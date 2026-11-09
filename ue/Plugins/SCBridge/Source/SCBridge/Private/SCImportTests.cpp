@@ -12,6 +12,8 @@
 #include "Engine/World.h"
 #include "SCVehicle.h"
 #include "Engine/StaticMesh.h"
+#include "Components/StaticMeshComponent.h"
+#include "Materials/Material.h"
 #include "StaticMeshResources.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
@@ -257,6 +259,15 @@ bool FSCReviewMaterials::RunTest(const FString&)
                 TestEqual(TEXT("original translucent slot index"), Sections[I].MaterialIndex, uint32(I));
                 TestEqual(TEXT("opaque slot has no translucent triangles"), Sections[I].NumTriangles, uint32(I == 0 ? 0 : 1));
             }
+            // WP-U2: no glass/decal/blended section of the split mesh may render with an opaque material.
+            for (UActorComponent* Component : Result.Vehicle->GetComponents())
+                if (auto* C = Cast<UStaticMeshComponent>(Component); C && C->GetStaticMesh() == Result.Vehicle->Meshes[1])
+                    for (int32 Slot = 1; Slot < 4; ++Slot)
+                    {
+                        UMaterialInterface* M = C->GetMaterial(Slot);
+                        TestTrue(FString::Printf(TEXT("split slot %d is decal or translucent"), Slot), M
+                            && (M->GetMaterial()->MaterialDomain == MD_DeferredDecal || IsTranslucentBlendMode(M->GetBlendMode())));
+                    }
         }
 #if WITH_EDITOR
         int32 Nanite=0; for (auto Mesh:Result.Vehicle->Meshes) Nanite+=Mesh->GetNaniteSettings().bEnabled;
@@ -285,9 +296,10 @@ bool USCImportLibrary::RunUnitTests()
 {
 #if WITH_DEV_AUTOMATION_TESTS
     bool Passed = true;
-    TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials")};
+    TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials"),
+        TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsTextures")};
     FString Folder;
-    if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Add(TEXT("FSCFolderTarImport"));
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
     for (const FString& Name : Names)
     {
         FAutomationTestFramework::Get().StartTestByName(Name, 0);

@@ -91,6 +91,8 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | MeshDecal, `%PARALLAX_OCCLUSION_MAPPING`, no stencil/tint signal (`relief_only`) | base colour untouched; alpha = TexSlot1.a × `DecalAlphaMultiplier`; normal from the DDNA slot blended over the host; height → parallax/normal darkening (panel grooves). Never opaque. |
 | MeshDecal with `%DIFFUSE_MAP` colour sheet (`color_sheet`) | masked/blended colour from the sheet where alpha × `DecalAlphaMultiplier` × `DecalDiffuseOpacity` > 0 |
 | MeshDecal with `%STENCIL_MAP` + `$TintPaletteDecal` (`stencil_palette`) | colour from the palette `decal` red/green/blue channels selected by the stencil texture, `StencilDiffuseColor*`, `StencilOpacity` |
+| Illum with `Glow` > 0 but `Emissive` = 0,0,0 (e.g. submaterials named "glows", "buttons") | the diffuse colour glows: `Emissive` acts as an optional multiplier that is ignored when zero (WP-U2 judgement call, consistent with the Gladius "emissives" case where Emissive is white and the colour comes from Diffuse); WP-R5 encodes the same rule in the sidecar `emissive` object |
+| Illum with CryEngine forward flag (`MtlFlags & 0x8000`) | diffuse alpha is coverage (masked); upstream should emit this in `alpha_config` (TODO WP-R5). `MtlFlags & 0x2` = two-sided, not yet honoured |
 | GlassPBR | translucent; tint = palette `glass` channel × `GlassTintStrength`; `EmissiveOpacity` |
 | Vehicle `MultiLight` port lights (`lights[]` from WP-R5) and `interiors[].lights` | UE light components, same mapping as the interior-light row above |
 

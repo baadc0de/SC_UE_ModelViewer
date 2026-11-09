@@ -180,6 +180,21 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         if (!Path.IsEmpty() && !FSCPackageSource::Normalize(Directory / Path, Clip.Sidecar)) { Warn(Out.ScenePath, TEXT("Unsafe clip sidecar")); continue; }
         Out.Clips.Add(MoveTemp(Clip));
     }
+    const FReaderObject* Controls; const FReaderObject* Glow;
+    if (Scene->TryGetObjectField(TEXT("controls"), Controls) && (*Controls)->TryGetObjectField(TEXT("engine_glow"), Glow))
+    {
+        double V = 0;
+        if ((*Glow)->TryGetNumberField(TEXT("min_strength"), V)) Out.EngineGlow.MinStrength = float(V);
+        if ((*Glow)->TryGetNumberField(TEXT("max_strength"), V)) Out.EngineGlow.MaxStrength = float(V);
+        if ((*Glow)->TryGetNumberField(TEXT("default_strength"), V)) Out.EngineGlow.DefaultStrength = float(V);
+        for (const auto& T : ReaderArray(*Glow, TEXT("targets")))
+        {
+            FSCEngineGlowTarget Target; const auto O = Object(T);
+            if (!O || !FSCPackageSource::Normalize(String(O, TEXT("material_sidecar")), Target.MaterialSidecar) || !O->TryGetNumberField(TEXT("source_material_index"), V))
+            { Warn(Out.ScenePath, TEXT("Invalid engine_glow target")); continue; }
+            Target.SourceMaterialIndex = int32(V); Out.EngineGlow.Targets.Add(MoveTemp(Target));
+        }
+    }
     // Mesh existence/format failures are recovered per asset by FSCImporter.
     return true;
 }

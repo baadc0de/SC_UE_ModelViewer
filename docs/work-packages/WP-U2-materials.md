@@ -49,3 +49,21 @@ no MeshDecal primitive on an opaque material; no emission without `Glow`; the Gl
   the cockpit interior under Lumen.
 - `materials.json` fixtures (synthetic, checked in) drive unit tests of the
   family→master mapping in an automation test (`SCBridge.Materials.*`).
+
+## Decision 2026-11-09 — Substrate (details: `ue/verification/WP-U2.md`)
+1. Material model: **Substrate** (`r.Substrate=True`, Adaptive GBuffer, `ue/SCViewer/Config/DefaultEngine.ini`).
+2. Installed 5.8.2: `r.Substrate` is not Experimental (default on for new 5.7+ projects); only UE material-layer UI and opaque rough refraction are.
+3. VULKAN_SM6 supports the Adaptive GBuffer; Nanite, Lumen, HWRT and DBuffer decals have Substrate paths.
+4. Measured on the RTX 4090: Viewer + Gladius render identically (Lumen overview before/after), one 8 min 26 s shader rebuild, project DDC +449 MiB.
+5. SC is a specular-colour workflow: Substrate's slab takes Diffuse Albedo + F0 directly (coloured `_spec` maps, no metallic heuristic).
+6. GlassPBR gets coloured transmittance and native thin film (`THIN_FILM`/`ThinFilmThickness` are authored on the canopy); legacy has neither in one model.
+7. Layered tint materials are an in-graph parameter blend in either model (no Substrate layering needed).
+8. Mesh decals use Substrate *Convert To Decal* (DBuffer): relief-only decals change normal/roughness, never base colour.
+9. Builder and parameter names are model-neutral; a switch back costs a rewrite of `ue/scripts/create_materials.py` graphs, the ini line and a shader rebuild — no C++.
+10. Risk: project-wide setting; shader/DDC rebuild after engine upgrades.
+
+### Deviations (WP-U2)
+- Masters added beyond the brief: `M_SC_MeshDecal_Relief` (control-only POM, normal/roughness), `M_SC_Translucent` (forward/faded Illum glow cards); blend/two-sided variants are constant instances (`MI_SC_*`).
+- "No mip generation changes": exported PNGs have one level, so the runtime path builds a box-filtered mip chain on the worker (no engine mip settings changed).
+- Emission follows the owner's rule (Glow absent/0 → none, strength = Glow × host constant `GlowToEmissive`), not `mtl.rs` `emissive_factor()`; Glow with Emissive = 0 is diffuse glow.
+- `MtlFlags & 0x8000` (CryEngine forward-rendering flag) makes Illum diffuse alpha a coverage mask; to be moved into the sidecar's `alpha_config` upstream.

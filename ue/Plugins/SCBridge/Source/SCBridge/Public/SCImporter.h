@@ -10,6 +10,7 @@ struct SCBRIDGE_API FSCImportOptions
     UWorld* World = nullptr;
     FString ScenePath;
     bool bBuildCollision = true;
+    bool bImportMaterials = true; // false keeps WP-U1's placeholder (timing baseline / geometry-only checks)
     bool bReplacePrevious = true;
     FTransform ActorTransform = FTransform::Identity;
 };
@@ -20,8 +21,8 @@ struct SCBRIDGE_API FSCImportResult
     TArray<FString> Warnings; // Each recoverable diagnostic includes its asset/instance path.
     TMap<FString, FSCMeshBuildStats> MeshStats;
     TMap<FString, FString> ContentHashes;
-    double TotalSeconds = 0;
-    int32 MeshCount = 0, InstanceCount = 0;
+    double TotalSeconds = 0, MaterialSeconds = 0;
+    int32 MeshCount = 0, InstanceCount = 0, TextureCount = 0, MaterialCount = 0;
 };
 class SCBRIDGE_API FSCImporter
 {

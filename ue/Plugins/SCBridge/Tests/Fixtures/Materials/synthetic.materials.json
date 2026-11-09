@@ -1,0 +1,1098 @@
+{
+ "version": 1,
+ "source_material_path": "Data/synthetic.mtl",
+ "submaterials": [
+  {
+   "index": 1,
+   "submaterial_name": "illum_spec",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.5,0.25,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0.9,0.6,0.3"
+    },
+    {
+     "name": "Shininess",
+     "value": "204"
+    },
+    {
+     "name": "Opacity",
+     "value": "1"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "NORMAL_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/illum_diff.png"
+    },
+    {
+     "slot": "TexSlot2",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/illum_ddna.png",
+     "source_path": "src/illum_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    },
+    {
+     "slot": "TexSlot4",
+     "role": "specular_support",
+     "is_virtual": false,
+     "export_path": "tex/illum_spec.png"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/illum_ddna_roughness.png",
+     "source_path": "src/illum_ddna.tif"
+    }
+   ],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 2,
+   "submaterial_name": "illum_masked_glow",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0.04,0.04,0.04"
+    },
+    {
+     "name": "Emissive",
+     "value": "2,1,0.5"
+    },
+    {
+     "name": "Glow",
+     "value": "3"
+    },
+    {
+     "name": "AlphaTest",
+     "value": "0.25"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/illum_diff.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 3,
+   "submaterial_name": "illum_decal_sheet",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0.04,0.04,0.04"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "DECAL"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/sheet.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 4,
+   "submaterial_name": "hard_primary",
+   "shader_family": "HardSurface",
+   "shader": "HardSurface",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HardSurface"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Specular",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Shininess",
+     "value": "180"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "WEAR_LAYER"
+    ]
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "Primary",
+     "uv_tiling": 2.0,
+     "tint_color": [
+      0.5,
+      0.5,
+      0.5
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Primary_diff.png",
+     "normal_export_path": "tex/Primary_ddna.png",
+     "roughness_export_path": "tex/Primary_ddna_roughness.png"
+    },
+    {
+     "name": "Wear",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 1.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Wear_diff.png",
+     "normal_export_path": "tex/Wear_ddna.png",
+     "roughness_export_path": "tex/Wear_ddna_roughness.png"
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "secondary"
+    }
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 5,
+   "submaterial_name": "blend4",
+   "shader_family": "LayerBlend_V2",
+   "shader": "LayerBlend_V2",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "LayerBlend_V2"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "BLEND_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot12",
+     "role": "blend_mask",
+     "is_virtual": false,
+     "export_path": "tex/blend.png"
+    },
+    {
+     "slot": "TexSlot11",
+     "role": "wear_mask",
+     "is_virtual": false,
+     "export_path": "tex/wear.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "BaseLayer1",
+     "uv_tiling": 4.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "primary"
+     },
+     "diffuse_export_path": "tex/BaseLayer1_diff.png",
+     "normal_export_path": "tex/BaseLayer1_ddna.png",
+     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png"
+    },
+    {
+     "name": "BaseLayer2",
+     "uv_tiling": 4.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.9,
+       0.9,
+       0.9
+      ],
+      "metallic": 1.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null,
+     "diffuse_export_path": "tex/BaseLayer2_diff.png",
+     "normal_export_path": "tex/BaseLayer2_ddna.png",
+     "roughness_export_path": "tex/BaseLayer2_ddna_roughness.png"
+    },
+    {
+     "name": "BaseLayer3",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "tertiary"
+     },
+     "diffuse_export_path": "tex/BaseLayer3_diff.png",
+     "normal_export_path": "tex/BaseLayer3_ddna.png",
+     "roughness_export_path": "tex/BaseLayer3_ddna_roughness.png"
+    },
+    {
+     "name": "BaseLayer4",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null
+    },
+    {
+     "name": "WearLayer1",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null,
+     "diffuse_export_path": "tex/WearLayer1_diff.png",
+     "normal_export_path": "tex/WearLayer1_ddna.png",
+     "roughness_export_path": "tex/WearLayer1_ddna_roughness.png"
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "BlendMapTiling": 3
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 6,
+   "submaterial_name": "blend1",
+   "shader_family": "LayerBlend_V2",
+   "shader": "LayerBlend_V2",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "LayerBlend_V2"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "BaseLayer1",
+     "uv_tiling": 8.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null,
+     "diffuse_export_path": "tex/BaseLayer1_diff.png",
+     "normal_export_path": "tex/BaseLayer1_ddna.png",
+     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png"
+    },
+    {
+     "name": "WearLayer1",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 1.0,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null,
+     "diffuse_export_path": "tex/WearLayer1_diff.png",
+     "normal_export_path": "tex/WearLayer1_ddna.png",
+     "roughness_export_path": "tex/WearLayer1_ddna_roughness.png"
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 7,
+   "submaterial_name": "glass_ext",
+   "shader_family": "GlassPBR",
+   "shader": "GlassPBR",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "GlassPBR"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.8,0.5,0.25"
+    },
+    {
+     "name": "Specular",
+     "value": "0.04,0.04,0.04"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    },
+    {
+     "name": "Opacity",
+     "value": "1"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "NORMAL_MAP",
+     "THIN_FILM",
+     "USE_TINT_PALETTE"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot2",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/glass_ddna.png",
+     "source_path": "src/glass_ddna.tif",
+     "texture_identity": "ddna_normal"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/glass_ddna_roughness.png",
+     "source_path": "src/glass_ddna.tif"
+    }
+   ],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "glass"
+    }
+   },
+   "public_params": {
+    "GlassTintStrength": 0.5,
+    "ThinFilmThickness": 0.06
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 8,
+   "submaterial_name": "decal_pom",
+   "shader_family": "MeshDecal",
+   "shader": "MeshDecal",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "MeshDecal"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0.03,0.03,0.03"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    },
+    {
+     "name": "AlphaTest",
+     "value": "0.9"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "DIFFUSE_MAP",
+     "PARALLAX_OCCLUSION_MAPPING"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/decal_diff.png"
+    },
+    {
+     "slot": "TexSlot3",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/illum_ddna.png",
+     "source_path": "src/illum_ddna.tif"
+    },
+    {
+     "slot": "TexSlot4",
+     "role": "height",
+     "is_virtual": false,
+     "export_path": "tex/decal_displ.png"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/illum_ddna_roughness.png",
+     "source_path": "src/illum_ddna.tif"
+    }
+   ],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "PomDisplacement": 0.03,
+    "DecalAlphaMultiplier": 0.5
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 9,
+   "submaterial_name": "screen",
+   "shader_family": "UIPlane",
+   "shader": "UIPlane",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "UIPlane"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0,0,0"
+    },
+    {
+     "name": "Opacity",
+     "value": "0.99"
+    },
+    {
+     "name": "Glow",
+     "value": "0.5"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot9",
+     "role": "render_to_texture",
+     "is_virtual": true
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 10,
+   "submaterial_name": "monitor",
+   "shader_family": "Monitor",
+   "shader": "Monitor",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Monitor"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0,0,0"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/monitor.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 11,
+   "submaterial_name": "inactive",
+   "shader_family": "MeshDecal",
+   "shader": "MeshDecal",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "MeshDecal"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "inactive",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 12,
+   "submaterial_name": "skin",
+   "shader_family": "HumanSkin_V2",
+   "shader": "HumanSkin_V2",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HumanSkin_V2"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.6,0.5,0.4"
+    },
+    {
+     "name": "Specular",
+     "value": "0.03,0.03,0.03"
+    },
+    {
+     "name": "Shininess",
+     "value": "128"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/skin.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 13,
+   "submaterial_name": "engine_glow",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.1,0.5,0.9"
+    },
+    {
+     "name": "Specular",
+     "value": "0.04,0.04,0.04"
+    },
+    {
+     "name": "Emissive",
+     "value": "0,0,0"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/illum_diff.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 14,
+   "submaterial_name": "forward_glow",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.2,0.6,0.9"
+    },
+    {
+     "name": "Specular",
+     "value": "0.04,0.04,0.04"
+    },
+    {
+     "name": "Emissive",
+     "value": "1,1,1"
+    },
+    {
+     "name": "MtlFlags",
+     "value": "50364544"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/illum_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 15,
+   "submaterial_name": "decal_colour",
+   "shader_family": "MeshDecal",
+   "shader": "MeshDecal",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "MeshDecal"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.8,0.8,0.8"
+    },
+    {
+     "name": "Specular",
+     "value": "0.03,0.03,0.03"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "DIFFUSE_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/decal_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 16,
+   "submaterial_name": "emissives_like",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.21223079,0.59720188,0.92158198"
+    },
+    {
+     "name": "Emissive",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Glow",
+     "value": "0.30000001"
+    },
+    {
+     "name": "MtlFlags",
+     "value": "50364546"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "USE_DAMAGE_MAP",
+     "VERTCOLORS"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/illum_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "AlphaGlowCutoff": 0
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  }
+ ]
+}

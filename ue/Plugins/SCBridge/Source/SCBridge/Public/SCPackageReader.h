@@ -60,6 +60,21 @@ struct SCBRIDGE_API FSCClipRecord
     UPROPERTY(BlueprintReadOnly) FString Sidecar;
     UPROPERTY(BlueprintReadOnly) FString Json;
 };
+/** controls.engine_glow target: main-thruster glow submaterial by sidecar + authored material index. */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCEngineGlowTarget
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) FString MaterialSidecar;
+    UPROPERTY(BlueprintReadOnly) int32 SourceMaterialIndex = -1;
+};
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCEngineGlow
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) float MinStrength = 0, MaxStrength = 0, DefaultStrength = 0;
+    UPROPERTY(BlueprintReadOnly) TArray<FSCEngineGlowTarget> Targets;
+};
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSceneManifest
 {
@@ -71,6 +86,7 @@ struct SCBRIDGE_API FSCSceneManifest
     UPROPERTY(BlueprintReadOnly) TArray<FSCMaterialSet> Materials;
     UPROPERTY(BlueprintReadOnly) TArray<FSCPalette> Palettes;
     UPROPERTY(BlueprintReadOnly) TArray<FSCClipRecord> Clips;
+    UPROPERTY(BlueprintReadOnly) FSCEngineGlow EngineGlow;
     UPROPERTY(BlueprintReadOnly) FString ContentHash;
     TArray<FString> MeshAssets() const;
 };

@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "export_kind": "Decomposed",
+ "root_entity": {
+  "entity_name": "Root",
+  "mesh_asset": "missing.glb",
+  "material_sidecar": "synthetic.materials.json",
+  "palette_id": "palette/synthetic"
+ },
+ "controls": {
+  "engine_glow": {
+   "min_strength": 0,
+   "max_strength": 200,
+   "default_strength": 7,
+   "targets": [
+    {
+     "material_sidecar": "synthetic.materials.json",
+     "source_material_index": 13
+    }
+   ]
+  }
+ }
+}

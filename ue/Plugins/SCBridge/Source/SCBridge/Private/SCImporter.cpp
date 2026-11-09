@@ -1,7 +1,10 @@
 #include "SCImporter.h"
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
+#include "SCImportMaterials.h"
 #include "Async/Async.h"
+#include "IImageWrapperModule.h"
+#include "Modules/ModuleManager.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
@@ -10,6 +13,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectIterator.h"
 #include "RenderingThread.h"
@@ -62,8 +66,30 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         UE_LOG(LogSCImport, Warning, TEXT("ASSET_WARNING %s: %s"), *Path, *Message);
     };
     for (const FString& Warning : Result.Warnings) UE_LOG(LogSCImport, Warning, TEXT("ASSET_WARNING %s"), *Warning);
+    // Materials first: describe + decode textures on a worker, then textures and MIDs on this thread.
+    FSCImportMaterials Materials;
+    if (Options.bImportMaterials)
+    {
+        FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+        const double MaterialStart = FPlatformTime::Seconds();
+        Async(EAsyncExecution::ThreadPool, [&] { Materials.Describe(Manifest); Materials.Decode(Source); }).Get();
+        TArray<FString> MaterialWarnings;
+        Materials.Instantiate(Vehicle, MaterialWarnings);
+        for (const FString& W : MaterialWarnings) Warn(TEXT("material"), W);
+        const auto& T = Materials.TextureStats;
+        Result.MaterialSeconds = FPlatformTime::Seconds() - MaterialStart;
+        Result.TextureCount = T.Created; Result.MaterialCount = Materials.MaterialCount;
+        UE_LOG(LogSCImport, Display, TEXT("TEXTURES requested=%d created=%d failed=%d bytes=%lld decode_s=%.4f create_s=%.4f"),
+            T.Requested, T.Created, T.Failed, T.Bytes, T.DecodeSeconds, T.CreateSeconds);
+        FString Masters;
+        for (const auto& Pair : Materials.MasterCounts) Masters += FString::Printf(TEXT(" %s=%d"), FSCMaterialBuilder::MasterName(Pair.Key), Pair.Value);
+        UE_LOG(LogSCImport, Display, TEXT("MATERIALS sets=%d instances=%d engine_glow=%d describe_s=%.4f mid_s=%.4f total_s=%.4f masters:%s"),
+            Materials.SetCount, Materials.MaterialCount, Materials.EngineGlowCount, Materials.DescribeSeconds, Materials.MaterialSeconds, Result.MaterialSeconds, *Masters);
+    }
     TMap<FString, TUniquePtr<FSCDerivedMesh>> Derived;
     TMap<FString, TArray<UStaticMesh*>> Meshes;
+    TMap<FString, TSet<int32>> MeshTranslucentSlots;
+    TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
     TMultiMap<FString, FString> Sidecars;
     auto CollectSidecar = [&](const FSCSceneInstance& I) { Sidecars.AddUnique(I.MeshAsset, I.MaterialSidecar); };
     CollectSidecar(Manifest.Root); for (const auto& I : Manifest.Children) CollectSidecar(I);
@@ -90,16 +116,13 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; });
             if (!Set) continue;
             for (int32 Slot = 0; Slot < Data->MaterialNames.Num(); ++Slot)
-            {
-                const FSCSubmaterial* Sub = Set->Submaterials.IsValidIndex(Slot) ? &Set->Submaterials[Slot] : nullptr;
-                // Current packages use array ordinals. Old compact GLBs explicitly carry
-                // source_name; use it only when that ordinal disagrees with the sidecar.
-                const FString& SourceName = Data->MaterialSourceNames[Slot];
-                if (!SourceName.IsEmpty() && (!Sub || Sub->Name != SourceName))
-                    if (const auto* Named = Set->Submaterials.FindByPredicate([&](const FSCSubmaterial& M) { return M.Name == SourceName; })) Sub = Named;
-                if (Sub && (IsTranslucent(Sub->ShaderFamily) || Sub->bBlended)) TranslucentSlots.Add(Slot);
-            }
+                if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Data->MaterialSourceNames, Slot))
+                    if (FSCMaterialBuilder::RequiresNonNanite(*Sub)) TranslucentSlots.Add(Slot); // D6, decided by the builder
         }
+        TArray<int32>& SlotTriangles = MeshSlotTriangles.Add(Path);
+        SlotTriangles.SetNumZeroed(Data->MaterialNames.Num());
+        for (auto T : Data->Description.Triangles().GetElementIDs())
+            if (SlotTriangles.IsValidIndex(Data->Description.GetTrianglePolygonGroup(T).GetValue())) ++SlotTriangles[Data->Description.GetTrianglePolygonGroup(T).GetValue()];
         FSCDerivedMesh Translucent;
         FSCMeshImporter::SplitTranslucent(*Data, TranslucentSlots, Translucent);
         UPackage* Package = CreatePackage(*AssetPackage(Session, Path)); Package->SetFlags(RF_Transient);
@@ -119,7 +142,7 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         };
         if (!Build(*Data, TEXT(""), Options.bBuildCollision)) continue;
         if (Translucent.bHasGeometry) Build(Translucent, TEXT("_Translucent"), false);
-        Result.ContentHashes.Add(Path, Data->ContentHash); Meshes.Add(Path, MoveTemp(Variants));
+        Result.ContentHashes.Add(Path, Data->ContentHash); Meshes.Add(Path, MoveTemp(Variants)); MeshTranslucentSlots.Add(Path, TranslucentSlots);
         // Assembly needs helper matrices only. Release CPU geometry and serialized BVH now.
         Data->Description = FMeshDescription(); Data->CollisionBytes.Empty();
         // TODO(WP-C1): bound source-description lifetime retained internally by UStaticMesh;
@@ -171,7 +194,28 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
             Vehicle->AddInstanceComponent(C); C->SetMobility(EComponentMobility::Movable); C->SetupAttachment(E.Anchor); C->SetStaticMesh((*Variants)[Variant]);
             C->ComponentTags.Add(FName(*I.MeshAsset));
             C->SetCollisionProfileName(Options.bBuildCollision && Variant == 0 ? TEXT("BlockAll") : TEXT("NoCollision"));
-            C->SetVisibility(!I.bInvisible); C->SetHiddenInGame(I.bInvisible); C->RegisterComponent(); ++RenderInstances;
+            C->SetVisibility(!I.bInvisible); C->SetHiddenInGame(I.bInvisible);
+            const UStaticMesh* Mesh = (*Variants)[Variant];
+            const TSet<int32>& Translucent = MeshTranslucentSlots.FindRef(I.MeshAsset);
+            const bool bNanite = Mesh->IsNaniteEnabled();
+            if (!bNanite && !Translucent.IsEmpty())
+            {
+                // Glass/decal/screen split: lit by Lumen but not part of its scene (no cards, no DF).
+                C->bAffectDistanceFieldLighting = false; C->bAffectDynamicIndirectLighting = false; C->CastShadow = false;
+            }
+            const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
+            const FString Host = FSCImportMaterials::HostChannel(Set, E.Mesh->MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset));
+            for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
+            {
+                // Bind only sections this variant draws; Nanite never receives a translucent instance.
+                if (bNanite && Translucent.Contains(Slot)) continue;
+                const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot);
+                UMaterialInterface* Material = Sub ? Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host) : nullptr;
+                // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
+                if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
+                if (Material) C->SetMaterial(Slot, Material);
+            }
+            C->RegisterComponent(); ++RenderInstances;
             }
         }
         return E;
@@ -201,8 +245,9 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
     if (Options.bReplacePrevious) Unload(Options.World);
     Vehicles.Add(Options.World, Vehicle); Result.Vehicle = Vehicle; Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;
-    UE_LOG(LogSCImport, Display, TEXT("IMPORT_OK seconds=%.4f assets=%d instances=%d children=%d interiors=%d materials=%d palettes=%d clips=%d game_world=%d render_meshes=%d render_instances=%d warnings=%d"),
-        Result.TotalSeconds, Result.MeshCount, Result.InstanceCount, Manifest.Children.Num(), Manifest.Interiors.Num(), Manifest.Materials.Num(), Manifest.Palettes.Num(), Manifest.Clips.Num(), Options.World->IsGameWorld(), Vehicle->Meshes.Num(), RenderInstances, Result.Warnings.Num());
+    UE_LOG(LogSCImport, Display, TEXT("IMPORT_OK seconds=%.4f assets=%d instances=%d children=%d interiors=%d materials=%d palettes=%d clips=%d game_world=%d render_meshes=%d render_instances=%d textures=%d material_instances=%d material_s=%.4f warnings=%d"),
+        Result.TotalSeconds, Result.MeshCount, Result.InstanceCount, Manifest.Children.Num(), Manifest.Interiors.Num(), Manifest.Materials.Num(), Manifest.Palettes.Num(), Manifest.Clips.Num(), Options.World->IsGameWorld(), Vehicle->Meshes.Num(), RenderInstances,
+        Result.TextureCount, Result.MaterialCount, Result.MaterialSeconds, Result.Warnings.Num());
     const FBox Bounds = Vehicle->GetComponentsBoundingBox(true);
     UE_LOG(LogSCImport, Display, TEXT("BOUNDS_CM min=%s max=%s size=%s"), *Bounds.Min.ToString(), *Bounds.Max.ToString(), *Bounds.GetSize().ToString());
     return true;
@@ -215,6 +260,7 @@ void FSCImporter::Unload(UWorld* World)
 ASCVehicle* USCImportLibrary::ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision)
 {
     FSCFolderPackageSource Source(Folder); FSCImportOptions Options; Options.World = GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull); Options.bBuildCollision = bBuildCollision;
+    Options.bImportMaterials = !FParse::Param(FCommandLine::Get(), TEXT("SCNoMaterials")); // timing baseline
     FSCImportResult Result;
     if (!FSCImporter::Import(Source, Options, Result)) UE_LOG(LogSCImport, Error, TEXT("IMPORT_FAILED %s"), *Result.Error);
     if (ASCVehicle* Vehicle = Result.Vehicle.Get())
