@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "SCPackageReader.h"
 #include "SCClipCatalog.h"
+#include "SCLightState.h"
 #include "SCVehicle.generated.h"
 class UTexture2D;
 class UMaterialInstanceDynamic;
@@ -31,6 +32,10 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USCRigComponent>> Rigs;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<ULightComponent>> Lights;
     UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") TArray<FSCImportedLightState> LightStates;
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") bool bMegaLightsActive = false;
+    /** Refresh after changing the project/scalability ray-tracing settings at runtime. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Lights") void RefreshLightShadowPolicy();
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayClip(FName Clip);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool SnapClip(FName Clip, bool bLast);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayFragment(FName Fragment, FName Tag);

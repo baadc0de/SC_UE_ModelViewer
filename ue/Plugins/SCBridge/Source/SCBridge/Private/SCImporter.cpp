@@ -594,6 +594,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
             It->GetOutermost()->GetName().StartsWith(First.Vehicle->SessionPath))
             Old.Add(*It);
     const int32 Loaded = StaticMeshCount();
+    bool bLights = FSCLightImporter::Verify(First.Vehicle.Get());
     bool bRepresentations = true;
     for (const auto& Pair : First.MeshStats)
         if (Pair.Value.Triangles > 0)
@@ -634,6 +635,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
     for (auto Object : Old)
         if (Object.IsValid()) ++Leaks;
     const int32 Reloaded = StaticMeshCount();
+    bLights &= FSCLightImporter::Verify(Second.Vehicle.Get());
     bool bSame = First.MeshCount == Second.MeshCount && First.InstanceCount == Second.InstanceCount;
     for (const auto& Pair : First.ContentHashes)
         bSame &= Second.ContentHashes.FindRef(Pair.Key) == Pair.Value;
@@ -642,7 +644,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
     CollectGarbage(RF_NoFlags);
     const int32 Final = StaticMeshCount();
     GEngine->Exec(World, TEXT("obj list class=StaticMesh"));
-    const bool bPassed = bSame && bHitHull && bRepresentations && Leaks == 0 && Final == Baseline && Loaded == Reloaded;
+    const bool bPassed = bLights && bSame && bHitHull && bRepresentations && Leaks == 0 && Final == Baseline && Loaded == Reloaded;
     UE_LOG(LogSCImport, Display,
            TEXT("VERIFY passed=%d folder_assets=%d tar_assets=%d folder_instances=%d tar_instances=%d representations=%d old_live=%d "
                 "tracked_old=%d baseline=%d loaded=%d reloaded=%d final=%d first_s=%.4f second_s=%.4f"),

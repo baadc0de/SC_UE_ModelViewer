@@ -3,6 +3,7 @@
 #include "SCVehicle.h"
 #include "SCRigComponent.h"
 #include "SCAnimImporter.h"
+#include "SCLightImporter.h"
 #include "Engine/SkeletalMesh.h"
 #include "Animation/AnimSequence.h"
 #include "Components/LightComponent.h"
@@ -82,6 +83,7 @@ bool USCImportLibrary::VerifyRig(ASCVehicle* Vehicle, const FString& PoseReferen
     UE_LOG(LogSCImport, Display, TEXT("RIG_VERIFY passed=%d clips=%d bound=%d sequences=%d tracks=%d rigs=%d soft_triangles=%d lights=%d"),
            OK, Vehicle->ClipCatalog->Clips.Num(), Bound, Sequences, Tracks, Vehicle->Rigs.Num(), SoftTriangles, Vehicle->Lights.Num());
     OK &= SCVerifySourcePose(Vehicle);
+    OK &= FSCLightImporter::Verify(Vehicle);
     if (!PoseReference.IsEmpty())
     {
         FSCFolderPackageSource Source(FPaths::GetPath(PoseReference));

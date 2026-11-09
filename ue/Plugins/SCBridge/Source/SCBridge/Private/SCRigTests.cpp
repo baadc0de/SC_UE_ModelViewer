@@ -199,6 +199,7 @@ bool FSCRigLights::RunTest(const FString&)
             HDRSource, HDR, Vehicle, Vehicle->GetRootComponent(), [](const FString&) -> USceneComponent* { return nullptr; }, Warnings);
     TestEqual(TEXT("HDR gobos decode and bind"), Warnings.Num(), 0);
     TestEqual(TEXT("one texture shared by repeated gobos"), Vehicle->GoboTextures.Num(), 1);
+    TestTrue(TEXT("one material shared by repeated gobos"), Vehicle->Lights.Last()->LightFunctionMaterial == Vehicle->Lights[Vehicle->Lights.Num() - 2]->LightFunctionMaterial);
     if (UTexture2D* Texture = Vehicle->GoboTextures.FindRef(TEXT("gobo.exr")))
     {
         TestFalse(TEXT("gobo is linear"), Texture->SRGB);

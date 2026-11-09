@@ -518,3 +518,198 @@ exports are in the change set. Ignored DDC is 1.2 GiB, project Intermediate
 423 MiB, plugin Intermediate 276 KiB; no cache purge was needed. Build outputs
 remain ignored for the orchestrator's GPU run. The tree is left uncommitted;
 `.git` is read-only and other agents' files are untouched.
+
+## WP-U3b importer follow-through — 2026-11-09
+
+Applied §8 of `WP-U3b.md` after `git apply --check`, then completed its state,
+exposure and verification items. No Rust/vendor/ThirdParty code or `docs/0*.md`
+was changed; no cargo command, commit or git-metadata write was performed.
+
+- **Gobo sharing:** one light-function MID per texture and master, owned by the
+  vehicle and reused across its ship/child/interior instances. Cutlass's 184
+  projectors use eight MIDs; Scorpius uses ten, Gladius six. The initial Cutlass
+  game-host check confirmed eight before removing `r.LightFunctionAtlas.Size=16`.
+  Final package tests observe the engine default **Size=4, 16 slots**. All three
+  fit; there is no atlas-size override left in `DefaultEngine.ini`.
+- **Fallback shadows:** local lights are selected iff their radius is at least
+  the instance's sorted radius at index `floor(3*N/4)`. Ambient proxies and
+  directional lights are excluded from that population; the directional sun
+  keeps its normal shadow policy. Ties at the threshold are retained. Selection
+  includes authored-but-disabled fixtures so changing the default state does
+  not silently change the documented radius budget. Actual visible shadowed
+  counts are reported separately. Thresholds are retained per component.
+- **Runtime gating:** the supplied project/HWRT check is extended to account for
+  scalability, supported shader platform, enabled HWRT/inline tracing or the
+  engine's `DoesProjectSupportDistanceFields()` SWRT gate. Null-RHI always uses
+  the fallback. The policy is computed at import; after a runtime renderer
+  setting change, call Blueprint `ASCVehicle.RefreshLightShadowPolicy()` or
+  reimport. This avoids polling every frame. The Viewer PPV does not override
+  MegaLights; per-view debug overrides are not a separate global shadow policy.
+- **Authored viewer defaults:** an explicit `offState` imports invisible with
+  zero component intensity. Otherwise, `states.defaultState` is selected when
+  present, including a zero-intensity default; missing state maps retain the
+  legacy flat data. This distinction matters: the export contract says
+  `active_state` is the first nonzero state in default/auxiliary/emergency/
+  cinematic order, not a running ship's actual state. Twenty-four Cutlass and
+  three Scorpius records export `auxiliaryState` only because their authored
+  defaults are zero. They now import disabled, while all components remain
+  available for later state selection. Positive intensity still maps 1:1 from
+  the selected state's candela proxy; no intensity conversion was changed.
+- **State properties:** `ASCVehicle.LightStates` exposes each component, source
+  name/owner, `ExportActiveState`, viewer `ActiveState`, `bEnabled`, and lossless
+  `StatesJson`, plus radius/shadow metadata. This preserves auxiliary/emergency/
+  cinematic/off choices for WP-V2 without guessing a parked state from names.
+- **Gladius wing evidence:** all eight records in `LightGroup-ext_wing_right`
+  and `LightGroup-ext_wing_left` have `active_state=defaultState` and positive
+  default intensity. Four projectors are 300 cd; the four Omnis are three at
+  1500 cd and one at approximately 450 cd. Their `offState` entries are zero,
+  but are not selected. They therefore remain enabled. The hangar screenshot
+  does not justify an importer override.
+- **Bounded exposure:** `Viewer.umap` now has one enabled, unbound post-process
+  volume, blend weight 1, priority 10, histogram auto exposure, bias 0 and
+  min/max **−3 / +6 EV100**. `configure_viewer_exposure.py` updates the existing
+  map without replacing its actors; `create_viewer.py` invokes the same helper
+  when creating the map. The helper was run twice; it updates the same volume.
+  Every package test reloads the saved map and checks its persisted bounds.
+
+**Rendered exposure readout is unavailable under null-RHI.** Installed engine
+`PostProcessEyeAdaptation.cpp:95` defines `r.EyeAdaptation.VisualizeDebugType` as a
+visualization-mode selector, not a log/readback switch. Its exposure result is
+computed by render-graph GPU passes and read by
+`FEyeAdaptationManager::UpdateLastExposureFromBuffer` via `FRHIGPUBufferReadback`
+(around line 1460). A headless placeholder is not a measured scene exposure.
+
+| View after these changes | Measured adapted EV100 | Verified bounds |
+| --- | --- | --- |
+| Cutlass bay (`-SCView=180,2,0.25`) | Pending orchestrator GPU readout | −3…+6 |
+| Scorpius exterior (default camera) | Pending orchestrator GPU readout | −3…+6 |
+
+Do not substitute WP-U3b's earlier +0.32 / −2.01 readings for new measurements:
+the default light states and projector material allocation have changed.
+
+Tests were added before the importer changes: shared-gobo identity failed in
+`FSCRigLights`, and `FSCLightDefaults` failed its quartile/off-state assertions
+(`/tmp/wp-u3b-import-red.log`, exit 255). Final tests cover radii 1/2/3/4 selecting
+only 4, an independent instance with radius 0.5, excluded ambient proxies,
+explicit off even with a positive supplied intensity, zero default with an
+auxiliary fallback, missing active state, state metadata, and null-RHI fallback
+with the project preference both off and on. Package verification independently
+reads the manifest, asserts per-instance selection and state invariants, and
+asserts shared gobo material count equals distinct texture count. Ship-specific
+counts below are informational; no importer rule branches on a ship name.
+
+Exact commands from the repository root:
+
+```bash
+ue/scripts/build.sh SCViewerEditor
+
+"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
+  "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript \
+  -script="$PWD/ue/scripts/configure_viewer_exposure.py" \
+  -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC \
+  -abslog=/tmp/wp-u3b-viewer-exposure.log
+# Repeated with -abslog=/tmp/wp-u3b-viewer-exposure-idempotent.log.
+
+# Initial shared-material measurement before removing the atlas override:
+ue/scripts/run_import.sh out/dec-cutlass_black -nullrhi -SCVerifyRig \
+  > /tmp/wp-u3b-cutlass-atlas-check.log 2>&1
+
+for ship in dec-r5 dec-scorpius dec-cutlass_black; do
+  python3 -I ue/scripts/make_test_tar.py "out/$ship" \
+    "ue/SCViewer/Saved/Import/u3b-$ship.tar"
+  "$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
+    "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript \
+    -script="$PWD/ue/scripts/test_importer.py" \
+    -SCPackage="$PWD/out/$ship" \
+    -SCVerifyTar="$PWD/ue/SCViewer/Saved/Import/u3b-$ship.tar" \
+    -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC \
+    -abslog="/tmp/wp-u3b-$ship-tests.log"
+done
+```
+
+All UE processes launched by this agent were sequential. The scratch launcher
+`UV_CACHE_DIR=/tmp/scviewer-uv uv run --no-project python /tmp/u3b_verify.py`
+ran the package commands and recorded exits in `/tmp/wp-u3b-import-results.json`.
+
+Final results: **build succeeded; all three package suites exit 0 with 18/18
+unit tests** (12 legacy, five rig, one new light-default/shadow-budget test).
+The saved map check logs
+`VIEWER_EXPOSURE_VERIFY passed=1 unbound=1 min_ev100=-3 max_ev100=6 bias=0 method=histogram`.
+The initial Cutlass game-host rig/light check also exits 0.
+
+| Package | Assets / instances | Light components | Enabled / disabled | Projectors | Gobo textures = MIDs | Fallback selected | Visible shadowed in fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Gladius | 45 / 61 | 76 | 76 / 0 | 47 | 6 = 6 | 22 | 22 |
+| Scorpius | 42 / 92 | 127 | 124 / 3 | 57 | 10 = 10 | 36 | 33 |
+| Cutlass | 53 / 129 | 225 | 201 / 24 | 184 | 8 = 8 | 60 | 58 |
+
+Each package's folder and tar light checks pass with `megalights_active=0`
+under null-RHI and `atlas_slots=16`. The fallback counts match the WP-U3b
+prediction without hard-coded ship expectations. On a MegaLights GPU host,
+all local components retain their shadow flag; disabled lights still emit
+nothing. That branch needs the GPU verification below.
+
+Exact final leak/representation evidence:
+
+```text
+dec-r5: [2026.11.09-17.13.25:339][  0]LogPython: VIEWER_EXPOSURE_VERIFY passed=1 unbound=1 min_ev100=-3 max_ev100=6 bias=0 method=histogram
+dec-scorpius: [2026.11.09-17.13.39:698][  0]LogPython: VIEWER_EXPOSURE_VERIFY passed=1 unbound=1 min_ev100=-3 max_ev100=6 bias=0 method=histogram
+dec-cutlass_black: [2026.11.09-17.14.05:969][  0]LogPython: VIEWER_EXPOSURE_VERIFY passed=1 unbound=1 min_ev100=-3 max_ev100=6 bias=0 method=histogram
+```
+
+Both imports independently satisfy light-state, shadow and sharing invariants.
+All old import-owned UObjects, including shared MIDs and the state component
+references, are covered by the leak check. Static meshes return to baseline 27.
+`git diff --check` is clean. Ignored DDC is 1.4 GiB, project Intermediate 426 MiB,
+plugin Intermediate 300 KiB. Test tars remain regenerable ignored scratch; no
+build products or game-derived exports are part of the change set.
+
+TODO(WP-V2): add named light-state selection/reapplication and style waveform playback using `LightStates`; preserve the exported state map and distinguish the authored default from the exporter's first-nonzero fallback.
+
+TODO(WP-U3): orchestrator must measure post-change adapted EV100 in the Cutlass bay and Scorpius exterior and record GPU acceptance for the checks below.
+
+GPU checks for the orchestrator:
+
+1. With the final ini, measure settled adapted EV100 using `ShowFlag.VisualizeHDR 1`
+   (optionally `r.EyeAdaptation.VisualizeDebugType 1`) in the Cutlass bay
+   (`-SCView=180,2,0.25`) and Scorpius exterior (default view). Record numeric
+   readouts and captures, verify −3…+6 bounds, then traverse exterior/interior
+   views to check adaptation. These must be new measurements.
+2. Confirm default atlas Size=4 retains all visible gobo patterns, with 8/10/6
+   distinct shared materials, no overflow or dropped patterns; check HDR/PNG,
+   luminance, clamp edges and projector orientation/roll against WP-U3b captures.
+3. Run fresh imports with MegaLights active on HWRT: `-SCVerifyRig -SCStay`
+   should log `megalights_active=1`, with shadow flags 225/127/76 for
+   Cutlass/Scorpius/Gladius. Compare bay/hull occlusion and frame times; no light
+   leaks or VSM one-pass overflow. Enabled counts remain 201/124/76.
+4. Disable MegaLights before import, or call `RefreshLightShadowPolicy()` after
+   toggling it at runtime. Verify the fallback selects 60/36/22 flags (58/33/22
+   visible shadow casters), compare shadow quality and VSM cost, then restore
+   MegaLights and refresh. Test a host without HWRT if available.
+5. Check the disabled default fixtures on Cutlass/Scorpius and the still-enabled
+   Gladius wing lights. The latter follow their positive authored default, not
+   the unknown parked state in the reference photograph. Recheck lit materials,
+   emissives, Nanite/Lumen/HWRT and animated light attachments under auto exposure.
+6. Reload/unload while viewing interiors: no leftover projected gobos, visible
+   lights or shadowing from a previous vehicle. The headless GC checks pass;
+   render-thread appearance remains a GPU check.
+
+Files changed in this follow-through:
+
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportTests.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCImporter.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCLightImporter.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCLightTests.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCLightVerification.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCRigTests.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCRigVerification.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCVehicle.cpp`
+- `ue/Plugins/SCBridge/Source/SCBridge/Public/SCLightImporter.h`
+- `ue/Plugins/SCBridge/Source/SCBridge/Public/SCLightState.h`
+- `ue/Plugins/SCBridge/Source/SCBridge/Public/SCVehicle.h`
+- `ue/SCViewer/Config/DefaultEngine.ini`
+- `ue/SCViewer/Content/Maps/Viewer.umap`
+- `ue/scripts/configure_viewer_exposure.py`
+- `ue/scripts/create_viewer.py`
+- `ue/scripts/test_importer.py`
+- `ue/verification/WP-U3.md`

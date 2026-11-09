@@ -7,6 +7,8 @@ class USceneComponent;
 class SCBRIDGE_API FSCLightImporter
 {
 public:
+    static void RefreshShadows(ASCVehicle* Vehicle);
+    static bool Verify(ASCVehicle* Vehicle);
     static void Build(const FSCPackageSource& Source, const FSCSceneInstance& Instance, ASCVehicle* Vehicle, USceneComponent* Parent,
                       TFunction<USceneComponent*(const FString&)> Helper, TArray<FString>& Warnings, bool bHelperFrame = false);
 };

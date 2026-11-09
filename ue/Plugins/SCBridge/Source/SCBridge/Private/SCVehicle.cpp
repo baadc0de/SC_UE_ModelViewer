@@ -4,6 +4,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SCMaterialBuilder.h"
 #include "SCAnimImporter.h"
+#include "SCLightImporter.h"
 #include "SCRigComponent.h"
 #include "Engine/SkeletalMesh.h"
 ASCVehicle::ASCVehicle()
@@ -205,4 +206,9 @@ void ASCVehicle::EvaluateClips()
         ++PoseEvaluations;
     }
     DirtyMeshes.Reset();
+}
+
+void ASCVehicle::RefreshLightShadowPolicy()
+{
+    FSCLightImporter::RefreshShadows(this);
 }

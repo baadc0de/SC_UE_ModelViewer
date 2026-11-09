@@ -1,5 +1,7 @@
 """Recreate the synthetic Viewer smoke scene; run inside Unreal's Python host."""
 import unreal
+import runpy
+from pathlib import Path
 
 levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -46,5 +48,7 @@ sphere = spawn(unreal.StaticMeshActor, 'Emissive sphere', (250, 150, 100))
 sphere.static_mesh_component.set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Sphere'))
 sphere.static_mesh_component.set_material(0, material)
 spawn(unreal.PlayerStart, 'Viewer start', (900, -1200, 850), unreal.Rotator(-28, 125, 0))
+runpy.run_path(str(Path(__file__).with_name("configure_viewer_exposure.py")),
+               run_name="sc_viewer_exposure")["configure_exposure"](actors)
 assert levels.save_current_level()
 unreal.log('WP-U0 VIEWER_MAP_OK')
