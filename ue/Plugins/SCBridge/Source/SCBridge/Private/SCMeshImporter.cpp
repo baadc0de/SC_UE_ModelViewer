@@ -124,7 +124,7 @@ struct FGlb
             if (Rotation.Num() == 4) Q = FQuat(Rotation[0]->AsNumber(), Rotation[1]->AsNumber(), Rotation[2]->AsNumber(), Rotation[3]->AsNumber()).GetNormalized();
             M = FTransform(Q, T, S).ToMatrixWithScale();
         }
-        return !M.ContainsNaN() && FMath::Abs(M.Determinant()) > SMALL_NUMBER;
+        return !M.ContainsNaN();
     }
 };
 }
@@ -139,7 +139,7 @@ FMatrix FSCMeshImporter::Transform(const FMatrix& Gltf)
 }
 FMatrix FSCMeshImporter::InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis)
 {
-    if (bSourceFrame) return Transform(AssetRoot.Inverse() * Local);
+    if (bSourceFrame) return Transform((AssetRoot.Determinant() != 0 ? AssetRoot.Inverse() : FMatrix::Identity) * Local);
     return Transform(bCryBasis ? CryToGltf().Inverse() * Local * CryToGltf() : Local);
 }
 bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path, FSCDerivedMesh& Out, FString& Error)
@@ -151,8 +151,22 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
     if (!G.Parse(Bytes)) { Error = Path + TEXT(": ") + G.Error; return false; }
     Out.bHasSkins = !Array(G.Json, TEXT("skins")).IsEmpty();
     for (const auto& M : Array(G.Json, TEXT("materials")))
-    { FString Name; if (M->AsObject()) M->AsObject()->TryGetStringField(TEXT("name"), Name); Out.MaterialNames.Add(Name); }
-    if (Out.MaterialNames.IsEmpty()) Out.MaterialNames.Add(TEXT("Default"));
+    {
+        FString Name, SourceName, Family, Alpha; const auto O = M->AsObject();
+        if (O)
+        {
+            O->TryGetStringField(TEXT("name"), Name); O->TryGetStringField(TEXT("alphaMode"), Alpha);
+            const FObject* Extras;
+            if (O->TryGetObjectField(TEXT("extras"), Extras))
+            {
+                (*Extras)->TryGetStringField(TEXT("source_name"), SourceName);
+                (*Extras)->TryGetStringField(TEXT("shader"), Family);
+            }
+        }
+        if (Alpha.Equals(TEXT("BLEND"), ESearchCase::IgnoreCase)) Out.BlendedSlots.Add(Out.MaterialNames.Num());
+        Out.MaterialNames.Add(Name); Out.MaterialSourceNames.Add(SourceName); Out.MaterialFamilies.Add(Family);
+    }
+    int32 DefaultSlot = INDEX_NONE;
     FStaticMeshAttributes A(Out.Description); A.Register();
     auto Positions = A.GetVertexPositions(); auto Normals = A.GetVertexInstanceNormals(); auto Tangents = A.GetVertexInstanceTangents();
     auto Signs = A.GetVertexInstanceBinormalSigns(); auto UVs = A.GetVertexInstanceUVs(); auto Colors = A.GetVertexInstanceColors();
@@ -176,7 +190,11 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         FString NodeName;
         if (Node->TryGetStringField(TEXT("name"), NodeName) && !NodeName.IsEmpty()) Out.Nodes.FindOrAdd(NodeName) = World;
         const int32 MeshIndex = Int(Node, TEXT("mesh"), -1);
-        if (MeshIndex >= 0)
+        const FVector Scale = World.GetScaleVector();
+        const double ScaleProduct = Scale.X * Scale.Y * Scale.Z;
+        const bool bDegenerate = ScaleProduct == 0 || FMath::Abs(World.Determinant() / ScaleProduct) <= 1.e-8;
+        if (MeshIndex >= 0 && bDegenerate) Out.Warnings.Add(TEXT("Degenerate node: geometry skipped, transform retained: ") + NodeName);
+        if (MeshIndex >= 0 && !bDegenerate)
         {
             const auto Mesh = ObjectAt(G.Json, TEXT("meshes"), MeshIndex);
             if (!Mesh) { Error = TEXT("Invalid mesh index"); return false; }
@@ -202,7 +220,19 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
                 if (bIndexed && (!G.Accessor(Int(Primitive, TEXT("indices")), Indices) || Indices.Components != 1 || Indices.Normalized
                     || (Indices.Type != 5121 && Indices.Type != 5123 && Indices.Type != 5125))) { Error = TEXT("Invalid triangle indices"); return false; }
                 const int32 Count = bIndexed ? Indices.Count : P.Count;
-                const int32 Material = Int(Primitive, TEXT("material"));
+                int32 Material = Int(Primitive, TEXT("material"), INDEX_NONE);
+                if (Material == INDEX_NONE)
+                {
+                    if (DefaultSlot == INDEX_NONE)
+                    {
+                        DefaultSlot = Out.MaterialNames.Add(TEXT("Default"));
+                        Out.MaterialSourceNames.Add(TEXT("")); Out.MaterialFamilies.Add(TEXT(""));
+                        auto Group = Out.Description.CreatePolygonGroup(); Groups.Add(Group);
+                        A.GetPolygonGroupMaterialSlotNames()[Group] = FName(*FString::Printf(TEXT("Slot_%d"), DefaultSlot));
+                        Out.Warnings.Add(FString::Printf(TEXT("Primitive has no material; using default slot %d"), DefaultSlot));
+                    }
+                    Material = DefaultSlot;
+                }
                 if (Count % 3 || !Groups.IsValidIndex(Material)) { Error = TEXT("Invalid triangle/material count"); return false; }
                 TMap<int32, FVertexID> Vertices;
                 for (int32 I = 0; I < Count; I += 3)
@@ -276,8 +306,63 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         for (const auto& P : Authored) { Tangents[P.Key] = FVector3f(P.Value); Signs[P.Key] = P.Value.W; }
         Out.bHasTangents = true;
     }
+    Out.bHasGeometry = Out.Description.Triangles().Num() > 0;
     // Hierarchy-only assets are valid attachments; retain their helper nodes.
     return true;
+}
+void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent)
+{
+    TArray<FTriangleID> Opaque, Blend;
+    for (auto T : Data.Description.Triangles().GetElementIDs())
+        (Slots.Contains(Data.Description.GetTrianglePolygonGroup(T).GetValue()) ? Blend : Opaque).Add(T);
+    if (Blend.IsEmpty()) return;
+    if (Opaque.IsEmpty()) { Data.bEnableNanite = false; return; }
+    Translucent.MaterialNames = Data.MaterialNames;
+    Translucent.ContentHash = Data.ContentHash; Translucent.bHasTangents = Data.bHasTangents;
+    Translucent.bEnableNanite = false; Translucent.bHasGeometry = true;
+    auto Select = [&](const TArray<FTriangleID>& Triangles)
+    {
+        FMeshDescription Selected;
+        FStaticMeshAttributes Dst(Selected); Dst.Register();
+        FStaticMeshConstAttributes Src(Data.Description);
+        const int32 Channels = Src.GetVertexInstanceUVs().GetNumChannels();
+        Dst.GetVertexInstanceUVs().SetNumChannels(Channels);
+        TArray<FPolygonGroupID> Groups;
+        for (int32 Slot = 0; Slot < Data.MaterialNames.Num(); ++Slot)
+        {
+            const auto Group = Selected.CreatePolygonGroup(); Groups.Add(Group);
+            Dst.GetPolygonGroupMaterialSlotNames()[Group] = FName(*FString::Printf(TEXT("Slot_%d"), Slot));
+        }
+        TMap<FVertexID, FVertexID> Vertices;
+        for (auto Triangle : Triangles)
+        {
+            TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
+            for (auto Original : Data.Description.GetTriangleVertexInstances(Triangle))
+            {
+                const auto Vertex = Data.Description.GetVertexInstanceVertex(Original);
+                auto* Existing = Vertices.Find(Vertex);
+                FVertexID NewVertex;
+                if (Existing) NewVertex = *Existing;
+                else
+                {
+                    NewVertex = Selected.CreateVertex(); Vertices.Add(Vertex, NewVertex);
+                    Dst.GetVertexPositions()[NewVertex] = Src.GetVertexPositions()[Vertex];
+                }
+                const auto Corner = Selected.CreateVertexInstance(NewVertex); Corners.Add(Corner);
+                Dst.GetVertexInstanceNormals()[Corner] = Src.GetVertexInstanceNormals()[Original];
+                Dst.GetVertexInstanceTangents()[Corner] = Src.GetVertexInstanceTangents()[Original];
+                Dst.GetVertexInstanceBinormalSigns()[Corner] = Src.GetVertexInstanceBinormalSigns()[Original];
+                Dst.GetVertexInstanceColors()[Corner] = Src.GetVertexInstanceColors()[Original];
+                for (int32 Channel = 0; Channel < Channels; ++Channel)
+                    Dst.GetVertexInstanceUVs().Set(Corner, Channel, Src.GetVertexInstanceUVs().Get(Original, Channel));
+            }
+            Selected.CreateTriangle(Groups[Data.Description.GetTrianglePolygonGroup(Triangle).GetValue()], Corners);
+        }
+        return Selected;
+    };
+    Translucent.Description = Select(Blend);
+    Data.Description = Select(Opaque);
+    // CollisionBytes retain the independently derived full-source triangle BVH.
 }
 bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
 {
@@ -319,12 +404,9 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
 {
     check(IsInGameThread());
     UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer, Name, RF_Transient);
+    Stats.NaniteReason = TEXT("disabled:empty_geometry");
     if (Data.Description.Triangles().Num() == 0) return Mesh;
-    Mesh->bAllowCPUAccess = true; Mesh->bSupportRayTracing = true; Mesh->bGenerateMeshDistanceField = true;
-    Mesh->GetNaniteSettings().bEnabled = true;
-    Mesh->GetNaniteSettings().FallbackTarget = ENaniteFallbackTarget::PercentTriangles;
-    Mesh->GetNaniteSettings().FallbackPercentTriangles = 1.0f;
-    Mesh->GetNaniteSettings().FallbackRelativeError = 1.0f;
+    Mesh->bSupportRayTracing = true;
     for (int32 I = 0; I < Data.MaterialNames.Num(); ++I)
         Mesh->GetStaticMaterials().Add(FStaticMaterial(Material ? Material : UMaterial::GetDefaultMaterial(MD_Surface), FName(*FString::Printf(TEXT("Slot_%d"), I))));
     Mesh->CreateBodySetup(); auto* Body = Mesh->GetBodySetup();
@@ -332,6 +414,14 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     Body->bNeverNeedsCookedCollisionData = true; // Avoid the synchronous implicit cook in Build().
     const double Start = FPlatformTime::Seconds();
 #if WITH_EDITOR
+    Mesh->bGenerateMeshDistanceField = Data.bEnableNanite;
+    Mesh->GetNaniteSettings().bEnabled = Data.bEnableNanite;
+    Mesh->GetNaniteSettings().bExplicitTangents = true;
+    Mesh->GetNaniteSettings().FallbackTarget = ENaniteFallbackTarget::PercentTriangles;
+    Mesh->GetNaniteSettings().FallbackPercentTriangles = 1.0f;
+    Mesh->GetNaniteSettings().FallbackRelativeError = 0.0f;
+    Stats.bNaniteEnabled = Data.bEnableNanite;
+    Stats.NaniteReason = Data.bEnableNanite ? TEXT("accepted") : TEXT("skipped:translucent");
     auto& Model = Mesh->AddSourceModel();
     Model.BuildSettings.bRecomputeNormals = false;
     Model.BuildSettings.bRecomputeTangents = !Data.bHasTangents;
@@ -340,7 +430,7 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     Model.BuildSettings.bUseFullPrecisionUVs = true;
     Model.BuildSettings.bUseHighPrecisionTangentBasis = true;
     Model.BuildSettings.bRemoveDegenerates = false;
-    Model.BuildSettings.MaxLumenMeshCards = 12;
+    Model.BuildSettings.MaxLumenMeshCards = Data.bEnableNanite ? 12 : 0;
     Mesh->CreateMeshDescription(0, Data.Description);
     UStaticMesh::FCommitMeshDescriptionParams Commit; Commit.bMarkPackageDirty = false; Commit.bUseHashAsGuid = true;
     Mesh->CommitMeshDescription(0, Commit);
@@ -352,8 +442,9 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     Mesh->Build(true);
     FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
 #else
+    Stats.NaniteReason = TEXT("disabled:non_editor_host");
     UStaticMesh::FBuildMeshDescriptionsParams Params;
-    Params.bFastBuild = true; Params.bAllowCpuAccess = true; Params.bBuildSimpleCollision = false;
+    Params.bFastBuild = true; Params.bAllowCpuAccess = false; Params.bBuildSimpleCollision = false;
     Mesh->BuildFromMeshDescriptions({&Data.Description}, Params);
 #endif
     Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
@@ -379,6 +470,7 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
         Body->bNeverNeedsCookedCollisionData = false;
         Stats.CollisionSeconds = Data.CollisionDeriveSeconds;
         Stats.bCollision = true;
+        Stats.CollisionTriangles = Geometry->Elements().GetNumTriangles();
     }
     const auto* Render = Mesh->GetRenderData();
     if (!Render || Render->LODResources.IsEmpty()) { Error = TEXT("Static mesh build produced no render data"); return nullptr; }
@@ -388,6 +480,7 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     Stats.bDistanceField = LOD.DistanceFieldData != nullptr; Stats.bRayTracingGeometry = LOD.RayTracingGeometry != nullptr
         || (Render->RayTracingProxy && !Render->RayTracingProxy->LODs.IsEmpty() && Render->RayTracingProxy->LODs[0].RayTracingGeometry);
 #if WITH_EDITOR
+    if (Stats.bNaniteEnabled && !Stats.Clusters) Stats.NaniteReason = TEXT("disabled:no_clusters");
     Stats.bMeshCards = LOD.CardRepresentationData != nullptr;
     Stats.Cards = LOD.CardRepresentationData ? LOD.CardRepresentationData->MeshCardsBuildData.CardBuildData.Num() : 0;
 #endif

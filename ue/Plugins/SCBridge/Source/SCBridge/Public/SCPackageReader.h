@@ -15,6 +15,7 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString ParentNodeName;
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;
+    FString ImportWarning; // Invalid optional instance: retain identity to suppress descendants.
     FMatrix LocalMatrix = FMatrix::Identity;
 };
 USTRUCT(BlueprintType)
@@ -32,6 +33,7 @@ struct SCBRIDGE_API FSCSubmaterial
     UPROPERTY(BlueprintReadOnly) int32 SourceIndex = 0; // Authored material index can be sparse.
     UPROPERTY(BlueprintReadOnly) FString Name;
     UPROPERTY(BlueprintReadOnly) FString ShaderFamily;
+    UPROPERTY(BlueprintReadOnly) bool bBlended = false;
     // Lossless metadata for WP-U2, including texture roles and authored parameters.
     UPROPERTY(BlueprintReadOnly) FString Json;
 };
@@ -76,6 +78,6 @@ class SCBRIDGE_API FSCPackageReader
 {
 public:
     // Empty ScenePath selects the sole manifest; shared roots with multiple scenes require an explicit path.
-    static bool Read(const FSCPackageSource& Source, FSCSceneManifest& Out, FString& Error, const FString& ScenePath = TEXT(""));
+    static bool Read(const FSCPackageSource& Source, FSCSceneManifest& Out, FString& Error, const FString& ScenePath = TEXT(""), TArray<FString>* Warnings = nullptr);
     static FString Hash(const TArray<uint8>& Bytes);
 };

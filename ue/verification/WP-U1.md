@@ -310,3 +310,199 @@ ue/scripts/run_import.sh
 ue/scripts/test_importer.py
 ue/verification/WP-U1.md
 ```
+
+## Review fixes
+
+Applied after orchestrator commit `784f70c` and its GPU acceptance. These notes
+supersede the earlier fallback/collision wording and object counts above. The
+existing GPU report and `ue/README.md` are unchanged.
+
+1. `FSCMeshImporter` enables explicit Nanite tangents. All Nanite settings,
+   source-model builds, compilation waits, and card-build API calls are inside
+   `WITH_EDITOR`. The non-editor fast-build path reports
+   `nanite=disabled:non_editor_host`, `cards=0`, `mesh_cards=0`, and
+   `distance_field=0`. This round built the chosen Editor host; it did not build
+   another non-editor executable. Header audit covered `StaticMesh.h`
+   (`GetNaniteSettings` is within `WITH_EDITORONLY_DATA`, lines 650–882;
+   `BuildFromMeshDescriptions` is runtime, lines 1838–1891), `BodySetup.h`,
+   `StaticMeshResources.h`, and `StaticMeshOperations.h`. The optional legacy
+   `SCSpike.cpp` is now restricted to `SC_SPIKE && WITH_EDITOR`; automation's
+   Nanite assertions are guarded. No remaining unguarded editor-only API calls
+   were found in SCBridge's Runtime sources.
+2. `FSCImportResult::Warnings` collects path/instance diagnostics. Missing or
+   malformed referenced material sidecars, missing/unsupported meshes, and bad
+   instances are skipped; unresolved parents also suppress their descendants.
+   Unreadable/unsupported scene manifests remain fatal (as do missing world or
+   actor-allocation failure). A degenerate GLB node skips its own geometry while
+   retaining its world matrix and traversing children. Scale `0.001` remains
+   valid. The partial-import fixture combines a broken GLB, missing GLB,
+   missing and invalid sidecars, and unresolved parent chains; the healthy root
+   and sibling still import. A missing primitive material gets an explicit,
+   logged default slot.
+3. `FSCPackageSource` keeps the same `Exists`, `ReadBytes`, and `ListFiles` API.
+   Tar keys now use case-sensitive equality and hashing. USTAR name/prefix,
+   per-file path-only PAX, and legacy GNU long names are supported and tested.
+   Entries larger than `MAX_int32` are rejected with the explicit 2 GiB limit
+   diagnostic before any size narrowing. `make_test_tar.py` now emits USTAR
+   name/prefix first, path-only PAX when needed, and offers `--gnu` for legacy
+   fixtures.
+4. D6 is implemented, not deferred: Glass families (including GlassPBR),
+   MeshDecal, sidecar blended alpha configuration, and glTF `alphaMode=BLEND`
+   select a separate non-Nanite mesh. Both components share the source instance
+   transform and retain original slot indices. A completely translucent source
+   uses one non-Nanite mesh. Each such mesh logs `nanite=skipped:translucent`.
+   Current sidecars use array ordinals; explicit GLB `extras.source_name`
+   resolves older compact material lists when their ordinals disagree.
+   Synthetic tests cover all three classification categories, triangle
+   allocation, unchanged slot indices (including empty sections), and Nanite
+   settings. WP-U2 must bind authored materials only to occupied sections;
+   retained empty slots should keep the opaque placeholder.
+5. `FallbackRelativeError=0.0`, with PercentTriangles=1.0, restores the builder's
+   input-reuse fast path. The full-resolution fallback is **not the collision
+   source**: collision is the independently derived full-source Chaos triangle
+   BVH, attached once per source instance, including triangles routed to the
+   translucent render mesh. Logs now report `collision_triangles` separately.
+6. Removed CPU-access retention and release each derived `FMeshDescription`
+   and serialized collision buffer after instantiation; assembly retains node
+   matrices. Derived format version is now 2. `sc.Import` accepts quoted paths
+   with spaces. The command-line import/camera/verification behavior moved to
+   `FSCImportHarness`; module startup only registers the console command and
+   starts the harness. No Rust, vendored code, plan docs, or GPU report changed.
+
+Verification commands, executed from the repository root (UE/editor invocations
+were sequential):
+
+```bash
+vulkaninfo --summary > ue/SCViewer/Saved/Spikes/review-vulkan.log 2>&1
+ue/scripts/build.sh SCViewerEditor > ue/SCViewer/Saved/Spikes/review-build-final.log 2>&1
+
+UV_CACHE_DIR=/tmp/scviewer-u1-uv uv run --no-project python ue/scripts/make_test_tar.py out/dec-r1 ue/SCViewer/Saved/Import/review-dec-r1.tar
+UV_CACHE_DIR=/tmp/scviewer-u1-uv uv run --no-project python ue/scripts/make_test_tar.py out/dec ue/SCViewer/Saved/Import/review-dec.tar
+
+for sc_review_package in dec-r1 dec; do
+  timeout -k 5 180 "$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
+    "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript \
+    -script="$PWD/ue/scripts/test_importer.py" \
+    -SCPackage="$PWD/out/$sc_review_package" \
+    -SCVerifyTar="$PWD/ue/SCViewer/Saved/Import/review-$sc_review_package.tar" \
+    -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC \
+    -abslog="$PWD/ue/SCViewer/Saved/Spikes/review-tests-$sc_review_package.log" \
+    > "ue/SCViewer/Saved/Spikes/review-tests-$sc_review_package-console.log" 2>&1 || exit $?
+done
+
+for sc_review_package in dec-r1 dec; do
+  timeout -k 5 180 "$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
+    "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript \
+    -script="$PWD/ue/scripts/import_package.py" \
+    -SCPackage="$PWD/out/$sc_review_package" \
+    -SCVerifyTar="$PWD/ue/SCViewer/Saved/Import/review-$sc_review_package.tar" \
+    -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC \
+    -abslog="$PWD/ue/SCViewer/Saved/Spikes/review-python-$sc_review_package.log" \
+    > "ue/SCViewer/Saved/Spikes/review-python-$sc_review_package-console.log" 2>&1 || exit $?
+done
+
+ln -s "$PWD/out/dec-r1" "ue/SCViewer/Saved/Import/review package with spaces"
+timeout -k 5 180 "$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
+  "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript \
+  -script="$PWD/ue/scripts/test_console_import.py" \
+  -SCConsolePackage="$PWD/ue/SCViewer/Saved/Import/review package with spaces" \
+  -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC \
+  -abslog="$PWD/ue/SCViewer/Saved/Spikes/review-console-path.log" \
+  > ue/SCViewer/Saved/Spikes/review-console-path-console.log 2>&1
+
+timeout -k 5 180 ue/scripts/run_import.sh out/dec-r1 -nullrhi \
+  -SCVerifyTar="$PWD/ue/SCViewer/Saved/Import/review-dec-r1.tar" \
+  -abslog="$PWD/ue/SCViewer/Saved/Spikes/review-game.log" \
+  > ue/SCViewer/Saved/Spikes/review-game-console.log 2>&1
+# run_import.sh's earlier -abslog wins: actual host log is Saved/Import/import.log.
+
+git diff --check
+```
+
+Vulkan exited 1: `Failed to detect any valid GPUs` /
+`vkEnumeratePhysicalDevices failed with ERROR_INITIALIZATION_FAILED`.
+The build and all final UE verification commands exited 0. Both tar fixtures
+contain 502 files / 101,734,400 bytes. Before the production fixes, the four new
+regression tests failed; after fixes, all eight registered tests pass for each
+package (`FSCReaderSparse`, `FSCPaths`, `FSCBasis`, `FSCReviewTar`,
+`FSCReviewPartial`, `FSCReviewScale`, `FSCReviewMaterials`, `FSCFolderTarImport`).
+The logs end in `WP-U1 UNIT_TESTS_OK` and `WP-U1 HEADLESS_PYTHON_OK` respectively.
+Quoted console import reports `WP-U1 QUOTED_CONSOLE_OK`.
+
+| Run | Folder seconds | Tar seconds | Result |
+| --- | ---: | ---: | --- |
+| Automation, `out/dec-r1` | 2.4370 | 2.4481 | passed |
+| Automation, `out/dec` | 2.4459 | 2.4501 | passed |
+| Python, `out/dec-r1` | 2.4941 | 2.5000 | passed |
+| Python, `out/dec` | 2.4464 | 2.4554 | passed |
+| Editor `-game` harness, `out/dec-r1` | 2.5361 | 2.4576 | passed |
+
+An initial cache-populating import with the changed build settings took 11.6232 s;
+its immediate tar reload took 2.4587 s. Each complete package has unchanged
+45 source assets / 61 source instances / 51 children / 3 interiors / 63 clips,
+17 referenced material sets and 18 palettes, with zero import warnings. The D6
+split produces 78 render meshes and 111 mesh components (33 additional meshes,
+50 additional components); these are reported separately from source counts.
+
+Representative root hull evidence, identical for both supplied packages:
+
+```text
+opaque:      triangles=140216 nanite=accepted clusters=2491 fallback=140216
+             cards=11 mesh_cards=1 distance_field=1 rt_geometry=1
+             collision=1 collision_triangles=164881
+translucent: triangles=24665 nanite=skipped:translucent clusters=0 fallback=24665
+             cards=0 rt_geometry=1 collision=0
+TRACE hit_hull=1
+```
+
+The render split preserves 140,216 + 24,665 = 164,881 nondegenerate hull triangles.
+Each parity run reports `representations=1`, `old_live=0`, `tracked_old=895`.
+Commandlet mesh counts are `baseline=27 loaded=105 reloaded=105 final=27`;
+the chosen `-game` host reports `baseline=33 loaded=111 reloaded=111 final=33`.
+All old actor/component/package/mesh weak references expire after replacement.
+The representation check requires clusters, cards data, distance field, RT
+geometry and collision for Nanite meshes, zero clusters for conventional
+meshes, and unchanged fallback triangle counts. The root additionally needs
+nonzero Lumen cards. Headless checks establish CPU representation availability,
+not GPU rendering.
+
+All `ue/scripts/*.py` also passed an AST parse using
+`UV_CACHE_DIR=/tmp/scviewer-u1-uv uv run --no-project python`. Final project DDC:
+481 MiB; Intermediate: 398 MiB; filesystem free space: 68 GiB. Generated products,
+logs, tar fixtures and the space-containing symlink remain under ignored Saved,
+Intermediate, Binaries or DerivedDataCache paths. No git mutation/commit was
+attempted.
+
+TODO(WP-U1): Orchestrator GPU revalidation after these fixes: Nanite overview,
+Lumen Scene overview with no black cut-out, and HWRT reflection panels, including
+the new conventional Glass/MeshDecal components. The existing GPU report covers
+the pre-review implementation; this sandbox exposes no Vulkan device.
+
+TODO(WP-V1): Async import API with per-phase progress; prepare all unique meshes
+in parallel and batch async compilation/card completion. Import still blocks
+the game thread through per-mesh `Async(...).Get()` and serial build/waits.
+
+TODO(WP-C1): Bound mesh-description lifetime and processed-cache ownership,
+including source descriptions retained internally by UStaticMesh. Importer's
+own temporary descriptions are now freed immediately after instantiation.
+
+Changed files for the orchestrator (16; no commit created):
+
+```text
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportHarness.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportHarness.h
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportTests.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCImporter.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCMeshImporter.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCPackageReader.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCPackageSource.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCImporter.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCMeshImporter.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCPackageReader.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCPackageSource.h
+ue/Plugins/SCBridge/Source/SCBridge/SCBridge.cpp
+ue/Plugins/SCBridge/Source/SCBridge/SCSpike.cpp
+ue/scripts/make_test_tar.py
+ue/scripts/test_console_import.py
+ue/verification/WP-U1.md
+```

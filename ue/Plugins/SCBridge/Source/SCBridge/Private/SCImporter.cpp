@@ -49,36 +49,81 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
     const double Start = FPlatformTime::Seconds();
     if (!Options.World) { Result.Error = TEXT("Import requires a world"); return false; }
     FSCSceneManifest Manifest;
-    if (!Async(EAsyncExecution::ThreadPool, [&] { return FSCPackageReader::Read(Source, Manifest, Result.Error, Options.ScenePath); }).Get()) return false;
+    if (!Async(EAsyncExecution::ThreadPool, [&] { return FSCPackageReader::Read(Source, Manifest, Result.Error, Options.ScenePath, &Result.Warnings); }).Get()) return false;
     const FString Session = TEXT("/Temp/SC/") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
     FActorSpawnParameters Spawn; Spawn.ObjectFlags |= RF_Transient;
     ASCVehicle* Vehicle = Options.World->SpawnActor<ASCVehicle>(ASCVehicle::StaticClass(), Options.ActorTransform, Spawn);
     if (!Vehicle) { Result.Error = TEXT("Cannot spawn vehicle"); return false; }
     Vehicle->Manifest = Manifest; Vehicle->SessionPath = Session;
     Vehicle->ClipCatalog = NewObject<USCClipCatalog>(Vehicle); Vehicle->ClipCatalog->Clips = Manifest.Clips;
+    auto Warn = [&](const FString& Path, const FString& Message)
+    {
+        Result.Warnings.Add(Path + TEXT(": ") + Message);
+        UE_LOG(LogSCImport, Warning, TEXT("ASSET_WARNING %s: %s"), *Path, *Message);
+    };
+    for (const FString& Warning : Result.Warnings) UE_LOG(LogSCImport, Warning, TEXT("ASSET_WARNING %s"), *Warning);
     TMap<FString, TUniquePtr<FSCDerivedMesh>> Derived;
-    TMap<FString, UStaticMesh*> Meshes;
+    TMap<FString, TArray<UStaticMesh*>> Meshes;
+    TMultiMap<FString, FString> Sidecars;
+    auto CollectSidecar = [&](const FSCSceneInstance& I) { Sidecars.AddUnique(I.MeshAsset, I.MaterialSidecar); };
+    CollectSidecar(Manifest.Root); for (const auto& I : Manifest.Children) CollectSidecar(I);
+    for (const auto& Interior : Manifest.Interiors) for (const auto& I : Interior.Placements) CollectSidecar(I);
     for (const FString& Path : Manifest.MeshAssets())
     {
-        auto Data = MakeUnique<FSCDerivedMesh>();
+        auto Data = MakeUnique<FSCDerivedMesh>(); FString AssetError;
         const double DeriveStart = FPlatformTime::Seconds();
-        if (!Async(EAsyncExecution::ThreadPool, [&] { return FSCMeshImporter::Derive(Source, Path, *Data, Result.Error)
-            && (!Options.bBuildCollision || FSCMeshImporter::DeriveCollision(*Data, Result.Error)); }).Get())
-        { Vehicle->Destroy(); return false; }
+        // TODO(WP-V1): async import API with per-phase progress; prepare all unique meshes
+        // in parallel, then batch async compilation and representation completion.
+        if (!Async(EAsyncExecution::ThreadPool, [&] { return FSCMeshImporter::Derive(Source, Path, *Data, AssetError)
+            && (!Options.bBuildCollision || FSCMeshImporter::DeriveCollision(*Data, AssetError)); }).Get())
+        { Warn(Path, AssetError); continue; }
         const double DeriveSeconds = FPlatformTime::Seconds() - DeriveStart;
-        // Keep primitive slot indices intact. Sparse sidecars may omit inactive source slots;
-        // those slots use the placeholder until WP-U2 applies the authored material policy.
-        Result.ContentHashes.Add(Path, Data->ContentHash);
+        for (const auto& Warning : Data->Warnings) Warn(Path, Warning);
+        TSet<int32> TranslucentSlots = Data->BlendedSlots;
+        auto IsTranslucent = [](const FString& Family)
+        { return Family.StartsWith(TEXT("Glass"), ESearchCase::IgnoreCase) || Family.Equals(TEXT("MeshDecal"), ESearchCase::IgnoreCase); };
+        for (int32 Slot = 0; Slot < Data->MaterialFamilies.Num(); ++Slot)
+            if (IsTranslucent(Data->MaterialFamilies[Slot])) TranslucentSlots.Add(Slot);
+        TArray<FString> Paths; Sidecars.MultiFind(Path, Paths);
+        for (const auto& Sidecar : Paths)
+        {
+            const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; });
+            if (!Set) continue;
+            for (int32 Slot = 0; Slot < Data->MaterialNames.Num(); ++Slot)
+            {
+                const FSCSubmaterial* Sub = Set->Submaterials.IsValidIndex(Slot) ? &Set->Submaterials[Slot] : nullptr;
+                // Current packages use array ordinals. Old compact GLBs explicitly carry
+                // source_name; use it only when that ordinal disagrees with the sidecar.
+                const FString& SourceName = Data->MaterialSourceNames[Slot];
+                if (!SourceName.IsEmpty() && (!Sub || Sub->Name != SourceName))
+                    if (const auto* Named = Set->Submaterials.FindByPredicate([&](const FSCSubmaterial& M) { return M.Name == SourceName; })) Sub = Named;
+                if (Sub && (IsTranslucent(Sub->ShaderFamily) || Sub->bBlended)) TranslucentSlots.Add(Slot);
+            }
+        }
+        FSCDerivedMesh Translucent;
+        FSCMeshImporter::SplitTranslucent(*Data, TranslucentSlots, Translucent);
         UPackage* Package = CreatePackage(*AssetPackage(Session, Path)); Package->SetFlags(RF_Transient);
-        FSCMeshBuildStats Stats;
-        UStaticMesh* Mesh = FSCMeshImporter::Instantiate(*Data, Package, FName(*SafeName(FPaths::GetBaseFilename(Path))), Options.bBuildCollision,
-            UMaterial::GetDefaultMaterial(MD_Surface), Stats, Result.Error);
-        if (!Mesh) { Vehicle->Destroy(); return false; }
-        Vehicle->Meshes.Add(Mesh); Meshes.Add(Path, Mesh); Result.MeshStats.Add(Path, Stats);
-        UE_LOG(LogSCImport, Display, TEXT("MESH path=%s hash=%s triangles=%d degenerate=%d nanite=%s clusters=%d fallback=%d cards=%d distance_field=%d rt_geometry=%d collision=%d derive_s=%.4f build_s=%.4f representation_wait_s=%.4f cook_s=%.4f skins_static=%d"),
-            *Path, *Data->ContentHash, Stats.Triangles, Data->DegenerateTriangles, Stats.Clusters ? TEXT("accepted") : Stats.Triangles ? TEXT("disabled:no_clusters") : TEXT("disabled:empty_geometry"), Stats.Clusters,
-            Stats.FallbackTriangles, Stats.Cards, Stats.bDistanceField, Stats.bRayTracingGeometry, Stats.bCollision, DeriveSeconds, Stats.BuildSeconds,
-            Stats.RepresentationSeconds, Stats.CollisionSeconds, Data->bHasSkins);
+        TArray<UStaticMesh*> Variants;
+        auto Build = [&](const FSCDerivedMesh& Variant, const FString& Suffix, bool bCollision)
+        {
+            FSCMeshBuildStats Stats;
+            UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Variant, Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)), bCollision,
+                UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
+            if (!Mesh) { Warn(Path + Suffix, AssetError); return false; }
+            Vehicle->Meshes.Add(Mesh); Variants.Add(Mesh); Result.MeshStats.Add(Path + Suffix, Stats);
+            UE_LOG(LogSCImport, Display, TEXT("MESH path=%s%s hash=%s triangles=%d degenerate=%d nanite=%s clusters=%d fallback=%d cards=%d mesh_cards=%d distance_field=%d rt_geometry=%d collision=%d collision_triangles=%d derive_s=%.4f build_s=%.4f representation_wait_s=%.4f cook_s=%.4f skins_static=%d"),
+                *Path, *Suffix, *Data->ContentHash, Stats.Triangles, Data->DegenerateTriangles, *Stats.NaniteReason, Stats.Clusters,
+                Stats.FallbackTriangles, Stats.Cards, Stats.bMeshCards, Stats.bDistanceField, Stats.bRayTracingGeometry, Stats.bCollision, Stats.CollisionTriangles, DeriveSeconds, Stats.BuildSeconds,
+                Stats.RepresentationSeconds, Stats.CollisionSeconds, Data->bHasSkins);
+            return true;
+        };
+        if (!Build(*Data, TEXT(""), Options.bBuildCollision)) continue;
+        if (Translucent.bHasGeometry) Build(Translucent, TEXT("_Translucent"), false);
+        Result.ContentHashes.Add(Path, Data->ContentHash); Meshes.Add(Path, MoveTemp(Variants));
+        // Assembly needs helper matrices only. Release CPU geometry and serialized BVH now.
+        Data->Description = FMeshDescription(); Data->CollisionBytes.Empty();
+        // TODO(WP-C1): bound source-description lifetime retained internally by UStaticMesh;
+        // cache CPU derivations independently of transient render UObjects.
         Derived.Add(Path, MoveTemp(Data));
     }
     TMap<FString, FEntity> Entities;
@@ -93,7 +138,7 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         bHelper = false;
         if (I.ParentEntityName.IsEmpty()) return Vehicle->GetRootComponent();
         FEntity* E = Entities.Find(I.ParentEntityName);
-        if (!E) { Result.Error = TEXT("Unresolved parent entity: ") + I.ParentEntityName; return nullptr; }
+        if (!E || !E->Anchor) { Warn(I.EntityName, TEXT("Unresolved parent entity: ") + I.ParentEntityName); return nullptr; }
         if (I.ParentNodeName.IsEmpty()) return E->Anchor;
         if (auto* Existing = E->Helpers.Find(I.ParentNodeName)) { bHelper = true; return *Existing; }
         const FMatrix* Node = E->Mesh ? E->Mesh->Nodes.Find(I.ParentNodeName) : nullptr;
@@ -105,10 +150,11 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
             Node = &E->Mesh->AttachmentRootMatrix;
             UE_LOG(LogSCImport, Display, TEXT("ATTACHMENT_ROOT_FALLBACK entity=%s helper=%s (resolved local transform retained)"), *I.ParentEntityName, *I.ParentNodeName);
         }
-        if (!Node) { Result.Error = TEXT("Unresolved parent helper: ") + I.ParentEntityName + TEXT("/") + I.ParentNodeName; return nullptr; }
+        if (!Node) { Warn(I.EntityName, TEXT("Unresolved parent helper: ") + I.ParentEntityName + TEXT("/") + I.ParentNodeName); return nullptr; }
         auto* Helper = NewAnchor(I.ParentNodeName, E->Anchor, FSCMeshImporter::Transform(*Node));
         E->Helpers.Add(I.ParentNodeName, Helper); bHelper = true; return Helper;
     };
+    int32 RenderInstances = 0;
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity
     {
         FEntity E;
@@ -116,36 +162,47 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         const FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
             bAtHelper, I.SourceTransformBasis == TEXT("cryengine_z_up"));
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
-        if (UStaticMesh** Mesh = Meshes.Find(I.MeshAsset); Mesh && E.Mesh && E.Mesh->Description.Triangles().Num() > 0)
+        if (const auto* Variants = Meshes.Find(I.MeshAsset); Variants && E.Mesh && E.Mesh->bHasGeometry)
         {
+            ++Result.InstanceCount;
+            for (int32 Variant = 0; Variant < Variants->Num(); ++Variant)
+            {
             auto* C = NewObject<UStaticMeshComponent>(Vehicle, MakeUniqueObjectName(Vehicle, UStaticMeshComponent::StaticClass(), TEXT("Mesh")), RF_Transient);
-            Vehicle->AddInstanceComponent(C); C->SetMobility(EComponentMobility::Movable); C->SetupAttachment(E.Anchor); C->SetStaticMesh(*Mesh);
-            C->SetCollisionProfileName(Options.bBuildCollision ? TEXT("BlockAll") : TEXT("NoCollision"));
-            C->SetVisibility(!I.bInvisible); C->SetHiddenInGame(I.bInvisible); C->RegisterComponent(); ++Result.InstanceCount;
+            Vehicle->AddInstanceComponent(C); C->SetMobility(EComponentMobility::Movable); C->SetupAttachment(E.Anchor); C->SetStaticMesh((*Variants)[Variant]);
+            C->ComponentTags.Add(FName(*I.MeshAsset));
+            C->SetCollisionProfileName(Options.bBuildCollision && Variant == 0 ? TEXT("BlockAll") : TEXT("NoCollision"));
+            C->SetVisibility(!I.bInvisible); C->SetHiddenInGame(I.bInvisible); C->RegisterComponent(); ++RenderInstances;
+            }
         }
         return E;
     };
-    Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, Vehicle->GetRootComponent(), false, true));
+    auto CanPlace = [&](const FSCSceneInstance& I)
+    {
+        if (!I.ImportWarning.IsEmpty() || (!I.MeshAsset.IsEmpty() && !Meshes.Contains(I.MeshAsset)))
+        { Warn(I.EntityName, TEXT("Instance skipped: ") + (I.ImportWarning.IsEmpty() ? I.MeshAsset : I.ImportWarning)); return false; }
+        return true;
+    };
+    if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, Vehicle->GetRootComponent(), false, true));
     for (const auto& I : Manifest.Children)
     {
         bool bHelper; auto* Parent = FindParent(I, bHelper);
-        if (!Parent) { Vehicle->Destroy(); return false; }
+        if (!Parent || !CanPlace(I)) { Entities.Add(I.EntityName, FEntity()); continue; }
         // Export order is depth-first; latest matching entity disambiguates repeated loadout instances.
         Entities.Add(I.EntityName, Place(I, Parent, bHelper, false));
     }
     for (const auto& Interior : Manifest.Interiors)
     {
         bool bHelper; auto* Parent = FindParent(Interior.Container, bHelper);
-        if (!Parent) { Vehicle->Destroy(); return false; }
+        if (!Parent) continue;
         const FMatrix W = FSCMeshImporter::CryToGltf();
         auto* Container = NewAnchor(Interior.Container.EntityName, Parent, FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
-        for (const auto& P : Interior.Placements) Place(P, Container, bHelper, false);
+        for (const auto& P : Interior.Placements) if (CanPlace(P)) Place(P, Container, bHelper, false);
     }
     if (Options.bReplacePrevious) Unload(Options.World);
     Vehicles.Add(Options.World, Vehicle); Result.Vehicle = Vehicle; Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;
-    UE_LOG(LogSCImport, Display, TEXT("IMPORT_OK seconds=%.4f assets=%d instances=%d children=%d interiors=%d materials=%d palettes=%d clips=%d game_world=%d"),
-        Result.TotalSeconds, Result.MeshCount, Result.InstanceCount, Manifest.Children.Num(), Manifest.Interiors.Num(), Manifest.Materials.Num(), Manifest.Palettes.Num(), Manifest.Clips.Num(), Options.World->IsGameWorld());
+    UE_LOG(LogSCImport, Display, TEXT("IMPORT_OK seconds=%.4f assets=%d instances=%d children=%d interiors=%d materials=%d palettes=%d clips=%d game_world=%d render_meshes=%d render_instances=%d warnings=%d"),
+        Result.TotalSeconds, Result.MeshCount, Result.InstanceCount, Manifest.Children.Num(), Manifest.Interiors.Num(), Manifest.Materials.Num(), Manifest.Palettes.Num(), Manifest.Clips.Num(), Options.World->IsGameWorld(), Vehicle->Meshes.Num(), RenderInstances, Result.Warnings.Num());
     const FBox Bounds = Vehicle->GetComponentsBoundingBox(true);
     UE_LOG(LogSCImport, Display, TEXT("BOUNDS_CM min=%s max=%s size=%s"), *Bounds.Min.ToString(), *Bounds.Max.ToString(), *Bounds.GetSize().ToString());
     return true;
@@ -196,8 +253,9 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
     bool bRepresentations = true;
     for (const auto& Pair : First.MeshStats)
         if (Pair.Value.Triangles > 0)
-            bRepresentations &= Pair.Value.Clusters > 0 && Pair.Value.bDistanceField && Pair.Value.bMeshCards && Pair.Value.bRayTracingGeometry && Pair.Value.bCollision
-                && Pair.Value.Triangles == Pair.Value.FallbackTriangles;
+            bRepresentations &= (Pair.Value.bNaniteEnabled
+                ? Pair.Value.Clusters > 0 && Pair.Value.bDistanceField && Pair.Value.bMeshCards && Pair.Value.bRayTracingGeometry && Pair.Value.bCollision
+                : Pair.Value.Clusters == 0) && Pair.Value.Triangles == Pair.Value.FallbackTriangles;
     if (const auto* RootStats = First.MeshStats.Find(First.Vehicle->Manifest.Root.MeshAsset)) bRepresentations &= RootStats->Cards > 0;
     if (First.Vehicle->Manifest.Root.MeshAsset.IsEmpty()) { UE_LOG(LogSCImport, Error, TEXT("Hull verification requires root geometry")); Unload(World); return false; }
     const FBox Bounds = First.Vehicle->GetComponentsBoundingBox(true);
@@ -208,7 +266,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
         FHitResult Hit; FCollisionQueryParams Params(SCENE_QUERY_STAT(SCImportTrace), true);
         bHitHull = World->LineTraceSingleByChannel(Hit, P + FVector(0,0,Bounds.Max.Z + 100), P + FVector(0,0,Bounds.Min.Z - 100), ECC_Visibility, Params)
             && Hit.GetActor() == First.Vehicle.Get() && Cast<UStaticMeshComponent>(Hit.GetComponent())
-            && Cast<UStaticMeshComponent>(Hit.GetComponent())->GetStaticMesh() == First.Vehicle->Meshes[First.Vehicle->Manifest.MeshAssets().IndexOfByKey(First.Vehicle->Manifest.Root.MeshAsset)];
+            && Hit.GetComponent()->ComponentHasTag(FName(*First.Vehicle->Manifest.Root.MeshAsset));
     }
     UE_LOG(LogSCImport, Display, TEXT("TRACE hit_hull=%d"), bHitHull);
     if (!Import(Memory, Options, Second)) { UE_LOG(LogSCImport, Error, TEXT("VERIFY tar failed: %s"), *Second.Error); return false; }

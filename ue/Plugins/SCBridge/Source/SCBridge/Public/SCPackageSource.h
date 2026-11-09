@@ -25,7 +25,7 @@ private:
     bool Resolve(const FString& Path, FString& Out) const;
 };
 
-/** Owns the uncompressed tar bytes (safe after sc_free_blob); indexes regular USTAR/GNU entries. */
+/** Owns the uncompressed tar bytes (safe after sc_free_blob); indexes USTAR, PAX path overrides and GNU long names. */
 class SCBRIDGE_API FSCTarPackageSource final : public FSCPackageSource
 {
 public:
@@ -38,6 +38,12 @@ public:
 private:
     struct FEntry { int64 Offset; int64 Size; };
     TArray<uint8> Bytes;
-    TMap<FString, FEntry> Entries;
+    struct FExactPathKeys : BaseKeyFuncs<TPair<FString, FEntry>, FString, false>
+    {
+        static const FString& GetSetKey(const TPair<FString, FEntry>& Entry) { return Entry.Key; }
+        static bool Matches(const FString& A, const FString& B) { return A.Equals(B, ESearchCase::CaseSensitive); }
+        static uint32 GetKeyHash(const FString& Path) { return FCrc::StrCrc32(*Path); }
+    };
+    TMap<FString, FEntry, FDefaultSetAllocator, FExactPathKeys> Entries;
     FString Error;
 };

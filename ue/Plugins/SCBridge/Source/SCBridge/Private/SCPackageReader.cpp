@@ -78,9 +78,11 @@ TArray<FString> FSCSceneManifest::MeshAssets() const
     for (const auto& I : Interiors) for (const auto& P : I.Placements) Add(P);
     TArray<FString> Result = Paths.Array(); Result.Sort(); return Result;
 }
-bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Out, FString& Error, const FString& ScenePath)
+bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Out, FString& Error, const FString& ScenePath, TArray<FString>* Warnings)
 {
     Out = FSCSceneManifest(); Error.Reset();
+    auto Warn = [&](const FString& Path, const FString& Message) { if (Warnings) Warnings->Add(Path + TEXT(": ") + Message); };
+    auto Object = [](const TSharedPtr<FJsonValue>& V) -> FReaderObject { return V && V->Type == EJson::Object ? V->AsObject() : nullptr; };
     Out.ScenePath = ScenePath;
     if (Out.ScenePath.IsEmpty())
     {
@@ -95,24 +97,27 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     if (!Scene->TryGetNumberField(TEXT("version"), Version) || Version != 1 || String(Scene, TEXT("export_kind")) != TEXT("Decomposed"))
     { Error = TEXT("Expected decomposed scene version 1"); return false; }
     const FReaderObject* Root;
-    if (!Scene->TryGetObjectField(TEXT("root_entity"), Root) || !Instance(*Root, Out.Root, Error)) return false;
+    if (!Scene->TryGetObjectField(TEXT("root_entity"), Root)) { Error = TEXT("Scene has no root_entity object"); return false; }
+    FString Detail;
+    if (!Instance(*Root, Out.Root, Detail)) { Out.Root.ImportWarning = Detail; Warn(TEXT("root_entity"), Detail); }
     for (const auto& V : ReaderArray(Scene, TEXT("children")))
     {
         FSCSceneInstance I;
-        if (!Instance(V->AsObject(), I, Error)) return false;
-        if (I.SourceTransformBasis.IsEmpty()) { Error = TEXT("Child lacks resolved source_transform_basis"); return false; }
+        if (!Instance(Object(V), I, Detail)) I.ImportWarning = Detail;
+        if (I.SourceTransformBasis.IsEmpty()) I.ImportWarning = TEXT("Child lacks resolved source_transform_basis");
+        if (!I.ImportWarning.IsEmpty()) Warn(I.EntityName, I.ImportWarning);
         Out.Children.Add(MoveTemp(I));
     }
     for (const auto& V : ReaderArray(Scene, TEXT("interiors")))
     {
-        const auto O = V->AsObject(); FSCInterior I;
-        if (!Instance(O, I.Container, Error, TEXT("container_transform"))) return false;
+        const auto O = Object(V); FSCInterior I;
+        if (!Instance(O, I.Container, Detail, TEXT("container_transform"))) { Warn(TEXT("interior"), Detail); continue; }
         I.Container.EntityName = String(O, TEXT("name"));
         I.Container.SourceTransformBasis = TEXT("cryengine_z_up");
         for (const auto& P : ReaderArray(O, TEXT("placements")))
         {
             FSCSceneInstance Placement;
-            if (!Instance(P->AsObject(), Placement, Error, TEXT("transform"))) return false;
+            if (!Instance(Object(P), Placement, Detail, TEXT("transform"))) { Warn(TEXT("placement"), Detail); continue; }
             Placement.EntityName = String(P->AsObject(), TEXT("cgf_path"));
             Placement.SourceTransformBasis = TEXT("cryengine_z_up");
             I.Placements.Add(MoveTemp(Placement));
@@ -127,39 +132,54 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     for (const FString& Path : Sorted)
     {
         FSCMaterialSet Set; Set.Path = Path; FReaderObject O;
-        if (!ReadJson(Source, Path, O, Error, &Set.ContentHash)) return false;
+        if (!ReadJson(Source, Path, O, Detail, &Set.ContentHash) || !O->HasTypedField<EJson::Array>(TEXT("submaterials")))
+        { Warn(Path, Detail.IsEmpty() ? TEXT("Missing submaterials array") : Detail); Detail.Reset(); continue; }
         for (const auto& V : ReaderArray(O, TEXT("submaterials")))
         {
-            const auto Sub = V->AsObject();
-            if (!Sub) { Error = TEXT("Invalid submaterial"); return false; }
+            const auto Sub = Object(V);
             FSCSubmaterial M; M.Index = Set.Submaterials.Num();
+            if (!Sub) { Warn(Path, TEXT("Invalid submaterial slot; using placeholder")); Set.Submaterials.Add(MoveTemp(M)); continue; }
             double Index;
             if (Sub->TryGetNumberField(TEXT("index"), Index)) M.SourceIndex = int32(Index);
             M.Name = String(Sub, TEXT("submaterial_name")); M.ShaderFamily = String(Sub, TEXT("shader_family")); M.Json = Json(Sub);
+            const FReaderObject* Alpha;
+            if (Sub->TryGetObjectField(TEXT("alpha_config"), Alpha))
+            {
+                (*Alpha)->TryGetBoolField(TEXT("blended"), M.bBlended);
+                FString Mode = String(*Alpha, TEXT("mode"));
+                M.bBlended |= Mode.Equals(TEXT("blend"), ESearchCase::IgnoreCase) || Mode.Equals(TEXT("blended"), ESearchCase::IgnoreCase);
+            }
+            else { FString AlphaMode = String(Sub, TEXT("alpha_config")); M.bBlended = AlphaMode.Equals(TEXT("blended"), ESearchCase::IgnoreCase) || AlphaMode.Equals(TEXT("blend"), ESearchCase::IgnoreCase); }
             Set.Submaterials.Add(MoveTemp(M));
         }
         Out.Materials.Add(MoveTemp(Set));
     }
+    auto ValidateSidecar = [&](FSCSceneInstance& I)
+    {
+        if (!I.MaterialSidecar.IsEmpty() && !Out.Materials.ContainsByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; }))
+            I.ImportWarning = TEXT("Unavailable material sidecar: ") + I.MaterialSidecar;
+    };
+    ValidateSidecar(Out.Root); for (auto& I : Out.Children) ValidateSidecar(I);
+    for (auto& I : Out.Interiors) for (auto& P : I.Placements) ValidateSidecar(P);
     const FString Directory = FPaths::GetPath(Out.ScenePath);
     const FString PalettesPath = Directory / TEXT("palettes.json");
     if (Source.Exists(PalettesPath))
     {
-        FReaderObject O; if (!ReadJson(Source, PalettesPath, O, Error)) return false;
+        FReaderObject O; if (!ReadJson(Source, PalettesPath, O, Detail)) Warn(PalettesPath, Detail);
         for (const auto& V : ReaderArray(O, TEXT("palettes")))
         {
-            if (!V->AsObject()) { Error = TEXT("Invalid palette"); return false; }
+            if (!Object(V)) { Warn(PalettesPath, TEXT("Invalid palette")); continue; }
             FSCPalette P; P.Id = String(V->AsObject(), TEXT("id")); P.Json = Json(V->AsObject()); Out.Palettes.Add(MoveTemp(P));
         }
     }
     for (const auto& V : ReaderArray(*Root, TEXT("animations")))
     {
-        if (!V->AsObject()) { Error = TEXT("Invalid clip record"); return false; }
+        if (!Object(V)) { Warn(Out.ScenePath, TEXT("Invalid clip record")); continue; }
         FSCClipRecord Clip; Clip.Name = String(V->AsObject(), TEXT("name")); Clip.Json = Json(V->AsObject());
         const FString Path = String(V->AsObject(), TEXT("sidecar"));
-        if (!Path.IsEmpty() && !FSCPackageSource::Normalize(Directory / Path, Clip.Sidecar)) { Error = TEXT("Unsafe clip sidecar"); return false; }
+        if (!Path.IsEmpty() && !FSCPackageSource::Normalize(Directory / Path, Clip.Sidecar)) { Warn(Out.ScenePath, TEXT("Unsafe clip sidecar")); continue; }
         Out.Clips.Add(MoveTemp(Clip));
     }
-    for (const FString& Path : Out.MeshAssets())
-        if (!Path.EndsWith(TEXT(".glb")) || !Source.Exists(Path)) { Error = TEXT("Missing/unsupported mesh: ") + Path; return false; }
+    // Mesh existence/format failures are recovered per asset by FSCImporter.
     return true;
 }

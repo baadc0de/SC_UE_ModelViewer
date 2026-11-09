@@ -1,4 +1,4 @@
-#if SC_SPIKE
+#if SC_SPIKE && WITH_EDITOR
 // WP-U0 synthetic feasibility probes. No Star Citizen data or importer policy lives here.
 #include "CoreMinimal.h"
 #include "Camera/CameraActor.h"

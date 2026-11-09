@@ -17,6 +17,7 @@ struct SCBRIDGE_API FSCImportResult
 {
     TWeakObjectPtr<ASCVehicle> Vehicle;
     FString Error;
+    TArray<FString> Warnings; // Each recoverable diagnostic includes its asset/instance path.
     TMap<FString, FSCMeshBuildStats> MeshStats;
     TMap<FString, FString> ContentHashes;
     double TotalSeconds = 0;
@@ -26,7 +27,7 @@ class SCBRIDGE_API FSCImporter
 {
 public:
     // Game-thread synchronous API. Parsing and pure Chaos BVH derivation run on a worker.
-    // Only publishes the new actor after all assets and attachments succeed.
+    // Only publishes the new actor after all readable assets and resolvable attachments are assembled.
     static bool Import(FSCPackageSource& Source, FSCImportOptions Options, FSCImportResult& Result);
     static void Unload(UWorld* World);
     static bool Verify(const FString& Folder, const FString& Tar, UWorld* World);
