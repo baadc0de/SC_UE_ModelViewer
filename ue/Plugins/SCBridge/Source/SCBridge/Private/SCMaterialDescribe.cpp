@@ -295,8 +295,12 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     const bool bOpaqueFamily = D.Master == ESCMaster::Illum || D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered || D.Master == ESCMaster::Fallback;
     // Decal surfaces (MeshDecal, %DECAL sheets) modify the host through the DBuffer; other blended surfaces of
     // the opaque families (Opacity < 1, alpha_config blend) are lit translucent surfaces.
-    if (bDecal) D.Master = ESCMaster::MeshDecal;
-    else if (D.Blend == ESCBlend::Translucent && bOpaqueFamily) D.Master = ESCMaster::Translucent;
+    // A forward-flag Illum with %DECAL is a glow-only overlay (CryEngine: drawn over the host, its diffuse scaled
+    // by DecalDiffuseOpacity): the family stays Illum and it takes the glow-card path below, never the DBuffer
+    // decal master, and decal opacity parameters never touch its emission or coverage.
+    const bool bForwardIllum = F == TEXT("Illum") && bForward;
+    if (bDecal && !bForwardIllum) D.Master = ESCMaster::MeshDecal;
+    else if (D.Blend == ESCBlend::Translucent && bOpaqueFamily && !bForwardIllum) D.Master = ESCMaster::Translucent;
 
     if (D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered)
     {
@@ -364,7 +368,9 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     // Emitting forward-flag Illum surfaces are glow cards: additive unlit emission weighted by texture alpha
     // (soft gradients survive, no clip), split into the non-Nanite mesh like glass. Non-emitting forward
     // materials (glass trims, runtime-driven engine glow) keep the masked opaque path.
-    if (bForward && D.Master == ESCMaster::Illum && D.Scalars.FindRef(TEXT("EmissiveStrength")) > 0.f)
+    // A %DECAL overlay card is a card even at strength 0 (runtime-driven engine glow); its non-emissive colour
+    // (Diffuse x DecalDiffuseOpacity) is not drawn by the additive master. TODO(WP-U2): DecalDiffuseOpacity > 0.
+    if (bForwardIllum && !D.bHidden && (D.Scalars.FindRef(TEXT("EmissiveStrength")) > 0.f || bDecal))
     {
         D.Master = ESCMaster::EmissiveUnlit; D.Blend = ESCBlend::Translucent; D.bGlowCard = true;
         D.Scalars.Add(TEXT("AlphaWeight"), 1.f);
@@ -412,7 +418,7 @@ void FSCMaterialBuilder::ApplyEngineGlow(FSCMaterialDesc& D, float Strength)
 {
     // EmissiveColor already follows the rule (Emissive when non-black, else no tint).
     D.Scalars.Add(TEXT("EmissiveStrength"), Strength);
-    if (D.bForward && D.Master == ESCMaster::Illum && !D.bHidden)
+    if (D.bForward && D.Family == TEXT("Illum") && !D.bHidden && !D.bGlowCard)
     {
         D.Master = ESCMaster::EmissiveUnlit; D.Blend = ESCBlend::Translucent; D.bGlowCard = true; D.bNonNanite = true;
         D.Scalars.Add(TEXT("AlphaWeight"), 1.f);

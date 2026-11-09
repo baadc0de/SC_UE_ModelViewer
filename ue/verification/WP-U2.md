@@ -417,3 +417,35 @@ Remaining suspects: occlusion by the nozzle grille geometry (`engine_a`/`engine_
 AlphaTest 0.03/0.02) or the vertex colours the card carries (not used by the masters; CryEngine may modulate
 glow cards with them). TODO(WP-U2): resolve the invisible nozzle card (depth/visibility debug of the
 `engine_glow` component, vertex-colour semantics).
+
+## Nozzle card fixed: forward Illum `%DECAL` is a glow-only overlay
+
+Cause, confirmed in the builder: thruster `engine_glow` (Illum, `MtlFlags` 50364576 = forward, `StringGenMask`
+`%DECAL`, public params `DecalDiffuseOpacity 0`, `DecalAlphaMult 1`) was routed by the `%DECAL` token to the
+DBuffer colour-decal master, whose coverage = alpha × Opacity × DecalAlphaMultiplier × **DecalDiffuseOpacity (0)**
+— so it drew nothing, at any strength; `ApplyEngineGlow` then saw a MeshDecal master and never made it a card.
+
+Fix (`Describe`): family comes from the shader name; a forward-flag Illum with `%DECAL` is never a DBuffer decal
+or lit-translucent surface — it takes the glow-card path (additive unlit, coverage = texture alpha ×
+`AlphaGlowCutoff` gate only), even at strength 0 so the engine-glow control can drive it. Decal opacity
+parameters never touch its emission or coverage; its non-emissive colour (Diffuse × DecalDiffuseOpacity) is not
+drawn by the additive master (0 here). TODO(WP-U2): a forward `%DECAL` Illum with DecalDiffuseOpacity > 0 would
+also need its diffuse overlay. Test `decal_glow_overlay` (forward Illum + `%DECAL` + DDO 0 → glow card, driven to
+100). `PackageRules` now counts it: `glow_cards=8`.
+
+Diagnostics (game host log, dec-r5):
+
+```text
+ENGINE_GLOW_BOUND entity=AEGS_Gladius_Thruster_Main component=Mesh_21 slot=4 nanite=0 visible=1 bounds_cm=X=94.849 Y=80.354 Z=58.557 material=MID_engine_glow_0
+ENGINE_GLOW_BOUND entity=AEGS_Gladius_Thruster_Main component=Mesh_23 slot=4 nanite=0 visible=1 bounds_cm=X=94.849 Y=80.354 Z=58.557 material=MID_engine_glow_0
+ENGINE_GLOW control=50 emissive=500 instance=MID_engine_glow_0 parent=M_SC_Emissive_Unlit readback=500
+```
+
+The card is bound on both thrusters, visible, in the non-Nanite split component (bounds ≈ 1.9 × 1.6 × 1.2 m,
+not culled), and the driven strength reaches the instance (control 50 × `GlowToEmissive` = 500, read back).
+
+Tests: dec-r5 / dec-r1 / dec exit 0, 12/12, `VERIFY passed=1`; synthetic only 10/10.
+Rear captures (`SC_ARGS="-SCView=180,3,1.0 [-SCEngineGlow=50]" ue/scripts/capture_views.sh out/dec-r5 …`):
+`wp-u2/rear-nozzle-glow10-vs-reference.jpg` (control default 10) and `wp-u2/rear-nozzle-glow50-vs-reference.jpg`
+(ours left, `reference/gladius/rear.webp` right): only the nozzle interior glows, blue-white with brighter ring
+lines, matching the reference; the housing stays unlit; at 50 the glow blooms beyond the nozzle.

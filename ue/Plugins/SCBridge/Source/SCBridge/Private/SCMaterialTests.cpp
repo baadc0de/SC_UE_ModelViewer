@@ -146,6 +146,15 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("colour from the texture"), X->Textures[TEXT("DiffuseMap")].Path, FString(TEXT("tex/illum_diff.png")));
         TestEqual(TEXT("alpha-weighted"), X->Scalars[TEXT("AlphaWeight")], 1.f);
     }
+    if (auto* X = Check(TEXT("decal_glow_overlay"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, true, true))
+    {
+        // Forward Illum + %DECAL + DecalDiffuseOpacity 0: glow-only overlay -> glow card (never a DBuffer decal),
+        // coverage = texture alpha only, decal opacities never scale emission or coverage.
+        TestTrue(TEXT("overlay is a glow card"), X->bGlowCard);
+        TestFalse(TEXT("no decal opacity on the card"), X->Scalars.Contains(TEXT("Opacity")) && X->Scalars[TEXT("Opacity")] == 0.f);
+        FSCMaterialDesc Driven = *X; FSCMaterialBuilder::ApplyEngineGlow(Driven, 100.f);
+        TestEqual(TEXT("engine glow drives the overlay card"), Driven.Scalars[TEXT("EmissiveStrength")], 100.f);
+    }
     if (auto* X = Check(TEXT("card_tinted"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
         // Tint applied once: strength 1 x k, Emissive only as colour.
@@ -291,8 +300,9 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
             if (D.bGlowCard)
             {
                 ++Cards;
-                TestTrue(Where + TEXT(" glow card is additive, alpha-weighted, non-Nanite, emitting"), D.bNonNanite
-                    && D.Scalars.FindRef(TEXT("AlphaWeight")) == 1.f && D.Scalars.FindRef(TEXT("EmissiveStrength")) > 0.f);
+                // Emitting, or a %DECAL glow-only overlay at strength 0 (runtime-driven by controls.engine_glow).
+                TestTrue(Where + TEXT(" glow card is additive, alpha-weighted and non-Nanite"), D.bNonNanite
+                    && D.Scalars.FindRef(TEXT("AlphaWeight")) == 1.f && (D.Scalars.FindRef(TEXT("EmissiveStrength")) > 0.f || Sub.Json.Contains(TEXT("%DECAL"))));
                 continue;
             }
             if (D.Master == ESCMaster::EmissiveUnlit) continue;

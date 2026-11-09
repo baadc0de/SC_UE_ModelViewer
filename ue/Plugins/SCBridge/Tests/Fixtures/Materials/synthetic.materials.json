@@ -1535,6 +1535,62 @@
     "two_sided": true,
     "forward_rendering": false
    }
+  },
+  {
+   "index": 26,
+   "submaterial_name": "decal_glow_overlay",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "StringGenMask",
+     "value": "%DECAL"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.1,0.45,0.85"
+    },
+    {
+     "name": "Emissive",
+     "value": "0,0,0"
+    },
+    {
+     "name": "MtlFlags",
+     "value": "50364576"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "DECAL"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/illum_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "AlphaGlowCutoff": 0,
+    "DecalAlphaMult": 1,
+    "DecalDiffuseOpacity": 0
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
   }
  ]
 }

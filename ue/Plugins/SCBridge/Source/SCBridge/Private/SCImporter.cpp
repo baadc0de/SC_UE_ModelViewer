@@ -219,6 +219,7 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
             }
             const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
             const FString Host = FSCImportMaterials::HostChannel(Set, E.Mesh->MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset));
+            TArray<int32> GlowSlots;
             for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
             {
                 // Bind only sections this variant draws; Nanite never receives a translucent instance.
@@ -228,8 +229,12 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
                 // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
                 if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
                 if (Material) C->SetMaterial(Slot, Material);
+                if (Material && Vehicle->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
             }
             C->RegisterComponent(); ++RenderInstances;
+            for (int32 Slot : GlowSlots) // engine-glow diagnostics: binding, visibility, bounds
+                UE_LOG(LogSCImport, Display, TEXT("ENGINE_GLOW_BOUND entity=%s component=%s slot=%d nanite=%d visible=%d bounds_cm=%s material=%s"),
+                    *I.EntityName, *C->GetName(), Slot, bNanite, C->IsVisible(), *C->Bounds.BoxExtent.ToString(), *C->GetMaterial(Slot)->GetName());
             }
         }
         return E;
