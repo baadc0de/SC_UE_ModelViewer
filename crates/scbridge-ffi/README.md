@@ -17,7 +17,9 @@ Runtime module's dependencies. No editor dependency is introduced here.
 
 `include/scbridge.h` is the complete ownership, threading and option contract.
 Initialize options with `sc_default_options`, open with
-`sc_open(NULL, "./cache/", &handle)`, and call exports from the host's worker.
+`sc_open(NULL, absolute_cache_path, &handle)`, and call exports from the host's worker.
+Resolve that absolute path from the launch directory before UE changes cwd.
+An explicit p4k path must also be UTF-8.
 NULL cache disables persistence. Entity search returns a JSON array; clip and
 light queries return the core catalogue objects unchanged. Exact entity names
 are required for catalogues and exports. `sc_blob` owns an uncompressed tar.
@@ -34,25 +36,35 @@ options are uint32 values restricted to 0/1, and material modes are integer
 constants so malformed C enum input cannot create an invalid Rust enum.
 
 The core currently always emits animation sidecars; `animations=0` returns
-UNSUPPORTED. `collision_reserved` must be zero. Cache statistics expose an atomic
-read-only manifest snapshot plus the core's latest Hit/Miss and automatic write
-cap. Eviction is delegated to the core and is a one-shot cap, not a persistent
-configuration change. Statistics report malformed/missing manifests as errors;
-subsequent core cache operations own their recovery. Cache recovery and export
-algorithms remain in the core.
+UNSUPPORTED. `collision_reserved` must be zero. Statistics use `Session::cache_stats()`
+under the core cache lock: missing cache/manifest reports zero, malformed manifests
+recover using the existing core policy, and the latest Hit/Miss is unchanged.
+Eviction is a one-shot cap, not a persistent configuration change.
 
-The C integration shell has no build.rs. `cargo test` invokes it, builds the
-cdylib and CLI sequentially, compiles the C caller with warnings as errors,
-exports Gladius, extracts with `tar`, runs `scviewer validate`, compares tar bytes
-with the CLI using the same cache, checks the ustar contract and live fixture
-counts, and tests cache reopening and eviction. It requires the installed LIVE
-4.10.2 game data. Artifacts remain under `out/`; temporary caches under `cache/`
-are removed. To test already-built release artifacts:
+The C integration test is an explicit script step, separate from `cargo test`.
+It never invokes Cargo. Build the library and discovery probe with the release
+script, and build the CLI before running it:
 
 ```sh
-SCBRIDGE_CTEST_LIB="$PWD/target/release/libscbridge.so" \
-SCBRIDGE_CTEST_CLI="$PWD/target/release/scviewer" \
-  crates/scbridge-ffi/ctest/run.sh
+scripts/build_ffi.sh
+CARGO_TARGET_DIR=./target cargo build --release -p scviewer-cli
+crates/scbridge-ffi/ctest/run.sh
+```
+
+The probe uses the same `find_p4k()` as the core tests; no archive means a clean
+skip. The script compiles the C caller, extracts its tar, runs `scviewer validate`,
+compares with the CLI using the same cache and checks structural invariants.
+Gladius counts are printed rather than pinned to one game build. Both the work
+folder under `out/` and temporary cache are removed on success or failure;
+`SCBRIDGE_CTEST_KEEP=1` retains only the work folder. Prebuilt artifacts can be
+selected with `SCBRIDGE_CTEST_LIB`, `SCBRIDGE_CTEST_CLI` and
+`SCBRIDGE_CTEST_DISCOVER`. The default paths are `target/release/libscbridge.so`,
+`target/release/scviewer` and `target/debug/examples/discover`.
+
+Synthetic verifier regressions need no game files:
+
+```sh
+python3 -I crates/scbridge-ffi/ctest/test_verify.py
 ```
 
 Independent uncached exports contain different upstream

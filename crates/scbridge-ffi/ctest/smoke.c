@@ -31,9 +31,10 @@ static void write_file(const char *root, const char *name, const void *data, siz
     assert(fwrite(data, 1, len, f) == len); assert(fclose(f) == 0);
 }
 int main(int argc, char **argv) {
-    assert(argc == 4); /* output directory, cache directory or '-', smoke/bench/panic */
+    assert(argc == 4 || argc == 5); /* output, cache or '-', mode, optional discovered p4k */
+    const char *archive = argc == 5 ? argv[4] : NULL;
     double start = now();
-    check(sc_open(NULL, strcmp(argv[2], "-") == 0 ? NULL : argv[2], &h));
+    check(sc_open(archive, strcmp(argv[2], "-") == 0 ? NULL : argv[2], &h));
     if (strcmp(argv[3], "evict") == 0) {
         uint64_t removed; sc_cache_info info;
         check(sc_cache_evict(h, 0, &removed)); check(sc_cache_stats(h, &info));
@@ -85,7 +86,7 @@ int main(int argc, char **argv) {
            (unsigned long long)info.bytes, (unsigned long long)info.entries, info.last_hit);
     uint64_t removed; check(sc_cache_evict(h, UINT64_MAX, &removed)); assert(removed == 0);
     sc_close(h); h = NULL;
-    check(sc_open(NULL, strcmp(argv[2], "-") == 0 ? NULL : argv[2], &h));
+    check(sc_open(archive, strcmp(argv[2], "-") == 0 ? NULL : argv[2], &h));
     check(sc_export_decomposed_mem(h, "AEGS_Gladius", NULL, NULL, NULL, &tar));
     check(sc_cache_stats(h, &info)); assert(!info.enabled || info.last_hit);
     sc_free_blob(&tar);

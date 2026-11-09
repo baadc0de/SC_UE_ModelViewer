@@ -1193,6 +1193,7 @@ dependencies = [
  "scviewer-core",
  "serde",
  "serde_json",
+ "starbreaker-common",
  "tempfile",
 ]
 

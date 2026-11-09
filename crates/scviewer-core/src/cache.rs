@@ -26,6 +26,52 @@ pub struct Cached<T> {
     pub value: T,
     pub cache_status: CacheStatus,
 }
+
+/// Layer-1 payload totals and the latest operation status; excludes manifest/lock bytes.
+#[derive(Debug)]
+pub struct CacheStats {
+    pub bytes: u64,
+    pub entries: u64,
+    pub enabled: bool,
+    pub cap_bytes: u64,
+    pub last_status: CacheStatus,
+}
+
+impl crate::Session {
+    /// Locked cache snapshot. Missing cache/manifest reports zero; malformed
+    /// manifests use the same recovery as reads and eviction. Status is unchanged.
+    pub fn cache_stats(&self) -> Result<CacheStats> {
+        let mut stats = CacheStats {
+            bytes: 0,
+            entries: 0,
+            enabled: self.cache.is_some(),
+            cap_bytes: DEFAULT_CACHE_CAP_BYTES,
+            last_status: self.cache_status(),
+        };
+        if let Some(cache) = &self.cache {
+            let _lock = match cache.lock() {
+                Ok(lock) => lock,
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    return Ok(stats);
+                }
+                Err(error) => return Err(error),
+            };
+            match fs::metadata(cache.root.join("manifest.json")) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(stats),
+                Err(e) => return Err(e.into()),
+                Ok(_) => {}
+            }
+            let manifest = cache.manifest()?;
+            stats.entries = manifest.entries.len() as u64;
+            stats.bytes = manifest.entries.values().map(|entry| entry.size).sum();
+        }
+        Ok(stats)
+    }
+}
 #[derive(Default, Serialize, Deserialize)]
 struct Manifest {
     entries: BTreeMap<String, Entry>,

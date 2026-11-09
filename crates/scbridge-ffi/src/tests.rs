@@ -89,3 +89,34 @@ fn forced_panic_returns_status_and_message() {
         println!("panic test: SC_STATUS_PANIC (3), message={error}; process survived");
     }
 }
+
+#[test]
+fn live_cache_stats_recovers_broken_manifest_and_handles_missing_manifest() {
+    let Ok(found) = starbreaker_common::discover::find_p4k() else {
+        eprintln!("skip: no Data.p4k installed");
+        return;
+    };
+    let cache = tempfile::tempdir().unwrap();
+    let path = CString::new(found.path.to_str().unwrap()).unwrap();
+    let cache_path = CString::new(cache.path().to_str().unwrap()).unwrap();
+    unsafe {
+        let mut h = ptr::null_mut();
+        assert_eq!(
+            sc_open(path.as_ptr(), cache_path.as_ptr(), &mut h),
+            sc_status::SC_STATUS_OK
+        );
+        let mut stats = sc_cache_info::default();
+        assert_eq!(sc_cache_stats(h, &mut stats), sc_status::SC_STATUS_OK);
+        let bytes = stats.bytes;
+        let hit = stats.last_hit;
+        assert!(bytes > 0);
+        std::fs::write(cache.path().join("manifest.json"), b"broken").unwrap();
+        assert_eq!(sc_cache_stats(h, &mut stats), sc_status::SC_STATUS_OK);
+        assert_eq!(stats.bytes, bytes);
+        assert_eq!(stats.last_hit, hit);
+        std::fs::remove_file(cache.path().join("manifest.json")).unwrap();
+        assert_eq!(sc_cache_stats(h, &mut stats), sc_status::SC_STATUS_OK);
+        assert_eq!((stats.bytes, stats.entries), (0, 0));
+        sc_close(h);
+    }
+}

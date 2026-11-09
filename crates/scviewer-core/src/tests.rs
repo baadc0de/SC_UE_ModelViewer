@@ -338,3 +338,27 @@ fn live_clip_catalogue_matches_scene_and_persists() {
         "catalogue hit must not open archive/DataCore"
     );
 }
+
+#[test]
+fn live_cache_statistics_missing_and_recovered_manifest() {
+    let Ok(found) = starbreaker_common::discover::find_p4k() else {
+        eprintln!("skip: no Data.p4k installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let session = Session::open(Some(&found.path), Some(dir.path())).unwrap();
+    let initial = session.cache_stats().unwrap();
+    assert!(initial.enabled && initial.bytes > 0 && initial.entries > 0);
+    fs::write(dir.path().join("manifest.json"), b"invalid").unwrap();
+    let recovered = session.cache_stats().unwrap();
+    assert_eq!(
+        (initial.bytes, initial.entries),
+        (recovered.bytes, recovered.entries)
+    );
+    assert_eq!(initial.last_status, session.cache_status());
+    fs::remove_file(dir.path().join("manifest.json")).unwrap();
+    let missing = session.cache_stats().unwrap();
+    assert_eq!((missing.bytes, missing.entries), (0, 0));
+    session.cache_evict(0).unwrap();
+    assert_eq!(session.cache_stats().unwrap().bytes, 0);
+}

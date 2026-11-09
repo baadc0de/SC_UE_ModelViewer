@@ -20,12 +20,13 @@ pub use types::*;
 pub struct sc_handle {
     session: Session,
     error: CString,
-    cache_dir: Option<PathBuf>,
     poisoned: bool,
 }
 
-/// NULL p4k auto-discovers the install; NULL cache disables persistence.
-/// Pass "./cache/" for the app default. On failure *out is NULL; read
+/// NULL p4k auto-discovers the install; explicit p4k paths must be UTF-8.
+/// NULL cache disables persistence. The host must pass an absolute cache path
+/// resolved from its launch directory, since UE changes cwd during startup.
+/// On failure *out is NULL; read
 /// sc_last_error(NULL) on the same thread for errors before a handle exists.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sc_open(
@@ -50,7 +51,6 @@ pub unsafe extern "C" fn sc_open(
             *out = Box::into_raw(Box::new(sc_handle {
                 session,
                 error: CString::default(),
-                cache_dir,
                 poisoned: false,
             }));
             Ok(())
@@ -130,7 +130,8 @@ pub unsafe extern "C" fn sc_lights(
     }
 }
 
-/// Read an atomic manifest snapshot; does not change last_hit. Disabled cache reports zero bytes/entries.
+/// Read core cache statistics; broken manifests recover under the cache lock.
+/// Missing/disabled cache reports zero bytes/entries; last_hit is unchanged.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sc_cache_stats(h: *mut sc_handle, out: *mut sc_cache_info) -> sc_status {
     unsafe {
@@ -163,7 +164,8 @@ pub unsafe extern "C" fn sc_cache_evict(
 /// POSIX ustar, regular typeflag '0', name/prefix splitting; PAX 'x' path only for
 /// unsplittable names. No GNU longlink entries. All callbacks finish before return.
 /// On ordinary failure out_tar is empty; after PANIC output is unspecified and
-/// must not be used. A failed/poisoned handle must be closed and reopened.
+/// must not be used. Only PANIC poisons the handle and requires close/reopen;
+/// ordinary failures leave it usable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sc_export_decomposed_mem(
     h: *mut sc_handle,

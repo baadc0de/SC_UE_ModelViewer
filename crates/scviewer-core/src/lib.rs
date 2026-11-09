@@ -23,7 +23,7 @@ mod package;
 
 use anyhow::{Context, Result, anyhow, ensure};
 pub use cache::{
-    CACHE_FORMAT_VERSION, CacheStatus, Cached, DEFAULT_CACHE_CAP_BYTES, EXPORTER_DIRTY,
+    CACHE_FORMAT_VERSION, CacheStats, CacheStatus, Cached, DEFAULT_CACHE_CAP_BYTES, EXPORTER_DIRTY,
     EXPORTER_REVISION, EXPORTER_VERSION,
 };
 use index::{BrowserIndex, Loaded, normalize};

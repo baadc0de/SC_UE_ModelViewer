@@ -1,7 +1,9 @@
 /* SCBridge ABI v1. All strings are NUL-terminated UTF-8.
  * Serialize ALL calls on a handle, including last_error and close. Handles may
  * move between threads; never access a handle concurrently or reenter it from a
- * callback. Different handles may be used concurrently.
+ * callback. While export is busy the host's serialization must block close,
+ * last_error and search until export returns.
+ * Different handles may be used concurrently; the library does not supply a host lock.
  * Non-NULL pointers must be valid, aligned and live for the documented duration.
  * Output storage must not alias inputs or hold an outstanding owned allocation.
  * Every entry point catches Rust unwinding panics (not invalid-pointer faults,
@@ -97,8 +99,10 @@ extern "C" {
 #endif // __cplusplus
 
 /*
- NULL p4k auto-discovers the install; NULL cache disables persistence.
- Pass "./cache/" for the app default. On failure *out is NULL; read
+ NULL p4k auto-discovers the install; explicit p4k paths must be UTF-8.
+ NULL cache disables persistence. The host must pass an absolute cache path
+ resolved from its launch directory, since UE changes cwd during startup.
+ On failure *out is NULL; read
  sc_last_error(NULL) on the same thread for errors before a handle exists.
  */
 enum sc_status sc_open(const char *p4k_or_null,
@@ -131,10 +135,10 @@ enum sc_status sc_clip_catalogue(struct sc_handle *h, const char *entity, char *
 enum sc_status sc_lights(struct sc_handle *h, const char *entity, char **out);
 
 /*
- Read an atomic manifest snapshot; does not change last_hit. Disabled cache reports zero bytes/entries.
+ Read core cache statistics; broken manifests recover under the cache lock.
+ Missing/disabled cache reports zero bytes/entries; last_hit is unchanged.
  */
-enum sc_status sc_cache_stats(struct sc_handle *h,
-                              struct sc_cache_info *out);
+enum sc_status sc_cache_stats(struct sc_handle *h, struct sc_cache_info *out);
 
 /*
  Evict LRU entries to cap_bytes and return bytes removed. Zero clears the disk cache.
@@ -147,7 +151,8 @@ enum sc_status sc_cache_evict(struct sc_handle *h, uint64_t cap_bytes, uint64_t 
  POSIX ustar, regular typeflag '0', name/prefix splitting; PAX 'x' path only for
  unsplittable names. No GNU longlink entries. All callbacks finish before return.
  On ordinary failure out_tar is empty; after PANIC output is unspecified and
- must not be used. A failed/poisoned handle must be closed and reopened.
+ must not be used. Only PANIC poisons the handle and requires close/reopen;
+ ordinary failures leave it usable.
  */
 enum sc_status sc_export_decomposed_mem(struct sc_handle *h,
                                         const char *entity,

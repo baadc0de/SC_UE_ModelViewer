@@ -14,4 +14,12 @@ fn generated_header_matches() {
         generated,
         "regenerate with cargo run -p scbridge-ffi --example header"
     );
+    assert_eq!(
+        std::fs::read(
+            root.join("../../ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h")
+        )
+        .unwrap(),
+        generated,
+        "ThirdParty scbridge.h is stale; run scripts/build_ffi.sh"
+    );
 }

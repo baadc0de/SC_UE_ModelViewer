@@ -165,3 +165,60 @@ sc_search_entities
 
 TODO(WP-R4): Add an animation-disable option to scviewer-core and its cache key before accepting animations=0 in the ABI; core changes were outside this assignment's writable scope.
 TODO(WP-R4): Resolve upstream export-stamp timestamp nondeterminism if byte identity between independent uncached exports is required; current exact C/CLI parity uses the shared package cache.
+
+## Cross-review fixes (2026-11-09)
+
+Items 1, 2, 5, 6 and 7 are implemented. The FFI section now describes the twelve
+current entry points, value layouts, ownership, serialization, UTF-8 paths and
+correct tar order. Cancellation (item 3, and the related part of item 4) is pending
+scope clarification: this round explicitly permits core changes for cache_stats
+and its test only, whereas cancellation requires export-path checkpoints.
+
+- The C smoke test is an explicit script step against prebuilt artifacts; no
+  cargo build runs inside cargo test. Its discovery probe calls find_p4k and
+  skips cleanly if unavailable. Work and cache directories are removed on all
+  exits; SCBRIDGE_CTEST_KEEP=1 keeps the work directory only.
+- Counts are informational. Structural checks require nonempty GLB contents
+  (mesh data or transform-only helper nodes), scene.json first, other paths
+  sorted, matching clip/index ids, and lights arrays. Synthetic tests cover
+  changed counts, zero-vertex meshes, transform-only helpers and missing lights.
+- Hosts must pass an absolute cache path resolved from the launch directory
+  before UE changes cwd. Explicit p4k paths must be UTF-8; NULL cache still
+  disables persistence. Only PANIC poisons a handle.
+- Session::cache_stats owns the locked snapshot and malformed-manifest recovery;
+  a missing cache or manifest returns zero. The FFI no longer parses manifests.
+- Header drift testing now checks the ThirdParty copy too. The cdylib's Linux
+  linker invocation sets SONAME to libscbridge.so.
+
+Regression-first evidence: the previous FFI failed the broken-manifest test with
+ERROR; the previous verifier rejected a valid synthetic export solely because
+its counts were (1,0,0,0,0). Both regressions now pass.
+
+Verification (Cargo home points to the writable sandbox copy; target stays shared):
+
+```sh
+export CARGO_HOME=/tmp/wp-r4-cargo-home
+export CARGO_TARGET_DIR=./target
+scripts/build_ffi.sh
+cargo build --locked --release -p scviewer-cli
+cargo test --locked --workspace -- --nocapture
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u HOME' \
+  cargo test --locked --workspace -- --nocapture
+crates/scbridge-ffi/ctest/run.sh
+env -u HOME crates/scbridge-ffi/ctest/run.sh
+python3 -I crates/scbridge-ffi/ctest/test_verify.py
+readelf -d target/release/libscbridge.so
+nm -D --defined-only target/release/libscbridge.so
+```
+
+The no-archive run removes HOME only from test subprocesses, leaving Cargo's
+build environment intact. Discovery then has no Linux home-relative install;
+the Windows fallback is absent here. SC_DATA_P4K was never set. Both workspace
+runs passed: 4 FFI + 1 header + 18 core tests; live tests reported skips without
+the archive. All 4 synthetic verifier tests passed. The C smoke passed validation
+and byte comparison, printed 45 GLBs / 23 sidecars / 366 PNGs / 63 clips / 77
+lights, and left no wp-r4-ctest work directory. The absent-archive script returned
+success with SKIP. readelf reports `Library soname: [libscbridge.so]`; nm reports
+only the same twelve production sc_* text symbols.
+
+TODO(WP-R4): Cancellation and its CANCELLED/header documentation require authorization for narrow core export checkpoints beyond the cache_stats-only edit permission in this review round.
