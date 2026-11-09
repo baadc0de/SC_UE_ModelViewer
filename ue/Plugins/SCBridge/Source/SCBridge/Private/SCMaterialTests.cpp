@@ -122,6 +122,21 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     const float DefaultClip = GetDefault<UMaterial>()->OpacityMaskClipValue;
     if (auto* X = Check(TEXT("forward_trim"), ESCMaster::Illum, ESCBlend::Masked, false, false))
         TestEqual(TEXT("non-emitting forward surface stays masked at the engine default clip"), X->Scalars[TEXT("AlphaTest")], DefaultClip);
+    if (const FSCMaterialDesc* X = Find(D, TEXT("forward_trim")))
+    {
+        // controls.engine_glow on a forward Illum target: glow card driven by the control, rule colour (no tint).
+        FSCMaterialDesc Driven = *X; FSCMaterialBuilder::ApplyEngineGlow(Driven, 50.f);
+        TestTrue(TEXT("driven forward target is a non-Nanite glow card"), Driven.bGlowCard && Driven.bNonNanite && Driven.Master == ESCMaster::EmissiveUnlit);
+        TestEqual(TEXT("control strength"), Driven.Scalars[TEXT("EmissiveStrength")], 50.f);
+        TestTrue(TEXT("black Emissive = no tint"), Near(Driven.Vectors[TEXT("EmissiveColor")], FLinearColor::White));
+        TestTrue(TEXT("split decision knows engine-glow targets"), FSCMaterialBuilder::RequiresNonNanite(
+            *M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("forward_trim"); }), true));
+    }
+    if (const FSCMaterialDesc* X = Find(D, TEXT("illum_spec")))
+    {
+        FSCMaterialDesc Driven = *X; FSCMaterialBuilder::ApplyEngineGlow(Driven, 50.f);
+        TestTrue(TEXT("driven non-forward target stays a lit Nanite surface"), Driven.Master == ESCMaster::Illum && !Driven.bNonNanite);
+    }
     if (auto* X = Check(TEXT("forward_glow"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
         // Headlight_Glow-like: forward flag + Emissive 1,1,1 + no Glow -> glow card, strength mean(Emissive) = 1,

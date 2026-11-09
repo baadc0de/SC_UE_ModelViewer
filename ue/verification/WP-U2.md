@@ -352,3 +352,31 @@ concurrently; earlier warm runs 2.9–3.1 s). Screenshots `wp-u2/r5-three-quarte
 `r5-rear.jpg`, `r5-lumen.jpg`, refreshed `three-quarter-vs-reference.jpg`: blue strips glow at the wing tips,
 wing leading edges, fin roots and under the rear module; orange fin-tip points; Lumen Scene / HWRT unchanged
 (hull present, no cut-out; additive cards are, like glass, not in the surface cache).
+
+## Engine-glow control (WP-R5 regenerated dec-r5)
+
+`controls.engine_glow` in dec-r5: range 0–200 `emission_strength`, default 0, four targets on
+`AEGS_Gladius_Thruster_Main_TEX2.materials.json`: `engine_a` (Illum, AlphaTest 0.03), `engine_b` (Illum),
+`text_decals` (Illum, `MtlFlags` 160, not forward), `engine_glow` (Illum, forward, Diffuse blue, glow atlas).
+
+Implementation: `FSCImportMaterials` applies `ApplyEngineGlow(default_strength)` to each target; the colour stays
+the rule's (surface colour × Emissive when non-black — all four have black Emissive, so the surface colour
+itself, never a fixed blue); strength is the control value 1:1 in UE emissive units, clamped to min/max by
+`ASCVehicle::SetEngineGlow` (`sc.EngineGlow`, harness `-SCEngineGlow=`). A forward-flag Illum target becomes a
+glow card (additive, alpha-weighted) and the D6 split now asks `RequiresNonNanite(Sub, bEngineGlowTarget)`, so it
+lands in the non-Nanite mesh; non-forward targets stay lit Nanite surfaces whose emissive parameter is driven.
+Tests: driven forward target → card, non-Nanite, strength 50, no tint; driven non-forward target stays Illum
+Nanite. All three packages: 12/12 passed, `VERIFY passed=1`; GPU log `MATERIALS … engine_glow=4`.
+
+GPU, `SC_ARGS="-SCView=180,3,1.0 -SCEngineGlow=<v>" ue/scripts/capture_views.sh out/dec-r5 …`:
+`wp-u2/rear-engine-glow50.jpg`, `wp-u2/rear-engine-glow5-vs-reference.jpg` (ours left, `reference/gladius/rear.webp`
+right), `wp-u2/nozzle-engine-glow5.jpg`. **Finding:** driving the targets as linked lights up the whole thruster
+housing (`engine_a`/`engine_b` cover it; their dark-grey diffuse × 50 saturates to white, × 5 reads lavender-grey),
+while the reference glows blue-white only inside the nozzle oval. The `engine_glow` card inside the oval is not
+distinguishable from the housing glow. `text_decals` (alpha-gated glyphs on the housing) shows at most faint light
+marks along the housing at strength 5 — it cannot be separated from the `engine_a/b` glow, so the capture neither
+confirms nor rules out the link. Conclusion for WP-R5: the `engine_a`/`engine_b` (and probably `text_decals`) links
+drive the whole housing's emission, which does not match the reference; the material side follows the data.
+TODO(WP-R5): re-check which submaterials the DataCore Glow links should target (only the nozzle glow surface
+glows in the reference). TODO(WP-R5): switch to the v2 `emissive` object once it carries `forward_rendering` and the
+glow-card strength (dec-r5 still encodes the pre-amendment rule, e.g. Headlight_Glow strength 0).

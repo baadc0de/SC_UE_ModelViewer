@@ -108,7 +108,11 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
             if (!Set) continue;
             for (int32 Slot = 0; Slot < Data->MaterialNames.Num(); ++Slot)
                 if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Data->MaterialSourceNames, Slot))
-                    if (FSCMaterialBuilder::RequiresNonNanite(*Sub)) TranslucentSlots.Add(Slot); // D6, decided by the builder
+                {
+                    const bool bGlowTarget = Manifest.EngineGlow.Targets.ContainsByPredicate([&](const FSCEngineGlowTarget& T)
+                        { return T.MaterialSidecar == Sidecar && T.SourceMaterialIndex == Sub->SourceIndex; });
+                    if (FSCMaterialBuilder::RequiresNonNanite(*Sub, bGlowTarget)) TranslucentSlots.Add(Slot); // D6, decided by the builder
+                }
         }
         TArray<int32>& SlotTriangles = MeshSlotTriangles.Add(Path);
         SlotTriangles.SetNumZeroed(Data->MaterialNames.Num());

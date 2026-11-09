@@ -266,7 +266,7 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     const bool bDecal = F == TEXT("MeshDecal") || HasToken(Sub, TEXT("DECAL"));
     const float Opacity = A.Float(TEXT("Opacity"), 1.f);
     const float AlphaTest = A.Float(TEXT("AlphaTest"), 0.f);
-    const bool bForward = IsForward(A);
+    const bool bForward = IsForward(A); D.bForward = bForward;
     if (bDecal || In.bBlended || (Opacity < 1.f && AlphaTest <= 0.f)) D.Blend = ESCBlend::Translucent;
     else if (AlphaTest > 0.f || bForward) D.Blend = ESCBlend::Masked;
     // Cutoff: authored AlphaTest; a forward card without one uses UE's default opacity-mask clip value.
@@ -361,7 +361,12 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     return D;
 }
 
-bool FSCMaterialBuilder::RequiresNonNanite(const FSCSubmaterial& Sub) { return Describe(Sub, nullptr).bNonNanite; }
+bool FSCMaterialBuilder::RequiresNonNanite(const FSCSubmaterial& Sub, bool bEngineGlowTarget)
+{
+    FSCMaterialDesc D = Describe(Sub, nullptr);
+    if (bEngineGlowTarget) ApplyEngineGlow(D, 0.f);
+    return D.bNonNanite;
+}
 
 FString FSCMaterialBuilder::HostChannel(const FSCSubmaterial& Sub)
 {
@@ -380,6 +385,11 @@ bool FSCMaterialBuilder::PaletteColor(const FSCPalette* Palette, const FString& 
 
 void FSCMaterialBuilder::ApplyEngineGlow(FSCMaterialDesc& D, float Strength)
 {
-    D.Vectors.Add(TEXT("EmissiveColor"), FLinearColor::White);
+    // EmissiveColor already follows the rule (Emissive when non-black, else no tint).
     D.Scalars.Add(TEXT("EmissiveStrength"), Strength);
+    if (D.bForward && D.Master == ESCMaster::Illum && !D.bHidden)
+    {
+        D.Master = ESCMaster::EmissiveUnlit; D.Blend = ESCBlend::Translucent; D.bGlowCard = true; D.bNonNanite = true;
+        D.Scalars.Add(TEXT("AlphaWeight"), 1.f);
+    }
 }
