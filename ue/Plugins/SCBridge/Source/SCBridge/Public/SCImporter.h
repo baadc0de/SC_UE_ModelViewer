@@ -40,6 +40,8 @@ class SCBRIDGE_API USCImportLibrary : public UBlueprintFunctionLibrary
 public:
     UFUNCTION(BlueprintCallable, Category="SC|Verification")
     static bool RunUnitTests();
+    UFUNCTION(BlueprintCallable, Category="SC|Verification")
+    static bool VerifyRig(ASCVehicle* Vehicle, const FString& PoseReference = TEXT(""), FName PoseClip = NAME_None);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static ASCVehicle* ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision = true);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))

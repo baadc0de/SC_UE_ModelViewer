@@ -27,6 +27,19 @@ void FSCImportHarness::Start()
             ASCVehicle* Vehicle = USCImportLibrary::ImportFolder(World, Folder);
             if (Vehicle)
             {
+                FString Clip, Fragment, Tag, Reference, PoseClip;
+                bool RigOK = true;
+                if (FParse::Param(FCommandLine::Get(), TEXT("SCVerifyRig")))
+                {
+                    FParse::Value(FCommandLine::Get(), TEXT("SCPoseReference="), Reference);
+                    FParse::Value(FCommandLine::Get(), TEXT("SCPoseClip="), PoseClip);
+                    RigOK = USCImportLibrary::VerifyRig(Vehicle, Reference, FName(*PoseClip));
+                    if (!RigOK) { FPlatformMisc::RequestExitWithStatus(false, 1); return false; }
+                }
+                if (FParse::Value(FCommandLine::Get(), TEXT("SCSnapClip="), Clip)) Vehicle->SnapClip(FName(*Clip), true);
+                if (FParse::Value(FCommandLine::Get(), TEXT("SCPlayClip="), Clip)) Vehicle->PlayClip(FName(*Clip));
+                if (FParse::Value(FCommandLine::Get(), TEXT("SCFragment="), Fragment))
+                { FParse::Value(FCommandLine::Get(), TEXT("SCTag="), Tag); Vehicle->PlayFragment(FName(*Fragment), FName(*Tag)); }
                 const FBox Bounds = Vehicle->GetComponentsBoundingBox(true);
                 // Review camera: -SCView=yaw,pitch,distance (degrees, x bounds radius) orbits the bounds
                 // centre, -SCTarget=x,y,z offsets the look-at point in cm. Defaults frame the whole model.

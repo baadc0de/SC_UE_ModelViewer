@@ -2,6 +2,12 @@
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
+#include "SCSkeletonBuilder.h"
+#include "SCAnimImporter.h"
+#include "SCLightImporter.h"
+#include "SCRigComponent.h"
+#include "Animation/Skeleton.h"
+#include "Engine/SkeletalMesh.h"
 #include "Async/Async.h"
 #include "IImageWrapperModule.h"
 #include "Modules/ModuleManager.h"
@@ -18,6 +24,7 @@
 #include "UObject/UObjectIterator.h"
 #include "RenderingThread.h"
 #include "StaticMeshResources.h"
+#include "PhysicsEngine/BodySetup.h"
 
 DEFINE_LOG_CATEGORY(LogSCImport);
 namespace
@@ -39,6 +46,7 @@ struct FEntity
     USceneComponent* Anchor = nullptr;
     const FSCDerivedMesh* Mesh = nullptr;
     TMap<FString, USceneComponent*> Helpers;
+    USCRigComponent* Rig = nullptr;
 };
 int32 StaticMeshCount()
 {
@@ -59,7 +67,7 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
     ASCVehicle* Vehicle = Options.World->SpawnActor<ASCVehicle>(ASCVehicle::StaticClass(), Options.ActorTransform, Spawn);
     if (!Vehicle) { Result.Error = TEXT("Cannot spawn vehicle"); return false; }
     Vehicle->Manifest = Manifest; Vehicle->SessionPath = Session;
-    Vehicle->ClipCatalog = NewObject<USCClipCatalog>(Vehicle); Vehicle->ClipCatalog->Clips = Manifest.Clips;
+    Vehicle->ClipCatalog = NewObject<USCClipCatalog>(Vehicle);
     auto Warn = [&](const FString& Path, const FString& Message)
     {
         Result.Warnings.Add(Path + TEXT(": ") + Message);
@@ -79,6 +87,8 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
     }
     TMap<FString, TUniquePtr<FSCDerivedMesh>> Derived;
     TMap<FString, TArray<UStaticMesh*>> Meshes;
+    TMap<FString, TArray<int32>> SocketNodes;
+    TMap<FString, USkeletalMesh*> RigMeshes;
     TMap<FString, TSet<int32>> MeshTranslucentSlots;
     TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
     TMultiMap<FString, FString> Sidecars;
@@ -91,8 +101,7 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         const double DeriveStart = FPlatformTime::Seconds();
         // TODO(WP-V1): async import API with per-phase progress; prepare all unique meshes
         // in parallel, then batch async compilation and representation completion.
-        if (!Async(EAsyncExecution::ThreadPool, [&] { return FSCMeshImporter::Derive(Source, Path, *Data, AssetError)
-            && (!Options.bBuildCollision || FSCMeshImporter::DeriveCollision(*Data, AssetError)); }).Get())
+        if (!Async(EAsyncExecution::ThreadPool, [&] { return FSCMeshImporter::Derive(Source, Path, *Data, AssetError); }).Get())
         { Warn(Path, AssetError); continue; }
         const double DeriveSeconds = FPlatformTime::Seconds() - DeriveStart;
         for (const auto& Warning : Data->Warnings) Warn(Path, Warning);
@@ -118,25 +127,47 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         SlotTriangles.SetNumZeroed(Data->MaterialNames.Num());
         for (auto T : Data->Description.Triangles().GetElementIDs())
             if (SlotTriangles.IsValidIndex(Data->Description.GetTrianglePolygonGroup(T).GetValue())) ++SlotTriangles[Data->Description.GetTrianglePolygonGroup(T).GetValue()];
-        FSCDerivedMesh Translucent;
-        FSCMeshImporter::SplitTranslucent(*Data, TranslucentSlots, Translucent);
         UPackage* Package = CreatePackage(*AssetPackage(Session, Path)); Package->SetFlags(RF_Transient);
-        TArray<UStaticMesh*> Variants;
-        auto Build = [&](const FSCDerivedMesh& Variant, const FString& Suffix, bool bCollision)
+        USkeleton* Skeleton = nullptr;
+        USkeletalMesh* RigMesh = FSCSkeletonBuilder::Build(*Data, Package, Skeleton);
+        TArray<FTriangleID> Soft;
+        TMap<int32, TArray<FTriangleID>> Rigid;
+        for (auto T : Data->Description.Triangles().GetElementIDs())
         {
+            const auto V = Data->Description.GetTriangleVertices(T);
+            if (Data->SkinWeights.Contains(V[0])) Soft.Add(T);
+            else Rigid.FindOrAdd(Data->TriangleNodes.FindRef(T)).Add(T);
+        }
+        auto SoftData = FSCMeshImporter::Select(*Data, Soft); SoftData.GltfToRig = Data->GltfToRig;
+        if (!FSCSkeletalMeshImporter::Build(SoftData, RigMesh, AssetError)) { Warn(Path, AssetError); continue; }
+        Vehicle->SkeletalMeshes.Add(RigMesh); RigMeshes.Add(Path, RigMesh);
+        UE_LOG(LogSCImport, Display, TEXT("RIG path=%s bones=%d soft_triangles=%d rigid_groups=%d"),
+            *Path, RigMesh->GetRefSkeleton().GetNum(), Soft.Num(), Rigid.Num());
+        TArray<UStaticMesh*> Variants;
+        TArray<int32>& Sockets = SocketNodes.Add(Path);
+        auto Build = [&](FSCDerivedMesh& Variant, const FString& Suffix, bool bCollision)
+        {
+            if (bCollision && Variant.CollisionBytes.IsEmpty() && !FSCMeshImporter::DeriveCollision(Variant, AssetError)) { Warn(Path + Suffix, AssetError); return false; }
             FSCMeshBuildStats Stats;
             UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Variant, Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)), bCollision,
                 UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
             if (!Mesh) { Warn(Path + Suffix, AssetError); return false; }
-            Vehicle->Meshes.Add(Mesh); Variants.Add(Mesh); Result.MeshStats.Add(Path + Suffix, Stats);
-            UE_LOG(LogSCImport, Display, TEXT("MESH path=%s%s hash=%s triangles=%d degenerate=%d nanite=%s clusters=%d fallback=%d cards=%d mesh_cards=%d distance_field=%d rt_geometry=%d collision=%d collision_triangles=%d derive_s=%.4f build_s=%.4f representation_wait_s=%.4f cook_s=%.4f skins_static=%d"),
-                *Path, *Suffix, *Data->ContentHash, Stats.Triangles, Data->DegenerateTriangles, *Stats.NaniteReason, Stats.Clusters,
-                Stats.FallbackTriangles, Stats.Cards, Stats.bMeshCards, Stats.bDistanceField, Stats.bRayTracingGeometry, Stats.bCollision, Stats.CollisionTriangles, DeriveSeconds, Stats.BuildSeconds,
-                Stats.RepresentationSeconds, Stats.CollisionSeconds, Data->bHasSkins);
+            Vehicle->Meshes.Add(Mesh); Variants.Add(Mesh); Sockets.Add(Variant.SocketNode); Result.MeshStats.Add(Path + Suffix, Stats);
+            UE_LOG(LogSCImport, Display, TEXT("MESH path=%s%s triangles=%d nanite=%s clusters=%d fallback=%d cards=%d collision=%d build_s=%.4f"),
+                *Path, *Suffix, Stats.Triangles, *Stats.NaniteReason, Stats.Clusters, Stats.FallbackTriangles, Stats.Cards, Stats.bCollision, Stats.BuildSeconds);
             return true;
         };
-        if (!Build(*Data, TEXT(""), Options.bBuildCollision)) continue;
-        if (Translucent.bHasGeometry) Build(Translucent, TEXT("_Translucent"), false);
+        TArray<int32> Owners; Rigid.GetKeys(Owners); Owners.Sort();
+        for (int32 Owner : Owners)
+        {
+            auto Part = FSCMeshImporter::Select(*Data, Rigid[Owner]); Part.SocketNode = Owner;
+            // Collision includes all triangles of this owner, including glass/decal split, as in U1.
+            if (Options.bBuildCollision) FSCMeshImporter::DeriveCollision(Part, AssetError);
+            FSCDerivedMesh Translucent; FSCMeshImporter::SplitTranslucent(Part, TranslucentSlots, Translucent);
+            const FString Suffix = Variants.IsEmpty() ? TEXT("") : FString::Printf(TEXT("_Node%d"), Owner);
+            Build(Part, Suffix, Options.bBuildCollision);
+            if (Translucent.bHasGeometry) Build(Translucent, Suffix + TEXT("_Translucent"), false);
+        }
         Result.ContentHashes.Add(Path, Data->ContentHash); Meshes.Add(Path, MoveTemp(Variants)); MeshTranslucentSlots.Add(Path, TranslucentSlots);
         // Assembly needs helper matrices only. Release CPU geometry and serialized BVH now.
         Data->Description = FMeshDescription(); Data->CollisionBytes.Empty();
@@ -163,6 +194,17 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
             Materials.SetCount, Materials.MaterialCount, Materials.EngineGlowCount, Materials.DescribeSeconds, Materials.MaterialSeconds,
             Result.MaterialSeconds, WaitSeconds, *Masters);
     }
+    for (const auto& Record : Manifest.Clips)
+    {
+        FSCImportedClip Clip; TSharedPtr<FJsonObject> Json; FString Error;
+        if (!FSCAnimImporter::Read(Source, Record, Manifest.Root.EntityName, Clip, Json, Error)) { Warn(Record.Sidecar, Error); continue; }
+        for (const auto& Pair : Derived)
+            if (!FSCAnimImporter::Bind(Json, *Pair.Value, Pair.Key, RigMeshes[Pair.Key], Vehicle, Clip, Error)) Warn(Record.Sidecar, Error);
+        if (Clip.Bindings.IsEmpty()) Warn(Record.Sidecar, TEXT("No receiver bones in exported geometry"));
+        if (RigMeshes.Contains(Manifest.Root.MeshAsset)) FSCAnimImporter::Finalize(RigMeshes[Manifest.Root.MeshAsset], Vehicle, Clip);
+        Vehicle->ClipCatalog->Clips.Add(MoveTemp(Clip));
+    }
+    UE_LOG(LogSCImport, Display, TEXT("ANIMATIONS imported=%d indexed=%d"), Vehicle->ClipCatalog->Clips.Num(), Manifest.Clips.Num());
     TMap<FString, FEntity> Entities;
     auto NewAnchor = [&](const FString& Label, USceneComponent* Parent, const FMatrix& Relative)
     {
@@ -178,6 +220,12 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         if (!E || !E->Anchor) { Warn(I.EntityName, TEXT("Unresolved parent entity: ") + I.ParentEntityName); return nullptr; }
         if (I.ParentNodeName.IsEmpty()) return E->Anchor;
         if (auto* Existing = E->Helpers.Find(I.ParentNodeName)) { bHelper = true; return *Existing; }
+        if (E->Rig && E->Rig->DoesSocketExist(FName(*I.ParentNodeName)))
+        {
+            auto* H = NewAnchor(I.ParentNodeName, E->Rig, FMatrix::Identity);
+            H->AttachToComponent(E->Rig, FAttachmentTransformRules::KeepRelativeTransform, FName(*I.ParentNodeName));
+            E->Helpers.Add(I.ParentNodeName, H); bHelper = true; return H;
+        }
         const FMatrix* Node = E->Mesh ? E->Mesh->Nodes.Find(I.ParentNodeName) : nullptr;
         if (!Node && E->Mesh)
             for (const auto& Pair : E->Mesh->Nodes) if (Pair.Key.Equals(I.ParentNodeName, ESearchCase::IgnoreCase)) { Node = &Pair.Value; break; }
@@ -199,6 +247,20 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         const FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
             bAtHelper, I.SourceTransformBasis == TEXT("cryengine_z_up"));
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
+        if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
+        {
+            E.Rig = NewObject<USCRigComponent>(Vehicle, NAME_None, RF_Transient);
+            Vehicle->AddInstanceComponent(E.Rig); Vehicle->Rigs.Add(E.Rig);
+            E.Rig->SetMobility(EComponentMobility::Movable); E.Rig->SetupAttachment(E.Anchor);
+            E.Rig->SetSkeletalMesh(*RigMesh); E.Rig->MeshAsset = I.MeshAsset; E.Rig->OwnerEntity = I.EntityName;
+            E.Rig->SetCollisionProfileName(TEXT("NoCollision")); E.Rig->SetVisibility(!I.bInvisible); E.Rig->SetHiddenInGame(I.bInvisible);
+            const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
+            const FString Host = FSCImportMaterials::HostChannel(Set, E.Mesh->MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset));
+            for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
+                if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
+                    if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host)) E.Rig->SetMaterial(Slot, Mat);
+            E.Rig->RegisterComponent(); E.Rig->ResetPose();
+        }
         if (const auto* Variants = Meshes.Find(I.MeshAsset); Variants && E.Mesh && E.Mesh->bHasGeometry)
         {
             ++Result.InstanceCount;
@@ -206,8 +268,14 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
             {
             auto* C = NewObject<UStaticMeshComponent>(Vehicle, MakeUniqueObjectName(Vehicle, UStaticMeshComponent::StaticClass(), TEXT("Mesh")), RF_Transient);
             Vehicle->AddInstanceComponent(C); C->SetMobility(EComponentMobility::Movable); C->SetupAttachment(E.Anchor); C->SetStaticMesh((*Variants)[Variant]);
+            const int32 Node = SocketNodes[I.MeshAsset][Variant];
+            if (E.Rig && E.Mesh->RigNodes.IsValidIndex(Node))
+            {
+                C->SetupAttachment(E.Rig, FSCSkeletonBuilder::BoneName(*E.Mesh, Node));
+                C->SetRelativeTransform(FTransform(FSCMeshImporter::Transform(E.Mesh->RigNodes[Node].World).Inverse()));
+            }
             C->ComponentTags.Add(FName(*I.MeshAsset));
-            C->SetCollisionProfileName(Options.bBuildCollision && Variant == 0 ? TEXT("BlockAll") : TEXT("NoCollision"));
+            C->SetCollisionProfileName(Options.bBuildCollision && (*Variants)[Variant]->GetBodySetup() && (*Variants)[Variant]->GetBodySetup()->bCreatedPhysicsMeshes ? TEXT("BlockAll") : TEXT("NoCollision"));
             C->SetVisibility(!I.bInvisible); C->SetHiddenInGame(I.bInvisible);
             const UStaticMesh* Mesh = (*Variants)[Variant];
             const TSet<int32>& Translucent = MeshTranslucentSlots.FindRef(I.MeshAsset);
@@ -237,6 +305,12 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
                     *I.EntityName, *C->GetName(), Slot, bNanite, C->IsVisible(), *C->Bounds.BoxExtent.ToString(), *C->GetMaterial(Slot)->GetName());
             }
         }
+        FSCLightImporter::Build(Source, I, Vehicle, E.Anchor, [&](const FString& Name) -> USceneComponent*
+        {
+            if (!E.Rig || !E.Rig->DoesSocketExist(FName(*Name))) return nullptr;
+            auto* H = NewAnchor(Name + TEXT("_LightAnchor"), E.Rig, FMatrix::Identity);
+            H->AttachToComponent(E.Rig, FAttachmentTransformRules::KeepRelativeTransform, FName(*Name)); return H;
+        }, Result.Warnings);
         return E;
     };
     auto CanPlace = [&](const FSCSceneInstance& I)
@@ -259,8 +333,10 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         if (!Parent) continue;
         const FMatrix W = FSCMeshImporter::CryToGltf();
         auto* Container = NewAnchor(Interior.Container.EntityName, Parent, FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
+        FSCLightImporter::Build(Source, Interior.Container, Vehicle, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
         for (const auto& P : Interior.Placements) if (CanPlace(P)) Place(P, Container, bHelper, false);
     }
+    UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), Vehicle->Lights.Num());
     if (Options.bReplacePrevious) Unload(Options.World);
     Vehicles.Add(Options.World, Vehicle); Result.Vehicle = Vehicle; Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;

@@ -15,6 +15,7 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString ParentNodeName;
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;
+    UPROPERTY(BlueprintReadOnly) TArray<FString> LightJson; // lossless state/style/attachment metadata
     FString ImportWarning; // Invalid optional instance: retain identity to suppress descendants.
     FMatrix LocalMatrix = FMatrix::Identity;
 };

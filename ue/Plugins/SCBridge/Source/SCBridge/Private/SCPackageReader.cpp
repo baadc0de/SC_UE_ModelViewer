@@ -49,6 +49,7 @@ bool Matrix(const FReaderObject& O, const TCHAR* Key, FMatrix& Out, FString& Err
 bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, const TCHAR* MatrixKey = TEXT("local_transform_sc"))
 {
     if (!O) { Error = TEXT("Expected scene instance object"); return false; }
+    for (const auto& V : ReaderArray(O, TEXT("lights"))) if (V->Type == EJson::Object) Out.LightJson.Add(Json(V->AsObject()));
     Out.EntityName = String(O, TEXT("entity_name"));
     Out.ParentEntityName = String(O, TEXT("parent_entity_name"));
     Out.ParentNodeName = String(O, TEXT("parent_node_name"));

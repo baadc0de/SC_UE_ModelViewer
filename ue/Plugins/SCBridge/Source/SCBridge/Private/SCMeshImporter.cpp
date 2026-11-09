@@ -72,7 +72,7 @@ struct FGlb
         const auto View = ObjectAt(Json, TEXT("bufferViews"), Int(O, TEXT("bufferView"), -1));
         if (!View || Int(View, TEXT("buffer")) != 0) { Error = TEXT("Missing/external bufferView"); return false; }
         FString Type; O->TryGetStringField(TEXT("type"), Type);
-        A.Components = Type == TEXT("SCALAR") ? 1 : Type == TEXT("VEC2") ? 2 : Type == TEXT("VEC3") ? 3 : Type == TEXT("VEC4") ? 4 : 0;
+        A.Components = Type == TEXT("SCALAR") ? 1 : Type == TEXT("VEC2") ? 2 : Type == TEXT("VEC3") ? 3 : Type == TEXT("VEC4") ? 4 : Type == TEXT("MAT4") ? 16 : 0;
         A.Type = Int(O, TEXT("componentType")); A.Count = Int(O, TEXT("count"));
         A.ComponentSize = A.Type == 5120 || A.Type == 5121 ? 1 : A.Type == 5122 || A.Type == 5123 ? 2 : A.Type == 5125 || A.Type == 5126 ? 4 : 0;
         A.Stride = Int(View, TEXT("byteStride"), A.Components * A.ComponentSize);
@@ -177,9 +177,12 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         auto Group = Out.Description.CreatePolygonGroup(); Groups.Add(Group);
         A.GetPolygonGroupMaterialSlotNames()[Group] = FName(*FString::Printf(TEXT("Slot_%d"), I));
     }
+    struct FBindCheck { int32 Joint; FMatrix InverseBind; FMatrix MeshWorld; };
+    TArray<FBindCheck> BindChecks;
+    TSet<int32> CheckedSkins;
     TSet<int32> Active, Visited;
-    TFunction<bool(int32, const FMatrix&)> Visit;
-    Visit = [&](int32 Index, const FMatrix& Parent)
+    TFunction<bool(int32, const FMatrix&, int32)> Visit;
+    Visit = [&](int32 Index, const FMatrix& Parent, int32 ParentRig)
     {
         const auto Node = ObjectAt(G.Json, TEXT("nodes"), Index);
         if (!Node || Active.Contains(Index) || Visited.Contains(Index)) { Error = TEXT("Invalid/cyclic/multiply-parented GLB node"); return false; }
@@ -189,6 +192,15 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         const FMatrix World = Local * Parent;
         FString NodeName;
         if (Node->TryGetStringField(TEXT("name"), NodeName) && !NodeName.IsEmpty()) Out.Nodes.FindOrAdd(NodeName) = World;
+        FSCRigNode RigNode;
+        RigNode.SourceName = NodeName.IsEmpty() ? FString::Printf(TEXT("Node_%d"), Index) : NodeName;
+        RigNode.Parent = ParentRig; RigNode.GltfIndex = Index;
+        RigNode.Local = FTransform(Transform(Local)); RigNode.World = World;
+        // Exported skin helper aliases are identity children of an identically named owner.
+        // Only that owner receives channels; driving both would apply the rotation twice.
+        for (int32 Ancestor = ParentRig; Ancestor != INDEX_NONE; Ancestor = Out.RigNodes[Ancestor].Parent)
+            if (Out.RigNodes[Ancestor].SourceName.Equals(RigNode.SourceName, ESearchCase::IgnoreCase)) RigNode.bAnimate = false;
+        const int32 RigIndex = Out.RigNodes.Add(RigNode); Out.GltfToRig.Add(Index, RigIndex);
         const int32 MeshIndex = Int(Node, TEXT("mesh"), -1);
         const FVector Scale = World.GetScaleVector();
         const double ScaleProduct = Scale.X * Scale.Y * Scale.Z;
@@ -204,7 +216,7 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
                 const auto Primitive = Value->AsObject(); const FObject* Attributes;
                 if (!Primitive || Int(Primitive, TEXT("mode"), 4) != 4 || !Primitive->TryGetObjectField(TEXT("attributes"), Attributes))
                 { Error = TEXT("Only triangle primitives are supported"); return false; }
-                FAccessor P, N, T, C, U0, U1, Indices;
+                FAccessor P, N, T, C, U0, U1, Indices, Joints, Weights;
                 if (!G.Accessor(Int(*Attributes, TEXT("POSITION"), -1), P) || P.Components != 3) { Error = G.Error; return false; }
                 auto Optional = [&](const TCHAR* Key, FAccessor& Access, int32 Min, int32 Max)
                 {
@@ -215,6 +227,30 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
                 };
                 if (!Optional(TEXT("NORMAL"), N, 3, 3) || !Optional(TEXT("TANGENT"), T, 4, 4) || !Optional(TEXT("COLOR_0"), C, 3, 4)
                     || !Optional(TEXT("TEXCOORD_0"), U0, 2, 2) || !Optional(TEXT("TEXCOORD_1"), U1, 2, 2)) return false;
+                const int32 SkinIndex = Int(Node, TEXT("skin"), -1);
+                const FObject Skin = ObjectAt(G.Json, TEXT("skins"), SkinIndex);
+                const auto& JointNodes = Array(Skin, TEXT("joints"));
+                if (SkinIndex >= 0 && (!Skin || !Optional(TEXT("JOINTS_0"), Joints, 4, 4) || !Optional(TEXT("WEIGHTS_0"), Weights, 4, 4)
+                    || !Joints.Data || !Weights.Data || Joints.Normalized || (Joints.Type != 5121 && Joints.Type != 5123)))
+                { Error = TEXT("Invalid skin joints/weights"); return false; }
+                // Validate inverse-bind accessors. The exporter rebases each skin into its mesh node frame.
+                if (Skin && Skin->HasField(TEXT("inverseBindMatrices")))
+                {
+                    FAccessor IBM;
+                    if (!G.Accessor(Int(Skin, TEXT("inverseBindMatrices")), IBM) || IBM.Components != 16 || IBM.Count != JointNodes.Num())
+                    { Error = TEXT("Invalid inverse bind matrices"); return false; }
+                    if (!CheckedSkins.Contains(SkinIndex))
+                    {
+                        CheckedSkins.Add(SkinIndex);
+                        for (int32 Joint = 0; Joint < IBM.Count; ++Joint)
+                        {
+                            FBindCheck Check; Check.Joint = int32(JointNodes[Joint]->AsNumber()); Check.MeshWorld = World;
+                            for (int32 K = 0; K < 16; ++K) Check.InverseBind.M[K/4][K%4] = IBM.Get(Joint,K);
+                            if (Check.InverseBind.ContainsNaN()) { Error = TEXT("Non-finite inverse bind"); return false; }
+                            BindChecks.Add(Check);
+                        }
+                    }
+                }
                 Out.bHasTangents &= T.Data != nullptr;
                 const bool bIndexed = Primitive->HasField(TEXT("indices"));
                 if (bIndexed && (!G.Accessor(Int(Primitive, TEXT("indices")), Indices) || Indices.Components != 1 || Indices.Normalized
@@ -255,7 +291,24 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
                     {
                         const int32 J = Id[K]; FVertexID* Existing = Vertices.Find(J); FVertexID Vertex;
                         if (Existing) Vertex = *Existing;
-                        else { Vertex = Out.Description.CreateVertex(); Positions[Vertex] = FVector3f(Pos[K]); Vertices.Add(J, Vertex); }
+                        else
+                        {
+                            Vertex = Out.Description.CreateVertex(); Positions[Vertex] = FVector3f(Pos[K]); Vertices.Add(J, Vertex);
+                            if (Skin)
+                            {
+                                FSCVertexWeights W; double Sum = 0;
+                                for (int32 L = 0; L < 4; ++L)
+                                {
+                                    const double Joint = Joints.Get(J, L), Weight = Weights.Get(J, L);
+                                    if (!FMath::IsFinite(Joint) || Joint != FMath::FloorToDouble(Joint) || !JointNodes.IsValidIndex(int32(Joint)) || !FMath::IsFinite(Weight) || Weight < 0)
+                                    { Error = TEXT("Invalid skin influence"); return false; }
+                                    W.Joints[L] = int32(JointNodes[int32(Joint)]->AsNumber()); W.Weights[L] = Weight; Sum += Weight;
+                                }
+                                if (Sum <= SMALL_NUMBER) { Error = TEXT("Zero skin weight sum"); return false; }
+                                for (float& Weight : W.Weights) Weight /= Sum;
+                                Out.SkinWeights.Add(Vertex, W);
+                            }
+                        }
                         const FVertexInstanceID VI = Out.Description.CreateVertexInstance(Vertex); Corners.Add(VI);
                         const FVector Normal = N.Data ? Position(NormalMatrix.TransformVector(N.Vector(J))).GetSafeNormal() : FaceNormal;
                         Normals[VI] = FVector3f(Normal);
@@ -267,11 +320,11 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
                         UVs.Set(VI, 0, U0.Data ? FVector2f(U0.Get(J, 0), U0.Get(J, 1)) : FVector2f::ZeroVector);
                         UVs.Set(VI, 1, U1.Data ? FVector2f(U1.Get(J, 0), U1.Get(J, 1)) : FVector2f::ZeroVector);
                     }
-                    Out.Description.CreateTriangle(Groups[Material], Corners);
+                    Out.TriangleNodes.Add(Out.Description.CreateTriangle(Groups[Material], Corners), RigIndex);
                 }
             }
         }
-        for (const auto& Child : Array(Node, TEXT("children"))) if (!Visit(int32(Child->AsNumber()), World)) return false;
+        for (const auto& Child : Array(Node, TEXT("children"))) if (!Visit(int32(Child->AsNumber()), World, RigIndex)) return false;
         Active.Remove(Index); return true;
     };
     const auto Scene = ObjectAt(G.Json, TEXT("scenes"), Int(G.Json, TEXT("scene")));
@@ -283,7 +336,16 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         // Capture the external coordinate wrapper structurally, never by asset/node name.
         if (Root && !Root->HasField(TEXT("mesh")) && !G.NodeMatrix(Root, Out.RootMatrix)) { Error = TEXT("Invalid root matrix"); return false; }
     }
-    for (const auto& Root : Roots) if (!Visit(int32(Root->AsNumber()), FMatrix::Identity)) return false;
+    for (const auto& Root : Roots) if (!Visit(int32(Root->AsNumber()), FMatrix::Identity, INDEX_NONE)) return false;
+    for (const auto& Check : BindChecks)
+    {
+        const int32* Joint = Out.GltfToRig.Find(Check.Joint);
+        if (!Joint || !(Check.InverseBind * Out.RigNodes[*Joint].World).Equals(Check.MeshWorld, 0.002))
+        {
+            Error = TEXT("Skin inverse bind disagrees with node reference pose; skeleton sidecar required (WP-R6)");
+            return false;
+        }
+    }
     Out.AttachmentRootMatrix = Out.RootMatrix;
     if (Roots.Num() == 1)
     {
@@ -310,19 +372,14 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
     // Hierarchy-only assets are valid attachments; retain their helper nodes.
     return true;
 }
-void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent)
+FSCDerivedMesh FSCMeshImporter::Select(const FSCDerivedMesh& Data, const TArray<FTriangleID>& Triangles)
 {
-    TArray<FTriangleID> Opaque, Blend;
-    for (auto T : Data.Description.Triangles().GetElementIDs())
-        (Slots.Contains(Data.Description.GetTrianglePolygonGroup(T).GetValue()) ? Blend : Opaque).Add(T);
-    if (Blend.IsEmpty()) return;
-    if (Opaque.IsEmpty()) { Data.bEnableNanite = false; return; }
-    Translucent.MaterialNames = Data.MaterialNames;
-    Translucent.ContentHash = Data.ContentHash; Translucent.bHasTangents = Data.bHasTangents;
-    Translucent.bEnableNanite = false; Translucent.bHasGeometry = true;
-    auto Select = [&](const TArray<FTriangleID>& Triangles)
-    {
-        FMeshDescription Selected;
+        FSCDerivedMesh Result;
+        Result.MaterialNames = Data.MaterialNames; Result.MaterialSourceNames = Data.MaterialSourceNames;
+        Result.MaterialFamilies = Data.MaterialFamilies; Result.ContentHash = Data.ContentHash;
+        Result.bHasTangents = Data.bHasTangents; Result.bEnableNanite = Data.bEnableNanite;
+        Result.SocketNode = Data.SocketNode;
+        FMeshDescription& Selected = Result.Description;
         FStaticMeshAttributes Dst(Selected); Dst.Register();
         FStaticMeshConstAttributes Src(Data.Description);
         const int32 Channels = Src.GetVertexInstanceUVs().GetNumChannels();
@@ -347,6 +404,7 @@ void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& 
                 {
                     NewVertex = Selected.CreateVertex(); Vertices.Add(Vertex, NewVertex);
                     Dst.GetVertexPositions()[NewVertex] = Src.GetVertexPositions()[Vertex];
+                    if (const auto* W = Data.SkinWeights.Find(Vertex)) Result.SkinWeights.Add(NewVertex, *W);
                 }
                 const auto Corner = Selected.CreateVertexInstance(NewVertex); Corners.Add(Corner);
                 Dst.GetVertexInstanceNormals()[Corner] = Src.GetVertexInstanceNormals()[Original];
@@ -356,12 +414,26 @@ void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& 
                 for (int32 Channel = 0; Channel < Channels; ++Channel)
                     Dst.GetVertexInstanceUVs().Set(Corner, Channel, Src.GetVertexInstanceUVs().Get(Original, Channel));
             }
-            Selected.CreateTriangle(Groups[Data.Description.GetTrianglePolygonGroup(Triangle).GetValue()], Corners);
+            const auto NewTriangle = Selected.CreateTriangle(Groups[Data.Description.GetTrianglePolygonGroup(Triangle).GetValue()], Corners);
+            Result.TriangleNodes.Add(NewTriangle, Data.TriangleNodes.FindRef(Triangle));
         }
-        return Selected;
-    };
-    Translucent.Description = Select(Blend);
-    Data.Description = Select(Opaque);
+    Result.bHasGeometry = !Triangles.IsEmpty(); return Result;
+}
+void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent)
+{
+    TArray<FTriangleID> Opaque, Blend;
+    for (auto T : Data.Description.Triangles().GetElementIDs())
+        (Slots.Contains(Data.Description.GetTrianglePolygonGroup(T).GetValue()) ? Blend : Opaque).Add(T);
+    if (Blend.IsEmpty()) return;
+    if (Opaque.IsEmpty()) { Data.bEnableNanite = false; return; }
+    Translucent.MaterialNames = Data.MaterialNames;
+    Translucent.ContentHash = Data.ContentHash; Translucent.bHasTangents = Data.bHasTangents;
+    Translucent.bEnableNanite = false; Translucent.bHasGeometry = true;
+    Translucent = Select(Data, Blend); Translucent.bEnableNanite = false;
+    auto OpaqueData = Select(Data, Opaque);
+    Data.Description = MoveTemp(OpaqueData.Description);
+    Data.TriangleNodes = MoveTemp(OpaqueData.TriangleNodes);
+    Data.SkinWeights = MoveTemp(OpaqueData.SkinWeights);
     // CollisionBytes retain the independently derived full-source triangle BVH.
 }
 bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)

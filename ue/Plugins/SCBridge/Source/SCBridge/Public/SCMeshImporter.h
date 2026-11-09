@@ -6,10 +6,30 @@
 
 class UStaticMesh;
 class UMaterialInterface;
+struct SCBRIDGE_API FSCRigNode
+{
+    FString SourceName;
+    int32 Parent = INDEX_NONE;
+    int32 GltfIndex = INDEX_NONE;
+    FTransform Local = FTransform::Identity;
+    FMatrix World = FMatrix::Identity;
+    bool bAnimate = true;
+};
+struct SCBRIDGE_API FSCVertexWeights
+{
+    int32 Joints[4] = {0,0,0,0}; // GLB node indices until skeleton remap
+    float Weights[4] = {1,0,0,0};
+};
 /** Pure CPU data: safe to derive on a worker, cache without retaining UObjects. */
 struct SCBRIDGE_API FSCDerivedMesh
 {
     FMeshDescription Description;
+    TArray<FSCRigNode> RigNodes; // parent-first, includes the coordinate wrapper
+    TMap<int32, int32> GltfToRig;
+    TMap<FTriangleID, int32> TriangleNodes;
+    TMap<FVertexID, FSCVertexWeights> SkinWeights;
+    int32 SocketNode = INDEX_NONE; // split meshes retain world-baked vertices, inverse bind on component
+
     TArray<FString> MaterialNames;
     TArray<FString> MaterialSourceNames, MaterialFamilies, Warnings;
     TSet<int32> BlendedSlots;
@@ -37,8 +57,9 @@ struct SCBRIDGE_API FSCMeshBuildStats
 class SCBRIDGE_API FSCMeshImporter
 {
 public:
-    static constexpr uint32 DerivedFormatVersion = 2; // Include engine version/build settings in a processed-cache key.
+    static constexpr uint32 DerivedFormatVersion = 3; // Include engine version/build settings in a processed-cache key.
     static bool Derive(const FSCPackageSource& Source, const FString& Path, FSCDerivedMesh& Out, FString& Error);
+    static FSCDerivedMesh Select(const FSCDerivedMesh& Data, const TArray<FTriangleID>& Triangles);
     static void SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent);
     static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error);
     static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,

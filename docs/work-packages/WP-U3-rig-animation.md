@@ -48,3 +48,50 @@ guarded by `WITH_EDITOR` with a runtime path kept working.
 - Gladius gear + canopy play together; rigid gear struts follow their bones.
 - Cutlass Black interior lights appear in the `Viewer` level with plausible intensity (a
   lit corridor, not a blown-out one); doors animate.
+
+## Implementation findings / deviations (2026-11-09)
+
+See `ue/verification/WP-U3.md` for commands, measured results, and remaining gates.
+
+- GLB node hierarchies plus skins are sufficient for the supplied packages. The
+  importer verifies that each skin inverse bind composed with its joint's node
+  world transform equals the mesh node's bind transform. No skeleton sidecar is
+  needed for these inputs. Duplicate identity children emitted as skin anchors
+  retain distinct UE bones but do not receive the owner's animation twice.
+- The whitepaper and current implementation disagree about animation locals.
+  `animation/pose.rs::clip_final_pose` writes the sidecar-convention quaternion
+  directly into exported node locals, beneath the existing GLB wrapper. The
+  Blender addon likewise assigns absolute sampled rotations. Applying another
+  Y-up conversion or multiplying identity-root-metadata samples by every bone's
+  bind rotation does not reproduce the supplied/default-pose exports. U3 converts
+  node-local samples with the same matrix as GLB node locals; non-identity
+  `start_rotation` uses `bind * inverse(start) * sample`, while identity or absent
+  clip-root anchors use absolute samples. This is a documented deviation from
+  the brief's blanket “when present” wording, backed by the reference comparison.
+- **Full-pose reference acceptance is blocked by an exporter discrepancy.** The
+  Scorpius gear clip has position-only `BONE_Front_Mid_Arm`; the default-pose
+  exporter replaces its unanimated rotation with identity. The importer keeps
+  its bind rotation. All authored rotation tracks match, but the complete
+  compared pose differs by 154.694311 degrees on that bone. Do not describe the
+  full 5-degree acceptance gate as passed.
+- Each catalogue entry has a sequence. Clips with no receiver in the equipped
+  package retain an empty metadata-only sequence and a warning, and cannot be
+  played. Counts are reported separately from clips bound to actual bones.
+- The old empty `Source/SCBridgeLib/SCBridgeLib.Build.cs` stub was removed because
+  WP-R4 supplies that module under `Source/ThirdParty/SCBridgeLib`; UBT otherwise
+  reports duplicate classes. No writes were made to the WP-R4 folder.
+
+TODO(WP-R6): in `animation/pose.rs`, preserve the reference rotation for channels
+without rotation keys instead of synthesizing identity in `clip_final_pose` and
+applying it unconditionally in `apply_pose_to_skeleton`; regenerate the Scorpius
+`apply_default_animation_pose=true` reference, then rerun the unmodified full-pose
+comparison. No new sidecar field is necessary: `has_rotation` already expresses
+this distinction.
+
+TODO(WP-U3): rerun full-pose acceptance after the WP-R6 reference correction; the
+current reference command intentionally returns failure rather than hiding the
+position-only bone's rotation mismatch.
+
+TODO(WP-U3): orchestrator must run the GPU checks listed in the verification
+record (PIE/game playback, simultaneous clips, socket-following rigid geometry,
+soft skin rendering, lit corridors, projector roll/gobos, Nanite/Lumen parity).
