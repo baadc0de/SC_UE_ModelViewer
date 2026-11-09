@@ -52,3 +52,23 @@ Still open: the full-pose numeric gate waits for the upstream reference fix (WP-
 the ship's own exterior lights still pool strongly on the floor — their authored
 default states are on (Gladius wing lights have positive defaults), so a parked /
 hangar light-state selection is a WP-V2 item, not a data error.
+
+## Full-pose gate closed (WP-R6 reference, superproject 7ba88b8)
+
+```bash
+./target/debug/scviewer glb RSI_Scorpius out/scorpius-default.glb --default-pose
+ue/scripts/run_import.sh out/dec-scorpius -nullrhi -SCVerifyRig \
+  -SCPoseReference="$PWD/out/scorpius-default.glb" -SCPoseClip=landing_gear_extend
+```
+
+```text
+RIG_VERIFY passed=1 clips=69 bound=65 sequences=88 tracks=675 rigs=23 soft_triangles=0 lights=127
+SOURCE_POSE_CHECK passed=1 positions=15 max_position_cm=0.000000000 tolerance_cm=0.01 bind_endpoints=7 max_bind_cm=0.000092858
+POSE_CHECK pending=WP-R6 oracle=0 passed=1 clip=landing_gear_extend bones=33 max_degrees=0.000007 max_centimetres=0.000000 tolerance_degrees=5 tolerance_cm=0.01
+POSE_AUTHORED_ROTATIONS passed=1 bones=26 max_degrees=0.000007 unauthored_reference_differences=0
+```
+
+The importer and the corrected upstream default-pose export agree on every bone of
+the Scorpius landing-gear rig (keyed and unkeyed), so the ≤5° / 1 cm acceptance gate
+of WP-U3 is passed. The `pending=WP-R6 oracle=0` label can be dropped once WP-R6 is
+upstreamed.
