@@ -7,31 +7,77 @@
 #include "Modules/ModuleManager.h"
 #include "TextureResource.h"
 #include "Misc/Paths.h"
+#include "RHIGlobals.h"
 
-bool FSCTextureImporter::Decode(const FSCPackageSource& Source, const FSCTextureKey& Key, FSCDecodedTexture& Out)
+FSCTextureLimits FSCTextureLimits::FromHost()
+{
+    FSCTextureLimits L; L.MaxDimension = GetMax2DTextureDimension(); return L;
+}
+
+int64 FSCTextureImporter::DecodedBytes(int64 W, int64 H)
+{
+    int64 Bytes = 0;
+    for (W = FMath::Max<int64>(W, 1), H = FMath::Max<int64>(H, 1);; W = FMath::Max<int64>(1, W / 2), H = FMath::Max<int64>(1, H / 2))
+    { Bytes += W * H * 4; if (W == 1 && H == 1) break; }
+    return Bytes;
+}
+
+namespace
+{
+/** Header-only probe: the PNG wrapper parses IHDR in SetCompressed; GetRaw decompresses. */
+struct FProbe
+{
+    TSharedPtr<IImageWrapper> Png;
+    TArray<uint8> Bytes;
+    int64 Width = 0, Height = 0;
+};
+bool Probe(const FSCPackageSource& Source, const FSCTextureKey& Key, const FSCTextureLimits& Limits, FProbe& P, FString& Error)
+{
+    IImageWrapperModule* Module = FModuleManager::GetModulePtr<IImageWrapperModule>(TEXT("ImageWrapper"));
+    if (!Module) { Error = TEXT("ImageWrapper module not loaded"); return false; }
+    if (!Source.ReadBytes(Key.Path, P.Bytes, Error)) return false;
+    P.Png = Module->CreateImageWrapper(EImageFormat::PNG);
+    if (!P.Png || !P.Png->SetCompressed(P.Bytes.GetData(), P.Bytes.Num())) { Error = TEXT("Invalid PNG: ") + Key.Path; return false; }
+    P.Width = P.Png->GetWidth(); P.Height = P.Png->GetHeight();
+    const uint32 MaxDim = Limits.MaxDimension ? Limits.MaxDimension : GetMax2DTextureDimension();
+    if (P.Width <= 0 || P.Height <= 0 || P.Width > MaxDim || P.Height > MaxDim)
+    { Error = FString::Printf(TEXT("Texture %lldx%lld outside the RHI limit %u: %s"), P.Width, P.Height, MaxDim, *Key.Path); return false; }
+    if (FSCTextureImporter::DecodedBytes(P.Width, P.Height) > Limits.MaxTextureBytes)
+    { Error = FString::Printf(TEXT("Texture %lldx%lld exceeds the per-texture budget: %s"), P.Width, P.Height, *Key.Path); return false; }
+    return true;
+}
+bool Finish(FProbe& P, const FSCTextureKey& Key, FSCDecodedTexture& Out)
+{
+    TArray64<uint8> Raw;
+    if (!P.Png->GetRaw(ERGBFormat::BGRA, 8, Raw) || Raw.Num() != P.Width * P.Height * 4)
+    { Out.Error = TEXT("Unexpected PNG layout: ") + Key.Path; return false; }
+    P.Png.Reset(); P.Bytes.Empty();
+    Out.Width = int32(P.Width); Out.Height = int32(P.Height);
+    if (Key.Role == ESCTextureRole::Normal)
+        for (int64 I = 1; I < Raw.Num(); I += 4) Raw[I] = 255 - Raw[I]; // glTF +Y -> UE -Y; BGRA index 1 is green
+    Out.Mips.Add(MoveTemp(Raw));
+    FSCTextureImporter::BuildMips(Out);
+    return true;
+}
+float SrgbToLinear(uint8 V) { return FLinearColor::sRGBToLinearTable[V]; }
+uint8 LinearToSrgb(float L)
+{
+    L = FMath::Clamp(L, 0.f, 1.f);
+    const float S = L <= 0.0031308f ? L * 12.92f : 1.055f * FMath::Pow(L, 1.f / 2.4f) - 0.055f;
+    return uint8(FMath::Clamp(FMath::RoundToInt(S * 255.f), 0, 255));
+}
+}
+
+bool FSCTextureImporter::Decode(const FSCPackageSource& Source, const FSCTextureKey& Key, FSCDecodedTexture& Out, const FSCTextureLimits& Limits)
 {
     Out = FSCDecodedTexture(); Out.Key = Key;
-    // Loaded by the importer on the game thread; module lookup is then thread-safe.
-    IImageWrapperModule* Module = FModuleManager::GetModulePtr<IImageWrapperModule>(TEXT("ImageWrapper"));
-    if (!Module) { Out.Error = TEXT("ImageWrapper module not loaded"); return false; }
-    TArray<uint8> Bytes;
-    if (!Source.ReadBytes(Key.Path, Bytes, Out.Error)) return false;
-    TSharedPtr<IImageWrapper> Png = Module->CreateImageWrapper(EImageFormat::PNG);
-    TArray64<uint8> Raw;
-    if (!Png || !Png->SetCompressed(Bytes.GetData(), Bytes.Num()) || !Png->GetRaw(ERGBFormat::BGRA, 8, Raw))
-    { Out.Error = TEXT("Invalid PNG: ") + Key.Path; return false; }
-    Out.Width = int32(Png->GetWidth()); Out.Height = int32(Png->GetHeight());
-    if (Out.Width <= 0 || Out.Height <= 0 || Raw.Num() != int64(Out.Width) * Out.Height * 4)
-    { Out.Error = TEXT("Unexpected PNG layout: ") + Key.Path; return false; }
-    if (Key.Role == ESCTextureRole::Normal)
-        for (int64 I = 1; I < Raw.Num(); I += 4) Raw[I] = 255 - Raw[I]; // BGRA: index 1 is green.
-    Out.Mips.Add(MoveTemp(Raw));
-    BuildMips(Out);
-    return true;
+    FProbe P;
+    return Probe(Source, Key, Limits, P, Out.Error) && Finish(P, Key, Out);
 }
 
 void FSCTextureImporter::BuildMips(FSCDecodedTexture& T)
 {
+    const bool bSrgb = T.Key.Role == ESCTextureRole::Color;
     int32 W = T.Width, H = T.Height;
     while (T.Mips.Num() && (W > 1 || H > 1))
     {
@@ -42,24 +88,39 @@ void FSCTextureImporter::BuildMips(FSCDecodedTexture& T)
             for (int32 X = 0; X < NW; ++X)
                 for (int32 C = 0; C < 4; ++C)
                 {
-                    // Average the 2x2 (or 2x1 / 1x2 at odd edges) footprint of the parent level.
-                    uint32 Sum = 0, Count = 0;
+                    // Average the 2x2 (or 2x1 / 1x2 at odd edges) parent footprint; sRGB colour in linear light.
+                    const bool bLinearize = bSrgb && C < 3;
+                    float Sum = 0; int32 Count = 0;
                     for (int32 DY = 0; DY < (H > 1 ? 2 : 1); ++DY)
                         for (int32 DX = 0; DX < (W > 1 ? 2 : 1); ++DX)
                         {
                             const int32 SX = FMath::Min(X * 2 + DX, W - 1), SY = FMath::Min(Y * 2 + DY, H - 1);
-                            Sum += Src[(int64(SY) * W + SX) * 4 + C]; ++Count;
+                            const uint8 V = Src[(int64(SY) * W + SX) * 4 + C];
+                            Sum += bLinearize ? SrgbToLinear(V) : float(V); ++Count;
                         }
-                    Dst[(int64(Y) * NW + X) * 4 + C] = uint8((Sum + Count / 2) / Count);
+                    Dst[(int64(Y) * NW + X) * 4 + C] = bLinearize ? LinearToSrgb(Sum / Count)
+                        : uint8(FMath::Clamp(FMath::RoundToInt(Sum / Count), 0, 255));
                 }
         T.Mips.Add(MoveTemp(Dst)); W = NW; H = NH;
     }
 }
 
-TArray<FSCDecodedTexture> FSCTextureImporter::DecodeAll(const FSCPackageSource& Source, const TArray<FSCTextureKey>& Keys)
+TArray<FSCDecodedTexture> FSCTextureImporter::DecodeAll(const FSCPackageSource& Source, const TArray<FSCTextureKey>& Keys, const FSCTextureLimits& Limits)
 {
     TArray<FSCDecodedTexture> Out; Out.SetNum(Keys.Num());
-    ParallelFor(Keys.Num(), [&](int32 I) { Decode(Source, Keys[I], Out[I]); });
+    TArray<FProbe> Probes; Probes.SetNum(Keys.Num());
+    TArray<bool> Ok; Ok.Init(false, Keys.Num());
+    ParallelFor(Keys.Num(), [&](int32 I) { Out[I].Key = Keys[I]; Ok[I] = Probe(Source, Keys[I], Limits, Probes[I], Out[I].Error); });
+    int64 Total = 0; // aggregate budget in deterministic key order
+    for (int32 I = 0; I < Keys.Num(); ++I)
+    {
+        if (!Ok[I]) continue;
+        const int64 Bytes = DecodedBytes(Probes[I].Width, Probes[I].Height);
+        if (Total + Bytes > Limits.BudgetBytes)
+        { Ok[I] = false; Probes[I] = FProbe(); Out[I].Error = TEXT("Import texture budget exhausted: ") + Keys[I].Path; continue; }
+        Total += Bytes;
+    }
+    ParallelFor(Keys.Num(), [&](int32 I) { if (Ok[I]) Finish(Probes[I], Keys[I], Out[I]); });
     return Out;
 }
 

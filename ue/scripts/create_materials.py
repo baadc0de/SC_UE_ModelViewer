@@ -62,6 +62,9 @@ class Graph:
             self.m.set_editor_property("translucency_lighting_mode", lighting)
         if nanite:
             self.m.set_editor_property("used_with_nanite", True)
+        # Explicit clip: mask graphs output (alpha - AlphaTest + 0.5), i.e. a texel survives when alpha >= the
+        # instance's authored AlphaTest. UE's default clip (0.3333, Material.cpp) would shift every threshold.
+        self.m.set_editor_property("opacity_mask_clip_value", 0.5)
         self.x, self.y = -2400, -1600
 
     def node(self, cls, **props):
@@ -151,6 +154,13 @@ class Graph:
             self.out(e, "", MP.MP_FRONT_MATERIAL)
         return e
 
+    def weight(self, slab, coverage):
+        """Substrate coverage (MP_Opacity is only live for AlphaComposite under Substrate)."""
+        w = self.node(unreal.MaterialExpressionSubstrateWeight)
+        self.link(slab, "", w, "A")
+        self.link(*coverage, w, "Weight")
+        self.out(w, "", MP.MP_FRONT_MATERIAL)
+
     def save(self):
         mel.layout_material_expressions(self.m)
         mel.recompile_material(self.m)
@@ -231,9 +241,9 @@ def glass_master():
     g.link(*g.vector("SpecularColor", (0.04, 0.04, 0.04)), film, "F0")
     g.link(*g.const3((1, 1, 1)), film, "F90")
     g.link(*g.scalar("ThinFilmThickness", 0.0), film, "Thickness")
-    g.slab(g.const3((0, 0, 0)), (film, "Specular Color"), (film, "Edge Specular Color"), g.roughness("", uv), normal,
-           None, (mfp, "MFP"))
-    g.out(*g.scalar("Opacity", 1.0), MP.MP_OPACITY)
+    slab = g.slab(g.const3((0, 0, 0)), (film, "Specular Color"), (film, "Edge Specular Color"), g.roughness("", uv), normal,
+                  None, (mfp, "MFP"), front=False)
+    g.weight(slab, g.saturate(g.scalar("Opacity", 1.0)))
     return g.save()
 
 
@@ -265,6 +275,17 @@ def decal_master(name, colour):
     uv, diffuse, normal, coverage = decal_surface(g)
     if colour:
         base = g.mul(g.mul((diffuse, "RGB"), g.vector("DiffuseColor", (1, 1, 1))), g.vector("HostTint", (1, 1, 1)))
+        # Stencil decals ($TintPaletteDecal): palettes.json decal red/green/blue chosen by the stencil channels,
+        # each x StencilDiffuseColor{,2,3}; coverage = channel sum x StencilOpacity.
+        stencil = g.texture("StencilMap", g.black_linear, ST.SAMPLERTYPE_MASKS, uv)
+        st_colour = None
+        for c, (pal, tint) in zip("RGB", (("DecalRed", "StencilTint1"), ("DecalGreen", "StencilTint2"), ("DecalBlue", "StencilTint3"))):
+            term = g.mul(g.mul((stencil, c), g.vector(pal, (1, 1, 1))), g.vector(tint, (1, 1, 1)))
+            st_colour = term if st_colour is None else g.add(st_colour, term)
+        st_cover = g.mul(g.saturate(g.add(g.add((stencil, "R"), (stencil, "G")), (stencil, "B"))), g.scalar("StencilOpacity", 1.0))
+        use = g.scalar("UseStencil", 0.0)
+        base = g.lerp(base, st_colour, use)
+        coverage = g.lerp(coverage, st_cover, use)
         f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)),
                    (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB"))
         slab = g.slab(g.mul(base, g.one_minus(g.scalar("Metallic", 0.0))), f0, None, g.roughness("", uv), normal,
@@ -279,16 +300,17 @@ def decal_master(name, colour):
 
 
 def translucent_master():
-    """M_SC_Translucent: lit, two-sided translucent surface for forward-rendered / faded Illum (glow cards,
-    Opacity < 1): coverage = diffuse alpha x Opacity, glow = colour x emissive x strength."""
+    """M_SC_Translucent: lit translucent surface for faded / blended Illum (Opacity < 1, alpha_config blend):
+    coverage = diffuse alpha x Opacity through a Substrate weight, glow = colour x emissive x strength."""
     g = Graph("M_SC_Translucent", unreal.BlendMode.BLEND_TRANSLUCENT,
-              unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING, two_sided=True)
+              unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
     uv, diffuse, normal, coverage = decal_surface(g)
     base = g.mul((diffuse, "RGB"), g.vector("DiffuseColor", (1, 1, 1)))
     f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)),
                (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB"))
-    g.slab(g.mul(base, g.one_minus(g.scalar("Metallic", 0.0))), f0, None, g.roughness("", uv), normal, g.glow(base, (diffuse, "A")))
-    g.out(*coverage, MP.MP_OPACITY)
+    slab = g.slab(g.mul(base, g.one_minus(g.scalar("Metallic", 0.0))), f0, None, g.roughness("", uv), normal,
+                  g.glow(base, (diffuse, "A")), front=False)
+    g.weight(slab, coverage)
     return g.save()
 
 
@@ -304,9 +326,9 @@ def unlit_master():
     return g.save()
 
 
-def variants(master):
+def variants(master, combos=(("_Masked", True, False), ("_TwoSided", False, True), ("_Masked_TwoSided", True, True))):
     """Constant instances that only override blend mode / two-sidedness (shader permutations built here)."""
-    for suffix, masked, two_sided in (("_Masked", True, False), ("_TwoSided", False, True), ("_Masked_TwoSided", True, True)):
+    for suffix, masked, two_sided in combos:
         name = "MI" + master.get_name()[1:] + suffix
         mi = tools.create_asset(name, ROOT, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
         mel.set_material_instance_parent(mi, master)
@@ -337,8 +359,7 @@ for opaque in (surface_master("M_SC_Illum"), layered_master("M_SC_HardSurface", 
                layered_master("M_SC_Layered", LAYERS), surface_master("M_SC_Fallback")):
     variants(opaque)
 glass_master()
-decal_master("M_SC_MeshDecal", True)
-decal_master("M_SC_MeshDecal_Relief", False)
-translucent_master()
+for sided in (decal_master("M_SC_MeshDecal", True), decal_master("M_SC_MeshDecal_Relief", False), translucent_master()):
+    variants(sided, (("_TwoSided", False, True),))  # is_double_sided decals keep reverse-facing triangles
 unlit_master()
 unreal.log("WP-U2 MATERIALS_OK")

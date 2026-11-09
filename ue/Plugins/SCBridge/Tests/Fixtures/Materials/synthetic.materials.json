@@ -1051,7 +1051,7 @@
     },
     {
      "name": "Diffuse",
-     "value": "0.21223079,0.59720188,0.92158198"
+     "value": "0.11,0.37,0.83"
     },
     {
      "name": "Emissive",
@@ -1059,7 +1059,7 @@
     },
     {
      "name": "Glow",
-     "value": "0.30000001"
+     "value": "0.45"
     },
     {
      "name": "MtlFlags",
@@ -1092,6 +1092,147 @@
    "activation_state": {
     "state": "active",
     "reason": "synthetic"
+   }
+  },
+  {
+   "index": 17,
+   "submaterial_name": "glow_zero",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.6,0.3,0.2"
+    },
+    {
+     "name": "Emissive",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Glow",
+     "value": "0"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/illum_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 18,
+   "submaterial_name": "glow_emittance",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.4,0.4,0.5"
+    },
+    {
+     "name": "Emissive",
+     "value": "0.8,0.7,0.6"
+    },
+    {
+     "name": "Glow",
+     "value": "1.5"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "EMITTANCE_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/emit.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "AlphaGlowCutoff": 0.25
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 19,
+   "submaterial_name": "stencil_palette",
+   "shader_family": "MeshDecal",
+   "shader": "MeshDecal",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "MeshDecal"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "VERTDATA",
+     "STENCIL_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot7",
+     "role": "tint_palette_decal",
+     "is_virtual": true
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "StencilDiffuseColor": "0.9,0.8,0.7",
+    "StencilDiffuseColor2": "0.6,0.5,0.4",
+    "StencilDiffuseColor3": "0.3,0.2,0.1",
+    "StencilOpacity": 0.75
+   },
+   "activation_state": {
+    "state": "inactive",
+    "reason": "missing_base_color_texture"
    }
   }
  ]

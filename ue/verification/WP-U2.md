@@ -178,3 +178,64 @@ TODO(WP-U2): `ThinFilmThickness` is passed straight to Substrate's normalised th
 TODO(WP-U2): verify the emissive interior lights the cockpit under Lumen once interior lights exist (WP-R5);
 current interior glows are weak (`buttons` Glow 0.04).
 TODO(WP-C1): cache decoded textures (BGRA8 + mips) with the processed-cache key.
+
+## Review fixes (Codex cross-review of 04c3c0a)
+
+Supersedes the earlier rows on roughness placeholder, white-specular sentinel, forward → translucent and
+screen brightness. Engine facts checked in `~/UnrealEngine/5.8`.
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| 1 | `MP_Opacity` is only live for AlphaComposite under Substrate (`Material.cpp:7928-7931`) | Glass and `M_SC_Translucent` route coverage through a Substrate **Weight** node (`Graph.weight`, slab → `A`, coverage → `Weight` → Front Material); decals already use Convert-To-Decal `Coverage` |
+| 2 | default clip 0.3333 (`Material.cpp:1169`) shifted thresholds | every master sets `opacity_mask_clip_value = 0.5` explicitly; mask graph = alpha − AlphaTest + 0.5, so a texel survives iff alpha ≥ authored AlphaTest. Test: `explicit mask clip 0.5` on every parent |
+| 3 | forward (`MtlFlags & 0x8000`) glow cards were translucent and left the Lumen scene | they are now **masked** opaque-family surfaces (Nanite, Lumen cards, emissive feeds GI); cutoff = authored AlphaTest, else UE's default clip read from the `UMaterial` CDO. Masters: Illum 51 (was 39), Translucent 9 (was 21) |
+| 4 | invented appearance (D11) | removed: roughness-0.5 placeholder (authored Shininess used), white-specular → 0.04 sentinel (authored Specular used), screen emission without Glow, Emissive=0 → white, and the `Max(1, n)` host-tint weight for empty slots (now actual triangle count, empty = 0). Genuinely missing values use the engine/Substrate default of that input (table below) |
+| 5 | single-sided decals | `MI_SC_MeshDecal_TwoSided`, `MI_SC_MeshDecal_Relief_TwoSided`, `MI_SC_Translucent_TwoSided` (two-sided override); `ParentPath` selects them for `is_double_sided`; `M_SC_Translucent` itself is single-sided now |
+| 6 | stencil/emittance routing | stencil decals bind `StencilMap` (TexSlot7 stencil export, or `palettes.json decal.export_path` for `$TintPaletteDecal`), `DecalRed/Green/Blue` from the palette decal channels, `StencilTint1..3` from `StencilDiffuseColor{,2,3}`, `StencilOpacity`, `UseStencil`; colour = Σ channel × decal colour × tint, coverage = Σ channels × StencilOpacity. An inactive `missing_base_color_texture` stencil becomes visible when the palette supplies the texture. `%EMITTANCE_MAP` routes the base-colour slot (no emittance role exists in `TextureSemanticRole`) |
+| 7 | sRGB mips averaged encoded bytes | colour RGB averaged in linear light (`FLinearColor::sRGBToLinearTable`, IEC sRGB encode); alpha, masks, normals as stored. Test: black/white 2×1 → 188 (colour), 128 (linear) |
+| 8 | decode before validation | header probe (PNG IHDR via `SetCompressed`) → RHI limit `GetMax2DTextureDimension()` → per-texture decoded-size budget → aggregate budget in key order → only then `GetRaw`. Rejections are warnings; the material keeps its neutral default. Tests: dimension rejection before decode, aggregate budget |
+| 9 | tests | `PackageRules` skips (info) without `-SCPackage`; explicit assertions: Glow = 0 with Emissive 1,1,1 → 0; `emissives`-like → b > g > r; `AlphaGlowCutoff` from public_params (0.25); emittance routing; stencil binding; real-package `emissives` (if present) emits blue. Fixture `emissives_like` now uses arbitrary values (0.11, 0.37, 0.83 / Glow 0.45) |
+| 10 | decode blocked the game thread | describe + decode start on a worker before the mesh loop and overlap mesh derive/build; the game thread waits only before creating textures/MIDs (`wait_s=0.0000` on the GPU run). TODO(WP-V1) full async API |
+| P3 | `SC_ARGS` under `set -u` | `${SC_ARGS:-}` |
+
+Missing-value policy (engine/Substrate defaults, `MaterialExpressionSubstrate.h` slab docs):
+
+| Input | Authored source | When absent |
+| --- | --- | --- |
+| roughness constant | `Shininess`/255 → smoothness | Substrate default roughness 0.5 (smoothness 0.75); TODO(WP-R5) emit gloss when `Shininess` is absent |
+| roughness map scale | `Shininess`/255 × layer `gloss_mult` | identity (1) |
+| F0 | `Specular` (× `_spec` map), layer snapshot `specular` | Substrate default F0 0.04; TODO(WP-R5) resolve the `Diffuse=Specular=1,1,1` sentinel upstream |
+| albedo | `Diffuse` × base texture × palette | texture as-is; with neither, Substrate default albedo 0.18 |
+| emission | `Emissive` × `Glow` × `GlowToEmissive` × albedo, alpha-gated by `AlphaGlowCutoff` | none (Glow absent/0 or Emissive 0,0,0 → 0); TODO(WP-R5) confirm Glow>0 with Emissive 0,0,0 (`glows`, `buttons`) |
+| mask cutoff | `AlphaTest` | forward cards: UE default clip (`UMaterial` CDO) |
+| multipliers (`DecalAlphaMultiplier`, `DecalDiffuseOpacity`, `GlassTintStrength`, `StencilOpacity`, `uv_tiling`) | public params / manifest | identity (1) |
+
+Fallback register additions: `FSCTextureLimits::MaxTextureBytes` 256 MiB per texture and `BudgetBytes`
+2048 MiB per import (decoded BGRA8 incl. mips) — host memory budgets with no data source; sunset when WP-C1's
+processed texture cache stores compressed platform data.
+
+Commands (from the repository root; UE invocations sequential):
+
+```bash
+ue/scripts/build.sh SCViewerEditor                                                   # Result: Succeeded
+UnrealEditor-Cmd … -script=ue/scripts/create_materials.py -nullrhi …                 # WP-U2 MATERIALS_OK (24 materials)
+for p in dec-r1 dec; do UnrealEditor-Cmd … -script=ue/scripts/test_importer.py \
+  -SCPackage=$PWD/out/$p -SCVerifyTar=$PWD/ue/SCViewer/Saved/Import/review-$p.tar -nullrhi …; done
+UnrealEditor-Cmd … -script=ue/scripts/test_importer.py -nullrhi …                    # synthetic only
+SC_ARGS="-SCView=35,40,1.2" ue/scripts/capture_views.sh out/dec-r1 u2r-3q lit
+SC_ARGS="-SCView=-90,8,1.0" ue/scripts/capture_views.sh out/dec-r1 u2r-side lit
+ue/scripts/capture_views.sh out/dec-r1 u2r lumen
+```
+
+Both packages: exit 0, all 12 tests `passed=1`, `PACKAGE_RULES decals=11 glowing=5 no_glow=210`,
+`VERIFY passed=1 … old_live=0 tracked_old=1939`, `WP-U1 UNIT_TESTS_OK`; synthetic-only run: exit 0, 10 passed.
+GPU (dec-r1): `TEXTURES requested=247 created=247 failed=0`, `MATERIALS … overlapped_s=2.41 wait_s=0.0000 masters:
+Illum=51 Layered=103 HardSurface=44 MeshDecal=35 MeshDecal_Relief=7 Emissive_Unlit=13 Translucent=9 Glass=9
+Fallback=2`, `IMPORT_OK seconds=2.9931`. Screenshots: `wp-u2/review-three-quarter.jpg`, `review-side.jpg`,
+`review-lumen.jpg` — livery, grooves and decals unchanged; Lumen Scene/HWRT show the hull with no black cut-out.
+Visible consequence of rule 4: the blue wing-edge strips (`Headlight_Glow`: Emissive 1,1,1, no Glow) no longer
+emit and read as dim blue paint; only Glow-authored materials (e.g. `emissives`, Glow 0.3) glow.
+
+TODO(WP-R5): sidecar fields named above (gloss when Shininess absent, specular sentinel, emittance role,
+forward/coverage in `alpha_config`, Glow without Emissive, palette `decal.export_path`).
+TODO(WP-V1): async import API with progress; texture creation and MID binding still run on the game thread.

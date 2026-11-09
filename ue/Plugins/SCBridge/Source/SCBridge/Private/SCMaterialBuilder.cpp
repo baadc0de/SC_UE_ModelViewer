@@ -23,12 +23,14 @@ const TCHAR* FSCMaterialBuilder::MasterName(ESCMaster Master)
 
 FString FSCMaterialBuilder::ParentPath(ESCMaster Master, ESCBlend Blend, bool bTwoSided)
 {
-    // Translucent masters carry their own blend mode and sidedness; opaque families have constant variants.
-    const bool bVariant = (Blend == ESCBlend::Masked || bTwoSided) && (Master == ESCMaster::Illum || Master == ESCMaster::HardSurface
-        || Master == ESCMaster::Layered || Master == ESCMaster::Fallback);
-    FString Name = bVariant ? FString(TEXT("MI_")) + MasterName(Master) : FString(TEXT("M_")) + MasterName(Master);
-    if (bVariant && Blend == ESCBlend::Masked) Name += TEXT("_Masked");
-    if (bVariant && bTwoSided) Name += TEXT("_TwoSided");
+    // Opaque families have masked / two-sided constant variants; decal and lit-translucent masters have a
+    // two-sided variant (is_double_sided); glass and screens are single-sided by their data.
+    const bool bOpaque = Master == ESCMaster::Illum || Master == ESCMaster::HardSurface || Master == ESCMaster::Layered || Master == ESCMaster::Fallback;
+    const bool bSided = Master == ESCMaster::MeshDecal || Master == ESCMaster::MeshDecalRelief || Master == ESCMaster::Translucent;
+    const bool bMasked = bOpaque && Blend == ESCBlend::Masked, bTwo = (bOpaque || bSided) && bTwoSided;
+    FString Name = (bMasked || bTwo ? FString(TEXT("MI_")) : FString(TEXT("M_"))) + MasterName(Master);
+    if (bMasked) Name += TEXT("_Masked");
+    if (bTwo) Name += TEXT("_TwoSided");
     return FString::Printf(TEXT("/SCBridge/Materials/%s.%s"), *Name, *Name);
 }
 

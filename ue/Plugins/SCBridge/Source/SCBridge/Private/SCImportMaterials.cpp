@@ -118,7 +118,7 @@ FString FSCImportMaterials::HostChannel(const FSCMaterialSet* Set, const TArray<
         if (const FSCSubmaterial* Sub = Resolve(Set, SourceNames, Slot))
         {
             const FString Channel = FSCMaterialBuilder::HostChannel(*Sub);
-            if (!Channel.IsEmpty()) Weight.FindOrAdd(Channel) += FMath::Max(1, SlotTriangles[Slot]);
+            if (!Channel.IsEmpty() && SlotTriangles[Slot] > 0) Weight.FindOrAdd(Channel) += SlotTriangles[Slot]; // empty slots weigh nothing
         }
     FString Best; int64 BestWeight = -1;
     for (const TCHAR* Channel : Priority) if (const int64* W = Weight.Find(Channel); W && *W > BestWeight) { Best = Channel; BestWeight = *W; }

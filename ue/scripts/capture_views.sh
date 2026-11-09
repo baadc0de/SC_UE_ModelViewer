@@ -24,8 +24,8 @@ for view in "${VIEWS[@]}"; do
   rm -f "$LOG"
   args=$(view_args "$view")
   start=$(date +%s)
-  if [ -n "$args" ]; then ue/scripts/run_import.sh "$PKG" -vulkan -SCStay $SC_ARGS "$args" >/dev/null 2>&1 &
-  else ue/scripts/run_import.sh "$PKG" -vulkan -SCStay $SC_ARGS >/dev/null 2>&1 & fi
+  if [ -n "$args" ]; then ue/scripts/run_import.sh "$PKG" -vulkan -SCStay ${SC_ARGS:-} "$args" >/dev/null 2>&1 &
+  else ue/scripts/run_import.sh "$PKG" -vulkan -SCStay ${SC_ARGS:-} >/dev/null 2>&1 & fi
   pid=$! i=0
   while [ $i -lt "$TIMEOUT" ]; do
     if [ -f "$LOG" ] && grep -q -E "IMPORT_OK|IMPORT_FAILED" "$LOG"; then break; fi

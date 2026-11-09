@@ -1,6 +1,7 @@
 // FSCMaterialBuilder::Describe: pure sidecar -> master/parameter mapping (decomposed-export-contract
 // §Material Sidecars, mirroring starbreaker-3d mtl.rs ShaderFamily / AlphaConfig / roughness rules).
 #include "SCMaterialBuilder.h"
+#include "Materials/Material.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -97,24 +98,27 @@ void Tex(FSCMaterialDesc& D, const TCHAR* Param, const FString& Path, ESCTexture
 {
     if (!Path.IsEmpty()) D.Textures.Add(Param, FSCTextureKey{Path, Role});
 }
-/** Families whose authored Shininess=255 is a placeholder for per-pixel DDNA smoothness (mtl.rs). */
-bool PerPixelSmoothness(const FString& Family)
+/** Substrate slab default roughness (MaterialExpressionSubstrate.h) as the masters' smoothness: r = sqrt(1 - s). */
+constexpr float SubstrateDefaultSmoothness = 1.f - 0.5f * 0.5f;
+/** Smoothness constants: authored Shininess/255 scales the map (or is the constant); a missing value is the
+ *  multiplicative identity for the map and the Substrate default roughness for the constant. */
+void Gloss(FSCMaterialDesc& D, const FString& Prefix, const TOptional<float>& Shininess, float Mult, bool bMap)
 {
-    return Family == TEXT("HardSurface") || Family.StartsWith(TEXT("LayerBlend")) || Family == TEXT("Illum") || Family == TEXT("GlassPBR");
+    const float Authored = Shininess.IsSet() ? FMath::Clamp(*Shininess / 255.f, 0.f, 1.f) : 1.f;
+    D.Scalars.Add(*(Prefix + TEXT("UseRoughnessMap")), bMap ? 1.f : 0.f);
+    D.Scalars.Add(*(Prefix + TEXT("GlossMult")), Authored * Mult);
+    // TODO(WP-R5): upstream should emit a scalar gloss/roughness when Shininess is absent.
+    D.Scalars.Add(*(Prefix + TEXT("Smoothness")), Shininess.IsSet() ? Authored * Mult : SubstrateDefaultSmoothness);
 }
+TOptional<float> OptionalAttr(const FAuthored& A, const TCHAR* Key) { return A.Attr.Contains(Key) ? TOptional<float>(A.Float(Key, 0.f)) : TOptional<float>(); }
 /** Normal + derived roughness + smoothness constants for a direct (non-layer) material. */
 void SurfaceGloss(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const TCHAR* NormalRole = TEXT("normal_gloss"))
 {
     const FObj Normal = Slot(Sub, NormalRole);
     if (Normal) Tex(D, TEXT("NormalGlossMap"), Str(Normal, TEXT("export_path")), ESCTextureRole::Normal);
     const FString Rough = DerivedRoughness(Sub, Normal);
-    const float Gloss = FMath::Clamp(A.Float(TEXT("Shininess"), 255.f) / 255.f, 0.f, 1.f);
     Tex(D, TEXT("RoughnessMap"), Rough, ESCTextureRole::Linear);
-    D.Scalars.Add(TEXT("UseRoughnessMap"), Rough.IsEmpty() ? 0.f : 1.f);
-    D.Scalars.Add(TEXT("GlossMult"), Gloss);
-    // mtl.rs: roughness 0 from a placeholder Shininess=255 without per-pixel data reads as a mirror;
-    // it substitutes roughness 0.5. Masters compute roughness = sqrt(1 - smoothness), so smoothness 0.75.
-    D.Scalars.Add(TEXT("Smoothness"), Rough.IsEmpty() && Gloss >= 1.f && PerPixelSmoothness(D.Family) ? 0.75f : Gloss);
+    Gloss(D, FString(), OptionalAttr(A, TEXT("Shininess")), 1.f, !Rough.IsEmpty()); // authored, no placeholder rule
 }
 float AuthoredGlow(const FAuthored& A) { return FMath::Max(0.f, A.Float(TEXT("Glow"), A.Float(TEXT("GlowAmount"), 0.f))); }
 /** Emission = Emissive x Glow x (Diffuse x base texture | emittance map), gated by alpha above AlphaGlowCutoff
@@ -122,37 +126,38 @@ float AuthoredGlow(const FAuthored& A) { return FMath::Max(0.f, A.Float(TEXT("Gl
  *  this deliberately does not use mtl.rs emissive_factor()'s Glow=1 fallback. */
 void Emission(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
 {
-    const float Glow = AuthoredGlow(A);
-    // Glow without an Emissive colour (Emissive=0,0,0, e.g. orange "glows" Illum) is CryEngine's diffuse glow:
-    // the surface colour itself emits, i.e. Emissive acts as white.
+    // Authored values only: Emissive = 0,0,0 or Glow absent/0 emits nothing.
+    // TODO(WP-R5): Glow > 0 with Emissive = 0,0,0 ("glows", "buttons") emits nothing by this rule; confirm
+    // whether the engine treats it as diffuse glow and, if so, emit the effective emissive colour upstream.
     const FLinearColor E = A.Color(TEXT("Emissive"), FLinearColor::Black);
-    D.Vectors.Add(TEXT("EmissiveColor"), Glow > 0.f && E.R <= 0.f && E.G <= 0.f && E.B <= 0.f ? FLinearColor::White : E);
-    D.Scalars.Add(TEXT("EmissiveStrength"), Glow * FSCMaterialBuilder::GlowToEmissive);
+    const bool bColour = E.R > 0.f || E.G > 0.f || E.B > 0.f;
+    D.Vectors.Add(TEXT("EmissiveColor"), E);
+    D.Scalars.Add(TEXT("EmissiveStrength"), bColour ? AuthoredGlow(A) * FSCMaterialBuilder::GlowToEmissive : 0.f);
     D.Scalars.Add(TEXT("AlphaGlowCutoff"), A.Param(TEXT("AlphaGlowCutoff"), 0.f));
     if (HasToken(Sub, TEXT("EMITTANCE_MAP")))
     {
-        FObj Map = Slot(Sub, TEXT("emittance")); if (!Map) Map = Slot(Sub, TEXT("emissive"));
-        if (Map) { Tex(D, TEXT("EmissiveMap"), Str(Map, TEXT("export_path")), ESCTextureRole::Color); D.Scalars.Add(TEXT("UseEmissiveMap"), 1.f); }
-        else D.Warnings.Add(TEXT("%EMITTANCE_MAP without an exported emittance slot; emission uses the base colour"));
+        // TextureSemanticRole has no emittance role (mtl.rs): route the base-colour slot until it does.
+        // TODO(WP-R5): emit an `emittance` texture role for %EMITTANCE_MAP slots.
+        if (const FObj Map = Slot(Sub, TEXT("base_color")))
+        { Tex(D, TEXT("EmissiveMap"), Str(Map, TEXT("export_path")), ESCTextureRole::Color); D.Scalars.Add(TEXT("UseEmissiveMap"), 1.f); }
     }
 }
 void Direct(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPalette* Palette)
 {
     if (const FObj Base = Slot(Sub, TEXT("base_color"))) Tex(D, TEXT("DiffuseMap"), Str(Base, TEXT("export_path")), ESCTextureRole::Color);
     if (const FObj Spec = Slot(Sub, TEXT("specular_support"))) Tex(D, TEXT("SpecularMap"), Str(Spec, TEXT("export_path")), ESCTextureRole::Color);
-    FLinearColor Diffuse = A.Color(TEXT("Diffuse"), FLinearColor::White);
+    // Authored Diffuse multiplies the texture; without either, the Substrate default albedo (0.18) applies.
+    FLinearColor Diffuse = A.Attr.Contains(TEXT("Diffuse")) || D.Textures.Contains(TEXT("DiffuseMap"))
+        ? A.Color(TEXT("Diffuse"), FLinearColor::White) : FLinearColor(0.18f, 0.18f, 0.18f);
     bool bPalette;
     const FLinearColor Tint = PaletteTint(Palette, Str(Child(Child(Sub, TEXT("palette_routing")), TEXT("material_channel")), TEXT("name")), bPalette);
     if (bPalette) Diffuse *= Tint;
     D.Vectors.Add(TEXT("DiffuseColor"), Diffuse);
-    // CryEngine spec workflow: F0 is the authored specular colour. Diffuse = Specular = (1,1,1) is the
-    // authored sentinel whose response lives in textures (mtl.rs layer_metallic): without a spec map it
-    // is a dielectric, so the master's dielectric default F0 applies.
-    const bool bSentinel = A.Color(TEXT("Diffuse"), FLinearColor::Black).Equals(FLinearColor::White)
-        && A.Color(TEXT("Specular"), FLinearColor::Black).Equals(FLinearColor::White);
-    if (!(bSentinel && !D.Textures.Contains(TEXT("SpecularMap"))))
-        D.Vectors.Add(TEXT("SpecularColor"), A.Color(TEXT("Specular"), FLinearColor(0.04f, 0.04f, 0.04f)));
-    D.Scalars.Add(TEXT("Metallic"), 0.f);
+    // CryEngine spec workflow: F0 is the authored Specular colour (x spec map), used as authored. A missing
+    // Specular keeps the masters' F0 default, which is Substrate's (0.04).
+    // TODO(WP-R5): resolve the Diffuse = Specular = 1,1,1 sentinel (response in textures) in the sidecar.
+    if (A.Attr.Contains(TEXT("Specular"))) D.Vectors.Add(TEXT("SpecularColor"), A.Color(TEXT("Specular"), FLinearColor::Black));
+    D.Scalars.Add(TEXT("Metallic"), 0.f); // no metallic in the spec workflow: albedo and F0 are authored directly
     D.Scalars.Add(TEXT("AlphaTest"), A.Float(TEXT("AlphaTest"), 0.f));
     SurfaceGloss(D, Sub, A);
     Emission(D, Sub, A);
@@ -162,6 +167,31 @@ template <typename V> void CopyPrefix(TMap<FName, V>& Map, const FString& From, 
     TArray<TPair<FName, V>> Add;
     for (const auto& Pair : Map) if (Pair.Key.ToString().StartsWith(From)) Add.Emplace(FName(To + Pair.Key.ToString().RightChop(From.Len())), Pair.Value);
     for (auto& Pair : Add) Map.Add(Pair.Key, Pair.Value);
+}
+/** Stencil decal: TexSlot7 stencil texture, or for $TintPaletteDecal the palette's decal texture; colours are
+ *  palettes.json decal red/green/blue x StencilDiffuseColor{,2,3}; coverage x StencilOpacity. */
+bool Stencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPalette* Palette)
+{
+    if (!HasToken(Sub, TEXT("STENCIL_MAP")) && !HasVirtualRole(Sub, TEXT("tint_palette_decal"))) return false;
+    const FObj PaletteJson = Palette ? Parse(Palette->Json) : nullptr;
+    const FObj Decal = Child(PaletteJson, TEXT("decal"));
+    FString Map;
+    if (const FObj Slot7 = Slot(Sub, TEXT("stencil"))) Map = Str(Slot7, TEXT("export_path"));
+    if (Map.IsEmpty() && HasVirtualRole(Sub, TEXT("tint_palette_decal"))) Map = Str(Decal, TEXT("export_path"));
+    if (Map.IsEmpty()) return false; // TODO(WP-R5): palettes.json decal.export_path is null in r1
+    Tex(D, TEXT("StencilMap"), Map, ESCTextureRole::Linear);
+    const TCHAR* Channels[] = {TEXT("red"), TEXT("green"), TEXT("blue")};
+    const TCHAR* Params[] = {TEXT("DecalRed"), TEXT("DecalGreen"), TEXT("DecalBlue")};
+    const TCHAR* Authored[] = {TEXT("StencilDiffuseColor"), TEXT("StencilDiffuseColor2"), TEXT("StencilDiffuseColor3")};
+    const TCHAR* Tints[] = {TEXT("StencilTint1"), TEXT("StencilTint2"), TEXT("StencilTint3")};
+    for (int32 I = 0; I < 3; ++I)
+    {
+        if (Decal && Decal->HasField(Channels[I])) D.Vectors.Add(Params[I], Rgb(Decal, Channels[I], FLinearColor::White));
+        FLinearColor C; if (A.Params.Contains(Authored[I]) && ParseRgb(A.Params[Authored[I]], C)) D.Vectors.Add(Tints[I], C);
+    }
+    D.Scalars.Add(TEXT("StencilOpacity"), A.Param(TEXT("StencilOpacity"), 1.f));
+    D.Scalars.Add(TEXT("UseStencil"), 1.f);
+    return true;
 }
 bool IsWear(const FObj& Layer) { return Str(Layer, TEXT("name")).StartsWith(TEXT("Wear"), ESearchCase::IgnoreCase); }
 /** Base layers of a HardSurface / LayerBlend_V2 manifest (wear layers need the wear factor: TODO(WP-U2)). */
@@ -177,18 +207,17 @@ int32 Layers(FSCMaterialDesc& D, const FObj& Sub, const FSCPalette* Palette, int
         bool bPalette;
         const FLinearColor Channel = PaletteTint(Palette, Str(Child(L, TEXT("palette_channel")), TEXT("name")), bPalette);
         const FLinearColor Tint = Rgb(Snap, TEXT("diffuse"), FLinearColor::White) * Rgb(L, TEXT("tint_color"), FLinearColor::White) * Channel;
-        const float Gloss = float(Num(L, TEXT("gloss_mult"), 1.0) * FMath::Clamp(Num(Snap, TEXT("shininess"), 255.0) / 255.0, 0.0, 1.0));
         const FString Rough = Str(L, TEXT("roughness_export_path"));
+        double Shininess = 0;
+        const TOptional<float> Shine = Snap && Snap->TryGetNumberField(TEXT("shininess"), Shininess) ? TOptional<float>(float(Shininess)) : TOptional<float>();
         Tex(D, *(P + TEXT("DiffuseMap")), Str(L, TEXT("diffuse_export_path")), ESCTextureRole::Color);
         Tex(D, *(P + TEXT("NormalGlossMap")), Str(L, TEXT("normal_export_path")), ESCTextureRole::Normal);
         Tex(D, *(P + TEXT("RoughnessMap")), Rough, ESCTextureRole::Linear);
         D.Vectors.Add(*(P + TEXT("Tint")), Tint);
-        D.Vectors.Add(*(P + TEXT("Specular")), Rgb(Snap, TEXT("specular"), FLinearColor(0.04f, 0.04f, 0.04f)));
+        if (Snap && Snap->HasField(TEXT("specular"))) D.Vectors.Add(*(P + TEXT("Specular")), Rgb(Snap, TEXT("specular"), FLinearColor::Black));
         D.Scalars.Add(*(P + TEXT("Metallic")), float(Num(Snap, TEXT("metallic"), 0.0)));
         D.Scalars.Add(*(P + TEXT("Tiling")), float(Num(L, TEXT("uv_tiling"), 1.0)));
-        D.Scalars.Add(*(P + TEXT("GlossMult")), Gloss);
-        D.Scalars.Add(*(P + TEXT("Smoothness")), Gloss);
-        D.Scalars.Add(*(P + TEXT("UseRoughnessMap")), Rough.IsEmpty() ? 0.f : 1.f);
+        Gloss(D, P, Shine, float(Num(L, TEXT("gloss_mult"), 1.0)), !Rough.IsEmpty());
     }
     // Unused blend slots repeat the last base layer so any mask channel resolves to authored data.
     for (int32 I = Count; I > 0 && I < Max; ++I)
@@ -219,18 +248,22 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     D.bHidden = F == TEXT("NoDraw") || Str(Child(Sub, TEXT("activation_state")), TEXT("state")) == TEXT("inactive");
 
     // mtl.rs alpha_config: NoDraw/decal -> blend; AlphaTest -> mask; Opacity < 1 -> blend. CryEngine's
-    // MTL_FLAG_REQUIRE_FORWARD_RENDERING (0x8000) marks surfaces drawn in the forward/transparent pass (glow
-    // cards over the hull): their diffuse alpha is coverage. TODO(WP-U2): carry this in the sidecar's alpha_config.
+    // MTL_FLAG_REQUIRE_FORWARD_RENDERING (0x8000) marks glow cards over the hull: their diffuse alpha is masked
+    // coverage (they stay opaque-pass Nanite surfaces, so their emission feeds Lumen).
+    // TODO(WP-R5): carry the forward/coverage decision in the sidecar's alpha_config.
     const bool bDecal = F == TEXT("MeshDecal") || HasToken(Sub, TEXT("DECAL"));
     const float Opacity = A.Float(TEXT("Opacity"), 1.f);
+    const float AlphaTest = A.Float(TEXT("AlphaTest"), 0.f);
     const bool bForward = (FCString::Strtoui64(*A.Attr.FindRef(TEXT("MtlFlags")), nullptr, 10) & 0x8000) != 0;
-    if (bDecal || In.bBlended || bForward || (Opacity < 1.f && A.Float(TEXT("AlphaTest"), 0.f) <= 0.f)) D.Blend = ESCBlend::Translucent;
-    else if (A.Float(TEXT("AlphaTest"), 0.f) > 0.f) D.Blend = ESCBlend::Masked;
+    if (bDecal || In.bBlended || (Opacity < 1.f && AlphaTest <= 0.f)) D.Blend = ESCBlend::Translucent;
+    else if (AlphaTest > 0.f || bForward) D.Blend = ESCBlend::Masked;
+    // Cutoff: authored AlphaTest; a forward card without one uses UE's default opacity-mask clip value.
+    const float Cutoff = AlphaTest > 0.f ? AlphaTest : GetDefault<UMaterial>()->OpacityMaskClipValue;
     D.bTwoSided = bDecal; // mtl.rs is_double_sided
     if (D.Master == ESCMaster::Glass || D.Master == ESCMaster::EmissiveUnlit) D.Blend = ESCBlend::Translucent;
     const bool bOpaqueFamily = D.Master == ESCMaster::Illum || D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered || D.Master == ESCMaster::Fallback;
     // Decal surfaces (MeshDecal, %DECAL sheets) modify the host through the DBuffer; other blended surfaces of
-    // the opaque families (forward glow cards, Opacity < 1) are lit translucent surfaces.
+    // the opaque families (Opacity < 1, alpha_config blend) are lit translucent surfaces.
     if (bDecal) D.Master = ESCMaster::MeshDecal;
     else if (D.Blend == ESCBlend::Translucent && bOpaqueFamily) D.Master = ESCMaster::Translucent;
 
@@ -249,7 +282,6 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
             if (D.Master == ESCMaster::Layered && Mask) Tex(D, TEXT("BlendMaskMap"), Str(Mask, TEXT("export_path")), ESCTextureRole::Linear);
             D.Scalars.Add(TEXT("UseBlendMask"), D.Textures.Contains(TEXT("BlendMaskMap")) ? 1.f : 0.f);
             D.Scalars.Add(TEXT("BlendMaskTiling"), A.Param(TEXT("BlendMapTiling"), 1.f));
-            D.Scalars.Add(TEXT("AlphaTest"), A.Float(TEXT("AlphaTest"), 0.f));
             Emission(D, Sub, A);
         }
     }
@@ -282,7 +314,10 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
             const bool bColourSignals = HasToken(Sub, TEXT("DECAL")) || HasToken(Sub, TEXT("STENCIL_MAP"))
                 || Slot(Sub, TEXT("stencil")) || HasVirtualRole(Sub, TEXT("tint_palette_decal"));
             const bool bControlOnlyPom = HasToken(Sub, TEXT("PARALLAX_OCCLUSION_MAPPING")) && !bColourSignals;
-            if (D.Master == ESCMaster::MeshDecal && (bControlOnlyPom || !D.Textures.Contains(TEXT("DiffuseMap"))))
+            const bool bStencil = Stencil(D, Sub, A, Palette);
+            if (bStencil && D.bHidden && Str(Child(Sub, TEXT("activation_state")), TEXT("reason")) == TEXT("missing_base_color_texture"))
+                D.bHidden = false; // the palette supplies the colour source the exporter could not see
+            if (D.Master == ESCMaster::MeshDecal && !bStencil && (bControlOnlyPom || !D.Textures.Contains(TEXT("DiffuseMap"))))
                 D.Master = ESCMaster::MeshDecalRelief;
             if (D.Master == ESCMaster::MeshDecal) // colour decals: sheet alpha x DecalAlphaMultiplier x DecalDiffuseOpacity
                 D.Scalars.Add(TEXT("Opacity"), Opacity * A.Param(TEXT("DecalAlphaMultiplier"), 1.f) * A.Param(TEXT("DecalDiffuseOpacity"), 1.f));
@@ -293,14 +328,9 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
             D.Scalars.Add(TEXT("EmissiveStrength"), 0.f);
             if (!HasVirtualRole(Sub, TEXT("render_to_texture"))) D.Warnings.Add(TEXT("Emissive family without an image; drawn dark"));
         }
-        else if (D.Master == ESCMaster::EmissiveUnlit)
-        {
-            // Screens show their image: authored Emissive tint (white when unset) x Glow, unit brightness without Glow.
-            const FLinearColor E = A.Color(TEXT("Emissive"), FLinearColor::Black);
-            if (E.R <= 0 && E.G <= 0 && E.B <= 0) D.Vectors.Add(TEXT("EmissiveColor"), FLinearColor::White);
-            D.Scalars.Add(TEXT("EmissiveStrength"), AuthoredGlow(A) > 0 ? AuthoredGlow(A) * FSCMaterialBuilder::GlowToEmissive : 1.f);
-        }
+        // Screens with an image emit by the same authored rule (Emissive x Glow); no Glow, no emission.
     }
+    if (D.Blend == ESCBlend::Masked) D.Scalars.Add(TEXT("AlphaTest"), Cutoff);
     if (D.bHidden)
     {
         D.Master = ESCMaster::EmissiveUnlit; D.Blend = ESCBlend::Translucent;

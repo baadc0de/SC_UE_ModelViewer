@@ -21,7 +21,26 @@
     0.1,
     0.6,
     0.3
-   ]
+   ],
+   "decal": {
+    "red": [
+     0.7,
+     0.2,
+     0.1
+    ],
+    "green": [
+     0.15,
+     0.65,
+     0.25
+    ],
+    "blue": [
+     0.05,
+     0.1,
+     0.55
+    ],
+    "export_path": "tex/palette_decal.png",
+    "source_path": "src/palette_decal.tif"
+   }
   }
  ]
 }

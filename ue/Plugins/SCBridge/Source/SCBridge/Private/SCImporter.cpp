@@ -66,25 +66,16 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         UE_LOG(LogSCImport, Warning, TEXT("ASSET_WARNING %s: %s"), *Path, *Message);
     };
     for (const FString& Warning : Result.Warnings) UE_LOG(LogSCImport, Warning, TEXT("ASSET_WARNING %s"), *Warning);
-    // Materials first: describe + decode textures on a worker, then textures and MIDs on this thread.
+    // Material preparation (describe + texture decode) runs on a worker while meshes are derived and built;
+    // textures and MIDs are created on this thread once it is done, before components are placed.
+    // TODO(WP-V1): async import API with per-phase progress (this call still returns only when complete).
     FSCImportMaterials Materials;
+    TFuture<void> MaterialPrep;
+    const double MaterialStart = FPlatformTime::Seconds();
     if (Options.bImportMaterials)
     {
         FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
-        const double MaterialStart = FPlatformTime::Seconds();
-        Async(EAsyncExecution::ThreadPool, [&] { Materials.Describe(Manifest); Materials.Decode(Source); }).Get();
-        TArray<FString> MaterialWarnings;
-        Materials.Instantiate(Vehicle, MaterialWarnings);
-        for (const FString& W : MaterialWarnings) Warn(TEXT("material"), W);
-        const auto& T = Materials.TextureStats;
-        Result.MaterialSeconds = FPlatformTime::Seconds() - MaterialStart;
-        Result.TextureCount = T.Created; Result.MaterialCount = Materials.MaterialCount;
-        UE_LOG(LogSCImport, Display, TEXT("TEXTURES requested=%d created=%d failed=%d bytes=%lld decode_s=%.4f create_s=%.4f"),
-            T.Requested, T.Created, T.Failed, T.Bytes, T.DecodeSeconds, T.CreateSeconds);
-        FString Masters;
-        for (const auto& Pair : Materials.MasterCounts) Masters += FString::Printf(TEXT(" %s=%d"), FSCMaterialBuilder::MasterName(Pair.Key), Pair.Value);
-        UE_LOG(LogSCImport, Display, TEXT("MATERIALS sets=%d instances=%d engine_glow=%d describe_s=%.4f mid_s=%.4f total_s=%.4f masters:%s"),
-            Materials.SetCount, Materials.MaterialCount, Materials.EngineGlowCount, Materials.DescribeSeconds, Materials.MaterialSeconds, Result.MaterialSeconds, *Masters);
+        MaterialPrep = Async(EAsyncExecution::ThreadPool, [&Materials, &Manifest, &Source] { Materials.Describe(Manifest); Materials.Decode(Source); });
     }
     TMap<FString, TUniquePtr<FSCDerivedMesh>> Derived;
     TMap<FString, TArray<UStaticMesh*>> Meshes;
@@ -148,6 +139,25 @@ bool FSCImporter::Import(FSCPackageSource& Source, FSCImportOptions Options, FSC
         // TODO(WP-C1): bound source-description lifetime retained internally by UStaticMesh;
         // cache CPU derivations independently of transient render UObjects.
         Derived.Add(Path, MoveTemp(Data));
+    }
+    if (Options.bImportMaterials)
+    {
+        const double WaitStart = FPlatformTime::Seconds();
+        MaterialPrep.Wait();
+        const double WaitSeconds = FPlatformTime::Seconds() - WaitStart;
+        TArray<FString> MaterialWarnings;
+        Materials.Instantiate(Vehicle, MaterialWarnings);
+        for (const FString& W : MaterialWarnings) Warn(TEXT("material"), W);
+        const auto& T = Materials.TextureStats;
+        Result.MaterialSeconds = FPlatformTime::Seconds() - MaterialStart;
+        Result.TextureCount = T.Created; Result.MaterialCount = Materials.MaterialCount;
+        UE_LOG(LogSCImport, Display, TEXT("TEXTURES requested=%d created=%d failed=%d bytes=%lld decode_s=%.4f create_s=%.4f"),
+            T.Requested, T.Created, T.Failed, T.Bytes, T.DecodeSeconds, T.CreateSeconds);
+        FString Masters;
+        for (const auto& Pair : Materials.MasterCounts) Masters += FString::Printf(TEXT(" %s=%d"), FSCMaterialBuilder::MasterName(Pair.Key), Pair.Value);
+        UE_LOG(LogSCImport, Display, TEXT("MATERIALS sets=%d instances=%d engine_glow=%d describe_s=%.4f mid_s=%.4f overlapped_s=%.4f wait_s=%.4f masters:%s"),
+            Materials.SetCount, Materials.MaterialCount, Materials.EngineGlowCount, Materials.DescribeSeconds, Materials.MaterialSeconds,
+            Result.MaterialSeconds, WaitSeconds, *Masters);
     }
     TMap<FString, FEntity> Entities;
     auto NewAnchor = [&](const FString& Label, USceneComponent* Parent, const FMatrix& Relative)
