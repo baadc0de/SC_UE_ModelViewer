@@ -308,3 +308,99 @@ here blocks the UE importer work. File finding 1 as a follow-up WP: entity-class
 resolution for sparse light components, which also retires the invented 5 m radius and 6500 K.
 Decide finding 2 (Blender shadows) with the owner. Fold findings 3-4 into the branch before the
 WP-D1 upstream PR.
+
+## Follow-up round
+
+Addressed findings **1–7**; findings 8–9 remain outside this round. Sparse lights now inherit missing attributes and states from their entity class's DataCore `LightComponentParams` at export time. Explicit zero/false overrides survive; missing default intensity inherits the class intensity. Unresolved source values remain nullable, with only the documented bulb-radius 0.05 m and attenuation-tweak 1.0 defaults. The compatibility intensity calculation is unchanged.
+
+Blender keeps shadows enabled for area-contained lights and otherwise honours `shadow_casting`. Its manifest/state consumers preserve unknown values. Unknown GI retains its mode and null value; GI and missing-importance diagnostics each warn once per export, verified across repeated lights and successive exports. Upstream wording is neutral. The parameterised cache-key regression proves version changes alter the key; `CACHE_FORMAT_VERSION` is **12** (previously 11). Scene schema remains **v2**; nullable fields are documented in the contract, UE design and FFI README.
+
+Tests were run before fixes: sparse inheritance, unknown fields, cache-version sensitivity, Blender shadows and nullable state handling reproduced failures. Extracted projector/class fixtures include provenance and a live DataCore/SOC validator. Logs and scratch scripts are under `/tmp/wp-r5b-followup`.
+
+Commands run from the repository root, with sequential Cargo builds:
+
+```sh
+export CARGO_TARGET_DIR=./target CARGO_INCREMENTAL=0
+cargo test -p scviewer-core
+CARGO_HOME=/tmp/scviewer-r5-cargo cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d
+cargo build
+cargo test --workspace
+python3 -m unittest discover -s vendor/StarBreaker/blender_addon/tests -p test_light_fields.py
+python3 -m unittest discover -s vendor/StarBreaker/blender_addon/tests -q
+python3 -I /tmp/wp-r5b/blender-suite.py
+target/debug/scviewer --no-cache lights AEGS_Gladius > /tmp/wp-r5b-followup/AEGS_Gladius.json
+blender -b --factory-startup --python-exit-code 1 --python /tmp/wp-r5b-followup/blender-live.py
+cargo fmt -p scviewer-core --check
+cargo fmt --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --check
+UV_CACHE_DIR=/tmp/wp-r5b-followup/uv-cache uv run python /tmp/wp-r5b-followup/focus_format.py --check
+rustfmt --edition 2024 --config skip_children=true --check \
+  vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_tests.rs \
+  vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_fields.rs \
+  vendor/StarBreaker/crates/starbreaker-3d/src/socpak/light_component.rs
+cargo sweep --maxsize 10GB .
+git diff --check -- crates docs/03-unreal-export-design.md docs/work-packages/WP-R5b-light-fields.md
+git -C vendor/StarBreaker diff --check
+```
+
+Results:
+
+| Check | Output |
+| --- | --- |
+| scviewer-core | 24 passed, 0 failed |
+| starbreaker-3d | 870 passed, 0 failed, 31 ignored |
+| Viewer workspace | 33 passed, 0 failed |
+| Debug build | `Finished dev profile [optimized + debuginfo]` |
+| Blender light-field tests | 4 tests, OK |
+| Standard Blender suite | 432 tests; 3 documented missing-material-fixture errors, 41 skipped |
+| Blender suite with scratch material fixture | 432 tests, OK, 41 skipped; assertions unchanged |
+| Headless Blender | 77 lights imported; authored dimensions/shadows PASS |
+| Scoped formatting and diff checks | Passed |
+| Target sweep | Cleaned 1.49 GiB; final `target` size 11G; no incremental directory |
+
+The Blender scratch runner redirects only the missing component-master fixture to the existing Gladius TEX2 material sidecar. The standard suite's three errors are unrelated to these changes.
+
+As requested, formatting is limited to changed files/hunks. **The starbreaker-3d `cargo fmt --check` still fails on pre-existing crate-wide drift: 146 files at baseline, unrelated to this WP; 142 remain after the scoped fixes.** No whole-crate formatting is included.
+
+Live CLI output summary:
+
+```text
+AEGS_Gladius: 77 lights
+base_lightgroups/Light-088: radius_m=10, temperature=6600, affects_this_area_only=true, affect_gi=true, importance=1 (Standard)
+base_lightgroups/Light-089: radius_m=10, temperature=6600, affects_this_area_only=true, affect_gi=true, importance=1 (Standard)
+Both: max_shadow_cast_distance_m=15, plane_softness=1, fade_min_distance_m=0
+Authored overrides preserved: bulb_radius_m=0.1, intensity_raw=0.2, fade_max_distance_m=75
+```
+
+Changed files, relative to the superproject root:
+
+```text
+crates/scbridge-ffi/README.md
+crates/scviewer-core/src/cache.rs
+docs/03-unreal-export-design.md
+docs/work-packages/WP-R5b-light-fields.md
+vendor/StarBreaker/blender_addon/starbreaker_addon/manifest.py
+vendor/StarBreaker/blender_addon/starbreaker_addon/runtime/importer/entity_lights.py
+vendor/StarBreaker/blender_addon/starbreaker_addon/runtime/importer/orchestration.py
+vendor/StarBreaker/blender_addon/starbreaker_addon/runtime/package_ops.py
+vendor/StarBreaker/blender_addon/tests/test_light_fields.py
+vendor/StarBreaker/blender_addon/tests/test_manifest.py
+vendor/StarBreaker/blender_addon/tests/test_package_ops.py
+vendor/StarBreaker/crates/starbreaker-3d/src/decomposed.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/gltf/glb_builder.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/blend_assembly.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/glb_assembly.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/interiors.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/light_catalogue.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/mod.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/socpak.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/socpak/light_component.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_fields.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_tests.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/types.rs
+vendor/StarBreaker/crates/starbreaker-3d/tests/fixtures/light_class/README.md
+vendor/StarBreaker/crates/starbreaker-3d/tests/fixtures/light_class/gladius_projectors.xml
+vendor/StarBreaker/crates/starbreaker-3d/tests/fixtures/light_class/light_component.json
+vendor/StarBreaker/docs/decomposed-export-contract.md
+```
+
+No commits or branches were created. No task writes were made under `out/` or `ue/`; unrelated changes are excluded above. The tree is ready to stage.

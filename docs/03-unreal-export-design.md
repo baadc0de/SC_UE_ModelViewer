@@ -101,19 +101,34 @@ GLB light extras:
 
 - `bulb_radius_m: f32` (documented CryEngine missing-value default 0.05),
   `plane_width_m`, `plane_height_m`: optional metres.
-- `shadow_casting: bool`, `max_shadow_cast_distance_m`: optional metres;
-  `affects_this_area_only: bool`, `affect_gi: bool` (absent flags are false).
+- `shadow_casting: Option<bool>`, `max_shadow_cast_distance_m`: optional metres;
+  `affects_this_area_only: Option<bool>`, `affect_gi: Option<bool>` (unknown flags are null).
 - `attenuation_tweak: f32` (default 1), `plane_softness: Option<f32>`,
   `fade_min_distance_m`, `fade_max_distance_m`: optional metres.
-- `importance: Option<i32>`, `glow_multiplier: f32` (existing default 1).
+- `importance: Option<i32>`, `glow_multiplier: Option<f32>`.
 - `intensity_candela_proxy_model: "raw_x1500"` on the flat record and states;
   `intensity_unit` remains `"cryengine_authored_intensity"`. The existing ambient
   proxy additionally applies glow multiplier ×0.25; all proxy maths is unchanged.
 
+Sparse SOC light components inherit each missing attribute from their entity
+class's `LightComponentParams`, read from DataCore at export time. This includes
+nested state intensity/temperature, size, shadows, area/GI flags, fades and
+importance. An explicit zero/false/empty value overrides the class. Only when
+both sources lack an attribute do the documented bulb-radius 0.05 and attenuation
+1 defaults apply; unresolved radius, state temperature/intensity and proxy values
+are nullable. Unknown GI retains its mode and null value, with one warning per
+export; absent importance enum metadata likewise warns once per export.
+Resolved light type, colour, style, state temperature-use flag and preset tag
+also remain null if absent from both the component and class record. Consumers
+must distinguish unknown values from explicit zero/false values.
+
+Blender keeps shadows enabled for area-contained lights, otherwise honouring
+the authored shadow flag.
+
 Unknown optional numeric fields are null; authored zeroes remain zero. Scene and
-material schemas stay v2. `scviewer-core::CACHE_FORMAT_VERSION` is **11** (was 10)
+material schemas stay v2. `scviewer-core::CACHE_FORMAT_VERSION` is **12** (was 11)
 so old layer-1 packages miss. `SCPackageReader` continues accepting scene v1/v2;
-it must read the additive v2 light fields, not require a scene version 11.
+it must read the additive v2 light fields, not require a scene version 12.
 
 WP-R5b enum detail: LIVE `importance` is often a name. `importance_name` preserves
 it and `importance` exports the DataCore property enum's zero-based option index,

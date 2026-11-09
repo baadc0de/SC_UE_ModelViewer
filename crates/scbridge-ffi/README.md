@@ -111,8 +111,18 @@ optional `max_shadow_cast_distance_m`, `affects_this_area_only`, `affect_gi`,
 `attenuation_tweak`, optional `plane_softness`, optional `fade_min_distance_m` /
 `fade_max_distance_m`, optional signed `importance`, and `glow_multiplier`.
 Distances are metres; unknown optional values are null and authored zeroes are
-preserved. Missing bulb radius defaults to CryEngine's 0.05 m; attenuation tweak
-and the existing glow multiplier default to 1. Absent boolean flags are false.
+preserved. Sparse components inherit every missing attribute (including nested
+states) from the entity class's DataCore `LightComponentParams` at export time.
+Explicit zeroes and false values remain overrides. Only if neither source has
+the attribute do bulb radius and attenuation use CryEngine's 0.05 m and 1.0
+respectively. Unresolved radius, glow multiplier, flags, state temperature and
+intensity (and their proxy aliases) are null. Unknown `affect_gi` remains null
+with `affect_gi_mode` preserved and one warning per export. Missing importance
+enum metadata also warns once per export, retaining the name and null ordinal.
+
+Resolved light type, colour, style, state temperature-use flag and preset tag
+also remain null if absent from both the component and class record. Consumers
+must distinguish unknown values from explicit zero/false values.
 
 An authored `defaultState` is always active, including intensity zero. Only
 when absent does the first positive auxiliary/emergency/cinematic state win.
@@ -121,7 +131,7 @@ state add `intensity_candela_proxy_model: "raw_x1500"`. Existing `intensity`,
 `intensity_cd` and `intensity_candela_proxy` compatibility values retain their
 maths (including ambient glow multiplier ×0.25); they are not calibrated cd.
 No C ABI signature changes. The same fields appear in decomposed scene v2 and
-bundled GLB light extras. Layer-1 `CACHE_FORMAT_VERSION` is 11 (previously 10);
+bundled GLB light extras. Layer-1 `CACHE_FORMAT_VERSION` is 12 (previously 11);
 UE `SCPackageReader` continues accepting scene v1/v2.
 
 WP-R5b enum detail: LIVE `importance` is often a name. `importance_name` preserves

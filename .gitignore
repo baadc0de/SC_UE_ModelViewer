@@ -38,3 +38,4 @@ ue/**/.vs/
 .cargo/config.toml
 .env
 .DS_Store
+__pycache__/

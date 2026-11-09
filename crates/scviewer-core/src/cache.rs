@@ -10,8 +10,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-// WP-R5b: authored light fields and default-state policy invalidate earlier packages.
-pub const CACHE_FORMAT_VERSION: u32 = 11;
+// WP-R5b follow-up: class inheritance and nullable source fields invalidate older packages.
+pub const CACHE_FORMAT_VERSION: u32 = 12;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");
@@ -92,20 +92,23 @@ pub(crate) fn package_key(
     entity: &str,
     options: &crate::DecomposedOptions,
 ) -> Result<String> {
-    package_key_for_exporter(build, entity, options, EXPORTER_VERSION)
+    package_key_for_exporter(
+        build,
+        entity,
+        options,
+        EXPORTER_VERSION,
+        CACHE_FORMAT_VERSION,
+    )
 }
 fn package_key_for_exporter(
     build: &str,
     entity: &str,
     options: &crate::DecomposedOptions,
     exporter: &str,
+    version: u32,
 ) -> Result<String> {
     Ok(digest(&serde_json::to_vec(&(
-        CACHE_FORMAT_VERSION,
-        exporter,
-        build,
-        entity,
-        options,
+        version, exporter, build, entity, options,
     ))?))
 }
 fn entry_name(name: &str) -> bool {
@@ -309,12 +312,18 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn light_fields_invalidate_pre_r5b_packages() {
+    fn format_version_changes_package_key() {
         let options = crate::DecomposedOptions::default();
-        let old_key = digest(
-            &serde_json::to_vec(&(10_u32, EXPORTER_VERSION, "build", "entity", &options)).unwrap(),
+        let key = |version| {
+            package_key_for_exporter("build", "entity", &options, EXPORTER_VERSION, version)
+                .unwrap()
+        };
+        assert_eq!(
+            package_key("build", "entity", &options).unwrap(),
+            key(CACHE_FORMAT_VERSION)
         );
-        assert_ne!(package_key("build", "entity", &options).unwrap(), old_key);
+        assert_ne!(key(CACHE_FORMAT_VERSION), key(CACHE_FORMAT_VERSION + 1));
+        assert_ne!(key(CACHE_FORMAT_VERSION), key(CACHE_FORMAT_VERSION - 1));
     }
     #[test]
     fn cache_keys_separate_builds_options_entities_and_version() {
@@ -331,18 +340,14 @@ mod tests {
         let mut b = o.clone();
         b.geometry.default_animation_tags = vec!["synthetic_tag".into()];
         assert_ne!(a, package_key("build-a", "entity", &b).unwrap());
-        assert_ne!(
-            a,
-            digest(
-                &serde_json::to_vec(&(CACHE_FORMAT_VERSION + 1, "build-a", "entity", o)).unwrap()
-            )
-        );
     }
     #[test]
     fn exporter_revision_and_dirty_flag_change_package_keys() {
         let options = crate::DecomposedOptions::default();
-        let key =
-            |identity| package_key_for_exporter("build", "entity", &options, identity).unwrap();
+        let key = |identity| {
+            package_key_for_exporter("build", "entity", &options, identity, CACHE_FORMAT_VERSION)
+                .unwrap()
+        };
         assert_ne!(key("revision-a:dirty=false"), key("revision-b:dirty=false"));
         assert_ne!(key("revision-a:dirty=false"), key("revision-a:dirty=true"));
     }
