@@ -1,0 +1,18 @@
+# WP-P2 player demo (-SCPlayerDemo[=<entity>]): first person at the vehicle's start spawn, wait for the player
+# body, run, draw the first stowed weapon, look around, third person, stow, back to first person. Ship-agnostic:
+# relative moves only (a wall simply stops the capsule). Pass -SCPlayerLoadout=<p4k xml> for a specific loadout.
+5 sc.FP.Look 0 0
+0 waitkit 900
+1 sc.FP.Move 1 0 1.5 1
+1 sc.Player.Weapon 1
+2 sc.Player.State
+0 shot demo-01-armed
+0 sc.FP.Move 1 0 1.5
+1 sc.FP.Look 45 -15
+1 sc.Player.View tp 150 250
+1 shot demo-02-third-person
+0 sc.Player.Weapon 1
+2 sc.Player.View tp 20 220
+1 shot demo-03-stowed
+0 sc.Player.View fp
+1 sc.Player.State

@@ -3,10 +3,21 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Camera/CameraComponent.h"
 #include "SCFirstPersonCharacter.generated.h"
 class ASCVehicle;
-class UCameraComponent;
 class USpotLightComponent;
+class USCPlayerBodyComponent;
+
+/** The exploration camera; NearClip > 0 overrides the global near plane (arms and weapon at the eye, WP-P2). */
+UCLASS()
+class SCBRIDGE_API USCEyeCameraComponent : public UCameraComponent
+{
+    GENERATED_BODY()
+public:
+    float NearClip = 0;
+    virtual void GetCameraView(float DeltaTime, FMinimalViewInfo& DesiredView) override;
+};
 
 /** Body and locomotion dimensions (cm, cm/s). Viewer defaults until a real player body supplies its own (WP-P2). */
 USTRUCT(BlueprintType)
@@ -32,7 +43,9 @@ UENUM()
 enum class ESCFirstPersonAction : uint8
 {
     Forward, Back, Left, Right, Down, Up, Run, Crouch, // held
-    Interact, Torch, Noclip, Teleport, Close           // pressed
+    Interact, Torch, Noclip, Teleport, Close,          // pressed
+    Holster, View,                                     // pressed, player body (WP-P2)
+    Weapon1, Weapon2, Weapon3, Weapon4, Weapon5, Weapon6, Weapon7, Weapon8, Weapon9
 };
 
 UCLASS()
@@ -46,6 +59,10 @@ public:
     virtual void RecalculateBaseEyeHeight() override;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UCameraComponent> Camera;
     UPROPERTY(VisibleAnywhere) TObjectPtr<USpotLightComponent> Flashlight;
+    /** The real player body (WP-P2); inactive until the viewer attaches a player kit. */
+    UPROPERTY(VisibleAnywhere) TObjectPtr<USCPlayerBodyComponent> Body;
+    /** Player-kit status for the HUD while no body is attached (loading / failure message). */
+    FString BodyStatus;
     UPROPERTY(BlueprintReadOnly) TObjectPtr<ASCVehicle> Vehicle;
     UPROPERTY(BlueprintReadOnly) bool bNoclip = false;
     UPROPERTY(BlueprintReadOnly) bool bStuck = false;
@@ -62,6 +79,8 @@ public:
      *  component (WP-P2) overrides the source; a camera attached elsewhere is never moved by Tick. */
     void SetEyeSource(TFunction<FVector()> Source) { EyeSource = MoveTemp(Source); }
     FVector EyeOffset() const;
+    /** Re-apply EyeOffset to a capsule-attached camera now (a body evaluated after Tick calls it). */
+    void RefreshEye();
 
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Explore(ASCVehicle* InVehicle);
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool TeleportToSpawn(int32 Index);

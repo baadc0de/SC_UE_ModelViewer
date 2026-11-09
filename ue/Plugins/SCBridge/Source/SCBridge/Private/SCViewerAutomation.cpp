@@ -5,6 +5,7 @@
 #include "SCViewerPawn.h"
 #include "SCVehicle.h"
 #include "SCFirstPersonCharacter.h"
+#include "SCPlayerBody.h"
 #include "SCRigComponent.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -17,6 +18,8 @@
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "InputCoreTypes.h"
 #include "RenderTimer.h"
 #include "DynamicRHI.h"
 
@@ -36,8 +39,22 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
     if (FParse::Param(Cmd, TEXT("SCDefaults"))) Options->ResetToDefaults();
     FParse::Value(Cmd, TEXT("SCLod="), Options->Lod);
     FParse::Value(Cmd, TEXT("SCMip="), Options->Mip);
-    FString ScriptFile;
-    if (FParse::Value(Cmd, TEXT("SCScript="), ScriptFile))
+    FParse::Value(Cmd, TEXT("SCPlayerWeapon="), PlayerWeapon);
+    FParse::Value(Cmd, TEXT("SCPlayerView="), PlayerView);
+    FString ScriptFile, DemoEntity;
+    if (FParse::Param(Cmd, TEXT("SCPlayerDemo")) || FParse::Value(Cmd, TEXT("SCPlayerDemo="), DemoEntity))
+    {
+        // Built-in demo route; the route itself names no ship (spawn kinds and relative moves only).
+        if (!FParse::Value(Cmd, TEXT("SCScript="), ScriptFile))
+            ScriptFile = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../scripts/routes/player-demo.txt"));
+        if (!DemoEntity.IsEmpty() && Queue.IsEmpty())
+        {
+            Queue.Add(DemoEntity);
+            bQueued = true;
+        }
+        if (Camera.IsEmpty()) Camera = TEXT("first");
+    }
+    if (!ScriptFile.IsEmpty() || FParse::Value(Cmd, TEXT("SCScript="), ScriptFile))
     {
         TArray<FString> Lines;
         if (!FFileHelper::LoadFileToStringArray(Lines, *ScriptFile))
@@ -75,6 +92,7 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
                                                                                   : ESCCameraMode::Orbit);
         })));
     RegisterFirstPersonCommands();
+    RegisterPlayerCommands();
 }
 
 namespace
@@ -168,6 +186,12 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
         if (V && !Args.IsEmpty()) V->ToggleDoor(FCString::Atoi(*Args[0]));
     });
+    Add(TEXT("sc.FP.Key"), TEXT("sc.FP.Key <key> 0|1: press/release a key of the first-person key table (e.g. W, LeftShift, D)"),
+        [Weak](const TArray<FString>& Args) {
+            if (auto* C = FirstPerson(Weak); C && !Args.IsEmpty())
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD key=%s down=%d handled=%d"), *Args[0], Flag(Args, 1, true),
+                       C->HandleKey(FKey(FName(*Args[0])), Flag(Args, 1, true)));
+        });
     Add(TEXT("sc.FP.Crouch"), TEXT("sc.FP.Crouch 0|1"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak)) C->SetCrouching(Flag(Args, 0, true));
     });
@@ -247,6 +271,69 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     });
 }
 
+void FSCViewerAutomation::RegisterPlayerCommands()
+{
+    TWeakObjectPtr<USCViewerSubsystem> Weak = Owner;
+    auto Add = [&](const TCHAR* Name, const TCHAR* Help, TFunction<void(const TArray<FString>&)> Body) {
+        Commands.Add(MakeUnique<FAutoConsoleCommand>(Name, Help,
+            FConsoleCommandWithArgsDelegate::CreateLambda([Body](const TArray<FString>& Args) { Body(Args); })));
+    };
+    auto BodyOf = [](const TWeakObjectPtr<USCViewerSubsystem>& W) -> USCPlayerBodyComponent* {
+        ASCFirstPersonCharacter* C = FirstPerson(W);
+        if (C && !C->Body->HasBody()) UE_LOG(LogSCViewerAutomation, Warning, TEXT("PLAYER_CMD ignored: no player body (%s)"), *W->GetPlayerKitStatus());
+        return C && C->Body->HasBody() ? C->Body.Get() : nullptr;
+    };
+    Add(TEXT("sc.Player.Load"), TEXT("sc.Player.Load: start (or retry) the player-body export/import"), [Weak](const TArray<FString>&) {
+        if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_CMD load ok=%d"), Weak->RequestPlayerKit());
+    });
+    Add(TEXT("sc.Player.Weapon"), TEXT("sc.Player.Weapon <slot 1..n|none>: draw the weapon on that key (its own slot or none holsters)"),
+        [Weak, BodyOf](const TArray<FString>& Args) {
+            USCPlayerBodyComponent* Body = BodyOf(Weak);
+            if (!Body || Args.IsEmpty()) return;
+            const int32 Slot = Args[0].IsNumeric() ? FCString::Atoi(*Args[0]) - 1 : INDEX_NONE;
+            const bool OK = Body->RequestSlot(Slot);
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_CMD weapon arg=%s ok=%d %s"), *Args[0], OK, *Body->Describe());
+        });
+    Add(TEXT("sc.Player.View"), TEXT("sc.Player.View fp|tp [orbit yaw deg] [distance cm]: first / third person body view"),
+        [Weak, BodyOf](const TArray<FString>& Args) {
+            USCPlayerBodyComponent* Body = BodyOf(Weak);
+            if (!Body || Args.IsEmpty()) return;
+            Body->SetThirdPerson(Args[0].Equals(TEXT("tp"), ESearchCase::IgnoreCase), Args.IsValidIndex(1) ? FCString::Atof(*Args[1]) : 0.f,
+                                 Args.IsValidIndex(2) ? FCString::Atof(*Args[2]) : -1.f);
+        });
+    Add(TEXT("sc.Player.Body"), TEXT("sc.Player.Body 0|1: detach (capsule only) / re-attach the player body (frame-time A/B)"),
+        [Weak](const TArray<FString>& Args) {
+            ASCFirstPersonCharacter* C = FirstPerson(Weak);
+            if (!C) return;
+            if (Flag(Args, 0, true)) Weak->AttachPlayerKit();
+            else { C->Body->Detach(); C->BodyStatus = TEXT("Player body off"); }
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_CMD body attached=%d"), C->Body->HasBody());
+        });
+    Add(TEXT("sc.Player.State"), TEXT("sc.Player.State: log the body, weapon and animator state (PLAYER_STATE)"), [Weak](const TArray<FString>&) {
+        ASCFirstPersonCharacter* C = FirstPerson(Weak);
+        if (C) UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_STATE kit=\"%s\" walk=%.0f run=%.0f %s"), *Weak->GetPlayerKitStatus(),
+                      C->GetProfile().WalkSpeed, C->GetProfile().RunSpeed, *C->Body->Describe());
+    });
+}
+
+void FSCViewerAutomation::ApplyPlayerOptions(USCViewerSubsystem& S)
+{
+    if (bPlayerOptionsApplied || (PlayerWeapon.IsEmpty() && PlayerView.IsEmpty())) return;
+    ASCFirstPersonCharacter* C = S.GetFirstPerson();
+    if (!C || !C->Body->HasBody()) return;
+    bPlayerOptionsApplied = true;
+    if (!PlayerView.IsEmpty())
+    {
+        TArray<FString> V;
+        PlayerView.ParseIntoArray(V, TEXT(","));
+        C->Body->SetThirdPerson(V[0].Equals(TEXT("tp"), ESearchCase::IgnoreCase), V.IsValidIndex(1) ? FCString::Atof(*V[1]) : 0.f,
+                                V.IsValidIndex(2) ? FCString::Atof(*V[2]) : -1.f);
+    }
+    if (!PlayerWeapon.IsEmpty())
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_CMD weapon arg=%s ok=%d (command line)"), *PlayerWeapon,
+               C->Body->RequestSlot(PlayerWeapon.IsNumeric() ? FCString::Atoi(*PlayerWeapon) - 1 : INDEX_NONE));
+}
+
 void FSCViewerAutomation::LogFrameSamples()
 {
     auto Stats = [](TArray<float> V) {
@@ -266,12 +353,21 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
     Step.Command.ParseIntoArrayWS(Words);
     if (Words.IsEmpty()) return;
     const double Now = FPlatformTime::Seconds();
-    if (Words[0] == TEXT("shot"))
+    if (Words[0] == TEXT("shot") || Words[0] == TEXT("snap"))
     {
-        // Hold still for an external screenshot (capture_route.sh): clear any timed input first.
-        if (ASCFirstPersonCharacter* C = S.GetFirstPerson()) C->HoldMoveInput(FVector::ZeroVector, 0, false);
+        // shot: hold still for an external screenshot (capture_route.sh), clearing any timed input first.
+        // snap: the same marker without touching input (moving shots with sc.FP.Key held).
+        if (ASCFirstPersonCharacter* C = S.GetFirstPerson(); C && Words[0] == TEXT("shot")) C->HoldMoveInput(FVector::ZeroVector, 0, false);
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_SHOT tag=%s %s"), Words.IsValidIndex(1) ? *Words[1] : TEXT("shot"), *Where(S));
         StepAt = Now + (Words.IsValidIndex(2) ? FCString::Atod(*Words[2]) : 3.0);
+        return;
+    }
+    if (Words[0] == TEXT("waitkit"))
+    {
+        // Hold the route until the player body is attached (or the kit failed), at most <seconds>.
+        S.RequestPlayerKit();
+        WaitKitUntil = Now + (Words.IsValidIndex(1) ? FCString::Atod(*Words[1]) : 600.0);
+        StepAt = Now;
         return;
     }
     if (Words[0] == TEXT("frametime"))
@@ -310,6 +406,15 @@ void FSCViewerAutomation::TickScript(USCViewerSubsystem& S)
         StepAt = Now + Script[0].Delay;
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_START steps=%d %s"), Script.Num(), *Where(S));
     }
+    if (WaitKitUntil > 0)
+    {
+        ASCFirstPersonCharacter* C = S.GetFirstPerson();
+        const bool bDone = (C && C->Body->HasBody()) || S.GetPlayerKitState() == USCViewerSubsystem::EPlayerKitState::Failed || Now > WaitKitUntil;
+        if (!bDone) return;
+        WaitKitUntil = 0;
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_WAITKIT attached=%d status=\"%s\""), C && C->Body->HasBody(), *S.GetPlayerKitStatus());
+        StepAt = FMath::Max(StepAt, Now + Script[StepIndex].Delay);
+    }
     // A timed move finishes before the next step's delay starts counting.
     if (ASCFirstPersonCharacter* C = S.GetFirstPerson(); C && C->IsHoldingMove())
     {
@@ -332,6 +437,7 @@ void FSCViewerAutomation::Tick()
     USCViewerSubsystem* S = Owner.Get();
     if (!S) return;
     TickScript(*S);
+    ApplyPlayerOptions(*S);
     if (S->IsBusy()) return;
     if (bWaiting)
     {

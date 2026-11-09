@@ -65,8 +65,48 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     }
     if (!Out.SourceTransformBasis.IsEmpty() && Out.SourceTransformBasis != TEXT("gltf_y_up") && Out.SourceTransformBasis != TEXT("cryengine_z_up"))
     { Error = TEXT("Unsupported transform basis: ") + Out.SourceTransformBasis; return false; }
+    Out.Id = String(O, TEXT("id"));
+    const FReaderObject* Port;
+    if (O->TryGetObjectField(TEXT("port"), Port))
+    {
+        Out.PortJson = Json(*Port);
+        // A bone port without a resolved transform is placed by its port record (player kits): the item's
+        // offset helper meets the attach joint plus the port offset. Identity local transform, joint frame.
+        if (String(*Port, TEXT("attachment")) == TEXT("bone") && !O->HasField(MatrixKey) && Out.SourceTransformBasis.IsEmpty())
+        {
+            Out.bBonePort = true;
+            Out.SourceTransformBasis = TEXT("gltf_y_up");
+            Out.PortHelper = String(*Port, TEXT("item_offset_helper"));
+            if (Out.ParentNodeName.IsEmpty()) Out.ParentNodeName = String(*Port, TEXT("attach_bone"));
+            Out.PortOffset = FSCPackageReader::PortOffset(*Port);
+        }
+    }
     return Matrix(O, MatrixKey, Out.LocalMatrix, Error);
 }
+}
+FMatrix FSCPackageReader::PortOffset(const TSharedPtr<FJsonObject>& Port)
+{
+    // Native SC axes: position in metres, Ang3 Euler degrees (x pitch, y roll, z yaw), Matrix33::CreateRotationXYZ
+    // = Rz * Ry * Rx for column vectors, i.e. Rx * Ry * Rz in this row-vector convention.
+    FVector P = FVector::ZeroVector, R = FVector::ZeroVector;
+    const FReaderObject* Offset;
+    if (Port && Port->TryGetObjectField(TEXT("offset"), Offset))
+    {
+        const auto& Pos = ReaderArray(*Offset, TEXT("position"));
+        const auto& Rot = ReaderArray(*Offset, TEXT("rotation_degrees"));
+        if (Pos.Num() == 3) P = FVector(Pos[0]->AsNumber(), Pos[1]->AsNumber(), Pos[2]->AsNumber());
+        if (Rot.Num() == 3) R = FVector(Rot[0]->AsNumber(), Rot[1]->AsNumber(), Rot[2]->AsNumber());
+    }
+    auto Axis = [](int32 A, double Degrees) {
+        const double S = FMath::Sin(FMath::DegreesToRadians(Degrees)), C = FMath::Cos(FMath::DegreesToRadians(Degrees));
+        FMatrix M = FMatrix::Identity;
+        const int32 U = (A + 1) % 3, V = (A + 2) % 3;
+        M.M[U][U] = C; M.M[U][V] = S; M.M[V][U] = -S; M.M[V][V] = C; // row-vector rotation about axis A
+        return M;
+    };
+    FMatrix M = Axis(0, R.X) * Axis(1, R.Y) * Axis(2, R.Z);
+    M.SetOrigin(P);
+    return M;
 }
 FString FSCPackageReader::Hash(const TArray<uint8>& Bytes)
 {
@@ -104,14 +144,32 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     if (!Scene->TryGetObjectField(TEXT("root_entity"), Root)) { Error = TEXT("Scene has no root_entity object"); return false; }
     FString Detail;
     if (!Instance(*Root, Out.Root, Detail)) { Out.Root.ImportWarning = Detail; Warn(TEXT("root_entity"), Detail); }
-    for (const auto& V : ReaderArray(Scene, TEXT("children")))
-    {
-        FSCSceneInstance I;
-        if (!Instance(Object(V), I, Detail)) I.ImportWarning = Detail;
-        if (I.SourceTransformBasis.IsEmpty()) I.ImportWarning = TEXT("Child lacks resolved source_transform_basis");
-        if (!I.ImportWarning.IsEmpty()) Warn(I.EntityName, I.ImportWarning);
-        Out.Children.Add(MoveTemp(I));
-    }
+    // Nested assemblies (a personal weapon's own children) follow their parent depth-first; ParentId binds
+    // them to that instance even when the authored parent name differs from the instance's entity name.
+    TArray<FString> NestedPackages; // nested assemblies keep their own palettes next to their manifest
+    TFunction<void(const TArray<TSharedPtr<FJsonValue>>&, const FString&)> ReadChildren =
+        [&](const TArray<TSharedPtr<FJsonValue>>& List, const FString& ParentKey) {
+            for (const auto& V : List)
+            {
+                FSCSceneInstance I;
+                if (!Instance(Object(V), I, Detail)) I.ImportWarning = Detail;
+                I.ParentId = ParentKey;
+                if (I.SourceTransformBasis.IsEmpty() && I.ImportWarning.IsEmpty())
+                    I.ImportWarning = I.MeshAsset.IsEmpty() && !I.PortJson.IsEmpty() ? FString() // metadata-only item
+                                                                                     : TEXT("Child lacks resolved source_transform_basis");
+                if (!I.ImportWarning.IsEmpty()) Warn(I.EntityName, I.ImportWarning);
+                const FString Key = I.Id;
+                const bool bMetadataOnly = I.SourceTransformBasis.IsEmpty() && I.ImportWarning.IsEmpty();
+                if (!bMetadataOnly) Out.Children.Add(MoveTemp(I));
+                if (const auto O = Object(V); O && !Key.IsEmpty())
+                {
+                    FString PackageDir;
+                    if (FSCPackageSource::Normalize(String(O, TEXT("package_dir")), PackageDir)) NestedPackages.AddUnique(PackageDir);
+                    ReadChildren(ReaderArray(O, TEXT("children")), Key);
+                }
+            }
+        };
+    ReadChildren(ReaderArray(Scene, TEXT("children")), FString());
     for (const auto& V : ReaderArray(Scene, TEXT("interiors")))
     {
         const auto O = Object(V); FSCInterior I;
@@ -169,14 +227,18 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     ValidateSidecar(Out.Root); for (auto& I : Out.Children) ValidateSidecar(I);
     for (auto& I : Out.Interiors) for (auto& P : I.Placements) ValidateSidecar(P);
     const FString Directory = FPaths::GetPath(Out.ScenePath);
-    const FString PalettesPath = Directory / TEXT("palettes.json");
-    if (Source.Exists(PalettesPath))
+    TArray<FString> PaletteFiles = {Directory / TEXT("palettes.json")};
+    for (const FString& Nested : NestedPackages) PaletteFiles.Add(Nested / TEXT("palettes.json"));
+    for (const FString& PalettesPath : PaletteFiles)
     {
+        if (!Source.Exists(PalettesPath)) continue;
         FReaderObject O; if (!ReadJson(Source, PalettesPath, O, Detail)) Warn(PalettesPath, Detail);
         for (const auto& V : ReaderArray(O, TEXT("palettes")))
         {
             if (!Object(V)) { Warn(PalettesPath, TEXT("Invalid palette")); continue; }
-            FSCPalette P; P.Id = String(V->AsObject(), TEXT("id")); P.Json = Json(V->AsObject()); Out.Palettes.Add(MoveTemp(P));
+            FSCPalette P; P.Id = String(V->AsObject(), TEXT("id")); P.Json = Json(V->AsObject());
+            // Repeated items share ids: the first definition wins (identical by contract).
+            if (!Out.Palettes.ContainsByPredicate([&](const FSCPalette& E) { return E.Id == P.Id; })) Out.Palettes.Add(MoveTemp(P));
         }
     }
     for (const auto& V : ReaderArray(*Root, TEXT("animations")))

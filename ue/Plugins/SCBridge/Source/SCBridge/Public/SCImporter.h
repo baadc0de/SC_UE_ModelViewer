@@ -12,6 +12,14 @@ struct SCBRIDGE_API FSCImportOptions
     bool bBuildCollision = true;
     bool bImportMaterials = true; // false keeps WP-U1's placeholder (timing baseline / geometry-only checks)
     bool bReplacePrevious = true;
+    /** false: the actor is neither registered as the world's current import nor given exploration data
+     *  (player kits are owned by the viewer subsystem, not the vehicle slot). */
+    bool bPublish = true;
+    /** true: every mesh with skin weights becomes a rig even without a binding clip (player kits are posed by
+     *  USCPlayerBodyComponent, not by the clip catalogue). */
+    bool bRigSkinnedMeshes = false;
+    /** false: clip sidecars are not read or bound (player kits sample body clips themselves). */
+    bool bImportClips = true;
     FTransform ActorTransform = FTransform::Identity;
 };
 struct SCBRIDGE_API FSCImportResult

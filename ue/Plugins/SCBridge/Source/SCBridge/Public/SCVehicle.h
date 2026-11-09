@@ -13,6 +13,13 @@ class UMaterialInstanceDynamic;
 class USCRigComponent;
 class USkeletalMesh;
 class ULightComponent;
+/** Named helper frames of one placed instance, in its anchor's space (cm, UE axes). "" is the item's source frame. */
+USTRUCT()
+struct SCBRIDGE_API FSCInstanceHelpers
+{
+    GENERATED_BODY()
+    UPROPERTY() TMap<FString, FTransform> Frames;
+};
 struct FSCClipPlayback
 {
     TWeakObjectPtr<USCRigComponent> TargetRig;
@@ -96,5 +103,11 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC") void SetEngineGlow(float Strength);
     UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USCClipCatalog> ClipCatalog;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FSCSceneManifest Manifest;
+    /** Anchors of instances that carry an id (player-kit items), by id. */
+    UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> InstanceAnchors;
+    /** Helper frames of those instances, by id: port alignment re-parents items at run time (stow <-> hand). */
+    UPROPERTY() TMap<FString, FSCInstanceHelpers> InstanceHelpers;
+    /** Anchor-relative transform that puts Helper (instance Id) on a joint frame plus Offset (native SC, row form). */
+    bool PortRelative(const FString& Id, const FString& Helper, const FMatrix& Offset, FTransform& Out) const;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FString SessionPath;
 };

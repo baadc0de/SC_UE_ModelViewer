@@ -1,6 +1,7 @@
 // ACharacter owns gravity, step-up, crouch and capsule sweeps; no ship-specific navigation rules.
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
+#include "SCPlayerBody.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -16,13 +17,19 @@ constexpr float BlockedOfferSeconds = 2;    // blocked input this long offers no
 constexpr float InteractReach = 300;        // E reaches 3 m (brief)
 }
 
+void USCEyeCameraComponent::GetCameraView(float DeltaTime, FMinimalViewInfo& DesiredView)
+{
+    Super::GetCameraView(DeltaTime, DesiredView);
+    if (NearClip > 0) DesiredView.PerspectiveNearClipPlane = NearClip;
+}
 ASCFirstPersonCharacter::ASCFirstPersonCharacter()
 {
     GetCapsuleComponent()->OnComponentHit.AddDynamic(this, &ASCFirstPersonCharacter::CapsuleHit);
     auto* Movement = GetCharacterMovement();
     Movement->GetNavAgentPropertiesRef().bCanCrouch = true;
     Movement->bRunPhysicsWithNoController = true; // scripted commandlet walks use the same movement component
-    Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
+    Camera = CreateDefaultSubobject<USCEyeCameraComponent>(TEXT("FirstPersonCamera"));
+    Body = CreateDefaultSubobject<USCPlayerBodyComponent>(TEXT("PlayerBody"));
     Camera->SetupAttachment(GetCapsuleComponent());
     Camera->bUsePawnControlRotation = true;
     Flashlight = CreateDefaultSubobject<USpotLightComponent>(TEXT("ExplorationFlashlight"));
@@ -56,6 +63,10 @@ void ASCFirstPersonCharacter::RecalculateBaseEyeHeight()
 FVector ASCFirstPersonCharacter::EyeOffset() const
 {
     return EyeSource ? EyeSource() : FVector(0, 0, BaseEyeHeight);
+}
+void ASCFirstPersonCharacter::RefreshEye()
+{
+    if (Camera->GetAttachParent() == GetCapsuleComponent()) Camera->SetRelativeLocation(EyeOffset());
 }
 void ASCFirstPersonCharacter::SetRunning(bool bRun)
 {
@@ -294,7 +305,10 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
     static const TArray<TPair<FKey, A>> Table = {
         {EKeys::W, A::Forward}, {EKeys::S, A::Back}, {EKeys::A, A::Left}, {EKeys::D, A::Right},
         {EKeys::Q, A::Down}, {EKeys::SpaceBar, A::Up}, {EKeys::LeftShift, A::Run}, {EKeys::LeftControl, A::Crouch},
-        {EKeys::E, A::Interact}, {EKeys::F, A::Torch}, {EKeys::V, A::Noclip}, {EKeys::T, A::Teleport}, {EKeys::Escape, A::Close}};
+        {EKeys::E, A::Interact}, {EKeys::F, A::Torch}, {EKeys::V, A::Noclip}, {EKeys::T, A::Teleport}, {EKeys::Escape, A::Close},
+        {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
+        {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
+        {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}};
     return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
@@ -329,7 +343,11 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     case A::Noclip: ToggleNoclip(); return true;
     case A::Teleport: bTeleportMenuOpen = !bTeleportMenuOpen; ClearInput(); return true;
     case A::Close: bTeleportMenuOpen = false; ClearInput(); return true;
-    default: return false;
+    case A::Holster: return Body->RequestSlot(INDEX_NONE);
+    case A::View: Body->SetThirdPerson(!Body->IsThirdPerson()); return Body->HasBody();
+    default:
+        if (Action >= A::Weapon1 && Action <= A::Weapon9) return Body->RequestSlot(int32(Action) - int32(A::Weapon1));
+        return false;
     }
 }
 void ASCFirstPersonCharacter::SetupPlayerInputComponent(UInputComponent* Input)
@@ -355,8 +373,9 @@ FString ASCFirstPersonCharacter::HUDText() const
     const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: the capsule overlaps geometry")
         : bStuck ? TEXT("Movement blocked — press V for noclip")
         : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");
-    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport"),
+    const FString Player = Body->HasBody() ? Body->HUDLine() : BodyStatus;
+    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport"),
         bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
         GetVelocity().Size() / 100, Flashlight->IsVisible() ? TEXT("on") : TEXT("off"),
-        *GetVehicleRelativeLocation().ToCompactString(), *Prompt, Status);
+        *GetVehicleRelativeLocation().ToCompactString(), *Prompt, Status, Player.IsEmpty() ? TEXT("") : TEXT("\n"), *Player);
 }

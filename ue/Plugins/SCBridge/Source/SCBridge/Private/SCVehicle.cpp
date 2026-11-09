@@ -6,6 +6,7 @@
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCRigComponent.h"
+#include "SCMeshImporter.h"
 #include "Engine/SkeletalMesh.h"
 ASCVehicle::ASCVehicle()
 {
@@ -13,6 +14,15 @@ ASCVehicle::ASCVehicle()
     PrimaryActorTick.bStartWithTickEnabled = false;
     RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("VehicleRoot"));
     RootComponent->SetMobility(EComponentMobility::Movable);
+}
+bool ASCVehicle::PortRelative(const FString& Id, const FString& Helper, const FMatrix& Offset, FTransform& Out) const
+{
+    const FSCInstanceHelpers* Helpers = InstanceHelpers.Find(Id);
+    const FTransform* Frame = Helpers ? Helpers->Frames.Find(Helper) : nullptr;
+    if (!Frame) return false;
+    // The helper (anchor space) lands on the joint frame plus the port offset; offset axes are the joint's own.
+    Out = Frame->Inverse() * FTransform(FSCMeshImporter::Transform(Offset));
+    return true;
 }
 void ASCVehicle::SetEngineGlow(float Strength)
 {

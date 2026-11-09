@@ -18,6 +18,17 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;
     UPROPERTY(BlueprintReadOnly) TArray<FString> LightJson; // lossless state/style/attachment metadata
+    /** Instance id (`children[].id`, player kits); unique where entity names repeat. */
+    UPROPERTY(BlueprintReadOnly) FString Id;
+    /** Id of the enclosing child for nested assemblies (`children[].children[]`); resolves the parent before the name. */
+    UPROPERTY(BlueprintReadOnly) FString ParentId;
+    /** Lossless authored item-port record (`port`), empty when the instance has none. */
+    UPROPERTY(BlueprintReadOnly) FString PortJson;
+    /** `port.attachment == "bone"` without a resolved local transform: placed by aligning the port's
+     *  item_offset_helper with the parent joint plus the port offset (contract "Player kits"). */
+    bool bBonePort = false;
+    FString PortHelper;           // port.item_offset_helper ("" = the item's source frame)
+    FMatrix PortOffset = FMatrix::Identity; // port.offset in native SC axes (row-vector, metres)
     FString ImportWarning; // Invalid optional instance: retain identity to suppress descendants.
     FMatrix LocalMatrix = FMatrix::Identity;
 };
@@ -101,4 +112,6 @@ public:
     // Empty ScenePath selects the sole manifest; shared roots with multiple scenes require an explicit path.
     static bool Read(const FSCPackageSource& Source, FSCSceneManifest& Out, FString& Error, const FString& ScenePath = TEXT(""), TArray<FString>* Warnings = nullptr);
     static FString Hash(const TArray<uint8>& Bytes);
+    /** `port.offset` as a native-SC-axes row-vector matrix (metres). */
+    static FMatrix PortOffset(const TSharedPtr<class FJsonObject>& Port);
 };

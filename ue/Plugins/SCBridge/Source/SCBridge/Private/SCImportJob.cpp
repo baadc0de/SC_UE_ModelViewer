@@ -292,7 +292,7 @@ bool FSCImportJob::FState::StepRead(bool bBlocking)
         ReadTask = Async(EAsyncExecution::ThreadPool, [this] {
             const double ReadStart = FPlatformTime::Seconds();
             if (!FSCPackageReader::Read(*Source, Manifest, ReadError, Options.ScenePath, &ReadWarnings)) return false;
-            for (const auto& Record : Manifest.Clips)
+            for (const auto& Record : Options.bImportClips ? Manifest.Clips : TArray<FSCClipRecord>())
             {
                 FSCImportedClip Clip;
                 TSharedPtr<FJsonObject> Json;
@@ -431,7 +431,7 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             }
             if (!Binding.Tracks.IsEmpty()) Slot.Bindings.Add(Index, MoveTemp(Binding));
         }
-        Slot.bAnimated = !Slot.Bindings.IsEmpty();
+        Slot.bAnimated = !Slot.Bindings.IsEmpty() || (Options.bRigSkinnedMeshes && !Data.SkinWeights.IsEmpty());
         TArray<FTriangleID> Soft;
         TMap<int32, TArray<FTriangleID>> Rigid;
         for (auto T : Data.Description.Triangles().GetElementIDs())
@@ -662,7 +662,7 @@ void FSCImportJob::FState::Assemble()
     const double FinalizeSeconds = FPlatformTime::Seconds() - AssembleStart;
     UE_LOG(LogSCImport, Display, TEXT("ANIMATIONS imported=%d indexed=%d"), Vehicle->ClipCatalog->Clips.Num(), Manifest.Clips.Num());
     ASCVehicle* V = Vehicle;
-    TMap<FString, FEntity> Entities;
+    TMap<FString, FEntity> Entities, EntitiesById;
     double AnchorSeconds = 0, BindSeconds = 0;
     V->bCollisionReady = Options.bBuildCollision;
     auto NewAnchor = [&](const FString& Label, USceneComponent* Parent, const FMatrix& Relative) {
@@ -678,8 +678,8 @@ void FSCImportJob::FState::Assemble()
     };
     auto FindParent = [&](const FSCSceneInstance& I, bool& bHelper) -> USceneComponent* {
         bHelper = false;
-        if (I.ParentEntityName.IsEmpty()) return V->GetRootComponent();
-        FEntity* E = Entities.Find(I.ParentEntityName);
+        if (I.ParentEntityName.IsEmpty() && I.ParentId.IsEmpty()) return V->GetRootComponent();
+        FEntity* E = I.ParentId.IsEmpty() ? Entities.Find(I.ParentEntityName) : EntitiesById.Find(I.ParentId);
         if (!E || !E->Anchor)
         {
             Warn(I.EntityName, TEXT("Unresolved parent entity: ") + I.ParentEntityName);
@@ -736,9 +736,27 @@ void FSCImportJob::FState::Assemble()
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
-        const FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
-                                                                    bAtHelper, I.SourceTransformBasis == TEXT("cryengine_z_up"));
+        FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
+                                                              bAtHelper, I.SourceTransformBasis == TEXT("cryengine_z_up"));
+        if (!I.Id.IsEmpty())
+        {
+            // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
+            FSCInstanceHelpers& Helpers = V->InstanceHelpers.FindOrAdd(I.Id);
+            Helpers.Frames.Add(FString(), FTransform(FSCMeshImporter::Transform(E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity)));
+            if (E.Mesh)
+                for (const auto& Node : E.Mesh->Nodes)
+                    if (!Node.Key.IsEmpty() && !Helpers.Frames.Contains(Node.Key)) Helpers.Frames.Add(Node.Key, FTransform(FSCMeshImporter::Transform(Node.Value)));
+        }
+        if (I.bBonePort && bAtHelper && !I.Id.IsEmpty())
+        {
+            FTransform Port;
+            if (V->PortRelative(I.Id, I.PortHelper, I.PortOffset, Port))
+                Relative = Port.ToMatrixWithScale();
+            else
+                Warn(I.EntityName, TEXT("Port item offset helper not in the item: ") + I.PortHelper);
+        }
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
+        if (!I.Id.IsEmpty()) V->InstanceAnchors.Add(I.Id, E.Anchor);
         V->AddItemSpawn(I, E.Anchor);
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {
@@ -868,10 +886,13 @@ void FSCImportJob::FState::Assemble()
         if (!Parent || !CanPlace(I))
         {
             Entities.Add(I.EntityName, FEntity());
+            if (!I.Id.IsEmpty()) EntitiesById.Add(I.Id, FEntity());
             continue;
         }
         // Export order is depth-first; latest matching entity disambiguates repeated loadout instances.
-        Entities.Add(I.EntityName, Place(I, Parent, bHelper, false));
+        FEntity Placed = Place(I, Parent, bHelper, false);
+        if (!I.Id.IsEmpty()) EntitiesById.Add(I.Id, Placed);
+        Entities.Add(I.EntityName, Placed);
     }
     for (const auto& Interior : Manifest.Interiors)
     {
@@ -896,8 +917,11 @@ void FSCImportJob::FState::Assemble()
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
-    V->BuildExploration();
-    FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
+    if (Options.bPublish)
+    {
+        V->BuildExploration();
+        FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
+    }
     Result.Vehicle = V;
     Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;

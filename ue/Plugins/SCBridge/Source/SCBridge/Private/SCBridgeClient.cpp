@@ -226,6 +226,52 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportDecomposed(const FStrin
     }, UE::Tasks::ETaskPriority::BackgroundNormal);
 }
 
+UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& Gender, const FString& Loadout,
+                                                               TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
+{
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Gender, Loadout, Progress] {
+        FSCExportResult Result;
+        const double Start = FPlatformTime::Seconds();
+        FScopeLock Guard(&Self->HandleLock);
+        if (!Self->Handle)
+        {
+            Result.Error = NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+            return Result;
+        }
+        sc_blob Blob{nullptr, 0};
+        const FTCHARToUTF8 GenderUtf8(*Gender), LoadoutUtf8(*Loadout);
+        const sc_status Status = scbridge_export_player(Self->Handle, Gender.IsEmpty() ? nullptr : GenderUtf8.Get(),
+                                                        Loadout.IsEmpty() ? nullptr : LoadoutUtf8.Get(), &FSCExportProgress::Callback,
+                                                        &Progress.Get(), &Blob);
+        Result.Seconds = FPlatformTime::Seconds() - Start;
+        const uint64 BlobBytes = Status == SC_STATUS_OK ? uint64(Blob.len) : 0;
+        if (Status == SC_STATUS_OK)
+        {
+            if (Blob.len > size_t(MAX_int32))
+                Result.Error = FText::Format(NSLOCTEXT("SCBridge", "PlayerTarTooLarge", "The player kit is {0} bytes; the importer accepts at most {1}."),
+                                             FText::AsNumber(uint64(Blob.len)), FText::AsNumber(MAX_int32));
+            else
+            {
+                Result.Tar.SetNumUninitialized(int32(Blob.len));
+                FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
+                Result.bOK = true;
+            }
+            sc_free_blob(&Blob);
+        }
+        else
+        {
+            Result.bCancelled = Status == SC_STATUS_CANCELLED;
+            Result.Error = Self->FailLocked(Status, Result.bPanicked);
+            if (!Result.bPanicked) sc_free_blob(&Blob);
+        }
+        if (Self->Handle) Result.Cache = Self->CacheStatsLocked();
+        UE_LOG(LogSCBridgeClient, Display, TEXT("FFI_EXPORT_PLAYER gender=%s loadout=%s status=%d seconds=%.3f bytes=%llu accepted=%d cache_hit=%d"),
+               Gender.IsEmpty() ? TEXT("<default>") : *Gender, Loadout.IsEmpty() ? TEXT("<default>") : *Loadout, int32(Status), Result.Seconds,
+               BlobBytes, Result.bOK, Result.Cache.bLastHit);
+        return Result;
+    }, UE::Tasks::ETaskPriority::BackgroundNormal);
+}
+
 FSCCacheStats FSCBridgeClient::CacheStats()
 {
     FScopeLock Guard(&HandleLock);

@@ -1,0 +1,128 @@
+# WP-P2 GPU route: the WP-P1 Cutlass walk-through with the player body and a drawn P4-AR, plus the armed
+# evidence shots (idle, running/strafing in third person, mid-select/deselect, stowed weapon, frame cost).
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+#       -SCPlayerLoadout=Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml
+# Slot 1 is the first stowed weapon in key order (size, then stow port): the P4-AR in this loadout.
+# Moves are timed inputs; durations are the WP-P1 route's scaled by 400/357 (armed walk speed, cm/s).
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0.5 sc.FP.Spawn Door:2
+0 waitkit 900
+1 sc.Player.State
+0 sc.FP.Look 0 60
+1 sc.FP.Interact
+5 sc.FP.Look 180 0
+0 shot 01-fp-unarmed-hangar
+# Out under the open ramp lip (crouched, as in WP-P1), then draw and run in the open hangar.
+0 sc.FP.Crouch 1
+0.3 sc.FP.Move 1 0 2.8
+0.5 sc.FP.Crouch 0
+1 sc.Player.Weapon 1
+2 sc.Player.State
+0 shot 02-fp-armed-idle
+0 sc.FP.Look 180 -25
+1 shot 03-fp-armed-look-down
+0 sc.FP.Look 180 0
+0 sc.Player.View tp 90 320
+1 shot 04-tp-armed-idle-side
+# Moving shots: keys stay held through the capture (snap); facing -X, then +Y, in the open hangar.
+0 sc.FP.Key W 1
+1 snap 05-tp-run-forward 2.2
+0 sc.FP.Key W 0
+1 sc.FP.Look 90 0
+1 sc.FP.Key LeftShift 1
+0 sc.FP.Key W 1
+1 snap 06-tp-sprint-forward 2.2
+0 sc.FP.Key W 0
+0 sc.FP.Key LeftShift 0
+1 sc.FP.Look 0 0
+0 sc.Player.View tp 180 320
+0.5 sc.FP.Key A 1
+1 snap 07-tp-strafe-left-front 2.2
+0 sc.FP.Key A 0
+1 sc.Player.View tp 0 320
+0.5 sc.FP.Key D 1
+1 snap 08-tp-strafe-right-behind 2.2
+0 sc.FP.Key D 0
+1 sc.FP.Look 90 0
+0 sc.Player.View tp 135 320
+0.5 sc.FP.Key S 1
+1 snap 09-tp-backpedal 2.2
+0 sc.FP.Key S 0
+# Mid-select / mid-deselect: slow motion (real-time route delays, game-time animation).
+1 sc.Player.Weapon 1
+2 sc.Player.View tp 100 220
+0 slomo 0.04
+0 sc.Player.Weapon 1
+4 sc.Player.State
+0 shot 10-tp-mid-select 2
+0 slomo 1
+2 sc.Player.State
+0 slomo 0.04
+0 sc.Player.Weapon 1
+4 sc.Player.State
+0 shot 11-tp-mid-deselect 2
+0 slomo 1
+2 sc.Player.View fp
+0 slomo 0.04
+0 sc.Player.Weapon 1
+4 sc.Player.State
+0 shot 12-fp-mid-select 2
+0 slomo 1
+2 sc.Player.State
+0 slomo 0.04
+0 sc.Player.Weapon 1
+4 sc.Player.State
+0 shot 13-fp-mid-deselect 2
+0 slomo 1
+# Stowed on the backpack (third person from behind).
+2 sc.Player.View tp 25 200
+1 shot 14-tp-stowed-back-left
+0 sc.Player.View tp -25 200
+1 shot 15-tp-stowed-back-right
+0 sc.Player.View fp
+# Armed walk-through: bay floor -> ramp foot -> up the ramp -> bulkhead (E) -> corridor -> cockpit.
+0 sc.FP.Spawn Interior:1
+0.5 sc.Player.Weapon 1
+2 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.9
+0.5 sc.FP.Look 0 0
+1 shot 16-fp-ramp-foot-looking-up
+0 sc.FP.Move 1 0 2.24
+1 shot 17-fp-cargo-bay-armed
+0 sc.FP.Look -90 0
+0.3 sc.FP.Move 1 0 0.69
+0.3 sc.FP.Look 0 0
+0.3 sc.FP.Move 1 0 3.4
+0.5 sc.FP.Where
+0.5 shot 18-fp-bulkhead-closed
+0 sc.FP.Interact
+3 shot 19-fp-bulkhead-opened-armed
+0 sc.Player.View tp 160 200
+1 shot 20-tp-at-bulkhead-armed
+0 sc.Player.View fp
+0 sc.FP.Move 1 0 1.12
+1 shot 21-fp-corridor
+0 sc.FP.Move 1 0 1.12
+0.5 sc.FP.Move 1 0 1.12
+0.5 sc.FP.Where
+0 sc.FP.Look 90 0
+0.3 sc.FP.Move 1 0 0.34
+0.3 sc.FP.Look 0 0
+0.3 sc.FP.Move 1 0 2.24
+1 sc.FP.Look 0 -10
+1 sc.FP.Where
+1 shot 22-fp-cockpit-armed
+0 sc.Player.View tp 160 180
+1 shot 23-tp-cockpit-armed
+0 sc.Player.View fp
+# Frame cost at one settled view: body on (armed idle) / body off (WP-P1 capsule only) / body on.
+0 sc.FP.Look 0 0
+2 frametime 6 body-a
+0 sc.Player.Body 0
+2 frametime 6 capsule-only
+0 sc.Player.Body 1
+0 sc.Player.Weapon 1
+3 frametime 6 body-b
+0 sc.Player.State
+0 quit

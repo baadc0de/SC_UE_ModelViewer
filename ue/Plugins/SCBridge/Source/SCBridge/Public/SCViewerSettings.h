@@ -21,7 +21,16 @@ public:
     /** Free-fly speed in cm/s (mouse wheel changes it while flying). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float FlySpeed = 1500.f;
 
+    /** First-person player body (WP-P2): gender ("male"/"female"; empty = exporter default, male). */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString PlayerGender;
+    /** Player loadout XML in Data.p4k (e.g. Data/Scripts/Loadouts/Player/DefaultLoadouts/<name>.xml); empty = the
+     *  exporter's default (first default loadout with a stowed personal weapon). */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString PlayerLoadout;
+
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static USCViewerSettings* Get();
+    /** -SCPlayerGender=<g> / -SCPlayerLoadout=<p4k path> override the settings for one run. */
+    FString ResolvePlayerGender() const;
+    FString ResolvePlayerLoadout() const;
     void AddRecent(const FString& Entity);
     /** Absolute cache dir resolved from the launch directory (UE changes cwd at startup); empty when disabled.
      *  -SCCacheDir=<dir> overrides the setting for one run. */

@@ -356,3 +356,66 @@ of a route ending in `quit`) and prints the route log. Routes live in
 
 See [WP-P1 verification](verification/WP-P1.md) for exact null-RHI commands,
 results, collision comparison, limitations, and the orchestrator's GPU checklist.
+
+## Armed first person: the real player body (WP-P2)
+
+Entering first person the first time starts the **player kit** in the background:
+`scbridge_export_player` (D10 cache in `./cache/`; ~9 s cold, <1 s cached) → tar parse →
+import (unpublished actor, no collision, every skinned part a rig) → body-clip sidecars read on
+workers (~3 s). Until it is ready — and if it fails — first person is the WP-P1 capsule; the HUD
+shows the progress or the failure. The kit is kept for later first-person sessions.
+
+Options (settings in `GameUserSettings.ini`, command line overrides one run):
+
+| Setting / switch | Meaning |
+| --- | --- |
+| `PlayerGender` / `-SCPlayerGender=male\|female` | body; empty = the exporter default (male) |
+| `PlayerLoadout` / `-SCPlayerLoadout=<p4k xml>` | e.g. `Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml` (P4-AR); empty = the exporter's default loadout |
+| `-SCPlayerPackage=<kit tar>` | read the kit from disk instead of exporting (no archive needed) |
+| `-SCPlayerWeapon=<slot\|none>`, `-SCPlayerView=fp\|tp[,yaw[,distance]]` | applied once the body is attached (for `capture_viewer.sh`) |
+| `-SCPlayerDemo[=<entity>]` | runs `ue/scripts/routes/player-demo.txt` (loads `<entity>` if given, enters first person) |
+
+Keys (same `KeyTable` for Slate and native input): `1`–`9` draw the stowed weapon in that slot
+(slots: stowed weapons with playable select/deselect, ordered by size, then stow-port name — the
+P4-AR loadout gives 1 = P4-AR, 2 = S71), the active slot's key or `H` holsters, another slot's key
+swaps (deselect, then select), keys are ignored mid-transition; `C` toggles a third-person orbit.
+E, F, V, T work as in WP-P1 in every weapon state (in third person E acts from the camera).
+
+What drives the body (all names from the scene's `player` block; Mannequin vocabulary only:
+fragment ids `MotionIdle`/`MotionMovement`/`select`/`deselect`, stance tags `stand`/`crouch`,
+blend-space parameters `MoveSpeed`/`TravelAngle`):
+
+- `USCPlayerBodyComponent` (on `ASCFirstPersonCharacter`): leader rig = the root part's rig, every
+  other rig on the body skeleton follows by joint name; feet on the capsule floor, facing the
+  root-motion joint's native +Y; items on their port joints aligned by `item_offset_helper`
+  (stow frames come from the port owner's same-named helper when the owner item is placed, e.g.
+  the backpack's `wep_stocked_attach_*_override`). Parts with port flags `invis_p1`/`HeadWear`, on
+  the root part's port, or skinned mostly below the camera joint's parent are hidden in first
+  person and keep casting shadows (`bCastHiddenShadow`). Camera at `camera_bone`, orientation =
+  control rotation, near plane 2 cm (`USCEyeCameraComponent`).
+- `FSCPlayerAnimator` (plain C++): state = (weapon, stance, move-speed tag, fp/tp); idle/movement
+  = the fragment option with the fewest query fragment tags; movement blend spaces sampled at
+  (ground speed, travel angle) as the closest point of the authored faces, examples phase-locked;
+  cross-fades with the fragment's `blend_in`; additive layers `local = delta * base` (parent
+  space), translation added; select/deselect one-shots on top; root-motion joint pinned; view pitch
+  spread over the camera joint's ancestors below the pelvis (interim: aim poses are not exported).
+  Walk / run speeds = nominal forward example speeds of the slowest / fastest move-speed tag
+  (P4-AR: 357 / 601 cm/s, unarmed 345 / 600). Off-hand two-bone IK to the weapon's off-hand grip
+  helper is implemented but off by default (`sc.Player.OffHandIK 1`): the game's clips author their
+  left-weapon IK blend at 0 for these states.
+
+Console (first person): `sc.Player.Weapon <slot|none>`, `sc.Player.View fp|tp [yaw] [distance]`,
+`sc.Player.State` (`PLAYER_STATE` log), `sc.Player.Load` (start/retry the kit), `sc.Player.Body 0|1`
+(detach/re-attach — frame-time A/B), `sc.FP.Key <key> 0|1` (press/release a key-table key).
+Route pseudo-commands: `waitkit [s]` holds the route until the body is attached; `snap <tag>` is
+`shot` without clearing held input (moving shots). `slomo <x>` (engine) slows the animation while
+route delays stay real time (mid-select frames).
+
+```bash
+ue/scripts/capture_route.sh p2-cutlass ue/scripts/routes/cutlass-armed-walkthrough.txt -SCDefaults \
+  -SCLoad=DRAK_Cutlass_Black -SCCamera=first \
+  -SCPlayerLoadout=Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml
+```
+
+Null-RHI tests: `-run=pythonscript -script=ue/scripts/test_player.py -SCPlayerTests
+[-SCPlayerPackage=<kit tar>]` (see [WP-P2 verification](verification/WP-P2.md)).

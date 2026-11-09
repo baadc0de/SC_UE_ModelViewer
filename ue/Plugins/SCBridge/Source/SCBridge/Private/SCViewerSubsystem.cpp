@@ -4,6 +4,8 @@
 #include "SCViewerAutomation.h"
 #include "SCViewerPawn.h"
 #include "SCFirstPersonCharacter.h"
+#include "SCPlayerBody.h"
+#include "SCRigComponent.h"
 #include "Camera/CameraComponent.h"
 #include "SCViewOptions.h"
 #include "SCViewerSettings.h"
@@ -20,6 +22,8 @@
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
 #include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Misc/Parse.h"
 #include "RenderingThread.h"
 #include "UObject/UObjectIterator.h"
@@ -83,6 +87,12 @@ void USCViewerSubsystem::Deinitialize()
         Search.Task.Wait();
     Searches.Empty();
     Job.Reset(); // destroys a partial actor if any
+    if (KitProgress) KitProgress->RequestCancel();
+    if (KitExport.IsValid()) KitExport.Wait();
+    if (KitParse.IsValid()) KitParse.Wait();
+    if (KitClipsTask.IsValid()) KitClipsTask.Wait();
+    KitJob.Reset();
+    KitSource.Reset();
     UnloadInternal(false); // the subsystem owns the loaded vehicle; the host collects garbage afterwards
     Client.Reset();
     Super::Deinitialize();
@@ -553,6 +563,7 @@ bool USCViewerSubsystem::Tick(float)
     }
     CompleteSearches(false);
     StepLoad(false);
+    StepPlayerKit(false);
     PollClientPanic();
     LogPhaseChange();
     if (Automation) Automation->Tick();
@@ -569,6 +580,190 @@ void USCViewerSubsystem::LogPhaseChange()
     if (!Step.IsEmpty())
         UE_LOG(LogSCViewer, Display, TEXT("VIEWER_PHASE t=%.3f progress=%.3f %s"), FPlatformTime::Seconds() - LoadStart, GetLoadProgress(),
                *GetLoadPhaseText());
+}
+
+// ---------------------------------------------------------------- player body (WP-P2)
+
+bool USCViewerSubsystem::RequestPlayerKit()
+{
+    if (KitState != EPlayerKitState::None && KitState != EPlayerKitState::Failed) return true; // running or ready
+    KitError.Empty();
+    KitStart = FPlatformTime::Seconds();
+    // -SCPlayerPackage=<kit tar|export folder> reads a kit from disk (no archive needed: folder harness, tests).
+    FString Package;
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCPlayerPackage="), Package))
+    {
+        Package = FPaths::ConvertRelativePathToFull(FPlatformMisc::LaunchDir(), Package);
+        KitParse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Package]() -> TSharedPtr<FSCTarPackageSource> {
+            TArray<uint8> Bytes;
+            if (!FFileHelper::LoadFileToArray(Bytes, *Package)) return nullptr;
+            return MakeShared<FSCTarPackageSource>(MoveTemp(Bytes));
+        });
+        KitState = EPlayerKitState::Parsing;
+        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_START package=%s"), *Package);
+        return true;
+    }
+    if (ArchiveState != ESCArchiveState::Ready)
+    {
+        FailPlayerKit(TEXT("the archive is not open"));
+        return false;
+    }
+    const USCViewerSettings* Settings = USCViewerSettings::Get();
+    const FString Gender = Settings->ResolvePlayerGender(), Loadout = Settings->ResolvePlayerLoadout();
+    KitProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
+    KitExport = Client->ExportPlayer(Gender, Loadout, KitProgress.ToSharedRef());
+    KitState = EPlayerKitState::Exporting;
+    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_START gender=%s loadout=%s"), Gender.IsEmpty() ? TEXT("<default>") : *Gender,
+           Loadout.IsEmpty() ? TEXT("<exporter default>") : *Loadout);
+    return true;
+}
+void USCViewerSubsystem::FailPlayerKit(const FString& Error)
+{
+    KitState = EPlayerKitState::Failed;
+    KitError = Error;
+    KitJob.Reset();
+    KitSource.Reset();
+    KitProgress.Reset();
+    UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_KIT result=Failed seconds=%.3f error=\"%s\" (first person stays capsule-only)"),
+           FPlatformTime::Seconds() - KitStart, *Error);
+    if (FirstPerson) FirstPerson->BodyStatus = GetPlayerKitStatus();
+}
+FString USCViewerSubsystem::GetPlayerKitStatus() const
+{
+    switch (KitState)
+    {
+    case EPlayerKitState::Exporting:
+    {
+        const FString Step = KitProgress ? KitProgress->GetPhase() : FString();
+        return TEXT("Player body: exporting") + (Step.IsEmpty() ? FString(TEXT("…")) : TEXT(" (") + Step + TEXT(")"));
+    }
+    case EPlayerKitState::Parsing: return TEXT("Player body: reading package…");
+    case EPlayerKitState::Importing: return TEXT("Player body: ") + (KitJob ? KitJob->GetPhase() : FString(TEXT("importing")));
+    case EPlayerKitState::Clips: return TEXT("Player body: reading animations…");
+    case EPlayerKitState::Ready: return TEXT("Player body ready");
+    case EPlayerKitState::Failed: return TEXT("Player body unavailable (capsule only): ") + KitError;
+    default: return FString();
+    }
+}
+bool USCViewerSubsystem::WaitForPlayerKit(float TimeoutSeconds)
+{
+    const double Deadline = FPlatformTime::Seconds() + TimeoutSeconds;
+    while (KitState != EPlayerKitState::None && KitState != EPlayerKitState::Ready && KitState != EPlayerKitState::Failed &&
+           FPlatformTime::Seconds() < Deadline)
+        StepPlayerKit(true);
+    return KitState == EPlayerKitState::Ready;
+}
+void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
+{
+    if (KitState == EPlayerKitState::Exporting)
+    {
+        if (!KitExport.IsCompleted())
+        {
+            if (!bBlocking) return;
+            KitExport.Wait();
+        }
+        FSCExportResult Result = MoveTemp(KitExport.GetResult());
+        KitExport = {};
+        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_EXPORT ok=%d seconds=%.3f bytes=%d cache_hit=%d"), Result.bOK, Result.Seconds, Result.Tar.Num(),
+               Result.Cache.bLastHit);
+        if (!Result.bOK)
+        {
+            PollClientPanic();
+            FailPlayerKit(Result.Error.ToString());
+            return;
+        }
+        KitParse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Tar = MoveTemp(Result.Tar)]() mutable {
+            return TSharedPtr<FSCTarPackageSource>(MakeShared<FSCTarPackageSource>(MoveTemp(Tar)));
+        });
+        KitState = EPlayerKitState::Parsing;
+        if (!bBlocking) return;
+    }
+    if (KitState == EPlayerKitState::Parsing)
+    {
+        if (!KitParse.IsCompleted())
+        {
+            if (!bBlocking) return;
+            KitParse.Wait();
+        }
+        KitSource = KitParse.GetResult();
+        KitParse = {};
+        if (!KitSource || !KitSource->IsValid())
+        {
+            FailPlayerKit(KitSource ? KitSource->GetError() : FString(TEXT("cannot read the player package")));
+            return;
+        }
+        const FString Scene = FSCPlayerKit::FindRootScene(*KitSource);
+        if (Scene.IsEmpty())
+        {
+            FailPlayerKit(TEXT("the package has no single root scene.json"));
+            return;
+        }
+        KitJob = MakeShared<FSCImportJob>(*KitSource, USCPlayerBodyComponent::KitImportOptions(GetViewerWorld(), Scene), KitSource);
+        KitState = EPlayerKitState::Importing;
+    }
+    if (KitState == EPlayerKitState::Importing)
+    {
+        if (!KitJob->Tick(bBlocking, ImportBudgetSeconds)) return;
+        if (KitJob->GetStage() != ESCImportStage::Succeeded)
+        {
+            FailPlayerKit(KitJob->GetResult().Error);
+            return;
+        }
+        KitActor = KitJob->GetResult().Vehicle.Get();
+        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_IMPORT seconds=%.3f rigs=%d meshes=%d warnings=%d"), KitJob->GetResult().TotalSeconds,
+               KitActor ? KitActor->Rigs.Num() : 0, KitActor ? KitActor->Meshes.Num() : 0, KitJob->GetResult().Warnings.Num());
+        KitJob.Reset();
+        USCRigComponent* Leader = USCPlayerBodyComponent::FindLeader(KitActor);
+        if (!Leader)
+        {
+            FailPlayerKit(TEXT("the package has no body rig"));
+            return;
+        }
+        KitActor->SetActorHiddenInGame(true);
+        KitClipsTask = UE::Tasks::Launch(UE_SOURCE_LOCATION,
+            [Source = KitSource, Scene = KitActor->Manifest.ScenePath, Bones = USCPlayerBodyComponent::BoneMap(Leader)] {
+                FKitClips Out;
+                if (!SCLoadPlayerKit(*Source, Scene, Bones, Out.Kit, Out.Clips, Out.Failed, Out.Error)) Out.Kit.Reset();
+                return Out;
+            });
+        KitState = EPlayerKitState::Clips;
+    }
+    if (KitState == EPlayerKitState::Clips)
+    {
+        if (!KitClipsTask.IsCompleted())
+        {
+            if (!bBlocking) return;
+            KitClipsTask.Wait();
+        }
+        FKitClips Result = KitClipsTask.GetResult();
+        KitClipsTask = {};
+        KitSource.Reset(); // the package bytes are no longer needed: meshes, textures and clips are built
+        if (!Result.Kit)
+        {
+            FailPlayerKit(Result.Error);
+            return;
+        }
+        KitData = Result.Kit;
+        KitClips = Result.Clips;
+        KitState = EPlayerKitState::Ready;
+        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT result=Ready seconds=%.3f gender=%s loadout=%s weapons=%d states=%d blend_spaces=%d clips=%d clip_failures=%d"),
+               FPlatformTime::Seconds() - KitStart, *KitData->Gender, *KitData->Loadout, KitData->Weapons.Num(), KitData->States.Num(),
+               KitData->BlendSpaces.Num(), KitClips->Num(), Result.Failed);
+        AttachPlayerKit();
+    }
+    if (FirstPerson && !FirstPerson->Body->HasBody()) FirstPerson->BodyStatus = GetPlayerKitStatus();
+}
+void USCViewerSubsystem::AttachPlayerKit()
+{
+    if (!FirstPerson) return;
+    FirstPerson->BodyStatus = GetPlayerKitStatus();
+    if (KitState != EPlayerKitState::Ready || !KitActor || FirstPerson->Body->HasBody()) return;
+    FString Error;
+    if (!FirstPerson->Body->Attach(KitActor, KitData, KitClips, Error))
+    {
+        FirstPerson->BodyStatus = TEXT("Player body unavailable (capsule only): ") + Error;
+        UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_BODY attach failed: %s"), *Error);
+    }
 }
 
 // ---------------------------------------------------------------- camera and inspection
@@ -612,6 +807,8 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
         }
         PC->Possess(FirstPerson);
         PC->SetControlRotation(FirstPerson->GetActorRotation());
+        RequestPlayerKit(); // first entry starts the player body; WP-P1 capsule-only until it is ready
+        AttachPlayerKit();
     }
     else if (FirstPerson)
     {

@@ -1,6 +1,7 @@
 // USCViewerSettings: launch-dir relative path resolution and persistence.
 #include "SCViewerSettings.h"
 #include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformMisc.h"
 
@@ -30,6 +31,18 @@ FString USCViewerSettings::ResolveArchivePath() const
     FString Path = ArchivePath;
     FParse::Value(FCommandLine::Get(), TEXT("SCArchive="), Path);
     return Path.IsEmpty() ? Path : FPaths::ConvertRelativePathToFull(FPlatformMisc::LaunchDir(), Path);
+}
+FString USCViewerSettings::ResolvePlayerGender() const
+{
+    FString Value = PlayerGender;
+    FParse::Value(FCommandLine::Get(), TEXT("SCPlayerGender="), Value);
+    return Value.TrimStartAndEnd();
+}
+FString USCViewerSettings::ResolvePlayerLoadout() const
+{
+    FString Value = PlayerLoadout;
+    FParse::Value(FCommandLine::Get(), TEXT("SCPlayerLoadout="), Value);
+    return Value.TrimStartAndEnd();
 }
 void USCViewerSettings::Save()
 {

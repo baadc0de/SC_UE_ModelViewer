@@ -4,7 +4,9 @@
 // (cm from the loaded bounds centre, degrees); -SCDefaults resets options to the core defaults first;
 // -SCLod=<n> / -SCMip=<n> override them; -SCQuitAfterLoad exits (status 0 only if every load succeeded).
 // -SCScript=<file> runs "<delay seconds> <console command>" lines once a vehicle is loaded (see ue/README.md).
-// Console: sc.Load <entity>, sc.Unload, sc.Cancel, sc.Camera <orbit|fly|first>, sc.FP.* (first person).
+// Console: sc.Load <entity>, sc.Unload, sc.Cancel, sc.Camera <orbit|fly|first>, sc.FP.* (first person),
+// sc.Player.* (player body, WP-P2). -SCPlayerWeapon=<n|none> / -SCPlayerView=fp|tp[,yaw[,distance]] apply once the
+// body is attached; -SCPlayerDemo[=<entity>] runs ue/scripts/routes/player-demo.txt (loading <entity> if given).
 #pragma once
 #include "CoreMinimal.h"
 #include "HAL/IConsoleManager.h"
@@ -24,6 +26,8 @@ private:
         FString Command;
     };
     void RegisterFirstPersonCommands();
+    void RegisterPlayerCommands();
+    void ApplyPlayerOptions(USCViewerSubsystem& S);
     void TickScript(USCViewerSubsystem& S);
     void RunStep(USCViewerSubsystem& S, const FStep& Step);
     void LogFrameSamples();
@@ -38,5 +42,8 @@ private:
     int32 StepIndex = INDEX_NONE; // INDEX_NONE: not started; Script.Num(): done
     double StepAt = 0, SampleUntil = 0;
     FString SampleTag;
+    double WaitKitUntil = 0; // "waitkit" pseudo-command: hold the route until the player body is attached
+    FString PlayerWeapon, PlayerView; // command-line player options, applied once
+    bool bPlayerOptionsApplied = false;
     TArray<float> FrameMs, GameMs, RenderMs, GpuMs;
 };

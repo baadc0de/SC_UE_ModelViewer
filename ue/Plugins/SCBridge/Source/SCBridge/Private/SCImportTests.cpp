@@ -302,6 +302,11 @@ bool USCImportLibrary::RunUnitTests()
     FString Folder;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
     if (FParse::Param(FCommandLine::Get(), TEXT("SCFirstPersonTests"))) Names = {TEXT("FSCFirstPersonCollision")};
+    if (FParse::Param(FCommandLine::Get(), TEXT("SCPlayerTests")))
+    {
+        Names = {TEXT("FSCPlayerBlendWeights"), TEXT("FSCPlayerAdditive"), TEXT("FSCPlayerWeaponStates")};
+        if (FParse::Value(FCommandLine::Get(), TEXT("SCPlayerPackage="), Folder)) Names.Add(TEXT("FSCPlayerKitRig"));
+    }
     for (const FString& Name : Names)
     {
         FAutomationTestFramework::Get().StartTestByName(Name, 0);

@@ -7,6 +7,7 @@
 #include "Containers/Ticker.h"
 #include "Tasks/Task.h"
 #include "SCBridgeClient.h"
+#include "SCPlayerAnimator.h"
 #include "SCViewerSubsystem.generated.h"
 
 class ASCVehicle;
@@ -193,6 +194,19 @@ public:
     /** Cache statistics as of the last export/open (no FFI call). */
     const FSCCacheStats& GetCacheStats() const { return CacheStats; }
 
+    // Player body (WP-P2): the kit is exported, imported and its clips read asynchronously the first time first
+    // person is entered, then kept for every later first-person session. Capsule-only first person meanwhile.
+    enum class EPlayerKitState : uint8 { None, Exporting, Parsing, Importing, Clips, Ready, Failed };
+    /** Starts the player-kit pipeline unless it is running or ready (a failed kit is retried). */
+    bool RequestPlayerKit();
+    EPlayerKitState GetPlayerKitState() const { return KitState; }
+    FString GetPlayerKitStatus() const;
+    /** Pumps the kit pipeline until ready or failed (automation, tests). */
+    bool WaitForPlayerKit(float TimeoutSeconds = 600.f);
+    ASCVehicle* GetPlayerKitActor() const { return KitActor; }
+    /** Attach the ready kit to the first-person character (no-op if none, not ready or attached). */
+    void AttachPlayerKit();
+
 private:
     bool Tick(float DeltaSeconds);
     void StepLoad(bool bBlocking);
@@ -244,6 +258,21 @@ private:
     TWeakObjectPtr<ASCVehicle> Vehicle;
 
     UPROPERTY() TObjectPtr<ASCFirstPersonCharacter> FirstPerson;
+    void StepPlayerKit(bool bBlocking);
+    void FailPlayerKit(const FString& Error);
+    EPlayerKitState KitState = EPlayerKitState::None;
+    FString KitError;
+    double KitStart = 0;
+    TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> KitProgress;
+    UE::Tasks::TTask<FSCExportResult> KitExport;
+    UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> KitParse;
+    TSharedPtr<FSCTarPackageSource> KitSource;
+    TSharedPtr<FSCImportJob> KitJob;
+    struct FKitClips { TSharedPtr<FSCPlayerKit> Kit; TSharedPtr<FSCPlayerClipMap> Clips; FString Error; int32 Failed = 0; };
+    UE::Tasks::TTask<FKitClips> KitClipsTask;
+    UPROPERTY() TObjectPtr<ASCVehicle> KitActor;
+    TSharedPtr<const FSCPlayerKit> KitData;
+    TSharedPtr<const FSCPlayerClipMap> KitClips;
     TWeakObjectPtr<ASCViewerPawn> InspectionPawn;
     ESCCameraMode CameraMode = ESCCameraMode::Orbit;
     TWeakObjectPtr<USceneComponent> Isolated, Focused;

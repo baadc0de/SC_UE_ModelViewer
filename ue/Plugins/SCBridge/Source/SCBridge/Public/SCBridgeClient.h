@@ -91,6 +91,9 @@ public:
     /** The tar is copied out of the FFI blob (freed before return). Cancel through Progress. */
     UE::Tasks::TTask<FSCExportResult> ExportDecomposed(const FString& Entity, const sc_options& Options,
                                                       TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    /** Player kit (scbridge_export_player): empty Gender = male, empty Loadout = the exporter's default loadout. */
+    UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout,
+                                                  TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** Blocking; waits for a running export (host lock). */
     FSCCacheStats CacheStats();
     bool IsOpen() const;

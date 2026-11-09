@@ -211,6 +211,32 @@ stowed weapon on the backpack in third person; walk up the ramp, open the interi
 door with E while armed, reach the cockpit; frame time within 10 % of WP-P1; no asset
 or ship names in code.
 
+### P2b status (implemented; evidence in `ue/verification/WP-P2.md`)
+
+Built as specified, with these deviations (each decided from the data, not by eye):
+
+- **Off-hand IK** is implemented (two-bone, effector = the other hand port's joint, target = the first grip's
+  `offHandGrip.optionalHelper`) but **off by default** (`sc.Player.OffHandIK 1` enables it). The LIVE stocked
+  idle and locomotion clips author their `LWeapon_IKBlend` channel at 0 (and `LHand2Aim_IKBlend` at 1): the game
+  does not pull the off hand to the grip helper in these states, and doing so moves it back to the magazine well.
+- **Stow frame**: a bone port's joint is resolved first as a same-named helper on the port's owner item when that
+  item is placed (the backpack carries `wep_stocked_attach_2/3_override`), else as the body joint. Rifles then sit
+  upright on the backpack sides instead of inside it.
+- **Speeds**: walk = nominal forward speed of the slowest move-speed tag, run (Shift) = the fastest (highest
+  forward example inside the authored `MoveSpeed` grid of the tag's default movement blend space): P4-AR 3.57 /
+  6.01 m/s, unarmed 3.45 / 6.00 m/s. Shift falls back to the slow tag where the fast space does not cover the
+  travel angle (no sideways sprint). The game's own speeds live in DataCore movement params (not exported).
+- **Keys** `1`-`9` (superset of `1`-`3`): slots are the stowed weapons with playable select/deselect, ordered by
+  size, then stow-port name (port numbering). P4-AR loadout: 1 P4-AR, 2 S71, then grenades, multitool, medgun,
+  pistol. Another slot's key swaps through a deselect.
+- **Fragment options**: idle and movement use the option with the fewest query fragment tags. The
+  `backward_left` movement option (same space with foot-lead variants of the diagonal clips) is not selected.
+- **Camera**: position at `camera_bone` (animated: bob included), orientation = control rotation only; the joint's
+  animated rotation offset is not added (judged as motion sickness risk without a tested damping).
+- **Not done**: turn-in-place, jump/crouch clips beyond the crouch states the data resolves, aim poses (spine
+  pitch interim), frame cost within 10 % (see verification: the visible skinned body parts cost ~0.6 ms GPU and
+  ~1 ms render thread).
+
 ## Out of scope
 Firing, reload, ADS, recoil, zero-g / EVA, prone, ladders, seats, character
 customisation (DNA), face animation, helmet HUD. Crouch, jump clips, turn-in-place and
