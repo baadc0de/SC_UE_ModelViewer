@@ -4,6 +4,8 @@
 #include "SSCHierarchyPanel.h"
 #include "SSCModelBrowser.h"
 #include "SSCViewportInput.h"
+#include "SSCFirstPersonHUD.h"
+#include "SCVehicle.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
 #include "SCViewOptions.h"
@@ -55,11 +57,14 @@ void SSCViewerRoot::Construct(const FArguments& Args)
                 [
                     SNew(STextBlock).Font(Font(8)).ColorAndOpacity(FLinearColor(1, 1, 1, 0.55f)).Visibility(EVisibility::HitTestInvisible)
                     .Text_Lambda([this] {
+                        if (Subsystem.IsValid() && Subsystem->GetCameraMode() == ESCCameraMode::FirstPerson)
+                            return LOCTEXT("FirstHelp", "Click view: mouse look · Esc: release cursor");
                         const bool bFly = Subsystem.IsValid() && Subsystem->GetCameraMode() == ESCCameraMode::Fly;
                         return bFly ? LOCTEXT("FlyHelp", "Drag: look · WASD move · E/Q up/down · Shift fast · Ctrl slow · wheel: speed · double-click: focus")
                                     : LOCTEXT("OrbitHelp", "Drag: orbit · Shift/middle drag: pan · wheel: zoom · double-click: focus part · F: frame all");
                     })
                 ]
+                + SOverlay::Slot()[SNew(SSCFirstPersonHUD).Subsystem(Subsystem.Get())]
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[MakeArchiveOverlay()]
             ]
             + SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(HierarchyWidth)[SNew(SSCHierarchyPanel).Subsystem(Subsystem.Get())]]
@@ -104,7 +109,8 @@ TSharedRef<SWidget> SSCViewerRoot::MakeCameraButton(const FText& Label, uint8 Mo
     return SNew(SCheckBox)
         .Style(FCoreStyle::Get(), "ToggleButtonCheckbox")
         .ToolTipText(Tip)
-        .IsEnabled(Target != ESCCameraMode::FirstPerson) // TODO(WP-P1): enable with the first-person character
+        .IsEnabled_Lambda([this, Target] { return Target != ESCCameraMode::FirstPerson ||
+            (Subsystem.IsValid() && Subsystem->GetVehicle() && Subsystem->GetVehicle()->bCollisionReady && !Subsystem->IsBusy()); })
         .IsChecked_Lambda([this, Target] {
             return Subsystem.IsValid() && Subsystem->GetCameraMode() == Target ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
         })
@@ -153,7 +159,10 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
         [MakeCameraButton(LOCTEXT("Fly", "Fly"), uint8(ESCCameraMode::Fly), LOCTEXT("FlyTip", "Free-fly camera: drag to look, WASD/QE to move"))]
         + SHorizontalBox::Slot().AutoWidth().Padding(2, 0)
         [MakeCameraButton(LOCTEXT("FirstPerson", "First person"), uint8(ESCCameraMode::FirstPerson),
-                          LOCTEXT("FirstPersonTip", "Walk the ship with collision (not available yet)"))]
+                          LOCTEXT("FirstPersonTip", "Walk the ship with collision"))]
+        + SHorizontalBox::Slot().AutoWidth().Padding(2, 0)
+        [SNew(SButton).Text(LOCTEXT("SpawnLook", "Spawn where I look"))
+            .OnClicked_Lambda([this] { if (Subsystem.IsValid()) Subsystem->SpawnWhereLooking(); return FReply::Handled(); })]
         + SHorizontalBox::Slot().AutoWidth().Padding(12, 0, 0, 0)
         [
             SNew(SButton)
@@ -173,7 +182,7 @@ TSharedRef<SWidget> SSCViewerRoot::MakeArchiveOverlay()
 {
     return SNew(SBorder)
         .Visibility_Lambda([this] {
-            return Subsystem.IsValid() && Subsystem->GetArchiveState() != ESCArchiveState::Ready ? EVisibility::Visible : EVisibility::Collapsed;
+            return Subsystem.IsValid() && !Subsystem->GetVehicle() && Subsystem->GetArchiveState() != ESCArchiveState::Ready ? EVisibility::Visible : EVisibility::Collapsed;
         })
         .BorderImage(Fill()).BorderBackgroundColor(Bar()).Padding(24)
         [
@@ -258,6 +267,7 @@ FText SSCViewerRoot::FooterLoadText() const
     FString Text = FString::Printf(TEXT("%s · export %.2f s (%s) · parse %.2f s · mesh build %.2f s · collision %.2f s · materials %.2f s · total %.2f s"),
                                    *R.Entity, R.ExportSeconds, R.bExportCacheHit ? TEXT("cache hit") : TEXT("cache miss"), R.ParseSeconds,
                                    R.BuildSeconds, R.CollisionSeconds, R.MaterialSeconds, R.TotalSeconds);
+    if (Subsystem->GetVehicle() && Subsystem->GetVehicle()->bCollisionReady) Text += TEXT(" · collision ready");
     if (R.Result == ESCLoadPhase::Failed) Text = FString::Printf(TEXT("%s · failed: %s"), *R.Entity, *R.Error);
     if (R.Result == ESCLoadPhase::Cancelled) Text = FString::Printf(TEXT("%s · cancelled"), *R.Entity);
     return FText::FromString(Text);

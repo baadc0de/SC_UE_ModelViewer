@@ -1,6 +1,9 @@
 #include "SCImportHarness.h"
 #include "SCImporter.h"
 #include "SCVehicle.h"
+#include "SCViewerSubsystem.h"
+#include "SCFirstPersonCharacter.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Camera/CameraActor.h"
@@ -54,10 +57,53 @@ void FSCImportHarness::Start()
                 auto* Camera = World->SpawnActor<ACameraActor>(Center + Offset, FRotator::ZeroRotator);
                 Camera->SetActorRotation((Center - Camera->GetActorLocation()).Rotation());
                 if (auto* PC = World->GetFirstPlayerController()) PC->SetViewTarget(Camera);
+                if (FParse::Param(FCommandLine::Get(), TEXT("SCExplore")))
+                {
+                    auto* Viewer = USCViewerSubsystem::Get(World);
+                    if (!Viewer) { FPlatformMisc::RequestExitWithStatus(false,1); return false; }
+                    Viewer->AdoptPackageVehicle(Vehicle);
+                    float WalkSeconds = 0;
+                    FParse::Value(FCommandLine::Get(),TEXT("SCWalkSeconds="),WalkSeconds);
+                    if (WalkSeconds>0)
+                        for (int32 Door=0; Door<Vehicle->Doors.Num(); ++Door) { Vehicle->ToggleDoor(Door); Vehicle->Tick(60); }
+                    if (!Viewer->SetCameraMode(ESCCameraMode::FirstPerson)) { FPlatformMisc::RequestExitWithStatus(false,1); return false; }
+                    // Possession resets the old review camera view target.
+                    if (auto* PC = World->GetFirstPlayerController()) PC->SetViewTarget(Viewer->GetFirstPerson());
+                    if (WalkSeconds>0)
+                    {
+                        TWeakObjectPtr<ASCFirstPersonCharacter> Character = Viewer->GetFirstPerson();
+                        const FVector Start = Character->GetActorLocation();
+                        FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+                            [Character,Start,Elapsed=0.f,WalkSeconds,FloorFrames=0,Started=false](float Dt) mutable {
+                                if (!Character.IsValid()) return false;
+                                // The registration frame includes the synchronous import stall.
+                                if (!Started) { Started=true; return true; }
+                                // Do not count import/initial physics stalls as simulated walking time.
+                                Elapsed += FMath::Min(Dt,0.1f);
+                                Character->SetMoveInput(Elapsed<1 ? FVector::ZeroVector : FVector(1,0,0));
+                                FloorFrames += Character->GetCharacterMovement()->IsMovingOnGround();
+                                if (Elapsed < WalkSeconds+1) return true;
+                                Character->ClearInput();
+                                bool Passed = Character->RecoveryCount==0 && FloorFrames>20 &&
+                                    FVector::Dist2D(Start,Character->GetActorLocation())>20;
+                                UE_LOG(LogTemp,Display,TEXT("P1_GAME_WALK passed=%d position=%s distance_cm=%.2f floor_frames=%d capsule_hits=%d recovery=%d"),
+                                    Passed,*Character->GetActorLocation().ToString(),FVector::Dist(Start,Character->GetActorLocation()),FloorFrames,Character->CapsuleHits,Character->RecoveryCount);
+                                auto* S = USCViewerSubsystem::Get(Character->GetWorld());
+                                const bool Switched = S && S->SetCameraMode(ESCCameraMode::Orbit) &&
+                                    S->SetCameraMode(ESCCameraMode::Fly) && S->SetCameraMode(ESCCameraMode::FirstPerson);
+                                if (S) S->Unload();
+                                const bool Unloaded = S && !S->GetFirstPerson() && !S->GetVehicle();
+                                Passed &= Switched && Unloaded;
+                                UE_LOG(LogTemp,Display,TEXT("P1_GAME_LIFECYCLE passed=%d switched=%d unloaded=%d"),Passed,Switched,Unloaded);
+                                FPlatformMisc::RequestExitWithStatus(false,Passed?0:1);
+                                return false;
+                            }));
+                    }
+                }
                 float Glow;
                 if (FParse::Value(FCommandLine::Get(), TEXT("SCEngineGlow="), Glow)) Vehicle->SetEngineGlow(Glow); // review aid
             }
-            if (!FParse::Param(FCommandLine::Get(), TEXT("SCStay"))) FPlatformMisc::RequestExitWithStatus(false, Vehicle ? 0 : 1);
+            if (!FParse::Param(FCommandLine::Get(), TEXT("SCStay")) && !FParse::Param(FCommandLine::Get(), TEXT("SCExplore"))) FPlatformMisc::RequestExitWithStatus(false, Vehicle ? 0 : 1);
         }
         return false;
     }), 0.5f);

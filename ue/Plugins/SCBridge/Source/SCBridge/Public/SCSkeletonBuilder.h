@@ -15,6 +15,7 @@ public:
 class SCBRIDGE_API FSCSkeletalMeshImporter
 {
 public:
+    static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error);
     /** Build GPU skin buffers without editor modules; empty geometry is a socket-only rig. */
     static bool Build(const FSCDerivedMesh& Data, USkeletalMesh* Mesh, FString& Error);
 };

@@ -74,7 +74,7 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | Source | UE object (transient at runtime; asset when kept) | Notes |
 | --- | --- | --- |
 | mesh `.glb` (rigid, opaque/masked) | `UStaticMesh`, **Nanite on**, fallback relative error 1 % | `FMeshDescription` from GLB primitives: metres → cm (×100); glTF Y-up RH → UE Z-up LH, matrix locked by a unit test against the Interchange baseline and DataCore ship dimensions. Keep normals/tangents, UV0/UV1, vertex colours. |
-| same mesh, collision | `UBodySetup` complex trimesh (Chaos, cooked at runtime) or Nanite fallback-mesh collision | per D7; `CollisionTraceFlag = UseComplexAsSimple`; cache cooked data by mesh hash under the app's cache dir |
+| same mesh, collision | `UBodySetup` complex trimesh (Chaos, cooked at runtime) or Nanite fallback-mesh collision | per D7; `CollisionTraceFlag = UseComplexAsSimple`; worker-cooked full-resolution triangles; processed caching is WP-C1 |
 | soft-skinned submesh set | `USkeletalMesh` + `USkeleton` from CHR bones | Nanite off by default (option; experimental) |
 | `.mtl` submaterial | `UMaterialInstanceDynamic` of a master per shader family | Illum, HardSurface, Glass, Layered (tint palette), MeshDecal (POM), Emissive/Unlit (screens, holograms), NoDraw (skipped), Fallback |
 | texture slot | `UTexture2D` | sRGB only for colour roles; DDNA → `TC_Normalmap` linear; roughness/metal/masks → linear; dedupe by source path; mip 0 textures built on a worker thread |
@@ -188,10 +188,46 @@ of the engine DDC; the latter is project-local build scratch in `DerivedDataCach
 | --- | --- | --- | --- |
 | Orbit | camera actor | none | default after load; fit to bounds; double-click component to focus |
 | Fly | `ADefaultPawn`-style | optional (noclip toggle) | WASD + mouse, speed wheel |
-| First person | `ACharacter` (capsule 34 × 88 cm default, crouch 44) | complex collision of every component | gravity along the ship's up axis (ship is spawned level so world −Z); walk/run/crouch/jump; interact key triggers the nearest door clip (fragments tagged `Door`/`Open`/`Close` or clip names of the owning entity); F toggles flashlight (spot on camera) for unlit interiors; teleport to spawn point list |
+| First person | `ACharacter` (capsule 34 × 88 cm default, crouch 44) | complex collision of every component | gravity along the ship's up axis (ship is spawned level so world −Z); walk/run/crouch/jump; E toggles the nearest receiving joint within 3 m using Mannequin door/canopy/hatch/entrance/ramp fragments and Open/Close tags, or a DataCore Door owner; F toggles flashlight (spot on camera) for unlit interiors; teleport to spawn point list |
 
 Collision is applied to the components of the loaded actor only; the floor of the
 Viewer map is the only other collider.
+
+WP-P1 implements this in the Runtime module with `ASCFirstPersonCharacter` and a
+Slate HUD. Static/rigid geometry retains the existing complex-as-simple bodies
+attached to receiving bones. Soft skins have a separately owned Chaos triangle
+BVH per `USCRigComponent`, cooked in the import worker and refitted with the CPU
+skin pose only when animation evaluation changes that rig. UE's per-poly query
+body is exposed explicitly; the stock 5.8 skeletal `GetBodyInstance` path only
+looks up physics-asset bodies. No second collision cache is introduced.
+
+`children[].item_type` is the authored DataCore
+`Components[SAttachableComponentParams].AttachDef.Type` string, or null when
+absent; never inferred from entity/asset names. The Rust mirror accepts absent
+fields. Layer-1 `CACHE_FORMAT_VERSION` is 13, invalidating older packages and
+catalogues. The FFI ABI stays unchanged: the additive field travels in the package.
+Child controllers use scoped clip IDs and fragment animation references; raw
+interior geometry can acquire a controller through an unambiguous exact DataCore
+geometry relationship. Animated CGA interior meshes retain their NMC receiving
+hierarchy without pre-baking those transforms; static CGF interiors keep their
+existing flattened path. UE targets interactions to one receiving rig instance.
+
+`ASCVehicle::SpawnPoints` holds kind, display name and vehicle-local transform.
+Seat/SeatAccess/Door/Entrance item types, fragment joints, interior placement
+bounds and the hull top produce hints. First-person entry searches entrances,
+seat access, seats, interiors, then hull; lower entrance hints are tried first.
+Each hint is resolved to a walkable surface with standing-capsule clearance and
+a supported short stride. Teleports reject occupied/unsupported locations.
+Older packages without item types retain the hull fallback. Orbit's **Spawn
+where I look** adds a surface hint. Possession disables the inspection pawn's
+tick; exit restores it and unload destroys the character.
+
+Controls: click the viewport to capture mouse; WASD, Shift run (650 cm/s versus
+400 walk), Space jump, Ctrl crouch, E interact, F torch, V noclip (Space/Q up/down),
+T teleport menu, Esc release mouse. Recovery returns to the last accepted spawn
+below the ship/floor; two seconds of blocked movement offers noclip. Exiting
+noclip inside blocking geometry is refused. See `ue/verification/WP-P1.md` for
+headless physics evidence and GPU acceptance still to be filled by the orchestrator.
 
 ## In-game UI (WP-V1, WP-V2)
 

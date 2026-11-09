@@ -112,3 +112,102 @@ go on `ASCVehicle` as `SpawnPoints` (kind, display name, transform) derived from
 `item_type` and the interior containers (`scene.json interiors[]`, floor estimated from
 placements' bounds). Verification output, headless, belongs in a new
 `ue/verification/WP-P1.md`; leave GPU rows for the orchestrator to fill.
+
+## Report
+
+Implemented WP-P1: animated triangle collision, first-person character/HUD,
+semantic spawn points, independent door interaction, teleport/noclip/recovery,
+and app possession/unload. Added authored DataCore item types, cache format 13,
+scoped child/interior fragments, and preserved animated interior geometry.
+Debug FFI rebuilt and staged; all three test packages regenerated.
+
+Validation: root Rust suites 34 passed; upstream 3D 811 passed / 3 ignored;
+UE editor build succeeded; 16 existing UE suites passed. First-person headless
+checks pass for Gladius, Scorpius and Cutlass (3 / 5 / 6 door interactions).
+Cutlass game-host walk moved 11.6 m with floor contact and no recovery;
+mode switching/unload passed. FFI load/reload/GC passed with zero retained objects.
+Exact ramp collision cooked in 1.461 ms; per-bone convex geometry disagreed on
+260/441 sampled traces, so exact triangles are retained.
+
+Full commands, output, limitations and exact GPU launch commands are recorded
+in `ue/verification/WP-P1.md`. GPU acceptance remains pending.
+
+Superproject changed/new source and documentation files (39):
+
+```text
+crates/scviewer-core/src/cache.rs
+crates/scviewer-core/src/items.rs
+crates/scviewer-core/src/lib.rs
+crates/scviewer-core/src/tests.rs
+docs/03-unreal-export-design.md
+docs/work-packages/WP-P1-first-person.md
+scripts/build_ffi.sh
+scripts/verify_wp_p1.py
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCAnimImporter.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCExploration.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCFirstPersonCharacter.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCFirstPersonCollisionComparison.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCFirstPersonCollisionComparison.h
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCFirstPersonTests.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportHarness.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportJob.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportTests.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCPackageReader.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCRigComponent.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCSkeletalCollision.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCVehicle.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCViewerAutomation.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCViewerGameMode.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/SCViewerSubsystem.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCFirstPersonHUD.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCFirstPersonHUD.h
+ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCViewerRoot.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCViewportInput.cpp
+ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCViewportInput.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCExploration.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCFirstPersonCharacter.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCPackageReader.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCRigComponent.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCSkeletonBuilder.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCVehicle.h
+ue/Plugins/SCBridge/Source/SCBridge/Public/SCViewerSubsystem.h
+ue/README.md
+ue/scripts/test_first_person.py
+ue/verification/WP-P1.md
+```
+
+Submodule changed files, relative to `vendor/StarBreaker` (7), on the existing
+`scviewer/item-types` branch:
+
+```text
+crates/starbreaker-3d/src/animation/mannequin.rs
+crates/starbreaker-3d/src/animation/rig_sources.rs
+crates/starbreaker-3d/src/decomposed.rs
+crates/starbreaker-3d/src/pipeline/animation_sources.rs
+crates/starbreaker-3d/src/pipeline/clip_catalogue.rs
+crates/starbreaker-3d/src/pipeline/interiors.rs
+docs/decomposed-export-contract.md
+```
+
+No commits or branches were made; both HEADs and the submodule gitlink remain
+unchanged. Ignored FFI copies were refreshed at
+`ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib/lib/Linux/libscbridge.so` and
+`ue/SCViewer/Binaries/Linux/libscbridge.so`. Generated packages/build scratch
+remain ignored. The pre-existing untracked `DefaultInput.ini` and `Maps/Presets/`
+were preserved; `Viewer.umap` and the light importer were not edited.
+
+Open TODOs:
+
+- TODO(WP-P1): Orchestrator completes the GPU rows: full Cutlass corridor/cockpit
+  route, Gladius hull/ladder/seat-height checks, HUD/torch/input, and ≤10% frame-cost
+  comparison. Headless tests do not replace those visual checks.
+- TODO(WP-P1): Run the full upstream workspace suite with a writable Cargo
+  registry. The attempted run stopped unpacking `anes v0.1.6` on the read-only
+  registry; the targeted 3D suite passed.
+- TODO(WP-U3): Update the existing package light verifier's radius-quartile
+  expectations to match authored `shadow_casting`. The additional folder/tar
+  aggregate check exits 1 (`LIGHT_VERIFY passed=0`, expected 60 versus 3 shadow
+  flags); geometry, hull hit and cleanup checks pass. Left outside this WP's
+  explicit light-code restriction.
+- TODO(WP-C1): Persistent collision caching and its cached-cook acceptance remain
+  assigned to WP-C1 by the addendum; P1 adds no second cache.

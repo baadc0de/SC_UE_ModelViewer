@@ -23,7 +23,7 @@ void ASCViewerPlayerController::BeginPlay()
     if (!IsLocalController() || !GEngine || !GEngine->GameViewport) return;
     // Harness review runs (-SCPackage, capture_views.sh) and -SCNoUI keep the bare viewport.
     FString HarnessPackage;
-    if (FParse::Param(FCommandLine::Get(), TEXT("SCNoUI")) || FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) return;
+    if (FParse::Param(FCommandLine::Get(), TEXT("SCNoUI")) || (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage) && !FParse::Param(FCommandLine::Get(), TEXT("SCExplore")))) return;
     USCViewerSubsystem* Subsystem = USCViewerSubsystem::Get(this);
     if (!Subsystem) return;
     Root = SNew(SSCViewerRoot).Subsystem(Subsystem);

@@ -290,3 +290,23 @@ Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>`,
 Headless (WP-Q1): `UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/ue_load_gladius.py
 -nullrhi` drives `USCViewerSubsystem.LoadEntity` through the FFI. Settings persist in
 `Saved/Config/<Platform>/GameUserSettings.ini`. Evidence: [verification/WP-V1.md](verification/WP-V1.md).
+
+## First-person exploration (WP-P1)
+
+Load a package, then choose **First person** or **Spawn where I look** in Orbit.
+Collision readiness includes the soft skin's animated triangle body. Click the
+viewport for mouse look; Esc releases capture. WASD walks, Shift runs, Space jumps,
+Ctrl crouches, E toggles the nearest authored door fragment within 3 m, F toggles
+the camera torch, V toggles noclip (Space/Q vertical), T opens the teleport list.
+Spawn choices come from DataCore types, fragment joints and interior bounds.
+Unsafe teleport/noclip-exit locations are rejected; falling recovers to the last
+spawn and blocked movement offers noclip after two seconds.
+
+The folder harness accepts `-SCPackage=<export-root> -SCExplore` to use the app UI
+and first-person possession without opening Data.p4k. `-SCWalkSeconds=2` adds a
+scripted forward walk and exits with a `P1_GAME_WALK` result. The archive-backed
+host accepts `-SCCamera=first` after `-SCLoad=<entity>`. Rebuild/restage the debug
+FFI library with `scripts/build_ffi.sh` after exporter changes.
+
+See [WP-P1 verification](verification/WP-P1.md) for exact null-RHI commands,
+results, collision comparison, limitations, and the orchestrator's GPU checklist.

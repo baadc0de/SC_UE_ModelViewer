@@ -33,15 +33,16 @@ void ASCVehicle::MarkDirty(int32 ClipIndex)
     for (const auto& Binding : ClipCatalog->Clips[ClipIndex].Bindings)
         DirtyMeshes.Add(Binding.Mesh);
 }
-bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes)
+bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes, USCRigComponent* Target)
 {
     if (!ClipCatalog || !ClipCatalog->Clips.IsValidIndex(Index) || !FMath::IsFinite(Speed)) return false;
     const auto& Clip = ClipCatalog->Clips[Index];
     if (Clip.Bindings.IsEmpty()) return false;
-    Playback.RemoveAll([&](const FSCClipPlayback& P) { return P.Clip == Index; });
-    HeldPlayback.RemoveAll([&](const FSCClipPlayback& P) { return P.Clip == Index; });
+    Playback.RemoveAll([&](const FSCClipPlayback& P) { return P.Clip == Index && P.TargetRig.Get() == Target; });
+    HeldPlayback.RemoveAll([&](const FSCClipPlayback& P) { return P.Clip == Index && P.TargetRig.Get() == Target; });
     FSCClipPlayback P;
     P.Clip = Index;
+    P.TargetRig = Target;
     P.Speed = Speed;
     P.Frame = (bSnap ? bLast : Speed < 0) ? Clip.LastFrame : 0;
     P.bPlaying = !bSnap && Speed != 0 && Clip.LastFrame > 0;
@@ -65,6 +66,10 @@ bool ASCVehicle::SnapClip(FName Id, bool bLast)
 }
 bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
 {
+    return PlayFragmentAt(Fragment, Tag, nullptr);
+}
+bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target)
+{
     if (!ClipCatalog) return false;
     struct FOption
     {
@@ -77,7 +82,7 @@ bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
     for (int32 Index = 0; Index < ClipCatalog->Clips.Num(); ++Index)
     {
         const auto& C = ClipCatalog->Clips[Index];
-        if (C.Bindings.IsEmpty()) continue;
+        if (C.Bindings.IsEmpty() || (Target && !C.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Target->GetSkeletalMeshAsset(); }))) continue;
         for (const auto& F : C.Fragments)
         {
             if (F.Fragment != Fragment || F.OptionWeight <= 0 || (!Tag.IsNone() && !F.Tags.Contains(Tag) && !F.FragmentTags.Contains(Tag)))
@@ -125,7 +130,7 @@ bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
         }
         const FOption Selected = Options[Choice];
         for (int32 I = Playback.Num() - 1; I >= 0; --I)
-            if (Conflicts(Selected.Scopes, Playback[I].Scopes))
+            if (Playback[I].TargetRig.Get() == Target && Conflicts(Selected.Scopes, Playback[I].Scopes))
             {
                 Playback[I].bPlaying = false;
                 HeldPlayback.Add(Playback[I]);
@@ -135,7 +140,7 @@ bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
         Selected.Clips.GetKeys(Indices);
         Indices.Sort();
         for (int32 Index : Indices)
-            Found |= StartClip(Index, Selected.Clips[Index], false, false, Selected.Scopes);
+            Found |= StartClip(Index, Selected.Clips[Index], false, false, Selected.Scopes, Target);
         Options.RemoveAll([&](const FOption& O) { return Conflicts(Selected.Scopes, O.Scopes); });
     }
     if (Found) FragmentTargets.Add(Fragment, Tag);
@@ -151,6 +156,7 @@ void ASCVehicle::ResetPose()
     HeldPlayback.Reset();
     DirtyMeshes.Reset();
     FragmentTargets.Reset();
+    for (auto& Door : Doors) Door.bOpen = false;
     SetActorTickEnabled(false);
     for (USCRigComponent* Rig : Rigs)
         Rig->ResetPose();
@@ -190,7 +196,7 @@ void ASCVehicle::EvaluateClips()
         TArray<FTransform> Pose = Rig->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose();
         for (const auto& P : Layers)
             for (const auto& B : ClipCatalog->Clips[P.Clip].Bindings)
-                if (B.Mesh == Rig->GetSkeletalMeshAsset())
+                if ((!P.TargetRig.IsValid() || P.TargetRig.Get() == Rig) && B.Mesh == Rig->GetSkeletalMeshAsset())
                     for (const auto& T : B.Tracks)
                     {
                         const FTransform Sample = FSCAnimImporter::Sample(T, P.Frame);

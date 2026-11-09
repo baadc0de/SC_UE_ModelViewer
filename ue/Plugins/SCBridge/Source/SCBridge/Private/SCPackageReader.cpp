@@ -53,6 +53,8 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     Out.EntityName = String(O, TEXT("entity_name"));
     Out.ParentEntityName = String(O, TEXT("parent_entity_name"));
     Out.ParentNodeName = String(O, TEXT("parent_node_name"));
+    Out.ItemType = String(O, TEXT("item_type"));
+    Out.PortFlags = String(O, TEXT("port_flags"));
     Out.SourceTransformBasis = String(O, TEXT("source_transform_basis"));
     Out.PaletteId = String(O, TEXT("palette_id"));
     Out.bInvisible = String(O, TEXT("port_flags")).Contains(TEXT("invisible"), ESearchCase::IgnoreCase);

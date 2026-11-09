@@ -11,14 +11,14 @@ fi
 cargo run --locked -p scbridge-ffi --example header
 cargo build --locked -p scbridge-ffi --example discover
 # Build consumers together: a stale CLI embeds a different exporter/cache identity.
-cargo build --locked --release -p scbridge-ffi -p scviewer-cli
+cargo build --locked -p scbridge-ffi -p scviewer-cli
 third_party=ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib
 install -Dm644 crates/scbridge-ffi/include/scbridge.h "$third_party/include/scbridge.h"
-install -Dm755 target/release/libscbridge.so "$third_party/lib/Linux/libscbridge.so"
+install -Dm755 target/debug/libscbridge.so "$third_party/lib/Linux/libscbridge.so"
 # UBT copies the library into the project binaries only when it builds; refresh a stale copy
 # so a game launch without a rebuild picks up the new exporter (and its cache identity).
 for bin in ue/SCViewer/Binaries/Linux ue/Plugins/SCBridge/Binaries/Linux; do
-    [[ -f "$bin/libscbridge.so" ]] && install -m755 target/release/libscbridge.so "$bin/libscbridge.so"
+    [[ -f "$bin/libscbridge.so" ]] && install -m755 target/debug/libscbridge.so "$bin/libscbridge.so"
 done
-stat -c '%n: %s bytes' target/release/libscbridge.so
-nm -D --defined-only target/release/libscbridge.so | awk '$2 == "T" { print; if ($3 !~ /^sc_/) bad=1 } END { exit bad }'
+stat -c '%n: %s bytes' target/debug/libscbridge.so
+nm -D --defined-only target/debug/libscbridge.so | awk '$2 == "T" { print; if ($3 !~ /^sc_/) bad=1 } END { exit bad }'

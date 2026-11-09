@@ -3,6 +3,8 @@
 #include "SCViewerSubsystem.h"
 #include "SCViewerAutomation.h"
 #include "SCViewerPawn.h"
+#include "SCFirstPersonCharacter.h"
+#include "Camera/CameraComponent.h"
 #include "SCViewOptions.h"
 #include "SCViewerSettings.h"
 #include "SCImportJob.h"
@@ -483,6 +485,7 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
 
 void USCViewerSubsystem::UnloadInternal(bool bCollect)
 {
+    if (FirstPerson) SetCameraMode(ESCCameraMode::Orbit);
     IsolateComponent(nullptr);
     Focused = nullptr;
     ASCVehicle* Previous = Vehicle.Get();
@@ -561,17 +564,78 @@ void USCViewerSubsystem::LogPhaseChange()
 
 // ---------------------------------------------------------------- camera and inspection
 
+void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
+{
+    if (!Imported || Imported->GetWorld() != GetViewerWorld()) return;
+    Vehicle = Imported;
+    LoadedEntity = Imported->Manifest.Root.EntityName;
+    Report.Entity = LoadedEntity;
+    Phase = Report.Result = ESCLoadPhase::Succeeded;
+    FrameAll();
+}
+ASCFirstPersonCharacter* USCViewerSubsystem::GetFirstPerson() const
+{
+    return CameraMode == ESCCameraMode::FirstPerson ? FirstPerson.Get() : nullptr;
+}
 bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
 {
+    if (Mode == CameraMode) return true;
+    UWorld* World = GetViewerWorld();
+    APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
     if (Mode == ESCCameraMode::FirstPerson)
     {
-        // TODO(WP-P1): first-person character with collision; the mode exists so UI and scripts can target it.
-        UE_LOG(LogSCViewer, Warning, TEXT("First-person mode is not implemented yet (WP-P1)"));
-        return false;
+        if (!Vehicle.IsValid() || !Vehicle->bCollisionReady || !PC || IsBusy()) return false;
+        InspectionPawn = GetViewerPawn();
+        FActorSpawnParameters Params;
+        Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        FirstPerson = World->SpawnActor<ASCFirstPersonCharacter>(ASCFirstPersonCharacter::StaticClass(), FTransform::Identity, Params);
+        if (!FirstPerson || !FirstPerson->Explore(Vehicle.Get()))
+        {
+            if (FirstPerson) FirstPerson->Destroy();
+            FirstPerson = nullptr;
+            UE_LOG(LogSCViewer, Warning, TEXT("FIRST_PERSON no safe spawn; choose a surface with Spawn where I look"));
+            return false;
+        }
+        if (InspectionPawn.IsValid())
+        {
+            for (int32 Axis=0; Axis<3; ++Axis) InspectionPawn->SetMoveKey(Axis,0);
+            InspectionPawn->SetActorTickEnabled(false);
+        }
+        PC->Possess(FirstPerson);
+        PC->SetControlRotation(FirstPerson->GetActorRotation());
+    }
+    else if (FirstPerson)
+    {
+        const FVector Position = FirstPerson->Camera->GetComponentLocation();
+        const FRotator Rotation = PC ? PC->GetControlRotation() : FirstPerson->GetActorRotation();
+        FirstPerson->ClearInput();
+        if (PC && InspectionPawn.IsValid()) PC->Possess(InspectionPawn.Get());
+        FirstPerson->Destroy();
+        FirstPerson = nullptr;
+        if (InspectionPawn.IsValid())
+        {
+            InspectionPawn->SetActorTickEnabled(true);
+            InspectionPawn->SetView(Position, Rotation);
+        }
     }
     CameraMode = Mode;
     if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetCameraMode(Mode);
+    UE_LOG(LogSCViewer, Display, TEXT("FIRST_PERSON_MODE mode=%d"), int32(Mode));
     return true;
+}
+bool USCViewerSubsystem::SpawnWhereLooking()
+{
+    ASCViewerPawn* Pawn = GetViewerPawn();
+    if (!Pawn || !Vehicle.IsValid() || !Vehicle->bCollisionReady || IsBusy()) return false;
+    const FVector Start = Pawn->Camera->GetComponentLocation();
+    FHitResult Hit;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(SCSpawnLook), true, Pawn);
+    if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, Start, Start + Pawn->Camera->GetForwardVector() * 100000,
+            ECC_Visibility, Query) || Hit.GetActor() != Vehicle.Get()) return false;
+    Vehicle->AddSpawnPoint(TEXT("Entrance"), TEXT("Selected surface"), FTransform(Hit.ImpactPoint));
+    const int32 Index = Vehicle->SpawnPoints.Num() - 1;
+    if (!SetCameraMode(ESCCameraMode::FirstPerson)) return false;
+    return FirstPerson->TeleportToSpawn(Index);
 }
 void USCViewerSubsystem::FocusComponent(USceneComponent* Component)
 {

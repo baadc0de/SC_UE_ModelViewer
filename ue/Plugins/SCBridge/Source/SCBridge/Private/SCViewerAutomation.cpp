@@ -55,7 +55,7 @@ void FSCViewerAutomation::Tick()
         if (!bCameraApplied && !Camera.IsEmpty())
         {
             bCameraApplied = true;
-            S->SetCameraMode(Camera.Equals(TEXT("fly"), ESearchCase::IgnoreCase) ? ESCCameraMode::Fly : ESCCameraMode::Orbit);
+            S->SetCameraMode(Camera.Equals(TEXT("fly"), ESearchCase::IgnoreCase) ? ESCCameraMode::Fly : Camera.Equals(TEXT("first"), ESearchCase::IgnoreCase) ? ESCCameraMode::FirstPerson : ESCCameraMode::Orbit);
             TArray<FString> V;
             ASCViewerPawn* Pawn = S->GetViewerPawn();
             if (Pawn && S->GetVehicle() && FlyView.ParseIntoArray(V, TEXT(",")) == 5)

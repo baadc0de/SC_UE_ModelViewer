@@ -2,6 +2,7 @@
 #include "SSCViewportInput.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
+#include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -16,6 +17,7 @@ void SSCViewportInput::Construct(const FArguments& Args)
 }
 FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent& Event)
 {
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->ClearInput();
     const FKey Button = Event.GetEffectingButton();
     const bool bPan = Button == EKeys::MiddleMouseButton || (Button == EKeys::LeftMouseButton && Event.IsShiftDown());
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Unhandled();
@@ -24,12 +26,18 @@ FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent
 }
 FReply SSCViewportInput::OnMouseButtonUp(const FGeometry&, const FPointerEvent&)
 {
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson() && Drag != EDrag::None) return FReply::Handled();
     if (Drag == EDrag::None) return FReply::Unhandled();
     Drag = EDrag::None;
     return FReply::Handled().ReleaseMouseCapture();
 }
 FReply SSCViewportInput::OnMouseMove(const FGeometry& Geometry, const FPointerEvent& Event)
 {
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson() && Drag != EDrag::None)
+    {
+        Subsystem->GetFirstPerson()->Look(Event.GetCursorDelta());
+        return FReply::Handled();
+    }
     ASCViewerPawn* Pawn = Subsystem.IsValid() ? Subsystem->GetViewerPawn() : nullptr;
     if (Drag == EDrag::None || !Pawn) return FReply::Unhandled();
     const FVector2D Delta = Event.GetCursorDelta();
@@ -61,6 +69,7 @@ FReply SSCViewportInput::OnMouseButtonDoubleClick(const FGeometry&, const FPoint
 }
 bool SSCViewportInput::HandleKey(const FKey& Key, bool bDown)
 {
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) return Subsystem->GetFirstPerson()->HandleKey(Key, bDown);
     static const FKey Movement[] = {EKeys::W, EKeys::S, EKeys::A, EKeys::D, EKeys::E, EKeys::Q, EKeys::LeftShift, EKeys::LeftControl};
     for (const FKey& K : Movement)
         if (Key == K)
@@ -92,7 +101,14 @@ void SSCViewportInput::ApplyMove()
 }
 FReply SSCViewportInput::OnKeyDown(const FGeometry&, const FKeyEvent& Event)
 {
-    return HandleKey(Event.GetKey(), true) ? FReply::Handled() : FReply::Unhandled();
+    if (Event.IsRepeat()) return FReply::Handled();
+    const bool Handled = HandleKey(Event.GetKey(), true);
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson() && (Event.GetKey() == EKeys::Escape || Event.GetKey() == EKeys::T))
+    {
+        Drag = EDrag::None;
+        return FReply::Handled().ReleaseMouseCapture();
+    }
+    return Handled ? FReply::Handled() : FReply::Unhandled();
 }
 FReply SSCViewportInput::OnKeyUp(const FGeometry&, const FKeyEvent& Event)
 {
@@ -100,6 +116,13 @@ FReply SSCViewportInput::OnKeyUp(const FGeometry&, const FKeyEvent& Event)
 }
 void SSCViewportInput::OnFocusLost(const FFocusEvent&)
 {
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->ClearInput();
     Held.Empty();
     ApplyMove();
+}
+
+FCursorReply SSCViewportInput::OnCursorQuery(const FGeometry&, const FPointerEvent&) const
+{
+    return Subsystem.IsValid() && Subsystem->GetFirstPerson() && HasMouseCapture()
+        ? FCursorReply::Cursor(EMouseCursor::None) : FCursorReply::Unhandled();
 }

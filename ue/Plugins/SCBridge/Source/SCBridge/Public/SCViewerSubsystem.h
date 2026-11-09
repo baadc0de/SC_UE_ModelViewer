@@ -11,6 +11,7 @@
 
 class ASCVehicle;
 class ASCViewerPawn;
+class ASCFirstPersonCharacter;
 class USCViewOptions;
 class FSCImportJob;
 class FSCTarPackageSource;
@@ -21,7 +22,6 @@ enum class ESCCameraMode : uint8
 {
     Orbit,
     Fly,
-    /** Implemented by WP-P1; SetCameraMode refuses it until then. */
     FirstPerson
 };
 UENUM(BlueprintType)
@@ -186,6 +186,10 @@ public:
     FSCOnComponentFocused OnComponentFocused;
     /** The local player's viewer pawn (null headless or when another pawn/view target is active). */
     ASCViewerPawn* GetViewerPawn() const;
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCFirstPersonCharacter* GetFirstPerson() const;
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SpawnWhereLooking();
+    /** Folder harness adopts the imported actor without opening an archive. */
+    void AdoptPackageVehicle(ASCVehicle* Imported);
     /** Cache statistics as of the last export/open (no FFI call). */
     const FSCCacheStats& GetCacheStats() const { return CacheStats; }
 
@@ -239,6 +243,8 @@ private:
     TSharedPtr<FSCImportJob> Job;
     TWeakObjectPtr<ASCVehicle> Vehicle;
 
+    UPROPERTY() TObjectPtr<ASCFirstPersonCharacter> FirstPerson;
+    TWeakObjectPtr<ASCViewerPawn> InspectionPawn;
     ESCCameraMode CameraMode = ESCCameraMode::Orbit;
     TWeakObjectPtr<USceneComponent> Isolated, Focused;
     TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> IsolationRestore;

@@ -104,6 +104,7 @@ bool FSCAnimImporter::Read(const FSCPackageSource& Source, const FSCClipRecord& 
     Clip.DisplayName = Str(Json, TEXT("display_name"));
     if (Clip.DisplayName.IsEmpty()) Clip.DisplayName = Clip.Name;
     Clip.Owner = Owner;
+    Json->TryGetStringField(TEXT("owner_entity"), Clip.Owner);
     Clip.Source = Record.Sidecar;
     Clip.Fps = Fps;
     Clip.LastFrame = FMath::CeilToInt(Frames);

@@ -449,6 +449,12 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             Slot.Soft = FSCMeshImporter::Select(Data, Soft);
             Slot.Soft.GltfToRig = Data.GltfToRig;
         }
+        if (Options.bBuildCollision && Slot.Soft.bHasGeometry)
+        {
+            FString Error;
+            if (!FSCSkeletalMeshImporter::DeriveCollision(Slot.Soft, Error)) Slot.PrepareWarnings.Emplace(Path, Error);
+            Slot.CollisionSeconds += Slot.Soft.CollisionDeriveSeconds;
+        }
         TArray<int32> Owners;
         Rigid.GetKeys(Owners);
         Owners.Sort();
@@ -507,6 +513,8 @@ bool FSCImportJob::FState::StepMesh(bool bBlocking)
         for (const auto& W : Slot.PrepareWarnings)
             Warn(W.Key, W.Value);
         Timings.Collision += Slot.CollisionSeconds;
+        if (Options.bBuildCollision)
+            UE_LOG(LogSCImport, Display, TEXT("COLLISION_DERIVE mesh=%s exact_s=%.6f"), *Slot.Path, Slot.CollisionSeconds);
     }
     const double BuildStart = FPlatformTime::Seconds(); // game-thread build time only, not the wait for workers
     ON_SCOPE_EXIT { Timings.Build += FPlatformTime::Seconds() - BuildStart; };
@@ -591,7 +599,8 @@ void FSCImportJob::FState::FinishBuild(FMeshSlot& Slot)
     const FString& Path = Slot.Path;
     KeepAlive.Remove(Slot.Package); // owned through its objects (meshes/rig referenced by the vehicle) from now on
     Slot.Parts.Empty();
-    Slot.Soft = FSCDerivedMesh();
+    Slot.Soft.Description = FMeshDescription();
+    Slot.Soft.SkinWeights.Empty(); // retain collision bytes until component assembly
     if (Slot.bBuildFailed)
     {
         Slot.Data.Reset();
@@ -655,6 +664,7 @@ void FSCImportJob::FState::Assemble()
     ASCVehicle* V = Vehicle;
     TMap<FString, FEntity> Entities;
     double AnchorSeconds = 0, BindSeconds = 0;
+    V->bCollisionReady = Options.bBuildCollision;
     auto NewAnchor = [&](const FString& Label, USceneComponent* Parent, const FMatrix& Relative) {
         const double AnchorStart = FPlatformTime::Seconds();
         ON_SCOPE_EXIT { AnchorSeconds += FPlatformTime::Seconds() - AnchorStart; };
@@ -729,6 +739,7 @@ void FSCImportJob::FState::Assemble()
         const FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
                                                                     bAtHelper, I.SourceTransformBasis == TEXT("cryengine_z_up"));
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
+        V->AddItemSpawn(I, E.Anchor);
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {
             E.Rig = NewObject<USCRigComponent>(V, NAME_None, RF_Transient);
@@ -740,6 +751,13 @@ void FSCImportJob::FState::Assemble()
             E.Rig->MeshAsset = I.MeshAsset;
             E.Rig->OwnerEntity = I.EntityName;
             E.Rig->SetCollisionProfileName(TEXT("NoCollision"));
+            if (Options.bBuildCollision)
+                for (const FMeshSlot& Slot : Slots)
+                    if (Slot.Path == I.MeshAsset && Slot.Soft.bHasGeometry && !E.Rig->InitializeCollision(Slot.Soft))
+                    {
+                        V->bCollisionReady = false;
+                        Warn(I.EntityName, TEXT("Skeletal collision unavailable"));
+                    }
             E.Rig->SetVisibility(!I.bInvisible);
             E.Rig->SetHiddenInGame(I.bInvisible);
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
@@ -868,8 +886,17 @@ void FSCImportJob::FState::Assemble()
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
         for (const auto& P : Interior.Placements)
             if (CanPlace(P)) Place(P, Container, bHelper, false);
+        FBox Floor(ForceInit);
+        TArray<USceneComponent*> Descendants;
+        Container->GetChildrenComponents(true, Descendants);
+        for (const auto* C : Descendants)
+            if (const auto* Primitive = Cast<UPrimitiveComponent>(C); Primitive && Primitive->IsCollisionEnabled()) Floor += Primitive->Bounds.GetBox();
+        if (Floor.IsValid)
+            V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName,
+                FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
+    V->BuildExploration();
     FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
     Result.Vehicle = V;
     Result.MeshCount = Meshes.Num();

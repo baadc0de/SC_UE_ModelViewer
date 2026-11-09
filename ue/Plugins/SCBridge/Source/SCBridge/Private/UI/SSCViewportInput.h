@@ -22,6 +22,7 @@ public:
     virtual FReply OnMouseButtonDoubleClick(const FGeometry& Geometry, const FPointerEvent& Event) override;
     virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
     virtual FReply OnKeyUp(const FGeometry& Geometry, const FKeyEvent& Event) override;
+    virtual FCursorReply OnCursorQuery(const FGeometry& Geometry, const FPointerEvent& Event) const override;
     virtual void OnFocusLost(const FFocusEvent& Event) override;
 
 private:

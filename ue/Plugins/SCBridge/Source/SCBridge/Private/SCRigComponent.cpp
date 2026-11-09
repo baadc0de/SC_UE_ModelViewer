@@ -29,6 +29,8 @@ void USCRigComponent::RefreshBoneTransforms(FActorComponentTickFunction*)
     }
     bNeedToFlipSpaceBaseBuffers = true;
     USkinnedMeshComponent::FinalizeBoneTransform();
+    if (bEnablePerPolyCollision && IsPhysicsStateCreated())
+        UpdateKinematicBonesToAnim(GetComponentSpaceTransforms(), ETeleportType::TeleportPhysics, true);
     UpdateChildTransforms();
     UpdateBounds();
     MarkRenderTransformDirty();

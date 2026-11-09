@@ -5,6 +5,7 @@
 #include "SCPackageReader.h"
 #include "SCClipCatalog.h"
 #include "SCLightState.h"
+#include "SCExploration.h"
 #include "SCVehicle.generated.h"
 class UTexture2D;
 class UMaterialInstanceDynamic;
@@ -14,6 +15,7 @@ class USkeletalMesh;
 class ULightComponent;
 struct FSCClipPlayback
 {
+    TWeakObjectPtr<USCRigComponent> TargetRig;
     int32 Clip = INDEX_NONE;
     double Frame = 0;
     float Speed = 1;
@@ -27,6 +29,17 @@ class SCBRIDGE_API ASCVehicle : public AActor
     GENERATED_BODY()
 public:
     ASCVehicle();
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") bool bCollisionReady = false;
+    void AddSpawnPoint(FName Kind, const FString& Label, const FTransform& WorldTransform);
+    void AddItemSpawn(const FSCSceneInstance& Instance, USceneComponent* Anchor);
+    void BuildExploration();
+    FBox ExplorationBounds() const;
+    UFUNCTION(BlueprintCallable, Category = "SC|Exploration") int32 NearestDoor(FVector Position, float Reach = 300) const;
+    UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool ToggleDoor(int32 Index);
+    bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target);
+
     virtual void Tick(float DeltaSeconds) override;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USkeletalMesh>> SkeletalMeshes;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USCRigComponent>> Rigs;
@@ -48,7 +61,7 @@ public:
     TArray<FSCClipPlayback> HeldPlayback; // bounded by catalogue size; no idle evaluation
     uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
 private:
-    bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {});
+    bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {}, USCRigComponent* Target = nullptr);
     void MarkDirty(int32 ClipIndex);
     TSet<USkeletalMesh*> DirtyMeshes;
     TMap<FName, FName> FragmentTargets;

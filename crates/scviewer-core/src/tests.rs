@@ -22,6 +22,15 @@ fn live_package_cache_round_trip_and_progress() {
         .unwrap();
     assert_eq!(cold.cache_status, CacheStatus::Miss);
     assert!(reports.load(Ordering::Relaxed) > 1);
+    let mut scene_archive = tar::Archive::new(cold.value.as_slice());
+    let mut entries = scene_archive.entries().unwrap();
+    let scene: serde_json::Value = serde_json::from_reader(entries.next().unwrap().unwrap()).unwrap();
+    let children = scene["children"].as_array().unwrap();
+    assert!(children.iter().all(|c| c.get("item_type").is_some()));
+    assert!(children.iter().any(|c| c["item_type"] == "Seat"));
+    for child in children {
+        let _: ChildItemIdentity = serde_json::from_value(child.clone()).unwrap();
+    }
     let names = package::tests::minimal_ustar_paths(&cold.value);
     let mut archive = tar::Archive::new(cold.value.as_slice());
     let standard: Vec<_> = archive

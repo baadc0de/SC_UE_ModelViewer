@@ -15,6 +15,8 @@ mod cancellation;
 pub use cancellation::{CancelToken, Error};
 mod catalogue;
 mod lights;
+mod items;
+pub use items::ChildItemIdentity;
 pub use catalogue::{Catalogue, ClipInfo, ClipSource, Fragment, SkeletonInfo};
 pub use lights::{
     EntityLight, LightAttachment, LightCatalogue, LightInfo, LightStateInfo, VehicleLightPort,
