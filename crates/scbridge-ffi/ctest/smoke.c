@@ -20,9 +20,10 @@ static void check(sc_status s) {
         fprintf(stderr, "status=%d: %s\n", s, sc_last_error(h)); exit(1);
     }
 }
-static void progress(const char *phase, uint64_t done, uint64_t total, void *user) {
+static int progress(const char *phase, uint64_t done, uint64_t total, void *user) {
     assert(phase && done <= total && user == &callbacks);
     atomic_fetch_add(&callbacks, 1);
+    return 0;
 }
 static void write_file(const char *root, const char *name, const void *data, size_t len) {
     char path[4096];
@@ -79,8 +80,9 @@ int main(int argc, char **argv) {
     assert(sc_search_entities(h, invalid_utf8, 1, &json) == SC_STATUS_INVALID_ARGUMENT);
     assert(!json);
     o.animations = 0;
-    assert(sc_export_decomposed_mem(h, "AEGS_Gladius", &o, NULL, NULL, &tar) == SC_STATUS_UNSUPPORTED);
-    assert(!tar.data && !tar.len);
+    check(sc_export_decomposed_mem(h, "AEGS_Gladius", &o, NULL, NULL, &tar));
+    write_file(argv[1], "no-animations.tar", tar.data, tar.len);
+    sc_free_blob(&tar);
     sc_cache_info info; check(sc_cache_stats(h, &info));
     printf("cache enabled=%u bytes=%llu entries=%llu last_hit=%u\n", info.enabled,
            (unsigned long long)info.bytes, (unsigned long long)info.entries, info.last_hit);

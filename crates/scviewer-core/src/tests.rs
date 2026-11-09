@@ -18,7 +18,7 @@ fn live_package_cache_round_trip_and_progress() {
     })));
     let options = DecomposedOptions::default();
     let cold = session
-        .export_entity_decomposed_mem_cached("AEGS_Gladius", &options)
+        .export_entity_decomposed_mem_cached("AEGS_Gladius", &options, None)
         .unwrap();
     assert_eq!(cold.cache_status, CacheStatus::Miss);
     assert!(reports.load(Ordering::Relaxed) > 1);
@@ -33,7 +33,7 @@ fn live_package_cache_round_trip_and_progress() {
     drop(session);
     let session = Session::open(Some(&found.path), Some(dir.path())).unwrap();
     let warm = session
-        .export_entity_decomposed_mem_cached("AEGS_Gladius", &options)
+        .export_entity_decomposed_mem_cached("AEGS_Gladius", &options, None)
         .unwrap();
     assert_eq!(warm.cache_status, CacheStatus::Hit);
     assert_eq!(cold.value, warm.value);
@@ -181,7 +181,7 @@ fn live_clip_catalogue_matches_scene_and_persists() {
         {
             let fresh = &catalogue.value;
             let bytes = session
-                .export_entity_decomposed_mem(entity, &DecomposedOptions::default())
+                .export_entity_decomposed_mem(entity, &DecomposedOptions::default(), None)
                 .unwrap();
             let mut archive = tar::Archive::new(bytes.as_slice());
             let mut entries = archive.entries().unwrap();

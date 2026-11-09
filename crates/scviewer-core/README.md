@@ -17,12 +17,12 @@ binary; its default cache is `./cache/` relative to the current working director
   entries contain `path`, `is_dir`, and uncompressed `size`. The geometry browser
   includes `.cga/.cgf/.skin/.chr/.cdf` and their parent directories. Paths use `/`;
   input paths accept either separator. Glob matching is case-insensitive.
-- `export_entity_glb(&str, &GlbOptions) -> Result<Vec<u8>>` and
+- `export_entity_glb(&str, &GlbOptions, Option<&CancelToken>) -> Result<Vec<u8>>` and
   `geometry_file_glb(&str) -> Result<Vec<u8>>`. Raw previews use upstream's
   `skin_to_glb`, with `.skinm/.cgfm/.cgam` companion resolution.
-- `export_entity_decomposed(&str, &Path, &DecomposedOptions) -> Result<ExportResult>`;
+- `export_entity_decomposed(&str, &Path, &DecomposedOptions, Option<&CancelToken>) -> Result<ExportResult>`;
   result contains written `files: Vec<PathBuf>` and `cache_status`.
-- `export_entity_decomposed_mem(&str, &DecomposedOptions) -> Result<Vec<u8>>`;
+- `export_entity_decomposed_mem(&str, &DecomposedOptions, Option<&CancelToken>) -> Result<Vec<u8>>`;
   uncompressed tar, `Packages/.../scene.json` first, remaining files sorted by path.
   Regular files have explicit typeflag `0`. Paths use POSIX ustar `name` (100 bytes)
   and `prefix` (155 bytes), split at a slash when required. Only paths that cannot
@@ -31,9 +31,20 @@ binary; its default cache is `./cache/` relative to the current working director
   reader must support exactly ustar name/prefix and per-file PAX path overrides.
   Unpacking does not preserve the archived zero mtimes.
 - `set_progress_callback(Option<ProgressCallback>)`; callback is an
-  `Arc<dyn Fn(f32, &str) + Send + Sync>`. Upstream progress is sampled every 20 ms
-  on a scoped thread during assembly; final/cache-hit notifications run on the
-  calling thread. Callbacks must not panic or block indefinitely.
+  `Arc<dyn Fn(f32, &str) + Send + Sync>`. Upstream checked progress phases call
+  it synchronously on the reporting thread (potentially a worker); core/cache-hit
+  phases run on the calling thread. Callbacks must not panic or block indefinitely.
+- `CancelToken::default()`, `clone()`, `cancel()`, `is_cancelled()`: one-way,
+  thread-safe cancellation. Entity exports and their `_cached` companions take
+  a final `Option<&CancelToken>`; pass `None` for no cancellation. A callback can
+  cancel a cloned token. The distinct `Error::Cancelled` is carried by anyhow;
+  inspect it with `error.downcast_ref::<scviewer_core::Error>()`.
+  Checkpoints run before assembly, at upstream progress phases, before tar build
+  and before cache publication. Cancelled writes no package cache entry or output
+  files. The last publication checkpoint is the commit point: cancellation after
+  it is ignored while publication/folder unpack completes, and returns success.
+  Individual decode operations are not interrupted. A cache-hit checkpoint may
+  cancel delivery without removing the existing cache entry.
 - `cache_status() -> CacheStatus` describes the latest successful operation.
   `_cached` companions return `Cached<T> { value, cache_status }`, retaining the
   exact `Vec` signatures requested by WP-R1. Uncached operations report `Miss`.
@@ -41,9 +52,12 @@ binary; its default cache is `./cache/` relative to the current working director
   bytes removed. `validate_decomposed_export` and `ValidationReport` are re-exported.
 
 `GlbOptions` exposes `lod`, `mip`, `materials: Materials::{Textures,Colors,None}`,
-`attachments`, `interior`, `lights`, `shields`, `apply_default_pose`.
-`DecomposedOptions { geometry: GlbOptions }` always enables animation sidecars;
+`attachments`, `interior`, `lights`, `shields`, `apply_default_pose`, `include_animations`.
+`include_animations` defaults to true; false omits clips and animation sidecars.
+`DecomposedOptions { geometry: GlbOptions }` enables animation sidecars by default;
 its default disables pose baking. Other defaults follow upstream (LOD 1, mip 2).
+Cache format v9 includes the animation switch in package keys; the CLI exposes
+`--no-animations` for both folder/tar and bundled GLB exports.
 
 A cold session reads the archive, parses DataCore and builds the entity index
 once. A disk index hit defers archive/DataCore work until an uncached export or
@@ -164,7 +178,7 @@ set `SCVIEWER_PERF_TESTS=1` to enforce the 500 ms warm-call budget.
 interior lights without exporting geometry or textures. Exact entity names are
 required; `scviewer lights Gladius` accepts the usual CLI shorthand and prints
 JSON. This operation reports `CacheStatus::Miss`; package caching remains
-available through the decomposed export API. Cache format v8 invalidates packages
+available through the decomposed export API. The earlier cache format v8 invalidated packages
 created before the single-tint forward-card emission and link-only engine-control
 rules, including earlier dirty exporter builds. Scene/material schemas remain v2;
 the validator checks explicit versions and accepts v1 and v2. Missing vehicle XML

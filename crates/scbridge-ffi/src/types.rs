@@ -2,7 +2,7 @@
 #![allow(non_camel_case_types)]
 use crate::boundary::{Failure, Result};
 use scviewer_core::{DecomposedOptions, GlbOptions, Materials};
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_int, c_void};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +12,7 @@ pub enum sc_status {
     SC_STATUS_ERROR = 2,
     SC_STATUS_PANIC = 3,
     SC_STATUS_UNSUPPORTED = 4,
+    SC_STATUS_CANCELLED = 5,
 }
 
 /// Material mode constants; sc_options uses an integer so invalid C input is safe to reject.
@@ -23,7 +24,7 @@ pub enum sc_material_mode {
 }
 
 /// Use sc_default_options rather than zero initialization. Boolean fields accept 0 or 1.
-/// animations must currently be 1 (core always emits animation sidecars).
+/// animations=0 omits animation clips and sidecars.
 /// collision_reserved must be 0; collision is built by the UE importer.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -54,7 +55,7 @@ impl Default for sc_options {
             interior: o.interior.into(),
             lights: o.lights.into(),
             shields: o.shields.into(),
-            animations: 1,
+            animations: o.include_animations.into(),
             default_pose: o.apply_default_pose.into(),
             collision_reserved: 0,
         }
@@ -83,11 +84,12 @@ impl sc_options {
             lights: flag(self.lights)?,
             shields: flag(self.shields)?,
             apply_default_pose: flag(self.default_pose)?,
+            include_animations: flag(self.animations)?,
         };
-        if !flag(self.animations)? || self.collision_reserved != 0 {
+        if self.collision_reserved != 0 {
             return Err(Failure(
                 sc_status::SC_STATUS_UNSUPPORTED,
-                "animations must be 1 and collision_reserved must be 0".into(),
+                "collision_reserved must be 0".into(),
             ));
         }
         Ok(DecomposedOptions { geometry })
@@ -126,6 +128,10 @@ pub struct sc_cache_info {
 /// phase is borrowed UTF-8 valid only during this call; done/total is normalized
 /// progress (0..1000), not a file count. Calls need not be monotonic across phases.
 /// user must remain live until export returns; no callbacks occur after return.
+/// Return nonzero to cancel: export returns SC_STATUS_CANCELLED, an empty blob,
+/// and no new package cache entry. Cancellation is cooperative at phase boundaries.
+/// No callback occurs after the final publication checkpoint (commit point).
 /// Callback must be thread-safe, must not reenter the handle, throw, or unwind.
-pub type sc_progress_cb =
-    Option<unsafe extern "C" fn(phase: *const c_char, done: u64, total: u64, user: *mut c_void)>;
+pub type sc_progress_cb = Option<
+    unsafe extern "C" fn(phase: *const c_char, done: u64, total: u64, user: *mut c_void) -> c_int,
+>;

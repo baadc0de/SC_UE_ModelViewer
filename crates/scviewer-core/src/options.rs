@@ -19,6 +19,7 @@ pub struct GlbOptions {
     pub lights: bool,
     pub shields: bool,
     pub apply_default_pose: bool,
+    pub include_animations: bool,
 }
 impl Default for GlbOptions {
     fn default() -> Self {
@@ -32,6 +33,7 @@ impl Default for GlbOptions {
             lights: o.include_lights,
             shields: o.include_shields,
             apply_default_pose: o.apply_default_animation_pose,
+            include_animations: true,
         }
     }
 }
@@ -52,13 +54,13 @@ impl GlbOptions {
             include_lights: self.lights,
             include_shields: self.shields,
             apply_default_animation_pose: self.apply_default_pose,
-            include_animations: kind == ExportKind::Decomposed,
+            include_animations: self.include_animations,
             ..Default::default()
         }
     }
 }
 
-/// Decomposed exports always include animation sidecars and default to the authored rest pose.
+/// Decomposed exports default to animation sidecars and the authored rest pose.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DecomposedOptions {
     pub geometry: GlbOptions,

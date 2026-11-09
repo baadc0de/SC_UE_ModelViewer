@@ -1,8 +1,8 @@
-/* SCBridge ABI v1. All strings are NUL-terminated UTF-8.
+/* SCBridge ABI v2. All strings are NUL-terminated UTF-8.
  * Serialize ALL calls on a handle, including last_error and close. Handles may
  * move between threads; never access a handle concurrently or reenter it from a
  * callback. While export is busy the host's serialization must block close,
- * last_error and search until export returns.
+ * last_error and search until export returns or is cancelled.
  * Different handles may be used concurrently; the library does not supply a host lock.
  * Non-NULL pointers must be valid, aligned and live for the documented duration.
  * Output storage must not alias inputs or hold an outstanding owned allocation.
@@ -30,6 +30,7 @@ typedef enum sc_status {
   SC_STATUS_ERROR = 2,
   SC_STATUS_PANIC = 3,
   SC_STATUS_UNSUPPORTED = 4,
+  SC_STATUS_CANCELLED = 5,
 } sc_status;
 
 /*
@@ -48,7 +49,7 @@ typedef struct sc_handle sc_handle;
 
 /*
  Use sc_default_options rather than zero initialization. Boolean fields accept 0 or 1.
- animations must currently be 1 (core always emits animation sidecars).
+ animations=0 omits animation clips and sidecars.
  collision_reserved must be 0; collision is built by the UE importer.
  */
 typedef struct sc_options {
@@ -82,9 +83,12 @@ typedef struct sc_cache_info {
  phase is borrowed UTF-8 valid only during this call; done/total is normalized
  progress (0..1000), not a file count. Calls need not be monotonic across phases.
  user must remain live until export returns; no callbacks occur after return.
+ Return nonzero to cancel: export returns SC_STATUS_CANCELLED, an empty blob,
+ and no new package cache entry. Cancellation is cooperative at phase boundaries.
+ No callback occurs after the final publication checkpoint (commit point).
  Callback must be thread-safe, must not reenter the handle, throw, or unwind.
  */
-typedef void (*sc_progress_cb)(const char *phase, uint64_t done, uint64_t total, void *user);
+typedef int (*sc_progress_cb)(const char *phase, uint64_t done, uint64_t total, void *user);
 
 /*
  Owned uncompressed tar. Do not change data/len; free exactly once via sc_free_blob.

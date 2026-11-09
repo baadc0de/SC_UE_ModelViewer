@@ -178,7 +178,8 @@ typedef enum sc_status {
     SC_STATUS_INVALID_ARGUMENT = 1,
     SC_STATUS_ERROR = 2,
     SC_STATUS_PANIC = 3,
-    SC_STATUS_UNSUPPORTED = 4
+    SC_STATUS_UNSUPPORTED = 4,
+    SC_STATUS_CANCELLED = 5
 } sc_status;
 typedef enum sc_material_mode {
     SC_MATERIAL_TEXTURES = 0, SC_MATERIAL_COLORS = 1, SC_MATERIAL_NONE = 2
@@ -193,7 +194,7 @@ typedef struct sc_cache_info {
     uint64_t bytes, entries, cap_bytes;
     uint32_t enabled, last_hit;
 } sc_cache_info;
-typedef void (*sc_progress_cb)(const char *phase, uint64_t done,
+typedef int (*sc_progress_cb)(const char *phase, uint64_t done,
                                uint64_t total, void *user);
 
 sc_status sc_open(const char *p4k_or_null, const char *cache_dir_or_null, sc_handle **out);
@@ -215,17 +216,34 @@ All strings, including explicit p4k and cache paths, must be NUL-terminated UTF-
 NULL p4k auto-discovers the install; NULL cache disables persistence. The host
 resolves its launch-directory cache setting to an **absolute path** before UE
 changes cwd. Use `sc_default_options` or NULL export options for core defaults;
-booleans accept only 0/1, `animations` must currently be 1, and
+booleans accept only 0/1, `animations=0` omits clips and animation sidecars, and
 `collision_reserved` must be zero. Unknown boolean/material values return
 INVALID_ARGUMENT; unsupported options return UNSUPPORTED.
 
 The host serializes all calls on a handle. While an export is busy, its host lock
-must block close, last_error and search until export returns. The library does not
+must block close, last_error and search until export returns or is cancelled. The library does not
 provide that host lock; do not call concurrently or reenter from a callback.
 Different handles may be used concurrently. Progress may run on worker/rayon
 threads; phase is borrowed only during that callback, and done/total is normalized
 0..1000 progress, not a file count. The user context must remain live until export
 returns. No callback occurs after return; callbacks must not throw or unwind.
+The callback returns zero to continue or nonzero to cancel. This is ABI v2;
+consumers compiled against the former void callback must rebuild against the new
+header. Cancellation returns `SC_STATUS_CANCELLED` (5), leaves an empty blob and
+no new package cache entry, and does not poison the handle. `sc_last_error`
+reports "export cancelled"; the same handle can search/export again.
+
+The core accepts an optional cloned `CancelToken` on entity export calls.
+Checkpoints run before assembly, synchronously at the exporter's checked progress
+phases, before tar construction and before cache publication. A token cancelled
+from another thread is observed at the next checkpoint; a long decoding phase
+is not interrupted mid-operation. The final publication checkpoint is the commit
+point: once it accepts continuation, cache publication and any folder unpack
+finish without further cancellable callbacks. Thus an export returning Cancelled
+never writes a package cache entry or leaves partial output files. Existing cache
+entries and unrelated output files are retained. Cache format v9 separates the
+new `include_animations` option (default true); CLI `--no-animations` sets it false.
+
 
 Each JSON output and tar blob is owned and must be released by the corresponding
 `sc_free_string` or `sc_free_blob` function. `sc_free_blob` clears its fields.

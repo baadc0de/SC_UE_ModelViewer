@@ -51,7 +51,7 @@ The generated ABI includes `sc_lights`, `sc_cache_stats`, `sc_cache_evict`, and
 `sc_default_options`. `sc_options` is 40 bytes: ten uint32 fields (`lod`, `mip`,
 `material_mode`, `attachments`, `interior`, `lights`, `shields`, `animations`,
 `default_pose`, `collision_reserved`). Status codes are OK=0, INVALID_ARGUMENT=1,
-ERROR=2, PANIC=3, UNSUPPORTED=4. Material modes are textures=0, colors=1, none=2.
+ERROR=2, PANIC=3, UNSUPPORTED=4, CANCELLED=5. Material modes are textures=0, colors=1, none=2.
 The test-only panic hook is absent from the deployment library.
 
 Scope/contract notes:
@@ -60,9 +60,9 @@ Scope/contract notes:
   atomically published manifest as a read-only size/count snapshot and combines
   that with `Session::cache_status()` and the public default write cap. Eviction
   stays in `Session::cache_evict`; the requested cap applies to that call only.
-- The core always emits decomposed animations. The ABI includes the requested
-  field but explicitly rejects `animations=0` with UNSUPPORTED. The reserved
-  collision field must be zero. No option is silently ignored.
+- `animations=0` is now honored through core `include_animations` and CLI
+  `--no-animations`; the option participates in cache format v9 package keys.
+  The reserved collision field must be zero. No option is silently ignored.
 - Tar bytes are returned untouched. Core order is scene.json first, then all
   other paths lexicographically (including Data before remaining Packages
   sidecars), rather than the older brief's sidecars-before-Data wording.
@@ -163,16 +163,14 @@ sc_open
 sc_search_entities
 ```
 
-TODO(WP-R4): Add an animation-disable option to scviewer-core and its cache key before accepting animations=0 in the ABI; core changes were outside this assignment's writable scope.
 TODO(WP-R4): Resolve upstream export-stamp timestamp nondeterminism if byte identity between independent uncached exports is required; current exact C/CLI parity uses the shared package cache.
 
 ## Cross-review fixes (2026-11-09)
 
 Items 1, 2, 5, 6 and 7 are implemented. The FFI section now describes the twelve
 current entry points, value layouts, ownership, serialization, UTF-8 paths and
-correct tar order. Cancellation (item 3, and the related part of item 4) is pending
-scope clarification: this round explicitly permits core changes for cache_stats
-and its test only, whereas cancellation requires export-path checkpoints.
+correct tar order. The initial review round deferred cancellation pending core
+scope clarification; the authorized implementation is recorded below.
 
 - The C smoke test is an explicit script step against prebuilt artifacts; no
   cargo build runs inside cargo test. Its discovery probe calls find_p4k and
@@ -221,4 +219,93 @@ lights, and left no wp-r4-ctest work directory. The absent-archive script return
 success with SKIP. readelf reports `Library soname: [libscbridge.so]`; nm reports
 only the same twelve production sc_* text symbols.
 
-TODO(WP-R4): Cancellation and its CANCELLED/header documentation require authorization for narrow core export checkpoints beyond the cache_stats-only edit permission in this review round.
+
+## Authorized cancellation and animation switch (2026-11-09)
+
+Implemented the narrow core/exporter changes authorized after review:
+
+- `CancelToken` is a cloneable one-way `Arc<AtomicBool>`. All three entity export
+  entry points and their cached companions accept a final `Option<&CancelToken>`.
+  Cancellation is distinguishable as `scviewer_core::Error::Cancelled` through
+  the existing anyhow result's `downcast_ref`; it is not a panic or string match.
+- Core checkpoints run before assembly, before tar construction and immediately
+  before cache publication. An opt-in `Progress::with_callback` plus
+  `report_checked` adds synchronous stoppable phase reports in upstream GLB
+  assembly, GLB packing and decomposed writing on branch `scviewer/lights`.
+  Existing polling/report APIs remain available; ordinary Progress callers never
+  request cancellation. No asset-specific rules were added.
+- The publication checkpoint is the commit point. After it, cache publication
+  and folder unpack complete without another cancellation check/callback. Thus
+  Cancelled cannot leave a new package cache entry or partial output folder;
+  existing entries/files are preserved. Cancellation is cooperative and cannot
+  interrupt an individual long-running decoder. A late request after the commit
+  point does not turn a successful publication into Cancelled.
+- ABI v2 makes `sc_progress_cb` return int: zero continues, nonzero cancels.
+  `SC_STATUS_CANCELLED = 5` returns an empty blob without poisoning the handle.
+  The host must serialize every handle call. Its busy-handle lock blocks close,
+  last_error and search until export returns or is cancelled; callbacks must not
+  reenter that handle. The library does not introduce an internal host lock.
+- `GlbOptions::include_animations` defaults to true and is passed upstream.
+  `sc_options.animations=0` and CLI `--no-animations` now disable clip/sidecar
+  output. Serialized package options contain this flag; cache format is v9.
+  `collision_reserved` remains required to be zero.
+
+Tests were added before implementation: the new core tests initially failed to
+compile against the missing token, option field and export arguments. They now
+exercise cross-thread token sharing, cancellation at preparation, first assembly
+phase, root-asset writing, tar build and publication; cache/output preservation;
+pre-cancelled GLB/cache-hit exports; successful animation-disabled exports,
+separate animation-on/off cache keys, and cache reuse. The C test cancels on
+callback two, checks status 5/empty blob/unchanged cache size and count, and then
+searches successfully on the same handle. The C script also compares and validates
+both animation-enabled and disabled packages against the CLI. Counts remain
+informational, following the review fixes.
+
+Verification commands (sequential Cargo, shared target; no SC_DATA_P4K):
+
+```sh
+export CARGO_HOME=/tmp/wp-r4-cargo-home
+export CARGO_TARGET_DIR=./target
+cargo test --locked --manifest-path vendor/StarBreaker/Cargo.toml \
+  -p starbreaker-common --lib progress -- --nocapture
+scripts/build_ffi.sh
+cargo build --locked --release -p scviewer-cli
+cargo test --locked --workspace -- --nocapture
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u HOME' \
+  cargo test --locked --workspace -- --nocapture
+crates/scbridge-ffi/ctest/run.sh
+env -u HOME crates/scbridge-ffi/ctest/run.sh
+python3 -I crates/scbridge-ffi/ctest/test_verify.py
+readelf -d target/release/libscbridge.so
+nm -D --defined-only target/release/libscbridge.so
+```
+
+Results on the installed archive:
+
+```text
+Upstream progress tests: 6 passed
+Workspace: 5 FFI + 1 header drift + 21 core tests passed (27 total)
+No-archive runner: same suite passed; live checks printed skips
+request cancellation on callback 2: Resolving loadout
+C cancellation: CANCELLED (5), exactly 2 callbacks, no package cache entry; handle/process fine
+C ABI smoke: PASS
+ValidationReport (animations enabled): is_valid: true
+FFI / CLI decomposed-tar (same cached package): byte-identical
+Informational counts: 45 GLBs / 23 sidecars / 366 PNGs / 63 clips / 77 lights
+animations=0 / --no-animations: no animation sidecars or scene clip entries
+ValidationReport (animations disabled): is_valid: true
+C/CLI animation-disabled tar cmp: exit 0
+cache eviction: 250014834 bytes removed
+No-archive C script: SKIP, exit 0
+Synthetic verifier: 4 tests passed
+SONAME: libscbridge.so
+Release libscbridge.so: 16260352 bytes
+nm: only the same 12 production sc_* text symbols; no test hook
+```
+
+The shell test removed its work/cache folders. Full logs are retained in
+`out/wp-r4-cancellation-verification/` (ignored). The existing export-stamp
+nondeterminism TODO above is unchanged; no cancellation or animation TODO remains.
+No commits or UE builds were made. Upstream modifications are limited to
+`starbreaker-common/src/progress.rs` and `starbreaker-3d/src/{error.rs,
+pipeline/glb_assembly.rs,gltf/mod.rs,decomposed.rs}` on `scviewer/lights`.

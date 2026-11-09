@@ -66,9 +66,12 @@ fn options_reject_invalid_and_unsupported_values() {
         status(sc_options { lights: 2, ..o }),
         sc_status::SC_STATUS_INVALID_ARGUMENT
     );
-    assert_eq!(
-        status(sc_options { animations: 0, ..o }),
-        sc_status::SC_STATUS_UNSUPPORTED
+    assert!(
+        !sc_options { animations: 0, ..o }
+            .core()
+            .unwrap_or_else(|_| panic!("animations=0 rejected"))
+            .geometry
+            .include_animations
     );
     assert_eq!(
         status(sc_options {
@@ -88,6 +91,14 @@ fn forced_panic_returns_status_and_message() {
         assert_eq!(error, "forced WP-R4 panic");
         println!("panic test: SC_STATUS_PANIC (3), message={error}; process survived");
     }
+}
+
+#[test]
+fn cancellation_is_a_distinct_nonpanic_status() {
+    let error: anyhow::Error = scviewer_core::Error::Cancelled.into();
+    let failure = boundary::Failure::from(error.context("export phase"));
+    assert_eq!(failure.0, sc_status::SC_STATUS_CANCELLED);
+    assert!(failure.1.contains("cancelled"));
 }
 
 #[test]

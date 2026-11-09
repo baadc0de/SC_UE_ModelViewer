@@ -15,7 +15,15 @@ impl Failure {
 }
 impl From<anyhow::Error> for Failure {
     fn from(error: anyhow::Error) -> Self {
-        Self(sc_status::SC_STATUS_ERROR, format!("{error:#}"))
+        let status = if matches!(
+            error.downcast_ref::<scviewer_core::Error>(),
+            Some(scviewer_core::Error::Cancelled)
+        ) {
+            sc_status::SC_STATUS_CANCELLED
+        } else {
+            sc_status::SC_STATUS_ERROR
+        };
+        Self(status, format!("{error:#}"))
     }
 }
 thread_local! { static ERROR: RefCell<CString> = RefCell::new(CString::default()); }

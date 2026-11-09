@@ -35,6 +35,9 @@ trap cleanup EXIT
 cache=$(mktemp -d "$PWD/cache/wp-r4-ctest.XXXXXX")
 cc -std=c11 -Wall -Wextra -Werror -I crates/scbridge-ffi/include \
     crates/scbridge-ffi/ctest/smoke.c "$library" -Wl,-rpath,"$(dirname "$library")" -o "$work/smoke"
+cc -std=c11 -Wall -Wextra -Werror -I crates/scbridge-ffi/include \
+    crates/scbridge-ffi/ctest/cancel.c "$library" -Wl,-rpath,"$(dirname "$library")" -o "$work/cancel"
+"$work/cancel" "$archive" "$cache"
 "$work/smoke" "$work" "$cache" smoke "$archive"
 mkdir "$work/extracted"
 tar -xf "$work/ffi.tar" -C "$work/extracted"
@@ -43,4 +46,10 @@ tar -xf "$work/ffi.tar" -C "$work/extracted"
 cmp "$work/ffi.tar" "$work/cli.tar"
 echo 'FFI / CLI decomposed-tar (same cached package): byte-identical'
 python3 -I crates/scbridge-ffi/ctest/verify.py "$work"
+"$cli" --p4k "$archive" --cache "$cache" decomposed-tar AEGS_Gladius "$work/cli-no-animations.tar" --no-animations
+cmp "$work/no-animations.tar" "$work/cli-no-animations.tar"
+python3 -I crates/scbridge-ffi/ctest/verify_no_animations.py "$work/no-animations.tar"
+mkdir "$work/no-animations"
+tar -xf "$work/no-animations.tar" -C "$work/no-animations"
+"$cli" validate "$work/no-animations"
 "$work/smoke" "$work" "$cache" evict "$archive"

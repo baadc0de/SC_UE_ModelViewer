@@ -11,6 +11,8 @@
 //! Exact brief-compatible Vec APIs expose status via `cache_status()`. The
 //! `_cached` methods return status alongside data for callers that need it owned.
 mod cache;
+mod cancellation;
+pub use cancellation::{CancelToken, Error};
 mod catalogue;
 mod lights;
 pub use catalogue::{Catalogue, ClipInfo, ClipSource, Fragment, SkeletonInfo};
@@ -38,7 +40,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, UNIX_EPOCH},
+    time::UNIX_EPOCH,
 };
 
 pub type ProgressCallback = Arc<dyn Fn(f32, &str) + Send + Sync>;
@@ -205,61 +207,81 @@ impl Session {
             .map(|e| e.name.as_str())
             .ok_or_else(|| anyhow!("no entity matching {query:?}"))
     }
+    fn checkpoint(&self, cancel: Option<&CancelToken>, fraction: f32, phase: &str) -> Result<()> {
+        if let Some(token) = cancel {
+            token.checkpoint()?;
+        }
+        if let Some(callback) = &self.progress {
+            callback(fraction, phase);
+        }
+        if let Some(token) = cancel {
+            token.checkpoint()?;
+        }
+        Ok(())
+    }
     fn assemble(
         &self,
         name: &str,
         options: &ExportOptions,
+        cancel: Option<&CancelToken>,
     ) -> Result<starbreaker_3d::ExportResult> {
+        if let Some(token) = cancel {
+            token.checkpoint()?;
+        }
         let loaded = self.loaded()?;
         let name = self.resolve_name(name)?;
-        let progress = starbreaker_common::Progress::new();
-        std::thread::scope(|scope| {
-            let (sender, receiver) = std::sync::mpsc::channel::<()>();
-            if let Some(callback) = &self.progress {
-                let progress = &progress;
-                scope.spawn(move || {
-                    loop {
-                        let (fraction, stage) = progress.get();
-                        callback(fraction, &stage);
-                        if receiver.recv_timeout(Duration::from_millis(20))
-                            != Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-                        {
-                            break;
-                        }
-                    }
-                });
+        // Borrow only thread-safe callback/token state, never the !Sync Session.
+        let callback = &self.progress;
+        let observer = |fraction: f32, phase: &str| {
+            if cancel.is_some_and(CancelToken::is_cancelled) {
+                return false;
             }
-            let result = loaded.index.with_dependent(|_, idx| -> Result<_> {
-                let record = idx
-                    .find_record(name)
-                    .ok_or_else(|| anyhow!("entity disappeared from DataCore: {name}"))?;
-                let tree = resolve_loadout_indexed(idx, record);
-                Ok(starbreaker_3d::assemble_glb_with_loadout_with_progress(
-                    idx.db,
-                    &loaded.p4k,
-                    record,
-                    &tree,
-                    options,
-                    Some(&progress),
-                    None,
-                    None,
-                    None,
-                )?)
-            });
-            drop(sender);
-            result
-        })
+            if let Some(callback) = callback {
+                callback(fraction, phase);
+            }
+            !cancel.is_some_and(CancelToken::is_cancelled)
+        };
+        let progress = starbreaker_common::Progress::with_callback(&observer);
+        let result = loaded.index.with_dependent(|_, idx| -> Result<_> {
+            let record = idx
+                .find_record(name)
+                .ok_or_else(|| anyhow!("entity disappeared from DataCore: {name}"))?;
+            let tree = resolve_loadout_indexed(idx, record);
+            if let Some(token) = cancel {
+                token.checkpoint()?;
+            }
+            Ok(starbreaker_3d::assemble_glb_with_loadout_with_progress(
+                idx.db,
+                &loaded.p4k,
+                record,
+                &tree,
+                options,
+                Some(&progress),
+                None,
+                None,
+                None,
+            )?)
+        });
+        // Convert upstream's checked-progress stop to our stable discriminator.
+        if let Some(token) = cancel {
+            token.checkpoint()?;
+        }
+        result
     }
-    pub fn export_entity_glb(&self, name: &str, options: &GlbOptions) -> Result<Vec<u8>> {
-        let result = self.assemble(name, &options.upstream(ExportKind::Bundled))?;
+    pub fn export_entity_glb(
+        &self,
+        name: &str,
+        options: &GlbOptions,
+        cancel: Option<&CancelToken>,
+    ) -> Result<Vec<u8>> {
+        self.checkpoint(cancel, 0.0, "Preparing export")?;
+        let result = self.assemble(name, &options.upstream(ExportKind::Bundled), cancel)?;
         ensure!(
             !result.glb.is_empty(),
             "upstream returned an empty bundled GLB"
         );
+        self.checkpoint(cancel, 1.0, "GLB ready")?;
         self.status.set(CacheStatus::Miss);
-        if let Some(cb) = &self.progress {
-            cb(1.0, "GLB ready");
-        }
         Ok(result.glb)
     }
     pub fn geometry_file_glb(&self, p4k_path: &str) -> Result<Vec<u8>> {
@@ -287,9 +309,10 @@ impl Session {
         &self,
         name: &str,
         options: &GlbOptions,
+        cancel: Option<&CancelToken>,
     ) -> Result<Cached<Vec<u8>>> {
         Ok(Cached {
-            value: self.export_entity_glb(name, options)?,
+            value: self.export_entity_glb(name, options, cancel)?,
             cache_status: CacheStatus::Miss,
         })
     }
@@ -303,25 +326,26 @@ impl Session {
         &self,
         name: &str,
         options: &DecomposedOptions,
+        cancel: Option<&CancelToken>,
     ) -> Result<Vec<u8>> {
         Ok(self
-            .export_entity_decomposed_mem_cached(name, options)?
+            .export_entity_decomposed_mem_cached(name, options, cancel)?
             .value)
     }
     pub fn export_entity_decomposed_mem_cached(
         &self,
         name: &str,
         options: &DecomposedOptions,
+        cancel: Option<&CancelToken>,
     ) -> Result<Cached<Vec<u8>>> {
+        self.checkpoint(cancel, 0.0, "Preparing export")?;
         let name = self.resolve_name(name)?;
         let filename = format!("{}.tar", cache::package_key(&self.build_id, name, options)?);
         if let Some(cache) = &self.cache {
             if let Some(bytes) = cache.read(&filename)? {
                 if package::validate_tar(&bytes).is_ok() {
+                    self.checkpoint(cancel, 1.0, "Package cache hit")?;
                     self.status.set(CacheStatus::Hit);
-                    if let Some(cb) = &self.progress {
-                        cb(1.0, "Package cache hit");
-                    }
                     return Ok(Cached {
                         value: bytes,
                         cache_status: CacheStatus::Hit,
@@ -330,18 +354,22 @@ impl Session {
                 cache.remove(&filename)?;
             }
         }
-        let result = self.assemble(name, &options.geometry.upstream(ExportKind::Decomposed))?;
+        let result = self.assemble(
+            name,
+            &options.geometry.upstream(ExportKind::Decomposed),
+            cancel,
+        )?;
         let package = result
             .decomposed
             .context("upstream returned no decomposed files")?;
+        self.checkpoint(cancel, 0.94, "Building tar")?;
         let bytes = package::to_tar(&package)?;
+        self.checkpoint(cancel, 1.0, "Publishing package")?;
+        // Commit point: no further cancellable callback after cache publication.
         if let Some(cache) = &self.cache {
             cache.write(&filename, &bytes)?;
         }
         self.status.set(CacheStatus::Miss);
-        if let Some(cb) = &self.progress {
-            cb(1.0, "Package ready");
-        }
         Ok(Cached {
             value: bytes,
             cache_status: CacheStatus::Miss,
@@ -352,8 +380,11 @@ impl Session {
         name: &str,
         out_root: &Path,
         options: &DecomposedOptions,
+        cancel: Option<&CancelToken>,
     ) -> Result<ExportResult> {
-        let result = self.export_entity_decomposed_mem_cached(name, options)?;
+        let result = self.export_entity_decomposed_mem_cached(name, options, cancel)?;
+        // No cancellation after the memory export's publication checkpoint:
+        // unpack completes, so Cancelled can never leave a partially unpacked tree.
         Ok(ExportResult {
             files: package::unpack(&result.value, out_root)?,
             cache_status: result.cache_status,
@@ -393,3 +424,6 @@ fn build_identity(path: &Path) -> Result<(String, Option<String>)> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cancellation_tests;

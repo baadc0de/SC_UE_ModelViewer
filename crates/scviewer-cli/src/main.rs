@@ -75,6 +75,8 @@ struct Options {
     #[arg(long)]
     no_lights: bool,
     #[arg(long)]
+    no_animations: bool,
+    #[arg(long)]
     shields: bool,
     #[arg(long, action = clap::ArgAction::Set)]
     apply_default_pose: Option<bool>,
@@ -93,6 +95,7 @@ impl Options {
             interior: !self.no_interior,
             lights: !self.no_lights,
             shields: self.shields,
+            include_animations: !self.no_animations,
             apply_default_pose: self.apply_default_pose.unwrap_or(!decomposed),
         }
     }
@@ -158,8 +161,11 @@ fn main() -> Result<()> {
         }
         Command::Glb { entity, out, opts } => write(
             &out,
-            &session
-                .export_entity_glb(&resolve_entity(&session, &entity)?, &opts.options(false))?,
+            &session.export_entity_glb(
+                &resolve_entity(&session, &entity)?,
+                &opts.options(false),
+                None,
+            )?,
         )?,
         Command::Decomposed {
             entity,
@@ -172,6 +178,7 @@ fn main() -> Result<()> {
                 &DecomposedOptions {
                     geometry: opts.options(true),
                 },
+                None,
             )?;
             println!(
                 "{} files written to {}",
@@ -186,6 +193,7 @@ fn main() -> Result<()> {
                 &DecomposedOptions {
                     geometry: opts.options(true),
                 },
+                None,
             )?,
         )?,
         Command::Validate { .. } => unreachable!(),

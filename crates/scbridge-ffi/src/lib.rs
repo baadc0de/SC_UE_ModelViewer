@@ -7,7 +7,7 @@ mod boundary;
 mod cache;
 mod types;
 use boundary::{Result, cstring, handle, output, run, string};
-use scviewer_core::Session;
+use scviewer_core::{CancelToken, Session};
 use std::{
     ffi::{CString, c_char, c_void},
     path::{Path, PathBuf},
@@ -183,20 +183,26 @@ pub unsafe extern "C" fn sc_export_decomposed_mem(
             let h = handle(h)?;
             // C explicitly promises user remains valid and thread-safe for this call.
             let user_address = user as usize;
+            let cancel = CancelToken::default();
+            let callback_cancel = cancel.clone();
             h.session.set_progress_callback(progress.map(|cb| {
                 Arc::new(move |fraction: f32, phase: &str| {
                     let phase = cstring(phase);
-                    cb(
+                    if cb(
                         phase.as_ptr(),
                         (fraction.clamp(0.0, 1.0) * 1000.0) as u64,
                         1000,
                         user_address as *mut c_void,
-                    );
+                    ) != 0
+                    {
+                        callback_cancel.cancel();
+                    }
                 }) as scviewer_core::ProgressCallback
             }));
             // Clear the borrowed callback context even when the core unwinds.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                h.session.export_entity_decomposed_mem(entity, &options)
+                h.session
+                    .export_entity_decomposed_mem(entity, &options, Some(&cancel))
             }));
             h.session.set_progress_callback(None);
             let bytes = match result {
