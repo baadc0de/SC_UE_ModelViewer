@@ -83,12 +83,16 @@ def check_glow_join(root, package, record_path):
         assert ((material["shader_family"] in ("Illum", "HardSurface")
                  and material["alpha_config"]["forward_rendering"])
                 or tokens & {"EMITTANCE_MAP", "MACRO_EMISSIVE_MAP"}), material["submaterial_name"]
+        def selector_matches(link, node):
+            return link["subMeshName"] in ("", "*") or node.get("name", "").casefold() == link["subMeshName"].casefold()
         authored = [(kind, i, j, link) for kind, i, j, link in links
-                    if any(node.get("name", "").casefold() == link["subMeshName"].casefold()
+                    if any(selector_matches(link, node) and "mesh" in node
+                           and any(p.get("material") == slot for p in gltf["meshes"][node["mesh"]]["primitives"])
                            for node in gltf["nodes"])]
         assert len(target["property_links"]) == len(authored)
         for exported, (kind, i, j, link) in zip(target["property_links"], authored):
             assert (exported["effect_kind"], exported["effect_index"], exported["property_link_index"]) == (kind, i, j)
+            assert exported["submesh_name"] == link["subMeshName"]
             assert exported["parameter_record_id"] == link["parameterName"]["_RecordId_"]
             assert exported["tag_record_id"] == category[kind][i]["tag"]["_RecordId_"]
             expected_modifiers = []
@@ -104,10 +108,12 @@ def check_glow_join(root, package, record_path):
         for key in ("multiplier", "minimum", "maximum"):
             assert target[key] == [link[key] for link in target["property_links"]]
         print("Glow modifiers:", {key: target[key] for key in ("multiplier", "minimum", "maximum")})
+        print("Glow material:", target["submaterial_name"], "static strength", material["emissive"]["strength"],
+              "tint", material["emissive"]["color"], "selectors", [link[3]["subMeshName"] for link in authored])
         matches = [(node, primitive, kind, i, j) for node in gltf["nodes"] if "mesh" in node
                    for primitive in gltf["meshes"][node["mesh"]]["primitives"] if primitive.get("material") == slot
-                   for kind, i, j, link in links if link["subMeshName"].casefold() == node["name"].casefold()]
-        assert matches, f"target lacks enabled Glow link on its exact geometry node: {target}"
+                   for kind, i, j, link in links if selector_matches(link, node)]
+        assert matches, f"target lacks enabled Glow link on its selected geometry: {target}"
         for node, primitive, kind, i, j in matches:
             print("Glow join:", record["_RecordId_"], f"{kind}[{i}].propertyLinks[{j}].Glow",
                   node["name"], "source slot", target["source_material_index"],
@@ -120,7 +126,7 @@ def main():
     parser.add_argument("after", type=Path)
     parser.add_argument("--generic", action="store_true", help="omit Gladius-specific acceptance probes")
     parser.add_argument("--expect-engine-glow", choices=("present", "absent"), required=True)
-    parser.add_argument("--glow-record", type=Path, help="raw DataCore entity JSON for live Glow-link join checks")
+    parser.add_argument("--glow-record", type=Path, nargs="+", default=[], help="raw DataCore entity JSON for live Glow-link join checks")
     args = parser.parse_args()
     old, new = scene(args.before), scene(args.after)
     assert new["version"] == 2
@@ -136,8 +142,22 @@ def main():
     assert bool(control.get("targets")) == (args.expect_engine_glow == "present")
     print("controls.engine_glow presence:", before_control, "->", bool(control.get("targets")),
           "targets:", len(control.get("targets", [])))
+    # Named LIVE acceptance lists supplied by the review brief, never production rules.
+    expected_targets = {"AEGS_Gladius": ["engine_glow"],
+                        "RSI_Scorpius": ["Glow_Thrusters"] * 4,
+                        "DRAK_Cutlass_Black": ["thruster_glow"] * 2}
+    entity = new["root_entity"]["entity_name"].removeprefix("EntityClassDefinition.")
+    targets = control.get("targets", [])
+    if entity in expected_targets:
+        assert sorted(t["submaterial_name"] for t in targets) == sorted(expected_targets[entity])
+    assert all(t["property_links"] for t in targets), "engine targets must have authored Glow links"
+    print("Engine target list:", [t["submaterial_name"] for t in targets])
+    for record_path in args.glow_record:
+        check_glow_join(args.after, new, record_path)
     if args.glow_record:
-        check_glow_join(args.after, new, args.glow_record)
+        checked_entities = {json.loads(p.read_bytes())["_RecordName_"].removeprefix("EntityClassDefinition.")
+                            for p in args.glow_record}
+        assert {t["entity_name"] for t in targets} <= checked_entities, "supply raw records for every target owner"
     materials = []
     black_with_glow = 0
     for path in args.after.rglob("*.materials.json"):
@@ -154,7 +174,7 @@ def main():
             flags = int(raw_flags, 16 if raw_flags.lower().startswith("0x") else 10)
             forward = bool(flags & 0x8000)
             forward_card = forward and material["shader_family"] in ("Illum", "HardSurface") and any(emission)
-            strength = glow if glow > 0 else sum(emission)/3 if forward_card else 1 if emittance else 0
+            strength = glow if glow > 0 else 1 if forward_card or emittance else 0
             actual = material["emissive"]
             assert all(abs(a-b) <= 1e-5 * max(1,abs(b)) for a,b in zip(actual["color"], expected_tint)), path
             assert abs(actual["strength"] - strength) <= 1e-5 * max(1, abs(strength)), path

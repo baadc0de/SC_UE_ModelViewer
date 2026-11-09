@@ -10,7 +10,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub const CACHE_FORMAT_VERSION: u32 = 7;
+pub const CACHE_FORMAT_VERSION: u32 = 8;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

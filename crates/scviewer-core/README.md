@@ -164,11 +164,11 @@ set `SCVIEWER_PERF_TESTS=1` to enforce the 500 ms warm-call budget.
 interior lights without exporting geometry or textures. Exact entity names are
 required; `scviewer lights Gladius` accepts the usual CLI shorthand and prints
 JSON. This operation reports `CacheStatus::Miss`; package caching remains
-available through the decomposed export API. Cache format v6 invalidates packages
-created before the amended forward-card emission/coverage
-rule, including earlier dirty exporter builds. Scene/material schemas remain v2;
-the validator accepts v1 and v2. Missing vehicle XML warns and leaves that source
-empty, so geometry and light discovery can continue.
+available through the decomposed export API. Cache format v8 invalidates packages
+created before the single-tint forward-card emission and link-only engine-control
+rules, including earlier dirty exporter builds. Scene/material schemas remain v2;
+the validator checks explicit versions and accepts v1 and v2. Missing vehicle XML
+warns and leaves that source empty, so geometry and light discovery can continue.
 
 `LightCatalogue { entity, ports, lights }`, `VehicleLightPort`, `EntityLight`,
 `LightInfo`, `LightAttachment` and `LightStateInfo` are re-exported. `ports` describes

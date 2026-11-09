@@ -24,9 +24,10 @@ authored attributes; executable datamining is not needed for this package.
 
 ## Tasks
 1. **Amended emission rule** (`mtl.rs` / `material_semantics.rs`): strength is
-   positive Glow; otherwise mean(Emissive) for forward (MtlFlags & 0x8000)
+   positive Glow; otherwise 1 for forward (MtlFlags & 0x8000)
    Illum/HardSurface with non-black Emissive; otherwise 1 for an enabled emittance
-   map; otherwise 0. `color` is Emissive tint, or white for black Emissive. Final
+   map (`%EMITTANCE_MAP` or `%MACRO_EMISSIVE_MAP`); otherwise 0. `color` is
+   Emissive tint, or white for black Emissive. Final
    emission is surface colour × color × strength. LayerBlend and non-forward
    materials never emit from Emissive alone. Preserve `uses_base_texture`,
    `emittance_texture`, `alpha_glow_cutoff`, raw `glow`, and add
@@ -531,3 +532,142 @@ docs/decomposed-export-contract.md
 
 The two earlier `TODO(WP-R5)` audit items remain, alongside the `TODO(verify)`
 above. No commits or UE changes were made in this round.
+
+## Final review fixes: single tint and link-only targets
+
+This round supersedes the earlier mean(Emissive) strength rule and static-only
+engine-control eligibility. All six review items are addressed:
+
+1. Forward Illum/HardSurface cards with non-black Emissive use strength **1**
+   when Glow is not positive. Emissive remains solely the `emissive.color` tint;
+   positive Glow still takes priority. Both emittance permutations also enable
+   strength 1. The synthetic coloured-card tests failed at 0.5 before the fix
+   and now assert strength 1 plus the unchanged tint and final emission factor.
+   Cutlass `thruster_glow` now exports strength **1**, color
+   **[1, 0.09084171801805496, 0]**, with no second colour-derived multiplier.
+2. Removed the static-emission fallback from decomposed target construction and
+   range derivation. Every engine target must have at least one enabled authored
+   Glow link; positive static emission alone is tested and rejected. Live dumps
+   revealed a related join bug: empty and `"*"` subMeshName selectors were being
+   dropped instead of selecting the owning entity's mesh. Those selectors now
+   pass through the same forward-card/emittance capability gate. Named selectors
+   still require exact case-insensitive NMC names. No asset-name classification
+   or fabricated Glow links are used. The live verification script asserts all
+   three exact target lists and compares every target's links, selectors, source
+   slots, record IDs and ordered modifier chains against raw DataCore records.
+3. The earlier broad markings test had already been replaced in the committed
+   narrowing round. Its successor is now named
+   `enabled_glow_link_keeps_only_capable_cards_and_exact_source_ids`; it keeps
+   the forward card while rejecting deferred Illum/HardSurface (even with
+   positive static Glow) and MeshDecal on the same node. It also covers empty
+   and `"*"` selectors, missing NMC, disabled links, sibling nodes and duplicate
+   primitives. The new entity-wide-selector assertion failed before its fix.
+4. Added the missing `//!` header to `pipeline/vehicle_xml.rs`; confirmed
+   `pipeline/engine_glow.rs` already has its three-line module header.
+5. `material_flags` parses signed i64 and reinterprets its bits as u64. Synthetic
+   negative values preserve forward and two-sided flags; the regression failed
+   with zero bits before the fix.
+6. The upstream contract explicitly includes `%MACRO_EMISSIVE_MAP`. The validator
+   previously did not enforce versions; it now checks root and package scene
+   manifests and material sidecars, accepting integer 1 or 2 and rejecting
+   unsupported, non-integer or missing versions. The regression first failed
+   because invalid versions produced no errors.
+
+Cache format **8** invalidates earlier packages with the old emission/control
+semantics. The scviewer-core API and `scviewer lights` remain available; their
+live light counts agree with the regenerated packages. This round changes no
+decal rules, geometry topology or placements.
+
+### Raw materialEffects evidence
+
+All six records have `materialEffects.enabled=true`, with enabled
+`tagEffects[0]` and `[1]`, each writing `propertyLinks[0].materialProperty=Glow`.
+Each chain is MultiplierModifier followed by MinMaxModifier. Parameter ID is
+`25650c41-acb0-4545-ad28-6417928c2a5e`; tag IDs in order are
+`eb736d5b-c639-48b0-852f-f18d919e1795` and
+`f303463a-97cb-4d49-b609-71966d409507`. Maximum bounds are
+`[10000000,10000000]` for all six records.
+
+| Entity record (EntityClassDefinition prefix omitted) | Record ID | subMeshName | Multipliers | Minimum bounds | Exported target |
+| --- | --- | --- | --- | --- | --- |
+| RSI_Scorpius_Thruster_Main_Bottom_Left | a70e7bd3-68e4-4c09-bb72-9d33e5377573 | empty | [60,120] | [10,15] | Glow_Thrusters |
+| RSI_Scorpius_Thruster_Main_Bottom_Right | 6da265a3-fe5b-40f6-bb40-431e5bc803fd | empty | [60,120] | [10,15] | Glow_Thrusters |
+| RSI_Scorpius_Thruster_Main_Top_Left | 19c33b93-c225-4df2-9752-992edc98bf1f | empty | [60,120] | [10,15] | Glow_Thrusters |
+| RSI_Scorpius_Thruster_Main_Top_Right | 791b1713-a71c-4d79-9f90-f3f3045101d7 | empty | [60,120] | [10,15] | Glow_Thrusters |
+| DRAK_Cutlass_Thruster_Main | 95536ade-bd7c-406b-b56d-f301aceca36a | * | [100,100] | [15,10] | thruster_glow |
+| DRAK_Cutlass_Thruster_Retro | 2a30fbef-8479-4f19-9c0b-34b37adae545 | empty | [15,20] | [1,1] | thruster_glow |
+
+Scorpius targets retain source slot **53** (222 indices each). Cutlass retains
+source slot **20**: Main has 678 + 144 indices, Retro has 900 + 18 across their
+body/nozzle nodes. All targets retain both links. Thus the target lists are
+exactly **4 × Glow_Thrusters** and **2 × thruster_glow**, derived from links.
+Gladius remains **[engine_glow]**, source slot **5**, 816 indices, with the two
+named-node links and bounds documented above.
+
+### Verification
+
+Exact commands from the superproject root (output logs and raw records are in
+ignored `out/wp-r5-final/`; the validation CLI emits a Rust debug report):
+
+```sh
+CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib
+CARGO_TARGET_DIR=./target cargo build && CARGO_TARGET_DIR=./target cargo test --workspace
+CARGO_HOME=/tmp/scviewer-r5-cargo CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml --workspace -- --test-threads=1
+CARGO_TARGET_DIR=./target cargo fmt -p scviewer-core -p scviewer-cli --check
+rustfmt --edition 2024 --check vendor/StarBreaker/crates/starbreaker-3d/src/material_semantics.rs vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/engine_glow.rs vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/vehicle_xml.rs
+for entity in RSI_Scorpius_Thruster_Main_Bottom_Left RSI_Scorpius_Thruster_Main_Bottom_Right RSI_Scorpius_Thruster_Main_Top_Left RSI_Scorpius_Thruster_Main_Top_Right DRAK_Cutlass_Thruster_Main DRAK_Cutlass_Thruster_Retro; do
+  target/debug/starbreaker dcb query EntityClassDefinition --filter "EntityClassDefinition.$entity" > "out/wp-r5-final/$entity.json" || exit
+done
+target/debug/scviewer --no-cache decomposed Gladius out/dec-r5
+target/debug/scviewer --no-cache decomposed Scorpius out/wp-r5-final/scorpius
+target/debug/scviewer --no-cache decomposed Cutlass_Black out/wp-r5-final/cutlass
+target/debug/scviewer validate out/dec-r5
+target/debug/scviewer validate out/wp-r5-final/scorpius
+target/debug/scviewer validate out/wp-r5-final/cutlass
+python3 -I scripts/verify_wp_r5.py out/wp-r5-glow/before out/dec-r5 --expect-engine-glow present --glow-record out/wp-r5-amended/thruster-record.json
+python3 -I scripts/verify_wp_r5.py out/wp-r5-review/after-scorpius out/wp-r5-final/scorpius --generic --expect-engine-glow present --glow-record out/wp-r5-final/RSI_Scorpius_Thruster_Main_*.json
+python3 -I scripts/verify_wp_r5.py out/wp-r5-review/after-cutlass out/wp-r5-final/cutlass --generic --expect-engine-glow present --glow-record out/wp-r5-final/DRAK_Cutlass_Thruster_*.json
+for entity in Gladius Scorpius Cutlass_Black Controller_Light; do
+  target/debug/scviewer --no-cache lights "$entity" > "out/wp-r5-final/${entity}-lights.json" 2> "out/wp-r5-final/${entity}-lights.log" || exit
+done
+```
+
+Build and formatting checks pass. Library: **794 passed, 3 ignored**; workspace:
+**17 passed**; full upstream aggregate: **2146 passed, 0 failed, 61 ignored**.
+All three validators report **is_valid=true, errors=[], warnings=[]**. All three
+acceptance-script runs pass, including unchanged topology, file inventory and
+all **10 / 14 / 30** interior placements respectively.
+
+| Export | Files | GLBs | Sidecars | PNGs | Children | Interiors | Clips | Lights (root + interior) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Gladius (`out/dec-r5`) | 502 | 45 | 23 | 366 | 51 | 3 | 63 | 77 (21 + 56) |
+| Scorpius | 491 | 42 | 20 | 355 | 78 | 2 | 69 | 127 (94 + 33) |
+| Cutlass_Black | 747 | 53 | 29 | 620 | 101 | 3 | 40 | 225 (103 + 122) |
+
+`scviewer lights` independently returns **77 / 127 / 225 / 0** for Gladius /
+Scorpius / Cutlass_Black / Controller_Light; the last catalogue has empty ports
+and lights. Gladius evidence remains:
+
+- `emissives`: strength **0.30000001192092896**, color white, surface RGB before
+  texture **[0.0636692395, 0.1791605711, 0.2764746050]**.
+- `Headlight_Glow`: strength **1**, color white; KLWE `glows`: strength
+  **0.3499999940395355**, color white; `pipe mat 1`: strength **0**.
+- `pom`: `relief_only`, coverage TexSlot1, normal_gloss TexSlot3, height TexSlot4,
+  PomDisplacement **0.031615101**, PomHeightBias **0.5**.
+- `decals`: `color_sheet`, base/coverage TexSlot1; `stencil`: `stencil_palette`,
+  stencil TexSlot7, authored stencil colour/opacity fields retained.
+
+Changed upstream files in this round:
+
+```text
+crates/starbreaker-3d/src/decomposed.rs
+crates/starbreaker-3d/src/material_semantics.rs
+crates/starbreaker-3d/src/mtl.rs
+crates/starbreaker-3d/src/pipeline/engine_glow.rs
+crates/starbreaker-3d/src/pipeline/vehicle_xml.rs
+crates/starbreaker-3d/src/validation.rs
+docs/decomposed-export-contract.md
+```
+
+The two existing `TODO(WP-R5)` lines and the existing `TODO(verify)` remain;
+this round adds none. No commits or UE edits were made by this agent.

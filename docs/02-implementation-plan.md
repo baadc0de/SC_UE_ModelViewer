@@ -56,7 +56,7 @@ Self-contained briefs in `docs/work-packages/`, handed to agents verbatim.
 | WP-R1 | **Done** (df22acc + 1de75d0; submodule `scviewer/decomposed-glb`). `scviewer-core`, `scviewer-cli`, layer-1 cache; upstream fix for empty decomposed GLB meshes; cross-reviewed | Codex | — | — |
 | WP-R3 | Clip catalogue API (`chrparams` ∪ DBA ∪ Mannequin, lazy) | Codex | R1 | cargo: no |
 | WP-R4 | `scbridge-ffi` C-ABI cdylib + `scbridge.h` + C smoke test | Codex | R1, R3 | cargo: no |
-| WP-R5 | **Done** (1ad3c48; submodule `scviewer/lights`). Glow-gated emission, `emissive`/`decal` sidecar objects (schema v2), ship SOC light groups → `lights[]`, `scviewer lights`; cross-review pending | Codex | — | — |
+| WP-R5 | **Done** (1ad3c48 … latest; submodule `scviewer/lights`). Glow-gated emission with forward glow cards, `emissive`/`decal`/`alpha_config` sidecar objects (schema v2), ship SOC light groups → `lights[]`, engine glow from DataCore Glow links narrowed to forward cards with modifier ranges, Blender addon parity; cross-reviewed twice, all findings fixed | Codex | — | — |
 | WP-R2 | *(optional, upstream contribution)* vehicle clips into bundled GLB animations | Codex | R1 | cargo: no |
 | WP-U0 | **Done.** Project + Viewer map; B selected; runtime Nanite data/collision and cooked-package restart proven, then GPU-validated (Nanite, Lumen, HWRT). Open: Interchange baseline (deferred); runtime meshes lack Lumen/RT representation (carried into U1/C1) | Codex | — | — |
 | WP-U1 | **Done** (784f70c + 4a44d2c, GPU-validated). Runtime importer: package source (folder + tar), reader, Nanite meshes with Lumen cards / DF / RT geometry, D6 translucent split, collision BVH, `ASCVehicle`; cross-reviewed | Codex | — | — |
