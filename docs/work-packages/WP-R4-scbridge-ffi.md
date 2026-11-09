@@ -13,20 +13,22 @@ in-memory decomposed package without any intermediate files.
 - API (see `docs/03-unreal-export-design.md` §FFI): `sc_open` (p4k path or NULL,
   cache dir or NULL), `sc_cache_stats`, `sc_cache_evict(cap)`, `sc_search_entities`,
   `sc_clip_catalogue`, `sc_export_decomposed_mem`, `sc_last_error`, `sc_free_string`,
-  `sc_free_blob`, `sc_close`. `sc_options` is a `#[repr(C)]` struct with LOD, mip,
+  `sc_free_blob`, `sc_close`, `sc_lights`, `sc_default_options`. `sc_options` is a `#[repr(C)]` struct with LOD, mip,
   material mode, attachments, interior, lights, shields, animations, default pose.
   Status codes as an enum; the last error message per handle.
 - The in-memory package is an **uncompressed tar** with the exact on-disk layout of
   `scviewer decomposed` (so `tar -x` of the blob == the folder). Entries ordered:
-  `Packages/**/scene.json` first, then sidecars, then `Data/**`.
+  `Packages/**/scene.json` first, then all other entries sorted alphabetically
+  (Data/ before Packages/ sidecars).
 - Every entry point wrapped in `catch_unwind`; no Rust panic crosses the boundary;
   no allocation crosses without its matching `sc_free_*`. Progress callback
   (`phase`, `done`, `total`) may fire from rayon threads — say so in the header.
 - `scripts/build_ffi.sh`: builds release `.so`, copies it + header to
   `ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib/{lib/Linux,include}/`.
 - `crates/scbridge-ffi/ctest/`: a 100-line C program linked against the `.so` that
-  opens the archive, searches "gladius", exports it and writes the tar; run by
-  `cargo test -p scbridge-ffi` through a `build.rs`-free shell test.
+  opens the archive, searches "gladius", exports it and writes the tar; run as an explicit shell step against prebuilt
+  artifacts, separate from `cargo test`, with no nested Cargo builds. It skips
+  when archive discovery fails and removes work files unless SCBRIDGE_CTEST_KEEP=1.
 
 ## Done criteria
 - `nm -D target/release/libscbridge.so | grep ' T '` shows only `sc_*` symbols.
@@ -36,7 +38,7 @@ in-memory decomposed package without any intermediate files.
 - A forced panic (test hook) returns `SC_STATUS_PANIC` with a message, no abort.
 - Export of Gladius through FFI within 10 % of the CLI's wall time.
 
-## Implementation / verification handoff (2026-11-09)
+## Initial implementation / verification handoff (2026-11-09; historical)
 
 Implemented the opaque-handle C ABI, generated header, Linux external UE module,
 release staging script, C consumer, Rust boundary tests and header drift test.

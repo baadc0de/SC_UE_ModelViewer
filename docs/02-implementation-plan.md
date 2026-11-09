@@ -64,6 +64,7 @@ Self-contained briefs in `docs/work-packages/`, handed to agents verbatim.
 | WP-C1 | Processed-data cache (layer 2): serialise built meshes/Nanite/collision/textures/anims, keying, size cap, eviction, hit/miss UI | Codex | U1 (U3 for anim data), U0 round-trip spike | UE lock |
 | WP-U2 | **Done** (Substrate; D11 rules from the v2 sidecar objects; DBuffer decals; forward glow cards additive; engine glow driven from the exporter control, nozzle matches the reference; 12 automation tests on three packages; cross-reviewed, all findings fixed). Open: wear/damage layers, stencil palette decals need an exported decal texture, paints dropdown | Opus 5.5 | — | — |
 | WP-U3 | Rig + animation + lights: skeleton, skeletal meshes, sockets, `UAnimSequence`, `USCClipCatalog`, `ASCVehicle` play API, light components | Codex | U1, R3 | UE lock |
+| WP-U3b | **MegaLights** investigation + decision for the 77–225 lights per ship (owner request); measured on the GPU; fallback = data-derived shadow cap | Opus 5.5 | U3 | UE lock |
 | WP-V2 | Animation panel: grouped clip list with Mannequin chips, transport, snap, compose, bone overlay | Opus 5.5 | V1, U3 | UE lock |
 | WP-P1 | First-person exploration: pawn, runtime complex collision, ship-relative gravity, spawn points, doors via clips, fly/noclip, HUD | Codex | U1, U3, V1 | UE lock |
 | WP-S1 | Standalone deliverable: build target per D3 decision, launcher script, settings persistence, startup/error UX, no editor UI | Codex | U0 decision, V1 | UE lock |

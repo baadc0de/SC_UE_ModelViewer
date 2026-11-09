@@ -168,23 +168,89 @@ Viewer map is the only other collider.
 
 ## FFI (`crates/scbridge-ffi`, `scbridge.h`)
 
+The generated `crates/scbridge-ffi/include/scbridge.h` is the ABI source of truth.
+The twelve production entry points and their value types are:
+
+```c
+typedef struct sc_handle sc_handle;
+typedef enum sc_status {
+    SC_STATUS_OK = 0,
+    SC_STATUS_INVALID_ARGUMENT = 1,
+    SC_STATUS_ERROR = 2,
+    SC_STATUS_PANIC = 3,
+    SC_STATUS_UNSUPPORTED = 4
+} sc_status;
+typedef enum sc_material_mode {
+    SC_MATERIAL_TEXTURES = 0, SC_MATERIAL_COLORS = 1, SC_MATERIAL_NONE = 2
+} sc_material_mode;
+typedef struct sc_options {
+    uint32_t lod, mip, material_mode;
+    uint32_t attachments, interior, lights, shields;
+    uint32_t animations, default_pose, collision_reserved;
+} sc_options;
+typedef struct sc_blob { uint8_t *data; size_t len; } sc_blob;
+typedef struct sc_cache_info {
+    uint64_t bytes, entries, cap_bytes;
+    uint32_t enabled, last_hit;
+} sc_cache_info;
+typedef void (*sc_progress_cb)(const char *phase, uint64_t done,
+                               uint64_t total, void *user);
+
+sc_status sc_open(const char *p4k_or_null, const char *cache_dir_or_null, sc_handle **out);
+sc_status sc_default_options(sc_options *out);
+sc_status sc_search_entities(sc_handle *, const char *query, uint32_t limit, char **json);
+sc_status sc_clip_catalogue(sc_handle *, const char *entity, char **json);
+sc_status sc_lights(sc_handle *, const char *entity, char **json);
+sc_status sc_cache_stats(sc_handle *, sc_cache_info *out);
+sc_status sc_cache_evict(sc_handle *, uint64_t cap_bytes, uint64_t *removed);
+sc_status sc_export_decomposed_mem(sc_handle *, const char *entity, const sc_options *,
+                                  sc_progress_cb, void *user, sc_blob *out_tar);
+const char *sc_last_error(sc_handle *);
+void sc_free_string(char *);
+void sc_free_blob(sc_blob *);
+void sc_close(sc_handle *);
 ```
-sc_status  sc_open(const char* p4k_or_null, const char* cache_dir_or_null, sc_handle** out);
-sc_status  sc_search_entities(sc_handle*, const char* query, uint32_t limit, char** json);
-sc_status  sc_clip_catalogue(sc_handle*, const char* entity, char** json);
-sc_status  sc_export_decomposed_mem(sc_handle*, const char* entity, const sc_options*,
-                                    sc_progress_cb, void* user, sc_blob* out_tar);
-const char* sc_last_error(sc_handle*);
-void       sc_free_string(char*);  void sc_free_blob(sc_blob*);  void sc_close(sc_handle*);
-```
-Every entry point is `catch_unwind`; strings UTF-8; the tar is uncompressed; the
-progress callback may be called from worker threads. The tar uses POSIX ustar headers
-with explicit Regular typeflag `0`. Long paths split into the 100-byte `name`
-and 155-byte `prefix` fields at a slash. Only paths that cannot fit that scheme
-use a per-file PAX `x` header carrying the UTF-8 `path` key for the following
-regular entry. The reader supports ustar name/prefix joining and PAX path
-overrides; the writer emits no GNU `L` / `@LongLink` records. Gladius's entire
-package is representable as plain ustar regular entries.
+
+All strings, including explicit p4k and cache paths, must be NUL-terminated UTF-8.
+NULL p4k auto-discovers the install; NULL cache disables persistence. The host
+resolves its launch-directory cache setting to an **absolute path** before UE
+changes cwd. Use `sc_default_options` or NULL export options for core defaults;
+booleans accept only 0/1, `animations` must currently be 1, and
+`collision_reserved` must be zero. Unknown boolean/material values return
+INVALID_ARGUMENT; unsupported options return UNSUPPORTED.
+
+The host serializes all calls on a handle. While an export is busy, its host lock
+must block close, last_error and search until export returns. The library does not
+provide that host lock; do not call concurrently or reenter from a callback.
+Different handles may be used concurrently. Progress may run on worker/rayon
+threads; phase is borrowed only during that callback, and done/total is normalized
+0..1000 progress, not a file count. The user context must remain live until export
+returns. No callback occurs after return; callbacks must not throw or unwind.
+
+Each JSON output and tar blob is owned and must be released by the corresponding
+`sc_free_string` or `sc_free_blob` function. `sc_free_blob` clears its fields.
+`sc_last_error` is borrowed and must never be freed: a handle's error remains valid
+until its next status-returning call or close. `sc_last_error(NULL)` reports open
+failures on the same thread, until the next call other than error retrieval.
+Output storage must not alias inputs or contain outstanding allocations.
+Every entry point catches Rust unwinding panics. Only PANIC poisons a handle and
+requires close/reopen; ordinary failures leave it usable. Ordinary export failures
+return an empty blob; outputs after PANIC must not be used. NULL frees/close are
+no-ops. Invalid pointers, allocation aborts and foreign exceptions are outside the
+panic guarantee.
+
+Cache statistics come from the core under its cache lock. Missing cache/manifest
+reports zero, malformed manifests recover through the existing policy, and
+last_hit describes the latest successful core operation. Eviction applies a
+one-shot cap; future writes still enforce the core's automatic cap.
+
+The tar is uncompressed: **scene.json first, then all other entries sorted
+alphabetically**, placing Data/ before Packages/ sidecars. Regular files use
+explicit typeflag `0` and POSIX ustar headers. Long paths split into the 100-byte
+name and 155-byte prefix at a slash. Only unsplittable paths use a per-file PAX `x`
+header carrying the UTF-8 path key for the following regular entry. No GNU
+longlink records are emitted. Shared-cache C/CLI exports are byte-identical;
+independent exports may differ in upstream export-stamp timestamps.
 
 ## Open questions after WP-U0
 
