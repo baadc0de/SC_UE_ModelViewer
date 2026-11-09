@@ -112,7 +112,7 @@ cache status and total process timing on stderr. `--cache` and `--no-cache` appl
 - `SkeletonInfo { owner_entity, chr_path, chrparams_path: Option<String>,
   dba_path: Option<String>, bone_count }`. `chr_path` is the source rig path,
   including rigid CGA/NMC rigs; optional paths are absent when undiscovered.
-- `ClipInfo { id, display_name, owner_entity, source: ClipSource, fps: u16,
+- `ClipInfo { id, display_name, owner_entity, contributors: Vec<String>, source: ClipSource, fps: u16,
   frame_count: u32, duration_s: f32, has_position, has_rotation, bone_count,
   fragments: Vec<Fragment>, boomerang }`.
 - `ClipSource::{Chrparams,DbaOnly,Caf}` distinguishes named DBA events, remaining
@@ -120,8 +120,18 @@ cache status and total process timing on stderr. `--cache` and `--no-cache` appl
   `frag_tags`, `scopes`.
 
 IDs use precisely the export's `root_entity.animations[].name` convention.
+Chrparams names containing `*` or `?` are mapping rules, not playable clip names,
+and are omitted from the event map. Concrete DBA entries remain discoverable.
+The exporter and catalogue share the ordered rig-source list, record-based
+geometry fallback, namespace rules and clip merger. Broken rig geometry or
+animation data produces a warning and is skipped; healthy rigs still contribute.
+Unknown position encodings use the full decoder's zero-value fallback without
+removing a DBA block; CAF FPS zero uses the missing-AnimInfo default of 30.
 Repeated names merge across rigs; `owner_entity` is the first contributing owner
-in export discovery order (root, landing gear, loadout children). `bone_count`
+in export discovery order (root, landing gear, loadout children); landing-gear
+owners preserve the exporter's filename including its extension. `contributors`
+lists every contributing owner and resolved rig node name, without changing the
+merged clip ID. It defaults to empty when deserializing older JSON. `bone_count`
 counts merged source-rig/bone channel variants. Frame count is the final key time
 rounded up, matching the index record, and duration is `frame_count / fps`.
 Boomerang means all available position/rotation endpoints agree (quaternion sign
@@ -136,10 +146,14 @@ socpak exports. A Cutlass ship package has a root rig and keeps merged names;
 changing its catalogue alone would break the importer join. The Session entity
 API does not expose standalone socpak exports.
 
-Catalogue files are `clips.<sha256>.bin`, independently keyed by catalogue schema,
+Catalogue files are `clips.<sha256>.bin`, independently keyed by catalogue schema (now v2),
 layer-1 format version, build ID, canonical entity and exporter identity. An
 identity-bearing envelope, checksum verification, atomic writes, manifest
 recovery and LRU eviction protect them like packages. A hit skips archive,
 DataCore, rig and animation reads. Corrupt entries rebuild as misses; cache I/O
 errors are reported. With persistence disabled each call recomputes and reports
 `Miss`. Entities without discoverable animation clips return an empty clip list.
+
+Live tests discover an entity without a geometry component from DataCore instead
+of relying on a build-specific name. Catalogue timings are always reported;
+set `SCVIEWER_PERF_TESTS=1` to enforce the 500 ms warm-call budget.

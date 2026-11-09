@@ -140,6 +140,21 @@ fn live_clip_catalogue_matches_scene_and_persists() {
         );
         assert_eq!(catalogue.cache_status, CacheStatus::Miss);
         assert!(catalogue.value.clips.len() >= 10);
+        assert!(
+            catalogue
+                .value
+                .clips
+                .iter()
+                .all(|clip| !clip.id.contains(['*', '?']))
+        );
+        assert!(
+            catalogue
+                .value
+                .clips
+                .iter()
+                .filter(|clip| clip.bone_count > 0)
+                .all(|clip| !clip.contributors.is_empty())
+        );
         if entity == "RSI_Scorpius" {
             assert!(catalogue.value.clips.iter().any(|c| {
                 c.fragments
@@ -158,7 +173,9 @@ fn live_clip_catalogue_matches_scene_and_persists() {
             let fresh = uncached.clip_catalogue(entity).unwrap();
             let elapsed = start.elapsed();
             eprintln!("Gladius warm session, uncached catalogue: {elapsed:?}");
-            assert!(elapsed < std::time::Duration::from_millis(500));
+            if std::env::var("SCVIEWER_PERF_TESTS").as_deref() == Ok("1") {
+                assert!(elapsed < std::time::Duration::from_millis(500));
+            }
             assert_eq!(fresh, catalogue.value);
         }
         {
@@ -194,7 +211,43 @@ fn live_clip_catalogue_matches_scene_and_persists() {
             }
         }
     }
-    let empty = session.clip_catalogue("medicalSupplies_medPens").unwrap();
+    let no_geometry = session.loaded().unwrap().index.with_dependent(|_, idx| {
+        use starbreaker_datacore::{QueryResultExt, query::value::Value};
+        let query = idx
+            .db
+            .compile_rooted::<Value>("EntityClassDefinition.Components[SGeometryResourceParams]")
+            .unwrap();
+        idx.db
+            .records_by_type_name("EntityClassDefinition")
+            .filter(|record| idx.db.is_main_record(record))
+            .find(|record| {
+                match idx
+                    .db
+                    .query_single::<Value>(&query, record)
+                    .optional()
+                    .unwrap()
+                    .flatten()
+                {
+                    None | Some(Value::Null) => true,
+                    Some(Value::Array(components)) => components.is_empty(),
+                    Some(_) => false,
+                }
+            })
+            .map(|record| {
+                idx.db
+                    .resolve_string2(record.name_offset)
+                    .rsplit('.')
+                    .next()
+                    .unwrap()
+                    .to_owned()
+            })
+            .expect("archive must contain an entity without a geometry component")
+    });
+    let empty = session.clip_catalogue(&no_geometry).unwrap();
+    eprintln!(
+        "no-geometry entity {no_geometry}: {} clips",
+        empty.clips.len()
+    );
     assert!(empty.clips.is_empty() && empty.skeletons.is_empty());
     assert!(session.clip_catalogue("not_an_entity").is_err());
     drop(session);

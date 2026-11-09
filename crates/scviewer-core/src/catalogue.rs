@@ -7,7 +7,7 @@ pub use starbreaker_3d::animation::catalogue::{
 };
 
 // Independent schema discriminator prevents collisions with browser/package entries.
-const CATALOGUE_VERSION: u32 = 1;
+const CATALOGUE_VERSION: u32 = 2;
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     key: String,
