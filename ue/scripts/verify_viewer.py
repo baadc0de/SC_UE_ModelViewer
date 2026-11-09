@@ -5,10 +5,13 @@ levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 assert levels.load_level('/Game/Maps/Viewer')
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
 by_label = {actor.get_actor_label(): actor for actor in actors}
-expected = {'Sky light', 'Sun', 'Sky atmosphere', 'Neutral collision floor',
-            'Nanite cube 0', 'Nanite cube 1', 'Nanite cube 2', 'Emissive sphere', 'Viewer start'}
+# WP-U3b §11.9: the default Viewer is a closed hangar (no sun, no atmosphere) lit by 16 ceiling panels.
+expected = {'Sky light', 'Neutral collision floor', 'Hangar wall +X', 'Hangar wall -X', 'Hangar wall +Y',
+            'Hangar wall -Y', 'Hangar ceiling', 'Nanite cube 0', 'Nanite cube 1', 'Nanite cube 2',
+            'Emissive sphere', 'Viewer start'} | {f'Hangar light r{i}c{j}' for i in range(4) for j in range(4)}
 assert expected <= set(by_label), expected - set(by_label)
-for label in ('Neutral collision floor', 'Nanite cube 0', 'Nanite cube 1', 'Nanite cube 2'):
+assert 'Sun' not in by_label and 'Sky atmosphere' not in by_label
+for label in ('Neutral collision floor', 'Hangar ceiling', 'Nanite cube 0', 'Nanite cube 1', 'Nanite cube 2'):
     component = by_label[label].static_mesh_component
     assert component.static_mesh.get_editor_property('nanite_settings').enabled, label
 floor = by_label['Neutral collision floor'].static_mesh_component

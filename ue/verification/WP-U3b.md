@@ -488,7 +488,7 @@ TODO(WP-V2): light-state default for parked ships (§11.5).
 
 ### 11.8 Measurements (2026-11-09, RTX 4090; UE lock after WP-V1)
 
-**Setup.** Presets: `ue/scripts/create_viewer_presets.py` (new; run with `UnrealEditor-Cmd … -run=pythonscript
+**Setup.** Presets: `ue/scripts/create_viewer_presets.py` (as of `b2b4318`; superseded by `create_viewer.py`, §11.9; run with `UnrealEditor-Cmd … -run=pythonscript
 -script=ue/scripts/create_viewer_presets.py -nullrhi`, after deleting `Content/Maps/Presets/`) duplicates
 `/Game/Maps/Viewer` into `/Game/Maps/Presets/Viewer_{Daylight,Hangar,Space}` (sun 100 klux at 45° / 300 lux at
 70° / no sun and no atmosphere; PPV EV100 bounds 10…16 / 2…8 / −6…6) and two measurement maps
@@ -571,3 +571,68 @@ map, hangar; columns: proxy, H-CE, lights off), `hce-gladius-daylight-space-prox
 TODO(WP-U3b): commit decision on `Content/Maps/Presets/*.umap` (generated, untracked) and the default map.
 TODO(WP-U3b): `attenuation_tweak` semantics (headlights) — needs a game-side reference.
 TODO(WP-V2): reuse `FSCLightImporter::StateCandela` when switching light states.
+
+### 11.9 Default environment: closed hangar (orchestrator decision 2026-11-09)
+
+`ue/scripts/create_viewer.py` now builds `/Game/Maps/Viewer` as a closed hangar and, from the same code,
+the selectable presets `/Game/Maps/Presets/Viewer_Daylight` and `Viewer_Space` (generated, untracked; WP-V2
+wires the UI). `create_viewer_presets.py` is removed (its `_FixedEV` measurement maps served §11.8 only).
+Regeneration: delete `Content/Maps/Viewer.umap` and `Content/Maps/Presets/`, then run
+`UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/create_viewer.py -nullrhi`; `/Game/Smoke` assets
+(`NaniteCube`, `Emissive`, new `M_ViewerGrey`) are reused when present. `verify_viewer.py` and the exposure
+assertions in `test_importer.py` follow the new contents. Physical reasoning per number:
+
+| Quantity | Value | Reason |
+| --- | --- | --- |
+| Floor | 80 m × 80 m | largest test ship (Cutlass, `BOUNDS_CM` 35.7 × 26.1 × 10.8 m, bounds radius 22.8 m): ≥ 20 m clear around the footprint; review cameras orbit at ≤ 1.6 radii (≤ 36.5 m) and stay inside in the standard views |
+| Clear height | 40 m | the importer lifts models 1 m above the floor; the Cutlass bounds centre is ~6.4 m up, the top-down camera at 1.3 radii is ~36 m up |
+| Walls, ceiling, floor | 1 m Nanite slabs, base colour 0.18, roughness 0.8 | photographic middle grey — the reflectance auto exposure targets — and matte so the walls do not mirror the ship; closing the box removes the black void that skewed metering in §11.8 |
+| Lighting | 16 rect panels 4 m × 1 m, 0.1 m below the ceiling, 20 m pitch, **98 400 cd** each (normal intensity, ≈ 309 klm) | chosen so the **direct** horizontal illuminance averages **400 lux** over the central 40 m × 40 m: EN 12464-1 industrial work areas 300–500 lux. Far-field Lambert sum E(p) = Σ I₀·cos²θ/d²: 435 lux at the centre, 353 lux at (20 m, 20 m), 170 lux at the wall corner; Lumen inter-reflection off the 18 % box adds on top. Panel size only sets shadow softness. Computed by the script, logged as `VIEWER_HANGAR` |
+| Sun, atmosphere | none in the hangar | indoor scene; the sky light captures the enclosure (real-time) |
+| Auto exposure (hangar) | histogram, EV100 **−3 … 10**, bias 0 | measured in this hangar (runs below): ship exteriors pick 7.3–7.9, the darkest ship interior (Cutlass bay) −2.1. Lower bound one stop below the darkest interior, upper two stops above the brightest exterior. (First version −2 … 8 came from the prediction −1.56 + log2(400 / 2.5) = 5.8, which the closed box's inter-reflection exceeds by ~2 EV.) |
+| Daylight preset | sun 100 klux at 45° + SkyAtmosphere, open floor, EV100 10 … 16 | clear-sky sun; ≈ 86 klux horizontal; predicted pick 13.5 ± 3 |
+| Space preset | no sun, no atmosphere, open floor, EV100 −6 … 6 | the ship's own lights set the exposure |
+| MegaLights, ini | unchanged | — |
+
+Prediction for the Gladius wing nav light under the hangar (H-CE 78.5 cd, ~2 m above the floor):
+19.6 lux of red against ~400 lux → contrast ≈ 0.05 (invisible); the ×1500 proxy would be 0.94.
+
+**Runs (2026-11-09, after the WP-V1 build round).** Maps regenerated: `create_viewer.py` → `VIEWER_HANGAR
+panels=16 candela_each=98352 direct_lux centre=435 (20,20)m=353 corner=170`, three `VIEWER_PRESET` lines,
+`VIEWER_MAP_OK`; `verify_viewer.py` → `VIEWER_VERIFY_OK expected_actors=28`. Captures on the WP-R5b packages
+with the built importer, default map unless noted (`out/smoke/wp-u3b-hangar/`, evidence `wp-u3b/hangar-*.jpg`):
+
+| Check | Result | Criterion |
+| --- | --- | --- |
+| Gladius top-down pool contrast (lights-off = point+spot off; the hangar panels are rect lights) | mean R/G/B 0.000/0.000/0.000, peak **0.039** (noise floor); only 64 px differ > 20/255, all on the ship's own fixtures | < 0.1 **pass**; matches `top-hangar.webp` (`hangar-gl-top.jpg`) |
+| Auto exposure, Gladius top / three-quarter / Scorpius | EV100 **7.89 / 7.44 / 7.30** | inside −2 … 8, but 0.1–0.7 EV under the upper bound |
+| Auto exposure, Cutlass bay | EV100 **−2.1**, clamped at the lower bound −2 | **fails** "inside the bounds" by 0.1 EV |
+| Cutlass bay floor saturation | **19.5 %** (frame 8.2 %) | < 5 % **fails** — the 1 m-bulb floods (TODO below) |
+| Cutlass forward corridor | mean linear luminance 0.151 = 0.56 of the bay (0.268); floor saturation 1.9 % | ≥ 0.1 **pass** |
+| Cutlass bay GPU time, 1601×900 | 11.76 ms median, MegaLights pass 1.94 ms (was 7.05 / 0.83 in the open map) | **not clean**: another game used ~40 % of the GPU during the whole batch; the 16 hangar panels do add MegaLights work. Re-measure on an idle GPU |
+| Daylight preset | sun-lit, sharp shadows, no pools | sanity ok |
+| Space preset | red/blue pools on the floor, ship-lit only | sanity ok (expected) |
+
+Findings: (1) the hangar removes the pools and gives the reference look; (2) the measured hangar picks
+(7.3–7.9) sit ~2 EV above the 5.8 prediction — the prediction was calibrated in the old open map with a
+lighter floor and no inter-reflection; Lumen bounce in the closed 18 % box raises the scene. Proposed
+bounds from these measurements: **EV100 −3 … 10** (one stop below the Cutlass bay −2.1, two above the
+hangar 7.9). (3) Cutlass bay saturation is the open 1 m-bulb question, unchanged by the environment.
+
+**Bounds applied (−3 … 10)** in `configure_viewer_exposure.py` (default), `create_viewer.py` and the
+`test_importer.py` assertion; maps regenerated (`VIEWER_EXPOSURE … min_ev100=-3 max_ev100=10`,
+`VIEWER_VERIFY_OK expected_actors=28`). Re-run on the final WP-R5b packages (regenerated with sparse
+components inheriting DataCore class values), `out/smoke/wp-u3b-hangar2/`, evidence `wp-u3b/hangar-bounds-*.jpg`.
+`nvidia-smi` before and after every run: **Soulstone-Survivors (another game) at 38–42 % GPU throughout**.
+
+| Check | Result | Criterion |
+| --- | --- | --- |
+| Gladius top-down auto exposure | EV100 **7.89** (pre-exposure 0.0042) | inside −3 … 10 **pass** |
+| Cutlass bay auto exposure | EV100 **−2.14** (pre-exposure 4.40) | inside −3 … 10 **pass** |
+| Cutlass bay floor saturation | **19.9 %** (frame 8.4 %), mean linear luminance 0.279 | < 5 % **fails** — 1 m-bulb floods, TODO |
+| Cutlass bay GPU time, 1601×900 | 10.66 ms median, p90 12.69 (MegaLights pass 1.83 ms) | **contended** (game at ~40 % GPU); clean number still owed |
+
+TODO(WP-U3b): Cutlass 1 m-bulb floods (13 exterior-group projectors, intensity 6.4, `bulb_radius_m` 1.0,
+≈ 201 000 cd each under H-CE) dominate the bay (scene EV100 −1.1, 19.5 % floor saturation in the old
+map, §11.8); needs an in-game reference before the bulb term is questioned. Evidence:
+`r5b-cutlass-bay-viewer-map.jpg`, `r5b-cutlass-bay-hangar-hdr.jpg`.

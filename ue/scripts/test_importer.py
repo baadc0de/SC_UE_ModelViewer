@@ -12,10 +12,10 @@ if "-SCPackage=" in unreal.SystemLibrary.get_command_line():
     assert settings.get_editor_property("override_auto_exposure_min_brightness")
     assert settings.get_editor_property("override_auto_exposure_max_brightness")
     assert settings.get_editor_property("auto_exposure_min_brightness") == -3.0
-    assert settings.get_editor_property("auto_exposure_max_brightness") == 6.0
+    assert settings.get_editor_property("auto_exposure_max_brightness") == 10.0
     assert settings.get_editor_property("auto_exposure_bias") == 0.0
     assert settings.get_editor_property("auto_exposure_method") == unreal.AutoExposureMethod.AEM_HISTOGRAM
-    unreal.log("VIEWER_EXPOSURE_VERIFY passed=1 unbound=1 min_ev100=-3 max_ev100=6 bias=0 method=histogram")
+    unreal.log("VIEWER_EXPOSURE_VERIFY passed=1 unbound=1 min_ev100=-3 max_ev100=10 bias=0 method=histogram")
 if not unreal.SCImportLibrary.run_unit_tests():
     raise RuntimeError("SCBridge unit tests failed")
 unreal.log("WP-U1 UNIT_TESTS_OK")

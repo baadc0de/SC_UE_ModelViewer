@@ -115,12 +115,13 @@ Headless commandlet (passed):
   -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC
 ```
 
-`verify_viewer.py` can replace `headless_smoke.py` to verify all nine scene actors,
-the Nanite flags, floor collision and emissive material assignment.
-`create_viewer.py` generated the map through the same commandlet; it is a one-time
-creator and refuses an existing map. For intentional regeneration, remove only
-`Content/Maps/Viewer.umap`, `Content/Smoke/NaniteCube.uasset` and
-`Content/Smoke/Emissive.uasset` first.
+`verify_viewer.py` can replace `headless_smoke.py` to verify the hangar's scene actors
+(floor, walls, ceiling, 16 ceiling lights, smoke cubes, emissive sphere, start), the Nanite
+flags, floor collision and emissive material assignment.
+`create_viewer.py` generates the default map (a closed hangar, WP-U3b §11.9) and the untracked
+presets `Content/Maps/Presets/Viewer_{Daylight,Space}` through the same commandlet. It refuses
+existing maps: for intentional regeneration remove `Content/Maps/Viewer.umap` and
+`Content/Maps/Presets/` first; assets under `Content/Smoke/` are reused when present.
 
 `SCViewerDDC` is a project-local filesystem DDC, selectable with `-ddc=SCViewerDDC`.
 `-SCViewerDDCPath=<empty-dir>` redirects it for cold-cache verification. It is
