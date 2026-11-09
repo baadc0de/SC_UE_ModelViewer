@@ -1,73 +1,163 @@
-# Unreal Engine export design
+# Unreal app and importer design
 
-Target: Unreal Engine 5.8.2 (Linux editor at `~/UnrealEngine/5.8`, Vulkan RHI). Plugin: `ue/Plugins/SCBridge`
-(editor-only module `SCBridgeEditor`, runtime module `SCBridge` for the actor
-classes). Python editor scripts are allowed for glue but the importer core is C++.
+Target: Unreal Engine 5.8.2 (Linux, `~/UnrealEngine/5.8`, Vulkan RHI). Project
+`ue/SCViewer` (C++). Plugin `ue/Plugins/SCBridge`:
 
-## Inputs
-
-StarBreaker decomposed package (contract: `vendor/StarBreaker/docs/decomposed-export-contract.md`):
-
-```
-<root>/Packages/<Entity>_LOD<n>_TEX<m>/scene.json        # hierarchy, children, interiors, lights, animation index
-<root>/Packages/<Entity>_LOD<n>_TEX<m>/animations/*.json # per clip, bones keyed by CRC32 hash, Blender Z-up wxyz
-<root>/Packages/<Entity>_LOD<n>_TEX<m>/palettes.json | liveries.json | paints.json
-<root>/Data/**/*.glb                                      # one mesh asset per source geometry
-<root>/Data/**/*.materials.json                           # per .mtl: submaterials, shader family, texture slots, params
-<root>/Data/**/*.png                                      # textures (DDNA normal w/ smoothness alpha, derived *_roughness)
-```
-
-M4 replaces the folder with the same structures produced in memory by `scbridge-ffi`.
-
-## Asset mapping
-
-| Source | UE asset | Notes |
+| Module | Type | Contents |
 | --- | --- | --- |
-| mesh asset `.glb` (rigid, opaque) | `UStaticMesh`, **Nanite enabled**, fallback relative error 1 %, collision complex-as-simple off (use simple boxes) | Build via `FMeshDescription` from the GLB primitives (positions ×100, Y-up RH → Z-up LH: `(x, y, z) → (x, -z, y)` then mirror to LH `(x, y, z) → (x, -y, z)`, verify against Interchange's result on one mesh), UV0/UV1, vertex colours, normals/tangents preserved (do not recompute). |
-| soft-skinned submesh set | `USkeletalMesh` + `USkeleton` from CHR bones | Nanite **off** by default (experimental); toggle in import options. |
-| `.mtl` submaterial | `UMaterialInstanceConstant` parented to a master material per shader family | Families from `materials.json`: Illum, HardSurface, Glass, Layered (tint palette), MeshDecal (POM), Emissive/Glow, NoDraw (skipped), Hologram/UI (unlit emissive). |
-| texture slot | `UTexture2D` | sRGB on for diffuse/albedo; linear + `TC_Normalmap` for DDNA; linear grayscale for derived roughness/metal/masks; `TC_Masks` for packed. |
-| `interiors[].lights` | `UPointLightComponent` / `USpotLightComponent` / rect for `area` | use `intensity_candela_proxy` (cd), `radius_m` ×100, `color` linear, half-angles as given, gobo texture → light function. Flag `ambient_proxy` as skipped. |
-| clip (`animations/*.json`) | `UAnimSequence` on the skeleton | convert Blender Z-up wxyz back to UE; linear keys at clip fps; hemisphere-align quats; `start_rotation` anchor per whitepaper §14.6. |
-| Mannequin fragments | `UDataAsset` (`USCClipCatalog`) listing clips, tags, scopes | lets the actor expose "Landing_Gear/Deploy" instead of raw clip names. |
-| scene hierarchy | `ASCVehicle` Blueprint (generated) | root `USceneComponent`; rigid meshes as `UStaticMeshComponent` attached to skeleton sockets named after the owning bone; soft parts as `USkeletalMeshComponent`; children recurse with `local_transform_sc` (`gltf_y_up` basis). |
+| `SCBridgeLib` | ThirdParty | links `libscbridge.so`, ships `scbridge.h` |
+| `SCBridge` | Runtime | FFI client, package source + reader, runtime importers, `ASCVehicle`, `USCClipCatalog`, player pawn, collision, in-game UI (UMG/Slate), app game mode |
+| `SCBridgeEditor` | Editor (optional host) | "Keep as assets" (save transient objects to `/Game/SC/<Entity>/`), viewer-level helpers, Interchange baseline tooling |
+
+Everything the user touches lives in the **Runtime** module so it works in the
+standalone app. The editor module only adds persistence.
+
+## Hosts and the standalone build path (decision gate, WP-U0)
+
+| Host | How it runs | Status |
+| --- | --- | --- |
+| Editor PIE / viewer level | `UnrealEditor SCViewer.uproject`, open `Viewer` map, Play | dev host |
+| **Editor-target `-game`** | `UnrealEditor SCViewer.uproject -game -windowed -resx=…` (or the project's own `SCViewerEditor` binary) — editor code compiled in, no editor UI, a normal game window | guaranteed fallback for the standalone app |
+| **Development game target** | `SCViewer` target (`TargetType.Game`, `Development`) linking the developer modules needed to build Nanite (`NaniteBuilder`, `MeshBuilder`, `MeshDescription`, `StaticMeshDescription`) and cook Chaos trimeshes at runtime | preferred if the spike proves it builds and renders Nanite |
+
+WP-U0 builds both, records what compiles, what builds Nanite at runtime, how long a
+Gladius-sized import takes in each, and picks. `Shipping` is out of scope (developer
+modules are stripped there). The launcher script hides the choice from the user.
+
+## How a view happens (same in every host)
+
+```
+[Model browser UI]  p4k path (auto-discovered or picked) ──► sc_open()
+       │ search "gladius" ──► sc_search_entities()  (FFI, worker thread)
+       │ pick entity + options (LOD, mip, attachments, interior, lights, animations, collision)
+       ▼
+sc_export_decomposed_mem()  ──►  in-memory tar: scene.json, Data/**.glb,
+       │                          **.materials.json, **.png, animations/*.json
+       ▼
+FSCPackageSource(memory)  ──►  FSCImporter (worker thread for parsing/decoding, game thread for UObject creation)
+       ├─ FSCMeshImporter      GLB → FMeshDescription → transient UStaticMesh (Nanite) + complex collision
+       ├─ FSCTextureImporter   PNG → transient UTexture2D (flags by role)
+       ├─ FSCMaterialBuilder   materials.json → UMaterialInstanceDynamic on master materials
+       ├─ FSCSkeletonBuilder   bones → USkeleton; soft parts → USkeletalMesh
+       ├─ FSCAnimImporter      animations/*.json → UAnimSequence + USCClipCatalog
+       └─ FSCActorAssembler    scene.json → ASCVehicle (components, sockets, lights)
+       ▼
+spawn ASCVehicle in the Viewer level (Lumen GI + reflections, Nanite, HWRT)
+       ▼
+[UI] hierarchy · clip list + transport · camera mode (orbit / fly / first person) · (editor host: Keep)
+```
+
+Loading a second entity destroys the previous actor and its transient objects
+(explicit `MarkAsGarbage` + GC) so memory stays bounded. The on-disk form of the same
+package (`scviewer decomposed <entity> out/dec`) feeds the folder package source for
+tests.
+
+## Inputs (decomposed package contract)
+
+`vendor/StarBreaker/docs/decomposed-export-contract.md`:
+
+```
+Packages/<Entity>_LOD<n>_TEX<m>/scene.json        # hierarchy, children, interiors, lights, animation index
+Packages/<Entity>_LOD<n>_TEX<m>/animations/*.json # per clip; bones keyed by CRC32 hash; Blender Z-up, [w,x,y,z]
+Packages/<Entity>_LOD<n>_TEX<m>/palettes.json | liveries.json | paints.json
+Data/**/*.glb                                      # one mesh per source geometry (glTF Y-up, metres)
+Data/**/*.materials.json                           # per .mtl: submaterials, shader family, texture slots, params
+Data/**/*.png                                      # textures (DDNA normal w/ smoothness alpha, derived *_roughness)
+```
+
+## Object mapping
+
+| Source | UE object (transient at runtime; asset when kept) | Notes |
+| --- | --- | --- |
+| mesh `.glb` (rigid, opaque/masked) | `UStaticMesh`, **Nanite on**, fallback relative error 1 % | `FMeshDescription` from GLB primitives: metres → cm (×100); glTF Y-up RH → UE Z-up LH, matrix locked by a unit test against the Interchange baseline and DataCore ship dimensions. Keep normals/tangents, UV0/UV1, vertex colours. |
+| same mesh, collision | `UBodySetup` complex trimesh (Chaos, cooked at runtime) or Nanite fallback-mesh collision | per D7; `CollisionTraceFlag = UseComplexAsSimple`; cache cooked data by mesh hash under the app's cache dir |
+| soft-skinned submesh set | `USkeletalMesh` + `USkeleton` from CHR bones | Nanite off by default (option; experimental) |
+| `.mtl` submaterial | `UMaterialInstanceDynamic` of a master per shader family | Illum, HardSurface, Glass, Layered (tint palette), MeshDecal (POM), Emissive/Unlit (screens, holograms), NoDraw (skipped), Fallback |
+| texture slot | `UTexture2D` | sRGB only for colour roles; DDNA → `TC_Normalmap` linear; roughness/metal/masks → linear; dedupe by source path; mip 0 textures built on a worker thread |
+| `interiors[].lights` | point / spot / rect light components | `intensity_candela_proxy` (cd), `radius_m` ×100, linear colour, half-angles, gobo → light function; `ambient_proxy` skipped with a log |
+| clip sidecar | `UAnimSequence` on the skeleton | Blender Z-up wxyz → UE; linear keys at clip fps; hemisphere-align; `bind · (start⁻¹ · sample)` when `start_rotation` present; hash-collision arrays by provenance (whitepaper §14.8) |
+| Mannequin fragments | `USCClipCatalog` | clip id, display name, owner entity, source, fragment/tags/scopes, boomerang flag |
+| scene hierarchy | `ASCVehicle` | root scene component; rigid meshes as `UStaticMeshComponent` on sockets named after their owning bone; soft parts as `USkeletalMeshComponent`; children via `local_transform_sc` (`gltf_y_up`); interiors via `container_transform` / placements; `SpawnPoints` derived from seats, entrances (door helpers) and interior floors |
 
 ## Nanite / Lumen rules
 
-- Opaque and Masked materials → Nanite static meshes. Translucent (Glass) and
-  MeshDecal materials → separate non-Nanite components with the same transform.
-- Emissive: Illum `glow` → emissive colour × strength in the Material Instance so
-  Lumen picks it up; thruster glow targets from `controls.engine_glow` get an
-  exposed scalar parameter.
-- Two-sided from `is_double_sided`; mesh decals use DBuffer decal response on hosts.
-- Nanite assembly: one `UStaticMesh` per source geometry, instanced across
-  components (same `Data/` asset path → same UE asset) so repeated parts share.
-- Lumen test level: `ue/SCTest/Content/Maps/LumenTest` with Lumen GI + reflections,
-  HWRT on, a sky light and one directional light. Import smoke = drop `ASCVehicle`,
-  take an automated screenshot.
+- Opaque and Masked → Nanite static meshes. Translucent (Glass) and MeshDecal →
+  separate non-Nanite components (decals optionally as DBuffer decal components).
+- Emissive: Illum glow → emissive colour × strength so Lumen GI sees it; thruster
+  targets (`controls.engine_glow`) get an exposed scalar.
+- Two-sided from `is_double_sided`; mesh-decal hosts get DBuffer response.
+- One `UStaticMesh` per source geometry path, instanced across components.
+- `Viewer` map: Lumen GI + reflections, HWRT on, VSM, sky + directional light, neutral
+  floor (collision), fixed exposure; a "space" variant with no floor for free-fly.
 
-## Direct import (M4)
+## Local file cache (D10, WP-R1 + WP-C1)
 
-`crates/scbridge-ffi` builds `libscbridge.so` with a C header (`cbindgen`):
+Root: `$XDG_CACHE_HOME/sc_ue_modelviewer/` (default `~/.cache/sc_ue_modelviewer/`),
+overridable in settings. Key material: archive build id (`BuildId` from
+`build_manifest.id`, else `Data.p4k` size + mtime), entity class name, the full
+options struct, and a cache-format version per layer. A `manifest.json` per root
+tracks entries, sizes and last-use for LRU eviction under a size cap (default 20 GB).
+
+| Layer | Owner | Content | Hit means |
+| --- | --- | --- | --- |
+| 1a entity index | Rust (`scviewer-core`, dir passed to `sc_open`) | `entities.<buildid>.bin` | model list appears without walking DataCore |
+| 1b package | Rust | `<key>.tar` — the decomposed package | no StarBreaker decode/export |
+| 2 processed data | UE (`FSCProcessedCache`) | per mesh hash: `FStaticMeshRenderData` incl. `Nanite::FResources` + cooked `UBodySetup`; per texture hash: platform data; per entity: skeleton, `UAnimSequence` raw data, `USCClipCatalog`, assembled `scene` | no Nanite build, no collision cook, no texture build — objects are reconstructed from blobs and the actor is assembled |
+
+Serialisation uses the engine's own runtime `Serialize` paths (the same code cooked
+assets load through) via `FMemoryWriter`/`FMemoryReader` with a proxy archive; WP-U0
+proves the round-trip for Nanite render data and `UBodySetup` in the chosen host. If
+the game target cannot write them, the editor `-game` host caches `.uasset` packages
+under a mounted content root (`/SCCache/`) instead — same key, same API. The footer
+shows per-layer hit/miss and sizes; settings offer Clear cache and the cap.
+
+## Player modes (WP-P1)
+
+| Mode | Pawn | Collision | Notes |
+| --- | --- | --- | --- |
+| Orbit | camera actor | none | default after load; fit to bounds; double-click component to focus |
+| Fly | `ADefaultPawn`-style | optional (noclip toggle) | WASD + mouse, speed wheel |
+| First person | `ACharacter` (capsule 34 × 88 cm default, crouch 44) | complex collision of every component | gravity along the ship's up axis (ship is spawned level so world −Z); walk/run/crouch/jump; interact key triggers the nearest door clip (fragments tagged `Door`/`Open`/`Close` or clip names of the owning entity); F toggles flashlight (spot on camera) for unlit interiors; teleport to spawn point list |
+
+Collision is applied to the components of the loaded actor only; the floor of the
+Viewer map is the only other collider.
+
+## In-game UI (WP-V1, WP-V2)
+
+- Startup: p4k path (auto-discovered via `sc_open(NULL)`, else a file picker),
+  build branch shown; remembered in `Saved/Config` (`USCViewerSettings`).
+- Model browser: search box → virtualised list (display name, class name, category),
+  recent list; options panel (LOD 0–3, mip 0/2/4, attachments, interior, lights,
+  shields, animations, default pose, collision, Nanite skeletal); Load with progress
+  (export phase → import phases) and cancel.
+- Hierarchy panel: component tree with badges (static/skeletal/light, Nanite yes/no,
+  triangles); click focuses / isolates.
+- Animation panel: grouped clip list, Mannequin tag chips, transport, snap first/last,
+  compose, bone overlay; fragment mode.
+- Footer: timings (export, mesh build, collision cook, total), cache hit/miss per
+  layer and cache size, memory, `df` headroom;
+  in the editor host a Keep button.
+
+## FFI (`crates/scbridge-ffi`, `scbridge.h`)
 
 ```
-sc_open(path | NULL for auto-discover) -> handle
-sc_search_entities(handle, query, out_json)
-sc_export_glb(handle, entity, lod, mip, out_bytes)          # viewer parity
-sc_export_decomposed_mem(handle, entity, opts, out_tar)     # same contract, in memory
-sc_free(ptr)
+sc_status  sc_open(const char* p4k_or_null, const char* cache_dir_or_null, sc_handle** out);
+sc_status  sc_search_entities(sc_handle*, const char* query, uint32_t limit, char** json);
+sc_status  sc_clip_catalogue(sc_handle*, const char* entity, char** json);
+sc_status  sc_export_decomposed_mem(sc_handle*, const char* entity, const sc_options*,
+                                    sc_progress_cb, void* user, sc_blob* out_tar);
+const char* sc_last_error(sc_handle*);
+void       sc_free_string(char*);  void sc_free_blob(sc_blob*);  void sc_close(sc_handle*);
 ```
+Every entry point is `catch_unwind`; strings UTF-8; the tar is uncompressed; the
+progress callback may be called from worker threads.
 
-UE side: `Source/ThirdParty/SCBridgeLib` module links the `.so`; an `SEditorUtilityWidget`
-or Slate tab provides search + options and calls the same importer code as M3 on the
-in-memory package. Error strings cross the boundary as UTF-8; no panics across FFI
-(`catch_unwind`).
+## Open questions (answered by WP-U0 / WP-U1)
 
-## Open questions to settle in WP-U1
-
-- Interchange glTF vs our own `FMeshDescription` builder: prototype both on
-  `AEGS_Gladius.cga`'s GLB; keep whichever preserves tangents/UV1/vertex colours and
-  lets us set Nanite settings before build. Expected: own builder.
-- Nanite skeletal mesh status in 5.8: confirm whether it is still experimental and
-  what the project flag is; default D6 (rigid parts as Nanite static meshes) stands
-  either way.
+- Which standalone build path (D3) and its import time for Gladius.
+- Whether `FStaticMeshRenderData` (with Nanite) and `UBodySetup` cooked data round-trip
+  through `FMemoryWriter`/`FMemoryReader` in that host (layer-2 cache feasibility).
+- Runtime Chaos trimesh cooking availability and cost; whether the Nanite fallback
+  mesh is an acceptable collider for corridors.
+- Exact glTF→UE basis matrix (lock with a synthetic-GLB unit test).
+- Nanite skeletal mesh status in 5.8 and its flag.

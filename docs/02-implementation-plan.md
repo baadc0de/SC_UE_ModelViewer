@@ -1,97 +1,116 @@
 # Implementation plan — SC_UE_ModelViewer
 
-Goal: a desktop **model browser and viewer** for Star Citizen assets that shows
-models with textures and lets the user trigger any discoverable animation, plus an
-**Unreal Engine 5 export path** that lands assets correctly set up for Nanite and
-Lumen. Built on the vendored StarBreaker crates (`docs/01-starbreaker-analysis.md`).
+Goal: a **standalone Unreal Engine 5.8 application** that is pointed at a Star
+Citizen `Data.p4k`, lists the models it contains, loads and processes them, and
+displays them **rendered with Nanite and Lumen** — textures, a list of animations
+the user can trigger, and (intermediate goal) **first-person exploration of ships
+with collision against the model**. Viewing produces proper UE objects (Nanite
+static meshes, skeletal meshes, materials, animation sequences); an editor plugin is
+an acceptable development vehicle and lets those objects be kept as project assets,
+but the final deliverable does not open the Unreal Editor.
+
+Built on the vendored StarBreaker crates (`docs/01-starbreaker-analysis.md`).
+
+Decision history (2026-11-09): the M0 draft planned a Tauri + three.js viewer with UE
+as an export target; the owner then asked for UE (Nanite + Lumen) to be the renderer,
+then for a standalone app rather than the editor, plus first-person exploration,
+plus a local file cache so repeat loads need no processing.
 
 ## Architecture decisions
 
 | # | Decision | Why |
 | --- | --- | --- |
-| D1 | **Reuse StarBreaker crates as path dependencies** (`vendor/StarBreaker`, git submodule, our fixes on a branch we upstream). No re-implementation of formats. | Formats are reverse-engineered and validated; the value we add is the viewer and the UE bridge. |
-| D2 | **Viewer = Tauri 2 + React 19 + three.js**, a new app in `app/`, not a fork of upstream `app/`. | Same stack as upstream, so agents can crib proven patterns (`geometry-preview.tsx`, Tauri commands, zustand stores) without inheriting the ship-UI/audio/character sprawl. three.js `GLTFLoader` + `AnimationMixer` give textured skinned meshes and clip playback for free. |
-| D3 | **GLB is the in-memory interchange between Rust and the viewer**; the **decomposed package** (scene.json + Data/ + materials.json + PNG) is the interchange to Unreal. | GLB already works and embeds textures; the decomposed contract is the richer, documented format with material semantics and lights, which UE needs. |
-| D4 | **Unreal import is a UE editor plugin (`ue/Plugins/SCBridge`)** in two stages: (M3) import a decomposed package from disk; (M4) link the Rust pipeline as a C-ABI library so the editor reads `Data.p4k` directly. | Direct engine API gives correct Nanite/Lumen settings, materials and actor hierarchy; a file-based first stage is testable without FFI and is what the user asked for as the "intermediate" path. |
-| D5 | **No FBX.** GLB → UE Interchange for payloads where convenient, our own `FMeshDescription` builder where we need control. | FBX adds a Blender/Assimp hop and loses metadata; Interchange's glTF translator imports static + skeletal meshes, materials and animations. |
-| D6 | **Ships in UE = hybrid actor**: rigid parts → Nanite `StaticMesh` attached to skeleton sockets; soft-skinned parts → `SkeletalMesh` + `AnimSequence`. Glass/decals → non-Nanite translucent/masked components. | Matches StarBreaker's rigid-vs-soft split (whitepaper §5.3). Nanite skeletal meshes are still experimental; static-mesh Nanite is production. Lumen needs opaque Nanite or distance fields; emissive Illum glow feeds Lumen GI directly. |
-| D7 | **Linux-first.** UE 5.8.2 Linux editor at `~/UnrealEngine/5.8` (Vulkan RHI). | Already installed on this CachyOS machine with an RTX 4090; Nanite, Lumen and HWRT work on Linux/NVIDIA. WP-U0 only creates the test project and smoke-tests the renderer. |
+| D1 | **Reuse StarBreaker crates as path dependencies** (`vendor/StarBreaker`, git submodule; our fixes on branches we upstream). No format code of our own. | Formats are reverse-engineered and validated; our value is the app and the UE bridge. |
+| D2 | **The viewer is a UE game-mode application**: project `ue/SCViewer`, plugin `ue/Plugins/SCBridge`. All viewer UI (model list, options, animation panel, first-person HUD) is in-game UMG/Slate, so the same code runs standalone and inside the editor's PIE/viewer level. | One UI, two hosts. The standalone deliverable is the game-mode app; the editor is only a dev host and an optional "keep as assets" tool. |
+| D3 | **Standalone build path is a spike with a decision gate (WP-U0).** Nanite and mesh building live in editor/developer modules (`NaniteBuilder`, `MeshBuilder`). Candidates, in preference order: (1) a `Development` game target that links the developer modules and builds Nanite at runtime; (2) the project's **Editor target launched with `-game`** (full editor code, no editor UI, a normal game window). Either satisfies "does not open the Editor"; (2) is the guaranteed fallback. Shipping-config packaging is explicitly out of scope. | Only a build experiment settles what 5.8 allows at runtime; we must not plan around an assumption. |
+| D4 | **Rust ↔ UE boundary is a C-ABI library** (`crates/scbridge-ffi`, `libscbridge.so`): open archive, search entities, clip catalogue, export an entity as an in-memory **decomposed package** (same contract as on disk). | One documented contract (`decomposed-export-contract.md`) carries geometry, material semantics, lights, hierarchy, clips. In memory avoids 100 MB folders per view; the on-disk form remains for debugging and CLI tests. |
+| D5 | **Importer owns the UE mapping at runtime**: transient `UStaticMesh` built from `FMeshDescription` (Nanite on), `UMaterialInstanceDynamic` from a master-material set per shader family, `USkeleton` + `USkeletalMesh` + `UAnimSequence` built in memory, lights, `ASCVehicle` actor from `scene.json`. In the editor host the same objects can be saved as assets ("Keep"). | Full control of Nanite settings, UV/tangent/colour preservation, axes/units, naming. Interchange is a baseline for validation only. |
+| D6 | **Ships = hybrid actor**: rigid parts → Nanite static meshes on skeleton sockets; soft-skinned parts → skeletal mesh; Glass / MeshDecal → non-Nanite components. | Matches StarBreaker's rigid-vs-soft split; production Nanite is static-mesh Nanite; Lumen wants opaque Nanite geometry and reads Illum glow as emissive. |
+| D7 | **Collision is per-mesh complex collision cooked at runtime** (Chaos trimesh from the imported triangles, or the Nanite fallback mesh when the spike shows runtime trimesh cooking is unavailable), with a first-person `ACharacter` pawn (capsule, gravity along the ship's up, crouch, fly/noclip toggle). | "Clipping against the model" needs triangle-accurate collision incl. interiors; simple primitives cannot do corridors and ramps. |
+| D8 | **No FBX, no Interchange in the main path.** | FBX loses metadata; Interchange cannot express our material semantics, sockets or runtime transient objects. |
+| D9 | **Linux-first.** UE 5.8.2 at `~/UnrealEngine/5.8`, Vulkan RHI. | Installed on this CachyOS machine with an RTX 4090; Nanite, Lumen and HWRT work on Linux/NVIDIA. |
+| D10 | **Two-layer local file cache, keyed by archive build id + entity + options + importer version**, under `$XDG_CACHE_HOME/sc_ue_modelviewer/` with a size cap and LRU eviction. Layer 1 (Rust): the entity index and the exported decomposed package (tar). Layer 2 (UE): the processed results — Nanite render data, cooked collision, built textures, skeleton/anim data — serialised so a hit skips all processing. | Processing is the expensive part (seconds of export, Nanite build, collision cook); the owner requires that a second load of the same model needs none of it. The editor host's DDC does not exist in the standalone app, so we own the cache. |
 
 ## Milestones
 
 | Milestone | Deliverable | Verifies |
 | --- | --- | --- |
-| **M0 Bootstrap** (this commit) | repo, submodule, docs, work-package briefs, helper scripts | `scripts/starbreaker.sh entity loadout Gladius` |
-| **M1 Viewer MVP** | search entities (DataCore) + browse P4k geometry, load as textured GLB in three.js, LOD/mip/material controls, orbit + fit camera, hierarchy tree | Gladius renders with textures in < 10 s |
-| **M2 Animations** | clip catalogue per entity (name, source, fps, frames, Mannequin tags), play/pause/scrub/loop/speed, snap-first/last, compose several clips, bone overlay | Scorpius: gear, canopy, wings play; Gladius gear; Cutlass doors |
-| **M3 UE export (file)** | "Export for Unreal" writes a decomposed package; UE plugin `SCBridge` imports it: Nanite static meshes, Material Instances from a master-material set, skeletal mesh + AnimSequences, actor Blueprint with hierarchy, lights | Gladius in a Lumen test level, gear anim plays, decals/glass correct |
-| **M4 UE direct import** | `scbridge-ffi` (Rust cdylib, C ABI) + editor tab "Import from Star Citizen": search, pick LOD/mip, import without leaving the editor | same result as M3 without an intermediate folder |
-| **M5 Breadth** | characters (`.chf`/armour), interiors (socpak), paints/palettes switching, batch export | Cutlass interior with lights in UE; a character with face idle |
+| **M0 Bootstrap** (done) | repo, submodule, docs, briefs, scripts | `scripts/starbreaker.sh entity loadout Gladius` |
+| **M1 Rust core + FFI** | `scviewer-core`, `scbridge-ffi` + header, `scviewer-cli` | `scviewer decomposed-tar Gladius out.tar`; C smoke program |
+| **M2 App MVP** | `ue/SCViewer` game-mode app (runs via editor `-game` at least): p4k picker, model list (search), options, load via FFI → Nanite meshes under Lumen, orbit/free-fly camera, hierarchy panel; **standalone build-path decision recorded**; layer-1 cache (entity index + package) | Gladius grey-textured under Lumen, standalone window, < 30 s cold; second load skips the export |
+| **M3 Materials** | master materials, dynamic instances from `materials.json`, textures with correct flags, palettes, emissive glow | Gladius hull/glass/decals/thruster glow right; cockpit lit by emissive |
+| **M3b Processed-data cache** | layer-2 cache: Nanite render data, cooked collision, textures, skeleton/anims round-tripped to disk; cache hit → no processing; size cap, eviction, Clear cache | second load of Gladius < 3 s with zero mesh builds; cache survives restart |
+| **M4 Animations** | skeleton + skeletal meshes, sockets, `UAnimSequence` per clip, clip catalogue; panel: list with Mannequin tags, play/snap/loop/speed/compose | Scorpius gear/canopy/wings; Gladius gear + canopy; Cutlass doors |
+| **M5 First-person exploration** | walk mode with collision against the imported geometry incl. interiors, doors via clips, spawn at entrance/seat, fly/noclip toggle, HUD | walk through Cutlass Black interior without falling through; ramps and doors work |
+| **M6 Standalone deliverable** | launcher (`scripts/run_viewer.sh` → chosen build path), settings persistence (p4k path, options), no editor UI, cold start < 20 s to model list, error dialogs | fresh shell → app → Gladius in under a minute |
+| **M7 Breadth** | characters (`.chf`), interiors as root entities (socpak), paints switching, "Keep as assets" in editor host, batch | Cutlass interior as a location; a character with a face idle |
 
 ## Work packages
 
-Each WP has a self-contained brief in `docs/work-packages/` that is handed to the
-agent verbatim. Dependencies, agent and parallel-safety are summarised here.
+Self-contained briefs in `docs/work-packages/`, handed to agents verbatim.
 
 | WP | Title | Agent | Depends on | Parallel-safe? |
 | --- | --- | --- | --- | --- |
-| WP-R1 | Rust workspace + `scviewer-core` crate wrapping StarBreaker (open p4k/dcb, search, export GLB in memory, decomposed to disk) | Codex | — | builds: no |
-| WP-R2 | Vehicle clips into GLB animations (patch `glb_assembly.rs`, submodule branch) | Codex | R1 | builds: no |
-| WP-R3 | Clip catalogue API (`chrparams` ∪ DBA ∪ Mannequin fragments, per skeleton) | Codex | R1 | builds: no |
-| WP-A1 | Tauri app scaffold: window, p4k discovery/open, entity search, geometry browser, zustand stores, IPC bindings | Opus 5.5 | R1 | research yes; builds no |
-| WP-A2 | three.js viewer: GLB load, textures, lights/env, grid, fit, hierarchy panel, LOD/mip/material controls | Opus 5.5 | A1 | after A1 |
-| WP-A3 | Animation UI: catalogue list, play/scrub/loop/speed, snap first/last, multi-clip compose, bone/skeleton overlay | Opus 5.5 | A2, R2, R3 | after A2 |
-| WP-U0 | UE 5.8.2 test project `ue/SCTest.uproject` with a Lumen test level, Vulkan/Nanite/Lumen/HWRT smoke test, Interchange GLB smoke import | Codex | — | yes (no cargo) |
-| WP-U1 | `SCBridge` plugin: decomposed-package reader (scene.json/materials.json), static meshes from `Data/*.glb` via Interchange or MeshDescription, Nanite settings, UE axis/scale mapping | Codex | U0, R1 (export) | yes vs Rust builds |
-| WP-U2 | Materials: master-material set per shader family (Illum, HardSurface, Glass, Layered/Tint, MeshDecal/POM, Emissive) + Material Instance builder from sidecars, texture import with correct sRGB/normal/roughness flags | Opus 5.5 | U1 | after U1 |
-| WP-U3 | Rig + animation: SkeletalMesh for soft-skinned parts, skeleton from CHR bones, AnimSequences from clips, sockets for rigid parts, `SCVehicle` actor BP assembly, lights from `interiors[].lights` | Codex | U1, R2, R3 | after U1 |
-| WP-U4 | `scbridge-ffi` C-ABI cdylib + UE ThirdParty module + "Import from Star Citizen" editor tab | Codex | R1–R3, U1–U3 | builds: no |
-| WP-Q1 | Verification harness: golden entities (Gladius, Scorpius, Cutlass), GLB stats checks (`scripts/glbinfo.py`), screenshot smoke in Tauri, UE commandlet import test | Opus 5.5 | A2, U1 | yes |
-| WP-D1 | Docs upkeep + upstream PRs for submodule patches (R2/R3 widenings) | Opus 5.5 | R2, R3 | yes |
+| WP-R1 | Rust workspace + `scviewer-core` (Session, search, decomposed export to disk and in-memory tar, layer-1 cache) | Codex | — | cargo: no |
+| WP-R3 | Clip catalogue API (`chrparams` ∪ DBA ∪ Mannequin, lazy) | Codex | R1 | cargo: no |
+| WP-R4 | `scbridge-ffi` C-ABI cdylib + `scbridge.h` + C smoke test | Codex | R1, R3 | cargo: no |
+| WP-R2 | *(optional, upstream contribution)* vehicle clips into bundled GLB animations | Codex | R1 | cargo: no |
+| WP-U0 | `ue/SCViewer` project, Viewer level (Lumen/Nanite/HWRT), **standalone build-path spike** (D3) incl. runtime Nanite + runtime trimesh collision feasibility, Interchange baseline | Codex | — | yes |
+| WP-U1 | Runtime importer core: `FSCPackageSource` (folder + tar), `FMeshDescription` → transient Nanite static meshes, axes/units, `ASCVehicle` assembly, per-mesh collision setup | Codex | U0 gate; a decomposed export from R1 | UE lock |
+| WP-V1 | App shell + model browser (game-mode UMG/Slate): p4k picker, search list, options, Load, progress, hierarchy, orbit/free-fly camera; editor host via PIE/viewer level | Opus 5.5 | U1, R4 | UE lock |
+| WP-C1 | Processed-data cache (layer 2): serialise built meshes/Nanite/collision/textures/anims, keying, size cap, eviction, hit/miss UI | Codex | U1 (U3 for anim data), U0 round-trip spike | UE lock |
+| WP-U2 | Materials: master set, dynamic instances from sidecars, texture flags, palettes | Opus 5.5 | U1 | UE lock |
+| WP-U3 | Rig + animation + lights: skeleton, skeletal meshes, sockets, `UAnimSequence`, `USCClipCatalog`, `ASCVehicle` play API, light components | Codex | U1, R3 | UE lock |
+| WP-V2 | Animation panel: grouped clip list with Mannequin chips, transport, snap, compose, bone overlay | Opus 5.5 | V1, U3 | UE lock |
+| WP-P1 | First-person exploration: pawn, runtime complex collision, ship-relative gravity, spawn points, doors via clips, fly/noclip, HUD | Codex | U1, U3, V1 | UE lock |
+| WP-S1 | Standalone deliverable: build target per D3 decision, launcher script, settings persistence, startup/error UX, no editor UI | Codex | U0 decision, V1 | UE lock |
+| WP-Q1 | Verification: golden exports + stats diff, headless UE smoke (import counts, Nanite flags, clip counts, collision presence, screenshots), CI | Opus 5.5 | R1, U1, V1 | yes |
+| WP-D1 | Docs upkeep, upstream PRs for submodule patches, user guide | Opus 5.5 | R3 | yes |
 
-Critical path: R1 → R2/R3 → A3 and R1 → U1 → U3 → U4. A1/A2 start as soon as R1
-exposes the first two commands; U0 starts immediately.
+Critical path: U0 (spike) → U1 → V1 → P1 → S1, with R1 → R4 feeding V1 and C1 landing
+before S1. U0 and R1 start immediately in parallel; U2, U3 and C1 run in parallel
+after U1 (disjoint files).
 
 ## Agent orchestration rules
 
-- **Orchestrator:** a Claude Code session in this repo dispatches WPs. Codex via
-  the `codex:codex-rescue` subagent / `codex` CLI (configured model `gpt-6-astra`,
-  reasoning high, `approvals_reviewer = user`); Opus 5.5 via the `Agent` tool
-  (`model: "opus"`). Briefs are the `docs/work-packages/WP-*.md` files; the
-  dispatcher adds only the current commit, the branch name and anything newly learned.
-- **Builds are sequential.** All Rust (ours + vendored) shares one
-  `CARGO_TARGET_DIR=./target`; two agents must never run `cargo build`/`test` at
-  once. UE builds (`ue/`) and npm builds (`app/`) are independent of cargo and may
-  overlap with it. Read-only research is always parallel-safe.
-- **One writer per file set.** Rust WPs and UI WPs touch disjoint trees; a WP that
-  needs a change outside its tree writes a `TODO(WP-xx)` note in its report rather
-  than editing it.
-- **Branching:** one branch per WP (`wp/r2-glb-animations`), PR into `main`,
-  squash merge. Submodule patches land on a branch in `vendor/StarBreaker` named
-  `scviewer/<topic>` and are pinned by the superproject commit; WP-D1 turns them into
-  upstream PRs.
-- **Cross-review:** every PR is reviewed by the *other* model before merge
-  (Codex work → Opus review, Opus work → Codex review), checking the done-criteria
-  in the brief, upstream's rules (root-cause fixes, no per-asset hard-coding,
-  `//!` headers), and that verification commands were actually run.
-- **Definition of done** for every WP: brief's done-criteria met, verification
-  commands pasted into the PR, `cargo build && cargo test --workspace` green
-  (debug), `npm run build` green where touched, UE plugin compiles where touched,
-  docs updated if a contract changed.
-- **Game data rules:** never set `SC_DATA_P4K` (auto-discovery finds LIVE);
-  never commit game-derived files (see `.gitignore`); exports go to `./out/`
-  (gitignored) or the session scratchpad; keep `target/` bounded with
-  `cargo sweep --time 30`, never a blind `cargo clean`.
-- **Scope discipline:** fix the category, not the asset (no "if ship == Gladius").
-  Hard-coded game values are a bug; derive from DataCore/P4k.
+- **Orchestrator:** a Claude Code session in this repo dispatches WPs. Codex via the
+  `codex:codex-rescue` subagent / `codex` CLI (model `gpt-6-astra`, reasoning high,
+  `approvals_reviewer = user`); Opus 5.5 via the `Agent` tool (`model: "opus"`). The
+  dispatcher adds only the current commit, the branch name and anything learned since
+  the brief was written.
+- **Two build locks.** Rust: one `CARGO_TARGET_DIR=./target`, one cargo build at a
+  time. Unreal: one UBT/editor build at a time. The two may overlap. Read-only
+  research is always parallel-safe.
+- **One writer per file set.** Rust WPs, importer (`SCBridge/Import*`), UI
+  (`SCBridge/UI*`), materials (`Content/Materials`), gameplay (`SCBridge/Player*`)
+  touch disjoint trees; cross-tree needs are reported as `TODO(WP-xx)`.
+- **Branching:** one branch per WP (`wp/u1-runtime-importer`), PR into `main`, squash
+  merge. Submodule patches on `scviewer/<topic>` branches in `vendor/StarBreaker`,
+  pinned by the superproject; WP-D1 upstreams them.
+- **Cross-review** by the other model before merge (Codex ⇄ Opus 5.5): done-criteria
+  met, upstream rules kept (root-cause fixes, no per-asset hard-coding, `//!` headers),
+  verification commands actually run and pasted.
+- **Definition of done:** brief's criteria met; `cargo build && cargo test --workspace`
+  green where Rust changed; the UE target(s) compile and the headless smoke (WP-Q1)
+  passes where UE changed; docs updated when a contract changed.
+- **Game data rules:** never set `SC_DATA_P4K`; never commit game-derived files;
+  exports to `./out/` or the scratchpad; keep `target/` and the UE `DerivedDataCache/`
+  bounded (`cargo sweep --time 30`, no blind `cargo clean`).
+- **Scope discipline:** fix the category, not the asset; hard-coded game values are
+  bugs — derive from DataCore / P4k.
 
 ## Risks and fallbacks
 
 | Risk | Mitigation |
 | --- | --- |
-| Vehicle clip → node-name binding fails for sub-rig duplicates (same bone names front/rear gear) | whitepaper §14.8 routing rules; test on Scorpius; fall back to per-skeleton clips scoped to the child entity node |
-| Nanite rejects a mesh (non-manifold, > 64 UV sets, WPO) | import opaque Nanite with fallback mesh; log per-mesh reasons; non-Nanite fallback per component |
-| Translucent/decal materials under Nanite | D6: glass/decals as separate non-Nanite components; decals optionally as DBuffer decals |
-| UE project DerivedDataCache + Intermediate growth on a 95 % full disk | keep `ue/SCTest` DDC local and bounded; `Saved/` and `Intermediate/` are gitignored; check `df` before Nanite builds of large interiors |
-| three.js chokes on 1000+ nodes / 300 textures at mip 0 | default mip 2 / LOD 1 as upstream; lazy texture upload; merge-by-material toggle |
-| Upstream StarBreaker moves fast | submodule pinned; patches small and upstreamed early (WP-D1) |
+| Runtime Nanite build is not available in a game target in 5.8 | D3 fallback: Editor target with `-game`; the user accepted bundling editor functionality. The spike settles it in week one. |
+| Runtime complex-collision cooking unavailable or too slow for 1000 meshes | cook on a worker thread with progress; cache cooked trimeshes keyed by mesh hash on disk; fall back to Nanite fallback mesh collision or simplified convex hulls per part |
+| Nanite build time per view | background task + progress on first load; layer-2 cache (D10) makes later loads processing-free; WP-U0 proves render-data round-trip in the chosen host |
+| Render-data serialisation is not round-trippable in a game target | fall back to the editor `-game` host where `SavePackage` is available and cache as `.uasset` packages under a mounted cache content root |
+| Nanite rejects a mesh | per-mesh non-Nanite fallback with a logged reason |
+| Translucent / decal materials under Nanite | D6: separate non-Nanite components |
+| FFI crashes take the app down | `catch_unwind` on every entry; worker thread; fuzz the tar reader |
+| Duplicate bone names across sub-rigs misroute clips | whitepaper §14.8 provenance routing; Scorpius regression |
+| Walking inside ships: interiors are separate socpak placements with their own transforms | include_interior on; verify container transforms on Cutlass; door clips via Mannequin fragments |
+| Disk at 95 % | cache size cap (default 20 GB) with LRU eviction, Clear cache button, `df` check with a clear error |
+| Upstream StarBreaker moves fast | submodule pinned; patches small and upstreamed early |

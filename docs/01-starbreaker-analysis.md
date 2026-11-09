@@ -46,9 +46,17 @@ RTX 4090 (Nanite, Lumen and hardware ray tracing are fine on Linux/Vulkan). The 
 plugins the UE briefs need: `Interchange`, `InterchangeEditor`, `PythonScriptPlugin`,
 `GeometryScripting`, `EditorScriptingUtilities`. Disk: 84 GB free on `/` — exports and `target/` must stay bounded.
 
-## Gaps we must close (ordered by how much they block the viewer)
+## Gaps we must close
 
-1. **Vehicle GLBs carry no animations.** `pipeline/glb_assembly.rs` passes
+The viewer renders in Unreal (plan D2), so the decomposed package — not the GLB —
+is our interchange. Ordered by how much they block that path:
+
+1. **No in-memory decomposed export, no C ABI, no cache.** The exporter writes a
+   folder each time; the UE app wants the same package as bytes and a build-id-keyed
+   cache so repeat loads skip the export (WP-R1 sink abstraction + layer-1 cache,
+   WP-R4 FFI).
+2. **No "clip catalogue" API** (see 3 below; WP-R3).
+3. *(Lower priority now)* **Vehicle GLBs carry no animations.** `pipeline/glb_assembly.rs` passes
    `animations: Vec::new()` to `GlbInput` for entity exports (lines ~477 and ~521).
    The emitter (`gltf/animation.rs::add_animations`) exists and is used by the
    character path; vehicle clips are only serialised into decomposed
@@ -58,27 +66,27 @@ plugins the UE briefs need: `Interchange`, `InterchangeEditor`, `PythonScriptPlu
    `shared_clip()` already does from CRC32 hashes) and pass them into `GlbInput`.
    Keep the glTF Y-up convention (clips are emitted under the `CryEngine_Z_up`
    wrapper node like the geometry).
-2. **No "clip catalogue" API.** The viewer needs a list before loading anything:
+   Clip catalogue detail: the viewer needs a list before loading anything:
    clip name, source (`chrparams` event / DBA-only), fps, frame count, Mannequin
    fragment + tags (`animation/mannequin.rs`), and which entity/skeleton owns it.
    Today that information is only assembled inside `decomposed.rs`.
-3. **Library surface is `pub(crate)` in places.** `pipeline`, `gltf`, `decomposed`
+4. **Library surface is `pub(crate)` in places.** `pipeline`, `gltf`, `decomposed`
    are crate-private modules with a curated `pub use` list in `lib.rs`. We can
    call `assemble_glb_with_loadout*`, `skin_to_glb`, `resolve_loadout_meshes`,
    `query_animation_controller_source`, `DecomposedExport`, `ExportOptions`. Anything
    else needs a small upstreamable `pub` widening in our submodule branch.
-4. **Primary-state transforms are not in the clips** (whitepaper §15.1). Landing
+5. **Primary-state transforms are not in the clips** (whitepaper §15.1). Landing
    gear "deployed" vs "retracted" full travel, canopy slide, wing fold are driven
    by Mannequin + vehicle C++ in the game. The clips carry secondary articulation.
    `ExportOptions::apply_default_animation_pose` bakes the `landing_gear_extend`
    pose into the rest pose. The viewer should expose "snap first / snap last /
    play" exactly as the Blender addon does and not promise more.
-5. **Materials in GLB are PBR approximations.** Layered/tint-palette materials are
+6. **Materials in GLB are PBR approximations.** Layered/tint-palette materials are
    flattened to colours + textures; decals, POM and glass become glTF extensions.
-   Good enough for the viewer. For Unreal we read the `*.materials.json` sidecars
+   For Unreal we read the `*.materials.json` sidecars
    (shader family, texture slots with semantic roles, palette routing, public
    params) and build Material Instances, not the GLB materials.
-6. **Coordinate conventions.** Source is CryEngine right-handed Y-up on disk with
+7. **Coordinate conventions.** Source is CryEngine right-handed Y-up on disk with
    `xyzw` quaternions; GLB wraps everything under a `CryEngine_Z_up` node. Unreal is
    left-handed Z-up, X forward, centimetres. The UE importer owns that mapping
    (Interchange handles glTF → UE if we import GLB; our own mesh builder must do
@@ -91,8 +99,9 @@ plugins the UE briefs need: `Interchange`, `InterchangeEditor`, `PythonScriptPlu
 - Export contract: `vendor/StarBreaker/docs/decomposed-export-contract.md`.
 - Interiors: `vendor/StarBreaker/docs/socpak-structure-export-guide.md`.
 - Lighting units: `vendor/StarBreaker/docs/star-citizen-lighting-research.md`.
-- Working Tauri + three.js reference: `vendor/StarBreaker/app/src/components/geometry-preview.tsx`,
-  `app/src-tauri/src/{commands,state,datacore_commands}.rs`, `app/src/lib/commands.ts`.
+- Reference for entity search / localisation / companion-file resolution:
+  `vendor/StarBreaker/app/src-tauri/src/{commands,state,datacore_commands}.rs`
+  (the upstream Tauri app; we do not build one).
 - Upstream engineering rules worth inheriting: `vendor/StarBreaker/AGENTS.md`
   (root-cause fixes, no per-asset hard-coding, `//!` module headers, sequential
   cargo builds across agents, debug profile for iteration).

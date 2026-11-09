@@ -22,7 +22,8 @@ node graphs); `vendor/StarBreaker/crates/starbreaker-3d/src/mtl.rs` (`ShaderFami
   (translucent, non-Nanite), `M_SC_MeshDecal` (masked/translucent decal response,
   POM as parallax offset from height), `M_SC_Emissive_Unlit` (screens/holograms),
   `M_SC_Fallback`.
-- `FSCMaterialBuilder`: shader family → master; texture slots by `role` → params;
+- `FSCMaterialBuilder` (Runtime module, creates `UMaterialInstanceDynamic` at
+  runtime; constant instances only in the editor host's Keep): shader family → master; texture slots by `role` → params;
   `public params` → scalars/colours; palette routing → colours from `palettes.json`
   (and `paints.json` variants exposed as a dropdown on the actor later);
   `is_double_sided`, `alpha_config` → blend mode. Unknown family → fallback with a
@@ -35,7 +36,7 @@ node graphs); `vendor/StarBreaker/crates/starbreaker-3d/src/mtl.rs` (`ShaderFami
 
 ## Done criteria
 - Gladius hull, cockpit glass, warning-tape decals, thruster glow and tint-palette
-  panels read correctly side by side with the three.js viewer; emissive glow lights
+  panels read correctly against in-game screenshots and the Blender add-on's import; emissive glow lights
   the cockpit interior under Lumen.
 - `materials.json` fixtures (synthetic, checked in) drive unit tests of the
   family→master mapping in an automation test (`SCBridge.Materials.*`).

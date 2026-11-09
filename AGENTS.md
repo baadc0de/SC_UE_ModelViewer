@@ -11,8 +11,9 @@ inherit for all Rust that touches the vendored crates).
   (WP-D1). Never edit it without a branch; never commit `Co-Authored-By` trailers
   inside the submodule (upstream rule). The superproject follows this repo's rules.
 - `crates/` — our Rust (`scviewer-core`, `scviewer-cli`, `scbridge-ffi`).
-- `app/` — Tauri 2 + React + three.js viewer.
-- `ue/` — Unreal test project and the `SCBridge` plugin.
+- `ue/SCViewer/` — the Unreal project (game-mode app, Viewer level);
+  `ue/Plugins/SCBridge/` — Runtime module (FFI client, importer, actor, player, UI),
+  optional Editor module (Keep as assets), `ThirdParty/SCBridgeLib`.
 - `docs/` — analysis, plan, UE design, `work-packages/` briefs.
 - `scripts/` — `starbreaker.sh` (build + run vendored CLI), `glbinfo.py`.
 - `out/` — exports (gitignored). Scratch belongs in the session scratchpad.
@@ -29,12 +30,14 @@ inherit for all Rust that touches the vendored crates).
 ## Building
 
 - One shared `CARGO_TARGET_DIR=./target` for our crates and the vendored CLI.
-  **Cargo builds are sequential across agents** — never two at once. UE and npm
-  builds may run alongside cargo.
+  **Cargo builds are sequential across agents** — never two at once. UE builds are a
+  second lock (one UBT/editor build at a time); cargo and UE builds may overlap.
 - Use `cargo build` (debug; opt-level 1 like upstream). Release only for shipping.
 - Keep `target/` bounded with `cargo sweep --time 30`; never a blind `cargo clean`.
   `/` has ~84 GB free.
-- Unreal: 5.8.2 Linux editor at `~/UnrealEngine/5.8`, Vulkan RHI (WP-U0 creates the test project).
+- Unreal: 5.8.2 at `~/UnrealEngine/5.8`, Vulkan RHI. The deliverable is a standalone
+  game-mode app (plan D2/D3): user-facing code goes in the Runtime module; editor-only
+  dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
 
 ## Working rules
 

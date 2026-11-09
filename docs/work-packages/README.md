@@ -5,6 +5,11 @@ self-contained (goal, inputs, files, done-criteria, verification). The dispatche
 prepends only: current commit, branch name, and anything learned since the brief
 was written. Agent assignment and ordering live in `docs/02-implementation-plan.md`.
 
+Dropped on 2026-11-09 when the viewer became UE-native: WP-A1..A3 (Tauri/three.js) and
+WP-U4 (merged into WP-R4 + WP-V1). Added the same day for the standalone-app and
+first-person requirements: WP-P1, WP-S1; WP-U0 gained the build-path spike. Added for
+the local-file-cache requirement: WP-C1 (layer 2), with layer 1 folded into WP-R1.
+
 Common preamble every agent receives:
 
 > You are working in `/home/baadc0de/Development/baadc0de/SC_UE_ModelViewer`.

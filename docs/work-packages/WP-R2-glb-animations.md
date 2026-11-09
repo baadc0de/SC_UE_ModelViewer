@@ -1,6 +1,9 @@
-# WP-R2 — Vehicle clips into GLB animations
+# WP-R2 — Vehicle clips into GLB animations *(optional — upstream contribution)*
 
 **Agent:** Codex. **Depends on:** WP-R1. **Build lock:** required.
+**Priority:** low. The UE viewer reads clips from the decomposed sidecars, not from
+GLB animations; do this only when the critical path (R4, U1, U3, V1, V2) is idle.
+It is still a valuable upstream fix for glTF consumers.
 **Lands in:** `vendor/StarBreaker` on branch `scviewer/glb-vehicle-animations`
 (submodule pointer bumped in the superproject). Keep the patch upstreamable.
 
@@ -36,7 +39,7 @@ the decomposed path serialises the same clips to `animations/*.json`.
 - `scripts/starbreaker.sh entity export Gladius out/gladius.glb` →
   `python3 -I scripts/glbinfo.py out/gladius.glb` lists `animations ≥ 4` including a
   landing-gear clip; Scorpius lists gear, canopy and wing clips.
-- Loading the GLB in three.js (or the `gltf` crate) and sampling the gear clip at its
+- Loading the GLB with the `gltf` crate and sampling the gear clip at its
   last key moves the gear bones; no node receives tracks from two clips of the same
   name in different children.
 - `cargo test -p starbreaker-3d` green; new tests follow upstream's TDD rule

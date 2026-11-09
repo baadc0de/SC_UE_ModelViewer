@@ -15,6 +15,10 @@ duplicate-hash routing) and §Animation Records of the export contract (sidecar 
 **Blender Z-up, `[w,x,y,z]`**, bone keys are CRC32 hex, `source_node_name` present
 when resolved, arrays for hash collisions).
 
+All builders live in the **Runtime** module and create transient objects (the
+editor host's Keep persists them); nothing may require editor-only modules unless
+guarded by `WITH_EDITOR` with a runtime path kept working.
+
 ## Deliverables
 - `FSCSkeletonBuilder`: bones from the exported skeleton (scene.json / mesh GLB
   skins) → `USkeleton` + reference pose (bind pose per §4.4). Decide and document
@@ -40,5 +44,5 @@ when resolved, arrays for hash collisions).
 - Scorpius: `PlayFragment(Landing_Gear, Deploy)` animates the gear in PIE; snap-last
   pose matches the deployed-pose export within 5°.
 - Gladius gear + canopy play together; rigid gear struts follow their bones.
-- Cutlass Black interior lights appear in `LumenTest` with plausible intensity (a
+- Cutlass Black interior lights appear in the `Viewer` level with plausible intensity (a
   lit corridor, not a blown-out one); doors animate.

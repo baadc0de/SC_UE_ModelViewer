@@ -1,8 +1,10 @@
 # SC_UE_ModelViewer
 
-A model browser and viewer for Star Citizen assets — ships, items, characters and
-interiors straight from `Data.p4k` — with textures and triggerable animations, plus an
-export path into Unreal Engine 5 that sets assets up for Nanite and Lumen.
+A **standalone Unreal Engine 5.8 application** that is pointed at a Star Citizen
+`Data.p4k`, lists the models inside, loads and processes them, and displays them
+**rendered with Nanite and Lumen** — textures, a list of animations you can trigger,
+and first-person exploration of ships with collision. The Unreal Editor is a
+development host and an optional "keep as assets" tool, not the deliverable.
 
 Built on the Rust crates of [StarBreaker](https://github.com/diogotr7/StarBreaker)
 (MIT), vendored as a git submodule at `vendor/StarBreaker`.
@@ -15,7 +17,7 @@ Built on the Rust crates of [StarBreaker](https://github.com/diogotr7/StarBreake
 | --- | --- |
 | [docs/01-starbreaker-analysis.md](docs/01-starbreaker-analysis.md) | what StarBreaker provides, what was verified on this machine, the gaps |
 | [docs/02-implementation-plan.md](docs/02-implementation-plan.md) | architecture decisions, milestones, work packages, agent orchestration |
-| [docs/03-unreal-export-design.md](docs/03-unreal-export-design.md) | UE plugin design: asset mapping, Nanite/Lumen rules, direct-import FFI |
+| [docs/03-unreal-export-design.md](docs/03-unreal-export-design.md) | UE app design: hosts and the standalone build path, view flow, object mapping, Nanite/Lumen rules, player modes, UI, FFI |
 | [docs/work-packages/](docs/work-packages/) | self-contained briefs handed to Codex / Opus 5.5 agents |
 
 ## Quick start (today)
@@ -33,12 +35,11 @@ machine the LUG Wine prefix under `~/Games/star-citizen`). Do not set `SC_DATA_P
 ## Planned layout
 
 ```
-crates/scviewer-core   Rust: Session over p4k + DataCore, GLB/decomposed export, clip catalogue
+crates/scviewer-core   Rust: Session over p4k + DataCore, decomposed export (disk + in-memory), clip catalogue
 crates/scviewer-cli    thin CLI for verification
-crates/scbridge-ffi    C-ABI library for the Unreal plugin (M4)
-app/                   Tauri 2 + React + three.js viewer
-ue/SCTest              UE 5.8 test project with a Lumen level
-ue/Plugins/SCBridge    UE editor plugin: package importer, materials, rig/anim, direct import
+crates/scbridge-ffi    C-ABI library (libscbridge.so) the Unreal plugin calls
+ue/SCViewer            UE 5.8 project: game-mode app + Viewer level (Lumen, Nanite, HWRT)
+ue/Plugins/SCBridge    runtime module (importer, actor, player, UI) + optional editor module (Keep)
 vendor/StarBreaker     upstream toolkit (submodule, pinned)
 scripts/               helpers (starbreaker.sh, glbinfo.py, golden.sh …)
 ```
