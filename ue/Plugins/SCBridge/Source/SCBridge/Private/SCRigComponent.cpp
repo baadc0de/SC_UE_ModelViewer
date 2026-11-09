@@ -29,8 +29,7 @@ void USCRigComponent::RefreshBoneTransforms(FActorComponentTickFunction*)
     }
     bNeedToFlipSpaceBaseBuffers = true;
     USkinnedMeshComponent::FinalizeBoneTransform();
-    if (bEnablePerPolyCollision && IsPhysicsStateCreated())
-        UpdateKinematicBonesToAnim(GetComponentSpaceTransforms(), ETeleportType::TeleportPhysics, true);
+    RefitCollision(); // our own CPU skin refit; never the engine's MeshObject-gated per-poly path
     UpdateChildTransforms();
     UpdateBounds();
     MarkRenderTransformDirty();

@@ -32,12 +32,21 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") bool bCollisionReady = false;
+    /** Incremented whenever SpawnPoints changes (UI lists rebuild on change). */
+    int32 SpawnRevision = 0;
     void AddSpawnPoint(FName Kind, const FString& Label, const FTransform& WorldTransform);
+    /** Replace the single user-selected spawn ("spawn where I look"); returns its index. */
+    int32 SetSelectedSpawn(const FTransform& WorldTransform);
     void AddItemSpawn(const FSCSceneInstance& Instance, USceneComponent* Anchor);
     void BuildExploration();
     FBox ExplorationBounds() const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") int32 NearestDoor(FVector Position, float Reach = 300) const;
+    /** Interaction under the view ray within Reach (rig hit -> its nearest driven joint), else NearestDoor. */
+    int32 FindInteraction(FVector Eye, FVector Direction, float Reach = 300, const AActor* Ignore = nullptr) const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool ToggleDoor(int32 Index);
+    UFUNCTION(BlueprintPure, Category = "SC|Exploration") bool IsDoorOpen(int32 Index) const;
+    /** Whether the last tag played for Fragment on Rig (nullptr: the untargeted orbit-UI toggle) is Open. */
+    bool IsFragmentOpen(FName Fragment, const USCRigComponent* Rig = nullptr) const;
     bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target);
 
     virtual void Tick(float DeltaSeconds) override;
@@ -64,7 +73,15 @@ private:
     bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {}, USCRigComponent* Target = nullptr);
     void MarkDirty(int32 ClipIndex);
     TSet<USkeletalMesh*> DirtyMeshes;
-    TMap<FName, FName> FragmentTargets;
+    // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle.
+    TMap<TPair<const USCRigComponent*, FName>, FName> FragmentTargets;
+    struct FPendingSpawn
+    {
+        FName Kind;
+        FString Label;
+        TWeakObjectPtr<USceneComponent> Anchor;
+    };
+    TArray<FPendingSpawn> PendingItemSpawns;
     uint64 NextOrder = 0;
     FRandomStream FragmentRandom{0x5343};
 

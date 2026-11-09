@@ -211,3 +211,20 @@ Open TODOs:
   explicit light-code restriction.
 - TODO(WP-C1): Persistent collision caching and its cached-cook acceptance remain
   assigned to WP-C1 by the addendum; P1 adds no second cache.
+
+## Contract changes from the GPU acceptance pass (orchestrator, 2026-11-09)
+
+- **Interactions** are Mannequin fragments with an Open/Close tag pair on a rig the clip
+  binds — no fragment or entity vocabulary, no `item_type` gate. This adds the authored
+  maintenance panels, ladders and folding seats (every former interaction is kept).
+  E acts on the interaction whose rig carries the part under the crosshair (within 3 m),
+  else on the nearest driven joint within 3 m. Open state is the tag last played on that
+  rig instance; the orbit-UI toggle keeps its own (untargeted) state.
+- **Spawn kinds:** `Seat`, `SeatAccess`, `Door` (DataCore `AttachDef.Type`; interaction
+  joints are `Door` too), `Interior`, `Hull`, `Selected` (spawn where I look, replaced on
+  reuse, never ranked). `Entrance` is reserved for a data-identified hull entrance (not
+  exported yet; see `ue/verification/WP-P1.md` Follow-ups). Start ranking:
+  `Entrance > SeatAccess > Seat > Interior > Door > Hull`.
+- **Skinned collision** is refit by our own CPU skinning (`USCRigComponent::RefitCollision`)
+  on every pose change of a weighting bone, identically with and without a GPU; the
+  serialized trimesh carries an identity external vertex map.

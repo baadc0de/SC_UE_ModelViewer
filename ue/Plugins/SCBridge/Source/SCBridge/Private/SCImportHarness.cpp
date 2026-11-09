@@ -73,8 +73,9 @@ void FSCImportHarness::Start()
                     {
                         TWeakObjectPtr<ASCFirstPersonCharacter> Character = Viewer->GetFirstPerson();
                         const FVector Start = Character->GetActorLocation();
+                        TWeakObjectPtr<UWorld> WeakWorld = World;
                         FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
-                            [Character,Start,Elapsed=0.f,WalkSeconds,FloorFrames=0,Started=false](float Dt) mutable {
+                            [Character,Start,Elapsed=0.f,WalkSeconds,FloorFrames=0,Started=false,WeakWorld,Folder](float Dt) mutable {
                                 if (!Character.IsValid()) return false;
                                 // The registration frame includes the synchronous import stall.
                                 if (!Started) { Started=true; return true; }
@@ -93,8 +94,14 @@ void FSCImportHarness::Start()
                                     S->SetCameraMode(ESCCameraMode::Fly) && S->SetCameraMode(ESCCameraMode::FirstPerson);
                                 if (S) S->Unload();
                                 const bool Unloaded = S && !S->GetFirstPerson() && !S->GetVehicle();
-                                Passed &= Switched && Unloaded;
-                                UE_LOG(LogTemp,Display,TEXT("P1_GAME_LIFECYCLE passed=%d switched=%d unloaded=%d"),Passed,Switched,Unloaded);
+                                // Reload, re-enter first person and quit from there: shutdown must
+                                // not possess or destroy while the world tears down.
+                                ASCVehicle* Again = S && WeakWorld.IsValid() ? USCImportLibrary::ImportFolder(WeakWorld.Get(), Folder) : nullptr;
+                                if (Again) S->AdoptPackageVehicle(Again);
+                                const bool Reentered = Again && S->SetCameraMode(ESCCameraMode::FirstPerson) && S->GetFirstPerson();
+                                Passed &= Switched && Unloaded && Reentered;
+                                UE_LOG(LogTemp,Display,TEXT("P1_GAME_LIFECYCLE passed=%d switched=%d unloaded=%d reloaded=%d quit_in_first_person=%d"),
+                                    Passed,Switched,Unloaded,Again!=nullptr,Reentered);
                                 FPlatformMisc::RequestExitWithStatus(false,Passed?0:1);
                                 return false;
                             }));

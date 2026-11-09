@@ -485,7 +485,16 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
 
 void USCViewerSubsystem::UnloadInternal(bool bCollect)
 {
-    if (FirstPerson) SetCameraMode(ESCCameraMode::Orbit);
+    UWorld* ViewerWorld = GetViewerWorld();
+    if (!ViewerWorld || ViewerWorld->bIsTearingDown || IsEngineExitRequested())
+    {
+        // The world destroys its own actors while tearing down: no possession, spawning or destroying.
+        FirstPerson = nullptr;
+        InspectionPawn = nullptr;
+        CameraMode = ESCCameraMode::Orbit;
+    }
+    else if (FirstPerson)
+        SetCameraMode(ESCCameraMode::Orbit);
     IsolateComponent(nullptr);
     Focused = nullptr;
     ASCVehicle* Previous = Vehicle.Get();
@@ -608,6 +617,11 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
     {
         const FVector Position = FirstPerson->Camera->GetComponentLocation();
         const FRotator Rotation = PC ? PC->GetControlRotation() : FirstPerson->GetActorRotation();
+        // Orbit around what the player was looking at, from the same viewpoint.
+        FHitResult Look;
+        FCollisionQueryParams LookParams(SCENE_QUERY_STAT(SCLeaveFirstPerson), true, FirstPerson);
+        const double Pivot = World->LineTraceSingleByChannel(Look, Position, Position + Rotation.Vector() * 100000, ECC_Visibility, LookParams)
+            ? Look.Distance : -1.0;
         FirstPerson->ClearInput();
         if (PC && InspectionPawn.IsValid()) PC->Possess(InspectionPawn.Get());
         FirstPerson->Destroy();
@@ -615,7 +629,7 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
         if (InspectionPawn.IsValid())
         {
             InspectionPawn->SetActorTickEnabled(true);
-            InspectionPawn->SetView(Position, Rotation);
+            InspectionPawn->SetView(Position, Rotation, Pivot);
         }
     }
     CameraMode = Mode;
@@ -632,8 +646,7 @@ bool USCViewerSubsystem::SpawnWhereLooking()
     FCollisionQueryParams Query(SCENE_QUERY_STAT(SCSpawnLook), true, Pawn);
     if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, Start, Start + Pawn->Camera->GetForwardVector() * 100000,
             ECC_Visibility, Query) || Hit.GetActor() != Vehicle.Get()) return false;
-    Vehicle->AddSpawnPoint(TEXT("Entrance"), TEXT("Selected surface"), FTransform(Hit.ImpactPoint));
-    const int32 Index = Vehicle->SpawnPoints.Num() - 1;
+    const int32 Index = Vehicle->SetSelectedSpawn(FTransform(Hit.ImpactPoint));
     if (!SetCameraMode(ESCCameraMode::FirstPerson)) return false;
     return FirstPerson->TeleportToSpawn(Index);
 }

@@ -79,6 +79,7 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         TMap<int32, float> Clips;
     };
     TArray<FOption> Options;
+    const uint64 OrderBefore = NextOrder;
     for (int32 Index = 0; Index < ClipCatalog->Clips.Num(); ++Index)
     {
         const auto& C = ClipCatalog->Clips[Index];
@@ -143,12 +144,30 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
             Found |= StartClip(Index, Selected.Clips[Index], false, false, Selected.Scopes, Target);
         Options.RemoveAll([&](const FOption& O) { return Conflicts(Selected.Scopes, O.Scopes); });
     }
-    if (Found) FragmentTargets.Add(Fragment, Tag);
+    if (Found)
+    {
+        // Record the played state on every rig instance this call actually drove (entries started
+        // above), so per-door state and the orbit toggle follow what is posed.
+        if (!Target) FragmentTargets.Add({nullptr, Fragment}, Tag);
+        auto Record = [&](const FSCClipPlayback& P) {
+            if (P.Order <= OrderBefore) return;
+            for (USCRigComponent* Rig : Rigs)
+                if ((!P.TargetRig.IsValid() || P.TargetRig.Get() == Rig) &&
+                    ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); }))
+                    FragmentTargets.Add({Rig, Fragment}, Tag);
+        };
+        for (const auto& P : Playback) Record(P);
+        for (const auto& P : HeldPlayback) Record(P);
+    }
     return Found;
+}
+bool ASCVehicle::IsFragmentOpen(FName Fragment, const USCRigComponent* Rig) const
+{
+    return FragmentTargets.FindRef({Rig, Fragment}) == FName(TEXT("Open"));
 }
 bool ASCVehicle::ToggleClip(FName Fragment, FName OpenTag, FName CloseTag)
 {
-    return PlayFragment(Fragment, FragmentTargets.FindRef(Fragment) == OpenTag ? CloseTag : OpenTag);
+    return PlayFragment(Fragment, FragmentTargets.FindRef({nullptr, Fragment}) == OpenTag ? CloseTag : OpenTag);
 }
 void ASCVehicle::ResetPose()
 {
@@ -156,7 +175,6 @@ void ASCVehicle::ResetPose()
     HeldPlayback.Reset();
     DirtyMeshes.Reset();
     FragmentTargets.Reset();
-    for (auto& Door : Doors) Door.bOpen = false;
     SetActorTickEnabled(false);
     for (USCRigComponent* Rig : Rigs)
         Rig->ResetPose();

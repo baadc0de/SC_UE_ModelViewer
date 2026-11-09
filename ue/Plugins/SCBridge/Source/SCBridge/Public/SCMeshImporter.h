@@ -61,7 +61,9 @@ public:
     static bool Derive(const FSCPackageSource& Source, const FString& Path, FSCDerivedMesh& Out, FString& Error);
     static FSCDerivedMesh Select(const FSCDerivedMesh& Data, const TArray<FTriangleID>& Triangles);
     static void SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent);
-    static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error);
+    /** Worker-thread Chaos BVH. bVertexIndexMap stores the identity external->particle map that
+     *  FTriangleMeshImplicitObject::UpdateVertices requires (refittable skinned collision only). */
+    static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap = false);
     static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
         bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error);
     // glTF (right, up, backward), metres -> UE (forward, right, up), centimetres.

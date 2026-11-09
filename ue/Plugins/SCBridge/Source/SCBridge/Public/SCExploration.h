@@ -3,6 +3,12 @@
 #include "CoreMinimal.h"
 #include "SCExploration.generated.h"
 class USCRigComponent;
+/** Spawn categories. Each comes from one data source; StartOrder is the first-person start ranking. */
+struct SCBRIDGE_API FSCSpawnKind
+{
+    static const FName Entrance, SeatAccess, Seat, Interior, Door, Hull, Selected;
+    static const TArray<FName>& StartOrder();
+};
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSpawnPoint
 {
@@ -20,5 +26,5 @@ struct SCBRIDGE_API FSCDoorInteraction
     UPROPERTY(BlueprintReadOnly) FString DisplayName;
     UPROPERTY(BlueprintReadOnly) TObjectPtr<USCRigComponent> Rig;
     UPROPERTY(BlueprintReadOnly) FName Joint;
-    UPROPERTY(BlueprintReadOnly) bool bOpen = false;
+    // Open state is derived from the fragment tag last played on Rig (ASCVehicle::IsDoorOpen).
 };

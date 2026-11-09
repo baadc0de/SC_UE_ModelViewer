@@ -1,0 +1,94 @@
+# WP-P1 GPU route: rear ramp -> cargo bay -> bulkhead -> corridor -> cockpit, wall block, frame cost.
+# Lines: <delay seconds> <console command>. Moves are timed inputs relative to the current view;
+# spawns are addressed by data kind: Door:2 = third DataCore Door item (the ramp; its hint is the
+# bottom of the ramp geometry, i.e. the hangar floor under the closed ramp), Interior:1 = cargo bay floor.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first (or -SCPackage=<export> -SCExplore).
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0.5 sc.FP.Spawns
+1 sc.FP.Spawn Door:2
+1 sc.FP.Look 0 60
+1 shot 01-ramp-closed-from-outside
+0 sc.FP.Interact
+5 shot 02-ramp-open-overhead
+# The open ramp's lip hangs ~1.5 m above the hangar floor (viewer floor clearance): crouch under it.
+0 sc.FP.Crouch 1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.5
+0.5 sc.FP.Where
+0 sc.FP.Crouch 0
+0.5 sc.FP.Look 0 5
+1 shot 03-ramp-open-outside
+# Boarding from the floor is impossible (lip above jump height): start inside on the bay floor.
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 shot 04-ramp-foot-looking-up
+0 sc.FP.Move 1 0 2
+1 shot 05-cargo-bay
+0 sc.FP.Look -90 0
+0.3 sc.FP.Move 1 0 0.62
+0.3 sc.FP.Look 0 0
+0.3 sc.FP.Move 1 0 3
+0.5 sc.FP.Where
+0.5 shot 06-bulkhead-closed-blocks
+0 sc.FP.Interact
+3 shot 07-bulkhead-open
+0 sc.FP.Move 1 0 1
+1 shot 08-corridor
+0 sc.FP.Move 1 0 1
+0.5 sc.FP.Move 1 0 1
+0.5 sc.FP.Where
+0.5 shot 09-wall-blocks
+0 sc.FP.Look 90 0
+0.3 sc.FP.Move 1 0 0.3
+0.3 sc.FP.Look 0 0
+0.3 sc.FP.Move 1 0 2
+1 sc.FP.Look 0 -10
+1 shot 10-cockpit
+0 sc.FP.Crouch 1
+1.5 shot 11-cockpit-crouched
+0 sc.FP.Crouch 0
+1 sc.FP.Look 180 -5
+1 shot 12-cockpit-looking-aft
+# Frame cost A/B/A at one settled view: first person at the start spawn, orbit from that same
+# viewpoint (the pawn takes over the eye position), first person again at the same start spawn.
+0 sc.Camera orbit
+1 sc.Camera first
+1 sc.FP.Look 0 0
+2 frametime 6 first-person-a
+0 sc.Camera orbit
+2 shot 13-orbit-same-view
+0 frametime 6 orbit-same-view
+0 sc.Camera first
+1 sc.FP.Look 0 0
+2 frametime 6 first-person-b
+# Safety: noclip into the surface under the crosshair, refused exit, back out, accepted exit.
+0 sc.FP.Look 0 0
+0.5 sc.FP.Embed
+0.5 sc.FP.Noclip 0
+0.3 shot 14-noclip-exit-refused 2
+0 sc.FP.Move -1 0 0.5
+0.5 sc.FP.Noclip 0
+1 sc.FP.Where
+# Deliberate fall: noclip down through the hangar floor, walk mode, recover to the last spawn.
+0 sc.FP.Noclip 1
+0 sc.FP.Move 0 0 3 0 -1
+0.5 sc.FP.Noclip 0
+3 sc.FP.Where
+0.5 shot 15-recovered
+# HUD: torch and teleport menu.
+0 sc.FP.Torch 1
+0 sc.FP.Menu 1
+1 shot 16-torch-and-teleport-menu
+0 sc.FP.Menu 0
+# Mode switches, unload, reload, and quit while in first person.
+0 sc.Camera fly
+2 sc.Camera orbit
+2 sc.Camera first
+2 sc.Unload
+3 sc.Load DRAK_Cutlass_Black
+30 sc.Camera first
+3 shot 17-reloaded-first-person
+0 quit

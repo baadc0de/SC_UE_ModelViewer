@@ -118,11 +118,13 @@ void ASCViewerPawn::FocusBounds(const FBox& Box)
         Distance = DistanceGoal;
     }
 }
-void ASCViewerPawn::SetView(const FVector& Location, const FRotator& Rotation)
+void ASCViewerPawn::SetView(const FVector& Location, const FRotator& Rotation, double PivotDistance)
 {
     SetActorLocationAndRotation(Location, FRotator(Rotation.Pitch, Rotation.Yaw, 0));
     Yaw = Rotation.Yaw;
     Pitch = FMath::Clamp(Rotation.Pitch, -89.f, 89.f);
+    if (PivotDistance > 0) Distance = FMath::Max(double(MinDistanceCm), PivotDistance);
+    DistanceGoal = Distance;
     Target = TargetGoal = Location + GetActorForwardVector() * Distance;
 }
 void ASCViewerPawn::RotateDrag(const FVector2D& Delta)

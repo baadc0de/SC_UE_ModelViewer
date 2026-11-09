@@ -101,7 +101,7 @@ void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& 
     Data.SkinWeights = MoveTemp(OpaqueData.SkinWeights);
     // CollisionBytes retain the independently derived full-source triangle BVH.
 }
-bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
+bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap)
 {
     const double Start = FPlatformTime::Seconds();
     Data.CollisionBytes.Reset();
@@ -127,8 +127,26 @@ bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
         Materials.Add(uint16(Data.Description.GetTrianglePolygonGroup(Triangle).GetValue()));
         FaceMap->Add(Triangle.GetValue());
     }
-    Chaos::FTriangleMeshImplicitObjectPtr Geometry =
-        new Chaos::FTriangleMeshImplicitObject(MoveTemp(Particles), MoveTemp(Triangles), MoveTemp(Materials), MoveTemp(FaceMap));
+    // Particles are created in vertex-element order, so external vertex i is particle i. Chaos
+    // serializes a missing map as an empty array and loads it as a non-null empty map, which
+    // UpdateVertices then indexes: a refittable mesh must carry the explicit identity map.
+    TUniquePtr<TArray<int32>> VertexIndexMap;
+    if (bVertexIndexMap)
+    {
+        VertexIndexMap = MakeUnique<TArray<int32>>();
+        VertexIndexMap->Init(INDEX_NONE, VertexMap.Num());
+        for (const auto& Pair : VertexMap)
+        {
+            if (!VertexIndexMap->IsValidIndex(Pair.Key.GetValue()))
+            {
+                Error = TEXT("Refittable collision needs compact vertex IDs");
+                return false;
+            }
+            (*VertexIndexMap)[Pair.Key.GetValue()] = Pair.Value;
+        }
+    }
+    Chaos::FTriangleMeshImplicitObjectPtr Geometry = new Chaos::FTriangleMeshImplicitObject(
+        MoveTemp(Particles), MoveTemp(Triangles), MoveTemp(Materials), MoveTemp(FaceMap), MoveTemp(VertexIndexMap));
     FMemoryWriter Writer(Data.CollisionBytes);
     Chaos::FChaosArchive Archive(Writer);
     Archive << Geometry;

@@ -1,0 +1,35 @@
+# WP-P1 GPU route: best start (pilot seat: the seat-access port has no location data), hull spawn + jump + walk, pilot seat (crouch eye height),
+# canopy and ladder by E. Spawn kinds from data: Seat, Hull, Door:n (interaction joints in
+# FP_DOOR_LIST order after the DataCore Door item: Door:1 canopy, Door:9 ladder on this package).
+# Host: -SCDefaults -SCLoad=AEGS_Gladius -SCCamera=first
+20 r.VSync 0
+0.5 sc.FP.Spawns
+1 sc.FP.Look 0 0
+0.5 shot 01-start
+0 sc.FP.Spawn Hull
+1 sc.FP.Look 0 -25
+1 shot 02-hull
+0 sc.FP.Jump
+0.3 sc.FP.Where
+1.5 sc.FP.Where
+0 sc.FP.Move 1 0 1
+0.5 shot 03-hull-after-walk
+0 sc.FP.Spawn Seat
+1 sc.FP.Look 0 0
+0.5 shot 04-pilot-seat
+0 sc.FP.Crouch 1
+1.5 sc.FP.Where
+0.3 shot 05-pilot-seat-crouched
+0 sc.FP.Crouch 0
+0.5 sc.FP.Look 0 60
+0.3 sc.FP.Probe
+0 sc.FP.Interact
+5 shot 06-canopy-toggled
+0 sc.FP.Spawn Door:9
+1 sc.FP.Look 90 10
+0.3 sc.FP.Probe
+0 sc.FP.Interact
+4 shot 07-after-E-at-ladder
+0 sc.FP.Spawns
+0 sc.FP.Door 8
+4 shot 08-ladder-fragment-toggled

@@ -22,7 +22,9 @@ public:
     /** Orbit: target the box centre at a distance that fits its sphere in view. Fly: move to the same viewpoint. */
     UFUNCTION(BlueprintCallable, Category = "SC|Camera") void FocusBounds(const FBox& Box);
     /** Place the camera directly (fly mode keeps it; orbit re-targets in front of it). */
-    UFUNCTION(BlueprintCallable, Category = "SC|Camera") void SetView(const FVector& Location, const FRotator& Rotation);
+    /** Place the camera; the orbit pivot lies PivotDistance ahead (<= 0 keeps the current orbit distance).
+     *  The camera stays where it is placed in either mode (no ease towards an older distance goal). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Camera") void SetView(const FVector& Location, const FRotator& Rotation, double PivotDistance = -1);
 
     // Input from the viewport input widget.
     void RotateDrag(const FVector2D& Pixels); // orbit around the target, or look around in fly mode

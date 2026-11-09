@@ -9,21 +9,22 @@
 #include "GameFramework/PlayerController.h"
 #include "Engine/World.h"
 
+namespace
+{
+constexpr float NoclipRefusalSeconds = 3;   // how long the HUD shows a refused noclip exit
+constexpr float BlockedOfferSeconds = 2;    // blocked input this long offers noclip
+constexpr float InteractReach = 300;        // E reaches 3 m (brief)
+}
+
 ASCFirstPersonCharacter::ASCFirstPersonCharacter()
 {
-    GetCapsuleComponent()->InitCapsuleSize(34, 88);
     GetCapsuleComponent()->OnComponentHit.AddDynamic(this, &ASCFirstPersonCharacter::CapsuleHit);
     auto* Movement = GetCharacterMovement();
-    Movement->MaxWalkSpeed = 400;
-    Movement->MaxFlySpeed = 650;
-    Movement->SetCrouchedHalfHeight(44);
-    Movement->MaxStepHeight = 45;
     Movement->GetNavAgentPropertiesRef().bCanCrouch = true;
     Movement->bRunPhysicsWithNoController = true; // scripted commandlet walks use the same movement component
     Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
     Camera->SetupAttachment(GetCapsuleComponent());
     Camera->bUsePawnControlRotation = true;
-    Camera->SetRelativeLocation(FVector(0, 0, BaseEyeHeight));
     Flashlight = CreateDefaultSubobject<USpotLightComponent>(TEXT("ExplorationFlashlight"));
     Flashlight->SetupAttachment(Camera);
     // Viewer-owned torch, not an imported game light.
@@ -31,10 +32,46 @@ ASCFirstPersonCharacter::ASCFirstPersonCharacter()
     Flashlight->SetAttenuationRadius(2000);
     Flashlight->SetOuterConeAngle(35);
     Flashlight->SetVisibility(false);
+    SetProfile(FSCCharacterProfile());
 }
-void ASCFirstPersonCharacter::SetRunning(bool bRun) { GetCharacterMovement()->MaxWalkSpeed = bRun ? 650 : 400; }
+void ASCFirstPersonCharacter::SetProfile(const FSCCharacterProfile& InProfile)
+{
+    Profile = InProfile;
+    auto* Movement = GetCharacterMovement();
+    GetCapsuleComponent()->SetCapsuleSize(Profile.CapsuleRadius, bIsCrouched ? Profile.CrouchedHalfHeight : Profile.StandingHalfHeight,
+                                          GetCapsuleComponent()->IsRegistered());
+    Movement->SetCrouchedHalfHeight(Profile.CrouchedHalfHeight);
+    Movement->MaxStepHeight = Profile.StepHeight;
+    Movement->MaxFlySpeed = Profile.NoclipSpeed;
+    Movement->BrakingDecelerationFlying = Profile.NoclipBraking;
+    CrouchedEyeHeight = Profile.CrouchedEyeHeight;
+    SetRunning(bRunning);
+    RecalculateBaseEyeHeight();
+    Camera->SetRelativeLocation(EyeOffset());
+}
+void ASCFirstPersonCharacter::RecalculateBaseEyeHeight()
+{
+    BaseEyeHeight = bIsCrouched ? Profile.CrouchedEyeHeight : Profile.EyeHeight;
+}
+FVector ASCFirstPersonCharacter::EyeOffset() const
+{
+    return EyeSource ? EyeSource() : FVector(0, 0, BaseEyeHeight);
+}
+void ASCFirstPersonCharacter::SetRunning(bool bRun)
+{
+    bRunning = bRun;
+    GetCharacterMovement()->MaxWalkSpeed = bRun ? Profile.RunSpeed : Profile.WalkSpeed;
+}
 void ASCFirstPersonCharacter::SetMoveInput(FVector Input) { Move = Input.GetClampedToMaxSize(1); }
-void ASCFirstPersonCharacter::ClearInput() { Held.Empty(); Move = FVector::ZeroVector; SetRunning(false); StopJumping(); UnCrouch(); }
+void ASCFirstPersonCharacter::ClearInput()
+{
+    Held.Empty();
+    HoldSeconds = 0;
+    Move = FVector::ZeroVector;
+    SetRunning(false);
+    StopJumping();
+    UnCrouch();
+}
 void ASCFirstPersonCharacter::CapsuleHit(UPrimitiveComponent*, AActor*, UPrimitiveComponent*, FVector, const FHitResult&) { ++CapsuleHits; }
 void ASCFirstPersonCharacter::Look(FVector2D Pixels)
 {
@@ -46,12 +83,42 @@ void ASCFirstPersonCharacter::Look(FVector2D Pixels)
         Controller->SetControlRotation(View);
     }
 }
+void ASCFirstPersonCharacter::SetVehicleRelativeView(float Yaw, float Pitch)
+{
+    const FQuat Base = Vehicle ? Vehicle->GetActorQuat() : FQuat::Identity;
+    const FRotator View = (Base * FRotator(FMath::Clamp(Pitch, -89.f, 89.f), Yaw, 0).Quaternion()).Rotator();
+    if (Controller) Controller->SetControlRotation(View);
+    SetActorRotation(FRotator(0, View.Yaw, 0));
+}
+FRotator ASCFirstPersonCharacter::GetVehicleRelativeView() const
+{
+    const FQuat Base = Vehicle ? Vehicle->GetActorQuat() : FQuat::Identity;
+    return (Base.Inverse() * GetViewRotation().Quaternion()).Rotator();
+}
+FVector ASCFirstPersonCharacter::GetVehicleRelativeLocation() const
+{
+    return Vehicle ? Vehicle->GetActorTransform().InverseTransformPosition(GetActorLocation()) : GetActorLocation();
+}
+void ASCFirstPersonCharacter::HoldMoveInput(FVector Input, float Seconds, bool bRun)
+{
+    HoldInput = Input.GetClampedToMaxSize(1);
+    HoldSeconds = FMath::Max(0.f, Seconds);
+    SetMoveInput(HoldSeconds > 0 ? HoldInput : FVector::ZeroVector);
+    SetRunning(HoldSeconds > 0 && bRun);
+}
 void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     if (!Vehicle || Vehicle->IsActorBeingDestroyed()) { ClearInput(); return; }
-    Camera->SetRelativeLocation(FVector(0, 0, BaseEyeHeight));
-    const FRotator Rotation = GetControlRotation();
+    // Single eye anchor; a camera re-attached to another driver (e.g. a head joint) is left alone.
+    if (Camera->GetAttachParent() == GetCapsuleComponent()) Camera->SetRelativeLocation(EyeOffset());
+    if (HoldSeconds > 0)
+    {
+        HoldSeconds -= DeltaSeconds;
+        if (HoldSeconds <= 0) { HoldSeconds = 0; ApplyHeldInput(); }
+    }
+    NoclipRefusedSeconds = FMath::Max(0.f, NoclipRefusedSeconds - DeltaSeconds);
+    const FRotator Rotation = GetViewRotation(); // control rotation; actor rotation without a controller
     const FRotator Heading(0, Rotation.Yaw, 0);
     if (!bTeleportMenuOpen)
     {
@@ -61,10 +128,9 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
     }
     const bool WantsMove = !Move.IsNearlyZero() && !bNoclip && !bTeleportMenuOpen;
     BlockedSeconds = WantsMove && FVector::DistSquared(LastPosition, GetActorLocation()) < 1 ? BlockedSeconds + DeltaSeconds : 0;
-    bStuck = BlockedSeconds >= 2;
+    bStuck = BlockedSeconds >= BlockedOfferSeconds;
     LastPosition = GetActorLocation();
-    const FBox Bounds = Vehicle->ExplorationBounds();
-    if (!bNoclip && Bounds.IsValid && GetActorLocation().Z < FMath::Min(0.0, Bounds.Min.Z) - GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * 4)
+    if (!bNoclip && GetActorLocation().Z < RecoveryZ)
     {
         SetActorTransform(LastSpawn, false, nullptr, ETeleportType::TeleportPhysics);
         GetCharacterMovement()->StopMovementImmediately();
@@ -72,49 +138,70 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
         UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_RECOVER count=%d"), RecoveryCount);
     }
 }
-bool ASCFirstPersonCharacter::ResolveSpawn(FVector Hint, FVector& Centre) const
+bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector& Centre, bool bSeated) const
 {
-    const auto* Capsule = GetCapsuleComponent();
-    const double Radius = Capsule->GetScaledCapsuleRadius(), Half = 88;
+    const double Radius = Profile.CapsuleRadius, Step = Profile.StepHeight;
+    const double WalkableZ = GetCharacterMovement()->GetWalkableFloorZ();
+    const FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, Half);
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSpawn), false, this);
-    const double Step = GetCharacterMovement()->MaxStepHeight;
     // Search a capsule-sized neighbourhood of the helper; never use an asset-name offset.
-    for (int32 Ring = 0; Ring <= 4; ++Ring)
+    // A seat is searched within two capsule diameters (seat bucket, footwell), never beyond.
+    for (int32 Ring = 0; Ring <= (bSeated ? 2 : 4); ++Ring)
         for (int32 Direction = 0; Direction < (Ring ? 8 : 1); ++Direction)
         {
             const double Angle = Direction * UE_DOUBLE_PI / 4;
             const FVector Offset(FMath::Cos(Angle) * Ring * Radius * 2, FMath::Sin(Angle) * Ring * Radius * 2, 0);
             FHitResult Hit;
             if (!GetWorld()->LineTraceSingleByChannel(Hit, Hint + Offset + FVector(0, 0, Half + Step),
-                    Hint + Offset - FVector(0, 0, Half * 4), ECC_Pawn, Params) ||
-                Hit.ImpactNormal.Z < GetCharacterMovement()->GetWalkableFloorZ()) continue;
+                    Hint + Offset - FVector(0, 0, bSeated ? Step : Half * 4), ECC_Pawn, Params) ||
+                Hit.ImpactNormal.Z < WalkableZ) continue;
             const FVector Candidate = Hit.ImpactPoint + FVector(0, 0, Half + 2.5);
-            if (!GetWorld()->OverlapBlockingTestByChannel(Candidate, FQuat::Identity, ECC_Pawn,
-                    FCollisionShape::MakeCapsule(Radius, Half), Params))
+            if (GetWorld()->OverlapBlockingTestByChannel(Candidate, FQuat::Identity, ECC_Pawn, Shape, Params)) continue;
+            if (bSeated) { Centre = Candidate; return true; } // sitting: no room to walk required
+            // A clear capsule in a tiny pocket is not a usable spot. Require a two-capsule-width step
+            // with floor support, using the same collision channel.
+            for (int32 Heading = 0; Heading < 8; ++Heading)
             {
-                // A clear capsule in a tiny pocket is not a usable entrance. Require a
-                // two-capsule-width step with floor support, using the same collision channel.
-                for (int32 Heading=0; Heading<8; ++Heading)
+                const FVector Ahead = Candidate + FRotator(0, Heading * 45, 0).Vector() * Radius * 4;
+                FHitResult Floor, Obstacle;
+                if (!GetWorld()->LineTraceSingleByChannel(Floor, Ahead + FVector(0, 0, Step), Ahead - FVector(0, 0, Half + Step), ECC_Pawn, Params) ||
+                    Floor.ImpactNormal.Z < WalkableZ) continue;
+                const FVector End = Floor.ImpactPoint + FVector(0, 0, Half + 2.5);
+                if (FMath::Abs(End.Z - Candidate.Z) > Step) continue;
+                if (!GetWorld()->SweepSingleByChannel(Obstacle, Candidate, End, FQuat::Identity, ECC_Pawn, Shape, Params))
                 {
-                    const FVector Ahead = Candidate + FRotator(0,Heading*45,0).Vector()*Radius*4;
-                    FHitResult Floor, Obstacle;
-                    if (!GetWorld()->LineTraceSingleByChannel(Floor,Ahead+FVector(0,0,Step),Ahead-FVector(0,0,Half+Step),ECC_Pawn,Params) ||
-                        Floor.ImpactNormal.Z<GetCharacterMovement()->GetWalkableFloorZ()) continue;
-                    const FVector End = Floor.ImpactPoint+FVector(0,0,Half+2.5);
-                    if (FMath::Abs(End.Z-Candidate.Z)>Step) continue;
-                    if (!GetWorld()->SweepSingleByChannel(Obstacle,Candidate,End,FQuat::Identity,ECC_Pawn,
-                            FCollisionShape::MakeCapsule(Radius,Half),Params))
-                    { Centre = Candidate; return true; }
+                    Centre = Candidate;
+                    return true;
                 }
             }
         }
     return false;
 }
-bool ASCFirstPersonCharacter::TeleportToFloor(FVector Floor)
+bool ASCFirstPersonCharacter::ResolveSpawn(FVector Hint, FVector& Centre, bool& bCrouched, bool bSeated) const
+{
+    if (bSeated)
+    {
+        bCrouched = FindCapsuleSpot(Hint, Profile.CrouchedHalfHeight, Centre, true);
+        return bCrouched;
+    }
+    bCrouched = false;
+    if (FindCapsuleSpot(Hint, Profile.StandingHalfHeight, Centre)) return true;
+    bCrouched = FindCapsuleSpot(Hint, Profile.CrouchedHalfHeight, Centre);
+    return bCrouched;
+}
+bool ASCFirstPersonCharacter::TeleportToFloor(FVector Floor, bool bSeated)
 {
     FVector Centre;
-    if (!ResolveSpawn(Floor, Centre)) return false;
-    UnCrouch();
+    bool bCrouchedSpot = false;
+    if (!ResolveSpawn(Floor, Centre, bCrouchedSpot, bSeated)) return false;
+    if (bCrouchedSpot)
+    {
+        // Shrink the capsule now so it is placed at the crouched centre without overlapping.
+        Crouch();
+        GetCharacterMovement()->Crouch();
+    }
+    else
+        UnCrouch();
     SetActorLocation(Centre, false, nullptr, ETeleportType::TeleportPhysics);
     GetCharacterMovement()->StopMovementImmediately();
     LastSpawn = GetActorTransform();
@@ -122,34 +209,51 @@ bool ASCFirstPersonCharacter::TeleportToFloor(FVector Floor)
     BlockedSeconds = 0;
     bStuck = false;
     bTeleportMenuOpen = false;
-    UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_SPAWN location=%s"), *Centre.ToString());
+    UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_SPAWN location=%s relative=%s crouched=%d"), *Centre.ToString(),
+           *GetVehicleRelativeLocation().ToCompactString(), bCrouchedSpot);
     return true;
 }
 bool ASCFirstPersonCharacter::TeleportToSpawn(int32 Index)
 {
     if (!Vehicle || !Vehicle->SpawnPoints.IsValidIndex(Index)) return false;
     const auto& Point = Vehicle->SpawnPoints[Index];
-    return TeleportToFloor((Point.Transform * Vehicle->GetActorTransform()).GetLocation());
+    if (!TeleportToFloor((Point.Transform * Vehicle->GetActorTransform()).GetLocation(), Point.Kind == FSCSpawnKind::Seat))
+    {
+        UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_SPAWN_REJECT index=%d kind=%s pos=%s label=\"%s\" reason=no_clear_capsule"), Index,
+               *Point.Kind.ToString(), *Point.Transform.GetLocation().ToCompactString(), *Point.DisplayName);
+        return false;
+    }
+    CurrentSpawn = Index;
+    UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_AT index=%d kind=%s label=\"%s\""), Index, *Point.Kind.ToString(), *Point.DisplayName);
+    return true;
 }
 bool ASCFirstPersonCharacter::Explore(ASCVehicle* InVehicle)
 {
     Vehicle = InVehicle;
     if (!Vehicle || !Vehicle->bCollisionReady) return false;
+    // Below everything that collides (and the world origin floor) by four capsule half-heights:
+    // computed once, the per-tick check must not walk every component.
+    const FBox Bounds = Vehicle->ExplorationBounds();
+    RecoveryZ = (Bounds.IsValid ? FMath::Min(0.0, Bounds.Min.Z) : 0.0) - Profile.StandingHalfHeight * 4;
     TArray<int32> Candidates;
-    for (int32 I=0; I<Vehicle->SpawnPoints.Num(); ++I) Candidates.Add(I);
+    for (int32 I = 0; I < Vehicle->SpawnPoints.Num(); ++I) Candidates.Add(I);
     Candidates.StableSort([&](int32 A, int32 B) { return Vehicle->SpawnPoints[A].Transform.GetLocation().Z < Vehicle->SpawnPoints[B].Transform.GetLocation().Z; });
-    for (FName Kind : {FName(TEXT("Entrance")), FName(TEXT("SeatAccess")), FName(TEXT("Seat")), FName(TEXT("Interior")), FName(TEXT("Hull"))})
+    for (FName Kind : FSCSpawnKind::StartOrder())
         for (int32 I : Candidates)
             if (Vehicle->SpawnPoints[I].Kind == Kind && TeleportToSpawn(I))
             {
-                UE_LOG(LogTemp,Display,TEXT("FIRST_PERSON_BEST kind=%s label=%s"),*Kind.ToString(),*Vehicle->SpawnPoints[I].DisplayName);
+                UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_BEST kind=%s label=%s"), *Kind.ToString(), *Vehicle->SpawnPoints[I].DisplayName);
                 return true;
             }
     return false;
 }
+int32 ASCFirstPersonCharacter::FocusedInteraction() const
+{
+    return Vehicle ? Vehicle->FindInteraction(Camera->GetComponentLocation(), GetViewRotation().Vector(), InteractReach, this) : INDEX_NONE;
+}
 bool ASCFirstPersonCharacter::Interact()
 {
-    return Vehicle && Vehicle->ToggleDoor(Vehicle->NearestDoor(Camera->GetComponentLocation()));
+    return Vehicle && Vehicle->ToggleDoor(FocusedInteraction());
 }
 void ASCFirstPersonCharacter::ToggleNoclip()
 {
@@ -157,56 +261,102 @@ void ASCFirstPersonCharacter::ToggleNoclip()
     {
         FCollisionQueryParams Params(SCENE_QUERY_STAT(SCNoclip), false, this);
         if (GetWorld()->OverlapBlockingTestByChannel(GetActorLocation(), FQuat::Identity, ECC_Pawn,
-                GetCapsuleComponent()->GetCollisionShape(), Params)) { bStuck = true; return; }
+                GetCapsuleComponent()->GetCollisionShape(), Params))
+        {
+            NoclipRefusedSeconds = NoclipRefusalSeconds;
+            UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_NOCLIP refused=1 relative=%s"), *GetVehicleRelativeLocation().ToCompactString());
+            return;
+        }
     }
     bNoclip = !bNoclip;
+    NoclipRefusedSeconds = 0;
     SetActorEnableCollision(!bNoclip);
     GetCharacterMovement()->SetMovementMode(bNoclip ? MOVE_Flying : MOVE_Falling);
     GetCharacterMovement()->StopMovementImmediately();
+    UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_NOCLIP on=%d relative=%s"), bNoclip, *GetVehicleRelativeLocation().ToCompactString());
+}
+bool ASCFirstPersonCharacter::SetNoclip(bool bOn)
+{
+    if (bOn != bNoclip) ToggleNoclip();
+    return bNoclip == bOn;
+}
+void ASCFirstPersonCharacter::SetCrouching(bool bCrouch)
+{
+    if (bCrouch) Crouch(); else UnCrouch();
+}
+void ASCFirstPersonCharacter::SetTorch(bool bOn)
+{
+    Flashlight->SetVisibility(bOn);
+}
+const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTable()
+{
+    using A = ESCFirstPersonAction;
+    static const TArray<TPair<FKey, A>> Table = {
+        {EKeys::W, A::Forward}, {EKeys::S, A::Back}, {EKeys::A, A::Left}, {EKeys::D, A::Right},
+        {EKeys::Q, A::Down}, {EKeys::SpaceBar, A::Up}, {EKeys::LeftShift, A::Run}, {EKeys::LeftControl, A::Crouch},
+        {EKeys::E, A::Interact}, {EKeys::F, A::Torch}, {EKeys::V, A::Noclip}, {EKeys::T, A::Teleport}, {EKeys::Escape, A::Close}};
+    return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
 {
-    const TArray<FKey> MoveKeys = {EKeys::W,EKeys::S,EKeys::A,EKeys::D,EKeys::Q,EKeys::SpaceBar,EKeys::LeftShift,EKeys::LeftControl};
-    if (MoveKeys.Contains(Key))
+    for (const auto& Entry : KeyTable())
+        if (Entry.Key == Key) return HandleAction(Entry.Value, bDown);
+    return false;
+}
+void ASCFirstPersonCharacter::ApplyHeldInput()
+{
+    using A = ESCFirstPersonAction;
+    auto Axis = [&](A Positive, A Negative) { return float(Held.Contains(Positive)) - float(Held.Contains(Negative)); };
+    SetMoveInput(FVector(Axis(A::Forward, A::Back), Axis(A::Right, A::Left), Axis(A::Up, A::Down)));
+    SetRunning(Held.Contains(A::Run));
+}
+bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDown)
+{
+    using A = ESCFirstPersonAction;
+    if (Action <= A::Crouch) // held actions
     {
-        if (bDown) Held.Add(Key); else Held.Remove(Key);
-        auto Axis = [&](FKey Positive, FKey Negative) { return float(Held.Contains(Positive)) - float(Held.Contains(Negative)); };
-        SetMoveInput(FVector(Axis(EKeys::W,EKeys::S), Axis(EKeys::D,EKeys::A), Axis(EKeys::SpaceBar,EKeys::Q)));
-        SetRunning(Held.Contains(EKeys::LeftShift));
-        if (Key == EKeys::SpaceBar && !bNoclip) { if (bDown) Jump(); else StopJumping(); }
-        if (Key == EKeys::LeftControl) { if (bDown) Crouch(); else UnCrouch(); }
+        if (bDown) Held.Add(Action); else Held.Remove(Action);
+        if (HoldSeconds <= 0) ApplyHeldInput();
+        if (Action == A::Up && !bNoclip) { if (bDown) Jump(); else StopJumping(); }
+        if (Action == A::Crouch) SetCrouching(bDown);
         return true;
     }
     if (!bDown) return false;
-    if (Key == EKeys::E) { Interact(); return true; }
-    if (Key == EKeys::F) { Flashlight->ToggleVisibility(); return true; }
-    if (Key == EKeys::V) { ToggleNoclip(); return true; }
-    if (Key == EKeys::T) { bTeleportMenuOpen = !bTeleportMenuOpen; ClearInput(); return true; }
-    if (Key == EKeys::Escape) { bTeleportMenuOpen = false; ClearInput(); return true; }
-    return false;
+    switch (Action)
+    {
+    case A::Interact: Interact(); return true;
+    case A::Torch: SetTorch(!Flashlight->IsVisible()); return true;
+    case A::Noclip: ToggleNoclip(); return true;
+    case A::Teleport: bTeleportMenuOpen = !bTeleportMenuOpen; ClearInput(); return true;
+    case A::Close: bTeleportMenuOpen = false; ClearInput(); return true;
+    default: return false;
+    }
 }
 void ASCFirstPersonCharacter::SetupPlayerInputComponent(UInputComponent* Input)
 {
     Super::SetupPlayerInputComponent(Input);
-    for (FKey Key : {EKeys::W,EKeys::S,EKeys::A,EKeys::D,EKeys::Q,EKeys::SpaceBar,EKeys::LeftShift,EKeys::LeftControl,EKeys::E,EKeys::F,EKeys::V,EKeys::T,EKeys::Escape})
-    {
+    for (const auto& Entry : KeyTable())
         for (EInputEvent Event : {IE_Pressed, IE_Released})
         {
-            FInputKeyBinding Binding(FInputChord(Key), Event);
-            Binding.KeyDelegate.GetDelegateForManualSet().BindLambda([this,Key,Event] { HandleKey(Key, Event == IE_Pressed); });
+            FInputKeyBinding Binding(FInputChord(Entry.Key), Event);
+            const ESCFirstPersonAction Action = Entry.Value;
+            Binding.KeyDelegate.GetDelegateForManualSet().BindLambda([this, Action, Event] { HandleAction(Action, Event == IE_Pressed); });
             Input->KeyBindings.Add(MoveTemp(Binding));
         }
-    }
-    Input->BindAxisKey(EKeys::MouseX).AxisDelegate.GetDelegateForManualSet().BindLambda([this](float Value) { Look(FVector2D(Value,0)); });
-    Input->BindAxisKey(EKeys::MouseY).AxisDelegate.GetDelegateForManualSet().BindLambda([this](float Value) { Look(FVector2D(0,-Value)); });
+    Input->BindAxisKey(EKeys::MouseX).AxisDelegate.GetDelegateForManualSet().BindLambda([this](float Value) { Look(FVector2D(Value, 0)); });
+    Input->BindAxisKey(EKeys::MouseY).AxisDelegate.GetDelegateForManualSet().BindLambda([this](float Value) { Look(FVector2D(0, -Value)); });
 }
 FString ASCFirstPersonCharacter::HUDText() const
 {
     if (!Vehicle) return FString();
-    const int32 Door = Vehicle->NearestDoor(Camera->GetComponentLocation());
-    return FString::Printf(TEXT("%s · %.1f m/s · %s cm from ship origin\n%s\n%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport"),
-        bNoclip ? TEXT("Noclip") : TEXT("Walking"), GetVelocity().Size()/100,
-        *Vehicle->GetActorTransform().InverseTransformPosition(GetActorLocation()).ToCompactString(),
-        Door == INDEX_NONE ? TEXT("") : *FString::Printf(TEXT("E: %s %s"), Vehicle->Doors[Door].bOpen ? TEXT("Close") : TEXT("Open"), *Vehicle->Doors[Door].DisplayName),
-        bStuck ? TEXT("Movement blocked — press V for noclip") : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…"));
+    const int32 Door = FocusedInteraction();
+    const FString Prompt = Door == INDEX_NONE ? FString()
+        : FString::Printf(TEXT("E: %s %s"), Vehicle->IsDoorOpen(Door) ? TEXT("Close") : TEXT("Open"), *Vehicle->Doors[Door].DisplayName);
+    const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: the capsule overlaps geometry")
+        : bStuck ? TEXT("Movement blocked — press V for noclip")
+        : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");
+    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport"),
+        bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
+        GetVelocity().Size() / 100, Flashlight->IsVisible() ? TEXT("on") : TEXT("off"),
+        *GetVehicleRelativeLocation().ToCompactString(), *Prompt, Status);
 }

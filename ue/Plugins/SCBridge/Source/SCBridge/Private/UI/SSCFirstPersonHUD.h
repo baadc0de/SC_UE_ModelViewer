@@ -13,5 +13,6 @@ public:
 private:
     TWeakObjectPtr<USCViewerSubsystem> Subsystem;
     TWeakObjectPtr<ASCVehicle> Listed;
+    int32 ListedRevision = INDEX_NONE;
     TSharedPtr<SVerticalBox> Menu;
 };

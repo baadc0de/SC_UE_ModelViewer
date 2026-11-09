@@ -296,17 +296,63 @@ Headless (WP-Q1): `UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/ue_
 Load a package, then choose **First person** or **Spawn where I look** in Orbit.
 Collision readiness includes the soft skin's animated triangle body. Click the
 viewport for mouse look; Esc releases capture. WASD walks, Shift runs, Space jumps,
-Ctrl crouches, E toggles the nearest authored door fragment within 3 m, F toggles
-the camera torch, V toggles noclip (Space/Q vertical), T opens the teleport list.
-Spawn choices come from DataCore types, fragment joints and interior bounds.
-Unsafe teleport/noclip-exit locations are rejected; falling recovers to the last
-spawn and blocked movement offers noclip after two seconds.
+Ctrl crouches, E toggles the interaction under the crosshair (else the nearest
+driven joint) within 3 m, F toggles the camera torch, V toggles noclip (Space/Q
+vertical), T opens the teleport list. One key table (`ASCFirstPersonCharacter::KeyTable`)
+drives both Slate and native input.
+
+Spawn kinds come from data: `Seat`, `SeatAccess`, `Door` (DataCore `AttachDef.Type`),
+`Door` also for every interaction's driven joint, `Interior` (interior container
+floors), `Hull` (above the collision bounds) and `Selected` ("spawn where I look",
+replaced on each use, never ranked). The first-person start ranks
+`Entrance` (only when the data marks a hull entrance — not exported yet) > `SeatAccess`
+> `Seat` > `Interior` > `Door` > `Hull`. Interactions are Mannequin fragments with an
+Open/Close tag pair on a rig the clip binds; their open state is the tag last played
+on that rig instance. Unsafe teleport/noclip-exit locations are rejected (the refusal
+stays on the HUD for 3 s); falling recovers to the last spawn and blocked movement
+offers noclip after two seconds. Soft-skinned collision is CPU-skinned and refit by
+`USCRigComponent::RefitCollision` whenever a weighting bone moves (same path with and
+without a GPU).
 
 The folder harness accepts `-SCPackage=<export-root> -SCExplore` to use the app UI
 and first-person possession without opening Data.p4k. `-SCWalkSeconds=2` adds a
-scripted forward walk and exits with a `P1_GAME_WALK` result. The archive-backed
-host accepts `-SCCamera=first` after `-SCLoad=<entity>`. Rebuild/restage the debug
-FFI library with `scripts/build_ffi.sh` after exporter changes.
+scripted forward walk, a mode/unload/reload cycle and a quit while in first person,
+and exits with `P1_GAME_WALK` / `P1_GAME_LIFECYCLE`. The archive-backed host accepts
+`-SCCamera=first` after `-SCLoad=<entity>`. Rebuild/restage the debug FFI library
+with `scripts/build_ffi.sh` after exporter changes.
+
+### Scripted first person (GPU evidence, reused by WP-P2)
+
+Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mode):
+
+| Command | Effect |
+| --- | --- |
+| `sc.FP.Spawns` | log spawn list (`FP_SPAWN_LIST index kind pos label`) and interactions (`FP_DOOR_LIST`) |
+| `sc.FP.Spawn <index\|kind[:n]>` | enter first person if needed, teleport to spawn `index` or the n-th spawn of `kind` |
+| `sc.FP.Look <yaw> <pitch>` | absolute view, degrees, relative to the vehicle |
+| `sc.FP.Move <fwd> <right> <seconds> [run 0\|1] [up]` | hold movement input (-1..1) for a duration |
+| `sc.FP.Interact` / `sc.FP.Door <index>` | E on the focused interaction / toggle one by index |
+| `sc.FP.Crouch 0\|1`, `sc.FP.Jump`, `sc.FP.Torch 0\|1`, `sc.FP.Noclip 0\|1` | as the keys (a refused noclip exit logs `FIRST_PERSON_NOCLIP refused=1`) |
+| `sc.FP.Menu 0\|1` | teleport menu |
+| `sc.FP.Teleport <x y z>` / `sc.FP.Place <x y z>` | vehicle-relative floor hint (checked) / raw capsule placement (noclip tests) |
+| `sc.FP.Embed [cm]` | noclip on, capsule centre pushed this far into the surface under the crosshair (noclip-exit refusal test) |
+| `sc.FP.Where`, `sc.FP.Probe [cm]` | log state (`FP_WHERE`) / what the view ray hits and the focused interaction (`FP_PROBE`) |
+| `sc.SpawnWhereLooking` | the Orbit button |
+
+`-SCScript=<file>` runs a route once a load has finished (after `-SCCamera`): each
+non-comment line is `<delay seconds> <console command>`, delays count after the
+previous step (and after a timed `sc.FP.Move` ends). Every step logs
+`SCRIPT step=<n> cmd="..." mode=... pos=<vehicle-relative cm> yaw pitch speed floor crouched noclip stuck recover`,
+the end logs `SCRIPT_DONE`. Pseudo-commands: `shot <tag> [hold s]` logs
+`SCRIPT_SHOT tag=<tag>` and holds still (default 3 s) for an external screenshot;
+`frametime <seconds> <tag>` logs `SCRIPT_FRAMETIME` (frame, game-thread, render-thread
+and GPU ms: mean/p50/p95, the `stat unit` sources). `quit` ends the app from the route.
+
+`ue/scripts/capture_route.sh <tag> <route> [host args]` launches the host like
+`capture_viewer.sh`, screenshots the window at every `SCRIPT_SHOT` into
+`out/smoke/<tag>-<shot>.png`, stops UE after `SCRIPT_DONE` (or reports the exit status
+of a route ending in `quit`) and prints the route log. Routes live in
+`ue/scripts/routes/` and use spawn kinds and relative moves only.
 
 See [WP-P1 verification](verification/WP-P1.md) for exact null-RHI commands,
 results, collision comparison, limitations, and the orchestrator's GPU checklist.

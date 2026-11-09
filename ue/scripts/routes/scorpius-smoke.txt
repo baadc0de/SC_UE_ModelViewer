@@ -1,0 +1,20 @@
+# WP-P1 GPU smoke: start spawn, canopy (entry) toggle by E, short walk on the hull, torch.
+# Host: -SCDefaults -SCLoad=RSI_Scorpius -SCCamera=first
+20 r.VSync 0
+0.5 sc.FP.Spawns
+0.5 sc.FP.Look 0 -20
+0.5 shot 01-start
+0 sc.FP.Spawn Door:2
+0.5 sc.FP.Look 180 -30
+0.5 sc.FP.Probe 300
+0 sc.FP.Interact
+4 shot 02-entry-toggled
+0 sc.FP.Spawn Hull
+1 sc.FP.Look 0 -20
+0.5 sc.FP.Move 1 0 1
+0.5 sc.FP.Where
+0 sc.FP.Torch 1
+1 sc.FP.Look 180 -30
+1 shot 03-hull-walk-torch
+0 sc.FP.Torch 0
+1 shot 04-torch-off

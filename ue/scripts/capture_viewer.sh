@@ -23,7 +23,7 @@ echo "$TAG: pattern after $(( $(date +%s) - start )) s"
 idle=0; while [ $idle -lt 4 ]; do if pgrep ShaderCompile >/dev/null; then idle=0; else idle=$((idle+1)); fi; sleep 2; done
 sleep "${SC_SETTLE:-8}"
 # niri reports a proxy PID from this environment, so match the UE window by app id / title like capture_views.sh.
-wid=$(niri msg windows | awk '/^Window ID/{id=$3} /App ID:|Title:/{ if (tolower($0) ~ /unrealeditor|scviewer/) {print id; exit} }' | tr -d ':')
+wid=$(niri msg windows | awk '/^Window ID/{id=$3} /App ID:|Title:/{ l=tolower($0); if (l ~ /unrealeditor|scviewer/ && l !~ /crash/) {print id; exit} }' | tr -d ':')
 if [ -n "$wid" ]; then
   niri msg action screenshot-window --id "$wid" --write-to-disk true >/dev/null 2>&1; sleep 2
   cp "$(ls -t ~/Pictures/Screenshots/*.png | head -1)" "$OUT/$TAG.png" && echo "$TAG: $OUT/$TAG.png"

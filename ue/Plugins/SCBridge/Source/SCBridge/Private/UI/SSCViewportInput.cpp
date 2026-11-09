@@ -17,7 +17,7 @@ void SSCViewportInput::Construct(const FArguments& Args)
 }
 FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent& Event)
 {
-    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->ClearInput();
+    // Clicking to capture the mouse must not drop movement keys held in first person.
     const FKey Button = Event.GetEffectingButton();
     const bool bPan = Button == EKeys::MiddleMouseButton || (Button == EKeys::LeftMouseButton && Event.IsShiftDown());
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Unhandled();
@@ -119,6 +119,12 @@ void SSCViewportInput::OnFocusLost(const FFocusEvent&)
     if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->ClearInput();
     Held.Empty();
     ApplyMove();
+    Drag = EDrag::None; // no mouse look/orbit without focus
+}
+void SSCViewportInput::OnMouseCaptureLost(const FCaptureLostEvent& Event)
+{
+    SCompoundWidget::OnMouseCaptureLost(Event);
+    Drag = EDrag::None; // capture taken away (alt-tab, another widget): stop look/orbit/pan
 }
 
 FCursorReply SSCViewportInput::OnCursorQuery(const FGeometry&, const FPointerEvent&) const

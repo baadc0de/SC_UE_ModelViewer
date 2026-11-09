@@ -5,6 +5,11 @@
 Star Citizen LIVE 4.10.2. All Unreal runs below used **null RHI**. No GPU
 acceptance is claimed. No commits, branches, map edits or light importer edits.
 
+> **Superseded in part** by [GPU acceptance pass](#gpu-acceptance-pass-orchestrator-2026-11-09)
+> below: the first headless pass never ran the skinned-collision refit (it is gated on the
+> render mesh object, null under `-nullrhi`), a GPU load crashed in it, and interaction /
+> spawn categories changed. Statements below that conflict with that section are history.
+
 ## Built
 
 - Runtime `ASCFirstPersonCharacter`: 34/88 cm capsule, 44 cm crouch, 400/650 cm/s
@@ -131,10 +136,9 @@ in this package; its 503 rigid animated bodies are the relevant collision path.
 Cutlass has six interactions (two side doors, ramp, two lockers, bulkhead).
 The short component walk is not a claim of completing the entire manual route.
 
-Cutlass selected `FIRST_PERSON_BEST kind=Entrance
-label=Door_RN_RoomConnector_Breachable_OpenReverse_Cutlass_Ramp`. Gladius's first
-accepted Door-category hint is near its weapon rack; the T menu also exposes
-pilot seat and hull choices for the requested hull/ladder check.
+(First pass, superseded:) Cutlass selected `FIRST_PERSON_BEST kind=Entrance` at the
+ramp; Gladius started at its weapon rack because every DataCore `Door` was an
+entrance. See the GPU acceptance pass for the current kinds and ranking.
 
 ### Collision choice and cost
 
@@ -244,39 +248,140 @@ folder/tar counts and reclamation return to baseline in this run. This mismatch
 needs a separate lighting verification follow-up; it must not be concealed as a
 P1 success or assumed to be fixed simply by using a GPU.
 
-## GPU acceptance — orchestrator to fill
+## GPU acceptance pass (orchestrator, 2026-11-09)
 
-Run from the repository root, one host at a time:
+Superproject `main` at `6887d5b` plus the uncommitted changes listed in the report;
+UE 5.8.2 Vulkan, RTX 4090, 1600×900 window; Star Citizen LIVE 4.10.2 through the staged
+debug FFI (`-SCDefaults -SCLoad=<entity> -SCCamera=first`). Screenshots are game-derived and
+stay in `out/smoke/` (gitignored).
 
-```bash
-ue/scripts/run_import.sh out/dec-r5b-cutlass -SCExplore
-ue/scripts/run_import.sh out/dec-r5b-gladius -SCExplore
-ue/scripts/run_import.sh out/dec-r5b-scorpius -SCExplore
+### A. Crash on load — root cause and fix
+
+`FSCMeshImporter::DeriveCollision` built the skinned trimesh without an external vertex
+map. Chaos serializes a missing map as an empty array and always loads a **non-null empty**
+map (`TriangleMeshImplicitObject.h:806-824`); `UpdateVertices` indexes it whenever it is
+non-null → `Array index out of bounds: 0 into an array of size 0`. The engine reaches
+`UpdateVertices` only through `UpdateKinematicBonesToAnim`'s per-poly branch, which is gated
+on the render `MeshObject` (null under `-nullrhi`), so no headless run ever refit the body
+and the claim "soft collision follows the animated pose" was untested.
+
+Fix: the skeletal derive passes `bVertexIndexMap` (identity map over the one-vertex-per-corner
+expansion; particle *i* is render vertex *i*). `USCRigComponent::RefitCollision` CPU-skins LOD0
+(`CacheRefToLocalMatrices` + `ComputeSkinnedPositions` on the asset's render data and skin
+weight buffer, both built with CPU access) and calls `BodyInstance.UpdateTriMeshVertices`; it
+runs from `RefreshBoneTransforms`, never before the body exists, only when a bone that weights
+a vertex moved (`SKIN_COLLISION ... skin_bones=`), and after `OnCreatePhysicsState` catches up
+with the current pose. `OnUpdateTransform` moves the single body like any primitive (the stock
+skeletal path also skipped that without a mesh object). One code path with and without a GPU.
+
+Test first: `SCFirstPersonTests.cpp` compares the live trimesh particles with
+`GetSkinnedVertexPosition` (bind, after a 137 cm root translation, after reset) and probes
+sampled triangles (moved surface must hit, vacated surface must miss), plus the same particle
+check for every deployed door. With the fix but the old engine refit call restored, Gladius:
+
+```text
+Expected 'pose change refits the body' to be true.
+Expected 'refit particles follow the CPU skin (error 137.000 cm)' to be true.
+Expected 'moved surface is hit (3/61)' to be true.
+Expected 'vacated surface is missed (0/61)' to be true.
+P1_VERIFY passed=0 soft=3 refitted=3 ...
 ```
 
-For archive-backed UI validation with the staged FFI:
+With the fix (final build), all exit 0 with `WP-P1 HEADLESS_OK`:
 
-```bash
-"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" \
-  "$PWD/ue/SCViewer/SCViewer.uproject" -game -windowed -resx=1600 -resy=900 \
-  -nosplash -nop4 -ddc=SCViewerDDC -SCLoad=DRAK_Cutlass_Black \
-  -SCCamera=first -SCHold -abslog="$PWD/ue/SCViewer/Saved/Import/p1-gpu-host.log"
+```text
+P1_VERIFY passed=1 soft=3 refitted=3 surface_hits=3 attached_bodies=142 seats=1 spawns=19 doors=13 toggles=13 walk=1 floor_frames=24 hits=135 recovery=1 import_s=2.536
+P1_VERIFY passed=1 soft=0 refitted=0 surface_hits=0 attached_bodies=503 seats=2 spawns=22 doors=16 toggles=16 walk=1 floor_frames=24 hits=11 recovery=1 import_s=3.053
+P1_VERIFY passed=1 soft=2 refitted=2 surface_hits=2 attached_bodies=299 seats=2 spawns=24 doors=12 toggles=12 walk=1 floor_frames=24 hits=3 recovery=1 import_s=3.580
 ```
 
-Click viewport to capture mouse, Esc to release. WASD, Shift, Space, Ctrl,
-E, F, V, T; noclip vertical Space/Q. Expected logs: `EXPLORATION ...
-collision_ready=1`, `FIRST_PERSON_MODE mode=2`, `FIRST_PERSON_SPAWN`, and
-`FIRST_PERSON_DOOR fragment=SCItemDoor ... open=1/0`. Intentional fall recovery
-logs `FIRST_PERSON_RECOVER`; ordinary traversal must not produce it.
+`test_importer.py`: exit 0, 16/16 suites, `WP-U1 UNIT_TESTS_OK`. Folder game host
+(`run_import.sh out/dec-r5b-cutlass -nullrhi -SCExplore -SCWalkSeconds=2`): exit 0,
+`P1_GAME_WALK passed=1 ... distance_cm=693.62 ... recovery=0`,
+`P1_GAME_LIFECYCLE passed=1 switched=1 unloaded=1 reloaded=1 quit_in_first_person=1`.
+On the GPU the same Cutlass load that asserted now loads (`VIEWER_LOAD result=Succeeded`,
+no ensure/assert in any log below).
 
-| GPU row | Exact action after launch | Result / evidence |
-| --- | --- | --- |
-| Cutlass rear ramp → interior → cockpit | First command above; E opens ramp, walk up, E opens bulkhead, traverse corridor/cockpit and check wall blocking; Ctrl under a low pass | **PENDING orchestrator** |
-| Gladius hull/ladder/seat | Second command; T → hull, jump around ladder region, T → pilot seat, crouch eye-height check | **PENDING orchestrator** |
-| Scorpius smoke | Third command; door/entry toggle, walk, torch, T/V, mode buttons | **PENDING orchestrator** |
-| HUD/input/lighting | Confirm crosshair, prompt/name, relative coordinates, speed, torch, mouse capture/release, teleport menu | **PENDING orchestrator** |
-| Frame cost ≤10% | Same ship, settled pose, resolution and comparable view; use `stat unit`/`stat fps`, record repeated Orbit vs First-person samples, including a moving ramp separately | **PENDING orchestrator** |
-| Safety/ownership | Noclip then try exit inside a wall (refused); fall/recover; switch modes and unload/reload via UI | **PENDING orchestrator** |
+### Review findings
 
-Save screenshots/timing logs outside git if they contain game-derived imagery.
-Persistent collision cache acceptance belongs to WP-C1, not this WP's addendum.
+1. Vocabulary removed: an interaction is any fragment with an Open/Close tag pair on a rig the
+   clip binds. Every former interaction is kept; additions are authored mechanisms that the word
+   list missed: Gladius 3→13 (Cooler L/R, Diagnostic, Fuelport, Inventory, Jumpdrive, Power,
+   Radar, Shield panels and **Left_Ladder**), Scorpius 5→16 (Avionics, Battery, Coolers,
+   Jumpdrive, **Ladder**, Life support, Power L/R, Radar, Shield generator), Cutlass 6→12 (six
+   `SCItemJumpSeat` folding seats). Logged per interaction as `EXPLORATION_INTERACTION`.
+   E now acts on the rig under the crosshair (one interaction on that rig: it; several: the one
+   whose driven joint carries the hit part, else the nearest joint), else the nearest joint
+   within 3 m — door hinges/hydraulics can sit > 3 m from the panel you face.
+2. Door items and door interactions are kind `Door`; `Entrance` is reserved for data-identified
+   hull entrances (none exported yet). Start ranking `Entrance > SeatAccess > Seat > Interior >
+   Door > Hull`. Item spawn hints are read after assembly from the bottom of the item's own
+   collidable geometry (ports at the vehicle origin carry their offset in the mesh); an item
+   at the origin without geometry has no location data and is skipped
+   (`EXPLORATION_SPAWN_UNLOCATED`: the Gladius and Scorpius SeatAccess). Seat hints resolve a
+   crouched (sitting) capsule within two capsule diameters, never the floor under the ship.
+   Starts: Cutlass `SeatAccess` (manned turret access), Gladius `Seat` (pilot), Scorpius
+   `Interior` (both seats reject a capsule). Tested: Door never outranks seat hints.
+4. `SSCViewportInput` resets drag state in `OnMouseCaptureLost` and `OnFocusLost`.
+5. `UnloadInternal` only nulls the character/pawn pointers and sets the mode when the world is
+   tearing down or exit was requested; the lifecycle check now reloads, re-enters first person and
+   quits from there (null RHI above; GPU: Cutlass route ends with `quit` in first person, exit 0).
+7. "Spawn where I look" uses kind `Selected` (never ranked), replaces the previous one; the
+   teleport menu rebuilds on `ASCVehicle::SpawnRevision`.
+Notes: the noclip refusal stays on the HUD for 3 s (tested); door state is keyed by (rig
+instance, fragment) from the tag actually played, the untargeted orbit toggle keeps its own key
+(tested: one door leaves other doors and the orbit state unchanged). Noclip now brakes
+(`NoclipBraking`), it drifted indefinitely before. Leaving first person for Orbit keeps the
+viewpoint (pivot = what you looked at); it previously eased out to the old frame-all distance,
+outside the hangar (black frame).
+
+### GPU routes
+
+```bash
+ue/scripts/capture_route.sh p1-cutlass ue/scripts/routes/cutlass-ramp-to-cockpit.txt -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+ue/scripts/capture_route.sh p1-gladius ue/scripts/routes/gladius-hull-seat.txt -SCDefaults -SCLoad=AEGS_Gladius -SCCamera=first
+ue/scripts/capture_route.sh p1-scorpius ue/scripts/routes/scorpius-smoke.txt -SCDefaults -SCLoad=RSI_Scorpius -SCCamera=first
+```
+
+Frame cost: `frametime 6 <tag>` samples every frame for 6 s (`FApp::GetDeltaTime`,
+`GGameThreadTime`, `GRenderThreadTime`, `RHIGetGPUFrameCycles` — the `stat unit` sources),
+`r.VSync 0`, `t.MaxFPS 0`, Cutlass at the first-person start, same eye position and view for
+all three samples (Orbit takes over the eye):
+
+```text
+SCRIPT_FRAMETIME tag=first-person-a  frames=1009 frame_ms[mean=5.94 p50=5.64 p95=11.91] game_ms[mean=1.71 p50=1.70 p95=2.19] render_ms[mean=3.65 p50=3.26 p95=9.57] gpu_ms[mean=5.34 p50=5.44 p95=5.62]
+SCRIPT_FRAMETIME tag=orbit-same-view frames=1004 frame_ms[mean=5.98 p50=5.69 p95=11.96] game_ms[mean=1.52 p50=1.52 p95=2.05] render_ms[mean=3.64 p50=3.23 p95=9.68] gpu_ms[mean=5.39 p50=5.51 p95=5.68]
+SCRIPT_FRAMETIME tag=first-person-b  frames=1000 frame_ms[mean=6.01 p50=5.60 p95=12.06] game_ms[mean=1.73 p50=1.73 p95=2.18] render_ms[mean=3.78 p50=3.27 p95=9.81] gpu_ms[mean=5.32 p50=5.44 p95=5.59]
+```
+
+| GPU row | Result / evidence |
+| --- | --- |
+| Cutlass ramp → bay → bulkhead → corridor → cockpit | **PASS with one deviation.** Start `Door:2` (ramp item) resolves to the hangar floor under the closed ramp; E on the ramp (crosshair) opens it (`FIRST_PERSON_DOOR ... Ramp open=1`), `01-ramp-closed-from-outside`, `02-ramp-open-overhead`. The open ramp's lip hangs ~1.5 m above the hangar floor (viewer places the model 1 m above the floor): not boardable from the floor (above jump height) — crouch-walk out under it (low pass, `crouched=1`, 7.4 m) `03-ramp-open-outside`; the route then spawns on the bay floor (`Interior:1`), walks down to the ramp foot and **up the ramp** (`04-ramp-foot-looking-up`, Z −441→−242), `05-cargo-bay`; closed bulkhead blocks at X=76.7 `06-bulkhead-closed-blocks` (prompt "E: Open drak door bulkhead"), E opens it `07-bulkhead-open`, `08-corridor`; wall blocks (two moves end at X=769.0 / 769.0) `09-wall-blocks`; cockpit reached via the step-up to Z −154 `10-cockpit`, `11-cockpit-crouched`, `12-cockpit-looking-aft`. No `FIRST_PERSON_RECOVER` during traversal. Canopy glass renders black from inside (material, not P1). Files `out/smoke/p1-cutlass-01…12-*.png`. |
+| Gladius hull / jump / pilot seat / canopy / ladder | **PARTIAL.** Hull spawn `p1-gladius-02-hull.png` (standing on the spine, prompt shown), jump Z 182.9 → 266.0 → 182.9 (`FP_WHERE`), walk along the hull 3.7 m `03-hull-after-walk`. Pilot-seat spawn is accepted crouched (`crouched=1`, eye at crouch height) but 136 cm aft of the seat (ring search); `04-pilot-seat`/`05`/`06` are **black frames** (camera in the enclosed space behind the seat) — sit-height view **not demonstrated, FAIL**. Canopy toggled by E from that spot (`FIRST_PERSON_DOOR fragment=Canopy open=1`) but not visible. Ladder: E from the floor beside it picked the nearest joint (Entrance panel, crosshair missed the hull); the `Left_Ladder` fragment toggled by index (`sc.FP.Door 8`) `08-ladder-fragment-toggled.png` (hull underside visible, ladder motion not identifiable in the still). |
+| Scorpius smoke | **PASS.** Start `Interior` on the hull (both seats reject a capsule, SeatAccess unlocated) `p1-scorpius-01-start.png`; E toggles the boarding `Ladder` fragment from the canopy spawn `02-entry-toggled.png` (prompt then offers "Open Cockpit Sliding Panel"); hull spawn, 1 s walk, torch on `03-hull-walk-torch.png` (HUD "torch on"; the cone is not visible in the lit hangar), off `04-torch-off.png`. |
+| HUD | **PASS.** Crosshair, prompt with interaction name and Open/Close, mode (Walking/Crouched/Noclip), m/s, torch state, vehicle-relative cm, status line, key help — readable on a dark backing (was white-on-white before this pass) — every `p1-*` FP shot; teleport menu with index · kind · label `p1-cutlass-16-torch-and-teleport-menu.png`. The engine's red sky-light warning line stays on screen (WP-V1 TODO). |
+| Frame cost ≤10 % | **PASS.** Same view, frame mean FP 5.94 / 6.01 ms vs Orbit 5.98 ms (−0.1 %); GPU 5.34 / 5.32 vs 5.39 ms; game thread 1.71 / 1.73 vs 1.52 ms (+0.2 ms, +13 %, not on the critical path). |
+| Safety | **PASS.** `sc.FP.Embed` into the copilot seat, exit refused `FIRST_PERSON_NOCLIP refused=1`, message visible `p1-cutlass-14-noclip-exit-refused.png`; backed out, exit accepted; noclip 19 m down through the floor, walk mode → `FIRST_PERSON_RECOVER count=1` back at the last spawn `15-recovered`; Fly → Orbit → First person, `sc.Unload`, `sc.Load DRAK_Cutlass_Black`, First person `17-reloaded-first-person`, `quit` in first person → **exit 0**, log ends `Log file closed`, no ensure/assert. |
+
+### Follow-ups
+
+- **Hull entrance (exporter, cargo lock):** export per child `NavigationLinkComponentParams.navLinks[].linkingType`
+  (or a boolean `exterior_link` = any link `LinksToExternalZone`/`LinksFromExternalZone`). Read-only
+  `target/debug/starbreaker dcb query EntityClassDefinition --filter '*.<name>'`: present on
+  `Door_RN_RoomConnector_Breachable_OpenReverse_Cutlass_Ramp` and `..._Cutlass` (side doors),
+  absent on `Weapon_Rack_AEGS_Gladius` (also `AttachDef.Type = Door`). UE then emits kind
+  `Entrance` for those doors (ranked first).
+- **Seat access location:** Gladius/Scorpius SeatAccess ports sit at the vehicle origin and the
+  items have no geometry; the location lives in interaction-point helpers
+  (`$IP_SeatAccess_Ground_Pilot` in `SInteractionPointParams`). Export that helper position.
+- **Pilot vs other seats:** no direct flag; candidates are `SCItemSeatParams.dashboardScopeContext`
+  (`SeatDashboard` pilot vs `SeatUser` gunner on the Scorpius) or the vehicle's controller
+  assignment. Until then seats are ordered by height.
+- **Sitting:** seat buckets do not fit a 34 cm capsule; a seated state (camera at the seat's
+  sit helper, collision off until the player stands) is needed for the sit-height check. Gladius
+  row above fails on this.
+- **Floor clearance:** the viewer places the lowest point 1 m above the hangar floor, so
+  ramps/ladders do not reach the ground (Cutlass ramp lip 1.5 m up). Rest the ship on its
+  deployed gear for first person (WP-V1 presentation constant).
+- **Interior spawn hints** from containers without a floor (e.g. Gladius `base_lightgroups`)
+  resolve to the hangar floor under the ship.

@@ -1,4 +1,5 @@
-// Collision-aware first-person exploration, shared by Slate, native input and headless verification.
+// Collision-aware first-person exploration, shared by Slate, native input, console automation and
+// headless verification.
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
@@ -6,6 +7,34 @@
 class ASCVehicle;
 class UCameraComponent;
 class USpotLightComponent;
+
+/** Body and locomotion dimensions (cm, cm/s). Viewer defaults until a real player body supplies its own (WP-P2). */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCCharacterProfile
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadWrite) float CapsuleRadius = 34;
+    UPROPERTY(BlueprintReadWrite) float StandingHalfHeight = 88;
+    UPROPERTY(BlueprintReadWrite) float CrouchedHalfHeight = 44;
+    UPROPERTY(BlueprintReadWrite) float StepHeight = 45;
+    UPROPERTY(BlueprintReadWrite) float WalkSpeed = 400;
+    UPROPERTY(BlueprintReadWrite) float RunSpeed = 650;
+    UPROPERTY(BlueprintReadWrite) float NoclipSpeed = 650;
+    /** Noclip stops when input is released instead of drifting (flying braking defaults to zero). */
+    UPROPERTY(BlueprintReadWrite) float NoclipBraking = 4000;
+    /** Eye above the capsule centre, standing and crouched (UE pawn/character defaults). */
+    UPROPERTY(BlueprintReadWrite) float EyeHeight = 64;
+    UPROPERTY(BlueprintReadWrite) float CrouchedEyeHeight = 32;
+};
+
+/** Every input the character understands; keys, console automation and UI map onto these. */
+UENUM()
+enum class ESCFirstPersonAction : uint8
+{
+    Forward, Back, Left, Right, Down, Up, Run, Crouch, // held
+    Interact, Torch, Noclip, Teleport, Close           // pressed
+};
+
 UCLASS()
 class SCBRIDGE_API ASCFirstPersonCharacter : public ACharacter
 {
@@ -14,6 +43,7 @@ public:
     ASCFirstPersonCharacter();
     virtual void Tick(float DeltaSeconds) override;
     virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
+    virtual void RecalculateBaseEyeHeight() override;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UCameraComponent> Camera;
     UPROPERTY(VisibleAnywhere) TObjectPtr<USpotLightComponent> Flashlight;
     UPROPERTY(BlueprintReadOnly) TObjectPtr<ASCVehicle> Vehicle;
@@ -22,24 +52,61 @@ public:
     UPROPERTY(BlueprintReadOnly) bool bTeleportMenuOpen = false;
     UPROPERTY(BlueprintReadOnly) int32 RecoveryCount = 0;
     UPROPERTY(BlueprintReadOnly) int32 CapsuleHits = 0;
+    /** Spawn index used by the last successful teleport (INDEX_NONE before the first). */
+    UPROPERTY(BlueprintReadOnly) int32 CurrentSpawn = INDEX_NONE;
+
+    /** The single setter for body/locomotion dimensions; nothing else writes these values. */
+    void SetProfile(const FSCCharacterProfile& InProfile);
+    const FSCCharacterProfile& GetProfile() const { return Profile; }
+    /** Eye position relative to the capsule. Default: profile eye height (crouch aware). A body
+     *  component (WP-P2) overrides the source; a camera attached elsewhere is never moved by Tick. */
+    void SetEyeSource(TFunction<FVector()> Source) { EyeSource = MoveTemp(Source); }
+    FVector EyeOffset() const;
+
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Explore(ASCVehicle* InVehicle);
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool TeleportToSpawn(int32 Index);
-    UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool TeleportToFloor(FVector Floor);
+    /** bSeated: a seat hint — crouched (sitting) capsule on the surface right under the hint, no
+     *  walkable-neighbourhood requirement and no search beyond it (never the floor below the ship). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool TeleportToFloor(FVector Floor, bool bSeated = false);
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Interact();
+    /** Interaction E would toggle now: under the crosshair within reach, else the nearest joint in reach. */
+    int32 FocusedInteraction() const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") void ToggleNoclip();
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") void SetMoveInput(FVector Input);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") FString HUDText() const;
     void Look(FVector2D Pixels);
+    /** Absolute view relative to the vehicle (degrees). */
+    void SetVehicleRelativeView(float Yaw, float Pitch);
+    FRotator GetVehicleRelativeView() const;
+    FVector GetVehicleRelativeLocation() const;
+    /** Hold a movement input for a duration of game time (automation); bRun selects run speed. */
+    void HoldMoveInput(FVector Input, float Seconds, bool bRun);
+    bool IsHoldingMove() const { return HoldSeconds > 0; }
+    void SetCrouching(bool bCrouch);
+    void SetTorch(bool bOn);
+    bool SetNoclip(bool bOn);
+    bool IsRunning() const { return bRunning; }
+
+    static const TArray<TPair<FKey, ESCFirstPersonAction>>& KeyTable();
     bool HandleKey(FKey Key, bool bDown);
+    bool HandleAction(ESCFirstPersonAction Action, bool bDown);
     void ClearInput();
-    /** Find a walkable surface and unoccupied standing capsule around a semantic spawn hint. */
-    bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre) const;
+    /** Find a walkable surface and unoccupied capsule around a semantic spawn hint; standing first,
+     *  crouched when only a crouched capsule fits (seats under canopies). */
+    bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre, bool& bCrouched, bool bSeated = false) const;
+    bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre) const { bool C; return ResolveSpawn(Hint, CapsuleCentre, C); }
 private:
-    FVector Move = FVector::ZeroVector, LastPosition = FVector::ZeroVector;
+    FSCCharacterProfile Profile;
+    TFunction<FVector()> EyeSource;
+    FVector Move = FVector::ZeroVector, LastPosition = FVector::ZeroVector, HoldInput = FVector::ZeroVector;
     FTransform LastSpawn;
-    TSet<FKey> Held;
-    float BlockedSeconds = 0;
+    TSet<ESCFirstPersonAction> Held;
+    float BlockedSeconds = 0, HoldSeconds = 0, NoclipRefusedSeconds = 0;
+    double RecoveryZ = -UE_BIG_NUMBER;
+    bool bRunning = false;
     void SetRunning(bool bRun);
+    void ApplyHeldInput();
+    bool FindCapsuleSpot(FVector Hint, double HalfHeight, FVector& Centre, bool bSeated = false) const;
     UFUNCTION() void CapsuleHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp,
                                FVector NormalImpulse, const FHitResult& Hit);
 };

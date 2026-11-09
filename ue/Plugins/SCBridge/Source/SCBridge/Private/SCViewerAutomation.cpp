@@ -4,8 +4,21 @@
 #include "SCViewOptions.h"
 #include "SCViewerPawn.h"
 #include "SCVehicle.h"
+#include "SCFirstPersonCharacter.h"
+#include "SCRigComponent.h"
+#include "Camera/CameraComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/App.h"
 #include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
+#include "RenderTimer.h"
+#include "DynamicRHI.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCViewerAutomation, Log, All);
 
@@ -23,6 +36,26 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
     if (FParse::Param(Cmd, TEXT("SCDefaults"))) Options->ResetToDefaults();
     FParse::Value(Cmd, TEXT("SCLod="), Options->Lod);
     FParse::Value(Cmd, TEXT("SCMip="), Options->Mip);
+    FString ScriptFile;
+    if (FParse::Value(Cmd, TEXT("SCScript="), ScriptFile))
+    {
+        TArray<FString> Lines;
+        if (!FFileHelper::LoadFileToStringArray(Lines, *ScriptFile))
+            UE_LOG(LogSCViewerAutomation, Error, TEXT("SCRIPT cannot read %s"), *ScriptFile);
+        for (FString Line : Lines)
+        {
+            Line.TrimStartAndEndInline();
+            if (Line.IsEmpty() || Line.StartsWith(TEXT("#"))) continue;
+            FString Delay, Command;
+            if (!Line.Split(TEXT(" "), &Delay, &Command) || !Delay.IsNumeric())
+            {
+                UE_LOG(LogSCViewerAutomation, Error, TEXT("SCRIPT bad line \"%s\": expected <delay seconds> <command>"), *Line);
+                continue;
+            }
+            Script.Add({FCString::Atod(*Delay), Command.TrimStartAndEnd()});
+        }
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT loaded file=%s steps=%d"), *ScriptFile, Script.Num());
+    }
     if (IsRunningCommandlet()) return; // headless hosts call the subsystem directly; one console registration
     TWeakObjectPtr<USCViewerSubsystem> Weak = &InOwner;
     Commands.Add(MakeUnique<FAutoConsoleCommand>(TEXT("sc.Load"), TEXT("sc.Load <entity>: load with the current view options"),
@@ -41,12 +74,265 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
                                 : M.Equals(TEXT("first"), ESearchCase::IgnoreCase) ? ESCCameraMode::FirstPerson
                                                                                   : ESCCameraMode::Orbit);
         })));
+    RegisterFirstPersonCommands();
+}
+
+namespace
+{
+ASCFirstPersonCharacter* FirstPerson(const TWeakObjectPtr<USCViewerSubsystem>& Weak)
+{
+    ASCFirstPersonCharacter* C = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr;
+    if (!C) UE_LOG(LogSCViewerAutomation, Warning, TEXT("FP_CMD ignored: not in first person (sc.FP.Spawn enters it)"));
+    return C;
+}
+bool Flag(const TArray<FString>& Args, int32 Index, bool bDefault)
+{
+    return Args.IsValidIndex(Index) ? FCString::Atoi(*Args[Index]) != 0 : bDefault;
+}
+FString Where(USCViewerSubsystem& S)
+{
+    ASCVehicle* V = S.GetVehicle();
+    if (ASCFirstPersonCharacter* C = S.GetFirstPerson())
+    {
+        const FRotator View = C->GetVehicleRelativeView();
+        return FString::Printf(TEXT("mode=first pos=%s yaw=%.1f pitch=%.1f speed=%.0f floor=%d crouched=%d noclip=%d stuck=%d recover=%d"),
+            *C->GetVehicleRelativeLocation().ToCompactString(), View.Yaw, View.Pitch, C->GetVelocity().Size(),
+            C->GetCharacterMovement()->IsMovingOnGround(), C->bIsCrouched, C->bNoclip, C->bStuck, C->RecoveryCount);
+    }
+    ASCViewerPawn* Pawn = S.GetViewerPawn();
+    const FVector P = Pawn ? Pawn->Camera->GetComponentLocation() : FVector::ZeroVector;
+    return FString::Printf(TEXT("mode=%d pos=%s"), int32(S.GetCameraMode()),
+        *(V ? V->GetActorTransform().InverseTransformPosition(P) : P).ToCompactString());
+}
+} // namespace
+
+void FSCViewerAutomation::RegisterFirstPersonCommands()
+{
+    TWeakObjectPtr<USCViewerSubsystem> Weak = Owner;
+    auto Add = [&](const TCHAR* Name, const TCHAR* Help, TFunction<void(const TArray<FString>&)> Body) {
+        Commands.Add(MakeUnique<FAutoConsoleCommand>(Name, Help,
+            FConsoleCommandWithArgsDelegate::CreateLambda([Body](const TArray<FString>& Args) { Body(Args); })));
+    };
+    Add(TEXT("sc.FP.Spawns"), TEXT("sc.FP.Spawns: log the spawn list (index, kind, label, vehicle-relative location)"), [Weak](const TArray<FString>&) {
+        ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+        for (int32 I = 0; V && I < V->SpawnPoints.Num(); ++I)
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_SPAWN_LIST index=%d kind=%s pos=%s label=\"%s\""), I,
+                   *V->SpawnPoints[I].Kind.ToString(), *V->SpawnPoints[I].Transform.GetLocation().ToCompactString(), *V->SpawnPoints[I].DisplayName);
+        for (int32 I = 0; V && I < V->Doors.Num(); ++I)
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_DOOR_LIST index=%d fragment=%s open=%d label=\"%s\""), I,
+                   *V->Doors[I].Fragment.ToString(), V->IsDoorOpen(I), *V->Doors[I].DisplayName);
+    });
+    Add(TEXT("sc.FP.Spawn"), TEXT("sc.FP.Spawn <index|kind[:n]>: enter first person if needed and teleport to a spawn"), [Weak](const TArray<FString>& Args) {
+        USCViewerSubsystem* S = Weak.Get();
+        ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+        if (!V || Args.IsEmpty()) return;
+        if (!S->GetFirstPerson() && !S->SetCameraMode(ESCCameraMode::FirstPerson))
+        {
+            UE_LOG(LogSCViewerAutomation, Warning, TEXT("FP_CMD spawn ok=0 reason=first_person_refused"));
+            return;
+        }
+        int32 Index = INDEX_NONE;
+        if (Args[0].IsNumeric())
+            Index = FCString::Atoi(*Args[0]);
+        else
+        {
+            FString Kind = Args[0], Nth = TEXT("0");
+            Args[0].Split(TEXT(":"), &Kind, &Nth);
+            TArray<int32> Matches;
+            for (int32 I = 0; I < V->SpawnPoints.Num(); ++I)
+                if (V->SpawnPoints[I].Kind.ToString().Equals(Kind, ESearchCase::IgnoreCase)) Matches.Add(I);
+            if (Matches.IsValidIndex(FCString::Atoi(*Nth))) Index = Matches[FCString::Atoi(*Nth)];
+        }
+        const bool OK = S->GetFirstPerson()->TeleportToSpawn(Index);
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn arg=%s index=%d ok=%d"), *Args[0], Index, OK);
+    });
+    Add(TEXT("sc.FP.Look"), TEXT("sc.FP.Look <yaw> <pitch>: absolute view relative to the vehicle (degrees)"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak); C && Args.Num() >= 2) C->SetVehicleRelativeView(FCString::Atof(*Args[0]), FCString::Atof(*Args[1]));
+    });
+    Add(TEXT("sc.FP.Move"), TEXT("sc.FP.Move <forward> <right> <seconds> [run 0|1] [up]: hold movement input (-1..1) for a duration"),
+        [Weak](const TArray<FString>& Args) {
+            if (auto* C = FirstPerson(Weak); C && Args.Num() >= 3)
+                C->HoldMoveInput(FVector(FCString::Atof(*Args[0]), FCString::Atof(*Args[1]), Args.IsValidIndex(4) ? FCString::Atof(*Args[4]) : 0.f),
+                                 FCString::Atof(*Args[2]), Flag(Args, 3, false));
+        });
+    Add(TEXT("sc.FP.Interact"), TEXT("sc.FP.Interact: E on the nearest interaction"), [Weak](const TArray<FString>&) {
+        if (auto* C = FirstPerson(Weak))
+        {
+            const int32 Door = C->FocusedInteraction();
+            const bool OK = C->Interact();
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD interact door=%d ok=%d open=%d label=\"%s\""), Door, OK,
+                   C->Vehicle && C->Vehicle->IsDoorOpen(Door), Door == INDEX_NONE ? TEXT("") : *C->Vehicle->Doors[Door].DisplayName);
+        }
+    });
+    Add(TEXT("sc.FP.Door"), TEXT("sc.FP.Door <index>: toggle an interaction by index (sc.FP.Spawns lists them)"), [Weak](const TArray<FString>& Args) {
+        ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+        if (V && !Args.IsEmpty()) V->ToggleDoor(FCString::Atoi(*Args[0]));
+    });
+    Add(TEXT("sc.FP.Crouch"), TEXT("sc.FP.Crouch 0|1"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak)) C->SetCrouching(Flag(Args, 0, true));
+    });
+    Add(TEXT("sc.FP.Jump"), TEXT("sc.FP.Jump: one jump"), [Weak](const TArray<FString>&) {
+        if (auto* C = FirstPerson(Weak)) C->Jump();
+    });
+    Add(TEXT("sc.FP.Torch"), TEXT("sc.FP.Torch 0|1"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak)) C->SetTorch(Flag(Args, 0, true));
+    });
+    Add(TEXT("sc.FP.Noclip"), TEXT("sc.FP.Noclip 0|1 (an exit inside geometry is refused)"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak))
+        {
+            const bool OK = C->SetNoclip(Flag(Args, 0, true));
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD noclip want=%d ok=%d"), Flag(Args, 0, true), OK);
+        }
+    });
+    Add(TEXT("sc.FP.Menu"), TEXT("sc.FP.Menu 0|1: show the teleport menu"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak)) C->bTeleportMenuOpen = Flag(Args, 0, true);
+    });
+    Add(TEXT("sc.FP.Teleport"), TEXT("sc.FP.Teleport <x> <y> <z>: vehicle-relative floor hint (cm)"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak); C && C->Vehicle && Args.Num() >= 3)
+        {
+            const FVector Local(FCString::Atod(*Args[0]), FCString::Atod(*Args[1]), FCString::Atod(*Args[2]));
+            const bool OK = C->TeleportToFloor(C->Vehicle->GetActorTransform().TransformPosition(Local));
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD teleport ok=%d"), OK);
+        }
+    });
+    Add(TEXT("sc.FP.Place"), TEXT("sc.FP.Place <x> <y> <z>: put the capsule centre at a vehicle-relative point without checks (noclip tests)"),
+        [Weak](const TArray<FString>& Args) {
+            if (auto* C = FirstPerson(Weak); C && C->Vehicle && Args.Num() >= 3)
+                C->SetActorLocation(C->Vehicle->GetActorTransform().TransformPosition(
+                    FVector(FCString::Atod(*Args[0]), FCString::Atod(*Args[1]), FCString::Atod(*Args[2]))), false, nullptr, ETeleportType::TeleportPhysics);
+        });
+    Add(TEXT("sc.FP.Embed"), TEXT("sc.FP.Embed [depth cm]: noclip, then put the capsule centre this far beyond the surface under the crosshair (noclip-exit test)"),
+        [Weak](const TArray<FString>& Args) {
+            auto* C = FirstPerson(Weak);
+            if (!C) return;
+            const FVector Eye = C->Camera->GetComponentLocation(), Dir = C->GetViewRotation().Vector();
+            FHitResult Hit;
+            FCollisionQueryParams Q(SCENE_QUERY_STAT(SCEmbed), true, C);
+            if (!C->GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Dir * 1000, ECC_Pawn, Q))
+            {
+                UE_LOG(LogSCViewerAutomation, Warning, TEXT("FP_CMD embed ok=0 reason=no_surface_within_10m"));
+                return;
+            }
+            C->SetNoclip(true);
+            const double Depth = Args.IsEmpty() ? C->GetProfile().CapsuleRadius : FCString::Atod(*Args[0]);
+            C->SetActorLocation(Hit.ImpactPoint + Dir * Depth, false, nullptr, ETeleportType::TeleportPhysics);
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD embed ok=1 pos=%s"), *C->GetVehicleRelativeLocation().ToCompactString());
+        });
+    Add(TEXT("sc.FP.Where"), TEXT("sc.FP.Where: log mode, vehicle-relative position and movement state"), [Weak](const TArray<FString>&) {
+        if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_WHERE %s"), *Where(*Weak.Get()));
+    });
+    Add(TEXT("sc.FP.Probe"), TEXT("sc.FP.Probe [reach cm]: log what the view ray hits (component chain, rig, socket) and the focused interaction"),
+        [Weak](const TArray<FString>& Args) {
+            auto* C = FirstPerson(Weak);
+            if (!C) return;
+            const double Reach = Args.IsEmpty() ? 1000 : FCString::Atod(*Args[0]);
+            const FVector Eye = C->Camera->GetComponentLocation();
+            FHitResult Hit;
+            FCollisionQueryParams Q(SCENE_QUERY_STAT(SCProbe), true, C);
+            const bool bHit = C->GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + C->GetViewRotation().Vector() * Reach, ECC_Visibility, Q);
+            FString Chain;
+            for (const USceneComponent* P = bHit ? Hit.GetComponent() : nullptr; P; P = P->GetAttachParent())
+            {
+                const auto* Rig = Cast<USCRigComponent>(P);
+                Chain += FString::Printf(TEXT(" > %s%s%s"), *P->GetName(), Rig ? *(TEXT("[rig ") + Rig->OwnerEntity + TEXT("]")) : TEXT(""),
+                                         P->GetAttachSocketName().IsNone() ? TEXT("") : *(TEXT("@") + P->GetAttachSocketName().ToString()));
+                if (Rig) break;
+            }
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PROBE hit=%d dist=%.0f point=%s focus=%d chain=%s"), bHit, Hit.Distance,
+                   C->Vehicle ? *C->Vehicle->GetActorTransform().InverseTransformPosition(Hit.ImpactPoint).ToCompactString() : TEXT("-"),
+                   C->FocusedInteraction(), *Chain);
+        });
+    Add(TEXT("sc.SpawnWhereLooking"), TEXT("sc.SpawnWhereLooking: orbit/fly camera ray -> first person on that surface"), [Weak](const TArray<FString>&) {
+        if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn_where_looking ok=%d"), Weak->SpawnWhereLooking());
+    });
+}
+
+void FSCViewerAutomation::LogFrameSamples()
+{
+    auto Stats = [](TArray<float> V) {
+        if (V.IsEmpty()) return FString(TEXT("n/a"));
+        V.Sort();
+        double Sum = 0;
+        for (float X : V) Sum += X;
+        return FString::Printf(TEXT("mean=%.2f p50=%.2f p95=%.2f"), Sum / V.Num(), V[V.Num() / 2], V[FMath::Min(V.Num() - 1, V.Num() * 95 / 100)]);
+    };
+    UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_FRAMETIME tag=%s frames=%d frame_ms[%s] game_ms[%s] render_ms[%s] gpu_ms[%s]"),
+           *SampleTag, FrameMs.Num(), *Stats(FrameMs), *Stats(GameMs), *Stats(RenderMs), *Stats(GpuMs));
+}
+
+void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
+{
+    TArray<FString> Words;
+    Step.Command.ParseIntoArrayWS(Words);
+    if (Words.IsEmpty()) return;
+    const double Now = FPlatformTime::Seconds();
+    if (Words[0] == TEXT("shot"))
+    {
+        // Hold still for an external screenshot (capture_route.sh): clear any timed input first.
+        if (ASCFirstPersonCharacter* C = S.GetFirstPerson()) C->HoldMoveInput(FVector::ZeroVector, 0, false);
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_SHOT tag=%s %s"), Words.IsValidIndex(1) ? *Words[1] : TEXT("shot"), *Where(S));
+        StepAt = Now + (Words.IsValidIndex(2) ? FCString::Atod(*Words[2]) : 3.0);
+        return;
+    }
+    if (Words[0] == TEXT("frametime"))
+    {
+        SampleTag = Words.IsValidIndex(2) ? Words[2] : TEXT("sample");
+        FrameMs.Reset(); GameMs.Reset(); RenderMs.Reset(); GpuMs.Reset();
+        SampleUntil = StepAt = Now + (Words.IsValidIndex(1) ? FCString::Atod(*Words[1]) : 5.0);
+        return;
+    }
+    UWorld* World = S.GetGameInstance() ? S.GetGameInstance()->GetWorld() : nullptr;
+    if (APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr)
+        PC->ConsoleCommand(Step.Command);
+    else if (GEngine)
+        GEngine->Exec(World, *Step.Command);
+}
+
+void FSCViewerAutomation::TickScript(USCViewerSubsystem& S)
+{
+    if (Script.IsEmpty() || StepIndex >= Script.Num()) return;
+    const double Now = FPlatformTime::Seconds();
+    if (SampleUntil > 0)
+    {
+        FrameMs.Add(FApp::GetDeltaTime() * 1000);
+        GameMs.Add(FPlatformTime::ToMilliseconds(GGameThreadTime));
+        RenderMs.Add(FPlatformTime::ToMilliseconds(GRenderThreadTime));
+        GpuMs.Add(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles(0)));
+        if (Now < SampleUntil) return;
+        SampleUntil = 0;
+        LogFrameSamples();
+    }
+    if (StepIndex == INDEX_NONE)
+    {
+        // Start once a load finished (folder harness or archive), after the -SCCamera switch.
+        if (!S.GetVehicle() || S.IsBusy() || bWaiting || !Queue.IsEmpty() || (!Camera.IsEmpty() && !bCameraApplied)) return;
+        StepIndex = 0;
+        StepAt = Now + Script[0].Delay;
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_START steps=%d %s"), Script.Num(), *Where(S));
+    }
+    // A timed move finishes before the next step's delay starts counting.
+    if (ASCFirstPersonCharacter* C = S.GetFirstPerson(); C && C->IsHoldingMove())
+    {
+        StepAt = FMath::Max(StepAt, Now + Script[StepIndex].Delay);
+        return;
+    }
+    if (Now < StepAt) return;
+    const FStep Step = Script[StepIndex];
+    RunStep(S, Step);
+    UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT step=%d cmd=\"%s\" %s"), StepIndex + 1, *Step.Command, *Where(S));
+    ++StepIndex;
+    if (StepIndex < Script.Num())
+        StepAt = FMath::Max(StepAt, Now) + Script[StepIndex].Delay;
+    else
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_DONE steps=%d %s"), Script.Num(), *Where(S));
 }
 
 void FSCViewerAutomation::Tick()
 {
     USCViewerSubsystem* S = Owner.Get();
-    if (!S || S->IsBusy()) return;
+    if (!S) return;
+    TickScript(*S);
+    if (S->IsBusy()) return;
     if (bWaiting)
     {
         bWaiting = false;

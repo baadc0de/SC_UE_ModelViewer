@@ -24,6 +24,7 @@ public:
     virtual FReply OnKeyUp(const FGeometry& Geometry, const FKeyEvent& Event) override;
     virtual FCursorReply OnCursorQuery(const FGeometry& Geometry, const FPointerEvent& Event) const override;
     virtual void OnFocusLost(const FFocusEvent& Event) override;
+    virtual void OnMouseCaptureLost(const FCaptureLostEvent& Event) override;
 
 private:
     enum class EDrag : uint8 { None, Rotate, Pan };
