@@ -40,19 +40,43 @@ def topology(path):
     return {key: len(doc.get(key, [])) for key in ("nodes", "meshes", "materials", "skins", "accessors")}
 
 
+def placements(package):
+    # Compare full authored placement transforms/paths per owning container,
+    # preserving multiplicity (several fixtures may share geometry).
+    return collections.Counter(json.dumps({"container": c["name"],
+        "parent_entity": c.get("parent_entity_name"), "parent_node": c.get("parent_node_name"),
+        "container_transform": c["container_transform"], "placement": p}, sort_keys=True)
+        for c in package["interiors"] for p in c["placements"])
+
+
+def all_lights(package):
+    return [light for group in [package["root_entity"], *package["children"], *package["interiors"]]
+            for light in group.get("lights", [])]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
+    parser.add_argument("--generic", action="store_true", help="omit Gladius-specific acceptance probes")
+    parser.add_argument("--expect-engine-glow", choices=("present", "absent"), required=True)
     args = parser.parse_args()
     old, new = scene(args.before), scene(args.after)
     assert new["version"] == 2
+    assert placements(old) == placements(new), "interior placement identities/transforms changed"
+    print("Placements unchanged:", sum(placements(new).values()))
     assert inventory(args.before, old) == inventory(args.after, new)
     print("Unchanged package counts:", json.dumps(inventory(args.after, new), sort_keys=True))
     for path in args.after.rglob("*.glb"):
         assert topology(path) == topology(args.before / path.relative_to(args.after)), path
     print("All GLB topology counts unchanged; root:", topology(args.after / new["root_entity"]["mesh_asset"]))
+    before_control = bool(old.get("controls", {}).get("engine_glow", {}).get("targets"))
+    control = new.get("controls", {}).get("engine_glow", {})
+    assert bool(control.get("targets")) == (args.expect_engine_glow == "present")
+    print("controls.engine_glow presence:", before_control, "->", bool(control.get("targets")),
+          "targets:", len(control.get("targets", [])))
     materials = []
+    black_with_glow = 0
     for path in args.after.rglob("*.materials.json"):
         doc = json.loads(path.read_bytes())
         assert doc["version"] == 2
@@ -60,26 +84,36 @@ def main():
             attrs = {a["name"]: a["value"] for a in material["authored_attributes"]}
             glow = float(attrs.get("Glow", attrs.get("GlowAmount", "0")))
             emission = [float(v) for v in attrs.get("Emissive", "0,0,0").split(",")]
-            diffuse = [float(v) for v in attrs.get("Diffuse", "1,1,1").split(",")]
-            expected = [e * d * glow for e, d in zip(emission, diffuse)]
-            actual = material["emissive"]["color"]
-            assert all(abs(a - b) <= 1e-5 * max(1, abs(b)) for a, b in zip(actual, expected)), path
+            tokens = set(attrs.get("StringGenMask", "").upper().split("%"))
+            emittance = bool(tokens & {"EMITTANCE_MAP", "MACRO_EMISSIVE_MAP"})
+            expected_tint = emission if any(emission) else [1,1,1]
+            strength = glow if glow > 0 else 1 if emittance else 0
+            actual = material["emissive"]
+            assert all(abs(a-b) <= 1e-5 * max(1,abs(b)) for a,b in zip(actual["color"], expected_tint)), path
+            assert abs(actual["strength"] - strength) <= 1e-5 * max(1, abs(strength)), path
+            assert actual["uses_base_texture"] == (not emittance), path
+            black_with_glow += glow > 0 and not any(emission)
             materials.append(material)
-    root = json.loads((args.after / new["root_entity"]["material_sidecar"]).read_bytes())
-    by_name = {m["submaterial_name"]: m for m in root["submaterials"]}
-    for name in ("emissives", "Headlight_Glow"):
-        print(name, json.dumps(by_name[name]["emissive"], sort_keys=True))
-    pipes = [m for m in materials if m["submaterial_name"] == "pipe mat 1"]
-    assert pipes and all(m["emissive"]["color"] == [0, 0, 0] for m in pipes)
-    print("pipe mat 1", pipes[0]["emissive"]["color"])
-    for name, kind in (("pom", "relief_only"), ("decals", "color_sheet"), ("stencil", "stencil_palette")):
-        assert by_name[name]["decal"]["kind"] == kind
-        print(name, json.dumps(by_name[name]["decal"], sort_keys=True))
-    groups = [new["root_entity"], *new["children"], *new["interiors"]]
-    lights = [light for group in groups for light in group.get("lights", [])]
+    print("Glow-positive / black-Emissive submaterials:", black_with_glow)
+    if not args.generic:
+        root = json.loads((args.after / new["root_entity"]["material_sidecar"]).read_bytes())
+        by_name = {m["submaterial_name"]: m for m in root["submaterials"]}
+        for name in ("glows", "emissives", "Headlight_Glow"):
+            m = next(m for m in materials if m["submaterial_name"] == name and m["emissive"]["glow"] > 0) if name == "glows" else by_name[name]
+            attrs = {a["name"]: a["value"] for a in m["authored_attributes"]}
+            diffuse = [float(v) for v in attrs["Diffuse"].split(",")]
+            effective = [c*d*m["emissive"]["strength"] for c,d in zip(m["emissive"]["color"], diffuse)]
+            print(name, json.dumps(m["emissive"], sort_keys=True), "surface RGB before texture:", effective)
+        pipes = [m for m in materials if m["submaterial_name"] == "pipe mat 1"]
+        assert pipes and all(m["emissive"]["strength"] == 0 for m in pipes)
+        print("pipe mat 1", pipes[0]["emissive"])
+        for name, kind in (("pom", "relief_only"), ("decals", "color_sheet"), ("stencil", "stencil_palette")):
+            assert by_name[name]["decal"]["kind"] == kind
+            print(name, json.dumps(by_name[name]["decal"], sort_keys=True))
+    lights = all_lights(new)
     ids = [(light["source_container_index"], light["source_light_index"]) for light in lights]
     assert len(ids) == len(set(ids)), "duplicate lights across entity/container arrays"
-    assert len(lights) == sum(len(c["lights"]) for c in old["interiors"])
+    assert len(lights) == len(all_lights(old))
     print("Lights:", len(lights), "root:", len(new["root_entity"]["lights"]),
           "children:", sum(len(c["lights"]) for c in new["children"]),
           "interiors:", sum(len(c["lights"]) for c in new["interiors"]))

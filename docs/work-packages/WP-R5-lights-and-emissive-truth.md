@@ -166,3 +166,164 @@ upstream-3d,acceptance,validate}.log`. Red-before-green regression evidence is i
 `emissive-red.log` and `lights-red.log`: missing Glow previously produced nonzero
 emission, empty groups invented a light, and LightGroupItem components were
 ignored. Tests use synthetic CryXmlB authored-attribute/component fixtures.
+
+## Cross-review corrections (2026-11-09)
+
+These corrections supersede the initial task/done-criteria emission formula and
+its earlier evidence above. Work continues from `scviewer/lights` at b4c0ebe6;
+no git metadata, UE files, or shared design documents were modified by this agent.
+
+1. **Final emission rule.** `emissive.color` is tint only: authored Emissive RGB
+   unless all zero, then white. `strength` is positive Glow, else 1 for an enabled
+   emittance-map permutation, else 0. Surface colour remains Diffuse × base map,
+   or the emittance map. Exact tokens `%EMITTANCE_MAP` and `%MACRO_EMISSIVE_MAP`
+   enable the map path; a slot name/texture filename alone does not. The latter
+   token is verified on live HardSurface materials with TexSlot14 (Scorpius trim
+   and thrusters, Cutlass thrusters/headlight). Unit tests cover black/white
+   Emissive with Glow, neutral Illum/LayerBlend without Glow, token-only maps,
+   and HardSurface map binding/negative filename-only evidence. Synthetic test
+   scalars are deliberately not copies of game values.
+2. **Thruster control restored from DataCore.** Querying
+   `EntityClassDefinition.AEGS_Gladius_Thruster_Main` found
+   `SEntityComponentEffects.entityEffects.materialEffects.enabled = true`, with
+   two enabled tag effects whose property links write `materialProperty = Glow`
+   on `subMeshName = Gladius_Thruster_Main`. Their authored multipliers are 50/100
+   and minima 10/20; these values are evidence, not constants added to code.
+   `SCItemThrusterParams` and `ThrusterEffectsComponentParams` were also inspected;
+   particle effects are separate. The NMC dump identifies that exact name as
+   geometry node 0 (parent 1), with only MapChannel 4/5/6 metadata. The material
+   `engine_glow` is Illum, `%DECAL`, Emissive zero, no Glow, AlphaGlowCutoff zero,
+   DecalDiffuseOpacity zero. No texture-name signal is used. Enabled Glow links
+   join exact NMC names and source material IDs. Because the authored effect
+   addresses the entire submesh, Gladius has four compatible Illum targets:
+   source slots 1/2/4/5 (`engine_a`, `engine_b`, `text_decals`, `engine_glow`).
+   Narrowing to the formerly name-selected slot would invent an unsupported
+   binding. This is a manual control; it does not simulate effect tags/modifiers
+   or change static emission. Tests cover disabled/unrelated effects, exact node
+   joins, original material IDs, missing nodes, and zero static emission.
+3. **Blender parity.** Manifest parsing and scene orchestration consume root and
+   child light arrays as well as interiors. A small helper binds per-instance
+   lights to animated helper-local transforms; unresolved helpers fall back to
+   the owning instance's entity-local frame. Tests verify all three locations,
+   legacy absence, local rotation/direction handling, and fallback placement.
+4. **Mixed light/geometry entities.** Removed the early continue after light
+   extraction. The regression test failed with zero meshes before the fix and
+   now retains both mesh and light. Live placement identities/transforms and all
+   GLB topology/file counts are unchanged on all three ships.
+5. **Optional vehicle XML.** Shared tolerant base/modification reader now serves
+   both invisible-port and light-port discovery. Query/read/parse failures warn
+   and allow other sources/export work to continue. A test covers missing and
+   corrupt XML followed by a valid modification.
+6. **Exact helpers and compatibility.** Removed suffix matching (including the
+   unique-suffix case, reproduced red first). Contract documents bundled GLB
+   emissive factors and screen-back-colour effects of the shared factor fix.
+   Scene/material schema stays v2; validation accepts v1/v2. Core cache is now
+   v5 to invalidate packages with superseded semantics. The name-derived texture
+   role debt is also marked `TODO(upstream)` at its implementation in `mtl.rs`.
+
+### Review verification
+
+Commands from the superproject root; detailed output is in ignored
+`out/wp-r5-review/`. The three `before-*` exports were made with the unchanged
+binary at the start of review work, using `--no-cache decomposed` and default
+LOD1/mip2. Regression-first logs: `rust-red.log` (six reproduced failures),
+`helper-red.log` (unique suffix bound incorrectly), `effect-red.log` (dynamic Glow
+binding missing), and `/tmp/r5-blender-red.log` (missing entity-light fields).
+
+```sh
+CARGO_TARGET_DIR=./target cargo build
+CARGO_TARGET_DIR=./target cargo test --workspace
+CARGO_HOME=/tmp/scviewer-r5-cargo CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml --workspace -- --test-threads=1
+CARGO_TARGET_DIR=./target cargo fmt -p scviewer-core -p scviewer-cli --check
+
+target/debug/scviewer --no-cache lights Gladius > out/wp-r5-review/gladius-lights.json
+target/debug/scviewer --no-cache lights Scorpius > out/wp-r5-review/scorpius-lights.json
+target/debug/scviewer --no-cache lights Cutlass_Black > out/wp-r5-review/cutlass-lights.json
+target/debug/scviewer --no-cache lights Controller_Light > out/wp-r5-review/empty-lights.json
+target/debug/scviewer --no-cache decomposed Gladius out/dec-r5 --lod 1 --mip 2
+target/debug/scviewer --no-cache decomposed Scorpius out/wp-r5-review/after-scorpius --lod 1 --mip 2
+target/debug/scviewer --no-cache decomposed Cutlass_Black out/wp-r5-review/after-cutlass --lod 1 --mip 2
+python3 -I scripts/verify_wp_r5.py out/wp-r5-review/before-gladius out/dec-r5 --expect-engine-glow present
+python3 -I scripts/verify_wp_r5.py out/wp-r5-review/before-scorpius out/wp-r5-review/after-scorpius --generic --expect-engine-glow present
+python3 -I scripts/verify_wp_r5.py out/wp-r5-review/before-cutlass out/wp-r5-review/after-cutlass --generic --expect-engine-glow present
+target/debug/scviewer validate out/dec-r5
+```
+
+Results: debug build succeeds, viewer **17 passed**, upstream **2,139 passed,
+61 ignored** across 102 invocations, no failures. Gladius validation is valid:
+45 meshes, zero empty meshes, no errors/warnings (the validator's GLB light count
+is zero; the scene manifest independently contains 77 lights).
+
+| Evidence | Gladius | Scorpius | Cutlass Black |
+| --- | ---: | ---: | ---: |
+| Lights | 77 | 127 | 225 |
+| Root / interior lights | 21 / 56 | 94 / 33 | 103 / 122 |
+| Interior placements, before = after | 10 | 14 | 30 |
+| Engine-glow control, before → after | absent → 4 targets | absent → 4 targets | absent → 2 targets |
+| Files, before = after | 502 | 491 | 747 |
+
+Controller_Light returns zero lights. No child light arrays contain lights for
+these three exports. Gladius still has 13 positive-Glow/black-Emissive materials.
+Live four-case emission evidence (surface RGB before texture modulation):
+
+| Material | Tint | Strength | Surface RGB × strength |
+| --- | --- | ---: | --- |
+| weapon `glows` | 1,1,1 | 0.35 | 0.322554, 0.114722, 0 |
+| root `emissives` | 1,1,1 | 0.3 | 0.063669, 0.179161, 0.276475 |
+| root `Headlight_Glow` | 1,1,1 | 0 | 0,0,0 |
+| `pipe mat 1` | 1,1,1 | 0 | 0,0,0 |
+
+Synthetic unit cases use Glow 0.25 / 0.5 and surface colours (1,0.5,0) /
+(0.25,0.5,1), respectively: tint stays white, factors are (0.25,0.25,0.25) /
+(0.5,0.5,0.5), and final pre-texture surfaces are (0.25,0.125,0) /
+(0.125,0.25,0.5). Both no-Glow cases have zero factors. The map-only test has
+strength 1 and tint/factor (0.5,1,0.25).
+
+Decals remain: `pom = relief_only`, PomDisplacement 0.031615101, PomHeightBias 0.5,
+coverage/normal_gloss/height = TexSlot1/3/4; `decals = color_sheet` with base colour
+TexSlot1; `stencil = stencil_palette` with TexSlot7 and numeric Stencil* fields.
+
+Blender's ordinary system-Python discovery first reported three missing legacy
+`vendor/ships/...component_master_01_TEX0.materials.json` fixture errors. Using the
+freshly exported equivalent TEX2 fixture, without copying game data into git:
+
+```sh
+cd vendor/StarBreaker/blender_addon
+python3 - <<'PY'
+import pathlib, unittest
+suite = unittest.defaultTestLoader.discover('tests')
+import test_manifest, test_templates
+fixture = pathlib.Path('../../../out/dec-r5/Data/Materials/vehicles/components/component_master_01_TEX2.materials.json').resolve()
+test_manifest.COMPONENT_MASTER = test_templates.COMPONENT_MASTER = fixture
+result = unittest.TextTestRunner(verbosity=1).run(suite)
+raise SystemExit(not result.wasSuccessful())
+PY
+```
+
+**426 tests run, OK, 41 skipped** (385 executed successfully). The two existing
+TODO(WP-R5) lines above remain; no engine-control regression TODO is necessary
+because a non-name authored binding was found and implemented.
+
+Changed files under `vendor/StarBreaker` (including new files):
+
+```text
+blender_addon/starbreaker_addon/manifest.py
+blender_addon/starbreaker_addon/runtime/importer/entity_lights.py
+blender_addon/starbreaker_addon/runtime/importer/orchestration.py
+blender_addon/tests/test_manifest.py
+blender_addon/tests/test_scene_instances.py
+crates/starbreaker-3d/src/decomposed.rs
+crates/starbreaker-3d/src/material_semantics.rs
+crates/starbreaker-3d/src/mtl.rs
+crates/starbreaker-3d/src/pipeline/engine_glow.rs
+crates/starbreaker-3d/src/pipeline/light_catalogue.rs
+crates/starbreaker-3d/src/pipeline/mod.rs
+crates/starbreaker-3d/src/pipeline/vehicle.rs
+crates/starbreaker-3d/src/pipeline/vehicle_lights.rs
+crates/starbreaker-3d/src/pipeline/vehicle_xml.rs
+crates/starbreaker-3d/src/socpak.rs
+docs/decomposed-export-contract.md
+```
+
+Superproject files: `crates/scviewer-core/README.md`,
+`crates/scviewer-core/src/cache.rs`, `scripts/verify_wp_r5.py`, and this brief.
