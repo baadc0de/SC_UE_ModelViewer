@@ -1,0 +1,21 @@
+[package]
+name = "scbridge-ffi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "scbridge"
+crate-type = ["cdylib"]
+
+[features]
+test-hooks = []
+
+[dependencies]
+scviewer-core = { path = "../scviewer-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+cbindgen = "=0.29.2"
+tempfile = "3"

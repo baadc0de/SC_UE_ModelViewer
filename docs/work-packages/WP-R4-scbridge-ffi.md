@@ -35,3 +35,131 @@ in-memory decomposed package without any intermediate files.
   missing).
 - A forced panic (test hook) returns `SC_STATUS_PANIC` with a message, no abort.
 - Export of Gladius through FFI within 10 % of the CLI's wall time.
+
+## Implementation / verification handoff (2026-11-09)
+
+Implemented the opaque-handle C ABI, generated header, Linux external UE module,
+release staging script, C consumer, Rust boundary tests and header drift test.
+All entry points contain unwinding Rust panics. Handles require serialized access;
+progress may arrive on worker/rayon threads and finishes before export returns.
+JSON and tar allocations have matching library frees. Open errors use thread-local
+storage; other errors are per handle. A panic poisons the handle until close.
+
+The generated ABI includes `sc_lights`, `sc_cache_stats`, `sc_cache_evict`, and
+`sc_default_options`. `sc_options` is 40 bytes: ten uint32 fields (`lod`, `mip`,
+`material_mode`, `attachments`, `interior`, `lights`, `shields`, `animations`,
+`default_pose`, `collision_reserved`). Status codes are OK=0, INVALID_ARGUMENT=1,
+ERROR=2, PANIC=3, UNSUPPORTED=4. Material modes are textures=0, colors=1, none=2.
+The test-only panic hook is absent from the deployment library.
+
+Scope/contract notes:
+
+- The supplied core has no public cache statistics method. The FFI reads its
+  atomically published manifest as a read-only size/count snapshot and combines
+  that with `Session::cache_status()` and the public default write cap. Eviction
+  stays in `Session::cache_evict`; the requested cap applies to that call only.
+- The core always emits decomposed animations. The ABI includes the requested
+  field but explicitly rejects `animations=0` with UNSUPPORTED. The reserved
+  collision field must be zero. No option is silently ignored.
+- Tar bytes are returned untouched. Core order is scene.json first, then all
+  other paths lexicographically (including Data before remaining Packages
+  sidecars), rather than the older brief's sidecars-before-Data wording.
+- Independent uncached exports differ in exactly one file:
+  `Data/UI/Generated/.export_stamp.json`. Upstream `insert_ui_export_stamp` in
+  `vendor/StarBreaker/crates/starbreaker-3d/src/decomposed.rs` writes wall-clock
+  export time and the invoking executable's mtime. All other 501 files were
+  byte-identical. The C integration test checks exact tar parity through the
+  same core package cache; the benchmark also checks independent exports,
+  allowing only the two timestamp fields to differ. No tar normalization occurs.
+- The root workspace had no release profile; added thin LTO and stripping to
+  match the vendored release profile, with explicit `panic = "unwind"`.
+- Per assignment, no branch/commit, vendored edit, CLI edit or UE build was made.
+  Only the assigned ThirdParty directory was touched under ue/. Its `.so` and
+  all target artifacts are ignored; the header and Build.cs are source files.
+
+Commands run from the repository root (Cargo commands were sequential):
+
+```sh
+# Default Cargo home is read-only in this sandbox; use a writable cache copy.
+mkdir -p /tmp/wp-r4-cargo-home
+cp -a --reflink=auto "$HOME/.cargo/registry" "$HOME/.cargo/git" \
+  "$HOME/.cargo/config.toml" /tmp/wp-r4-cargo-home/
+export CARGO_HOME=/tmp/wp-r4-cargo-home
+export CARGO_TARGET_DIR=./target
+
+cargo test -p scbridge-ffi -- --nocapture
+scripts/build_ffi.sh
+cargo build --locked --release -p scviewer-cli
+SCBRIDGE_CTEST_LIB="$PWD/target/release/libscbridge.so" \
+SCBRIDGE_CTEST_CLI="$PWD/target/release/scviewer" \
+  crates/scbridge-ffi/ctest/run.sh
+
+cargo build --locked -p scbridge-ffi --features test-hooks
+mkdir -p out/wp-r4-panic
+cc -std=c11 -Wall -Wextra -Werror -DSCBRIDGE_TEST_HOOKS \
+  -I crates/scbridge-ffi/include crates/scbridge-ffi/ctest/smoke.c \
+  "$PWD/target/debug/libscbridge.so" -Wl,-rpath,"$PWD/target/debug" \
+  -o out/wp-r4-panic/smoke
+out/wp-r4-panic/smoke out/wp-r4-panic ./cache panic
+
+cargo build --locked --workspace
+cargo test --locked --workspace -- --nocapture
+cargo sweep --maxsize 10GB .
+UV_CACHE_DIR=/tmp/wp-r4-uv-cache uv run python crates/scbridge-ffi/ctest/benchmark.py
+scripts/build_ffi.sh --check-header
+nm -D --defined-only target/release/libscbridge.so | awk '$2 == "T"'
+stat -c '%n: %s bytes' target/release/libscbridge.so
+```
+
+The C test shell invokes `tar -xf "$work/ffi.tar" -C "$work/extracted"`,
+`scviewer validate "$work/extracted"`,
+`scviewer --cache "$cache" decomposed-tar AEGS_Gladius "$work/cli.tar"`, and
+`cmp "$work/ffi.tar" "$work/cli.tar"`. Its isolated cache is under `./cache/`
+and is evicted and removed; the package artifacts remain under `./out/`.
+
+Key captured output:
+
+```text
+FFI export=4.996541 s total=6.182090 s bytes=101938176 callbacks=246
+C ABI smoke: PASS
+ValidationReport: is_valid: true, mesh_count: 45, errors: [], warnings: []
+FFI / CLI decomposed-tar (same cached package): byte-identical
+ustar: 502 regular files; scene.json first; name/prefix reader agrees with tarfile
+Gladius: 45 GLBs / 23 sidecars / 366 PNGs / 63 clips / 77 lights; catalogue joins PASS
+cache eviction: 152473203 bytes removed
+C panic: status=3 message=forced WP-R4 panic; process survived
+Workspace: 3 boundary + 1 C integration + 1 header drift + 17 core tests passed
+median FFI=6.171951 s CLI=6.146536 s ratio=1.0041 overhead=0.41%
+Timing budget: PASS
+Independent export differences (timestamp metadata only): ['Data/UI/Generated/.export_stamp.json']
+libscbridge.so: 16321408 bytes (15.57 MiB)
+cargo sweep (final pass): Cleaned 3.07 GiB; du -sh target: 13G
+```
+
+Timings are full process wall times, including open, search, export, file write
+and close. Both release programs used disabled persistence and a warm OS file
+cache, with one warmup pair and five alternating measured pairs. No CPU affinity
+or OS cache flushing was used. The upstream validator's `light_count` field is
+zero for this package; the separate C catalogue/scene join verifies all 77 lights.
+The final timing run had no concurrent Cargo build and used the final staged library.
+Full captured logs are retained under `out/wp-r4-verification/` (gitignored).
+
+`nm -D` defined text symbols (no non-sc symbols, no test hook):
+
+```text
+sc_cache_evict
+sc_cache_stats
+sc_clip_catalogue
+sc_close
+sc_default_options
+sc_export_decomposed_mem
+sc_free_blob
+sc_free_string
+sc_last_error
+sc_lights
+sc_open
+sc_search_entities
+```
+
+TODO(WP-R4): Add an animation-disable option to scviewer-core and its cache key before accepting animations=0 in the ABI; core changes were outside this assignment's writable scope.
+TODO(WP-R4): Resolve upstream export-stamp timestamp nondeterminism if byte identity between independent uncached exports is required; current exact C/CLI parity uses the shared package cache.

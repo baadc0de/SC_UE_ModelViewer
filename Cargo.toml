@@ -9,6 +9,12 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+panic = "unwind"
+
 [workspace.dependencies]
 starbreaker-3d = { path = "vendor/StarBreaker/crates/starbreaker-3d" }
 starbreaker-common = { path = "vendor/StarBreaker/crates/starbreaker-common" }
