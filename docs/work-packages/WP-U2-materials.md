@@ -34,6 +34,15 @@ node graphs); `vendor/StarBreaker/crates/starbreaker-3d/src/mtl.rs` (`ShaderFami
 - Nanite rule: `Glass` and `MeshDecal` instances mark the owning component
   non-Nanite (WP-U1 reads a flag from the builder).
 
+## Schema v2 inputs (WP-R5 landed 2026-11-09)
+Sidecars now carry curated per-submaterial `emissive` (`color` = Emissive × Glow ×
+Diffuse, `uses_base_texture`, `emittance_texture`, `alpha_glow_cutoff`, `glow`) and
+`decal` (`kind` relief_only | color_sheet | stencil_palette | unknown, plus the slots and
+public params used) objects; `out/dec-r5` is the Gladius package in that schema. Switch
+the builder to read these objects (fall back to attribute parsing only for v1 packages)
+so both importers follow one rule; the Headlight_Glow submaterial has no Glow and is
+correctly non-emissive in v2.
+
 ## Data-driven rules (owner requirement, 2026-11-09)
 See `docs/03-unreal-export-design.md` §"Emissive, decal and light rules" and WP-R5.
 Until WP-R5 lands, derive the same facts from the sidecar's `authored_attributes`

@@ -36,7 +36,9 @@ guarded by `WITH_EDITOR` with a runtime path kept working.
 - `USCClipCatalog` DataAsset: clip id, display name, owner, source, fragments/tags,
   boomerang flag; `ASCVehicle` gets `PlayClip(FName)`, `SnapClip(FName, bLast)`,
   `PlayFragment(FName fragment, FName tag)` Blueprint-callable functions.
-- Lights: `interiors[].lights` → point/spot/rect components with
+- Lights (scene schema v2 from WP-R5): `root_entity.lights[]` and `children[].lights[]`
+  (the ship's own SOC light groups resolved to attachment helpers; Gladius 21 root +
+  56 interior lights, Cutlass Black 225 total) **and** `interiors[].lights` → point/spot/rect components with
   `intensity_candela_proxy`, `radius_m`, colour, half-angles, gobo texture as light
   function; `ambient_proxy` skipped with a log line.
 
