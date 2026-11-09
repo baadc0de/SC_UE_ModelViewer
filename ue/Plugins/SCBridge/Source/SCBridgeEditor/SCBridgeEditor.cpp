@@ -4,16 +4,21 @@
 #include "IDesktopPlatform.h"
 #include "Editor.h"
 #include "SCImporter.h"
+#include "SCViewerSubsystem.h"
+#include "Private/SCKeepAssets.h"
 #include "Framework/Application/SlateApplication.h"
 class FSCBridgeEditorModule : public IModuleInterface
 {
 public:
     void StartupModule() override
     {
+        // Editor host extra: the Runtime UI shows "Keep as assets" while this handler is bound.
+        USCViewerSubsystem::KeepHandler().BindStatic(&SCKeepAssets::Keep);
         UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FSCBridgeEditorModule::RegisterMenus));
     }
     void ShutdownModule() override
     {
+        USCViewerSubsystem::KeepHandler().Unbind();
         UToolMenus::UnRegisterStartupCallback(this); UToolMenus::UnregisterOwner(this);
     }
     void RegisterMenus()

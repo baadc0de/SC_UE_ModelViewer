@@ -27,9 +27,12 @@ struct SCBRIDGE_API FSCImportResult
 class SCBRIDGE_API FSCImporter
 {
 public:
-    // Game-thread synchronous API. Parsing and pure Chaos BVH derivation run on a worker.
+    // Game-thread synchronous API over FSCImportJob (SCImportJob.h), which hosts drive incrementally.
+    // Parsing, mesh derivation and pure Chaos BVH derivation run on workers.
     // Only publishes the new actor after all readable assets and resolvable attachments are assembled.
     static bool Import(FSCPackageSource& Source, FSCImportOptions Options, FSCImportResult& Result);
+    /** Registers Vehicle as the world's current import, destroying the previous one when bReplacePrevious. */
+    static void Publish(UWorld* World, ASCVehicle* Vehicle, bool bReplacePrevious);
     static void Unload(UWorld* World);
     static bool Verify(const FString& Folder, const FString& Tar, UWorld* World);
 };

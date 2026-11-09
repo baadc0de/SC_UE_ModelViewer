@@ -44,3 +44,19 @@ the Lumen `Viewer` level with an orbit camera. All UI is in the **Runtime** modu
 - Headless: `UnrealEditor-Cmd ue/SCViewer/SCViewer.uproject -run=pythonscript
   -script=scripts/ue_load_gladius.py` drives `LoadEntity` (used by WP-Q1).
 - No UI hard-codes an entity or asset name.
+
+## Implementation notes and deviations (2026-11-09, Opus 5.5)
+
+- UI is Slate (not UMG) in the Runtime module; the local player's view rect is
+  restricted to the gap between the panels so the scene is centred and framed correctly.
+- Async import: the importer's `TODO(WP-V1)` is resolved by `FSCImportJob` (phase
+  progress, cancel, workers for parse/derive/collision); `FSCImporter::Import` wraps it.
+  Static-mesh builds are still one game-thread step per mesh (parallel async compile
+  is a follow-up, see `ue/verification/WP-V1.md`).
+- Settings live in `GameUserSettings.ini` (UE 5.8 does not save arbitrary `Game.ini` sections).
+- The headless entry creates its own `UGameInstance` (`USCViewerSubsystem::CreateHeadless`)
+  because commandlets have none; the script is `ue/scripts/ue_load_gladius.py`.
+- Keep saves textures, material instances (as constants), Nanite static meshes,
+  skeletons, clips and the clip catalogue; runtime skeletal meshes are skipped (no
+  editor source model; `TODO(WP-U3)`).
+- The archive build branch is not shown: the FFI has no call for it (`TODO(WP-R4)`).

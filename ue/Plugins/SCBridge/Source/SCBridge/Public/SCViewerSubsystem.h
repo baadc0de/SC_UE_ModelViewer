@@ -1,0 +1,221 @@
+// Viewer application state: owns the FFI client, the current ASCVehicle and the load pipeline
+// (FFI export on a worker -> tar parse on a worker -> FSCImportJob stepped on the game thread), camera mode,
+// focus/isolate and object-reuse by entity + options hash. Blueprint/Python-callable; UI polls it every frame.
+#pragma once
+#include "CoreMinimal.h"
+#include "Subsystems/GameInstanceSubsystem.h"
+#include "Containers/Ticker.h"
+#include "Tasks/Task.h"
+#include "SCBridgeClient.h"
+#include "SCViewerSubsystem.generated.h"
+
+class ASCVehicle;
+class ASCViewerPawn;
+class USCViewOptions;
+class FSCImportJob;
+class FSCTarPackageSource;
+class FSCViewerAutomation;
+
+UENUM(BlueprintType)
+enum class ESCCameraMode : uint8
+{
+    Orbit,
+    Fly,
+    /** Implemented by WP-P1; SetCameraMode refuses it until then. */
+    FirstPerson
+};
+UENUM(BlueprintType)
+enum class ESCArchiveState : uint8
+{
+    Closed,
+    Opening,
+    Ready,
+    Failed
+};
+UENUM(BlueprintType)
+enum class ESCLoadPhase : uint8
+{
+    Idle,
+    Exporting,
+    Parsing,
+    Importing,
+    Succeeded,
+    Failed,
+    Cancelled
+};
+
+/** Outcome and timings of the latest LoadEntity call (seconds are wall time). */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCLoadReport
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Entity;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Options;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") ESCLoadPhase Result = ESCLoadPhase::Idle;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Error;
+    /** Same entity + options as the loaded actor: nothing was exported or imported. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") bool bReused = false;
+    /** Layer-1 package cache hit reported by the core for this export. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") bool bExportCacheHit = false;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double ExportSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double ParseSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double ImportSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double DeriveSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double BuildSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double CollisionSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double MaterialSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double AssembleSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") double TotalSeconds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int64 TarBytes = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int64 CacheBytes = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int64 CacheEntries = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Assets = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Instances = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Warnings = 0;
+    /** Live objects after the load (whole process). */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 StaticMeshes = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 SkeletalMeshes = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Textures = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 MaterialInstances = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Vehicles = 0;
+    /** Objects of the previous vehicle tracked before unload, and how many survived GC (must be 0). */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 PreviousObjects = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 PreviousObjectsAlive = 0;
+};
+
+/** Outcome of the editor-host Keep. */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCKeepResult
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly, Category = "SC") bool bOK = false;
+    /** Long package path of the kept folder, e.g. /Game/SC/<Entity>. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Root;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Saved = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Message;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSCOnLoadFinished, const FSCLoadReport&, Report);
+DECLARE_MULTICAST_DELEGATE_OneParam(FSCOnComponentFocused, USceneComponent*);
+/** Editor-host "Keep": save the current vehicle's transient objects as assets. Bound by SCBridgeEditor only. */
+DECLARE_DELEGATE_RetVal_TwoParams(FSCKeepResult, FSCKeepHandler, ASCVehicle*, const FString& /*Entity*/);
+
+UCLASS()
+class SCBRIDGE_API USCViewerSubsystem : public UGameInstanceSubsystem
+{
+    GENERATED_BODY()
+public:
+    virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+    virtual void Deinitialize() override;
+
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer", meta = (WorldContext = "WorldContext"))
+    static USCViewerSubsystem* Get(const UObject* WorldContext);
+    /** Headless/automation host (commandlets): a standalone game instance with a dummy game world, no viewport. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") static USCViewerSubsystem* CreateHeadless();
+    /** Tear down an instance made by CreateHeadless (game instance shutdown, world destroyed) before the host exits. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") static void DestroyHeadless(USCViewerSubsystem* Viewer);
+
+    // Archive
+    /** Empty path: settings / -SCArchive, else auto-discovery. A successful explicit path is remembered. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void OpenArchive(const FString& P4kPath);
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCArchiveState GetArchiveState() const { return ArchiveState; }
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveError() const { return ArchiveError.ToString(); }
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveLabel() const;
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetCacheDir() const { return CacheDir; }
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForArchive(float TimeoutSeconds = 300.f);
+
+    // Search
+    /** Blocking search (scripts); the UI uses SearchAsync. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") TArray<FSCEntityHit> SearchEntities(const FString& Query, int32 Limit = 100);
+    /** Callback runs on the game thread from the subsystem tick. */
+    void SearchAsync(const FString& Query, int32 Limit, TFunction<void(const FSCSearchResult&)> Callback);
+
+    // Load lifecycle
+    /** Starts an asynchronous load; returns false if the archive is not ready or a load is running. Same entity and
+     *  options hash as the loaded actor completes immediately as "reused". */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool LoadEntity(const FString& Entity, USCViewOptions* Options);
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void CancelLoad();
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void Unload();
+    /** Pumps the pipeline on the calling (game) thread until the load finishes; for commandlets and tests. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForLoad(float TimeoutSeconds = 600.f);
+    /** Pumps until the pipeline reaches Phase (or finishes); lets tests cancel inside a given phase. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForPhase(ESCLoadPhase Target, float TimeoutSeconds = 600.f);
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") bool IsBusy() const;
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadPhaseText() const;
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") FSCLoadReport GetLastReport() const { return Report; }
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetVehicle() const;
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadedEntity() const { return LoadedEntity; }
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetPendingEntity() const { return PendingEntity; }
+    /** The options instance the UI edits; persisted with the settings after each successful load. */
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") USCViewOptions* GetOptions() const { return Options; }
+
+    // Camera / inspection
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetCameraMode(ESCCameraMode Mode);
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCCameraMode GetCameraMode() const { return CameraMode; }
+    /** Orbit camera fits the component's subtree bounds (the vehicle when null). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void FocusComponent(USceneComponent* Component);
+    /** Hide every primitive outside Component's subtree; null restores the imported visibility. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void IsolateComponent(USceneComponent* Component);
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") USceneComponent* GetIsolated() const { return Isolated.Get(); }
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") USceneComponent* GetFocused() const { return Focused.Get(); }
+
+    // Editor-host Keep
+    static FSCKeepHandler& KeepHandler();
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") bool CanKeep() const;
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") FSCKeepResult Keep();
+
+    UPROPERTY(BlueprintAssignable, Category = "SC|Viewer") FSCOnLoadFinished OnLoadFinished;
+    FSCOnComponentFocused OnComponentFocused;
+    /** The local player's viewer pawn (null headless or when another pawn/view target is active). */
+    ASCViewerPawn* GetViewerPawn() const;
+    /** Cache statistics as of the last export/open (no FFI call). */
+    const FSCCacheStats& GetCacheStats() const { return CacheStats; }
+
+private:
+    bool Tick(float DeltaSeconds);
+    void StepLoad(bool bBlocking);
+    void StartImport();
+    void FinishLoad(ESCLoadPhase Result, const FString& Error);
+    void UnloadInternal(bool bCollect);
+    void CompleteSearches(bool bBlocking);
+    void LogPhaseChange();
+    UWorld* GetViewerWorld() const;
+
+    TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client;
+    FTSTicker::FDelegateHandle TickHandle;
+    TSharedPtr<FSCViewerAutomation> Automation; // shared: type-erased deleter, the class stays private
+
+    ESCArchiveState ArchiveState = ESCArchiveState::Closed;
+    FText ArchiveError;
+    FString ArchivePath, CacheDir;
+    UE::Tasks::TTask<FSCOpenResult> OpenTask;
+    double OpenSeconds = 0;
+    FSCCacheStats CacheStats;
+
+    struct FPendingSearch
+    {
+        UE::Tasks::TTask<FSCSearchResult> Task;
+        TFunction<void(const FSCSearchResult&)> Callback;
+    };
+    TArray<FPendingSearch> Searches;
+
+    UPROPERTY() TObjectPtr<USCViewOptions> Options;
+    /** Snapshot of the options of the running/last load. */
+    UPROPERTY() TObjectPtr<USCViewOptions> LoadOptions;
+    ESCLoadPhase Phase = ESCLoadPhase::Idle;
+    FSCLoadReport Report;
+    FString PendingEntity, PendingKey, LoadedEntity, LoadedKey;
+    double LoadStart = 0, ParseStart = 0, ImportStart = 0;
+    FString LastPhaseKey;
+    TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> ExportProgress;
+    UE::Tasks::TTask<FSCExportResult> ExportTask;
+    UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> ParseTask;
+    TSharedPtr<FSCImportJob> Job;
+    TWeakObjectPtr<ASCVehicle> Vehicle;
+
+    ESCCameraMode CameraMode = ESCCameraMode::Orbit;
+    TWeakObjectPtr<USceneComponent> Isolated, Focused;
+    TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> IsolationRestore;
+};

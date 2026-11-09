@@ -268,3 +268,24 @@ Evidence, exact acceptance commands, input-revision notes and GPU TODOs are in
 CPU representations are verified, while rendered Nanite/Lumen/HWRT acceptance
 must be completed on the orchestrator's GPU.
 WP-U2 materials (Substrate decision, masters, builder, textures): [verification/WP-U2.md](verification/WP-U2.md).
+
+## WP-V1 viewer app (model browser, load pipeline, cameras)
+
+The game mode `ASCViewerGameMode` (set in `DefaultEngine.ini`) shows the in-game
+Slate UI in every host. Run from the repository root (the cache defaults to
+`./cache/`, resolved from the launch directory):
+
+```bash
+"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
+  -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
+```
+
+Search, pick options, Load; drag to orbit, Shift/middle-drag to pan, wheel to zoom,
+double-click a part to focus, F to frame all; Fly mode uses WASD/QE with Shift/Ctrl.
+Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>`,
+`-SCLoad=a,b`, `-SCHold=<s>`, `-SCCamera=fly`, `-SCFlyView=dx,dy,dz,pitch,yaw`,
+`-SCDefaults`, `-SCLod=`, `-SCMip=`, `-SCQuitAfterLoad`, `-SCNoUI`; console `sc.Load`,
+`sc.Unload`, `sc.Cancel`, `sc.Camera`. `ue/scripts/capture_viewer.sh` screenshots a run.
+Headless (WP-Q1): `UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/ue_load_gladius.py
+-nullrhi` drives `USCViewerSubsystem.LoadEntity` through the FFI. Settings persist in
+`Saved/Config/<Platform>/GameUserSettings.ini`. Evidence: [verification/WP-V1.md](verification/WP-V1.md).
