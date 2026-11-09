@@ -35,3 +35,20 @@ Findings:
    max lights overflow" on every frame). WP-U3b (MegaLights) investigates the proper
    many-light path; until then shadow casting should be capped by a data-derived rule
    (the brief's fallback), not left on for every light.
+
+## After the review fixes, WP-U3b settings and the lights round (superproject 224999e)
+
+Same runs, new binaries (`after-*.jpg`): MegaLights on, auto-exposure, sidecar basis fixed.
+
+| Capture | Result |
+| --- | --- |
+| `after-scorpius-wings.jpg` | `wings_deploy` spreads the wings into the X configuration with every part attached; no mirroring, nothing floating |
+| `after-scorpius-gear.jpg` | `landing_gear_deploy` snap-last: struts extended, ship resting on them, all attachments in place |
+| `after-cutlass-interior.jpg` | cargo bay reads as a lit interior (grey deck, orange trims, ceiling fixtures with MegaLights shadows); no overexposure |
+| all | the VSM "One Pass Projection max lights overflow" message is gone (MegaLights handles the 127–225 local lights) |
+
+Findings 1 (clip basis), 2 (exposure) and 3 (many lights) from the first pass are closed.
+Still open: the full-pose numeric gate waits for the upstream reference fix (WP-R6);
+the ship's own exterior lights still pool strongly on the floor — their authored
+default states are on (Gladius wing lights have positive defaults), so a parked /
+hangar light-state selection is a WP-V2 item, not a data error.
