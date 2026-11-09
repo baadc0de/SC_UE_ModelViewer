@@ -34,7 +34,7 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
             FSCMaterialDesc Desc = FSCMaterialBuilder::Describe(Sub, Palette);
             const bool bGlow = Manifest.EngineGlow.Targets.ContainsByPredicate([&](const FSCEngineGlowTarget& T)
                 { return T.MaterialSidecar == Pair.Key && T.SourceMaterialIndex == Sub.SourceIndex; });
-            if (bGlow) FSCMaterialBuilder::ApplyEngineGlow(Desc, Manifest.EngineGlow.DefaultStrength);
+            if (bGlow) FSCMaterialBuilder::ApplyEngineGlow(Desc, FSCMaterialBuilder::EngineGlowToEmissive(Manifest.EngineGlow, Manifest.EngineGlow.DefaultStrength));
             for (const auto& Tex : Desc.Textures) Unique.Add(Tex.Value);
             Out.Descs.Add(MoveTemp(Desc)); Out.EngineGlow.Add(bGlow);
         }

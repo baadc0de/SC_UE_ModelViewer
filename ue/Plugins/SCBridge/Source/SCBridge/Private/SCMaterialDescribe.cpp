@@ -123,33 +123,46 @@ void SurfaceGloss(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const
 /** CryEngine MTL_FLAG_REQUIRE_FORWARD_RENDERING. TODO(WP-R5): carry it in the sidecar's alpha_config. */
 bool IsForward(const FAuthored& A) { return (FCString::Strtoui64(*A.Attr.FindRef(TEXT("MtlFlags")), nullptr, 10) & 0x8000) != 0; }
 float AuthoredGlow(const FAuthored& A) { return FMath::Max(0.f, A.Float(TEXT("Glow"), A.Float(TEXT("GlowAmount"), 0.f))); }
-/** Emission = Emissive x Glow x (Diffuse x base texture | emittance map), gated by alpha above AlphaGlowCutoff
- *  (the masters multiply by the surface colour). Glow absent or 0 emits nothing even with Emissive = 1,1,1;
- *  this deliberately does not use mtl.rs emissive_factor()'s Glow=1 fallback. */
+/** Emission parameters (D11 final rule, amended; docs/03-unreal-export-design.md): the masters emit
+ *  surface colour (Diffuse x base texture, or the emittance map) x EmissiveColor (tint) x EmissiveStrength,
+ *  gated by alpha above AlphaGlowCutoff. Tint is applied once; strength = rule strength x GlowToEmissive.
+ *  v2 sidecars carry the rule in `emissive` {strength, color, uses_base_texture, emittance_texture,
+ *  alpha_glow_cutoff, forward_rendering}; v1 sidecars are evaluated from the authored attributes. */
 void Emission(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
 {
-    // D11 final rule (docs/03-unreal-export-design.md): strength = Glow when Glow > 0, else 1 with an emittance
-    // map (%EMITTANCE_MAP), else 0 -- the Emissive triplet alone is never a signal (Emissive = 1,1,1 is a neutral
-    // authored baseline). Colour = surface colour (or emittance map) x Emissive when non-zero; black = no tint.
-    // Computed from authored attributes; the sidecar v2 `emissive` object is advisory until WP-R5 encodes the
-    // same rule. TODO(WP-R5): prefer `emissive` {glow, color, emittance_texture} once it follows this rule.
-    // Amended (survey of 391 Gladius submaterials): an Illum-family forward-rendered surface
-    // (MtlFlags & 0x8000) with a non-black Emissive is a glow card and emits mean(Emissive) without Glow;
-    // LayerBlend and non-forward materials never emit from Emissive alone.
-    const FLinearColor E = A.Color(TEXT("Emissive"), FLinearColor::Black);
-    const bool bTint = E.R > 0.f || E.G > 0.f || E.B > 0.f;
-    const bool bEmittance = HasToken(Sub, TEXT("EMITTANCE_MAP"));
-    const float Glow = AuthoredGlow(A);
-    const bool bGlowCard = (D.Family == TEXT("Illum") || D.Family == TEXT("HardSurface")) && IsForward(A) && bTint;
-    const float Strength = Glow > 0.f ? Glow : bGlowCard ? (E.R + E.G + E.B) / 3.f : bEmittance ? 1.f : 0.f;
-    D.Vectors.Add(TEXT("EmissiveColor"), bTint ? E : FLinearColor::White);
+    const FObj Em = D.bV2 ? Child(Sub, TEXT("emissive")) : nullptr;
+    float Strength = 0.f; FLinearColor Tint = FLinearColor::White; FString Map; double Cutoff = 0;
+    bool bEmittance = HasToken(Sub, TEXT("EMITTANCE_MAP"));
+    if (Em)
+    {
+        Strength = float(Num(Em, TEXT("strength"), 0.0));
+        Tint = Rgb(Em, TEXT("color"), FLinearColor::White);
+        Map = Str(Em, TEXT("emittance_texture"));
+        bEmittance |= !Map.IsEmpty();
+        Cutoff = Em->TryGetNumberField(TEXT("alpha_glow_cutoff"), Cutoff) ? Cutoff : A.Param(TEXT("AlphaGlowCutoff"), 0.f);
+        bool bBase = true;
+        if (Em->TryGetBoolField(TEXT("uses_base_texture"), bBase) && !bBase && Strength > 0.f)
+            D.Warnings.Add(TEXT("emissive.uses_base_texture = false is not supported by the masters; base texture still applied")); // TODO(WP-U2)
+    }
+    else
+    {
+        // v1: strength = Glow if > 0; else a forward-rendered Illum-family glow card with a non-black Emissive
+        // emits 1 (Emissive is its tint, applied once); else 1 with an emittance map; else 0. LayerBlend and
+        // non-forward materials never emit from Emissive alone. Black Emissive = no tint.
+        const FLinearColor E = A.Color(TEXT("Emissive"), FLinearColor::Black);
+        const bool bTint = E.R > 0.f || E.G > 0.f || E.B > 0.f;
+        const float Glow = AuthoredGlow(A);
+        const bool bGlowCard = (D.Family == TEXT("Illum") || D.Family == TEXT("HardSurface")) && D.bForward && bTint;
+        Strength = Glow > 0.f ? Glow : (bGlowCard || bEmittance) ? 1.f : 0.f;
+        Tint = bTint ? E : FLinearColor::White;
+        Cutoff = A.Param(TEXT("AlphaGlowCutoff"), 0.f);
+    }
+    D.Vectors.Add(TEXT("EmissiveColor"), Tint);
     D.Scalars.Add(TEXT("EmissiveStrength"), Strength * FSCMaterialBuilder::GlowToEmissive);
-    D.Scalars.Add(TEXT("AlphaGlowCutoff"), A.Param(TEXT("AlphaGlowCutoff"), 0.f));
+    D.Scalars.Add(TEXT("AlphaGlowCutoff"), float(Cutoff));
     if (bEmittance)
     {
-        // TextureSemanticRole has no emittance role (mtl.rs): v2 `emissive.emittance_texture` when present,
-        // otherwise the base-colour slot. TODO(WP-R5): emit an `emittance` texture role for %EMITTANCE_MAP slots.
-        FString Map = Str(Child(Sub, TEXT("emissive")), TEXT("emittance_texture"));
+        // TextureSemanticRole has no emittance role (mtl.rs): the base-colour slot unless v2 names the map.
         if (Map.IsEmpty()) if (const FObj Base = Slot(Sub, TEXT("base_color"))) Map = Str(Base, TEXT("export_path"));
         if (!Map.IsEmpty()) { Tex(D, TEXT("EmissiveMap"), Map, ESCTextureRole::Color); D.Scalars.Add(TEXT("UseEmissiveMap"), 1.f); }
     }
@@ -241,10 +254,11 @@ int32 Layers(FSCMaterialDesc& D, const FObj& Sub, const FSCPalette* Palette, int
 }
 }
 
-FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSCPalette* Palette)
+FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSCPalette* Palette, bool bUseV2Objects)
 {
     FSCMaterialDesc D; D.Name = In.Name; D.Family = In.ShaderFamily;
     const FObj Sub = Parse(In.Json);
+    D.bV2 = bUseV2Objects && Sub && Child(Sub, TEXT("emissive")) && Child(Sub, TEXT("alpha_config"));
     const FAuthored A = Authored(Sub);
     D.Shader = A.Attr.FindRef(TEXT("Shader"));
     const FString& F = D.Family;
@@ -264,14 +278,19 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     // coverage (they stay opaque-pass Nanite surfaces, so their emission feeds Lumen).
     // TODO(WP-R5): carry the forward/coverage decision in the sidecar's alpha_config.
     const bool bDecal = F == TEXT("MeshDecal") || HasToken(Sub, TEXT("DECAL"));
-    const float Opacity = A.Float(TEXT("Opacity"), 1.f);
-    const float AlphaTest = A.Float(TEXT("AlphaTest"), 0.f);
-    const bool bForward = IsForward(A); D.bForward = bForward;
+    // v2 `alpha_config` {alpha_test, opacity, two_sided, forward_rendering} when present; v1: authored attributes.
+    const FObj AC = D.bV2 ? Child(Sub, TEXT("alpha_config")) : nullptr;
+    const float Opacity = AC ? float(Num(AC, TEXT("opacity"), 1.0)) : A.Float(TEXT("Opacity"), 1.f);
+    const float AlphaTest = AC ? float(Num(AC, TEXT("alpha_test"), 0.0)) : A.Float(TEXT("AlphaTest"), 0.f);
+    bool bForward = IsForward(A);
+    if (AC) AC->TryGetBoolField(TEXT("forward_rendering"), bForward);
+    D.bForward = bForward;
     if (bDecal || In.bBlended || (Opacity < 1.f && AlphaTest <= 0.f)) D.Blend = ESCBlend::Translucent;
     else if (AlphaTest > 0.f || bForward) D.Blend = ESCBlend::Masked;
     // Cutoff: authored AlphaTest; a forward card without one uses UE's default opacity-mask clip value.
     const float Cutoff = AlphaTest > 0.f ? AlphaTest : GetDefault<UMaterial>()->OpacityMaskClipValue;
-    D.bTwoSided = bDecal; // mtl.rs is_double_sided
+    D.bTwoSided = bDecal; // v1: mtl.rs is_double_sided
+    if (AC) AC->TryGetBoolField(TEXT("two_sided"), D.bTwoSided); // v2: authored MtlFlags two-sided
     if (D.Master == ESCMaster::Glass || D.Master == ESCMaster::EmissiveUnlit) D.Blend = ESCBlend::Translucent;
     const bool bOpaqueFamily = D.Master == ESCMaster::Illum || D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered || D.Master == ESCMaster::Fallback;
     // Decal surfaces (MeshDecal, %DECAL sheets) modify the host through the DBuffer; other blended surfaces of
@@ -381,6 +400,12 @@ bool FSCMaterialBuilder::PaletteColor(const FSCPalette* Palette, const FString& 
     const FObj P = Parse(Palette->Json);
     if (!P || !P->HasTypedField<EJson::Array>(*Channel)) return false;
     Out = Rgb(P, *Channel, FLinearColor::White); return true;
+}
+
+float FSCMaterialBuilder::EngineGlowToEmissive(const FSCEngineGlow& C, float Value)
+{
+    if (C.MaxStrength > C.MinStrength) Value = FMath::Clamp(Value, C.MinStrength, C.MaxStrength);
+    return C.Units == TEXT("material_property_glow") ? Value * GlowToEmissive : Value;
 }
 
 void FSCMaterialBuilder::ApplyEngineGlow(FSCMaterialDesc& D, float Strength)

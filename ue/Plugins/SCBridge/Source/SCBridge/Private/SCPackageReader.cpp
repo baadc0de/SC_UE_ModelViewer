@@ -191,6 +191,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         if ((*Glow)->TryGetNumberField(TEXT("min_strength"), V)) Out.EngineGlow.MinStrength = float(V);
         if ((*Glow)->TryGetNumberField(TEXT("max_strength"), V)) Out.EngineGlow.MaxStrength = float(V);
         if ((*Glow)->TryGetNumberField(TEXT("default_strength"), V)) Out.EngineGlow.DefaultStrength = float(V);
+        (*Glow)->TryGetStringField(TEXT("units"), Out.EngineGlow.Units);
         for (const auto& T : ReaderArray(*Glow, TEXT("targets")))
         {
             FSCEngineGlowTarget Target; const auto O = Object(T);

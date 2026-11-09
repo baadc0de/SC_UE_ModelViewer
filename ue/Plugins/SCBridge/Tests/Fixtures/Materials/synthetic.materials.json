@@ -1428,6 +1428,113 @@
     "state": "active",
     "reason": "synthetic"
    }
+  },
+  {
+   "index": 24,
+   "submaterial_name": "card_tinted",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.7,0.7,0.7"
+    },
+    {
+     "name": "Emissive",
+     "value": "0.2,0.4,0.9"
+    },
+    {
+     "name": "MtlFlags",
+     "value": "50364544"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/illum_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 25,
+   "submaterial_name": "v2_object",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.5,0.5,0.5"
+    },
+    {
+     "name": "Emissive",
+     "value": "0,0,0"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/illum_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   },
+   "emissive": {
+    "strength": 2.0,
+    "color": [
+     0.1,
+     0.2,
+     0.3
+    ],
+    "glow": 2.0,
+    "uses_base_texture": true,
+    "emittance_texture": null,
+    "alpha_glow_cutoff": 0.4,
+    "forward_rendering": false
+   },
+   "alpha_config": {
+    "alpha_test": 0.2,
+    "opacity": 1.0,
+    "two_sided": true,
+    "forward_rendering": false
+   }
   }
  ]
 }

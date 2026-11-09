@@ -142,9 +142,26 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         // Headlight_Glow-like: forward flag + Emissive 1,1,1 + no Glow -> glow card, strength mean(Emissive) = 1,
         // colour from Diffuse x texture, additive and alpha-weighted (no clip), split from Nanite.
         TestTrue(TEXT("glow card"), X->bGlowCard);
-        TestEqual(TEXT("card strength = mean(Emissive) x k"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("card strength = 1 x k"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
         TestEqual(TEXT("colour from the texture"), X->Textures[TEXT("DiffuseMap")].Path, FString(TEXT("tex/illum_diff.png")));
         TestEqual(TEXT("alpha-weighted"), X->Scalars[TEXT("AlphaWeight")], 1.f);
+    }
+    if (auto* X = Check(TEXT("card_tinted"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
+    {
+        // Tint applied once: strength 1 x k, Emissive only as colour.
+        TestEqual(TEXT("tinted card strength = 1 x k"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
+        TestTrue(TEXT("tinted card colour = Emissive"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.2f, 0.4f, 0.9f)));
+    }
+    if (auto* X = Check(TEXT("v2_object"), ESCMaster::Illum, ESCBlend::Masked, true, false))
+    {
+        // v2 objects win over attributes: strength, tint, cutoff, alpha_test, two_sided.
+        TestTrue(TEXT("described from v2"), X->bV2);
+        TestEqual(TEXT("v2 strength"), X->Scalars[TEXT("EmissiveStrength")], 2.f * FSCMaterialBuilder::GlowToEmissive);
+        TestTrue(TEXT("v2 tint"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.1f, 0.2f, 0.3f)));
+        TestEqual(TEXT("v2 glow cutoff"), X->Scalars[TEXT("AlphaGlowCutoff")], 0.4f);
+        TestEqual(TEXT("v2 alpha_test"), X->Scalars[TEXT("AlphaTest")], 0.2f);
+        const FSCMaterialDesc V1 = FSCMaterialBuilder::Describe(*M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("v2_object"); }), Palette, false);
+        TestEqual(TEXT("v1 attribute path for comparison emits nothing"), V1.Scalars.FindRef(TEXT("EmissiveStrength")), 0.f);
     }
     if (auto* X = Check(TEXT("emissives_like"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
@@ -194,7 +211,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     {
         // Rule: no Glow (absent or 0) -> no emission, for every lit family (engine-glow targets excepted).
         const FSCMaterialDesc* X = Find(D, *Sub.Name);
-        if (!X || X->Master == ESCMaster::EmissiveUnlit || X->bGlowCard || Sub.Json.Contains(TEXT("\"Glow\""), ESearchCase::CaseSensitive) || Sub.Json.Contains(TEXT("EMITTANCE_MAP"), ESearchCase::CaseSensitive)) continue;
+        if (!X || X->bV2 || X->Master == ESCMaster::EmissiveUnlit || X->bGlowCard || Sub.Json.Contains(TEXT("\"Glow\""), ESearchCase::CaseSensitive) || Sub.Json.Contains(TEXT("EMITTANCE_MAP"), ESearchCase::CaseSensitive)) continue;
         TestEqual(Sub.Name + TEXT(": no Glow, no emission"), X->Scalars.FindRef(TEXT("EmissiveStrength")), 0.f);
         // Rule: a MeshDecal primitive never resolves to an opaque master.
         if (Sub.ShaderFamily == TEXT("MeshDecal"))
@@ -213,6 +230,13 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // Engine glow: scene controls target (sidecar, authored index 13) gets the default strength.
     TestEqual(TEXT("engine glow targets"), M.EngineGlow.Targets.Num(), 1);
     TestEqual(TEXT("engine glow default"), M.EngineGlow.DefaultStrength, 7.f);
+    {
+        FSCEngineGlow Glow = M.EngineGlow; // legacy units: 1:1
+        TestEqual(TEXT("emission_strength 1:1"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 7.f), 7.f);
+        Glow.Units = TEXT("material_property_glow"); Glow.MinStrength = 10.f; Glow.MaxStrength = 1000.f;
+        TestEqual(TEXT("Glow units x GlowToEmissive"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 50.f), 50.f * FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("clamped to the control minimum"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 1.f), 10.f * FSCMaterialBuilder::GlowToEmissive);
+    }
     FSCImportMaterials Phase; Phase.Describe(M);
     FSCFolderPackageSource Empty(FixtureDir()); // fixtures carry no PNGs: every decode fails, counts stay exact
     FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
@@ -237,12 +261,27 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
     { AddInfo(TEXT("PACKAGE_RULES skipped: no -SCPackage export root")); return true; }
     FSCFolderPackageSource Source(Folder); FSCSceneManifest M; FString Error;
     if (!TestTrue(TEXT("package reads: ") + Error, FSCPackageReader::Read(Source, M, Error))) return false;
-    int32 Decals = 0, Glowing = 0, Silent = 0, Cards = 0;
+    int32 Decals = 0, Glowing = 0, Silent = 0, Cards = 0, V2 = 0, Disagree = 0;
     for (const FSCMaterialSet& Set : M.Materials)
         for (const FSCSubmaterial& Sub : Set.Submaterials)
         {
             const FSCMaterialDesc D = FSCMaterialBuilder::Describe(Sub, M.Palettes.Num() ? &M.Palettes[0] : nullptr);
             const FString Where = Set.Path + TEXT(":") + Sub.Name;
+            if (D.bV2)
+            {
+                // Cross-check the sidecar v2 objects against the v1 attribute evaluation (informational).
+                ++V2;
+                const FSCMaterialDesc A = FSCMaterialBuilder::Describe(Sub, M.Palettes.Num() ? &M.Palettes[0] : nullptr, false);
+                TArray<FString> Diff;
+                if (!FMath::IsNearlyEqual(A.Scalars.FindRef(TEXT("EmissiveStrength")), D.Scalars.FindRef(TEXT("EmissiveStrength")), 1e-3f))
+                    Diff.Add(FString::Printf(TEXT("strength attr=%g v2=%g"), A.Scalars.FindRef(TEXT("EmissiveStrength")), D.Scalars.FindRef(TEXT("EmissiveStrength"))));
+                if (!A.Vectors.FindRef(TEXT("EmissiveColor")).Equals(D.Vectors.FindRef(TEXT("EmissiveColor")), 1e-3f))
+                    Diff.Add(TEXT("tint attr=") + A.Vectors.FindRef(TEXT("EmissiveColor")).ToString() + TEXT(" v2=") + D.Vectors.FindRef(TEXT("EmissiveColor")).ToString());
+                if (A.bForward != D.bForward) Diff.Add(TEXT("forward"));
+                if (A.bTwoSided != D.bTwoSided) Diff.Add(FString::Printf(TEXT("two_sided attr=%d v2=%d"), A.bTwoSided, D.bTwoSided));
+                if (A.Blend != D.Blend || A.Master != D.Master) Diff.Add(FString::Printf(TEXT("blend/master attr=%d/%d v2=%d/%d"), int32(A.Blend), int32(A.Master), int32(D.Blend), int32(D.Master)));
+                if (Diff.Num()) { ++Disagree; AddInfo(TEXT("V2_DIFF ") + Where + TEXT(" ") + FString::Join(Diff, TEXT("; "))); }
+            }
             if (Sub.ShaderFamily == TEXT("MeshDecal"))
             {
                 ++Decals;
@@ -272,7 +311,7 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
                 TestTrue(Where + TEXT(" glow colour comes from Emissive x Diffuse"), C.R + C.G + C.B > 0.f);
             }
         }
-    AddInfo(FString::Printf(TEXT("PACKAGE_RULES decals=%d glow_cards=%d glowing=%d no_glow=%d"), Decals, Cards, Glowing, Silent));
+    AddInfo(FString::Printf(TEXT("PACKAGE_RULES decals=%d glow_cards=%d glowing=%d no_glow=%d v2=%d v2_disagree=%d"), Decals, Cards, Glowing, Silent, V2, Disagree));
     return true;
 }
 

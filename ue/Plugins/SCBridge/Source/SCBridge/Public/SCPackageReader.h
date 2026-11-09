@@ -73,6 +73,8 @@ struct SCBRIDGE_API FSCEngineGlow
 {
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) float MinStrength = 0, MaxStrength = 0, DefaultStrength = 0;
+    /** `material_property_glow` (CryEngine Glow value) or legacy `emission_strength`. */
+    UPROPERTY(BlueprintReadOnly) FString Units;
     UPROPERTY(BlueprintReadOnly) TArray<FSCEngineGlowTarget> Targets;
 };
 USTRUCT(BlueprintType)

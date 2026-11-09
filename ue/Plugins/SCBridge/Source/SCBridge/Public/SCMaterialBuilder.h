@@ -24,7 +24,8 @@ struct SCBRIDGE_API FSCMaterialDesc
     bool bNonNanite = false;   // D6: translucent, decal, additive or hidden -> separate conventional mesh
     bool bHostTinted = false;
     bool bGlowCard = false;
-    bool bForward = false;     // CryEngine MTL_FLAG_REQUIRE_FORWARD_RENDERING (MtlFlags & 0x8000)    // forward-flag Illum glow card: additive, alpha-weighted, non-Nanite  // POM mesh decal: colour follows the host surface's palette channel (HostTint)
+    bool bForward = false;     // CryEngine MTL_FLAG_REQUIRE_FORWARD_RENDERING (MtlFlags & 0x8000)
+    bool bV2 = false;          // described from the sidecar v2 `emissive` / `alpha_config` objects    // forward-flag Illum glow card: additive, alpha-weighted, non-Nanite  // POM mesh decal: colour follows the host surface's palette channel (HostTint)
     TMap<FName, float> Scalars;
     TMap<FName, FLinearColor> Vectors;
     TMap<FName, FSCTextureKey> Textures;
@@ -38,13 +39,17 @@ public:
      *  for the Viewer's fixed exposure. Sunset: replace with the engine's Glow luminance unit once known. */
     static constexpr float GlowToEmissive = 10.f;
     /** Maps one sidecar submaterial; Palette is the scene instance's palettes.json record (may be null). */
-    static FSCMaterialDesc Describe(const FSCSubmaterial& Sub, const FSCPalette* Palette);
+    /** bUseV2Objects=false forces the v1 attribute path (used to cross-check v2 data). */
+    static FSCMaterialDesc Describe(const FSCSubmaterial& Sub, const FSCPalette* Palette, bool bUseV2Objects = true);
     /** Palette-independent D6 decision used by the mesh split (same rule as Describe().bNonNanite). */
     static bool RequiresNonNanite(const FSCSubmaterial& Sub, bool bEngineGlowTarget = false);
-    /** controls.engine_glow target: the control's strength (emission_strength units, 1:1 UE emissive) drives
+    /** controls.engine_glow target: Strength is in UE emissive units (see FSCEngineGlow::ToEmissive) and drives
      *  emission; colour stays the rule's (surface colour x Emissive when non-black). A forward-flag Illum target
      *  becomes a glow card (additive, alpha-weighted, non-Nanite) so it can light up at runtime. */
     static void ApplyEngineGlow(FSCMaterialDesc& Desc, float Strength);
+    /** Control value -> UE emissive strength: `material_property_glow` is a Glow value (x GlowToEmissive, the
+     *  same host constant as authored Glow); legacy `emission_strength` maps 1:1. Clamped to the control range. */
+    static float EngineGlowToEmissive(const FSCEngineGlow& Control, float Value);
     /** Palette channel of an opaque host-paint submaterial ("" for decals, glass, unrouted). */
     static FString HostChannel(const FSCSubmaterial& Sub);
     /** palettes.json colour of a channel (primary/secondary/tertiary/glass); false when absent. */
