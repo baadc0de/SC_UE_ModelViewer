@@ -34,6 +34,15 @@ node graphs); `vendor/StarBreaker/crates/starbreaker-3d/src/mtl.rs` (`ShaderFami
 - Nanite rule: `Glass` and `MeshDecal` instances mark the owning component
   non-Nanite (WP-U1 reads a flag from the builder).
 
+## Data-driven rules (owner requirement, 2026-11-09)
+See `docs/03-unreal-export-design.md` §"Emissive, decal and light rules" and WP-R5.
+Until WP-R5 lands, derive the same facts from the sidecar's `authored_attributes`
+(`Emissive`, `Glow`, `Diffuse`), `decoded_feature_flags.tokens`, `texture_slots`
+roles and `public_params` yourself; do not use upstream's `emissive_factor()` semantics
+(missing `Glow` must mean no emission). Evidence table and automation checks required:
+no MeshDecal primitive on an opaque material; no emission without `Glow`; the Gladius
+"emissives" submaterial yields a blue emissive from its authored attributes.
+
 ## Done criteria
 - Gladius hull, cockpit glass, warning-tape decals, thruster glow and tint-palette
   panels read correctly against in-game screenshots and the Blender add-on's import; emissive glow lights

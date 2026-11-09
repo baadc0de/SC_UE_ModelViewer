@@ -83,6 +83,17 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | Mannequin fragments | `USCClipCatalog` | clip id, display name, owner entity, source, fragment/tags/scopes, boomerang flag |
 | scene hierarchy | `ASCVehicle` | root scene component; rigid meshes as `UStaticMeshComponent` on sockets named after their owning bone; soft parts as `USkeletalMeshComponent`; children via `local_transform_sc` (`gltf_y_up`); interiors via `container_transform` / placements; `SpawnPoints` derived from seats, entrances (door helpers) and interior floors |
 
+## Emissive, decal and light rules (D11 — data-driven, see WP-R5)
+
+| Signal in the sidecar | Rendering rule |
+| --- | --- |
+| Illum/HardSurface/LayerBlend with `Glow` > 0 | emissive = `Emissive × Glow × (Diffuse × base_color texture)`, or × emittance map when one exists; `AlphaGlowCutoff` gates by alpha. `Glow` absent or 0 → **no emission** regardless of `Emissive` (upstream `emissive_factor` fixed in WP-R5). UE emissive strength = Glow × one registered host constant. |
+| MeshDecal, `%PARALLAX_OCCLUSION_MAPPING`, no stencil/tint signal (`relief_only`) | base colour untouched; alpha = TexSlot1.a × `DecalAlphaMultiplier`; normal from the DDNA slot blended over the host; height → parallax/normal darkening (panel grooves). Never opaque. |
+| MeshDecal with `%DIFFUSE_MAP` colour sheet (`color_sheet`) | masked/blended colour from the sheet where alpha × `DecalAlphaMultiplier` × `DecalDiffuseOpacity` > 0 |
+| MeshDecal with `%STENCIL_MAP` + `$TintPaletteDecal` (`stencil_palette`) | colour from the palette `decal` red/green/blue channels selected by the stencil texture, `StencilDiffuseColor*`, `StencilOpacity` |
+| GlassPBR | translucent; tint = palette `glass` channel × `GlassTintStrength`; `EmissiveOpacity` |
+| Vehicle `MultiLight` port lights (`lights[]` from WP-R5) and `interiors[].lights` | UE light components, same mapping as the interior-light row above |
+
 ## Nanite / Lumen rules
 
 - Opaque and Masked → Nanite static meshes. Translucent (Glass) and MeshDecal →

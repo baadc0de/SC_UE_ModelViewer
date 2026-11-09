@@ -62,5 +62,44 @@ all keyframes (lazy — the viewer calls this on every selection).
   the upstream crate's tests/fixtures/clip_catalogue directory; no game bytes are
   checked in. The root workspace tests and upstream animation tests pass.
 
-TODO(WP-R3): Orchestrator must create the WP branch/commits and arrange the required
-other-model cross-review before merging; this sandbox cannot write `.git`.
+## Cross-review fixes (2026-11-09)
+
+- Per-rig geometry/chrparams/DBA failures warn and skip; healthy rigs survive.
+  Entity export and catalogue consume a shared rig-source list and merge policy,
+  including record-based geometry fallback, gear filenames and empty-name rules.
+- Sparse decoding preserves unknown-position blocks with the full decoder's
+  zero fallback; zero CAF FPS uses 30 at the parser. Format strides and the
+  inactive-axis sentinel are shared codec constants.
+- Wildcard chrparams event names (`*`, `?`) are omitted as mapping rules. The
+  whitepaper does not specify expansion semantics; concrete DBA entries remain
+  discoverable through the metadata union, preserving real playable clips.
+- `ClipInfo::contributors: Vec<String>` adds contributing owners and resolved rig
+  node names without changing merged IDs; older JSON defaults this field to empty.
+  Catalogue cache schema is v2 to invalidate the former binary layout.
+- Synthetic regressions cover missing DBA/geometry, zero FPS, wildcard names,
+  unknown position formats, inactive SNORM axes, bitmap time keys and provenance.
+  Timing enforcement is opt-in (`SCVIEWER_PERF_TESTS=1`); the no-geometry live
+  case is selected from DataCore. Matching is split into scoring, diagnostics,
+  extraction and tests rather than remaining one monolithic module.
+
+TODO(WP-R3): Namespace child-rig clips in ship packages upstream as a coordinated
+exporter + importer contract change, needed by M5 to open individual doors.
+The contributors field supplies provenance but does not change playback routing.
+
+
+Review verification: 17 workspace tests and 41 upstream animation tests pass,
+plus the two focused rig failure/fallback tests. Live export parity passes for
+Gladius **63**, Scorpius **69**, Cutlass Black **40**; no wildcard IDs remain.
+Gladius replaces `*` with the concrete DBA `landing_gears_retract.caf` path;
+Scorpius drops `*`; Cutlass drops `*` and exposes `nacelles_retract.caf` and
+`drak_cutlass_seat_pilot_idle`. The no-geometry entity was queried as `freeze`.
+
+`out/dec-r1` was regenerated at LOD 1 / mip 2. Its scene index, 12 existing
+animation sidecars and UI export stamp changed; one concrete sidecar was added
+and the obsolete `animations/_.json` removed. Mesh, material and texture files
+were byte-identical. The UE agent must reload animation data from the new index.
+The reusable parity check is:
+
+```bash
+python3 -I scripts/check_clip_catalogue.py out/wp-r3-review/gladius.json 'out/dec-r1/Packages/AEGS Gladius_LOD1_TEX2/scene.json'
+```
