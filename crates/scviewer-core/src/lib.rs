@@ -1,4 +1,4 @@
-//! UI-independent StarBreaker sessions, geometry browsing, cached clip catalogues and exports.
+//! UI-independent StarBreaker sessions, geometry browsing, clip catalogues, lights and exports.
 //!
 //! Decomposed mesh materials retain `<mtl stem>_<submaterial name>_<NN>`:
 //! `NN` is the zero-based sidecar `submaterials[]` index and the GLB primitive's
@@ -12,7 +12,11 @@
 //! `_cached` methods return status alongside data for callers that need it owned.
 mod cache;
 mod catalogue;
+mod lights;
 pub use catalogue::{Catalogue, ClipInfo, ClipSource, Fragment, SkeletonInfo};
+pub use lights::{
+    EntityLight, LightAttachment, LightCatalogue, LightInfo, LightStateInfo, VehicleLightPort,
+};
 mod index;
 mod options;
 mod package;

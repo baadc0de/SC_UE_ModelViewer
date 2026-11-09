@@ -157,3 +157,31 @@ errors are reported. With persistence disabled each call recomputes and reports
 Live tests discover an entity without a geometry component from DataCore instead
 of relying on a build-specific name. Catalogue timings are always reported;
 set `SCVIEWER_PERF_TESTS=1` to enforce the 500 ms warm-call budget.
+
+## Lights (WP-R5)
+
+`Session::lights(&str) -> Result<LightCatalogue>` returns authored vehicle and
+interior lights without exporting geometry or textures. Exact entity names are
+required; `scviewer lights Gladius` accepts the usual CLI shorthand and prints
+JSON. This operation reports `CacheStatus::Miss`; package caching remains
+available through the decomposed export API. Cache format v4 invalidates packages
+created before scene/material schema v2, including earlier dirty exporter builds.
+
+`LightCatalogue { entity, ports, lights }`, `VehicleLightPort`, `EntityLight`,
+`LightInfo`, `LightAttachment` and `LightStateInfo` are re-exported. `ports` describes
+vehicle XML MultiLight attachment points. Each `EntityLight` has its owning entity,
+source container and source indices, source container parent, the standard light
+fields, and an optional resolved NMC node with parent-local position/rotation.
+Flat positions are owner-entity-local CryEngine Z-up metres; directions are unit
+vectors, rotations are `[w,x,y,z]`. The catalogue keeps source projector paths;
+packages replace those with exported texture paths.
+
+The implementation follows DataCore object-container references and the resolved
+loadout tree, parsing authored SOC `LightComponentParams` and group metadata.
+LIVE 4.10.2's Gladius MultiLight port has no equipped item: its actual light groups
+are authored in SOC, including their helper names and baked light states. No item
+is inferred from a ship or port name. Empty groups produce no synthetic light.
+In schema v2, resolved attached groups occur once in `root_entity.lights` or
+`children[].lights`; other lights remain in `interiors[].lights`. Catalogue and
+export share discovery and transform resolution, and live tests join both by
+`source_container_index` / `source_light_index`.

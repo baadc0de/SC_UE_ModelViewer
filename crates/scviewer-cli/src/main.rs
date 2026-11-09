@@ -18,6 +18,9 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    Lights {
+        entity: String,
+    },
     Clips {
         entity: String,
     },
@@ -108,6 +111,17 @@ fn main() -> Result<()> {
         if cli.no_cache { None } else { Some(&cli.cache) },
     )?;
     match cli.command {
+        Command::Lights { entity } => {
+            let entity = resolve_entity(&session, &entity)?;
+            let catalogue = session.lights(&entity)?;
+            eprintln!(
+                "{}: {} lights, {} MultiLight ports",
+                catalogue.entity,
+                catalogue.lights.len(),
+                catalogue.ports.len()
+            );
+            println!("{}", serde_json::to_string_pretty(&catalogue)?);
+        }
         Command::Clips { entity } => {
             let entity = resolve_entity(&session, &entity)?;
             let call_started = Instant::now();

@@ -193,6 +193,74 @@ fn live_clip_catalogue_matches_scene_and_persists() {
                 .read_to_string(&mut scene)
                 .unwrap();
             let scene: serde_json::Value = serde_json::from_str(&scene).unwrap();
+            let lights = session.lights(entity).unwrap();
+            let exported_lights: Vec<_> = scene["root_entity"]["lights"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(
+                    scene["children"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|child| child["lights"].as_array().unwrap().iter()),
+                )
+                .chain(
+                    scene["interiors"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|container| container["lights"].as_array().unwrap().iter()),
+                )
+                .collect();
+            assert_eq!(
+                exported_lights.len(),
+                lights.lights.len(),
+                "light catalogue/export parity for {entity}"
+            );
+            let roundtrip = |value: serde_json::Value| {
+                serde_json::from_str::<serde_json::Value>(&value.to_string()).unwrap()
+            };
+            let mut identities = BTreeSet::new();
+            for light in &lights.lights {
+                let id = (light.source_container_index, light.source_light_index);
+                assert!(identities.insert(id), "duplicate source light");
+                let matches: Vec<_> = exported_lights
+                    .iter()
+                    .filter(|record| {
+                        record["source_container_index"] == id.0
+                            && record["source_light_index"] == id.1
+                    })
+                    .collect();
+                assert_eq!(matches.len(), 1, "source light must occur exactly once");
+                let record = matches[0];
+                assert_eq!(
+                    record["color"],
+                    roundtrip(serde_json::json!(light.light.color))
+                );
+                assert_eq!(
+                    record["states"],
+                    roundtrip(serde_json::to_value(&light.light.states).unwrap())
+                );
+                assert_eq!(
+                    record["radius_m"],
+                    roundtrip(serde_json::json!(light.light.radius_m))
+                );
+                if light.parent_node_name.is_some() {
+                    assert_eq!(
+                        record["position"],
+                        roundtrip(serde_json::json!(light.light.position))
+                    );
+                    assert_eq!(
+                        record["parent_local_position"],
+                        roundtrip(serde_json::json!(light.parent_local_position))
+                    );
+                }
+            }
+            eprintln!(
+                "{entity}: {} lights; catalogue/export parity verified",
+                lights.lights.len()
+            );
             let exported = scene["root_entity"]["animations"].as_array().unwrap();
             let names: BTreeSet<_> = exported
                 .iter()
@@ -249,6 +317,10 @@ fn live_clip_catalogue_matches_scene_and_persists() {
         empty.clips.len()
     );
     assert!(empty.clips.is_empty() && empty.skeletons.is_empty());
+    let lights = session.lights(&no_geometry).unwrap();
+    assert!(lights.lights.is_empty());
+    eprintln!("no-geometry entity {no_geometry}: 0 lights");
+    assert!(session.lights("not_an_entity").is_err());
     assert!(session.clip_catalogue("not_an_entity").is_err());
     drop(session);
     let session = Session::open(Some(&found.path), Some(cache_dir.path())).unwrap();

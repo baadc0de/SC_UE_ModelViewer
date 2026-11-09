@@ -60,3 +60,109 @@ authored attributes; executable datamining is not needed for this package.
   Cutlass Black and Scorpius too; an entity without lights → empty list.
 - `cargo test --workspace` + upstream tests green; decomposed counts unchanged
   except the new fields; parity between exporter and catalogue preserved.
+
+## Implementation evidence and deviations (2026-11-09)
+
+LIVE 4.10.2 does **not** equip a MultiLight item on Gladius's
+`hardpoint_lights_ext`. The raw `SEntityComponentDefaultLoadoutParams` contains
+`Controller_Light` on `hardpoint_controller_light`, and no MultiLight entry.
+Querying `Components[SLightGroupComponentParams]` on the ship returns no value;
+`SCItemMultiLightParams` does not exist in this build's schema. The ship's
+`VehicleComponentParams.objectContainers` instead references
+`objectcontainers/ships/aegs/gladius/base_lightgroups.socpak`.
+
+That SOC contains the actual ship-specific `LightGroup` instances. Their
+`PropertiesDataCore/EntityComponentLightGroup` has type
+`SLightGroupComponentParams` and authored `helper` values. The separate direct
+`EntityComponentLightGroup/BakedInLights/Light` blocks contain
+`EntityComponentLight` (`LightComponentParams`) with `LightSizeParams`,
+`LightStateParams_*`, `LightProjectorParams`, etc. `TileAttachmentParams` preserves
+the attachment-point names inside `ItemPortName` brackets. This is the source
+used by the implementation, rather than inventing a missing DataCore light item.
+The XML port's five attachment points are exported as metadata and used when a
+SOC group lacks an explicit helper. Explicit SOC helpers take precedence: for
+example the wing groups author `WingLeft_Tip` / `WingRight_Tip`, and the headlight
+point `ext_Headlights_Lights` is absent from the older XML port list while its SOC
+helper `Nose` resolves. Cockpit lights use the container's `interior_cockpit`
+attachment, not an inferred `helper_light_int_cockpit_lights` binding.
+
+The baseline exporter already parsed 77 Gladius lights (54 in
+`base_int_all_main`, 23 in `base_lightgroups`). WP-R5 exposes their provenance and
+resolved attachment transforms, moves resolved groups to the owning entity's
+`lights[]`, and retains other lights in interior containers without duplication.
+The CLI catalogue includes both. Synthetic tests also caught and removed the
+fabricated white-light fallback for empty groups, and fixed component-backed
+light classes being skipped by a fixed class-name allowlist.
+
+Observed catalogue totals: Gladius **77**, Scorpius **127**, Cutlass Black **225**,
+Controller_Light **0**. Resolved per-group NMC attachments: **21**, **94**, **103**
+respectively; remaining lights retain their authored container transforms.
+Gladius package counts remain **502 files, 45 GLBs, 23 material sidecars,
+366 PNGs, 51 child instances, 3 interior containers, 63 animation clips**.
+Its lights are now 21 root lights plus 56 interior lights, still 77 total.
+
+The Gladius material evidence is `emissives.color =
+[0.063669242, 0.179160565, 0.276474595]`, `glow = 0.300000012`;
+`pipe mat 1` and `Headlight_Glow` have zero emission; `pom = relief_only`,
+`decals = color_sheet`, `stencil = stencil_palette`. POM retains displacement
+`0.031615101` and height bias `0.5`. These observations are acceptance evidence,
+not constants or assertions on game-specific counts in the production code.
+
+Scene/material schemas are v2, with raw fields preserved. Core cache format v4
+invalidates old package results, including earlier dirty builds of the pinned
+revision. Tests and debug builds use the shared target directory. No release
+build, UE edit, git metadata write, branch switch or commit was performed; the
+orchestrator will branch the existing `scviewer/clip-catalogue` work as
+`scviewer/lights`.
+
+TODO(WP-R5): Audit the pre-existing SOC candela-proxy constants, projector inner-angle ratio and sparse-component defaults against source data in a separate lighting-units change; WP-R5 preserves the documented cross-DCC conversion for parity and removes only the invented empty-group light.
+TODO(WP-R5): The pre-existing general texture-role classifier consulted for Blender decal parity still uses texture-name heuristics. Replace those with verified family/slot rules in a separate material-contract change; the new emissive selection and engine-glow gate do not use asset names.
+
+### Verification commands and results
+
+Commands run from the superproject root (all generated outputs remain ignored):
+
+```sh
+CARGO_TARGET_DIR=./target cargo build
+CARGO_TARGET_DIR=./target cargo test --workspace -- --test-threads=1 --nocapture
+CARGO_HOME=/tmp/scviewer-r5-cargo CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml --workspace -- --test-threads=1
+CARGO_HOME=/tmp/scviewer-r5-cargo CARGO_TARGET_DIR=./target cargo build --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker
+CARGO_TARGET_DIR=./target cargo fmt -p scviewer-core -p scviewer-cli --check
+
+target/debug/scviewer --no-cache lights Gladius > out/wp-r5/gladius-lights.json
+target/debug/scviewer --no-cache lights Scorpius > out/wp-r5/scorpius-lights.json
+target/debug/scviewer --no-cache lights Cutlass_Black > out/wp-r5/cutlass-lights.json
+target/debug/scviewer --no-cache lights Controller_Light > out/wp-r5/empty-lights.json
+target/debug/scviewer --no-cache decomposed Gladius out/wp-r5/after
+python3 -I scripts/verify_wp_r5.py out/wp-r5/before out/wp-r5/after
+target/debug/scviewer validate out/wp-r5/after
+```
+
+`before` was exported with the unchanged binary at the start of the session:
+`target/debug/scviewer --no-cache decomposed Gladius out/wp-r5/before`.
+The full upstream workspace initially could not unpack `anes` into the read-only
+home Cargo registry. The successful rerun used a scratch Cargo home, preserving
+the installed linker/profile configuration, linking existing immutable crate
+sources, and copying the registry index. It still used the shared `./target`.
+
+Results: viewer workspace **17 passed, 0 failed**; full upstream workspace
+**2,129 passed, 0 failed, 61 ignored** across 102 test/doc-test invocations.
+The focused `starbreaker-3d --lib` run also passed **777 tests, 3 ignored**.
+Live tests verified clip catalogue parity (63 / 69 / 40 clips), light catalogue
+parity (77 / 127 / 225 lights), exact-once source IDs, colours/states/radii, and
+entity/parent-local positions for attached lights. A dynamically discovered
+geometryless entity (`freeze`) returned zero lights as well as zero clips.
+
+The acceptance script checked every exported material's emission against its
+own authored attributes, all GLB topology counts against the baseline, the WP's
+named material evidence, and light uniqueness/count conservation. Root GLB:
+274 nodes, 89 meshes, 27 materials, 395 accessors. Package validation returned
+`is_valid: true`, 45 meshes, zero empty meshes, no errors or warnings. That
+existing validator counts native mesh-file lights (zero for these GLBs); the
+manifest light inventory is checked by the acceptance script and live parity test.
+
+Logs: `out/wp-r5/{build,upstream-build,workspace-tests,upstream-workspace-tests,
+upstream-3d,acceptance,validate}.log`. Red-before-green regression evidence is in
+`emissive-red.log` and `lights-red.log`: missing Glow previously produced nonzero
+emission, empty groups invented a light, and LightGroupItem components were
+ignored. Tests use synthetic CryXmlB authored-attribute/component fixtures.
