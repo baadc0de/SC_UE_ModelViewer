@@ -389,7 +389,9 @@ Each has `propertyLinks[0].materialProperty = Glow` and
 | 5d118473-dd82-4182-81a8-3bcf35b8d969 | tagEffects[0/1].propertyLinks[0].Glow | Gladius_Thruster_Main / 0 (geometry, parent 1) | 4 → 3 | text_decals | 48 |
 | 5d118473-dd82-4182-81a8-3bcf35b8d969 | tagEffects[0/1].propertyLinks[0].Glow | Gladius_Thruster_Main / 0 (geometry, parent 1) | 5 → 4 | engine_glow | 816 |
 
-`text_decals` is genuinely bound by the authored **node-level** Glow writes;
+The following conclusion was superseded by the focused glow-capability round
+below: a node-level write alone is insufficient evidence that a slot responds.
+`text_decals` is addressed by the authored **node-level** Glow writes;
 its label does not indicate a separate NMC node. The four-target join is retained.
 It describes eligibility for the manual control, not a claim that every section
 visibly glows in every game state (effect tags, modifiers and shader coverage
@@ -440,3 +442,92 @@ Controller_Light 0**. Survey reconfirms 395 submaterials, including the 11 forwa
 Illum cards and 42 non-forward LayerBlend_V2 entries described above.
 
 No new `TODO(WP-R5)` items; the two earlier audit items remain outstanding.
+
+## Focused engine-glow capability and modifier round
+
+This round supersedes the four-target conclusion above. Hypothesis: a runtime
+node-level Glow write only produces emission on shader permutations capable of
+using it. The structural gate is forward-rendered Illum/HardSurface
+(`MtlFlags & 0x8000`) or an emittance feature token (`EMITTANCE_MAP` /
+`MACRO_EMISSIVE_MAP`). No material, node, ship or texture name is used to classify
+capability. The authored node name still supplies the exact, case-insensitive
+DataCore → NMC join; source material IDs survive sidecar filtering.
+
+Evidence: [the in-game rear reference](../../ue/verification/reference/gladius/rear.webp)
+shows a blue-white nozzle interior with a dark housing, while
+[the UE four-target Glow=50 capture](../../ue/verification/wp-u2/rear-engine-glow50.jpg)
+lights the housing. Both images were inspected read-only. On that same node,
+`engine_a` / `engine_b` are deferred Illum, `details` is MeshDecal, and
+`text_decals` is deferred Illum with `%DECAL%DECAL_OPACITY_MAP`; none has an
+emittance source. Only `engine_glow` is a forward Illum card (`%DECAL`), with
+Diffuse approximately (0.021, 0.539, 0.939), base texture
+`gladius_emissives_diff`, black Emissive and no authored Glow. These facts support
+the capability gate rather than a name filter. The regenerated target list is
+exactly **[`engine_glow`]**, source slot **5**, exported slot **4**, **816** LOD1
+indices. This round verifies exported semantics; a new UE rendering was not
+performed.
+
+The same raw DataCore record above supplies both enabled chains:
+
+| Tag effect | Ordered modifiers | Output minimum | Output maximum |
+| --- | --- | ---: | ---: |
+| 0 | MultiplierModifier 50 → MinMaxModifier | 10 | 10000000 |
+| 1 | MultiplierModifier 100 → MinMaxModifier | 20 | 10000000 |
+
+One target preserves both chains and their parameter/tag record IDs in
+`property_links[]`; its parallel `multiplier`, `minimum`, `maximum` arrays are
+respectively `[50,100]`, `[10,20]`, `[10000000,10000000]`. The control uses
+`units:"material_property_glow"`, **min_strength 10**, **max_strength 10000000**,
+**default_strength 10**. The default is the minimum of the authored output
+bounds, an initial manual control value rather than a claim about the active
+runtime tag. The authored maximum is preserved without a fabricated display
+cap or assumed normalized thrust domain. Unknown bounds remain null; malformed
+or unsupported modifier chains fail explicitly. Static-only targets retain
+their authored Glow value. The upstream export contract documents these units,
+parallel arrays, ordered chains and range derivation. The scviewer package-cache
+version advances from 6 to 7 to reject packages with the old control semantics.
+
+TODO(verify): Deferred materials with authored Glow > 0 (buttons, glows) are still treated as statically emissive under the rule; capture such a surface in game to confirm that interpretation. The rear-engine images establish the dynamic card gate, not this separate static-emission hypothesis.
+
+Verification from the superproject root (logs in ignored `out/wp-r5-glow/`):
+
+```sh
+CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib node_glow_selects_forward_card_not_deferred_materials
+CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib engine_glow
+CARGO_TARGET_DIR=./target cargo build && CARGO_TARGET_DIR=./target cargo test --workspace
+CARGO_HOME=/tmp/scviewer-r5-cargo CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml --workspace -- --test-threads=1
+CARGO_TARGET_DIR=./target cargo fmt -p scviewer-core -p scviewer-cli --check
+rustfmt --edition 2024 --check vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/engine_glow.rs
+target/debug/scviewer --no-cache decomposed Gladius out/dec-r5
+target/debug/scviewer validate out/dec-r5
+python3 -I scripts/verify_wp_r5.py out/wp-r5-glow/before out/dec-r5 --expect-engine-glow present --glow-record out/wp-r5-amended/thruster-record.json
+for entity in Gladius Scorpius Cutlass_Black Controller_Light; do
+  target/debug/scviewer --no-cache lights "$entity" > "out/wp-r5-glow/${entity}-lights.json" 2> "out/wp-r5-glow/${entity}-lights.log" || exit
+done
+```
+
+The bug regression first failed selecting a deferred slot alongside the card
+(`red.log`); the final synthetic case includes a forward card, deferred Illum /
+HardSurface / MeshDecal sections, a sibling node and repeated primitives, and
+selects only the card with both chains. Targeted engine-glow tests: **8 passed**.
+Workspace: **17 passed**. Upstream aggregate: **2144 passed, 0 failed, 61 ignored**.
+Build and formatting checks pass. Export: **502 files**, cache miss. Validation:
+**is_valid=true, errors=[], warnings=[]**. The acceptance script checks the exact
+target list, modifiers, record IDs and source-slot join, unchanged topology and
+all ten interior placements: **45 GLBs / 23 sidecars / 366 PNGs / 51 children /
+3 interiors / 63 clips**. Static emissive strengths remain **0.3000000119**
+(`emissives`, forward), **1** (`Headlight_Glow`, forward), **0** (`pom` and
+`pipe mat 1`), and **0.3499999940** (deferred KLWE `glows`); alpha fields and
+decal objects still match authored data. Light counts remain **Gladius 77
+(21 root + 56 interiors), Scorpius 127, Cutlass_Black 225, Controller_Light 0**.
+
+Changed upstream files in this round:
+
+```text
+crates/starbreaker-3d/src/pipeline/engine_glow.rs
+crates/starbreaker-3d/src/decomposed.rs
+docs/decomposed-export-contract.md
+```
+
+The two earlier `TODO(WP-R5)` audit items remain, alongside the `TODO(verify)`
+above. No commits or UE changes were made in this round.

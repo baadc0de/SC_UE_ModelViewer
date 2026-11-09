@@ -78,6 +78,32 @@ def check_glow_join(root, package, record_path):
         sidecar = json.loads((root / target["material_sidecar"]).read_bytes())
         slot = next(i for i, m in enumerate(sidecar["submaterials"])
                     if m["index"] == target["source_material_index"])
+        material = sidecar["submaterials"][slot]
+        tokens = set(material["decoded_feature_flags"]["tokens"])
+        assert ((material["shader_family"] in ("Illum", "HardSurface")
+                 and material["alpha_config"]["forward_rendering"])
+                or tokens & {"EMITTANCE_MAP", "MACRO_EMISSIVE_MAP"}), material["submaterial_name"]
+        authored = [(kind, i, j, link) for kind, i, j, link in links
+                    if any(node.get("name", "").casefold() == link["subMeshName"].casefold()
+                           for node in gltf["nodes"])]
+        assert len(target["property_links"]) == len(authored)
+        for exported, (kind, i, j, link) in zip(target["property_links"], authored):
+            assert (exported["effect_kind"], exported["effect_index"], exported["property_link_index"]) == (kind, i, j)
+            assert exported["parameter_record_id"] == link["parameterName"]["_RecordId_"]
+            assert exported["tag_record_id"] == category[kind][i]["tag"]["_RecordId_"]
+            expected_modifiers = []
+            for modifier in link["modifiers"]:
+                typ = modifier["_Type_"]
+                if typ == "SEntityEffectSystem_MultiplierModifier":
+                    expected_modifiers.append({"kind": "multiplier", "multiplier": modifier["multiplier"]})
+                elif typ == "SEntityEffectSystem_MinMaxModifier":
+                    expected_modifiers.append({"kind": "min_max", "minimum": modifier["minimum"], "maximum": modifier["maximum"]})
+                else:
+                    raise AssertionError(f"unverified modifier type {typ}")
+            assert exported["modifiers"] == expected_modifiers
+        for key in ("multiplier", "minimum", "maximum"):
+            assert target[key] == [link[key] for link in target["property_links"]]
+        print("Glow modifiers:", {key: target[key] for key in ("multiplier", "minimum", "maximum")})
         matches = [(node, primitive, kind, i, j) for node in gltf["nodes"] if "mesh" in node
                    for primitive in gltf["meshes"][node["mesh"]]["primitives"] if primitive.get("material") == slot
                    for kind, i, j, link in links if link["subMeshName"].casefold() == node["name"].casefold()]
@@ -143,6 +169,14 @@ def main():
             materials.append(material)
     print("Glow-positive / black-Emissive submaterials:", black_with_glow)
     if not args.generic:
+        targets = control["targets"]
+        assert [t["submaterial_name"] for t in targets] == ["engine_glow"]
+        # LIVE evidence from the focused Glow-link brief and thruster-record.json.
+        assert targets[0]["multiplier"] == [50, 100]
+        assert targets[0]["minimum"] == [10, 20]
+        assert targets[0]["maximum"] == [10000000, 10000000]
+        assert (control["units"], control["min_strength"], control["max_strength"], control["default_strength"]) == ("material_property_glow", 10, 10000000, 10)
+        print("Glow control:", {k: control[k] for k in ("units", "min_strength", "max_strength", "default_strength")})
         root = json.loads((args.after / new["root_entity"]["material_sidecar"]).read_bytes())
         by_name = {m["submaterial_name"]: m for m in root["submaterials"]}
         # LIVE acceptance values supplied in the amended brief, not production rules.
