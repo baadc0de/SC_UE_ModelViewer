@@ -143,3 +143,9 @@ step above.
 
 TODO(WP-R6): Orchestrator runs the full UE pose gate with the new reference
 (all bones within 5° / 1 cm), obtains cross-review, and commits the changes.
+
+## Cross-review (Opus, 2026-11-09): merge as-is — optional follow-ups
+- TODO(WP-R6): `--default-animation-tag` values enter the cache key even when pose baking is off (decomposed default), so identical output is stored under several keys; ignore the tags unless `apply_default_pose` is on, or make the flag require it.
+- TODO(WP-R6): `--default-pose` is a no-op on `scviewer glb` (bundled exports already bake the pose by default); say so in the flag's help text.
+- TODO(WP-R6): the bake writes the final sample directly and does not apply §14.6 `bind · (start⁻¹ · sample)` for clips with a non-identity `start_rotation` (irrelevant for gear-deploy clips whose first frame is bind; none of the three test ships has such a clip).
+- TODO(WP-R6): `dba_animation_test.rs` round-trip test is `#[ignore]` (needs a fixture) so that path never ran in CI; add a synthetic fixture.
