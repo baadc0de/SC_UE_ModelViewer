@@ -18,6 +18,10 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    Player {
+        #[command(subcommand)]
+        command: PlayerCommand,
+    },
     Lights {
         entity: String,
     },
@@ -52,6 +56,20 @@ enum Command {
     },
     Ls {
         dir: String,
+    },
+}
+#[derive(Subcommand)]
+enum PlayerCommand {
+    Export {
+        out: PathBuf,
+        #[arg(long, default_value = "male", value_parser = ["male", "female"])]
+        gender: String,
+        #[arg(long)]
+        loadout: Option<String>,
+    },
+    Loadouts {
+        #[arg(long, default_value = "male", value_parser = ["male", "female"])]
+        gender: String,
     },
 }
 #[derive(Clone, Copy, ValueEnum)]
@@ -111,7 +129,7 @@ impl Options {
         }
     }
 }
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let started = Instant::now();
     let cli = Cli::parse();
     if let Command::Validate { dir } = &cli.command {
@@ -125,6 +143,16 @@ fn main() -> Result<()> {
         if cli.no_cache { None } else { Some(&cli.cache) },
     )?;
     match cli.command {
+        Command::Player { command } => match command {
+            PlayerCommand::Export { out, gender, loadout } => write(
+                &out,
+                &session.export_player(&scviewer_core::PlayerRequest { gender, loadout }, None)?,
+            )?,
+            PlayerCommand::Loadouts { gender } => println!(
+                "{}",
+                serde_json::to_string_pretty(&session.player_loadouts(&gender)?)?
+            ),
+        },
         Command::Lights { entity } => {
             let entity = resolve_entity(&session, &entity)?;
             let catalogue = session.lights(&entity)?;

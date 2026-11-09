@@ -194,6 +194,19 @@ void sc_close(struct sc_handle *h);
 enum sc_status sc_test_panic(struct sc_handle *h);
 #endif
 
+/*
+ Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses
+ the first default loadout in name order with a stowed personal weapon.
+ Strings are UTF-8. Release out_tar with sc_free_blob. Progress and cancellation
+ follow sc_export_decomposed_mem; assembly is a single cancellation phase.
+ */
+enum sc_status scbridge_export_player(struct sc_handle *h,
+                                      const char *gender_or_null,
+                                      const char *loadout_or_null,
+                                      sc_progress_cb progress,
+                                      void *user,
+                                      struct sc_blob *out_tar);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

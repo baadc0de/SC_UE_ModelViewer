@@ -12,7 +12,11 @@ run() {
     fi
 }
 run cd "$(dirname "$0")/../../.."
-probe="${SCBRIDGE_CTEST_DISCOVER:-$PWD/target/debug/examples/discover}"
+ffi_profile=${SC_FFI_PROFILE:-debug}
+[[ "$ffi_profile" == debug || "$ffi_profile" == release ]] || {
+    echo 'SC_FFI_PROFILE must be debug or release' >&2; exit 2;
+}
+probe="${SCBRIDGE_CTEST_DISCOVER:-$PWD/target/$ffi_profile/examples/discover}"
 if [[ ! -x "$probe" ]]; then
     echo 'Build the discovery probe and cdylib first: scripts/build_ffi.sh' >&2
     exit 1
@@ -22,8 +26,8 @@ if archive=$("$probe"); then :; else
     if [[ "$status" == 77 ]]; then exit 0; fi
     exit "$status"
 fi
-library="${SCBRIDGE_CTEST_LIB:-$PWD/target/release/libscbridge.so}"
-cli="${SCBRIDGE_CTEST_CLI:-$PWD/target/release/scviewer}"
+library="${SCBRIDGE_CTEST_LIB:-$PWD/target/$ffi_profile/libscbridge.so}"
+cli="${SCBRIDGE_CTEST_CLI:-$PWD/target/$ffi_profile/scviewer}"
 [[ -f "$library" && -x "$cli" ]] || {
     echo 'Missing artifacts: run scripts/build_ffi.sh (builds both library and CLI)' >&2
     exit 1

@@ -359,3 +359,98 @@ independent exports may differ in upstream export-stamp timestamps.
 - WP-C1 cache format/versioning and processed texture/skeleton/animation coverage.
 - Nanite skeletal support is present in 5.8 with `r.Nanite.AllowSkinnedMeshes=1`;
   see U0's source/documentation findings. Soft-skin rendering is not tested here.
+
+## Player package API (WP-P2a)
+
+`Session::export_player(&PlayerRequest { gender, loadout }, cancel)` returns the
+contract-v2 character tar. `player_loadouts(gender)` lists default loadout paths
+with their stowed weapons. The CLI exposes `player export <out.tar> --gender
+male|female [--loadout <p4k path>]` and `player loadouts`. Player raw-cache entries
+use a separate player namespace, player format revision, archive identity, global
+cache format, gender and loadout request. Entity cache keys and exports are not
+changed by this API. Cancellation is checked before/after assembly and before
+publication; cached or cancelled exports retain the existing D10 semantics.
+
+The additive FFI function is `scbridge_export_player(handle, gender_or_null,
+loadout_or_null, progress, user, out_tar)`. NULL gender chooses male, NULL loadout
+chooses the first armed default loadout in name order. Strings and callback
+lifetimes follow the existing ABI; release the result using `sc_free_blob`.
+
+See the vendored [player contract](../vendor/StarBreaker/docs/decomposed-export-contract.md#player-kits-wp-p2a)
+for the shipped `player`, `port`, motion-layer and blend-space schema. P2b should
+bind skinned parts to the root pose by joint name, attach bone items with the port
+and inverse item-helper transform, and use each nested weapon's `package_dir`
+for its animation sidecars. Body sidecar samples retain the importer convention;
+root-motion endpoints and port offsets explicitly use native SC axes. Do not
+interpret additive root endpoints as an absolute body pose. Retain source layer
+indices and sequence times when evaluating Mannequin layers.
+
+LIVE correction: alphabetical default selection picks Brightsky (sniper, SMG,
+pistol), so the P4-AR test uses the explicit PVE loadout. Blend-space effective
+bounds include all authored/derived examples while preserving authored grid bounds.
+The exporter does not silently clamp examples to their grid.
+
+Player motion layers with `missing: true` retain the authored clip name but have
+no sidecar (`additive` is null). `player.diagnostics` identifies the missing clip,
+fragment, authored tags/fragment tags and gender. P2b must skip these layers while
+retaining the rest of the state. LIVE 4.10.2 lacks the female FP pistol select
+additive in the female's registered animation sources; this is a reported sidearm
+gap, not a substitute animation. Required unarmed and stocked-rifle states are
+checked by `scripts/verify_wp_p2.py` for both genders.
+
+Nested player items namespace their assets and manifests by child ID. Resolve
+mesh/material paths from the tar root and weapon animation sidecars from the
+child's `package_dir`. Body clip sidecars remain relative to the outer package.
+Combined blend spaces retain selectors/components; `scopes` and `move_speed_tag`
+retain controller bindings and unarmed gait variants for the runtime evaluator.
+The CHF head identity wins over a loadout head subtree, preventing duplicate faces.
+
+P2a validation on LIVE 4.10.2 (2026-11-09, debug, raw cache disabled):
+
+| Package | Wall time | Body clips | Blend spaces | States |
+| --- | ---: | ---: | ---: | ---: |
+| Default male | 9.184 s | 177 | 37 | 52 |
+| Default female | 9.148 s | 174 | 37 | 52 |
+| Explicit P4-AR loadout, male | 9.039 s | 177 | 37 | 48 |
+| Explicit P4-AR loadout, female | 9.006 s | 174 | 37 | 48 |
+
+These are fresh processes without the application cache, not a flushed OS page
+cache. Default loadout enumeration found 79 loadouts, 40 with stowed weapons.
+Both female fixtures report the one sidearm diagnostic above. Verification:
+
+```sh
+target/debug/scviewer-cli --no-cache player export out/fps/player-male.tar
+target/debug/scviewer-cli --no-cache player export out/fps/player-female.tar --gender female
+target/debug/scviewer-cli --no-cache player export out/fps/player-p4-male.tar --loadout Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml
+target/debug/scviewer-cli --no-cache player export out/fps/player-p4-female.tar --gender female --loadout Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml
+python3 -I scripts/verify_wp_p2.py out/fps/player-male.tar out/fps/player-female.tar
+python3 -I scripts/verify_wp_p2.py out/fps/player-p4-male.tar out/fps/player-p4-female.tar --require-entity behr_rifle_ballistic_01 --require-entity rrs_combat_heavy_backpack_03_01_01
+```
+
+All four packages pass. The core/CLI/FFI workspace passed 38 Rust tests; the
+upstream 3D library passed 830 tests (3 ignored), including 19 new player tests.
+The generated header check and staged-library comparison pass. Independent
+uncached, cached and FFI default-male tars share SHA-256
+`a59a5cb692b295e874cdc0903dfab7cc2f97a267fa57d5028a202ea5f4dda275`;
+cache hit was 201.4 ms. The C player smoke test verifies cancellation, cleared
+output, recovered-handle export and blob release.
+
+The strict whole-Gladius-tar hash differs because the existing provenance stamp
+includes all exporter source. Before:
+`a3dec8798a3b07fd4e456d066e649fc7fe4cab64aa8df12d1267f13ac918cba7`;
+after: `fca239d696e7e1a5ea622ab00accd312b8ab9d6441053a0fb56aa77277406938`.
+All 503 non-stamp members are byte-identical. The remaining stamp differs only
+in `exporter.source_sha256`; tar framing, member order and all other bytes match.
+No provenance or tar is rewritten. The standalone P4-AR comparison against a
+scratch build of the pinned pre-P2 source passes 73/73 byte-identical members.
+The older supplied `p4-dec` research export predates WP-P1 and is not that baseline.
+
+```sh
+python3 -I scripts/verify_wp_p2.py --compare out/fps/gladius-before.tar out/fps/gladius-after.tar
+python3 -I scripts/verify_wp_p2.py --compare out/fps/p4-before-p2 out/fps/p4-after.tar
+```
+
+P2b still needs runtime verification of scope/layer sequencing, component blend
+space selectors, leader-pose clothing, helper-relative weapon attachment and
+native-SC root-motion conversion. Aim-pose assets are not part of this ground
+motion export; the brief's distributed view-pitch path remains applicable.

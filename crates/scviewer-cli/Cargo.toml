@@ -2,10 +2,15 @@
 name = "scviewer-cli"
 version = "0.1.0"
 edition = "2024"
+default-run = "scviewer"
 
 [[bin]]
 name = "scviewer"
 path = "src/main.rs"
+
+[[bin]]
+name = "scviewer-cli"
+path = "src/compat.rs"
 
 [dependencies]
 scviewer-core = { path = "../scviewer-core" }

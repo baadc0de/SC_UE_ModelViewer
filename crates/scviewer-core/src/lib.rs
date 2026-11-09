@@ -16,6 +16,8 @@ pub use cancellation::{CancelToken, Error};
 mod catalogue;
 mod lights;
 mod items;
+mod player;
+pub use player::{PlayerRequest, PlayerLoadout};
 pub use items::ChildItemIdentity;
 pub use catalogue::{Catalogue, ClipInfo, ClipSource, Fragment, SkeletonInfo};
 pub use lights::{
