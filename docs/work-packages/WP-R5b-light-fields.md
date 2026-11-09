@@ -209,3 +209,102 @@ vendor/StarBreaker/docs/decomposed-export-contract.md
 ```
 
 TODO(WP-R5b): UE-side measurement in `ue/verification/WP-U3b.md` §11.2–11.3 must establish the physical intensity mapping. Legacy sparse-component defaults and old-package Blender sizing remain compatibility behavior; this WP does not recalibrate them.
+
+## Cross-review (Opus 5.5)
+
+Reviewed `vendor/StarBreaker` 29bf66fc (on 2b4c8454) and superproject 026fdcf against the brief.
+Re-ran: `cargo test -p scviewer-core` (24 passed), `cargo test --manifest-path
+vendor/StarBreaker/Cargo.toml -p starbreaker-3d` (865 passed, 31 ignored, incl. the 8 new
+`light_field_tests`), the Blender `test_light_fields.py` (3 OK), and
+`scviewer --no-cache lights` for the three ships (77 / 127 / 225 lights; every light
+`active_state = defaultState`; authored-off defaults 0 / 3 / 24, each of which had a lit
+auxiliary/emergency/cinematic state, so these are exactly the lights the old policy flipped).
+Codex's before/after scenes in `/tmp/wp-r5b` differ, for lights whose active state did not change,
+only by the new `intensity_candela_proxy_model` label: proxy maths unchanged. `importance`
+options come from DataCore at run time (`Decorative, Standard, Secondary, Key, Cinematic`); an
+absent struct or property returns an empty list, so `importance` stays null and the name is kept.
+The cache bump (10 → 11) is in the `package_key` tuple, the entity-index file name and the
+light-catalogue identity, so pre-R5b layer-1 entries miss. The submodule commit has no trailer,
+no game-derived files, `//!` headers on both new `.rs` files, and red logs for every new test.
+
+### Findings (ranked)
+
+1. **should-fix (follow-up WP): sparse `EntityClass="Light"` components get values the data
+   contradicts.** `socpak.rs:2016-2036` (`shadow_casting`, `affects_this_area_only`, `affect_gi`,
+   `importance`, and the `None` optionals), `socpak_light_tests.rs:146-165` (enforces `false`).
+   Gladius `base_lightgroups` Light-088/-089 (the cockpit projectors) are serialised as *deltas*:
+   only `lightType`, `bulbRadius`, plane size, state intensities, `FOV` and fade `maxDistance` are
+   authored. The base they override is the DataCore record `EntityClassDefinition.Light` →
+   `LightComponentParams`. Its values are `affectsThisAreaOnly=true`, `affectsObjects=true`,
+   `affectGI=InheritAffectsObjects`, `importance=Standard`, `maxShadowCastDist=15`,
+   `planeSoftness=1`, `fadeParams.minDistance=0`, `lightRadius=10`, `temperature=6600`. The export
+   has `affects_this_area_only=false`, `affect_gi=false`, `importance=null`,
+   `max_shadow_cast_distance_m=null` and `plane_softness=null`. Two older invented values sit on
+   the same path: `radius 5.0` (`socpak.rs:1965`) and state `temperature 6500` (`socpak.rs:1871-1874`).
+   The 0.05 and 1.0 defaults happen to match this record. Under the new policy there is also a
+   latent bug: a `defaultState` node with no `intensity` attribute is read as an authored 0
+   (`socpak.rs:1867-1870`) and would now be exported dark, although a delta means "inherit 1.0".
+   This does not occur in the three ships: all 27 off-defaults carry an explicit `intensity="0"`.
+   **Fix:** resolve the SOC entity's `EntityClass` to its `EntityClassDefinition`
+   `LightComponentParams` and use it as the base for every missing attribute. This replaces the
+   hand-written defaults, including the brief's 0.05/1.0, with data. Until then, treat a missing
+   `intensity` as unknown rather than 0. Not a blocker: the brief fixed `bool` types and
+   "absent → false", and only 2 of 429 lights are affected. Under upstream's self-correcting
+   hard-coding rule it needs a tracked `TODO`, though. Codex's report only hints at it
+   ("legacy sparse-component defaults").
+2. **should-fix (brief-level, owner decision): Blender now turns shadows off for ~97 % of lights.**
+   `entity_lights.py:9-10`. `shadow_casting → use_shadow` follows the brief. But Blender has no
+   `affectsThisAreaOnly` vis-area containment, so exterior lights now leak through hulls into
+   interiors and back. WP-U3b §11.3 makes the same point for UE: without containment, shadows
+   are the substitute. **Fix:** keep `use_shadow=True` when `affects_this_area_only` is true
+   (or add an import option), and honour `shadow_casting=false` only for unconfined lights.
+3. **should-fix: viewer-specific text in the upstream contract.**
+   `vendor/StarBreaker/docs/decomposed-export-contract.md:252-299` names `WP-R5b`,
+   `scviewer lights` / `sc_lights`, `scviewer-core::CACHE_FORMAT_VERSION` and `SCPackageReader`.
+   None of these exist upstream, and WP-D1 will upstream this branch. The same applies to
+   `TODO(WP-R5b)` → `ue/verification/WP-U3b.md` at `socpak.rs:31` (the brief asked for it).
+   **Fix:** keep the field table, enum and active-state text upstream. Move the cache, FFI and
+   UE-reader paragraph to `docs/03-unreal-export-design.md`, which already has it. Reword the TODO
+   to name the physical bulb-size calibration without a superproject path.
+4. **nit: new code is not rustfmt-clean.** `socpak.rs:2023` and `socpak.rs:2034-2035`
+   (`importance_name` chain), `pipeline/interiors.rs:762-767` (the `resolve_importance` closure
+   and `} else { Vec::new() }`). Codex checked only the two new files, which are clean; both
+   touched files already had format drift. **Fix:** format just these hunks.
+5. **nit: the cache test is tautological.** `cache.rs:312-318` copies `package_key`'s tuple
+   layout with a literal `10`. It passes for any version ≠ 10 and goes silently stale if the
+   tuple changes. **Fix:** call `package_key_for_exporter` with a parameterised version, or simply
+   `assert!(CACHE_FORMAT_VERSION >= 11)` next to a comment naming R5b.
+6. **nit: unknown `affectGI` → `false`.** `socpak_light_fields.rs:10-13` is a fallback
+   silencer under the upstream rules. `affect_gi_mode` keeps the spelling, so the harm is small.
+   **Fix:** derive the known option set from the DataCore enum, as importance does, and fail the
+   test when LIVE gains a new option.
+7. **nit: one warning per light when the importance enum is missing.**
+   `socpak_light_fields.rs:39-43` warns per light, not once per export. **Fix:** warn once in
+   `importance_options` when it returns empty.
+8. **nit: layout and coverage.** `apply_authored_light_fields` lives in `entity_lights.py` but
+   serves every light (move it to `utils.py` or a `light_fields.py`). `light_fields` is a
+   non-test `#[path]` module at `src/socpak_light_fields.rs` (upstream uses `#[path]` only for
+   tests). No fixture has a non-empty `children[].lights` (0 in all three ships); it shares the
+   serialisation path, so coverage is structural only.
+9. **nit (forward note for WP-C1):** the layer-2 entity-load key in `WP-C1-processed-cache.md`
+   ("archive build id + entity + full options") has no exporter or package identity. Exporter
+   changes like this one would then return stale UE scenes. **Fix:** key layer 2 on the layer-1
+   `package_key` (or `EXPORTER_VERSION` + `CACHE_FORMAT_VERSION`).
+
+Checklist status: (1) exact field names on all three scene arrays, the catalogue, `sc_lights`
+and GLB extras: yes; defaults as briefed, but see 1. (2) Policy: correct, counts 0 / 3 / 24
+reproduced. (3) Proxy maths unchanged and labelled `raw_x1500`: yes. (4) Cache bump invalidates
+and is tested: yes (5). (5) `importance` derived from DataCore and degrades to null + name: yes.
+(6) Upstream rules: headers, trailer, files and tests-first all OK; formatting 4. (7) Blender is
+backward compatible: absent or null fields leave the legacy mapping untouched (tested); for the
+behaviour change see 2. (8) Docs: consistent across `03`, the upstream contract and the FFI
+README; scope 3.
+
+**Verdict: merge with follow-ups.** The WP does what the brief asks. All authored fields reach
+every output with the fixed names. The active-state fix is exact and minimal (the 27 flipped
+lights are precisely those with an explicit zero default). The proxy is untouched and labelled.
+Cache invalidation is real, `importance` comes from DataCore, and the test suites pass. Nothing
+here blocks the UE importer work. File finding 1 as a follow-up WP: entity-class base
+resolution for sparse light components, which also retires the invented 5 m radius and 6500 K.
+Decide finding 2 (Blender shadows) with the owner. Fold findings 3-4 into the branch before the
+WP-D1 upstream PR.
