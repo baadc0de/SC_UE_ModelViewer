@@ -85,6 +85,7 @@ impl sc_options {
             shields: flag(self.shields)?,
             apply_default_pose: flag(self.default_pose)?,
             include_animations: flag(self.animations)?,
+            ..Default::default()
         };
         if self.collision_reserved != 0 {
             return Err(Failure(

@@ -80,6 +80,12 @@ struct Options {
     shields: bool,
     #[arg(long, action = clap::ArgAction::Set)]
     apply_default_pose: Option<bool>,
+    /// Bake the default animation's final pose into the bundled GLB.
+    #[arg(long, conflicts_with = "apply_default_pose")]
+    default_pose: bool,
+    /// Ordered default-pose tag candidates; repeat to override upstream defaults.
+    #[arg(long = "default-animation-tag")]
+    default_animation_tags: Vec<String>,
 }
 impl Options {
     fn options(&self, decomposed: bool) -> GlbOptions {
@@ -96,7 +102,12 @@ impl Options {
             lights: !self.no_lights,
             shields: self.shields,
             include_animations: !self.no_animations,
-            apply_default_pose: self.apply_default_pose.unwrap_or(!decomposed),
+            apply_default_pose: self.default_pose || self.apply_default_pose.unwrap_or(!decomposed),
+            default_animation_tags: if self.default_animation_tags.is_empty() {
+                GlbOptions::default().default_animation_tags
+            } else {
+                self.default_animation_tags.clone()
+            },
         }
     }
 }
@@ -232,6 +243,48 @@ fn resolve_entity(session: &Session, query: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_pose_flags_preserve_defaults_and_tag_order() {
+        let parse = |args: &[&str]| {
+            let cli = Cli::try_parse_from(
+                ["scviewer", "glb", "synthetic", "out"]
+                    .into_iter()
+                    .chain(args.iter().copied()),
+            )
+            .unwrap();
+            let Command::Glb { opts, .. } = cli.command else {
+                unreachable!()
+            };
+            opts.options(false)
+        };
+        assert_eq!(parse(&["--default-pose"]), GlbOptions::default());
+        let custom = parse(&[
+            "--default-pose",
+            "--default-animation-tag",
+            "synthetic_a",
+            "--default-animation-tag",
+            "synthetic_b",
+        ]);
+        assert!(custom.apply_default_pose);
+        assert_eq!(
+            custom.default_animation_tags,
+            ["synthetic_a", "synthetic_b"]
+        );
+        assert!(!parse(&["--apply-default-pose", "false"]).apply_default_pose);
+        assert!(
+            Cli::try_parse_from([
+                "scviewer",
+                "glb",
+                "synthetic",
+                "out",
+                "--default-pose",
+                "--apply-default-pose",
+                "false"
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn cli_defaults_match_the_core_and_ffi_decomposed_contract() {

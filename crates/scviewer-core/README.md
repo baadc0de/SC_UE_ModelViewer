@@ -52,7 +52,17 @@ binary; its default cache is `./cache/` relative to the current working director
   bytes removed. `validate_decomposed_export` and `ValidationReport` are re-exported.
 
 `GlbOptions` exposes `lod`, `mip`, `materials: Materials::{Textures,Colors,None}`,
-`attachments`, `interior`, `lights`, `shields`, `apply_default_pose`, `include_animations`.
+`attachments`, `interior`, `lights`, `shields`, `apply_default_pose`,
+`default_animation_tags`, `include_animations`.
+The ordered tag list defaults to upstream's `["landing_gear_extend"]` and is
+included in package cache keys. Older JSON options without the field use that
+default. The FFI retains its existing ABI and uses upstream's default tags.
+`scviewer glb RSI_Scorpius out/scorpius-default.glb --default-pose` writes a
+pose-applied bundled GLB; repeat `--default-animation-tag <tag>` to override
+the ordered candidates passed to upstream. Bundled GLB already defaults to
+pose baking; `--apply-default-pose false` disables it. `--default-pose` conflicts
+with the explicit boolean option. Unkeyed components retain bind values and
+baked locals stay native Y-up; the Blender Z-up animation sidecars are unchanged.
 `include_animations` defaults to true; false omits clips and animation sidecars.
 `DecomposedOptions { geometry: GlbOptions }` enables animation sidecars by default;
 its default disables pose baking. Other defaults follow upstream (LOD 1, mip 2).

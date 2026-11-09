@@ -319,6 +319,9 @@ mod tests {
         let mut b = o.clone();
         b.geometry.include_animations = false;
         assert_ne!(a, package_key("build-a", "entity", &b).unwrap());
+        let mut b = o.clone();
+        b.geometry.default_animation_tags = vec!["synthetic_tag".into()];
+        assert_ne!(a, package_key("build-a", "entity", &b).unwrap());
         assert_ne!(
             a,
             digest(

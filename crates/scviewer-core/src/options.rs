@@ -19,6 +19,9 @@ pub struct GlbOptions {
     pub lights: bool,
     pub shields: bool,
     pub apply_default_pose: bool,
+    /// Ordered animation tags passed to upstream's default-pose selection.
+    #[serde(default = "default_animation_tags")]
+    pub default_animation_tags: Vec<String>,
     pub include_animations: bool,
 }
 impl Default for GlbOptions {
@@ -33,6 +36,7 @@ impl Default for GlbOptions {
             lights: o.include_lights,
             shields: o.include_shields,
             apply_default_pose: o.apply_default_animation_pose,
+            default_animation_tags: o.default_animation_tags,
             include_animations: true,
         }
     }
@@ -54,10 +58,15 @@ impl GlbOptions {
             include_lights: self.lights,
             include_shields: self.shields,
             apply_default_animation_pose: self.apply_default_pose,
+            default_animation_tags: self.default_animation_tags.clone(),
             include_animations: self.include_animations,
             ..Default::default()
         }
     }
+}
+
+fn default_animation_tags() -> Vec<String> {
+    ExportOptions::default().default_animation_tags
 }
 
 /// Decomposed exports default to animation sidecars and the authored rest pose.
@@ -73,5 +82,33 @@ impl Default for DecomposedOptions {
                 ..Default::default()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_animation_tags_survive_serialization_and_upstream_conversion() {
+        let options = GlbOptions {
+            default_animation_tags: vec!["synthetic_a".into(), "synthetic_b".into()],
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(&options).unwrap();
+        let decoded: GlbOptions = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(decoded, options);
+        assert_eq!(
+            decoded.upstream(ExportKind::Bundled).default_animation_tags,
+            options.default_animation_tags
+        );
+        json.as_object_mut()
+            .unwrap()
+            .remove("default_animation_tags");
+        let legacy: GlbOptions = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            legacy.default_animation_tags,
+            ExportOptions::default().default_animation_tags
+        );
     }
 }
