@@ -1,0 +1,13 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.0.1",
+  "FriendlyName": "SC Bridge",
+  "Description": "Runtime viewer and optional editor persistence",
+  "Category": "Importers",
+  "CanContainContent": true,
+  "Modules": [
+    {"Name": "SCBridge", "Type": "Runtime", "LoadingPhase": "Default"},
+    {"Name": "SCBridgeEditor", "Type": "Editor", "LoadingPhase": "Default"}
+  ]
+}

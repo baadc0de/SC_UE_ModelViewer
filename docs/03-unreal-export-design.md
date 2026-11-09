@@ -12,17 +12,21 @@ Target: Unreal Engine 5.8.2 (Linux, `~/UnrealEngine/5.8`, Vulkan RHI). Project
 Everything the user touches lives in the **Runtime** module so it works in the
 standalone app. The editor module only adds persistence.
 
-## Hosts and the standalone build path (decision gate, WP-U0)
+## Hosts and the standalone build path (WP-U0: B selected)
 
-| Host | How it runs | Status |
+| Host | How it runs | Observed result |
 | --- | --- | --- |
-| Editor PIE / viewer level | `UnrealEditor SCViewer.uproject`, open `Viewer` map, Play | dev host |
-| **Editor-target `-game`** | `UnrealEditor SCViewer.uproject -game -windowed -resx=…` (or the project's own `SCViewerEditor` binary) — editor code compiled in, no editor UI, a normal game window | guaranteed fallback for the standalone app |
-| **Development game target** | `SCViewer` target (`TargetType.Game`, `Development`) linking the developer modules needed to build Nanite (`NaniteBuilder`, `MeshBuilder`, `MeshDescription`, `StaticMeshDescription`) and cook Chaos trimeshes at runtime | preferred if the spike proves it builds and renders Nanite |
+| Editor PIE / viewer level | `UnrealEditor SCViewer.uproject`, open `Viewer`, Play | development host; map created and verified headlessly |
+| **B: Editor-target `-game`** | `UnrealEditor SCViewer.uproject -game -windowed -resx=1600 -resy=900 -ddc=SCViewerDDC` | **selected**; builds Nanite resources and full-resolution complex collision in a game world; cooked-package reload survives restart and an empty DDC |
+| A: Development Game target | `SCViewer Linux Development` linking `NaniteBuilder`, `MeshBuilder`, `MeshDescription`, `StaticMeshDescription` | UBT rejects `MeshBuilder -> MeshUtilities -> MaterialUtilities -> UnrealEd`; no executable for runtime comparisons |
 
-WP-U0 builds both, records what compiles, what builds Nanite at runtime, how long a
-Gladius-sized import takes in each, and picks. `Shipping` is out of scope (developer
-modules are stripped there). The launcher script hides the choice from the user.
+Measurements, exact commands, and errors are in `ue/README.md` and
+`ue/verification/WP-U0.md`. The measured geometry is synthetic (100,352 triangles),
+not a Gladius import. The test environment has no GPU device nodes; Vulkan reports
+zero devices. All successful runtime probes used `-nullrhi`. Nanite **data** and
+collision are verified; rendered Nanite, Lumen and HWRT remain a WP-U0 gate on the
+GPU-equipped host. Shipping is out of scope. The runtime module owns the console
+probes and future user-facing code; build/save APIs remain behind `WITH_EDITOR`.
 
 ## How a view happens (same in every host)
 
@@ -103,14 +107,25 @@ tracks entries, sizes and last-use for LRU eviction under a size cap (default 20
 | --- | --- | --- | --- |
 | 1a entity index | Rust (`scviewer-core`, dir passed to `sc_open`) | `entities.<buildid>.bin` | model list appears without walking DataCore |
 | 1b package | Rust | `<key>.tar` — the decomposed package | no StarBreaker decode/export |
-| 2 processed data | UE (`FSCProcessedCache`) | per mesh hash: `FStaticMeshRenderData` incl. `Nanite::FResources` + cooked `UBodySetup`; per texture hash: platform data; per entity: skeleton, `UAnimSequence` raw data, `USCClipCatalog`, assembled `scene` | no Nanite build, no collision cook, no texture build — objects are reconstructed from blobs and the actor is assembled |
+| 2 processed data | UE (`FSCProcessedCache`) | per mesh hash: cooked package holding `FStaticMeshRenderData` incl. `Nanite::FResources` + cooked `UBodySetup`; per texture hash: platform data; per entity: skeleton, `UAnimSequence` raw data, `USCClipCatalog`, assembled `scene` | no Nanite build, no collision cook, no texture build — objects are loaded from packages and the actor is assembled |
 
-Serialisation uses the engine's own runtime `Serialize` paths (the same code cooked
-assets load through) via `FMemoryWriter`/`FMemoryReader` with a proxy archive; WP-U0
-proves the round-trip for Nanite render data and `UBodySetup` in the chosen host. If
-the game target cannot write them, the editor `-game` host caches `.uasset` packages
-under a mounted content root (`/SCCache/`) instead — same key, same API. The footer
-shows per-layer hit/miss and sizes; settings offer Clear cache and the cap.
+WP-U0 selects the **cooked-package fallback** for the installed 5.8.2 host.
+Calling `FStaticMeshRenderData::Serialize` directly from a plugin fails to link
+(the installed engine does not export it). `UPackage::SavePackage` with the Linux
+cooking target and an `ICookedPackageWriter` produces `.uasset`, `.uexp`, and
+`.ubulk` under a mounted `/SCCache/` root. Save must wait for distance-field,
+Lumen-card and Nanite streaming preparation. An uncooked asset/DDC hit is not
+sufficient evidence of a processed cache.
+
+The spike uses `./cache/spike/` relative to the invoking working directory, passed
+explicitly by `ue/scripts/run_spike.sh` because UE changes cwd during startup.
+A fresh process with an empty DDC loaded the cooked mesh's Nanite resources and
+collision and passed a line trace without rebuilding the spike. GPU rendering of
+the reloaded data is still blocked by absent GPU access. The package writer is a
+single-package feasibility sink, not WP-C1's production cache: WP-C1 must add
+version/key checks, atomic publication, dependency handling, LRU/size limits and
+texture/skeleton/animation coverage. The application cache must be independent
+of the engine DDC; the latter is project-local build scratch in `DerivedDataCache/`.
 
 ## Player modes (WP-P1)
 
@@ -153,12 +168,12 @@ void       sc_free_string(char*);  void sc_free_blob(sc_blob*);  void sc_close(s
 Every entry point is `catch_unwind`; strings UTF-8; the tar is uncompressed; the
 progress callback may be called from worker threads.
 
-## Open questions (answered by WP-U0 / WP-U1)
+## Open questions after WP-U0
 
-- Which standalone build path (D3) and its import time for Gladius.
-- Whether `FStaticMeshRenderData` (with Nanite) and `UBodySetup` cooked data round-trip
-  through `FMemoryWriter`/`FMemoryReader` in that host (layer-2 cache feasibility).
-- Runtime Chaos trimesh cooking availability and cost; whether the Nanite fallback
-  mesh is an acceptable collider for corridors.
-- Exact glTF→UE basis matrix (lock with a synthetic-GLB unit test).
-- Nanite skeletal mesh status in 5.8 and its flag.
+- GPU validation of chosen path B: Nanite clusters, Lumen scene view and HWRT,
+  including the cooked-package reload. The sandbox exposed no Vulkan devices.
+- Gladius-sized import timing and Interchange baseline (deferred; no cargo in U0).
+- Exact glTF→UE basis matrix (lock with a synthetic-GLB unit test in WP-U1).
+- WP-C1 cache format/versioning and processed texture/skeleton/animation coverage.
+- Nanite skeletal support is present in 5.8 with `r.Nanite.AllowSkinnedMeshes=1`;
+  see U0's source/documentation findings. Soft-skin rendering is not tested here.
