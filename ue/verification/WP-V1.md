@@ -181,3 +181,5 @@ include it. The first capture attempt showed the ship framed far too close even 
 `VIEWER_FOCUS` logged the same 52.6 m fit, and the second was taken while UE showed
 "Preparing Textures"; the third (20 s settle) matches the earlier framing. Possible
 external input to the shared window is not excluded.
+
+TODO(WP-V1): the game host shows UE's red on-screen debug line for the `LogSkinnedMeshComp: Invalid Lod 0` warnings (runtime skeletal meshes have no LOD 0 render data for some attachments) at the top of the 3D view; silence the warning at its source or disable on-screen debug messages in the viewer (seen in out/smoke/orch-final2-gladius.png, 2026-11-09).
