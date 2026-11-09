@@ -87,6 +87,7 @@ def verify(path, required):
         spaces = {s['id']: s for s in player['blend_spaces']}
         assert spaces, 'no blend spaces'
         for s in spaces.values():
+            assert all(component in spaces for component in s.get('components', [])), s['id']
             for e in s['examples']:
                 if e.get('missing'):
                     assert e['clip'] in missing and e['clip'] not in clips
@@ -97,7 +98,27 @@ def verify(path, required):
                     assert d['min'] <= v <= d['max'], (s['id'], v, d)
             for face in s['faces']:
                 assert all(0 <= i < len(s['examples']) for i in face)
+        unarmed_queries = {(s['stance'], s['first_person'], s['move_speed_tag'])
+                           for s in player['motion']['states'] if s['weapon_child_id'] is None}
+        for weapon_id in weapons:
+            queries = [(s['stance'], s['first_person'], s['move_speed_tag'])
+                       for s in player['motion']['states'] if s['weapon_child_id'] == weapon_id]
+            assert len(queries) == len(set(queries)) and set(queries) == unarmed_queries, (
+                'weapon speed/view/stance matrix differs from unarmed', weapon_id)
+        armed_standing = 0
         for state in player['motion']['states']:
+            if state['weapon_child_id'] is not None and state['stance'] == 'stand':
+                idle = [f for f in state['fragments'] if f['fragment'] == 'MotionIdle']
+                assert idle, ('armed state has no idle', state['weapon_child_id'])
+                base = set.intersection(*(set(f['query_frag_tags']) for f in idle))
+                assert len(base) == 1, ('ambiguous idle motion base', state['weapon_child_id'], base)
+                movement = [f for f in state['fragments'] if f['fragment'] == 'MotionMovement'
+                            and base <= set(f['query_frag_tags'])
+                            and any(layer['loop'] for layer in f['layers'])]
+                assert movement, ('armed state has no looping movement with idle base',
+                                  state['weapon_child_id'], state['move_speed_tag'],
+                                  state['first_person'], sorted(base))
+                armed_standing += 1
             for f in state['fragments']:
                 for layer in f['layers']:
                     if layer.get('missing'):
@@ -125,7 +146,8 @@ def verify(path, required):
                 assert required_fragments <= resolved, (weapon_id, fp, resolved)
         print(f"PASS {path}: {player['gender']}, {len(children)} attached items, "
               f"{len(player['weapons'])} weapons, {len(player['motion']['states'])} states, "
-              f"{len(spaces)} blend spaces, {len(clips)} body clips; scene first")
+              f"{len(spaces)} blend spaces, {len(clips)} body clips; scene first; "
+              f"{armed_standing} armed standing states have looping movement with idle base")
 
 
 def compare(before, after):

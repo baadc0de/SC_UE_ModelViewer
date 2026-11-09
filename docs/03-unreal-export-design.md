@@ -454,3 +454,23 @@ P2b still needs runtime verification of scope/layer sequencing, component blend
 space selectors, leader-pose clothing, helper-relative weapon attachment and
 native-SC root-motion conversion. Aim-pose assets are not part of this ground
 motion export; the brief's distributed view-pitch path remains applicable.
+
+P2a armed-locomotion follow-up: the exporter shares the actor motion base across
+all participating fragment IDs, fixing rifles that previously selected unarmed
+movement despite armed idle. A base association authored in another stance can
+establish the same actor base for crouch; actual ADB selection retains the exact
+requested stance. Weapons now receive the same untagged/walk/run/sprint query
+matrix as unarmed actors, using the authored `moveSpeed` group. The JSON schema
+is unchanged; `move_speed_tag` now varies for weapon states as well. Runtime
+selection must include it to use speed-specific options. Stow selection remains
+independent of the locomotion base.
+
+Follow-up verification: all four tars were re-exported in place. Default packages
+now contain 160 states each (72 armed standing states); P4 loadout packages contain
+144 each (64 armed standing states). All have 39 blend spaces and 183 body clips.
+The stronger verifier passes every armed standing state and requires each weapon's
+speed/stance/view matrix to equal the unarmed matrix. The existing female pistol
+select diagnostic remains the only missing-clip diagnostic. Before/after comparison
+confirms all 16 unarmed states, 15 referenced blend spaces and 67 clip payloads are
+unchanged in each package. Player tests: 22 passed; workspace tests: 38 passed.
+No FFI staging or UE files were touched for this follow-up.
