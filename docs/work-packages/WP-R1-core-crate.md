@@ -64,7 +64,7 @@ bridge need. No format code of our own.
   no env var — add a real `--format glb|blend` CLI option (default blend to keep
   upstream behaviour) and make `scviewer-core` request `ExportFormat::Glb` directly.
   Verified output for `Gladius --lod 1 --mip 2`: 45 GLBs none empty, root mesh 274
-  nodes / 89 meshes / 24 materials, 23 sidecars, 366 PNGs, 63 clips, 96 MB, ~10 s.
+  nodes / 89 meshes / 27 materials (28 sidecar slots; highest referenced slot 26), 23 sidecars, 366 PNGs, 63 clips, 96 MB, ~10 s.
 - **Material mapping contract** (decided 2026-11-09 after Codex found the prototype's
   GLB material list was compacted to the 24 slots the Gladius root uses out of the
   sidecar's 28, so `_NN` was a compact position, not the sidecar index): **preserve
@@ -93,3 +93,126 @@ bridge need. No format code of our own.
   same entity report `cache: hit` and finish in < 200 ms.
 - Unit tests that need game data skip cleanly when no p4k is found (copy upstream's
   `test_p4k.rs` pattern).
+
+## WP-R1 implementation handoff (2026-11-09)
+
+Implemented `crates/scviewer-core` and the `scviewer` binary in
+`crates/scviewer-cli`. Public API details and the material contract are documented
+in `crates/scviewer-core/README.md`. All requested Vec-returning methods retain
+those signatures; `Session::cache_status()` and `_cached` companions expose
+`CacheStatus` without changing them. `ExportResult` carries status directly.
+`DecomposedOptions` contains `geometry: GlbOptions` and always includes animations.
+
+Necessary implementation clarifications:
+
+- Upstream `MappedP4k` uses pooled positional reads, not mmap. The wrapper reuses
+  that implementation rather than adding archive-format code.
+- Cold `open` loads DataCore and builds the index once. A persisted index hit
+  defers archive/DataCore initialization until an uncached export or geometry
+  preview, allowing process-start cache hits below 200 ms.
+- The binary browser index includes geometry paths and parent directories. The
+  default local cache is enforced by the CLI; passing `None` to core disables it.
+  Cache publication is atomic and process-locked; writes apply a 20 GiB LRU cap.
+- Beyond the supplied prototype, native Blend assembly had to be bypassed for
+  GLB packages: it otherwise regenerated mesh files as compressed Blend data
+  under `.glb` names. GLB material slots also required sidecar-order restoration,
+  retention of unused gaps, and the specified two-digit naming convention.
+- Upstream validation only accepted Blend exports. It now accepts GLB scene
+  manifests, validates GLB payloads, and rejects empty GLB files.
+- The sandbox prevented commits/branches as anticipated; no `.git` writes were
+  attempted. The orchestrator must branch, commit and pin the submodule.
+- Cargo dependency downloads required a writable `CARGO_HOME` copy in `/tmp`;
+  build outputs remained in the repository's shared `./target` (6.3 GiB).
+
+### Verification commands and key output
+
+Commands were run from the repository root. Every cargo invocation below used
+this environment prefix (including formatting and upstream tests):
+
+```sh
+CARGO_HOME=/tmp/wp-r1-cargo-home CARGO_TARGET_DIR=./target
+```
+
+```sh
+cargo build
+cargo test --workspace
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --test decomposed_glb
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib gltf::
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib validation::
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker common::tests
+cargo fmt -p scviewer-core -p scviewer-cli -- --check
+```
+
+Results: build passed; workspace **7 passed**, live decomposed regression **1
+passed**, GLB tests **43 passed**, validation tests **29 passed**, CLI common tests
+**15 passed**, formatting passed. Live tests skip if discovery finds no archive.
+The empty-GLB regression was observed failing before the mesh fix; material-name
+and validator regressions were likewise observed failing before their fixes.
+
+```sh
+cargo run -p scviewer-cli -- search gladius
+cargo run -p scviewer-cli -- search gladius
+cargo run -p scviewer-cli -- glb Gladius out/gladius.glb
+python3 -I scripts/glbinfo.py out/gladius.glb
+cargo run -p scviewer-cli -- decomposed Gladius out/dec --lod 1 --mip 2
+cargo run -p scviewer-cli -- decomposed-tar Gladius out/dec.tar --lod 1 --mip 2
+cargo run -p scviewer-cli -- decomposed-tar Gladius out/dec.tar --lod 1 --mip 2
+python3 -I scripts/verify_r1_package.py out/dec out/dec.tar
+cargo run -p scviewer-cli -- validate out/dec
+cargo run -p scviewer-cli -- ls Data/Objects/Spaceships/Ships/AEGS/Gladius
+```
+
+Search lists `AEGS_Gladius` / `Aegis Gladius` first. Bundled GLB: **67,189,044
+bytes**, 1,072 nodes, **220 meshes, 334 images**, 184 materials, 42 skins; export
+4,144.0 ms. Decomposed cold export: **6,919.9 ms**, **502 files**. Tar:
+**101,784,064 bytes**, `scene.json` first, all **502 entries byte-identical** to
+the folder. An older folder containing a stale `scene.blend` was preserved as
+`out/dec-before-final-r1` before repeating the final clean-folder check.
+
+Package counts: **45 non-empty GLBs / 23 material sidecars / 366 PNGs / 63 clip
+sidecars**. Root: **274 nodes / 89 meshes / 27 materials**, **28 sidecar slots**,
+highest referenced slot **26**, 63 root animations. Validator: `is_valid: true`,
+`mesh_count: 45`, `errors: []`, `warnings: []`.
+
+Process timing used Bash's builtin `time` (same cargo environment prefix):
+
+```sh
+TIMEFORMAT='wall: %3R s'
+time cargo run -p scviewer-cli -- search gladius
+time cargo run -p scviewer-cli -- decomposed-tar Gladius out/dec.tar --lod 1 --mip 2
+```
+
+Search: **cache: hit (29.8 ms)**, whole Cargo command **0.075 s**.
+Tar: **cache: hit (77.2 ms)**, whole Cargo command **0.123 s**.
+
+```sh
+cargo run --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker -- entity export Gladius out/wp-r1-upstream --kind decomposed --format glb --lod 1 --mip 2
+blender --background --factory-startup --python /tmp/wp-r1-blender.py
+```
+
+Real upstream CLI `--format glb` export: **502 files**. The temporary Blender
+script imported the root GLB with `bpy.ops.import_scene.gltf`: **274 objects,
+89 meshes**, 24 instantiated materials (only slots actually used by primitives).
+The GLB itself retains the required 27 slots.
+
+Additional reproducibility probe:
+
+```sh
+cargo run -p scviewer-cli -- --no-cache decomposed-tar Gladius out/dec-uncached.tar --lod 1 --mip 2
+python3 -I scripts/verify_r1_package.py out/dec out/dec-uncached.tar
+```
+
+The independent uncached export took **6,818.0 ms**. Its parity probe found exactly
+one differing file: `Data/UI/Generated/.export_stamp.json`, whose upstream build
+and export timestamps intentionally change. The regular cached folder/tar parity
+check above passes for every file.
+
+### Handoff items
+
+- TODO(WP-R1): Orchestrator to create `scviewer/decomposed-glb`, commit/pin the
+  submodule and arrange the required cross-review/PR; this sandbox cannot write git metadata.
+- TODO(WP-R1): If independent cache-disabled exports must be byte-reproducible,
+  agree on upstream diagnostic `.export_stamp.json` handling. Cached package
+  replay is already byte-identical; the stamp is currently preserved verbatim.
+- TODO(WP-R1): Carry upstream missing skin-joint/bind-pose fallback warnings from
+  the real CLI export into the rig/animation verification work (WP-U3).

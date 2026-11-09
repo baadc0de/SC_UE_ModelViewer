@@ -1,0 +1,179 @@
+//! Thin verification CLI for the UI-independent viewer core.
+use anyhow::{Result, ensure};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use scviewer_core::{DecomposedOptions, GlbOptions, Materials, Session};
+use std::{path::PathBuf, time::Instant};
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    #[arg(long, global = true)]
+    p4k: Option<PathBuf>,
+    #[arg(long, global = true, default_value = "./cache/")]
+    cache: PathBuf,
+    #[arg(long, global = true)]
+    no_cache: bool,
+    #[command(subcommand)]
+    command: Command,
+}
+#[derive(Subcommand)]
+enum Command {
+    Search {
+        q: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    Glb {
+        entity: String,
+        out: PathBuf,
+        #[command(flatten)]
+        opts: Options,
+    },
+    Decomposed {
+        entity: String,
+        out_root: PathBuf,
+        #[command(flatten)]
+        opts: Options,
+    },
+    DecomposedTar {
+        entity: String,
+        out: PathBuf,
+        #[command(flatten)]
+        opts: Options,
+    },
+    Validate {
+        dir: PathBuf,
+    },
+    Ls {
+        dir: String,
+    },
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum MaterialArg {
+    Textures,
+    Colors,
+    None,
+}
+#[derive(Args)]
+struct Options {
+    #[arg(long, default_value_t = 1)]
+    lod: u32,
+    #[arg(long, default_value_t = 2)]
+    mip: u32,
+    #[arg(long, value_enum, default_value = "textures")]
+    materials: MaterialArg,
+    #[arg(long)]
+    no_attachments: bool,
+    #[arg(long)]
+    no_interior: bool,
+    #[arg(long)]
+    no_lights: bool,
+    #[arg(long)]
+    shields: bool,
+    #[arg(long, action = clap::ArgAction::Set)]
+    apply_default_pose: Option<bool>,
+}
+impl Options {
+    fn options(&self, decomposed: bool) -> GlbOptions {
+        GlbOptions {
+            lod: self.lod,
+            mip: self.mip,
+            materials: match self.materials {
+                MaterialArg::Textures => Materials::Textures,
+                MaterialArg::Colors => Materials::Colors,
+                MaterialArg::None => Materials::None,
+            },
+            attachments: !self.no_attachments,
+            interior: !self.no_interior,
+            lights: !self.no_lights,
+            shields: self.shields,
+            apply_default_pose: self.apply_default_pose.unwrap_or(!decomposed),
+        }
+    }
+}
+fn main() -> Result<()> {
+    let started = Instant::now();
+    let cli = Cli::parse();
+    if let Command::Validate { dir } = &cli.command {
+        let report = scviewer_core::validate_decomposed_export(dir)?;
+        println!("{report:#?}");
+        ensure!(report.is_valid, "decomposed validation failed");
+        return Ok(());
+    }
+    let session = Session::open(
+        cli.p4k.as_deref(),
+        if cli.no_cache { None } else { Some(&cli.cache) },
+    )?;
+    match cli.command {
+        Command::Search { q, limit } => {
+            for hit in session.search_entities(&q, limit) {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    hit.name,
+                    hit.guid,
+                    hit.category,
+                    hit.display_name.as_deref().unwrap_or("")
+                );
+            }
+        }
+        Command::Ls { dir } => {
+            for entry in session.list_dir(&dir) {
+                println!(
+                    "{}\t{}\t{}",
+                    if entry.is_dir { "dir" } else { "file" },
+                    entry.size,
+                    entry.path
+                );
+            }
+        }
+        Command::Glb { entity, out, opts } => write(
+            &out,
+            &session.export_entity_glb(&entity, &opts.options(false))?,
+        )?,
+        Command::Decomposed {
+            entity,
+            out_root,
+            opts,
+        } => {
+            let result = session.export_entity_decomposed(
+                &entity,
+                &out_root,
+                &DecomposedOptions {
+                    geometry: opts.options(true),
+                },
+            )?;
+            println!(
+                "{} files written to {}",
+                result.files.len(),
+                out_root.display()
+            );
+        }
+        Command::DecomposedTar { entity, out, opts } => write(
+            &out,
+            &session.export_entity_decomposed_mem(
+                &entity,
+                &DecomposedOptions {
+                    geometry: opts.options(true),
+                },
+            )?,
+        )?,
+        Command::Validate { .. } => unreachable!(),
+    }
+    eprintln!(
+        "cache: {} ({:.1} ms)",
+        match session.cache_status() {
+            scviewer_core::CacheStatus::Hit => "hit",
+            scviewer_core::CacheStatus::Miss => "miss",
+        },
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok(())
+}
+fn write(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, bytes)?;
+    println!("{} bytes written to {}", bytes.len(), path.display());
+    Ok(())
+}

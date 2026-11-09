@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/*"]
+exclude = ["vendor/StarBreaker"]
+resolver = "2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[workspace.dependencies]
+starbreaker-3d = { path = "vendor/StarBreaker/crates/starbreaker-3d" }
+starbreaker-common = { path = "vendor/StarBreaker/crates/starbreaker-common" }
+starbreaker-datacore = { path = "vendor/StarBreaker/crates/starbreaker-datacore" }
+starbreaker-p4k = { path = "vendor/StarBreaker/crates/starbreaker-p4k" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
