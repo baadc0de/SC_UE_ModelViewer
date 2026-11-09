@@ -1,0 +1,147 @@
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "SCPackageSource.h"
+#include "SCPackageReader.h"
+#include "SCMeshImporter.h"
+#include "StaticMeshAttributes.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "SCImporter.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+
+namespace
+{
+class FMemorySource : public FSCPackageSource
+{
+public:
+    TMap<FString, TArray<uint8>> Files;
+    void Add(const FString& Name, const FString& Text)
+    { FTCHARToUTF8 Utf8(*Text); TArray<uint8> B; B.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length()); Files.Add(Name, MoveTemp(B)); }
+    bool Exists(const FString& Path) const override { return Files.Contains(Path); }
+    bool ReadBytes(const FString& Path, TArray<uint8>& Out, FString& Error) const override
+    { if (auto* B = Files.Find(Path)) { Out = *B; return true; } Error = TEXT("Missing fixture"); return false; }
+    TArray<FString> ListFiles(const FString& Prefix) const override
+    { TArray<FString> R; for (const auto& P : Files) if (Prefix.IsEmpty() || P.Key.StartsWith(Prefix)) R.Add(P.Key); R.Sort(); return R; }
+};
+void Append32(TArray<uint8>& B, uint32 V) { B.Append(reinterpret_cast<uint8*>(&V), 4); }
+FMemorySource Triangle()
+{
+    // Entirely synthetic: asymmetric metre-sized triangle, authored tangent, two UVs and colours.
+    FMemorySource S; TArray<uint8> Bin;
+    const float Values[] = {
+        0,0,0, 2,0,0, 0,3,0, // positions
+        0,0,1, 0,0,1, 0,0,1, // normals
+        1,0,0,1, 1,0,0,1, 1,0,0,1, // tangent
+        0,0, 1,0, 0,1, // UV0
+        0.2f,0.3f, 0.4f,0.5f, 0.6f,0.7f, // UV1
+        1,0,0,1, 0.25f,0.5f,0.75f,1, 0,0,1,1 // colors
+    };
+    Bin.Append(reinterpret_cast<const uint8*>(Values), sizeof(Values));
+    const FString Json = TEXT(R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":216}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":48},{"buffer":0,"byteOffset":120,"byteLength":24},{"buffer":0,"byteOffset":144,"byteLength":24},{"buffer":0,"byteOffset":168,"byteLength":48}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":4,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":5,"componentType":5126,"count":3,"type":"VEC4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TANGENT":2,"TEXCOORD_0":3,"TEXCOORD_1":4,"COLOR_0":5}}]}],"nodes":[{"mesh":0,"name":"Synthetic"}],"scenes":[{"nodes":[0]}],"scene":0})");
+    FTCHARToUTF8 UTF8(*Json); TArray<uint8> J; J.Append(reinterpret_cast<const uint8*>(UTF8.Get()), UTF8.Length());
+    while (J.Num() % 4) J.Add(' ');
+    TArray<uint8> B; Append32(B, 0x46546c67); Append32(B, 2); Append32(B, 28 + J.Num() + Bin.Num());
+    Append32(B, J.Num()); Append32(B, 0x4e4f534a); B.Append(J); Append32(B, Bin.Num()); Append32(B, 0x004e4942); B.Append(Bin);
+    S.Files.Add(TEXT("triangle.glb"), MoveTemp(B)); return S;
+}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderSparse, "SCBridge.Package.SparseAuthoredMaterialIndices", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCReaderSparse::RunTest(const FString&)
+{
+    FMemorySource Source;
+    Source.Add(TEXT("scene.json"), TEXT(R"({"version":1,"export_kind":"Decomposed","root_entity":{"entity_name":"Synthetic","material_sidecar":"Data/material.materials.json"}})"));
+    Source.Add(TEXT("Data/material.materials.json"), TEXT(R"({"submaterials":[{"index":1,"submaterial_name":"A"},{"index":10,"submaterial_name":"B"}]})"));
+    FSCSceneManifest Scene; FString Error;
+    const bool Read = FSCPackageReader::Read(Source, Scene, Error);
+    TestTrue(*Error, Read);
+    if (Scene.Materials.Num()) TestEqual(TEXT("Two ordinal slots despite sparse authored indices"), Scene.Materials[0].Submaterials.Num(), 2);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPaths, "SCBridge.Package.PathsAndTar", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCPaths::RunTest(const FString&)
+{
+    FString P;
+    TestTrue(TEXT("normalize"), FSCPackageSource::Normalize(TEXT("./Data\\Meshes//a.glb"), P));
+    TestEqual(TEXT("canonical"), P, FString(TEXT("Data/Meshes/a.glb")));
+    for (const FString Bad : {TEXT("../escape"), TEXT("Data/../../escape"), TEXT("/absolute"), TEXT("C:\\escape")}) TestFalse(*Bad, FSCPackageSource::Normalize(Bad, P));
+    TArray<uint8> Empty; Empty.SetNumZeroed(1024); FSCTarPackageSource Tar(MoveTemp(Empty));
+    TestTrue(TEXT("empty tar"), Tar.IsValid());
+    TArray<uint8> Broken; Broken.Init(1,512); FSCTarPackageSource Bad(MoveTemp(Broken));
+    TestFalse(TEXT("bad checksum"), Bad.IsValid()); return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCBasis, "SCBridge.Mesh.BasisAndAttributes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCBasis::RunTest(const FString&)
+{
+    auto Source = Triangle(); FSCDerivedMesh D; FString Error;
+    if (!TestTrue(TEXT("derive triangle"), FSCMeshImporter::Derive(Source, TEXT("triangle.glb"), D, Error))) { AddError(Error); return false; }
+    FStaticMeshConstAttributes A(D.Description);
+    TestEqual(TEXT("triangles"), D.Description.Triangles().Num(), 1);
+    TestTrue(TEXT("forward -Z becomes +X centimetres"), FSCMeshImporter::Position(FVector(0,0,-2)).Equals(FVector(200,0,0)));
+    TestTrue(TEXT("up +Y becomes +Z"), FSCMeshImporter::Position(FVector(0,3,0)).Equals(FVector(0,0,300)));
+    TestEqual(TEXT("UV channels"), A.GetVertexInstanceUVs().GetNumChannels(), 2);
+    const FVertexInstanceID VI(0);
+    TestTrue(TEXT("normal"), A.GetVertexInstanceNormals()[VI].Equals(FVector3f(-1,0,0)));
+    TestTrue(TEXT("tangent"), A.GetVertexInstanceTangents()[VI].Equals(FVector3f(0,1,0)));
+    TestEqual(TEXT("binormal sign"), A.GetVertexInstanceBinormalSigns()[VI], 1.0f);
+    TestTrue(TEXT("UV1"), A.GetVertexInstanceUVs().Get(VI,1).Equals(FVector2f(0.2f,0.3f)));
+    TestTrue(TEXT("colour"), A.GetVertexInstanceColors()[VI].Equals(FVector4f(1,0,0,1)));
+    const FMatrix W = FSCMeshImporter::CryToGltf();
+    const FMatrix HelperMatrix = FTranslationMatrix(FVector(0,5,1)) * W;
+    const FMatrix Child = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(0,2,0)), W, true, false);
+    const FMatrix ChildWorld = FSCMeshImporter::Transform(W) * Child * FSCMeshImporter::Transform(HelperMatrix);
+    TestTrue(TEXT("Resolved child offsets are relative to source helper, one wrapper only"), FVector(ChildWorld.TransformPosition(FVector::ZeroVector)).Equals(FVector(700,0,100), 0.001));
+    const FMatrix Container = FSCMeshImporter::Transform(FTranslationMatrix(FVector(0,1,0)));
+    const FMatrix Placement = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(2,3,4)), W, true, true);
+    const FMatrix InteriorWorld = FSCMeshImporter::Transform(W) * Placement * Container * FSCMeshImporter::Transform(HelperMatrix);
+    TestTrue(TEXT("Interior placement composes in source helper frame"), FVector(InteriorWorld.TransformPosition(FVector::ZeroVector)).Equals(FVector(900,200,500), 0.001));
+    auto& Bytes = Source.Files[TEXT("triangle.glb")];
+    FFileHelper::SaveArrayToFile(Bytes, *(FPaths::ProjectSavedDir() / TEXT("Import/synthetic.glb")));
+    TArray<uint8> HelperBytes = Bytes;
+    for (int32 I = 20; I + 8 < HelperBytes.Num(); ++I)
+        if (FMemory::Memcmp(HelperBytes.GetData() + I, "\"mesh\":0", 8) == 0) { HelperBytes[I + 1] = 'x'; break; }
+    Source.Files.Add(TEXT("helper.glb"), MoveTemp(HelperBytes));
+    FSCDerivedMesh Helper;
+    TestTrue(TEXT("Hierarchy-only GLB is valid"), FSCMeshImporter::Derive(Source, TEXT("helper.glb"), Helper, Error));
+    TestEqual(TEXT("Helper nodes retained"), Helper.Nodes.Num(), 1);
+    Source.Files[TEXT("triangle.glb")][8] = 0;
+    TestFalse(TEXT("truncated header rejected"), FSCMeshImporter::Derive(Source, TEXT("triangle.glb"), D, Error));
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFolderTarImport, "SCBridge.Package.FolderTarImport", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFolderTarImport::RunTest(const FString&)
+{
+    FString Folder, Tar;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder) || !FParse::Value(FCommandLine::Get(), TEXT("SCVerifyTar="), Tar))
+    { AddError(TEXT("FolderTarImport requires -SCPackage and -SCVerifyTar")); return false; }
+    UWorld* World = nullptr;
+    for (const auto& Context : GEngine->GetWorldContexts())
+        if (Context.World() && (Context.WorldType == EWorldType::Editor || Context.World()->IsGameWorld())) World = Context.World();
+    TestTrue(TEXT("Folder/tar asset counts, content hashes, collision, representations and GC"), FSCImporter::Verify(Folder, Tar, World));
+    return true;
+}
+#endif
+#include "SCImporter.h"
+bool USCImportLibrary::RunUnitTests()
+{
+#if WITH_DEV_AUTOMATION_TESTS
+    bool Passed = true;
+    TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCPaths"), TEXT("FSCBasis")};
+    FString Folder;
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Add(TEXT("FSCFolderTarImport"));
+    for (const FString& Name : Names)
+    {
+        FAutomationTestFramework::Get().StartTestByName(Name, 0);
+        if (!GIsAutomationTesting) return false;
+        FAutomationTestExecutionInfo Info;
+        const bool OK = FAutomationTestFramework::Get().StopTest(Info);
+        UE_LOG(LogSCImport, Display, TEXT("UNIT_TEST name=%s passed=%d"), *Name, OK);
+        for (const auto& Entry : Info.GetEntries()) UE_LOG(LogSCImport, Display, TEXT("UNIT_DETAIL %s"), *Entry.ToString());
+        Passed &= OK;
+    }
+    return Passed;
+#else
+    return false;
+#endif
+}

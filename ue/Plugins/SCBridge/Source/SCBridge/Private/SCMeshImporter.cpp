@@ -1,0 +1,395 @@
+#include "SCMeshImporter.h"
+#include "SCPackageReader.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Engine/StaticMesh.h"
+#include "StaticMeshAttributes.h"
+#include "StaticMeshOperations.h"
+#include "Util/ColorConstants.h"
+#include "StaticMeshResources.h"
+#include "Materials/Material.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "Rendering/NaniteResources.h"
+#include "Chaos/TriangleMeshImplicitObject.h"
+#include "Chaos/ChaosArchive.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/MemoryReader.h"
+#if WITH_EDITOR
+#include "StaticMeshCompiler.h"
+#include "DistanceFieldAtlas.h"
+#include "MeshCardBuild.h"
+#endif
+
+namespace
+{
+using FObject = TSharedPtr<FJsonObject>;
+const TArray<TSharedPtr<FJsonValue>>& Array(const FObject& O, const TCHAR* Key)
+{
+    static const TArray<TSharedPtr<FJsonValue>> Empty;
+    const TArray<TSharedPtr<FJsonValue>>* A;
+    return O && O->TryGetArrayField(Key, A) ? *A : Empty;
+}
+int32 Int(const FObject& O, const TCHAR* Key, int32 Default = 0)
+{
+    int32 V; return O && O->TryGetNumberField(Key, V) ? V : Default;
+}
+FObject ObjectAt(const FObject& O, const TCHAR* Key, int32 Index)
+{
+    const auto& A = Array(O, Key); return A.IsValidIndex(Index) ? A[Index]->AsObject() : nullptr;
+}
+uint32 U32(const uint8* P) { uint32 V; FMemory::Memcpy(&V, P, 4); return V; }
+struct FAccessor
+{
+    const uint8* Data = nullptr;
+    int32 Count = 0, Components = 0, Type = 0, ComponentSize = 0, Stride = 0;
+    bool Normalized = false;
+    double Get(int32 Index, int32 Component) const
+    {
+        const uint8* P = Data + int64(Index) * Stride + Component * ComponentSize;
+        switch (Type)
+        {
+        case 5126: { float V; FMemory::Memcpy(&V, P, 4); return V; }
+        case 5125: return U32(P);
+        case 5123: { uint16 V; FMemory::Memcpy(&V, P, 2); return Normalized ? V / 65535.0 : V; }
+        case 5122: { int16 V; FMemory::Memcpy(&V, P, 2); return Normalized ? FMath::Max(-1.0, V / 32767.0) : V; }
+        case 5121: return Normalized ? *P / 255.0 : *P;
+        case 5120: { int8 V = *P; return Normalized ? FMath::Max(-1.0, V / 127.0) : V; }
+        default: return 0;
+        }
+    }
+    FVector Vector(int32 I) const { return FVector(Get(I, 0), Get(I, 1), Get(I, 2)); }
+};
+struct FGlb
+{
+    FObject Json;
+    const uint8* Bin = nullptr;
+    int64 BinSize = 0;
+    FString Error;
+    bool Accessor(int32 Index, FAccessor& A)
+    {
+        const auto O = ObjectAt(Json, TEXT("accessors"), Index);
+        if (!O || O->HasField(TEXT("sparse"))) { Error = TEXT("Missing or unsupported sparse accessor"); return false; }
+        const auto View = ObjectAt(Json, TEXT("bufferViews"), Int(O, TEXT("bufferView"), -1));
+        if (!View || Int(View, TEXT("buffer")) != 0) { Error = TEXT("Missing/external bufferView"); return false; }
+        FString Type; O->TryGetStringField(TEXT("type"), Type);
+        A.Components = Type == TEXT("SCALAR") ? 1 : Type == TEXT("VEC2") ? 2 : Type == TEXT("VEC3") ? 3 : Type == TEXT("VEC4") ? 4 : 0;
+        A.Type = Int(O, TEXT("componentType")); A.Count = Int(O, TEXT("count"));
+        A.ComponentSize = A.Type == 5120 || A.Type == 5121 ? 1 : A.Type == 5122 || A.Type == 5123 ? 2 : A.Type == 5125 || A.Type == 5126 ? 4 : 0;
+        A.Stride = Int(View, TEXT("byteStride"), A.Components * A.ComponentSize);
+        O->TryGetBoolField(TEXT("normalized"), A.Normalized);
+        const int64 ViewOffset = Int(View, TEXT("byteOffset")), ViewSize = Int(View, TEXT("byteLength")), Offset = Int(O, TEXT("byteOffset"));
+        const int64 Needed = int64(A.Count - 1) * A.Stride + A.Components * A.ComponentSize;
+        if (!A.Components || !A.ComponentSize || A.Count <= 0 || A.Stride < A.Components * A.ComponentSize || Offset < 0 || ViewOffset < 0 || ViewSize < 0
+            || ViewOffset + ViewSize > BinSize || Needed < 0 || Offset + Needed > ViewSize)
+        { Error = TEXT("Accessor exceeds buffer bounds or has invalid layout"); return false; }
+        A.Data = Bin + ViewOffset + Offset;
+        return true;
+    }
+    bool Parse(const TArray<uint8>& Bytes)
+    {
+        if (Bytes.Num() < 20 || U32(Bytes.GetData()) != 0x46546c67 || U32(Bytes.GetData() + 4) != 2 || U32(Bytes.GetData() + 8) != uint32(Bytes.Num()))
+        { Error = TEXT("Invalid GLB 2 header"); return false; }
+        for (int64 Offset = 12; Offset + 8 <= Bytes.Num();)
+        {
+            const uint32 Size = U32(Bytes.GetData() + Offset), Type = U32(Bytes.GetData() + Offset + 4);
+            Offset += 8;
+            if (Offset + Size > Bytes.Num()) { Error = TEXT("Truncated GLB chunk"); return false; }
+            if (Type == 0x4e4f534a)
+            {
+                const FString Text(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(Bytes.GetData() + Offset), Size));
+                if (Json || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json)) { Error = TEXT("Invalid GLB JSON"); return false; }
+            }
+            else if (Type == 0x004e4942) { Bin = Bytes.GetData() + Offset; BinSize = Size; }
+            Offset += Size;
+        }
+        if (!Json || !Bin) { Error = TEXT("GLB needs JSON and BIN chunks"); return false; }
+        if (!Array(Json, TEXT("extensionsRequired")).IsEmpty()) { Error = TEXT("Required glTF extensions are unsupported"); return false; }
+        return true;
+    }
+    bool NodeMatrix(const FObject& N, FMatrix& M)
+    {
+        M = FMatrix::Identity;
+        const auto& Values = Array(N, TEXT("matrix"));
+        if (!Values.IsEmpty())
+        {
+            if (Values.Num() != 16) return false;
+            for (int32 I = 0; I < 16; ++I) M.M[I / 4][I % 4] = Values[I]->AsNumber();
+        }
+        else
+        {
+            FVector T(0), S(1); FQuat Q = FQuat::Identity;
+            const auto& Translation = Array(N, TEXT("translation")); const auto& Scale = Array(N, TEXT("scale")); const auto& Rotation = Array(N, TEXT("rotation"));
+            if (Translation.Num() == 3) T = FVector(Translation[0]->AsNumber(), Translation[1]->AsNumber(), Translation[2]->AsNumber());
+            if (Scale.Num() == 3) S = FVector(Scale[0]->AsNumber(), Scale[1]->AsNumber(), Scale[2]->AsNumber());
+            if (Rotation.Num() == 4) Q = FQuat(Rotation[0]->AsNumber(), Rotation[1]->AsNumber(), Rotation[2]->AsNumber(), Rotation[3]->AsNumber()).GetNormalized();
+            M = FTransform(Q, T, S).ToMatrixWithScale();
+        }
+        return !M.ContainsNaN() && FMath::Abs(M.Determinant()) > SMALL_NUMBER;
+    }
+};
+}
+FMatrix FSCMeshImporter::CryToGltf()
+{
+    return FMatrix(FPlane(1,0,0,0), FPlane(0,0,-1,0), FPlane(0,1,0,0), FPlane(0,0,0,1));
+}
+FMatrix FSCMeshImporter::Transform(const FMatrix& Gltf)
+{
+    const FMatrix Basis(FPlane(0,100,0,0), FPlane(0,0,100,0), FPlane(-100,0,0,0), FPlane(0,0,0,1));
+    return Basis.Inverse() * Gltf * Basis;
+}
+FMatrix FSCMeshImporter::InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis)
+{
+    if (bSourceFrame) return Transform(AssetRoot.Inverse() * Local);
+    return Transform(bCryBasis ? CryToGltf().Inverse() * Local * CryToGltf() : Local);
+}
+bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path, FSCDerivedMesh& Out, FString& Error)
+{
+    Out = FSCDerivedMesh(); TArray<uint8> Bytes;
+    if (!Source.ReadBytes(Path, Bytes, Error)) return false;
+    Out.ContentHash = FSCPackageReader::Hash(Bytes);
+    FGlb G;
+    if (!G.Parse(Bytes)) { Error = Path + TEXT(": ") + G.Error; return false; }
+    Out.bHasSkins = !Array(G.Json, TEXT("skins")).IsEmpty();
+    for (const auto& M : Array(G.Json, TEXT("materials")))
+    { FString Name; if (M->AsObject()) M->AsObject()->TryGetStringField(TEXT("name"), Name); Out.MaterialNames.Add(Name); }
+    if (Out.MaterialNames.IsEmpty()) Out.MaterialNames.Add(TEXT("Default"));
+    FStaticMeshAttributes A(Out.Description); A.Register();
+    auto Positions = A.GetVertexPositions(); auto Normals = A.GetVertexInstanceNormals(); auto Tangents = A.GetVertexInstanceTangents();
+    auto Signs = A.GetVertexInstanceBinormalSigns(); auto UVs = A.GetVertexInstanceUVs(); auto Colors = A.GetVertexInstanceColors();
+    UVs.SetNumChannels(2);
+    TArray<FPolygonGroupID> Groups;
+    for (int32 I = 0; I < Out.MaterialNames.Num(); ++I)
+    {
+        auto Group = Out.Description.CreatePolygonGroup(); Groups.Add(Group);
+        A.GetPolygonGroupMaterialSlotNames()[Group] = FName(*FString::Printf(TEXT("Slot_%d"), I));
+    }
+    TSet<int32> Active, Visited;
+    TFunction<bool(int32, const FMatrix&)> Visit;
+    Visit = [&](int32 Index, const FMatrix& Parent)
+    {
+        const auto Node = ObjectAt(G.Json, TEXT("nodes"), Index);
+        if (!Node || Active.Contains(Index) || Visited.Contains(Index)) { Error = TEXT("Invalid/cyclic/multiply-parented GLB node"); return false; }
+        Active.Add(Index); Visited.Add(Index);
+        FMatrix Local;
+        if (!G.NodeMatrix(Node, Local)) { Error = TEXT("Invalid node matrix"); return false; }
+        const FMatrix World = Local * Parent;
+        FString NodeName;
+        if (Node->TryGetStringField(TEXT("name"), NodeName) && !NodeName.IsEmpty()) Out.Nodes.FindOrAdd(NodeName) = World;
+        const int32 MeshIndex = Int(Node, TEXT("mesh"), -1);
+        if (MeshIndex >= 0)
+        {
+            const auto Mesh = ObjectAt(G.Json, TEXT("meshes"), MeshIndex);
+            if (!Mesh) { Error = TEXT("Invalid mesh index"); return false; }
+            const FMatrix NormalMatrix = World.Inverse().GetTransposed();
+            for (const auto& Value : Array(Mesh, TEXT("primitives")))
+            {
+                const auto Primitive = Value->AsObject(); const FObject* Attributes;
+                if (!Primitive || Int(Primitive, TEXT("mode"), 4) != 4 || !Primitive->TryGetObjectField(TEXT("attributes"), Attributes))
+                { Error = TEXT("Only triangle primitives are supported"); return false; }
+                FAccessor P, N, T, C, U0, U1, Indices;
+                if (!G.Accessor(Int(*Attributes, TEXT("POSITION"), -1), P) || P.Components != 3) { Error = G.Error; return false; }
+                auto Optional = [&](const TCHAR* Key, FAccessor& Access, int32 Min, int32 Max)
+                {
+                    if (!(*Attributes)->HasField(Key)) return true;
+                    if (!G.Accessor(Int(*Attributes, Key), Access) || Access.Count != P.Count || Access.Components < Min || Access.Components > Max)
+                    { Error = TEXT("Invalid vertex attribute: ") + FString(Key) + TEXT(" ") + G.Error; return false; }
+                    return true;
+                };
+                if (!Optional(TEXT("NORMAL"), N, 3, 3) || !Optional(TEXT("TANGENT"), T, 4, 4) || !Optional(TEXT("COLOR_0"), C, 3, 4)
+                    || !Optional(TEXT("TEXCOORD_0"), U0, 2, 2) || !Optional(TEXT("TEXCOORD_1"), U1, 2, 2)) return false;
+                Out.bHasTangents &= T.Data != nullptr;
+                const bool bIndexed = Primitive->HasField(TEXT("indices"));
+                if (bIndexed && (!G.Accessor(Int(Primitive, TEXT("indices")), Indices) || Indices.Components != 1 || Indices.Normalized
+                    || (Indices.Type != 5121 && Indices.Type != 5123 && Indices.Type != 5125))) { Error = TEXT("Invalid triangle indices"); return false; }
+                const int32 Count = bIndexed ? Indices.Count : P.Count;
+                const int32 Material = Int(Primitive, TEXT("material"));
+                if (Count % 3 || !Groups.IsValidIndex(Material)) { Error = TEXT("Invalid triangle/material count"); return false; }
+                TMap<int32, FVertexID> Vertices;
+                for (int32 I = 0; I < Count; I += 3)
+                {
+                    int32 Id[3]; FVector Pos[3];
+                    for (int32 K = 0; K < 3; ++K)
+                    {
+                        const double Raw = bIndexed ? Indices.Get(I + K, 0) : I + K;
+                        if (Raw < 0 || Raw >= P.Count) { Error = TEXT("Index outside POSITION accessor"); return false; }
+                        Id[K] = int32(Raw); Pos[K] = Position(World.TransformPosition(P.Vector(Id[K])));
+                        if (Pos[K].ContainsNaN()) { Error = TEXT("Non-finite vertex"); return false; }
+                    }
+                    // UE uses clockwise front faces. The host basis already reflects handedness;
+                    // only an additional mirrored node reverses corners (Interchange baseline).
+                    if (World.Determinant() < 0) { Swap(Id[1], Id[2]); Swap(Pos[1], Pos[2]); }
+                    const FVector FaceNormal = FVector::CrossProduct(Pos[2] - Pos[0], Pos[1] - Pos[0]).GetSafeNormal();
+                    if (FaceNormal.IsNearlyZero()) { ++Out.DegenerateTriangles; continue; }
+                    TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
+                    for (int32 K = 0; K < 3; ++K)
+                    {
+                        const int32 J = Id[K]; FVertexID* Existing = Vertices.Find(J); FVertexID Vertex;
+                        if (Existing) Vertex = *Existing;
+                        else { Vertex = Out.Description.CreateVertex(); Positions[Vertex] = FVector3f(Pos[K]); Vertices.Add(J, Vertex); }
+                        const FVertexInstanceID VI = Out.Description.CreateVertexInstance(Vertex); Corners.Add(VI);
+                        const FVector Normal = N.Data ? Position(NormalMatrix.TransformVector(N.Vector(J))).GetSafeNormal() : FaceNormal;
+                        Normals[VI] = FVector3f(Normal);
+                        Tangents[VI] = T.Data ? FVector3f(Position(World.TransformVector(T.Vector(J))).GetSafeNormal()) : FVector3f::ZeroVector;
+                        Signs[VI] = T.Data ? float(FMath::Sign(World.Determinant()) * T.Get(J, 3)) : 1;
+                        Colors[VI] = C.Data ? FVector4f(C.Get(J, 0), C.Get(J, 1), C.Get(J, 2), C.Components == 4 ? C.Get(J, 3) : 1) : FVector4f(1,1,1,1);
+                        // Match Interchange: counter the static-mesh builder's linear-to-sRGB vertex-colour packing.
+                        UE::Geometry::LinearColors::SRGBToLinear(Colors[VI]);
+                        UVs.Set(VI, 0, U0.Data ? FVector2f(U0.Get(J, 0), U0.Get(J, 1)) : FVector2f::ZeroVector);
+                        UVs.Set(VI, 1, U1.Data ? FVector2f(U1.Get(J, 0), U1.Get(J, 1)) : FVector2f::ZeroVector);
+                    }
+                    Out.Description.CreateTriangle(Groups[Material], Corners);
+                }
+            }
+        }
+        for (const auto& Child : Array(Node, TEXT("children"))) if (!Visit(int32(Child->AsNumber()), World)) return false;
+        Active.Remove(Index); return true;
+    };
+    const auto Scene = ObjectAt(G.Json, TEXT("scenes"), Int(G.Json, TEXT("scene")));
+    const auto& Roots = Array(Scene, TEXT("nodes"));
+    if (Roots.IsEmpty()) { Error = TEXT("GLB has no scene roots"); return false; }
+    if (Roots.Num() == 1)
+    {
+        const auto Root = ObjectAt(G.Json, TEXT("nodes"), int32(Roots[0]->AsNumber()));
+        // Capture the external coordinate wrapper structurally, never by asset/node name.
+        if (Root && !Root->HasField(TEXT("mesh")) && !G.NodeMatrix(Root, Out.RootMatrix)) { Error = TEXT("Invalid root matrix"); return false; }
+    }
+    for (const auto& Root : Roots) if (!Visit(int32(Root->AsNumber()), FMatrix::Identity)) return false;
+    Out.AttachmentRootMatrix = Out.RootMatrix;
+    if (Roots.Num() == 1)
+    {
+        const auto Root = ObjectAt(G.Json, TEXT("nodes"), int32(Roots[0]->AsNumber()));
+        const auto& Children = Array(Root, TEXT("children"));
+        if (!Root->HasField(TEXT("mesh")) && Children.Num() == 1)
+        {
+            FMatrix Content;
+            if (G.NodeMatrix(ObjectAt(G.Json, TEXT("nodes"), int32(Children[0]->AsNumber())), Content))
+                Out.AttachmentRootMatrix = Content * Out.RootMatrix;
+        }
+    }
+    if (!Out.bHasTangents && Out.Description.Triangles().Num() > 0)
+    {
+        TMap<FVertexInstanceID, FVector4f> Authored;
+        for (auto VI : Out.Description.VertexInstances().GetElementIDs())
+            if (!Tangents[VI].IsNearlyZero()) Authored.Add(VI, FVector4f(Tangents[VI], Signs[VI]));
+        FStaticMeshOperations::ComputeTriangleTangentsAndNormals(Out.Description);
+        FStaticMeshOperations::ComputeMikktTangents(Out.Description, true);
+        for (const auto& P : Authored) { Tangents[P.Key] = FVector3f(P.Value); Signs[P.Key] = P.Value.W; }
+        Out.bHasTangents = true;
+    }
+    // Hierarchy-only assets are valid attachments; retain their helper nodes.
+    return true;
+}
+bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
+{
+    const double Start = FPlatformTime::Seconds();
+    Data.CollisionBytes.Reset();
+    if (Data.Description.Triangles().Num() == 0) return true;
+    FStaticMeshConstAttributes Attributes(Data.Description);
+    Chaos::FTriangleMeshImplicitObject::ParticlesType Particles;
+    Particles.AddParticles(Data.Description.Vertices().Num());
+    TMap<FVertexID, int32> VertexMap;
+    for (auto V : Data.Description.Vertices().GetElementIDs())
+    {
+        const int32 Index = VertexMap.Num(); VertexMap.Add(V, Index);
+        Particles.SetX(Index, Attributes.GetVertexPositions()[V]);
+    }
+    TArray<Chaos::TVec3<int32>> Triangles;
+    TArray<uint16> Materials;
+    auto FaceMap = MakeUnique<TArray<int32>>();
+    for (auto Triangle : Data.Description.Triangles().GetElementIDs())
+    {
+        const auto V = Data.Description.GetTriangleVertices(Triangle);
+        // UStaticMesh::GetPhysicsTriMeshData sets bFlipNormals: Chaos uses the opposite winding.
+        Triangles.Emplace(VertexMap[V[0]], VertexMap[V[2]], VertexMap[V[1]]);
+        Materials.Add(uint16(Data.Description.GetTrianglePolygonGroup(Triangle).GetValue()));
+        FaceMap->Add(Triangle.GetValue());
+    }
+    Chaos::FTriangleMeshImplicitObjectPtr Geometry = new Chaos::FTriangleMeshImplicitObject(
+        MoveTemp(Particles), MoveTemp(Triangles), MoveTemp(Materials), MoveTemp(FaceMap));
+    FMemoryWriter Writer(Data.CollisionBytes);
+    Chaos::FChaosArchive Archive(Writer);
+    Archive << Geometry;
+    Data.CollisionVersions = Writer.GetCustomVersions();
+    Data.CollisionDeriveSeconds = FPlatformTime::Seconds() - Start;
+    if (Writer.IsError()) { Error = TEXT("Cannot serialize derived Chaos BVH"); return false; }
+    return true;
+}
+UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
+    bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error)
+{
+    check(IsInGameThread());
+    UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer, Name, RF_Transient);
+    if (Data.Description.Triangles().Num() == 0) return Mesh;
+    Mesh->bAllowCPUAccess = true; Mesh->bSupportRayTracing = true; Mesh->bGenerateMeshDistanceField = true;
+    Mesh->GetNaniteSettings().bEnabled = true;
+    Mesh->GetNaniteSettings().FallbackTarget = ENaniteFallbackTarget::PercentTriangles;
+    Mesh->GetNaniteSettings().FallbackPercentTriangles = 1.0f;
+    Mesh->GetNaniteSettings().FallbackRelativeError = 1.0f;
+    for (int32 I = 0; I < Data.MaterialNames.Num(); ++I)
+        Mesh->GetStaticMaterials().Add(FStaticMaterial(Material ? Material : UMaterial::GetDefaultMaterial(MD_Surface), FName(*FString::Printf(TEXT("Slot_%d"), I))));
+    Mesh->CreateBodySetup(); auto* Body = Mesh->GetBodySetup();
+    Body->CollisionTraceFlag = CTF_UseComplexAsSimple; Body->bDoubleSidedGeometry = true;
+    Body->bNeverNeedsCookedCollisionData = true; // Avoid the synchronous implicit cook in Build().
+    const double Start = FPlatformTime::Seconds();
+#if WITH_EDITOR
+    auto& Model = Mesh->AddSourceModel();
+    Model.BuildSettings.bRecomputeNormals = false;
+    Model.BuildSettings.bRecomputeTangents = !Data.bHasTangents;
+    Model.BuildSettings.bUseMikkTSpace = true;
+    Model.BuildSettings.bGenerateLightmapUVs = false;
+    Model.BuildSettings.bUseFullPrecisionUVs = true;
+    Model.BuildSettings.bUseHighPrecisionTangentBasis = true;
+    Model.BuildSettings.bRemoveDegenerates = false;
+    Model.BuildSettings.MaxLumenMeshCards = 12;
+    Mesh->CreateMeshDescription(0, Data.Description);
+    UStaticMesh::FCommitMeshDescriptionParams Commit; Commit.bMarkPackageDirty = false; Commit.bUseHashAsGuid = true;
+    Mesh->CommitMeshDescription(0, Commit);
+    for (int32 I = 0; I < Data.MaterialNames.Num(); ++I)
+    {
+        FMeshSectionInfo Info(I); Info.bEnableCollision = bBuildCollision;
+        Mesh->GetSectionInfoMap().Set(0, I, Info);
+    }
+    Mesh->Build(true);
+    FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
+#else
+    UStaticMesh::FBuildMeshDescriptionsParams Params;
+    Params.bFastBuild = true; Params.bAllowCpuAccess = true; Params.bBuildSimpleCollision = false;
+    Mesh->BuildFromMeshDescriptions({&Data.Description}, Params);
+#endif
+    Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
+    const double RepresentationStart = FPlatformTime::Seconds();
+#if WITH_EDITOR
+    if (GDistanceFieldAsyncQueue) GDistanceFieldAsyncQueue->BlockUntilBuildComplete(Mesh, false);
+    if (GCardRepresentationAsyncQueue) GCardRepresentationAsyncQueue->BlockUntilBuildComplete(Mesh, false);
+#endif
+    Stats.RepresentationSeconds = FPlatformTime::Seconds() - RepresentationStart;
+    if (bBuildCollision)
+    {
+        if (Data.CollisionBytes.IsEmpty()) { Error = TEXT("Collision requested without DeriveCollision data"); return nullptr; }
+        FMemoryReader Reader(Data.CollisionBytes);
+        Reader.SetCustomVersions(Data.CollisionVersions);
+        Chaos::FChaosArchive Archive(Reader);
+        Chaos::FTriangleMeshImplicitObjectPtr Geometry;
+        Archive << Geometry;
+        if (Reader.IsError() || !Geometry) { Error = TEXT("Cannot instantiate derived Chaos BVH"); return nullptr; }
+        Body->TriMeshGeometries.Add(Geometry);
+        Body->bCreatedPhysicsMeshes = true;
+        Body->bFailedToCreatePhysicsMeshes = false;
+        Body->bHasCookedCollisionData = true;
+        Body->bNeverNeedsCookedCollisionData = false;
+        Stats.CollisionSeconds = Data.CollisionDeriveSeconds;
+        Stats.bCollision = true;
+    }
+    const auto* Render = Mesh->GetRenderData();
+    if (!Render || Render->LODResources.IsEmpty()) { Error = TEXT("Static mesh build produced no render data"); return nullptr; }
+    const auto& LOD = Render->LODResources[0];
+    Stats.Triangles = Data.Description.Triangles().Num(); Stats.FallbackTriangles = LOD.GetNumTriangles();
+    Stats.Clusters = Render->HasValidNaniteData() ? Render->NaniteResourcesPtr->NumClusters : 0;
+    Stats.bDistanceField = LOD.DistanceFieldData != nullptr; Stats.bRayTracingGeometry = LOD.RayTracingGeometry != nullptr
+        || (Render->RayTracingProxy && !Render->RayTracingProxy->LODs.IsEmpty() && Render->RayTracingProxy->LODs[0].RayTracingGeometry);
+#if WITH_EDITOR
+    Stats.bMeshCards = LOD.CardRepresentationData != nullptr;
+    Stats.Cards = LOD.CardRepresentationData ? LOD.CardRepresentationData->MeshCardsBuildData.CardBuildData.Num() : 0;
+#endif
+    return Mesh;
+}

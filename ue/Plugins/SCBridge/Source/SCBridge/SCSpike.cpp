@@ -1,3 +1,4 @@
+#if SC_SPIKE
 // WP-U0 synthetic feasibility probes. No Star Citizen data or importer policy lives here.
 #include "CoreMinimal.h"
 #include "Camera/CameraActor.h"
@@ -355,3 +356,4 @@ void Stop()
     FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
 }
 }
+#endif // SC_SPIKE

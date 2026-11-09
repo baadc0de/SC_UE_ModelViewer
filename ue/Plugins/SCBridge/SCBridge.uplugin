@@ -7,7 +7,24 @@
   "Category": "Importers",
   "CanContainContent": true,
   "Modules": [
-    {"Name": "SCBridge", "Type": "Runtime", "LoadingPhase": "Default"},
-    {"Name": "SCBridgeEditor", "Type": "Editor", "LoadingPhase": "Default"}
+    {
+      "Name": "SCBridge",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "SCBridgeEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "Interchange",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
+    }
   ]
 }

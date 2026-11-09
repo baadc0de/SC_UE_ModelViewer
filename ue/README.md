@@ -172,3 +172,98 @@ rendering test; WP-U3 must validate our soft-skinned import before enabling it b
 TODO(WP-U0): Run Vulkan Nanite cluster visualization, Lumen scene view and HWRT checks on a host exposing the RTX 4090; also render the reloaded cooked package.
 TODO(WP-U0): Commit the prepared files when `.git` is writable. Initial branch creation failed; by final verification the checkout was `wp/u0-unreal-spike` at a2e64db, but staging still failed with `.git/index.lock: Read-only file system`. All changes remain uncommitted. Use the requested `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` trailer; do not push or open a PR.
 TODO(WP-U0): Interchange Gladius baseline is not done. The export wrapper runs cargo, prohibited for this task; feature preservation, orientation and dimensions remain unmeasured for WP-U1.
+
+## WP-U1 runtime importer
+
+`SCBridge` now imports decomposed GLB packages in the chosen Editor `-game`
+host. The runtime entry point is
+`FSCImporter::Import(FSCPackageSource&, FSCImportOptions, FSCImportResult&)`.
+`FSCFolderPackageSource` and `FSCTarPackageSource` implement the same read-only
+`Exists`, `ReadBytes` and `ListFiles` API; paths are relative to the export root.
+The tar source owns its buffer and supports regular USTAR/GNU files, including
+GNU long names. It rejects traversal, duplicates, links, invalid checksums and
+truncation. PAX and compressed archives are outside the WP-R4 package contract.
+Select `FSCImportOptions.ScenePath` when a shared export root contains multiple
+`scene.json` files. Errors return `false` with `FSCImportResult.Error`.
+
+The reader exposes reflected scene, instance, interior, palette, material and
+clip records. Material metadata remains lossless JSON for WP-U2; it retains both
+array ordinals and authored (potentially sparse) indices. `ASCVehicle` owns the
+transient meshes and `USCClipCatalog`. Repeated paths share one mesh. Helpers,
+resolved child transforms and interior placements assemble the component tree;
+loading another package replaces the previous vehicle. All drawable components
+currently use the engine's grey grid placeholder master, and skins are static.
+
+The **direct GLB / FMeshDescription builder is selected**. The editor-only
+`USCInterchangePipeline` / `USCInterchangeBaseline` remains available for
+comparison. It sets Nanite before import and applies the same ship-facing yaw.
+The direct path preserves authored normals, tangents, UV0/UV1 and vertex colours,
+generates missing tangents with MikkTSpace, and preserves material slot numbers.
+It supports embedded GLB triangle geometry, normalized/interleaved accessors,
+node matrices and TRS, and hierarchy-only assets. Required extensions, sparse
+accessors and external buffers fail explicitly. The supplied package needs none
+of those unsupported geometry features.
+
+Geometry is glTF metres to UE centimetres, `(x,y,z) -> (-z,x,y) * 100`.
+Transform conversion conjugates by that basis. Named helpers retain their source
+frame; an attached mesh's external coordinate wrapper is removed once when
+composing the resolved local transform. Interior containers and placements use
+the same source frame when attached to helpers. Missing helpers fall back to the
+source entity root, matching the exporter, with a diagnostic. Repeated entity
+names resolve in the manifest's depth-first order. Synthetic tests lock these
+compositions; the Gladius hull's 19.689 m bounds match Interchange.
+
+The editor `UStaticMesh::Build()` path builds Nanite, distance fields, Lumen cards
+and ray-tracing proxy geometry. `bSupportRayTracing` is enabled before build;
+compilation/card/distance-field queues finish before the result is published.
+Nanite fallback uses **PercentTriangles=1**, with `FallbackRelativeError=1.0`,
+retaining all nondegenerate triangles for collision. Empty assets retain helpers
+and log `disabled:empty_geometry`. Tiny planar surfaces can have a built card
+representation with zero selected cards; the hull must have actual cards.
+All editor-only dependencies are behind the editor target/`WITH_EDITOR` guards.
+The non-editor fast-build fallback remains in source; it is not a validated
+Nanite/Lumen host.
+
+Cache boundaries for WP-C1:
+
+- `FSCMeshImporter::Derive` returns `FSCDerivedMesh`: mesh description, material
+  slots, helper matrices and input SHA-1, without UObjects.
+- `DeriveCollision` builds and serializes a Chaos triangle BVH on the worker into
+  `CollisionBytes` plus `CollisionVersions`. It does not allocate a UObject.
+- `Instantiate` creates the mesh and body setup and deserializes the BVH without
+  cooking it again. `bBuildCollision=false` skips collision derivation and replay.
+- A processed-cache key must also include `DerivedFormatVersion`, engine version,
+  platform and build options. Engine Nanite/card/DF building remains in the
+  UObject phase; WP-C1 can replay its cooked package rather than call that phase.
+  No persistent processed cache is implemented here.
+
+From the repository root:
+
+```bash
+ue/scripts/build.sh SCViewerEditor
+ue/scripts/run_import.sh out/dec -vulkan -SCStay
+# Headless game-host parity, trace and GC checks:
+python3 -I ue/scripts/make_test_tar.py out/dec ue/SCViewer/Saved/Import/dec.tar
+ue/scripts/run_import.sh out/dec -nullrhi \
+  -SCVerifyTar="$PWD/ue/SCViewer/Saved/Import/dec.tar"
+```
+
+The editor File menu contains **Import SC package folder…**. Runtime callers can
+also use `sc.Import <folder>` or `USCImportLibrary::ImportFolder` (these convenience
+entry points lift the bounds one metre above the Viewer floor); Python exposes
+`unreal.SCImportLibrary`. `ue/scripts/import_package.py` is the headless import
+entry point. `ue/scripts/test_importer.py` runs the synthetic automation tests;
+passing `-SCPackage` and `-SCVerifyTar` also runs the real folder/tar integration
+test. `ue/scripts/interchange_baseline.py` accepts `-SCBaseline=<absolute GLB>`.
+Use these scripts with `UnrealEditor-Cmd -run=pythonscript -script=<absolute script>
+-nullrhi -unattended -nop4 -nosplash -ddc=SCViewerDDC`.
+
+The old WP-U0 spike is quarantined behind `SC_SPIKE` (off by default). To reproduce
+it, explicitly rebuild with
+`SC_SPIKE=1 ue/scripts/build.sh SCViewerEditor -NoUBTMakefiles`, then use
+`run_spike.sh`. Restore the default importer build afterward.
+
+Evidence, exact acceptance commands, input-revision notes and GPU TODOs are in
+[verification/WP-U1.md](verification/WP-U1.md). This sandbox has no Vulkan device;
+CPU representations are verified, while rendered Nanite/Lumen/HWRT acceptance
+must be completed on the orchestrator's GPU.
