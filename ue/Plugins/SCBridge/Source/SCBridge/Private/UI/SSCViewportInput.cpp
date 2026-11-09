@@ -74,7 +74,7 @@ bool SSCViewportInput::HandleKey(const FKey& Key, bool bDown)
         }
     if (Key == EKeys::F && bDown && Subsystem.IsValid())
     {
-        Subsystem->FocusComponent(nullptr); // frame the whole entity
+        Subsystem->FrameAll(); // restore visibility, clear isolation/selection, frame the whole entity
         return true;
     }
     return false;

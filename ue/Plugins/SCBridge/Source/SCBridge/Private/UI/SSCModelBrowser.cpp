@@ -227,8 +227,15 @@ EActiveTimerReturnType SSCModelBrowser::RunSearch(double, float)
     SearchTimer.Reset();
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return EActiveTimerReturnType::Stop;
+    bQueryDirty = true;
+    if (S->GetArchiveState() != ESCArchiveState::Ready)
+    {
+        // Keep the query; Tick submits it when the archive becomes ready.
+        Status = LOCTEXT("WaitingArchive", "Waiting for the archive…");
+        return EActiveTimerReturnType::Stop;
+    }
+    bQueryDirty = false;
     const uint32 Id = ++Sequence;
-    bSearchedOnce = true;
     Status = LOCTEXT("Searching", "Searching…");
     TWeakPtr<SSCModelBrowser> Self = SharedThis(this);
     S->SearchAsync(Query.TrimStartAndEnd(), USCViewerSettings::Get()->SearchLimit, [Self, Id](const FSCSearchResult& Result) {
@@ -285,8 +292,18 @@ void SSCModelBrowser::Tick(const FGeometry& Geometry, double CurrentTime, float 
     SCompoundWidget::Tick(Geometry, CurrentTime, DeltaTime);
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
-    // First search as soon as the archive opens (an empty query lists the first indexed entities).
-    if (!bSearchedOnce && S->GetArchiveState() == ESCArchiveState::Ready && !SearchTimer) RunSearch(0, 0);
+    // Archive sessions: results belong to one session. Leaving Ready clears them and re-arms the query; reaching Ready
+    // submits the pending query (the first one too: an empty query lists the first indexed entities).
+    const bool bReady = S->GetArchiveState() == ESCArchiveState::Ready;
+    if (bWasReady && !bReady)
+    {
+        ++Sequence; // a reply still in flight belongs to the old session
+        Hits.Reset();
+        List->RequestListRefresh();
+        bQueryDirty = true;
+    }
+    bWasReady = bReady;
+    if (bReady && bQueryDirty && !SearchTimer) RunSearch(0, 0);
     if (RecentsBuiltFrom != int32(GetTypeHash(FString::Join(USCViewerSettings::Get()->RecentEntities, TEXT("|"))))) RebuildRecents();
 }
 

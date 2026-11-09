@@ -71,8 +71,7 @@ void SSCHierarchyPanel::Construct(const FArguments& Args)
                 + SHorizontalBox::Slot().AutoWidth()
                 [
                     SNew(SButton).OnClicked_Lambda([this] {
-                        Tree->ClearSelection();
-                        if (Subsystem.IsValid()) Subsystem->FocusComponent(nullptr);
+                        if (Subsystem.IsValid()) Subsystem->FrameAll(); // its nullptr focus broadcast clears our state
                         return FReply::Handled();
                     })
                     [SNew(STextBlock).Font(Font(8)).Text(LOCTEXT("FrameAll", "Frame all (F)"))]
@@ -217,13 +216,19 @@ SSCHierarchyPanel::FItem SSCHierarchyPanel::Find(const FItem& From, const UScene
 }
 void SSCHierarchyPanel::OnFocused(USceneComponent* Component)
 {
-    // Keep the tree in sync with focus changes from elsewhere (viewport double-click, scripts).
-    if (!Component || Roots.IsEmpty()) return;
+    // Keep the tree in sync with focus changes from elsewhere (viewport double-click, F / Frame all, scripts).
+    TGuardValue<bool> Guard(bSyncingSelection, true);
+    if (!Component)
+    {
+        bIsolate = false; // FrameAll already restored visibility
+        Tree->ClearSelection();
+        return;
+    }
+    if (Roots.IsEmpty()) return;
     FItem Item = Find(Roots[0], Component);
     if (!Item || Tree->IsItemSelected(Item)) return;
     for (TSharedPtr<FNode> P = Item->Parent.Pin(); P; P = P->Parent.Pin())
         Tree->SetItemExpansion(P, true);
-    TGuardValue<bool> Guard(bSyncingSelection, true);
     Tree->SetSelection(Item);
     Tree->RequestScrollIntoView(Item);
 }

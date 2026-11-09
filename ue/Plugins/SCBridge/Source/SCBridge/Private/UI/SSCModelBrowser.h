@@ -43,6 +43,7 @@ private:
     FText Status;
     uint32 Sequence = 0;
     TSharedPtr<FActiveTimerHandle> SearchTimer;
-    bool bSearchedOnce = false;
+    bool bQueryDirty = true; // Query not yet submitted against the current archive session
+    bool bWasReady = false;
     int32 RecentsBuiltFrom = INDEX_NONE;
 };

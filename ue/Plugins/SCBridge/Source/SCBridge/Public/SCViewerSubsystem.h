@@ -81,6 +81,14 @@ struct SCBRIDGE_API FSCLoadReport
     /** Objects of the previous vehicle tracked before unload, and how many survived GC (must be 0). */
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 PreviousObjects = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 PreviousObjectsAlive = 0;
+    /** Cancelled/failed import: objects it had created (partial actor + session packages) and survivors after GC. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 PartialObjects = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 PartialObjectsAlive = 0;
+    /** State when CancelLoad was called: static meshes already built, and whether worker tasks were still running. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 MeshesBuiltAtCancel = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") bool bWorkersPendingAtCancel = false;
+    /** Archive session the load belonged to (OpenArchive increments it). */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 ArchiveGeneration = 0;
 };
 
 /** Outcome of the editor-host Keep. */
@@ -113,7 +121,8 @@ public:
     /** Headless/automation host (commandlets): a standalone game instance with a dummy game world, no viewport. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") static USCViewerSubsystem* CreateHeadless();
     /** Tear down an instance made by CreateHeadless (game instance shutdown, world destroyed) before the host exits. */
-    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") static void DestroyHeadless(USCViewerSubsystem* Viewer);
+    /** Returns how many objects of the loaded and in-flight imports survived teardown + GC (0 expected; -1 if not headless). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") static int32 DestroyHeadless(USCViewerSubsystem* Viewer);
 
     // Archive
     /** Empty path: settings / -SCArchive, else auto-discovery. A successful explicit path is remembered. */
@@ -122,6 +131,8 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveError() const { return ArchiveError.ToString(); }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveLabel() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetCacheDir() const { return CacheDir; }
+    /** Incremented by every OpenArchive: reuse keys and search results are scoped to one archive session. */
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") int32 GetArchiveGeneration() const { return int32(ArchiveGeneration); }
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForArchive(float TimeoutSeconds = 300.f);
 
     // Search
@@ -140,6 +151,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForLoad(float TimeoutSeconds = 600.f);
     /** Pumps until the pipeline reaches Phase (or finishes); lets tests cancel inside a given phase. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForPhase(ESCLoadPhase Target, float TimeoutSeconds = 600.f);
+    /** Pumps the import one step at a time until at least MinMeshes static meshes exist and a worker is still running
+     *  (a mid-import state for cancel/teardown tests). False if the import ends first. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForImportedMeshes(int32 MinMeshes, float TimeoutSeconds = 600.f);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") bool IsBusy() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
@@ -158,6 +172,8 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void FocusComponent(USceneComponent* Component);
     /** Hide every primitive outside Component's subtree; null restores the imported visibility. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void IsolateComponent(USceneComponent* Component);
+    /** Restore imported visibility, clear isolation and focus/selection, then frame the whole vehicle (F key). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void FrameAll();
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") USceneComponent* GetIsolated() const { return Isolated.Get(); }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") USceneComponent* GetFocused() const { return Focused.Get(); }
 
@@ -181,6 +197,12 @@ private:
     void UnloadInternal(bool bCollect);
     void CompleteSearches(bool bBlocking);
     void LogPhaseChange();
+    /** Archive lost to an FFI panic: leave Ready so the overlay offers Choose/Retry. */
+    void PollClientPanic();
+    /** Objects owned by an import session: the actor (and its subobjects) plus its /Temp/SC session packages. */
+    static void TrackSession(const UObject* Actor, const FString& Session, TArray<TWeakObjectPtr<UObject>>& Out);
+    /** Flush rendering, collect garbage and count tracked objects that still exist (garbage-marked included). */
+    static int32 CollectAndCount(const TArray<TWeakObjectPtr<UObject>>& Tracked);
     UWorld* GetViewerWorld() const;
 
     TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client;
@@ -188,6 +210,7 @@ private:
     TSharedPtr<FSCViewerAutomation> Automation; // shared: type-erased deleter, the class stays private
 
     ESCArchiveState ArchiveState = ESCArchiveState::Closed;
+    uint32 ArchiveGeneration = 0;
     FText ArchiveError;
     FString ArchivePath, CacheDir;
     UE::Tasks::TTask<FSCOpenResult> OpenTask;
@@ -198,6 +221,7 @@ private:
     {
         UE::Tasks::TTask<FSCSearchResult> Task;
         TFunction<void(const FSCSearchResult&)> Callback;
+        uint32 Generation = 0;
     };
     TArray<FPendingSearch> Searches;
 

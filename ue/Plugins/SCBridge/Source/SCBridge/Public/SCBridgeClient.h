@@ -51,6 +51,9 @@ struct SCBRIDGE_API FSCSearchResult
     FString Query;
     TArray<FSCEntityHit> Hits;
     FText Error;
+    bool bPanicked = false;
+    /** Archive generation the search was issued in (set by the host; results of older generations are dropped). */
+    uint32 Generation = 0;
     double Seconds = 0;
 };
 struct SCBRIDGE_API FSCCacheStats
@@ -60,7 +63,7 @@ struct SCBRIDGE_API FSCCacheStats
 };
 struct SCBRIDGE_API FSCExportResult
 {
-    bool bOK = false, bCancelled = false;
+    bool bOK = false, bCancelled = false, bPanicked = false;
     FText Error;
     TArray<uint8> Tar;
     double Seconds = 0;
@@ -68,7 +71,7 @@ struct SCBRIDGE_API FSCExportResult
 };
 struct SCBRIDGE_API FSCTextResult
 {
-    bool bOK = false;
+    bool bOK = false, bPanicked = false;
     FString Json;
     FText Error;
 };
@@ -91,12 +94,19 @@ public:
     /** Blocking; waits for a running export (host lock). */
     FSCCacheStats CacheStats();
     bool IsOpen() const;
+    /** True once after any call hit SC_STATUS_PANIC (the handle is already closed); the host must reopen. */
+    bool TakePanic(FText& OutError);
     /** Core defaults (sc_default_options); no handle needed. */
     static sc_options DefaultOptions();
 
 private:
     FText LastError(sc_status Status) const; // caller holds HandleLock
+    /** Caller holds HandleLock: error text for a failed call; on PANIC closes the poisoned handle and flags it. */
+    FText FailLocked(sc_status Status, bool& bOutPanicked);
     FSCCacheStats CacheStatsLocked();
     mutable FCriticalSection HandleLock; // serializes ALL calls on Handle incl. last_error/close (scbridge.h)
     sc_handle* Handle = nullptr;
+    FCriticalSection PanicLock;
+    bool bPanicPending = false;
+    FText PanicError;
 };

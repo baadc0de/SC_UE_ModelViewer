@@ -78,6 +78,13 @@ struct FMeshSlot
     int32 SoftTriangles = 0, RigidGroups = 0;
     TArray<FPart> Parts;
     double CollisionSeconds = 0;
+    // Game-thread build cursor: one static-mesh variant (part or its translucent split) per job step.
+    bool bBuildBegun = false, bBuildFailed = false;
+    UPackage* Package = nullptr; // also held by FState::KeepAlive between steps (it may be empty)
+    int32 NextPart = 0;
+    bool bTranslucentNext = false;
+    FString PartSuffix;
+    TArray<UStaticMesh*> Variants;
 };
 } // namespace
 
@@ -104,6 +111,8 @@ struct FSCImportJob::FState
 
     // Game-thread objects (also owned by Vehicle UPROPERTYs; Vehicle is referenced via AddReferencedObjects)
     TObjectPtr<ASCVehicle> Vehicle;
+    TWeakObjectPtr<ASCVehicle> Spawned; // never cleared: lets hosts account for a destroyed partial actor
+    TArray<TObjectPtr<UObject>> KeepAlive; // session packages between build steps
     FString Session;
     FSCImportMaterials Materials;
     TFuture<void> MaterialPrep;
@@ -151,7 +160,10 @@ struct FSCImportJob::FState
     void LaunchDerives();
     bool StepMesh(bool bBlocking);
     void LaunchPrepare(FMeshSlot& Slot);
-    void BuildMesh(FMeshSlot& Slot);
+    void BeginBuild(FMeshSlot& Slot);
+    void BuildNextVariant(FMeshSlot& Slot);
+    void FinishBuild(FMeshSlot& Slot);
+    bool HasPendingWorkers() const;
     bool StepMaterials(bool bBlocking);
     void Assemble();
 };
@@ -174,6 +186,18 @@ FSCImportJob::~FSCImportJob()
 void FSCImportJob::AddReferencedObjects(FReferenceCollector& Collector)
 {
     Collector.AddReferencedObject(S->Vehicle);
+    Collector.AddReferencedObjects(S->KeepAlive);
+}
+FString FSCImportJob::GetSessionPath() const { return S->Session; }
+ASCVehicle* FSCImportJob::GetSpawnedVehicle() const { return S->Spawned.Get(/*bEvenIfGarbage*/ true); }
+bool FSCImportJob::HasPendingWorkers() const { return S->HasPendingWorkers(); }
+bool FSCImportJob::FState::HasPendingWorkers() const
+{
+    auto Pending = [](const auto& Future) { return Future.IsValid() && !Future.IsReady(); };
+    if (Pending(ReadTask) || Pending(MaterialPrep)) return true;
+    for (const FMeshSlot& Slot : Slots)
+        if (Pending(Slot.Derive) || Pending(Slot.Prepare)) return true;
+    return false;
 }
 void FSCImportJob::Cancel() { S->bCancel = true; }
 ESCImportStage FSCImportJob::GetStage() const { return S->Stage; }
@@ -192,9 +216,11 @@ FString FSCImportJob::GetPhase() const
     {
         if (!S->Slots.IsValidIndex(S->Current)) return TEXT("Building meshes");
         const FMeshSlot& Slot = S->Slots[S->Current];
+        if (Slot.bBuildBegun)
+            return FString::Printf(TEXT("Building mesh %d/%d (part %d/%d)"), S->Current + 1, N, FMath::Min(Slot.NextPart + 1, Slot.Parts.Num()),
+                                   Slot.Parts.Num());
         const TCHAR* Step = !Slot.bPrepareLaunched ? TEXT("Deriving mesh")
-                            : Slot.Prepare.IsValid() && !Slot.Prepare.IsReady() ? (S->Options.bBuildCollision ? TEXT("Deriving collision") : TEXT("Preparing mesh"))
-                                                      : TEXT("Building mesh");
+                            : S->Options.bBuildCollision ? TEXT("Deriving collision") : TEXT("Preparing mesh");
         return FString::Printf(TEXT("%s %d/%d"), Step, S->Current + 1, N);
     }
     case ESCImportStage::Materials: return TEXT("Creating textures and materials");
@@ -307,6 +333,7 @@ void FSCImportJob::FState::Begin()
         Fail(TEXT("Cannot spawn vehicle"));
         return;
     }
+    Spawned = Vehicle;
     Vehicle->Manifest = Manifest;
     Vehicle->SessionPath = Session;
     Vehicle->ClipCatalog = NewObject<USCClipCatalog>(Vehicle);
@@ -472,80 +499,111 @@ bool FSCImportJob::FState::StepMesh(bool bBlocking)
         LaunchPrepare(Slot);
         return true;
     }
-    if (!bBlocking && !Slot.Prepare.IsReady()) return false;
-    Slot.Prepare.Wait();
-    Slot.Prepare = TFuture<void>();
-    for (const auto& W : Slot.PrepareWarnings)
-        Warn(W.Key, W.Value);
-    Timings.Collision += Slot.CollisionSeconds;
-    const double BuildStart = FPlatformTime::Seconds();
-    BuildMesh(Slot);
-    Timings.Build += FPlatformTime::Seconds() - BuildStart;
-    ++Current;
+    if (!Slot.bBuildBegun)
+    {
+        if (!bBlocking && !Slot.Prepare.IsReady()) return false;
+        Slot.Prepare.Wait();
+        Slot.Prepare = TFuture<void>();
+        for (const auto& W : Slot.PrepareWarnings)
+            Warn(W.Key, W.Value);
+        Timings.Collision += Slot.CollisionSeconds;
+    }
+    const double BuildStart = FPlatformTime::Seconds(); // game-thread build time only, not the wait for workers
+    ON_SCOPE_EXIT { Timings.Build += FPlatformTime::Seconds() - BuildStart; };
+    if (!Slot.bBuildBegun)
+        BeginBuild(Slot); // package + rig: one step
+    else if (!Slot.bBuildFailed && Slot.NextPart < Slot.Parts.Num())
+        BuildNextVariant(Slot); // one UStaticMesh build per step: the budget and cancellation are checked between them
+    if (Slot.bBuildFailed || Slot.NextPart >= Slot.Parts.Num())
+    {
+        FinishBuild(Slot);
+        ++Current;
+    }
     return true;
 }
 
-void FSCImportJob::FState::BuildMesh(FMeshSlot& Slot)
+void FSCImportJob::FState::BeginBuild(FMeshSlot& Slot)
+{
+    Slot.bBuildBegun = true;
+    const FString& Path = Slot.Path;
+    MeshSlotTriangles.Add(Path, MoveTemp(Slot.SlotTriangles));
+    Slot.Package = CreatePackage(*AssetPackage(Session, Path));
+    Slot.Package->SetFlags(RF_Transient);
+    KeepAlive.Add(Slot.Package);
+    if (!Slot.bAnimated) return;
+    FString AssetError;
+    USkeleton* Skeleton = nullptr;
+    USkeletalMesh* RigMesh = FSCSkeletonBuilder::Build(*Slot.Data, Slot.Package, Skeleton);
+    if (!FSCSkeletalMeshImporter::Build(Slot.Soft, RigMesh, AssetError))
+    {
+        Warn(Path, AssetError);
+        Slot.bBuildFailed = true; // the asset is skipped, as before the split
+        return;
+    }
+    Vehicle->SkeletalMeshes.Add(RigMesh);
+    RigMeshes.Add(Path, RigMesh);
+    for (auto& Pair : Slot.Bindings)
+        FSCAnimImporter::AttachBinding(RigMesh, Vehicle, Vehicle->ClipCatalog->Clips[Pair.Key], MoveTemp(Pair.Value));
+    UE_LOG(LogSCImport, Display, TEXT("RIG path=%s bones=%d soft_triangles=%d rigid_groups=%d"), *Path,
+           RigMesh->GetRefSkeleton().GetNum(), Slot.SoftTriangles, Slot.RigidGroups);
+}
+
+void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
 {
     const FString& Path = Slot.Path;
-    FSCDerivedMesh& Data = *Slot.Data;
-    MeshSlotTriangles.Add(Path, MoveTemp(Slot.SlotTriangles));
-    UPackage* Package = CreatePackage(*AssetPackage(Session, Path));
-    Package->SetFlags(RF_Transient);
+    FPart& Part = Slot.Parts[Slot.NextPart];
+    const bool bTranslucent = Slot.bTranslucentNext;
+    if (!bTranslucent) Slot.PartSuffix = Slot.Variants.IsEmpty() ? TEXT("") : FString::Printf(TEXT("_Node%d"), Part.Owner);
+    const FString Suffix = Slot.PartSuffix + (bTranslucent ? TEXT("_Translucent") : TEXT(""));
+    FSCDerivedMesh& Variant = bTranslucent ? Part.Translucent : Part.Mesh;
+    FSCMeshBuildStats Stats;
     FString AssetError;
-    if (Slot.bAnimated)
+    UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)),
+                                                     !bTranslucent && Options.bBuildCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats,
+                                                     AssetError);
+    if (!Mesh)
+        Warn(Path + Suffix, AssetError);
+    else
     {
-        USkeleton* Skeleton = nullptr;
-        USkeletalMesh* RigMesh = FSCSkeletonBuilder::Build(Data, Package, Skeleton);
-        if (!FSCSkeletalMeshImporter::Build(Slot.Soft, RigMesh, AssetError))
-        {
-            Warn(Path, AssetError);
-            Slot.Data.Reset();
-            Slot.Parts.Empty();
-            return;
-        }
-        Vehicle->SkeletalMeshes.Add(RigMesh);
-        RigMeshes.Add(Path, RigMesh);
-        for (auto& Pair : Slot.Bindings)
-            FSCAnimImporter::AttachBinding(RigMesh, Vehicle, Vehicle->ClipCatalog->Clips[Pair.Key], MoveTemp(Pair.Value));
-        UE_LOG(LogSCImport, Display, TEXT("RIG path=%s bones=%d soft_triangles=%d rigid_groups=%d"), *Path,
-               RigMesh->GetRefSkeleton().GetNum(), Slot.SoftTriangles, Slot.RigidGroups);
-    }
-    TArray<UStaticMesh*> Variants;
-    TArray<int32>& Sockets = SocketNodes.Add(Path);
-    auto Build = [&](FSCDerivedMesh& Variant, const FString& Suffix, bool bCollision) {
-        FSCMeshBuildStats Stats;
-        UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Variant, Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)),
-                                                         bCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
-        if (!Mesh)
-        {
-            Warn(Path + Suffix, AssetError);
-            return false;
-        }
         Vehicle->Meshes.Add(Mesh);
-        Variants.Add(Mesh);
-        Sockets.Add(Variant.SocketNode);
+        Slot.Variants.Add(Mesh);
+        SocketNodes.FindOrAdd(Path).Add(Variant.SocketNode);
         Result.MeshStats.Add(Path + Suffix, Stats);
         UE_LOG(LogSCImport, Display,
                TEXT("MESH path=%s%s triangles=%d nanite=%s clusters=%d fallback=%d cards=%d collision=%d build_s=%.4f"), *Path, *Suffix,
                Stats.Triangles, *Stats.NaniteReason, Stats.Clusters, Stats.FallbackTriangles, Stats.Cards, Stats.bCollision,
                Stats.BuildSeconds);
-        return true;
-    };
-    for (FPart& Part : Slot.Parts)
-    {
-        const FString Suffix = Variants.IsEmpty() ? TEXT("") : FString::Printf(TEXT("_Node%d"), Part.Owner);
-        Build(Part.Mesh, Suffix, Options.bBuildCollision);
-        if (Part.Translucent.bHasGeometry) Build(Part.Translucent, Suffix + TEXT("_Translucent"), false);
     }
+    // Advance: a part's translucent split (if any) follows the part itself; release built CPU geometry now.
+    if (!bTranslucent && Part.Translucent.bHasGeometry)
+    {
+        Part.Mesh = FSCDerivedMesh();
+        Slot.bTranslucentNext = true;
+        return;
+    }
+    Part = FPart();
+    Slot.bTranslucentNext = false;
+    ++Slot.NextPart;
+}
+
+void FSCImportJob::FState::FinishBuild(FMeshSlot& Slot)
+{
+    const FString& Path = Slot.Path;
+    KeepAlive.Remove(Slot.Package); // owned through its objects (meshes/rig referenced by the vehicle) from now on
     Slot.Parts.Empty();
     Slot.Soft = FSCDerivedMesh();
-    Result.ContentHashes.Add(Path, Data.ContentHash);
-    Meshes.Add(Path, MoveTemp(Variants));
+    if (Slot.bBuildFailed)
+    {
+        Slot.Data.Reset();
+        return;
+    }
+    SocketNodes.FindOrAdd(Path);
+    Result.ContentHashes.Add(Path, Slot.Data->ContentHash);
+    Meshes.Add(Path, MoveTemp(Slot.Variants));
     MeshTranslucentSlots.Add(Path, MoveTemp(Slot.TranslucentSlots));
     // Assembly needs helper matrices only. Release CPU geometry and serialized BVH now.
-    Data.Description = FMeshDescription();
-    Data.CollisionBytes.Empty();
+    Slot.Data->Description = FMeshDescription();
+    Slot.Data->CollisionBytes.Empty();
     // TODO(WP-C1): bound source-description lifetime retained internally by UStaticMesh;
     // cache CPU derivations independently of transient render UObjects.
     Derived.Add(Path, MoveTemp(Slot.Data));

@@ -81,6 +81,7 @@ void USCViewerSubsystem::Deinitialize()
         Search.Task.Wait();
     Searches.Empty();
     Job.Reset(); // destroys a partial actor if any
+    UnloadInternal(false); // the subsystem owns the loaded vehicle; the host collects garbage afterwards
     Client.Reset();
     Super::Deinitialize();
 }
@@ -97,22 +98,44 @@ USCViewerSubsystem* USCViewerSubsystem::CreateHeadless()
     Instance->InitializeStandalone(TEXT("SCViewerHeadless"));
     return Instance->GetSubsystem<USCViewerSubsystem>();
 }
-void USCViewerSubsystem::DestroyHeadless(USCViewerSubsystem* Viewer)
+int32 USCViewerSubsystem::DestroyHeadless(USCViewerSubsystem* Viewer)
 {
     UGameInstance* Instance = Viewer ? Viewer->GetGameInstance() : nullptr;
-    if (!Instance || !Instance->IsRooted()) return; // only instances made by CreateHeadless
+    if (!Instance || !Instance->IsRooted()) return -1; // only instances made by CreateHeadless
     UWorld* World = Instance->GetWorld();
-    Viewer->CancelLoad();
-    Viewer->WaitForLoad(60.f);
-    Viewer->UnloadInternal(false);
-    Instance->Shutdown(); // deinitializes this subsystem; no member access after this line
+    // Account for everything still owned: the loaded vehicle and an import that may be mid-flight with workers running.
+    TArray<TWeakObjectPtr<UObject>> Tracked;
+    if (ASCVehicle* Loaded = Viewer->Vehicle.Get()) TrackSession(Loaded, Loaded->SessionPath, Tracked);
+    const bool bInFlight = Viewer->IsBusy();
+    if (Viewer->Job) TrackSession(Viewer->Job->GetSpawnedVehicle(), Viewer->Job->GetSessionPath(), Tracked);
+    // The real teardown path: Deinitialize cancels the export, waits for tasks and drops the job (drains workers,
+    // destroys a partial actor). No member access after Shutdown.
+    Instance->Shutdown();
     if (World)
     {
         GEngine->DestroyWorldContext(World);
         World->DestroyWorld(false);
     }
     Instance->RemoveFromRoot();
+    const int32 Alive = CollectAndCount(Tracked);
+    UE_LOG(LogSCViewer, Display, TEXT("VIEWER_HEADLESS_TEARDOWN in_flight=%d tracked=%d alive_after_gc=%d"), bInFlight, Tracked.Num(), Alive);
+    return Alive;
+}
+void USCViewerSubsystem::TrackSession(const UObject* Actor, const FString& Session, TArray<TWeakObjectPtr<UObject>>& Out)
+{
+    if (!Actor && Session.IsEmpty()) return;
+    for (TObjectIterator<UObject> It; It; ++It) // includes garbage-marked objects (destroyed, not yet collected)
+        if ((Actor && (*It == Actor || It->IsIn(Actor))) || (!Session.IsEmpty() && It->GetOutermost()->GetName().StartsWith(Session)))
+            Out.Add(*It);
+}
+int32 USCViewerSubsystem::CollectAndCount(const TArray<TWeakObjectPtr<UObject>>& Tracked)
+{
+    FlushRenderingCommands();
     CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+    int32 Alive = 0;
+    for (const auto& Object : Tracked)
+        if (Object.IsValid(/*bEvenIfPendingKill*/ true)) ++Alive;
+    return Alive;
 }
 UWorld* USCViewerSubsystem::GetViewerWorld() const
 {
@@ -140,6 +163,7 @@ void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
     }
     ArchivePath = P4kPath.IsEmpty() ? USCViewerSettings::Get()->ResolveArchivePath() : P4kPath;
     ArchiveState = ESCArchiveState::Opening;
+    ++ArchiveGeneration; // a different installation may follow: no reuse of loaded objects, no stale search results
     ArchiveError = FText();
     if (!CacheDir.IsEmpty()) IFileManager::Get().MakeDirectory(*CacheDir, true);
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE_OPEN p4k=%s cache=%s"), ArchivePath.IsEmpty() ? TEXT("<auto-discover>") : *ArchivePath,
@@ -169,7 +193,7 @@ void USCViewerSubsystem::SearchAsync(const FString& Query, int32 Limit, TFunctio
         Callback(Result);
         return;
     }
-    Searches.Add({Client->Search(Query, Limit), MoveTemp(Callback)});
+    Searches.Add({Client->Search(Query, Limit), MoveTemp(Callback), ArchiveGeneration});
 }
 TArray<FSCEntityHit> USCViewerSubsystem::SearchEntities(const FString& Query, int32 Limit)
 {
@@ -177,6 +201,7 @@ TArray<FSCEntityHit> USCViewerSubsystem::SearchEntities(const FString& Query, in
     auto Task = Client->Search(Query, Limit);
     Task.Wait();
     if (!Task.GetResult().Error.IsEmpty()) UE_LOG(LogSCViewer, Warning, TEXT("Search failed: %s"), *Task.GetResult().Error.ToString());
+    PollClientPanic();
     return Task.GetResult().Hits;
 }
 void USCViewerSubsystem::CompleteSearches(bool bBlocking)
@@ -190,7 +215,10 @@ void USCViewerSubsystem::CompleteSearches(bool bBlocking)
         }
         FPendingSearch Done = MoveTemp(Searches[I]);
         Searches.RemoveAt(I);
-        Done.Callback(Done.Task.GetResult());
+        if (Done.Generation != ArchiveGeneration) continue; // issued against an earlier archive session: drop
+        FSCSearchResult Result = Done.Task.GetResult();
+        Result.Generation = Done.Generation;
+        Done.Callback(Result);
     }
 }
 
@@ -213,7 +241,8 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
     Report.Entity = Entity;
     Report.Options = LoadOptions->Describe();
     PendingEntity = Entity;
-    PendingKey = Entity.ToLower() + TEXT("|") + LoadOptions->GetHash();
+    Report.ArchiveGeneration = int32(ArchiveGeneration);
+    PendingKey = FString::Printf(TEXT("%u|%s|%s"), ArchiveGeneration, *Entity.ToLower(), *LoadOptions->GetHash());
     LoadStart = FPlatformTime::Seconds();
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_LOAD_START entity=%s options=\"%s\""), *Entity, *Report.Options);
     if (PendingKey == LoadedKey && Vehicle.IsValid())
@@ -231,6 +260,10 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
 }
 void USCViewerSubsystem::CancelLoad()
 {
+    if (!IsBusy()) return;
+    Report.MeshesBuiltAtCancel = Job ? Job->GetResult().MeshStats.Num() : 0;
+    Report.bWorkersPendingAtCancel = Job ? Job->HasPendingWorkers() : (ExportTask.IsValid() && !ExportTask.IsCompleted()) ||
+                                                                          (ParseTask.IsValid() && !ParseTask.IsCompleted());
     if (ExportProgress) ExportProgress->RequestCancel(); // export: FFI callback returns nonzero; parse: checked after
     if (Job) Job->Cancel();
 }
@@ -264,6 +297,23 @@ bool USCViewerSubsystem::WaitForPhase(ESCLoadPhase Target, float TimeoutSeconds)
         if (Phase == ESCLoadPhase::Importing && Job && Job->IsFinished()) StepLoad(false);
     }
     return Phase == Target;
+}
+bool USCViewerSubsystem::WaitForImportedMeshes(int32 MinMeshes, float TimeoutSeconds)
+{
+    const double Deadline = FPlatformTime::Seconds() + TimeoutSeconds;
+    if (Phase != ESCLoadPhase::Importing && !WaitForPhase(ESCLoadPhase::Importing, TimeoutSeconds)) return false;
+    while (Phase == ESCLoadPhase::Importing && FPlatformTime::Seconds() < Deadline)
+    {
+        if (Job->GetResult().MeshStats.Num() >= MinMeshes && Job->HasPendingWorkers()) return true;
+        if (Job->IsFinished())
+        {
+            StepLoad(false); // finalize the load; the requested mid-import state was not observed
+            return false;
+        }
+        Job->Tick(false, 0.0); // a zero budget runs at most one step
+        FPlatformProcess::SleepNoStats(0.0005f);
+    }
+    return false;
 }
 float USCViewerSubsystem::GetLoadProgress() const
 {
@@ -313,6 +363,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         Report.CacheEntries = int64(Result.Cache.Entries);
         if (!Result.bOK)
         {
+            PollClientPanic();
             FinishLoad(Result.bCancelled ? ESCLoadPhase::Cancelled : ESCLoadPhase::Failed, Result.Error.ToString());
             return;
         }
@@ -377,8 +428,19 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
             if (Bounds.IsValid) Vehicle->AddActorWorldOffset(FVector(0, 0, FloorClearanceCm - Bounds.Min.Z));
             LoadedEntity = PendingEntity;
             LoadedKey = PendingKey;
+            Job.Reset();
         }
-        Job.Reset();
+        else
+        {
+            // The job destroyed its partial actor; account for what it had created and prove GC releases it.
+            TArray<TWeakObjectPtr<UObject>> Partial;
+            TrackSession(Job->GetSpawnedVehicle(), Job->GetSessionPath(), Partial);
+            Job.Reset(); // drains any remaining workers
+            Report.PartialObjects = Partial.Num();
+            Report.PartialObjectsAlive = CollectAndCount(Partial);
+            UE_LOG(LogSCViewer, Display, TEXT("VIEWER_IMPORT_CLEANUP stage=%d meshes_built_at_cancel=%d workers_pending_at_cancel=%d tracked=%d alive_after_gc=%d"),
+                   int32(Stage), Report.MeshesBuiltAtCancel, Report.bWorkersPendingAtCancel, Report.PartialObjects, Report.PartialObjectsAlive);
+        }
         FinishLoad(Stage == ESCImportStage::Succeeded ? ESCLoadPhase::Succeeded
                    : Stage == ESCImportStage::Cancelled ? ESCLoadPhase::Cancelled
                                                         : ESCLoadPhase::Failed,
@@ -427,26 +489,31 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect)
     TArray<TWeakObjectPtr<UObject>> Tracked;
     if (Previous)
     {
-        const FString Session = Previous->SessionPath;
-        for (TObjectIterator<UObject> It; It; ++It)
-            if (*It == Previous || It->IsIn(Previous) || (!Session.IsEmpty() && It->GetOutermost()->GetName().StartsWith(Session)))
-                Tracked.Add(*It);
-        if (UWorld* World = Previous->GetWorld()) FSCImporter::Unload(World);
-        if (IsValid(Previous) && !Previous->IsActorBeingDestroyed()) Previous->Destroy();
+        TrackSession(Previous, Previous->SessionPath, Tracked);
+        UWorld* World = Previous->GetWorld();
+        if (World) FSCImporter::Unload(World);
+        // During engine exit the world tears its actors down itself.
+        if (IsValid(Previous) && !Previous->IsActorBeingDestroyed() && World && !World->bIsTearingDown) Previous->Destroy();
     }
     Vehicle = nullptr;
     LoadedEntity.Empty();
     LoadedKey.Empty();
     if (!bCollect || Tracked.IsEmpty()) return;
-    FlushRenderingCommands();
-    CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
-    int32 Alive = 0;
-    for (const auto& Object : Tracked)
-        if (Object.IsValid()) ++Alive;
+    const int32 Alive = CollectAndCount(Tracked);
     Report.PreviousObjects = Tracked.Num();
     Report.PreviousObjectsAlive = Alive;
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_UNLOAD tracked=%d alive_after_gc=%d live_static_meshes=%d live_textures=%d live_mids=%d"),
            Tracked.Num(), Alive, CountLive<UStaticMesh>(), CountLive<UTexture2D>(), CountLive<UMaterialInstanceDynamic>());
+}
+
+void USCViewerSubsystem::PollClientPanic()
+{
+    FText Error;
+    if (!Client || !Client->TakePanic(Error)) return;
+    ArchiveState = ESCArchiveState::Failed;
+    ArchiveError = Error;
+    ++ArchiveGeneration; // the next open is a new session; nothing from this one may be reused
+    UE_LOG(LogSCViewer, Error, TEXT("VIEWER_ARCHIVE_LOST %s"), *Error.ToString());
 }
 
 bool USCViewerSubsystem::Tick(float)
@@ -474,6 +541,7 @@ bool USCViewerSubsystem::Tick(float)
     }
     CompleteSearches(false);
     StepLoad(false);
+    PollClientPanic();
     LogPhaseChange();
     if (Automation) Automation->Tick();
     return true;
@@ -514,6 +582,11 @@ void USCViewerSubsystem::FocusComponent(USceneComponent* Component)
     const FBox Box = SubtreeBounds(Component ? Component : V->GetRootComponent());
     if (ASCViewerPawn* Pawn = GetViewerPawn(); Pawn && Box.IsValid) Pawn->FocusBounds(Box);
     OnComponentFocused.Broadcast(Component);
+}
+void USCViewerSubsystem::FrameAll()
+{
+    IsolateComponent(nullptr); // restores the imported visibility first, so the whole vehicle is framed
+    FocusComponent(nullptr);   // clears focus and broadcasts nullptr: the hierarchy drops selection and isolate
 }
 void USCViewerSubsystem::IsolateComponent(USceneComponent* Component)
 {

@@ -64,5 +64,8 @@ if not reused.reused:
 vehicle = viewer.get_vehicle()
 unreal.log("WP-V1 HEADLESS_LOAD_OK entity=%s components=%d clips=%d" % (
     first, len(vehicle.get_components_by_class(unreal.SceneComponent)), len(vehicle.clip_catalog.clips)))
-unreal.SCViewerSubsystem.destroy_headless(viewer)
-unreal.log("WP-V1 HEADLESS_TEARDOWN_OK")
+del vehicle  # a Python reference would keep the actor (and everything it owns) alive through teardown
+alive = unreal.SCViewerSubsystem.destroy_headless(viewer)
+if alive != 0:
+    raise RuntimeError("%d objects survived teardown" % alive)
+unreal.log("WP-V1 HEADLESS_TEARDOWN_OK alive_after_gc=0")

@@ -5,6 +5,8 @@
 #include "UObject/GCObject.h"
 #include "SCImporter.h"
 
+class ASCVehicle;
+
 enum class ESCImportStage : uint8
 {
     Reading,
@@ -29,8 +31,9 @@ public:
     FSCImportJob(const FSCPackageSource& Source, FSCImportOptions Options, TSharedPtr<const FSCPackageSource> SourceOwner = nullptr);
     virtual ~FSCImportJob() override;
 
-    /** Game thread. Non-blocking ticks return when a worker result is pending or Budget seconds are spent; blocking
-     *  ticks wait for workers and run to completion. Returns true once Succeeded, Failed or Cancelled. */
+    /** Game thread. Non-blocking ticks return when a worker result is pending or Budget seconds are spent (checked
+     *  after every step; a step is at most one static-mesh variant build); blocking ticks wait for workers and run to
+     *  completion. Returns true once Succeeded, Failed or Cancelled. */
     bool Tick(bool bBlocking, double BudgetSeconds = 0.05);
     /** Takes effect at the next step boundary: workers are drained and the partial actor is destroyed. */
     void Cancel();
@@ -45,6 +48,12 @@ public:
     /** Filled progressively; Vehicle is set only on success. */
     const FSCImportResult& GetResult() const;
     FSCImportResult& GetResult();
+    /** Package root of this import's transient objects (/Temp/SC/<guid>); empty before Reading completes. */
+    FString GetSessionPath() const;
+    /** The actor spawned for this import, even after a cancel destroyed it (until GC); for leak accounting. */
+    ASCVehicle* GetSpawnedVehicle() const;
+    /** True while any worker (read, derive, prepare, material decode) has not completed. */
+    bool HasPendingWorkers() const;
 
     virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
     virtual FString GetReferencerName() const override { return TEXT("FSCImportJob"); }
