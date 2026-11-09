@@ -15,7 +15,7 @@ Lumen. Built on the vendored StarBreaker crates (`docs/01-starbreaker-analysis.m
 | D4 | **Unreal import is a UE editor plugin (`ue/Plugins/SCBridge`)** in two stages: (M3) import a decomposed package from disk; (M4) link the Rust pipeline as a C-ABI library so the editor reads `Data.p4k` directly. | Direct engine API gives correct Nanite/Lumen settings, materials and actor hierarchy; a file-based first stage is testable without FFI and is what the user asked for as the "intermediate" path. |
 | D5 | **No FBX.** GLB → UE Interchange for payloads where convenient, our own `FMeshDescription` builder where we need control. | FBX adds a Blender/Assimp hop and loses metadata; Interchange's glTF translator imports static + skeletal meshes, materials and animations. |
 | D6 | **Ships in UE = hybrid actor**: rigid parts → Nanite `StaticMesh` attached to skeleton sockets; soft-skinned parts → `SkeletalMesh` + `AnimSequence`. Glass/decals → non-Nanite translucent/masked components. | Matches StarBreaker's rigid-vs-soft split (whitepaper §5.3). Nanite skeletal meshes are still experimental; static-mesh Nanite is production. Lumen needs opaque Nanite or distance fields; emissive Illum glow feeds Lumen GI directly. |
-| D7 | **Linux-first.** UE 5.6+ Linux editor (Vulkan RHI). | This machine is CachyOS with an RTX 4090; Nanite, Lumen and HWRT work on Linux/NVIDIA. UE is not installed yet: prerequisite WP-U0. |
+| D7 | **Linux-first.** UE 5.8.2 Linux editor at `~/UnrealEngine/5.8` (Vulkan RHI). | Already installed on this CachyOS machine with an RTX 4090; Nanite, Lumen and HWRT work on Linux/NVIDIA. WP-U0 only creates the test project and smoke-tests the renderer. |
 
 ## Milestones
 
@@ -41,7 +41,7 @@ agent verbatim. Dependencies, agent and parallel-safety are summarised here.
 | WP-A1 | Tauri app scaffold: window, p4k discovery/open, entity search, geometry browser, zustand stores, IPC bindings | Opus 5.5 | R1 | research yes; builds no |
 | WP-A2 | three.js viewer: GLB load, textures, lights/env, grid, fit, hierarchy panel, LOD/mip/material controls | Opus 5.5 | A1 | after A1 |
 | WP-A3 | Animation UI: catalogue list, play/scrub/loop/speed, snap first/last, multi-clip compose, bone/skeleton overlay | Opus 5.5 | A2, R2, R3 | after A2 |
-| WP-U0 | Install UE 5.6+ Linux editor, Vulkan/Nanite/Lumen smoke test, `ue/SCTest.uproject` with a Lumen test level | Codex | — | yes (no cargo) |
+| WP-U0 | UE 5.8.2 test project `ue/SCTest.uproject` with a Lumen test level, Vulkan/Nanite/Lumen/HWRT smoke test, Interchange GLB smoke import | Codex | — | yes (no cargo) |
 | WP-U1 | `SCBridge` plugin: decomposed-package reader (scene.json/materials.json), static meshes from `Data/*.glb` via Interchange or MeshDescription, Nanite settings, UE axis/scale mapping | Codex | U0, R1 (export) | yes vs Rust builds |
 | WP-U2 | Materials: master-material set per shader family (Illum, HardSurface, Glass, Layered/Tint, MeshDecal/POM, Emissive) + Material Instance builder from sidecars, texture import with correct sRGB/normal/roughness flags | Opus 5.5 | U1 | after U1 |
 | WP-U3 | Rig + animation: SkeletalMesh for soft-skinned parts, skeleton from CHR bones, AnimSequences from clips, sockets for rigid parts, `SCVehicle` actor BP assembly, lights from `interiors[].lights` | Codex | U1, R2, R3 | after U1 |
@@ -92,6 +92,6 @@ exposes the first two commands; U0 starts immediately.
 | Vehicle clip → node-name binding fails for sub-rig duplicates (same bone names front/rear gear) | whitepaper §14.8 routing rules; test on Scorpius; fall back to per-skeleton clips scoped to the child entity node |
 | Nanite rejects a mesh (non-manifold, > 64 UV sets, WPO) | import opaque Nanite with fallback mesh; log per-mesh reasons; non-Nanite fallback per component |
 | Translucent/decal materials under Nanite | D6: glass/decals as separate non-Nanite components; decals optionally as DBuffer decals |
-| UE Linux editor install/size (~40 GB) on a 95 % full disk | WP-U0 checks space first; install on another volume if needed |
+| UE project DerivedDataCache + Intermediate growth on a 95 % full disk | keep `ue/SCTest` DDC local and bounded; `Saved/` and `Intermediate/` are gitignored; check `df` before Nanite builds of large interiors |
 | three.js chokes on 1000+ nodes / 300 textures at mip 0 | default mip 2 / LOD 1 as upstream; lazy texture upload; merge-by-material toggle |
 | Upstream StarBreaker moves fast | submodule pinned; patches small and upstreamed early (WP-D1) |

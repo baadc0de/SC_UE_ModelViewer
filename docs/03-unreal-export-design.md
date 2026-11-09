@@ -1,6 +1,6 @@
 # Unreal Engine export design
 
-Target: Unreal Engine 5.6+ (Linux editor, Vulkan RHI). Plugin: `ue/Plugins/SCBridge`
+Target: Unreal Engine 5.8.2 (Linux editor at `~/UnrealEngine/5.8`, Vulkan RHI). Plugin: `ue/Plugins/SCBridge`
 (editor-only module `SCBridgeEditor`, runtime module `SCBridge` for the actor
 classes). Python editor scripts are allowed for glue but the importer core is C++.
 
@@ -68,5 +68,6 @@ in-memory package. Error strings cross the boundary as UTF-8; no panics across F
 - Interchange glTF vs our own `FMeshDescription` builder: prototype both on
   `AEGS_Gladius.cga`'s GLB; keep whichever preserves tangents/UV1/vertex colours and
   lets us set Nanite settings before build. Expected: own builder.
-- UE version pin (5.6 vs 5.7): pick the newest Linux binary that has Nanite skeletal
-  mesh behind a flag and a stable Interchange glTF translator.
+- Nanite skeletal mesh status in 5.8: confirm whether it is still experimental and
+  what the project flag is; default D6 (rigid parts as Nanite static meshes) stands
+  either way.

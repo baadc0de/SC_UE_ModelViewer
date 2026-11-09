@@ -40,9 +40,11 @@ starbreaker entity export Gladius gladius.glb --lod 1 --mip 2
 
 Toolchain present: rustc 1.99.1, node 26.13, python3 + uv, blender, clang/cmake,
 webkit2gtk 2.54 + gtk3 (Tauri deps), Codex CLI 0.167 (`gpt-6-astra`, high).
-**Unreal Engine is not installed** on this machine (checked `~/Development`, `/opt`,
-`~/UnrealEngine*`). GPU: RTX 4090 (Nanite, Lumen and hardware ray tracing are fine on
-Linux/Vulkan). Disk: 84 GB free on `/` — exports and `target/` must stay bounded.
+**Unreal Engine 5.8.2** (`++UE5+Release-5.8`, CL 56702186) is installed at
+`~/UnrealEngine/5.8` (Linux editor; `Engine/Binaries/Linux/UnrealEditor`). GPU:
+RTX 4090 (Nanite, Lumen and hardware ray tracing are fine on Linux/Vulkan). The install (73 GB) ships the
+plugins the UE briefs need: `Interchange`, `InterchangeEditor`, `PythonScriptPlugin`,
+`GeometryScripting`, `EditorScriptingUtilities`. Disk: 84 GB free on `/` — exports and `target/` must stay bounded.
 
 ## Gaps we must close (ordered by how much they block the viewer)
 

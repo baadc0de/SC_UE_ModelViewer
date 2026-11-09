@@ -1,36 +1,38 @@
-# WP-U0 — Unreal Engine on this machine
+# WP-U0 — Unreal test project and renderer smoke test
 
 **Agent:** Codex. **Depends on:** nothing. **Build lock:** no cargo involved.
-**Caution:** asks the user before any download > 1 GB or install outside `~`.
+
+## Facts
+Unreal Engine **5.8.2** (`++UE5+Release-5.8`, CL 56702186) is installed at
+`~/UnrealEngine/5.8`; editor binaries in `Engine/Binaries/Linux/` (`UnrealEditor`,
+`UnrealEditor-Cmd`). GPU: RTX 4090. Disk: `/` is ~95 % full — keep the project's
+`DerivedDataCache/`, `Intermediate/` and `Saved/` bounded and never commit them.
 
 ## Goal
-A working UE 5.6+ Linux editor with a test project where Nanite, Lumen and
-hardware ray tracing are verified on the RTX 4090 (Vulkan RHI).
+A C++ test project `ue/SCTest/SCTest.uproject` where Nanite, Lumen and hardware ray
+tracing are verified on Vulkan, plus a first look at what Interchange keeps from a
+StarBreaker GLB.
 
 ## Tasks
-1. Check free space (`df -h ~ /`): the Linux editor is ~40 GB unpacked. `/` has
-   ~84 GB free; if another volume has more room, propose it. Do not proceed under
-   30 GB headroom after install.
-2. Obtain the newest Linux prebuilt editor from Epic's GitHub releases
-   (`EpicGames/UnrealEngine` → Releases → `Linux_Unreal_Engine_5.x.y.zip`; requires
-   the user's GitHub account to be linked to Epic — if the release page is 404,
-   stop and tell the user exactly what to link). Unpack to `~/UnrealEngine/5.x`.
-3. Record the exact version and the editor path in `ue/README.md`; add
-   `.claude/launch.json` entry `ue-editor` that runs
-   `UnrealEditor ue/SCTest/SCTest.uproject`.
-4. Create `ue/SCTest/SCTest.uproject` (C++ project so plugins build), enable plugins
+1. Record engine version, path and `df -h` headroom in `ue/README.md`. Add
+   `.claude/launch.json` entry `ue-editor` →
+   `~/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor ue/SCTest/SCTest.uproject`.
+2. Create `ue/SCTest/SCTest.uproject` (C++ project so plugins build) with plugins
    `Interchange`, `InterchangeEditor`, `GeometryScripting`, `PythonScriptPlugin`,
-   `EditorScriptingUtilities`. Project settings: Nanite on, Lumen GI + reflections,
-   HWRT on, virtual shadow maps, Vulkan SM6 as default RHI, DirectX none.
-5. Level `Content/Maps/LumenTest`: sky light, directional light, a few Nanite cubes
-   and an emissive sphere. Confirm in `stat GPU` that Lumen and Nanite are active.
-6. Smoke import: `starbreaker entity export Gladius out/gladius.glb` and import the
-   GLB through Interchange in the editor UI; note which mesh/material features
-   survive (tangents, UV1, vertex colour, lights) in `ue/README.md` — this informs
-   WP-U1's builder decision.
+   `EditorScriptingUtilities` enabled. Project settings: Nanite on, Lumen GI +
+   reflections, HWRT on, virtual shadow maps, Vulkan SM6 default RHI.
+3. Level `Content/Maps/LumenTest`: sky light, directional light, a few Nanite cubes,
+   an emissive sphere. Confirm with `stat GPU` / Nanite visualisation that Lumen and
+   Nanite are active; note any Vulkan warnings.
+4. Smoke import: `scripts/starbreaker.sh entity export Gladius out/gladius.glb` and
+   import the GLB through Interchange in the editor UI; record in `ue/README.md`
+   which features survive (tangents, UV1, vertex colour, lights, skins, animation
+   count once WP-R2 lands). This informs WP-U1's builder decision.
+5. Check whether Nanite skeletal meshes are still experimental in 5.8 and which
+   project setting enables them; record it.
 
 ## Done criteria
-- Editor launches headless: `UnrealEditor-Cmd SCTest.uproject -run=pythonscript -script=...`
-  works (needed by WP-Q1).
-- `ue/README.md` has version, paths, RHI, and the Interchange smoke findings.
+- `UnrealEditor-Cmd ue/SCTest/SCTest.uproject -run=pythonscript -script=<x>` works
+  headless (needed by WP-Q1).
+- `ue/README.md` has version, paths, RHI, headroom, Interchange findings.
 - `ue/SCTest` committed without `Binaries/ Intermediate/ Saved/ DerivedDataCache/`.

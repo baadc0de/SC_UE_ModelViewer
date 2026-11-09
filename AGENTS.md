@@ -34,7 +34,7 @@ inherit for all Rust that touches the vendored crates).
 - Use `cargo build` (debug; opt-level 1 like upstream). Release only for shipping.
 - Keep `target/` bounded with `cargo sweep --time 30`; never a blind `cargo clean`.
   `/` has ~84 GB free.
-- Unreal: Linux editor, Vulkan RHI (not installed yet — WP-U0 does that).
+- Unreal: 5.8.2 Linux editor at `~/UnrealEngine/5.8`, Vulkan RHI (WP-U0 creates the test project).
 
 ## Working rules
 

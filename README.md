@@ -37,7 +37,7 @@ crates/scviewer-core   Rust: Session over p4k + DataCore, GLB/decomposed export,
 crates/scviewer-cli    thin CLI for verification
 crates/scbridge-ffi    C-ABI library for the Unreal plugin (M4)
 app/                   Tauri 2 + React + three.js viewer
-ue/SCTest              UE test project with a Lumen level
+ue/SCTest              UE 5.8 test project with a Lumen level
 ue/Plugins/SCBridge    UE editor plugin: package importer, materials, rig/anim, direct import
 vendor/StarBreaker     upstream toolkit (submodule, pinned)
 scripts/               helpers (starbreaker.sh, glbinfo.py, golden.sh …)
