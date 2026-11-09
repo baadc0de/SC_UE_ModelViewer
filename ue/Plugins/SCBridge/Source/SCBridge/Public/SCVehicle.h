@@ -1,3 +1,4 @@
+// Imported vehicle ownership and sparse clip/fragment playback API.
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -16,6 +17,8 @@ struct FSCClipPlayback
     double Frame = 0;
     float Speed = 1;
     bool bPlaying = true;
+    uint64 Order = 0;
+    TArray<FName> Scopes;
 };
 UCLASS(BlueprintType)
 class SCBRIDGE_API ASCVehicle : public AActor
@@ -24,26 +27,39 @@ class SCBRIDGE_API ASCVehicle : public AActor
 public:
     ASCVehicle();
     virtual void Tick(float DeltaSeconds) override;
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<TObjectPtr<USkeletalMesh>> SkeletalMeshes;
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<TObjectPtr<USCRigComponent>> Rigs;
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<TObjectPtr<ULightComponent>> Lights;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USkeletalMesh>> SkeletalMeshes;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USCRigComponent>> Rigs;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<ULightComponent>> Lights;
     UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;
-    UFUNCTION(BlueprintCallable, Category="SC|Animation") bool PlayClip(FName Clip);
-    UFUNCTION(BlueprintCallable, Category="SC|Animation") bool SnapClip(FName Clip, bool bLast);
-    UFUNCTION(BlueprintCallable, Category="SC|Animation") bool PlayFragment(FName Fragment, FName Tag);
-    UFUNCTION(BlueprintCallable, Category="SC|Animation") void ResetPose();
+    UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayClip(FName Clip);
+    UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool SnapClip(FName Clip, bool bLast);
+    UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayFragment(FName Fragment, FName Tag);
+    /** Toggle a caller-selected open/close tag pair; defaults suit the interact key. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Animation")
+    bool ToggleClip(FName Fragment, FName OpenTag = "Open", FName CloseTag = "Close");
+    UFUNCTION(BlueprintCallable, Category = "SC|Animation") void ResetPose();
     void EvaluateClips();
-    TArray<FSCClipPlayback> Playback;
+    TArray<FSCClipPlayback> Playback;     // active entries only
+    TArray<FSCClipPlayback> HeldPlayback; // bounded by catalogue size; no idle evaluation
+    uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
+private:
+    bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {});
+    void MarkDirty(int32 ClipIndex);
+    TSet<USkeletalMesh*> DirtyMeshes;
+    TMap<FName, FName> FragmentTargets;
+    uint64 NextOrder = 0;
+    FRandomStream FragmentRandom{0x5343};
 
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<TObjectPtr<UStaticMesh>> Meshes;
+public:
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UStaticMesh>> Meshes;
     /** Transient textures (deduplicated by source path + role) and material instances owned by this import. */
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<TObjectPtr<UTexture2D>> Textures;
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UTexture2D>> Textures;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials;
     /** Instances driven by scene controls.engine_glow (main thrusters). */
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> EngineGlowMaterials;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> EngineGlowMaterials;
     /** Sets the engine-glow control value (package units, clamped to its range); see EngineGlowToEmissive. */
-    UFUNCTION(BlueprintCallable, Category="SC") void SetEngineGlow(float Strength);
-    UPROPERTY(BlueprintReadOnly, Category="SC") TObjectPtr<USCClipCatalog> ClipCatalog;
-    UPROPERTY(BlueprintReadOnly, Category="SC") FSCSceneManifest Manifest;
-    UPROPERTY(BlueprintReadOnly, Category="SC") FString SessionPath;
+    UFUNCTION(BlueprintCallable, Category = "SC") void SetEngineGlow(float Strength);
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USCClipCatalog> ClipCatalog;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FSCSceneManifest Manifest;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString SessionPath;
 };

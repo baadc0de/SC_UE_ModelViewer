@@ -58,22 +58,31 @@ See `ue/verification/WP-U3.md` for commands, measured results, and remaining gat
   world transform equals the mesh node's bind transform. No skeleton sidecar is
   needed for these inputs. Duplicate identity children emitted as skin anchors
   retain distinct UE bones but do not receive the owner's animation twice.
-- The whitepaper and current implementation disagree about animation locals.
-  `animation/pose.rs::clip_final_pose` writes the sidecar-convention quaternion
-  directly into exported node locals, beneath the existing GLB wrapper. The
-  Blender addon likewise assigns absolute sampled rotations. Applying another
-  Y-up conversion or multiplying identity-root-metadata samples by every bone's
-  bind rotation does not reproduce the supplied/default-pose exports. U3 converts
-  node-local samples with the same matrix as GLB node locals; non-identity
-  `start_rotation` uses `bind * inverse(start) * sample`, while identity or absent
-  clip-root anchors use absolute samples. This is a documented deviation from
-  the brief's blanket “when present” wording, backed by the reference comparison.
-- **Full-pose reference acceptance is blocked by an exporter discrepancy.** The
-  Scorpius gear clip has position-only `BONE_Front_Mid_Arm`; the default-pose
-  exporter replaces its unanimated rotation with identity. The importer keeps
-  its bind rotation. All authored rotation tracks match, but the complete
-  compared pose differs by 154.694311 degrees on that bone. Do not describe the
-  full 5-degree acceptance gate as passed.
+- Review corrected the clip basis: undo the exporter's native Y-up -> Blender Z-up
+  swap before applying the GLB -> UE transform. Sidecar `(bx,by,bz)` becomes
+  `100*(by,bx,bz)` cm; sidecar `[w,x,y,z]` becomes UE `FQuat(-y,-x,-z,w)`.
+  The GLB wrapper remains a bone and is applied once. The previous default-pose
+  export agreement was circular: that exporter made the same basis mistake.
+- Non-identity `start_rotation` retains `bind * inverse(start) * sample`;
+  identity/absent clip-root anchors use absolute parent-local rotations, matching
+  the addon source decoder. Unkeyed channels keep bind (whitepaper §4.4), while
+  sparse clips compose onto the current pose (§14.6).
+- Cyclic clips use per-bone `bind + (sample - first)` for positions, like the
+  addon. A moving clip is cyclic when all authored channels return to their
+  first value (0.1 degrees / 0.01 cm); names and clip-root `start_position` are
+  not used. Snap-last remains the literal last frame, not a guessed midpoint.
+- Full-pose reference acceptance remains pending WP-R6. Source-based tests use
+  the original GLBs and sidecars independently of `clip_final_pose`, check
+  translations, and separately confirm the stable bind endpoints and CableTop
+  rotation. The quarantined reference check also reports translations now.
+- Only assets receiving clip channels create rigs and split by bone owner.
+  Others retain U1/U2's static meshes. Collision derivation is checked on a
+  worker before material splitting; a failure skips that owner with a warning.
+- Finished playback leaves the active list; bounded held layers preserve sparse
+  overlap order without idle evaluation. Only changed clip receivers refresh.
+  Fragment options use their weights and compete for overlapping scopes;
+  disjoint scopes can coexist. `ToggleClip(fragment, openTag=Open, closeTag=Close)`
+  alternates caller-selected tags for WP-P1's interact action.
 - Each catalogue entry has a sequence. Clips with no receiver in the equipped
   package retain an empty metadata-only sequence and a warning, and cannot be
   played. Counts are reported separately from clips bound to actual bones.
@@ -81,16 +90,11 @@ See `ue/verification/WP-U3.md` for commands, measured results, and remaining gat
   WP-R4 supplies that module under `Source/ThirdParty/SCBridgeLib`; UBT otherwise
   reports duplicate classes. No writes were made to the WP-R4 folder.
 
-TODO(WP-R6): in `animation/pose.rs`, preserve the reference rotation for channels
-without rotation keys instead of synthesizing identity in `clip_final_pose` and
-applying it unconditionally in `apply_pose_to_skeleton`; regenerate the Scorpius
-`apply_default_animation_pose=true` reference, then rerun the unmodified full-pose
-comparison. No new sidecar field is necessary: `has_rotation` already expresses
-this distinction.
+TODO(WP-R6): upstream animation/pose.rs must (a) make BonePose.rotation an Option built from ch.rotations.last() and have apply_pose_to_skeleton set it only when Some, and (b) bake into skeleton bones in native order without the axis swap (rotation [w,x,y,z] from [x,y,z,w], position unchanged), keeping cry_xyzw_to_blender_wxyz for the sidecar only; then regenerate the reference.
 
 TODO(WP-U3): rerun full-pose acceptance after the WP-R6 reference correction; the
 current reference command intentionally returns failure rather than hiding the
-position-only bone's rotation mismatch.
+exporter's basis and unkeyed-channel discrepancies.
 
 TODO(WP-U3): orchestrator must run the GPU checks listed in the verification
 record (PIE/game playback, simultaneous clips, socket-following rigid geometry,

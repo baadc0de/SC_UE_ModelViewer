@@ -1,3 +1,4 @@
+// Sparse local-pose evaluation and socket-child propagation for imported rigs.
 #include "SCRigComponent.h"
 #include "Engine/SkeletalMesh.h"
 USCRigComponent::USCRigComponent()
@@ -28,5 +29,8 @@ void USCRigComponent::RefreshBoneTransforms(FActorComponentTickFunction*)
     }
     bNeedToFlipSpaceBaseBuffers = true;
     USkinnedMeshComponent::FinalizeBoneTransform();
-    UpdateChildTransforms(); UpdateBounds(); MarkRenderTransformDirty(); MarkRenderDynamicDataDirty();
+    UpdateChildTransforms();
+    UpdateBounds();
+    MarkRenderTransformDirty();
+    MarkRenderDynamicDataDirty();
 }

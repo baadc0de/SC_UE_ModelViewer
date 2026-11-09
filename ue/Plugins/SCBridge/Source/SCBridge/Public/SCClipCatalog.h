@@ -1,3 +1,4 @@
+// Transient clip metadata and sparse authored channels shared by editor and game playback.
 #pragma once
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
@@ -14,6 +15,8 @@ struct SCBRIDGE_API FSCClipFragment
     UPROPERTY(BlueprintReadOnly) TArray<FName> FragmentTags;
     UPROPERTY(BlueprintReadOnly) TArray<FName> Scopes;
     UPROPERTY(BlueprintReadOnly) TArray<FName> AnimationNames;
+    UPROPERTY(BlueprintReadOnly) FString OptionId;
+    UPROPERTY(BlueprintReadOnly) float OptionWeight = 1;
     UPROPERTY(BlueprintReadOnly) float Speed = 1;
     UPROPERTY(BlueprintReadOnly) FString Json;
 };
@@ -46,6 +49,7 @@ struct SCBRIDGE_API FSCImportedClip
     UPROPERTY(BlueprintReadOnly) TArray<FString> Contributors;
     UPROPERTY(BlueprintReadOnly) TArray<FSCClipFragment> Fragments;
     UPROPERTY(BlueprintReadOnly) bool bBoomerang = false;
+    UPROPERTY(BlueprintReadOnly) bool bCyclic = false;
     UPROPERTY(BlueprintReadOnly) float Fps = 30;
     UPROPERTY(BlueprintReadOnly) int32 LastFrame = 0;
     UPROPERTY(BlueprintReadOnly) TObjectPtr<UAnimSequence> Sequence; // primary rig, or empty metadata-only sequence if no receiver
@@ -56,5 +60,5 @@ class SCBRIDGE_API USCClipCatalog : public UDataAsset
 {
     GENERATED_BODY()
 public:
-    UPROPERTY(BlueprintReadOnly, Category="SC") TArray<FSCImportedClip> Clips;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<FSCImportedClip> Clips;
 };

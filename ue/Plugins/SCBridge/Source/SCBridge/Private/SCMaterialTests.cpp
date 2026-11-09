@@ -18,6 +18,8 @@
 #include "Misc/Paths.h"
 #include "Misc/CommandLine.h"
 #include "UObject/Package.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -306,6 +308,22 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
                 continue;
             }
             if (D.Master == ESCMaster::EmissiveUnlit) continue;
+            // Schema v2 emittance maps can emit without a Glow attribute (e.g. MACRO_EMISSIVE_MAP).
+            // Check their authored strength directly; the legacy no-Glow invariant does not apply.
+            TSharedPtr<FJsonObject> Json;
+            const TSharedPtr<FJsonObject>* Emissive;
+            FString Emittance;
+            double AuthoredStrength = 0;
+            if (D.bV2 && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Sub.Json), Json)
+                && Json->TryGetObjectField(TEXT("emissive"), Emissive)
+                && (*Emissive)->TryGetStringField(TEXT("emittance_texture"), Emittance) && !Emittance.IsEmpty()
+                && (*Emissive)->TryGetNumberField(TEXT("strength"), AuthoredStrength))
+            {
+                TestEqual(Where + TEXT(" emittance map uses authored v2 strength"),
+                    D.Scalars.FindRef(TEXT("EmissiveStrength")), D.bHidden ? 0.f : float(AuthoredStrength) * FSCMaterialBuilder::GlowToEmissive);
+                Glowing += AuthoredStrength > 0;
+                continue;
+            }
             const bool bGlow = Sub.Json.Contains(TEXT("\"Glow\""), ESearchCase::CaseSensitive);
             const float Strength = D.Scalars.FindRef(TEXT("EmissiveStrength"));
             if (Sub.Name == TEXT("emissives")) // the Gladius wing-tip / under-wing strips when this package is the Gladius
@@ -317,8 +335,17 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
             else if (Strength > 0.f)
             {
                 ++Glowing;
-                const FLinearColor C = D.Vectors.FindRef(TEXT("EmissiveColor")) * D.Vectors.FindRef(TEXT("DiffuseColor"));
-                TestTrue(Where + TEXT(" glow colour comes from Emissive x Diffuse"), C.R + C.G + C.B > 0.f);
+                // A black palette/base colour may legitimately suppress emission. Validate the
+                // authored tint instead of requiring its product with every palette to be nonblack.
+                const FLinearColor Tint = D.Vectors.FindRef(TEXT("EmissiveColor"));
+                const TArray<TSharedPtr<FJsonValue>>* Color;
+                if (D.bV2 && Json && Json->TryGetObjectField(TEXT("emissive"), Emissive)
+                    && (*Emissive)->TryGetArrayField(TEXT("color"), Color) && Color->Num() == 3)
+                {
+                    const FLinearColor Expected((*Color)[0]->AsNumber(), (*Color)[1]->AsNumber(), (*Color)[2]->AsNumber());
+                    TestTrue(Where + TEXT(" emission tint follows the authored v2 colour"), Tint.Equals(Expected, 1.e-4f));
+                }
+                else TestTrue(Where + TEXT(" emitting legacy material has a tint"), Tint.R + Tint.G + Tint.B > 0.f);
             }
         }
     AddInfo(FString::Printf(TEXT("PACKAGE_RULES decals=%d glow_cards=%d glowing=%d no_glow=%d v2=%d v2_disagree=%d"), Decals, Cards, Glowing, Silent, V2, Disagree));

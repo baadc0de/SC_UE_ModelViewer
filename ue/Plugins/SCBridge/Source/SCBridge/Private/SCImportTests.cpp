@@ -191,6 +191,7 @@ bool FSCReviewPartial::RunTest(const FString&)
     TestEqual(TEXT("root plus healthy sibling"), Result.InstanceCount, 2);
     TestTrue(TEXT("recoverable warnings returned to caller"), Result.Warnings.Num() >= 7);
     TestTrue(TEXT("no fatal error"), Result.Error.IsEmpty());
+    if (Result.Vehicle.IsValid()) TestEqual(TEXT("unanimated assets do not create rigs"), Result.Vehicle->Rigs.Num(), 0);
     if (Result.Vehicle.IsValid())
     {
 #if WITH_EDITOR
@@ -297,7 +298,7 @@ bool USCImportLibrary::RunUnitTests()
 #if WITH_DEV_AUTOMATION_TESTS
     bool Passed = true;
     TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials"),
-        TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights")};
+        TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic")};
     FString Folder;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
     for (const FString& Name : Names)

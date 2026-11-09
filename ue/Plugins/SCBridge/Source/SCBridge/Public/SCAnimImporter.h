@@ -1,3 +1,4 @@
+// Runtime animation import API; CPU binding is independent of skeletal UObject construction.
 #pragma once
 #include "CoreMinimal.h"
 #include "SCClipCatalog.h"
@@ -11,11 +12,15 @@ public:
     static FVector SidecarPosition(const FVector& V);
     static FQuat SidecarRotation(const FQuat& Q);
     static FQuat LinearRotation(FQuat A, FQuat B, double Alpha);
-    static int32 ProvenanceScore(const FString& ReceiverName, const FString& ReceiverPath, const FString& SourceName, const FString& SourcePath);
-    static bool Read(const FSCPackageSource& Source, const FSCClipRecord& Record, const FString& Owner,
-        FSCImportedClip& Clip, TSharedPtr<FJsonObject>& Json, FString& Error);
-    static bool Bind(const TSharedPtr<FJsonObject>& Json, const FSCDerivedMesh& Rig, const FString& Path,
-        USkeletalMesh* Mesh, UObject* Outer, FSCImportedClip& Clip, FString& Error);
+    static int32 ProvenanceScore(const FString& ReceiverName, const FString& ReceiverPath, const FString& SourceName,
+                                 const FString& SourcePath);
+    static bool Read(const FSCPackageSource& Source, const FSCClipRecord& Record, const FString& Owner, FSCImportedClip& Clip,
+                     TSharedPtr<FJsonObject>& Json, FString& Error);
+    static bool DeriveBinding(const TSharedPtr<FJsonObject>& Json, const FSCDerivedMesh& Rig, const FString& Path, FSCImportedClip& Clip,
+                              FSCClipBinding& Binding, FString& Error);
+    static void AttachBinding(USkeletalMesh* Mesh, UObject* Outer, FSCImportedClip& Clip, FSCClipBinding Binding);
+    static bool Bind(const TSharedPtr<FJsonObject>& Json, const FSCDerivedMesh& Rig, const FString& Path, USkeletalMesh* Mesh,
+                     UObject* Outer, FSCImportedClip& Clip, FString& Error);
     static void Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImportedClip& Clip);
     static FTransform Sample(const FSCBoneTrack& Track, double Frame);
 };

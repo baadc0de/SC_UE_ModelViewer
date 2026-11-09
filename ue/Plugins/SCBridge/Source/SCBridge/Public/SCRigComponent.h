@@ -1,3 +1,4 @@
+// Runtime rig component with explicit sparse local-pose evaluation.
 #pragma once
 #include "CoreMinimal.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -11,8 +12,8 @@ class SCBRIDGE_API USCRigComponent : public USkeletalMeshComponent
 public:
     USCRigComponent();
     UPROPERTY() TArray<FTransform> LocalPose;
-    UPROPERTY(BlueprintReadOnly, Category="SC") FString MeshAsset;
-    UPROPERTY(BlueprintReadOnly, Category="SC") FString OwnerEntity;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString MeshAsset;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") FString OwnerEntity;
     virtual void RefreshBoneTransforms(FActorComponentTickFunction* TickFunction = nullptr) override;
     void ResetPose();
 };
