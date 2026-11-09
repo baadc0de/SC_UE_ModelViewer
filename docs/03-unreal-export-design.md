@@ -170,8 +170,9 @@ progress callback may be called from worker threads.
 
 ## Open questions after WP-U0
 
-- GPU validation of chosen path B: Nanite clusters, Lumen scene view and HWRT,
-  including the cooked-package reload. The sandbox exposed no Vulkan devices.
+- ~~GPU validation of path B~~ done 2026-11-09 (`ue/README.md` §GPU validation).
+  New: runtime-built meshes must gain Lumen mesh cards, a distance field and RT
+  geometry (WP-U1) and the cache must carry them (WP-C1).
 - Gladius-sized import timing and Interchange baseline (deferred; no cargo in U0).
 - Exact glTF→UE basis matrix (lock with a synthetic-GLB unit test in WP-U1).
 - WP-C1 cache format/versioning and processed texture/skeleton/animation coverage.

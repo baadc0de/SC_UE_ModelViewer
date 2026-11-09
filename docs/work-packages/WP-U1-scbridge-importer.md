@@ -50,6 +50,13 @@ interiors/placements, path rules).
 - Collision: per WP-U0 finding — complex trimesh cooked at runtime
   (`CTF_UseComplexAsSimple`) or Nanite fallback-mesh collision; cooking on a worker
   thread; expose `bBuildCollision` in `FSCImportOptions` (WP-P1 adds caching).
+- **Lumen / ray-tracing representation (WP-U0 finding):** a mesh built with
+  `BuildFromMeshDescriptions` has no mesh cards, distance field or RT geometry and
+  shows as a black cut-out in the Lumen overview. Build them explicitly (host B links
+  `MeshCardBuild`/`MeshUtilities`; or use the editor `Build()` path) and set
+  `bSupportRayTracing`; verify with `ShowFlag.VisualizeLumen 1, r.Lumen.Visualize 1`
+  that the ship is present in "Lumen Scene" and "Reflection View, HWRT". Expose
+  the cost per mesh in the import log.
 - Cache hooks (WP-C1 fills them): every builder is split into *derive* (pure data:
   mesh description, cooked collision, texture platform data) and *instantiate*
   (UObject creation), with a content hash per input so WP-C1 can store and replay
@@ -61,7 +68,9 @@ interiors/placements, path rules).
 - In the chosen standalone host: import `out/dec` (Gladius) → actor in the `Viewer`
   level shows a textured-grey ship
   with every attachment positioned (thrusters, gear, seats), Nanite visualisation
-  shows clusters on the hull, Lumen GI reacts to an emissive test material.
+  shows clusters on the hull, Lumen GI reacts to an emissive test material, and the
+  Lumen overview shows the hull in the Lumen Scene and HWRT reflection panels (no
+  black cut-out).
 - Loading Gladius twice in a row leaves no leaked UObjects (`obj list class=StaticMesh`
   count returns to baseline after GC); a line trace hits the hull.
 - Headless import via Python script works (for WP-Q1).

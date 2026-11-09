@@ -12,9 +12,9 @@ The probe's project build products occupy about 434 MiB, plus 17 MiB under
 **Choose B: `SCViewerEditor` launched with `-game`, for continued development.**
 A fails the installed engine's module rules. B builds Nanite data and cooks complex
 collision in a game world, and reloads a cooked package after process restart.
-**GPU acceptance remains open:** Vulkan found zero devices in this session;
-successful runtime tests used `-nullrhi`, so rendered Nanite, Lumen and HWRT are
-not verified. WP-U0 is not fully complete.
+**GPU acceptance (added after the sandbox run):** rendered Nanite, Lumen GI and
+HWRT are verified on the RTX 4090 — see *GPU validation* below — with one finding:
+runtime-built meshes have no Lumen scene / ray-tracing representation yet.
 
 | Probe | A: Development Game target | B: Editor target with `-game` |
 | --- | --- | --- |
@@ -46,6 +46,32 @@ Exact chosen launch command, from the repository root (GPU validation still need
   "$PWD/ue/SCViewer/SCViewer.uproject" \
   -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
 ```
+
+## GPU validation (2026-11-09, host B on the RTX 4090)
+
+Run by the orchestrator outside the Codex sandbox with the launch command above
+(`ue/scripts/run_spike.sh load`, then `-SCSpikeStay` runs with `-ExecCmds` for the
+visualisation modes). Evidence: `ue/verification/wp-u0/*.png` (half size).
+
+| Check | Result |
+| --- | --- |
+| RHI | Vulkan on `NVIDIA GeForce RTX 4090`, driver 620.70, API 1.4.357; `Ray tracing is enabled (dynamic)`, ray tracing shaders enabled |
+| First Vulkan start | ~11 min (10:41:46 → 10:52:55) spent compiling shaders; later starts reach the loaded mesh in well under a minute |
+| Cooked-package reload on GPU | `LOAD_PACKAGE seconds=0.021` (then 0.013/0.012/0.012 on three more runs), `nanite=1 clusters=1633`, `build_calls=0 cook_calls=0`, `TRACE hit_spike=1`, `RUN_COMPLETE passed=1` |
+| Rendered Nanite | **Yes**: `r.Nanite.Visualize Overview` shows the spike plane and the map cubes in the Triangles / Clusters / Instances / Primitives panels (`nanite.png`) |
+| Lumen GI | **Yes** for map assets: the emissive sphere lights the neighbouring cube face and floor; VSM shadows (`lit.png`) |
+| HWRT | Enabled; the Lumen overview's "Reflection View, HWRT" panel renders the map assets (`lumen.png`) |
+| **Runtime-built mesh in the Lumen scene** | **No.** In both `build` (live) and `load` (cooked) runs the spike mesh appears as a black cut-out in "Lumen Scene" and in "Reflection View, HWRT" (`build-lumen.png`, `lumen.png`), while the map's cubes are present. Black (not pink) means the mesh has no Lumen scene representation at all: `BuildFromMeshDescriptions` produces no mesh cards, no distance field and no ray-tracing geometry. The cooked package therefore has nothing of the kind to carry; the round-trip is not at fault. |
+
+Consequence for WP-U1 and WP-C1: runtime-built ship meshes must also get Lumen mesh
+cards (`MeshCardBuild`), a distance field (`MeshUtilities` DF generation) and ray
+tracing geometry (`bSupportRayTracing` + RT geometry init) — all available in host B
+because the editor modules are linked — or be built through the editor `Build()`
+path that produces them; and the cache must store them. Verify with the Lumen
+overview: no black cut-out where the ship is.
+
+The `pkill -f` in the screenshot helper killed the helper itself once (exit 144) and
+left the game running; stop the game by PID, not by pattern.
 
 ## Project and commands
 
