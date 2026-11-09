@@ -36,8 +36,8 @@ plus a local file cache so repeat loads need no processing.
 | Milestone | Deliverable | Verifies |
 | --- | --- | --- |
 | **M0 Bootstrap** (done) | repo, submodule, docs, briefs, scripts | `scripts/starbreaker.sh entity loadout Gladius` |
-| **M1 Rust core + FFI** | `scviewer-core`, `scbridge-ffi` + header, `scviewer-cli` | `scviewer decomposed-tar Gladius out.tar`; C smoke program |
-| **M2 App MVP** | `ue/SCViewer` game-mode app (runs via editor `-game` at least): p4k picker, model list (search), options, load via FFI → Nanite meshes under Lumen, orbit/free-fly camera, hierarchy panel; **standalone build-path decision recorded**; layer-1 cache (entity index + package) | Gladius grey-textured under Lumen, standalone window, < 30 s cold; second load skips the export |
+| **M1 Rust core + FFI** | `scviewer-core`, `scbridge-ffi` + header, `scviewer-cli` — *R1 done 2026-11-09; R3, R4 open* | `scviewer decomposed-tar Gladius out.tar`; C smoke program |
+| **M2 App MVP** *(U0, U1 done 2026-11-09; V1 open)* | `ue/SCViewer` game-mode app (runs via editor `-game` at least): p4k picker, model list (search), options, load via FFI → Nanite meshes under Lumen, orbit/free-fly camera, hierarchy panel; **standalone build-path decision recorded**; layer-1 cache (entity index + package) | Gladius grey-textured under Lumen, standalone window, < 30 s cold; second load skips the export |
 | **M3 Materials** | master materials, dynamic instances from `materials.json`, textures with correct flags, palettes, emissive glow | Gladius hull/glass/decals/thruster glow right; cockpit lit by emissive |
 | **M3b Processed-data cache** | layer-2 cache: Nanite render data, cooked collision, textures, skeleton/anims round-tripped to disk; cache hit → no processing; size cap, eviction, Clear cache | second load of Gladius < 3 s with zero mesh builds; cache survives restart |
 | **M4 Animations** | skeleton + skeletal meshes, sockets, `UAnimSequence` per clip, clip catalogue; panel: list with Mannequin tags, play/snap/loop/speed/compose | Scorpius gear/canopy/wings; Gladius gear + canopy; Cutlass doors |
@@ -51,12 +51,12 @@ Self-contained briefs in `docs/work-packages/`, handed to agents verbatim.
 
 | WP | Title | Agent | Depends on | Parallel-safe? |
 | --- | --- | --- | --- | --- |
-| WP-R1 | Rust workspace + `scviewer-core` (Session, search, decomposed export to disk and in-memory tar, layer-1 cache) | Codex | — | cargo: no |
+| WP-R1 | **Done** (df22acc + 1de75d0; submodule `scviewer/decomposed-glb`). `scviewer-core`, `scviewer-cli`, layer-1 cache; upstream fix for empty decomposed GLB meshes; cross-reviewed | Codex | — | — |
 | WP-R3 | Clip catalogue API (`chrparams` ∪ DBA ∪ Mannequin, lazy) | Codex | R1 | cargo: no |
 | WP-R4 | `scbridge-ffi` C-ABI cdylib + `scbridge.h` + C smoke test | Codex | R1, R3 | cargo: no |
 | WP-R2 | *(optional, upstream contribution)* vehicle clips into bundled GLB animations | Codex | R1 | cargo: no |
 | WP-U0 | **Done.** Project + Viewer map; B selected; runtime Nanite data/collision and cooked-package restart proven, then GPU-validated (Nanite, Lumen, HWRT). Open: Interchange baseline (deferred); runtime meshes lack Lumen/RT representation (carried into U1/C1) | Codex | — | — |
-| WP-U1 | Runtime importer core: `FSCPackageSource` (folder + tar), `FMeshDescription` → transient Nanite static meshes, axes/units, `ASCVehicle` assembly, per-mesh collision setup | Codex | U0 gate; a decomposed export from R1 | UE lock |
+| WP-U1 | **Done** (784f70c + 4a44d2c, GPU-validated). Runtime importer: package source (folder + tar), reader, Nanite meshes with Lumen cards / DF / RT geometry, D6 translucent split, collision BVH, `ASCVehicle`; cross-reviewed | Codex | — | — |
 | WP-V1 | App shell + model browser (game-mode UMG/Slate): p4k picker, search list, options, Load, progress, hierarchy, orbit/free-fly camera; editor host via PIE/viewer level | Opus 5.5 | U1, R4 | UE lock |
 | WP-C1 | Processed-data cache (layer 2): serialise built meshes/Nanite/collision/textures/anims, keying, size cap, eviction, hit/miss UI | Codex | U1 (U3 for anim data), U0 round-trip spike | UE lock |
 | WP-U2 | Materials: master set, dynamic instances from sidecars, texture flags, palettes | Opus 5.5 | U1 | UE lock |

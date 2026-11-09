@@ -34,3 +34,22 @@ Observations for the follow-up round:
 - The DDC was warm from Codex's runs, so 2.0–2.5 s is a warm import; cold was 10.1 s in Codex's measurement.
 - `materials=17` is the sidecar count the reader resolved for the slot-ordered package; the earlier compact `out/dec` reported the same count, so the reader is index-agnostic as intended.
 - No visual check of per-slot material assignment is possible until WP-U2 (all surfaces are grey).
+
+## Re-validation after the review fixes (superproject `4a44d2c`)
+
+Same three runs on `out/dec-r1`:
+
+```text
+IMPORT_OK seconds=2.4380 assets=45 instances=61 children=51 interiors=3 materials=17 palettes=18 clips=63 game_world=1 render_meshes=78 render_instances=111 warnings=0
+```
+
+- Lit and Nanite views unchanged (same bounds, same placement).
+- `lumen-after-split.png`: the hull is still present in the Lumen Scene and the
+  HWRT reflection view (no black cut-out). The split-off Glass / MeshDecal meshes
+  now show as **yellow (culled surface cache)** patches — canopy glass, wing-tip
+  glow decals, small decals — because they are small separate non-Nanite
+  components. That is expected for translucent surfaces, which should not feed the
+  surface cache anyway; TODO(WP-U2): when real translucent/decal materials exist,
+  set those components to not affect Lumen (`bAffectDistanceFieldLighting=false`,
+  no surface-cache capture) so the overlay is clean, and keep the host hull as the
+  GI contributor.
