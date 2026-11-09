@@ -47,3 +47,21 @@ hardware ray tracing, which the Viewer level already uses (D8/D9, Vulkan HWRT).
   and the Gladius still matches its reference images.
 - Any new project setting is in `ue/SCViewer/Config/DefaultEngine.ini` with a comment
   pointing at the verification record.
+
+## Decision (2026-11-09, evidence in `ue/verification/WP-U3b.md`)
+1. MegaLights is enabled for the project (`r.MegaLights.EnableForProject=1`). It is still marked
+   Experimental in 5.8.2 but supported on VULKAN_SM6 (SM6 + wave ops + HWRT), with Substrate.
+2. Cutlass bay, 153 lights: 10.0 → 7.0 ms GPU at 1600×900 and 28.8 → 16.9 ms at 3840×2160
+   (RTX 4090). Scorpius 7.4 → 6.5 / 14.5 → 11.9 ms. VSM one-pass overflow gone; all lights shadowed.
+3. No leaks: interior lights do not show through the hull with the sun off; shadows match VSM.
+4. Gobos were silently dropped on both paths (16-slot light function atlas, one MID per light):
+   `r.LightFunctionAtlas.Size=16` now; importer patch shares one MID per texture.
+5. Intensity stays `intensity_candela_proxy` (= raw × 1500) in candela; the addon's ×20 gain is a
+   uniform exposure, not per-light information. Overexposure came from the fixed exposure.
+6. Viewer exposure: auto exposure, EV100 units, bias 0 (measured EV100 −2.0/−1.6 exteriors,
+   +0.3 Cutlass bay); a bounded PPV (−3…6) is proposed for the Viewer map.
+7. Fallback without MegaLights: per scene instance, only lights with `radius_m` ≥ the instance's
+   upper quartile cast shadows (Cutlass 60/225, Scorpius 36/127, Gladius 22/76) — in the patch.
+8. MegaLights needs no per-light flags (defaults: allowed, ray-traced shadows).
+9. Patch for `SCLightImporter.cpp` is in the record (§8), checked with `git apply --check`, not built.
+10. Gladius hull/livery unchanged; the hangar reference shows no ship-light pools (light state, TODO).
