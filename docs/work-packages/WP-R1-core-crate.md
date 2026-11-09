@@ -65,10 +65,18 @@ bridge need. No format code of our own.
   upstream behaviour) and make `scviewer-core` request `ExportFormat::Glb` directly.
   Verified output for `Gladius --lod 1 --mip 2`: 45 GLBs none empty, root mesh 274
   nodes / 89 meshes / 24 materials, 23 sidecars, 366 PNGs, 63 clips, 96 MB, ~10 s.
-- **Material mapping contract** the UE importer relies on: a GLB material is named
-  `<mtl stem>_<submaterial name>_<NN>` where `NN` is the zero-based index into the
-  sidecar's `submaterials[]` (`<mtl stem>_TEX<m>.materials.json`); the GLB primitive's
-  material index is that same `NN`. Keep this stable and state it in the crate docs.
+- **Material mapping contract** (decided 2026-11-09 after Codex found the prototype's
+  GLB material list was compacted to the 24 slots the Gladius root uses out of the
+  sidecar's 28, so `_NN` was a compact position, not the sidecar index): **preserve
+  direct sidecar indices.** A decomposed mesh GLB's `materials[]` has one entry per
+  source `.mtl` slot up to the highest slot the mesh references (unused slots are
+  plain entries with no primitives); the GLB primitive's `material` index therefore
+  equals the zero-based index into the sidecar's `submaterials[]`, and the material
+  name is `<mtl stem>_<submaterial name>_<NN>` with that same index. Document the
+  corrected Gladius root count (27 materials for 28 sidecar slots, highest referenced
+  slot 26) wherever the earlier "24" appears, and add a unit test that checks
+  `materials[i].name` ends in `_{i:02}` and that `i` indexes the sidecar's
+  `submaterials[]` for the Gladius root mesh.
 - The library already returns the whole package in memory
   (`DecomposedExport { files: Vec<ExportedFile { relative_path, bytes, kind }> }`),
   so the in-memory tar is a serialisation of that vector, not a new exporter path.

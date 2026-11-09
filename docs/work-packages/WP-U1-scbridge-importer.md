@@ -26,9 +26,15 @@ and a minimal menu entry "Import SC package folder…" for testing.
 - **Do not run cargo or `scripts/starbreaker.sh`** (WP-R1 holds the cargo lock and
   shares `./target`). If you need another entity exported, write `TODO(WP-U1)` with
   the exact entity and options and the orchestrator will produce it.
-- Material mapping contract: GLB material name = `<mtl stem>_<submaterial>_<NN>`,
-  `NN` = zero-based index into the sidecar's `submaterials[]`; the GLB primitive's
-  material index is the same `NN`. Use the index, not the name, for lookups.
+- Material mapping contract (confirmed 2026-11-09, with one caveat): in packages
+  from the final WP-R1 exporter, the GLB `materials[]` preserves source `.mtl` slot
+  order (unused slots are present as entries with no primitives), so a primitive's
+  `material` index equals the zero-based index into the sidecar's `submaterials[]`,
+  and the material name ends in `_NN` with that same index. Use the index. **Caveat:**
+  the current `out/dec` was produced by the earlier prototype, whose material list is
+  compacted (24 entries for 28 sidecar slots; `_NN` there is the compact position).
+  Treat `out/dec` as geometry-only test data: map materials by name stem for now, and
+  the orchestrator regenerates `out/dec` from the final exporter when WP-R1 lands.
 - UE facts from WP-U0 are in `ue/README.md` (Decision + GPU validation). The spike
   code `ue/Plugins/SCBridge/Source/SCBridge/SCSpike.cpp` shows a working runtime
   `BuildFromMeshDescriptions` + Nanite + collision + cooked-package save; reuse its
