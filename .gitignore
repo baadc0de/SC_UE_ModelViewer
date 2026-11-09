@@ -19,8 +19,9 @@ ue/**/Saved/
 ue/**/.vs/
 *.sln
 
-# Exports / probes (large game-derived data never goes in git)
+# Exports / probes / cache (large game-derived data never goes in git)
 /out/
+/cache/
 /exports/
 /probe/
 *.glb

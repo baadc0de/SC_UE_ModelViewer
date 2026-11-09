@@ -92,8 +92,9 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 
 ## Local file cache (D10, WP-R1 + WP-C1)
 
-Root: `$XDG_CACHE_HOME/sc_ue_modelviewer/` (default `~/.cache/sc_ue_modelviewer/`),
-overridable in settings. Key material: archive build id (`BuildId` from
+Root: `./cache/` **relative to the working directory the app or CLI is launched
+from** (the repo root in development; gitignored), overridable with `--cache <dir>`
+or in settings. Never a global or home-directory location. Key material: archive build id (`BuildId` from
 `build_manifest.id`, else `Data.p4k` size + mtime), entity class name, the full
 options struct, and a cache-format version per layer. A `manifest.json` per root
 tracks entries, sizes and last-use for LRU eviction under a size cap (default 20 GB).

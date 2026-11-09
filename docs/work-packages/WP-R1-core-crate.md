@@ -35,7 +35,8 @@ bridge need. No format code of our own.
     folder; `scene.json` first). Implement by giving the exporter a sink abstraction
     if upstream writes straight to disk (`DecomposedExport` / `ExportedFile`); patch
     upstream on a `scviewer/` branch if needed and note it for WP-D1.
-  - Layer-1 cache (plan D10) when `cache_dir` is given: the entity index as
+  - Layer-1 cache (plan D10) when `cache_dir` is given (the CLI defaults it to
+  `./cache/` relative to the current working directory; never a global/home dir): the entity index as
     `entities.<buildid>.bin` (build id from `build_manifest.id` beside the p4k, else
     size + mtime), and every decomposed export as `<key>.tar` where the key hashes
     build id + entity + options + a `CACHE_FORMAT_VERSION`. `manifest.json` records
@@ -55,7 +56,7 @@ bridge need. No format code of our own.
 - `cargo run -p scviewer-cli -- decomposed Gladius out/dec` writes
   `out/dec/Packages/*/scene.json` with a non-empty `root_entity.animations`;
   `decomposed-tar Gladius out/dec.tar` extracts to a byte-identical tree.
-- With `--cache out/cache`, the second `search` and the second `decomposed-tar` of the
+- With the default `./cache/` (or `--cache <dir>`), the second `search` and the second `decomposed-tar` of the
   same entity report `cache: hit` and finish in < 200 ms.
 - Unit tests that need game data skip cleanly when no p4k is found (copy upstream's
   `test_p4k.rs` pattern).

@@ -14,8 +14,9 @@ actor is reconstructed from cached blobs in a few seconds.
 (which serialisation path round-tripped in the chosen host).
 
 ## Deliverables
-- `FSCProcessedCache` (Runtime module): root `$XDG_CACHE_HOME/sc_ue_modelviewer/`
-  (settings override), `manifest.json` (entries, sizes, last use, format version),
+- `FSCProcessedCache` (Runtime module): root `./cache/processed/` relative to the
+  working directory the app was launched from (never a global/home location;
+  `--cache <dir>` and settings override), `manifest.json` (entries, sizes, last use, format version),
   size cap (default 20 GB) with LRU eviction, `Clear()`, `Stats()`.
 - Keys: per **mesh** = hash of the GLB bytes + import options that affect geometry
   (Nanite settings, collision mode) + format version; per **texture** = hash of PNG
