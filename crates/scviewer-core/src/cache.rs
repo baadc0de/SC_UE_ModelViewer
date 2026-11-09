@@ -10,7 +10,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub const CACHE_FORMAT_VERSION: u32 = 10;
+// WP-R5b: authored light fields and default-state policy invalidate earlier packages.
+pub const CACHE_FORMAT_VERSION: u32 = 11;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");
@@ -307,6 +308,14 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn light_fields_invalidate_pre_r5b_packages() {
+        let options = crate::DecomposedOptions::default();
+        let old_key = digest(
+            &serde_json::to_vec(&(10_u32, EXPORTER_VERSION, "build", "entity", &options)).unwrap(),
+        );
+        assert_ne!(package_key("build", "entity", &options).unwrap(), old_key);
+    }
     #[test]
     fn cache_keys_separate_builds_options_entities_and_version() {
         let o = crate::DecomposedOptions::default();

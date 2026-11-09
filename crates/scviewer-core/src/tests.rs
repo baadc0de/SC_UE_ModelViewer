@@ -234,6 +234,37 @@ fn live_clip_catalogue_matches_scene_and_persists() {
                     .collect();
                 assert_eq!(matches.len(), 1, "source light must occur exactly once");
                 let record = matches[0];
+                let authored = roundtrip(serde_json::to_value(&light.light).unwrap());
+                for field in [
+                    "bulb_radius_m",
+                    "plane_width_m",
+                    "plane_height_m",
+                    "shadow_casting",
+                    "max_shadow_cast_distance_m",
+                    "affects_this_area_only",
+                    "affect_gi",
+                    "attenuation_tweak",
+                    "plane_softness",
+                    "fade_min_distance_m",
+                    "fade_max_distance_m",
+                    "importance",
+                    "glow_multiplier",
+                    "intensity_candela_proxy_model",
+                    "importance_name",
+                    "affect_gi_mode",
+                    "active_state",
+                    "intensity_raw",
+                ] {
+                    assert!(record.get(field).is_some(), "missing {field}");
+                    assert_eq!(record[field], authored[field], "{field}");
+                }
+                if let Some(default) = light.light.states.get("defaultState") {
+                    assert_eq!(record["active_state"], "defaultState");
+                    assert_eq!(
+                        record["intensity_raw"],
+                        roundtrip(serde_json::json!(default.intensity_raw))
+                    );
+                }
                 assert_eq!(
                     record["color"],
                     roundtrip(serde_json::json!(light.light.color))

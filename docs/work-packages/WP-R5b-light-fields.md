@@ -96,3 +96,116 @@ lights authored off in `defaultState` are exported with `active_state = "default
 and `intensity_raw = 0`; the format version is bumped; docs updated; PR text with
 verification output written to `docs/work-packages/WP-R5b-light-fields.md` under a
 "## Report" heading at the end of this file.
+
+## Report
+
+Implemented WP-R5b. Authored fields reach all scene light arrays, the CLI/FFI catalogue and bundled-GLB light extras. Authored `defaultState` always wins, including zero intensity. Proxy maths is unchanged and labelled `raw_x1500`. Blender consumes authored shadows, bulb radius and plane dimensions while retaining compatibility with older packages.
+
+LIVE uses named enums: `importance` now resolves from the current DataCore property enum's option index, and `affectGI="InheritAffectsObjects"` follows `affectsObjects`. Additional `importance_name` and `affect_gi_mode` fields preserve the source spellings. No game enum ordinal table or asset-specific rule was introduced.
+
+**Version:** `crates/scviewer-core/src/cache.rs::CACHE_FORMAT_VERSION` changed **10 → 11**, invalidating old layer-1 packages. Scene/material schema stays **v2**. UE `SCPackageReader` must continue accepting **scene versions 1 and 2** and consume the additive v2 fields; **11 is not a scene version**.
+
+| Ship | Lights | Active state changed | Off defaults retained |
+| --- | ---: | ---: | ---: |
+| AEGS_Gladius | 77 | 0 | 0 |
+| RSI_Scorpius | 127 | 3 | 3 |
+| DRAK_Cutlass_Black | 225 | 24 | 24 |
+
+All 429 lights match the raw SOC authored-field tuples. Catalogue/scene parity passes for every new field. Package file counts remain 502 / 491 / 747; all GLB topology counts and 10 / 14 / 30 interior placements are unchanged.
+
+Verification ran from the repository root, sequentially, using debug builds and scratch outputs in `/tmp/wp-r5b`. Commands:
+
+```sh
+export CARGO_TARGET_DIR=./target CARGO_INCREMENTAL=0
+cargo build
+cargo test --workspace -- --test-threads=1 --nocapture
+CARGO_HOME=/tmp/scviewer-r5-cargo cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d -- --test-threads=1 --nocapture
+CARGO_HOME=/tmp/scviewer-r5-cargo cargo test --manifest-path vendor/StarBreaker/Cargo.toml --workspace -- --test-threads=1
+cargo fmt -p scviewer-core --check
+rustfmt --edition 2024 --check vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_tests.rs vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_fields.rs
+```
+
+| Verification output | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| Viewer workspace, including scviewer-core | 33 | 0 | 0 |
+| scviewer-core portion | 24 | 0 | 0 |
+| starbreaker-3d, aggregate across 22 suites | 865 | 0 | 31 |
+| Full upstream workspace, aggregate across 102 suites | 2161 | 0 | 61 |
+
+Build output: `Finished dev profile [optimized + debuginfo]`. Formatting checks exit 0. Tests were added and run before fixes: parser regressions reproduced three failures; bundled GLB lacked extras; the pre-R5b cache key was reused; enum parsing lost names/inherited GI. Each regression now passes. Logs: `rust-red.log`, `glb-red.log`, `cache-red.log`, `enum-red.log`, `build-final.log`, `workspace-final.log`, `starbreaker-3d-final.log`, `upstream-final.log` under `/tmp/wp-r5b`.
+
+Baseline exports were captured before implementation with the same decomposed command and destinations `before-$ship`. Final live commands:
+
+```sh
+for ship in AEGS_Gladius RSI_Scorpius DRAK_Cutlass_Black; do
+  target/debug/scviewer --no-cache lights "$ship" > "/tmp/wp-r5b/after-$ship.json"
+  target/debug/scviewer --no-cache decomposed "$ship" "/tmp/wp-r5b/after-$ship"
+  UV_CACHE_DIR=/tmp/wp-r5b/uv-cache uv run python -I scripts/verify_wp_r5.py "/tmp/wp-r5b/before-$ship" "/tmp/wp-r5b/after-$ship" --generic --expect-engine-glow present --catalogue "/tmp/wp-r5b/after-$ship.json"
+done
+python3 -I /tmp/wp-r5b/raw-verify.py
+```
+
+Output excerpts:
+
+```text
+WP-R5b: AEGS_Gladius active state changed: 0 authored-off defaults: 0
+Catalogue/scene authored-field parity: 77 lights
+WP-R5b: RSI_Scorpius active state changed: 3 authored-off defaults: 3
+Catalogue/scene authored-field parity: 127 lights
+WP-R5b: DRAK_Cutlass_Black active state changed: 24 authored-off defaults: 24
+Catalogue/scene authored-field parity: 225 lights
+EntityClassDefinition.AEGS_Gladius: 77 raw SOC component field tuples match; affect_gi true=75
+EntityClassDefinition.DRAK_Cutlass_Black: 225 raw SOC component field tuples match; affect_gi true=223
+EntityClassDefinition.RSI_Scorpius: 127 raw SOC component field tuples match; affect_gi true=102
+```
+
+The verifier asserts every requested field, proxy labels, named-importance resolution, catalogue parity and zero-default darkness. Float comparisons preserve f32 identity across direct catalogue JSON and scene JSON decimal representations.
+
+Blender and C ABI verification:
+
+```sh
+python3 -m unittest discover -s vendor/StarBreaker/blender_addon/tests -p test_light_fields.py
+python3 -I /tmp/wp-r5b/blender-suite.py
+blender -b --factory-startup --python-exit-code 1 --python /tmp/wp-r5b/blender-live.py
+cc -std=c11 -Wall -Wextra -Werror -I crates/scbridge-ffi/include crates/scbridge-ffi/ctest/smoke.c -L target/debug -Wl,-rpath,"$PWD/target/debug" -lscbridge -o /tmp/wp-r5b/ffi-smoke
+/tmp/wp-r5b/ffi-smoke /tmp/wp-r5b/ffi - smoke
+```
+
+Output: new Blender regressions **3 passed**; full stub suite **429 tests, OK (41 skipped)**; headless Blender **77 / 127 / 225 lights imported**, authored dimensions/shadows passed, **0 / 3 / 24 off defaults stayed off**. The normal full stub-suite invocation initially hit its three documented missing component-master fixture errors. The scratch runner redirects only that fixture to the live Gladius TEX2 sidecar; assertions are unchanged. Headless verification used Blender 5.2.3 LTS and imported light records without gobo graphs.
+
+C output: `C ABI smoke (uncached): PASS`. A JSON comparison also passed: `sc_lights: 77 lights; all authored fields and states match CLI; zero-default policy PASS`.
+
+Final housekeeping:
+
+```sh
+CARGO_TARGET_DIR=./target cargo sweep --maxsize 10GB .
+rmdir target/debug/incremental
+du -sh target
+git diff --check
+git -C vendor/StarBreaker diff --check
+```
+
+Output: sweep cleaned **8.80 GiB**; `target` is **11G**; both diff checks exit 0. No commits or branches were created. This task made no writes under `out/` or `ue/`; unrelated concurrent changes are excluded below.
+
+Changed files, relative to the superproject root:
+
+```text
+crates/scbridge-ffi/README.md
+crates/scviewer-core/src/cache.rs
+crates/scviewer-core/src/tests.rs
+docs/03-unreal-export-design.md
+docs/work-packages/WP-R5b-light-fields.md
+scripts/verify_wp_r5.py
+vendor/StarBreaker/blender_addon/starbreaker_addon/runtime/importer/entity_lights.py
+vendor/StarBreaker/blender_addon/starbreaker_addon/runtime/importer/orchestration.py
+vendor/StarBreaker/blender_addon/tests/test_light_fields.py
+vendor/StarBreaker/crates/starbreaker-3d/src/gltf/glb_builder.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/interiors.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/socpak.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_fields.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/socpak_light_tests.rs
+vendor/StarBreaker/crates/starbreaker-3d/src/types.rs
+vendor/StarBreaker/docs/decomposed-export-contract.md
+```
+
+TODO(WP-R5b): UE-side measurement in `ue/verification/WP-U3b.md` §11.2–11.3 must establish the physical intensity mapping. Legacy sparse-component defaults and old-package Blender sizing remain compatibility behavior; this WP does not recalibrate them.

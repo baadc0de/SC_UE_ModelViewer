@@ -78,7 +78,7 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | soft-skinned submesh set | `USkeletalMesh` + `USkeleton` from CHR bones | Nanite off by default (option; experimental) |
 | `.mtl` submaterial | `UMaterialInstanceDynamic` of a master per shader family | Illum, HardSurface, Glass, Layered (tint palette), MeshDecal (POM), Emissive/Unlit (screens, holograms), NoDraw (skipped), Fallback |
 | texture slot | `UTexture2D` | sRGB only for colour roles; DDNA → `TC_Normalmap` linear; roughness/metal/masks → linear; dedupe by source path; mip 0 textures built on a worker thread |
-| `interiors[].lights` | point / spot / rect light components | `intensity_candela_proxy` (cd), `radius_m` ×100, linear colour, half-angles, gobo → light function; `ambient_proxy` skipped with a log |
+| `interiors[].lights` | point / spot / rect light components | Authored intensity, bulb/plane size, attenuation and shadow fields below; `radius_m` ×100, linear colour, half-angles, gobo → light function. `intensity_candela_proxy` is the legacy `raw_x1500` proxy, not calibrated cd; physical mapping belongs to UE (WP-U3b §11.2–11.3). `ambient_proxy` skipped with a log |
 | clip sidecar | `UAnimSequence` on the skeleton | Blender Z-up wxyz → UE; linear keys at clip fps; hemisphere-align; `bind · (start⁻¹ · sample)` when `start_rotation` present; hash-collision arrays by provenance (whitepaper §14.8) |
 | Mannequin fragments | `USCClipCatalog` | clip id, display name, owner entity, source, fragment/tags/scopes, boomerang flag |
 | scene hierarchy | `ASCVehicle` | root scene component; rigid meshes as `UStaticMeshComponent` on sockets named after their owning bone; soft parts as `USkeletalMeshComponent`; children via `local_transform_sc` (`gltf_y_up`); interiors via `container_transform` / placements; `SpawnPoints` derived from seats, entrances (door helpers) and interior floors |
@@ -93,7 +93,35 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | MeshDecal with `%STENCIL_MAP` + `$TintPaletteDecal` (`stencil_palette`) | colour from the palette `decal` red/green/blue channels selected by the stencil texture, `StencilDiffuseColor*`, `StencilOpacity` |
 | Illum with CryEngine forward flag (`MtlFlags & 0x8000`) | diffuse alpha is coverage (masked); upstream should emit this in `alpha_config` (TODO WP-R5). `MtlFlags & 0x2` = two-sided, not yet honoured |
 | GlassPBR | translucent; tint = palette `glass` channel × `GlassTintStrength`; `EmissiveOpacity` |
-| Vehicle `MultiLight` port lights (`lights[]` from WP-R5) and `interiors[].lights` | UE light components, same mapping as the interior-light row above |
+| Vehicle `MultiLight` port lights (`lights[]` from WP-R5) and `interiors[].lights` | Same authored mapping as above. Always use authored `defaultState`, even intensity 0; only an absent default permits the first positive auxiliary → emergency → cinematic fallback. Preserve all states for the UI. |
+
+WP-R5b light sidecar fields apply identically to `root_entity.lights[]`,
+`children[].lights[]`, `interiors[].lights[]`, the light catalogue, and bundled
+GLB light extras:
+
+- `bulb_radius_m: f32` (documented CryEngine missing-value default 0.05),
+  `plane_width_m`, `plane_height_m`: optional metres.
+- `shadow_casting: bool`, `max_shadow_cast_distance_m`: optional metres;
+  `affects_this_area_only: bool`, `affect_gi: bool` (absent flags are false).
+- `attenuation_tweak: f32` (default 1), `plane_softness: Option<f32>`,
+  `fade_min_distance_m`, `fade_max_distance_m`: optional metres.
+- `importance: Option<i32>`, `glow_multiplier: f32` (existing default 1).
+- `intensity_candela_proxy_model: "raw_x1500"` on the flat record and states;
+  `intensity_unit` remains `"cryengine_authored_intensity"`. The existing ambient
+  proxy additionally applies glow multiplier ×0.25; all proxy maths is unchanged.
+
+Unknown optional numeric fields are null; authored zeroes remain zero. Scene and
+material schemas stay v2. `scviewer-core::CACHE_FORMAT_VERSION` is **11** (was 10)
+so old layer-1 packages miss. `SCPackageReader` continues accepting scene v1/v2;
+it must read the additive v2 light fields, not require a scene version 11.
+
+WP-R5b enum detail: LIVE `importance` is often a name. `importance_name` preserves
+it and `importance` exports the DataCore property enum's zero-based option index,
+resolved from the current database rather than a copied table. `affect_gi_mode`
+preserves `On` / `Off` / `InheritAffectsObjects`; `affect_gi` resolves the latter
+from the component's `affectsObjects` flag. Numeric importance and boolean GI
+spellings remain supported. Missing importance is null; standalone SOC parsing
+without DataCore keeps the name with a null index until interior assembly.
 
 ## Nanite / Lumen rules
 

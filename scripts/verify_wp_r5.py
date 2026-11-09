@@ -60,6 +60,48 @@ def all_lights(package):
             for light in group.get("lights", [])]
 
 
+LIGHT_FIELDS = (
+    "bulb_radius_m", "plane_width_m", "plane_height_m", "shadow_casting",
+    "max_shadow_cast_distance_m", "affects_this_area_only", "affect_gi",
+    "attenuation_tweak", "plane_softness", "fade_min_distance_m",
+    "fade_max_distance_m", "importance", "glow_multiplier",
+    "intensity_candela_proxy_model", "importance_name", "affect_gi_mode",
+)
+
+
+def check_light_fields(lights):
+    for light in lights:
+        assert all(field in light for field in LIGHT_FIELDS), light["name"]
+        assert light["intensity_candela_proxy_model"] == "raw_x1500"
+        assert light["intensity_unit"] == "cryengine_authored_intensity"
+        for state in light["states"].values():
+            assert state["intensity_candela_proxy_model"] == "raw_x1500"
+            assert state["intensity_cd"] == state["intensity_candela_proxy"]
+        if light["importance_name"] is not None:
+            assert isinstance(light["importance"], int), light["importance_name"]
+        if light["affect_gi_mode"] in ("On", "Off"):
+            assert light["affect_gi"] == (light["affect_gi_mode"] == "On")
+        default = light["states"].get("defaultState")
+        if default is not None:
+            assert light["active_state"] == "defaultState", light["name"]
+            assert light["intensity_raw"] == default["intensity_raw"], light["name"]
+            if default["intensity_raw"] == 0:
+                assert light["intensity_candela_proxy"] == light["intensity"] == 0, light["name"]
+    return sum(light["states"].get("defaultState", {}).get("intensity_raw") == 0
+               for light in lights)
+
+
+def same_authored_value(a, b):
+    """Direct f32 JSON and scene Value JSON can use different decimal spellings."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(same_authored_value(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(same_authored_value(x, y) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return struct.pack("<f", a) == struct.pack("<f", b)
+    return a == b
+
+
 def check_glow_join(root, package, record_path):
     """Recheck live node/material joins against an exported raw DataCore record."""
     record = json.loads(record_path.read_bytes())
@@ -127,6 +169,7 @@ def main():
     parser.add_argument("--generic", action="store_true", help="omit Gladius-specific acceptance probes")
     parser.add_argument("--expect-engine-glow", choices=("present", "absent"), required=True)
     parser.add_argument("--glow-record", type=Path, nargs="+", default=[], help="raw DataCore entity JSON for live Glow-link join checks")
+    parser.add_argument("--catalogue", type=Path, help="scviewer lights JSON for authored-field parity")
     args = parser.parse_args()
     old, new = scene(args.before), scene(args.after)
     assert new["version"] == 2
@@ -219,6 +262,23 @@ def main():
             assert by_name[name]["decal"]["kind"] == kind
             print(name, json.dumps(by_name[name]["decal"], sort_keys=True))
     lights = all_lights(new)
+    off_defaults = check_light_fields(lights)
+    identity = lambda light: (light["source_container_index"], light["source_light_index"])
+    previous = {identity(light): light for light in all_lights(old)}
+    changed = sum(light["active_state"] != previous[identity(light)]["active_state"] for light in lights)
+    print("WP-R5b:", entity, "active state changed:", changed, "authored-off defaults:", off_defaults)
+    if args.catalogue:
+        catalogue = json.loads(args.catalogue.read_bytes())["lights"]
+        check_light_fields(catalogue)
+        indexed = {identity(light): light for light in catalogue}
+        assert len(indexed) == len(lights)
+        for light in lights:
+            other = indexed[identity(light)]
+            for field in (*LIGHT_FIELDS, "active_state", "intensity_raw", "states"):
+                assert same_authored_value(light[field], other[field]), (light["name"], field)
+        print("Catalogue/scene authored-field parity:", len(lights), "lights")
+    if lights:
+        print("Authored field sample:", json.dumps({field: lights[0][field] for field in LIGHT_FIELDS}, sort_keys=True))
     ids = [(light["source_container_index"], light["source_light_index"]) for light in lights]
     assert len(ids) == len(set(ids)), "duplicate lights across entity/container arrays"
     assert len(lights) == len(all_lights(old))

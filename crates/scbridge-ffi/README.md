@@ -102,3 +102,32 @@ unit tests); it is absent from the deployment `.so`. Compile C with
 `-DSCBRIDGE_TEST_HOOKS` and run the smoke program's `panic` mode against that test
 library. The normal `cargo test` also forces the same boundary panic. Expected
 panic-hook text goes to stderr; execution survives and returns status 3.
+
+### Authored light fields (WP-R5b)
+
+`sc_lights` still returns `{entity, ports, lights}`; each light now also carries
+`bulb_radius_m`, optional `plane_width_m` / `plane_height_m`, `shadow_casting`,
+optional `max_shadow_cast_distance_m`, `affects_this_area_only`, `affect_gi`,
+`attenuation_tweak`, optional `plane_softness`, optional `fade_min_distance_m` /
+`fade_max_distance_m`, optional signed `importance`, and `glow_multiplier`.
+Distances are metres; unknown optional values are null and authored zeroes are
+preserved. Missing bulb radius defaults to CryEngine's 0.05 m; attenuation tweak
+and the existing glow multiplier default to 1. Absent boolean flags are false.
+
+An authored `defaultState` is always active, including intensity zero. Only
+when absent does the first positive auxiliary/emergency/cinematic state win.
+`intensity_unit` stays `cryengine_authored_intensity`; the flat record and each
+state add `intensity_candela_proxy_model: "raw_x1500"`. Existing `intensity`,
+`intensity_cd` and `intensity_candela_proxy` compatibility values retain their
+maths (including ambient glow multiplier ×0.25); they are not calibrated cd.
+No C ABI signature changes. The same fields appear in decomposed scene v2 and
+bundled GLB light extras. Layer-1 `CACHE_FORMAT_VERSION` is 11 (previously 10);
+UE `SCPackageReader` continues accepting scene v1/v2.
+
+WP-R5b enum detail: LIVE `importance` is often a name. `importance_name` preserves
+it and `importance` exports the DataCore property enum's zero-based option index,
+resolved from the current database rather than a copied table. `affect_gi_mode`
+preserves `On` / `Off` / `InheritAffectsObjects`; `affect_gi` resolves the latter
+from the component's `affectsObjects` flag. Numeric importance and boolean GI
+spellings remain supported. Missing importance is null; standalone SOC parsing
+without DataCore keeps the name with a null index until interior assembly.
