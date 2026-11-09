@@ -1,0 +1,39 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Tauri
+app/src-tauri/gen/
+
+# Unreal
+ue/**/Binaries/
+ue/**/Intermediate/
+ue/**/DerivedDataCache/
+ue/**/Saved/
+ue/**/.vs/
+*.sln
+
+# Exports / probes (large game-derived data never goes in git)
+/out/
+/exports/
+/probe/
+*.glb
+*.gltf
+*.fbx
+*.blend
+*.blend1
+*.p4k
+*.dds
+*.dds.*
+
+# Local config
+.mcp.json
+.cargo/config.toml
+.env
+.DS_Store

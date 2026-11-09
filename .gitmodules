@@ -1,0 +1,3 @@
+[submodule "vendor/StarBreaker"]
+	path = vendor/StarBreaker
+	url = https://github.com/diogotr7/StarBreaker
