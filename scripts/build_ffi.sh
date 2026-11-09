@@ -10,7 +10,8 @@ if [[ "${1:-}" == --check-header ]]; then
 fi
 cargo run --locked -p scbridge-ffi --example header
 cargo build --locked -p scbridge-ffi --example discover
-cargo build --locked --release -p scbridge-ffi
+# Build consumers together: a stale CLI embeds a different exporter/cache identity.
+cargo build --locked --release -p scbridge-ffi -p scviewer-cli
 third_party=ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib
 install -Dm644 crates/scbridge-ffi/include/scbridge.h "$third_party/include/scbridge.h"
 install -Dm755 target/release/libscbridge.so "$third_party/lib/Linux/libscbridge.so"

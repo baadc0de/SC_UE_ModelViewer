@@ -48,8 +48,13 @@ fn invalid_inputs_and_open_errors_are_reported_without_allocations() {
     }
 }
 #[test]
-fn options_reject_invalid_and_unsupported_values() {
-    let o = sc_options::default();
+fn ffi_defaults_match_core_contract_and_options_validate() {
+    let mut output = std::mem::MaybeUninit::<sc_options>::uninit();
+    assert_eq!(
+        unsafe { sc_default_options(output.as_mut_ptr()) },
+        sc_status::SC_STATUS_OK
+    );
+    let o = unsafe { output.assume_init() };
     assert_eq!(
         o.core().unwrap_or_else(|_| panic!("defaults rejected")),
         scviewer_core::DecomposedOptions::default()

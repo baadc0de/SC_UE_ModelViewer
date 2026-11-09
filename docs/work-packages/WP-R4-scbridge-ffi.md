@@ -163,7 +163,6 @@ sc_open
 sc_search_entities
 ```
 
-TODO(WP-R4): Resolve upstream export-stamp timestamp nondeterminism if byte identity between independent uncached exports is required; current exact C/CLI parity uses the shared package cache.
 
 ## Cross-review fixes (2026-11-09)
 
@@ -309,3 +308,111 @@ nondeterminism TODO above is unchanged; no cancellation or animation TODO remain
 No commits or UE builds were made. Upstream modifications are limited to
 `starbreaker-common/src/progress.rs` and `starbreaker-3d/src/{error.rs,
 pipeline/glb_assembly.rs,gltf/mod.rs,decomposed.rs}` on `scviewer/lights`.
+
+## Deterministic provenance and runner follow-up
+
+The cache miss was stale-artifact skew, not a defaults discrepancy. Before
+rebuilding, `strings` found these embedded core exporter identities:
+
+```text
+FFI: 94c8fba3b0cb32852152d584dcdf3ba9ba0fe733:dirty=false
+CLI: ae26c82e6dfb34f38c6ce53f8f1f12160fd093e7:dirty=true
+```
+
+These identities intentionally produce different package keys. The release
+script now builds the library and CLI in one Cargo invocation. CLI parser tests
+and FFI entry-point tests both compare defaults against `DecomposedOptions`;
+the C runner additionally requires CLI defaults to hit the exact cache entry
+written using FFI defaults. No export defaults were changed.
+
+The runner already had `set -euo pipefail`, but regression tests reproduced false
+success when sourced in a Bash conditional, which disables errexit. Each step
+now has an explicit failure check, including cached CLI export and cache-hit
+verification. Cleanup preserves the failing status, removes cache and work
+folders on failure or success, and honors `SCBRIDGE_CTEST_KEEP=1` for the work
+folder only. Eighteen fault-injection cases cover compiler, C programs, tar,
+validation/export, cmp, Python verification, cached CLI failure and unexpected
+cache miss with both KEEP settings. The terminal PASS/FAIL marker remains visible
+through filters; callers that pipe output must still enable their own pipefail.
+The original reported work directory was no longer present, so the original
+orchestrator wrapper/KEEP setting could not be reconstructed.
+
+Upstream changes are on the existing `scviewer/lights` branch, without commits:
+
+- `.export_stamp.json` schema v2 contains archive build ID, exporter version and
+  a compile-time SHA-256 of workspace-relative source/build inputs, entity,
+  serialized export options, and generated UI payload hashes. Set-valued filters
+  serialize in sorted order. Missing install manifests use an archive-directory
+  digest; malformed manifests report errors. No wall clock, executable mtime,
+  hostname, runtime Git call or checkout path enters the stamp.
+- The Blender `manifest.py::PackageBundle.load` reader does not consume the
+  auxiliary stamp. The C test loads the real extracted package through that
+  reader and verifies the stamp's generated-file digests.
+- Upstream UI visual checks accept v2 by matching source identity and PNG hashes,
+  retaining the original timestamp guard only for legacy stamps. The full-check
+  script's age hint similarly recognizes v2. The UI check battery is green.
+- Cache format v10 invalidates packages containing old timestamp stamps. C tests
+  now compare independent uncached FFI and CLI packages, both with and without
+  animations. The benchmark no longer permits timestamp exceptions.
+
+Regression-first evidence: the new independent-export Rust test failed at
+`Data/UI/Generated/.export_stamp.json` before the change. It now exports through
+two fresh uncached sessions into separate temporary directories under `out/`,
+then compares all 502 relative paths and file payloads exactly. The initial eight
+shell fault-injection cases returned false success before the runner fix; all
+18 cases pass after the fix.
+
+Final verification (commands from superproject root):
+
+```sh
+export CARGO_HOME=/tmp/wp-r4-cargo-home
+export CARGO_TARGET_DIR=./target
+cargo test --workspace -- --nocapture
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u HOME' \
+  cargo test --workspace -- --nocapture
+scripts/build_ffi.sh
+crates/scbridge-ffi/ctest/run.sh
+env -u HOME crates/scbridge-ffi/ctest/run.sh
+cargo build --workspace
+cargo test -p scbridge-ffi --test shell -- --nocapture
+scripts/build_ffi.sh --check-header
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d export_stamp -- --nocapture
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-ui --test manifest_visual_regression deterministic_stamp -- --nocapture
+readelf -d target/release/libscbridge.so
+nm -D --defined-only target/release/libscbridge.so
+```
+
+The upstream `bash vendor/StarBreaker/scripts/ui_check.sh` also ran successfully.
+A temporary Cargo wrapper changed back to the superproject root and added
+`--manifest-path vendor/StarBreaker/Cargo.toml`, so its nested Cargo commands
+still used `CARGO_TARGET_DIR=./target`. The script printed `ui_check: ALL GREEN`;
+its optional Git marker write was blocked by the read-only .git sandbox. No
+commit or UE build was attempted. SC_DATA_P4K was never set.
+
+Key final output:
+
+```text
+Workspace with archive: 30 passed, 0 failed
+Workspace without archive: 30 passed, 0 failed; live checks report skip
+ffi_defaults_match_core_contract_and_options_validate ... ok
+cli_defaults_match_the_core_and_ffi_decomposed_contract ... ok
+two independent uncached exports: 502 files byte-identical
+FFI / CLI independent uncached decomposed-tar: byte-identical
+Informational counts: 45 GLBs / 23 sidecars / 366 PNGs / 63 clips / 77 lights
+Blender PackageBundle.load: PASS; deterministic stamp and generated hashes: PASS
+ValidationReport: is_valid: true (both animation modes)
+cache: hit (112.8 ms)
+FFI defaults / CLI defaults: same cache key, CLI hit, byte-identical
+C test: PASS
+Without archive: SKIP C smoke: no Data.p4k discovered; exit 0
+Upstream stamp tests: 3 passed
+Upstream deterministic reader tests: 3 passed
+ui_check: ALL GREEN
+scbridge.h matches cbindgen output
+Library soname: [libscbridge.so]
+12 production sc_* text symbols; library 16265792 bytes
+```
+
+Full logs: `out/wp-r4-followup-verification/`. The successful C run's temporary
+work directory was removed, and the fault tests verify failure cleanup/KEEP.
+No open items remain for this follow-up.

@@ -56,7 +56,8 @@ binary; its default cache is `./cache/` relative to the current working director
 `include_animations` defaults to true; false omits clips and animation sidecars.
 `DecomposedOptions { geometry: GlbOptions }` enables animation sidecars by default;
 its default disables pose baking. Other defaults follow upstream (LOD 1, mip 2).
-Cache format v9 includes the animation switch in package keys; the CLI exposes
+Cache format v10 includes the animation switch in package keys and invalidates
+packages with the former nondeterministic UI export stamp; the CLI exposes
 `--no-animations` for both folder/tar and bundled GLB exports.
 
 A cold session reads the archive, parses DataCore and builds the entity index

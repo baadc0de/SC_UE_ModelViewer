@@ -48,24 +48,27 @@ options are uint32 values restricted to 0/1, and material modes are integer
 constants so malformed C enum input cannot create an invalid Rust enum.
 
 `animations=0` disables clip output and animation sidecars, matching CLI
-`--no-animations`. Cache format v9 includes the option in the package key. `collision_reserved` must be zero. Statistics use `Session::cache_stats()`
+`--no-animations`. Cache format v10 includes the option in the package key and invalidates timestamped packages. `collision_reserved` must be zero. Statistics use `Session::cache_stats()`
 under the core cache lock: missing cache/manifest reports zero, malformed manifests
 recover using the existing core policy, and the latest Hit/Miss is unchanged.
 Eviction is a one-shot cap, not a persistent configuration change.
 
 The C integration test is an explicit script step, separate from `cargo test`.
-It never invokes Cargo. Build the library and discovery probe with the release
-script, and build the CLI before running it:
+It never invokes Cargo. The release script builds the library, CLI and discovery
+probe together so they share the same exporter/cache identity:
 
 ```sh
 scripts/build_ffi.sh
-CARGO_TARGET_DIR=./target cargo build --release -p scviewer-cli
 crates/scbridge-ffi/ctest/run.sh
 ```
 
 The probe uses the same `find_p4k()` as the core tests; no archive means a clean
 skip. The script compiles the C caller, extracts its tar, runs `scviewer validate`,
-compares with the CLI using the same cache and checks structural invariants.
+compares independent uncached FFI/CLI exports and checks structural invariants.
+A separate cache test requires CLI defaults to hit the entry written by FFI defaults.
+Every step has an explicit status check, even if Bash errexit is suppressed by a
+conditional invocation. A final PASS/FAIL marker survives output filtering; callers
+that pipe the script must still enable pipefail in their own shell.
 It also cancels on callback two, verifies the same handle still works and no
 package entry was added, then compares/validates animation-disabled C/CLI tars.
 Gladius counts are printed rather than pinned to one game build. Both the work
@@ -81,10 +84,11 @@ Synthetic verifier regressions need no game files:
 python3 -I crates/scbridge-ffi/ctest/test_verify.py
 ```
 
-Independent uncached exports contain different upstream
-`Data/UI/Generated/.export_stamp.json` timestamps. This wrapper does not rewrite
-or reorder tar bytes: exact parity is verified using the shared core package
-cache. The remaining 501 files were byte-identical in the independent comparison.
+Independent uncached exports are byte-identical, including generated UI
+provenance. Upstream schema-v2 `.export_stamp.json` derives from archive build id,
+exporter source identity/version, entity, options and generated file hashes. The
+C test also loads the extracted package with Blender's actual `PackageBundle`
+reader. No byte-comparison exception or stamp rewrite is used.
 The benchmark runs independent processes with caching disabled and compares
 median wall times over five alternating pairs after a warmup pair:
 

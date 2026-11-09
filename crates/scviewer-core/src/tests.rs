@@ -362,3 +362,54 @@ fn live_cache_statistics_missing_and_recovered_manifest() {
     session.cache_evict(0).unwrap();
     assert_eq!(session.cache_stats().unwrap().bytes, 0);
 }
+
+#[test]
+fn live_independent_decomposed_exports_are_byte_identical() {
+    use std::{collections::BTreeMap, path::PathBuf};
+    let Ok(found) = starbreaker_common::discover::find_p4k() else {
+        eprintln!("skip: no Data.p4k installed");
+        return;
+    };
+    fn files(root: &Path, dir: &Path, result: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files(root, &path, result);
+            } else {
+                result.insert(
+                    path.strip_prefix(root).unwrap().into(),
+                    fs::read(&path).unwrap(),
+                );
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out");
+    fs::create_dir_all(&root).unwrap();
+    let first = tempfile::tempdir_in(&root).unwrap();
+    let second = tempfile::tempdir_in(&root).unwrap();
+    for dir in [&first, &second] {
+        // A new session and disabled persistence ensure independent assembly.
+        let session = Session::open(Some(&found.path), None).unwrap();
+        session
+            .export_entity_decomposed(
+                "AEGS_Gladius",
+                dir.path(),
+                &DecomposedOptions::default(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(session.cache_status(), CacheStatus::Miss);
+    }
+    let mut a = BTreeMap::new();
+    let mut b = BTreeMap::new();
+    files(first.path(), first.path(), &mut a);
+    files(second.path(), second.path(), &mut b);
+    assert_eq!(a.keys().collect::<Vec<_>>(), b.keys().collect::<Vec<_>>());
+    for (path, bytes) in &a {
+        assert!(bytes == &b[path], "different bytes: {}", path.display());
+    }
+    eprintln!(
+        "two independent uncached exports: {} files byte-identical",
+        a.len()
+    );
+}

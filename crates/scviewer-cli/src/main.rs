@@ -228,3 +228,22 @@ fn resolve_entity(session: &Session, query: &str) -> Result<String> {
         .map(|hit| hit.name.clone())
         .ok_or_else(|| anyhow::anyhow!("no entity matching {query:?}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_defaults_match_the_core_and_ffi_decomposed_contract() {
+        // scbridge-ffi independently checks sc_default_options against this
+        // same core value; parsing exercises Clap defaults, not a copied struct.
+        for command in ["decomposed", "decomposed-tar"] {
+            let cli = Cli::try_parse_from(["scviewer", command, "synthetic", "out"]).unwrap();
+            let opts = match cli.command {
+                Command::Decomposed { opts, .. } | Command::DecomposedTar { opts, .. } => opts,
+                _ => unreachable!(),
+            };
+            assert_eq!(opts.options(true), DecomposedOptions::default().geometry);
+        }
+    }
+}

@@ -1,9 +1,7 @@
 """Alternate release C/CLI processes with persistence off; compare median wall times."""
 from pathlib import Path
-import json
 import statistics
 import subprocess
-import tarfile
 import time
 
 root = Path(__file__).resolve().parents[3]
@@ -36,21 +34,7 @@ for trial in range(6):
 ffi, cli = (statistics.median(results[key]) for key in ["FFI", "CLI"])
 ratio = ffi / cli
 print(f"median FFI={ffi:.6f} s CLI={cli:.6f} s ratio={ratio:.4f} overhead={(ratio - 1) * 100:.2f}%", flush=True)
-# An independent export legitimately has different upstream provenance timestamps.
-# Keep all 501 other files byte-exact and permit only those two metadata values.
-with tarfile.open(out / "ffi.tar") as a, tarfile.open(out / "cli.tar") as b:
-    assert a.getnames() == b.getnames()
-    differing = []
-    for name in a.getnames():
-        left, right = a.extractfile(name).read(), b.extractfile(name).read()
-        if left != right:
-            differing.append(name)
-            assert name == "Data/UI/Generated/.export_stamp.json", name
-            left, right = json.loads(left), json.loads(right)
-            for key in ["binary_built_at_epoch_s", "written_at_epoch_s"]:
-                assert key in left and key in right
-                del left[key], right[key]
-            assert left == right
-    print(f"Independent export differences (timestamp metadata only): {differing}", flush=True)
+assert (out / "ffi.tar").read_bytes() == (out / "cli.tar").read_bytes(), "independent tar byte mismatch"
+print("Independent uncached tar byte comparison: PASS", flush=True)
 assert ratio <= 1.10, "FFI exceeds 10% wall time overhead budget"
-print("Timing budget: PASS (exact tar parity is checked separately with a shared cache)", flush=True)
+print("Timing budget: PASS", flush=True)
