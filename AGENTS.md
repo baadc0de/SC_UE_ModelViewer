@@ -33,8 +33,11 @@ inherit for all Rust that touches the vendored crates).
   **Cargo builds are sequential across agents** — never two at once. UE builds are a
   second lock (one UBT/editor build at a time); cargo and UE builds may overlap.
 - Use `cargo build` (debug; opt-level 1 like upstream). Release only for shipping.
-- Keep `target/` bounded with `cargo sweep --time 30`; never a blind `cargo clean`.
-  `/` has ~84 GB free.
+- Keep `target/` bounded: incremental compilation is off in the dev profile (its caches
+  reached 15 GB); run `cargo sweep --maxsize 10GB .` when `target/` passes ~12 GB and
+  delete `target/debug/incremental` if it reappears. Never a blind `cargo clean`.
+  `/` is ~97 % full (~55 GB free); the UE project's `Saved/Import/*.tar` test tars
+  are regenerable scratch.
 - Unreal: 5.8.2 at `~/UnrealEngine/5.8`, Vulkan RHI. The deliverable is a standalone
   game-mode app (plan D2/D3): user-facing code goes in the Runtime module; editor-only
   dependencies stay behind `WITH_EDITOR` with a runtime path kept working.

@@ -5,6 +5,8 @@ resolver = "2"
 
 [profile.dev]
 opt-level = 1
+# Incremental caches grew to 15 GB on a 98 %-full disk with several agents building; off.
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 3
