@@ -11,7 +11,7 @@ orchestrator verified on 2026-11-09 (Gladius, LIVE 4.10.2) where that data is:
 
 | Visible thing | Source of truth | Status in the decomposed package |
 | --- | --- | --- |
-| Blue wing-tip / under-wing strips, headlight glow | `.mtl` Illum submaterial attributes `Emissive` (RGB) × `Glow` (scalar) × (`Diffuse` × base-colour texture); e.g. "emissives": Diffuse 0.212,0.597,0.922, Emissive 1,1,1, Glow 0.3, `gladius_emissives_diff` | present in `authored_attributes`, but the curated `emissive_factor()` in `mtl.rs` is wrong (see below) |
+| Blue wing-tip / under-wing strips, headlight glow | `.mtl` surface colour × Emissive tint × strength; strength follows the amended Glow / forward Illum / emittance-map priority below. "emissives" has Diffuse 0.212,0.597,0.922 and Glow 0.3; forward "Headlight_Glow" has no Glow and strength 1 | curated `emissive` and `alpha_config` objects, preserving raw attributes |
 | Panel-line grooves | MeshDecal "pom": `%PARALLAX_OCCLUSION_MAPPING`, TexSlot1 coverage, TexSlot3 DDNA, TexSlot4 height, `PomDisplacement`, `PomHeightBias` | present (slots + flags + public params) |
 | Markings, warning tape | MeshDecal with `%DIFFUSE_MAP` colour sheet (`gladius_text_diff`) | present |
 | Roundels / stencils | MeshDecal with `%STENCIL_MAP` + `$TintPaletteDecal` → palette `decal` channels | present |
@@ -23,14 +23,15 @@ semantics come from CryEngine's documented Illum/MeshDecal behaviour plus the
 authored attributes; executable datamining is not needed for this package.
 
 ## Tasks
-1. **Fix `SubMaterial::emissive_factor` upstream** (`crates/starbreaker-3d/src/mtl.rs`):
-   emission is `Emissive × Glow`; a missing or zero `Glow` means no emission (today a
-   missing Glow falls back to 1.0, which would make every `LayerBlend_V2` submaterial
-   with `Emissive=1,1,1` glow white). Keep `is_engine_glow_material` consistent. Add
-   a unit test with an authored-attribute fixture. Expose in the sidecar a curated
-   `emissive` object per submaterial: `color` (Emissive×Glow×Diffuse), `uses_base_texture`
-   (true unless an emittance map exists), `emittance_texture` (slot ref or null),
-   `alpha_glow_cutoff`, `glow` (raw scalar) — so importers need no attribute parsing.
+1. **Amended emission rule** (`mtl.rs` / `material_semantics.rs`): strength is
+   positive Glow; otherwise mean(Emissive) for forward (MtlFlags & 0x8000)
+   Illum/HardSurface with non-black Emissive; otherwise 1 for an enabled emittance
+   map; otherwise 0. `color` is Emissive tint, or white for black Emissive. Final
+   emission is surface colour × color × strength. LayerBlend and non-forward
+   materials never emit from Emissive alone. Preserve `uses_base_texture`,
+   `emittance_texture`, `alpha_glow_cutoff`, raw `glow`, and add
+   `forward_rendering`. `alpha_config` exposes forward/two-sided flags and
+   authored AlphaTest/Opacity. Unit fixtures must be synthetic.
 2. **Decal semantics in the sidecar**: add `decal` object per MeshDecal submaterial:
    `kind` = `relief_only` (POM, no colour signal) | `color_sheet` | `stencil_palette`
    | `unknown`, with the slot refs it uses and the relevant public params
@@ -51,8 +52,10 @@ authored attributes; executable datamining is not needed for this package.
    `lights[]`; bump the sidecar/scene version field as the contract requires.
 
 ## Done criteria
-- Gladius sidecar: "emissives" → `emissive.color` ≈ (0.064, 0.179, 0.277) (blue × 0.3),
-  "pipe mat 1" (LayerBlend_V2, Emissive 1,1,1, no Glow) → `emissive.color` = 0;
+- Gladius sidecar strengths: "emissives" ≈ 0.3, "Headlight_Glow" = 1,
+  "pipe mat 1" = 0, "glows" in KLWE_las_rep_s1-3 ≈ 0.35. Tint is white in
+  these cases. Effective "emissives" surface RGB before texture remains
+  ≈ (0.064, 0.179, 0.276);
   "pom" → `decal.kind = relief_only`; "decals" → `color_sheet`; "stencil" →
   `stencil_palette`. Unit tests on synthetic attribute fixtures, not game counts.
 - `scviewer lights Gladius` lists the external light groups with positions resolved
@@ -101,9 +104,10 @@ Gladius package counts remain **502 files, 45 GLBs, 23 material sidecars,
 366 PNGs, 51 child instances, 3 interior containers, 63 animation clips**.
 Its lights are now 21 root lights plus 56 interior lights, still 77 total.
 
-The Gladius material evidence is `emissives.color =
-[0.063669242, 0.179160565, 0.276474595]`, `glow = 0.300000012`;
-`pipe mat 1` and `Headlight_Glow` have zero emission; `pom = relief_only`,
+The amended Gladius material evidence is `emissives.color = [1,1,1]`,
+`strength = 0.300000012`, yielding surface RGB before texture
+`[0.063669242, 0.179160565, 0.276474595]`. `pipe mat 1` has strength 0;
+forward `Headlight_Glow` has strength 1. KLWE `glows` has strength ≈ 0.35; `pom = relief_only`,
 `decals = color_sheet`, `stencil = stencil_palette`. POM retains displacement
 `0.031615101` and height bias `0.5`. These observations are acceptance evidence,
 not constants or assertions on game-specific counts in the production code.
@@ -173,7 +177,7 @@ These corrections supersede the initial task/done-criteria emission formula and
 its earlier evidence above. Work continues from `scviewer/lights` at b4c0ebe6;
 no git metadata, UE files, or shared design documents were modified by this agent.
 
-1. **Final emission rule.** `emissive.color` is tint only: authored Emissive RGB
+1. **Previous review emission rule (forward-card exception superseded below).** `emissive.color` is tint only: authored Emissive RGB
    unless all zero, then white. `strength` is positive Glow, else 1 for an enabled
    emittance-map permutation, else 0. Surface colour remains Diffuse × base map,
    or the emittance map. Exact tokens `%EMITTANCE_MAP` and `%MACRO_EMISSIVE_MAP`
@@ -327,3 +331,112 @@ docs/decomposed-export-contract.md
 
 Superproject files: `crates/scviewer-core/README.md`,
 `crates/scviewer-core/src/cache.rs`, `scripts/verify_wp_r5.py`, and this brief.
+
+## Forward-card amendment and Glow join audit (2026-11-09)
+
+This round starts at superproject `5ce4faa`, submodule `scviewer/lights`
+`98222214`, and supersedes the earlier review's statement that neutral Emissive
+without Glow/map always stays off. The read-only command
+`python3 -I ue/scripts/survey_materials.py out/dec-r5` reproduced **395**
+submaterials: **11** forward Illum cards with non-black Emissive/no Glow and
+**42** LayerBlend_V2 materials with non-black Emissive/no Glow/no forward flag.
+The design row's older count of 391 is historical; this agent did not edit it.
+
+The implementation shares the amended strength calculation between the sidecar
+and `emissive_factor()`: positive Glow, then mean(Emissive) for forward
+Illum/HardSurface cards, then enabled emittance map, then zero. Tint remains
+Emissive (white when black); surface colour is applied once by the importer.
+The previously verified `%MACRO_EMISSIVE_MAP` permutation remains supported
+alongside `%EMITTANCE_MAP`. `forward_rendering` is explicit on `emissive`.
+`alpha_config` carries `forward_rendering`, `two_sided`, `alpha_test`, `opacity`.
+Scene/material schemas stay v2; cache format v6 prevents stale v2 package hits.
+
+| Acceptance probe | Strength | Forward | Colour/coverage evidence |
+| --- | ---: | --- | --- |
+| Root `emissives` | ≈ 0.3 | true | Tint white; surface RGB before texture ≈ (0.063669242, 0.179160565, 0.276474595) |
+| Root `Headlight_Glow` | 1.0 | true | Emissive (1,1,1), no Glow; soft forward glow card |
+| `pipe mat 1` | 0 | false | LayerBlend_V2 neutral Emissive is not energy |
+| KLWE_las_rep_s1-3 `glows` | ≈ 0.35 | false | Black Emissive is untinted; positive Glow drives surface emission |
+
+The `glows` selector in the acceptance script includes the source material stem:
+a distinct jump-drive material also calls a submaterial `glows` and authors Glow
+≈ 0.3. No production rule uses these names. All numeric acceptance values above
+come from the supplied brief/live survey; unit tests use synthetic values.
+
+### Enabled DataCore property-link evidence
+
+Reproduced with:
+
+```sh
+target/debug/starbreaker dcb query EntityClassDefinition --filter 'EntityClassDefinition.AEGS_Gladius_Thruster_Main' > out/wp-r5-amended/thruster-record.json
+target/debug/starbreaker nmc dump 'Data\Objects\Spaceships\Thrusters\AEGS\AEGS_Gladius_Thrusters\AEGS_Gladius_Thruster_Main.cga' > out/wp-r5-amended/thruster-nmc.txt
+```
+
+Entity record **5d118473-dd82-4182-81a8-3bcf35b8d969** is
+`EntityClassDefinition.AEGS_Gladius_Thruster_Main`.
+`Components[SEntityComponentEffects].entityEffects.materialEffects.enabled`
+is true, and **both** `tagEffects[0]` and `tagEffects[1]` are enabled.
+Each has `propertyLinks[0].materialProperty = Glow` and
+`propertyLinks[0].subMeshName = Gladius_Thruster_Main`. Their parameter record is
+`25650c41-acb0-4545-ad28-6417928c2a5e`; tag records are respectively
+`eb736d5b-c639-48b0-852f-f18d919e1795` and
+`f303463a-97cb-4d49-b609-71966d409507`. Neither link contains a material-slot filter.
+
+| Record ID | Property links | Exact submesh / NMC node | Source material slot → exported slot | Material | LOD1 indices |
+| --- | --- | --- | --- | --- | ---: |
+| 5d118473-dd82-4182-81a8-3bcf35b8d969 | tagEffects[0/1].propertyLinks[0].Glow | Gladius_Thruster_Main / 0 (geometry, parent 1) | 1 → 0 | engine_a | 6354 |
+| 5d118473-dd82-4182-81a8-3bcf35b8d969 | tagEffects[0/1].propertyLinks[0].Glow | Gladius_Thruster_Main / 0 (geometry, parent 1) | 2 → 1 | engine_b | 44871 |
+| 5d118473-dd82-4182-81a8-3bcf35b8d969 | tagEffects[0/1].propertyLinks[0].Glow | Gladius_Thruster_Main / 0 (geometry, parent 1) | 4 → 3 | text_decals | 48 |
+| 5d118473-dd82-4182-81a8-3bcf35b8d969 | tagEffects[0/1].propertyLinks[0].Glow | Gladius_Thruster_Main / 0 (geometry, parent 1) | 5 → 4 | engine_glow | 816 |
+
+`text_decals` is genuinely bound by the authored **node-level** Glow writes;
+its label does not indicate a separate NMC node. The four-target join is retained.
+It describes eligibility for the manual control, not a claim that every section
+visibly glows in every game state (effect tags, modifiers and shader coverage
+still matter). The synthetic regression
+`enabled_glow_link_includes_markings_and_retains_exact_source_ids` feeds an enabled
+Glow link through the join, includes a marking section on that exact node, and
+rejects a similarly named sibling. The acceptance script's `--glow-record` option
+also rechecks the live record → node → sidecar source slot → GLB primitive join.
+
+Amendment verification (all commands from the superproject root; logs and raw
+evidence in ignored `out/wp-r5-amended/`):
+
+```sh
+CARGO_TARGET_DIR=./target cargo build
+CARGO_TARGET_DIR=./target cargo test --workspace
+CARGO_HOME=/tmp/scviewer-r5-cargo CARGO_TARGET_DIR=./target cargo test --manifest-path vendor/StarBreaker/Cargo.toml --workspace -- --test-threads=1
+CARGO_TARGET_DIR=./target cargo fmt -p scviewer-core -p scviewer-cli --check
+rustfmt --edition 2024 --check vendor/StarBreaker/crates/starbreaker-3d/src/material_semantics.rs vendor/StarBreaker/crates/starbreaker-3d/src/pipeline/engine_glow.rs
+target/debug/scviewer decomposed Gladius out/dec-r5 --lod 1 --mip 2
+target/debug/scviewer validate out/dec-r5
+python3 -I scripts/verify_wp_r5.py out/wp-r5-amended/before out/dec-r5 --expect-engine-glow present --glow-record out/wp-r5-amended/thruster-record.json
+python3 -I ue/scripts/survey_materials.py out/dec-r5
+for entity in Gladius Scorpius Cutlass_Black Controller_Light; do
+  target/debug/scviewer --no-cache lights "$entity" > "out/wp-r5-amended/${entity}-lights.json" 2> "out/wp-r5-amended/${entity}-lights.log" || exit
+done
+```
+
+The synthetic forward-card regression first failed with strength 0 versus
+expected 1 (`forward-red.log`), then passed after the amendment. Root workspace:
+**17 passed, 0 failed**. Upstream workspace aggregate: **2141 passed, 0 failed,
+61 ignored**; the 3D library has **789 passed, 3 ignored**. Formatting checks pass.
+The scratch Cargo home uses the existing package cache with writable downloaded
+dependencies because the normal registry is read-only in this sandbox; all build
+outputs still use `./target`.
+
+Export: **502 files, cache miss**. Validation: **is_valid=true, errors=[],
+warnings=[]**. Acceptance: strengths **0.3000000119 / 1 / 0 / 0.3499999940**
+for emissives / Headlight_Glow / pipe mat 1 / KLWE glows; every submaterial's
+emission and alpha fields match its authored data. `emissives.alpha_config` is
+`{forward_rendering:true, two_sided:true, alpha_test:0, opacity:1}`;
+`Headlight_Glow.alpha_config` differs only in `two_sided:false`.
+The script confirms all four enabled Glow joins, unchanged topology and all ten
+interior placements, 45 GLBs / 23 sidecars / 366 PNGs / 51 children / 3 interiors /
+63 clips, and **77 lights = 21 root + 56 interiors**. The generic validator's
+`light_count:0` is its GLB-light statistic, not the scene-sidecar light total.
+CLI counts reconfirm **Gladius 77 / Scorpius 127 / Cutlass_Black 225 /
+Controller_Light 0**. Survey reconfirms 395 submaterials, including the 11 forward
+Illum cards and 42 non-forward LayerBlend_V2 entries described above.
+
+No new `TODO(WP-R5)` items; the two earlier audit items remain outstanding.

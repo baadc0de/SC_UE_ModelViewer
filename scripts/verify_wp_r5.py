@@ -2,8 +2,9 @@
 """Validate WP-R5 exports against an unchanged baseline and print live evidence.
 
 Run with python3 -I: inputs are generated/exported data. Named material selectors
-are the WP's acceptance probes, never production classification rules. Numeric
-emission expectations are derived from authored attributes, not copied game data.
+are the WP's acceptance probes, never production classification rules. General
+emission expectations are derived from authored attributes. The four
+named strength checks are acceptance values supplied in the amended WP-R5 brief.
 """
 import argparse
 import collections
@@ -31,12 +32,17 @@ def inventory(root, package):
     }
 
 
-def topology(path):
+def gltf_document(path):
     data = path.read_bytes()
     assert data[:4] == b"glTF"
     size, kind = struct.unpack_from("<II", data, 12)
     assert kind == 0x4E4F534A
     doc = json.loads(data[20:20 + size])
+    return doc
+
+
+def topology(path):
+    doc = gltf_document(path)
     return {key: len(doc.get(key, [])) for key in ("nodes", "meshes", "materials", "skins", "accessors")}
 
 
@@ -54,12 +60,41 @@ def all_lights(package):
             for light in group.get("lights", [])]
 
 
+def check_glow_join(root, package, record_path):
+    """Recheck live node/material joins against an exported raw DataCore record."""
+    record = json.loads(record_path.read_bytes())
+    component = next(c for c in record["_RecordValue_"]["Components"]
+                     if c["_Type_"] == "SEntityComponentEffects")
+    category = component["entityEffects"]["materialEffects"]
+    assert category["enabled"]
+    links = [(kind, i, j, link) for kind in ("tagEffects", "triggerEffects")
+             for i, effect in enumerate(category[kind]) if effect["enabled"]
+             for j, link in enumerate(effect["propertyLinks"]) if link["materialProperty"] == "Glow"]
+    targets = [t for t in package["controls"]["engine_glow"]["targets"]
+               if t["entity_name"] == record["_RecordName_"].removeprefix("EntityClassDefinition.")]
+    assert targets and links
+    for target in targets:
+        gltf = gltf_document(root / target["mesh_asset"])
+        sidecar = json.loads((root / target["material_sidecar"]).read_bytes())
+        slot = next(i for i, m in enumerate(sidecar["submaterials"])
+                    if m["index"] == target["source_material_index"])
+        matches = [(node, primitive, kind, i, j) for node in gltf["nodes"] if "mesh" in node
+                   for primitive in gltf["meshes"][node["mesh"]]["primitives"] if primitive.get("material") == slot
+                   for kind, i, j, link in links if link["subMeshName"].casefold() == node["name"].casefold()]
+        assert matches, f"target lacks enabled Glow link on its exact geometry node: {target}"
+        for node, primitive, kind, i, j in matches:
+            print("Glow join:", record["_RecordId_"], f"{kind}[{i}].propertyLinks[{j}].Glow",
+                  node["name"], "source slot", target["source_material_index"],
+                  target["submaterial_name"], "indices", gltf["accessors"][primitive["indices"]]["count"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
     parser.add_argument("--generic", action="store_true", help="omit Gladius-specific acceptance probes")
     parser.add_argument("--expect-engine-glow", choices=("present", "absent"), required=True)
+    parser.add_argument("--glow-record", type=Path, help="raw DataCore entity JSON for live Glow-link join checks")
     args = parser.parse_args()
     old, new = scene(args.before), scene(args.after)
     assert new["version"] == 2
@@ -75,6 +110,8 @@ def main():
     assert bool(control.get("targets")) == (args.expect_engine_glow == "present")
     print("controls.engine_glow presence:", before_control, "->", bool(control.get("targets")),
           "targets:", len(control.get("targets", [])))
+    if args.glow_record:
+        check_glow_join(args.after, new, args.glow_record)
     materials = []
     black_with_glow = 0
     for path in args.after.rglob("*.materials.json"):
@@ -87,19 +124,36 @@ def main():
             tokens = set(attrs.get("StringGenMask", "").upper().split("%"))
             emittance = bool(tokens & {"EMITTANCE_MAP", "MACRO_EMISSIVE_MAP"})
             expected_tint = emission if any(emission) else [1,1,1]
-            strength = glow if glow > 0 else 1 if emittance else 0
+            raw_flags = attrs.get("MtlFlags", "0").strip()
+            flags = int(raw_flags, 16 if raw_flags.lower().startswith("0x") else 10)
+            forward = bool(flags & 0x8000)
+            forward_card = forward and material["shader_family"] in ("Illum", "HardSurface") and any(emission)
+            strength = glow if glow > 0 else sum(emission)/3 if forward_card else 1 if emittance else 0
             actual = material["emissive"]
             assert all(abs(a-b) <= 1e-5 * max(1,abs(b)) for a,b in zip(actual["color"], expected_tint)), path
             assert abs(actual["strength"] - strength) <= 1e-5 * max(1, abs(strength)), path
             assert actual["uses_base_texture"] == (not emittance), path
+            assert actual["forward_rendering"] == forward, path
+            alpha = material["alpha_config"]
+            assert alpha["forward_rendering"] == forward, path
+            assert alpha["two_sided"] == bool(flags & 0x2), path
+            assert abs(alpha["alpha_test"] - float(attrs.get("AlphaTest", "0"))) < 1e-6, path
+            assert abs(alpha["opacity"] - float(attrs.get("Opacity", "1"))) < 1e-6, path
             black_with_glow += glow > 0 and not any(emission)
             materials.append(material)
     print("Glow-positive / black-Emissive submaterials:", black_with_glow)
     if not args.generic:
         root = json.loads((args.after / new["root_entity"]["material_sidecar"]).read_bytes())
         by_name = {m["submaterial_name"]: m for m in root["submaterials"]}
-        for name in ("glows", "emissives", "Headlight_Glow"):
-            m = next(m for m in materials if m["submaterial_name"] == name and m["emissive"]["glow"] > 0) if name == "glows" else by_name[name]
+        # LIVE acceptance values supplied in the amended brief, not production rules.
+        expected_strengths = {"emissives": 0.3, "Headlight_Glow": 1.0, "glows": 0.35}
+        for name, expected_strength in expected_strengths.items():
+            if name == "glows":
+                m = next(m for m in materials if m["submaterial_name"] == name
+                         and m["material_set_identity"]["source_stem"].casefold() == "klwe_las_rep_s1-3")
+            else:
+                m = by_name[name]
+            assert abs(m["emissive"]["strength"] - expected_strength) < 1e-6, name
             attrs = {a["name"]: a["value"] for a in m["authored_attributes"]}
             diffuse = [float(v) for v in attrs["Diffuse"].split(",")]
             effective = [c*d*m["emissive"]["strength"] for c,d in zip(m["emissive"]["color"], diffuse)]
