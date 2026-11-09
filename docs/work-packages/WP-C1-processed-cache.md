@@ -18,6 +18,10 @@ actor is reconstructed from cached blobs in a few seconds.
   working directory the app was launched from (never a global/home location;
   `--cache <dir>` and settings override), `manifest.json` (entries, sizes, last use, format version),
   size cap (default 20 GB) with LRU eviction, `Clear()`, `Stats()`.
+- The per-mesh cooked package must carry the Lumen mesh cards, distance field and
+  ray-tracing geometry that WP-U1 builds (WP-U0 found the spike package carried none
+  because the build path produced none); a cache hit must render identically in the
+  Lumen overview to a fresh build.
 - Keys: per **mesh** = hash of the GLB bytes + import options that affect geometry
   (Nanite settings, collision mode) + format version; per **texture** = hash of PNG
   bytes + role flags; per **entity load** = archive build id + entity + full options
