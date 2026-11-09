@@ -56,8 +56,9 @@ hardware ray tracing, which the Viewer level already uses (D8/D9, Vulkan HWRT).
 3. No leaks: interior lights do not show through the hull with the sun off; shadows match VSM.
 4. Gobos were silently dropped on both paths (16-slot light function atlas, one MID per light):
    `r.LightFunctionAtlas.Size=16` now; importer patch shares one MID per texture.
-5. Intensity stays `intensity_candela_proxy` (= raw × 1500) in candela; the addon's ×20 gain is a
-   uniform exposure, not per-light information. Overexposure came from the fixed exposure.
+5. Intensity stays `intensity_candela_proxy` (= raw × 1500) for now; the addon's ×20 gain is a
+   uniform exposure. Revised by the follow-up (record §11): CryEngine's model gives
+   I = π·10⁴·intensity·bulbRadius², so ×1500 is wrong per light; needs `bulbRadius` exported.
 6. Viewer exposure: auto exposure, EV100 units, bias 0 (measured EV100 −2.0/−1.6 exteriors,
    +0.3 Cutlass bay); a bounded PPV (−3…6) is proposed for the Viewer map.
 7. Fallback without MegaLights: per scene instance, only lights with `radius_m` ≥ the instance's
@@ -65,3 +66,7 @@ hardware ray tracing, which the Viewer level already uses (D8/D9, Vulkan HWRT).
 8. MegaLights needs no per-light flags (defaults: allowed, ray-traced shadows).
 9. Patch for `SCLightImporter.cpp` is in the record (§8), checked with `git apply --check`, not built.
 10. Gladius hull/livery unchanged; the hangar reference shows no ship-light pools (light state, TODO).
+11. Follow-up (record §11.8): the CryEngine model (π·10⁴·intensity·bulb²) is in the importer against the
+    WP-R5b fields; Gladius hangar pool contrast 0.04 (×1500: 0.50), matching the hangar reference. Pools in
+    the old 5 lux map remain — the default environment should become the hangar preset. Open: Cutlass flood
+    balance (EV100 −1.1 bay), auto-exposure metering in the void, `attenuation_tweak` semantics.

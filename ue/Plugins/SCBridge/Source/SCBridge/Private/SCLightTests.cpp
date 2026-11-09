@@ -1,4 +1,4 @@
-// Regression fixtures for instance-local shadow budgets and authored default light states.
+// Regression fixtures for instance-local shadow budgets, authored default light states and the CryEngine light model.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "SCLightImporter.h"
@@ -7,6 +7,8 @@
 #include "Components/LightComponent.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
+#include "Components/PointLightComponent.h"
+#include "Components/RectLightComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightDefaults, "SCBridge.Lights.DefaultsAndShadowBudget",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -67,6 +69,43 @@ bool FSCLightDefaults::RunTest(const FString&)
         TestFalse(TEXT("runtime refresh retains fallback on null-RHI"), Vehicle->Lights[0]->CastShadows);
     }
     TestEqual(TEXT("valid fixtures have no warnings"), Warnings.Num(), 0);
+    Vehicle->Destroy();
+    World->DestroyWorld(false);
+    MegaLights->Set(Previous, ECVF_SetByCode);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightAuthoredModel, "SCBridge.Lights.AuthoredCryEngineModel",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightAuthoredModel::RunTest(const FString&)
+{
+    // Synthetic values (not game data): CryEngine model pi*1e4*I*b^2 for point/spot, 1e4*I*w*h for planar.
+    auto* MegaLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.EnableForProject"));
+    const int32 Previous = MegaLights->GetInt();
+    MegaLights->Set(0, ECVF_SetByCode);
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    auto* Vehicle = World->SpawnActor<ASCVehicle>();
+    FSCFolderPackageSource Source(TEXT("/tmp"));
+    TArray<FString> Warnings;
+    const auto Helper = [](const FString&) -> USceneComponent* { return nullptr; };
+    FSCSceneInstance Instance;
+    const TCHAR* Common = TEXT(R"("transform_basis":"cryengine_z_up","radius_m":3,"intensity_candela_proxy":1500,"plane_width_m":0.5,"plane_height_m":0.2)");
+    Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Bulb","semantic_light_kind":"point",%s,"intensity_raw":2,"bulb_radius_m":0.1,"shadow_casting":true,)"
+                                                R"("active_state":"defaultState","states":{"defaultState":{"intensity_raw":2,"intensity_candela_proxy":3000}}})"), Common));
+    Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Tiny","semantic_light_kind":"spot",%s,"intensity_raw":2,"bulb_radius_m":0.01,"shadow_casting":false,"outer_angle":40,"inner_angle":30})"), Common));
+    Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Panel","semantic_light_kind":"area",%s,"intensity_raw":2,"bulb_radius_m":0,"shadow_casting":false})"), Common));
+    Instance.LightJson.Add(TEXT(R"({"name":"Legacy","semantic_light_kind":"point","transform_basis":"cryengine_z_up","radius_m":3,"intensity_candela_proxy":25})"));
+    FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
+    TestEqual(TEXT("four components"), Vehicle->Lights.Num(), 4);
+    TestEqual(TEXT("bulb model: pi*1e4*2*0.1^2"), double(Vehicle->Lights[0]->Intensity), UE_DOUBLE_PI * 200.0, 0.01);
+    TestEqual(TEXT("bulb model: small bulb"), double(Vehicle->Lights[1]->Intensity), UE_DOUBLE_PI * 2.0, 0.001);
+    TestEqual(TEXT("planar model: 1e4*2*0.5*0.2"), double(Vehicle->Lights[2]->Intensity), 2000.0, 0.01);
+    TestEqual(TEXT("legacy packages keep the proxy"), double(Vehicle->Lights[3]->Intensity), 25.0, 0.001);
+    TestEqual(TEXT("bulb is the source radius (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SourceRadius), 10.0, 0.001);
+    TestEqual(TEXT("plane is the rect source (cm)"), double(Cast<URectLightComponent>(Vehicle->Lights[2])->SourceWidth), 50.0, 0.001);
+    TestTrue(TEXT("fallback shadows follow shadow_casting (on)"), bool(Vehicle->Lights[0]->CastShadows));
+    TestFalse(TEXT("fallback shadows follow shadow_casting (off)"), bool(Vehicle->Lights[1]->CastShadows));
+    TestEqual(TEXT("no warnings"), Warnings.Num(), 0);
     Vehicle->Destroy();
     World->DestroyWorld(false);
     MegaLights->Set(Previous, ECVF_SetByCode);

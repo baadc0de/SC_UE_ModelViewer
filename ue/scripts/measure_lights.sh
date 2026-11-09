@@ -6,7 +6,8 @@
 #   measure_lights.sh --analyse <csv> [sample seconds]     (re-analyse a saved CSV)
 # Env: SC_SP (r.ScreenPercentage, default 100), SC_EXEC (comma-separated console commands
 # appended to "stat unit"), SC_SETTLE (s after shaders go idle, default 20), SC_SAMPLE (s of
-# frames sampled after the screenshot, default 15), SC_OUT (screenshot/CSV dir).
+# frames sampled after the screenshot, default 15), SC_OUT (screenshot/CSV dir), SC_MAP (map URL,
+# e.g. /Game/Maps/Presets/Viewer_Hangar; default: the project's GameDefaultMap).
 # The boot CSV capture streams rows until UE is stopped (SIGTERM leaves the file unfinalised,
 # the last row may be cut); statistics use only the frames of the last SC_SAMPLE seconds.
 set -u
@@ -46,8 +47,16 @@ CSVDIR="$HOME/.config/Epic/UnrealEngine/5.8/Saved/Profiling/CSV"  # boot capture
 SETTLE=${SC_SETTLE:-20}; SAMPLE=${SC_SAMPLE:-15}
 EXEC="stat unit, r.ScreenPercentage ${SC_SP:-100}, r.DynamicRes.OperationMode 0${SC_EXEC:+, $SC_EXEC}"
 rm -f "$LOG"; before=$(ls "$CSVDIR" 2>/dev/null | wc -l)
-ue/scripts/run_import.sh "$PKG" -vulkan -SCStay -csvGpuStats -csvCaptureFrames=1000000 \
+if [ -n "${SC_MAP:-}" ]; then   # same host arguments as run_import.sh, with the map URL first
+  mkdir -p ue/SCViewer/Saved/Import
+  "$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/ue/SCViewer/SCViewer.uproject" "$SC_MAP" \
+    -game -windowed -resx=1600 -resy=900 -unattended -nosplash -nop4 -ddc=SCViewerDDC \
+    -SCPackage="$(realpath "$PKG")" -abslog="$SC_REPO/$LOG" -vulkan -SCStay -csvGpuStats \
+    -csvCaptureFrames=1000000 "-ExecCmds=$EXEC" "$@" >/dev/null 2>&1 &
+else
+  ue/scripts/run_import.sh "$PKG" -vulkan -SCStay -csvGpuStats -csvCaptureFrames=1000000 \
     "-ExecCmds=$EXEC" "$@" >/dev/null 2>&1 &
+fi
 pid=$!; start=$(date +%s)
 until [ -f "$LOG" ] && grep -q -E "IMPORT_OK|IMPORT_FAILED" "$LOG"; do
   kill -0 $pid 2>/dev/null || { echo "$TAG: UE exited early"; exit 1; }

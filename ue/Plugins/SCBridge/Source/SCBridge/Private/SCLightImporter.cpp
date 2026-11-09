@@ -89,6 +89,14 @@ double ShadowRadiusThreshold(const TArray<FString>& LightJson)
     Radii.Sort();
     return Radii[(3 * Radii.Num()) / 4];
 }
+// CryEngine's renderer light unit (CRYENGINE 5 CryCommon/CryRenderer/IRenderer.h RENDERER_LIGHT_UNIT_SCALE): one unit of
+// light colour is 1e4 cd/m2 (luminance) / 1e4 lux (sun, divided by pi). Engine constant, not game data.
+constexpr double CryLightUnit = 10000.0;
+// The authored light model is present when the exporter wrote the WP-R5b fields.
+bool HasAuthoredModel(const FLightJson& J)
+{
+    return J->HasField(TEXT("bulb_radius_m"));
+}
 // One light-function MID per gobo texture: the light function atlas (deferred lighting, MegaLights, Lumen)
 // de-duplicates slots by material and holds r.LightFunctionAtlas.Size^2 materials; a MID per light exhausts it.
 UMaterialInstanceDynamic* GoboMaterial(ASCVehicle* Vehicle, UMaterialInterface* Master, UTexture2D* Texture)
@@ -106,6 +114,20 @@ UMaterialInstanceDynamic* GoboMaterial(ASCVehicle* Vehicle, UMaterialInterface* 
     return MID;
 }
 } // namespace
+double FSCLightImporter::StateCandela(const TSharedPtr<FJsonObject>& Light, const TSharedPtr<FJsonObject>& State)
+{
+    if (!HasAuthoredModel(Light))
+        return FMath::Max(0., LightNumber(State, TEXT("intensity_candela_proxy"), LightNumber(Light, TEXT("intensity_candela_proxy"))));
+    // CryEngine attenuation (shadeLib.cfi GetPhysicalLightAttenuation): full intensity inside the bulb, then (b/d)^2,
+    // with the Lambert pi folded into the light colour; so the far-field luminous intensity is pi * 1e4 * I * b^2.
+    // attenuation_tweak (headlights only) has no documented meaning and is not applied (§11.7: inconclusive).
+    const double Raw = FMath::Max(0., LightNumber(State, TEXT("intensity_raw"), LightNumber(Light, TEXT("intensity_raw"))));
+    if (LightString(Light, TEXT("semantic_light_kind")) == TEXT("area"))
+        return CryLightUnit * Raw * FMath::Max(0., LightNumber(Light, TEXT("plane_width_m"))) *
+               FMath::Max(0., LightNumber(Light, TEXT("plane_height_m")));
+    const double Bulb = FMath::Max(0., LightNumber(Light, TEXT("bulb_radius_m")));
+    return UE_DOUBLE_PI * CryLightUnit * Raw * Bulb * Bulb;
+}
 void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInstance& Instance, ASCVehicle* Vehicle, USceneComponent* Parent,
                              TFunction<USceneComponent*(const FString&)> Helper, TArray<FString>& Warnings, bool bHelperFrame)
 {
@@ -171,9 +193,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         }
         State.RadiusM = FMath::Max(0., LightNumber(J, TEXT("radius_m")));
         State.ShadowThresholdM = ShadowRadius;
-        State.bFallbackShadow = !Cast<ULocalLightComponent>(Light) || State.RadiusM >= ShadowRadius;
-        const double Intensity =
-            FMath::Max(0., LightNumber(Selected, TEXT("intensity_candela_proxy"), LightNumber(J, TEXT("intensity_candela_proxy"))));
+        // Fallback (no MegaLights): the authored shadowParams.shadowCasting flag when exported, else the radius quartile.
+        const bool bAuthored = HasAuthoredModel(J);
+        bool bAuthoredShadow = false;
+        State.bFallbackShadow = !Cast<ULocalLightComponent>(Light) ||
+                                (bAuthored && J->TryGetBoolField(TEXT("shadow_casting"), bAuthoredShadow) ? bAuthoredShadow
+                                                                                                          : State.RadiusM >= ShadowRadius);
+        const double Intensity = StateCandela(J, Selected);
         State.bEnabled = State.ActiveState != TEXT("offState") && Intensity > 0;
         Light->SetVisibility(State.bEnabled);
         const FVector Color = LightVector(Selected, TEXT("color"), LightVector(J, TEXT("color"), FVector(1)));
@@ -183,7 +209,18 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             Local->SetIntensityUnits(ELightUnits::Candelas);
             const double Radius = FMath::Max(0., LightNumber(J, TEXT("radius_m")));
             Local->SetAttenuationRadius(Radius * 100);
-            Local->SetCastShadows(!bShadowCap || Radius >= ShadowRadius);
+            Local->SetCastShadows(!bShadowCap || State.bFallbackShadow);
+        }
+        // Emitter size from the authored bulb / plane (CryEngine's attenuation bulb is the source radius).
+        if (bAuthored)
+        {
+            if (auto* Point = Cast<UPointLightComponent>(Light)) // also spot lights
+                Point->SetSourceRadius(FMath::Max(0., LightNumber(J, TEXT("bulb_radius_m"))) * 100);
+            else if (auto* Rect = Cast<URectLightComponent>(Light))
+            {
+                Rect->SetSourceWidth(FMath::Max(0., LightNumber(J, TEXT("plane_width_m"))) * 100);
+                Rect->SetSourceHeight(FMath::Max(0., LightNumber(J, TEXT("plane_height_m"))) * 100);
+            }
         }
         Light->SetIntensity(State.bEnabled ? Intensity : 0.);
         if (auto* Spot = Cast<USpotLightComponent>(Light))
