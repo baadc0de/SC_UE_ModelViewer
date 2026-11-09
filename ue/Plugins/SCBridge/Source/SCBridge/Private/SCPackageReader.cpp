@@ -94,8 +94,9 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     FReaderObject Scene;
     if (!ReadJson(Source, Out.ScenePath, Scene, Error, &Out.ContentHash)) return false;
     double Version = 0;
-    if (!Scene->TryGetNumberField(TEXT("version"), Version) || Version != 1 || String(Scene, TEXT("export_kind")) != TEXT("Decomposed"))
-    { Error = TEXT("Expected decomposed scene version 1"); return false; }
+    // Schema v2 (WP-R5) only adds fields (lights, vehicle_light_ports, sidecar emissive/decal objects).
+    if (!Scene->TryGetNumberField(TEXT("version"), Version) || (Version != 1 && Version != 2) || String(Scene, TEXT("export_kind")) != TEXT("Decomposed"))
+    { Error = TEXT("Expected decomposed scene version 1 or 2"); return false; }
     const FReaderObject* Root;
     if (!Scene->TryGetObjectField(TEXT("root_entity"), Root)) { Error = TEXT("Scene has no root_entity object"); return false; }
     FString Detail;
@@ -134,6 +135,9 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         FSCMaterialSet Set; Set.Path = Path; FReaderObject O;
         if (!ReadJson(Source, Path, O, Detail, &Set.ContentHash) || !O->HasTypedField<EJson::Array>(TEXT("submaterials")))
         { Warn(Path, Detail.IsEmpty() ? TEXT("Missing submaterials array") : Detail); Detail.Reset(); continue; }
+        double SidecarVersion = 1;
+        if (O->TryGetNumberField(TEXT("version"), SidecarVersion) && SidecarVersion != 1 && SidecarVersion != 2)
+            Warn(Path, FString::Printf(TEXT("Unknown material sidecar version %g; reading v2 fields"), SidecarVersion));
         for (const auto& V : ReaderArray(O, TEXT("submaterials")))
         {
             const auto Sub = Object(V);

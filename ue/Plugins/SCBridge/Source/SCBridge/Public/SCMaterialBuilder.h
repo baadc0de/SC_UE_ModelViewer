@@ -22,7 +22,8 @@ struct SCBRIDGE_API FSCMaterialDesc
     bool bTwoSided = false;
     bool bHidden = false;      // inactive / NoDraw: drawn by nothing (zero-emission additive in the split mesh)
     bool bNonNanite = false;   // D6: translucent, decal, additive or hidden -> separate conventional mesh
-    bool bHostTinted = false;  // POM mesh decal: colour follows the host surface's palette channel (HostTint)
+    bool bHostTinted = false;
+    bool bGlowCard = false;    // forward-flag Illum glow card: additive, alpha-weighted, non-Nanite  // POM mesh decal: colour follows the host surface's palette channel (HostTint)
     TMap<FName, float> Scalars;
     TMap<FName, FLinearColor> Vectors;
     TMap<FName, FSCTextureKey> Textures;

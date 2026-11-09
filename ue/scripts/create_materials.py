@@ -315,13 +315,19 @@ def translucent_master():
 
 
 def unlit_master():
-    """M_SC_Emissive_Unlit: additive emissive screens/holograms (diffuse x colour x emissive x strength)."""
+    """M_SC_Emissive_Unlit: additive emissive screens/holograms and forward glow cards
+    (diffuse x colour x emissive x strength, optionally weighted by texture alpha)."""
     g = Graph("M_SC_Emissive_Unlit", unreal.BlendMode.BLEND_ADDITIVE)
     uv = g.uv(g.scalar("Tiling", 1.0))
     diffuse = g.texture("DiffuseMap", g.white, ST.SAMPLERTYPE_COLOR, uv)
     colour = g.mul(g.mul((diffuse, "RGB"), g.vector("DiffuseColor", (1, 1, 1))), g.vector("EmissiveColor", (1, 1, 1)))
+    # Glow cards (forward-flag Illum): texture alpha weights the additive glow so soft gradients survive,
+    # gated at AlphaGlowCutoff. Screens keep AlphaWeight = 0 (full image).
+    alpha = (diffuse, "A")
+    gate = g.saturate(g.mul(g.sub(alpha, g.scalar("AlphaGlowCutoff", 0.0)), g.const(1.0e4)))
+    weight = g.lerp(g.const(1.0), g.mul(alpha, gate), g.scalar("AlphaWeight", 0.0))
     unlit = g.node(unreal.MaterialExpressionSubstrateUnlitBSDF)
-    g.link(*g.mul(colour, g.scalar("EmissiveStrength", 0.0)), unlit, "EmissiveColor")
+    g.link(*g.mul(g.mul(colour, g.scalar("EmissiveStrength", 0.0)), weight), unlit, "EmissiveColor")
     g.out(unlit, "", MP.MP_FRONT_MATERIAL)
     return g.save()
 

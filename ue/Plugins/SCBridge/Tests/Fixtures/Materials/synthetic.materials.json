@@ -1234,6 +1234,200 @@
     "state": "inactive",
     "reason": "missing_base_color_texture"
    }
+  },
+  {
+   "index": 20,
+   "submaterial_name": "glows_like",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.85,0.4,0.05"
+    },
+    {
+     "name": "Emissive",
+     "value": "0,0,0"
+    },
+    {
+     "name": "Glow",
+     "value": "0.35"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 21,
+   "submaterial_name": "emittance_noglow",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.5,0.5,0.5"
+    },
+    {
+     "name": "Emissive",
+     "value": "0.3,0.6,0.9"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "EMITTANCE_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/emit.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 22,
+   "submaterial_name": "layerblend_like",
+   "shader_family": "LayerBlend_V2",
+   "shader": "LayerBlend_V2",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "LayerBlend_V2"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Emissive",
+     "value": "1,1,1"
+    },
+    {
+     "name": "MtlFlags",
+     "value": "50331776"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "BaseLayer1",
+     "uv_tiling": 2.0,
+     "tint_color": [
+      0.5,
+      0.6,
+      0.7
+     ],
+     "gloss_mult": 0.8,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.05,
+       0.05,
+       0.05
+      ],
+      "metallic": 0.0,
+      "shininess": 200.0
+     },
+     "palette_channel": null
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 23,
+   "submaterial_name": "forward_trim",
+   "shader_family": "Illum",
+   "shader": "Illum",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Illum"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.3,0.3,0.35"
+    },
+    {
+     "name": "Emissive",
+     "value": "0,0,0"
+    },
+    {
+     "name": "MtlFlags",
+     "value": "50364544"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "export_path": "tex/illum_diff.png",
+     "is_virtual": false
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
   }
  ]
 }

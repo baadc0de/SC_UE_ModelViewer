@@ -239,3 +239,116 @@ emit and read as dim blue paint; only Glow-authored materials (e.g. `emissives`,
 TODO(WP-R5): sidecar fields named above (gloss when Shininess absent, specular sentinel, emittance role,
 forward/coverage in `alpha_config`, Glow without Emissive, palette `decal.export_path`).
 TODO(WP-V1): async import API with progress; texture creation and MID binding still run on the game thread.
+
+## Schema v2, final emission rule, wing-strip evidence (after 0158adb / 613ba10)
+
+Primary package is now `out/dec-r5` (scene v2, sidecar v2); `out/dec-r1` and `out/dec` stay as v1 regression inputs.
+
+**1. Schema v2.** `FSCPackageReader` accepts scene `version` 1 or 2 (v2 only adds `lights`, `vehicle_light_ports`,
+sidecar `emissive`/`decal` objects) and rejects anything else; sidecar versions other than 1/2 produce a warning.
+New fixtures `scene_v2.json` (read) and `scene_v3.json` (rejected) in `FamilyMapping`.
+
+**2. Final emission rule** (`docs/03-unreal-export-design.md`, row "final rule"), computed from authored
+attributes in `Emission()`; the v2 `emissive` object is advisory (only its `emittance_texture` is used when
+`%EMITTANCE_MAP` is set) — TODO(WP-R5) prefer the object once it encodes this rule:
+strength = `Glow` if > 0, else 1 with `%EMITTANCE_MAP`, else 0 (× `GlowToEmissive`); colour = surface colour
+(Diffuse × base texture, or the emittance map) × `Emissive` when non-zero, black `Emissive` = no tint.
+Synthetic cases (all pass): `glows_like` (Glow 0.35, Emissive 0, orange Diffuse) → orange, 0.35 × k;
+`emissives_like` (Glow 0.45, Emissive 1, blue) → b > g > r, 0.45 × k; `forward_glow` / `glow_zero`
+(Emissive 1,1,1, no/zero Glow) → 0; `emittance_noglow` → 1 × k tinted by Emissive; `glow_emittance` (Glow 1.5,
+`AlphaGlowCutoff` 0.25) → routing and cutoff. `PackageRules` (all three packages): every lit submaterial
+without Glow and without `%EMITTANCE_MAP` has zero emission; every emitting one has a non-zero colour.
+(The earlier package check matched the v2 `"glow"` key case-insensitively; checks are now case-sensitive.)
+
+**3. Which material the wing-edge strips use.** The coordinator's scan covered the hull GLB only. The strips
+are separate child entities (`*_Decal_Glow`, `*_GlowDecal`, `*_DecalGlow` GLBs); every one of their primitives
+uses GLB material `AEGS_Gladius_Headlight_Glow_27` → sidecar ordinal 27 → `Headlight_Glow` (Illum, Diffuse
+0.212/0.597/0.922, Emissive 1,1,1, **no Glow**, forward flag). UV-centroid samples of
+`gladius_emissives_diff` (RGBA, 0–255) per glow GLB:
+
+| GLB | tris | mean RGBA at triangle centroids |
+| --- | ---: | --- |
+| WingLeft_Decal_Glow / WingRight_Decal_Glow | 38 / 38 | (25, 64, 82, 95) — blue strip |
+| WingLeft_Tip_GlowDecal / WingRightTip_GlowDecal | 53 / 51 | (5, 63, 76, 84) — blue |
+| Body_DecalGlow_mesh / Nose_DecalGlow | 50 / 12 | (9, 101, 124, 136) / (11, 114, 140, 152) — blue |
+| WingfinLeft/Right_DecalGlow | 12 / 12 | (159, 45, 7, 160) — orange (fin-tip points) |
+| Headlights_glow | 100 | (252, 252, 252, 113) — white |
+
+`emissives` (slot 13, Glow 0.3) sits on Body, Belly, Rudder_Left/Right, Ladder_Bottom, Moving_rack_shield,
+door and gunrack primitives of the hull GLB and samples the **orange** regions of the same atlas (e.g. rudders
+(170, 49, 0, 174), belly (159, 97, 0, 156)); with Diffuse blue its emission is a dim orange-brown
+(≈ (0.13, 0.09, 0) × 0.3 × k), visible as the orange points on the rudder tips in `wp-u2/r5-rear.jpg`.
+Conclusion: the blue strips, orange fin-tip points and headlights in the reference are **`Headlight_Glow`**,
+which the final rule classifies as non-emissive (the "residual uncertainty" case the rule names); the
+reference shows them glowing. Not changed here (rule is owner-decided); evidence for the D11 owner.
+Also relevant: forward glow cards are masked at UE's default clip 0.3333 and these strips' coverage alpha
+averages 84–96/255 (0.33–0.38), so about half their texels are clipped — a masked threshold is a poor fit
+for soft glow cards. `GlowToEmissive` was not changed: `emissives` at 0.3 × 10 is visible; the remaining
+dimness comes from the data/rule (no Glow on the strips; blue Diffuse × orange texels), not the constant.
+No `controls.engine_glow` in dec-r5 (no target meets the exporter's rule), so the thruster test is moot there.
+
+Commands and results:
+
+```bash
+python3 -I ue/scripts/make_test_tar.py out/dec-r5 ue/SCViewer/Saved/Import/review-dec-r5.tar   # files=502
+ue/scripts/build.sh SCViewerEditor                                                           # Succeeded
+for p in dec-r5 dec-r1 dec; do UnrealEditor-Cmd … test_importer.py -SCPackage=out/$p -SCVerifyTar=…/review-$p.tar …; done
+UnrealEditor-Cmd … test_importer.py …                                                        # synthetic only
+SC_ARGS="-SCView=35,40,1.2" ue/scripts/capture_views.sh out/dec-r5 u2c-3q lit
+SC_ARGS="-SCView=-90,8,1.0" ue/scripts/capture_views.sh out/dec-r5 u2c-side lit
+ue/scripts/capture_views.sh out/dec-r5 u2c lumen
+SC_ARGS="-SCView=180,8,0.9" ue/scripts/capture_views.sh out/dec-r5 u2c-rear lit
+```
+
+dec-r5 / dec-r1 / dec: exit 0, 12/12 `passed=1`, `PACKAGE_RULES decals=11 glowing=8 no_glow=210`,
+`VERIFY passed=1 … old_live=0`; synthetic only: exit 0, 10/10. GPU dec-r5: `TEXTURES requested=247 created=247
+failed=0`, `MATERIALS sets=19 instances=273 engine_glow=0 … wait_s=0.0000`, `IMPORT_OK seconds=3.0076
+warnings=4`. Screenshots `wp-u2/r5-three-quarter.jpg`, `r5-side.jpg`, `r5-lumen.jpg` (hull in Lumen Scene and
+HWRT reflections, no black cut-out), `r5-rear.jpg`.
+
+TODO(WP-R5): decide `Headlight_Glow`-type materials (Emissive only, forward flag, glow atlas) — the strips the
+reference shows glowing; prefer the v2 `emissive` object once it encodes the final rule.
+TODO(WP-U2): soft glow cards are masked at the default clip (≈ half of the strip texels clipped); revisit once
+`alpha_config` carries the forward/coverage decision.
+
+## Amended emission rule: forward glow cards (after e8337ed)
+
+**Survey** (all sidecars of the export, not only referenced ones):
+
+```bash
+python3 -I ue/scripts/survey_materials.py out/dec-r5     # total 395 submaterial records
+```
+
+| family | forward (`MtlFlags & 0x8000`) | Emissive > 0 | Glow > 0 | count | examples |
+| --- | --- | --- | --- | ---: | --- |
+| Illum | yes | yes | no | 11 | Headlight_Glow, glows_a, decal_glow, Glow_Linked, buttons_linked |
+| Illum | yes | yes | yes | 7 | emissives |
+| Illum | yes | no | yes | 1 | glows |
+| Illum | yes | no | no | 4 | glass, trim_02, glows, engine_glow (runtime-driven) |
+| Illum | no | yes | yes | 4 | Decal_Glow_Unlinked, Gladius_Emissive, engine_glow, glows_a |
+| Illum | no | no | yes | 2 | buttons, glows |
+| Illum | no | yes | no | 1 | decal_pom |
+| LayerBlend_V2 | no | yes | no | 42 | pipes / metals (never forward, never glow) |
+| UIPlane / DisplayScreen | no | no | yes | 8 / 2 | UI_Graphics, hud_material |
+
+**1. Rule** (`Emission()`): strength = Glow if > 0; else for Illum/HardSurface with the forward flag and a
+non-black Emissive, mean(Emissive); else 1 with `%EMITTANCE_MAP`; else 0 (× `GlowToEmissive`). Colour = surface
+colour (or emittance map) × Emissive when non-black. Tests (synthetic, all pass): `glows_like` orange 0.35k,
+`emissives_like` blue 0.45k, `glow_zero` 0, `emittance_noglow` 1k, **`forward_glow`** (Headlight_Glow-like: forward
++ Emissive 1,1,1, no Glow → glow card, strength 1k, colour from the base texture), **`layerblend_like`** (Emissive
+1,1,1, no Glow, not forward → 0), `forward_trim` (forward, non-emitting → masked at the engine default clip).
+
+**2. Glow cards**: an emitting forward Illum surface becomes `M_SC_Emissive_Unlit` (additive, Substrate unlit),
+`AlphaWeight = 1`: emission × texture alpha × step(alpha > `AlphaGlowCutoff`), no clip, so the 0.3–0.4 gradients
+survive; `bNonNanite` puts it in WP-U1's split mesh (split criterion now: Glass | MeshDecal | glow card,
+through `FSCMaterialBuilder::RequiresNonNanite`). Non-emitting forward materials keep the masked path.
+`PackageRules` checks every card is additive, alpha-weighted, emitting and non-Nanite.
+
+**3. Results.** dec-r5 / dec-r1 / dec: exit 0, 12/12 passed,
+`PACKAGE_RULES decals=11 glow_cards=7 glowing=6 no_glow=205`, `VERIFY passed=1`; synthetic-only 10/10.
+GPU dec-r5: `TEXTURES created=247 failed=0`, masters `Illum=42 Emissive_Unlit=22` (9 cards moved from masked
+Illum), `IMPORT_OK seconds=6.56` (first start after regenerating the unlit master: on-demand shader compile ran
+concurrently; earlier warm runs 2.9–3.1 s). Screenshots `wp-u2/r5-three-quarter.jpg`, `r5-side.jpg`,
+`r5-rear.jpg`, `r5-lumen.jpg`, refreshed `three-quarter-vs-reference.jpg`: blue strips glow at the wing tips,
+wing leading edges, fin roots and under the rear module; orange fin-tip points; Lumen Scene / HWRT unchanged
+(hull present, no cut-out; additive cards are, like glass, not in the surface cache).

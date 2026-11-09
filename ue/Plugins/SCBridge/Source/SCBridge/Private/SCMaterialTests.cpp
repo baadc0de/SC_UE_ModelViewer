@@ -120,21 +120,38 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("colour decal parent"), FSCMaterialBuilder::ParentPath(X->Master, X->Blend, X->bTwoSided),
             FString(TEXT("/SCBridge/Materials/MI_SC_MeshDecal_TwoSided.MI_SC_MeshDecal_TwoSided")));
     const float DefaultClip = GetDefault<UMaterial>()->OpacityMaskClipValue;
-    if (auto* X = Check(TEXT("forward_glow"), ESCMaster::Illum, ESCBlend::Masked, false, false))
+    if (auto* X = Check(TEXT("forward_trim"), ESCMaster::Illum, ESCBlend::Masked, false, false))
+        TestEqual(TEXT("non-emitting forward surface stays masked at the engine default clip"), X->Scalars[TEXT("AlphaTest")], DefaultClip);
+    if (auto* X = Check(TEXT("forward_glow"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
-        // MTL_FLAG_REQUIRE_FORWARD_RENDERING: diffuse alpha is masked coverage (Nanite, feeds Lumen); no AlphaTest
-        // authored -> UE's default clip value as the cutoff.
-        TestEqual(TEXT("forward cutoff = engine default clip"), X->Scalars[TEXT("AlphaTest")], DefaultClip);
-        TestTrue(TEXT("glow keeps authored diffuse colour"), Near(X->Vectors[TEXT("DiffuseColor")], FLinearColor(0.2f, 0.6f, 0.9f)));
-        TestEqual(TEXT("Emissive=1,1,1 without Glow emits nothing"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
+        // Headlight_Glow-like: forward flag + Emissive 1,1,1 + no Glow -> glow card, strength mean(Emissive) = 1,
+        // colour from Diffuse x texture, additive and alpha-weighted (no clip), split from Nanite.
+        TestTrue(TEXT("glow card"), X->bGlowCard);
+        TestEqual(TEXT("card strength = mean(Emissive) x k"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("colour from the texture"), X->Textures[TEXT("DiffuseMap")].Path, FString(TEXT("tex/illum_diff.png")));
+        TestEqual(TEXT("alpha-weighted"), X->Scalars[TEXT("AlphaWeight")], 1.f);
     }
-    if (auto* X = Check(TEXT("emissives_like"), ESCMaster::Illum, ESCBlend::Masked, false, false))
+    if (auto* X = Check(TEXT("emissives_like"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
         // Emission colour = Emissive x Diffuse (x texture in the master): blue ordering, strength = Glow x host scale.
         const FLinearColor Glow = X->Vectors[TEXT("EmissiveColor")] * X->Vectors[TEXT("DiffuseColor")];
         TestTrue(TEXT("emissives glow blue (b > g > r)"), Glow.B > Glow.G && Glow.G > Glow.R && Glow.R > 0.f);
         TestEqual(TEXT("emissives strength"), X->Scalars[TEXT("EmissiveStrength")], 0.45f * FSCMaterialBuilder::GlowToEmissive);
     }
+    if (auto* X = Check(TEXT("glows_like"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
+    {
+        // Glow > 0 with black Emissive: no tint, the orange surface colour emits at Glow strength.
+        const FLinearColor Glow = X->Vectors[TEXT("EmissiveColor")] * X->Vectors[TEXT("DiffuseColor")];
+        TestTrue(TEXT("glows emit orange (r > g > b)"), Glow.R > Glow.G && Glow.G > Glow.B);
+        TestEqual(TEXT("glows strength"), X->Scalars[TEXT("EmissiveStrength")], 0.35f * FSCMaterialBuilder::GlowToEmissive);
+    }
+    if (auto* X = Check(TEXT("emittance_noglow"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
+    {
+        TestEqual(TEXT("emittance map without Glow -> strength 1"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
+        TestTrue(TEXT("Emissive tints the emittance"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.3f, 0.6f, 0.9f)));
+    }
+    if (auto* X = Check(TEXT("layerblend_like"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
+        TestEqual(TEXT("LayerBlend Emissive 1,1,1 without Glow / forward flag emits nothing"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
     if (auto* X = Check(TEXT("glow_zero"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
         TestEqual(TEXT("Glow = 0 with Emissive = 1,1,1 emits nothing"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
     if (auto* X = Check(TEXT("glow_emittance"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
@@ -162,7 +179,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     {
         // Rule: no Glow (absent or 0) -> no emission, for every lit family (engine-glow targets excepted).
         const FSCMaterialDesc* X = Find(D, *Sub.Name);
-        if (!X || X->Master == ESCMaster::EmissiveUnlit || Sub.Json.Contains(TEXT("\"Glow\""))) continue;
+        if (!X || X->Master == ESCMaster::EmissiveUnlit || X->bGlowCard || Sub.Json.Contains(TEXT("\"Glow\""), ESearchCase::CaseSensitive) || Sub.Json.Contains(TEXT("EMITTANCE_MAP"), ESearchCase::CaseSensitive)) continue;
         TestEqual(Sub.Name + TEXT(": no Glow, no emission"), X->Scalars.FindRef(TEXT("EmissiveStrength")), 0.f);
         // Rule: a MeshDecal primitive never resolves to an opaque master.
         if (Sub.ShaderFamily == TEXT("MeshDecal"))
@@ -187,6 +204,12 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     Phase.Decode(Empty);
     // Unique (path, role) pairs across all submaterials; tex/illum_ddna.png etc. are shared and deduplicated.
     TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 26);
+    // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
+    {
+        FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;
+        TestTrue(TEXT("scene v2 accepted: ") + Error, FSCPackageReader::Read(Source, V2, Error, TEXT("scene_v2.json")) && V2.Materials.Num() == 1);
+        TestFalse(TEXT("scene v3 rejected"), FSCPackageReader::Read(Source, V3, Error, TEXT("scene_v3.json")));
+    }
     return true;
 }
 
@@ -199,7 +222,7 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
     { AddInfo(TEXT("PACKAGE_RULES skipped: no -SCPackage export root")); return true; }
     FSCFolderPackageSource Source(Folder); FSCSceneManifest M; FString Error;
     if (!TestTrue(TEXT("package reads: ") + Error, FSCPackageReader::Read(Source, M, Error))) return false;
-    int32 Decals = 0, Glowing = 0, Silent = 0;
+    int32 Decals = 0, Glowing = 0, Silent = 0, Cards = 0;
     for (const FSCMaterialSet& Set : M.Materials)
         for (const FSCSubmaterial& Sub : Set.Submaterials)
         {
@@ -211,15 +234,22 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
                 TestTrue(Where + TEXT(" MeshDecal never opaque"), D.Blend == ESCBlend::Translucent && D.bNonNanite
                     && (D.Master == ESCMaster::MeshDecal || D.Master == ESCMaster::MeshDecalRelief || D.bHidden));
             }
+            if (D.bGlowCard)
+            {
+                ++Cards;
+                TestTrue(Where + TEXT(" glow card is additive, alpha-weighted, non-Nanite, emitting"), D.bNonNanite
+                    && D.Scalars.FindRef(TEXT("AlphaWeight")) == 1.f && D.Scalars.FindRef(TEXT("EmissiveStrength")) > 0.f);
+                continue;
+            }
             if (D.Master == ESCMaster::EmissiveUnlit) continue;
-            const bool bGlow = Sub.Json.Contains(TEXT("\"Glow\""));
+            const bool bGlow = Sub.Json.Contains(TEXT("\"Glow\""), ESearchCase::CaseSensitive);
             const float Strength = D.Scalars.FindRef(TEXT("EmissiveStrength"));
             if (Sub.Name == TEXT("emissives")) // the Gladius wing-tip / under-wing strips when this package is the Gladius
             {
                 const FLinearColor C = D.Vectors.FindRef(TEXT("EmissiveColor")) * D.Vectors.FindRef(TEXT("DiffuseColor"));
                 TestTrue(Where + TEXT(" emits blue (b > g > r)"), Strength > 0.f && C.B > C.G && C.G > C.R);
             }
-            if (!bGlow) { ++Silent; TestEqual(Where + TEXT(" no Glow -> no emission"), Strength, 0.f); }
+            if (!bGlow && !Sub.Json.Contains(TEXT("EMITTANCE_MAP"), ESearchCase::CaseSensitive)) { ++Silent; TestEqual(Where + TEXT(" no Glow -> no emission"), Strength, 0.f); }
             else if (Strength > 0.f)
             {
                 ++Glowing;
@@ -227,7 +257,7 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
                 TestTrue(Where + TEXT(" glow colour comes from Emissive x Diffuse"), C.R + C.G + C.B > 0.f);
             }
         }
-    AddInfo(FString::Printf(TEXT("PACKAGE_RULES decals=%d glowing=%d no_glow=%d"), Decals, Glowing, Silent));
+    AddInfo(FString::Printf(TEXT("PACKAGE_RULES decals=%d glow_cards=%d glowing=%d no_glow=%d"), Decals, Cards, Glowing, Silent));
     return true;
 }
 
