@@ -118,3 +118,98 @@ fn live_session_reuses_index_and_resolves_geometry_companions() {
     assert_eq!(second.search_entities("gladius", 1)[0].guid, hit.guid);
     assert!(second.search_entities("", 0).is_empty());
 }
+
+#[test]
+fn live_clip_catalogue_matches_scene_and_persists() {
+    use std::{collections::BTreeSet, io::Read, time::Instant};
+    let Ok(found) = starbreaker_common::discover::find_p4k() else {
+        eprintln!("skip: no Data.p4k installed");
+        return;
+    };
+    let cache_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cache");
+    fs::create_dir_all(&cache_root).unwrap();
+    let cache_dir = tempfile::tempdir_in(cache_root).unwrap();
+    let session = Session::open(Some(&found.path), Some(cache_dir.path())).unwrap();
+    for entity in ["AEGS_Gladius", "RSI_Scorpius", "DRAK_Cutlass_Black"] {
+        let start = Instant::now();
+        let catalogue = session.clip_catalogue_cached(entity).unwrap();
+        eprintln!(
+            "{entity}: {} clips, cold catalogue {:?}",
+            catalogue.value.clips.len(),
+            start.elapsed()
+        );
+        assert_eq!(catalogue.cache_status, CacheStatus::Miss);
+        assert!(catalogue.value.clips.len() >= 10);
+        if entity == "RSI_Scorpius" {
+            assert!(catalogue.value.clips.iter().any(|c| {
+                c.fragments
+                    .iter()
+                    .any(|f| f.fragment.to_lowercase().contains("landing"))
+            }));
+        }
+        let start = Instant::now();
+        let warm = session.clip_catalogue_cached(entity).unwrap();
+        eprintln!("{entity}: catalogue cache hit {:?}", start.elapsed());
+        assert_eq!(warm.cache_status, CacheStatus::Hit);
+        assert_eq!(warm.value, catalogue.value);
+        if entity == "AEGS_Gladius" {
+            let uncached = Session::open(Some(&found.path), None).unwrap();
+            let start = Instant::now();
+            let fresh = uncached.clip_catalogue(entity).unwrap();
+            let elapsed = start.elapsed();
+            eprintln!("Gladius warm session, uncached catalogue: {elapsed:?}");
+            assert!(elapsed < std::time::Duration::from_millis(500));
+            assert_eq!(fresh, catalogue.value);
+        }
+        {
+            let fresh = &catalogue.value;
+            let bytes = session
+                .export_entity_decomposed_mem(entity, &DecomposedOptions::default())
+                .unwrap();
+            let mut archive = tar::Archive::new(bytes.as_slice());
+            let mut entries = archive.entries().unwrap();
+            let mut scene = String::new();
+            entries
+                .next()
+                .unwrap()
+                .unwrap()
+                .read_to_string(&mut scene)
+                .unwrap();
+            let scene: serde_json::Value = serde_json::from_str(&scene).unwrap();
+            let exported = scene["root_entity"]["animations"].as_array().unwrap();
+            let names: BTreeSet<_> = exported
+                .iter()
+                .map(|c| c["name"].as_str().unwrap())
+                .collect();
+            let ids: BTreeSet<_> = fresh.clips.iter().map(|c| c.id.as_str()).collect();
+            assert_eq!(
+                ids, names,
+                "catalogue and scene index must join in both directions"
+            );
+            for clip in &fresh.clips {
+                let index = exported.iter().find(|e| e["name"] == clip.id).unwrap();
+                if let Some(label) = index["display_name"].as_str() {
+                    assert_eq!(label, clip.display_name);
+                }
+            }
+        }
+    }
+    let empty = session.clip_catalogue("medicalSupplies_medPens").unwrap();
+    assert!(empty.clips.is_empty() && empty.skeletons.is_empty());
+    assert!(session.clip_catalogue("not_an_entity").is_err());
+    drop(session);
+    let session = Session::open(Some(&found.path), Some(cache_dir.path())).unwrap();
+    let start = Instant::now();
+    assert_eq!(
+        session
+            .clip_catalogue_cached("aegs_gladius")
+            .unwrap()
+            .cache_status,
+        CacheStatus::Hit
+    );
+    eprintln!("reopened session catalogue hit: {:?}", start.elapsed());
+    assert!(
+        session.loaded.get().is_none(),
+        "catalogue hit must not open archive/DataCore"
+    );
+}

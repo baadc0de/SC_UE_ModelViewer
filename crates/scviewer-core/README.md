@@ -91,3 +91,55 @@ Tests discover game data and skip live checks when none is found. Run cargo from
 the repository root with `CARGO_TARGET_DIR=./target`. Format only owned packages
 (`cargo fmt -p scviewer-core -p scviewer-cli`); `--all` traverses the vendored
 workspace as well.
+
+## Clip catalogue (WP-R3)
+
+`Session::clip_catalogue(&str) -> Result<Catalogue>` lists the default decomposed
+package's animation IDs before exporting meshes or textures.
+`clip_catalogue_cached(&str) -> Result<Cached<Catalogue>>` returns the same value
+with `CacheStatus`; `cache_status()` also records the result. Names must match an
+entity exactly, ignoring case. The CLI accepts substring shorthand:
+
+```bash
+CARGO_TARGET_DIR=./target cargo run -p scviewer-cli -- clips Scorpius
+```
+
+The command prints JSON and reports clip/skeleton counts, catalogue-call timing,
+cache status and total process timing on stderr. `--cache` and `--no-cache` apply.
+
+`Catalogue { entity, skeletons, clips }` and its member types are re-exported:
+
+- `SkeletonInfo { owner_entity, chr_path, chrparams_path: Option<String>,
+  dba_path: Option<String>, bone_count }`. `chr_path` is the source rig path,
+  including rigid CGA/NMC rigs; optional paths are absent when undiscovered.
+- `ClipInfo { id, display_name, owner_entity, source: ClipSource, fps: u16,
+  frame_count: u32, duration_s: f32, has_position, has_rotation, bone_count,
+  fragments: Vec<Fragment>, boomerang }`.
+- `ClipSource::{Chrparams,DbaOnly,Caf}` distinguishes named DBA events, remaining
+  DBA metadata entries, and standalone CAFs. `Fragment` holds `fragment`, `tags`,
+  `frag_tags`, `scopes`.
+
+IDs use precisely the export's `root_entity.animations[].name` convention.
+Repeated names merge across rigs; `owner_entity` is the first contributing owner
+in export discovery order (root, landing gear, loadout children). `bone_count`
+counts merged source-rig/bone channel variants. Frame count is the final key time
+rounded up, matching the index record, and duration is `frame_count / fps`.
+Boomerang means all available position/rotation endpoints agree (quaternion sign
+is immaterial), including constant tracks. No intermediate sample values are
+decoded: upstream shares the full export's name matcher and reads controller
+headers, time tables and first/final values only. This preserves its motion
+ranking while avoiding full keyframe decompression.
+
+Interior keys and labels use the export helpers. The existing exporter only
+namespaces children when the package has **no root skeleton**, as in standalone
+socpak exports. A Cutlass ship package has a root rig and keeps merged names;
+changing its catalogue alone would break the importer join. The Session entity
+API does not expose standalone socpak exports.
+
+Catalogue files are `clips.<sha256>.bin`, independently keyed by catalogue schema,
+layer-1 format version, build ID, canonical entity and exporter identity. An
+identity-bearing envelope, checksum verification, atomic writes, manifest
+recovery and LRU eviction protect them like packages. A hit skips archive,
+DataCore, rig and animation reads. Corrupt entries rebuild as misses; cache I/O
+errors are reported. With persistence disabled each call recomputes and reports
+`Miss`. Entities without discoverable animation clips return an empty clip list.

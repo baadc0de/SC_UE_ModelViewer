@@ -36,3 +36,31 @@ all keyframes (lazy — the viewer calls this on every selection).
 - `clip_catalogue` on Gladius runs in < 500 ms warm.
 - Unit tests with a checked-in **synthetic** DBA/chrparams fixture (never copies of
   game data), plus p4k-gated integration tests.
+
+## Implementation notes / deviations (2026-11-09)
+
+- The fallible API is `Session::clip_catalogue(&str) -> Result<Catalogue>`;
+  `clip_catalogue_cached` returns `Result<Cached<Catalogue>>`. Both update the
+  session's `CacheStatus`. Catalogue persistence uses the layer-1 manifest,
+  atomic publication and LRU, keyed by build/entity/exporter/format plus its own
+  schema discriminator. No geometry export is needed on a miss.
+- `SkeletonInfo::chrparams_path` and `dba_path` are optional because rigs can
+  have no discoverable parameters or use standalone CAFs. `chr_path` also covers
+  CGA/NMC rigid rigs. Merged clips expose the first owner in export discovery
+  order; all contributing source-rig/bone variants participate in their summary.
+- Matching needs first/final values for the existing exporter's motion tie-break.
+  The sparse decoder reads controller metadata, time tables and these endpoints;
+  it never decodes intermediate sample values. Frame count follows the scene
+  index's final-key-time convention rather than substituting DBA `end_frame`.
+- The current exporter namespaces interior child clips only for **rootless
+  standalone socpak packages**. Cutlass as a ship has a root rig and merges clip
+  names. The catalogue preserves this existing contract; changing its IDs alone
+  would break the requested join. Live tests verify exact scene-index ID equality
+  in both directions for Gladius (63), Scorpius (70) and Cutlass Black (39).
+  The entity Session API does not add a standalone socpak export entry point.
+- Synthetic DBA, CAF and binary chrparams fixtures and their generator live in
+  the upstream crate's tests/fixtures/clip_catalogue directory; no game bytes are
+  checked in. The root workspace tests and upstream animation tests pass.
+
+TODO(WP-R3): Orchestrator must create the WP branch/commits and arrange the required
+other-model cross-review before merging; this sandbox cannot write `.git`.

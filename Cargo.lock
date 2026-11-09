@@ -1168,6 +1168,7 @@ dependencies = [
  "anyhow",
  "clap",
  "scviewer-core",
+ "serde_json",
 ]
 
 [[package]]

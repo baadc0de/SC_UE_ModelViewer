@@ -1,4 +1,4 @@
-//! UI-independent StarBreaker sessions, geometry browsing and cached exports.
+//! UI-independent StarBreaker sessions, geometry browsing, cached clip catalogues and exports.
 //!
 //! Decomposed mesh materials retain `<mtl stem>_<submaterial name>_<NN>`:
 //! `NN` is the zero-based sidecar `submaterials[]` index and the GLB primitive's
@@ -11,6 +11,8 @@
 //! Exact brief-compatible Vec APIs expose status via `cache_status()`. The
 //! `_cached` methods return status alongside data for callers that need it owned.
 mod cache;
+mod catalogue;
+pub use catalogue::{Catalogue, ClipInfo, ClipSource, Fragment, SkeletonInfo};
 mod index;
 mod options;
 mod package;

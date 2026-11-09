@@ -18,6 +18,9 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    Clips {
+        entity: String,
+    },
     Search {
         q: String,
         #[arg(long, default_value_t = 20)]
@@ -105,6 +108,19 @@ fn main() -> Result<()> {
         if cli.no_cache { None } else { Some(&cli.cache) },
     )?;
     match cli.command {
+        Command::Clips { entity } => {
+            let entity = resolve_entity(&session, &entity)?;
+            let call_started = Instant::now();
+            let catalogue = session.clip_catalogue(&entity)?;
+            eprintln!(
+                "{}: {} clips, {} skeletons; catalogue {:.3} ms",
+                catalogue.entity,
+                catalogue.clips.len(),
+                catalogue.skeletons.len(),
+                call_started.elapsed().as_secs_f64() * 1000.0
+            );
+            println!("{}", serde_json::to_string_pretty(&catalogue)?);
+        }
         Command::Search { q, limit } => {
             for hit in session.search_entities(&q, limit) {
                 println!(
