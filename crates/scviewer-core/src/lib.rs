@@ -16,7 +16,10 @@ mod options;
 mod package;
 
 use anyhow::{Context, Result, anyhow, ensure};
-pub use cache::{CACHE_FORMAT_VERSION, CacheStatus, Cached, DEFAULT_CACHE_CAP_BYTES};
+pub use cache::{
+    CACHE_FORMAT_VERSION, CacheStatus, Cached, DEFAULT_CACHE_CAP_BYTES, EXPORTER_DIRTY,
+    EXPORTER_REVISION, EXPORTER_VERSION,
+};
 use index::{BrowserIndex, Loaded, normalize};
 pub use index::{DirEntry, EntityHit};
 use once_cell::unsync::OnceCell;
@@ -66,29 +69,24 @@ impl Session {
         } else {
             cache::digest(build_id.as_bytes())
         };
-        let index_name = format!("entities.{safe_id}.bin");
+        let index_name = format!("entities.v{CACHE_FORMAT_VERSION}.{safe_id}.bin");
         let loaded = OnceCell::new();
         let cached = cache
             .as_ref()
             .map(|c| c.read(&index_name))
             .transpose()?
             .flatten();
-        let (browser, index_status) = if let Some(bytes) = cached {
-            let index: BrowserIndex =
-                bincode::deserialize(&bytes).context("invalid cached browser index")?;
-            if index.version == CACHE_FORMAT_VERSION && index.build_id == build_id {
-                (index, CacheStatus::Hit)
-            } else {
-                let index = BrowserIndex::build(
-                    loaded.get_or_try_init(|| Loaded::open(&path))?,
-                    &build_id,
-                )?;
-                if let Some(c) = &cache {
-                    c.write(&index_name, &bincode::serialize(&index)?)?;
-                }
-                (index, CacheStatus::Miss)
-            }
+        let cached_index = cached
+            .as_deref()
+            .and_then(|bytes| BrowserIndex::decode(bytes, &build_id));
+        let (browser, index_status) = if let Some(index) = cached_index {
+            (index, CacheStatus::Hit)
         } else {
+            if cached.is_some() {
+                if let Some(c) = &cache {
+                    c.remove(&index_name)?;
+                }
+            }
             let index =
                 BrowserIndex::build(loaded.get_or_try_init(|| Loaded::open(&path))?, &build_id)?;
             if let Some(c) = &cache {
@@ -198,12 +196,6 @@ impl Session {
             .entities
             .iter()
             .find(|e| e.name.to_lowercase() == query)
-            .or_else(|| {
-                self.browser
-                    .entities
-                    .iter()
-                    .find(|e| e.name.to_lowercase().contains(&query))
-            })
             .map(|e| e.name.as_str())
             .ok_or_else(|| anyhow!("no entity matching {query:?}"))
     }
@@ -319,14 +311,17 @@ impl Session {
         let filename = format!("{}.tar", cache::package_key(&self.build_id, name, options)?);
         if let Some(cache) = &self.cache {
             if let Some(bytes) = cache.read(&filename)? {
-                self.status.set(CacheStatus::Hit);
-                if let Some(cb) = &self.progress {
-                    cb(1.0, "Package cache hit");
+                if package::validate_tar(&bytes).is_ok() {
+                    self.status.set(CacheStatus::Hit);
+                    if let Some(cb) = &self.progress {
+                        cb(1.0, "Package cache hit");
+                    }
+                    return Ok(Cached {
+                        value: bytes,
+                        cache_status: CacheStatus::Hit,
+                    });
                 }
-                return Ok(Cached {
-                    value: bytes,
-                    cache_status: CacheStatus::Hit,
-                });
+                cache.remove(&filename)?;
             }
         }
         let result = self.assemble(name, &options.geometry.upstream(ExportKind::Decomposed))?;
@@ -391,92 +386,4 @@ fn build_identity(path: &Path) -> Result<(String, Option<String>)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn live_package_cache_round_trip_and_progress() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let Ok(found) = starbreaker_common::discover::find_p4k() else {
-            eprintln!("skip: no Data.p4k installed");
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let mut session = Session::open(Some(&found.path), Some(dir.path())).unwrap();
-        let reports = Arc::new(AtomicUsize::new(0));
-        let counter = reports.clone();
-        session.set_progress_callback(Some(Arc::new(move |fraction, _| {
-            assert!((0.0..=1.0).contains(&fraction));
-            counter.fetch_add(1, Ordering::Relaxed);
-        })));
-        let options = DecomposedOptions::default();
-        let cold = session
-            .export_entity_decomposed_mem_cached("Gladius", &options)
-            .unwrap();
-        assert_eq!(cold.cache_status, CacheStatus::Miss);
-        assert!(reports.load(Ordering::Relaxed) > 1);
-        drop(session);
-        let session = Session::open(Some(&found.path), Some(dir.path())).unwrap();
-        let warm = session
-            .export_entity_decomposed_mem_cached("AEGS_Gladius", &options)
-            .unwrap();
-        assert_eq!(warm.cache_status, CacheStatus::Hit);
-        assert_eq!(cold.value, warm.value);
-        assert!(
-            session.loaded.get().is_none(),
-            "package hit must avoid archive processing"
-        );
-        assert!(session.cache_evict(0).unwrap() >= cold.value.len() as u64);
-    }
-    #[test]
-    fn build_identity_uses_manifest_and_falls_back_to_archive_metadata() {
-        let dir = tempfile::tempdir().unwrap();
-        let p4k = dir.path().join("Data.p4k");
-        fs::write(&p4k, b"synthetic archive").unwrap();
-        let (first, branch) = build_identity(&p4k).unwrap();
-        assert!(branch.is_none());
-        fs::write(&p4k, b"different synthetic archive size").unwrap();
-        assert_ne!(first, build_identity(&p4k).unwrap().0);
-        fs::write(
-            dir.path().join("build_manifest.id"),
-            br#"{"Data":{"BuildId":"synthetic-build","Branch":"test"}}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            build_identity(&p4k).unwrap(),
-            ("synthetic-build".into(), Some("test".into()))
-        );
-    }
-    #[test]
-    fn live_session_reuses_index_and_resolves_geometry_companions() {
-        let Ok(found) = starbreaker_common::discover::find_p4k() else {
-            eprintln!("skip: no Data.p4k installed");
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let first = Session::open(Some(&found.path), Some(dir.path())).unwrap();
-        assert_eq!(first.cache_status(), CacheStatus::Miss);
-        let hit = first.search_entities("gLaDiUs", 1).remove(0);
-        assert_eq!(hit.name, "AEGS_Gladius");
-        assert!(hit.geometry_path.is_some());
-        let paths = first.search_paths("**/gladius/*.cga", 1);
-        assert!(!paths.is_empty());
-        let bytes = first.geometry_file_glb(&paths[0].path).unwrap();
-        assert!(bytes.starts_with(b"glTF"));
-        let parent = paths[0].path.rsplit_once('/').unwrap().0;
-        assert!(
-            first
-                .list_dir(parent)
-                .iter()
-                .any(|e| e.path == paths[0].path)
-        );
-        drop(first);
-        let second = Session::open(Some(&found.path), Some(dir.path())).unwrap();
-        assert_eq!(second.cache_status(), CacheStatus::Hit);
-        assert!(
-            second.loaded.get().is_none(),
-            "index hit must avoid archive and DataCore processing"
-        );
-        assert_eq!(second.search_entities("gladius", 1)[0].guid, hit.guid);
-        assert!(second.search_entities("", 0).is_empty());
-    }
-}
+mod tests;

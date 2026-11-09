@@ -166,7 +166,13 @@ const char* sc_last_error(sc_handle*);
 void       sc_free_string(char*);  void sc_free_blob(sc_blob*);  void sc_close(sc_handle*);
 ```
 Every entry point is `catch_unwind`; strings UTF-8; the tar is uncompressed; the
-progress callback may be called from worker threads.
+progress callback may be called from worker threads. The tar uses POSIX ustar headers
+with explicit Regular typeflag `0`. Long paths split into the 100-byte `name`
+and 155-byte `prefix` fields at a slash. Only paths that cannot fit that scheme
+use a per-file PAX `x` header carrying the UTF-8 `path` key for the following
+regular entry. The reader supports ustar name/prefix joining and PAX path
+overrides; the writer emits no GNU `L` / `@LongLink` records. Gladius's entire
+package is representable as plain ustar regular entries.
 
 ## Open questions after WP-U0
 

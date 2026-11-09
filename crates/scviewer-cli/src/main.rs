@@ -128,7 +128,8 @@ fn main() -> Result<()> {
         }
         Command::Glb { entity, out, opts } => write(
             &out,
-            &session.export_entity_glb(&entity, &opts.options(false))?,
+            &session
+                .export_entity_glb(&resolve_entity(&session, &entity)?, &opts.options(false))?,
         )?,
         Command::Decomposed {
             entity,
@@ -136,7 +137,7 @@ fn main() -> Result<()> {
             opts,
         } => {
             let result = session.export_entity_decomposed(
-                &entity,
+                &resolve_entity(&session, &entity)?,
                 &out_root,
                 &DecomposedOptions {
                     geometry: opts.options(true),
@@ -151,7 +152,7 @@ fn main() -> Result<()> {
         Command::DecomposedTar { entity, out, opts } => write(
             &out,
             &session.export_entity_decomposed_mem(
-                &entity,
+                &resolve_entity(&session, &entity)?,
                 &DecomposedOptions {
                     geometry: opts.options(true),
                 },
@@ -176,4 +177,16 @@ fn write(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes)?;
     println!("{} bytes written to {}", bytes.len(), path.display());
     Ok(())
+}
+
+fn resolve_entity(session: &Session, query: &str) -> Result<String> {
+    let hits = session.search_entities(query, usize::MAX);
+    hits.iter()
+        .find(|hit| hit.name.eq_ignore_ascii_case(query))
+        .or_else(|| {
+            hits.iter()
+                .find(|hit| hit.name.to_lowercase().contains(&query.to_lowercase()))
+        })
+        .map(|hit| hit.name.clone())
+        .ok_or_else(|| anyhow::anyhow!("no entity matching {query:?}"))
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Verify the Gladius WP-R1 package, tar parity and material index contract.
+"""Star Citizen LIVE 4.10.2 fixture: Gladius WP-R1 counts and material contract.
+Exact counts below are a versioned game-data fixture, not exporter rules.
 Run with python3 -I: exported data is untrusted input.
 """
 import json
@@ -18,7 +19,7 @@ def glb(path):
         return json.loads(source.read(size))
 
 
-def main(root, archive_path):
+def main(root, archive_path, bundled_path=None):
     root = Path(root)
     files = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if p.is_file()}
     meshes = [p for p in files.values() if p.suffix == '.glb']
@@ -64,6 +65,11 @@ def main(root, archive_path):
     print(f'Root animations: {len(scene["root_entity"]["animations"])}')
     print(f'scene.json first; all {len(files)} tar entries byte-identical to folder')
     print('GLB material slot indices preserved')
+    if bundled_path is not None:
+        # LIVE 4.10.2 baseline before the explicit material-slot option refactor.
+        materials = len(glb(Path(bundled_path))['materials'])
+        assert materials == 184, materials
+        print(f'Bundled Gladius material count unchanged: {materials} (LIVE 4.10.2 fixture)')
 
 
 if __name__ == '__main__':

@@ -216,3 +216,99 @@ check above passes for every file.
   replay is already byte-identical; the stamp is currently preserved verbatim.
 - TODO(WP-R1): Carry upstream missing skin-joint/bind-pose fallback warnings from
   the real CLI export into the rig/animation verification work (WP-U3).
+
+## Cross-review corrections (WP-R1c, 2026-11-09)
+
+Applied the review against superproject `df22acc` and submodule
+`scviewer/decomposed-glb` at `a3304713`; changes remain uncommitted for the
+orchestrator.
+
+1. Cache identity now embeds the vendored revision and dirty flag, exposed as
+   `EXPORTER_REVISION`, `EXPORTER_DIRTY`, and `EXPORTER_VERSION`. The build script
+   watches vendor sources and git metadata. Git-unavailable fallback was exercised
+   directly and matched the SHA-256 of the vendored Cargo.lock. Both package keys
+   and index headers include exporter identity.
+2. Cache format is now v3; index filenames are `entities.v3.<buildid>.bin`.
+   Invalid/outdated index envelopes are removed and rebuilt as misses. Manifest
+   corruption triggers reconstruction from cache-owned files. Package reads check
+   recorded length and SHA-256 plus tar structure; truncated or same-size damaged
+   entries are misses. Atomic writes sync before publication; orphan `.tmp*` files
+   are removed under the cache lock. Filesystem access errors still surface.
+3. Tar files use explicit Regular typeflag `0`, POSIX ustar name/prefix splitting,
+   and per-file PAX `x`/`path` only for unsplittable paths. No GNU LongLink entries.
+   The minimal-reader live test checks all Gladius entries without GNU/PAX support;
+   a separate synthetic test covers the PAX fallback. Extraction disables mtime
+   preservation. The contract is documented in the crate README and design §FFI.
+4. The upstream live regression now checks material-name/sidecar/index bounds and
+   highest-referenced-slot invariants, without patch-specific counts. Exact counts
+   remain in the labelled LIVE 4.10.2 script fixture, including the unchanged
+   bundled material baseline.
+5. `GlbOptions.preserve_material_slots` is explicit: true in the decomposed
+   writer, false in bundled/raw/character callers. The claim that every production
+   caller's metadata said Bundled was false: the decomposed writer already said
+   Decomposed. Tests now prove slot behavior is independent of that label, and the
+   real bundled Gladius baseline stayed at 184 materials. The upstream contract
+   documents GLB package dispatch and the Blend-only `__child` rewrite.
+
+Also applied the low-severity fixes: core export requires an exact name (case
+insensitive); CLI shorthand retains exact-first substring resolution. A bad
+per-record localization query/value warns and omits its display name rather than
+aborting the index. Removed the CLI's unused serde_json dependency and added the
+requested category-classification TODO.
+
+### Review verification
+
+All cargo commands below ran at the repository root with
+`CARGO_HOME=/tmp/wp-r1-cargo-home CARGO_TARGET_DIR=./target`.
+
+```sh
+cargo build
+cargo test --workspace
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib gltf::
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --test decomposed_glb
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib validation::
+cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker common::tests
+cargo fmt -p scviewer-core -p scviewer-cli -- --check
+```
+
+Passed: build, **15 core tests**, **44 GLB tests**, **1 live export test**,
+**29 validation tests**, **15 CLI tests**, formatting and diff whitespace checks.
+The pre-fix run reproduced five failures covering corrupt index/manifest,
+truncated tar acceptance and non-regular/non-ustar headers.
+
+```sh
+cargo run -p scviewer-cli -- decomposed-tar Gladius out/dec-r1c.tar --lod 1 --mip 2
+cp out/dec-r1c.tar out/dec-r1c-first.tar
+cargo run -p scviewer-cli -- decomposed-tar Gladius out/dec-r1c.tar --lod 1 --mip 2
+cmp out/dec-r1c-first.tar out/dec-r1c.tar
+```
+
+Tar size **101,727,744 bytes**, cold **cache: miss (8548.7 ms)**, second
+**cache: hit (133.5 ms)**. `cmp` passed. The size reduction is from replacing GNU
+long-name records with ustar prefix splitting.
+
+```sh
+python3 -I /tmp/wp-r1c-truncate.py
+cargo run -p scviewer-cli -- decomposed-tar Gladius out/dec-r1c-rebuilt.tar --lod 1 --mip 2
+cargo run -p scviewer-cli -- decomposed-tar Gladius out/dec-r1c-rebuilt-hit.tar --lod 1 --mip 2
+cmp out/dec-r1c-rebuilt.tar out/dec-r1c-rebuilt-hit.tar
+cargo run -p scviewer-cli -- decomposed Gladius out/dec-r1c --lod 1 --mip 2
+cargo run -p scviewer-cli -- --no-cache glb Gladius out/gladius-r1c-after.glb
+python3 -I scripts/verify_r1_package.py out/dec-r1c out/dec-r1c-rebuilt.tar out/gladius-r1c-after.glb
+cargo run -p scviewer-cli -- validate out/dec-r1c
+```
+
+The truncation script selected the single cache tar whose manifest checksum
+matched `out/dec-r1c.tar`, then truncated it to **4,096 bytes** without modifying
+the manifest. The next call reported **cache: miss (8007.1 ms)** and restored
+**101,727,744 bytes**; the following call reported **cache: hit (112.8 ms)**.
+The rebuilt and hit files compared byte-identically.
+
+Fixture check: **45 non-empty GLBs / 23 sidecars / 366 PNGs / 63 clips**, root
+**274/89/27**, all **502 entries** identical to the folder. Bundled Gladius stayed
+at **184 materials** before and after the explicit-option refactor (220 meshes,
+334 images). Validation reported **45 mesh files**, no errors or warnings.
+
+TODO(WP-R1): Replace inherited path-substring categories with DataCore type metadata.
+TODO(WP-R1): Orchestrator to commit these review corrections in the existing branches.
+The earlier diagnostic-stamp reproducibility and skin-joint followups remain unchanged.

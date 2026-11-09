@@ -12,7 +12,7 @@ binary; its default cache is `./cache/` relative to the current working director
 - `search_entities(&str, usize) -> Vec<EntityHit>`; hits contain `name`, `guid`,
   optional `geometry_path`, `category`, and optional English `display_name`.
   Search matches case-insensitive entity or display-name substrings, ordered by
-  shortest entity name then name. Export resolves exact entity names first.
+  shortest entity name then name. Core export accepts exact entity names (case-insensitive); only the CLI resolves substring shorthand.
 - `list_dir(&str) -> Vec<DirEntry>` and `search_paths(&str, usize)`;
   entries contain `path`, `is_dir`, and uncompressed `size`. The geometry browser
   includes `.cga/.cgf/.skin/.chr/.cdf` and their parent directories. Paths use `/`;
@@ -24,6 +24,12 @@ binary; its default cache is `./cache/` relative to the current working director
   result contains written `files: Vec<PathBuf>` and `cache_status`.
 - `export_entity_decomposed_mem(&str, &DecomposedOptions) -> Result<Vec<u8>>`;
   uncompressed tar, `Packages/.../scene.json` first, remaining files sorted by path.
+  Regular files have explicit typeflag `0`. Paths use POSIX ustar `name` (100 bytes)
+  and `prefix` (155 bytes), split at a slash when required. Only paths that cannot
+  fit those fields use a per-file PAX `x` header with a UTF-8 `path` key followed
+  by a regular file header. No GNU `L`/`@LongLink` entries are emitted. The UE
+  reader must support exactly ustar name/prefix and per-file PAX path overrides.
+  Unpacking does not preserve the archived zero mtimes.
 - `set_progress_callback(Option<ProgressCallback>)`; callback is an
   `Arc<dyn Fn(f32, &str) + Send + Sync>`. Upstream progress is sampled every 20 ms
   on a scoped thread during assembly; final/cache-hit notifications run on the
@@ -64,15 +70,21 @@ Gladius at LOD 1 / mip 2 has **45 non-empty GLBs, 23 material sidecars, 366 PNGs
 has 28 slots and its highest referenced slot is 26. The prototype compacted the
 material table and did not satisfy direct sidecar indexing.
 
-The binary browser index is `entities.<buildid>.bin`; unsafe build-id filenames
+The binary browser index is `entities.v<N>.<buildid>.bin`; unsafe build-id filenames
 use a SHA-256 representation. Build identity comes from `Data.BuildId` in the
 adjacent `build_manifest.id`, falling back to archive size and modification time.
 Packages are `<sha256>.tar`, hashing cache format version, build id, canonical
-entity name and all export options. Index envelopes also check version/build id.
-`manifest.json` tracks size and last-use timestamp for both indexes and packages.
+entity name and all export options, plus `EXPORTER_VERSION`. Index envelopes
+also check version/build id/exporter identity. `build.rs` embeds the vendored git
+revision and dirty flag in `EXPORTER_REVISION`, `EXPORTER_DIRTY`, and
+`EXPORTER_VERSION` via compile-time environment constants. It watches vendored
+source and git metadata for changes. Without git, the identity falls back to a
+SHA-256 hash of the vendored Cargo.lock.
+`manifest.json` tracks size, SHA-256 checksum and last-use timestamp for both indexes and packages.
 Publication is atomic; a process lock serializes cache reads, writes and eviction.
-Writes enforce the default 20 GiB cap. Cache failures are reported, not silently
-ignored. Existing files at identical output paths are replaced when unpacking;
+Writes enforce the default 20 GiB cap. Corrupt/outdated entries are removed and rebuilt as misses. Malformed manifests
+are reconstructed from cache-owned files; orphan `.tmp*` files are removed.
+Files are synced before atomic publication. Filesystem access failures are reported. Existing files at identical output paths are replaced when unpacking;
 unrelated files under a shared export root remain intact.
 
 Tests discover game data and skip live checks when none is found. Run cargo from

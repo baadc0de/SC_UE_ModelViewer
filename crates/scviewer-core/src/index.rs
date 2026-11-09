@@ -55,6 +55,7 @@ pub struct DirEntry {
 pub(crate) struct BrowserIndex {
     pub version: u32,
     pub build_id: String,
+    pub exporter_version: String,
     pub entities: Vec<EntityHit>,
     pub paths: Vec<DirEntry>,
 }
@@ -81,6 +82,19 @@ fn geometry(path: &str) -> bool {
     })
 }
 impl BrowserIndex {
+    pub fn decode(bytes: &[u8], build_id: &str) -> Option<Self> {
+        use bincode::Options;
+        let index: Self = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(bytes.len() as u64)
+            .reject_trailing_bytes()
+            .deserialize(bytes)
+            .ok()?;
+        (index.version == crate::CACHE_FORMAT_VERSION
+            && index.build_id == build_id
+            && index.exporter_version == crate::EXPORTER_VERSION)
+            .then_some(index)
+    }
     pub fn build(loaded: &Loaded, build_id: &str) -> Result<Self> {
         let loc = parse_localization(
             &loaded
@@ -94,13 +108,17 @@ impl BrowserIndex {
             for record in db.records_by_type_name("EntityClassDefinition").filter(|r|db.is_main_record(r)) {
                 let full_name = db.resolve_string2(record.name_offset);
                 let name = full_name.rsplit('.').next().unwrap_or(full_name).to_owned();
-                let key = query.as_ref().map(|q| db.query_single::<Value>(q, record).optional()).transpose()?.flatten().flatten();
+                let key = match query.as_ref().map(|q| db.query_single::<Value>(q, record).optional()).transpose() {
+                    Ok(value) => value.flatten().flatten(),
+                    Err(error) => { eprintln!("WARNING: skipping Localization.Name for {name}: {error}"); None }
+                };
                 let display_name = match key {
                     Some(Value::String(s) | Value::Locale(s)) => loc.get(&s.trim_start_matches('@').to_lowercase()).cloned(),
                     None => None,
-                    Some(other) => anyhow::bail!("Localization.Name for {name} has unexpected type: {other:?}"),
+                    Some(other) => { eprintln!("WARNING: skipping Localization.Name for {name}: unexpected type {other:?}"); None },
                 };
                 let source = normalize(db.resolve_string(record.file_name_offset)).to_lowercase();
+                // TODO(WP-R1): replace inherited path-based categories with DataCore type metadata.
                 let category = if source.contains("entities/spaceships") { "Ships" }
                     else if source.contains("entities/groundvehicles") { "Ground Vehicles" }
                     else if source.contains("weapon") { "Weapons" } else { "Other" };
@@ -134,6 +152,7 @@ impl BrowserIndex {
         Ok(Self {
             version: crate::CACHE_FORMAT_VERSION,
             build_id: build_id.into(),
+            exporter_version: crate::EXPORTER_VERSION.into(),
             entities,
             paths,
         })
@@ -142,6 +161,28 @@ impl BrowserIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cache_header_rejects_outdated_build_version_and_exporter() {
+        let mut index = BrowserIndex {
+            version: crate::CACHE_FORMAT_VERSION,
+            build_id: "build".into(),
+            exporter_version: crate::EXPORTER_VERSION.into(),
+            entities: Vec::new(),
+            paths: Vec::new(),
+        };
+        let decode =
+            |i: &BrowserIndex| BrowserIndex::decode(&bincode::serialize(i).unwrap(), "build");
+        assert!(decode(&index).is_some());
+        index.version += 1;
+        assert!(decode(&index).is_none());
+        index.version -= 1;
+        index.exporter_version.push_str("-other");
+        assert!(decode(&index).is_none());
+        index.exporter_version = crate::EXPORTER_VERSION.into();
+        index.build_id = "other".into();
+        assert!(decode(&index).is_none());
+        assert!(BrowserIndex::decode(&[255; 64], "build").is_none());
+    }
     #[test]
     fn localization_handles_bom_comments_case_and_equals() {
         let l = parse_localization("\u{feff};comment\n#comment\n ItEm = A=B \n".as_bytes());
