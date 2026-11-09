@@ -16,6 +16,32 @@ are imported as static for now (WP-U3 replaces that). The in-game UI is WP-V1; t
 WP exposes `FSCImporter::Import(FSCPackageSource&, FSCImportOptions, FSCImportResult&)`
 and a minimal menu entry "Import SC package folder…" for testing.
 
+## Inputs ready for you (2026-11-09, orchestrator)
+- A GLB-format decomposed Gladius package is at `out/dec/` (gitignored; LOD 1,
+  mip 2): `out/dec/Packages/AEGS Gladius_LOD1_TEX2/scene.json` (51 children,
+  3 interiors, 63 clip index records), `out/dec/Data/**` with 45 mesh `.glb`
+  (untextured, Colors material mode), 23 `*.materials.json` sidecars, 366 PNGs. The
+  root mesh `AEGS_Gladius_LOD1.glb` has 274 nodes / 89 meshes / 24 materials, no skins
+  (rigid NMC hierarchy); landing-gear children carry skins. Ignore `scene.blend`.
+- **Do not run cargo or `scripts/starbreaker.sh`** (WP-R1 holds the cargo lock and
+  shares `./target`). If you need another entity exported, write `TODO(WP-U1)` with
+  the exact entity and options and the orchestrator will produce it.
+- Material mapping contract: GLB material name = `<mtl stem>_<submaterial>_<NN>`,
+  `NN` = zero-based index into the sidecar's `submaterials[]`; the GLB primitive's
+  material index is the same `NN`. Use the index, not the name, for lookups.
+- UE facts from WP-U0 are in `ue/README.md` (Decision + GPU validation). The spike
+  code `ue/Plugins/SCBridge/Source/SCBridge/SCSpike.cpp` shows a working runtime
+  `BuildFromMeshDescriptions` + Nanite + collision + cooked-package save; reuse its
+  patterns, then delete or quarantine the spike behind a `SC_SPIKE` define once the
+  real importer covers it.
+- You hold the Unreal build lock (`ue/scripts/build.sh SCViewerEditor`). The game
+  host launch is `ue/scripts/run_spike.sh`-style: `UnrealEditor <uproject> -game
+  -windowed -vulkan -ddc=SCViewerDDC`; a GPU is available in this session only if
+  `vulkaninfo --summary` lists the RTX 4090 — if it lists none, run with `-nullrhi`,
+  record that, and leave visual checks to the orchestrator.
+- Cannot commit: `.git` is read-only in your sandbox. Leave the tree clean of build
+  products; the orchestrator commits by path.
+
 ## Read first
 `docs/03-unreal-export-design.md`, `vendor/StarBreaker/docs/decomposed-export-contract.md`
 (scene manifest, child instances, `local_transform_sc` with `gltf_y_up` basis,

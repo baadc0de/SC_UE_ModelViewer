@@ -48,6 +48,31 @@ bridge need. No format code of our own.
   `validate <dir>` (upstream `validate_decomposed_export`), `ls <p4k dir>` — thin,
   for verification.
 
+## Findings you must build on (2026-11-09, orchestrator)
+- **Upstream's GLB decomposed format writes empty mesh files.** The CLI forces
+  `ExportFormat::Blend` whenever `--kind decomposed` is given (`cli/src/common.rs`
+  `From<&ExportOpts>`, and `cli/src/entity.rs::export` short-circuits to
+  `export_blend`). With `ExportFormat::Glb` the library runs the decomposed path but
+  `decomposed.rs::write_mesh_asset` inserts `Vec::new()` for every `.glb` (the Blend
+  format fills meshes in a later assembly step; nothing does that for GLB).
+- A working prototype fix is in
+  `docs/work-packages/wp-r1-prototype-glb-mesh-asset.patch` (against upstream
+  `7d3f01e`): `write_mesh_asset` builds each mesh through `gltf::write_glb` with
+  `MaterialMode::Colors`, no textures, `preserve_textureless_decal_primitives = true`,
+  the NMC node table and the bone table, plus an env-var escape hatch in the CLI.
+  Turn that into a proper `scviewer/decomposed-glb` branch in `vendor/StarBreaker`:
+  no env var — add a real `--format glb|blend` CLI option (default blend to keep
+  upstream behaviour) and make `scviewer-core` request `ExportFormat::Glb` directly.
+  Verified output for `Gladius --lod 1 --mip 2`: 45 GLBs none empty, root mesh 274
+  nodes / 89 meshes / 24 materials, 23 sidecars, 366 PNGs, 63 clips, 96 MB, ~10 s.
+- **Material mapping contract** the UE importer relies on: a GLB material is named
+  `<mtl stem>_<submaterial name>_<NN>` where `NN` is the zero-based index into the
+  sidecar's `submaterials[]` (`<mtl stem>_TEX<m>.materials.json`); the GLB primitive's
+  material index is that same `NN`. Keep this stable and state it in the crate docs.
+- The library already returns the whole package in memory
+  (`DecomposedExport { files: Vec<ExportedFile { relative_path, bytes, kind }> }`),
+  so the in-memory tar is a serialisation of that vector, not a new exporter path.
+
 ## Done criteria
 - `cargo build && cargo test --workspace` green (debug).
 - `cargo run -p scviewer-cli -- search gladius` lists `AEGS_Gladius` first.

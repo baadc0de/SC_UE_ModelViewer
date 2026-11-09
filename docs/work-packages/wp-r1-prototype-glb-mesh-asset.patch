@@ -1,0 +1,96 @@
+diff --git a/cli/src/common.rs b/cli/src/common.rs
+index 414b9c2..f4c9c3c 100644
+--- a/cli/src/common.rs
++++ b/cli/src/common.rs
+@@ -107,6 +107,7 @@ impl From<&ExportOpts> for starbreaker_3d::ExportOptions {
+             }
+         };
+         let format = match kind {
++            starbreaker_3d::ExportKind::Decomposed if std::env::var_os("SB_DECOMPOSED_GLB").is_some() => starbreaker_3d::ExportFormat::Glb,
+             starbreaker_3d::ExportKind::Decomposed => starbreaker_3d::ExportFormat::Blend,
+             starbreaker_3d::ExportKind::Bundled => starbreaker_3d::ExportFormat::Glb,
+         };
+diff --git a/cli/src/entity.rs b/cli/src/entity.rs
+index 804bef6..cb415b3 100644
+--- a/cli/src/entity.rs
++++ b/cli/src/entity.rs
+@@ -532,7 +532,7 @@ fn export(
+     opts: ExportOpts,
+ ) -> Result<()> {
+     // Decomposed exports generate scene.blend with linked mesh instances.
+-    if opts.kind.to_lowercase() == "decomposed" {
++    if opts.kind.to_lowercase() == "decomposed" && std::env::var_os("SB_DECOMPOSED_GLB").is_none() {
+         return export_blend(name, output, p4k_path, opts);
+     }
+ 
+diff --git a/crates/starbreaker-3d/src/decomposed.rs b/crates/starbreaker-3d/src/decomposed.rs
+index 80e0d76..1869f83 100644
+--- a/crates/starbreaker-3d/src/decomposed.rs
++++ b/crates/starbreaker-3d/src/decomposed.rs
+@@ -2464,10 +2464,10 @@ fn write_mesh_asset(
+     p4k: &MappedP4k,
+     fallback_name: &str,
+     geometry_path: &str,
+-    _mesh: &Mesh,
+-    _materials: Option<&MtlFile>,
+-    _nmc: Option<&NodeMeshCombo>,
+-    _bones: &[Bone],
++    mesh: &Mesh,
++    materials: Option<&MtlFile>,
++    nmc: Option<&NodeMeshCombo>,
++    bones: &[Bone],
+     lod_level: u32,
+     format: ExportFormat,
+     existing_asset_paths: Option<&HashSet<String>>,
+@@ -2479,7 +2479,50 @@ fn write_mesh_asset(
+     {
+         return Ok(requested_path);
+     }
+-    Ok(insert_binary_file(files, requested_path, Vec::new()))
++    // SCVIEWER PROTOTYPE: the Glb decomposed format writes the per-mesh GLB
++    // (untextured, material names preserved for sidecar slot mapping);
++    // the Blend format keeps the placeholder that blend assembly fills later.
++    let bytes = if format == ExportFormat::Glb {
++        crate::gltf::write_glb(
++            crate::gltf::GlbInput {
++                root_mesh: Some(mesh.clone()),
++                root_materials: materials.cloned(),
++                root_textures: None,
++                root_nmc: nmc.cloned(),
++                root_palette: None,
++                skeleton_bones: bones.to_vec(),
++                children: Vec::new(),
++                interiors: crate::pipeline::LoadedInteriors::default(),
++                animations: Vec::new(),
++            },
++            &mut crate::gltf::GlbLoaders {
++                load_textures: &mut |_, _| None,
++                load_interior_mesh: &mut |_| None,
++            },
++            &crate::gltf::GlbOptions {
++                material_mode: crate::pipeline::MaterialMode::Colors,
++                preserve_textureless_decal_primitives: true,
++                metadata: crate::gltf::GlbMetadata {
++                    entity_name: None,
++                    geometry_path: Some(geometry_path.to_string()),
++                    material_path: None,
++                    export_options: crate::gltf::ExportOptionsMetadata {
++                        kind: "Decomposed".to_string(),
++                        material_mode: "Colors".to_string(),
++                        format: "Glb".to_string(),
++                        lod_level,
++                        texture_mip: 0,
++                        include_attachments: false,
++                        include_interior: false,
++                    },
++                },
++                fallback_palette: None,
++            },
++        )?
++    } else {
++        Vec::new()
++    };
++    Ok(insert_binary_file(files, requested_path, bytes))
+ }
+ 
+ fn write_material_sidecar(
