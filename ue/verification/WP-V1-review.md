@@ -1,0 +1,29 @@
+# WP-V1 cross-review (Codex, gpt-6-astra, 2026-11-09)
+
+Static review of commit e90abb8 by the other model, per the orchestration rule. Codex could not write this file from its sandbox; the orchestrator saved its output verbatim. Follow-ups are handled in a WP-V1 review round by the implementer.
+
+Reviewed WP-V1 commit `e90abb8` through static inspection only; no builds, scripts, or Unreal runs. I could not create `ue/verification/WP-V1-review.md` because this session permits only filesystem reads.
+
+1. **blocker — Tar length can overflow the destination array.** [SCBridgeClient.cpp:171](../ue/Plugins/SCBridge/Source/SCBridge/Private/SCBridgeClient.cpp:171)  
+   `Result.Tar` is a `TArray<uint8>` with a signed 32-bit count. Casting `Blob.len` to `int64` does not prevent narrowing in `SetNumUninitialized`; `Memcpy` then uses the original full length. An oversized package can therefore trigger an allocation assertion or a buffer overflow when the narrowed count is positive. **Fix:** reject lengths above `MAX_int32` before allocation, free the successful FFI blob, and return an actionable error—or migrate the entire tar path to 64-bit arrays.
+
+2. **should-fix — Panic handling leaves the application without a usable archive or UI recovery.** [SCBridgeClient.cpp:179](../ue/Plugins/SCBridge/Source/SCBridge/Private/SCBridgeClient.cpp:179), [SCViewerSubsystem.cpp:314](../ue/Plugins/SCBridge/Source/SCBridge/Private/SCViewerSubsystem.cpp:314)  
+   Export closes a panicked handle, but the subsystem leaves `ArchiveState` as `Ready`; subsequent searches and exports fail, while the archive retry/picker remains hidden. Search and catalogue error paths do not close poisoned handles. Export also calls `sc_free_blob` after `PANIC`, although [scbridge.h:157](../ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h:157) declares that output unspecified and unusable. **Fix:** centralize panic invalidation under the handle lock, propagate it to the subsystem, expose reopening, and avoid inspecting or freeing unspecified panic output.
+
+3. **should-fix — Reopening an archive can reuse a model from the previous archive.** [SCViewerSubsystem.cpp:134](../ue/Plugins/SCBridge/Source/SCBridge/Private/SCViewerSubsystem.cpp:134), [SCViewerSubsystem.cpp:216](../ue/Plugins/SCBridge/Source/SCBridge/Private/SCViewerSubsystem.cpp:216)  
+   `OpenArchive` preserves `LoadedKey` and the vehicle. The reuse key contains only entity and options, so opening another installation and loading the same class/options reports success while retaining the previous installation’s objects. **Fix:** invalidate reuse when reopening, or include an archive-session generation in the key. Also discard search results belonging to an earlier archive generation.
+
+4. **should-fix — The import budget is checked after an entire source asset’s mesh builds.** [SCImportJob.cpp:482](../ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportJob.cpp:482), [SCImportJob.cpp:535](../ue/Plugins/SCBridge/Source/SCBridge/Private/SCImportJob.cpp:535)  
+   One `BuildMesh` call builds every rigid part and translucent variant for the asset before returning to the budget/cancellation check. UI rendering and cancellation therefore wait for the whole group, contrary to the “one mesh build” step claimed in [WP-V1.md:91](../ue/verification/WP-V1.md:91). **Fix:** retain a per-variant build cursor and yield/check cancellation between builds; report measurements for actual tick boundaries.
+
+5. **should-fix — Cancellation verification does not establish partial-object cleanup.** [test_viewer_cancel.py:25](../ue/scripts/test_viewer_cancel.py:25)  
+   The test waits only for the outer `Importing` phase, which does not guarantee any meshes have been created. It checks `get_vehicle()`, but that accessor is populated only after successful import. Despite its docstring, the test neither forces GC after cancellation nor checks that partial import objects disappeared. **Fix:** cancel after confirmed mesh creation and while worker work is pending, track partial objects, collect garbage, and assert their release. Add teardown-with-pending-work coverage.
+
+6. **should-fix — Searching during archive startup suppresses the initial successful search.** [SSCModelBrowser.cpp:225](../ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCModelBrowser.cpp:225), [SSCModelBrowser.cpp:289](../ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCModelBrowser.cpp:289)  
+   A debounced query sets `bSearchedOnce` before checking archive readiness. If opening is still underway, `SearchAsync` immediately returns an error; once opening succeeds, the automatic search is suppressed. Results remain empty until another edit. **Fix:** retain the pending query and mark it submitted only when the archive is ready, then search on the readiness transition.
+
+7. **should-fix — “Frame all” leaves isolation active.** [SSCHierarchyPanel.cpp:73](../ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCHierarchyPanel.cpp:73), [SSCHierarchyPanel.cpp:205](../ue/Plugins/SCBridge/Source/SCBridge/Private/UI/SSCHierarchyPanel.cpp:205)  
+   Clearing selection returns early from `OnSelection`, leaving the previous component isolated. `FocusComponent(nullptr)` then frames visible bounds, so “Frame all” still shows only that component. The F shortcut likewise preserves isolation. **Fix:** provide one frame-all action that restores visibility, clears isolation and selection state, then frames the vehicle.
+
+**Verdict: do not merge.** Resolve the unchecked tar-size conversion before merge, and address the recovery, reuse, responsiveness, and cancellation-verification findings. Static inspection found no additional U1–U3 mapping regression; Rust was unchanged, and `Content/SC/.gitignore` covers kept assets. The implementer’s execution results were not independently rerun.
+
