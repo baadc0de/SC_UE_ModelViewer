@@ -74,5 +74,5 @@ no MeshDecal primitive on an opaque material; no emission without `Glow`; the Gl
 ### Deviations (WP-U2)
 - Masters added beyond the brief: `M_SC_MeshDecal_Relief` (control-only POM, normal/roughness), `M_SC_Translucent` (forward/faded Illum glow cards); blend/two-sided variants are constant instances (`MI_SC_*`).
 - "No mip generation changes": exported PNGs have one level, so the runtime path builds a box-filtered mip chain on the worker (no engine mip settings changed).
-- Emission follows the owner's rule (Glow absent/0 → none, strength = Glow × host constant `GlowToEmissive`), not `mtl.rs` `emissive_factor()`; Glow with Emissive = 0 is diffuse glow.
+- Emission follows the owner's rule (Glow absent/0 → none, strength in cd/m² from the game's glow rule `FSCStarEngine::GlowNits`, quadratic in Glow — `ue/verification/WP-U3b.md` §13.3; until 2026-11-10 a host constant `GlowToEmissive`), not `mtl.rs` `emissive_factor()`; Glow with Emissive = 0 is diffuse glow.
 - `MtlFlags & 0x8000` (CryEngine forward-rendering flag) makes Illum diffuse alpha a coverage mask; to be moved into the sidecar's `alpha_config` upstream.

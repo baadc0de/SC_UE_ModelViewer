@@ -13,6 +13,8 @@ class SCBRIDGE_API ASCViewerGameMode : public AGameModeBase
     GENERATED_BODY()
 public:
     ASCViewerGameMode();
+    /** Applies the game's exposure and display mapping to the map (SCViewerExposure.h). */
+    virtual void StartPlay() override;
 };
 
 UCLASS()

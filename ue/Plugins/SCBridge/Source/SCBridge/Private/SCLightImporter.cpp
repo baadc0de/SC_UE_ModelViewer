@@ -1,5 +1,6 @@
 // Scene light and projector creation; photometric mapping is shared with the package contract.
 #include "SCLightImporter.h"
+#include "SCStarEngine.h"
 #include "SCVehicle.h"
 #include "SCMeshImporter.h"
 #include "SCImporter.h"
@@ -72,26 +73,6 @@ bool MegaLightsActive()
     const bool Software = ConsoleEnabled(TEXT("r.MegaLights.SoftwareRayTracing.Allow")) && DoesProjectSupportDistanceFields();
     return Hardware || Software;
 }
-// Fallback rule: within one scene instance (root entity or interior container) only the lights whose authored
-// attenuation radius is in the upper quartile cast shadows; small-radius fixtures only light their housing.
-double ShadowRadiusThreshold(const TArray<FString>& LightJson)
-{
-    TArray<double> Radii;
-    for (const auto& Text : LightJson)
-    {
-        FLightJson J;
-        if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), J) && J &&
-            (LightString(J, TEXT("semantic_light_kind")) == TEXT("point") || LightString(J, TEXT("semantic_light_kind")) == TEXT("spot") ||
-             LightString(J, TEXT("semantic_light_kind")) == TEXT("area")))
-            Radii.Add(FMath::Max(0., LightNumber(J, TEXT("radius_m"))));
-    }
-    if (Radii.IsEmpty()) return 0;
-    Radii.Sort();
-    return Radii[(3 * Radii.Num()) / 4];
-}
-// CryEngine's renderer light unit (CRYENGINE 5 CryCommon/CryRenderer/IRenderer.h RENDERER_LIGHT_UNIT_SCALE): one unit of
-// light colour is 1e4 cd/m2 (luminance) / 1e4 lux (sun, divided by pi). Engine constant, not game data.
-constexpr double CryLightUnit = 10000.0;
 // The authored light model is present when the exporter wrote the WP-R5b fields.
 bool HasAuthoredModel(const FLightJson& J)
 {
@@ -114,19 +95,46 @@ UMaterialInstanceDynamic* GoboMaterial(ASCVehicle* Vehicle, UMaterialInterface* 
     return MID;
 }
 } // namespace
+UClass* FSCLightImporter::ComponentClass(const TSharedPtr<FJsonObject>& Light)
+{
+    if (LightString(Light, TEXT("transform_basis")) != TEXT("cryengine_z_up")) return nullptr;
+    const FString Kind = LightString(Light, TEXT("semantic_light_kind"));
+    if (Kind == TEXT("point")) return UPointLightComponent::StaticClass();
+    if (Kind == TEXT("spot")) return USpotLightComponent::StaticClass();
+    if (Kind == TEXT("area")) return URectLightComponent::StaticClass();
+    if (Kind == TEXT("sun")) return UDirectionalLightComponent::StaticClass();
+    return nullptr; // the ambient proxy and kinds without a UE light
+}
+// Fallback rule: within one scene instance (root entity or interior container) only the local lights whose authored
+// attenuation radius is in the upper quartile cast shadows; small-radius fixtures only light their housing.
+double FSCLightImporter::ShadowRadiusThreshold(const TArray<FString>& LightJson)
+{
+    TArray<double> Radii;
+    for (const auto& Text : LightJson)
+    {
+        FLightJson J;
+        if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), J) || !J) continue;
+        const UClass* Class = ComponentClass(J);
+        if (Class && Class->IsChildOf(ULocalLightComponent::StaticClass())) Radii.Add(FMath::Max(0., LightNumber(J, TEXT("radius_m"))));
+    }
+    if (Radii.IsEmpty()) return 0;
+    Radii.Sort();
+    return Radii[(3 * Radii.Num()) / 4];
+}
 double FSCLightImporter::StateCandela(const TSharedPtr<FJsonObject>& Light, const TSharedPtr<FJsonObject>& State)
 {
     if (!HasAuthoredModel(Light))
         return FMath::Max(0., LightNumber(State, TEXT("intensity_candela_proxy"), LightNumber(Light, TEXT("intensity_candela_proxy"))));
-    // CryEngine attenuation (shadeLib.cfi GetPhysicalLightAttenuation): full intensity inside the bulb, then (b/d)^2,
-    // with the Lambert pi folded into the light colour; so the far-field luminous intensity is pi * 1e4 * I * b^2.
-    // attenuation_tweak (headlights only) has no documented meaning and is not applied (§11.7: inconclusive).
+    // The game renderer's light model (FSCStarEngine, ue/verification/WP-U3b.md §13): the authored intensity is the
+    // brightness (scene units, Lambert pi folded in) reached 1 m from the bulb surface, falling off as
+    // GetPhysicalLightAttenuation; planar lights carry it as the plane's luminance.
+    const FSCStarEngine& Game = FSCStarEngine::Get();
     const double Raw = FMath::Max(0., LightNumber(State, TEXT("intensity_raw"), LightNumber(Light, TEXT("intensity_raw"))));
     if (LightString(Light, TEXT("semantic_light_kind")) == TEXT("area"))
-        return CryLightUnit * Raw * FMath::Max(0., LightNumber(Light, TEXT("plane_width_m"))) *
-               FMath::Max(0., LightNumber(Light, TEXT("plane_height_m")));
-    const double Bulb = FMath::Max(0., LightNumber(Light, TEXT("bulb_radius_m")));
-    return UE_DOUBLE_PI * CryLightUnit * Raw * Bulb * Bulb;
+        return Game.PlanarCandela(Raw, FMath::Max(0., LightNumber(Light, TEXT("plane_width_m"))),
+                                  FMath::Max(0., LightNumber(Light, TEXT("plane_height_m"))));
+    return Game.PointCandela(Raw, FMath::Max(0., LightNumber(Light, TEXT("bulb_radius_m"))),
+                             LightNumber(Light, TEXT("attenuation_tweak"), 1.0));
 }
 FVector FSCLightImporter::ContainerBasis(const FVector& Cry, bool bHelperFrame)
 {
@@ -155,20 +163,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             Warnings.Add(Name + TEXT(": unsupported light basis"));
             continue;
         }
-        ULightComponent* Light = nullptr;
-        if (Kind == TEXT("point"))
-            Light = NewObject<UPointLightComponent>(Vehicle, NAME_None, RF_Transient);
-        else if (Kind == TEXT("spot"))
-            Light = NewObject<USpotLightComponent>(Vehicle, NAME_None, RF_Transient);
-        else if (Kind == TEXT("area"))
-            Light = NewObject<URectLightComponent>(Vehicle, NAME_None, RF_Transient);
-        else if (Kind == TEXT("sun"))
-            Light = NewObject<UDirectionalLightComponent>(Vehicle, NAME_None, RF_Transient);
-        if (!Light)
+        UClass* Class = ComponentClass(J);
+        if (!Class)
         {
             Warnings.Add(Name + TEXT(": unsupported light kind ") + Kind);
             continue;
         }
+        ULightComponent* Light = NewObject<ULightComponent>(Vehicle, Class, NAME_None, RF_Transient);
         Vehicle->AddInstanceComponent(Light);
         Vehicle->Lights.Add(Light);
         Light->SetMobility(EComponentMobility::Movable);

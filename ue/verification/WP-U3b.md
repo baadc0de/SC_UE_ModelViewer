@@ -15,6 +15,10 @@ and the Cutlass bay costs **7.0 ms GPU at 1600×900 (≈140 fps) and 16.9 ms at 
 (set) and one material per texture (importer diff below). The data-derived shadow cap stays as
 the fallback for hosts without hardware ray tracing (same diff).
 
+> **2026-11-10:** intensity, emissive strength, exposure and the display curve now follow the installed
+> game's renderer (§13). The candela proxy and UE's default auto exposure described here are the record of
+> the 2026-11-09 build.
+
 ## 1. MegaLights in the installed 5.8.2 (engine source, CL 56702186)
 
 | Question | Fact | Reference (`~/UnrealEngine/5.8/Engine/…`) |
@@ -95,6 +99,7 @@ nothing measurable under MegaLights (b vs c). MegaLights' denoiser is included i
   emissive materials are unchanged (identical `LumenSceneUpdate`/`LumenReflections` costs).
   WP-U2's `GlowToEmissive` (10 units per Glow) was tuned to the old fixed exposure; under auto
   exposure emissives read 0.6–1 stop brighter on sun-lit exteriors and 1.3 stops dimmer in the Cutlass bay.
+  (Superseded by §13.3: emissive strength is cd/m² from the game's glow rule; `GlowToEmissive` is gone.)
 - **Spot cones.** Authored 90° half-angles (180° projector FOV) are clamped by UE to 88.9°.
 - **Rect lights.** `Planar` lights → rect lights at the UE default 64×64 cm source size; the
   emitter size (`planeWidth`/`planeHeight`) is not exported.
@@ -321,7 +326,8 @@ match the expected scale and are not used.
 - TODO(WP-U3b): apply the §8 patch after the WP-U3 round, build, add the suggested test; then
   `r.LightFunctionAtlas.Size` can return to the default if every ship stays ≤ 16 unique gobos.
 - TODO(WP-U3b): bounded auto-exposure PPV in the Viewer map (`create_viewer.py`, −3…6 EV100).
-- TODO(WP-U2): re-tune `GlowToEmissive` for auto exposure (or derive Glow → cd/m²).
+- ~~TODO(WP-U2): re-tune `GlowToEmissive` for auto exposure (or derive Glow → cd/m²).~~ Done 2026-11-10,
+  derived (§13.3).
 - TODO(WP-R5): export `shadowParams` (cast-shadow flag) and `planeWidth`/`planeHeight`; the
   shadow rule and the 64 cm rect default are stand-ins for them.
 - TODO(WP-V2): light-state selection (default/auxiliary/emergency/off); the Gladius hangar
@@ -330,6 +336,11 @@ match the expected scale and are not used.
   fallback rule working (the patch keys it on the same CVar).
 
 ## 11. Ranges and intensities (follow-up to owner feedback, analysis only — no GPU runs yet)
+
+> **Superseded in part by §13 (2026-11-10).** The intensity rule of this section (H-CE,
+> `I = π·10⁴·intensity·bulb²`, from the public CryEngine 5 source) is replaced by the rule read from the
+> installed game's own shaders (H-SE, §13.2); the open `attenuationTweak` question is answered there. The
+> attenuation model in UE (§11.3), the hangar (§11.9) and the measurements stand as records of that build.
 
 Owner: the ship's own lights pool metres across the floor (Gladius red/blue wing lights, Scorpius
 white/blue), while `reference/gladius/top-hangar.webp` shows none. The UE build lock and GPU
@@ -834,4 +845,236 @@ from each other and P2 stale channels after animation — documented above.
 - The hangar floor and the ramp are white before and after — viewer hangar panels and auto exposure, not ship
   lights. Bay auto-exposure EV100 was not re-measured.
 - `projectorNearPlane`, `specularMultiplier`, `focusedBeam` are not exported; `attenuationTweak` semantics
-  remain open (§11).
+  remain open (§11). *(Answered in §13.2.)*
+
+## 13. Game photometry: light, glow, exposure and display curve from the installed renderer (2026-11-10)
+
+Owner request: "continue improving this. visual fidelity is paramount." After §12 every interior was still
+blown out or flat: light intensity came from the public CryEngine 5 source (H-CE, §11.2), emissive strength
+from a host scale, exposure from UE's defaults and the picture went through UE's filmic tonemapper. All four
+are replaced here by the rules of the installed game's renderer (Star Citizen `sc-alpha-4.10.2`, version
+`4.10.197.2878`, change `12913470`), read from its shader sources and its executable. Nothing was tuned from
+a screenshot and no ship, material or light name is tested anywhere.
+
+RTX 4090, Vulkan SM6, Editor `-game` host, default hangar map. Superproject `ed429a8` plus this change;
+submodule unchanged (`1f8993a4`), cache format still 16.
+
+### 13.1 Source, fixture, validator
+
+- The shader sources ship in `Engine\ShaderCache_Vulkan.pak` inside `Data.p4k` (stored, unencrypted;
+  2,391,328,688 bytes, crc32 `aea61527`): a zip of FXB1 tokenised `.cfib` / `.cfxb` files. Cvar defaults are
+  compiled into `Bin64/StarCitizen.exe` (found by disassembling each cvar's registration call).
+- What the Viewer cannot read at run time is checked in as an **extracted fixture**,
+  `ue/Plugins/SCBridge/Resources/StarEngineRender.json` (schema `star_engine_render_v1`): 22 cvar defaults,
+  7 shader constants and the sha256 of the tokens of 17 shader functions the rules were written from. Shader
+  text itself is not checked in. Provenance, method and "what each value drives":
+  `StarEngineRender.notes.md` beside it.
+- `FSCStarEngine::Load` (`SCStarEngine.cpp`) has **no in-code fallback**: a missing value, another schema or a
+  value outside the rules' domain (non-positive units, inverted ranges, anchors not strictly ascending or a
+  compensation segment with slope ≥ 1, discard ratios that leave no band, non-finite numbers) is an error
+  naming the value, and `Get()` is fatal on it. `SCBridge.Build.cs` stages the fixture as a runtime dependency.
+- Validator (run after every game patch; reads the pak in place from `Data.p4k`, so no extracted copy can go
+  stale):
+
+  ```
+  $ python3 -I scripts/verify_star_engine_render.py
+  STAR_ENGINE_RENDER OK: 47/47 checks match the installed game
+  ```
+
+  46 fixture values plus one completeness check (the fixture lists exactly the `r_ExposureCompensationEV<n>`
+  cvars the executable registers). The validator applies the same domain rules as the loader.
+
+### 13.2 Light intensity (H-SE, replaces H-CE of §11.2)
+
+- One unit of scene colour is `HDR_LUMINANCE_SCALE` = **1000 cd/m²** (`common.cfib`).
+- Point and projector lights attenuate with `GetPhysicalLightAttenuation`
+  = `1 / (tweak · (d − bulb) / bulb + 1)²`, and the Lambert π is folded into the light colour
+  (`DiffuseLambert`). With the authored intensity reached one metre from the bulb surface, the far field is
+  `intensity · (1 + bulb/tweak)² / d²` scene units, so
+
+  **`I_cd = π · 1000 · intensity · (1 + bulb/tweak)²`** (`FSCStarEngine::PointCandela`; 0 when tweak ≤ 0).
+
+  This answers the open `attenuationTweak` question of §11/§12.7: it divides the bulb radius in the far
+  field. The importer reads `attenuation_tweak` from the light record (1.0 when the record has none, the
+  DataCore default).
+- Planar (area) lights: the colour is the panel's luminance over π (`PlanarLightDiffuse_LightSpace`), so
+  **`I_cd = π · 1000 · intensity · width · height`** (`PlanarCandela`).
+- Inferences, not read from the game: the CPU-side normalisation ("reached one metre from the bulb surface",
+  including the tweak) — the shader shows only the GPU half; and that planar lights get no CPU normalisation.
+- The exported `intensity_candela_proxy` is used only for lights without the authored model
+  (`HasAuthoredModel`), as before. The light verifier now derives class and candela through the importer's
+  own functions (`ComponentClass`, `StateCandela`, `ShadowRadiusThreshold`) instead of a parallel copy.
+
+### 13.3 Glow
+
+- **Material glow** is quadratic: `MaterialGlowToLinearGlow` gives `sqrGlowFactor · Glow²` scene units with
+  `sqrGlowFactor` = 400, so **`EmissiveStrength = 1000 · 400 · Glow²` cd/m²** (`FSCStarEngine::GlowNits`;
+  Glow 0.1 → 4,000 cd/m², Glow 0.236 → 22,280 cd/m²). The host scale `GlowToEmissive` is gone.
+- **Instance glow** is linear: `CalculateEmissive(glowColour, materialGlowStr, instanceGlowColour)` returns
+  `materialGlowStr · glowColour + instanceGlowColour · glowColour`, and the hard-surface shader passes
+  `instData.glow · GetPerInstanceGlowFactor()` as the instance term — no conversion, already scene units. So
+  **`InstanceGlowNits(amount) = 1000 · amount` cd/m²**.
+- The exporter's `controls.engine_glow` (units `material_property_glow`) is the output of an entity-effect
+  link (DataCore `SEntityComponentEffects.entityEffects.materialEffects`, `materialProperty == Glow`: parameter
+  × multiplier, clamped to min/max). It is read as an **instance-glow amount**, not a material Glow. Evidence:
+  (a) the values — a census of 29,693 entities finds 3,049 Glow links whose most common chain is
+  `× 100, min 1, max 10⁷` (1,428 links) and whose outputs run from 1 into the thousands, against authored
+  material Glow of 0.02–0.5; (b) the executable carries `CRenderProxy::AddGlowForSlot(const SLightAmount&, …)`
+  and `CGeomLinkManager::AddGlow(ELightLinkHandle, IRenderNode*, const SLightAmount&, int)` beside separate
+  `MATERIAL_PROPERTY_GLOW_AMOUNT` / `MATERIAL_PROPERTY_LINKED_GLOW` names. This is string-level evidence; the
+  code path was not disassembled. `GetPerInstanceGlowFactor` (a per-material constant) and any CPU scaling
+  between the effect value and `instData.glow` are taken as 1 (not established).
+- **Placeholder (registered fallback, WP-U2 register):** a rule strength > 0 with no authored Glow (forward
+  glow cards, `%EMITTANCE_MAP`) gets one scene unit of instance glow. Sunset: derive from the light link
+  (`glowMultiplier` × light state).
+
+The first version of this change fed the effect value through the quadratic rule. The Scorpius main
+thrusters idle at the control minimum 10 (tags `Thrust` × 60 min 10, `AfterBurn` × 120 min 15), which became
+4·10⁷ cd/m² and bloomed into teal blobs over the hull (found on the GPU capture, not by a test). Test first:
+
+```
+UNIT_TEST name=FSCMaterialsFamilies passed=0
+Expected 'effect Glow is linear instance glow' to be 50000.000000, but it was 1000000000.000000
+Expected 'clamped to the control minimum' to be 10000.000000, but it was 40000000.000000
+Expected 'clamped to the control maximum' to be 1000000.000000, but it was 399999991808.000000
+```
+
+then green with `InstanceGlowNits` (idle thrusters 10,000 cd/m²; the build before this change gave 100).
+
+### 13.4 Exposure
+
+The game (`OpticsExposure.cfxb`, `Histogram.cfib`; all numbers from the fixture):
+
+- scene EV = log2(cd/m²) + 3 (`LogLumToEV`);
+- `exposure = clamp(0.18 / exp2(logLumMetered − CalculateEVCompensation(EV)), 0.0001, 20)` per scene unit;
+- compensation is piecewise linear through EV 0 / 4 / 8 / 12 / 16 = −4.5 / −3.7 / −1.0 / +0.5 / +2.0 stops, end
+  segments extended — dark scenes stay dark (a 32 cd/m² interior is exposed one stop under middle grey);
+- histogram meter over log2 scene units −14…16, 1 % discarded at each end;
+- adaptation half-lives: pigment 5 s (to dark) / 2 s (to bright), pupil 0.4 s over 2 stops.
+
+UE mapping (`FSCExposureSettings::From`, pure and unit-tested; `SCViewerExposure::Install` applies it):
+
+| UE setting | Value | From |
+|---|---|---|
+| axis offset (scene EV − UE EV100) | 0.526 | `LOG2_LUMINANCE_TO_EV` + log2(0.18 · LuminanceMax), LuminanceMax 1 (extended range) |
+| min / max brightness (EV100) | 1.561 / 31.121 | the scene EVs where the multiplier reaches 20 and 0.0001 (2.087 / 31.647; 2.087 ≈ 0.53 cd/m²) |
+| low / high percent | 1 / 99 | discard ratios |
+| speed up = down | 2.599 stops/s | ln 2 · `r.EyeAdaptation.ExponentialTransitionDistance` (1.5) / pupil half-life |
+| histogram log range | −4.034 … 25.966 | `LOG_MIN` / `LOG_MAX` + log2(1000) |
+| exposure-compensation curve | 6 linear keys: low clamp, EV 4 / 8 / 12 / 16, high clamp; first (1.561, −4.083), last (31.121, 7.868) | `CalculateEVCompensation` |
+| compensation LUT | 1.561 … 31.121, 1893 samples (≤ 1/64 stop apart) | host precision choice, not a game value |
+| bias, physical camera exposure | 0, off | — |
+| `r.AutoExposure.LuminanceMethod` | 2 | the game's histogram meters Rec.709 luminance (`GetLuminance`) |
+
+- The LUT cvars (`r.EyeAdaptation.ExposureCompensationCurveLUT.MinX/.MaxX/.NumSamples`) are set **before** the
+  curve object exists: the renderer rebakes on a curve or sample-count change, not on a domain change. UE's
+  stock domain ends below the game's upper clamp, which silently truncated the curve (Codex finding 1).
+- The settings live on an unbound transient post-process volume above every volume of the map (priority 11
+  in the hangar, whose own volume clamps EV100 to −3…10), spawned by `ASCViewerGameMode::StartPlay`.
+  `-SCHostExposure` skips it (map exposure, UE tonemapper) for comparison captures. Log line of every run:
+
+  ```
+  VIEWER_GAME_EXPOSURE priority=11 brightness=1.561..31.121 percent=1.0..99.0 speed=2.599
+    histogram=-4.034..25.966 keys=6 first=(1.561,-4.083) last=(31.121,7.868) lut=1.561..31.121/1893 display_curve=1
+  ```
+
+### 13.5 Display curve
+
+`r_HDRTonemappingCurve` = 1 selects `HuePreservingShoulder`; `r_HDRDisplayOutput` = 0 takes the SDR branch of
+`DisplayMapping` with `MaxDisplayNitsLDR` = 80 and toe 1.0. `/SCBridge/Materials/M_SC_DisplayMapping` is a
+post-process material at "Replacing the Tonemapper" whose Custom node is a statement-by-statement port of
+`HuePreservingShoulder`, `GetLuminance` and `ToSRGB` (scene + bloom, times the eye-adaptation exposure). Its
+parameters (`MaxDisplayNits`, `RefWhiteScale`, `ToeScale`) are set at run time from the fixture; the asset's
+defaults are deliberately unusable. `ue/scripts/create_display_mapping_material.py` builds it and refuses to
+when one of the three function hashes in the fixture differs from the hash its port was written against.
+
+### 13.6 Measurements
+
+Routes as in §12.5, tags `la2` (before: `ed429a8`), `lb3` (this change with the quadratic effect glow),
+`lb4` (final). All three routes exit 0; 41 `lb4` screenshots.
+
+Light probe at the player, Cutlass armed walkthrough (lux, unshadowed / visible):
+
+| Shot | before (`la2`) | final (`lb4`) |
+|---|---|---|
+| 01 hangar, under the ship | 593.0 / 0.0 | 687.3 / 0.0 |
+| 16 ramp foot | 617.7 / 197.0 | 743.0 / 308.6 |
+| 17 cargo bay | 725.2 / 21.9 | 1809.7 / 967.8 |
+| 19 bulkhead | 1013.0 / 292.4 | 5851.0 / 5068.0 |
+| 21 corridor | 839.4 / 122.8 | 2491.3 / 1642.8 |
+| 22 cockpit | 915.9 / 197.1 | 10044.7 / 9325.8 |
+| 24 nose to wall | 764.2 / 45.3 | 2778.1 / 2059.2 |
+
+Ship lights are several times stronger under H-SE (the `(1 + bulb/tweak)²` term against `10 · bulb²`), and the
+picture is nevertheless darker and no longer clipped: the game's compensation curve under-exposes interiors
+and its shoulder keeps highlights. Gladius probe (`lb4`): hull 766.3 / 758.7, at the ladder 794.9 / 493.7.
+
+What the captures show (half size, viewport crop, before | after):
+
+- `gamephoto-cutlass-bay-before-after.jpg`, `-bulkhead-`, `-corridor-`, `-ramp-`: white, flat interior →
+  dark metal with visible light pools, emissive strips and door frames reading as light sources; the
+  corridor locker wall keeps detail instead of clipping.
+- `gamephoto-cutlass-cockpit-tp-before-after.jpg`: armour was white, is green with its lit visor strips.
+- `gamephoto-gladius-hull-before-after.jpg`: hull and hangar no longer clip; paint colours separate.
+- `gamephoto-scorpius-hull-before-quadratic-linear.jpg`: before | quadratic effect glow (teal bloom, top
+  left) | final. The red cooling emissives (Glow 0.236) are the quadratic material rule.
+
+### 13.7 Verification
+
+```
+$ ue/scripts/build.sh SCViewerEditor                                   → BUILD_EXIT=0
+$ UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/test_importer.py -nullrhi …
+  WP-U1 UNIT_TESTS_OK                                                  (27 test classes)
+$ … test_importer.py -SCPackage=out/dec-rv-cutlass -SCVerifyTar=cache/1272fb0b….tar
+  LIGHT_VERIFY passed=1 components=225 enabled=201 disabled=24 projectors=184 gobo_textures=8
+    gobo_materials=8 fallback_selected=3 shadow_flags=3 visible_shadowed=3 megalights_active=0 atlas_slots=16
+  WP-U1 UNIT_TESTS_OK                                                  (29 test classes)
+$ … test_player.py -SCPlayerTests -SCPlayerPackage=out/fps/player-p4-male.tar
+  WP-P2 HEADLESS_OK
+$ python3 -I scripts/verify_star_engine_render.py
+  STAR_ENGINE_RENDER OK: 47/47 checks match the installed game
+```
+
+New test classes (added to the explicit list in `USCImportLibrary::RunUnitTests`; they were silently not
+running until then): `FSCStarEngineFixture` (the checked-in fixture loads and is in domain),
+`FSCStarEngineDomain` (each out-of-domain edit is refused with an error naming the rule),
+`FSCStarEngineRules` (glow, instance glow, point, tweak, planar, EV, compensation segments, multiplier — on a
+visibly synthetic fixture), `FSCViewerExposureSettings` (every row of the table in §13.4),
+`FSCViewerExposureLut` (the baked LUT follows the keys over the whole clamp range),
+`FSCViewerExposureInstall` (the volume spawns unbound with the curve and the LUT cvars), plus the material
+and light cases that moved to the new units and the verifier negative cases (`FSCLightVerifier`).
+
+Cross-review (Codex, read-only, no GPU), six findings:
+
+1. P1 — the compensation LUT kept UE's stock domain and truncated the curve above it: fixed (domain = key
+   range, cvars before the curve), test red first.
+2. P1 — the loader accepted fixtures outside the rules' domain: fixed in loader and validator, tests red first.
+3. P2 — reflected metering omits the game's dynamic-range rejection (`r_ExposureThresholdRange`): not
+   emulated; residual below.
+4. P2 — the validator could certify a stale extracted shader copy: fixed, it reads the pak in place and says
+   so when it is pointed at a copy.
+5. P2 — the light verifier re-implemented the importer's rules and had drifted: fixed, shared functions.
+6. P3 — stale documents (host-scale emissive, H-CE, fixed exposure): fixed in this change.
+
+The Scorpius glow regression (§13.3) was not among the findings; it was caught on the GPU capture.
+
+### 13.8 Not verified / still open
+
+- **Not compared with the game.** No in-game capture of these ships under a known light set-up exists here;
+  every number above is derived. In particular the 10 klx cockpit, the brightness of the white door-frame
+  strips and of the red Scorpius cooling emissives (22,280 cd/m²) are rule outputs, not matched results.
+- Meter: UE meters reflected luminance only. The game blends an incident-light meter
+  (`r_exposureMeterMode` 3, `r_exposureIncidentBlendAmt` 0.5) and rejects histogram outliers by dynamic
+  range; UE's histogram has its own bucket count. An exact port needs a custom metering pass.
+- Adaptation: one stage (the pupil half-life both ways); the game's slower pigment stage is not emulated.
+- Glow: the per-material instance-glow factor and CPU scaling of the effect value are taken as 1; whether a
+  parked ship carries the `Thrust` tag at all was not established (the viewer shows the control minimum,
+  "engines on, zero thrust"); glow cards and emittance maps use the registered placeholder.
+- Light rule: the CPU normalisation and the planar rule are inferences (§13.2).
+- Kept from UE: bloom, lens effects. Not ported: the game's vignette, colour-grading LUT, sun shafts. The
+  search for `.cfg` overrides of the cvar defaults was done once by hand and is not part of the validator.
+- Views: the Gladius pilot-seat shots (01, 04–06) are black before and after; the Cutlass cockpit still
+  looks out at a black hangar wall region (shot 22); the orbit camera of large ships ends outside the hangar
+  enclosure; UE's red on-screen sky-light warning is in every capture. None is new.
+- Frame time was not re-measured (§3 numbers predate this change; the tonemapper replacement is one
+  full-screen pass). Only the three regression ships were captured.

@@ -6,6 +6,7 @@
 #include "SCImportMaterials.h"
 #include "SCPackageReader.h"
 #include "SCTextureImporter.h"
+#include "SCStarEngine.h"
 #include "Engine/Texture2D.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
@@ -23,6 +24,9 @@
 
 namespace
 {
+// The game's glow rule from the extracted fixture: quadratic for an authored Glow, one scene unit for a placeholder.
+float GlowNits(double Glow) { return float(FSCStarEngine::Get().GlowNits(Glow)); }
+float UnitGlowNits() { return float(FSCStarEngine::Get().SceneUnitNits); }
 FString FixtureDir() { return IPluginManager::Get().FindPlugin(TEXT("SCBridge"))->GetBaseDir() / TEXT("Tests/Fixtures/Materials"); }
 bool ReadFixture(FAutomationTestBase& Test, FSCSceneManifest& Manifest)
 {
@@ -69,7 +73,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     {
         TestEqual(TEXT("alpha test"), X->Scalars[TEXT("AlphaTest")], 0.25f);
         TestTrue(TEXT("emissive colour"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(2.f, 1.f, 0.5f)));
-        TestEqual(TEXT("glow x host scale"), X->Scalars[TEXT("EmissiveStrength")], 3.f * FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("glow: MaterialGlowToLinearGlow in cd/m2"), X->Scalars[TEXT("EmissiveStrength")], GlowNits(3.f));
         TestEqual(TEXT("authored Shininess=255 used as authored (no placeholder substitution)"), X->Scalars[TEXT("Smoothness")], 1.f);
         TestEqual(TEXT("masked parent"), FSCMaterialBuilder::ParentPath(X->Master, X->Blend, X->bTwoSided),
             FString(TEXT("/SCBridge/Materials/MI_SC_Illum_Masked.MI_SC_Illum_Masked")));
@@ -270,7 +274,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         // Headlight_Glow-like: forward flag + Emissive 1,1,1 + no Glow -> glow card, strength mean(Emissive) = 1,
         // colour from Diffuse x texture, additive and alpha-weighted (no clip), split from Nanite.
         TestTrue(TEXT("glow card"), X->bGlowCard);
-        TestEqual(TEXT("card strength = 1 x k"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("card strength = unit instance glow"), X->Scalars[TEXT("EmissiveStrength")], UnitGlowNits());
         TestEqual(TEXT("colour from the texture"), X->Textures[TEXT("DiffuseMap")].Path, FString(TEXT("tex/illum_diff.png")));
         TestEqual(TEXT("alpha-weighted"), X->Scalars[TEXT("AlphaWeight")], 1.f);
     }
@@ -285,15 +289,15 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     }
     if (auto* X = Check(TEXT("card_tinted"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
-        // Tint applied once: strength 1 x k, Emissive only as colour.
-        TestEqual(TEXT("tinted card strength = 1 x k"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
+        // Tint applied once: unit instance glow, Emissive only as colour.
+        TestEqual(TEXT("tinted card strength = unit instance glow"), X->Scalars[TEXT("EmissiveStrength")], UnitGlowNits());
         TestTrue(TEXT("tinted card colour = Emissive"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.2f, 0.4f, 0.9f)));
     }
     if (auto* X = Check(TEXT("v2_object"), ESCMaster::Illum, ESCBlend::Masked, true, false))
     {
         // v2 objects win over attributes: strength, tint, cutoff, alpha_test, two_sided.
         TestTrue(TEXT("described from v2"), X->bV2);
-        TestEqual(TEXT("v2 strength"), X->Scalars[TEXT("EmissiveStrength")], 2.f * FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("v2 strength"), X->Scalars[TEXT("EmissiveStrength")], GlowNits(2.f));
         TestTrue(TEXT("v2 tint"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.1f, 0.2f, 0.3f)));
         TestEqual(TEXT("v2 glow cutoff"), X->Scalars[TEXT("AlphaGlowCutoff")], 0.4f);
         TestEqual(TEXT("v2 alpha_test"), X->Scalars[TEXT("AlphaTest")], 0.2f);
@@ -302,21 +306,21 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     }
     if (auto* X = Check(TEXT("emissives_like"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
-        // Emission colour = Emissive x Diffuse (x texture in the master): blue ordering, strength = Glow x host scale.
+        // Emission colour = Emissive x Diffuse (x texture in the master): blue ordering, strength = the glow rule of Glow.
         const FLinearColor Glow = X->Vectors[TEXT("EmissiveColor")] * X->Vectors[TEXT("DiffuseColor")];
         TestTrue(TEXT("emissives glow blue (b > g > r)"), Glow.B > Glow.G && Glow.G > Glow.R && Glow.R > 0.f);
-        TestEqual(TEXT("emissives strength"), X->Scalars[TEXT("EmissiveStrength")], 0.45f * FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("emissives strength"), X->Scalars[TEXT("EmissiveStrength")], GlowNits(0.45f));
     }
     if (auto* X = Check(TEXT("glows_like"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
     {
         // Glow > 0 with black Emissive: no tint, the orange surface colour emits at Glow strength.
         const FLinearColor Glow = X->Vectors[TEXT("EmissiveColor")] * X->Vectors[TEXT("DiffuseColor")];
         TestTrue(TEXT("glows emit orange (r > g > b)"), Glow.R > Glow.G && Glow.G > Glow.B);
-        TestEqual(TEXT("glows strength"), X->Scalars[TEXT("EmissiveStrength")], 0.35f * FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("glows strength"), X->Scalars[TEXT("EmissiveStrength")], GlowNits(0.35f));
     }
     if (auto* X = Check(TEXT("emittance_noglow"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
     {
-        TestEqual(TEXT("emittance map without Glow -> strength 1"), X->Scalars[TEXT("EmissiveStrength")], FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("emittance map without Glow -> unit instance glow"), X->Scalars[TEXT("EmissiveStrength")], UnitGlowNits());
         TestTrue(TEXT("Emissive tints the emittance"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.3f, 0.6f, 0.9f)));
     }
     if (auto* X = Check(TEXT("layerblend_like"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
@@ -336,7 +340,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("AlphaGlowCutoff from public_params"), X->Scalars[TEXT("AlphaGlowCutoff")], 0.25f);
         TestEqual(TEXT("%EMITTANCE_MAP routes the base-colour slot"), X->Textures[TEXT("EmissiveMap")].Path, FString(TEXT("tex/emit.png")));
         TestEqual(TEXT("emittance map on"), X->Scalars[TEXT("UseEmissiveMap")], 1.f);
-        TestEqual(TEXT("emittance strength"), X->Scalars[TEXT("EmissiveStrength")], 1.5f * FSCMaterialBuilder::GlowToEmissive);
+        TestEqual(TEXT("emittance strength"), X->Scalars[TEXT("EmissiveStrength")], GlowNits(1.5f));
     }
     if (auto* X = Check(TEXT("stencil_palette"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
     {
@@ -397,8 +401,10 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         FSCEngineGlow Glow = M.EngineGlow; // legacy units: 1:1
         TestEqual(TEXT("emission_strength 1:1"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 7.f), 7.f);
         Glow.Units = TEXT("material_property_glow"); Glow.MinStrength = 10.f; Glow.MaxStrength = 1000.f;
-        TestEqual(TEXT("Glow units x GlowToEmissive"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 50.f), 50.f * FSCMaterialBuilder::GlowToEmissive);
-        TestEqual(TEXT("clamped to the control minimum"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 1.f), 10.f * FSCMaterialBuilder::GlowToEmissive);
+        // An effect-system Glow is the per-instance glow term (linear scene units), not an authored material Glow.
+        TestEqual(TEXT("effect Glow is linear instance glow"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 50.f), 50.f * UnitGlowNits());
+        TestEqual(TEXT("clamped to the control minimum"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 1.f), 10.f * UnitGlowNits());
+        TestEqual(TEXT("clamped to the control maximum"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 5000.f), 1000.f * UnitGlowNits());
     }
     {
         // Texture means: RGB x mean, alpha untouched; an unavailable mean is reported and leaves the value alone.
@@ -486,8 +492,11 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
                 && (*Emissive)->TryGetStringField(TEXT("emittance_texture"), Emittance) && !Emittance.IsEmpty()
                 && (*Emissive)->TryGetNumberField(TEXT("strength"), AuthoredStrength))
             {
-                TestEqual(Where + TEXT(" emittance map uses authored v2 strength"),
-                    D.Scalars.FindRef(TEXT("EmissiveStrength")), D.bHidden ? 0.f : float(AuthoredStrength) * FSCMaterialBuilder::GlowToEmissive);
+                double AuthoredGlow = 0; // absent = 0 (decomposed-export-contract.md)
+                (*Emissive)->TryGetNumberField(TEXT("glow"), AuthoredGlow);
+                TestEqual(Where + TEXT(" emittance map uses the authored v2 glow, or unit instance glow without one"),
+                    D.Scalars.FindRef(TEXT("EmissiveStrength")),
+                    D.bHidden ? 0.f : AuthoredGlow > 0 ? GlowNits(AuthoredGlow) : float(AuthoredStrength) * UnitGlowNits());
                 Glowing += AuthoredStrength > 0;
                 continue;
             }

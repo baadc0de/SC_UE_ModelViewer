@@ -70,43 +70,49 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         FName State;
         bool Enabled;
         bool Shadow;
+        bool Local;
+        double Candela;
     };
     TArray<FExpected> Expected;
     TSet<FString> Textures;
     auto Collect = [&](const FSCSceneInstance& Instance) {
-        TArray<TSharedPtr<FJsonObject>> Records;
-        TArray<double> Radii;
+        // The importer's own rules decide which records become components and where the shadow quartile lies.
+        const double Threshold = FSCLightImporter::ShadowRadiusThreshold(Instance.LightJson);
         for (const auto& Text : Instance.LightJson)
         {
             TSharedPtr<FJsonObject> J;
             if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), J) || !J) continue;
-            const FString Kind = J->GetStringField(TEXT("semantic_light_kind"));
-            if (Kind == TEXT("ambient_proxy")) continue;
-            Records.Add(J);
-            if (Kind != TEXT("sun")) Radii.Add(J->GetNumberField(TEXT("radius_m")));
-        }
-        Radii.Sort();
-        const double Threshold = Radii.IsEmpty() ? 0 : Radii[Radii.Num() * 3 / 4];
-        for (const auto& J : Records)
-        {
+            const UClass* Class = FSCLightImporter::ComponentClass(J);
+            if (!Class) continue;
+            const bool bLocal = Class->IsChildOf(ULocalLightComponent::StaticClass());
             FString State;
             J->TryGetStringField(TEXT("active_state"), State);
             if (State.IsEmpty()) State = TEXT("defaultState");
-            double Intensity = J->GetNumberField(TEXT("intensity_candela_proxy"));
+            TSharedPtr<FJsonObject> Selected = J;
             const TSharedPtr<FJsonObject>* States;
             const TSharedPtr<FJsonObject>* Authored;
             if (J->TryGetObjectField(TEXT("states"), States))
             {
                 if (State != TEXT("offState") && (*States)->TryGetObjectField(TEXT("defaultState"), Authored)) State = TEXT("defaultState");
-                if ((*States)->TryGetObjectField(State, Authored))
-                    (*Authored)->TryGetNumberField(TEXT("intensity_candela_proxy"), Intensity);
+                if ((*States)->TryGetObjectField(State, Authored)) Selected = *Authored;
             }
+            // The importer's intensity rule (authored light model, else the exporter's proxy) decides what is lit.
+            const double Intensity = FSCLightImporter::StateCandela(J, Selected);
             FString Gobo;
             J->TryGetStringField(TEXT("projector_texture"), Gobo);
             if (!Gobo.IsEmpty()) Textures.Add(Gobo);
-            Expected.Add(
-                {J->GetStringField(TEXT("name")), Gobo, FName(*State), State != TEXT("offState") && Intensity > 0,
-                 J->GetStringField(TEXT("semantic_light_kind")) == TEXT("sun") || J->GetNumberField(TEXT("radius_m")) >= Threshold});
+            // Same fallback rule as the importer: the authored shadowParams.shadowCasting flag when the record carries
+            // the authored light model, else the radius quartile; lights that are not local (the sun) always cast.
+            bool bAuthoredShadow = false;
+            double RadiusM = 0;
+            J->TryGetNumberField(TEXT("radius_m"), RadiusM);
+            const bool bShadow = J->HasField(TEXT("bulb_radius_m")) && J->TryGetBoolField(TEXT("shadow_casting"), bAuthoredShadow)
+                                     ? bAuthoredShadow
+                                     : FMath::Max(0., RadiusM) >= Threshold;
+            FString Name;
+            J->TryGetStringField(TEXT("name"), Name);
+            const bool bEnabled = State != TEXT("offState") && Intensity > 0;
+            Expected.Add({Name, Gobo, FName(*State), bEnabled, !bLocal || bShadow, bLocal, bEnabled ? Intensity : 0.});
         }
     };
     Collect(Vehicle->Manifest.Root);
@@ -134,7 +140,10 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         const auto& State = Vehicle->LightStates[I];
         OK &= State.Component == Light && State.Name == Want.Name && State.ActiveState == Want.State;
         OK &= State.bEnabled == Want.Enabled && Light->IsVisible() == Want.Enabled;
-        OK &= Want.Enabled ? Light->Intensity > 0 : Light->Intensity == 0;
+        // The component carries the rule's candela (float precision), in candela.
+        OK &= FMath::IsNearlyEqual(double(Light->Intensity), Want.Candela, 1e-5 * FMath::Max(1.0, Want.Candela));
+        const auto* Local = Cast<ULocalLightComponent>(Light);
+        OK &= (Local != nullptr) == Want.Local && (!Local || Local->IntensityUnits == ELightUnits::Candelas);
         OK &= State.bFallbackShadow == Want.Shadow;
         OK &= bool(Light->CastShadows) == (Vehicle->bMegaLightsActive || Want.Shadow);
         Disabled += !Light->IsVisible();

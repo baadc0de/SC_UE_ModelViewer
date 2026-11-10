@@ -1,0 +1,206 @@
+{
+  "schema": "star_engine_render_v1",
+  "extracted_from": {
+    "branch": "sc-alpha-4.10.2",
+    "version": "4.10.197.2878",
+    "change": 12913470,
+    "notes": "StarEngineRender.notes.md"
+  },
+  "exe_cvars": {
+    "r_exposureMeterMode": {
+      "kind": "int",
+      "value": 3
+    },
+    "r_exposureIncidentBlendAmt": {
+      "kind": "float",
+      "value": 0.5
+    },
+    "r_ExposureDiscardRatioDark": {
+      "kind": "float",
+      "value": 0.01
+    },
+    "r_ExposureDiscardRatioBright": {
+      "kind": "float",
+      "value": 0.01
+    },
+    "r_ExposureThresholdRange": {
+      "kind": "float",
+      "value": 10.0
+    },
+    "r_ExposureCompensationEV0": {
+      "kind": "float",
+      "value": -4.5
+    },
+    "r_ExposureCompensationEV4": {
+      "kind": "float",
+      "value": -3.7
+    },
+    "r_ExposureCompensationEV8": {
+      "kind": "float",
+      "value": -1.0
+    },
+    "r_ExposureCompensationEV12": {
+      "kind": "float",
+      "value": 0.5
+    },
+    "r_ExposureCompensationEV16": {
+      "kind": "float",
+      "value": 2.0
+    },
+    "r_ExposureMultiplierMin": {
+      "kind": "float",
+      "value": 0.0001
+    },
+    "r_ExposureMultiplierMax": {
+      "kind": "float",
+      "value": 20.0
+    },
+    "r_ExposureAdaptTimeDark": {
+      "kind": "float",
+      "value": 5.0
+    },
+    "r_ExposureAdaptTimeBright": {
+      "kind": "float",
+      "value": 2.0
+    },
+    "r_ExposureAdaptTimePupil": {
+      "kind": "float",
+      "value": 0.4
+    },
+    "r_ExposureAdaptRangePupil": {
+      "kind": "float",
+      "value": 2.0
+    },
+    "r_ExposureTargetEV": {
+      "kind": "float",
+      "value": 0.0
+    },
+    "r_HDRTonemappingCurve": {
+      "kind": "int",
+      "value": 1
+    },
+    "r_HDRTonemappingCurveToe": {
+      "kind": "float",
+      "value": 1.0
+    },
+    "r_HDRDisplayMaxNits": {
+      "kind": "int",
+      "value": 1500
+    },
+    "r_HDRDisplayRefWhite": {
+      "kind": "int",
+      "value": 200
+    },
+    "r_HDRDisplayOutput": {
+      "kind": "int",
+      "value": 0
+    }
+  },
+  "shader_constants": {
+    "HDR_LUMINANCE_SCALE": {
+      "value": 1000.0,
+      "file": "common.cfib",
+      "pattern": "#define HDR_LUMINANCE_SCALE (\\S+)"
+    },
+    "LOG2_LUMINANCE_TO_EV": {
+      "value": 3.0,
+      "file": "common.cfib",
+      "pattern": "#define LOG2_LUMINANCE_TO_EV (\\S+)"
+    },
+    "sqrGlowFactor": {
+      "value": 400.0,
+      "file": "common.cfib",
+      "pattern": "const float sqrGlowFactor = (\\S+) ;"
+    },
+    "MaxDisplayNitsLDR": {
+      "value": 80.0,
+      "file": "Tonemapping.cfib",
+      "pattern": "const float MaxDisplayNitsLDR = (\\S+) ;"
+    },
+    "middleGray": {
+      "value": 0.18,
+      "file": "OpticsExposure.cfxb",
+      "pattern": "float middleGray = (\\S+) ;"
+    },
+    "LOG_MIN": {
+      "value": -14.0,
+      "file": "Histogram.cfib",
+      "pattern": "#define LOG_MIN \\( (- \\d+) \\)"
+    },
+    "LOG_MAX": {
+      "value": 16.0,
+      "file": "Histogram.cfib",
+      "pattern": "#define LOG_MAX (\\S+)"
+    }
+  },
+  "shader_functions": {
+    "MaterialGlowToLinearGlow": {
+      "file": "common.cfib",
+      "sha256": "bdd3b1019809ce903c2d9de1ebab0793caad0b063b21b754f487e27c676f53f1"
+    },
+    "HuePreservingShoulder": {
+      "file": "Tonemapping.cfib",
+      "sha256": "765ad7fe9ff17ee77f7ff1f13107cf9fe9d4cf8e656393e11debae841dbd345b"
+    },
+    "CalculateEVCompensation": {
+      "file": "OpticsExposure.cfib",
+      "sha256": "76bb01fbc194075cb609dbb1b20c1e2e0615c45b7386872d26d854dd750eabc0"
+    },
+    "GetPhysicalLightAttenuation": {
+      "file": "ShadeLib.cfib",
+      "sha256": "92244c234583e569589e980d5eaffc67f577e275539b56c195803d16560447c8"
+    },
+    "CalculateEmissive": {
+      "file": "ShadeLib.cfib",
+      "sha256": "ddbfcf646fde1c841009fe149f051cf7f21caf20738960fa399d1b8808e77cb5"
+    },
+    "LogLumToEV": {
+      "file": "OpticsExposure.cfib",
+      "sha256": "5146023dcea7950a5da89b4f96300a8f680b3944db8c88007a59a8c88e7336be"
+    },
+    "PupilAdaptation": {
+      "file": "OpticsExposure.cfib",
+      "sha256": "91ee9b5af4aa1a8a734a6a2b4ddb803a075c10880de66820cdd4332b00f808f3"
+    },
+    "PigmentAdaptation": {
+      "file": "OpticsExposure.cfib",
+      "sha256": "fb72f6fe6c46bb12b61baf1218a9bb5270674142f2237d669dcde204dcf720c8"
+    },
+    "ExponentialDecay": {
+      "file": "OpticsExposure.cfib",
+      "sha256": "a04c557b5b33dd9a25a2dc30b066ac10eeb338a47928dfcfffed0dee06a91faf"
+    },
+    "CalcExposureAndNoise": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "d1ecc2be00cb2543c422b9c13cd64f539527cc963c45e7494cbee569ac82615a"
+    },
+    "DisplayMapping": {
+      "file": "HDRPostProcess.cfxb",
+      "sha256": "d1e83d47aee3b4cfec900a1dbd8fbacca2c2f92968dc6f02bb5a8ed84dc5a1a7"
+    },
+    "CalcLogLumMetered": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "64c1a2f44cce6bea06bc3c49d4cbaf9e9cfc0973d71b9290f1c0c1de9a5b7ad1"
+    },
+    "PlanarLightDiffuse_LightSpace": {
+      "file": "AreaLightDiffuse.cfib",
+      "sha256": "a33d204a71802739214726a580b8a3348ec0947967c1d5640be315b76a4779ca"
+    },
+    "DiffuseLambert": {
+      "file": "ShadeLib.cfib",
+      "sha256": "6861c7b9384a45e57ca5cce8b872048d6b0763f7a2bc5a8c053643f886613400"
+    },
+    "ParallelReduce_Range": {
+      "file": "Histogram.cfib",
+      "sha256": "314e064b5d49628eec6808ae137facac2876a0b915675a3d2d14720e0c62be36"
+    },
+    "GetLuminance": {
+      "file": "common.cfib",
+      "sha256": "eab8d913434ab6867181ae9c532ac58f21003e7f8c6b4556281300f07bd6220f"
+    },
+    "ToSRGB": {
+      "file": "common.cfib",
+      "sha256": "8c9a59f93c51fd030960b1cfff84ba735e9faa86b35993a420140f081ccfde59"
+    }
+  }
+}

@@ -70,3 +70,11 @@ hardware ray tracing, which the Viewer level already uses (D8/D9, Vulkan HWRT).
     WP-R5b fields; Gladius hangar pool contrast 0.04 (×1500: 0.50), matching the hangar reference. Pools in
     the old 5 lux map remain — the default environment should become the hangar preset. Open: Cutlass flood
     balance (EV100 −1.1 bay), auto-exposure metering in the void, `attenuation_tweak` semantics.
+12. Game photometry (record §13, 2026-11-10): intensity, glow, exposure and the display curve now come from the
+    installed game's renderer through an extracted, validated fixture
+    (`ue/Plugins/SCBridge/Resources/StarEngineRender.json`, `scripts/verify_star_engine_render.py`):
+    scene unit 1000 cd/m², I = π·1000·intensity·(1 + bulb/tweak)² (replaces item 11's π·10⁴·intensity·bulb²),
+    material glow 400·Glow² scene units, effect-system Glow as linear instance glow, the game's EV-compensation
+    curve / multiplier clamp / pupil adaptation as UE histogram exposure, `HuePreservingShoulder` as a
+    replacing-tonemapper material. Open: the game's incident-light meter and dynamic-range rejection are not
+    emulated; light-linked glow amounts are a placeholder.

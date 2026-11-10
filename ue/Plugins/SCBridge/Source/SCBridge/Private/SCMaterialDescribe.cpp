@@ -1,6 +1,7 @@
 // FSCMaterialBuilder::Describe: pure sidecar -> master/parameter mapping (decomposed-export-contract
 // §Material Sidecars, mirroring starbreaker-3d mtl.rs ShaderFamily / AlphaConfig / roughness rules).
 #include "SCMaterialBuilder.h"
+#include "SCStarEngine.h"
 #include "Materials/Material.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
@@ -157,17 +158,21 @@ bool IsForward(const FAuthored& A) { return (FCString::Strtoui64(*A.Attr.FindRef
 float AuthoredGlow(const FAuthored& A) { return FMath::Max(0.f, A.Float(TEXT("Glow"), A.Float(TEXT("GlowAmount"), 0.f))); }
 /** Emission parameters (D11 final rule, amended; docs/03-unreal-export-design.md): the masters emit
  *  surface colour (Diffuse x base texture, or the emittance map) x EmissiveColor (tint) x EmissiveStrength,
- *  gated by alpha above AlphaGlowCutoff. Tint is applied once; strength = rule strength x GlowToEmissive.
+ *  gated by alpha above AlphaGlowCutoff. Tint is applied once. EmissiveStrength is in cd/m2 and follows the
+ *  game shader (FSCStarEngine; ue/verification/WP-U3b.md §13): an authored Glow emits MaterialGlowToLinearGlow(Glow);
+ *  a material that emits without one (forward glow card, emittance map) is driven by the instance glow term of
+ *  CalculateEmissive, taken as one scene unit (fallback register, WP-U2.md).
  *  v2 sidecars carry the rule in `emissive` {strength, color, uses_base_texture, emittance_texture,
  *  alpha_glow_cutoff, forward_rendering}; v1 sidecars are evaluated from the authored attributes. */
 void Emission(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
 {
     const FObj Em = D.bV2 ? Child(Sub, TEXT("emissive")) : nullptr;
-    float Strength = 0.f; FLinearColor Tint = FLinearColor::White; FString Map; double Cutoff = 0;
+    float Strength = 0.f, Glow = AuthoredGlow(A); FLinearColor Tint = FLinearColor::White; FString Map; double Cutoff = 0;
     bool bEmittance = HasToken(Sub, TEXT("EMITTANCE_MAP"));
     if (Em)
     {
         Strength = float(Num(Em, TEXT("strength"), 0.0));
+        Glow = float(FMath::Max(0., Num(Em, TEXT("glow"), Glow)));
         Tint = Rgb(Em, TEXT("color"), FLinearColor::White);
         Map = Str(Em, TEXT("emittance_texture"));
         bEmittance |= !Map.IsEmpty();
@@ -183,14 +188,14 @@ void Emission(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
         // non-forward materials never emit from Emissive alone. Black Emissive = no tint.
         const FLinearColor E = A.Color(TEXT("Emissive"), FLinearColor::Black);
         const bool bTint = E.R > 0.f || E.G > 0.f || E.B > 0.f;
-        const float Glow = AuthoredGlow(A);
         const bool bGlowCard = (D.Family == TEXT("Illum") || D.Family == TEXT("HardSurface")) && D.bForward && bTint;
         Strength = Glow > 0.f ? Glow : (bGlowCard || bEmittance) ? 1.f : 0.f;
         Tint = bTint ? E : FLinearColor::White;
         Cutoff = A.Param(TEXT("AlphaGlowCutoff"), 0.f);
     }
     D.Vectors.Add(TEXT("EmissiveColor"), Tint);
-    D.Scalars.Add(TEXT("EmissiveStrength"), Strength * FSCMaterialBuilder::GlowToEmissive);
+    const FSCStarEngine& Game = FSCStarEngine::Get();
+    D.Scalars.Add(TEXT("EmissiveStrength"), float(Strength <= 0.f ? 0. : Glow > 0.f ? Game.GlowNits(Glow) : Game.InstanceGlowNits(Strength)));
     D.Scalars.Add(TEXT("AlphaGlowCutoff"), float(Cutoff));
     if (bEmittance)
     {
@@ -630,7 +635,7 @@ bool FSCMaterialBuilder::PaletteColor(const FSCPalette* Palette, const FString& 
 float FSCMaterialBuilder::EngineGlowToEmissive(const FSCEngineGlow& C, float Value)
 {
     if (C.MaxStrength > C.MinStrength) Value = FMath::Clamp(Value, C.MinStrength, C.MaxStrength);
-    return C.Units == TEXT("material_property_glow") ? Value * GlowToEmissive : Value;
+    return C.Units == TEXT("material_property_glow") ? float(FSCStarEngine::Get().InstanceGlowNits(Value)) : Value;
 }
 
 void FSCMaterialBuilder::ApplyEngineGlow(FSCMaterialDesc& D, float Strength)

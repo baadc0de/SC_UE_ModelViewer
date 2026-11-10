@@ -38,20 +38,19 @@ struct SCBRIDGE_API FSCMaterialDesc
 class SCBRIDGE_API FSCMaterialBuilder
 {
 public:
-    /** Host constant (fallback register, ue/verification/WP-U2.md): UE emissive units per authored Glow unit
-     *  for the Viewer's fixed exposure. Sunset: replace with the engine's Glow luminance unit once known. */
-    static constexpr float GlowToEmissive = 10.f;
     /** Maps one sidecar submaterial; Palette is the scene instance's palettes.json record (may be null). */
     /** bUseV2Objects=false forces the v1 attribute path (used to cross-check v2 data). */
     static FSCMaterialDesc Describe(const FSCSubmaterial& Sub, const FSCPalette* Palette, bool bUseV2Objects = true);
     /** Palette-independent D6 decision used by the mesh split (same rule as Describe().bNonNanite). */
     static bool RequiresNonNanite(const FSCSubmaterial& Sub, bool bEngineGlowTarget = false);
-    /** controls.engine_glow target: Strength is in UE emissive units (see FSCEngineGlow::ToEmissive) and drives
+    /** controls.engine_glow target: Strength is in UE emissive units (cd/m2; see EngineGlowToEmissive) and drives
      *  emission; colour stays the rule's (surface colour x Emissive when non-black). A forward-flag Illum target
      *  becomes a glow card (additive, alpha-weighted, non-Nanite) so it can light up at runtime. */
     static void ApplyEngineGlow(FSCMaterialDesc& Desc, float Strength);
-    /** Control value -> UE emissive strength: `material_property_glow` is a Glow value (x GlowToEmissive, the
-     *  same host constant as authored Glow); legacy `emission_strength` maps 1:1. Clamped to the control range. */
+    /** Control value -> UE emissive strength (cd/m2): `material_property_glow` is the output of an entity-effect
+     *  Glow link, which the game adds as per-instance glow (FSCStarEngine::InstanceGlowNits; linear, not the
+     *  quadratic authored-Glow rule; ue/verification/WP-U3b.md §13); legacy `emission_strength` maps 1:1.
+     *  Clamped to the control range. */
     static float EngineGlowToEmissive(const FSCEngineGlow& Control, float Value);
     /** Palette channel of an opaque host-paint submaterial ("" for decals, glass, unrouted). */
     static FString HostChannel(const FSCSubmaterial& Sub);

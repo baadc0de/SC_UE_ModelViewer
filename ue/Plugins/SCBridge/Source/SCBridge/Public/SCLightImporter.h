@@ -9,10 +9,18 @@ class SCBRIDGE_API FSCLightImporter
 {
 public:
     static void RefreshShadows(ASCVehicle* Vehicle);
-    // UE candela for one light state. Packages with the authored light fields (bulb_radius_m, …) use CryEngine's
-    // model (ue/verification/WP-U3b.md §11): pi * 1e4 * intensity_raw * bulb_radius_m^2 for point/spot lights and
-    // 1e4 * intensity_raw * plane_width_m * plane_height_m for planar lights; older packages keep the x1500 proxy.
+    // UE candela for one light state. Packages with the authored light fields (bulb_radius_m, …) use the game
+    // renderer's model (FSCStarEngine::PointCandela / PlanarCandela; ue/verification/WP-U3b.md §13); older packages
+    // keep the x1500 proxy.
     static double StateCandela(const TSharedPtr<FJsonObject>& Light, const TSharedPtr<FJsonObject>& State);
+    // The component class Build creates for a light record; nullptr for the records it builds nothing for (the
+    // ambient proxy, a foreign transform basis, an unknown kind).
+    static UClass* ComponentClass(const TSharedPtr<FJsonObject>& Light);
+    // Fallback shadow rule (no MegaLights) of one scene instance: the upper-quartile attenuation radius (metres) of
+    // its point, spot and area records.
+    static double ShadowRadiusThreshold(const TArray<FString>& LightJson);
+    // Whether the vehicle's light components are what Build makes of its manifest: order, state, the candela of the
+    // intensity rule in candela units, shadow flags and gobo materials.
     static bool Verify(ASCVehicle* Vehicle);
     // Diagnostic: the Top local lights of World by unshadowed illuminance (lux at normal incidence, UE's photometric
     // model: candela / d^2, attenuation window, spot cone) at a world point, each with a visibility trace to the point.

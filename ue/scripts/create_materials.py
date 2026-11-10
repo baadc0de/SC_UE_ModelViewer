@@ -189,7 +189,7 @@ class Graph:
         raise RuntimeError(f"{self.m.get_name()}: cannot link {a.get_name()} -> {b.get_name()}.{names}")
 
     def glow(self, colour, alpha, ramp=False):
-        """Emission = colour x Emissive x EmissiveStrength (builder: Glow x host scale; 0 when Glow is absent),
+        """Emission = colour x Emissive x EmissiveStrength (builder: cd/m2 from the game's glow rule, FSCStarEngine; 0 when the material does not emit),
         optionally from the emittance map, gated by texture alpha above AlphaGlowCutoff: a step, or with `ramp` the
         HardSurface.cfx form saturate((alpha - cutoff) / (1 - cutoff))."""
         source = self.lerp(colour, (self.texture("EmissiveMap", self.white, ST.SAMPLERTYPE_COLOR, self.last_uv), "RGB"),

@@ -7,6 +7,8 @@ public class SCBridge : ModuleRules
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         // SCBridgeLib is public: SCBridgeClient.h exposes sc_options from scbridge.h.
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "MeshDescription", "SCBridgeLib" });
+        // Extracted Star Engine render constants (FSCStarEngine); staged with the plugin.
+        RuntimeDependencies.Add("$(PluginDir)/Resources/StarEngineRender.json");
         PrivateDependencyModuleNames.AddRange(new[] { "Json", "StaticMeshDescription", "RenderCore", "RHI", "PhysicsCore", "Chaos", "GeometryCore", "ImageWrapper", "Projects", "Slate", "SlateCore", "InputCore", "ApplicationCore" });
         PublicDefinitions.Add("SC_SPIKE=" + (Environment.GetEnvironmentVariable("SC_SPIKE") == "1" ? "1" : "0"));
         PublicDefinitions.Add("SC_SPIKE_RAW_SERIALIZE=" + (Environment.GetEnvironmentVariable("SC_SPIKE_RAW_SERIALIZE") == "1" ? "1" : "0"));

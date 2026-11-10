@@ -1,4 +1,4 @@
-// Regression fixtures for instance-local shadow budgets, authored default light states and the CryEngine light model.
+// Regression fixtures for instance-local shadow budgets, authored default light states and the game's light model.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "SCLightImporter.h"
@@ -12,6 +12,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "SCLightAreas.h"
+#include "SCStarEngine.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightDefaults, "SCBridge.Lights.DefaultsAndShadowBudget",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -82,7 +83,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightAuthoredModel, "SCBridge.Lights.Authore
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightAuthoredModel::RunTest(const FString&)
 {
-    // Synthetic values (not game data): CryEngine model pi*1e4*I*b^2 for point/spot, 1e4*I*w*h for planar.
+    // Synthetic lights (not game data). Point / spot: pi * unit * I * (1 + bulb / tweak)^2; planar: pi * unit * I * w * h,
+    // unit = the scene unit in cd/m2 from the extracted fixture.
+    const double Unit = UE_DOUBLE_PI * FSCStarEngine::Get().SceneUnitNits;
     auto* MegaLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.EnableForProject"));
     const int32 Previous = MegaLights->GetInt();
     MegaLights->Set(0, ECVF_SetByCode);
@@ -98,17 +101,71 @@ bool FSCLightAuthoredModel::RunTest(const FString&)
     Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Tiny","semantic_light_kind":"spot",%s,"intensity_raw":2,"bulb_radius_m":0.01,"shadow_casting":false,"outer_angle":40,"inner_angle":30})"), Common));
     Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Panel","semantic_light_kind":"area",%s,"intensity_raw":2,"bulb_radius_m":0,"shadow_casting":false})"), Common));
     Instance.LightJson.Add(TEXT(R"({"name":"Legacy","semantic_light_kind":"point","transform_basis":"cryengine_z_up","radius_m":3,"intensity_candela_proxy":25})"));
+    Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Tweaked","semantic_light_kind":"spot",%s,"intensity_raw":2,"bulb_radius_m":0.1,"attenuation_tweak":0.25,"shadow_casting":false,"outer_angle":40,"inner_angle":30})"), Common));
+    Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"NoBulb","semantic_light_kind":"point",%s,"intensity_raw":2,"bulb_radius_m":0,"shadow_casting":false})"), Common));
     FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
-    TestEqual(TEXT("four components"), Vehicle->Lights.Num(), 4);
-    TestEqual(TEXT("bulb model: pi*1e4*2*0.1^2"), double(Vehicle->Lights[0]->Intensity), UE_DOUBLE_PI * 200.0, 0.01);
-    TestEqual(TEXT("bulb model: small bulb"), double(Vehicle->Lights[1]->Intensity), UE_DOUBLE_PI * 2.0, 0.001);
-    TestEqual(TEXT("planar model: 1e4*2*0.5*0.2"), double(Vehicle->Lights[2]->Intensity), 2000.0, 0.01);
-    TestEqual(TEXT("legacy packages keep the proxy"), double(Vehicle->Lights[3]->Intensity), 25.0, 0.001);
+    TestEqual(TEXT("six components"), Vehicle->Lights.Num(), 6);
+    const auto Candela = [&](int32 Index) { return double(Vehicle->Lights[Index]->Intensity); };
+    TestEqual(TEXT("point: reached 1 m from the bulb surface"), Candela(0), Unit * 2.0 * FMath::Square(1.1), Unit * 1e-5);
+    TestEqual(TEXT("point: small bulb"), Candela(1), Unit * 2.0 * FMath::Square(1.01), Unit * 1e-5);
+    TestEqual(TEXT("planar: luminance pi * I over the plane"), Candela(2), Unit * 2.0 * 0.5 * 0.2, Unit * 1e-5);
+    TestEqual(TEXT("legacy packages keep the proxy"), Candela(3), 25.0, 0.001);
+    TestEqual(TEXT("attenuation tweak scales the bulb term"), Candela(4), Unit * 2.0 * FMath::Square(1.0 + 0.1 / 0.25), Unit * 1e-5);
+    TestEqual(TEXT("no bulb: the authored intensity at 1 m"), Candela(5), Unit * 2.0, Unit * 1e-5);
     TestEqual(TEXT("bulb is the source radius (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SourceRadius), 10.0, 0.001);
     TestEqual(TEXT("plane is the rect source (cm)"), double(Cast<URectLightComponent>(Vehicle->Lights[2])->SourceWidth), 50.0, 0.001);
     TestTrue(TEXT("fallback shadows follow shadow_casting (on)"), bool(Vehicle->Lights[0]->CastShadows));
     TestFalse(TEXT("fallback shadows follow shadow_casting (off)"), bool(Vehicle->Lights[1]->CastShadows));
     TestEqual(TEXT("no warnings"), Warnings.Num(), 0);
+    Vehicle->Destroy();
+    World->DestroyWorld(false);
+    MegaLights->Set(Previous, ECVF_SetByCode);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightVerifier, "SCBridge.Lights.VerifierFollowsImporter",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightVerifier::RunTest(const FString&)
+{
+    auto* MegaLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.EnableForProject"));
+    const int32 Previous = MegaLights->GetInt();
+    MegaLights->Set(0, ECVF_SetByCode);
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    auto* Vehicle = World->SpawnActor<ASCVehicle>();
+    FSCFolderPackageSource Source(TEXT("/tmp"));
+    TArray<FString> Warnings;
+    const auto Helper = [](const FString&) -> USceneComponent* { return nullptr; };
+    // Records the importer builds nothing for sit between the lights and carry the largest radii: they may neither
+    // shift the verifier's component index nor move its shadow quartile.
+    FSCSceneInstance Instance;
+    const auto Record = [&Instance](const TCHAR* Name, const TCHAR* Kind, const TCHAR* Basis, int32 Radius) {
+        Instance.LightJson.Add(FString::Printf(
+            TEXT(R"({"name":"%s","semantic_light_kind":"%s","transform_basis":"%s","radius_m":%d,"intensity_candela_proxy":25})"), Name, Kind, Basis, Radius));
+    };
+    Record(TEXT("Radius1"), TEXT("point"), TEXT("cryengine_z_up"), 1);
+    Record(TEXT("Ambient"), TEXT("ambient_proxy"), TEXT("cryengine_z_up"), 50);
+    Record(TEXT("Radius2"), TEXT("point"), TEXT("cryengine_z_up"), 2);
+    Record(TEXT("UnknownKind"), TEXT("synthetic_unknown_kind"), TEXT("cryengine_z_up"), 60);
+    Record(TEXT("Radius3"), TEXT("point"), TEXT("cryengine_z_up"), 3);
+    Record(TEXT("ForeignBasis"), TEXT("point"), TEXT("synthetic_basis"), 70);
+    Record(TEXT("Radius4"), TEXT("point"), TEXT("cryengine_z_up"), 4);
+    Vehicle->Manifest.Root = Instance;
+    FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
+    TestEqual(TEXT("four lights are built"), Vehicle->Lights.Num(), 4);
+    TestEqual(TEXT("the unknown kind and the foreign basis warn"), Warnings.Num(), 2);
+    TestTrue(TEXT("the verifier accepts what the importer built"), FSCLightImporter::Verify(Vehicle));
+    if (Vehicle->Lights.Num() == 4)
+    {
+        auto* Light = Cast<ULocalLightComponent>(Vehicle->Lights[0]);
+        const float Built = Light->Intensity;
+        Light->SetIntensity(Built * 2);
+        TestFalse(TEXT("a light at twice its rule intensity is refused"), FSCLightImporter::Verify(Vehicle));
+        Light->SetIntensity(Built);
+        Light->IntensityUnits = ELightUnits::Lumens;
+        TestFalse(TEXT("a light in another unit is refused"), FSCLightImporter::Verify(Vehicle));
+        Light->IntensityUnits = ELightUnits::Candelas;
+        TestTrue(TEXT("restored, it passes again"), FSCLightImporter::Verify(Vehicle));
+    }
     Vehicle->Destroy();
     World->DestroyWorld(false);
     MegaLights->Set(Previous, ECVF_SetByCode);

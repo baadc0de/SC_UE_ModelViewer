@@ -299,7 +299,9 @@ bool USCImportLibrary::RunUnitTests()
     bool Passed = true;
     TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials"),
         TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsMasterParameters"), TEXT("FSCMaterialsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic"), TEXT("FSCLightDefaults"), TEXT("FSCLightAuthoredModel"),
-        TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement")};
+        TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement"), TEXT("FSCLightVerifier"),
+        TEXT("FSCStarEngineFixture"), TEXT("FSCStarEngineDomain"), TEXT("FSCStarEngineRules"),
+        TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall")};
     FString Folder;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
     if (FParse::Param(FCommandLine::Get(), TEXT("SCFirstPersonTests"))) Names = {TEXT("FSCFirstPersonCollision")};

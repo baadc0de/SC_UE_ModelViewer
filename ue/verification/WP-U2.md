@@ -4,6 +4,13 @@ Base: superproject `d39e298` (main). UE 5.8.2 CL 56702186. Test package `out/dec
 (final-exporter Gladius, 23 `*.materials.json`, 366 PNGs). No cargo, no `vendor/` or
 `crates/` changes. Commands are from the repository root.
 
+> **2026-11-10 — emissive units superseded (WP-U3b §13.3).** `GlowToEmissive` (10 UE units per authored `Glow`),
+> named in the dated records below, no longer exists. `EmissiveStrength` is now cd/m² from the game renderer's
+> own rule: an authored Glow emits `SceneUnitNits × sqrGlowFactor × Glow²` (`FSCStarEngine::GlowNits`), an
+> effect-system Glow (`controls.engine_glow`) is per-instance glow, `SceneUnitNits × amount`
+> (`InstanceGlowNits`). The rule tables and the fallback register below are current; the dated round records
+> keep the numbers measured at the time.
+
 ## Substrate vs legacy materials
 
 Owner instruction: choose the material model on evidence before building the master set.
@@ -99,7 +106,7 @@ shader rebuild. No C++ change.
 | Family → master | `shader_family` (`mtl.rs` `ShaderFamily` strings) | Illum, HardSurface, LayerBlend_V2/Layer, GlassPBR, MeshDecal, screens (DisplayScreen/UIPlane/Monitor/UIMesh/Hologram*), NoDraw; anything else → Fallback + warning naming family and `Shader` |
 | Hidden | `activation_state.state == inactive`, NoDraw | invisible in the split mesh (e.g. `stencil`, `RTT_Text_To_Decal`) |
 | Blend | `alpha_config` (null in r1), `authored_attributes` `AlphaTest`, `Opacity`, `MtlFlags & 0x8000` (CryEngine REQUIRE_FORWARD_RENDERING: Headlight_Glow, emissives, glows, engine_glow…), `%DECAL` token | masked / translucent / decal; two-sided = `is_double_sided` (decal) |
-| Emission | `Emissive` RGB, `Glow` (or `GlowAmount`), `public_params.AlphaGlowCutoff`, `%EMITTANCE_MAP` + emittance slot | strength = Glow × `GlowToEmissive` (10, host constant below); **Glow absent/0 → 0** (no `emissive_factor()` Glow=1 fallback); colour = Emissive × Diffuse × base texture, gated by alpha > cutoff. Deviation: Glow > 0 with Emissive = 0,0,0 (`glows`, `buttons`) is CryEngine diffuse glow → Emissive treated as white |
+| Emission | `Emissive` RGB, `Glow` (or `GlowAmount`), `public_params.AlphaGlowCutoff`, `%EMITTANCE_MAP` + emittance slot | strength in cd/m² from the game's glow rule, `SceneUnitNits × sqrGlowFactor × Glow²` (`FSCStarEngine::GlowNits`, WP-U3b §13.3); a material that emits without a Glow (forward glow card, `%EMITTANCE_MAP`) gets one scene unit of instance glow (fallback register below); **otherwise Glow absent/0 → 0** (no `emissive_factor()` Glow=1 fallback); colour = Emissive × Diffuse × base texture, gated by alpha > cutoff. Deviation: Glow > 0 with Emissive = 0,0,0 (`glows`, `buttons`) is CryEngine diffuse glow → Emissive treated as white |
 | Relief decal | MeshDecal + `%PARALLAX_OCCLUSION_MAPPING`, no `%DECAL`/`%STENCIL_MAP`/stencil slot/`tint_palette_decal`; TexSlot1 alpha, TexSlot3 `normal_gloss`, TexSlot4 `height`, `PomDisplacement`, `DecalAlphaMultiplier` | `M_SC_MeshDecal_Relief`: normal + roughness into the DBuffer under TexSlot1 alpha × DecalAlphaMultiplier, POM as bump offset — the dark grooves |
 | Colour decal | MeshDecal/`%DECAL` with `base_color` (gladius_text_diff, warningtape) , `DecalAlphaMultiplier`, `DecalDiffuseOpacity` | `M_SC_MeshDecal`: sheet RGB × Diffuse where alpha × DAM × DDO |
 | Stencil decal | `%STENCIL_MAP`, `$TintPaletteDecal` | r1's only stencil is inactive and `palettes.json` `decal.export_path` is null → hidden; TODO below |
@@ -108,13 +115,13 @@ shader rebuild. No C++ change.
 | Roughness | `derived_textures[]` role roughness paired by `source_path`; `Shininess` | roughness = 1 − min(smoothness, 251/255) (since 2026-11-10, see "Macro surface, HAL and the gloss convention"; before: sqrt(1 − smoothness)), smoothness = (1 − r²) × Shininess/255 with r the exporter's sqrt(1 − gloss) map; placeholder Shininess=255 without map → 0.5 (mtl.rs) |
 | Specular | `Specular`, `specular_support` map; Diffuse = Specular = 1,1,1 sentinel without map → dielectric default | F0 colour (Substrate slab) |
 | Host tint | POM colour decals: dominant `palette_routing.material_channel` of the host mesh's slots by triangle count (Blender add-on rule) | `HostTint` per channel instance |
-| Engine glow | `controls.engine_glow` targets (`material_sidecar`, `source_material_index` = authored `index`), `default_strength` | strength from the control (default 0) |
+| Engine glow | `controls.engine_glow` targets (`material_sidecar`, `source_material_index` = authored `index`), `default_strength` | strength from the control (`default_strength`), clamped to its range; `material_property_glow` is an entity-effect Glow amount = per-instance glow, linear: `SceneUnitNits × amount` cd/m² (`FSCStarEngine::InstanceGlowNits`, WP-U3b §13.3) |
 
 ### Fallback register (host constants)
 
 | Constant | Value | Why | Trigger to remove / sunset |
 | --- | --- | --- | --- |
-| `FSCMaterialBuilder::GlowToEmissive` | 10 UE emissive units per authored `Glow` | Glow's luminance unit is not in the exported data; the Viewer uses fixed, non-physical exposure (5 lux sun) | replace with the engine's Glow → cd/m² unit once WP-R5/WP-V1 establish physical light/exposure units |
+| Unit instance glow (`Emission()` in `SCMaterialDescribe.cpp`: rule strength > 0 with Glow 0) | one scene unit (`SceneUnitNits` = 1000 cd/m², from the fixture) of instance glow for a material that emits without an authored `Glow` (forward glow card, `%EMITTANCE_MAP`) | the game lights these through the instance-glow term of `CalculateEmissive` (light-linked glow, `glowMultiplier` × the linked light's state; effect links); that amount is not in the export, and material Glow 0 alone would switch them off | derive the amount from the light link (`glow_multiplier` × light state) or the entity-effect link once the exporter carries the link target; retired `GlowToEmissive` (10 units per Glow) was replaced by the game's rule on 2026-11-10 (WP-U3b §13.3) |
 | Alpha-glow gate slope | 1e4 (step at `AlphaGlowCutoff`) | step function in a material graph | none (numerical) |
 
 ## Commands and results
@@ -208,7 +215,7 @@ Missing-value policy (engine/Substrate defaults, `MaterialExpressionSubstrate.h`
 | roughness map scale | `Shininess`/255 × layer `gloss_mult` | identity (1) |
 | F0 | `Specular` (× `_spec` map), layer snapshot `specular` | Substrate default F0 0.04; TODO(WP-R5) resolve the `Diffuse=Specular=1,1,1` sentinel upstream |
 | albedo | `Diffuse` × base texture × palette | texture as-is; with neither, Substrate default albedo 0.18 |
-| emission | `Emissive` × `Glow` × `GlowToEmissive` × albedo, alpha-gated by `AlphaGlowCutoff` | none (Glow absent/0 or Emissive 0,0,0 → 0); TODO(WP-R5) confirm Glow>0 with Emissive 0,0,0 (`glows`, `buttons`) |
+| emission | `Emissive` × strength (cd/m², game glow rule — WP-U3b §13.3) × albedo, alpha-gated by `AlphaGlowCutoff` | none (Glow absent/0 or Emissive 0,0,0 → 0); TODO(WP-R5) confirm Glow>0 with Emissive 0,0,0 (`glows`, `buttons`) |
 | mask cutoff | `AlphaTest` | forward cards: UE default clip (`UMaterial` CDO) |
 | multipliers (`DecalAlphaMultiplier`, `DecalDiffuseOpacity`, `GlassTintStrength`, `StencilOpacity`, `uv_tiling`) | public params / manifest | identity (1) |
 
@@ -397,6 +404,11 @@ target's Glow, so emissive = value × `GlowToEmissive` (same host constant), cla
 `max_strength` (`FSCMaterialBuilder::EngineGlowToEmissive`, used by the import default and
 `ASCVehicle::SetEngineGlow` / `-SCEngineGlow=`); legacy `emission_strength` stays 1:1. The per-link
 `multiplier`/`minimum`/`maximum` chains are not applied (the control value is the Glow value).
+
+*Superseded 2026-11-10 (WP-U3b §13.3):* the control value is not an authored material Glow. It is the output
+of a DataCore entity-effect link with `materialProperty == Glow`, which the game adds as per-instance glow
+(`CalculateEmissive`: `instData.glow × glowColour`, no conversion) — so emissive = `SceneUnitNits × value` cd/m²
+(`FSCStarEngine::InstanceGlowNits`), still clamped to the control range; legacy `emission_strength` stays 1:1.
 
 **v2 vs attributes** (`PackageRules` on dec-r5, informational `V2_DIFF` lines): 226 v2 submaterials, **68 disagree,
 all only in `two_sided`**: v2 takes it from `MtlFlags & 0x2` (e.g. hull `metal_*`, interior trims, `emissives`
