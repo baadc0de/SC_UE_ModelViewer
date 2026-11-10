@@ -207,6 +207,16 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         FSCMaterialSet Set; Set.Path = Path; FReaderObject O;
         if (!ReadJson(Source, Path, O, Detail, &Set.ContentHash) || !O->HasTypedField<EJson::Array>(TEXT("submaterials")))
         { Warn(Path, Detail.IsEmpty() ? TEXT("Missing submaterials array") : Detail); Detail.Reset(); continue; }
+        // The .mtl's own default tint palette, as the exporter names palette ids: palette/<record name, lowercase>.
+        const FReaderObject* Authored;
+        if (O->TryGetObjectField(TEXT("authored_material_set"), Authored))
+            for (const auto& V : ReaderArray(*Authored, TEXT("attributes")))
+                if (const auto A = Object(V); A && String(A, TEXT("name")).Equals(TEXT("DefaultPalette"), ESearchCase::IgnoreCase))
+                {
+                    const FString Record = FPaths::GetCleanFilename(String(A, TEXT("value")).Replace(TEXT("\\"), TEXT("/")));
+                    if (!Record.IsEmpty()) Set.DefaultPaletteId = TEXT("palette/") + Record.ToLower();
+                    break;
+                }
         double SidecarVersion = 1;
         if (O->TryGetNumberField(TEXT("version"), SidecarVersion) && SidecarVersion != 1 && SidecarVersion != 2)
             Warn(Path, FString::Printf(TEXT("Unknown material sidecar version %g; reading v2 fields"), SidecarVersion));
@@ -252,6 +262,26 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             if (!Out.Palettes.ContainsByPredicate([&](const FSCPalette& E) { return E.Id == P.Id; })) Out.Palettes.Add(MoveTemp(P));
         }
     }
+    // Palette resolution, the chain the contract's other consumers apply: the instance's own palette, a
+    // placement's container's, the material set's authored DefaultPalette, then the palette of the entity the
+    // instance is attached to. An id the package carries no palette for does not resolve; with no resolvable
+    // candidate the authored id is kept.
+    auto Known = [&](const FString& Id) { return !Id.IsEmpty() && Out.Palettes.ContainsByPredicate([&](const FSCPalette& P) { return P.Id == Id; }); };
+    auto ResolvePalette = [&](FSCSceneInstance& I, const FString& Container, const FString& Host)
+    {
+        const FSCMaterialSet* Set = Out.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
+        for (const FString& Id : {I.PaletteId, Container, Set ? Set->DefaultPaletteId : FString(), Host})
+            if (Known(Id)) { I.PaletteId = Id; return; }
+    };
+    ResolvePalette(Out.Root, FString(), FString());
+    for (int32 Index = 0; Index < Out.Children.Num(); ++Index) // depth-first: a nested entry follows its assembly
+    {
+        FSCSceneInstance& I = Out.Children[Index];
+        const FSCSceneInstance* Assembly = I.ParentId.IsEmpty() ? nullptr
+            : Out.Children.FindByPredicate([&](const FSCSceneInstance& C) { return C.Id == I.ParentId; });
+        ResolvePalette(I, FString(), Assembly ? Assembly->PaletteId : Out.Root.PaletteId);
+    }
+    for (auto& I : Out.Interiors) for (auto& P : I.Placements) ResolvePalette(P, I.Container.PaletteId, Out.Root.PaletteId);
     for (const auto& V : ReaderArray(*Root, TEXT("animations")))
     {
         if (!Object(V)) { Warn(Out.ScenePath, TEXT("Invalid clip record")); continue; }

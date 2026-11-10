@@ -24,6 +24,20 @@ struct SCBRIDGE_API FSCStarEngine
     double MeterLogMin = 0, MeterLogMax = 0;                     // LOG_MIN / LOG_MAX: the meter's log2 scene-unit range
     int32 TonemappingCurve = 0;                                  // r_HDRTonemappingCurve
     double TonemappingCurveToe = 0;                              // r_HDRTonemappingCurveToe
+    // GlassPBR (glassLib.cfib GlassShared). Absorption per unit of layer height:
+    //   density = (1 / max(transmissive colour, GlassColourFloor) - 1) * GlassDensityScale,
+    //   transmittance = exp(-density * height * refracted path length).
+    // Height = saturate((vertex blue - GlassVertexHeightBias) * GlassVertexHeightScale) under %PER_VERTEX_CURVATURE,
+    // times the height map under %HEIGHT_MAP, which also clips the surface below GlassHeightClip.
+    double GlassDensityScale = 0, GlassColourFloor = 0;
+    double GlassVertexHeightBias = 0, GlassVertexHeightScale = 0;
+    double GlassHeightClip = 0;
+    double GlassTintStrengthDefault = 0; // GlassTintStrength when the material does not set it (%USE_TINT_PALETTE)
+    // The glass maps (normal, smoothness, height, tint) are sampled at glassUV = baseUV * GlassTiling with
+    // v *= GlassVStretch; under %THIN_FILM the iridescence LUT is read at NdotV * ThinFilmThickness. These are the
+    // shader's values for a material that does not set the parameter.
+    double GlassTilingDefault = 0, GlassVStretchDefault = 0;
+    double GlassThinFilmThicknessDefault = 0;
 
     static FString FixturePath();
     static bool Load(const FString& Path, FSCStarEngine& Out, FString& Error);

@@ -285,6 +285,60 @@ bool Stencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCP
     return true;
 }
 bool IsWear(const FObj& Layer) { return Str(Layer, TEXT("name")).StartsWith(TEXT("Wear"), ESearchCase::IgnoreCase); }
+/** GlassPBR, the game's glassLib.cfib GlassShared (ue/verification/WP-U3b.md §14). The glass is a clear dielectric
+ *  over what is behind it: base-layer albedo 0, Reflectance = MatSpecColor.rrr, and a transmissive colour that
+ *  absorbs along the refracted path through the layer height,
+ *    transmittance = exp(-(1 / max(colour, floor) - 1) * densityScale * height / cos(refracted angle)).
+ *  colour = Diffuse, moved to the palette's glass entry by GlassTintStrength under %USE_TINT_PALETTE when the
+ *  instance carries a palette (LayerAttribs_ApplyGlassTint: paletteIndex != 0), x vertex colour under
+ *  %PER_VERTEX_TINT, x the TexSlot4 tint map under %TINT_MAP. height = the vertex blue channel remapped under
+ *  %PER_VERTEX_CURVATURE (#elif of %PER_VERTEX_TINT), x the TexSlot8 height map under %HEIGHT_MAP, which also clips
+ *  the surface. The glass maps (normal, smoothness, height, tint) are sampled at glassUV = baseUV * GlassTiling,
+ *  v *= GlassVStretch. The authored Opacity (MatDifColor.a) is never read. The constants, and the value of a
+ *  parameter the material does not set, are the game's (FSCStarEngine); the master evaluates the per-pixel part.
+ *  What the export does not carry is reported, not silently dropped. */
+void Glass(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPalette* Palette)
+{
+    const FSCStarEngine& Game = FSCStarEngine::Get();
+    SurfaceGloss(D, Sub, A);
+    // TODO(WP-U2): the 0.04 dielectric stand-in for a material without Specular is a host value, not the engine's
+    // (the engine's unauthored MatSpecColor is not derived yet), so it is reported where it is used.
+    if (!A.Attr.Contains(TEXT("Specular")))
+        D.Warnings.Add(TEXT("GlassPBR without an authored Specular: reflectance falls back to the host's 0.04"));
+    const FLinearColor Specular = A.Color(TEXT("Specular"), FLinearColor(0.04f, 0.04f, 0.04f));
+    D.Vectors.Add(TEXT("SpecularColor"), FLinearColor(Specular.R, Specular.R, Specular.R));
+    D.Scalars.Add(TEXT("GlassTiling"), A.Param(TEXT("GlassTiling"), float(Game.GlassTilingDefault)));
+    D.Scalars.Add(TEXT("GlassVStretch"), A.Param(TEXT("GlassVStretch"), float(Game.GlassVStretchDefault)));
+    FLinearColor Colour = A.Color(TEXT("Diffuse"), FLinearColor::White);
+    if (HasToken(Sub, TEXT("USE_TINT_PALETTE")))
+    {
+        bool bPalette;
+        const FLinearColor Entry = PaletteTint(Palette, Str(Child(Child(Sub, TEXT("palette_routing")), TEXT("material_channel")), TEXT("name")), bPalette);
+        if (bPalette) Colour = FMath::Lerp(Colour, Entry, A.Param(TEXT("GlassTintStrength"), float(Game.GlassTintStrengthDefault)));
+    }
+    D.Vectors.Add(TEXT("GlassColor"), FLinearColor(Colour.R, Colour.G, Colour.B));
+    D.Scalars.Add(TEXT("GlassDensityScale"), float(Game.GlassDensityScale));
+    D.Scalars.Add(TEXT("GlassColorFloor"), float(Game.GlassColourFloor));
+    D.Scalars.Add(TEXT("GlassVertexHeightBias"), float(Game.GlassVertexHeightBias));
+    D.Scalars.Add(TEXT("GlassVertexHeightScale"), float(Game.GlassVertexHeightScale));
+    D.Scalars.Add(TEXT("GlassHeightClip"), float(Game.GlassHeightClip));
+    const bool bVertexTint = HasToken(Sub, TEXT("PER_VERTEX_TINT"));
+    D.Scalars.Add(TEXT("UseVertexTint"), bVertexTint ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("UseVertexHeight"), !bVertexTint && HasToken(Sub, TEXT("PER_VERTEX_CURVATURE")) ? 1.f : 0.f);
+    // A map the export does not carry leaves its factor at 1 and is reported: the feature the shader compiles in
+    // (thickness and clip, or the tint) is then missing from the picture.
+    auto Map = [&D, &Sub](const TCHAR* Token, int32 Index, const TCHAR* Name, ESCTextureRole Role)
+    {
+        if (!HasToken(Sub, Token)) return false;
+        if (const FObj Slot = SlotAt(Sub, Index)) Tex(D, Name, Str(Slot, TEXT("export_path")), Role);
+        if (D.Textures.Contains(Name)) return true;
+        D.Warnings.Add(FString::Printf(TEXT("GlassPBR %%%s without an exported TexSlot%d: the map is not applied"), Token, Index));
+        return false;
+    };
+    D.Scalars.Add(TEXT("UseHeightMap"), Map(TEXT("HEIGHT_MAP"), 8, TEXT("HeightMap"), ESCTextureRole::Linear) ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("UseTintMap"), Map(TEXT("TINT_MAP"), 4, TEXT("TintMap"), ESCTextureRole::Color) ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("ThinFilmThickness"), HasToken(Sub, TEXT("THIN_FILM")) ? A.Param(TEXT("ThinFilmThickness"), float(Game.GlassThinFilmThicknessDefault)) : 0.f);
+}
 /** Material-level maps applied over the blended layers (game HardSurface.cfx / LayerBlend_V2.cfx):
  *  - macro normal + gloss: TexSlot3 ddna, compiled in by %MACRO_NORMAL_MAP (HardSurface, at baseTC x MacroTiling)
  *    or %NORMAL_MAP (LayerBlend, untiled); LayerAttribs_AddMacroSurface = detail-normal blend, smoothness x gloss;
@@ -545,14 +599,7 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     }
     else if (D.Master == ESCMaster::Glass)
     {
-        SurfaceGloss(D, Sub, A);
-        D.Vectors.Add(TEXT("SpecularColor"), A.Color(TEXT("Specular"), FLinearColor(0.04f, 0.04f, 0.04f)));
-        bool bPalette;
-        const FLinearColor Glass = PaletteTint(Palette, Str(Child(Child(Sub, TEXT("palette_routing")), TEXT("material_channel")), TEXT("name")), bPalette);
-        D.Vectors.Add(TEXT("GlassTint"), bPalette ? Glass : A.Color(TEXT("Diffuse"), FLinearColor::White));
-        D.Scalars.Add(TEXT("GlassTintStrength"), A.Param(TEXT("GlassTintStrength"), 1.f));
-        D.Scalars.Add(TEXT("ThinFilmThickness"), HasToken(Sub, TEXT("THIN_FILM")) ? A.Param(TEXT("ThinFilmThickness"), 0.f) : 0.f);
-        D.Scalars.Add(TEXT("Opacity"), Opacity);
+        Glass(D, Sub, A, Palette);
     }
     else
     {

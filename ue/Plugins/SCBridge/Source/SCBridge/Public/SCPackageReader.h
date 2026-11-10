@@ -10,6 +10,7 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString EntityName;
     UPROPERTY(BlueprintReadOnly) FString MeshAsset;
     UPROPERTY(BlueprintReadOnly) FString MaterialSidecar;
+    /** Resolved by the reader: own id, container's, the material set's DefaultPalette, then the host's. */
     UPROPERTY(BlueprintReadOnly) FString PaletteId;
     UPROPERTY(BlueprintReadOnly) FString ParentEntityName;
     UPROPERTY(BlueprintReadOnly) FString ParentNodeName;
@@ -60,6 +61,8 @@ struct SCBRIDGE_API FSCMaterialSet
     UPROPERTY(BlueprintReadOnly) FString Path;
     UPROPERTY(BlueprintReadOnly) TArray<FSCSubmaterial> Submaterials;
     UPROPERTY(BlueprintReadOnly) FString ContentHash;
+    /** Palette id named by the .mtl's authored `DefaultPalette` attribute; empty when the set authors none. */
+    UPROPERTY(BlueprintReadOnly) FString DefaultPaletteId;
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCPalette

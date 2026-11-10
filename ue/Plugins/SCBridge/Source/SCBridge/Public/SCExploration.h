@@ -17,6 +17,8 @@ struct SCBRIDGE_API FSCSpawnPoint
     UPROPERTY(BlueprintReadOnly) FString DisplayName;
     /** Vehicle-local floor/helper transform; the character resolves capsule clearance at teleport time. */
     UPROPERTY(BlueprintReadOnly) FTransform Transform;
+    /** Vehicle-local box of the item's collidable geometry; invalid when the item carries none. */
+    UPROPERTY(BlueprintReadOnly) FBox Bounds = FBox(ForceInit);
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCDoorInteraction

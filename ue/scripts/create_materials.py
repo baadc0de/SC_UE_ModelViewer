@@ -11,6 +11,7 @@ surface, HAL luminance range, HardSurface static wear); those are shader logic, 
 where they appear. Game functions with branches or many terms are Custom (HLSL) nodes transcribed from the
 shader text, so they can be read against it.
 """
+import json
 import os
 import shutil
 import struct
@@ -410,15 +411,65 @@ def hardsurface_master():
     return g.save()
 
 
+# glassLib.cfib GlassShared. transmissiveColour = MatDifColor (palette-tinted by the builder), x IN.Color.rgb under
+# %PER_VERTEX_TINT, x tintTexture under %TINT_MAP. glass.Height = saturate((IN.Color.b - 0.25) * 3) under
+# %PER_VERTEX_CURVATURE, x heightTexture under %HEIGHT_MAP. colourDensity = (1 / max(colour, 0.01) - 1) * 0.1 and
+# transmittanceColour = exp(-colourDensity * path). The numbers arrive as instance parameters from FSCStarEngine;
+# the master defaults are inert (no absorption). This is the transmittance at normal incidence (path = Height).
+GLASS_TRANSMITTANCE = """
+float3 colour = Colour * lerp(float3(1, 1, 1), Vertex.rgb, UseVertexTint) * lerp(float3(1, 1, 1), TintMap, UseTintMap);
+float height = lerp(1.0, saturate((Vertex.b - HeightBias) * HeightScale), UseVertexHeight) * lerp(1.0, HeightMap, UseHeightMap);
+float3 density = (1.0 / max(colour, Floor) - 1.0) * DensityScale;
+return exp(-density * height);
+"""
+# glassLib.cfib under %HEIGHT_MAP: clip(heightMap - 0.01).
+GLASS_COVERAGE = "return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
+# The glass graph is a port of these game functions. StarEngineRender.json pins their token hashes and
+# scripts/verify_star_engine_render.py re-checks them against the installed game; the master is not built from a
+# fixture that no longer carries the hashes the port was written against.
+GLASS_PORTED = {
+    "GlassShared": "c9e71e7cb2bf0a6c75d5ae829f849a7763d8508210d41bbec4a6ddb432281ad4",
+    "ReflectanceToIOR": "96a922e87560903c7cd13017ebded86cdaca5bc81e1957ce83c9671b8da33634",
+}
+
+
+def check_ported(ported):
+    fixture = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Plugins", "SCBridge", "Resources", "StarEngineRender.json")
+    with open(fixture, encoding="utf-8") as handle:
+        functions = json.load(handle)["shader_functions"]
+    for name, sha in ported.items():
+        if functions.get(name, {}).get("sha256") != sha:
+            raise RuntimeError(f"{name}: the game shader changed since the port was written; re-derive the graph")
+
+
 def glass_master():
-    """M_SC_Glass: colored-transmittance slab, MFP from (palette) tint, thin-film F0/F90, DDNA normal + roughness."""
+    """M_SC_Glass, the game's GlassPBR (ue/verification/WP-U3b.md §14): a clear dielectric slab, albedo 0, F0 =
+    SpecularColor, whose only colour is absorption through its height. The slab is a Substrate *simple volume*: UE
+    evaluates it like the game does (GlassShared), refracting the view ray with the IOR of F0, taking Beer-Lambert
+    transmittance along the refracted path and multiplying by (1 - Fresnel). TransmittanceToMFP converts the
+    normal-incidence transmittance into the slab's mean free path. Any other sub-surface type has no transmittance
+    in a translucent blend mode and draws the slab opaque. Coverage is 1: the authored Opacity is not read. Every
+    glass map is read at the game's glassUV = baseUV * GlassTiling, v *= GlassVStretch."""
+    check_ported(GLASS_PORTED)
     g = Graph("M_SC_Glass", unreal.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE,
               unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
-    uv = g.uv(g.scalar("Tiling", 1.0))
+    uv = g.mul(g.uv(g.scalar("GlassTiling", 1.0)),
+               g.op(unreal.MaterialExpressionAppendVector, g.const(1.0), g.scalar("GlassVStretch", 1.0)))
+    g.last_uv = uv
     normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
-    tint = g.lerp(g.const3((1, 1, 1)), g.vector("GlassTint", (1, 1, 1)), g.scalar("GlassTintStrength", 0.0))
+    vertex = (g.node(unreal.MaterialExpressionVertexColor), "")
+    height_map = (g.texture("HeightMap", g.white_linear, ST.SAMPLERTYPE_MASKS, uv), "R")
+    use_height_map = g.scalar("UseHeightMap", 0.0)
+    f1, f3 = unreal.CustomMaterialOutputType.CMOT_FLOAT1, unreal.CustomMaterialOutputType.CMOT_FLOAT3
+    transmittance = g.custom(
+        GLASS_TRANSMITTANCE, f3, Colour=g.vector("GlassColor", (1, 1, 1)), Vertex=vertex,
+        UseVertexTint=g.scalar("UseVertexTint", 0.0), TintMap=(g.texture("TintMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB"),
+        UseTintMap=g.scalar("UseTintMap", 0.0), HeightBias=g.scalar("GlassVertexHeightBias", 0.0),
+        HeightScale=g.scalar("GlassVertexHeightScale", 1.0), UseVertexHeight=g.scalar("UseVertexHeight", 0.0),
+        HeightMap=height_map, UseHeightMap=use_height_map, Floor=g.scalar("GlassColorFloor", 1.0),
+        DensityScale=g.scalar("GlassDensityScale", 0.0))
     mfp = g.node(unreal.MaterialExpressionSubstrateTransmittanceToMFP)
-    g.link(*tint, mfp, "TransmittanceColor")
+    g.link(*transmittance, mfp, "TransmittanceColor")
     film = g.node(unreal.MaterialExpressionSubstrateThinFilm)
     g.link(*normal, film, "Normal")
     g.link(*g.vector("SpecularColor", (0.04, 0.04, 0.04)), film, "F0")
@@ -426,7 +477,9 @@ def glass_master():
     g.link(*g.scalar("ThinFilmThickness", 0.0), film, "Thickness")
     slab = g.slab(g.const3((0, 0, 0)), (film, "Specular Color"), (film, "Edge Specular Color"), g.roughness("", uv), normal,
                   None, (mfp, "MFP"), front=False)
-    g.weight(slab, g.saturate(g.scalar("Opacity", 1.0)))
+    slab.set_editor_property("sub_surface_type", unreal.MaterialSubSurfaceType.MSS_SIMPLE_VOLUME)
+    g.weight(slab, g.custom(GLASS_COVERAGE, f1, HeightMap=height_map, UseHeightMap=use_height_map,
+                            Clip=g.scalar("GlassHeightClip", 0.0)))
     return g.save()
 
 
@@ -539,8 +592,9 @@ if not unreal.SystemLibrary.get_console_variable_bool_value("r.Substrate"):
 # Regenerate from scratch so the checked-in assets always equal this script's output. Packages that the
 # commandlet has not loaded are removed on disk first (editor-side deletion leaves them in this session).
 CONTENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Plugins", "SCBridge", "Content", "Materials")
-# M_SC_LightFunction belongs to create_light_material.py (WP-U3) and is kept.
-KEEP = {"M_SC_LightFunction.uasset"}
+# M_SC_LightFunction belongs to create_light_material.py (WP-U3) and M_SC_DisplayMapping to
+# create_display_mapping_material.py (WP-U3b §13); both are kept.
+KEEP = {"M_SC_LightFunction.uasset", "M_SC_DisplayMapping.uasset"}
 for entry in (os.listdir(CONTENT) if os.path.isdir(CONTENT) else []):
     path = os.path.join(CONTENT, entry)
     if os.path.isdir(path):

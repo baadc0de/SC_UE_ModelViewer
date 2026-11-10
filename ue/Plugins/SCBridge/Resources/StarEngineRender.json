@@ -131,6 +131,51 @@
       "value": 16.0,
       "file": "Histogram.cfib",
       "pattern": "#define LOG_MAX (\\S+)"
+    },
+    "glassColourDensityScale": {
+      "value": 0.1,
+      "file": "glassLib.cfib",
+      "pattern": "float3 colourDensity = \\( 1 / max \\( transmissiveColour , \\S+ \\) - 1 \\) \\* (\\S+) ;"
+    },
+    "glassColourFloor": {
+      "value": 0.01,
+      "file": "glassLib.cfib",
+      "pattern": "float3 colourDensity = \\( 1 / max \\( transmissiveColour , (\\S+) \\) - 1 \\) \\* \\S+ ;"
+    },
+    "glassVertexHeightBias": {
+      "value": 0.25,
+      "file": "glassLib.cfib",
+      "pattern": "heightMult = saturate \\( \\( IN \\. Color \\. b - (\\S+) \\) \\* \\S+ \\) ;"
+    },
+    "glassVertexHeightScale": {
+      "value": 3.0,
+      "file": "glassLib.cfib",
+      "pattern": "heightMult = saturate \\( \\( IN \\. Color \\. b - \\S+ \\) \\* (\\S+) \\) ;"
+    },
+    "glassHeightClip": {
+      "value": 0.01,
+      "file": "glassLib.cfib",
+      "pattern": "clip \\( heightMap - (\\S+) \\) ;"
+    },
+    "glassTintStrengthDefault": {
+      "value": 1.0,
+      "file": "glassLib.cfib",
+      "pattern": "float GlassTintStrength < .*? ; > = (\\S+) ;"
+    },
+    "glassTilingDefault": {
+      "value": 1.0,
+      "file": "glassLib.cfib",
+      "pattern": "float GlassTiling < .*? ; > = (\\S+) ;"
+    },
+    "glassVStretchDefault": {
+      "value": 1.0,
+      "file": "glassLib.cfib",
+      "pattern": "float GlassVStretch < .*? ; > = (\\S+) ;"
+    },
+    "glassThinFilmThicknessDefault": {
+      "value": 1.0,
+      "file": "glassLib.cfib",
+      "pattern": "float ThinFilmThickness < .*? ; > = (\\S+) ;"
     }
   },
   "shader_functions": {
@@ -201,6 +246,22 @@
     "ToSRGB": {
       "file": "common.cfib",
       "sha256": "8c9a59f93c51fd030960b1cfff84ba735e9faa86b35993a420140f081ccfde59"
+    },
+    "GlassShared": {
+      "file": "glassLib.cfib",
+      "sha256": "c9e71e7cb2bf0a6c75d5ae829f849a7763d8508210d41bbec4a6ddb432281ad4"
+    },
+    "LayerAttribs_ApplyGlassTint": {
+      "file": "paletteLib.cfib",
+      "sha256": "6835d07c2c2f1740f7584edbfd7dc856c8fe8f03a3f4d714b533dd959b34aa6a"
+    },
+    "ReflectanceToIOR": {
+      "file": "ShadeLib.cfib",
+      "sha256": "96a922e87560903c7cd13017ebded86cdaca5bc81e1957ce83c9671b8da33634"
+    },
+    "GlassPBR_PS": {
+      "file": "GlassPBR.cfxb",
+      "sha256": "eefd2d58d53cd8017ab200d2a9ba3d420b0e8391f47bfd169d20621795b1e79a"
     }
   }
 }

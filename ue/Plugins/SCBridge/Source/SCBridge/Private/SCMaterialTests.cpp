@@ -14,6 +14,7 @@
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialExpressionSubstrate.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -232,12 +233,67 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
             TestTrue(TEXT("palette specular x spec map mean"), Near(Folded.Vectors[TEXT("Layer0Specular")], FLinearColor(0.05f, 0.1f, 0.075f)));
         }
     }
+    // GlassPBR (glassLib.cfib GlassShared): the transmissive colour is MatDifColor, moved to the palette glass entry
+    // by GlassTintStrength only under %USE_TINT_PALETTE; reflectance is MatSpecColor.r; the authored Opacity is never
+    // read. Thickness (layer Height) is the vertex blue channel under %PER_VERTEX_CURVATURE times the %HEIGHT_MAP.
+    const FSCStarEngine& Star = FSCStarEngine::Get();
+    auto GlassRule = [&](const FSCMaterialDesc& X, bool bVertexHeight, bool bVertexTint, bool bHeightMap, bool bTintMap)
+    {
+        TestEqual(X.Name + TEXT(" density scale is the game's"), X.Scalars[TEXT("GlassDensityScale")], float(Star.GlassDensityScale));
+        TestEqual(X.Name + TEXT(" colour floor is the game's"), X.Scalars[TEXT("GlassColorFloor")], float(Star.GlassColourFloor));
+        TestEqual(X.Name + TEXT(" vertex height bias is the game's"), X.Scalars[TEXT("GlassVertexHeightBias")], float(Star.GlassVertexHeightBias));
+        TestEqual(X.Name + TEXT(" vertex height scale is the game's"), X.Scalars[TEXT("GlassVertexHeightScale")], float(Star.GlassVertexHeightScale));
+        TestEqual(X.Name + TEXT(" height clip is the game's"), X.Scalars[TEXT("GlassHeightClip")], float(Star.GlassHeightClip));
+        TestEqual(X.Name + TEXT(" %PER_VERTEX_CURVATURE"), X.Scalars[TEXT("UseVertexHeight")], bVertexHeight ? 1.f : 0.f);
+        TestEqual(X.Name + TEXT(" %PER_VERTEX_TINT"), X.Scalars[TEXT("UseVertexTint")], bVertexTint ? 1.f : 0.f);
+        TestEqual(X.Name + TEXT(" %HEIGHT_MAP"), X.Scalars[TEXT("UseHeightMap")], bHeightMap ? 1.f : 0.f);
+        TestEqual(X.Name + TEXT(" %TINT_MAP"), X.Scalars[TEXT("UseTintMap")], bTintMap ? 1.f : 0.f);
+        TestFalse(X.Name + TEXT(" authored Opacity is not glass coverage"), X.Scalars.Contains(TEXT("Opacity")));
+        TestFalse(X.Name + TEXT(" no tint lerp left to the master"), X.Scalars.Contains(TEXT("GlassTintStrength")) || X.Vectors.Contains(TEXT("GlassTint")));
+        // glassUV = baseUV * GlassTiling, then v * GlassVStretch: the glass maps never use the generic Tiling.
+        TestTrue(X.Name + TEXT(" glass UV parameters"), X.Scalars.Contains(TEXT("GlassTiling")) && X.Scalars.Contains(TEXT("GlassVStretch")) && !X.Scalars.Contains(TEXT("Tiling")));
+    };
+    auto Warned = [](const FSCMaterialDesc& X, const TCHAR* What) { return X.Warnings.ContainsByPredicate([What](const FString& W) { return W.Contains(What); }); };
     if (auto* X = Check(TEXT("glass_ext"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
-        TestTrue(TEXT("palette glass tint"), Near(X->Vectors[TEXT("GlassTint")], FLinearColor(0.1f, 0.6f, 0.3f)));
-        TestEqual(TEXT("tint strength"), X->Scalars[TEXT("GlassTintStrength")], 0.5f);
+        GlassRule(*X, false, false, false, false);
+        TestTrue(TEXT("%USE_TINT_PALETTE: Diffuse moved to the palette glass colour by GlassTintStrength"),
+                 Near(X->Vectors[TEXT("GlassColor")], FLinearColor(0.45f, 0.55f, 0.275f)));
+        TestTrue(TEXT("glass reflectance = Specular.r"), Near(X->Vectors[TEXT("SpecularColor")], FLinearColor(0.05f, 0.05f, 0.05f)));
         TestEqual(TEXT("thin film"), X->Scalars[TEXT("ThinFilmThickness")], 0.06f);
+        TestEqual(TEXT("unset GlassTiling is the shader default"), X->Scalars[TEXT("GlassTiling")], float(Star.GlassTilingDefault));
+        TestEqual(TEXT("unset GlassVStretch is the shader default"), X->Scalars[TEXT("GlassVStretch")], float(Star.GlassVStretchDefault));
+        TestEqual(TEXT("complete glass: nothing reported"), X->Warnings.Num(), 0);
         TestEqual(TEXT("glass roughness"), X->Textures[TEXT("RoughnessMap")].Path, FString(TEXT("tex/glass_ddna_roughness.png")));
+        // The game leaves the colour alone when the instance carries no palette (paletteIndex == 0).
+        const FSCMaterialDesc Bare = FSCMaterialBuilder::Describe(M.Materials[0].Submaterials[int32(X - D.GetData())], nullptr);
+        TestTrue(TEXT("no palette: the authored Diffuse"), Near(Bare.Vectors[TEXT("GlassColor")], FLinearColor(0.8f, 0.5f, 0.25f)));
+    }
+    if (auto* X = Check(TEXT("glass_thickness"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
+    {
+        GlassRule(*X, true, false, true, false);
+        TestTrue(TEXT("no %USE_TINT_PALETTE: a routed palette channel does not tint"), Near(X->Vectors[TEXT("GlassColor")], FLinearColor(0.2f, 0.4f, 0.6f)));
+        TestEqual(TEXT("height map is TexSlot8"), X->Textures[TEXT("HeightMap")].Path, FString(TEXT("tex/glass_height.png")));
+        TestEqual(TEXT("height map is linear"), int32(X->Textures[TEXT("HeightMap")].Role), int32(ESCTextureRole::Linear));
+        TestEqual(TEXT("authored GlassTiling"), X->Scalars[TEXT("GlassTiling")], 2.f);
+        TestEqual(TEXT("authored GlassVStretch"), X->Scalars[TEXT("GlassVStretch")], 3.f);
+        TestEqual(TEXT("no %THIN_FILM: no film"), X->Scalars[TEXT("ThinFilmThickness")], 0.f);
+    }
+    if (auto* X = Check(TEXT("glass_vertex_tint"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
+    {
+        GlassRule(*X, false, true, false, true);
+        TestEqual(TEXT("tint map is TexSlot4"), X->Textures[TEXT("TintMap")].Path, FString(TEXT("tex/glass_tint.png")));
+        TestEqual(TEXT("tint map is colour"), int32(X->Textures[TEXT("TintMap")].Role), int32(ESCTextureRole::Color));
+    }
+    if (auto* X = Check(TEXT("glass_bare"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
+    {
+        // What the material leaves out is the shader's own default, and what the export does not carry is reported:
+        // the feature would otherwise go missing without a trace.
+        GlassRule(*X, false, false, false, false);
+        TestEqual(TEXT("%THIN_FILM without ThinFilmThickness: the shader default"), X->Scalars[TEXT("ThinFilmThickness")], float(Star.GlassThinFilmThicknessDefault));
+        TestTrue(TEXT("%HEIGHT_MAP without an exported TexSlot8 is reported"), Warned(*X, TEXT("TexSlot8")));
+        TestTrue(TEXT("%TINT_MAP without an exported TexSlot4 is reported"), Warned(*X, TEXT("TexSlot4")));
+        TestTrue(TEXT("glass without Specular is reported"), Warned(*X, TEXT("Specular")));
     }
     if (auto* X = Check(TEXT("decal_pom"), ESCMaster::MeshDecalRelief, ESCBlend::Translucent, true, true))
     {
@@ -425,8 +481,9 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // Unique (path, role) pairs across all submaterials; tex/illum_ddna.png etc. are shared and deduplicated. Static
     // wear adds 7: the hard_primary Wear layer's three maps, its two layer spec maps and blend map, and the
     // hard_wear_tinted blend map (its wear surface reuses the Primary maps). Two more are read for their mean
-    // colour only: the unsampled spec maps of hard_wear_tinted and blend1.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 42);
+    // colour only: the unsampled spec maps of hard_wear_tinted and blend1. GlassPBR adds 2: the glass_thickness
+    // height map and the glass_vertex_tint tint map.
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 44);
     // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;
@@ -552,6 +609,24 @@ bool FSCMaterialsMasters::RunTest(const FString&)
                 TestTrue(Path + TEXT(" usable on skeletal meshes"), Parent->GetMaterial()->GetUsageByFlag(MATUSAGE_SkeletalMesh));
                 if (Master == ESCMaster::Glass || Master == ESCMaster::Translucent || Master == ESCMaster::EmissiveUnlit)
                     TestTrue(Path + TEXT(" is translucent"), IsTranslucentBlendMode(Parent->GetBlendMode()));
+#if WITH_EDITOR
+                if (Master == ESCMaster::Glass)
+                {
+                    // A translucent Substrate slab transmits only as a simple volume: the default diffusion type is
+                    // demoted to no sub-surface (Substrate.ush) and the mean free path is then ignored.
+                    int32 Slabs = 0;
+                    for (const UMaterialExpression* E : Parent->GetMaterial()->GetExpressions())
+                        if (const auto* Slab = Cast<UMaterialExpressionSubstrateSlabBSDF>(E))
+                        { ++Slabs; TestEqual(Path + TEXT(" slab is a simple volume"), int32(Slab->SubSurfaceType), int32(MSS_SimpleVolume)); }
+                    TestEqual(Path + TEXT(" one glass slab"), Slabs, 1);
+                    TestEqual(Path + TEXT(" coloured transmittance"), int32(Parent->GetBlendMode()), int32(BLEND_TranslucentColoredTransmittance));
+                    TArray<FMaterialParameterInfo> Infos; TArray<FGuid> Ids;
+                    Parent->GetAllScalarParameterInfo(Infos, Ids);
+                    auto Has = [&Infos](FName Name) { return Infos.ContainsByPredicate([Name](const FMaterialParameterInfo& I) { return I.Name == Name; }); };
+                    TestTrue(Path + TEXT(" glass UVs: GlassTiling and GlassVStretch, no generic Tiling"),
+                             Has(TEXT("GlassTiling")) && Has(TEXT("GlassVStretch")) && !Has(TEXT("Tiling")));
+                }
+#endif
             }
     return true;
 }

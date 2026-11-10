@@ -1075,6 +1075,202 @@ The Scorpius glow regression (§13.3) was not among the findings; it was caught 
   search for `.cfg` overrides of the cvar defaults was done once by hand and is not part of the validator.
 - Views: the Gladius pilot-seat shots (01, 04–06) are black before and after; the Cutlass cockpit still
   looks out at a black hangar wall region (shot 22); the orbit camera of large ships ends outside the hangar
-  enclosure; UE's red on-screen sky-light warning is in every capture. None is new.
+  enclosure; UE's red on-screen sky-light warning is in every capture. None is new. (The first two are
+  fixed in §14; the other two remain.)
 - Frame time was not re-measured (§3 numbers predate this change; the tonemapper replacement is one
   full-screen pass). Only the three regression ships were captured.
+## 14. Cockpit glass, instance palettes and the seat start (2026-11-10)
+
+Four defects of the views around a cockpit, all present before and after §13 (listed there under "Views"):
+
+| Defect (before) | Cause | After |
+|---|---|---|
+| Gladius canopy opaque black from outside | `M_SC_Glass` used the glass colour itself as the slab's transmittance, on a slab of the default sub-surface type, which has no transmittance in a translucent blend mode | see-through; the cockpit is visible through it (`wp-u3b/glass-gladius-canopy-before-after.jpg`) |
+| Opaque white cover on the Gladius spine (refuelling port) | the cover's instance names a palette the package does not carry, so no tint was applied | hull-coloured: the palette chain of §14.2 ends at the host's palette (same image) |
+| Gladius pilot-seat start: black frames | the seat spawn accepted a crouched capsule 136 cm behind the seat, in the closed bay aft of the seat back | the seat spawn is refused (§14.3); the start falls to the next kind (`wp-u3b/glass-gladius-seat-before-after.jpg`) |
+| Cutlass cockpit looks out at black | same glass defect seen from inside | the hangar is visible through the windscreen (`wp-u3b/glass-cutlass-cockpit-before-after.jpg`) |
+
+### 14.1 Glass: the game's rule and the port
+
+Source: `glassLib.cfib` `GlassShared` (called by `GlassPBR.cfxb` `GlassPBR_PS`), `paletteLib.cfib`
+`LayerAttribs_ApplyGlassTint`, read from the extracted shader cache of §13.1. The base layer of a glass
+surface is a clear dielectric — albedo 0, opacity 0, reflectance `MatSpecColor.rrr`, smoothness
+`MatSpecColor.a` — and the only colour is absorption along the path through the layer:
+
+```
+glassUV       = baseUV × GlassTiling;  glassUV.y ×= GlassVStretch        (normal, smoothness, height and tint maps)
+transmissive  = MatDifColor.rgb
+%USE_TINT_PALETTE, instance palette present:  transmissive = lerp(transmissive, palette glass, GlassTintStrength)
+%PER_VERTEX_TINT:                              transmissive *= vertex colour
+  #elif %PER_VERTEX_CURVATURE:                 height *= saturate((vertex blue − 0.25) × 3)
+%TINT_MAP (TexSlot4):                          transmissive *= tint map
+%HEIGHT_MAP (TexSlot8):                        height *= height map;  clip(height map − 0.01)
+density       = (1 / max(transmissive, 0.01) − 1) × 0.1
+transmittance = exp(−density × path through the layer)
+```
+
+The authored `Opacity` (`MatDifColor.a`) is not read by the glass shader. What the old master did instead:
+transmittance = `lerp(1, palette glass or Diffuse, GlassTintStrength)`, coverage = `Opacity`. A dark canopy
+colour therefore became a dark transmittance, and the slab drew opaque on top of that.
+
+Port:
+
+- `FSCMaterialBuilder` (`SCMaterialDescribe.cpp` `Glass`) resolves the per-material part: `GlassColor` =
+  Diffuse moved to the palette's glass entry by `GlassTintStrength` (only under `%USE_TINT_PALETTE` and when
+  the instance has a palette), `SpecularColor` = `Specular.rrr`, `GlassTiling` / `GlassVStretch`, the
+  vertex / map switches from the shader tokens, the TexSlot4 / TexSlot8 maps when the export carries them.
+  A parameter the material does not author takes the shader's declared default from the fixture
+  (`GlassTiling`, `GlassVStretch`, `GlassTintStrength`, and `ThinFilmThickness` under `%THIN_FILM`). What
+  cannot be applied is reported as an import warning instead of silently dropped: `%HEIGHT_MAP` /
+  `%TINT_MAP` without an exported TexSlot8 / TexSlot4, and a material without `Specular` (§14.7).
+- `M_SC_Glass` (`create_materials.py` `glass_master`) reads every glass map at `glassUV`, evaluates the
+  per-pixel part in two Custom nodes (transmittance at normal incidence; coverage from the height-map clip)
+  and feeds
+  `SubstrateTransmittanceToMFP`. The slab is a Substrate **simple volume** (`MSS_SimpleVolume`) in the
+  `TranslucentColoredTransmittance` blend mode: UE refracts the view ray with the IOR of F0, applies
+  Beer-Lambert along the refracted path and multiplies by (1 − Fresnel) — the same three steps as
+  `GlassShared`. Coverage is 1 except where the height map clips.
+- The nine constants (`0.1`, `0.01`, `0.25`, `3`, `0.01`, and the declared defaults of `GlassTintStrength`,
+  `GlassTiling`, `GlassVStretch`, `ThinFilmThickness`, all `1`) are in `StarEngineRender.json`
+  (`shader_constants`), reach the material as instance parameters from
+  `FSCStarEngine`, and the master's own defaults are inert. `GlassShared`, `GlassPBR_PS`,
+  `LayerAttribs_ApplyGlassTint` and `ReflectanceToIOR` are pinned by hash; `glass_master` refuses to build
+  when `GlassShared` or `ReflectanceToIOR` differs from the hash its graph was written from.
+
+### 14.2 Instance palette
+
+An instance's tint palette is the first id of this chain that the package's `palettes.json` carries:
+
+1. the instance's own `palette_id`;
+2. for an interior placement, its container's `palette_id`;
+3. the `DefaultPalette` attribute of the instance's material set (`authored_material_set.attributes[]`, name
+   compared without case; id = `palette/<record file name, lower case>`);
+4. the palette of the entity the instance is attached to (a nested child: its assembly's resolved palette;
+   otherwise the root's).
+
+This is the chain of the contract's other consumers (`vendor/StarBreaker` `blender_addon/…/importer/
+orchestration.py`, `starbreaker-3d/src/pipeline/blend_assembly.rs`, `docs/decomposed-export-contract.md`
+"palette resolution"). Before, the reader used step 1 only, so an instance naming an unexported palette got
+none. With no resolvable candidate the authored id is kept (and the material is untinted, as before).
+
+Gladius: the refuelling-port cover (`component_master_01`) names no exported palette and its material set's
+`DefaultPalette` is `gen_glossy_dark_a`, which the exporter does not write into this package's
+`palettes.json`; step 4 gives it `palette/aegs_gladius`. The game would use step 3's palette here — see
+§14.7.
+
+### 14.3 Seat start
+
+DataCore gives a seat an attachment (`SCItemSeatParams.actorAttachment`: bone `Sit_Pos_Pilot`, stance
+`Seated`), not a place to stand. The first-person start may put a (crouched) capsule at a seat only when
+the capsule touches the seat: the distance from the capsule's axis segment to the seat's box is at most
+radius + skin (+0.1 cm trace tolerance). The box is that of the seat item's collidable geometry, taken in the
+vehicle's frame (`FSCSpawnPoint::Bounds`, vehicle-local) and tested there, so a turned or stretched vehicle
+gives the same answer as an axis-aligned one; a seat with a hint but no geometry gets a zero-size box at
+the hint. A free spot that does not touch the box is another place, not the seat, and the seat spawn is
+refused
+(`FIRST_PERSON_SPAWN_REJECT … kind=Seat … reason=no_clear_capsule`). Gladius: seat box
+(772, −33, −86)…(878, 33, 56) cm, the only free spot within reach of the old ring search was 83 cm behind it.
+The start ranking is unchanged (`Entrance > SeatAccess > Seat > Interior > Door > Hull`); what changed is
+which seat spawns succeed. Details and results: `WP-P1.md`.
+
+### 14.4 Front-layer translucency (A/B, left off)
+
+`r.Lumen.TranslucencyReflections.FrontLayer.EnableForProject` and
+`r.MegaLights.FrontLayerTranslucency.EnableForProject` were switched on together for one run and compared
+with the committed configuration on the same camera positions. Gladius exterior: the difference is confined
+to the canopy glass, at most 35/255 per channel, mean 0.66/255 over the frame; Cutlass cockpit: no visible
+difference. In the uniformly grey hangar the canopy has nothing distinct to reflect, so the result says
+little about a scene with bright surroundings. Both stay off (`DefaultEngine.ini` unchanged).
+
+### 14.5 Verification
+
+```
+$ ue/scripts/build.sh SCViewerEditor                                   → BUILD_EXIT=0
+$ UnrealEditor-Cmd … -script=ue/scripts/create_materials.py -nullrhi … → WP-U2 MATERIALS_OK
+$ … test_importer.py -nullrhi …
+  WP-U1 UNIT_TESTS_OK                                                  (29 test classes)
+$ … test_importer.py -SCPackage=out/dec-rv-cutlass -SCVerifyTar=cache/1272fb0b….tar
+  LIGHT_VERIFY passed=1 components=225 enabled=201 disabled=24 projectors=184 gobo_textures=8 …
+  WP-U1 UNIT_TESTS_OK                                                  (31 test classes)
+$ … test_first_person.py -SCPackage=out/dec-r5b-{gladius,scorpius,cutlass} -SCFirstPersonTests
+  WP-P1 HEADLESS_OK   ×3
+$ … test_player.py -SCPlayerTests -SCPlayerPackage=out/fps/player-p4-male.tar
+  WP-P2 HEADLESS_OK
+$ python3 -I scripts/verify_star_engine_render.py
+  STAR_ENGINE_RENDER OK: 60/60 checks match the installed game
+```
+
+Tests written first (red on the old code): glass cases in `FSCMaterialDescribe*` on three new synthetic
+submaterials (`glass_thickness`: palette + tint strength + thin film + height / tint maps + authored
+`GlassTiling` / `GlassVStretch`; `glass_vertex_tint`: `%PER_VERTEX_TINT` wins over `%PER_VERTEX_CURVATURE`;
+`glass_bare`: no `Specular`, `%THIN_FILM` without a thickness, `%HEIGHT_MAP` / `%TINT_MAP` without exported
+slots — fixture defaults and three warnings) and the master's parameter set (`GlassTiling`, `GlassVStretch`,
+no generic `Tiling`); `FSCStarEngineFixture` / `Domain` for the nine glass constants; `FSCReaderPalette`
+(each step of §14.2, an unknown id at every step, nested children); `FSCFirstPersonSeatReach` (a seat with
+room accepts, a seat whose only free spot is behind the back refuses, a hint-only seat, an invalid box, a
+vehicle turned 45°, a vehicle turned and stretched 2×) and the start-ranking invariant in
+`FSCFirstPersonSpawns` (a refused seat never hides a lower-ranked spawn that fits).
+
+GPU (RTX 4090, default hangar, `-SCDefaults`), before → after on the three regression ships:
+
+| Ship | Route | Result |
+|---|---|---|
+| Gladius | noclip stations (front of the canopy, cockpit eye point 830, 0, −70) | canopy black → see-through with the seat, dashboard and coolers visible; spine cover white → hull olive; views from inside unchanged |
+| Gladius | `routes/gladius-hull-seat.txt` | `spawn Seat … ok=0`; start `Interior`; cockpit-eye shot shows the hangar through the canopy; canopy and ladder fragments toggle (end pose: §14.7) |
+| Cutlass | `routes/cutlass-armed-walkthrough.txt` (29 shots) | cockpit shot 22: black → hangar wall and floor through the windscreen; the other 28 shots show no difference beyond frame noise |
+| Scorpius | `routes/scorpius-smoke.txt` (4 shots) | shot 02: the opening behind the canopy shows the lit cockpit instead of black; hull shots unchanged (`wp-u3b/glass-scorpius-entry-before-after.jpg`) |
+
+The GPU routes were run twice: once on the first implementation (the before → after of the table and of the
+four evidence images) and again after the cross-review fixes of §14.6 (`out/smoke/gl3*`, 58 shots). The
+second run reproduces the first: Gladius and Scorpius differ by 0.2–0.9/255 mean per frame (temporal noise),
+the Cutlass walkthrough by 0.4–5.6/255, all of it at silhouette edges of the walking player and of geometry
+seen from a position a few centimetres off (third-person and mid-animation shots highest); no change inside
+any glass area is visible, although 67 of the 145 glass submaterials of the three ships (Gladius 7 of 23, Scorpius 1 of 33,
+Cutlass 59 of 89) author a `GlassTiling` or `GlassVStretch` other than 1 — in these views the glass maps
+carry too little detail for the tiling to show. Start spots and log lines are identical (Gladius seat
+refused → `Interior`; Scorpius both seats refused → `Interior`; Cutlass `SeatAccess`), 0 `Error:` lines.
+
+### 14.6 Cross-review (Codex)
+
+Reviewed on the uncommitted change set; six findings, five fixed with tests first, one recorded.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | P2 — the seat box was a world box carried back into the vehicle, so it grew under a rotated vehicle and a spot beside the seat counted as on it | fixed: box computed in the vehicle's frame, reach = capsule-axis-to-box distance in that frame (§14.3) |
+| 2 | P2 — glass maps ignored `GlassTiling` / `GlassVStretch` | fixed: `glassUV` in the master, both parameters from the material or the fixture default (§14.1) |
+| 3 | P2 — `%HEIGHT_MAP` / `%TINT_MAP` without an exported slot switched the feature off silently | fixed: import warning naming the slot |
+| 4 | P2 — `%THIN_FILM` without `ThinFilmThickness` used 0; the shader declares 1 | fixed: `glassThinFilmThicknessDefault` in the fixture |
+| 5 | P2 — literals outside the fixture: the 0.04 reflectance for a material without `Specular`, and (older, shared by every master) the gloss cap 251/255, the Rec.709 weights in `conserve`, the host `Shininess` default | not fixed here: the 0.04 case now raises a warning and carries a `TODO(WP-U2)`; the three shared ones are a cross-master change, listed in §14.7 |
+| 6 | P3 — an invalid seat box reached the reach test | fixed: normalised to the zero-size box at the hint |
+
+On the three regression ships none of 3, 4 or the `Specular` half of 5 occurs (all 145 glass submaterials
+author `Specular`; all 61 `%THIN_FILM` ones author a thickness; all 6 `%HEIGHT_MAP` and 2 `%TINT_MAP` ones
+have their slot), so those fixes change no pixel there.
+
+### 14.7 Not mapped / still open
+
+- **Not compared with the game.** The glass rule is ported; no in-game capture under a known light set-up
+  was matched.
+- Glass features of `GlassShared` that are not mapped: dirt layer and wear smoothness, the game's thin-film
+  LUT (approximated by `SubstrateThinFilm`: the game's `ThinFilmThickness` scales a LUT coordinate, it is
+  not a physical thickness, and `ThinFilmStrength` is not mapped), screen-space refraction offset, curvature
+  and glare, light amplification, emissive glass (`EmissiveOpacity`), cracks, frost, condensation and the
+  glass decal layer.
+- **Host values still outside the fixture** (cross-review finding 5): F0 0.04 for a glass material without
+  `Specular` (Substrate's default dielectric, not the engine's unauthored `MatSpecColor`; warned at import),
+  the gloss cap 251/255, the Rec.709 weights in `conserve` and the host `Shininess` default. To be derived
+  or registered as host fallbacks in WP-U2.
+- UE blends a simple-volume slab's diffuse towards the volume for very dark glass; not measured against the
+  game's result for the same colour.
+- Front-layer Lumen reflections / MegaLights on translucency are off (§14.4).
+- **Palettes the exporter does not write.** A material set's `DefaultPalette` that no entity of the package
+  references is missing from `palettes.json` (Gladius `gen_glossy_dark_a`), so step 3 of §14.2 cannot
+  resolve and the instance takes its host's palette. Exporter fix (vendored submodule): write every
+  palette a sidecar names.
+- **Seated state.** No seat of the Gladius or the Scorpius accepts a capsule; the pilot's eye point needs the
+  seat's idle clip and the rig's camera joint with collision off while seated (`WP-P1.md` follow-ups).
+- **Open / Close clips end in each other's pose** on the Gladius canopy and several panels: an exporter
+  defect in the pairing of DBA clip names with key blocks, recorded with its evidence in `WP-P1.md`
+  ("Follow-ups"). The viewer plays what the package says.
+- UE's red on-screen warning about the real-time-capture sky light is still in every capture.
+- Frame time was not re-measured; only the three regression ships were captured.

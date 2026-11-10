@@ -71,12 +71,18 @@ void ASCVehicle::BuildExploration()
             FTransform World = Pending.Anchor->GetComponentTransform();
             TArray<USceneComponent*> Parts;
             Pending.Anchor->GetChildrenComponents(true, Parts);
-            FBox Box(ForceInit);
+            // The item's box is taken in the vehicle's frame: a world box carried back into the vehicle grows by
+            // the vehicle's rotation, and what is beside the seat would then count as on it.
+            FBox Box(ForceInit), Local(ForceInit);
             for (const USceneComponent* Part : Parts)
                 if (const auto* Primitive = Cast<UPrimitiveComponent>(Part); Primitive && Primitive->IsRegistered() && Primitive->IsCollisionEnabled())
+                {
                     Box += Primitive->Bounds.GetBox();
+                    Local += Primitive->CalcBounds(Primitive->GetComponentTransform().GetRelativeTransform(GetActorTransform())).GetBox();
+                }
             if (Box.IsValid) World.SetLocation(FVector(Box.GetCenter().X, Box.GetCenter().Y, Box.Min.Z));
             Point.Transform = World.GetRelativeTransform(GetActorTransform());
+            Point.Bounds = Local;
             // A port at the vehicle origin whose item carries no collidable geometry has no location
             // information (e.g. seat-access items whose position lives in interaction helpers): skip.
             if (!Box.IsValid && Point.Transform.GetLocation().IsNearlyZero(1))

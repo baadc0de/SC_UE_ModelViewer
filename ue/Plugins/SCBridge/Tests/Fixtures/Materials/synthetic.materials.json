@@ -750,7 +750,7 @@
     },
     {
      "name": "Specular",
-     "value": "0.04,0.04,0.04"
+     "value": "0.05,0.2,0.3"
     },
     {
      "name": "Shininess",
@@ -758,7 +758,7 @@
     },
     {
      "name": "Opacity",
-     "value": "1"
+     "value": "0.3"
     }
    ],
    "decoded_feature_flags": {
@@ -2237,6 +2237,178 @@
    "palette_routing": {
     "layer_channels": [],
     "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 33,
+   "submaterial_name": "glass_thickness",
+   "shader_family": "GlassPBR",
+   "shader": "GlassPBR",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "GlassPBR"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.2,0.4,0.6"
+    },
+    {
+     "name": "Specular",
+     "value": "0.02,0.02,0.02"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    },
+    {
+     "name": "Opacity",
+     "value": "1"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "PER_VERTEX_CURVATURE",
+     "HEIGHT_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot8",
+     "role": "unknown",
+     "is_virtual": false,
+     "export_path": "tex/glass_height.png",
+     "source_path": "src/glass_height.tif"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "glass"
+    }
+   },
+   "public_params": {
+    "GlassTintStrength": 1.0,
+    "GlassTiling": 2.0,
+    "GlassVStretch": 3.0
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 34,
+   "submaterial_name": "glass_vertex_tint",
+   "shader_family": "GlassPBR",
+   "shader": "GlassPBR",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "GlassPBR"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0.02,0.02,0.02"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    },
+    {
+     "name": "Opacity",
+     "value": "1"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "PER_VERTEX_TINT",
+     "TINT_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot4",
+     "role": "unknown",
+     "is_virtual": false,
+     "export_path": "tex/glass_tint.png",
+     "source_path": "src/glass_tint.tif"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "glass"
+    }
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 35,
+   "submaterial_name": "glass_bare",
+   "shader_family": "GlassPBR",
+   "shader": "GlassPBR",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "GlassPBR"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.5,0.5,0.5"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    },
+    {
+     "name": "Opacity",
+     "value": "1"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "THIN_FILM",
+     "HEIGHT_MAP",
+     "TINT_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot8",
+     "role": "unknown",
+     "is_virtual": false,
+     "export_path": "",
+     "source_path": "src/glass_bare_height.tif"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "glass"
+    }
    },
    "public_params": {},
    "activation_state": {

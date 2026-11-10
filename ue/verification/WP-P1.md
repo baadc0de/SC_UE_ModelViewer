@@ -322,6 +322,9 @@ no ensure/assert in any log below).
    crouched (sitting) capsule within two capsule diameters, never the floor under the ship.
    Starts: Cutlass `SeatAccess` (manned turret access), Gladius `Seat` (pilot), Scorpius
    `Interior` (both seats reject a capsule). Tested: Door never outranks seat hints.
+   **Amended 2026-11-10 (seat reach):** a free spot within two diameters is not enough — the
+   capsule must touch the seat. Rule, tests and results: "Seat reach" below. Gladius now
+   starts at the next kind that fits instead of `Seat`.
 4. `SSCViewportInput` resets drag state in `OnMouseCaptureLost` and `OnFocusLost`.
 5. `UnloadInternal` only nulls the character/pawn pointers and sets the mode when the world is
    tearing down or exit was requested; the lifecycle check now reloads, re-enters first person and
@@ -379,9 +382,80 @@ SCRIPT_FRAMETIME tag=first-person-b  frames=1000 frame_ms[mean=6.01 p50=5.60 p95
   assignment. Until then seats are ordered by height.
 - **Sitting:** seat buckets do not fit a 34 cm capsule; a seated state (camera at the seat's
   sit helper, collision off until the player stands) is needed for the sit-height check. Gladius
-  row above fails on this.
+  row above fails on this. Since the seat-reach rule (below) the Gladius and Scorpius seat spawns
+  are refused outright rather than placed beside the seat, so no pilot's-eye view exists until this
+  state does. Data for it: `SCItemSeatParams.actorAttachment` (bone `Sit_Pos_Pilot`, stance `Seated`).
 - **Floor clearance:** the viewer places the lowest point 1 m above the hangar floor, so
   ramps/ladders do not reach the ground (Cutlass ramp lip 1.5 m up). Rest the ship on its
   deployed gear for first person (WP-V1 presentation constant).
 - **Interior spawn hints** from containers without a floor (e.g. Gladius `base_lightgroups`)
   resolve to the hangar floor under the ship.
+
+## Seat reach and the Gladius cockpit (2026-11-10)
+
+Part of the cockpit-glass change (`WP-U3b.md` §14). Defect: the Gladius pilot-seat start was accepted
+crouched 136 cm aft of the seat, inside the closed bay behind the seat back, and every frame from there
+was black (the **FAIL** of the Gladius row above).
+
+Rule. A seat spawn carries the box of the seat item's collidable primitives in the vehicle's frame
+(`FSCSpawnPoint::Bounds`, computed with `CalcBounds` in actor space, so it does not grow when the vehicle is
+rotated). `ASCFirstPersonCharacter::FindCapsuleSpot` accepts a seated candidate only when the distance from
+the capsule's axis segment (centre ± (half height − radius) along Z) to that box, measured in the vehicle's
+rigid frame (rotation and translation; the actor's scale is folded into the box), is at most
+`Radius + Skin + 0.1` cm — the capsule touches the seat. A seat known only by its hint, or whose box is
+invalid, is a zero-size box at the hint. No reachable free spot → `FIRST_PERSON_SPAWN_REJECT … kind=Seat …
+reason=no_clear_capsule`, and the start falls to the next kind in `Entrance > SeatAccess > Seat > Interior >
+Door > Hull` (ranking unchanged). The capsule numbers are the character's own profile (radius 34, crouched
+half height 44, skin 2.5); nothing is ship-specific.
+
+Tests (written first): `FSCFirstPersonSeatReach` — a seat with room accepts; a seat whose only free spot is
+behind the back refuses; hint-only and invalid boxes; a vehicle turned 45° (a spot past the seat's corner is
+refused although a world-aligned box would contain it); a vehicle turned 45° and stretched 2× along X (a
+capsule one diameter out along the vehicle's X sits). `FSCFirstPersonSpawns`: a refused seat never hides a
+lower-ranked spawn that fits.
+
+```
+$ … test_first_person.py -SCPackage=out/dec-r5b-gladius -SCFirstPersonTests
+  FIRST_PERSON_SPAWN_REJECT index=0 kind=Seat pos=V(X=824.86, Y=0.01, Z=-85.50) label="AEGS_Gladius_SCItem_Seat_Pilot" reason=no_clear_capsule
+  FIRST_PERSON_BEST kind=Door label=pinventory interiordoor
+  WP-P1 HEADLESS_OK
+$ … -SCPackage=out/dec-r5b-scorpius …
+  FIRST_PERSON_SPAWN_REJECT … label="RSI_Scorpius_SCItem_Seat_Gunner" …   (and …_Seat_Pilot)
+  FIRST_PERSON_BEST kind=Interior label=ext_lightning_main
+  WP-P1 HEADLESS_OK
+$ … -SCPackage=out/dec-r5b-cutlass …
+  FIRST_PERSON_BEST kind=SeatAccess label=DRAK_Cutlass_SeatAccess_MannedTurret
+  WP-P1 HEADLESS_OK
+```
+
+GPU (`routes/gladius-hull-seat.txt`, RTX 4090): the viewer's own load (interior containers present) starts
+at `Interior` `base_lightgroups`, which resolves to the hangar floor beside the ship (the "Interior spawn
+hints" follow-up above; the headless test world has no hangar floor, so that hint is rejected there and
+the `Door` is picked); `spawn Seat` is
+refused and the player stays where they were (`04-seat-spawn-refused`); a noclip camera at the pilot's eye
+point shows the cockpit and the hangar through the canopy (`05-cockpit-eye`); E on the canopy from the hull
+toggles it (`06`). Evidence: `wp-u3b/glass-gladius-seat-before-after.jpg`. The Gladius row's sit-height
+check stays **not demonstrated** — it needs the seated state.
+
+### Open: Open / Close clips end in each other's pose (exporter)
+
+Seen on the Gladius canopy: after "Open canopy" the canopy is closed and vice versa. The package's clips
+carry the wrong key blocks. `vendor/StarBreaker` `starbreaker-3d/src/animation/dba.rs`
+`match_dba_metadata_to_blocks` pairs the DBA's metadata entries (name, `end_frame`) with its key blocks by
+index, and the two tables are not in the same order; `end_frame` is not used to check the pairing. Comparing
+each clip's metadata `end_frame` with the frame count of the block it was paired with, 14 of the Gladius's
+40 clips disagree — six plain swaps between two clips, and the landing-gear clips shifted against their
+blocks:
+
+| Clip | metadata end frame | paired block's frames |
+| --- | --- | --- |
+| `canopy_close` / `canopy_open` | 125 / 260 | 260 / 125 |
+| `cooler_left_close` / `cooler_right_open` | 150 / 100 | 100 / 150 |
+| `diagnostic_panel_close` / `_open` | 66 / 70 | 70 / 66 |
+| `entrance_panel_close` / `_open` | 32 / 35 | 35 / 32 |
+| `inventory_close` / `_open` | 112 / 119 | 119 / 112 |
+| `landing_gear_idle` / `landing_gear_retract` | 124 / 140 | 140 / 167 |
+| `shield_close` / `_open` | 170 / 180 | 180 / 170 |
+
+Not fixed here (vendored submodule; needs a `scviewer/<topic>` branch, a failing test on the pairing and
+the engine's actual keying of blocks to metadata). The viewer plays what the package says.

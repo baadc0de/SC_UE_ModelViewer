@@ -93,7 +93,7 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | MeshDecal with `%DIFFUSE_MAP` colour sheet (`color_sheet`) | masked/blended colour from the sheet where alpha × `DecalAlphaMultiplier` × `DecalDiffuseOpacity` > 0 |
 | MeshDecal with `%STENCIL_MAP` + `$TintPaletteDecal` (`stencil_palette`) | colour from the palette `decal` red/green/blue channels selected by the stencil texture, `StencilDiffuseColor*`, `StencilOpacity` |
 | Illum with CryEngine forward flag (`MtlFlags & 0x8000`) | diffuse alpha is coverage (masked); upstream should emit this in `alpha_config` (TODO WP-R5). `MtlFlags & 0x2` = two-sided, not yet honoured |
-| GlassPBR | translucent; tint = palette `glass` channel × `GlassTintStrength`; `EmissiveOpacity` |
+| GlassPBR | translucent clear dielectric (F0 = `Specular.r`); colour only as absorption: `Diffuse`, moved to the palette `glass` channel by `GlassTintStrength` under `%USE_TINT_PALETTE`, × vertex colour / tint map; maps at `baseUV × GlassTiling` (v × `GlassVStretch`); `Opacity` unused; `EmissiveOpacity` not mapped (`ue/verification/WP-U3b.md` §14) |
 | Vehicle `MultiLight` port lights (`lights[]` from WP-R5) and `interiors[].lights` | Same authored mapping as above. Always use authored `defaultState`, even intensity 0; only an absent default permits the first positive auxiliary → emergency → cinematic fallback. Preserve all states for the UI. |
 
 WP-R5b light sidecar fields apply identically to `root_entity.lights[]`,
@@ -219,6 +219,13 @@ UE reads HardSurface static wear from `public_params.WearBlendBase`, the `Wear`
 layer or the wear tints, the Primary layer's `TexSlot8` blend map and glTF
 `COLOR_0` (R damage, G glow, B AO, A wear) under `%VERTCOLORS`; rules and sources in
 `ue/verification/WP-U2.md`.
+
+Instance palette (2026-11-10): UE resolves an instance's tint palette as the first id that
+`palettes.json` carries of: the instance's `palette_id`; its interior container's `palette_id`;
+the material sidecar's authored `DefaultPalette` (`palette/<lower-case record file name>`); the
+palette of the entity the instance is attached to. With no resolvable candidate the authored id
+is kept and the material is untinted. No package or ABI change (`WP-U3b.md` §14.2).
+
 Child controllers use scoped clip IDs and fragment animation references; raw
 interior geometry can acquire a controller through an unambiguous exact DataCore
 geometry relationship. Animated CGA interior meshes retain their NMC receiving
@@ -230,7 +237,9 @@ Seat/SeatAccess/Door/Entrance item types, fragment joints, interior placement
 bounds and the hull top produce hints. First-person entry searches entrances,
 seat access, seats, interiors, then hull; lower entrance hints are tried first.
 Each hint is resolved to a walkable surface with standing-capsule clearance and
-a supported short stride. Teleports reject occupied/unsupported locations.
+a supported short stride. A Seat hint carries the vehicle-local box of the seat item's
+collidable geometry (`FSCSpawnPoint::Bounds`); a seat start is accepted only when the
+crouched capsule touches that box, else the seat is refused and the next kind is tried. Teleports reject occupied/unsupported locations.
 Older packages without item types retain the hull fallback. Orbit's **Spawn
 where I look** adds a surface hint. Possession disables the inspection pawn's
 tick; exit restores it and unload destroys the character.

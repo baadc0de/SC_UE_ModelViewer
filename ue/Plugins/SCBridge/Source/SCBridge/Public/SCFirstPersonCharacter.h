@@ -48,6 +48,13 @@ enum class ESCFirstPersonAction : uint8
     Weapon1, Weapon2, Weapon3, Weapon4, Weapon5, Weapon6, Weapon7, Weapon8, Weapon9
 };
 
+/** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),
+ *  so a turned vehicle's seat keeps its own box. An invalid box is a seat known only by its hint. */
+struct FSCSeatBox
+{
+    FBox Box = FBox(ForceInit);
+    FTransform Frame = FTransform::Identity;
+};
 UCLASS()
 class SCBRIDGE_API ASCFirstPersonCharacter : public ACharacter
 {
@@ -87,6 +94,9 @@ public:
     /** bSeated: a seat hint — crouched (sitting) capsule on the surface right under the hint, no
      *  walkable-neighbourhood requirement and no search beyond it (never the floor below the ship). */
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool TeleportToFloor(FVector Floor, bool bSeated = false);
+    /** Seated teleport. Seat is the box of the seat's collidable geometry in Frame (FSCSeatBox): the capsule
+     *  must touch it, so a clear pocket beside the seat (behind its back, past a bulkhead) is refused. */
+    bool TeleportToSeat(FVector Floor, const FBox& Seat, const FTransform& Frame = FTransform::Identity);
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Interact();
     /** Interaction E would toggle now: under the crosshair within reach, else the nearest joint in reach. */
     int32 FocusedInteraction() const;
@@ -114,7 +124,7 @@ public:
     void ClearInput();
     /** Find a walkable surface and unoccupied capsule around a semantic spawn hint; standing first,
      *  crouched when only a crouched capsule fits (seats under canopies). */
-    bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre, bool& bCrouched, bool bSeated = false) const;
+    bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre, bool& bCrouched, const FSCSeatBox* Seat = nullptr) const;
     bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre) const { bool C; return ResolveSpawn(Hint, CapsuleCentre, C); }
 private:
     FSCCharacterProfile Profile;
@@ -130,7 +140,8 @@ private:
     bool bRunning = false;
     void SetRunning(bool bRun);
     void ApplyHeldInput();
-    bool FindCapsuleSpot(FVector Hint, double HalfHeight, FVector& Centre, bool bSeated = false) const;
+    bool FindCapsuleSpot(FVector Hint, double HalfHeight, FVector& Centre, const FSCSeatBox* Seat = nullptr) const;
+    bool Place(FVector Floor, const FSCSeatBox* Seat);
     UFUNCTION() void CapsuleHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp,
                                FVector NormalImpulse, const FHitResult& Hit);
 };

@@ -1,5 +1,8 @@
-# WP-P1 GPU route: best start (pilot seat: the seat-access port has no location data), hull spawn + jump + walk, pilot seat (crouch eye height),
-# canopy and ladder by E. Spawn kinds from data: Seat, Hull, Door:n (interaction joints in
+# WP-P1 GPU route: best start, hull spawn + jump + walk, the pilot seat spawn (refused: no capsule fits at the
+# seat, and the clear spot behind its back is not the seat), the cockpit eye view through the canopy glass and the
+# canopy fragment by E in noclip (its end pose seen from the hull), the ladder by E. The canopy's Open fragment
+# ends in the closed pose on this package: the exporter pairs the DBA clip names with the wrong key blocks
+# (ue/verification/WP-P1.md, open items). Spawn kinds from data: Seat, Hull, Door:n (interaction joints in
 # FP_DOOR_LIST order after the DataCore Door item: Door:1 canopy, Door:9 ladder on this package).
 # Host: -SCDefaults -SCLoad=AEGS_Gladius -SCCamera=first
 20 r.VSync 0
@@ -15,16 +18,20 @@
 0 sc.FP.Move 1 0 1
 0.5 shot 03-hull-after-walk
 0 sc.FP.Spawn Seat
+0.5 sc.FP.Where
+0.3 shot 04-seat-spawn-refused
+0 sc.FP.Noclip 1
+0 sc.FP.Place 830 0 -70
 1 sc.FP.Look 0 0
-0.5 shot 04-pilot-seat
-0 sc.FP.Crouch 1
-1.5 sc.FP.Where
-0.3 shot 05-pilot-seat-crouched
-0 sc.FP.Crouch 0
+0.5 shot 05-cockpit-eye
 0.5 sc.FP.Look 0 60
 0.3 sc.FP.Probe
 0 sc.FP.Interact
-5 shot 06-canopy-toggled
+0 sc.FP.Spawn Hull
+0 sc.FP.Noclip 0
+1 sc.FP.Look 0 -25
+1.5 sc.FP.Move 1 0 1
+3 shot 06-canopy-after-E-from-hull
 0 sc.FP.Spawn Door:9
 1 sc.FP.Look 90 10
 0.3 sc.FP.Probe

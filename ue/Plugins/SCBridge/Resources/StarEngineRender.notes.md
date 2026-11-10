@@ -34,7 +34,7 @@ Inputs, both part of the installed game (untrusted data, never checked in):
 python3 -I scripts/verify_star_engine_render.py
 # SOURCE exe: …/LIVE/Bin64/StarCitizen.exe
 # SOURCE shaders: Engine\ShaderCache_Vulkan.pak (2391328688 bytes, crc32 aea61527) read in place from …/LIVE/Data.p4k
-# STAR_ENGINE_RENDER OK: 47/47 checks match the installed game
+# STAR_ENGINE_RENDER OK: 60/60 checks match the installed game
 ```
 
 `--exe PATH` and `--p4k PATH` (defaults: the LIVE executable and `Data.p4k` under `~/Games/star-citizen/...`),
@@ -46,7 +46,7 @@ Any difference is a non-zero exit naming the value. Run it after every game patc
 and, for a changed function hash, the rule ported from that function must be re-derived — never edit a value to
 make the validator pass.
 
-The 47 checks are the 46 fixture values plus one completeness check: the fixture must list exactly the
+The 60 checks are the 59 fixture values plus one completeness check: the fixture must list exactly the
 `r_ExposureCompensationEV<n>` cvars the executable registers (the loader builds the compensation curve from
 whatever anchors the fixture carries, so a dropped or invented anchor would otherwise pass). The shader side of
 the same curve — which anchors are read and where the segments join — is pinned by the `CalculateEVCompensation`
@@ -80,6 +80,10 @@ Method:
 | `r_ExposureDiscardRatioDark/Bright` | UE histogram low / high percent | histogram fractions left out of the meter |
 | `r_ExposureAdaptTimeDark/Bright/Pupil`, `r_ExposureAdaptRangePupil` | UE adaptation speed (pupil stage) | `PigmentAdaptation` / `PupilAdaptation` half-lives |
 | `r_HDRTonemappingCurve`, `r_HDRTonemappingCurveToe` | display-mapping material | curve 1 = `HuePreservingShoulder`, toe 1.0 |
+| `glassColourDensityScale`, `glassColourFloor` | `M_SC_Glass` (instance parameters from `FSCStarEngine`) | `density = (1 / max(transmissive, 0.01) − 1) × 0.1`, `transmittance = exp(−density × path)` (`GlassShared`) |
+| `glassVertexHeightBias`, `glassVertexHeightScale` | `M_SC_Glass` | `%PER_VERTEX_CURVATURE`: `height ×= saturate((vertex blue − 0.25) × 3)` |
+| `glassHeightClip` | `M_SC_Glass` coverage | `clip(heightMap − 0.01)` under `%HEIGHT_MAP` |
+| `glassTintStrengthDefault`, `glassTilingDefault`, `glassVStretchDefault`, `glassThinFilmThicknessDefault` | `FSCMaterialBuilder` `Glass` | the shader's declared default of a public parameter the material does not author (`GlassTintStrength`, `GlassTiling`, `GlassVStretch`; `ThinFilmThickness` under `%THIN_FILM`) |
 
 Recorded as evidence only (they justify a documented residual or a path not taken; nothing reads them):
 `r_exposureMeterMode` 3 and `r_exposureIncidentBlendAmt` 0.5 (the game blends an incident-light meter into the
@@ -100,6 +104,10 @@ Functions and what was taken from each:
 | `MaterialGlowToLinearGlow`, `CalculateEmissive` | `GlowNits` (material term) and `InstanceGlowNits` (instance term) |
 | `GetPhysicalLightAttenuation` | `PointCandela`: `1 / (tweak · (d − bulb) / bulb + 1)²` |
 | `PlanarLightDiffuse_LightSpace`, `DiffuseLambert` | `PlanarCandela` and the Lambert π folded into the light colour |
+| `GlassShared` | **ported** to `M_SC_Glass` (`create_materials.py` `glass_master`, which refuses to build when this hash or `ReflectanceToIOR`'s differs from the one its graph was written from): glass UV, clear base layer, absorption, vertex / map modifiers, height clip |
+| `GlassPBR_PS` | call site: what the glass pass hands to `GlassShared` |
+| `LayerAttribs_ApplyGlassTint` | palette glass colour moved in by `GlassTintStrength` (`FSCMaterialBuilder` `Glass`) |
+| `ReflectanceToIOR` | refraction index from F0; UE's Substrate slab derives the same quantity from F0 |
 
 When a hash changes: decode the function again (`--dump` plus the token reader in the validator), compare it
 with the rule above, update the port or the rule and its tests, then update the hash here and in the port guard.

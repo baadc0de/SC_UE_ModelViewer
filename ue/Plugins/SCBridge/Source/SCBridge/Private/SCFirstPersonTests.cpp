@@ -14,6 +14,7 @@
 #include "Rendering/SkeletalMeshLODRenderData.h"
 #include "Engine/SkeletalMesh.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Camera/CameraComponent.h"
@@ -202,11 +203,20 @@ bool FSCFirstPersonCollision::RunTest(const FString&)
     Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
     auto* Character = World->SpawnActor<ASCFirstPersonCharacter>(ASCFirstPersonCharacter::StaticClass(), FTransform::Identity, Params);
     TestTrue(TEXT("safe semantic spawn"), Character->Explore(V));
-    // Start ranking: a generic DataCore Door never outranks seat access / seat hints; Selected is never ranked.
-    const FName StartKind = V->SpawnPoints.IsValidIndex(Character->CurrentSpawn) ? V->SpawnPoints[Character->CurrentSpawn].Kind : NAME_None;
-    const bool HasSeatHint = V->SpawnPoints.ContainsByPredicate([](const FSCSpawnPoint& P) {
-        return P.Kind == FSCSpawnKind::SeatAccess || P.Kind == FSCSpawnKind::Seat; });
-    TestFalse(TEXT("door does not outrank seat hints"), HasSeatHint && StartKind == FSCSpawnKind::Door);
+    // Start ranking: the start is the best-ranked spawn that takes the capsule. A lower kind (a generic DataCore
+    // Door below seat access / seat hints) starts only when every spawn ranked above it refuses; Selected is
+    // never ranked.
+    const int32 StartIndex = Character->CurrentSpawn;
+    const int32 StartRank = V->SpawnPoints.IsValidIndex(StartIndex) ? FSCSpawnKind::StartOrder().IndexOfByKey(V->SpawnPoints[StartIndex].Kind) : INDEX_NONE;
+    if (TestTrue(TEXT("start is a ranked spawn"), StartRank != INDEX_NONE))
+    {
+        for (int32 I = 0; I < V->SpawnPoints.Num(); ++I)
+        {
+            const int32 Rank = FSCSpawnKind::StartOrder().IndexOfByKey(V->SpawnPoints[I].Kind);
+            if (Rank != INDEX_NONE && Rank < StartRank) TestFalse(TEXT("no spawn ranked above the start takes the capsule"), Character->TeleportToSpawn(I));
+        }
+        TestTrue(TEXT("start spawn repeats"), Character->TeleportToSpawn(StartIndex));
+    }
     TestFalse(TEXT("doors are not entrances without data"), V->SpawnPoints.ContainsByPredicate([](const FSCSpawnPoint& P) {
         return P.Kind == FSCSpawnKind::Entrance; }));
     {
@@ -346,6 +356,139 @@ bool FSCFirstPersonCollision::RunTest(const FString&)
         !HasAnyErrors(),Soft,Refitted,SurfaceHits,AttachedBodies,ExpectedSeats,V->SpawnPoints.Num(),V->Doors.Num(),Toggles,Walked,FloorFrames,Character->CapsuleHits,Character->RecoveryCount,Result.TotalSeconds);
     Character->Destroy();
     FSCImporter::Unload(World);
+    World->DestroyWorld(false);
+    return !HasAnyErrors();
+}
+
+namespace
+{
+UBoxComponent* AddBlock(AActor* Owner, USceneComponent* Parent, const FVector& Centre, const FVector& Extent)
+{
+    auto* Box = NewObject<UBoxComponent>(Owner);
+    Box->SetBoxExtent(Extent);
+    Box->SetCollisionProfileName(TEXT("BlockAll"));
+    Box->SetupAttachment(Parent);
+    Box->SetRelativeLocation(Centre);
+    Box->RegisterComponent();
+    return Box;
+}
+/** A vehicle whose only item is a seat: an anchor at the vehicle origin carrying collidable blocks {centre, extent}. */
+ASCVehicle* SeatVehicle(UWorld* World, const FTransform& At, std::initializer_list<TPair<FVector, FVector>> Blocks)
+{
+    auto* V = World->SpawnActor<ASCVehicle>(ASCVehicle::StaticClass(), At);
+    auto* Anchor = NewObject<USceneComponent>(V);
+    Anchor->SetupAttachment(V->GetRootComponent());
+    Anchor->RegisterComponent();
+    for (const auto& Block : Blocks) AddBlock(V, Anchor, Block.Key, Block.Value);
+    FSCSceneInstance Seat;
+    Seat.ItemType = TEXT("Seat");
+    Seat.EntityName = TEXT("SyntheticSeat");
+    V->AddItemSpawn(Seat, Anchor);
+    V->BuildExploration();
+    V->bCollisionReady = true;
+    return V;
+}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFirstPersonSeatReach, "SCBridge.FirstPerson.SeatReach",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFirstPersonSeatReach::RunTest(const FString&)
+{
+    // A seat spot belongs to the seat: sitting needs no room to walk, but the capsule's extent must reach the
+    // seat's own collidable geometry. A clear capsule further off is the space beside the seat, not the seat.
+    // Synthetic geometry in capsule units; no game data.
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    World->InitializeActorsForPlay(FURL());
+    World->BeginPlay();
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    auto* Character = World->SpawnActor<ASCFirstPersonCharacter>(ASCFirstPersonCharacter::StaticClass(), FTransform(FVector(0, 0, 5000)), Params);
+    const double R = Character->GetCapsuleComponent()->GetUnscaledCapsuleRadius();
+    AActor* Set = World->SpawnActor<AActor>();
+    auto* SetRoot = NewObject<USceneComponent>(Set);
+    Set->SetRootComponent(SetRoot);
+    SetRoot->RegisterComponent();
+    AddBlock(Set, SetRoot, FVector(0, 0, -10), FVector(R * 400, R * 400, 10)); // floor, top at z = 0
+
+    // 1. Enclosed cockpit: a low roof over the seat out to 3R and walls under its rim. The only clear capsules in
+    //    the seated search are outside the walls (ring 2 on the axes, 4R away).
+    ASCVehicle* Enclosed = SeatVehicle(World, FTransform::Identity, {{FVector(0, 0, 20), FVector(20, 20, 20)}});
+    AddBlock(Set, SetRoot, FVector(0, 0, 70 + 200), FVector(R * 3 - 2, R * 3 - 2, 200));
+    for (int32 Side = 0; Side < 4; ++Side)
+    {
+        const FVector Out = FRotator(0, Side * 90, 0).Vector();
+        const FVector Along(FMath::Abs(Out.Y), FMath::Abs(Out.X), 0);
+        AddBlock(Set, SetRoot, Out * (R * 3 - 7) + FVector(0, 0, 35), Out.GetAbs() * 5 + Along * (R * 3 - 2) + FVector(0, 0, 35));
+    }
+    // BuildExploration adds the generic hull spawn after the item spawns.
+    if (TestTrue(TEXT("seat spawn, then the hull spawn"), Enclosed->SpawnPoints.Num() == 2 && Enclosed->SpawnPoints[1].Kind == FSCSpawnKind::Hull))
+    {
+        const FSCSpawnPoint& Seat = Enclosed->SpawnPoints[0];
+        TestTrue(TEXT("seat spawn carries its geometry box"), Seat.Kind == FSCSpawnKind::Seat && Seat.Bounds.IsValid &&
+            Seat.Bounds.Min.Equals(FVector(-20, -20, 0), 0.5) && Seat.Bounds.Max.Equals(FVector(20, 20, 40), 0.5));
+        TestTrue(TEXT("start falls through to a reachable spawn"), Character->Explore(Enclosed) && Character->CurrentSpawn == 1);
+        const FVector At = Character->GetActorLocation();
+        TestFalse(TEXT("a capsule walled off from the seat is not the seat"), Character->TeleportToSpawn(0));
+        TestTrue(TEXT("a refused seat leaves the character where it was"), Character->GetActorLocation().Equals(At, 0.01) && Character->CurrentSpawn == 1);
+    }
+
+    // 2. A seat in the open whose pan lies under a hood too low to sit under, on a vehicle that is moved and
+    //    turned: the capsule fits beside the pan, under the hood's rim, within reach of the seat's box.
+    const FTransform Moved(FRotator(0, 90, 0), FVector(0, R * 200, 0));
+    ASCVehicle* Open = SeatVehicle(World, Moved, {{FVector(0, 0, 20), FVector(30, 30, 20)}, {FVector(0, 0, 110), FVector(40, 40, 10)}});
+    if (TestTrue(TEXT("seat spawn first"), Open->SpawnPoints.Num() == 2 && Open->SpawnPoints[0].Kind == FSCSpawnKind::Seat))
+    {
+        Character->Explore(Open);
+        TestTrue(TEXT("a capsule beside the seat sits"), Character->TeleportToSpawn(0));
+        const FVector Local = Moved.InverseTransformPosition(Character->GetActorLocation());
+        TestTrue(TEXT("one capsule diameter out, on the floor"), FMath::IsNearlyEqual(FVector2D(Local).Size(), R * 2, 0.5) && Local.Z < 60);
+    }
+
+    // 3. A low seat in the open: the capsule sits on it; the seat's own surface is the arrival, not an obstacle.
+    ASCVehicle* Low = SeatVehicle(World, FTransform(FVector(0, -R * 200, 0)), {{FVector(0, 0, 20), FVector(20, 20, 20)}});
+    if (TestTrue(TEXT("seat spawn first"), Low->SpawnPoints.Num() == 2 && Low->SpawnPoints[0].Kind == FSCSpawnKind::Seat))
+    {
+        Character->Explore(Low);
+        TestTrue(TEXT("a capsule on the seat sits"), Character->TeleportToSpawn(0));
+        const FVector Local = Low->GetActorTransform().InverseTransformPosition(Character->GetActorLocation());
+        TestTrue(TEXT("on top of the seat"), FVector2D(Local).Size() < 1 && Local.Z > 40);
+        // A seat known only by its hint: the capsule stands on the hint, or nowhere.
+        const FVector Clear = Low->GetActorTransform().TransformPosition(FVector(R * 20, 0, 0));
+        TestTrue(TEXT("hint-only seat on clear floor"), Character->TeleportToFloor(Clear, true) && FVector2D(Character->GetActorLocation() - Clear).Size() < 1);
+        TestFalse(TEXT("hint-only seat under a roof"), Character->TeleportToFloor(FVector(R, R, 0), true));
+        // A seat box that is not one (no collidable geometry) is the hint-only seat, wherever the hint is; a
+        // zero-size box is a point, reached like any other geometry.
+        TestTrue(TEXT("invalid seat box: the hint"), Character->TeleportToSeat(Clear, FBox(ForceInit)) && FVector2D(Character->GetActorLocation() - Clear).Size() < 1);
+        TestTrue(TEXT("zero-size seat box at the hint"), Character->TeleportToSeat(Clear, FBox(Clear, Clear)) && FVector2D(Character->GetActorLocation() - Clear).Size() < 1);
+        const FVector Aloft = Clear + FVector(0, 0, R * 10);
+        TestFalse(TEXT("zero-size seat box out of reach"), Character->TeleportToSeat(Clear, FBox(Aloft, Aloft)));
+    }
+
+    // 4. Reach is measured to the seat's box in the vehicle's frame, not to a world-aligned box around it. A square
+    //    seat on a vehicle turned 45 degrees, under a roof that leaves only the floor beside it: the clear capsule
+    //    one diameter out along a world axis faces the seat's corner (16 * sqrt 2 from its centre) and stands
+    //    2R - 16 * sqrt 2 > R + skin from it. A world box around the turned seat would reach it.
+    const FTransform Turned(FRotator(0, 45, 0), FVector(R * 200, 0, 0));
+    ASCVehicle* Corner = SeatVehicle(World, Turned, {{FVector(0, 0, 16), FVector(16, 16, 16)}});
+    AddBlock(Set, SetRoot, Turned.GetLocation() + FVector(0, 0, 70 + 200), FVector(30, 30, 200));
+    if (TestTrue(TEXT("seat spawn first"), Corner->SpawnPoints.Num() == 2 && Corner->SpawnPoints[0].Kind == FSCSpawnKind::Seat))
+    {
+        TestTrue(TEXT("seat box is the vehicle-frame box"), Corner->SpawnPoints[0].Bounds.Min.Equals(FVector(-16, -16, 0), 0.5) &&
+            Corner->SpawnPoints[0].Bounds.Max.Equals(FVector(16, 16, 32), 0.5));
+        Character->Explore(Corner);
+        TestFalse(TEXT("a capsule past the seat's corner is beside the seat"), Character->TeleportToSpawn(0));
+    }
+
+    // 5. The same pan-under-a-hood seat as case 2 on a vehicle turned 45 degrees and stretched 2x along its own X:
+    //    the capsule sits one diameter out along the vehicle's X, where the stretched hood's rim is R - 6 away.
+    const FTransform Stretched(FRotator(0, 45, 0), FVector(-R * 200, 0, 0), FVector(2, 1, 1));
+    ASCVehicle* Wide = SeatVehicle(World, Stretched, {{FVector(0, 0, 20), FVector(15, 30, 20)}, {FVector(0, 0, 110), FVector(20, 40, 10)}});
+    if (TestTrue(TEXT("seat spawn first"), Wide->SpawnPoints.Num() == 2 && Wide->SpawnPoints[0].Kind == FSCSpawnKind::Seat))
+    {
+        Character->Explore(Wide);
+        TestTrue(TEXT("a capsule beside the stretched seat sits"), Character->TeleportToSpawn(0));
+        const FVector Local = Stretched.InverseTransformPosition(Character->GetActorLocation());
+        TestTrue(TEXT("one capsule diameter out along the vehicle's X"), FMath::IsNearlyEqual(Local.X * 2, R * 2, 0.5) && FMath::Abs(Local.Y) < 0.5 && Local.Z < 60);
+    }
     World->DestroyWorld(false);
     return !HasAnyErrors();
 }

@@ -164,10 +164,28 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
         UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_RECOVER count=%d"), RecoveryCount);
     }
 }
-bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector& Centre, bool bSeated) const
+namespace
 {
+/** Distance from the segment A-B to a box, all in the box's frame. The distance to a convex set is convex along
+ *  the segment, so a ternary search finds its minimum. */
+double SegmentToBox(const FBox& Box, const FVector& A, const FVector& B)
+{
+    auto At = [&](double T) { return Box.ComputeSquaredDistanceToPoint(FMath::Lerp(A, B, T)); };
+    double Lo = 0, Hi = 1;
+    for (int32 I = 0; I < 48; ++I)
+    {
+        const double M1 = Lo + (Hi - Lo) / 3, M2 = Hi - (Hi - Lo) / 3;
+        if (At(M1) < At(M2)) Hi = M2; else Lo = M1;
+    }
+    return FMath::Sqrt(At((Lo + Hi) / 2));
+}
+}
+bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector& Centre, const FSCSeatBox* Seat) const
+{
+    const bool bSeated = Seat != nullptr;
     const double Radius = Profile.CapsuleRadius, Step = Profile.StepHeight;
     const double WalkableZ = GetCharacterMovement()->GetWalkableFloorZ();
+    const double Skin = 2.5; // capsule clearance above the surface it stands on
     const FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, Half);
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSpawn), false, this);
     // Search a capsule-sized neighbourhood of the helper; never use an asset-name offset.
@@ -181,9 +199,22 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
             if (!GetWorld()->LineTraceSingleByChannel(Hit, Hint + Offset + FVector(0, 0, Half + Step),
                     Hint + Offset - FVector(0, 0, bSeated ? Step : Half * 4), ECC_Pawn, Params) ||
                 Hit.ImpactNormal.Z < WalkableZ) continue;
-            const FVector Candidate = Hit.ImpactPoint + FVector(0, 0, Half + 2.5);
+            const FVector Candidate = Hit.ImpactPoint + FVector(0, 0, Half + Skin);
             if (GetWorld()->OverlapBlockingTestByChannel(Candidate, FQuat::Identity, ECC_Pawn, Shape, Params)) continue;
-            if (bSeated) { Centre = Candidate; return true; } // sitting: no room to walk required
+            if (Seat)
+            {
+                // Sitting needs no room to walk, but the spot must be the seat: the capsule has to be on the
+                // seat's own geometry or against it. A clear capsule further off is the space beside the seat (a
+                // bay behind its back, the far side of a bulkhead), not the seat. The capsule (its axis segment,
+                // swept by Radius) is within its standing clearance of the seat's box, measured in the seat's frame
+                // so the box does not grow with the vehicle's heading. Tolerance: the trace's float precision.
+                const FVector Axis(0, 0, Half - Radius);
+                const double Gap = SegmentToBox(Seat->Box, Seat->Frame.InverseTransformPosition(Candidate - Axis),
+                                                Seat->Frame.InverseTransformPosition(Candidate + Axis));
+                if (Gap > Radius + Skin + 0.1) continue;
+                Centre = Candidate;
+                return true;
+            }
             // A clear capsule in a tiny pocket is not a usable spot. Require a two-capsule-width step
             // with floor support, using the same collision channel.
             for (int32 Heading = 0; Heading < 8; ++Heading)
@@ -192,7 +223,7 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
                 FHitResult Floor, Obstacle;
                 if (!GetWorld()->LineTraceSingleByChannel(Floor, Ahead + FVector(0, 0, Step), Ahead - FVector(0, 0, Half + Step), ECC_Pawn, Params) ||
                     Floor.ImpactNormal.Z < WalkableZ) continue;
-                const FVector End = Floor.ImpactPoint + FVector(0, 0, Half + 2.5);
+                const FVector End = Floor.ImpactPoint + FVector(0, 0, Half + Skin);
                 if (FMath::Abs(End.Z - Candidate.Z) > Step) continue;
                 if (!GetWorld()->SweepSingleByChannel(Obstacle, Candidate, End, FQuat::Identity, ECC_Pawn, Shape, Params))
                 {
@@ -203,11 +234,13 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
         }
     return false;
 }
-bool ASCFirstPersonCharacter::ResolveSpawn(FVector Hint, FVector& Centre, bool& bCrouched, bool bSeated) const
+bool ASCFirstPersonCharacter::ResolveSpawn(FVector Hint, FVector& Centre, bool& bCrouched, const FSCSeatBox* Seat) const
 {
-    if (bSeated)
+    if (Seat)
     {
-        bCrouched = FindCapsuleSpot(Hint, Profile.CrouchedHalfHeight, Centre, true);
+        // A seat without a box (no collidable geometry) is the hint itself.
+        const FSCSeatBox AtHint{FBox(Hint, Hint), FTransform::Identity};
+        bCrouched = FindCapsuleSpot(Hint, Profile.CrouchedHalfHeight, Centre, Seat->Box.IsValid ? Seat : &AtHint);
         return bCrouched;
     }
     bCrouched = false;
@@ -217,9 +250,19 @@ bool ASCFirstPersonCharacter::ResolveSpawn(FVector Hint, FVector& Centre, bool& 
 }
 bool ASCFirstPersonCharacter::TeleportToFloor(FVector Floor, bool bSeated)
 {
+    const FSCSeatBox Hint; // a seat known only by its hint
+    return Place(Floor, bSeated ? &Hint : nullptr);
+}
+bool ASCFirstPersonCharacter::TeleportToSeat(FVector Floor, const FBox& Seat, const FTransform& Frame)
+{
+    const FSCSeatBox Box{Seat, Frame};
+    return Place(Floor, &Box);
+}
+bool ASCFirstPersonCharacter::Place(FVector Floor, const FSCSeatBox* Seat)
+{
     FVector Centre;
     bool bCrouchedSpot = false;
-    if (!ResolveSpawn(Floor, Centre, bCrouchedSpot, bSeated)) return false;
+    if (!ResolveSpawn(Floor, Centre, bCrouchedSpot, Seat)) return false;
     if (bCrouchedSpot)
     {
         // Shrink the capsule now so it is placed at the crouched centre without overlapping.
@@ -243,7 +286,21 @@ bool ASCFirstPersonCharacter::TeleportToSpawn(int32 Index)
 {
     if (!Vehicle || !Vehicle->SpawnPoints.IsValidIndex(Index)) return false;
     const auto& Point = Vehicle->SpawnPoints[Index];
-    if (!TeleportToFloor((Point.Transform * Vehicle->GetActorTransform()).GetLocation(), Point.Kind == FSCSpawnKind::Seat))
+    const FVector Floor = (Point.Transform * Vehicle->GetActorTransform()).GetLocation();
+    const bool bSeat = Point.Kind == FSCSpawnKind::Seat;
+    bool bPlaced;
+    if (bSeat && Point.Bounds.IsValid)
+    {
+        // The vehicle-local box in the vehicle's rigid frame: the vehicle's scale goes into the box's lengths.
+        const FTransform Actor = Vehicle->GetActorTransform();
+        FBox Box(ForceInit);
+        Box += Point.Bounds.Min * Actor.GetScale3D();
+        Box += Point.Bounds.Max * Actor.GetScale3D();
+        bPlaced = TeleportToSeat(Floor, Box, FTransform(Actor.GetRotation(), Actor.GetLocation()));
+    }
+    else
+        bPlaced = TeleportToFloor(Floor, bSeat);
+    if (!bPlaced)
     {
         UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_SPAWN_REJECT index=%d kind=%s pos=%s label=\"%s\" reason=no_clear_capsule"), Index,
                *Point.Kind.ToString(), *Point.Transform.GetLocation().ToCompactString(), *Point.DisplayName);

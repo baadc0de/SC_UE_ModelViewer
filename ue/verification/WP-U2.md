@@ -110,7 +110,7 @@ shader rebuild. No C++ change.
 | Relief decal | MeshDecal + `%PARALLAX_OCCLUSION_MAPPING`, no `%DECAL`/`%STENCIL_MAP`/stencil slot/`tint_palette_decal`; TexSlot1 alpha, TexSlot3 `normal_gloss`, TexSlot4 `height`, `PomDisplacement`, `DecalAlphaMultiplier` | `M_SC_MeshDecal_Relief`: normal + roughness into the DBuffer under TexSlot1 alpha × DecalAlphaMultiplier, POM as bump offset — the dark grooves |
 | Colour decal | MeshDecal/`%DECAL` with `base_color` (gladius_text_diff, warningtape) , `DecalAlphaMultiplier`, `DecalDiffuseOpacity` | `M_SC_MeshDecal`: sheet RGB × Diffuse where alpha × DAM × DDO |
 | Stencil decal | `%STENCIL_MAP`, `$TintPaletteDecal` | r1's only stencil is inactive and `palettes.json` `decal.export_path` is null → hidden; TODO below |
-| Glass | `palette_routing.material_channel` (glass) → `palettes.json` `glass`, `public_params.GlassTintStrength`, `%THIN_FILM` + `ThinFilmThickness`, `Specular`, DDNA + derived roughness | `M_SC_Glass`, non-Nanite |
+| Glass | `Diffuse` (transmissive colour), `%USE_TINT_PALETTE` + `palette_routing.material_channel` (glass) → `palettes.json` `glass` by `public_params.GlassTintStrength`, `GlassTiling` / `GlassVStretch`, `%PER_VERTEX_TINT` / `%PER_VERTEX_CURVATURE`, `%TINT_MAP` TexSlot4, `%HEIGHT_MAP` TexSlot8, `%THIN_FILM` + `ThinFilmThickness`, `Specular` (F0), DDNA + derived roughness; `Opacity` is not read (rule: "Glass" section below) | `M_SC_Glass`, non-Nanite |
 | Layers | `layer_manifest[]` base layers (name not `Wear*`): `diffuse/normal/roughness_export_path`, `tint_color`, `palette_channel`, `uv_tiling`, `gloss_mult`, `layer_snapshot.{diffuse,specular,shininess}`; `blend_mask` slot + `BlendMapTiling` | tint = snapshot diffuse × tint × palette channel; F0 = snapshot specular (superseded by the palette `TintMode` / finish rule in "Static wear" below; `layer_snapshot.metallic` is no longer read) |
 | Roughness | `derived_textures[]` role roughness paired by `source_path`; `Shininess` | roughness = 1 − min(smoothness, 251/255) (since 2026-11-10, see "Macro surface, HAL and the gloss convention"; before: sqrt(1 − smoothness)), smoothness = (1 − r²) × Shininess/255 with r the exporter's sqrt(1 − gloss) map; placeholder Shininess=255 without map → 0.5 (mtl.rs) |
 | Specular | `Specular`, `specular_support` map; Diffuse = Specular = 1,1,1 sentinel without map → dielectric default | F0 colour (Substrate slab) |
@@ -217,7 +217,8 @@ Missing-value policy (engine/Substrate defaults, `MaterialExpressionSubstrate.h`
 | albedo | `Diffuse` × base texture × palette | texture as-is; with neither, Substrate default albedo 0.18 |
 | emission | `Emissive` × strength (cd/m², game glow rule — WP-U3b §13.3) × albedo, alpha-gated by `AlphaGlowCutoff` | none (Glow absent/0 or Emissive 0,0,0 → 0); TODO(WP-R5) confirm Glow>0 with Emissive 0,0,0 (`glows`, `buttons`) |
 | mask cutoff | `AlphaTest` | forward cards: UE default clip (`UMaterial` CDO) |
-| multipliers (`DecalAlphaMultiplier`, `DecalDiffuseOpacity`, `GlassTintStrength`, `StencilOpacity`, `uv_tiling`) | public params / manifest | identity (1) |
+| multipliers (`DecalAlphaMultiplier`, `DecalDiffuseOpacity`, `StencilOpacity`, `uv_tiling`) | public params / manifest | identity (1) |
+| glass parameters (`GlassTintStrength`, `GlassTiling`, `GlassVStretch`, `ThinFilmThickness`) | public params | the shader's declared default from `StarEngineRender.json` (since the "Glass" section below) |
 
 Fallback register additions: `FSCTextureLimits::MaxTextureBytes` 256 MiB per texture and `BudgetBytes`
 2048 MiB per import (decoded BGRA8 incl. mips) — host memory budgets with no data source; sunset when WP-C1's
@@ -749,3 +750,31 @@ damage map, `WearMasksSecondaryLayer`, per-instance wear; numeric tests of the `
 | 4. `--skip-existing-assets` keeps untagged PNGs from an older export | yes | **documented limitation** (role fallback = previous behaviour) |
 | Primer / remap constants unverified | source located afterwards: `layerLibConstants.cfi` | documented above |
 | No graph-output tests; malformed-PNG and sampled-and-averaged cases untested | yes | **open**, stated under Tests |
+
+## Glass: the game's `GlassShared` rule (2026-11-10)
+
+`M_SC_Glass` and `FSCMaterialBuilder` `Glass` now follow `glassLib.cfib` `GlassShared` instead of the earlier
+"palette colour as transmittance, `Opacity` as coverage" reading. Rule, sources, port, cross-review and
+GPU evidence: `WP-U3b.md` §14. In short:
+
+| Game (`GlassShared`) | UE |
+| --- | --- |
+| `glassUV = baseUV × GlassTiling`, `v ×= GlassVStretch`; normal, smoothness, height and tint maps read there | `M_SC_Glass` scalar parameters `GlassTiling`, `GlassVStretch` (no generic `Tiling`) |
+| base layer: albedo 0, F0 `MatSpecColor.rrr` | Substrate simple-volume slab, albedo 0, F0 = `SpecularColor` through `SubstrateThinFilm` |
+| `transmissive = MatDifColor.rgb`, moved to the palette's glass colour by `GlassTintStrength` under `%USE_TINT_PALETTE` | `GlassColor` vector resolved by the builder (instance palette of `WP-U3b.md` §14.2) |
+| × vertex colour (`%PER_VERTEX_TINT`), else height × `saturate((blue − 0.25) × 3)` (`%PER_VERTEX_CURVATURE`); × tint map; height map, `clip(height − 0.01)` | switches `UseVertexTint` / `UseVertexHeight` / `UseTintMap` / `UseHeightMap`, Custom nodes; coverage only from the clip |
+| `density = (1 / max(transmissive, 0.01) − 1) × 0.1`, `exp(−density × path)` | Custom node → `SubstrateTransmittanceToMFP`, blend mode `TranslucentColoredTransmittance` |
+
+The nine constants and four function hashes are in `StarEngineRender.json` (validator 60/60). The synthetic
+fixture `synthetic.materials.json` has 35 submaterials; the glass ones are `glass_ext` (defaults, no
+warnings), `glass_thickness` (every feature, authored tiling), `glass_vertex_tint` (token precedence) and
+`glass_bare` (no `Specular`, missing map slots, `%THIN_FILM` without a thickness → fixture default and three
+import warnings).
+
+Not mapped: see `WP-U3b.md` §14.7 (dirt, wear smoothness, the thin-film LUT and `ThinFilmStrength`,
+refraction offset / curvature / glare, light amplification, `EmissiveOpacity`, cracks / frost / condensation /
+glass decals).
+
+TODO(WP-U2): the 0.04 reflectance for a glass material without `Specular`, the gloss cap 251/255, the
+Rec.709 weights in `conserve` and the host `Shininess` default are host values outside the fixture
+(cross-review finding 5 in `WP-U3b.md` §14.6): derive them or register them as host fallbacks.

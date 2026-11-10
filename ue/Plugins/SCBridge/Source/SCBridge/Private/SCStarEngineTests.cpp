@@ -10,7 +10,10 @@ namespace
 // Visibly synthetic values (not the game's): round numbers that make every rule checkable by hand.
 const TCHAR* SyntheticFixture = TEXT(R"({"schema":"star_engine_render_v1",
  "shader_constants":{"HDR_LUMINANCE_SCALE":{"value":100},"LOG2_LUMINANCE_TO_EV":{"value":2},"sqrGlowFactor":{"value":9},
-  "middleGray":{"value":0.5},"MaxDisplayNitsLDR":{"value":50},"LOG_MIN":{"value":-6},"LOG_MAX":{"value":10}},
+  "middleGray":{"value":0.5},"MaxDisplayNitsLDR":{"value":50},"LOG_MIN":{"value":-6},"LOG_MAX":{"value":10},
+  "glassColourDensityScale":{"value":0.5},"glassColourFloor":{"value":0.125},"glassVertexHeightBias":{"value":0.2},
+  "glassVertexHeightScale":{"value":2},"glassHeightClip":{"value":0.05},"glassTintStrengthDefault":{"value":0.75},
+  "glassTilingDefault":{"value":4},"glassVStretchDefault":{"value":0.5},"glassThinFilmThicknessDefault":{"value":0.25}},
  "exe_cvars":{"r_ExposureCompensationEV0":{"value":-1},"r_ExposureCompensationEV10":{"value":1},"r_ExposureCompensationEV20":{"value":1},
   "r_ExposureMultiplierMin":{"value":0.01},"r_ExposureMultiplierMax":{"value":8},
   "r_ExposureAdaptTimeDark":{"value":4},"r_ExposureAdaptTimeBright":{"value":2},"r_ExposureAdaptTimePupil":{"value":0.5},
@@ -42,6 +45,12 @@ bool FSCStarEngineFixture::RunTest(const FString&)
     TestTrue(TEXT("half-lives are positive"), S.AdaptTimeDark > 0 && S.AdaptTimeBright > 0 && S.AdaptTimePupil > 0);
     TestTrue(TEXT("meter range is a range"), S.MeterLogMax > S.MeterLogMin);
     TestTrue(TEXT("discard ratios leave a band"), S.DiscardRatioDark >= 0 && S.DiscardRatioBright >= 0 && S.DiscardRatioDark + S.DiscardRatioBright < 1);
+    TestTrue(TEXT("glass absorption constants are positive"), S.GlassDensityScale > 0 && S.GlassColourFloor > 0 && S.GlassVertexHeightScale > 0);
+    TestTrue(TEXT("glass parameter defaults are in their domain"), S.GlassTilingDefault > 0 && S.GlassVStretchDefault > 0 && S.GlassThinFilmThicknessDefault >= 0);
+    FSCStarEngine Synthetic;
+    if (TestTrue(TEXT("the synthetic fixture loads: ") + Error, LoadText(SyntheticFixture, Synthetic, Error)))
+        TestTrue(TEXT("glass parameter defaults are read from the fixture"),
+                 Synthetic.GlassTilingDefault == 4 && Synthetic.GlassVStretchDefault == 0.5 && Synthetic.GlassThinFilmThicknessDefault == 0.25);
 
     FSCStarEngine Broken;
     TestFalse(TEXT("a fixture without a constant is refused"),
@@ -69,6 +78,12 @@ bool FSCStarEngineDomain::RunTest(const FString&)
         {TEXT("no glow factor"), TEXT(R"("sqrGlowFactor":{"value":9})"), TEXT(R"("sqrGlowFactor":{"value":0})"), TEXT("sqrGlowFactor")},
         {TEXT("no display peak"), TEXT(R"("MaxDisplayNitsLDR":{"value":50})"), TEXT(R"("MaxDisplayNitsLDR":{"value":0})"), TEXT("MaxDisplayNitsLDR")},
         {TEXT("inverted multiplier clamp"), TEXT(R"("r_ExposureMultiplierMax":{"value":8})"), TEXT(R"("r_ExposureMultiplierMax":{"value":0.001})"), TEXT("r_ExposureMultiplierM")},
+        {TEXT("no glass density"), TEXT(R"("glassColourDensityScale":{"value":0.5})"), TEXT(R"("glassColourDensityScale":{"value":0})"), TEXT("glassColourDensityScale")},
+        {TEXT("a glass colour floor that divides by zero"), TEXT(R"("glassColourFloor":{"value":0.125})"), TEXT(R"("glassColourFloor":{"value":0})"), TEXT("glassColourFloor")},
+        {TEXT("no glass tiling"), TEXT(R"("glassTilingDefault":{"value":4})"), TEXT(R"("glassTilingDefault":{"value":0})"), TEXT("glassTilingDefault")},
+        {TEXT("no glass V stretch"), TEXT(R"("glassVStretchDefault":{"value":0.5})"), TEXT(R"("glassVStretchDefault":{"value":0})"), TEXT("glassVStretchDefault")},
+        {TEXT("a negative film thickness"), TEXT(R"("glassThinFilmThicknessDefault":{"value":0.25})"), TEXT(R"("glassThinFilmThicknessDefault":{"value":-1})"), TEXT("glassThinFilmThicknessDefault")},
+        {TEXT("no vertex height slope"), TEXT(R"("glassVertexHeightScale":{"value":2})"), TEXT(R"("glassVertexHeightScale":{"value":0})"), TEXT("glassVertexHeightScale")},
         {TEXT("a value that is not finite"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":0.5})"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":1e999})"), TEXT("finite")},
     };
     for (const FCase& C : Cases)

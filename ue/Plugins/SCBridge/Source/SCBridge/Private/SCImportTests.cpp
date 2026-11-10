@@ -100,6 +100,52 @@ bool FSCReaderSparse::RunTest(const FString&)
     if (Scene.Materials.Num()) TestEqual(TEXT("Two ordinal slots despite sparse authored indices"), Scene.Materials[0].Submaterials.Num(), 2);
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderPalette, "SCBridge.Package.PaletteResolution", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCReaderPalette::RunTest(const FString&)
+{
+    // Contract: an instance's palette is its own `palette_id`, else (placements) its container's, else the
+    // material set's authored `DefaultPalette`, else the palette of the entity it is attached to. Ids are synthetic.
+    FMemorySource Source;
+    Source.Add(TEXT("scene.json"), TEXT(R"({"version":1,"export_kind":"Decomposed",
+        "root_entity":{"entity_name":"Host","material_sidecar":"Data/plain.materials.json","palette_id":"palette/host"},
+        "children":[
+          {"entity_name":"Own","parent_entity_name":"Host","material_sidecar":"Data/plain.materials.json","palette_id":"palette/own","source_transform_basis":"gltf_y_up"},
+          {"entity_name":"Inherits","parent_entity_name":"Host","material_sidecar":"Data/plain.materials.json","source_transform_basis":"gltf_y_up"},
+          {"entity_name":"SetDefault","parent_entity_name":"Host","material_sidecar":"Data/default.materials.json","source_transform_basis":"gltf_y_up"},
+          {"entity_name":"SetDefaultAbsent","parent_entity_name":"Host","material_sidecar":"Data/absent.materials.json","source_transform_basis":"gltf_y_up"},
+          {"entity_name":"UnknownOwn","parent_entity_name":"Host","material_sidecar":"Data/plain.materials.json","palette_id":"palette/not_exported","source_transform_basis":"gltf_y_up"},
+          {"entity_name":"Assembly","id":"assembly-1","parent_entity_name":"Host","material_sidecar":"Data/plain.materials.json","palette_id":"palette/own","source_transform_basis":"gltf_y_up",
+           "children":[{"entity_name":"Accessory","parent_entity_name":"Assembly","material_sidecar":"Data/plain.materials.json","source_transform_basis":"gltf_y_up"}]}],
+        "interiors":[
+          {"name":"Tinted","palette_id":"palette/own","placements":[
+            {"cgf_path":"a.cgf","material_sidecar":"Data/plain.materials.json"},
+            {"cgf_path":"b.cgf","material_sidecar":"Data/plain.materials.json","palette_id":"palette/set_default"}]},
+          {"name":"Untinted","placements":[
+            {"cgf_path":"c.cgf","material_sidecar":"Data/plain.materials.json"},
+            {"cgf_path":"d.cgf","material_sidecar":"Data/default.materials.json"}]}]})"));
+    Source.Add(TEXT("palettes.json"), TEXT(R"({"palettes":[{"id":"palette/host"},{"id":"palette/own"},{"id":"palette/set_default"}]})"));
+    Source.Add(TEXT("Data/plain.materials.json"), TEXT(R"({"submaterials":[{"index":0,"submaterial_name":"A"}]})"));
+    Source.Add(TEXT("Data/default.materials.json"), TEXT(R"({"authored_material_set":{"attributes":[{"name":"DefaultPalette","value":"Libs\\Synthetic\\TintPalettes/Set_Default"}]},"submaterials":[{"index":0,"submaterial_name":"A"}]})"));
+    Source.Add(TEXT("Data/absent.materials.json"), TEXT(R"({"authored_material_set":{"attributes":[{"name":"defaultpalette","value":"Libs/Synthetic/TintPalettes/not_exported"}]},"submaterials":[{"index":0,"submaterial_name":"A"}]})"));
+    FSCSceneManifest Scene; FString Error;
+    TestTrue(*Error, FSCPackageReader::Read(Source, Scene, Error));
+    auto Child = [&](const TCHAR* Name) { const auto* I = Scene.Children.FindByPredicate([&](const FSCSceneInstance& C) { return C.EntityName == Name; }); return I ? I->PaletteId : FString(TEXT("<missing>")); };
+    TestEqual(TEXT("root keeps its palette"), Scene.Root.PaletteId, FString(TEXT("palette/host")));
+    TestEqual(TEXT("own palette wins"), Child(TEXT("Own")), FString(TEXT("palette/own")));
+    TestEqual(TEXT("no palette, no set default: the host's"), Child(TEXT("Inherits")), FString(TEXT("palette/host")));
+    TestEqual(TEXT("the material set's DefaultPalette"), Child(TEXT("SetDefault")), FString(TEXT("palette/set_default")));
+    TestEqual(TEXT("a DefaultPalette the package does not carry: the host's"), Child(TEXT("SetDefaultAbsent")), FString(TEXT("palette/host")));
+    TestEqual(TEXT("an own palette the package does not carry: the host's"), Child(TEXT("UnknownOwn")), FString(TEXT("palette/host")));
+    TestEqual(TEXT("a nested assembly's entry takes the assembly's palette"), Child(TEXT("Accessory")), FString(TEXT("palette/own")));
+    if (TestEqual(TEXT("interiors"), Scene.Interiors.Num(), 2) && TestEqual(TEXT("placements"), Scene.Interiors[0].Placements.Num() + Scene.Interiors[1].Placements.Num(), 4))
+    {
+        TestEqual(TEXT("placement takes its container's palette"), Scene.Interiors[0].Placements[0].PaletteId, FString(TEXT("palette/own")));
+        TestEqual(TEXT("placement's own palette overrides the container's"), Scene.Interiors[0].Placements[1].PaletteId, FString(TEXT("palette/set_default")));
+        TestEqual(TEXT("untinted container: the host's"), Scene.Interiors[1].Placements[0].PaletteId, FString(TEXT("palette/host")));
+        TestEqual(TEXT("untinted container: the set default first"), Scene.Interiors[1].Placements[1].PaletteId, FString(TEXT("palette/set_default")));
+    }
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPaths, "SCBridge.Package.PathsAndTar", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCPaths::RunTest(const FString&)
 {
@@ -297,11 +343,11 @@ bool USCImportLibrary::RunUnitTests()
 {
 #if WITH_DEV_AUTOMATION_TESTS
     bool Passed = true;
-    TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials"),
+    TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCReaderPalette"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials"),
         TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsMasterParameters"), TEXT("FSCMaterialsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic"), TEXT("FSCLightDefaults"), TEXT("FSCLightAuthoredModel"),
         TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement"), TEXT("FSCLightVerifier"),
         TEXT("FSCStarEngineFixture"), TEXT("FSCStarEngineDomain"), TEXT("FSCStarEngineRules"),
-        TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall")};
+        TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach")};
     FString Folder;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
     if (FParse::Param(FCommandLine::Get(), TEXT("SCFirstPersonTests"))) Names = {TEXT("FSCFirstPersonCollision")};
