@@ -65,7 +65,9 @@ with the explicit boolean option. Unkeyed components retain bind values and
 baked locals stay native Y-up; the Blender Z-up animation sidecars are unchanged.
 `include_animations` defaults to true; false omits clips and animation sidecars.
 `DecomposedOptions { geometry: GlbOptions }` enables animation sidecars by default;
-its default disables pose baking. Other defaults follow upstream (LOD 1, mip 2).
+its default disables pose baking. Geometry defaults to LOD 0 (Nanite needs no coarser LOD); other
+defaults follow upstream (mip 2: full-resolution textures exceed the importer's texture budget
+while they are decoded to BGRA8).
 Cache format v10 includes the animation switch in package keys and invalidates
 packages with the former nondeterministic UI export stamp; the CLI exposes
 `--no-animations` for both folder/tar and bundled GLB exports.

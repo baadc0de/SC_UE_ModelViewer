@@ -80,9 +80,9 @@ enum MaterialArg {
 }
 #[derive(Args)]
 struct Options {
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = GlbOptions::default().lod)]
     lod: u32,
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = GlbOptions::default().mip)]
     mip: u32,
     #[arg(long, value_enum, default_value = "textures")]
     materials: MaterialArg,

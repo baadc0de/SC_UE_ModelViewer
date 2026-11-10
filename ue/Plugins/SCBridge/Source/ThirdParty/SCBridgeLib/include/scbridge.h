@@ -114,7 +114,7 @@ enum sc_status sc_open(const char *p4k_or_null,
                        struct sc_handle **out);
 
 /*
- Fill defaults from the core (LOD 1, mip 2, textures, attachments/interior/lights/
+ Fill defaults from the core (LOD 0, mip 2, textures, attachments/interior/lights/
  animations enabled, shields/default pose disabled). NULL export options uses these too.
  */
 enum sc_status sc_default_options(struct sc_options *out);

@@ -778,3 +778,69 @@ glass decals).
 TODO(WP-U2): the 0.04 reflectance for a glass material without `Specular`, the gloss cap 251/255, the
 Rec.709 weights in `conserve` and the host `Shininess` default are host values outside the fixture
 (cross-review finding 5 in `WP-U3b.md` §14.6): derive them or register them as host fallbacks.
+
+## Full-detail geometry by default (2026-11-10)
+
+**Found.** Every package the viewer built — the app's own cache and the `scviewer` CLI's — was exported at
+`lod_level 1`, `texture_mip 2` (`export_options` in `scene.json`; mesh files `*_LOD1.glb`, packages
+`<Entity>_LOD1_TEX2`). `USCViewOptions` declares `Lod = 0` / `Mip = 0`, but its constructor seeds both
+from the core (`FSCBridgeClient::DefaultOptions()`), and the core copied StarBreaker's
+`ExportOptions::default()` — a coarser mesh LOD and a quarter-resolution texture mip chosen for Blender.
+So the viewer showed the game's second mesh LOD at every distance, Nanite included.
+
+**Fix.** `GlbOptions::default().lod` is 0 (`crates/scviewer-core/src/options.rs`); the CLI's `--lod` /
+`--mip` defaults now read the core's instead of repeating literals, and the app, the FFI
+(`sc_default_options`) and the CLI all follow it. A different options value is a different package key,
+so existing cache entries are not reused; no cache-format bump. The options panel still offers LOD 0–3.
+
+**Test first.** `options::tests::viewer_defaults_to_full_detail_geometry` failed before the change
+(`left: 1, right: 0`) and passes after; `cargo test -p scviewer-core -p scviewer-cli -p scbridge-ffi`:
+all green (27 + 6 + 2 + 2 + 1 + 1 passed). `scripts/build_ffi.sh` and `--check-header`: exit 0.
+
+**Measured** (`target/debug/scviewer --no-cache decomposed <entity> out/dec-l0-<ship>`, triangles of every
+GLB of the package):
+
+| Package | LOD 1 (`out/dec-r7-*`) | LOD 0 (`out/dec-l0-*`) |
+| --- | --- | --- |
+| Gladius | 392 684 | 908 814 |
+| Scorpius | 416 041 | 893 276 |
+| Cutlass Black | 669 120 | 1 546 021 |
+
+Clips are unchanged by the geometry LOD: `verify_clip_pairing.py` exit 0 on each `out/dec-l0-*` package.
+Headless on `out/dec-l0-*`, each exit 0: `verify_wp_p1.py --datacore`; `test_rig.py` (`WP-U3 RIG_TESTS_OK`,
+`RIG_VERIFY passed=1` with the same counts as at LOD 1 — `clips=64 bound=63 sequences=80 tracks=636
+rigs=16`, `clips=75 bound=71 sequences=90 tracks=675 rigs=23`, `clips=55 bound=53 sequences=68 tracks=371
+rigs=32`); `test_first_person.py` (`WP-P1 HEADLESS_OK`); `test_importer.py` (31 suites passed). Gladius
+import (`IMPORT_OK seconds`): 24.8 s for the first import of the new meshes (engine DDC without their
+Nanite data — the layer-2 processed cache is not persistent yet, so collision is derived on every import),
+4.7 s for the next import in the same DDC, against 4.3 – 5.6 s at LOD 1 with a DDC already holding those
+meshes; commandlet peak memory 4.3 – 4.7 GB against 3.5 – 3.6 GB.
+
+**GPU (RTX 4090, Vulkan), the app's own load path.** `gladius-hull-seat.txt` twice, both re-exporting
+(`export_cache_hit=0`):
+
+```
+ue/scripts/capture_route.sh lod1-gladius ue/scripts/routes/gladius-hull-seat.txt -SCDefaults -SCLoad=AEGS_Gladius -SCCamera=first -SCLod=1
+ue/scripts/capture_route.sh lod0-gladius ue/scripts/routes/gladius-hull-seat.txt -SCDefaults -SCLoad=AEGS_Gladius -SCCamera=first
+```
+
+The status bar reads `473.4k triangles` / `total 9.81 s` at LOD 1 and `1.09M triangles` / `total 13.58 s`
+at the new default (`Rig AEGS_Gladius_LOD0`). Evidence `wp-u2/lod0-gladius.jpg` (left LOD 1, right LOD 0;
+top: on the hull looking forward, bottom: the cockpit eye point): at LOD 0 the access panel around the Aegis
+logo has its outline and its small light (the in-game `top-hangar.webp` shows that panel outlined), and the
+canopy frame detail and the dashboard's button icons appear. 0.40 % / 1.39 % of pixels differ by more than
+40/255.
+
+**Not done: texture resolution.** Textures stay at StarBreaker's mip 2 (a quarter of the game's resolution
+in each dimension). Measured on the Gladius, the textures decode to 326 MiB at mip 2 and 4 223 MiB at mip
+0 (181 of them 2048²), the Cutlass 637 MiB at mip 2 — so mip 0, and on the Cutlass even mip 1, exceeds the
+importer's 2 GiB per-import budget (`FSCTextureLimits::BudgetBytes`) while textures are decoded to
+uncompressed BGRA8. Full resolution needs the game's block-compressed data kept compressed through to
+the GPU; the options panel still offers mip 0 for one-off use on small models.
+
+Cross-review (Codex, on the uncommitted diff): `ue/scripts/ue_load_gladius.py` still forced LOD 1 when no
+`-SCLod` was given (and a successful load saves the options) — fixed, it now overrides the core's defaults
+only for the arguments given; the timing labels above were ambiguous about the cache state — fixed. Nothing
+else found in default propagation (core, CLI, FFI incl. null options, UE reset), cache keys and package
+names (both carry LOD and mip; no format bump), or tests. A user's saved options from before this change
+keep their LOD until "Core defaults" is pressed.

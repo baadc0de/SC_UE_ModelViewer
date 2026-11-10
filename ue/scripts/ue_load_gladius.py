@@ -23,9 +23,11 @@ if not viewer.wait_for_archive(900.0):
     raise RuntimeError("archive did not open: " + viewer.get_archive_error())
 
 view = unreal.SCViewOptions()
-view.reset_to_defaults()
-view.lod = int(options.get("SCLod", 1))
-view.mip = int(options.get("SCMip", 2))
+view.reset_to_defaults()  # the core's defaults; -SCLod / -SCMip override them only when given
+if "SCLod" in options:
+    view.lod = int(options["SCLod"])
+if "SCMip" in options:
+    view.mip = int(options["SCMip"])
 
 COUNTS = ("static_meshes", "skeletal_meshes", "textures", "material_instances", "vehicles")
 

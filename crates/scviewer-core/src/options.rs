@@ -1,4 +1,5 @@
-//! Serializable viewer export options; defaults follow StarBreaker.
+//! Serializable viewer export options; defaults follow StarBreaker, except geometry, which is the
+//! full-detail LOD 0 (the viewer renders with Nanite, which needs no coarser mesh LOD).
 use serde::{Deserialize, Serialize};
 use starbreaker_3d::{ExportFormat, ExportKind, ExportOptions, MaterialMode};
 
@@ -28,7 +29,10 @@ impl Default for GlbOptions {
     fn default() -> Self {
         let o = ExportOptions::default();
         Self {
-            lod: o.lod_level,
+            // StarBreaker's default is a coarser LOD for Blender; Nanite renders LOD 0 at every distance.
+            lod: 0,
+            // Texture mips stay StarBreaker's: full-resolution textures, decoded to BGRA8, exceed the
+            // importer's per-import texture budget (they need the game's compressed blocks passed through).
             mip: o.texture_mip,
             materials: Materials::Textures,
             attachments: o.include_attachments,
@@ -88,6 +92,14 @@ impl Default for DecomposedOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewer_defaults_to_full_detail_geometry() {
+        // Nanite renders LOD 0 at every distance; a coarser mesh LOD only loses detail.
+        assert_eq!(GlbOptions::default().lod, 0);
+        assert_eq!(DecomposedOptions::default().geometry.lod, 0);
+        assert_eq!(GlbOptions::default().upstream(ExportKind::Decomposed).lod_level, 0);
+    }
 
     #[test]
     fn default_animation_tags_survive_serialization_and_upstream_conversion() {

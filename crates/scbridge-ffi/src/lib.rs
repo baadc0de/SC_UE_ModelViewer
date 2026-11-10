@@ -60,7 +60,7 @@ pub unsafe extern "C" fn sc_open(
     }
 }
 
-/// Fill defaults from the core (LOD 1, mip 2, textures, attachments/interior/lights/
+/// Fill defaults from the core (LOD 0, mip 2, textures, attachments/interior/lights/
 /// animations enabled, shields/default pose disabled). NULL export options uses these too.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sc_default_options(out: *mut sc_options) -> sc_status {
