@@ -80,7 +80,7 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | texture slot | `UTexture2D` | Colour encoding from the exported PNG: the exporter copies the source DDS's sRGB state into an `sRGB` chunk (sRGB) or `gAMA` 1.0 (linear); an untagged PNG falls back to the slot role (sRGB only for colour roles). DDNA → `TC_Normalmap` linear; roughness/masks → linear; dedupe by source path; mip 0 textures built on a worker thread |
 | `interiors[].lights` | point / spot / rect light components | Authored intensity, bulb/plane size, attenuation and shadow fields below; `radius_m` ×100, linear colour, half-angles, gobo → light function. `intensity_candela_proxy` is the legacy `raw_x1500` proxy, not calibrated cd; physical mapping belongs to UE (the game renderer's light model, WP-U3b §13.2). `ambient_proxy` skipped with a log. Positions are final in the export: a tile-attached light group sits on its container item port (`interactionOffset`, owner frame), not on its `.soc` position (WP-U3b §12.2) |
 | `interiors[].room_volumes` | lighting channels (`FSCLightAreas`) | Box / prism / trimesh room extents from `entitycomponentroom.xml` areas. A light with `affects_this_area_only` lights only its own area in the engine (clip volumes); UE collapses this to channel 0 = outside every room, channel 1 = inside one. Area-only lights take the channel of their position, other lights both; primitives are classified at the rest pose by vertex samples; environment lights get both; the player body follows the capsule. Rooms are not separated from each other (WP-U3b §12.3) |
-| clip sidecar | `UAnimSequence` on the skeleton | Blender Z-up wxyz → UE; linear keys at clip fps; hemisphere-align; `bind · (start⁻¹ · sample)` when `start_rotation` present; hash-collision arrays by provenance (whitepaper §14.8) |
+| clip sidecar | `UAnimSequence`s on the skeleton | Blender Z-up wxyz → UE; linear keys, each track at the rate and length of its own source animation (clip-level when the clip lists no `sources`); a binding holds one sequence per source timing (rate and length) with that animation's keys verbatim; hemisphere-align; `bind · (start⁻¹ · sample)` when the source has a `start_rotation`; hash-collision arrays by provenance (whitepaper §14.8) |
 | Mannequin fragments | `USCClipCatalog` | clip id, display name, owner entity, source, fragment/tags/scopes, boomerang flag |
 | scene hierarchy | `ASCVehicle` | root scene component; rigid meshes as `UStaticMeshComponent` on sockets named after their owning bone; soft parts as `USkeletalMeshComponent`; children via `local_transform_sc` (`gltf_y_up`); interiors via `container_transform` / placements; `SpawnPoints` derived from seats, entrances (door helpers) and interior floors |
 
@@ -225,8 +225,16 @@ event names — the `$TracksDatabase` entry of that resolved path (metadata entr
 key block `i`), else the loose `.caf`; `#filepath` is a running, case-insensitive
 directive. No name or bone heuristic takes part, and an event whose CAF is stored nowhere
 has no clip. A clip merged by name across rigs has the longest contributor's
-`frame_count`. Layer-1 `CACHE_FORMAT_VERSION` is 17 (earlier packages can hold another
-clip's keys, e.g. Open and Close exchanged). Contract and known gaps: submodule
+`frame_count` and lists every contributing animation in `sources` (rate, length, start
+pose); each channel names its own by `source`. UE times and anchors a track by its
+source: played forward the animations start together, played backwards (a fragment with
+negative speed) each starts at its own end, as each entity does in the game
+(`FSCAnimImporter::TrackFrame`). A rate that is not a whole number of frames a second, a
+channel with keys past its animation's length and an animation longer than its clip are
+import errors. Layer-1 `CACHE_FORMAT_VERSION` is 18 (17: packages
+without `sources`, where a shorter animation starts late when its clip runs backwards;
+earlier: packages that can hold another clip's keys, e.g. Open and Close exchanged).
+Contract and known gaps: submodule
 `docs/decomposed-export-contract.md` "Animation Records"; validator
 `scripts/verify_clip_pairing.py`; evidence `ue/verification/WP-P1.md`.
 

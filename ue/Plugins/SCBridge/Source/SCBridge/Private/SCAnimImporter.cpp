@@ -32,6 +32,14 @@ FVector Vec(const TArray<TSharedPtr<FJsonValue>>& A)
 {
     return A.Num() == 3 ? FVector(A[0]->AsNumber(), A[1]->AsNumber(), A[2]->AsNumber()) : FVector::ZeroVector;
 }
+// An animation's rate and length, for the clip and each of its source animations: the rate a whole number of
+// frames a second (contract), so it survives the track's float and the sequence's frame rate; both within
+// the host's limits.
+bool ValidTiming(double Fps, double Frames)
+{
+    return FMath::IsFinite(Fps) && Fps >= 1 && Fps == FMath::FloorToDouble(Fps) && Fps <= 1000 && FMath::IsFinite(Frames) &&
+           Frames >= 0 && Frames <= 100000;
+}
 TSet<FString> Tokens(FString Path)
 {
     Path = Path.ToLower();
@@ -93,10 +101,9 @@ bool FSCAnimImporter::Read(const FSCPackageSource& Source, const FSCClipRecord& 
         return false;
     }
     double Fps = 0, Frames = 0;
-    if (!Json->TryGetNumberField(TEXT("fps"), Fps) || !Json->TryGetNumberField(TEXT("frame_count"), Frames) || !FMath::IsFinite(Fps) ||
-        Fps <= 0 || Fps > 1000 || !FMath::IsFinite(Frames) || Frames < 0 || Frames > 100000)
+    if (!Json->TryGetNumberField(TEXT("fps"), Fps) || !Json->TryGetNumberField(TEXT("frame_count"), Frames) || !ValidTiming(Fps, Frames))
     {
-        Error = TEXT("Invalid clip frame rate/length (host limits: 1000 fps, 100000 frames)");
+        Error = TEXT("Invalid clip frame rate/length (a whole rate; host limits: 1000 fps, 100000 frames)");
         return false;
     }
     Clip.Id = FName(*Record.Name);
@@ -185,6 +192,14 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
         Error = TEXT("Clip has no bones object");
         return false;
     }
+    // A clip merged by name lists every contributing animation. Clips without the list have one animation, timed by
+    // the clip itself; a list of any other shape is a broken clip, not a clip without one.
+    const TSharedPtr<FJsonValue> SourceList = Json->TryGetField(TEXT("sources"));
+    if (SourceList && SourceList->Type != EJson::Array)
+    {
+        Error = TEXT("Clip source animation list is not an array");
+        return false;
+    }
     for (int32 I = 0; I < Rig.RigNodes.Num(); ++I)
     {
         const auto& Node = Rig.RigNodes[I];
@@ -268,10 +283,48 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
         Track.Bone = I + 1;
         Track.bRotation = HR;
         Track.bPosition = HP;
+        Track.Fps = Clip.Fps;
+        // The channel names its own animation in the clip's list, whose rate, length and start pose time and
+        // anchor this track.
+        FObj Timing = Json;
+        int32 OwnLast = Clip.LastFrame;
+        if (SourceList)
+        {
+            const auto& Sources = SourceList->AsArray();
+            // The index is a JSON number that must be a whole, listed position: no rounding, no numeric strings.
+            const TSharedPtr<FJsonValue> Named = Channel->TryGetField(TEXT("source"));
+            const double Index = Named && Named->Type == EJson::Number ? Named->AsNumber() : -1.;
+            double Fps = 0, Frames = -1;
+            if (!FMath::IsFinite(Index) || Index < 0 || Index >= Sources.Num() || Index != FMath::FloorToDouble(Index) ||
+                Sources[int32(Index)]->Type != EJson::Object)
+            {
+                Error = TEXT("Channel names no listed source animation: ") + Node.SourceName;
+                return false;
+            }
+            Timing = Sources[int32(Index)]->AsObject();
+            if (!Timing->TryGetNumberField(TEXT("fps"), Fps) || !Timing->TryGetNumberField(TEXT("frame_count"), Frames) ||
+                !ValidTiming(Fps, Frames))
+            {
+                Error = TEXT("Invalid source animation rate/length: ") + Node.SourceName;
+                return false;
+            }
+            Track.Fps = Fps;
+            OwnLast = FMath::CeilToInt(Frames);
+        }
+        // An animation holds every key of its channels, and the clip every source animation in full: anything
+        // else would cut authored keys off or stop a track short of its end.
+        auto LastTime = [](const auto& Values, const auto& Times) {
+            return Values.IsEmpty() ? 0. : Times.IsEmpty() ? double(Values.Num() - 1) : Times.Last()->AsNumber();
+        };
+        if (FMath::Max(LastTime(Rot, RT), LastTime(Pos, PT)) > OwnLast || OwnLast * double(Clip.Fps) > Clip.LastFrame * double(Track.Fps))
+        {
+            Error = TEXT("Channel keys past their animation's length, or an animation longer than its clip: ") + Node.SourceName;
+            return false;
+        }
         const FTransform Bind = Node.Local;
-        const auto& Anchor = Arr(Json, TEXT("start_rotation"));
+        const auto& Anchor = Arr(Timing, TEXT("start_rotation"));
         const FQuat Start = SidecarRotation(Anchor.Num() == 4 ? Quat(Anchor) : HR ? Quat(Rot[0]->AsArray()) : FQuat::Identity);
-        for (int32 Frame = 0; Frame <= Clip.LastFrame; ++Frame)
+        for (int32 Frame = 0; Frame <= OwnLast; ++Frame)
         {
             FTransform Key = Bind;
             int32 A, B;
@@ -314,38 +367,48 @@ bool FSCAnimImporter::Bind(const FObj& Json, const FSCDerivedMesh& Rig, const FS
 void FSCAnimImporter::AttachBinding(USkeletalMesh* Mesh, UObject* Outer, FSCImportedClip& Clip, FSCClipBinding Binding)
 {
     Binding.Mesh = Mesh;
-    Binding.Sequence = NewObject<UAnimSequence>(Outer, NAME_None, RF_Transient);
-    Binding.Sequence->SetSkeleton(Mesh->GetSkeleton());
-    Binding.Sequence->Interpolation = EAnimInterpolationType::Linear;
-#if WITH_EDITOR
-    auto& Controller = Binding.Sequence->GetController();
-    Controller.OpenBracket(FText::FromString(TEXT("SC clip import")), false);
-    Controller.InitializeModel();
-    Controller.SetFrameRate(FFrameRate(FMath::RoundToInt(Clip.Fps * 1000), 1000), false);
-    Controller.SetNumberOfFrames(FFrameNumber(FMath::Max(1, Clip.LastFrame)), false);
+    // A sequence has one rate and one length; the tracks of a merged clip keep their own animation's. Tracks that
+    // share a timing share a sequence, so every key is stored as authored and each sequence can be played from its
+    // own end, as the runtime plays its tracks.
+    TArray<TPair<float, int32>> Timings;
     for (const auto& T : Binding.Tracks)
+        Timings.AddUnique(TPair<float, int32>(T.Fps, T.Keys.Num()));
+    for (const auto& Timing : Timings)
     {
-        TArray<FVector3f> P, S;
-        TArray<FQuat4f> R;
-        for (const FTransform& K : T.Keys)
+        UAnimSequence* Sequence = Binding.Sequences.Add_GetRef(NewObject<UAnimSequence>(Outer, NAME_None, RF_Transient));
+        Sequence->SetSkeleton(Mesh->GetSkeleton());
+        Sequence->Interpolation = EAnimInterpolationType::Linear;
+#if WITH_EDITOR
+        auto& Controller = Sequence->GetController();
+        Controller.OpenBracket(FText::FromString(TEXT("SC clip import")), false);
+        Controller.InitializeModel();
+        Controller.SetFrameRate(FFrameRate(FMath::RoundToInt(Timing.Key * 1000), 1000), false);
+        Controller.SetNumberOfFrames(FFrameNumber(FMath::Max(1, Timing.Value - 1)), false);
+        for (const auto& T : Binding.Tracks)
         {
-            P.Add(FVector3f(K.GetTranslation()));
-            R.Add(FQuat4f(K.GetRotation()));
-            S.Add(FVector3f(K.GetScale3D()));
+            if (T.Fps != Timing.Key || T.Keys.Num() != Timing.Value) continue;
+            TArray<FVector3f> P, S;
+            TArray<FQuat4f> R;
+            for (const FTransform& K : T.Keys)
+            {
+                P.Add(FVector3f(K.GetTranslation()));
+                R.Add(FQuat4f(K.GetRotation()));
+                S.Add(FVector3f(K.GetScale3D()));
+            }
+            if (P.Num() == 1) // a sequence has at least one frame: a still pose is held across it
+            {
+                P.Add(FVector3f(P[0]));
+                R.Add(FQuat4f(R[0]));
+                S.Add(FVector3f(S[0]));
+            }
+            const FName Bone = Mesh->GetRefSkeleton().GetBoneName(T.Bone);
+            Controller.AddBoneCurve(Bone, false);
+            Controller.SetBoneTrackKeys(Bone, P, R, S, false);
         }
-        if (T.Keys.Num() == 1)
-        {
-            P.Add(FVector3f(P[0]));
-            R.Add(FQuat4f(R[0]));
-            S.Add(FVector3f(S[0]));
-        }
-        const FName Bone = Mesh->GetRefSkeleton().GetBoneName(T.Bone);
-        Controller.AddBoneCurve(Bone, false);
-        Controller.SetBoneTrackKeys(Bone, P, R, S, false);
-    }
-    Controller.NotifyPopulated();
-    Controller.CloseBracket(false);
+        Controller.NotifyPopulated();
+        Controller.CloseBracket(false);
 #endif
+    }
     Clip.Bindings.Add(MoveTemp(Binding));
 }
 FTransform FSCAnimImporter::Sample(const FSCBoneTrack& Track, double Frame)
@@ -358,12 +421,19 @@ FTransform FSCAnimImporter::Sample(const FSCBoneTrack& Track, double Frame)
                       FMath::Lerp(Track.Keys[A].GetTranslation(), Track.Keys[B].GetTranslation(), T),
                       FMath::Lerp(Track.Keys[A].GetScale3D(), Track.Keys[B].GetScale3D(), T));
 }
+double FSCAnimImporter::TrackFrame(const FSCImportedClip& Clip, const FSCBoneTrack& Track, double ClipFrame, bool bFromEnd)
+{
+    checkf(Clip.Fps > 0 && Track.Fps > 0, TEXT("clip and track rates are set by the importer"));
+    const double Last = FMath::Max(0, Track.Keys.Num() - 1);
+    const double Scale = Track.Fps / Clip.Fps;
+    return bFromEnd ? FMath::Max(0., Last - (Clip.LastFrame - ClipFrame) * Scale) : FMath::Min(Last, ClipFrame * Scale);
+}
 
 void FSCAnimImporter::Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImportedClip& Clip)
 {
     if (!Clip.Bindings.IsEmpty())
     {
-        Clip.Sequence = Clip.Bindings[0].Sequence;
+        Clip.Sequence = Clip.Bindings[0].Sequences[0];
         return;
     }
     Clip.bBoomerang = false;

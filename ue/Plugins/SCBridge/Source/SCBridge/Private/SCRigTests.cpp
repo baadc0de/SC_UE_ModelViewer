@@ -68,12 +68,20 @@ bool FSCRigMath::RunTest(const FString&)
                                                     1.e-5));
         TestEqual(TEXT("uniform frames include endpoint"), Track.Keys.Num(), 3);
         TestTrue(TEXT("nonboomerang"), !Clip.bBoomerang);
-        TestNotNull(TEXT("sequence object"), Clip.Bindings[0].Sequence.Get());
+        TestNotNull(TEXT("sequence object"), Clip.Bindings[0].Sequences.IsEmpty() ? nullptr : Clip.Bindings[0].Sequences[0].Get());
     }
+    // A clip of one frame holds one key per channel (a channel with more would run past the clip's length).
+    const FString StillText =
+        FString::Printf(TEXT("{\"start_rotation\":%s,\"bones\":{\"0x%X\":{\"source_node_name\":\"Root\",\"rotation\":[%s]}}}"),
+                        *QJson(Start), FSCAnimImporter::BoneHash(TEXT("Root")), *QJson(Start));
+    TSharedPtr<FJsonObject> StillJson;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(StillText), StillJson);
     FSCImportedClip Still;
     Still.LastFrame = 0;
     TestTrue(TEXT("single-frame clip duplicates safely for the UE model"),
-             FSCAnimImporter::Bind(Json, Data, TEXT("test.skin"), Mesh, GetTransientPackage(), Still, Error));
+             FSCAnimImporter::Bind(StillJson, Data, TEXT("test.skin"), Mesh, GetTransientPackage(), Still, Error));
+    TestFalse(TEXT("a channel longer than its single-frame clip"),
+              FSCAnimImporter::Bind(Json, Data, TEXT("test.skin"), Mesh, GetTransientPackage(), Still, Error));
     return true;
 }
 #endif

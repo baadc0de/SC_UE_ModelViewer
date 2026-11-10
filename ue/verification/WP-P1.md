@@ -535,3 +535,198 @@ toggle log line was checked).
 Not verified: the default-pose bake on real data (the viewer's "Default pose" option is off by default;
 covered by the synthetic fixture only); loose CAFs are not compared by `verify_clip_pairing.py`; ships
 other than these three.
+
+### Fixed: a merged clip timed every rig by one length (exporter + importer, 2026-11-10)
+
+The gap the previous section left: a clip merged by name across rigs had one `fps`, one `frame_count`
+(the longest contributor's) and one start pose, so every track ran on the clip's clock. The game plays
+each entity's own animation of that name, and a Mannequin fragment with negative speed starts each one at
+its own end. Played backwards, a shorter contributor therefore held its end pose until the clip clock
+reached its length: on the Gladius `Landing_Gear` / `Retract` (`landing_gear_extend` at speed −1) the hull
+animation is 167 frames and the three gear rigs' 160, so the gear started 7 frames (0.23 s) after the hull
+doors and finished with them instead of 7 frames before.
+
+**Measured on the three packages** (clips whose contributors differ in length; all are 30 fps, and no
+merged clip has contributors with different start poses that would change a pose — only lengths differ):
+
+| Package | merged clips | contributors differ in length |
+| --- | --- | --- |
+| Gladius (64 clips) | 7 | `landing_gear_extend` 167 (hull 167, three gear rigs 160), `landing_gear_retract` 160 (hull 140, gears 160), `open` 67 / `close` 69 (power plant 67 / 69, jump module 40) |
+| Scorpius (75) | 6 | `dashboard_deploy` 77 (gunner 45, pilot 77), `dashboard_retract` 77 (gunner 50, pilot 77), `open` 70 / `close` 70 (jump module 40, fuel port 70, power plant 67 / 69) |
+| Cutlass Black (55) | 4 | none |
+
+**Fix.** Exporter (submodule branch `scviewer/clip-sources`, `e95e6ca5` + `dfee4503`): a clip lists each distinct
+contributing animation in `sources` (`skeleton_path`, `fps`, `frame_count`, start pose) and every channel
+or channel variant names its own by `source`; a bone's entry stays one channel or a flat list of variants when a contributor
+brings a list of its own; the clip-level fields are unchanged. Importer: a track takes
+its rate, length and start-pose anchor from its source (`FSCBoneTrack::Fps`; a hard import error when `sources` is not a list, or a channel of a clip with
+`sources` names none, a fraction, text, or a record without a usable rate and length; also when a rate is not a whole number of
+frames a second, a channel has keys past its animation's length, or an animation is longer than its clip), and `FSCAnimImporter::TrackFrame` maps the clip frame to
+the track's own frame — forward from the common start, backwards from the track's own end — in
+`ASCVehicle::EvaluateClips` and the rig verification mirror. A `UAnimSequence` has one timeline, so a
+binding holds one per source timing (rate and length) among its tracks (`FSCClipBinding::Sequences`),
+each with that animation's keys verbatim; nothing is resampled.
+Layer-1 `CACHE_FORMAT_VERSION` 17 → 18. No asset name, bone name or length threshold takes part.
+
+**Tests first.** Rust (`animation/rig_sources.rs` and `decomposed.rs`, 6 tests: a merged clip records each
+contributing animation, one animation on two entities is one source, the merged length is the longest
+duration at the clip rate, every channel variant names its source, an incoming variant list joins flat —
+at the merge function and through a rig that brings one):
+`CARGO_TARGET_DIR=$PWD/target cargo test --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib`
+→ 879 passed, 0 failed, 3 ignored. UE (`SCRigSourceTimingTests.cpp`): `FSCRigSourceTiming` (import: own
+length, own rate, own anchor, error on a missing source) and `FSCRigSourcePlayback` (a 6-frame and a
+4-frame rig in one clip: forward both start at once, backwards both start at once and the short one ends
+first). The UE tests could not be run before the API they call existed; they were shown to fail by
+mutation instead — with `EvaluateClips` back on the clip frame and `DeriveBinding` ignoring `sources`,
+both report `passed=0` ("shorter animation keeps its own length" expected 5, was 7; "backward: short
+moves at once" expected 30, was 40; "backward starts at own end" expected 4, was 6); restored, both pass.
+
+**Validation on re-exported packages** (`out/dec-r7-*`, `target/debug/scviewer --no-cache decomposed
+<entity> <dir>`, exporter `dfee4503`; the clips are identical to the `e95e6ca5` export's — 64 / 75 / 55
+clips, same names, 0 bodies differing). `scripts/verify_clip_pairing.py` makes two checks. *Structure*
+(no game files needed): `sources` is a list, every channel names a whole listed index, no source is
+unused, variant lists are flat, the channels naming a source end on that source's `frame_count`, the
+clip's `fps` and start pose are its first source's, and its `frame_count` is the longest source's
+duration in clip frames, rounded up. *Pairing* (against the extracted `.chrparams` / `.dba`): the bones
+of a rig's event are its own database block's controllers, each with the block's rotation and position
+key counts and last key time, and all name one
+source whose rig, rate, length and start pose are the block's — the start pose read from the block's
+metadata by the script itself, not taken from the export; a clip exported under a database entry's own
+path is compared as a whole with that entry (`path=block`). Any `wrong`, `timing wrong`,
+`structure wrong` or `missing evidence` (a rig whose `.chrparams` is not in the extract, a tracks database
+a `.chrparams` names that is absent or unreadable, a clip of a rig with a database that no entry was
+compared with) exits 1. Key values, and the times of the keys before a controller's last, are not
+compared with the database:
+
+```
+$ python3 -I scripts/verify_clip_pairing.py --chrparams-root <chrparams> --dba-root <dba> out/dec-r7-gladius out/dec-r7-scorpius out/dec-r7-cutlass
+out/dec-r7-gladius rigs 13 event=block 58 path=block 16 wrong 0 timing wrong 0 structure wrong 0 loose-caf events 0 events without clip 0 missing evidence 0 unjudged: rigs without database 1 rig-clip pairs 2 of 76
+out/dec-r7-scorpius rigs 14 event=block 55 path=block 28 wrong 0 timing wrong 0 structure wrong 0 loose-caf events 0 events without clip 0 missing evidence 0 unjudged: rigs without database 1 rig-clip pairs 2 of 87
+out/dec-r7-cutlass rigs 18 event=block 42 path=block 14 wrong 0 timing wrong 0 structure wrong 0 loose-caf events 0 events without clip 0 missing evidence 0 unjudged: rigs without database 1 rig-clip pairs 5 of 61
+```
+
+Unjudged, and listed by the script: the rigs whose `.chrparams` names no tracks database, so their events
+are loose `.caf` files with no block to compare against — `jmod_tars_s01_pl02.cga` `open` / `close`
+(Gladius, Scorpius) and `grin_tractor_beam_s1.cga` `power_down` / `power_up` / `running` / `spin_down` /
+`spin_up` (Cutlass). Their structure is checked; their pairing and timing are not.
+
+The validator fails when the package is broken (copies of the Gladius package with `landing_gear_extend`
+edited, each exit 1): clip `frame_count` 167 → 160 — `STRUCTURE … 'clip is 160 frames long, its longest
+source 167'`; one gear source's start rotation replaced — `TIMING (aegs_gladius_landinggear_backright_chr.chr,
+landing_gear_extend) … start rotation [0.5, 0.5, 0.5, 0.5], block (1.0, -0.0, 0.0, -0.0)`; two sources
+swapped — `STRUCTURE … 'source 0 is 167 frames long, its channels end on 160.0'` and four `TIMING`
+(rig, length); a variant list nested — `STRUCTURE … '0x11ED938E: a variant list inside a variant list'`;
+one middle key of `canopy_close` removed (same controllers, same last key) — `WRONG (aegs_gladius.cga,
+canopy_close) … 'keys differ on 1 controllers'`; the owner rig of a path-named clip renamed —
+`no chrparams … aegs_gladius_renamed.cga`, `MISSING EVIDENCE (aegs_gladius_refueling_port.cga,
+…/air_fuel_intake_close.caf)`, `missing evidence 2`. A copy with the time arrays that equal the sample
+indices left out (the contract's implicit times) passes, exit 0.
+The package of the previous section (no `sources`) fails it too: `out/dec-r5b-gladius … event=block 0 …
+timing wrong 58 structure wrong 64 … missing evidence 16`, exit 1.
+
+`scripts/verify_wp_p1.py --datacore`: exit 0 ×3. Headless on `out/dec-r7-*`, each exit 0 (run again after
+the second review pass's changes, same results):
+`test_importer.py` (31 suites passed, 0 failed), `test_first_person.py` on each package
+(`WP-P1 HEADLESS_OK`), `test_player.py` (`WP-P2 HEADLESS_OK`), `test_rig.py` on each package
+(`WP-U3 RIG_TESTS_OK`; `RIG_VERIFY passed=1 clips=64 bound=63 sequences=80 tracks=636 rigs=16`,
+`clips=75 bound=71 sequences=90 tracks=675 rigs=23`, `clips=55 bound=53 sequences=68 tracks=371 rigs=32`
+— 80 / 90 against 78 / 88 before the per-timing sequences: two more on each of the two ships, where a
+binding's tracks have more than one timing).
+
+**Cross-review (Codex, on the first version of this change).** Eight findings; five fixed, tests first:
+
+- *The sequence resampled every track on the clip's timeline* (P1) — fixed: one sequence per source timing,
+  keys verbatim. Red before the fix: `'one sequence per source timing' to be 4, but it was 1`,
+  `'Short: sequence of the animation's length' to be 5, but it was 7`, `'Fast: sequence at the animation's
+  rate' to be 60, but it was 30`; green after.
+- *A source index was rounded, a `sources` that is not a list was read as absent, a missing rate fell back
+  to the clip's* — fixed: all hard import errors. Red: `'fractional source index'`, `'negative source
+  index'`, `'source index as text'`, `'source list that is not an array'` expected true; green after.
+- *A contributor that brings a variant list nested it inside the merged list* — fixed in the exporter
+  (`dfee4503`), two Rust tests red then green. No package of the three contains such a list, so their output
+  did not change.
+- *The validator took the start pose from the export it was checking, did not check structure, skipped
+  path-named clips and counted unjudged rigs as passes* — fixed as described above.
+- *Contract wording on when two source records are one* — fixed (`decomposed-export-contract.md`).
+
+Measured, not changed: `bCyclic` is decided for the clip as a whole from its tracks' endpoints; decided
+per source instead it differs for 0 clips of the three packages. It remains an endpoint-equality
+heuristic (the game's loop flag is not read) and is flagged as such. Flagged, not fixed: reversing a
+clip in mid-play restarts it from the opposite end rather than from the current pose (present before
+this change); the Blender addon does not read `sources`.
+
+**Second review pass (Codex, over the review fixes).** Five findings, all P2; it reported no defect in
+the strict source-index parsing, the sequence grouping, `TrackFrame`, the exporter's flattening and
+source re-indexing, `SCKeepAssets.cpp`, or the validator's database offsets and axis conversion, and did
+not examine live playback or saved-asset reload.
+
+- *The importer accepted a rate too small for the track's float (it became 0 and reached `TrackFrame`'s
+  check) and a fractional rate (the sequence's frame rate is whole)* — fixed: a rate is a whole number of
+  frames a second, at least 1, as the contract says.
+- *Inconsistent lengths were accepted: a channel with keys past its animation's `frame_count`, an animation
+  longer than its clip* — fixed: hard import errors. Red before the fix, seven expectations of
+  `FSCRigSourceTiming` (`'source rate too small to store'`, `'fractional source rate'`, `'source shorter than
+  its channel'`, `'source shorter than its channel's times'`, `'clip shorter than its source'`, `'clip
+  shorter than its faster source'`, `'clip shorter than its channel'` expected true); green after. The
+  check also caught a test of ours that bound a three-key channel under a one-frame clip
+  (`FSCRigMath`); the test now uses a one-key clip and asserts the three-key one is rejected. No clip of
+  the three packages or the player kit is rejected (suites above).
+- *The validator read an omitted time array as time 0 and so rejected the contract's implicit times* —
+  fixed (last key = sample count − 1 per component); it also checks that an explicit time array is as
+  long as its keys. Before: the implicit-times copy failed with `'source 0 is 8 frames long, its channels
+  end on 0'`; after: exit 0.
+- *The validator exited 0 when evidence was missing* — fixed: `missing evidence` exits 1 (before: the
+  renamed-owner copy exit 0, after: exit 1). Rigs whose `.chrparams` names no tracks database stay
+  reported as unjudged; the set of rigs is still taken from the clips, not from the scene's rig inventory.
+- *The validator certified a pairing by the controller set and one last key time* — narrowed, not closed:
+  it now compares every controller's rotation and position key counts and last key time, per variant
+  (before: the removed-key copy exit 0, after: exit 1; the three packages match the database on every
+  controller). It still does not compare key values or the earlier key times: a clip with the right
+  shape and other values would pass.
+
+A `USCClipCatalog` kept as assets before this change has no per-track rate and no per-timing sequences;
+keep the vehicle again. The app itself never plays a kept catalog: every load builds the catalog from
+the export's clip files (`SCImportJob.cpp`).
+
+**GPU (RTX 4090, Vulkan).** New console command `sc.Fragment <fragment> [tag]`; route
+`ue/scripts/routes/gladius-gear-retract.txt` plays `Landing_Gear` / `Retract` at `slomo 0.05` (one
+animation frame = 0.67 s) from the front-left quarter, once on the new package and once on the previous
+one — the previous package has no `sources`, so the same build times it the old way:
+
+```
+ue/scripts/capture_route.sh lg-r6  ue/scripts/routes/gladius-gear-retract.txt -SCPackage="$PWD/out/dec-r6-gladius"  -SCExplore
+ue/scripts/capture_route.sh lg-r5b ue/scripts/routes/gladius-gear-retract.txt -SCPackage="$PWD/out/dec-r5b-gladius" -SCExplore
+```
+
+Both log `FRAGMENT_CMD fragment=Landing_Gear tag=Retract ok=1`. Frames after the fragment start, from
+the log and screenshot times (new / old): 6.6 / 6.0, 40.9 / 41.1, 163.5 / 164.2. Share of pixels in the
+gear region differing by more than 40/255 between the two runs: gear down (before the fragment) 0.00 %,
+start 0.22 %, mid 1.72 %, near end 0.00 %, retracted 0.00 %. At the start shot the new package's gear
+has left its end pose and the old one's has not (difference image: gear outlines only); at the mid shot
+the new gear is visibly further folded. Evidence: `wp-u3b/gear-retract-sources.jpg` (rows: start, mid —
+new left, old right; bottom: rear gear at the start shot, new / old / difference ×4).
+
+After the review fixes the route was run again on the re-exported package
+(`capture_route.sh lg-r7 … -SCPackage="$PWD/out/dec-r7-gladius" -SCExplore`, `FRAGMENT_CMD … ok=1`, exit 0)
+and compared with the `lg-r6` shots over the whole frame: 0.07 – 0.08 % of pixels differ by more than
+40/255 in every shot, the one before the fragment included — scattered single pixels, the renderer's
+frame-to-frame noise. The start and mid shots differ no more than the still one, so the gear poses are
+the same as in the evidence image. Run once more with the final build, after the second review's
+importer checks (`lg-r8`, same package, `FRAGMENT_CMD … ok=1`, exit 0): 0.01 % of pixels differ from the
+`lg-r7` shots in each of the five.
+
+No regression through the app's own load path (cache miss, re-processed with the new library):
+`capture_route.sh src-gladius <canopy cycle route> -SCDefaults -SCLoad=AEGS_Gladius -SCCamera=first`
+(`export_cache_hit=0`, canopy `open=1` then `open=0`, rest / raised / closed as before) and
+`scorpius-smoke.txt` with `-SCLoad=RSI_Scorpius` (`Ladder Top open=1`, hull walk).
+
+Not verified / not done: the Scorpius dashboards and the `open` / `close` item clips were not looked at
+on the GPU (covered by the validator and the unit tests only); the Cutlass has no clip this changes and
+was not run on the GPU; the app's own load path (`-SCLoad`) was not re-run after the reviews' fixes (the
+clips it exports are unchanged; the headless suites and the GPU route import them with the final build); the
+second review's fixes were not reviewed again; the
+near-end frame shows no difference because the gear is already behind the doors there. The Blender addon
+does not read `sources`. A merged clip still keeps only the first contributor's fragments, and clips of
+unrelated items still merge by name (contract "Known gaps"). At the start of `Retract` the gear jumps from
+its rest pose (compressed, on the floor) to the clip's end pose (extended) — present before this change,
+not addressed.

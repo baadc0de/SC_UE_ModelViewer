@@ -1,0 +1,16 @@
+# Landing gear Retract (fragment Landing_Gear, tag Retract: landing_gear_extend played backwards) at 1/20 speed,
+# seen from the front-left quarter near the floor. One animation frame is 0.67 s of route time at this speed:
+# the shots land about 6, 40 and 163 frames after the start, then the end pose at normal speed.
+# Host: -SCPackage=<decomposed package folder> -SCExplore
+20 r.VSync 0
+0 sc.FP.Noclip 1
+0 sc.FP.Place 1300 -650 -300
+1 sc.FP.Look 147 2
+1 shot 01-gear-down
+0 slomo 0.05
+0 sc.Fragment Landing_Gear Retract
+2.5 snap 02-start
+20.2 snap 03-mid
+79 snap 04-near-end
+0 slomo 1
+3 shot 05-retracted

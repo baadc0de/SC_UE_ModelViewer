@@ -156,7 +156,8 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
             const FString ClipName = FPaths::GetBaseFilename(Clip.Name);
             K.Move(Clip.Sequence, TEXT("Animations"), ClipName);
             for (FSCClipBinding& Binding : Clip.Bindings)
-                K.Move(Binding.Sequence, TEXT("Animations"), ClipName);
+                for (TObjectPtr<UAnimSequence>& Sequence : Binding.Sequences)
+                    K.Move(Sequence, TEXT("Animations"), ClipName);
         }
         K.Move(Catalog, FString(), TEXT("Clips"));
     }

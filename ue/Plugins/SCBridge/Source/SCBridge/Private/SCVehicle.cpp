@@ -227,7 +227,8 @@ void ASCVehicle::EvaluateClips()
                 if ((!P.TargetRig.IsValid() || P.TargetRig.Get() == Rig) && B.Mesh == Rig->GetSkeletalMeshAsset())
                     for (const auto& T : B.Tracks)
                     {
-                        const FTransform Sample = FSCAnimImporter::Sample(T, P.Frame);
+                        const FTransform Sample =
+                            FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(ClipCatalog->Clips[P.Clip], T, P.Frame, P.Speed < 0));
                         if (T.bRotation) Pose[T.Bone].SetRotation(Sample.GetRotation());
                         if (T.bPosition) Pose[T.Bone].SetTranslation(Sample.GetTranslation());
                     }

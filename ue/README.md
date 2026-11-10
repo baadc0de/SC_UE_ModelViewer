@@ -354,6 +354,7 @@ Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mod
 | `sc.FP.Embed [cm]` | noclip on, capsule centre pushed this far into the surface under the crosshair (noclip-exit refusal test) |
 | `sc.FP.Where`, `sc.FP.Probe [cm]` | log state (`FP_WHERE`) / what the view ray hits and the focused interaction (`FP_PROBE`) |
 | `sc.SpawnWhereLooking` | the Orbit button |
+| `sc.Fragment <fragment> [tag]` | play a Mannequin fragment of the loaded vehicle (any camera mode); logs `FRAGMENT_CMD fragment tag ok` |
 
 `-SCScript=<file>` runs a route once a load has finished (after `-SCCamera`): each
 non-comment line is `<delay seconds> <console command>`, delays count after the
@@ -368,7 +369,10 @@ and GPU ms: mean/p50/p95, the `stat unit` sources). `quit` ends the app from the
 `capture_viewer.sh`, screenshots the window at every `SCRIPT_SHOT` into
 `out/smoke/<tag>-<shot>.png`, stops UE after `SCRIPT_DONE` (or reports the exit status
 of a route ending in `quit`) and prints the route log. Routes live in
-`ue/scripts/routes/` and use spawn kinds and relative moves only.
+`ue/scripts/routes/`. Walking routes use spawn kinds and relative moves only; a route that
+only frames a shot may put the noclip camera at a vehicle-relative point with `sc.FP.Place`
+(`gladius-hull-seat.txt`, and `gladius-gear-retract.txt`, which plays the landing-gear
+`Retract` fragment at 1/20 speed with `sc.Fragment` and `slomo`).
 
 `-SCLightProbe` adds a light audit to every `shot`: for the player position and for the
 surface under the crosshair it logs `LIGHT_PROBE tag=<shot> at=player|view point=...

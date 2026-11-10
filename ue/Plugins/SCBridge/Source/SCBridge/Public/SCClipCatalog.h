@@ -27,14 +27,17 @@ struct SCBRIDGE_API FSCBoneTrack
     UPROPERTY() int32 Bone = INDEX_NONE;
     UPROPERTY() bool bRotation = false;
     UPROPERTY() bool bPosition = false;
-    UPROPERTY() TArray<FTransform> Keys; // uniform source frames, including the literal final frame
+    UPROPERTY() TArray<FTransform> Keys; // uniform frames of the animation this track came from, including its final frame
+    UPROPERTY() float Fps = 0;           // that animation's own rate, always set by the importer; a merged clip's
+                                         // tracks can differ in rate and length
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCClipBinding
 {
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) TObjectPtr<USkeletalMesh> Mesh;
-    UPROPERTY(BlueprintReadOnly) TObjectPtr<UAnimSequence> Sequence;
+    // One per animation rate and length among the tracks: a sequence has one timeline, a merged clip several.
+    UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<UAnimSequence>> Sequences;
     UPROPERTY() TArray<FSCBoneTrack> Tracks; // also provides a non-editor runtime evaluation path
 };
 USTRUCT(BlueprintType)

@@ -43,6 +43,7 @@ bool FSCRigPlayback::RunTest(const FString&)
         FSCBoneTrack Track;
         Track.Bone = 1;
         Track.bPosition = true;
+        Track.Fps = 1;
         for (int32 Frame = 0; Frame <= 2; ++Frame)
             Track.Keys.Add(FTransform(FVector(Frame * 10, 0, 0)));
         Binding.Tracks.Add(Track);

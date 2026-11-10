@@ -23,4 +23,7 @@ public:
                      UObject* Outer, FSCImportedClip& Clip, FString& Error);
     static void Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImportedClip& Clip);
     static FTransform Sample(const FSCBoneTrack& Track, double Frame);
+    /** Clip frame -> the track's own frame. Each rig plays its own animation of the clip's name: forward they start
+     *  together, backward each starts at its own end. */
+    static double TrackFrame(const FSCImportedClip& Clip, const FSCBoneTrack& Track, double ClipFrame, bool bFromEnd);
 };

@@ -344,7 +344,7 @@ bool USCImportLibrary::RunUnitTests()
 #if WITH_DEV_AUTOMATION_TESTS
     bool Passed = true;
     TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCReaderPalette"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials"),
-        TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsMasterParameters"), TEXT("FSCMaterialsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic"), TEXT("FSCLightDefaults"), TEXT("FSCLightAuthoredModel"),
+        TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsMasterParameters"), TEXT("FSCMaterialsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic"), TEXT("FSCRigSourceTiming"), TEXT("FSCRigSourcePlayback"), TEXT("FSCLightDefaults"), TEXT("FSCLightAuthoredModel"),
         TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement"), TEXT("FSCLightVerifier"),
         TEXT("FSCStarEngineFixture"), TEXT("FSCStarEngineDomain"), TEXT("FSCStarEngineRules"),
         TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach")};

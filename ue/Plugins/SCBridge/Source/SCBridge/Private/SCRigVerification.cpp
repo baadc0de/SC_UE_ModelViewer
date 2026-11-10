@@ -23,12 +23,16 @@ bool USCImportLibrary::VerifyRig(ASCVehicle* Vehicle, const FString& PoseReferen
         Bound += !Clip.Bindings.IsEmpty();
         for (const auto& Binding : Clip.Bindings)
         {
-            OK &= Binding.Sequence && Binding.Sequence->GetSkeleton() == Binding.Mesh->GetSkeleton();
-            ++Sequences;
+            OK &= !Binding.Sequences.IsEmpty();
+            for (const UAnimSequence* Sequence : Binding.Sequences)
+                OK &= Sequence && Sequence->GetSkeleton() == Binding.Mesh->GetSkeleton();
+            Sequences += Binding.Sequences.Num();
             Tracks += Binding.Tracks.Num();
             for (const auto& Track : Binding.Tracks)
             {
-                OK &= Track.Keys.Num() == Clip.LastFrame + 1;
+                // A track keeps its own animation's rate and length, never longer than the clip.
+                OK &= Track.Fps > 0 && !Track.Keys.IsEmpty() &&
+                      (Track.Keys.Num() - 1) / Track.Fps <= Clip.LastFrame / Clip.Fps + 1.e-4;
                 for (int32 K = 1; K < Track.Keys.Num(); ++K)
                     OK &= !Track.Keys[K].ContainsNaN() && (Track.Keys[K - 1].GetRotation() | Track.Keys[K].GetRotation()) >= -1.e-6;
             }
@@ -71,7 +75,8 @@ bool USCImportLibrary::VerifyRig(ASCVehicle* Vehicle, const FString& PoseReferen
                         {
                             FTransform* X = Expected.Find(T.Bone);
                             if (!X) X = &Expected.Add(T.Bone, Rig->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose()[T.Bone]);
-                            const auto Sample = FSCAnimImporter::Sample(T, Play.Frame);
+                            const auto Sample = FSCAnimImporter::Sample(
+                                T, FSCAnimImporter::TrackFrame(Vehicle->ClipCatalog->Clips[Play.Clip], T, Play.Frame, Play.Speed < 0));
                             if (T.bRotation) X->SetRotation(Sample.GetRotation());
                             if (T.bPosition) X->SetTranslation(Sample.GetTranslation());
                         }

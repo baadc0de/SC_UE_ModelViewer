@@ -92,6 +92,13 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
                                 : M.Equals(TEXT("first"), ESearchCase::IgnoreCase) ? ESCCameraMode::FirstPerson
                                                                                   : ESCCameraMode::Orbit);
         })));
+    Commands.Add(MakeUnique<FAutoConsoleCommand>(TEXT("sc.Fragment"), TEXT("sc.Fragment <fragment> [tag]: play a Mannequin fragment of the loaded vehicle"),
+        FConsoleCommandWithArgsDelegate::CreateLambda([Weak](const TArray<FString>& Args) {
+            ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+            if (!V || Args.IsEmpty()) return;
+            const FName Tag = Args.IsValidIndex(1) ? FName(*Args[1]) : NAME_None;
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FRAGMENT_CMD fragment=%s tag=%s ok=%d"), *Args[0], *Tag.ToString(), V->PlayFragment(FName(*Args[0]), Tag));
+        })));
     RegisterFirstPersonCommands();
     RegisterPlayerCommands();
 }

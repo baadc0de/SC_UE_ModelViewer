@@ -18,7 +18,10 @@ use std::{
 //     the CAF that path names, so each exported clip carries the key block of its own CAF (earlier
 //     packages can hold another clip's keys); a clip merged across rigs runs as long as its longest
 //     contributor (earlier packages cut it at the first contributor's length).
-pub const CACHE_FORMAT_VERSION: u32 = 17;
+// 18: a clip merged across rigs lists every contributing animation in `sources` (rig, fps, frame_count,
+//     start pose) and each channel names its own by `source`; the host times and anchors each track by
+//     it (earlier packages give every track the clip-level length, rate and start pose).
+pub const CACHE_FORMAT_VERSION: u32 = 18;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");
