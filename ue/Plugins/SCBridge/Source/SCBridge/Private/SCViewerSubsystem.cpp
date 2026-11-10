@@ -1,6 +1,7 @@
 // USCViewerSubsystem: archive open, async search, the load pipeline with phase progress and cancel, unload with
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
+#include "EngineUtils.h"
 #include "SCViewerAutomation.h"
 #include "SCViewerPawn.h"
 #include "SCFirstPersonCharacter.h"
@@ -624,6 +625,21 @@ void USCViewerSubsystem::FailPlayerKit(const FString& Error)
     KitJob.Reset();
     KitSource.Reset();
     KitProgress.Reset();
+    // A rejected kit leaves nothing behind: its actor (meshes, materials, textures) and parsed data go, so a
+    // retry starts clean and repeated failures stay bounded.
+    if (KitActor && IsValid(KitActor))
+    {
+        if (FirstPerson && FirstPerson->Body->GetKit() == KitActor) FirstPerson->Body->Detach();
+        KitActor->SetActorHiddenInGame(true);
+        KitActor->Destroy();
+    }
+    KitActor = nullptr;
+    KitData.Reset();
+    KitClips.Reset();
+    int32 LiveVehicles = 0;
+    if (UWorld* World = GetViewerWorld())
+        for (TActorIterator<ASCVehicle> It(World); It; ++It) LiveVehicles += IsValid(*It) && !It->IsActorBeingDestroyed();
+    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_RELEASED live_vehicles=%d (the loaded ship counts one)"), LiveVehicles);
     UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_KIT result=Failed seconds=%.3f error=\"%s\" (first person stays capsule-only)"),
            FPlatformTime::Seconds() - KitStart, *Error);
     if (FirstPerson) FirstPerson->BodyStatus = GetPlayerKitStatus();
@@ -710,6 +726,7 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
             return;
         }
         KitActor = KitJob->GetResult().Vehicle.Get();
+        if (KitActor) KitActor->SetActorHiddenInGame(true); // unpublished: never visible before it is validated
         UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_IMPORT seconds=%.3f rigs=%d meshes=%d warnings=%d"), KitJob->GetResult().TotalSeconds,
                KitActor ? KitActor->Rigs.Num() : 0, KitActor ? KitActor->Meshes.Num() : 0, KitJob->GetResult().Warnings.Num());
         KitJob.Reset();
@@ -746,6 +763,7 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
         KitData = Result.Kit;
         KitClips = Result.Clips;
         KitState = EPlayerKitState::Ready;
+        for (const FString& D : KitData->Diagnostics) UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_DIAGNOSTIC %s"), *D);
         UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT result=Ready seconds=%.3f gender=%s loadout=%s weapons=%d states=%d blend_spaces=%d clips=%d clip_failures=%d"),
                FPlatformTime::Seconds() - KitStart, *KitData->Gender, *KitData->Loadout, KitData->Weapons.Num(), KitData->States.Num(),
                KitData->BlendSpaces.Num(), KitClips->Num(), Result.Failed);
@@ -761,8 +779,8 @@ void USCViewerSubsystem::AttachPlayerKit()
     FString Error;
     if (!FirstPerson->Body->Attach(KitActor, KitData, KitClips, Error))
     {
-        FirstPerson->BodyStatus = TEXT("Player body unavailable (capsule only): ") + Error;
         UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_BODY attach failed: %s"), *Error);
+        FailPlayerKit(Error); // capsule only; the kit actor and data are released
     }
 }
 

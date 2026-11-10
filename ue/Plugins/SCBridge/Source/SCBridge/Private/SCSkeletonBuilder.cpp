@@ -74,7 +74,6 @@ bool FSCSkeletalMeshImporter::Build(const FSCDerivedMesh& Data, USkeletalMesh* M
         Section.MaterialIndex = Group.GetValue();
         Section.BaseIndex = Indices.Num();
         Section.BaseVertexIndex = Vertices.Num();
-        Section.BoneMap = LOD->RequiredBones;
         Section.MaxBoneInfluences = 4;
         for (auto Triangle : Data.Description.GetPolygonGroupTriangles(Group))
         {
@@ -118,6 +117,26 @@ bool FSCSkeletalMeshImporter::Build(const FSCDerivedMesh& Data, USkeletalMesh* M
             ++Section.NumTriangles;
         }
         Section.NumVertices = Vertices.Num() - Section.BaseVertexIndex;
+        // Per-section bone map: only the joints that weight this section's vertices (sorted); influences become
+        // indices into it. GPU skinning uploads BoneMap.Num() matrices per section per frame, so a full-skeleton
+        // map (499 joints on a character) per section is wasted work. Measured in WP-P2 round 2: no visible change
+        // in frame time, so this was not the cause of the player body's frame cost.
+        // RequiredBones stays the whole skeleton: sockets and attachments need every joint's transform.
+        {
+            TArray<FBoneIndexType> Used;
+            for (int32 V = Section.BaseVertexIndex; V < Vertices.Num(); ++V)
+                for (int32 K = 0; K < 4; ++K)
+                    if (Weights[V].InfluenceWeights[K]) Used.AddUnique(FBoneIndexType(Weights[V].InfluenceBones[K]));
+            Used.Sort();
+            if (Used.IsEmpty()) Used.Add(0);
+            Section.BoneMap = Used;
+            for (int32 V = Section.BaseVertexIndex; V < Vertices.Num(); ++V)
+                for (int32 K = 0; K < 4; ++K)
+                {
+                    const int32 Local = Weights[V].InfluenceWeights[K] ? Used.IndexOfByKey(FBoneIndexType(Weights[V].InfluenceBones[K])) : 0;
+                    Weights[V].InfluenceBones[K] = FBoneIndexType(FMath::Max(Local, 0));
+                }
+        }
         if (Section.NumTriangles)
         {
             TMap<int32, TArray<int32>> Duplicates;

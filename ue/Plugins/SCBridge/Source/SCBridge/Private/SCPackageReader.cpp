@@ -147,13 +147,23 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     // Nested assemblies (a personal weapon's own children) follow their parent depth-first; ParentId binds
     // them to that instance even when the authored parent name differs from the instance's entity name.
     TArray<FString> NestedPackages; // nested assemblies keep their own palettes next to their manifest
-    TFunction<void(const TArray<TSharedPtr<FJsonValue>>&, const FString&)> ReadChildren =
-        [&](const TArray<TSharedPtr<FJsonValue>>& List, const FString& ParentKey) {
+    TFunction<void(const TArray<TSharedPtr<FJsonValue>>&, const FString&, const FString&)> ReadChildren =
+        [&](const TArray<TSharedPtr<FJsonValue>>& List, const FString& ParentKey, const FString& ParentEntity) {
+            // Inside a nested assembly every entry binds to the containing instance (its authored parent names the
+            // assembly's own root, e.g. the weapon's class). Accessory-to-accessory parenting (weapon -> mount ->
+            // optic) is not resolved: nested entries carry no ids. Guard: say so loudly instead of misplacing it.
+            TSet<FString> Siblings;
+            if (!ParentKey.IsEmpty())
+                for (const auto& V : List)
+                    if (const auto O = Object(V)) Siblings.Add(String(O, TEXT("entity_name")));
             for (const auto& V : List)
             {
                 FSCSceneInstance I;
                 if (!Instance(Object(V), I, Detail)) I.ImportWarning = Detail;
                 I.ParentId = ParentKey;
+                if (!ParentKey.IsEmpty() && Siblings.Contains(I.ParentEntityName) && I.ParentEntityName != I.EntityName)
+                    Warn(I.EntityName, FString::Printf(TEXT("nested parent '%s' is another entry of the '%s' assembly; accessory-to-accessory "
+                        "parenting is not supported, attached to the assembly root (known limit)"), *I.ParentEntityName, *ParentEntity));
                 if (I.SourceTransformBasis.IsEmpty() && I.ImportWarning.IsEmpty())
                     I.ImportWarning = I.MeshAsset.IsEmpty() && !I.PortJson.IsEmpty() ? FString() // metadata-only item
                                                                                      : TEXT("Child lacks resolved source_transform_basis");
@@ -165,11 +175,11 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
                 {
                     FString PackageDir;
                     if (FSCPackageSource::Normalize(String(O, TEXT("package_dir")), PackageDir)) NestedPackages.AddUnique(PackageDir);
-                    ReadChildren(ReaderArray(O, TEXT("children")), Key);
+                    ReadChildren(ReaderArray(O, TEXT("children")), Key, String(O, TEXT("entity_name")));
                 }
             }
         };
-    ReadChildren(ReaderArray(Scene, TEXT("children")), FString());
+    ReadChildren(ReaderArray(Scene, TEXT("children")), FString(), FString());
     for (const auto& V : ReaderArray(Scene, TEXT("interiors")))
     {
         const auto O = Object(V); FSCInterior I;

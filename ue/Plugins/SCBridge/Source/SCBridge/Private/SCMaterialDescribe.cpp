@@ -187,6 +187,36 @@ void Direct(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPa
     SurfaceGloss(D, Sub, A);
     Emission(D, Sub, A);
 }
+/** UE HairShadingCommon.ush GetHairColorFromMelanin (absorption model, [0..1] melanin), on the CPU. */
+FLinearColor HairColorFromMelanin(float Melanin01, float Redness, const FLinearColor& Dye)
+{
+    constexpr float B = 0.3f;
+    const float D = 5.969f - 0.215f * B + 2.532f * B * B - 10.73f * B * B * B + 5.574f * B * B * B * B + 0.245f * B * B * B * B * B;
+    const float Melanin = -FMath::Loge(FMath::Max(1.f - FMath::Clamp(Melanin01, 0.f, 1.f), 0.0001f));
+    const float Eu = Melanin * (1.f - FMath::Clamp(Redness, 0.f, 1.f)), Pheo = Melanin * FMath::Clamp(Redness, 0.f, 1.f);
+    const float EuA[3] = {0.506f, 0.841f, 1.653f}, PheoA[3] = {0.343f, 0.733f, 1.924f}, DyeC[3] = {Dye.R, Dye.G, Dye.B};
+    float Out[3];
+    for (int32 I = 0; I < 3; ++I)
+    {
+        const float DyeAbs = FMath::Square(FMath::Loge(FMath::Clamp(DyeC[I], 1e-4f, 1.f)) / D);
+        Out[I] = FMath::Exp(-FMath::Sqrt(Eu * EuA[I] + Pheo * PheoA[I] + DyeAbs) * D);
+    }
+    return FLinearColor(Out[0], Out[1], Out[2]);
+}
+/** HairPBR: card coverage from the `opacity` slot (red channel) and, when the material authors BaseMelanin,
+ *  colour = melanin model (BaseMelanin, BaseMelaninRedness, DyeColor x DyeAmount) x BaseTintColor; otherwise
+ *  the authored Diffuse (hair caps: black). */
+void Hair(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
+{
+    if (const FObj Opacity = Slot(Sub, TEXT("opacity"))) Tex(D, TEXT("OpacityMap"), Str(Opacity, TEXT("export_path")), ESCTextureRole::Linear);
+    if (!A.Params.Contains(TEXT("BaseMelanin"))) return;
+    FLinearColor Dye = FLinearColor::White, Tint = FLinearColor::White;
+    if (A.Params.Contains(TEXT("DyeColor"))) ParseRgb(A.Params[TEXT("DyeColor")], Dye);
+    if (A.Params.Contains(TEXT("BaseTintColor"))) ParseRgb(A.Params[TEXT("BaseTintColor")], Tint);
+    const float DyeAmount = FMath::Clamp(A.Param(TEXT("DyeAmount"), 0.f), 0.f, 1.f);
+    D.Vectors.Add(TEXT("DiffuseColor"), HairColorFromMelanin(A.Param(TEXT("BaseMelanin"), 0.f), A.Param(TEXT("BaseMelaninRedness"), 0.f),
+        FMath::Lerp(FLinearColor::White, Dye, DyeAmount)) * Tint);
+}
 template <typename V> void CopyPrefix(TMap<FName, V>& Map, const FString& From, const FString& To)
 {
     TArray<TPair<FName, V>> Add;
@@ -269,6 +299,10 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     else if (F == TEXT("MeshDecal")) D.Master = ESCMaster::MeshDecal;
     else if (F == TEXT("DisplayScreen") || F == TEXT("UIPlane") || F == TEXT("Monitor") || F == TEXT("UIMesh")
         || F == TEXT("Hologram") || F == TEXT("HologramCIG") || F == TEXT("Shield_Holo")) D.Master = ESCMaster::EmissiveUnlit;
+    // Character families (WP-P2 round 2): plain lit mapping of their textures through the Illum master, no
+    // subsurface / DNA / wrinkle work. HumanSkin_V2 and Eye: base colour, DDNA normal, spec map, authored F0.
+    // HairPBR: card coverage from the `opacity` slot (masked), colour from the authored melanin parameters.
+    else if (F == TEXT("HumanSkin_V2") || F == TEXT("Eye") || F == TEXT("HairPBR")) D.Master = ESCMaster::Illum;
     else if (F != TEXT("NoDraw"))
         D.Warnings.Add(FString::Printf(TEXT("Unknown shader family '%s' (shader '%s'); using M_SC_Fallback"), *F, *D.Shader));
     D.bHidden = F == TEXT("NoDraw") || Str(Child(Sub, TEXT("activation_state")), TEXT("state")) == TEXT("inactive");
@@ -285,8 +319,9 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     bool bForward = IsForward(A);
     if (AC) AC->TryGetBoolField(TEXT("forward_rendering"), bForward);
     D.bForward = bForward;
+    const bool bHairCards = F == TEXT("HairPBR") && Slot(Sub, TEXT("opacity"));
     if (bDecal || In.bBlended || (Opacity < 1.f && AlphaTest <= 0.f)) D.Blend = ESCBlend::Translucent;
-    else if (AlphaTest > 0.f || bForward) D.Blend = ESCBlend::Masked;
+    else if (AlphaTest > 0.f || bForward || bHairCards) D.Blend = ESCBlend::Masked;
     // Cutoff: authored AlphaTest; a forward card without one uses UE's default opacity-mask clip value.
     const float Cutoff = AlphaTest > 0.f ? AlphaTest : GetDefault<UMaterial>()->OpacityMaskClipValue;
     D.bTwoSided = bDecal; // v1: mtl.rs is_double_sided
@@ -334,6 +369,7 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     else
     {
         Direct(D, Sub, A, Palette);
+        if (F == TEXT("HairPBR")) Hair(D, Sub, A);
         if (D.Master == ESCMaster::MeshDecal || D.Master == ESCMaster::Translucent)
         {
             if (const FObj Height = Slot(Sub, TEXT("height"))) Tex(D, TEXT("HeightMap"), Str(Height, TEXT("export_path")), ESCTextureRole::Linear);

@@ -10,6 +10,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "SCPackageSource.h"
 #include "Async/ParallelFor.h"
+#include "Misc/ScopeExit.h"
 #include <atomic>
 #include "Misc/Paths.h"
 
@@ -83,6 +84,33 @@ FVector ClosestBarycentric(const FVector2D& P, const FVector2D& A, const FVector
     const double Denom = 1.0 / (VA + VB + VC);
     const double V = VB * Denom, W = VC * Denom;
     return FVector(1 - V - W, V, W);
+}
+// A segment AB (bTriangle false) or a degenerate (collinear / coincident) triangle ABC: the closest point over its
+// edges (ties: the shortest edge, so the nearest examples blend), weights mapped back to the face's vertices; fully
+// coincident points give A all the weight.
+FVector DegenerateBarycentric(const FVector2D& P, const FVector2D& A, const FVector2D& B, const FVector2D& C, bool bTriangle)
+{
+    const FVector2D V[3] = {A, B, C};
+    const TPair<int32, int32> Edges[3] = {{0, 1}, {1, 2}, {0, 2}};
+    FVector Best(1, 0, 0);
+    double BestDistance = TNumericLimits<double>::Max(), BestLength = TNumericLimits<double>::Max();
+    for (int32 K = 0; K < (bTriangle ? 3 : 1); ++K)
+    {
+        const int32 I = Edges[K].Key, J = Edges[K].Value;
+        const double Length = FVector2D::DistSquared(V[I], V[J]);
+        if (Length <= 0) continue;
+        const double T = FMath::Clamp(((P - V[I]) | (V[J] - V[I])) / Length, 0.0, 1.0);
+        const double Distance = FVector2D::DistSquared(P, V[I] + (V[J] - V[I]) * T);
+        if (Distance < BestDistance - 1e-12 || (Distance <= BestDistance + 1e-12 && Length < BestLength))
+        {
+            BestDistance = Distance;
+            BestLength = Length;
+            Best = FVector(0, 0, 0);
+            Best[I] = 1 - T;
+            Best[J] += T;
+        }
+    }
+    return Best;
 }
 void ComputeCS(const TArray<FTransform>& Local, const TArray<int32>& Parents, TArray<FTransform>& CS)
 {
@@ -215,6 +243,13 @@ void FSCPlayerClip::ApplyAdditive(float Seconds, float Alpha, TArray<FTransform>
 
 // ---------------------------------------------------------------- blend spaces
 
+float FSCBlendSampler::StickySeamAngle(float Angle, float Previous, float Band)
+{
+    // +-pi is one direction but two ends of the TravelAngle axis: near it, stay on the side used last frame.
+    if (FMath::Abs(Angle) > UE_PI - Band && FMath::Abs(Previous) > UE_PI - Band && FMath::Sign(Angle) != FMath::Sign(Previous))
+        return Angle > 0 ? Angle - UE_TWO_PI : Angle + UE_TWO_PI;
+    return Angle;
+}
 void FSCBlendSampler::Weights(const FSCBlendSpace& Space, TConstArrayView<float> Params, TArray<TPair<int32, float>>& Out)
 {
     Out.Reset();
@@ -238,23 +273,20 @@ void FSCBlendSampler::Weights(const FSCBlendSpace& Space, TConstArrayView<float>
     };
     const FVector2D P = Normalised(Params);
     double Best = TNumericLimits<double>::Max();
+    // Combined spaces: the choosing selector picks one component first; only its faces interpolate.
+    const int32 Component = Space.SelectComponent(Params);
     // Faces are fans (quads split along their first diagonal); a 1-D space uses its face edges as segments.
     for (const auto& Face : Space.Faces)
     {
         bool bOK = Face.Num() >= 2;
-        for (int32 E : Face) bOK &= Usable(E);
+        for (int32 E : Face) bOK &= Usable(E) && (Component == INDEX_NONE || Space.Examples[E].Component == Component);
         if (!bOK) continue;
         auto Try = [&](int32 IA, int32 IB, int32 IC) {
             const FVector2D A = Normalised(Space.Examples[IA].Params), B = Normalised(Space.Examples[IB].Params);
             const FVector2D C = IC == INDEX_NONE ? B : Normalised(Space.Examples[IC].Params);
             FVector Bary;
             if (IC == INDEX_NONE || FMath::Abs((B - A) ^ (C - A)) < 1e-9)
-            {
-                // Segment (or degenerate triangle): closest point on the longest edge.
-                const FVector2D AB = B - A;
-                const double T = AB.SizeSquared() > 0 ? FMath::Clamp(((P - A) | AB) / AB.SizeSquared(), 0.0, 1.0) : 0.0;
-                Bary = FVector(1 - T, T, 0);
-            }
+                Bary = DegenerateBarycentric(P, A, B, C, IC != INDEX_NONE);
             else
                 Bary = ClosestBarycentric(P, A, B, C);
             const FVector2D Q = A * Bary.X + B * Bary.Y + C * Bary.Z;
@@ -335,12 +367,12 @@ ESCWeaponAction FSCWeaponStateMachine::Request(int32 Index) const
     default: return ESCWeaponAction::None;                        // mid-transition: ignored
     }
 }
-void FSCWeaponStateMachine::BeginSelect(int32 Index, float Seconds)
+void FSCWeaponStateMachine::BeginSelect(int32 Index, float Seconds, float AlreadyElapsed)
 {
     State = ESCWeaponState::Selecting;
     Active = Index;
     Queued = INDEX_NONE;
-    Elapsed = 0;
+    Elapsed = FMath::Max(0.f, AlreadyElapsed);
     Duration = FMath::Max(0.f, Seconds);
 }
 void FSCWeaponStateMachine::BeginDeselect(float Seconds, int32 Then)
@@ -468,16 +500,8 @@ const FSCMotionState* FSCPlayerAnimator::ResolveState(const FSCAnimatorInput& In
     if (!Kit->FindState(Input.WeaponChildId, Stance, FString(), Input.bFirstPerson)) Stance = StandTag;
     FString Slow, Fast;
     SpeedTags(Input.WeaponChildId, Stance, Input.bFirstPerson, Slow, Fast);
-    FString Tag = Input.bFast ? Fast : Slow;
-    if (Input.bFast)
-    {
-        // The fast space may not cover sideways/backward travel (sprint): use the slow tag there.
-        const FSCMotionState* S = Kit->FindState(Input.WeaponChildId, Stance, Fast, Input.bFirstPerson);
-        const FSCMotionFragment* Move = S ? S->Default(MoveFragment) : nullptr;
-        const FSCMotionLayer* Layer = Move ? BaseLayer(*Move) : nullptr;
-        const FSCBlendSpace* Space = Layer ? Kit->BlendSpaces.Find(Layer->BlendSpace) : nullptr;
-        if (Space && Input.Speed >= MoveThreshold && !FSCBlendSampler::CoversAngle(*Space, Input.TravelAngle)) Tag = Slow;
-    }
+    // One decision for animation and capsule speed (the body sets MaxWalkSpeed from CanRun too).
+    const FString Tag = Input.bFast && CanRun(Input) ? Fast : Slow;
     if (bFastOut) *bFastOut = Tag == Fast && !Fast.IsEmpty();
     const FSCMotionState* State = Kit->FindState(Input.WeaponChildId, Stance, Tag, Input.bFirstPerson);
     return State ? State : Kit->FindState(Input.WeaponChildId, Stance, FString(), Input.bFirstPerson);
@@ -500,7 +524,10 @@ void FSCPlayerAnimator::EvaluateSource(FSource& S, const FSCAnimatorInput& Input
     Out = RefPose;
     const FSCMotionLayer* Layer = S.Fragment ? BaseLayer(*S.Fragment) : nullptr;
     if (!Layer) return;
+    if (bAdvance) S.Clock += Input.DeltaSeconds;
     const float Dt = bAdvance ? Input.DeltaSeconds * Layer->Speed : 0.f;
+    // The base layer's authored weight scales it against the bind pose (1 in every LIVE kit; 0 stays 0).
+    ON_SCOPE_EXIT { if (Layer->Weight < 1.f) { Scratch2 = MoveTemp(Out); Out = RefPose; BlendInto(Out, Scratch2, FMath::Max(0.f, Layer->Weight)); } };
     if (const FSCPlayerClip* C = Clip(Layer->Clip))
     {
         C->Sample(S.Time, Out);
@@ -529,7 +556,7 @@ void FSCPlayerAnimator::EvaluateSource(FSource& S, const FSCAnimatorInput& Input
     }
     S.Time = FMath::Fmod(S.Time + Dt * Rate, 1.f);
 }
-float FSCPlayerAnimator::PlayOneShot(FName Fragment, const FSCAnimatorInput& Input)
+float FSCPlayerAnimator::PlayOneShot(FName Fragment, const FSCAnimatorInput& Input, float StartTime)
 {
     const FSCMotionState* State = ResolveState(Input);
     const FSCMotionFragment* F = State ? State->Default(Fragment) : nullptr;
@@ -537,7 +564,42 @@ float FSCPlayerAnimator::PlayOneShot(FName Fragment, const FSCAnimatorInput& Inp
     if (!F) return 0;
     OneShot.Fragment = F;
     OneShot.Duration = Length(*F);
+    OneShot.Time = StartTime;
     return OneShot.Duration;
+}
+float FSCPlayerAnimator::LayerSeconds(const FSCMotionLayer& L, float ClipDuration, float Clock)
+{
+    // Own clock per layer (Mannequin layers are not phase-locked to the base); zero speed holds the start time.
+    const float T = L.StartTime + FMath::Max(0.f, Clock) * FMath::Max(0.f, L.Speed);
+    if (ClipDuration <= 0) return 0;
+    return L.bLoop ? FMath::Fmod(T, ClipDuration) : FMath::Min(T, ClipDuration);
+}
+bool FSCPlayerAnimator::FragmentReady(const FSCMotionFragment& F) const
+{
+    if (!F.IsPlayable()) return false;
+    for (const auto& L : F.Layers)
+    {
+        if (!L.Clip.IsNone() && !Clip(L.Clip)) return false;
+        if (const FSCBlendSpace* Space = Kit->BlendSpaces.Find(L.BlendSpace))
+            for (const auto& E : Space->Examples)
+                if (!E.bMissing && !Clip(E.Clip)) return false;
+    }
+    return true;
+}
+bool FSCPlayerAnimator::CanRun(const FSCAnimatorInput& Input) const
+{
+    FString Stance = Input.bCrouched ? CrouchTag : StandTag;
+    if (!Kit->FindState(Input.WeaponChildId, Stance, FString(), Input.bFirstPerson)) Stance = StandTag;
+    FString Slow, Fast;
+    SpeedTags(Input.WeaponChildId, Stance, Input.bFirstPerson, Slow, Fast);
+    if (Fast.IsEmpty() || Fast == Slow) return false;
+    // The fast space may not cover sideways/backward travel (sprint): running is allowed only where it does.
+    const FSCMotionState* S = Kit->FindState(Input.WeaponChildId, Stance, Fast, Input.bFirstPerson);
+    const FSCMotionFragment* Move = S ? S->Default(MoveFragment) : nullptr;
+    const FSCMotionLayer* Layer = Move ? BaseLayer(*Move) : nullptr;
+    const FSCBlendSpace* Space = Layer ? Kit->BlendSpaces.Find(Layer->BlendSpace) : nullptr;
+    const float Angle = FMath::IsFinite(Input.IntentAngle) ? Input.IntentAngle : Input.TravelAngle;
+    return Space && FSCBlendSampler::CoversAngle(*Space, Angle);
 }
 float FSCPlayerAnimator::OneShotProgress() const
 {
@@ -590,13 +652,13 @@ void FSCPlayerAnimator::Tick(const FSCAnimatorInput& Input)
         Accumulated += S.Weight;
     }
     if (Sources.IsEmpty()) Pose = RefPose;
-    // Additive layers of the current base fragment (layer weight; zero stays zero).
+    // Additive layers of the current base fragment (layer weight; zero stays zero), on the source's own clock in
+    // seconds (the base's blend-space phase is normalised and is not a time).
     if (!Sources.IsEmpty() && Sources.Last().Fragment)
         for (const auto& L : Sources.Last().Fragment->Layers)
             if (L.bAdditive)
                 if (const FSCPlayerClip* C = Clip(L.Clip))
-                    C->ApplyAdditive(L.Speed > 0 ? FMath::Fmod(Sources.Last().Time * L.Speed, FMath::Max(C->Duration, UE_KINDA_SMALL_NUMBER)) : 0.f,
-                                     L.Weight * Sources.Last().Weight, Pose);
+                    C->ApplyAdditive(LayerSeconds(L, C->Duration, Sources.Last().Clock), L.Weight * Sources.Last().Weight, Pose);
     // One-shot fragment (select/deselect): full layers override sparsely, additive layers compose on top.
     if (OneShot.Fragment)
     {
@@ -605,9 +667,9 @@ void FSCPlayerAnimator::Tick(const FSCAnimatorInput& Input)
         {
             const FSCPlayerClip* C = Clip(L.Clip);
             if (!C) continue;
-            const float T = OneShot.Time * L.Speed;
+            const float T = FMath::Max(0.f, OneShot.Time) * L.Speed;
             const float End = C->Duration / FMath::Max(L.Speed, UE_KINDA_SMALL_NUMBER);
-            float W = L.Weight * (L.BlendIn > 0 ? FMath::Min(1.f, OneShot.Time / L.BlendIn) : 1.f);
+            float W = L.Weight * (L.BlendIn > 0 ? FMath::Clamp(OneShot.Time / L.BlendIn, 0.f, 1.f) : 1.f);
             if (L.bAdditive)
                 C->ApplyAdditive(T, W, Pose);
             else

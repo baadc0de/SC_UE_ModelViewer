@@ -62,6 +62,10 @@ class Graph:
             self.m.set_editor_property("translucency_lighting_mode", lighting)
         if nanite:
             self.m.set_editor_property("used_with_nanite", True)
+        # Skinned parts (WP-U3 rigs, WP-P2 player body and weapons) use the same masters. A standalone (-game)
+        # session cannot add a usage flag at runtime: the proxy would fall back to the engine's default
+        # (WorldGrid) material, so the flag is part of the asset.
+        self.m.set_editor_property("used_with_skeletal_mesh", True)
         # Explicit clip: mask graphs output (alpha - AlphaTest + 0.5), i.e. a texel survives when alpha >= the
         # instance's authored AlphaTest. UE's default clip (0.3333, Material.cpp) would shift every threshold.
         self.m.set_editor_property("opacity_mask_clip_value", 0.5)
@@ -184,7 +188,10 @@ def surface_master(name):
     albedo = g.mul(base, g.one_minus(g.scalar("Metallic", 0.0)))
     emissive = g.glow(base, (diffuse, "A"))
     g.slab(albedo, f0, None, g.roughness("", uv), normal, emissive)
-    mask = g.add(g.sub((diffuse, "A"), g.scalar("AlphaTest", 0.0)), g.const(0.5))
+    # Coverage = diffuse alpha x a separate opacity map (HairPBR cards: TexSlot1 `opacity`, red channel);
+    # the white default leaves every other family's coverage unchanged.
+    coverage = g.mul((diffuse, "A"), (g.texture("OpacityMap", g.white_linear, ST.SAMPLERTYPE_MASKS, uv), "R"))
+    mask = g.add(g.sub(coverage, g.scalar("AlphaTest", 0.0)), g.const(0.5))
     g.out(*mask, MP.MP_OPACITY_MASK)
     return g.save()
 
@@ -356,7 +363,14 @@ if not unreal.SystemLibrary.get_console_variable_bool_value("r.Substrate"):
 # Regenerate from scratch so the checked-in assets always equal this script's output. Packages that the
 # commandlet has not loaded are removed on disk first (editor-side deletion leaves them in this session).
 CONTENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Plugins", "SCBridge", "Content", "Materials")
-shutil.rmtree(CONTENT, ignore_errors=True)
+# M_SC_LightFunction belongs to create_light_material.py (WP-U3) and is kept.
+KEEP = {"M_SC_LightFunction.uasset"}
+for entry in (os.listdir(CONTENT) if os.path.isdir(CONTENT) else []):
+    path = os.path.join(CONTENT, entry)
+    if os.path.isdir(path):
+        shutil.rmtree(path, ignore_errors=True)
+    elif entry not in KEEP:
+        os.remove(path)
 Graph.white = default_texture("T_SC_White", (255, 255, 255, 255), True, unreal.TextureCompressionSettings.TC_DEFAULT)
 Graph.white_linear = default_texture("T_SC_WhiteLinear", (255, 255, 255, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.black_linear = default_texture("T_SC_BlackLinear", (0, 0, 0, 255), False, unreal.TextureCompressionSettings.TC_MASKS)

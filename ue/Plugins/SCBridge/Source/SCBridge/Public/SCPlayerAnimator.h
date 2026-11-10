@@ -52,6 +52,10 @@ struct SCBRIDGE_API FSCBlendSampler
     static float NominalForwardSpeed(const FSCBlendSpace& Space);
     /** Whether TravelAngle lies within the angles the space's examples cover. */
     static bool CoversAngle(const FSCBlendSpace& Space, float TravelAngle);
+    /** TravelAngle with the +-pi seam made sticky: within Band of pi, an angle on the other side of the seam from
+     *  last frame's is continued past pi (the sampler clamps it to that side's edge). Some LIVE spaces author
+     *  different foot-lead clips at +pi and -pi; straight backward travel would otherwise alternate between them. */
+    static float StickySeamAngle(float Angle, float Previous, float Band = 0.35f);
 };
 
 enum class ESCWeaponState : uint8
@@ -74,7 +78,10 @@ public:
     /** What a request for weapon Index (INDEX_NONE: holster) does now. Armed + another index: deselect first,
      *  the other weapon is selected when the deselect ends (Queued). Never changes state. */
     ESCWeaponAction Request(int32 Index) const;
-    void BeginSelect(int32 Index, float Seconds);
+    /** AlreadyElapsed: time of this frame left over after the previous transition ended (queued swap). */
+    void BeginSelect(int32 Index, float Seconds, float AlreadyElapsed = 0);
+    /** Time past the end of the transition that just ended (valid right after Tick returned its event). */
+    float GetOvershoot() const { return FMath::Max(0.f, Elapsed - Duration); }
     void BeginDeselect(float Seconds, int32 Then = INDEX_NONE);
     enum class EEvent : uint8 { None, Selected, Holstered };
     EEvent Tick(float DeltaSeconds);
@@ -96,6 +103,8 @@ struct SCBRIDGE_API FSCAnimatorInput
     bool bFirstPerson = true, bCrouched = false, bFast = false;
     float Speed = 0;       // ground speed, m/s
     float TravelAngle = 0; // rad relative to facing, left positive (Mannequin TravelAngle)
+    /** Intended travel direction (movement input), for the run decision; NaN: use TravelAngle. */
+    float IntentAngle = std::numeric_limits<float>::quiet_NaN();
     float PitchDegrees = 0; // view pitch, up positive
     float DeltaSeconds = 0;
     /** Off-hand IK: weapon helper relative to the hand-port joint; Weight 0 disables. */
@@ -122,8 +131,16 @@ public:
     FTransform ComponentSpace(int32 Bone) const;
     /** Start a one-shot fragment (select/deselect) of the state Input resolves to; returns its length in seconds
      *  (0: the state has no playable fragment). */
-    float PlayOneShot(FName Fragment, const FSCAnimatorInput& Input);
+    float PlayOneShot(FName Fragment, const FSCAnimatorInput& Input, float StartTime = 0);
+    /** Seconds into a layer's clip after Clock seconds on its own clock: start time + clock x speed, looped or held. */
+    static float LayerSeconds(const FSCMotionLayer& Layer, float ClipDuration, float Clock);
+    /** Every clip the fragment's playable layers reference (blend-space examples included) is loaded. */
+    bool FragmentReady(const FSCMotionFragment& Fragment) const;
+    /** Whether the fast (run) speed tag may be used for this input: it exists and its movement space covers the
+     *  intended travel direction. Drives both the animation tag and the capsule's run speed. */
+    bool CanRun(const FSCAnimatorInput& Input) const;
     float OneShotProgress() const;
+    float OneShotDuration() const { return OneShot.Fragment ? OneShot.Duration : 0.f; }
     /** Walk/run speeds (m/s) for a weapon: nominal forward speeds of the slowest / fastest speed tag. */
     void LocomotionSpeeds(const FString& WeaponChildId, bool bFirstPerson, float& Slow, float& Fast) const;
     /** Character facing in component space (the root-motion joint's native +Y). */
@@ -139,6 +156,7 @@ private:
         const FSCMotionFragment* Fragment = nullptr;
         FName Key;          // clip or blend space of the base layer
         float Time = 0;     // clip seconds, or blend-space phase 0..1
+        float Clock = 0;    // seconds since the source started (additive layers)
         float Weight = 0, FadeRate = 0;
         bool bFadingIn = false;
     };

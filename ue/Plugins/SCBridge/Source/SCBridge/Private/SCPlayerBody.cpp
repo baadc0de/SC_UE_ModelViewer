@@ -40,18 +40,35 @@ float SubtreeInfluence(const USCRigComponent* Rig, FName Root)
     if (!Weights.GetNeedsCPUAccess() || Weights.GetNumVertices() == 0) return 0;
     double Inside = 0, Total = 0;
     const uint32 Influences = Weights.GetMaxBoneInfluences();
-    for (uint32 V = 0; V < Weights.GetNumVertices(); ++V)
-        for (uint32 K = 0; K < Influences; ++K)
-        {
-            const double W = Weights.GetBoneWeight(V, K);
-            const uint32 Bone = Weights.GetBoneIndex(V, K);
-            Total += W;
-            if (Under.IsValidIndex(int32(Bone)) && Under[Bone]) Inside += W;
-        }
+    // Influence indices are section-local: map them through each section's bone map.
+    for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
+        for (uint32 V = Section.BaseVertexIndex; V < Section.BaseVertexIndex + Section.NumVertices; ++V)
+            for (uint32 K = 0; K < Influences; ++K)
+            {
+                const double W = Weights.GetBoneWeight(V, K);
+                const uint32 Local = Weights.GetBoneIndex(V, K);
+                const int32 Bone = Section.BoneMap.IsValidIndex(int32(Local)) ? int32(Section.BoneMap[Local]) : INDEX_NONE;
+                Total += W;
+                if (Under.IsValidIndex(Bone) && Under[Bone]) Inside += W;
+            }
     return Total > 0 ? float(Inside / Total) : 0.f;
 }
 } // namespace
 
+bool USCPlayerBodyComponent::IsHairOnly(const USCRigComponent* Rig) const
+{
+    // The part's scene instance (root or child, by entity and mesh asset) -> its material sidecar -> families.
+    const FSCSceneManifest& M = Kit->Manifest;
+    FString Sidecar;
+    if (M.Root.EntityName == Rig->OwnerEntity && M.Root.MeshAsset == Rig->MeshAsset) Sidecar = M.Root.MaterialSidecar;
+    for (const FSCSceneInstance& I : M.Children)
+        if (Sidecar.IsEmpty() && I.EntityName == Rig->OwnerEntity && I.MeshAsset == Rig->MeshAsset) Sidecar = I.MaterialSidecar;
+    const FSCMaterialSet* Set = Sidecar.IsEmpty() ? nullptr : M.Materials.FindByPredicate([&](const FSCMaterialSet& S) { return S.Path.Equals(Sidecar, ESearchCase::IgnoreCase); });
+    if (!Set || Set->Submaterials.IsEmpty()) return false;
+    for (const FSCSubmaterial& Sub : Set->Submaterials)
+        if (Sub.ShaderFamily != TEXT("HairPBR")) return false;
+    return true;
+}
 USCPlayerBodyComponent::USCPlayerBodyComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
@@ -103,6 +120,17 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
     Data = InData;
     ClipStore = InClips;
     if (!Animator.Init(*Data, Root->GetSkeletalMeshAsset()->GetRefSkeleton(), *ClipStore, Error)) return false;
+    // Readiness: the unarmed idle the body starts in must have every clip it references, else capsule only.
+    for (const bool bFP : {true, false})
+    {
+        const FSCMotionState* Unarmed = Data->FindState(FString(), FSCPlayerAnimator::StandTag, FString(), bFP);
+        const FSCMotionFragment* Idle = Unarmed ? Unarmed->Default(FSCPlayerAnimator::IdleFragment) : nullptr;
+        if (!Idle || !Animator.FragmentReady(*Idle))
+        {
+            Error = FString::Printf(TEXT("the unarmed %s idle has unreadable or missing clips"), bFP ? TEXT("first-person") : TEXT("third-person"));
+            return false;
+        }
+    }
     Kit = InKit;
     Leader = Root;
     CameraBone = Animator.Bone(Data->CameraBone);
@@ -130,8 +158,8 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
         else CopyMaps.Add(Rig, MoveTemp(Map));
         Followers.Add(Rig);
     }
-    // First-person hidden parts: ports flagged invisible in first person or head wear, the root part's own port
-    // (the head socket), and parts skinned mostly to the joint that carries the camera.
+    // First-person hidden parts: ports flagged invisible in first person or head wear, and parts skinned mostly to
+    // the joint that carries the camera.
     HeadParts.Reset();
     const int32 Head = LeaderRef.GetParentIndex(LeaderRef.FindBoneIndex(FName(*Data->CameraBone)));
     const FName HeadName = Head == INDEX_NONE ? NAME_None : LeaderRef.GetBoneName(Head);
@@ -149,12 +177,24 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
     {
         const FSCItemPort Port = PortOf(Rig);
         const float Influence = SubtreeInfluence(Rig, HeadName);
-        const bool bHide = Port.HasFlag(TEXT("invis_p1")) || Port.HasFlag(TEXT("HeadWear")) ||
-                           (Port.IsValid() && Port.Name == Data->RootPort.Name && Port.OwnerEntity == Data->RootPort.OwnerEntity) || Influence > 0.5f;
+        // Port semantics and skin influence only: the package root may be a visible clothing part (contract:
+        // a helmet or clothing can hide the head, and then another skin becomes the root).
+        const bool bHide = Port.HasFlag(TEXT("invis_p1")) || Port.HasFlag(TEXT("HeadWear")) || Influence > 0.5f;
         UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_PART entity=%s port=%s flags=%s head_influence=%.2f hidden_fp=%d fp_shadow=%d leader_pose=%d"),
                *Rig->OwnerEntity, *Port.Name, *FString::Join(Port.Flags, TEXT(",")), Influence, bHide,
                !bHide || !bHeadWear || Port.HasFlag(TEXT("HeadWear")), Rig != Leader && !CopyMaps.Contains(Rig));
         Rig->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        // Hair cards (every submaterial of the part in the HairPBR family) are authored for the bare head and pass
+        // through worn head wear: hidden in both views while head wear is worn.
+        if (bHeadWear && !Port.HasFlag(TEXT("HeadWear")) && IsHairOnly(Rig))
+        {
+            Rig->SetVisibility(false, true);
+            Rig->SetHiddenInGame(true, true);
+            Rig->bCastHiddenShadow = false;
+            HiddenUnderHeadWear.Add(Rig);
+            UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_PART entity=%s hidden_under_head_wear=1 (HairPBR)"), *Rig->OwnerEntity);
+            continue;
+        }
         const bool bShadow = !bHeadWear || Port.HasFlag(TEXT("HeadWear"));
         Rig->bCastHiddenShadow = bShadow;
         if (!bHide) continue;
@@ -173,12 +213,35 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
     // shadows and is lit. No collision on body or weapon parts.
     TArray<UPrimitiveComponent*> Primitives;
     Kit->GetComponents<UPrimitiveComponent>(Primitives);
+    ViewParts.Reset();
+    HeadShadows.Reset();
+    for (UPrimitiveComponent* P : HeadParts) HeadShadows.Add(P->bCastHiddenShadow);
     for (UPrimitiveComponent* P : Primitives)
     {
         P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         P->bAffectDistanceFieldLighting = false;
         P->bAffectDynamicIndirectLighting = false;
         P->MarkRenderStateDirty();
+        if (!HeadParts.Contains(P) && !HiddenUnderHeadWear.Contains(P)) ViewParts.Add(P);
+    }
+    // Probe box per weapon: every primitive under the weapon's anchor (attachments included), in anchor space.
+    WeaponBoxes.Reset();
+    for (int32 W = 0; W < Data->Weapons.Num(); ++W)
+    {
+        USceneComponent* Anchor = Kit->InstanceAnchors.FindRef(Data->Weapons[W].ChildId);
+        if (!Anchor) continue;
+        TArray<USceneComponent*> Under;
+        Anchor->GetChildrenComponents(true, Under);
+        Under.Add(Anchor);
+        FBox Box(ForceInit);
+        const FTransform ToAnchor = Anchor->GetComponentTransform().Inverse();
+        for (USceneComponent* Child : Under)
+            if (const UPrimitiveComponent* P = Cast<UPrimitiveComponent>(Child))
+            {
+                const FBox Local = P->CalcBounds(FTransform::Identity).GetBox();
+                if (Local.IsValid) Box += Local.TransformBy(P->GetComponentTransform() * ToAnchor);
+            }
+        if (Box.IsValid) WeaponBoxes.Add(W, Box);
     }
     // Weapon slots: stowed weapons the body can draw (an anchor, a hand port, playable select and deselect),
     // ordered by size (primary first), then stow port name (port numbering), then authored order.
@@ -190,6 +253,15 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
         if (!Kit->InstanceAnchors.Contains(Weapon.ChildId) || !Data->HandPortFor(Weapon) || !State ||
             !State->Default(FSCPlayerAnimator::SelectFragment) || !State->Default(FSCPlayerAnimator::DeselectFragment))
             continue;
+        // Every clip of the draw, the holster and the armed idle must have loaded (a sidecar lost in copying
+        // leaves the fragment resolvable but unplayable): otherwise the slot is disabled.
+        const FSCMotionFragment* Idle = State->Default(FSCPlayerAnimator::IdleFragment);
+        if (!Animator.FragmentReady(*State->Default(FSCPlayerAnimator::SelectFragment)) ||
+            !Animator.FragmentReady(*State->Default(FSCPlayerAnimator::DeselectFragment)) || !Idle || !Animator.FragmentReady(*Idle))
+        {
+            UE_LOG(LogSCPlayer, Warning, TEXT("PLAYER_SLOT_DISABLED weapon=%s child=%s reason=\"select/deselect/idle clips unreadable\""), *Weapon.Entity, *Weapon.ChildId);
+            continue;
+        }
         Slots.Add(W);
     }
     Slots.StableSort([&](int32 A, int32 B) {
@@ -225,8 +297,15 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
 void USCPlayerBodyComponent::Detach()
 {
     SetComponentTickEnabled(false);
+    SetFirstPersonPrimitives(false);
+    FirstPersonScale = 1;
     if (ASCFirstPersonCharacter* C = Character())
     {
+        if (C->Camera)
+        {
+            C->Camera->SetEnableFirstPersonScale(false);
+            C->Camera->SetFirstPersonScale(1.f);
+        }
         C->SetEyeSource(nullptr);
         if (USCEyeCameraComponent* Camera = Cast<USCEyeCameraComponent>(C->Camera)) Camera->NearClip = 0;
         if (C->Camera) C->Camera->bUsePawnControlRotation = true;
@@ -240,6 +319,12 @@ void USCPlayerBodyComponent::Detach()
             {
                 P->SetHiddenInGame(false);
                 P->SetVisibility(true);
+            }
+        for (UPrimitiveComponent* P : HiddenUnderHeadWear)
+            if (P)
+            {
+                P->SetHiddenInGame(false, true);
+                P->SetVisibility(true, true);
             }
         Kit->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
         Kit->SetActorHiddenInGame(true);
@@ -255,6 +340,10 @@ void USCPlayerBodyComponent::Detach()
     Followers.Reset();
     CopyMaps.Reset();
     HeadParts.Reset();
+    HeadShadows.Reset();
+    HiddenUnderHeadWear.Reset();
+    ViewParts.Reset();
+    WeaponBoxes.Reset();
     Slots.Reset();
     Weapons = FSCWeaponStateMachine();
     bThirdPerson = false;
@@ -325,10 +414,12 @@ FSCAnimatorInput USCPlayerBodyComponent::MakeInput(float DeltaSeconds) const
     In.DeltaSeconds = DeltaSeconds;
     In.bFirstPerson = !bThirdPerson;
     In.bCrouched = C->bIsCrouched;
-    In.bFast = C->IsRunning();
     const FVector Local = C->GetActorRotation().UnrotateVector(C->GetVelocity());
     In.Speed = C->bNoclip ? 0.f : float(FVector2D(Local).Size() / 100.0);
-    In.TravelAngle = In.Speed >= FSCPlayerAnimator::MoveThreshold ? float(FMath::Atan2(-Local.Y, Local.X)) : 0.f;
+    In.TravelAngle = In.Speed >= FSCPlayerAnimator::MoveThreshold ? FSCBlendSampler::StickySeamAngle(float(FMath::Atan2(-Local.Y, Local.X)), LastTravelAngle) : 0.f;
+    // Intended direction (movement input) decides whether running is allowed, before the velocity turns.
+    const FVector Intent = C->GetActorRotation().UnrotateVector(C->GetCharacterMovement()->GetCurrentAcceleration());
+    if (!FVector2D(Intent).IsNearlyZero()) In.IntentAngle = float(FMath::Atan2(-Intent.Y, Intent.X));
     In.PitchDegrees = float(FRotator::NormalizeAxis(C->GetViewRotation().Pitch));
     if (Weapons.GetState() != ESCWeaponState::Unarmed && Slots.IsValidIndex(Weapons.GetActive()))
     {
@@ -347,6 +438,7 @@ FSCAnimatorInput USCPlayerBodyComponent::MakeInput(float DeltaSeconds) const
             In.OffHandWeight = Weapons.GetState() == ESCWeaponState::Armed && CVarOffHandIK.GetValueOnGameThread() ? 1.f : 0.f;
         }
     }
+    In.bFast = C->IsRunning() && Animator.CanRun(In);
     return In;
 }
 void USCPlayerBodyComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -366,6 +458,7 @@ void USCPlayerBodyComponent::Step(float DeltaSeconds)
         break;
     case FSCWeaponStateMachine::EEvent::Holstered:
     {
+        const float Overshoot = Weapons.GetOvershoot();
         // The deselect has ended: the weapon goes back to its stow port (aligned by its item offset helper).
         int32 Previous = INDEX_NONE;
         for (int32 S = 0; S < Slots.Num(); ++S)
@@ -373,12 +466,18 @@ void USCPlayerBodyComponent::Step(float DeltaSeconds)
         if (Previous != INDEX_NONE) PlaceWeapon(Slots[Previous], false);
         UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_WEAPON state=Unarmed stowed=%s"), Previous != INDEX_NONE ? *SlotWeapon(Previous)->Entity : TEXT("-"));
         UpdateProfile();
-        if (Weapons.GetQueued() != INDEX_NONE) BeginSelect(Weapons.GetQueued());
+        // A queued swap starts with the time of this frame left after the holster ended, on both clocks.
+        if (Weapons.GetQueued() != INDEX_NONE) BeginSelect(Weapons.GetQueued(), Overshoot, DeltaSeconds);
         break;
     }
     default: break;
     }
-    Animator.Tick(MakeInput(DeltaSeconds));
+    const FSCAnimatorInput Input = MakeInput(DeltaSeconds);
+    LastTravelAngle = FMath::UnwindRadians(Input.TravelAngle);
+    Animator.Tick(Input);
+    // Capsule speed follows the same run decision as the animation (no sprint speed while strafing on the slow space).
+    if (!C->bNoclip && C->GetProfile().RunSpeed > 0)
+        C->GetCharacterMovement()->MaxWalkSpeed = Input.bFast ? C->GetProfile().RunSpeed : C->GetProfile().WalkSpeed;
     Leader->LocalPose = Animator.GetPose();
     Leader->RefreshBoneTransforms();
     Leader->RefreshFollowerComponents(); // leader-pose followers skin with the leader's buffer: mark them dirty
@@ -419,8 +518,10 @@ void USCPlayerBodyComponent::ApplyView()
         Eye = Capsule.InverseTransformPosition(bBlocked ? Hit.Location : HeadWorld);
         C->Camera->bUsePawnControlRotation = true;
         C->RefreshEye();
+        UpdateFirstPersonScale(Capsule.TransformPosition(Eye), LastDelta);
         return;
     }
+    UpdateFirstPersonScale(FVector::ZeroVector, -1); // third person: world-space body, scale 1
     // Third person: orbit the camera joint at a presentation distance, pulled in by the level's camera channel.
     const FRotator View = C->GetViewRotation() + FRotator(0, OrbitYaw, 0);
     const FVector Desired = HeadWorld - View.Vector() * OrbitDistance;
@@ -436,6 +537,78 @@ void USCPlayerBodyComponent::ApplyView()
     C->RefreshEye();
     C->Camera->SetWorldRotation(View);
 }
+float USCPlayerBodyComponent::FirstPersonScaleFor(TConstArrayView<float> ProbeDistance, TConstArrayView<float> HitDistance, float Margin, float MinScale)
+{
+    float Scale = 1;
+    for (int32 I = 0; I < FMath::Min(ProbeDistance.Num(), HitDistance.Num()); ++I)
+        if (HitDistance[I] >= 0 && ProbeDistance[I] > UE_KINDA_SMALL_NUMBER)
+            Scale = FMath::Min(Scale, (HitDistance[I] - Margin) / ProbeDistance[I]);
+    return FMath::Clamp(Scale, MinScale, 1.f);
+}
+FVector USCPlayerBodyComponent::HeadLocation() const
+{
+    return Leader && Data ? Leader->GetSocketLocation(FName(*Data->CameraBone)) : FVector::ZeroVector;
+}
+void USCPlayerBodyComponent::SetFirstPersonPrimitives(bool bOn)
+{
+    if (bOn == bFirstPersonPrimitives) return;
+    bFirstPersonPrimitives = bOn;
+    // First-person primitives cast no shadows (engine rule, PrimitiveSceneProxy.cpp), so the body keeps its
+    // world-space shadows except while a wall is in reach. The hidden head parts stop casting their head shadow
+    // meanwhile: the scaled body sits inside the head, and its shadow rays would hit the hidden helmet.
+    for (UPrimitiveComponent* P : ViewParts)
+        if (P) P->SetFirstPersonPrimitiveType(bOn ? EFirstPersonPrimitiveType::FirstPerson : EFirstPersonPrimitiveType::None);
+    for (int32 I = 0; I < HeadParts.Num(); ++I)
+        if (HeadParts[I])
+        {
+            HeadParts[I]->bCastHiddenShadow = !bOn && HeadShadows.IsValidIndex(I) && HeadShadows[I];
+            HeadParts[I]->MarkRenderStateDirty();
+        }
+    UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_FP_PRIMITIVES on=%d parts=%d scale=%.3f"), bOn, ViewParts.Num(), FirstPersonScale);
+}
+void USCPlayerBodyComponent::UpdateFirstPersonScale(const FVector& EyeWorld, float DeltaSeconds)
+{
+    ASCFirstPersonCharacter* C = Character();
+    if (!C || !C->Camera) return;
+    float Target = 1;
+    if (DeltaSeconds >= 0 && !bThirdPerson && GetWorld())
+    {
+        // Probes: the held weapon's box corners (all of its primitives) and the hand port joints.
+        TArray<FVector, TInlineAllocator<12>> Probes;
+        const bool bHeld = Weapons.GetState() != ESCWeaponState::Unarmed && Slots.IsValidIndex(Weapons.GetActive());
+        if (bHeld)
+            if (const FBox* Box = WeaponBoxes.Find(Slots[Weapons.GetActive()]))
+                if (USceneComponent* Anchor = Kit->InstanceAnchors.FindRef(Data->Weapons[Slots[Weapons.GetActive()]].ChildId))
+                {
+                    FVector Corners[8];
+                    Box->GetVertices(Corners);
+                    for (const FVector& Corner : Corners) Probes.Add(Anchor->GetComponentTransform().TransformPosition(Corner));
+                }
+        for (const FSCItemPort& Hand : Data->HandPorts) Probes.Add(Leader->GetSocketLocation(FName(*Hand.AttachBone)));
+        TArray<float, TInlineAllocator<12>> Distance, Hit;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(SCFirstPersonScale), false, C);
+        Params.AddIgnoredActor(Kit);
+        for (const FVector& Probe : Probes)
+        {
+            FHitResult Result;
+            Distance.Add(float(FVector::Dist(EyeWorld, Probe)));
+            Hit.Add(GetWorld()->LineTraceSingleByChannel(Result, EyeWorld, Probe, ECC_Camera, Params) ? float(Result.Distance) : -1.f);
+        }
+        Target = FirstPersonScaleFor(Distance, Hit, WallMargin, MinFirstPersonScale);
+    }
+    // Down at once (never intersect), back up over ~0.3 s (lighting of the scaled body changes smoothly).
+    FirstPersonScale = Target <= FirstPersonScale ? Target : FMath::FInterpConstantTo(FirstPersonScale, Target, FMath::Max(DeltaSeconds, 0.f), 3.f);
+    if (DeltaSeconds < 0) FirstPersonScale = 1;
+    // Leave first-person primitives only after the scale has been back at 1 for a moment (each switch rebuilds the
+    // parts' render state; walking along a wall would otherwise flip it every few frames).
+    UnscaledSeconds = FirstPersonScale < 1.f ? 0.f : UnscaledSeconds + FMath::Max(DeltaSeconds, 0.f);
+    SetFirstPersonPrimitives(DeltaSeconds >= 0 && (FirstPersonScale < 1.f || (bFirstPersonPrimitives && UnscaledSeconds < 0.5f)));
+    C->Camera->SetEnableFirstPersonScale(bFirstPersonPrimitives);
+    C->Camera->SetFirstPersonScale(FirstPersonScale);
+    // The near plane follows the scale so the scaled arms and weapon are not clipped by it.
+    if (USCEyeCameraComponent* Camera = Cast<USCEyeCameraComponent>(C->Camera))
+        Camera->NearClip = bThirdPerson ? NearClip : FMath::Max(MinNearClip, NearClip * FirstPersonScale);
+}
 void USCPlayerBodyComponent::SetThirdPerson(bool bOn, float InOrbitYaw, float InOrbitDistance)
 {
     bThirdPerson = bOn;
@@ -444,14 +617,16 @@ void USCPlayerBodyComponent::SetThirdPerson(bool bOn, float InOrbitYaw, float In
     UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_VIEW mode=%s orbit_yaw=%.0f distance=%.0f"), bOn ? TEXT("tp") : TEXT("fp"), OrbitYaw, OrbitDistance);
     if (Kit) ApplyView();
 }
-void USCPlayerBodyComponent::BeginSelect(int32 Slot)
+void USCPlayerBodyComponent::BeginSelect(int32 Slot, float AlreadyElapsed, float FrameDelta)
 {
     FSCAnimatorInput In = MakeInput(0);
     In.WeaponChildId = Data->Weapons[Slots[Slot]].ChildId;
-    const float Seconds = Animator.PlayOneShot(FSCPlayerAnimator::SelectFragment, In);
+    // The animator advances the one-shot by this frame's delta right after: start it that much earlier so both
+    // clocks read AlreadyElapsed at the end of the frame.
+    const float Seconds = Animator.PlayOneShot(FSCPlayerAnimator::SelectFragment, In, AlreadyElapsed - FrameDelta);
     // The weapon is on the hand port for the whole select (the clip carries the hand joint to it).
     PlaceWeapon(Slots[Slot], true);
-    Weapons.BeginSelect(Slot, Seconds);
+    Weapons.BeginSelect(Slot, Seconds, AlreadyElapsed);
     UpdateProfile();
     UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_WEAPON state=Selecting weapon=%s seconds=%.3f view=%s"), *Data->Weapons[Slots[Slot]].Entity, Seconds,
            bThirdPerson ? TEXT("tp") : TEXT("fp"));

@@ -90,6 +90,8 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Interact();
     /** Interaction E would toggle now: under the crosshair within reach, else the nearest joint in reach. */
     int32 FocusedInteraction() const;
+    /** Where E reaches from: the eye camera in first person, the body's camera joint in third person. */
+    FVector InteractionOrigin() const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") void ToggleNoclip();
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") void SetMoveInput(FVector Input);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") FString HUDText() const;

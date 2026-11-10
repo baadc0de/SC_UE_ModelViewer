@@ -34,9 +34,11 @@ struct SCBRIDGE_API FSCMotionLayer
 {
     FName Clip, BlendSpace;
     bool bAdditive = false, bMissing = false, bLoop = false;
-    float Speed = 1, BlendIn = 0, BlendOut = 0, Weight = 1, StartTime = 0;
+    float Speed = 1, BlendIn = 0, BlendOut = 0, Weight = 1, StartTime = 0, ExitTime = 0;
     int32 Layer = 0;
     bool HasJointMask = false;
+    /** The layer's blend space has a selector the sampler cannot evaluate: the fragment is not playable. */
+    bool bUnsupported = false;
 };
 struct SCBRIDGE_API FSCMotionFragment
 {
@@ -67,6 +69,14 @@ struct SCBRIDGE_API FSCBlendExample
     TArray<float> Params; // NaN where the exporter could not resolve one (missing example)
     float PlaybackScale = 1;
     bool bMissing = false;
+    int32 Component = INDEX_NONE; // index into FSCBlendSpace::Components (combined spaces)
+};
+/** Combined-space selector: a dimension whose value chooses the component space (`choose_blend_space`). */
+struct SCBRIDGE_API FSCBlendSelector
+{
+    FString Name;
+    int32 Dimension = INDEX_NONE; // resolved; a nameless selector of a 1-D space selects on its only dimension
+    bool bChooseBlendSpace = false, bLocked = false;
 };
 struct SCBRIDGE_API FSCBlendSpace
 {
@@ -74,7 +84,15 @@ struct SCBRIDGE_API FSCBlendSpace
     TArray<FSCBlendDimension> Dimensions;
     TArray<FSCBlendExample> Examples;
     TArray<TArray<int32>> Faces;
+    /** Combined (.comb) spaces: component ids and selectors; examples name their component. */
+    TArray<FName> Components;
+    TArray<FSCBlendSelector> Selectors;
+    /** Non-empty: why the selectors cannot be evaluated (more than one choosing selector, unresolved dimension). */
+    FString Unsupported;
     int32 Dimension(const TCHAR* Name) const;
+    /** The selected component for these parameters (INDEX_NONE: not a combined space): the first component, in
+     *  exported order, whose usable examples span the choosing dimension's value; else the nearest one. */
+    int32 SelectComponent(TConstArrayView<float> Params) const;
 };
 
 struct SCBRIDGE_API FSCPlayerKit
@@ -90,6 +108,8 @@ struct SCBRIDGE_API FSCPlayerKit
     FSCItemPort RootPort;
     struct FPart { FString EntityName, MeshAsset, Id; FSCItemPort Port; };
     TArray<FPart> Parts;
+    /** Data the consumer does not evaluate (sequenced layers, joint masks, unsupported selectors), one line each. */
+    TArray<FString> Diagnostics;
 
     static bool Parse(const FString& SceneJson, const FString& PackageDir, FSCPlayerKit& Out, FString& Error);
     /** The kit's own manifest: nested item manifests live below it (Packages/PlayerItems/<id>/...), so it is the

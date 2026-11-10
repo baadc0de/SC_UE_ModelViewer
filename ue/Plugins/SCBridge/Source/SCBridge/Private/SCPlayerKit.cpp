@@ -65,7 +65,7 @@ bool FSCMotionFragment::IsPlayable() const
 {
     if (Layers.IsEmpty()) return false;
     for (const auto& L : Layers)
-        if (L.bMissing) return false;
+        if (L.bMissing || L.bUnsupported) return false;
     return true;
 }
 const FSCMotionFragment* FSCMotionState::Default(FName Fragment) const
@@ -78,6 +78,32 @@ const FSCMotionFragment* FSCMotionState::Default(FName Fragment) const
 int32 FSCBlendSpace::Dimension(const TCHAR* Name) const
 {
     return Dimensions.IndexOfByPredicate([&](const FSCBlendDimension& D) { return D.Name.Equals(Name, ESearchCase::IgnoreCase); });
+}
+int32 FSCBlendSpace::SelectComponent(TConstArrayView<float> Params) const
+{
+    if (Components.IsEmpty() || !Unsupported.IsEmpty()) return INDEX_NONE;
+    const FSCBlendSelector* Selector = Selectors.FindByPredicate([](const FSCBlendSelector& S) { return S.bChooseBlendSpace; });
+    if (!Selector) return Components.Num() == 1 ? 0 : INDEX_NONE;
+    const int32 D = Selector->Dimension;
+    if (!Params.IsValidIndex(D)) return INDEX_NONE;
+    const float X = Params[D];
+    int32 Nearest = INDEX_NONE;
+    float NearestGap = TNumericLimits<float>::Max();
+    for (int32 C = 0; C < Components.Num(); ++C)
+    {
+        float Lo = TNumericLimits<float>::Max(), Hi = -TNumericLimits<float>::Max();
+        for (const auto& E : Examples)
+            if (E.Component == C && !E.bMissing && E.Params.IsValidIndex(D) && FMath::IsFinite(E.Params[D]))
+            {
+                Lo = FMath::Min(Lo, E.Params[D]);
+                Hi = FMath::Max(Hi, E.Params[D]);
+            }
+        if (Lo > Hi) continue;
+        if (X >= Lo - 1e-3f && X <= Hi + 1e-3f) return C; // first covering component in exported order
+        const float Gap = X < Lo ? Lo - X : X - Hi;
+        if (Gap < NearestGap) { NearestGap = Gap; Nearest = C; }
+    }
+    return Nearest;
 }
 FSCItemPort FSCPlayerKit::ParsePort(const FObj& O)
 {
@@ -199,11 +225,29 @@ bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FS
                 Layer.BlendOut = Num(L, TEXT("blend_out"), 0);
                 Layer.Weight = Num(L, TEXT("weight"), 1);
                 Layer.StartTime = Num(L, TEXT("start_time"), 0);
+                Layer.ExitTime = Num(L, TEXT("exit_time"), 0);
                 Layer.Layer = int32(Num(L, TEXT("layer"), 0));
                 const TSharedPtr<FJsonValue> Mask = L->TryGetField(TEXT("joint_mask"));
                 Layer.HasJointMask = Mask.IsValid() && !Mask->IsNull();
                 Fragment.Layers.Add(Layer);
             }
+            // Guards for data the animator does not evaluate yet (none occur in LIVE 4.10.2 kits): sequenced entries
+            // (several entries on one layer, exit/start times) and joint masks. Reported once per fragment.
+            TMap<int32, int32> PerLayer;
+            bool bTimed = false, bMasked = false;
+            for (const auto& L : Fragment.Layers)
+            {
+                ++PerLayer.FindOrAdd(L.Layer);
+                bTimed |= L.ExitTime != 0 || L.StartTime != 0;
+                bMasked |= L.HasJointMask;
+            }
+            bool bSequenced = false;
+            for (const auto& Pair : PerLayer) bSequenced |= Pair.Value > 1;
+            if (bSequenced || bTimed || bMasked)
+                Out.Diagnostics.Add(FString::Printf(TEXT("fragment %s [%s]:%s%s%s"), *Fragment.Fragment.ToString(), *FString::Join(State.Tags, TEXT(" ")),
+                    bSequenced ? TEXT(" sequenced entries on one layer (played together)") : TEXT(""),
+                    bTimed ? TEXT(" exit/start times (start times honoured, exit times ignored)") : TEXT(""),
+                    bMasked ? TEXT(" joint mask (applied to every joint)") : TEXT("")));
             State.Fragments.Add(MoveTemp(Fragment));
         }
         Out.States.Add(MoveTemp(State));
@@ -214,6 +258,7 @@ bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FS
         const FObj B = V->AsObject();
         FSCBlendSpace Space;
         Space.Id = FName(*Str(B, TEXT("id")));
+        for (const auto& CV : Arr(B, TEXT("components"))) Space.Components.Add(FName(*CV->AsString()));
         for (const auto& DV : Arr(B, TEXT("dimensions")))
             if (DV->Type == EJson::Object)
             {
@@ -229,6 +274,11 @@ bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FS
             Example.Clip = FName(*Str(E, TEXT("clip")));
             Example.PlaybackScale = Num(E, TEXT("playback_scale"), 1);
             Example.bMissing = Bool(E, TEXT("missing"));
+            if (const FString Component = Str(E, TEXT("component")); !Component.IsEmpty())
+            {
+                Example.Component = Space.Components.IndexOfByKey(FName(*Component));
+                if (Example.Component == INDEX_NONE) Example.Component = Space.Components.Add(FName(*Component));
+            }
             for (const auto& P : Arr(E, TEXT("params")))
             {
                 double X;
@@ -245,8 +295,37 @@ bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FS
                 Indices.Add(int32(I->AsNumber()));
             Space.Faces.Add(MoveTemp(Indices));
         }
+        for (const auto& SV : Arr(B, TEXT("selectors")))
+            if (SV->Type == EJson::Object)
+            {
+                const FObj Sel = SV->AsObject();
+                FSCBlendSelector Selector;
+                Selector.Name = Str(Sel, TEXT("name"));
+                Selector.bChooseBlendSpace = Bool(Sel, TEXT("choose_blend_space"));
+                Selector.bLocked = Bool(Sel, TEXT("locked"));
+                Selector.Dimension = Selector.Name.IsEmpty() && Space.Dimensions.Num() == 1 ? 0 : Space.Dimension(*Selector.Name);
+                Space.Selectors.Add(Selector);
+            }
+        int32 Choosing = 0;
+        for (const auto& Selector : Space.Selectors)
+            if (Selector.bChooseBlendSpace)
+            {
+                ++Choosing;
+                if (Selector.Dimension == INDEX_NONE) Space.Unsupported = FString::Printf(TEXT("selector '%s' names no dimension"), *Selector.Name);
+            }
+        if (Choosing > 1) Space.Unsupported = FString::Printf(TEXT("%d choosing selectors"), Choosing);
+        if (!Space.Components.IsEmpty() && Choosing == 0 && Space.Components.Num() > 1) Space.Unsupported = TEXT("components without a choosing selector");
         Out.BlendSpaces.Add(Space.Id, MoveTemp(Space));
     }
+    // Fragments whose blend space cannot be evaluated are not playable (reported, never picked by face order).
+    for (auto& State : Out.States)
+        for (auto& Fragment : State.Fragments)
+            for (auto& L : Fragment.Layers)
+                if (const FSCBlendSpace* Space = Out.BlendSpaces.Find(L.BlendSpace); Space && !Space->Unsupported.IsEmpty())
+                {
+                    L.bUnsupported = true;
+                    Out.Diagnostics.AddUnique(FString::Printf(TEXT("blend space %s unsupported: %s"), *Space->Id.ToString(), *Space->Unsupported));
+                }
     return true;
 }
 FString FSCPlayerKit::FindRootScene(const FSCPackageSource& Source)

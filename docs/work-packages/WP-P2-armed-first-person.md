@@ -237,6 +237,19 @@ Built as specified, with these deviations (each decided from the data, not by ey
   pitch interim), frame cost within 10 % (see verification: the visible skinned body parts cost ~0.6 ms GPU and
   ~1 ms render thread).
 
+### P2b round 2 status (look and correctness; evidence in `ue/verification/WP-P2.md` "Round 2")
+
+- **Materials**: the white/checkered body and weapon were the engine's WorldGrid default material — the SC
+  masters lacked the skeletal-mesh usage flag, which a `-game` session cannot add at runtime. All masters now
+  carry it (`create_materials.py`). `HumanSkin_V2`, `Eye`, `HairPBR` map plainly onto the Illum master; hair
+  cards are hidden while head wear is worn.
+- **Walls**: engine first-person rendering (`FirstPerson` primitives + camera `FirstPersonScale`) driven by
+  probes from the eye to the held weapon's box and the hands; only while a probe reaches into the world.
+- **Third-person E** reaches from the eye joint. Review fixes (Codex review of f60b36b) are listed per item
+  in the verification.
+- **Not done**: `stop` run-to-idle spaces (the option is chosen by gait-phase frag tags `forward_hip` /
+  `backward_hip` the export does not explain), turn-in-place, frame cost within 10 %.
+
 ## Out of scope
 Firing, reload, ADS, recoil, zero-g / EVA, prone, ladders, seats, character
 customisation (DNA), face animation, helmet HUD. Crouch, jump clips, turn-in-place and

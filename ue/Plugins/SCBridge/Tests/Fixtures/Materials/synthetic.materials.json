@@ -1591,6 +1591,93 @@
     "state": "active",
     "reason": "synthetic"
    }
+  },
+  {
+   "index": 27,
+   "submaterial_name": "hair_cards",
+   "shader_family": "HairPBR",
+   "shader": "HairPBR",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HairPBR"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "0,0,0"
+    },
+    {
+     "name": "Shininess",
+     "value": "10"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "HAIR_CARDS"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "opacity",
+     "is_virtual": false,
+     "export_path": "tex/hair_opac.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "BaseMelanin": 0.5,
+    "BaseMelaninRedness": 0,
+    "DyeAmount": 0,
+    "DyeColor": "0.5,0.2,0.1",
+    "BaseTintColor": "1,1,1"
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 28,
+   "submaterial_name": "hair_cap",
+   "shader_family": "HairPBR",
+   "shader": "HairPBR",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HairPBR"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0,0,0"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "HAIR_CAP"
+    ]
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
   }
  ]
 }

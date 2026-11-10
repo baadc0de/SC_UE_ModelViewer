@@ -379,7 +379,8 @@ Keys (same `KeyTable` for Slate and native input): `1`–`9` draw the stowed wea
 (slots: stowed weapons with playable select/deselect, ordered by size, then stow-port name — the
 P4-AR loadout gives 1 = P4-AR, 2 = S71), the active slot's key or `H` holsters, another slot's key
 swaps (deselect, then select), keys are ignored mid-transition; `C` toggles a third-person orbit.
-E, F, V, T work as in WP-P1 in every weapon state (in third person E acts from the camera).
+E, F, V, T work as in WP-P1 in every weapon state (in third person E reaches from the character's
+eye — the camera joint — along its view, not from the orbit camera).
 
 What drives the body (all names from the scene's `player` block; Mannequin vocabulary only:
 fragment ids `MotionIdle`/`MotionMovement`/`select`/`deselect`, stance tags `stand`/`crouch`,
@@ -389,10 +390,22 @@ blend-space parameters `MoveSpeed`/`TravelAngle`):
   other rig on the body skeleton follows by joint name; feet on the capsule floor, facing the
   root-motion joint's native +Y; items on their port joints aligned by `item_offset_helper`
   (stow frames come from the port owner's same-named helper when the owner item is placed, e.g.
-  the backpack's `wep_stocked_attach_*_override`). Parts with port flags `invis_p1`/`HeadWear`, on
-  the root part's port, or skinned mostly below the camera joint's parent are hidden in first
-  person and keep casting shadows (`bCastHiddenShadow`). Camera at `camera_bone`, orientation =
-  control rotation, near plane 2 cm (`USCEyeCameraComponent`).
+  the backpack's `wep_stocked_attach_*_override`). Parts with port flags `invis_p1`/`HeadWear` or
+  skinned mostly below the camera joint's parent are hidden in first person and keep casting
+  shadows (`bCastHiddenShadow`); package-root identity does not imply "head". While head wear is
+  worn, parts whose submaterials are all `HairPBR` (hair cards, scalp cap, brows, lashes, beard) are
+  hidden in both views (they are authored for the bare head and pass through helmets). Camera at
+  `camera_bone`, orientation = control rotation, near plane 2 cm (`USCEyeCameraComponent`).
+- **Walls (round 2)**: each first-person frame traces from the eye to the held weapon's box corners
+  (all of its primitives, in its anchor frame) and to the hand joints. When a probe reaches into
+  the world, the engine's first-person rendering takes over: every visible kit primitive becomes a
+  `FirstPerson` primitive and the camera's `FirstPersonScale` = the largest scale that keeps every
+  probe 1.5 cm in front of the surface (min 0.04; near plane follows, floor 0.2 cm). The image is
+  unchanged (scaling toward the eye keeps the projection), only depth: the weapon never cuts into a
+  wall or door. The scale returns to 1 over ~0.3 s; first-person primitives cast no shadows (engine
+  rule), so the body's shadow (and the hidden head's) is off only while a wall is in reach; the
+  primitives switch back 0.5 s after the scale is 1 again. Third person never uses it. Log:
+  `PLAYER_FP_PRIMITIVES`.
 - `FSCPlayerAnimator` (plain C++): state = (weapon, stance, move-speed tag, fp/tp); idle/movement
   = the fragment option with the fewest query fragment tags; movement blend spaces sampled at
   (ground speed, travel angle) as the closest point of the authored faces, examples phase-locked;
@@ -400,7 +413,17 @@ blend-space parameters `MoveSpeed`/`TravelAngle`):
   space), translation added; select/deselect one-shots on top; root-motion joint pinned; view pitch
   spread over the camera joint's ancestors below the pelvis (interim: aim poses are not exported).
   Walk / run speeds = nominal forward example speeds of the slowest / fastest move-speed tag
-  (P4-AR: 357 / 601 cm/s, unarmed 345 / 600). Off-hand two-bone IK to the weapon's off-hand grip
+  (P4-AR: 357 / 601 cm/s, unarmed 345 / 600). Running is allowed only where the fast tag's movement
+  space covers the intended direction (movement input); the same decision picks the animation tag
+  and the capsule's `MaxWalkSpeed` (Shift + strafe moves at walk speed). Combined (`.comb`) spaces
+  evaluate their choosing selector first (the first component, in exported order, whose examples
+  span the value), then interpolate that component only; an unevaluable selector makes the
+  fragment unplayable (`PLAYER_KIT_DIAGNOSTIC`). Additive layers run on their own clock (start
+  time + seconds × speed, looped or held). TravelAngle is sticky at ±π (some unarmed/crouch spaces
+  author different clips at +π and −π). A queued weapon swap starts the new draw with the time
+  left in the frame on both the animation and state-machine clocks. A weapon whose draw, holster
+  or armed idle references an unreadable clip is not given a slot (`PLAYER_SLOT_DISABLED`); an
+  unreadable unarmed idle fails the kit (capsule only; the kit actor and data are destroyed). Off-hand two-bone IK to the weapon's off-hand grip
   helper is implemented but off by default (`sc.Player.OffHandIK 1`): the game's clips author their
   left-weapon IK blend at 0 for these states.
 

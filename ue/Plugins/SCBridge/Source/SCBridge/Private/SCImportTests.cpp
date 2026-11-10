@@ -304,7 +304,7 @@ bool USCImportLibrary::RunUnitTests()
     if (FParse::Param(FCommandLine::Get(), TEXT("SCFirstPersonTests"))) Names = {TEXT("FSCFirstPersonCollision")};
     if (FParse::Param(FCommandLine::Get(), TEXT("SCPlayerTests")))
     {
-        Names = {TEXT("FSCPlayerBlendWeights"), TEXT("FSCPlayerAdditive"), TEXT("FSCPlayerWeaponStates")};
+        Names = {TEXT("FSCPlayerBlendWeights"), TEXT("FSCPlayerAdditive"), TEXT("FSCPlayerWeaponStates"), TEXT("FSCPlayerFirstPersonScale")};
         if (FParse::Value(FCommandLine::Get(), TEXT("SCPlayerPackage="), Folder)) Names.Add(TEXT("FSCPlayerKitRig"));
     }
     for (const FString& Name : Names)

@@ -44,6 +44,8 @@ public:
     /** Select slot (0-based), or holster with INDEX_NONE; the active slot holsters. False when ignored. */
     bool RequestSlot(int32 Slot);
     ESCWeaponState GetWeaponState() const { return Weapons.GetState(); }
+    /** Seconds into the current select/deselect on the state machine's clock. */
+    float GetWeaponElapsed() const { return Weapons.GetElapsed(); }
     int32 GetActiveSlot() const { return Weapons.GetActive(); }
     /** Joint the slot's weapon is attached to now (hand port joint while selecting/armed/deselecting). */
     FName WeaponParentBone(int32 Slot) const;
@@ -58,6 +60,20 @@ public:
     FString Describe() const;
     /** First-person camera near plane (cm): small enough for arms and weapon in front of the eye (viewer constant). */
     static constexpr float NearClip = 2.f;
+    /** Smallest first-person scale and the near plane floor while it is applied (viewer constants, cm). */
+    static constexpr float MinFirstPersonScale = 0.04f;
+    static constexpr float MinNearClip = 0.2f;
+    /** Clearance (cm) kept between scaled first-person geometry and the first world surface on each probe ray. */
+    static constexpr float WallMargin = 1.5f;
+    /** Engine first-person scale that keeps every probe in front of the world: for probe i at distance D[i] from the
+     *  eye whose ray hits geometry at H[i] (H < 0: no hit), the largest s with s*D[i] <= H[i] - Margin, clamped to
+     *  [MinScale, 1]. Pure (unit-tested). */
+    static float FirstPersonScaleFor(TConstArrayView<float> ProbeDistance, TConstArrayView<float> HitDistance, float Margin, float MinScale);
+    /** First-person scale applied this frame (1: no wall in reach; < 1: body and items drawn as first-person primitives). */
+    float GetFirstPersonScale() const { return FirstPersonScale; }
+    bool AreFirstPersonPrimitivesActive() const { return bFirstPersonPrimitives; }
+    /** World location of the player's camera joint (eye) this frame; the interaction origin in either view. */
+    FVector HeadLocation() const;
 
 private:
     ASCFirstPersonCharacter* Character() const;
@@ -65,10 +81,16 @@ private:
     /** A bone port's frame: the same-named helper on the port's owner item when that item is placed (a backpack
      *  overrides the body's stow joints), else the body joint itself. */
     void ResolvePortFrame(const FSCItemPort& Port, USceneComponent*& Parent, FName& Socket, FTransform& Frame) const;
-    void BeginSelect(int32 Slot);
+    void BeginSelect(int32 Slot, float AlreadyElapsed = 0, float FrameDelta = 0);
     void BeginDeselect(int32 Then);
     void UpdateProfile();
     void ApplyView();
+    /** First person: probe from the eye to the held weapon's box corners and the hand joints, scale the body toward
+     *  the camera when a probe reaches into the world (engine first-person rendering). */
+    void UpdateFirstPersonScale(const FVector& EyeWorld, float DeltaSeconds);
+    void SetFirstPersonPrimitives(bool bOn);
+    /** Every submaterial of the rig's part is in the HairPBR family (hair cards, scalp cap, brows, lashes). */
+    bool IsHairOnly(const USCRigComponent* Rig) const;
     FSCAnimatorInput MakeInput(float DeltaSeconds) const;
 
     UPROPERTY() TObjectPtr<ASCVehicle> Kit;
@@ -77,6 +99,16 @@ private:
     /** Followers with joints of their own: their joint -> leader joint (INDEX_NONE keeps the bind local). */
     TMap<TObjectPtr<USCRigComponent>, TArray<int32>> CopyMaps;
     UPROPERTY() TArray<TObjectPtr<UPrimitiveComponent>> HeadParts;
+    /** Every other kit primitive (body, worn and stowed items, weapons): drawn as first-person primitives while
+     *  the first-person scale is below 1. */
+    UPROPERTY() TArray<TObjectPtr<UPrimitiveComponent>> ViewParts;
+    /** Per weapon index: the box of all its primitives in its anchor's frame (probe corners). */
+    TMap<int32, FBox> WeaponBoxes;
+    TArray<bool> HeadShadows; // head parts' hidden-shadow flag as attached (parallel to HeadParts)
+    /** Hair-card parts hidden in both views while head wear is worn. */
+    UPROPERTY() TArray<TObjectPtr<UPrimitiveComponent>> HiddenUnderHeadWear;
+    float FirstPersonScale = 1, UnscaledSeconds = 0;
+    bool bFirstPersonPrimitives = false;
     TSharedPtr<const FSCPlayerKit> Data;
     TSharedPtr<const FSCPlayerClipMap> ClipStore;
     FSCPlayerAnimator Animator;
@@ -89,4 +121,5 @@ private:
     FVector Eye = FVector::ZeroVector; // capsule space
     int32 CameraBone = INDEX_NONE;
     float LastDelta = 0;
+    float LastTravelAngle = 0; // unwound, for the +-pi seam
 };

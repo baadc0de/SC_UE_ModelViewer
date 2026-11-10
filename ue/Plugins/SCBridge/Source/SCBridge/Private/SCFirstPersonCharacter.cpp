@@ -260,7 +260,12 @@ bool ASCFirstPersonCharacter::Explore(ASCVehicle* InVehicle)
 }
 int32 ASCFirstPersonCharacter::FocusedInteraction() const
 {
-    return Vehicle ? Vehicle->FindInteraction(Camera->GetComponentLocation(), GetViewRotation().Vector(), InteractReach, this) : INDEX_NONE;
+    return Vehicle ? Vehicle->FindInteraction(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this) : INDEX_NONE;
+}
+FVector ASCFirstPersonCharacter::InteractionOrigin() const
+{
+    // Third person: reach from the character's eye (camera joint) along its view, not from the orbit camera.
+    return Body && Body->HasBody() && Body->IsThirdPerson() ? Body->HeadLocation() : Camera->GetComponentLocation();
 }
 bool ASCFirstPersonCharacter::Interact()
 {

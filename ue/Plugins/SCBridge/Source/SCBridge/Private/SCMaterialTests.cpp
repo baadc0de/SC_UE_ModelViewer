@@ -233,8 +233,26 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     if (auto* X = Check(TEXT("monitor"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
         TestEqual(TEXT("screen image without Glow emits nothing"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
     if (auto* X = Check(TEXT("inactive"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, true, true)) TestTrue(TEXT("hidden"), X->bHidden);
-    if (auto* X = Check(TEXT("skin"), ESCMaster::Fallback, ESCBlend::Opaque, false, false))
-        TestTrue(TEXT("fallback warning names the shader"), X->Warnings.Num() == 1 && X->Warnings[0].Contains(TEXT("HumanSkin_V2")));
+    // Character families (WP-P2 round 2): plain Illum mapping, no fallback warning.
+    if (auto* X = Check(TEXT("skin"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
+    {
+        TestEqual(TEXT("skin: no fallback warning"), X->Warnings.Num(), 0);
+        TestTrue(TEXT("skin: base colour map"), X->Textures.Contains(TEXT("DiffuseMap")));
+        TestTrue(TEXT("skin: authored diffuse"), Near(X->Vectors[TEXT("DiffuseColor")], FLinearColor(0.6f, 0.5f, 0.4f)));
+    }
+    if (auto* X = Check(TEXT("hair_cards"), ESCMaster::Illum, ESCBlend::Masked, false, false))
+    {
+        TestEqual(TEXT("hair: opacity map is linear coverage"), int32(X->Textures[TEXT("OpacityMap")].Role), int32(ESCTextureRole::Linear));
+        // Melanin 0.5, no redness, no dye: UE GetHairColorFromMelanin -> exp(-sqrt(ln2 * sigma_eu) * D).
+        const float Dc = 5.969f - 0.215f * 0.3f + 2.532f * 0.09f - 10.73f * 0.027f + 5.574f * 0.0081f + 0.245f * 0.00243f;
+        const FLinearColor Expected(FMath::Exp(-FMath::Sqrt(FMath::Loge(2.f) * 0.506f) * Dc),
+            FMath::Exp(-FMath::Sqrt(FMath::Loge(2.f) * 0.841f) * Dc), FMath::Exp(-FMath::Sqrt(FMath::Loge(2.f) * 1.653f) * Dc));
+        TestTrue(TEXT("hair: colour from melanin"), X->Vectors[TEXT("DiffuseColor")].Equals(Expected, 1e-3f));
+        TestTrue(TEXT("hair: brown (R > G > B)"), Expected.R > Expected.G && Expected.G > Expected.B);
+        TestEqual(TEXT("hair: UE default clip"), X->Scalars[TEXT("AlphaTest")], GetDefault<UMaterial>()->OpacityMaskClipValue);
+    }
+    if (auto* X = Check(TEXT("hair_cap"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
+        TestTrue(TEXT("hair cap without melanin keeps the authored diffuse"), Near(X->Vectors[TEXT("DiffuseColor")], FLinearColor::Black));
     for (const FSCMaterialDesc& X : D)
         TestEqual(X.Name + TEXT(": RequiresNonNanite matches Describe"), FSCMaterialBuilder::RequiresNonNanite(
             *M.Materials[0].Submaterials.FindByPredicate([&](const FSCSubmaterial& S) { return S.Name == X.Name; })), X.bNonNanite);
@@ -253,7 +271,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
     Phase.Decode(Empty);
     // Unique (path, role) pairs across all submaterials; tex/illum_ddna.png etc. are shared and deduplicated.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 26);
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 27);
     // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;
@@ -372,6 +390,8 @@ bool FSCMaterialsMasters::RunTest(const FString&)
                 if (Master == ESCMaster::MeshDecal || Master == ESCMaster::MeshDecalRelief || Master == ESCMaster::Translucent)
                     TestEqual(Path + TEXT(" sidedness follows is_double_sided"), Parent->IsTwoSided(), bTwoSided);
                 TestEqual(Path + TEXT(" explicit mask clip 0.5"), Parent->GetMaterial()->OpacityMaskClipValue, 0.5f);
+                // Saved flag, not CheckMaterialUsage: a -game session cannot set it and would draw WorldGrid.
+                TestTrue(Path + TEXT(" usable on skeletal meshes"), Parent->GetMaterial()->GetUsageByFlag(MATUSAGE_SkeletalMesh));
                 if (Master == ESCMaster::Glass || Master == ESCMaster::Translucent || Master == ESCMaster::EmissiveUnlit)
                     TestTrue(Path + TEXT(" is translucent"), IsTranslucentBlendMode(Parent->GetBlendMode()));
             }

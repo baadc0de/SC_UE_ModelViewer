@@ -141,7 +141,10 @@ bool FSCSkinBuffers::RunTest(const FString&)
         TestEqual(TEXT("soft triangle"), int32(LOD.RenderSections[0].NumTriangles), 1);
         TestEqual(TEXT("three vertices"), int32(LOD.GetNumVertices()), 3);
         const auto W = LOD.SkinWeightVertexBuffer.GetVertexSkinWeights(0);
-        TestEqual(TEXT("joint remap preserves synthetic root offset"), int32(W.InfluenceBones[1]), 2);
+        const auto& Map = LOD.RenderSections[0].BoneMap;
+        TestTrue(TEXT("joint remap preserves synthetic root offset (through the section bone map)"),
+                 Map.IsValidIndex(W.InfluenceBones[1]) && int32(Map[W.InfluenceBones[1]]) == 2);
+        TestTrue(TEXT("section bone map lists only weighting joints"), Map.Num() < Mesh->GetRefSkeleton().GetNum());
         TestEqual(TEXT("quantized weights sum to 65535"), int32(W.InfluenceWeights[0]) + int32(W.InfluenceWeights[1]), 65535);
     }
     return true;
