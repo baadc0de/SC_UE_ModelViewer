@@ -69,6 +69,15 @@ FObj Slot(const FObj& Sub, const TCHAR* Role)
     }
     return Best;
 }
+/** Exported texture slot by number: for slots whose meaning is fixed by the shader family (macro maps), where the
+ *  lowest slot with a role is a different texture (LayerBlend_V2 TexSlot2 = POM decal normal, TexSlot3 = macro normal). */
+FObj SlotAt(const FObj& Sub, int32 Number)
+{
+    const FString Name = FString::Printf(TEXT("TexSlot%d"), Number);
+    for (const auto& V : Arr(Sub, TEXT("texture_slots")))
+        if (V->Type == EJson::Object && Str(V->AsObject(), TEXT("slot")) == Name && !Str(V->AsObject(), TEXT("export_path")).IsEmpty()) return V->AsObject();
+    return nullptr;
+}
 bool HasVirtualRole(const FObj& Sub, const TCHAR* Role)
 {
     for (const auto& V : Arr(Sub, TEXT("texture_slots")))
@@ -98,8 +107,9 @@ void Tex(FSCMaterialDesc& D, const TCHAR* Param, const FString& Path, ESCTexture
 {
     if (!Path.IsEmpty()) D.Textures.Add(Param, FSCTextureKey{Path, Role});
 }
-/** Substrate slab default roughness (MaterialExpressionSubstrate.h) as the masters' smoothness: r = sqrt(1 - s). */
-constexpr float SubstrateDefaultSmoothness = 1.f - 0.5f * 0.5f;
+/** Substrate slab default roughness 0.5 (MaterialExpressionSubstrate.h) as the masters' smoothness: r = 1 - s
+ *  (game ShadeLib GlossToRoughness: GGX alpha = (1 - gloss)^2 = UE Roughness^2). */
+constexpr float SubstrateDefaultSmoothness = 0.5f;
 /** Smoothness constants: authored Shininess/255 scales the map (or is the constant); a missing value is the
  *  multiplicative identity for the map and the Substrate default roughness for the constant. */
 void Gloss(FSCMaterialDesc& D, const FString& Prefix, const TOptional<float>& Shininess, float Mult, bool bMap)
@@ -249,7 +259,38 @@ bool Stencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCP
     return true;
 }
 bool IsWear(const FObj& Layer) { return Str(Layer, TEXT("name")).StartsWith(TEXT("Wear"), ESearchCase::IgnoreCase); }
-/** Base layers of a HardSurface / LayerBlend_V2 manifest (wear layers need the wear factor: TODO(WP-U2)). */
+/** Material-level maps applied over the blended layers (game HardSurface.cfx / LayerBlend_V2.cfx):
+ *  - macro normal + gloss: TexSlot3 ddna, compiled in by %MACRO_NORMAL_MAP (HardSurface, at baseTC x MacroTiling)
+ *    or %NORMAL_MAP (LayerBlend, untiled); LayerAttribs_AddMacroSurface = detail-normal blend, smoothness x gloss;
+ *  - HardSurface %MACRO_AO_MAP: TexSlot1, single channel, same UVs (exported with the base_color role);
+ *  - LayerBlend TexSlot13: R hue shift, G AO, B luminance shift, sampled unconditionally at baseTC. */
+void MacroSurface(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
+{
+    const bool bHard = D.Master == ESCMaster::HardSurface;
+    FObj Normal = HasToken(Sub, bHard ? TEXT("MACRO_NORMAL_MAP") : TEXT("NORMAL_MAP")) ? SlotAt(Sub, 3) : nullptr;
+    if (Normal && Str(Normal, TEXT("role")) != TEXT("normal_gloss")) Normal = nullptr;
+    const FString Rough = DerivedRoughness(Sub, Normal);
+    if (Normal) Tex(D, TEXT("MacroNormalMap"), Str(Normal, TEXT("export_path")), ESCTextureRole::Normal);
+    Tex(D, TEXT("MacroRoughnessMap"), Rough, ESCTextureRole::Linear);
+    D.Scalars.Add(TEXT("UseMacroGloss"), Rough.IsEmpty() ? 0.f : 1.f);
+    D.Scalars.Add(TEXT("MacroTiling"), bHard ? A.Param(TEXT("MacroTiling"), 1.f) : 1.f);
+    if (bHard)
+    {
+        if (HasToken(Sub, TEXT("MACRO_AO_MAP"))) if (const FObj AO = SlotAt(Sub, 1)) Tex(D, TEXT("MacroAOMap"), Str(AO, TEXT("export_path")), ESCTextureRole::Linear);
+        if (HasToken(Sub, TEXT("USE_UV2_FOR_MACRO_MAPS")) && (D.Textures.Contains(TEXT("MacroNormalMap")) || D.Textures.Contains(TEXT("MacroAOMap"))))
+            D.Warnings.Add(TEXT("%USE_UV2_FOR_MACRO_MAPS is not supported by the masters; macro maps use the first UV set"));
+    }
+    else
+    {
+        const FObj Hal = SlotAt(Sub, 13);
+        if (Hal && Str(Hal, TEXT("role")) == TEXT("hal_control")) Tex(D, TEXT("HalMap"), Str(Hal, TEXT("export_path")), ESCTextureRole::Linear);
+        D.Scalars.Add(TEXT("UseHalMap"), D.Textures.Contains(TEXT("HalMap")) ? 1.f : 0.f);
+        if (A.Param(TEXT("RotateLayerUVs"), 0.f) != 0.f)
+            D.Warnings.Add(TEXT("RotateLayerUVs is not supported by the masters; layer UVs are not rotated"));
+    }
+}
+/** Base layers of a HardSurface / LayerBlend_V2 manifest. Wear layers are not drawn: LayerBlend wear is a runtime
+ *  per-instance amount (zero on a pristine item); HardSurface static wear (WearBlendBase) is TODO(WP-U2). */
 int32 Layers(FSCMaterialDesc& D, const FObj& Sub, const FSCPalette* Palette, int32 Max)
 {
     int32 Count = 0;
@@ -349,9 +390,13 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
         else
         {
             const FObj Mask = Slot(Sub, TEXT("blend_mask"));
-            if (D.Master == ESCMaster::Layered && Mask) Tex(D, TEXT("BlendMaskMap"), Str(Mask, TEXT("export_path")), ESCTextureRole::Linear);
-            D.Scalars.Add(TEXT("UseBlendMask"), D.Textures.Contains(TEXT("BlendMaskMap")) ? 1.f : 0.f);
-            D.Scalars.Add(TEXT("BlendMaskTiling"), A.Param(TEXT("BlendMapTiling"), 1.f));
+            if (D.Master == ESCMaster::Layered) // M_SC_HardSurface has one layer and no blend mask
+            {
+                if (Mask) Tex(D, TEXT("BlendMaskMap"), Str(Mask, TEXT("export_path")), ESCTextureRole::Linear);
+                D.Scalars.Add(TEXT("UseBlendMask"), D.Textures.Contains(TEXT("BlendMaskMap")) ? 1.f : 0.f);
+                D.Scalars.Add(TEXT("BlendMaskTiling"), A.Param(TEXT("BlendMapTiling"), 1.f));
+            }
+            MacroSurface(D, Sub, A);
             Emission(D, Sub, A);
         }
     }

@@ -103,7 +103,7 @@ shader rebuild. No C++ change.
 | Stencil decal | `%STENCIL_MAP`, `$TintPaletteDecal` | r1's only stencil is inactive and `palettes.json` `decal.export_path` is null → hidden; TODO below |
 | Glass | `palette_routing.material_channel` (glass) → `palettes.json` `glass`, `public_params.GlassTintStrength`, `%THIN_FILM` + `ThinFilmThickness`, `Specular`, DDNA + derived roughness | `M_SC_Glass`, non-Nanite |
 | Layers | `layer_manifest[]` base layers (name not `Wear*`): `diffuse/normal/roughness_export_path`, `tint_color`, `palette_channel`, `uv_tiling`, `gloss_mult`, `layer_snapshot.{diffuse,specular,metallic,shininess}`; `blend_mask` slot + `BlendMapTiling` | tint = snapshot diffuse × tint × palette channel; F0 = snapshot specular |
-| Roughness | `derived_textures[]` role roughness paired by `source_path`; `Shininess` | roughness = sqrt(1 − smoothness), smoothness = (1 − r²) × Shininess/255; placeholder Shininess=255 without map → 0.5 (mtl.rs) |
+| Roughness | `derived_textures[]` role roughness paired by `source_path`; `Shininess` | roughness = 1 − min(smoothness, 251/255) (since 2026-11-10, see "Macro surface, HAL and the gloss convention"; before: sqrt(1 − smoothness)), smoothness = (1 − r²) × Shininess/255 with r the exporter's sqrt(1 − gloss) map; placeholder Shininess=255 without map → 0.5 (mtl.rs) |
 | Specular | `Specular`, `specular_support` map; Diffuse = Specular = 1,1,1 sentinel without map → dielectric default | F0 colour (Substrate slab) |
 | Host tint | POM colour decals: dominant `palette_routing.material_channel` of the host mesh's slots by triangle count (Blender add-on rule) | `HostTint` per channel instance |
 | Engine glow | `controls.engine_glow` targets (`material_sidecar`, `source_material_index` = authored `index`), `default_strength` | strength from the control (default 0) |
@@ -168,7 +168,7 @@ a strong specular sheen (Viewer lighting/exposure, not material data), thruster 
 TODO(WP-U2): `-SCEngineGlow=50` produced no visible glow in rear close-ups; check the engine_glow slot binding
 and its UV region against the alpha gate (texture `gladius_emissives_diff`, Illum + forward flag).
 TODO(WP-U2): wear/damage layers (`WearLayer*`, `wear_mask`, vertex colours), Illum secondary blend layer
-(TexSlot9/3/12), LayerBlend_V2 direct TexSlot3 macro normal, HardSurface direct TexSlot1 / iridescence (TexSlot10),
+(TexSlot9/3/12), HardSurface iridescence (TexSlot10),
 glass dirt and `EmissiveOpacity`, TexMod tiling, UV1 (`SECOND_UVS`) are not mapped.
 TODO(WP-U2): stencil / `$TintPaletteDecal` decals need the palette decal texture (`palettes.json decal.export_path`
 is null in r1); screens need `ui_bindings` images; paints.json variants as an actor dropdown.
@@ -202,7 +202,7 @@ Missing-value policy (engine/Substrate defaults, `MaterialExpressionSubstrate.h`
 
 | Input | Authored source | When absent |
 | --- | --- | --- |
-| roughness constant | `Shininess`/255 → smoothness | Substrate default roughness 0.5 (smoothness 0.75); TODO(WP-R5) emit gloss when `Shininess` is absent |
+| roughness constant | `Shininess`/255 → smoothness | Substrate default roughness 0.5 (smoothness 0.5 since 2026-11-10, 0.75 under the earlier sqrt convention); TODO(WP-R5) emit gloss when `Shininess` is absent |
 | roughness map scale | `Shininess`/255 × layer `gloss_mult` | identity (1) |
 | F0 | `Specular` (× `_spec` map), layer snapshot `specular` | Substrate default F0 0.04; TODO(WP-R5) resolve the `Diffuse=Specular=1,1,1` sentinel upstream |
 | albedo | `Diffuse` × base texture × palette | texture as-is; with neither, Substrate default albedo 0.18 |
@@ -449,3 +449,116 @@ Rear captures (`SC_ARGS="-SCView=180,3,1.0 [-SCEngineGlow=50]" ue/scripts/captur
 `wp-u2/rear-nozzle-glow10-vs-reference.jpg` (control default 10) and `wp-u2/rear-nozzle-glow50-vs-reference.jpg`
 (ours left, `reference/gladius/rear.webp` right): only the nozzle interior glows, blue-white with brighter ring
 lines, matching the reference; the housing stays unlit; at 50 the glow blooms beyond the nozzle.
+
+
+## Macro surface, HAL and the gloss convention (2026-11-10, WP-P2 "armour look")
+
+Defect: armour (LayerBlend_V2) read flat and too bright; the layered masters drew only the per-layer textures.
+Rules below are read from the game's own shader sources (decoded `Engine/ShaderCache_Vulkan.pak`:
+`LayerBlend_V2.cfx`, `HardSurface.cfx`, `layerLib.cfi`, `NormalsCommon.cfi`, `ShadeLib.cfi`; the decoded text is
+game-derived scratch and is not in git). No asset names, no values copied from assets or reference images.
+
+| Rule | Game shader | Sidecar field | Master parameter |
+| --- | --- | --- | --- |
+| Macro normal over the blended layers | `LayerAttribs_AddMacroSurface`: `NormalTS = AddDetailNormals(macro, layer.NormalTS)` | `TexSlot3`, role `normal_gloss`, gated by `%NORMAL_MAP` (LayerBlend_V2) / `%MACRO_NORMAL_MAP` (HardSurface) in `string_gen_mask` | `MacroNormalMap` |
+| Macro gloss | same function: `Smoothness *= macroSmoothness` (DDNA alpha) | the slot's `derived_textures[]` roughness | `MacroRoughnessMap`, `UseMacroGloss` |
+| Macro UVs | LayerBlend_V2: base UVs; HardSurface: `baseTC × MacroTiling` | `public_params.MacroTiling` | `MacroTiling` (1 for LayerBlend_V2) |
+| HardSurface macro AO | `%MACRO_AO_MAP`: `Albedo *= AO; Reflectance *= AO` | `TexSlot1` (exported role `base_color`), loaded linear, red channel | `MacroAOMap` |
+| HAL map AO | LayerBlend_V2 `HueAoLumMap` (TexSlot13), G: `Albedo *= AO; Reflectance *= AO` after the blend | `TexSlot13`, role `hal_control` | `HalMap`, `UseHalMap` |
+| HAL luminance | `Layer_ApplyLayerEffects` per layer, before accumulation: `saturate(colour × (lumShift × 0.2 + 0.8))`, `lumShift = B × 2` (`HAL_LUM_MAX_* = 0.2`), on albedo and reflectance | same map, B | same |
+| Layer blend | `LayerAttribs_MultiplyAdd` accumulates Albedo, Reflectance, NormalTS.xy and **Smoothness**; `LayerAttribs_BlendNormalize` = `ReconstructNormalZ(xy)` | — | graph: smoothness is blended (was roughness), normal XY blended and Z rebuilt (was normalize(xyz)) |
+| Gloss → roughness | `GlossToRoughness(g) = (1 − min(g, 251/255))²` is the GGX alpha (`NDF_GGX(alpha)` squares it once more: `alpha2/denom²`) | — | UE GGX alpha = Roughness² ⇒ **Roughness = 1 − min(gloss, 251/255)** in every lit master (`Graph.gloss_to_roughness`); before: `sqrt(1 − gloss)` |
+
+`AddDetailNormals(base, detail)`: `base.z += 1; detail.xy *= −1; normalize(base × dot(base, detail) − detail × base.z)`;
+it is equivariant under the importer's green flip applied to both inputs, so no extra handedness correction.
+The macro normal is selected by slot number with a role check: 65 armour LayerBlend_V2 submaterials also carry a
+POM decal normal in `TexSlot2` (same role), and two Scorpius `%MACRO_NORMAL_MAP` submaterials have a `TexSlot3`
+of role `alternate_base_color` (not used). A `TexSlot3` normal without the token is not used (fixture
+`layerblend_like`).
+
+**The gloss convention is global.** Every lit master now uses the game-exact mapping, so all surfaces with
+authored gloss above 0 are glossier than before (gloss 0.5: roughness 0.5 instead of 0.71; gloss 0.9: 0.1 instead
+of 0.32). Constant-smoothness defaults moved accordingly (Substrate default roughness 0.5 = smoothness 0.5).
+
+Not implemented (warnings where the data asks for it): HAL hue shift (R, needs the game's `HueLUT` volume),
+`RotateLayerUVs` (0 in every surveyed sidecar), `%USE_UV2_FOR_MACRO_MAPS`, vertex-colour AO, LayerBlend wear
+(runtime per-instance; pristine = none), and **HardSurface static wear**: `wearAmt = saturate(max(WearBlendBase,
+instWear) − vertexWear)` → `CalcAlphas_BlendBased` → `BlendLayers_SeparatePrimaryAndWear` (`%WEAR_LAYER`) or
+`BlendLayers_TintedPrimaryWear`. The Gladius hull authors `WearBlendBase` 0.18 on its HardSurface submaterials,
+so the game never draws that paint pristine; we do.
+TODO(WP-U2): HardSurface static wear (`WearBlendBase`, Wear layer, vertex wear, `WearMasksSecondaryLayer`).
+TODO(WP-U2): derived roughness maps are mip-mapped and filtered as `sqrt(1 − gloss)` (exporter encoding,
+`FSCTextureImporter::BuildMips`); the game filters linear gloss. Minified texels with varying gloss come out
+glossier (two texels gloss 0 and 1 average to 0.75 instead of 0.5). Needs a gloss texture role (decode to
+linear gloss before mips) and a cache-format bump. Pre-existing; the macro gloss inherits it.
+TODO(WP-U2): `MasterParameters` counts 52 descriptor parameters that masters outside the layered family do not
+have (shared describe code: `AlphaTest`/`Metallic`/`Smoothness`/… on `M_SC_Emissive_Unlit`, and
+`EmissiveColor`/`EmissiveStrength`/`DiffuseColor`/`SpecularColor`/`HostTint` on `MI_SC_MeshDecal_Relief`); MIDs
+drop them silently. Triage which of them are authored values that should be drawn.
+
+### Tests
+
+`SCBridge.Materials.FamilyMapping` (fixture `synthetic.materials.json`): `hard_primary` (macro normal + gloss,
+`MacroTiling` 3, macro AO linear, no HAL), `blend4` (macro normal = TexSlot3 and not the TexSlot2 decal normal,
+HAL linear, `UseHalMap` 1), `blend1` / `layerblend_like` (no macro), `glow_zero` (default smoothness 0.5);
+deduplicated texture requests 27 → 33. New `SCBridge.Materials.MasterParameters`: every parameter described for a
+layered-family fixture material exists in its master (a MID drops unknown names silently); this found
+`UseBlendMask` / `BlendMaskTiling` written for the one-layer `M_SC_HardSurface` (now Layered only). The tests
+check selection and parameter presence, **not graph output**: the graph math is verified by the GPU captures only.
+
+```bash
+ue/scripts/build.sh SCViewerEditor                                             # Result: Succeeded
+UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/create_materials.py …  # WP-U2 MATERIALS_OK
+UnrealEditor-Cmd … -script=ue/scripts/test_importer.py -nullrhi …              # exit 0, 17/17, WP-U1 UNIT_TESTS_OK
+#   MASTER_PARAMETERS present=383 layered_family=4 dropped_other_families=52
+UnrealEditor-Cmd … -script=ue/scripts/test_player.py -SCPlayerTests \
+  -SCPlayerPackage="$PWD/out/fps/player-p4-male.tar" -nullrhi …                # exit 0, 5/5
+ue/scripts/capture_route.sh p2r3-cutlass ue/scripts/routes/cutlass-armed-walkthrough.txt -SCDefaults \
+  -SCLoad=DRAK_Cutlass_Black -SCCamera=first \
+  -SCPlayerLoadout=Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml
+SC_SETTLE=20 ue/scripts/capture_viewer.sh armour-gladius 'VIEWER_LOAD result' -SCDefaults -SCLoad=AEGS_Gladius
+```
+
+### GPU result (captures re-taken after the cross-review fixes)
+
+Route `p2r3-cutlass`: `SCRIPT_DONE steps=149`, 29 shots, 0 material compile errors; every `SCRIPT_SHOT pos=` is
+within 7.8 cm of the round-2 run (`p2r2-cutlass`), so the pairs below are the same view. (The first after-run
+was perturbed and not position-matched; it was discarded.) Gladius: `VIEWER_LOAD result=Succeeded`,
+`AUTOMATION_DONE all_succeeded=1`. Before | after sheets (half size here, full size `out/smoke/armour-r3-*.png`):
+
+- `wp-u2/armour-hangar-before-after.jpg` (shot 04, neutral hangar light): **better**. Plates are darker in
+  their recesses and seams (HAL AO), the helmet and limb plates show panel relief and the backpack shows fabric
+  folds (macro normal), olive plates are deeper (HAL luminance). White torso and legs stay white: that is the
+  loadout variant's authored tint.
+- `wp-u2/armour-cockpit-before-after.jpg` (shot 23): helmet seams, strap and collar relief are visible where
+  the before image is a smooth shell; the scene is still very bright.
+- `wp-u2/armour-bulkhead-before-after.jpg` (shot 20, Cutlass interior): **not fixed**. The armour is blown out
+  to white before and after; with the game-exact gloss the metallic plates now mirror the interior lights more
+  sharply (the shoulder plate reads as polished metal). The cause is the over-bright ship interior lights
+  (open light-intensity defect), not the armour material; wear, which would break the mirror up, is not drawn.
+- `wp-u2/gladius-gloss-before-after.jpg`: **ships changed**. The Gladius hull is visibly glossier (sharp
+  highlights on the nose, canopy frame and wing edges) than before and than the in-game references, which show
+  satin paint broken up by wear and dirt. The mapping is the game's; the difference is the 18 % static wear the
+  game always blends in and we do not (TODO above). Kept game-exact rather than tuned by eye.
+
+Frame time, same cockpit view as WP-P2 §4 (single run each, different sessions):
+
+```text
+SCRIPT_FRAMETIME tag=body-a       frames=805  frame_ms[mean=7.45 p50=6.49 p95=12.52] gpu_ms[mean=6.17 p50=6.19 p95=6.73]
+SCRIPT_FRAMETIME tag=capsule-only frames=1030 frame_ms[mean=5.83 p50=5.76 p95=10.10] gpu_ms[mean=5.54 p50=5.52 p95=6.02]
+SCRIPT_FRAMETIME tag=body-b       frames=800  frame_ms[mean=7.50 p50=6.37 p95=12.54] gpu_ms[mean=6.08 p50=6.04 p95=6.63]
+```
+
+Against round 2 (body 7.23 / 5.71 GPU, capsule-only 5.43 / 5.13 GPU): about +0.4 ms GPU (+8 %) with and
+without the body, i.e. the extra macro/HAL samples cost on the ship's materials too. Not A/B'd inside one
+session, so part of it may be run-to-run noise.
+
+### Cross-review (Codex, on the uncommitted diff)
+
+| Finding | Verified | Disposition |
+| --- | --- | --- |
+| HAL luminance saturated after the blend; the game applies it per layer (`Layer_ApplyLayerEffects` before `LayerAttribs_MultiplyAdd`) | yes (`LayerBlend_V2` layer loop, `Layer_ApplyComplementWearAndHAL`) | **fixed**: per-layer `saturate(colour × lum)` on albedo and F0; AO stays after the blend |
+| Blended layer normal was `normalize(lerp xyz)`; the game accumulates XY and rebuilds Z | yes (`LayerAttribs_MultiplyAdd`, `LayerAttribs_BlendNormalize`) | **fixed**: `Graph.reconstruct_z` (pre-existing since the first layered master) |
+| Gloss is filtered in the exporter's `sqrt(1 − gloss)` encoding | yes (`BuildMips` averages the encoded bytes) | **open**, TODO above (pre-existing, texture role + cache format) |
+| Tests cannot detect a broken graph | yes | **partly**: `MasterParameters` added (presence); graph-output tests not added, stated above |
+| Selection logic against 52 ship and 59 player-kit sidecars, token gates, green flip, linear roles, `251/255`, HAL constants | reviewer found no defect | — |

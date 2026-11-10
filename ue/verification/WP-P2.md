@@ -290,6 +290,8 @@ degenerate faces, selectors, seam, 20 kit grids, seam measurement, 6 combined sp
 1. **Armour reads flat and too bright in strong light**: the Layered master has no material-level (TexSlot3)
    macro normal, wear layers or HAL control (WP-U2 open item, shared with ships; adding it changes ship looks),
    and metallic layers with authored gloss 1 mirror the bright interiors (white patches on the helmet in `-23`).
+   *Round 3: macro normal, HAL AO/luminance and the game's gloss mapping are in; still blown out in the Cutlass
+   interior — see "Round 3" below.*
 2. **No body shadow while a wall is in reach** (first-person primitives cast none). A proper fix is the
    engine's world-space-representation pairing with `r.AllowStaticLighting=False` (project-wide).
 3. **Frame cost** (§4).
@@ -304,3 +306,33 @@ degenerate faces, selectors, seam, 20 kit grids, seam measurement, 6 combined sp
 - `stop` fragments: state which gait phase each `forward_hip` / `backward_hip` option serves.
 - Character customization (`root_entity.character.customization`: hair dye, `BodyColor`, `EyeColor`) is not
   applied; the viewer uses each material's own authored values.
+
+---
+
+# Round 3 — armour look (2026-11-10)
+
+Defect 1 above. The rules, their shader sources, tests, commands, frame times and the Codex cross-review
+disposition are in [WP-U2.md](WP-U2.md) ("Macro surface, HAL and the gloss convention"); the masters are shared
+with ships, so the contract lives there. Same host, loadout and route as round 2; shots `out/smoke/p2r3-cutlass-*`
+(position-matched to `p2r2-cutlass-*` within 7.8 cm), before | after sheets `out/smoke/armour-r3-*.png` and
+`wp-u2/armour-*-before-after.jpg`.
+
+| Part of the defect | Result | Evidence |
+| --- | --- | --- |
+| No macro normal | **fixed** (TexSlot3 over the blended layers, macro gloss) | hangar 04/14: panel relief on helmet and limb plates, backpack folds |
+| No HAL control | **fixed for AO and luminance**; hue shift not implemented (needs the game's `HueLUT`) | hangar 04: shaded seams and recesses, deeper olive plates |
+| Too bright / mirror patches in strong light | **not fixed** | bulkhead 20, cockpit 23: still blown out; plates mirror the lights more sharply under the game-exact gloss. Cause: over-bright Cutlass interior lights (open) |
+| No wear layers | **not done** | LayerBlend wear is per-instance at runtime (pristine = none); HardSurface static wear is a WP-U2 TODO |
+
+Side effect on ships (reported, not tuned): every lit master now maps gloss the way the game does, so ship
+exteriors are glossier than before and than the in-game references until static wear is drawn
+(`wp-u2/gladius-gloss-before-after.jpg`). Cutlass interior shots are otherwise unchanged in content.
+Frame time: about +0.4 ms GPU (+8 %) in the cockpit view with and without the body (WP-U2.md); the body's own
+cost (§4) is unchanged. Tests: `test_importer.py` 17/17, `test_player.py` 5/5.
+
+## Known defects after round 3 (most visible first)
+
+1. **Armour and interiors blow out to white in the Cutlass** (bulkhead, cockpit): ship interior light
+   intensities (open since the MegaLights demo), now with sharper reflections on glossy metal.
+2. **Ship paint too glossy / too clean**: HardSurface static wear not drawn (WP-U2 TODO).
+3. Items 2–6 of the round-2 list, unchanged.

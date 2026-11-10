@@ -206,11 +206,35 @@
    ],
    "decoded_feature_flags": {
     "tokens": [
-     "WEAR_LAYER"
+     "WEAR_LAYER",
+     "MACRO_NORMAL_MAP",
+     "MACRO_AO_MAP"
     ]
    },
-   "texture_slots": [],
-   "derived_textures": [],
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ao.png"
+    },
+    {
+     "slot": "TexSlot3",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ddna.png",
+     "source_path": "src/hard_macro_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/hard_macro_ddna_roughness.png",
+     "source_path": "src/hard_macro_ddna.tif"
+    }
+   ],
    "layer_manifest": [
     {
      "name": "Primary",
@@ -282,7 +306,9 @@
      "name": "secondary"
     }
    },
-   "public_params": {},
+   "public_params": {
+    "MacroTiling": 3
+   },
    "activation_state": {
     "state": "active",
     "reason": "synthetic"
@@ -313,7 +339,8 @@
    ],
    "decoded_feature_flags": {
     "tokens": [
-     "BLEND_MAP"
+     "BLEND_MAP",
+     "NORMAL_MAP"
     ]
    },
    "texture_slots": [
@@ -328,9 +355,44 @@
      "role": "wear_mask",
      "is_virtual": false,
      "export_path": "tex/wear.png"
+    },
+    {
+     "slot": "TexSlot2",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/blend_decal_ddna.png",
+     "source_path": "src/blend_decal_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    },
+    {
+     "slot": "TexSlot3",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/blend_macro_ddna.png",
+     "source_path": "src/blend_macro_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    },
+    {
+     "slot": "TexSlot13",
+     "role": "hal_control",
+     "is_virtual": false,
+     "export_path": "tex/blend_hal.png"
     }
    ],
-   "derived_textures": [],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/blend_decal_ddna_roughness.png",
+     "source_path": "src/blend_decal_ddna.tif"
+    },
+    {
+     "role": "roughness",
+     "export_path": "tex/blend_macro_ddna_roughness.png",
+     "source_path": "src/blend_macro_ddna.tif"
+    }
+   ],
    "layer_manifest": [
     {
      "name": "BaseLayer1",
@@ -1344,8 +1406,24 @@
    "decoded_feature_flags": {
     "tokens": []
    },
-   "texture_slots": [],
-   "derived_textures": [],
+   "texture_slots": [
+    {
+     "slot": "TexSlot3",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/unused_macro_ddna.png",
+     "source_path": "src/unused_macro_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/unused_macro_ddna_roughness.png",
+     "source_path": "src/unused_macro_ddna.tif"
+    }
+   ],
    "layer_manifest": [
     {
      "name": "BaseLayer1",

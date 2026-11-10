@@ -4,8 +4,10 @@ Run headless inside the Python commandlet with r.Substrate enabled (project defa
   UnrealEditor-Cmd SCViewer.uproject -run=pythonscript -script=<abs>/create_materials.py \
       -unattended -nop4 -nosplash -ddc=SCViewerDDC
 Everything lives under /SCBridge/Materials (ue/Plugins/SCBridge/Content/Materials). Parameter names are
-SC-semantic and model-neutral; FSCMaterialBuilder (C++) sets them. No game values are baked in here:
+SC-semantic and model-neutral; FSCMaterialBuilder (C++) sets them. No asset values are baked in here:
 every default is a neutral identity (white, flat normal, 0/1) and the builder supplies sidecar data.
+The graphs do carry shading rules of the game's own shaders (gloss -> roughness, layer blend order, macro
+surface, HAL luminance range); those are shader logic, the same for every asset, cited where they appear.
 """
 import os
 import shutil
@@ -124,15 +126,37 @@ class Graph:
         self.last_uv = self.mul(coords, tiling)
         return self.last_uv
 
-    def roughness(self, prefix, uv):
-        """UE perceptual roughness from the exporter's grayscale map (sqrt(1 - smoothness)) or a constant.
+    def map_smoothness(self, name, uv, group="SC"):
+        """Smoothness stored by the exporter as a grayscale map r = sqrt(1 - smoothness): 1 - r^2."""
+        r = (self.texture(name, self.white_linear, ST.SAMPLERTYPE_MASKS, uv, group), "R")
+        return self.one_minus(self.mul(r, r))
 
-        smoothness = lerp(<p>Smoothness, (1 - r^2) * <p>GlossMult, <p>UseRoughnessMap); roughness = sqrt(1 - smoothness).
-        """
-        r = (self.texture(prefix + "RoughnessMap", self.white_linear, ST.SAMPLERTYPE_MASKS, uv), "R")
-        from_map = self.mul(self.one_minus(self.mul(r, r)), self.scalar(prefix + "GlossMult", 1.0))
-        smooth = self.lerp(self.scalar(prefix + "Smoothness", 0.0), from_map, self.scalar(prefix + "UseRoughnessMap", 0.0))
-        return self.sqrt(self.saturate(self.one_minus(smooth)))
+    def smoothness(self, prefix, uv):
+        """Game smoothness (gloss): lerp(<p>Smoothness, map x <p>GlossMult, <p>UseRoughnessMap)."""
+        from_map = self.mul(self.map_smoothness(prefix + "RoughnessMap", uv), self.scalar(prefix + "GlossMult", 1.0))
+        return self.lerp(self.scalar(prefix + "Smoothness", 0.0), from_map, self.scalar(prefix + "UseRoughnessMap", 0.0))
+
+    def gloss_to_roughness(self, smooth):
+        """UE roughness from game smoothness. Game ShadeLib: GlossToRoughness(g) = (1 - min(g, 251/255))^2 is the
+        GGX alpha (NDF_GGX); UE's GGX alpha is Roughness^2, so Roughness = 1 - min(g, 251/255)."""
+        return self.saturate(self.one_minus(self.op(unreal.MaterialExpressionMin, smooth, self.const(251.0 / 255.0))))
+
+    def roughness(self, prefix, uv):
+        return self.gloss_to_roughness(self.smoothness(prefix, uv))
+
+    def reconstruct_z(self, n):
+        """Game NormalsCommon ReconstructNormalZ: keep XY, z = sqrt(max(1e-6, 1 - x^2 - y^2))."""
+        xy = self.op(unreal.MaterialExpressionComponentMask, n, names=("",), r=True, g=True, b=False)
+        zz = self.op(unreal.MaterialExpressionMax, self.one_minus(self.op(unreal.MaterialExpressionDotProduct, xy, xy)), self.const(1.0e-6))
+        return self.op(unreal.MaterialExpressionAppendVector, xy, self.sqrt(zz))
+
+    def detail_normal(self, base, detail):
+        """Game NormalsCommon AddDetailNormals (reoriented normal mapping): `detail` rotated onto `base`."""
+        t = self.add(base, self.const3((0, 0, 1)))
+        u = self.mul(detail, self.const3((-1, -1, 1)))
+        tz = self.op(unreal.MaterialExpressionComponentMask, t, names=("",), r=False, g=False, b=True)
+        dot = self.op(unreal.MaterialExpressionDotProduct, t, u)
+        return self.normalize(self.sub(self.mul(t, dot), self.mul(u, tz)))
 
     def link_any(self, a, out, b, names):
         for name in names:
@@ -200,9 +224,25 @@ def layered_master(name, count):
     """M_SC_HardSurface (1 layer) / M_SC_Layered (4): per-layer tiling, tint (palette x tint x diffuse), F0, metallic.
 
     Layers blend like LayerBlend_V2: start from layer N-1, lerp toward layer i by blend-mask channel i (R,G,B).
-    UseBlendMask=0 forces mask (1,1,1) which selects Layer0.
+    UseBlendMask=0 forces mask (1,1,1) which selects Layer0. Smoothness blends as smoothness (layerLib), and
+    the material-level maps apply over the blended result (LayerAttribs_AddMacroSurface, then AO):
+      MacroNormalMap / MacroRoughnessMap (UseMacroGloss) at UV x MacroTiling: detail-normal blend of the layer
+        normal onto the macro normal; smoothness x macro smoothness.
+      M_SC_HardSurface: MacroAOMap (R) at the macro UVs -> albedo and F0 x AO.
+      M_SC_Layered: HalMap at the base UVs (UseHalMap): G = AO over the blend; B = luminance shift, applied to
+        each layer before it is accumulated (Layer_ApplyLayerEffects): saturate(colour x (B x 0.4 + 0.8)) on
+        albedo and F0 (LayerBlend_V2: lumShift = B x 2, HAL_LUM_MAX = 0.2). The R hue shift (HueLUT) and
+        RotateLayerUVs are not implemented.
+    Blended layer normals accumulate XY and rebuild Z (LayerAttribs_BlendNormalize -> ReconstructNormalZ).
     """
     g = Graph(name, unreal.BlendMode.BLEND_OPAQUE, nanite=True)
+    base_uv = g.uv(g.scalar("Tiling", 1.0))  # HAL map and emittance map (g.glow) UVs
+    lum = ao = None
+    if count > 1:
+        hal = g.texture("HalMap", g.white_linear, ST.SAMPLERTYPE_MASKS, base_uv, "Macro")
+        use_hal = g.scalar("UseHalMap", 0.0, "Macro")
+        ao = g.lerp(g.const(1.0), (hal, "G"), use_hal)
+        lum = g.lerp(g.const(1.0), g.add(g.mul((hal, "B"), g.const(0.4)), g.const(0.8)), use_hal)
     layers = []
     for i in range(count):
         p = f"Layer{i}"
@@ -210,11 +250,13 @@ def layered_master(name, count):
         d = g.texture(p + "DiffuseMap", g.white, ST.SAMPLERTYPE_COLOR, uv, p)
         colour = g.mul((d, "RGB"), g.vector(p + "Tint", (1, 1, 1), p))
         metallic = g.scalar(p + "Metallic", 0.0, p)
+        albedo, f0 = g.mul(colour, g.one_minus(metallic)), g.vector(p + "Specular", (0.04, 0.04, 0.04), p)
+        if lum:
+            albedo, f0 = g.saturate(g.mul(albedo, lum)), g.saturate(g.mul(f0, lum))
         layers.append(dict(
-            albedo=g.mul(colour, g.one_minus(metallic)),
-            f0=g.vector(p + "Specular", (0.04, 0.04, 0.04), p),
+            albedo=albedo, f0=f0,
             normal=(g.texture(p + "NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv, p), "RGB"),
-            roughness=g.roughness(p, uv),
+            smoothness=g.smoothness(p, uv),
             colour=colour, alpha=(d, "A")))
     result = dict(layers[-1])
     if count > 1:
@@ -224,12 +266,20 @@ def layered_master(name, count):
         channels = [g.op(unreal.MaterialExpressionComponentMask, mask, names=("",), r=c == 0, g=c == 1, b=c == 2)
                     for c in range(3)]
         for i in range(count - 2, -1, -1):
-            for key in ("albedo", "f0", "normal", "roughness", "colour", "alpha"):
+            for key in ("albedo", "f0", "normal", "smoothness", "colour", "alpha"):
                 result[key] = g.lerp(result[key], layers[i][key], channels[i])
-        result["normal"] = g.normalize(result["normal"])
-    g.uv(g.scalar("Tiling", 1.0))
+        result["normal"] = g.reconstruct_z(result["normal"])
+    macro_uv = g.uv(g.scalar("MacroTiling", 1.0, "Macro"))
+    macro = (g.texture("MacroNormalMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, macro_uv, "Macro"), "RGB")
+    normal = g.detail_normal(macro, result["normal"])
+    macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroRoughnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
+    smooth = g.mul(result["smoothness"], macro_gloss)
+    albedo, f0 = result["albedo"], result["f0"]
+    if count == 1:
+        ao = (g.texture("MacroAOMap", g.white_linear, ST.SAMPLERTYPE_MASKS, macro_uv, "Macro"), "R")
+    g.last_uv = base_uv
     emissive = g.glow(result["colour"], result["alpha"])
-    g.slab(result["albedo"], result["f0"], None, result["roughness"], result["normal"], emissive)
+    g.slab(g.mul(albedo, ao), g.mul(f0, ao), None, g.gloss_to_roughness(smooth), normal, emissive)
     g.out(*g.add(g.sub(result["alpha"], g.scalar("AlphaTest", 0.0)), g.const(0.5)), MP.MP_OPACITY_MASK)
     return g.save()
 

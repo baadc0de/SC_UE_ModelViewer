@@ -83,6 +83,16 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("layer gloss"), X->Scalars[TEXT("Layer0GlossMult")], 0.5f);
         TestFalse(TEXT("wear layer is not a base layer"), X->Scalars.Contains(TEXT("Layer1Tiling")));
         TestEqual(TEXT("layer roughness"), X->Textures[TEXT("Layer0RoughnessMap")].Path, FString(TEXT("tex/Primary_ddna_roughness.png")));
+        // HardSurface.cfx macro surface: %MACRO_NORMAL_MAP = TexSlot3 (+ gloss in its alpha), %MACRO_AO_MAP = TexSlot1,
+        // both at baseTC x MacroTiling.
+        TestEqual(TEXT("macro normal"), X->Textures[TEXT("MacroNormalMap")].Path, FString(TEXT("tex/hard_macro_ddna.png")));
+        TestEqual(TEXT("macro normal role"), int32(X->Textures[TEXT("MacroNormalMap")].Role), int32(ESCTextureRole::Normal));
+        TestEqual(TEXT("macro gloss"), X->Textures[TEXT("MacroRoughnessMap")].Path, FString(TEXT("tex/hard_macro_ddna_roughness.png")));
+        TestEqual(TEXT("macro gloss on"), X->Scalars[TEXT("UseMacroGloss")], 1.f);
+        TestEqual(TEXT("macro tiling"), X->Scalars[TEXT("MacroTiling")], 3.f);
+        TestEqual(TEXT("macro AO is TexSlot1 under %MACRO_AO_MAP"), X->Textures[TEXT("MacroAOMap")].Path, FString(TEXT("tex/hard_macro_ao.png")));
+        TestEqual(TEXT("macro AO is data, not colour"), int32(X->Textures[TEXT("MacroAOMap")].Role), int32(ESCTextureRole::Linear));
+        TestFalse(TEXT("HardSurface has no HAL map"), X->Textures.Contains(TEXT("HalMap")));
     }
     if (auto* X = Check(TEXT("blend4"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
     {
@@ -95,12 +105,25 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("blend mask"), X->Textures[TEXT("BlendMaskMap")].Path, FString(TEXT("tex/blend.png")));
         TestEqual(TEXT("blend mask on"), X->Scalars[TEXT("UseBlendMask")], 1.f);
         TestEqual(TEXT("blend map tiling"), X->Scalars[TEXT("BlendMaskTiling")], 3.f);
+        // LayerBlend_V2.cfx: %NORMAL_MAP = material-level TexSlot3 over all layers (TexSlot2 is the POM decal normal),
+        // untiled; TexSlot13 = hue / AO / luminance control, sampled unconditionally.
+        TestEqual(TEXT("macro normal is TexSlot3, not the lowest normal slot"), X->Textures[TEXT("MacroNormalMap")].Path, FString(TEXT("tex/blend_macro_ddna.png")));
+        TestEqual(TEXT("macro gloss"), X->Textures[TEXT("MacroRoughnessMap")].Path, FString(TEXT("tex/blend_macro_ddna_roughness.png")));
+        TestEqual(TEXT("macro gloss on"), X->Scalars[TEXT("UseMacroGloss")], 1.f);
+        TestEqual(TEXT("LayerBlend macro maps are untiled"), X->Scalars[TEXT("MacroTiling")], 1.f);
+        TestEqual(TEXT("HAL map"), X->Textures[TEXT("HalMap")].Path, FString(TEXT("tex/blend_hal.png")));
+        TestEqual(TEXT("HAL is data, not colour"), int32(X->Textures[TEXT("HalMap")].Role), int32(ESCTextureRole::Linear));
+        TestEqual(TEXT("HAL on"), X->Scalars[TEXT("UseHalMap")], 1.f);
+        TestFalse(TEXT("LayerBlend has no macro AO map"), X->Textures.Contains(TEXT("MacroAOMap")));
     }
     if (auto* X = Check(TEXT("blend1"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
     {
         TestEqual(TEXT("unused slots repeat the last base layer"), X->Scalars[TEXT("Layer3Tiling")], 8.f);
         TestEqual(TEXT("repeated texture"), X->Textures[TEXT("Layer2DiffuseMap")].Path, FString(TEXT("tex/BaseLayer1_diff.png")));
         TestEqual(TEXT("no mask -> layer 0"), X->Scalars[TEXT("UseBlendMask")], 0.f);
+        TestFalse(TEXT("no macro normal"), X->Textures.Contains(TEXT("MacroNormalMap")));
+        TestEqual(TEXT("no macro gloss"), X->Scalars[TEXT("UseMacroGloss")], 0.f);
+        TestEqual(TEXT("no HAL"), X->Scalars[TEXT("UseHalMap")], 0.f);
     }
     if (auto* X = Check(TEXT("glass_ext"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
@@ -194,9 +217,17 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestTrue(TEXT("Emissive tints the emittance"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.3f, 0.6f, 0.9f)));
     }
     if (auto* X = Check(TEXT("layerblend_like"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
+    {
         TestEqual(TEXT("LayerBlend Emissive 1,1,1 without Glow / forward flag emits nothing"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
+        TestFalse(TEXT("TexSlot3 without %NORMAL_MAP is not sampled"), X->Textures.Contains(TEXT("MacroNormalMap")));
+        TestEqual(TEXT("no token -> no macro gloss"), X->Scalars[TEXT("UseMacroGloss")], 0.f);
+    }
     if (auto* X = Check(TEXT("glow_zero"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
+    {
         TestEqual(TEXT("Glow = 0 with Emissive = 1,1,1 emits nothing"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
+        // Masters: Roughness = 1 - smoothness (game GlossToRoughness), so the Substrate default roughness 0.5 is smoothness 0.5.
+        TestEqual(TEXT("no Shininess -> Substrate default roughness"), X->Scalars[TEXT("Smoothness")], 0.5f);
+    }
     if (auto* X = Check(TEXT("glow_emittance"), ESCMaster::Illum, ESCBlend::Opaque, false, false))
     {
         TestEqual(TEXT("AlphaGlowCutoff from public_params"), X->Scalars[TEXT("AlphaGlowCutoff")], 0.25f);
@@ -271,7 +302,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
     Phase.Decode(Empty);
     // Unique (path, role) pairs across all submaterials; tex/illum_ddna.png etc. are shared and deduplicated.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 27);
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 33);
     // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;
@@ -396,6 +427,45 @@ bool FSCMaterialsMasters::RunTest(const FString&)
                     TestTrue(Path + TEXT(" is translucent"), IsTranslucentBlendMode(Parent->GetBlendMode()));
             }
     return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsMasterParameters, "SCBridge.Materials.MasterParameters", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCMaterialsMasterParameters::RunTest(const FString&)
+{
+    // Every parameter the describe code writes must exist in the chosen master: a MID silently drops a name its
+    // graph lacks, so the authored value would never reach the shader. (Presence only; graph output is GPU-verified.)
+    FSCSceneManifest M; if (!ReadFixture(*this, M)) return false;
+    int32 Checked = 0, Dropped = 0, Layered = 0;
+    for (const auto& Sub : M.Materials[0].Submaterials)
+    {
+        const FSCMaterialDesc D = FSCMaterialBuilder::Describe(Sub, &M.Palettes[0]);
+        const FString Path = FSCMaterialBuilder::ParentPath(D.Master, D.Blend, D.bTwoSided);
+        UMaterialInterface* Parent = LoadObject<UMaterialInterface>(nullptr, *Path);
+        if (!TestNotNull(D.Name + TEXT(" parent ") + Path, Parent)) continue;
+        auto Names = [&](auto Getter)
+        {
+            TArray<FMaterialParameterInfo> Infos; TArray<FGuid> Ids; (Parent->*Getter)(Infos, Ids);
+            TSet<FName> Out; for (const FMaterialParameterInfo& I : Infos) Out.Add(I.Name); return Out;
+        };
+        const TSet<FName> Scalars = Names(&UMaterialInterface::GetAllScalarParameterInfo);
+        const TSet<FName> Vectors = Names(&UMaterialInterface::GetAllVectorParameterInfo);
+        const TSet<FName> Textures = Names(&UMaterialInterface::GetAllTextureParameterInfo);
+        // Strict for the layered family; the other families share describe code that writes a common parameter set,
+        // so their drops are only counted (ue/verification/WP-U2.md, open issues).
+        const bool bStrict = D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered;
+        auto Check = [&](const TCHAR* Kind, FName Key, const TSet<FName>& Have)
+        {
+            if (Have.Contains(Key)) { ++Checked; return; }
+            if (bStrict) AddError(FString::Printf(TEXT("%s %s %s is missing from %s"), *D.Name, Kind, *Key.ToString(), *Path));
+            else ++Dropped;
+        };
+        for (const auto& KV : D.Scalars) Check(TEXT("scalar"), KV.Key, Scalars);
+        for (const auto& KV : D.Vectors) Check(TEXT("vector"), KV.Key, Vectors);
+        for (const auto& KV : D.Textures) Check(TEXT("texture"), KV.Key, Textures);
+        Layered += bStrict;
+    }
+    AddInfo(FString::Printf(TEXT("MASTER_PARAMETERS present=%d layered_family=%d dropped_other_families=%d"), Checked, Layered, Dropped));
+    return TestTrue(TEXT("fixture has layered-family materials"), Layered > 0);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsTextures, "SCBridge.Materials.TextureDecode", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
