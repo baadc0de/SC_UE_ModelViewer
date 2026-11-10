@@ -5,6 +5,8 @@
 #include "SCPackageReader.h"
 #include "SCClipCatalog.h"
 #include "SCLightState.h"
+#include "SCLightAreas.h"
+#include "UObject/ObjectKey.h"
 #include "SCExploration.h"
 #include "SCVehicle.generated.h"
 class UTexture2D;
@@ -65,6 +67,12 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") bool bMegaLightsActive = false;
     /** Refresh after changing the project/scalability ray-tracing settings at runtime. */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") void RefreshLightShadowPolicy();
+    /** Room volumes of the interior containers (WP-U3b §12); empty when the vehicle authors no rooms. */
+    TArray<FSCLightArea> LightAreas;
+    /** Vertex samples per imported mesh asset (mesh-local cm): the input of the inside/outside vote. */
+    TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
+    /** World point inside any room volume of this vehicle (the game's "not the root clip volume"). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Lights") bool IsInsideLightArea(const FVector& World) const;
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayClip(FName Clip);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool SnapClip(FName Clip, bool bLast);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayFragment(FName Fragment, FName Tag);

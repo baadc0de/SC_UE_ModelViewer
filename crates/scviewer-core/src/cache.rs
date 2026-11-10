@@ -12,7 +12,9 @@ use std::{
 
 // Generic texture PNGs record their color encoding (sRGB / gAMA chunk) and palettes.json carries the palette
 // finish glossiness as a 0..1 fraction; older packages have untagged textures and a null glossiness.
-pub const CACHE_FORMAT_VERSION: u32 = 14;
+// 15: scene.json interiors carry `room_volumes` (the areas `affects_this_area_only` lights are confined to).
+// 16: tile-attached light groups are placed on their container item port (`interactionOffset`).
+pub const CACHE_FORMAT_VERSION: u32 = 16;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

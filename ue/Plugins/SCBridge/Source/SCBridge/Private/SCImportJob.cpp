@@ -9,6 +9,7 @@
 #include "SCSkeletonBuilder.h"
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
+#include "SCLightAreas.h"
 #include "SCRigComponent.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
@@ -549,6 +550,7 @@ void FSCImportJob::FState::BeginBuild(FMeshSlot& Slot)
         return;
     }
     Vehicle->SkeletalMeshes.Add(RigMesh);
+    Vehicle->MeshSamples.Add(RigMesh, FSCLightAreas::Sample(Slot.Soft.Description));
     RigMeshes.Add(Path, RigMesh);
     for (auto& Pair : Slot.Bindings)
         FSCAnimImporter::AttachBinding(RigMesh, Vehicle, Vehicle->ClipCatalog->Clips[Pair.Key], MoveTemp(Pair.Value));
@@ -574,6 +576,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
     else
     {
         Vehicle->Meshes.Add(Mesh);
+        Vehicle->MeshSamples.Add(Mesh, FSCLightAreas::Sample(Variant.Description));
         Slot.Variants.Add(Mesh);
         SocketNodes.FindOrAdd(Path).Add(Variant.SocketNode);
         Result.MeshStats.Add(Path + Suffix, Stats);
@@ -905,6 +908,7 @@ void FSCImportJob::FState::Assemble()
             FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
         FSCLightImporter::Build(
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
+        FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
         for (const auto& P : Interior.Placements)
             if (CanPlace(P)) Place(P, Container, bHelper, false);
         FBox Floor(ForceInit);
@@ -917,6 +921,7 @@ void FSCImportJob::FState::Assemble()
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
+    FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose
     if (Options.bPublish)
     {
         V->BuildExploration();

@@ -332,8 +332,11 @@ cost (§4) is unchanged. Tests: `test_importer.py` 17/17, `test_player.py` 5/5.
 
 ## Known defects after round 3 (most visible first)
 
-1. **Armour and interiors blow out to white in the Cutlass** (bulkhead, cockpit): ship interior light
-   intensities (open since the MegaLights demo), now with sharper reflections on glossy metal.
+1. ~~Armour and interiors blow out to white in the Cutlass (bulkhead, cockpit)~~: cause fixed 2026-11-10 —
+   the exterior under-hull floods were exported 5.46 m off, inside the cockpit and cargo bay (WP-U3b.md §12;
+   cockpit 25 320 → 197 lux at the player). Still bright and not compared with the game: white door-frame
+   strips at the bulkhead, helmet and armour in the third-person cockpit view, the hangar floor and ramp
+   under the viewer's own hangar panels.
 2. ~~Ship paint too glossy / too clean~~: fixed 2026-11-10 (HardSurface static wear, palette finish gloss and
    specular, DDS colour encoding, energy split; WP-U2.md). Dirt and per-instance wear are still not drawn.
 3. Items 2–6 of the round-2 list, unchanged.

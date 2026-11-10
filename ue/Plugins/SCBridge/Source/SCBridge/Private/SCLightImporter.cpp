@@ -128,10 +128,15 @@ double FSCLightImporter::StateCandela(const TSharedPtr<FJsonObject>& Light, cons
     const double Bulb = FMath::Max(0., LightNumber(Light, TEXT("bulb_radius_m")));
     return UE_DOUBLE_PI * CryLightUnit * Raw * Bulb * Bulb;
 }
+FVector FSCLightImporter::ContainerBasis(const FVector& Cry, bool bHelperFrame)
+{
+    return bHelperFrame ? FSCMeshImporter::Position(Cry) / 100. : LightBasis(Cry);
+}
+
 void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInstance& Instance, ASCVehicle* Vehicle, USceneComponent* Parent,
                              TFunction<USceneComponent*(const FString&)> Helper, TArray<FString>& Warnings, bool bHelperFrame)
 {
-    auto Basis = [bHelperFrame](FVector V) { return bHelperFrame ? FSCMeshImporter::Position(V) / 100. : LightBasis(V); };
+    auto Basis = [bHelperFrame](FVector V) { return ContainerBasis(V, bHelperFrame); };
     Vehicle->bMegaLightsActive = MegaLightsActive();
     const bool bShadowCap = !Vehicle->bMegaLightsActive;
     const double ShadowRadius = ShadowRadiusThreshold(Instance.LightJson);
@@ -172,6 +177,7 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         State.Component = Light;
         State.Name = Name;
         State.OwnerEntity = Instance.EntityName;
+        J->TryGetBoolField(TEXT("affects_this_area_only"), State.bAreaOnly);
         const FString ExportState = LightString(J, TEXT("active_state"));
         State.ExportActiveState = FName(*ExportState);
         State.ActiveState = ExportState.IsEmpty() ? FName(TEXT("defaultState")) : FName(*ExportState);

@@ -356,6 +356,18 @@ and GPU ms: mean/p50/p95, the `stat unit` sources). `quit` ends the app from the
 of a route ending in `quit`) and prints the route log. Routes live in
 `ue/scripts/routes/` and use spawn kinds and relative moves only.
 
+`-SCLightProbe` adds a light audit to every `shot`: for the player position and for the
+surface under the crosshair it logs `LIGHT_PROBE tag=<shot> at=player|view point=...
+channels=<bits> lights=<n> lux_unshadowed=... lux_visible=... gated=<n> lux_gated=...`
+followed by one line per contributing light (lux, candela, distance, radius, cone factor,
+the actor blocking it). It is inverse-square with the importer's candela, attenuation
+radius and cone; a line trace stands in for shadows, gobos and the bulb clamp are
+ignored; `gated` counts lights excluded by lighting channel. Every import also logs
+`LIGHT_AREAS volumes=... lights_inside=... lights_outside=... lights_everywhere=...
+meshes_inside=... meshes_outside=... environment_lights=...`: how the package's room
+volumes split lights and meshes between lighting channel 0 (outside) and 1 (inside a
+room). See [WP-U3b verification §12](verification/WP-U3b.md).
+
 See [WP-P1 verification](verification/WP-P1.md) for exact null-RHI commands,
 results, collision comparison, limitations, and the orchestrator's GPU checklist.
 

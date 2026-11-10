@@ -123,6 +123,9 @@ private:
     FTransform LastSpawn;
     TSet<ESCFirstPersonAction> Held;
     float BlockedSeconds = 0, HoldSeconds = 0, NoclipRefusedSeconds = 0;
+    /** Last applied light side (WP-U3b §12): -1 none, 0 outside, 1 inside a room volume; and the kit it covered. */
+    int8 LightAreaState = -1;
+    TWeakObjectPtr<ASCVehicle> LightAreaKit;
     double RecoveryZ = -UE_BIG_NUMBER;
     bool bRunning = false;
     void SetRunning(bool bRun);

@@ -186,6 +186,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         if (!Instance(O, I.Container, Detail, TEXT("container_transform"))) { Warn(TEXT("interior"), Detail); continue; }
         I.Container.EntityName = String(O, TEXT("name"));
         I.Container.SourceTransformBasis = TEXT("cryengine_z_up");
+        for (const auto& R : ReaderArray(O, TEXT("room_volumes"))) if (R->Type == EJson::Object) I.RoomVolumeJson.Add(Json(R->AsObject()));
         for (const auto& P : ReaderArray(O, TEXT("placements")))
         {
             FSCSceneInstance Placement;

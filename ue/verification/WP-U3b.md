@@ -565,7 +565,7 @@ map, hangar; columns: proxy, H-CE, lights off), `hce-gladius-daylight-space-prox
   histogram (Gladius three-quarter view overexposed under the hangar bounds 2…8,
   `r5b-gladius-three-quarter-hangar.jpg`). Enclose the hangar preset (walls/ceiling) or meter centre-weighted,
   and widen the minimum to cover interiors (Cutlass bay EV100 −1.1).
-- Cutlass flood balance: confirm in game whether 1 m-bulb floods really dominate the bay, or whether Star
+- Cutlass flood balance (**resolved in §12**: placement, not the bulb term): confirm in game whether 1 m-bulb floods really dominate the bay, or whether Star
   Engine bounds the bulb term (the only lights with b ≥ 1 m are these 16 exterior-group projectors).
 
 TODO(WP-U3b): commit decision on `Content/Maps/Presets/*.umap` (generated, untracked) and the default map.
@@ -607,7 +607,7 @@ with the built importer, default map unless noted (`out/smoke/wp-u3b-hangar/`, e
 | Gladius top-down pool contrast (lights-off = point+spot off; the hangar panels are rect lights) | mean R/G/B 0.000/0.000/0.000, peak **0.039** (noise floor); only 64 px differ > 20/255, all on the ship's own fixtures | < 0.1 **pass**; matches `top-hangar.webp` (`hangar-gl-top.jpg`) |
 | Auto exposure, Gladius top / three-quarter / Scorpius | EV100 **7.89 / 7.44 / 7.30** | inside −2 … 8, but 0.1–0.7 EV under the upper bound |
 | Auto exposure, Cutlass bay | EV100 **−2.1**, clamped at the lower bound −2 | **fails** "inside the bounds" by 0.1 EV |
-| Cutlass bay floor saturation | **19.5 %** (frame 8.2 %) | < 5 % **fails** — the 1 m-bulb floods (TODO below) |
+| Cutlass bay floor saturation | **19.5 %** (frame 8.2 %) | < 5 % **fails** — the 1 m-bulb floods (resolved in §12: misplaced exterior floods) |
 | Cutlass forward corridor | mean linear luminance 0.151 = 0.56 of the bay (0.268); floor saturation 1.9 % | ≥ 0.1 **pass** |
 | Cutlass bay GPU time, 1601×900 | 11.76 ms median, MegaLights pass 1.94 ms (was 7.05 / 0.83 in the open map) | **not clean**: another game used ~40 % of the GPU during the whole batch; the 16 hangar panels do add MegaLights work. Re-measure on an idle GPU |
 | Daylight preset | sun-lit, sharp shadows, no pools | sanity ok |
@@ -629,10 +629,209 @@ components inheriting DataCore class values), `out/smoke/wp-u3b-hangar2/`, evide
 | --- | --- | --- |
 | Gladius top-down auto exposure | EV100 **7.89** (pre-exposure 0.0042) | inside −3 … 10 **pass** |
 | Cutlass bay auto exposure | EV100 **−2.14** (pre-exposure 4.40) | inside −3 … 10 **pass** |
-| Cutlass bay floor saturation | **19.9 %** (frame 8.4 %), mean linear luminance 0.279 | < 5 % **fails** — 1 m-bulb floods, TODO |
+| Cutlass bay floor saturation | **19.9 %** (frame 8.4 %), mean linear luminance 0.279 | < 5 % **fails** — 1 m-bulb floods (resolved in §12: 3.7 % after the placement fix) |
 | Cutlass bay GPU time, 1601×900 | 10.66 ms median, p90 12.69 (MegaLights pass 1.83 ms) | **contended** (game at ~40 % GPU); clean number still owed |
 
-TODO(WP-U3b): Cutlass 1 m-bulb floods (13 exterior-group projectors, intensity 6.4, `bulb_radius_m` 1.0,
+~~TODO(WP-U3b)~~ **Resolved 2026-11-10, §12** (the floods were exported 5.46 m off, inside the hull; the bulb term
+is right). Original note: Cutlass 1 m-bulb floods (13 exterior-group projectors, intensity 6.4, `bulb_radius_m` 1.0,
 ≈ 201 000 cd each under H-CE) dominate the bay (scene EV100 −1.1, 19.5 % floor saturation in the old
 map, §11.8); needs an in-game reference before the bulb term is questioned. Evidence:
 `r5b-cutlass-bay-viewer-map.jpg`, `r5b-cutlass-bay-hangar-hdr.jpg`.
+
+## 12. Cutlass interior blow-out: light-group placement and area confinement (2026-11-10)
+
+Owner feedback after the MegaLights demo ("something is wrong with light ranges … or intensities") and the
+open §11.9 TODO (bay floor 19.9 % saturated). Result: **neither ranges nor intensities were wrong. 103
+exterior lights of the Cutlass were exported 5.46 m from where the game puts them**, which moved the
+under-hull floods into the cargo bay and the cockpit. Evidence `wp-u3b/lightanchor-*.jpg`.
+
+### 12.1 Diagnosis
+
+`-SCLightProbe` (new, §12.5) on the armed walkthrough, before any change (`lp0-cutlass`): the player in the
+cockpit seat received **26 039 lux unshadowed / 25 320 lux visible**, 25 147 lux of it from one light,
+`LightGroup_BL_Body-008` (201 062 cd, 2.81 m away, unblocked). The hangar gives 400–700 lux.
+
+Hypotheses checked against the game shaders (decoded from the P4k shader cache; not in git):
+
+| Hypothesis | Verdict |
+| --- | --- |
+| The H-CE bulb term (I = π·10⁴·intensity·bulb²) is wrong for 1 m bulbs | **No.** `GetPhysicalLightAttenuation` (ShadeLib) is `bulb² / max(d², bulb²)` × forced falloff, as §11 assumed; a 1 m bulb is that bright in the engine too |
+| `projectorNearPlane = 49.18` (authored on exactly the 16 1 m-bulb projectors) cuts them off (`projDepthCutoff` in tiled shading) | **Rejected as a rule.** The CPU-side mapping is not visible in the shaders, the GI path has no such cutoff, and the values across the group (0, 49.18, −60.66, −57.38 = n/61) include Omni lights, where a projector near plane means nothing. Not exported |
+| `affectsThisAreaOnly` confines these lights to "outside" | **True and implemented (§12.3), but not the cause**: confinement alone changed nothing measurable (`la1-cutlass` ≈ `lp0-cutlass`) because the lights sat *inside* the room volumes |
+| The lights are in the wrong place | **Yes.** The raw `.soc` names them `Light_Flood_Under-*` / `Light_LG*`: under-hull and landing-gear floods |
+
+### 12.2 Root cause and rule
+
+`ext_lg.socpak` is attached to the vehicle at helper `hardpoint_lights_ext` = (0.119, −4.731, 2.720) m. Its
+eight `EntityComponentLightGroup` entities carry `.soc` positions that are **already in the vehicle frame**;
+the loader composed them with the helper again, shifting every light by |(0.119, −4.731, 2.720)| = 5.4585 m.
+Other containers author the same field container-local (Cutlass `base_int_body_main`), so neither reading
+of the `.soc` position is right for all of them.
+
+**Rule (data-derived, no asset names):** a light group that names an item port
+(`TileAttachmentParams@ItemPortName`) is placed with its origin on that port's `interactionOffset` in the
+container descriptor (`<name>.xml`, `TileItemPortEntries/ItemPort`), which is authored in the frame of the
+entity that owns the container. The group's lights keep their offsets from the group origin and their
+orientation. At load time: `position' = inv(W)·port + (position − group_position)`,
+`W = helper_world × container_transform`. Conflicting duplicate port names are dropped with a warning (the
+`.soc` placement is kept). Scope: containers listed on the root entity's
+`VehicleComponentParams.objectContainers`; nested child socpaks and containers of loadout children are not
+anchored.
+
+Effect on the exports (`scene.json` before → after; light counts, rotations and every other field equal):
+
+| Container · group | Lights | Moved |
+| --- | --- | --- |
+| Cutlass `ext_lg` · 8 groups (`BL_Body` 32, `BL_Tail` 35, wings 9+9, nacelles 5+5, headlights 4+4) | 103 | **5.4585 m** each |
+| Cutlass `base_int_body_main` / `base_int_cockpit_main` | 70 / 52 | 10 mm / 11 mm |
+| Gladius exterior groups / `base_int_all_main` | 21 / 54 | 2.1 mm / 0.3 mm |
+| Scorpius, all 17 groups | 127 | 0 |
+
+So the rule reproduces the previous placement to ≤ 11 mm on four containers where it was already right and
+differs only where it was wrong. Independent check — distance from each Cutlass `ext_lg` light to the nearest
+exported hull vertex (n = 103): median **1.446 m → 0.054 m**, mean 1.628 → 0.182, p90 3.256 → 0.171: the
+lights now sit on the hull fixtures.
+
+The bundled GLB path had the mirror-image defect (Codex review P1): containers were parented to the scene
+root, so a helper-relative `container_transform` lost the helper. Containers now hang under their helper node
+(or the owner entity node; scene root with a warning when neither exists). Checked on a real export
+(`scviewer glb DRAK_Cutlass_Black … --materials none --no-animations --no-cache`): chain
+`interior_ext_lg → hardpoint_lights_ext → DRAK_Cutlass_Black`; all 103 `ext_lg` lights sit at the light
+catalogue's `parent_local_position` with a maximum residual of 0.0000 m.
+
+### 12.3 Area confinement (`affects_this_area_only`)
+
+The engine shades an area-only light only on pixels of the clip volume it sits in
+(`GetClipVolumeWeightBinary`, tiled shading). The exporter now writes `interiors[].room_volumes[]`
+(`entitycomponentroom.xml` `AreaComponent` segments: box, extruded polygon, closed triangle soup; Cutlass 8,
+Gladius 2, Scorpius 1). UE has no per-pixel clip volumes, so the importer collapses the rule to two lighting
+channels: channel 0 = outside every room volume, channel 1 = inside one. Area-only lights get the channel of
+their position, other lights both; a primitive is inside when more than half of ≤ 64 vertex samples are
+inside; environment lights get both; the player body and kit switch with the capsule every tick.
+`LIGHT_AREAS` logs the result:
+
+| Ship | Volumes | Lights inside / outside / everywhere | Meshes inside / outside |
+| --- | --- | --- | --- |
+| Cutlass, old placement (`la1`) | 8 | 98 / 77 / 50 | — |
+| Cutlass (`la2`, `la3`) | 8 | **82 / 93** / 50 | 384 / 305 |
+| Gladius | 2 | 53 / 23 / 0 | 34 / 319 |
+| Scorpius | 1 | 29 / 80 / 18 | 192 / 727 |
+
+Trimesh containment (Codex review P2): the first version counted a triangle edge or vertex hit by the parity
+ray twice or not at all. Both sides (Rust `socpak/room_containment.rs`, UE `SCLightAreas.cpp`) now cast +Z
+and decide each projected edge with a sign that never answers "on the edge" (the query is treated as displaced
+by an infinitesimal (ε, ε²); edges evaluated in canonical vertex order so the two triangles sharing an edge get
+opposite answers). Tests were red first: Rust lattice interior `[0.125, 0.625, 0.5]` and exterior
+`[-0.5, -0.5, -1]`; UE 32 + 33 interior lattice points left out of the split/fanned cube and 4 + 4 exterior
+points taken in. Cutlass `LIGHT_AREAS` counts are identical before and after this fix.
+
+Known limitations (reviewed, not fixed):
+- **Rooms are not confined from each other.** Membership is "inside any room"; the engine matches the
+  room's own stencil ID (1–63). An unshadowed area-only light can light the neighbouring room through a wall.
+  UE offers three lighting channels, not 63.
+- **Channels are assigned once, at the rest pose** (`SCImportJob.cpp`, `SCVehicle.cpp`). A ramp or door that
+  animates across a room boundary keeps its side.
+- Clip-volume blend distance and portals are not modelled; the test is binary.
+
+### 12.4 Measurements (RTX 4090, default hangar map, final build)
+
+Armed Cutlass walkthrough (`ue/scripts/routes/cutlass-armed-walkthrough.txt`), `lp0` = before, `la1` = area
+confinement only, `la2` = with the placement fix. Clipped pixels (all channels ≥ 250) of the whole window:
+
+| Shot | lp0 | la1 | la2 |
+| --- | --- | --- | --- |
+| 17 first person, cargo bay | 2.5 % | 2.4 % | **0.6 %** |
+| 19 first person, bulkhead door | 1.5 % | 1.5 % | 1.3 % |
+| 20 third person at the bulkhead | 2.9 % | 2.9 % | 3.4 % |
+| 21 first person, corridor | 2.8 % | 2.7 % | 3.2 % |
+| 22 first person, cockpit | 0.0 % | 0.0 % | 0.1 % |
+| 23 third person, cockpit | 1.9 % | 1.9 % | 1.7 % |
+| 01 hangar / 16 ramp foot | 5.7 % / 0.2 % | 5.6 % / 0.2 % | 6.6 % / 0.3 % |
+| 05, 08, 12, 15 exterior | 0.0 % | 0.0 % | 0.0 % |
+
+Probe illuminance, lux unshadowed / visible (`LIGHT_PROBE … at=player|view`):
+
+| Shot · point | lp0 | la2 |
+| --- | --- | --- |
+| 22/23 cockpit · player | 26 039.2 / **25 320.4** | 915.9 / **197.1** |
+| 22 cockpit · view | 10 872.4 / 10 151.0 | 722.8 / 1.1 |
+| 23 cockpit · view | 15 045.0 / 14 311.1 | 735.3 / 1.9 |
+| 17 cargo bay · player | 725.2 / 21.8 | 725.2 / 21.9 |
+| 17 cargo bay · view (bay floor ahead) | 785.4 / 21.6 | 771.4 / 7.6 |
+| 19 bulkhead · player | 1 039.0 / 188.4 | 1 013.0 / 292.4 |
+| 21 corridor · player | 838.7 / 95.6 | 839.4 / 122.8 |
+| 16 ramp foot · player | 617.3 / 197.0 | 617.7 / 197.0 |
+
+(The unshadowed totals are dominated by the 16 hangar panels, 98 352 cd each, which the hull blocks.)
+
+§11.9 bay view (`measure_lights.sh out/dec-rv-cutlass anchor-cb-bay -SCView=180,2,0.25`), same metric on
+the §11.9 capture (`wp-u3b-hangar2/cb-bay.png`) and the new one, viewport only, all channels ≥ 250:
+
+| | §11.9 capture | Now |
+| --- | --- | --- |
+| Frame | 8.0 % | **2.3 %** |
+| Floor band (lower 42 % of the viewport) | 17.6 % | **3.7 %** (< 5 %) |
+| Mean sRGB luma | 0.452 | 0.314 |
+| GPU time, 1695×953 | 10.66 ms median (contended) | 7.03 ms median, p90 7.51; MegaLights pass 1.35 ms |
+
+The original floor mask of §11.9 (19.9 %) is not recorded; the band above is a stand-in that gives 17.6 % on
+the same capture. The §11.9 capture also predates the static-wear materials (WP-U2), so the pair is not a
+single-variable comparison — the walkthrough pairs above are. What still clips in the bay are the emissive
+floor strips and wall chevrons. The GPU time is not a clean number either: `nvidia-smi` was read only after
+the run (14 %, the other game still open).
+
+Regression, ships whose placement did not move: Gladius orbit clipped 0.0 % and luma 0.238 before and
+after; Scorpius walk shots 01–04 luma identical (0.236 / 0.218 / 0.238 / 0.238); Gladius hull-seat route
+luma within ±0.016 of the pre-wear baseline, 0.0 % clipped. No visible difference on the contact sheets.
+
+### 12.5 Tooling
+
+- `-SCLightProbe` (host argument): at every route `shot`, logs for the player position and for the surface
+  under the crosshair `LIGHT_PROBE tag=… at=player|view point=… channels=… lights=… lux_unshadowed=…
+  lux_visible=… gated=… lux_gated=…` and one line per contributing light (lux, cd, distance, radius, cone
+  factor, blocking hit). Inverse-square with the importer's candela, radius window and cone; `gated` = lights
+  excluded by lighting channel. A line trace stands in for shadowing; gobos and the bulb clamp are ignored.
+- `LIGHT_AREAS volumes=… lights_inside=… lights_outside=… lights_everywhere=… meshes_inside=…
+  meshes_outside=… environment_lights=…` per import.
+
+### 12.6 Verification
+
+```bash
+export CARGO_TARGET_DIR=$PWD/target
+cargo test -q --manifest-path vendor/StarBreaker/Cargo.toml -p starbreaker-3d --lib   # 857 passed, 0 failed, 3 ignored
+cargo test -q -p scviewer-core                                                         # 26 passed
+scripts/build_ffi.sh && cargo build -q -p scviewer-cli && ue/scripts/build.sh SCViewerEditor   # all exit 0
+UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/test_importer.py -nullrhi …     # WP-U1 UNIT_TESTS_OK
+UnrealEditor-Cmd … -script=ue/scripts/test_player.py -nullrhi -SCPlayerTests …          # WP-P2 HEADLESS_OK
+target/debug/scviewer decomposed DRAK_Cutlass_Black out/dec-rv-cutlass                  # also AEGS_Gladius, RSI_Scorpius
+SC_TIMEOUT=2400 ue/scripts/capture_route.sh la2-cutlass ue/scripts/routes/cutlass-armed-walkthrough.txt \
+  -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first \
+  -SCPlayerLoadout=Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml -SCLightProbe
+```
+
+New tests: Rust `socpak::light_anchor` (6), `socpak::room_containment` (3), `gltf::tests_interiors` (5),
+`pipeline::light_catalogue::item_port_anchored_group_lands_on_its_port_in_the_owner_frame`; UE light tests
+for area classification and the trimesh cases. Cache format version 15 → 16.
+
+Cross-review (Codex, read-only, no GPU): P1 bundled-GLB container parenting — fixed; P2 trimesh edge double
+count — fixed, tests red first on both sides; P2 duplicate item-port names — fixed; P2 rooms not confined
+from each other and P2 stale channels after animation — documented above.
+
+### 12.7 Not verified / still open
+
+- The rule was derived from five containers on three ships, all with identity container rotation and empty
+  port helpers. Rotated containers, ports with a helper, `resourceLinkToParent = 1` light ports, nested child
+  socpaks, containers of loadout children and standalone tile-attached `Light` entities are untested or
+  unanchored.
+- The end-to-end catalogue test was written with the fix and was not seen red on its own; the bundled check
+  covers the 103 `ext_lg` lights only (the 122 interior-container lights have no catalogue parent-local
+  position to compare against).
+- Gladius, Scorpius and the Cutlass walkthrough were not re-captured after the trimesh fix (the Cutlass orbit
+  was; its area counts are identical).
+- Not compared with the game: the small yellow pool at the top of the ramp (a tail-group light at its authored
+  position), the white door-frame strips at the bulkhead (shot 19), and the third-person cockpit view, where
+  helmet and armour are still very bright. Shots 20 and 21 did not improve. No under-hull view was inspected.
+- The hangar floor and the ramp are white before and after — viewer hangar panels and auto exposure, not ship
+  lights. Bay auto-exposure EV100 was not re-measured.
+- `projectorNearPlane`, `specularMultiplier`, `focusedBeam` are not exported; `attenuationTweak` semantics
+  remain open (§11).

@@ -8,6 +8,58 @@
 #include "Components/LocalLightComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "HAL/IConsoleManager.h"
+#include "Components/SpotLightComponent.h"
+#include "Components/PointLightComponent.h"
+#include "Engine/World.h"
+#include "UObject/UObjectIterator.h"
+
+TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Point, const AActor* Ignore, int32 Top, uint8 ReceiverChannels)
+{
+    struct FRow { double Lux; FString Text; };
+    TArray<FRow> Rows;
+    double Total = 0, Visible = 0, GatedLux = 0;
+    int32 Gated = 0;
+    for (TObjectIterator<ULocalLightComponent> It; It; ++It)
+    {
+        const ULocalLightComponent* L = *It;
+        if (L->GetWorld() != World || !L->IsRegistered() || !L->IsVisible() || L->Intensity <= 0) continue;
+        const FVector Origin = L->GetComponentLocation();
+        const double Cm = FVector::Dist(Origin, Point), Radius = L->AttenuationRadius;
+        if (Cm >= Radius) continue;
+        const auto* Spot = Cast<USpotLightComponent>(L);
+        const auto* Bulb = Cast<UPointLightComponent>(L);
+        double Cone = 1;
+        if (Spot)
+        {
+            const double CosOuter = FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle));
+            const double CosInner = FMath::Cos(FMath::DegreesToRadians(FMath::Min(Spot->InnerConeAngle, Spot->OuterConeAngle)));
+            const double CosPoint = FVector::DotProduct(L->GetForwardVector(), (Point - Origin).GetSafeNormal());
+            Cone = FMath::Square(FMath::Clamp((CosPoint - CosOuter) / FMath::Max(1e-4, CosInner - CosOuter), 0., 1.));
+        }
+        const double Candela = L->Intensity * ULocalLightComponent::GetUnitsConversionFactor(
+            L->IntensityUnits, ELightUnits::Candelas, Spot ? FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle)) : -1.f);
+        const double M = FMath::Max3(Cm, Bulb ? double(Bulb->SourceRadius) : 0., 1.) / 100.;
+        const double Lux = Candela / (M * M) * FMath::Square(1 - FMath::Pow(Cm / Radius, 4.)) * Cone;
+        if (Lux <= 0) continue;
+        const uint8 Channels = L->LightingChannels.bChannel0 | (L->LightingChannels.bChannel1 << 1) | (L->LightingChannels.bChannel2 << 2);
+        if (ReceiverChannels && !(Channels & ReceiverChannels)) { ++Gated; GatedLux += Lux; continue; }
+        FHitResult Hit;
+        FCollisionQueryParams Q(SCENE_QUERY_STAT(SCLightProbe), true, Ignore);
+        const bool bBlocked = World->LineTraceSingleByChannel(Hit, Origin, Point, ECC_Visibility, Q) && Hit.Distance < Cm - 2;
+        Total += Lux;
+        if (!bBlocked) Visible += Lux;
+        Rows.Add({Lux, FString::Printf(TEXT("lux=%.1f cd=%.0f d=%.2fm r=%.1fm cone=%.2f blocked=%d%s %s/%s"), Lux, Candela, Cm / 100., Radius / 100.,
+                                       Cone, bBlocked, bBlocked ? *FString::Printf(TEXT("@%.2fm"), Hit.Distance / 100.) : TEXT(""),
+                                       L->GetOwner() ? *L->GetOwner()->GetName() : TEXT("?"),
+                                       L->ComponentTags.Num() ? *L->ComponentTags[0].ToString() : *L->GetName())});
+    }
+    Rows.Sort([](const FRow& A, const FRow& B) { return A.Lux > B.Lux; });
+    TArray<FString> Out;
+    Out.Add(FString::Printf(TEXT("point=%s channels=%d lights=%d lux_unshadowed=%.1f lux_visible=%.1f gated=%d lux_gated=%.1f"),
+                            *Point.ToCompactString(), ReceiverChannels, Rows.Num(), Total, Visible, Gated, GatedLux));
+    for (int32 I = 0; I < FMath::Min(Top, Rows.Num()); ++I) Out.Add(Rows[I].Text);
+    return Out;
+}
 
 bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
 {

@@ -37,6 +37,8 @@ struct SCBRIDGE_API FSCInterior
 {
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) FSCSceneInstance Container;
+    /** `room_volumes[]` objects verbatim (container-local CryEngine metres); parsed by FSCRoomVolume. */
+    UPROPERTY(BlueprintReadOnly) TArray<FString> RoomVolumeJson;
     UPROPERTY(BlueprintReadOnly) TArray<FSCSceneInstance> Placements;
 };
 USTRUCT(BlueprintType)

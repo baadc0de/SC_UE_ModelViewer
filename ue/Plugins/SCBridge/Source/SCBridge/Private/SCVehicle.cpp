@@ -246,3 +246,10 @@ void ASCVehicle::RefreshLightShadowPolicy()
 {
     FSCLightImporter::RefreshShadows(this);
 }
+
+bool ASCVehicle::IsInsideLightArea(const FVector& World) const
+{
+    for (const FSCLightArea& Area : LightAreas)
+        if (Area.Contains(World)) return true;
+    return false;
+}

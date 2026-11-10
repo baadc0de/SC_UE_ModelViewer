@@ -7,6 +7,7 @@
 #include "SCFirstPersonCharacter.h"
 #include "SCPlayerBody.h"
 #include "SCRigComponent.h"
+#include "SCLightImporter.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/Engine.h"
@@ -359,6 +360,22 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
         // snap: the same marker without touching input (moving shots with sc.FP.Key held).
         if (ASCFirstPersonCharacter* C = S.GetFirstPerson(); C && Words[0] == TEXT("shot")) C->HoldMoveInput(FVector::ZeroVector, 0, false);
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_SHOT tag=%s %s"), Words.IsValidIndex(1) ? *Words[1] : TEXT("shot"), *Where(S));
+        if (ASCFirstPersonCharacter* C = S.GetFirstPerson(); C && FParse::Param(FCommandLine::Get(), TEXT("SCLightProbe")))
+        {
+            // -SCLightProbe: which lights reach the player and the surface under the crosshair (verification only).
+            FHitResult Hit;
+            const FVector Eye = C->Camera->GetComponentLocation();
+            FCollisionQueryParams Q(SCENE_QUERY_STAT(SCLightProbeView), true, C);
+            // Receiver channels: the player's light side (WP-U3b §12), and the channels of the component that was hit.
+            auto Bits = [](const FLightingChannels& L) { return uint8(L.bChannel0 | (L.bChannel1 << 1) | (L.bChannel2 << 2)); };
+            struct FPoint { const TCHAR* Name; FVector At; uint8 Channels; };
+            TArray<FPoint> Points{{TEXT("player"), C->GetActorLocation(), uint8(C->Vehicle && C->Vehicle->IsInsideLightArea(C->GetActorLocation()) ? 2 : 1)}};
+            if (C->GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + C->GetViewRotation().Vector() * 3000, ECC_Visibility, Q) && Hit.GetComponent())
+                Points.Add({TEXT("view"), Hit.ImpactPoint + Hit.ImpactNormal * 3, Bits(Hit.GetComponent()->LightingChannels)});
+            for (const FPoint& Point : Points)
+                for (const FString& Line : FSCLightImporter::Probe(C->GetWorld(), Point.At, C, 10, Point.Channels))
+                    UE_LOG(LogSCViewerAutomation, Display, TEXT("LIGHT_PROBE tag=%s at=%s %s"), Words.IsValidIndex(1) ? *Words[1] : TEXT("shot"), Point.Name, *Line);
+        }
         StepAt = Now + (Words.IsValidIndex(2) ? FCString::Atod(*Words[2]) : 3.0);
         return;
     }

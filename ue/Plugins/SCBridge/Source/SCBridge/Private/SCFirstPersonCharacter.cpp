@@ -2,6 +2,7 @@
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
 #include "SCPlayerBody.h"
+#include "SCLightAreas.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -39,6 +40,7 @@ ASCFirstPersonCharacter::ASCFirstPersonCharacter()
     Flashlight->SetAttenuationRadius(2000);
     Flashlight->SetOuterConeAngle(35);
     Flashlight->SetVisibility(false);
+    Flashlight->LightingChannels.bChannel1 = true; // not an area light: it reaches both light sides (WP-U3b §12)
     SetProfile(FSCCharacterProfile());
 }
 void ASCFirstPersonCharacter::SetProfile(const FSCCharacterProfile& InProfile)
@@ -121,6 +123,19 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     if (!Vehicle || Vehicle->IsActorBeingDestroyed()) { ClearInput(); return; }
+    // The body and its kit are lit like the surfaces around them: by the lights of the side the player stands on.
+    ASCVehicle* Kit = Body->GetKit();
+    if (const bool bInside = Vehicle->IsInsideLightArea(GetActorLocation()); LightAreaState != int8(bInside) || LightAreaKit.Get() != Kit)
+    {
+        LightAreaState = int8(bInside);
+        LightAreaKit = Kit;
+        for (const AActor* Actor : {static_cast<const AActor*>(this), static_cast<const AActor*>(Kit)})
+        {
+            if (!Actor) continue;
+            TInlineComponentArray<UPrimitiveComponent*> Primitives(Actor);
+            for (UPrimitiveComponent* Primitive : Primitives) FSCLightAreas::SetChannels(Primitive, bInside);
+        }
+    }
     // Single eye anchor; a camera re-attached to another driver (e.g. a head joint) is left alone.
     if (Camera->GetAttachParent() == GetCapsuleComponent()) Camera->SetRelativeLocation(EyeOffset());
     if (HoldSeconds > 0)
