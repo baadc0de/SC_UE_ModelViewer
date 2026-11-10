@@ -136,6 +136,10 @@ No C ABI signature changes. The same fields appear in decomposed scene v2 and
 bundled GLB light extras. Layer-1 `CACHE_FORMAT_VERSION` is 12 (previously 11);
 UE `SCPackageReader` continues accepting scene v1/v2.
 
+Since format 14 the package's texture PNGs state their colour encoding (`sRGB`
+chunk or `gAMA` 1.0) and `palettes.json` `finish.*.glossiness` is a 0..1
+fraction; no C ABI change.
+
 WP-R5b enum detail: LIVE `importance` is often a name. `importance_name` preserves
 it and `importance` exports the DataCore property enum's zero-based option index,
 resolved from the current database rather than a copied table. `affect_gi_mode`

@@ -40,6 +40,36 @@
     ],
     "export_path": "tex/palette_decal.png",
     "source_path": "src/palette_decal.tif"
+   },
+   "finish": {
+    "primary": {
+     "specular": [
+      0.3,
+      0.2,
+      0.1
+     ],
+     "glossiness": 0.5
+    },
+    "secondary": {
+     "specular": [
+      0.1,
+      0.2,
+      0.3
+     ],
+     "glossiness": 0.8
+    },
+    "tertiary": {
+     "specular": [
+      0.6,
+      0.5,
+      0.4
+     ],
+     "glossiness": null
+    },
+    "glass": {
+     "specular": null,
+     "glossiness": null
+    }
    }
   }
  ]

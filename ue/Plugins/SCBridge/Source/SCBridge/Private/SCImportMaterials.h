@@ -12,7 +12,7 @@ class FSCImportMaterials
 public:
     /** Pure: build descriptions for every instance's sidecar/palette pair (engine-glow targets applied). */
     void Describe(const FSCSceneManifest& Manifest);
-    /** Worker: decode the deduplicated texture set. */
+    /** Worker: decode the deduplicated texture set and resolve the descriptions' texture means. */
     void Decode(const FSCPackageSource& Source);
     /** Game thread: textures and material instances, retained by the vehicle. */
     void Instantiate(ASCVehicle* Vehicle, TArray<FString>& Warnings);
@@ -48,5 +48,6 @@ private:
     TMap<FSCTextureKey, UTexture2D*> Textures;
     TArray<FSet> Sets;
     TArray<FSCTextureKey> Keys;
+    TSet<FSCTextureKey> SampledKeys, MeanKeys; // bound to a material / read for its mean colour (may be both)
     TArray<FSCDecodedTexture> Decoded;
 };

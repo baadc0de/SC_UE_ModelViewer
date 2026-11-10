@@ -77,7 +77,7 @@ Data/**/*.png                                      # textures (DDNA normal w/ sm
 | same mesh, collision | `UBodySetup` complex trimesh (Chaos, cooked at runtime) or Nanite fallback-mesh collision | per D7; `CollisionTraceFlag = UseComplexAsSimple`; worker-cooked full-resolution triangles; processed caching is WP-C1 |
 | soft-skinned submesh set | `USkeletalMesh` + `USkeleton` from CHR bones | Nanite off by default (option; experimental). One render section per material slot; each section's bone map lists only the joints that weight its vertices (influences index into it); the LOD's required/active bones stay the whole skeleton (sockets and attachments) |
 | `.mtl` submaterial | `UMaterialInstanceDynamic` of a master per shader family | Illum, HardSurface, Glass, Layered (tint palette), MeshDecal (POM), Emissive/Unlit (screens, holograms), NoDraw (skipped), Fallback. Character families (WP-P2 round 2) map plainly onto the Illum master: `HumanSkin_V2` and `Eye` = base colour, DDNA normal, spec map, authored F0 (no subsurface/DNA/wrinkles); `HairPBR` = masked cards, coverage from the `opacity` slot's red channel (`OpacityMap`), colour from the authored melanin parameters (UE's `GetHairColorFromMelanin`: `BaseMelanin`, `BaseMelaninRedness`, `DyeColor` × `DyeAmount`, × `BaseTintColor`), authored `Diffuse` when the material has no melanin (hair caps). Every master is flagged for skeletal meshes (`bUsedWithSkeletalMesh`): a standalone `-game` session cannot add a usage flag at runtime and would draw the engine's WorldGrid default material on skinned parts. The layered family (HardSurface, Layered) also draws the material-level macro surface from the game's shaders: `TexSlot3` macro normal + gloss over the blended layers (`%MACRO_NORMAL_MAP` / `%NORMAL_MAP`), HardSurface `TexSlot1` macro AO (`%MACRO_AO_MAP`), LayerBlend_V2 `TexSlot13` HAL map (AO, per-layer luminance; hue shift and wear layers not drawn). All lit masters map gloss as the game does: roughness = 1 − min(gloss, 251/255) (`ue/verification/WP-U2.md`, "Macro surface, HAL and the gloss convention") |
-| texture slot | `UTexture2D` | sRGB only for colour roles; DDNA → `TC_Normalmap` linear; roughness/metal/masks → linear; dedupe by source path; mip 0 textures built on a worker thread |
+| texture slot | `UTexture2D` | Colour encoding from the exported PNG: the exporter copies the source DDS's sRGB state into an `sRGB` chunk (sRGB) or `gAMA` 1.0 (linear); an untagged PNG falls back to the slot role (sRGB only for colour roles). DDNA → `TC_Normalmap` linear; roughness/masks → linear; dedupe by source path; mip 0 textures built on a worker thread |
 | `interiors[].lights` | point / spot / rect light components | Authored intensity, bulb/plane size, attenuation and shadow fields below; `radius_m` ×100, linear colour, half-angles, gobo → light function. `intensity_candela_proxy` is the legacy `raw_x1500` proxy, not calibrated cd; physical mapping belongs to UE (WP-U3b §11.2–11.3). `ambient_proxy` skipped with a log |
 | clip sidecar | `UAnimSequence` on the skeleton | Blender Z-up wxyz → UE; linear keys at clip fps; hemisphere-align; `bind · (start⁻¹ · sample)` when `start_rotation` present; hash-collision arrays by provenance (whitepaper §14.8) |
 | Mannequin fragments | `USCClipCatalog` | clip id, display name, owner entity, source, fragment/tags/scopes, boomerang flag |
@@ -206,6 +206,17 @@ looks up physics-asset bodies. No second collision cache is introduced.
 absent; never inferred from entity/asset names. The Rust mirror accepts absent
 fields. Layer-1 `CACHE_FORMAT_VERSION` is 13, invalidating older packages and
 catalogues. The FFI ABI stays unchanged: the additive field travels in the package.
+
+Static wear (WP-U2, 2026-11-10): generic texture PNGs carry their colour encoding
+(`sRGB` chunk, or `gAMA` 100000 for linear data, from the DDS header), and
+`palettes.json` `finish.<channel>.glossiness` is the DataCore `TintEntry.glossiness`
+UNorm8 as a 0..1 fraction (was the raw byte). Layer-1 `CACHE_FORMAT_VERSION` is 14.
+A `--skip-existing-assets` export into a directory written by an older exporter
+keeps its untagged PNGs (role fallback); export into a fresh directory instead.
+UE reads HardSurface static wear from `public_params.WearBlendBase`, the `Wear`
+layer or the wear tints, the Primary layer's `TexSlot8` blend map and glTF
+`COLOR_0` (R damage, G glow, B AO, A wear) under `%VERTCOLORS`; rules and sources in
+`ue/verification/WP-U2.md`.
 Child controllers use scoped clip IDs and fragment animation references; raw
 interior geometry can acquire a controller through an unambiguous exact DataCore
 geometry relationship. Animated CGA interior meshes retain their NMC receiving

@@ -208,7 +208,9 @@
     "tokens": [
      "WEAR_LAYER",
      "MACRO_NORMAL_MAP",
-     "MACRO_AO_MAP"
+     "MACRO_AO_MAP",
+     "VERTCOLORS",
+     "USE_SPECULAR_MAPS"
     ]
    },
    "texture_slots": [
@@ -265,7 +267,54 @@
      },
      "diffuse_export_path": "tex/Primary_diff.png",
      "normal_export_path": "tex/Primary_ddna.png",
-     "roughness_export_path": "tex/Primary_ddna_roughness.png"
+     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_spec.png"
+      },
+      {
+       "slot": "TexSlot8",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_blend.png"
+      }
+     ],
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "ShadingModel",
+        "value": "2"
+       },
+       {
+        "name": "WearDirtBlendFalloff",
+        "value": "0.25"
+       },
+       {
+        "name": "WearDiffuseColor",
+        "value": "0.5,0.5,0.5"
+       },
+       {
+        "name": "WearSpecularColor",
+        "value": "0.2,0.2,0.2"
+       },
+       {
+        "name": "WearGlossiness",
+        "value": "0.5"
+       }
+      ]
+     },
+     "wear_tint": [
+      1,
+      1,
+      1
+     ],
+     "wear_gloss": 1.0
     },
     {
      "name": "Wear",
@@ -275,7 +324,7 @@
       1,
       1
      ],
-     "gloss_mult": 1.0,
+     "gloss_mult": 0.5,
      "layer_snapshot": {
       "diffuse": [
        1,
@@ -296,7 +345,15 @@
      },
      "diffuse_export_path": "tex/Wear_diff.png",
      "normal_export_path": "tex/Wear_ddna.png",
-     "roughness_export_path": "tex/Wear_ddna_roughness.png"
+     "roughness_export_path": "tex/Wear_ddna_roughness.png",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Wear_spec.png"
+      }
+     ]
     }
    ],
    "palette_routing": {
@@ -307,7 +364,8 @@
     }
    },
    "public_params": {
-    "MacroTiling": 3
+    "MacroTiling": 3,
+    "WearBlendBase": 0.25
    },
    "activation_state": {
     "state": "active",
@@ -423,7 +481,18 @@
      },
      "diffuse_export_path": "tex/BaseLayer1_diff.png",
      "normal_export_path": "tex/BaseLayer1_ddna.png",
-     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png"
+     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png",
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "TintMode",
+        "value": "1"
+       }
+      ]
+     }
     },
     {
      "name": "BaseLayer2",
@@ -482,7 +551,18 @@
      },
      "diffuse_export_path": "tex/BaseLayer3_diff.png",
      "normal_export_path": "tex/BaseLayer3_ddna.png",
-     "roughness_export_path": "tex/BaseLayer3_ddna_roughness.png"
+     "roughness_export_path": "tex/BaseLayer3_ddna_roughness.png",
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "TintMode",
+        "value": "2"
+       }
+      ]
+     }
     },
     {
      "name": "BaseLayer4",
@@ -605,7 +685,15 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/BaseLayer1_diff.png",
      "normal_export_path": "tex/BaseLayer1_ddna.png",
-     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png"
+     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/BaseLayer1_spec.png"
+      }
+     ]
     },
     {
      "name": "WearLayer1",
@@ -1747,6 +1835,405 @@
    "texture_slots": [],
    "derived_textures": [],
    "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 29,
+   "submaterial_name": "hard_wear_tinted",
+   "shader_family": "HardSurface",
+   "shader": "HardSurface",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HardSurface"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Specular",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Shininess",
+     "value": "180"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "Primary",
+     "uv_tiling": 3.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null,
+     "diffuse_export_path": "tex/Primary_diff.png",
+     "normal_export_path": "tex/Primary_ddna.png",
+     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/tinted_spec.png"
+      },
+      {
+       "slot": "TexSlot8",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/tinted_blend.png"
+      }
+     ],
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "ShadingModel",
+        "value": "0"
+       },
+       {
+        "name": "WearDirtBlendFalloff",
+        "value": "0.75"
+       },
+       {
+        "name": "WearDiffuseColor",
+        "value": "0.5,0.5,0.5"
+       },
+       {
+        "name": "WearSpecularColor",
+        "value": "0.2,0.2,0.2"
+       },
+       {
+        "name": "WearGlossiness",
+        "value": "0.5"
+       }
+      ]
+     },
+     "wear_tint": [
+      0.5,
+      1,
+      1
+     ],
+     "wear_gloss": 0.5
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "WearBlendBase": 0.4
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 30,
+   "submaterial_name": "hard_wear_no_blend_map",
+   "shader_family": "HardSurface",
+   "shader": "HardSurface",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HardSurface"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Specular",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Shininess",
+     "value": "180"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "WEAR_LAYER"
+    ]
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "Primary",
+     "uv_tiling": 3.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null,
+     "diffuse_export_path": "tex/Primary_diff.png",
+     "normal_export_path": "tex/Primary_ddna.png",
+     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "texture_slots": [],
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "ShadingModel",
+        "value": "4"
+       },
+       {
+        "name": "WearDirtBlendFalloff",
+        "value": "0.75"
+       },
+       {
+        "name": "WearDiffuseColor",
+        "value": "0.5,0.5,0.5"
+       },
+       {
+        "name": "WearSpecularColor",
+        "value": "0.2,0.2,0.2"
+       },
+       {
+        "name": "WearGlossiness",
+        "value": "0.5"
+       }
+      ]
+     },
+     "wear_tint": [
+      1,
+      1,
+      1
+     ],
+     "wear_gloss": 1.0
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "WearBlendBase": 0.3
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 31,
+   "submaterial_name": "hard_wear_no_tints",
+   "shader_family": "HardSurface",
+   "shader": "HardSurface",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HardSurface"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Specular",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Shininess",
+     "value": "180"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "Primary",
+     "uv_tiling": 3.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": null,
+     "diffuse_export_path": "tex/Primary_diff.png",
+     "normal_export_path": "tex/Primary_ddna.png",
+     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "texture_slots": [
+      {
+       "slot": "TexSlot8",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/tinted_blend.png"
+      }
+     ],
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "ShadingModel",
+        "value": "0"
+       },
+       {
+        "name": "WearDirtBlendFalloff",
+        "value": "0.75"
+       }
+      ]
+     },
+     "wear_tint": [
+      1,
+      1,
+      1
+     ],
+     "wear_gloss": 1.0
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "WearBlendBase": 0.3
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 32,
+   "submaterial_name": "blend_palette_fold",
+   "shader_family": "LayerBlend_V2",
+   "shader": "LayerBlend_V2",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "LayerBlend_V2"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Specular",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Shininess",
+     "value": "255"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [],
+   "derived_textures": [],
+   "layer_manifest": [
+    {
+     "name": "BaseLayer1",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/BaseLayer1_diff.png",
+     "normal_export_path": "tex/BaseLayer1_ddna.png",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/BaseLayer1_spec.png"
+      }
+     ]
+    }
+   ],
    "palette_routing": {
     "layer_channels": [],
     "material_channel": null

@@ -268,7 +268,8 @@ Evidence, exact acceptance commands, input-revision notes and GPU TODOs are in
 [verification/WP-U1.md](verification/WP-U1.md). This sandbox has no Vulkan device;
 CPU representations are verified, while rendered Nanite/Lumen/HWRT acceptance
 must be completed on the orchestrator's GPU.
-WP-U2 materials (Substrate decision, masters, builder, textures, macro surface / HAL / gloss convention):
+WP-U2 materials (Substrate decision, masters, builder, textures, macro surface / HAL / gloss convention,
+HardSurface static wear, palette finish, PNG colour encoding, energy split):
 [verification/WP-U2.md](verification/WP-U2.md).
 
 ## WP-V1 viewer app (model browser, load pipeline, cameras)

@@ -80,7 +80,9 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         // snapshot diffuse x layer tint x palette secondary.
         TestTrue(TEXT("layer tint x palette"), Near(X->Vectors[TEXT("Layer0Tint")], FLinearColor(0.25f, 0.25f, 0.125f)));
         TestEqual(TEXT("layer tiling"), X->Scalars[TEXT("Layer0Tiling")], 2.f);
-        TestEqual(TEXT("layer gloss"), X->Scalars[TEXT("Layer0GlossMult")], 0.5f);
+        // paletteLib ApplyPaletteParams, TintMode 0 (diffuse and specular): gloss x palette gloss, F0 = palette specular.
+        TestEqual(TEXT("layer gloss x palette gloss"), X->Scalars[TEXT("Layer0GlossMult")], 0.5f * 0.8f);
+        TestTrue(TEXT("layer F0 = palette specular"), Near(X->Vectors[TEXT("Layer0Specular")], FLinearColor(0.1f, 0.2f, 0.3f)));
         TestFalse(TEXT("wear layer is not a base layer"), X->Scalars.Contains(TEXT("Layer1Tiling")));
         TestEqual(TEXT("layer roughness"), X->Textures[TEXT("Layer0RoughnessMap")].Path, FString(TEXT("tex/Primary_ddna_roughness.png")));
         // HardSurface.cfx macro surface: %MACRO_NORMAL_MAP = TexSlot3 (+ gloss in its alpha), %MACRO_AO_MAP = TexSlot1,
@@ -93,14 +95,75 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("macro AO is TexSlot1 under %MACRO_AO_MAP"), X->Textures[TEXT("MacroAOMap")].Path, FString(TEXT("tex/hard_macro_ao.png")));
         TestEqual(TEXT("macro AO is data, not colour"), int32(X->Textures[TEXT("MacroAOMap")].Role), int32(ESCTextureRole::Linear));
         TestFalse(TEXT("HardSurface has no HAL map"), X->Textures.Contains(TEXT("HalMap")));
+        // Static wear (HardSurface.cfx CalcAlphas_BlendBased + BlendLayers_SeparatePrimaryAndWear under %WEAR_LAYER).
+        TestEqual(TEXT("%VERTCOLORS: vertex glow / AO / wear are read"), X->Scalars[TEXT("UseVertexColors")], 1.f);
+        TestEqual(TEXT("wear amount base"), X->Scalars[TEXT("WearBlendBase")], 0.25f);
+        TestEqual(TEXT("blend map = Primary layer TexSlot8"), X->Textures[TEXT("WearBlendMap")].Path, FString(TEXT("tex/Primary_blend.png")));
+        TestEqual(TEXT("blend map is data"), int32(X->Textures[TEXT("WearBlendMap")].Role), int32(ESCTextureRole::Linear));
+        TestEqual(TEXT("blend softness = Primary WearDirtBlendFalloff"), X->Scalars[TEXT("WearFalloff")], 0.25f);
+        TestEqual(TEXT("Primary ShadingModel 2 = paint"), X->Scalars[TEXT("WearPaint")], 1.f);
+        TestEqual(TEXT("not cloth"), X->Scalars[TEXT("WearCloth")], 0.f);
+        TestTrue(TEXT("complement hue is reported"), X->Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("complement hue")); }));
+        TestEqual(TEXT("wear layer diffuse"), X->Textures[TEXT("WearDiffuseMap")].Path, FString(TEXT("tex/Wear_diff.png")));
+        TestEqual(TEXT("wear layer gloss"), X->Textures[TEXT("WearRoughnessMap")].Path, FString(TEXT("tex/Wear_ddna_roughness.png")));
+        TestTrue(TEXT("wear layer tint x palette"), Near(X->Vectors[TEXT("WearTint")], FLinearColor(0.5f, 0.5f, 0.25f)));
+        TestTrue(TEXT("wear layer F0 = palette specular"), Near(X->Vectors[TEXT("WearSpecular")], FLinearColor(0.1f, 0.2f, 0.3f)));
+        TestFalse(TEXT("no exporter metallic: the energy split is in the master"), X->Scalars.Contains(TEXT("WearMetallic")) || X->Scalars.Contains(TEXT("Layer0Metallic")));
+        TestEqual(TEXT("wear layer tiling"), X->Scalars[TEXT("WearTiling")], 1.f);
+        TestEqual(TEXT("wear layer gloss x palette gloss"), X->Scalars[TEXT("WearGlossMult")], 0.5f * 0.8f);
+        TestEqual(TEXT("%USE_SPECULAR_MAPS: Primary TexSlot6"), X->Textures[TEXT("Layer0SpecularMap")].Path, FString(TEXT("tex/Primary_spec.png")));
+        TestEqual(TEXT("%USE_SPECULAR_MAPS: Wear TexSlot6"), X->Textures[TEXT("WearSpecularMap")].Path, FString(TEXT("tex/Wear_spec.png")));
+        TestEqual(TEXT("spec map is colour"), int32(X->Textures[TEXT("WearSpecularMap")].Role), int32(ESCTextureRole::Color));
+        TestTrue(TEXT("sampled spec maps are not folded into F0"), X->VectorMeans.IsEmpty());
     }
+    if (auto* X = Check(TEXT("hard_wear_tinted"), ESCMaster::HardSurface, ESCBlend::Opaque, false, false))
+    {
+        // No %WEAR_LAYER: BlendLayers_TintedPrimaryWear = the Primary maps with LayerAttribs_ApplyWearTints.
+        TestEqual(TEXT("no %VERTCOLORS"), X->Scalars[TEXT("UseVertexColors")], 0.f);
+        TestEqual(TEXT("tinted wear base"), X->Scalars[TEXT("WearBlendBase")], 0.4f);
+        TestEqual(TEXT("tinted wear diffuse = Primary diffuse"), X->Textures[TEXT("WearDiffuseMap")].Path, X->Textures[TEXT("Layer0DiffuseMap")].Path);
+        TestEqual(TEXT("tinted wear normal = Primary normal"), X->Textures[TEXT("WearNormalGlossMap")].Path, X->Textures[TEXT("Layer0NormalGlossMap")].Path);
+        TestEqual(TEXT("tinted wear gloss map = Primary gloss map"), X->Textures[TEXT("WearRoughnessMap")].Path, X->Textures[TEXT("Layer0RoughnessMap")].Path);
+        TestTrue(TEXT("WearDiffuseColor x WearTint"), Near(X->Vectors[TEXT("WearTint")], FLinearColor(0.25f, 0.5f, 0.5f)));
+        TestTrue(TEXT("F0 = WearSpecularColor"), Near(X->Vectors[TEXT("WearSpecular")], FLinearColor(0.2f, 0.2f, 0.2f)));
+        TestFalse(TEXT("tinted wear has no exporter metallic"), X->Scalars.Contains(TEXT("WearMetallic")));
+        TestEqual(TEXT("tinted wear tiling = Primary tiling"), X->Scalars[TEXT("WearTiling")], 3.f);
+        TestEqual(TEXT("WearGlossiness x WearGloss"), X->Scalars[TEXT("WearGlossMult")], 0.25f);
+        TestEqual(TEXT("tinted wear uses the Primary gloss map"), X->Scalars[TEXT("WearUseRoughnessMap")], 1.f);
+        TestEqual(TEXT("ShadingModel 0: no paint remap"), X->Scalars[TEXT("WearPaint")], 0.f);
+        TestFalse(TEXT("no %USE_SPECULAR_MAPS: TexSlot6 is not sampled"), X->Textures.Contains(TEXT("Layer0SpecularMap")) || X->Textures.Contains(TEXT("WearSpecularMap")));
+        // UseLayerSpecMap = false: the spec map's mean colour scales the layer F0 instead (and the tinted wear F0,
+        // whose surface is the Primary layer's textures).
+        const FSCTextureKey* Fold = X->VectorMeans.Find(TEXT("Layer0Specular"));
+        const FSCTextureKey* WearFold = X->VectorMeans.Find(TEXT("WearSpecular"));
+        TestTrue(TEXT("unsampled spec map: mean x Primary F0"), Fold && Fold->Path == TEXT("tex/tinted_spec.png") && Fold->Role == ESCTextureRole::Color);
+        TestTrue(TEXT("unsampled spec map: mean x tinted wear F0"), WearFold && *WearFold == *Fold);
+        TestEqual(TEXT("nothing else is folded"), X->VectorMeans.Num(), 2);
+    }
+    for (const TCHAR* Name : { TEXT("hard_wear_no_blend_map"), TEXT("hard_wear_no_tints") })
+        if (auto* X = Check(Name, ESCMaster::HardSurface, ESCBlend::Opaque, false, false))
+        {
+            // A missing input is reported and leaves wear off; no shader default is guessed.
+            TestEqual(FString(Name) + TEXT(": wear off"), X->Scalars[TEXT("WearBlendBase")], 0.f);
+            TestTrue(FString(Name) + TEXT(": reported"), X->Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("WearBlendBase")); }));
+            TestFalse(FString(Name) + TEXT(": no wear parameters"), X->Textures.Contains(TEXT("WearBlendMap")) || X->Vectors.Contains(TEXT("WearTint")));
+        }
     if (auto* X = Check(TEXT("blend4"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
     {
+        // Layer TintMode 1 (diffuse only): palette diffuse and gloss, the layer keeps its own specular.
         TestTrue(TEXT("layer 0 palette primary"), Near(X->Vectors[TEXT("Layer0Tint")], FLinearColor(0.2f, 0.4f, 0.6f)));
+        TestTrue(TEXT("layer 0 diffuse-only keeps the layer F0"), Near(X->Vectors[TEXT("Layer0Specular")], FLinearColor(0.04f, 0.04f, 0.04f)));
+        TestEqual(TEXT("layer 0 gloss x palette gloss"), X->Scalars[TEXT("Layer0GlossMult")], 0.5f);
         TestTrue(TEXT("layer 1 unrouted"), Near(X->Vectors[TEXT("Layer1Tint")], FLinearColor::White));
-        TestTrue(TEXT("layer 2 palette tertiary"), Near(X->Vectors[TEXT("Layer2Tint")], FLinearColor(0.9f, 0.1f, 0.1f)));
-        TestEqual(TEXT("layer 1 metallic from snapshot"), X->Scalars[TEXT("Layer1Metallic")], 1.f);
         TestTrue(TEXT("layer 1 F0"), Near(X->Vectors[TEXT("Layer1Specular")], FLinearColor(0.9f, 0.9f, 0.9f)));
+        TestEqual(TEXT("layer 1 gloss unscaled"), X->Scalars[TEXT("Layer1GlossMult")], 1.f);
+        // Layer TintMode 2 (specular only): no palette diffuse, F0 = palette specular.
+        TestTrue(TEXT("layer 2 specular-only keeps its diffuse"), Near(X->Vectors[TEXT("Layer2Tint")], FLinearColor::White));
+        TestTrue(TEXT("layer 2 F0 = palette tertiary specular"), Near(X->Vectors[TEXT("Layer2Specular")], FLinearColor(0.6f, 0.5f, 0.4f)));
+        // A palette value the export does not carry is reported and leaves the layer's own value.
+        TestEqual(TEXT("layer 2 gloss not scaled without a palette gloss"), X->Scalars[TEXT("Layer2GlossMult")], 1.f);
+        TestTrue(TEXT("missing palette gloss reported"), X->Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("tertiary has no gloss")); }));
+        TestFalse(TEXT("no exporter metallic"), X->Scalars.Contains(TEXT("Layer1Metallic")));
         TestFalse(TEXT("layer without textures has no maps"), X->Textures.Contains(TEXT("Layer3DiffuseMap")));
         TestEqual(TEXT("blend mask"), X->Textures[TEXT("BlendMaskMap")].Path, FString(TEXT("tex/blend.png")));
         TestEqual(TEXT("blend mask on"), X->Scalars[TEXT("UseBlendMask")], 1.f);
@@ -116,14 +179,54 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("HAL on"), X->Scalars[TEXT("UseHalMap")], 1.f);
         TestFalse(TEXT("LayerBlend has no macro AO map"), X->Textures.Contains(TEXT("MacroAOMap")));
     }
+    {
+        // A palette without `finish` (an export older than the field): both halves are reported, layer values stay.
+        FSCPalette Bare = *Palette;
+        TSharedPtr<FJsonObject> Json; TestTrue(TEXT("palette json"), FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Bare.Json), Json) && Json);
+        if (Json) { Json->RemoveField(TEXT("finish")); Bare.Json.Reset(); FJsonSerializer::Serialize(Json.ToSharedRef(), TJsonWriterFactory<>::Create(&Bare.Json)); }
+        const FSCSubmaterial* Sub = M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("hard_primary"); });
+        if (TestNotNull(TEXT("hard_primary submaterial"), Sub))
+        {
+            const FSCMaterialDesc X = FSCMaterialBuilder::Describe(*Sub, &Bare);
+            TestTrue(TEXT("no finish: palette diffuse still applies"), Near(X.Vectors[TEXT("Layer0Tint")], FLinearColor(0.25f, 0.25f, 0.125f)));
+            TestTrue(TEXT("no finish: layer F0 kept"), Near(X.Vectors[TEXT("Layer0Specular")], FLinearColor(0.04f, 0.04f, 0.04f)));
+            TestEqual(TEXT("no finish: gloss unscaled"), X.Scalars[TEXT("Layer0GlossMult")], 0.5f);
+            TestTrue(TEXT("no finish: specular reported"), X.Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("no specular tint")); }));
+            TestTrue(TEXT("no finish: gloss reported"), X.Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("no gloss")); }));
+        }
+    }
     if (auto* X = Check(TEXT("blend1"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
     {
         TestEqual(TEXT("unused slots repeat the last base layer"), X->Scalars[TEXT("Layer3Tiling")], 8.f);
         TestEqual(TEXT("repeated texture"), X->Textures[TEXT("Layer2DiffuseMap")].Path, FString(TEXT("tex/BaseLayer1_diff.png")));
+        // LayerBlend_V2 has no layer spec sampler: a layer's TexSlot6 is never bound, its mean scales the layer F0.
+        const FSCTextureKey* Fold = X->VectorMeans.Find(TEXT("Layer0Specular"));
+        TestTrue(TEXT("LayerBlend spec map: mean x layer F0"), Fold && Fold->Path == TEXT("tex/BaseLayer1_spec.png"));
+        TestTrue(TEXT("repeated layers repeat the fold"), X->VectorMeans.Contains(TEXT("Layer3Specular")));
+        TestFalse(TEXT("LayerBlend spec map is not a texture parameter"), X->Textures.Contains(TEXT("Layer0SpecularMap")));
         TestEqual(TEXT("no mask -> layer 0"), X->Scalars[TEXT("UseBlendMask")], 0.f);
         TestFalse(TEXT("no macro normal"), X->Textures.Contains(TEXT("MacroNormalMap")));
         TestEqual(TEXT("no macro gloss"), X->Scalars[TEXT("UseMacroGloss")], 0.f);
         TestEqual(TEXT("no HAL"), X->Scalars[TEXT("UseHalMap")], 0.f);
+    }
+    if (auto* X = Check(TEXT("blend_palette_fold"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
+    {
+        // paletteLib ApplyPaletteParams: `Smoothness *= layerGloss * gloss` is unconditional, so the palette gloss
+        // (0.8) and the layer GlossMult (0.5) also scale a layer without an authored Shininess or a gloss map.
+        TestEqual(TEXT("no gloss map"), X->Scalars[TEXT("Layer0UseRoughnessMap")], 0.f);
+        TestEqual(TEXT("no Shininess: default smoothness x layer gloss x palette gloss"), X->Scalars[TEXT("Layer0Smoothness")], 0.5f * 0.5f * 0.8f);
+        // The sampling shader multiplies the spec map (LayerAttribs_ReadSpecular) before ApplyTintsAndPalette picks
+        // the palette or the layer specular, so the map scales whichever F0 the palette rule selects: the mean
+        // stands in for the sample and folds into the palette specular too.
+        TestTrue(TEXT("TintMode 0: F0 = palette specular"), Near(X->Vectors[TEXT("Layer0Specular")], FLinearColor(0.1f, 0.2f, 0.3f)));
+        const FSCTextureKey* Fold = X->VectorMeans.Find(TEXT("Layer0Specular"));
+        TestTrue(TEXT("unsampled spec map: mean x palette-selected F0"), Fold && Fold->Path == TEXT("tex/BaseLayer1_spec.png"));
+        if (Fold)
+        {
+            FSCMaterialDesc Folded = *X;
+            FSCMaterialBuilder::ApplyTextureMeans(Folded, {{*Fold, FLinearColor(0.5f, 0.5f, 0.25f)}});
+            TestTrue(TEXT("palette specular x spec map mean"), Near(Folded.Vectors[TEXT("Layer0Specular")], FLinearColor(0.05f, 0.1f, 0.075f)));
+        }
     }
     if (auto* X = Check(TEXT("glass_ext"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
@@ -297,12 +400,27 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("Glow units x GlowToEmissive"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 50.f), 50.f * FSCMaterialBuilder::GlowToEmissive);
         TestEqual(TEXT("clamped to the control minimum"), FSCMaterialBuilder::EngineGlowToEmissive(Glow, 1.f), 10.f * FSCMaterialBuilder::GlowToEmissive);
     }
+    {
+        // Texture means: RGB x mean, alpha untouched; an unavailable mean is reported and leaves the value alone.
+        FSCMaterialDesc Fold;
+        const FSCTextureKey Have{TEXT("have.png"), ESCTextureRole::Color}, Lost{TEXT("lost.png"), ESCTextureRole::Color};
+        Fold.Vectors.Add(TEXT("A"), FLinearColor(0.5f, 1.f, 1.f, 1.f)); Fold.Vectors.Add(TEXT("B"), FLinearColor(1.f, 1.f, 1.f, 1.f));
+        Fold.VectorMeans.Add(TEXT("A"), Have); Fold.VectorMeans.Add(TEXT("B"), Lost);
+        FSCMaterialBuilder::ApplyTextureMeans(Fold, {{Have, FLinearColor(0.1f, 0.2f, 0.3f, 0.f)}});
+        TestTrue(TEXT("vector x texture mean"), Near(Fold.Vectors[TEXT("A")], FLinearColor(0.05f, 0.2f, 0.3f)) && Fold.Vectors[TEXT("A")].A == 1.f);
+        TestTrue(TEXT("missing mean keeps the value"), Near(Fold.Vectors[TEXT("B")], FLinearColor::White));
+        TestTrue(TEXT("missing mean is reported"), Fold.Warnings.Num() == 1 && Fold.Warnings[0].Contains(TEXT("lost.png")));
+        TestTrue(TEXT("means are applied once"), Fold.VectorMeans.IsEmpty());
+    }
     FSCImportMaterials Phase; Phase.Describe(M);
     FSCFolderPackageSource Empty(FixtureDir()); // fixtures carry no PNGs: every decode fails, counts stay exact
     FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
     Phase.Decode(Empty);
-    // Unique (path, role) pairs across all submaterials; tex/illum_ddna.png etc. are shared and deduplicated.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 33);
+    // Unique (path, role) pairs across all submaterials; tex/illum_ddna.png etc. are shared and deduplicated. Static
+    // wear adds 7: the hard_primary Wear layer's three maps, its two layer spec maps and blend map, and the
+    // hard_wear_tinted blend map (its wear surface reuses the Primary maps). Two more are read for their mean
+    // colour only: the unsampled spec maps of hard_wear_tinted and blend1.
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 42);
     // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;
@@ -504,6 +622,46 @@ bool FSCMaterialsTextures::RunTest(const FString&)
     if (FSCTextureImporter::Decode(Source, {TEXT("bw.png"), ESCTextureRole::Linear}, BWLinear) && BWLinear.Mips.Num() == 2)
         TestEqual(TEXT("linear mip"), int32(BWLinear.Mips[1][2]), 128);
     else AddError(TEXT("bw linear decode"));
+    {
+        // Mean colour of the top mip in linear light: black + white is 0.5 when sRGB-encoded, 127.5/255 as data.
+        FLinearColor SrgbMean, LinearMean, None;
+        TestTrue(TEXT("sRGB mean"), FSCTextureImporter::MeanColor(BWColor, SrgbMean) && FMath::IsNearlyEqual(SrgbMean.R, 0.5f, 1e-4f) && SrgbMean.R == SrgbMean.B);
+        TestTrue(TEXT("linear mean"), FSCTextureImporter::MeanColor(BWLinear, LinearMean) && FMath::IsNearlyEqual(LinearMean.G, 0.5f, 1e-4f));
+        TestFalse(TEXT("no texels, no mean"), FSCTextureImporter::MeanColor(FSCDecodedTexture(), None));
+    }
+    // Colour encoding: the PNG states it (the exporter copies the DDS's sRGB state); the role is only the fallback.
+    auto Tagged = [&](const TCHAR* Name, const ANSICHAR* Type, TArray<uint8> Data)
+    {
+        TArray<uint8> Chunk; const uint32 Len = Data.Num();
+        Chunk.Append({uint8(Len >> 24), uint8(Len >> 16), uint8(Len >> 8), uint8(Len)});
+        TArray<uint8> Body; Body.Append(reinterpret_cast<const uint8*>(Type), 4); Body.Append(Data);
+        const uint32 Crc = FCrc::MemCrc32(Body.GetData(), Body.Num());
+        Chunk.Append(Body); Chunk.Append({uint8(Crc >> 24), uint8(Crc >> 16), uint8(Crc >> 8), uint8(Crc)});
+        TArray<uint8> File(BWBytes.GetData(), int32(BWBytes.Num()));
+        File.Insert(Chunk, 8 + 25); // after the signature and IHDR
+        FFileHelper::SaveArrayToFile(File, *(Dir / Name));
+    };
+    Tagged(TEXT("bw_srgb.png"), "sRGB", {0});
+    Tagged(TEXT("bw_linear.png"), "gAMA", {0x00, 0x01, 0x86, 0xA0}); // 100000 = gamma 1.0
+    FSCDecodedTexture SrgbMask, LinearColor, SrgbNormal;
+    if (FSCTextureImporter::Decode(Source, {TEXT("bw_srgb.png"), ESCTextureRole::Linear}, SrgbMask) && SrgbMask.Mips.Num() == 2)
+    {
+        TestTrue(TEXT("sRGB chunk overrides the Linear role"), SrgbMask.bSRGB);
+        TestEqual(TEXT("sRGB-tagged mask mip in linear light"), int32(SrgbMask.Mips[1][2]), 188);
+    }
+    else AddError(TEXT("tagged sRGB decode: ") + SrgbMask.Error);
+    if (FSCTextureImporter::Decode(Source, {TEXT("bw_linear.png"), ESCTextureRole::Color}, LinearColor) && LinearColor.Mips.Num() == 2)
+    {
+        TestFalse(TEXT("gAMA 1.0 overrides the Color role"), LinearColor.bSRGB);
+        TestEqual(TEXT("linear-tagged colour mip as stored"), int32(LinearColor.Mips[1][2]), 128);
+    }
+    else AddError(TEXT("tagged linear decode: ") + LinearColor.Error);
+    TestTrue(TEXT("normal stays linear whatever the PNG says"),
+        FSCTextureImporter::Decode(Source, {TEXT("bw_srgb.png"), ESCTextureRole::Normal}, SrgbNormal) && !SrgbNormal.bSRGB);
+    TestTrue(TEXT("untagged PNG falls back to the role"), BWColor.bSRGB && !BWLinear.bSRGB);
+    UTexture2D* SrgbMaskTexture = FSCTextureImporter::Create(MoveTemp(SrgbMask), GetTransientPackage());
+    UTexture2D* LinearColorTexture = FSCTextureImporter::Create(MoveTemp(LinearColor), GetTransientPackage());
+    TestTrue(TEXT("created textures carry the resolved encoding"), SrgbMaskTexture && SrgbMaskTexture->SRGB && LinearColorTexture && !LinearColorTexture->SRGB);
     // Limits: dimension / per-texture / aggregate budget are enforced before decompression.
     FSCTextureLimits Small; Small.MaxDimension = 2;
     FSCDecodedTexture Rejected;

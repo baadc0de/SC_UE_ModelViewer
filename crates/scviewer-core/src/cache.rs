@@ -10,8 +10,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-// WP-R5b follow-up: class inheritance and nullable source fields invalidate older packages.
-pub const CACHE_FORMAT_VERSION: u32 = 13;
+// Generic texture PNGs record their color encoding (sRGB / gAMA chunk) and palettes.json carries the palette
+// finish glossiness as a 0..1 fraction; older packages have untagged textures and a null glossiness.
+pub const CACHE_FORMAT_VERSION: u32 = 14;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

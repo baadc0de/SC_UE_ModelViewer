@@ -29,6 +29,9 @@ struct SCBRIDGE_API FSCMaterialDesc
     TMap<FName, float> Scalars;
     TMap<FName, FLinearColor> Vectors;
     TMap<FName, FSCTextureKey> Textures;
+    /** Vector parameter -> texture whose mean colour multiplies it: a layer map the game shader does not sample
+     *  for this material (resolved by ApplyTextureMeans once the texture is decoded; never bound). */
+    TMap<FName, FSCTextureKey> VectorMeans;
     TArray<FString> Warnings;
 };
 
@@ -54,6 +57,9 @@ public:
     static FString HostChannel(const FSCSubmaterial& Sub);
     /** palettes.json colour of a channel (primary/secondary/tertiary/glass); false when absent. */
     static bool PaletteColor(const FSCPalette* Palette, const FString& Channel, FLinearColor& Out);
+    /** Resolves Desc.VectorMeans: each named vector's RGB x the texture's mean colour (FSCTextureImporter::
+     *  MeanColor). A mean that is not available leaves the vector as described, with a warning. */
+    static void ApplyTextureMeans(FSCMaterialDesc& Desc, const TMap<FSCTextureKey, FLinearColor>& Means);
     static const TCHAR* MasterName(ESCMaster Master);
     /** Object path of the master or its blend/two-sided constant variant. */
     static FString ParentPath(ESCMaster Master, ESCBlend Blend, bool bTwoSided);

@@ -30,6 +30,7 @@ struct FProbe
     TSharedPtr<IImageWrapper> Png;
     TArray<uint8> Bytes;
     int64 Width = 0, Height = 0;
+    bool bSRGB = false;
 };
 bool Probe(const FSCPackageSource& Source, const FSCTextureKey& Key, const FSCTextureLimits& Limits, FProbe& P, FString& Error)
 {
@@ -39,6 +40,7 @@ bool Probe(const FSCPackageSource& Source, const FSCTextureKey& Key, const FSCTe
     P.Png = Module->CreateImageWrapper(EImageFormat::PNG);
     if (!P.Png || !P.Png->SetCompressed(P.Bytes.GetData(), P.Bytes.Num())) { Error = TEXT("Invalid PNG: ") + Key.Path; return false; }
     P.Width = P.Png->GetWidth(); P.Height = P.Png->GetHeight();
+    P.bSRGB = FSCTextureImporter::ResolveSRGB(P.Bytes, Key.Role);
     const uint32 MaxDim = Limits.MaxDimension ? Limits.MaxDimension : GetMax2DTextureDimension();
     if (P.Width <= 0 || P.Height <= 0 || P.Width > MaxDim || P.Height > MaxDim)
     { Error = FString::Printf(TEXT("Texture %lldx%lld outside the RHI limit %u: %s"), P.Width, P.Height, MaxDim, *Key.Path); return false; }
@@ -52,7 +54,7 @@ bool Finish(FProbe& P, const FSCTextureKey& Key, FSCDecodedTexture& Out)
     if (!P.Png->GetRaw(ERGBFormat::BGRA, 8, Raw) || Raw.Num() != P.Width * P.Height * 4)
     { Out.Error = TEXT("Unexpected PNG layout: ") + Key.Path; return false; }
     P.Png.Reset(); P.Bytes.Empty();
-    Out.Width = int32(P.Width); Out.Height = int32(P.Height);
+    Out.Width = int32(P.Width); Out.Height = int32(P.Height); Out.bSRGB = P.bSRGB;
     if (Key.Role == ESCTextureRole::Normal)
         for (int64 I = 1; I < Raw.Num(); I += 4) Raw[I] = 255 - Raw[I]; // glTF +Y -> UE -Y; BGRA index 1 is green
     Out.Mips.Add(MoveTemp(Raw));
@@ -68,6 +70,24 @@ uint8 LinearToSrgb(float L)
 }
 }
 
+bool FSCTextureImporter::ResolveSRGB(TConstArrayView<uint8> Png, ESCTextureRole Role)
+{
+    if (Role == ESCTextureRole::Normal) return false;
+    // PNG chunks after the 8-byte signature: u32 length, 4-byte type, data, u32 CRC (big-endian). The colour
+    // chunks precede IDAT. UE's PNG wrapper applies neither chunk to the pixels, so they are pure metadata here.
+    auto U32 = [&Png](int64 At) { return (uint32(Png[At]) << 24) | (uint32(Png[At + 1]) << 16) | (uint32(Png[At + 2]) << 8) | uint32(Png[At + 3]); };
+    for (int64 At = 8; At + 12 <= Png.Num();)
+    {
+        const int64 Length = U32(At);
+        const uint8* Type = &Png[At + 4];
+        if (At + 12 + Length > Png.Num() || !FMemory::Memcmp(Type, "IDAT", 4)) break;
+        if (!FMemory::Memcmp(Type, "sRGB", 4)) return true;
+        if (!FMemory::Memcmp(Type, "gAMA", 4) && Length == 4 && U32(At + 8) == 100000) return false;
+        At += 12 + Length;
+    }
+    return Role == ESCTextureRole::Color;
+}
+
 bool FSCTextureImporter::Decode(const FSCPackageSource& Source, const FSCTextureKey& Key, FSCDecodedTexture& Out, const FSCTextureLimits& Limits)
 {
     Out = FSCDecodedTexture(); Out.Key = Key;
@@ -75,9 +95,21 @@ bool FSCTextureImporter::Decode(const FSCPackageSource& Source, const FSCTexture
     return Probe(Source, Key, Limits, P, Out.Error) && Finish(P, Key, Out);
 }
 
+bool FSCTextureImporter::MeanColor(const FSCDecodedTexture& T, FLinearColor& Out)
+{
+    if (T.Mips.IsEmpty() || T.Mips[0].Num() < 4) return false;
+    const TArray64<uint8>& Top = T.Mips[0];
+    const int64 Count = Top.Num() / 4;
+    double Sum[3] = {0, 0, 0}; // BGRA
+    for (int64 I = 0; I < Count; ++I)
+        for (int32 C = 0; C < 3; ++C) Sum[C] += T.bSRGB ? double(SrgbToLinear(Top[I * 4 + C])) : Top[I * 4 + C] / 255.0;
+    Out = FLinearColor(float(Sum[2] / Count), float(Sum[1] / Count), float(Sum[0] / Count));
+    return true;
+}
+
 void FSCTextureImporter::BuildMips(FSCDecodedTexture& T)
 {
-    const bool bSrgb = T.Key.Role == ESCTextureRole::Color;
+    const bool bSrgb = T.bSRGB;
     int32 W = T.Width, H = T.Height;
     while (T.Mips.Num() && (W > 1 || H > 1))
     {
@@ -146,8 +178,8 @@ UTexture2D* FSCTextureImporter::Create(FSCDecodedTexture&& D, UObject* Outer)
     T->SetPlatformData(Platform);
     T->bNotOfflineProcessed = true; // Mips are uploaded as-is; never platform-processed.
     T->NeverStream = true;
-    T->SRGB = D.Key.Role == ESCTextureRole::Color;
-    T->CompressionSettings = D.Key.Role == ESCTextureRole::Normal ? TC_Normalmap : D.Key.Role == ESCTextureRole::Linear ? TC_Masks : TC_Default;
+    T->SRGB = D.bSRGB;
+    T->CompressionSettings = D.Key.Role == ESCTextureRole::Normal ? TC_Normalmap : D.Key.Role == ESCTextureRole::Linear && !D.bSRGB ? TC_Masks : TC_Default;
     T->LODGroup = D.Key.Role == ESCTextureRole::Normal ? TEXTUREGROUP_WorldNormalMap : D.Key.Role == ESCTextureRole::Linear ? TEXTUREGROUP_WorldSpecular : TEXTUREGROUP_World;
     T->Filter = TF_Default;
     T->AddressX = T->AddressY = TA_Wrap;

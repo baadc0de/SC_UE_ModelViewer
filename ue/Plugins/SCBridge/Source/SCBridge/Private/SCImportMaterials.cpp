@@ -2,6 +2,7 @@
 #include "SCImportMaterials.h"
 #include "SCImporter.h"
 #include "SCVehicle.h"
+#include "Async/ParallelFor.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 
@@ -35,7 +36,8 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
             const bool bGlow = Manifest.EngineGlow.Targets.ContainsByPredicate([&](const FSCEngineGlowTarget& T)
                 { return T.MaterialSidecar == Pair.Key && T.SourceMaterialIndex == Sub.SourceIndex; });
             if (bGlow) FSCMaterialBuilder::ApplyEngineGlow(Desc, FSCMaterialBuilder::EngineGlowToEmissive(Manifest.EngineGlow, Manifest.EngineGlow.DefaultStrength));
-            for (const auto& Tex : Desc.Textures) Unique.Add(Tex.Value);
+            for (const auto& Tex : Desc.Textures) { Unique.Add(Tex.Value); SampledKeys.Add(Tex.Value); }
+            for (const auto& Mean : Desc.VectorMeans) { Unique.Add(Mean.Value); MeanKeys.Add(Mean.Value); }
             Out.Descs.Add(MoveTemp(Desc)); Out.EngineGlow.Add(bGlow);
         }
     }
@@ -50,6 +52,17 @@ void FSCImportMaterials::Decode(const FSCPackageSource& Source)
     const double Start = FPlatformTime::Seconds();
     Decoded = FSCTextureImporter::DecodeAll(Source, Keys);
     TextureStats.Requested = Keys.Num();
+    TArray<FLinearColor> Mean; Mean.SetNum(Decoded.Num());
+    TArray<bool> HasMean; HasMean.Init(false, Decoded.Num());
+    ParallelFor(Decoded.Num(), [&](int32 I)
+    {
+        if (!MeanKeys.Contains(Decoded[I].Key)) return;
+        HasMean[I] = FSCTextureImporter::MeanColor(Decoded[I], Mean[I]);
+        if (!SampledKeys.Contains(Decoded[I].Key)) Decoded[I].Mips.Empty(); // read for its mean only: never a texture
+    });
+    TMap<FSCTextureKey, FLinearColor> Means;
+    for (int32 I = 0; I < Decoded.Num(); ++I) if (HasMean[I]) Means.Add(Decoded[I].Key, Mean[I]);
+    for (FSet& Set : Sets) for (FSCMaterialDesc& Desc : Set.Descs) FSCMaterialBuilder::ApplyTextureMeans(Desc, Means);
     TextureStats.DecodeSeconds = FPlatformTime::Seconds() - Start;
 }
 
@@ -61,6 +74,7 @@ void FSCImportMaterials::Instantiate(ASCVehicle* Vehicle, TArray<FString>& Warni
     for (FSCDecodedTexture& D : Decoded)
     {
         if (!D.Error.IsEmpty()) { ++TextureStats.Failed; Warnings.Add(D.Key.Path + TEXT(": ") + D.Error); continue; }
+        if (!SampledKeys.Contains(D.Key)) continue; // mean-only: resolved in Decode
         for (const auto& Mip : D.Mips) TextureStats.Bytes += Mip.Num();
         const FSCTextureKey Key = D.Key;
         if (UTexture2D* T = FSCTextureImporter::Create(MoveTemp(D), Vehicle)) { Textures.Add(Key, T); Vehicle->Textures.Add(T); ++TextureStats.Created; }

@@ -7,7 +7,9 @@ Everything lives under /SCBridge/Materials (ue/Plugins/SCBridge/Content/Material
 SC-semantic and model-neutral; FSCMaterialBuilder (C++) sets them. No asset values are baked in here:
 every default is a neutral identity (white, flat normal, 0/1) and the builder supplies sidecar data.
 The graphs do carry shading rules of the game's own shaders (gloss -> roughness, layer blend order, macro
-surface, HAL luminance range); those are shader logic, the same for every asset, cited where they appear.
+surface, HAL luminance range, HardSurface static wear); those are shader logic, the same for every asset, cited
+where they appear. Game functions with branches or many terms are Custom (HLSL) nodes transcribed from the
+shader text, so they can be read against it.
 """
 import os
 import shutil
@@ -121,6 +123,19 @@ class Graph:
     def const(self, v): return (self.node(unreal.MaterialExpressionConstant, r=v), "")
     def const3(self, v): return (self.node(unreal.MaterialExpressionConstant3Vector, constant=unreal.LinearColor(*v, 1.0)), "")
 
+    def custom(self, code, output, **inputs):
+        """Custom HLSL node; `inputs` are name=(expression, output) pins, usable by name in `code`."""
+        e = self.node(unreal.MaterialExpressionCustom, code=code, output_type=output)
+        pins = []
+        for name in inputs:
+            pin = unreal.CustomInput()
+            pin.set_editor_property("input_name", name)
+            pins.append(pin)
+        e.set_editor_property("inputs", pins)
+        for name, source in inputs.items():
+            self.link(*source, e, name)
+        return (e, "")
+
     def uv(self, tiling):
         coords = (self.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), "")
         self.last_uv = self.mul(coords, tiling)
@@ -144,6 +159,15 @@ class Graph:
     def roughness(self, prefix, uv):
         return self.gloss_to_roughness(self.smoothness(prefix, uv))
 
+    def conserve(self, albedo, f0):
+        """Game diffuse / specular energy split, on the final surface attributes (TiledShading.cfx deferred
+        resolve after DecodeGBuffer, Illum.cfx forward): Albedo *= saturate(1 - GetLuminance(Reflectance)),
+        GetLuminance = Rec. 709. This is the spec workflow's only "metalness": albedo and F0 are authored
+        separately. UE's own view-dependent form of the same attenuation (r.Shading.EnergyPreservation) is off
+        in DefaultEngine.ini so the split is not applied twice."""
+        lum = self.op(unreal.MaterialExpressionDotProduct, f0, self.const3((0.2126, 0.7152, 0.0722)))
+        return self.mul(albedo, self.saturate(self.one_minus(lum)))
+
     def reconstruct_z(self, n):
         """Game NormalsCommon ReconstructNormalZ: keep XY, z = sqrt(max(1e-6, 1 - x^2 - y^2))."""
         xy = self.op(unreal.MaterialExpressionComponentMask, n, names=("",), r=True, g=True, b=False)
@@ -164,12 +188,16 @@ class Graph:
                 return
         raise RuntimeError(f"{self.m.get_name()}: cannot link {a.get_name()} -> {b.get_name()}.{names}")
 
-    def glow(self, colour, alpha):
+    def glow(self, colour, alpha, ramp=False):
         """Emission = colour x Emissive x EmissiveStrength (builder: Glow x host scale; 0 when Glow is absent),
-        optionally from the emittance map, gated by texture alpha above AlphaGlowCutoff (step)."""
+        optionally from the emittance map, gated by texture alpha above AlphaGlowCutoff: a step, or with `ramp` the
+        HardSurface.cfx form saturate((alpha - cutoff) / (1 - cutoff))."""
         source = self.lerp(colour, (self.texture("EmissiveMap", self.white, ST.SAMPLERTYPE_COLOR, self.last_uv), "RGB"),
                            self.scalar("UseEmissiveMap", 0.0))
-        gate = self.saturate(self.mul(self.sub(alpha, self.scalar("AlphaGlowCutoff", 0.0)), self.const(1.0e4)))
+        cutoff = self.scalar("AlphaGlowCutoff", 0.0)
+        slope = self.op(unreal.MaterialExpressionDivide, self.const(1.0), self.op(
+            unreal.MaterialExpressionMax, self.one_minus(cutoff), self.const(1.0e-4))) if ramp else self.const(1.0e4)
+        gate = self.saturate(self.mul(self.sub(alpha, cutoff), slope))
         return self.mul(self.mul(self.mul(source, self.vector("EmissiveColor", (0, 0, 0))), self.scalar("EmissiveStrength", 0.0)), gate)
 
     def slab(self, albedo=None, f0=None, f90=None, roughness=None, normal=None, emissive=None, mfp=None, front=True):
@@ -209,9 +237,8 @@ def surface_master(name):
     normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
     spec = (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB")
     f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)), spec)
-    albedo = g.mul(base, g.one_minus(g.scalar("Metallic", 0.0)))
     emissive = g.glow(base, (diffuse, "A"))
-    g.slab(albedo, f0, None, g.roughness("", uv), normal, emissive)
+    g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive)
     # Coverage = diffuse alpha x a separate opacity map (HairPBR cards: TexSlot1 `opacity`, red channel);
     # the white default leaves every other family's coverage unchanged.
     coverage = g.mul((diffuse, "A"), (g.texture("OpacityMap", g.white_linear, ST.SAMPLERTYPE_MASKS, uv), "R"))
@@ -221,66 +248,165 @@ def surface_master(name):
 
 
 def layered_master(name, count):
-    """M_SC_HardSurface (1 layer) / M_SC_Layered (4): per-layer tiling, tint (palette x tint x diffuse), F0, metallic.
+    """M_SC_Layered (4 layers): per-layer tiling, tint (palette x tint x diffuse) and F0.
 
     Layers blend like LayerBlend_V2: start from layer N-1, lerp toward layer i by blend-mask channel i (R,G,B).
     UseBlendMask=0 forces mask (1,1,1) which selects Layer0. Smoothness blends as smoothness (layerLib), and
     the material-level maps apply over the blended result (LayerAttribs_AddMacroSurface, then AO):
-      MacroNormalMap / MacroRoughnessMap (UseMacroGloss) at UV x MacroTiling: detail-normal blend of the layer
-        normal onto the macro normal; smoothness x macro smoothness.
-      M_SC_HardSurface: MacroAOMap (R) at the macro UVs -> albedo and F0 x AO.
-      M_SC_Layered: HalMap at the base UVs (UseHalMap): G = AO over the blend; B = luminance shift, applied to
-        each layer before it is accumulated (Layer_ApplyLayerEffects): saturate(colour x (B x 0.4 + 0.8)) on
-        albedo and F0 (LayerBlend_V2: lumShift = B x 2, HAL_LUM_MAX = 0.2). The R hue shift (HueLUT) and
-        RotateLayerUVs are not implemented.
+      MacroNormalMap / MacroRoughnessMap (UseMacroGloss) at UV x MacroTiling (the builder sets 1: LayerBlend
+        macro maps are untiled): detail-normal blend of the layer normal onto the macro normal; smoothness x
+        macro smoothness.
+      HalMap at the base UVs (UseHalMap): G = AO over the blend; B = luminance shift, applied to each layer
+        before it is accumulated (Layer_ApplyLayerEffects): saturate(colour x (B x 0.4 + 0.8)) on albedo and
+        F0 (LayerBlend_V2: lumShift = B x 2, HAL_LUM_MAX = 0.2). The R hue shift (HueLUT) and RotateLayerUVs
+        are not implemented.
     Blended layer normals accumulate XY and rebuild Z (LayerAttribs_BlendNormalize -> ReconstructNormalZ).
     """
     g = Graph(name, unreal.BlendMode.BLEND_OPAQUE, nanite=True)
     base_uv = g.uv(g.scalar("Tiling", 1.0))  # HAL map and emittance map (g.glow) UVs
-    lum = ao = None
-    if count > 1:
-        hal = g.texture("HalMap", g.white_linear, ST.SAMPLERTYPE_MASKS, base_uv, "Macro")
-        use_hal = g.scalar("UseHalMap", 0.0, "Macro")
-        ao = g.lerp(g.const(1.0), (hal, "G"), use_hal)
-        lum = g.lerp(g.const(1.0), g.add(g.mul((hal, "B"), g.const(0.4)), g.const(0.8)), use_hal)
+    hal = g.texture("HalMap", g.white_linear, ST.SAMPLERTYPE_MASKS, base_uv, "Macro")
+    use_hal = g.scalar("UseHalMap", 0.0, "Macro")
+    ao = g.lerp(g.const(1.0), (hal, "G"), use_hal)
+    lum = g.lerp(g.const(1.0), g.add(g.mul((hal, "B"), g.const(0.4)), g.const(0.8)), use_hal)
     layers = []
     for i in range(count):
         p = f"Layer{i}"
         uv = g.uv(g.scalar(p + "Tiling", 1.0, p))
         d = g.texture(p + "DiffuseMap", g.white, ST.SAMPLERTYPE_COLOR, uv, p)
         colour = g.mul((d, "RGB"), g.vector(p + "Tint", (1, 1, 1), p))
-        metallic = g.scalar(p + "Metallic", 0.0, p)
-        albedo, f0 = g.mul(colour, g.one_minus(metallic)), g.vector(p + "Specular", (0.04, 0.04, 0.04), p)
-        if lum:
-            albedo, f0 = g.saturate(g.mul(albedo, lum)), g.saturate(g.mul(f0, lum))
+        f0 = g.vector(p + "Specular", (0.04, 0.04, 0.04), p)
+        albedo, f0 = g.saturate(g.mul(colour, lum)), g.saturate(g.mul(f0, lum))
         layers.append(dict(
             albedo=albedo, f0=f0,
             normal=(g.texture(p + "NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv, p), "RGB"),
             smoothness=g.smoothness(p, uv),
             colour=colour, alpha=(d, "A")))
     result = dict(layers[-1])
-    if count > 1:
-        mask_uv = g.uv(g.scalar("BlendMaskTiling", 1.0))
-        mask = (g.texture("BlendMaskMap", g.white_linear, ST.SAMPLERTYPE_MASKS, mask_uv), "RGB")
-        mask = g.lerp(g.const3((1, 1, 1)), mask, g.scalar("UseBlendMask", 0.0))
-        channels = [g.op(unreal.MaterialExpressionComponentMask, mask, names=("",), r=c == 0, g=c == 1, b=c == 2)
-                    for c in range(3)]
-        for i in range(count - 2, -1, -1):
-            for key in ("albedo", "f0", "normal", "smoothness", "colour", "alpha"):
-                result[key] = g.lerp(result[key], layers[i][key], channels[i])
-        result["normal"] = g.reconstruct_z(result["normal"])
+    mask_uv = g.uv(g.scalar("BlendMaskTiling", 1.0))
+    mask = (g.texture("BlendMaskMap", g.white_linear, ST.SAMPLERTYPE_MASKS, mask_uv), "RGB")
+    mask = g.lerp(g.const3((1, 1, 1)), mask, g.scalar("UseBlendMask", 0.0))
+    channels = [g.op(unreal.MaterialExpressionComponentMask, mask, names=("",), r=c == 0, g=c == 1, b=c == 2)
+                for c in range(3)]
+    for i in range(count - 2, -1, -1):
+        for key in ("albedo", "f0", "normal", "smoothness", "colour", "alpha"):
+            result[key] = g.lerp(result[key], layers[i][key], channels[i])
+    result["normal"] = g.reconstruct_z(result["normal"])
     macro_uv = g.uv(g.scalar("MacroTiling", 1.0, "Macro"))
     macro = (g.texture("MacroNormalMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, macro_uv, "Macro"), "RGB")
     normal = g.detail_normal(macro, result["normal"])
     macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroRoughnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
     smooth = g.mul(result["smoothness"], macro_gloss)
-    albedo, f0 = result["albedo"], result["f0"]
-    if count == 1:
-        ao = (g.texture("MacroAOMap", g.white_linear, ST.SAMPLERTYPE_MASKS, macro_uv, "Macro"), "R")
+    albedo, f0 = g.mul(result["albedo"], ao), g.mul(result["f0"], ao)
     g.last_uv = base_uv
     emissive = g.glow(result["colour"], result["alpha"])
-    g.slab(g.mul(albedo, ao), g.mul(f0, ao), None, g.gloss_to_roughness(smooth), normal, emissive)
+    g.slab(g.conserve(albedo, f0), f0, None, g.gloss_to_roughness(smooth), normal, emissive)
     g.out(*g.add(g.sub(result["alpha"], g.scalar("AlphaTest", 0.0)), g.const(0.5)), MP.MP_OPACITY_MASK)
+    return g.save()
+
+
+# Game layerLib.cfi CalcBlendAlpha(blendMap, blendAmt, softness) = 1 - CalcBlendInAlpha x CalcBlendOutAlpha.
+WEAR_ALPHA = """const float maxSlopeRatio = 1.0 / 255.0;
+float inMap = BlendMap * (1 - maxSlopeRatio - 0.001) + maxSlopeRatio + 0.001;
+float softSlope = saturate(2 * Amount);
+float hardSlope = 1.0 / max(softSlope, maxSlopeRatio);
+float softAlpha = inMap * softSlope + 1 - softSlope;
+float hardAlpha = inMap * hardSlope;
+float blendIn = saturate(lerp(hardAlpha, softAlpha, Softness));
+float blendOut = lerp(1.0, BlendMap * BlendMap, saturate(2 * Amount - 1));
+return 1.0 - blendIn * blendOut;"""
+# Game layerLib.cfi Layer_RemapWear: paint (SHADING_PAINT / SHADING_CLEARCOAT_PAINT) starts the wear layer at
+# 1 - PaintPrimerStart (0.5), cloth at 1 - ClothComplementStart (0.75); other shading models are unchanged.
+WEAR_REMAP = """float startWear = Paint * (1.0 - 0.5) + Cloth * (1.0 - 0.75);
+return saturate((WearAlpha - startWear) * (1 / (1 - startWear)));"""
+# Game layerLib.cfi Layer_ApplyLayerEffects, paint branch (PaintPrimerStart 0.5, PaintComplementStart 0.9), on
+# the tinted primary layer; wearAmt = 1 - CalcBlendAlpha. rgb = albedo, a = smoothness. The complement-hue
+# shift (Layer_ApplyComplementWearAndHAL: a 3D HueLUT lookup) between wearAmt 0.9 and 1 is not drawn.
+WEAR_PRIMER = """float primerAmount = (1 - smoothstep(0.5, 0.9, PrimaryWear)) * Paint;
+float3 baseColor = sqrt(Albedo);
+float maxCol = max(baseColor.r, max(baseColor.g, baseColor.b));
+float minCol = min(baseColor.r, min(baseColor.g, baseColor.b));
+float doubleLuminance = maxCol + minCol;
+float saturation = (maxCol - minCol) / (1.0 + (1.0e-4) - abs(doubleLuminance - 1.0));
+float luminance = 0.5 * doubleLuminance;
+float3 blendGrey = lerp(luminance, baseColor, 0.5);
+float lumBias = pow(luminance, 5);
+float lumDelta = lerp(0.25, 0.33, saturation) - 0.35 * lumBias;
+float3 blendSat = lerp(blendGrey, lumDelta > 0 ? 1.0 : 0.0, abs(lumDelta));
+float3 primerAlbedo = pow(blendSat, 2);
+float boostedGloss = 0.75 + (Smoothness * 0.25);
+float loweredGloss = 0 + (Smoothness * 0.75);
+float primerGloss = lerp(boostedGloss, loweredGloss, Smoothness);
+return float4(lerp(Albedo, primerAlbedo, primerAmount), lerp(Smoothness, primerGloss, primerAmount));"""
+
+
+def hardsurface_master():
+    """M_SC_HardSurface: Primary layer (Layer0*) + wear layer (Wear*), blended by the game's static wear.
+
+    Game HardSurface.cfx GetLayerAttribs / CalcAlphas_BlendBased / BlendLayers_BranchGradWear:
+      vertex colour (%VERTCOLORS -> UseVertexColors; else damage 0, glow 1, AO 1, wear 0): G = glow mask,
+        B = AO, A = wear; wearAmt = saturate(WearBlendBase - A x 0.95) (CalculateVertexWear; the per-instance
+        wear of a flown ship is 0 here).
+      wearAlpha = CalcBlendAlpha(WearBlendMap.r at UV x Layer0Tiling, wearAmt, WearFalloff)   [WEAR_ALPHA]
+      Primary: (diffuse x tint, F0 = specular x Layer0SpecularMap, gloss), then Layer_ApplyLayerEffects with
+        1 - wearAlpha: paint wears to primer first [WEAR_PRIMER]; weight 1 - Layer_RemapWear(wearAlpha).
+      Wear: the same attributes from the Wear* parameters (the builder fills them from the separate Wear layer
+        under %WEAR_LAYER, else from the Primary textures with the layer's wear tints); weight
+        Layer_RemapWear(wearAlpha) [WEAR_REMAP].
+      Normal XY, albedo, F0 and smoothness accumulate by weight, Z is rebuilt (LayerAttribs_BlendNormalize).
+      Then LayerAttribs_AddMacroSurface (MacroNormalMap / MacroRoughnessMap at UV x MacroTiling),
+        albedo, F0 x AO, AO = vertex B x MacroAOMap.r, and the deferred energy split (Graph.conserve).
+      Opacity (alpha test) is the Primary diffuse alpha; the glow is masked by vertex G (GetMaterialAttribs).
+    Not drawn: per-instance wear/dirt/damage, detail maps, the paint/cloth complement hue (HueLUT),
+    retroreflective normals, %SECONDARY_LAYER, stencils, iridescence.
+    """
+    g = Graph("M_SC_HardSurface", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
+    base_uv = g.uv(g.scalar("Tiling", 1.0))  # emittance map (g.glow) UVs
+    colour_v = g.node(unreal.MaterialExpressionVertexColor)
+    use_vertex = g.scalar("UseVertexColors", 0.0, "Wear")
+    vertex = lambda channel, default: g.lerp(g.const(default), (colour_v, channel), use_vertex)
+    vertex_glow, vertex_ao, vertex_wear = vertex("G", 1.0), vertex("B", 1.0), vertex("A", 0.0)
+
+    def layer(p):
+        uv = g.uv(g.scalar(p + "Tiling", 1.0, p))
+        d = g.texture(p + "DiffuseMap", g.white, ST.SAMPLERTYPE_COLOR, uv, p)
+        spec = (g.texture(p + "SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv, p), "RGB")
+        return dict(
+            uv=uv, alpha=(d, "A"), colour=g.mul((d, "RGB"), g.vector(p + "Tint", (1, 1, 1), p)),
+            f0=g.mul(g.vector(p + "Specular", (0.04, 0.04, 0.04), p), spec),
+            normal=(g.texture(p + "NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv, p), "RGB"),
+            smoothness=g.smoothness(p, uv))
+
+    primary, wear = layer("Layer0"), layer("Wear")
+    wear_amount = g.saturate(g.sub(g.scalar("WearBlendBase", 0.0, "Wear"), g.mul(vertex_wear, g.const(0.95))))
+    blend_map = (g.texture("WearBlendMap", g.white_linear, ST.SAMPLERTYPE_MASKS, primary["uv"], "Wear"), "R")
+    wear_alpha = g.custom(WEAR_ALPHA, unreal.CustomMaterialOutputType.CMOT_FLOAT1,
+                          BlendMap=blend_map, Amount=wear_amount, Softness=g.scalar("WearFalloff", 0.5, "Wear"))
+    paint = g.scalar("WearPaint", 0.0, "Wear")
+    wear_weight = g.custom(WEAR_REMAP, unreal.CustomMaterialOutputType.CMOT_FLOAT1,
+                           WearAlpha=wear_alpha, Paint=paint, Cloth=g.scalar("WearCloth", 0.0, "Wear"))
+    worn = g.custom(WEAR_PRIMER, unreal.CustomMaterialOutputType.CMOT_FLOAT4, Albedo=primary["colour"],
+                    Smoothness=primary["smoothness"], PrimaryWear=g.one_minus(wear_alpha), Paint=paint)
+    worn_colour = g.op(unreal.MaterialExpressionComponentMask, worn, names=("",), r=True, g=True, b=True, a=False)
+    worn_smooth = g.op(unreal.MaterialExpressionComponentMask, worn, names=("",), r=False, g=False, b=False, a=True)
+    blend = lambda a, b: g.lerp(a, b, wear_weight)  # weights (1 - w, w) sum to 1
+    albedo = blend(worn_colour, wear["colour"])
+    f0 = blend(primary["f0"], wear["f0"])
+    smooth = blend(worn_smooth, wear["smoothness"])
+    layer_normal = g.reconstruct_z(blend(primary["normal"], wear["normal"]))
+
+    macro_uv = g.uv(g.scalar("MacroTiling", 1.0, "Macro"))
+    macro = (g.texture("MacroNormalMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, macro_uv, "Macro"), "RGB")
+    normal = g.detail_normal(macro, layer_normal)
+    macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroRoughnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
+    smooth = g.mul(smooth, macro_gloss)
+    ao = g.mul(vertex_ao, (g.texture("MacroAOMap", g.white_linear, ST.SAMPLERTYPE_MASKS, macro_uv, "Macro"), "R"))
+    g.last_uv = base_uv
+    albedo, f0 = g.mul(albedo, ao), g.mul(f0, ao)
+    # HardSurface.cfx GetMaterialAttribs: glowColour = attribs.Albedo, the wear-blended albedo after the AO multiply
+    # (before the lighting energy split), x the alpha ramp x the vertex glow mask.
+    emissive = g.mul(g.glow(albedo, primary["alpha"], ramp=True), vertex_glow)
+    g.slab(g.conserve(albedo, f0), f0, None, g.gloss_to_roughness(smooth), normal, emissive)
+    g.out(*g.add(g.sub(primary["alpha"], g.scalar("AlphaTest", 0.0)), g.const(0.5)), MP.MP_OPACITY_MASK)
     return g.save()
 
 
@@ -345,7 +471,7 @@ def decal_master(name, colour):
         coverage = g.lerp(coverage, st_cover, use)
         f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)),
                    (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB"))
-        slab = g.slab(g.mul(base, g.one_minus(g.scalar("Metallic", 0.0))), f0, None, g.roughness("", uv), normal,
+        slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal,
                       g.glow(base, (diffuse, "A")), front=False)
     else:
         slab = g.slab(None, None, None, g.roughness("", uv), normal, front=False)
@@ -365,7 +491,7 @@ def translucent_master():
     base = g.mul((diffuse, "RGB"), g.vector("DiffuseColor", (1, 1, 1)))
     f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)),
                (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB"))
-    slab = g.slab(g.mul(base, g.one_minus(g.scalar("Metallic", 0.0))), f0, None, g.roughness("", uv), normal,
+    slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal,
                   g.glow(base, (diffuse, "A")), front=False)
     g.weight(slab, coverage)
     return g.save()
@@ -425,7 +551,7 @@ Graph.white = default_texture("T_SC_White", (255, 255, 255, 255), True, unreal.T
 Graph.white_linear = default_texture("T_SC_WhiteLinear", (255, 255, 255, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.black_linear = default_texture("T_SC_BlackLinear", (0, 0, 0, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.flat_normal = default_texture("T_SC_FlatNormal", (128, 128, 255, 255), False, unreal.TextureCompressionSettings.TC_NORMALMAP)
-for opaque in (surface_master("M_SC_Illum"), layered_master("M_SC_HardSurface", 1),
+for opaque in (surface_master("M_SC_Illum"), hardsurface_master(),
                layered_master("M_SC_Layered", LAYERS), surface_master("M_SC_Fallback")):
     variants(opaque)
 glass_master()

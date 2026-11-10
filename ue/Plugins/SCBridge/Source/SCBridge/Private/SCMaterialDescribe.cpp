@@ -103,6 +103,27 @@ FLinearColor PaletteTint(const FSCPalette* Palette, const FString& Channel, bool
     bFound = FSCMaterialBuilder::PaletteColor(Palette, Channel, C);
     return bFound ? C : FLinearColor::White;
 }
+/** palettes.json `finish.<channel>`: the palette entry's specular tint (linear) and gloss factor (0..1), the
+ *  other half of the game's SPackedTintEntry { diffuse, specular, gloss }. A field the export does not carry
+ *  (null) stays unset. */
+struct FPaletteFinish { TOptional<FLinearColor> Specular; TOptional<float> Gloss; };
+FPaletteFinish PaletteFinish(const FSCPalette* Palette, const FString& Channel)
+{
+    FPaletteFinish F;
+    const FObj Entry = Palette && !Channel.IsEmpty() ? Child(Child(Parse(Palette->Json), TEXT("finish")), *Channel) : nullptr;
+    if (Entry && Entry->HasTypedField<EJson::Array>(TEXT("specular"))) F.Specular = Rgb(Entry, TEXT("specular"), FLinearColor::Black);
+    double Gloss = 0;
+    if (Entry && Entry->TryGetNumberField(TEXT("glossiness"), Gloss)) F.Gloss = FMath::Clamp(float(Gloss), 0.f, 1.f);
+    return F;
+}
+/** A layer .mtl's public params (manifest `resolved_material.authored_public_params`: name / value pairs). */
+TMap<FString, FString> LayerParams(const FObj& L)
+{
+    TMap<FString, FString> P;
+    for (const auto& V : Arr(Child(L, TEXT("resolved_material")), TEXT("authored_public_params"))) if (V->Type == EJson::Object)
+        P.Add(Str(V->AsObject(), TEXT("name")), Str(V->AsObject(), TEXT("value")));
+    return P;
+}
 void Tex(FSCMaterialDesc& D, const TCHAR* Param, const FString& Path, ESCTextureRole Role)
 {
     if (!Path.IsEmpty()) D.Textures.Add(Param, FSCTextureKey{Path, Role});
@@ -118,7 +139,8 @@ void Gloss(FSCMaterialDesc& D, const FString& Prefix, const TOptional<float>& Sh
     D.Scalars.Add(*(Prefix + TEXT("UseRoughnessMap")), bMap ? 1.f : 0.f);
     D.Scalars.Add(*(Prefix + TEXT("GlossMult")), Authored * Mult);
     // TODO(WP-R5): upstream should emit a scalar gloss/roughness when Shininess is absent.
-    D.Scalars.Add(*(Prefix + TEXT("Smoothness")), Shininess.IsSet() ? Authored * Mult : SubstrateDefaultSmoothness);
+    // Mult (layer GlossMult x palette gloss) scales the constant either way: paletteLib `Smoothness *= layerGloss * gloss`.
+    D.Scalars.Add(*(Prefix + TEXT("Smoothness")), (Shininess.IsSet() ? Authored : SubstrateDefaultSmoothness) * Mult);
 }
 TOptional<float> OptionalAttr(const FAuthored& A, const TCHAR* Key) { return A.Attr.Contains(Key) ? TOptional<float>(A.Float(Key, 0.f)) : TOptional<float>(); }
 /** Normal + derived roughness + smoothness constants for a direct (non-layer) material. */
@@ -192,7 +214,6 @@ void Direct(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPa
     // Specular keeps the masters' F0 default, which is Substrate's (0.04).
     // TODO(WP-R5): resolve the Diffuse = Specular = 1,1,1 sentinel (response in textures) in the sidecar.
     if (A.Attr.Contains(TEXT("Specular"))) D.Vectors.Add(TEXT("SpecularColor"), A.Color(TEXT("Specular"), FLinearColor::Black));
-    D.Scalars.Add(TEXT("Metallic"), 0.f); // no metallic in the spec workflow: albedo and F0 are authored directly
     D.Scalars.Add(TEXT("AlphaTest"), A.Float(TEXT("AlphaTest"), 0.f));
     SurfaceGloss(D, Sub, A);
     Emission(D, Sub, A);
@@ -289,39 +310,153 @@ void MacroSurface(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
             D.Warnings.Add(TEXT("RotateLayerUVs is not supported by the masters; layer UVs are not rotated"));
     }
 }
-/** Base layers of a HardSurface / LayerBlend_V2 manifest. Wear layers are not drawn: LayerBlend wear is a runtime
- *  per-instance amount (zero on a pristine item); HardSurface static wear (WearBlendBase) is TODO(WP-U2). */
-int32 Layers(FSCMaterialDesc& D, const FObj& Sub, const FSCPalette* Palette, int32 Max)
+/** Game layer tint modes (Layer.cfx `TintMode` UIEnum), authored on the layer .mtl; the shader default is 0. */
+enum class ESCTintMode { DiffuseAndSpecular = 0, DiffuseOnly = 1, SpecularOnly = 2 };
+/** One manifest layer as `<P>*` parameters: maps, tint, F0, tiling, gloss.
+ *  Tints follow the game's paletteLib.cfi LayerAttribs_ApplyTintsAndPalette (HardSurface Primary / Wear and every
+ *  LayerBlend_V2 layer). Without a palette entry (no palette, or the layer names no channel):
+ *    albedo x layer diffuse, F0 = layer specular, gloss x layer gloss.
+ *  With one (ApplyPaletteParams):
+ *    albedo x layer diffuse, and x the entry's diffuse tint when the layer tints diffuse;
+ *    F0 = the entry's specular tint when the layer tints specular (it takes the place of the layer specular),
+ *         else the layer specular;
+ *    gloss x layer gloss x the entry's gloss, always.
+ *  Which of the two a layer tints is its TintMode. The engine packs that into the tint index bits the shader
+ *  tests (0x4 diffuse, 0x8 specular); the packing code is not in the shader cache, so the mapping from the enum
+ *  (0 both, 1 diffuse only, 2 specular only) is taken from the enum's names.
+ *  A palette that lacks the entry's specular / gloss keeps the layer's own value, with a warning.
+ *
+ *  The layer's spec map (its TexSlot6) scales F0. A shader that samples it (HardSurface %USE_SPECULAR_MAPS:
+ *  LayerAttribs_ReadSpecular, declared per layer as `UseLayerSpecMap`) gets it as `<P>SpecularMap`. One that does
+ *  not (HardSurface without the token; LayerBlend_V2, which has no layer spec sampler at all) gets the map's mean
+ *  colour times F0 instead (FSCMaterialDesc::VectorMeans). That fold is inferred, not read from the shader cache:
+ *  layers authored for a spec map carry Specular = 1,1,1 and keep their real F0 in the map, the same layer .mtl is
+ *  used under both kinds of shader, and the engine tells its layer packing which kind it is (UseLayerSpecMap);
+ *  taking Specular as authored would turn every such layer into a mirror. See ue/verification/WP-U2.md. */
+void Layer(FSCMaterialDesc& D, const FObj& L, const FString& P, const FSCPalette* Palette, bool bSamplesSpecMap)
+{
+    const FObj Snap = Child(L, TEXT("layer_snapshot"));
+    const FString ChannelName = Str(Child(L, TEXT("palette_channel")), TEXT("name"));
+    bool bPalette;
+    const FLinearColor Channel = PaletteTint(Palette, ChannelName, bPalette);
+    const ESCTintMode Mode = ESCTintMode(FCString::Atoi(*LayerParams(L).FindRef(TEXT("TintMode"))));
+    const bool bTintDiffuse = bPalette && Mode != ESCTintMode::SpecularOnly, bTintSpecular = bPalette && Mode != ESCTintMode::DiffuseOnly;
+    const FPaletteFinish Finish = bPalette ? PaletteFinish(Palette, ChannelName) : FPaletteFinish();
+    if (bTintSpecular && !Finish.Specular.IsSet())
+        D.Warnings.Add(FString::Printf(TEXT("palette %s has no specular tint: layer %s keeps its own specular"), *ChannelName, *Str(L, TEXT("name"))));
+    if (bPalette && !Finish.Gloss.IsSet())
+        D.Warnings.Add(FString::Printf(TEXT("palette %s has no gloss: layer %s gloss is not scaled"), *ChannelName, *Str(L, TEXT("name"))));
+    FLinearColor Tint = Rgb(Snap, TEXT("diffuse"), FLinearColor::White) * Rgb(L, TEXT("tint_color"), FLinearColor::White);
+    if (bTintDiffuse) Tint *= Channel;
+    const FString Rough = Str(L, TEXT("roughness_export_path"));
+    double Shininess = 0;
+    const TOptional<float> Shine = Snap && Snap->TryGetNumberField(TEXT("shininess"), Shininess) ? TOptional<float>(float(Shininess)) : TOptional<float>();
+    Tex(D, *(P + TEXT("DiffuseMap")), Str(L, TEXT("diffuse_export_path")), ESCTextureRole::Color);
+    Tex(D, *(P + TEXT("NormalGlossMap")), Str(L, TEXT("normal_export_path")), ESCTextureRole::Normal);
+    Tex(D, *(P + TEXT("RoughnessMap")), Rough, ESCTextureRole::Linear);
+    D.Vectors.Add(*(P + TEXT("Tint")), Tint);
+    if (bTintSpecular && Finish.Specular.IsSet()) D.Vectors.Add(*(P + TEXT("Specular")), *Finish.Specular);
+    else if (Snap && Snap->HasField(TEXT("specular"))) D.Vectors.Add(*(P + TEXT("Specular")), Rgb(Snap, TEXT("specular"), FLinearColor::Black));
+    D.Scalars.Add(*(P + TEXT("Tiling")), float(Num(L, TEXT("uv_tiling"), 1.0)));
+    Gloss(D, P, Shine, float(Num(L, TEXT("gloss_mult"), 1.0)) * Finish.Gloss.Get(1.f), !Rough.IsEmpty());
+    if (const FObj Spec = SlotAt(L, 6))
+    {
+        const FSCTextureKey Key{Str(Spec, TEXT("export_path")), ESCTextureRole::Color};
+        if (bSamplesSpecMap) D.Textures.Add(*(P + TEXT("SpecularMap")), Key);
+        else if (D.Vectors.Contains(*(P + TEXT("Specular")))) D.VectorMeans.Add(*(P + TEXT("Specular")), Key);
+        else D.Warnings.Add(FString::Printf(TEXT("layer %s has a spec map but no specular colour: the map is not used"), *Str(L, TEXT("name"))));
+    }
+}
+/** Base layers of a HardSurface / LayerBlend_V2 manifest. Wear layers are not base layers: LayerBlend wear is a
+ *  runtime per-instance amount (zero on a pristine item); HardSurface static wear is described by StaticWear. */
+int32 Layers(FSCMaterialDesc& D, const FObj& Sub, const FSCPalette* Palette, int32 Max, bool bSamplesSpecMaps)
 {
     int32 Count = 0;
     for (const auto& V : Arr(Sub, TEXT("layer_manifest")))
     {
         const FObj L = V->Type == EJson::Object ? V->AsObject() : nullptr;
         if (!L || IsWear(L) || Count == Max) continue;
-        const FString P = FString::Printf(TEXT("Layer%d"), Count++);
-        const FObj Snap = Child(L, TEXT("layer_snapshot"));
-        bool bPalette;
-        const FLinearColor Channel = PaletteTint(Palette, Str(Child(L, TEXT("palette_channel")), TEXT("name")), bPalette);
-        const FLinearColor Tint = Rgb(Snap, TEXT("diffuse"), FLinearColor::White) * Rgb(L, TEXT("tint_color"), FLinearColor::White) * Channel;
-        const FString Rough = Str(L, TEXT("roughness_export_path"));
-        double Shininess = 0;
-        const TOptional<float> Shine = Snap && Snap->TryGetNumberField(TEXT("shininess"), Shininess) ? TOptional<float>(float(Shininess)) : TOptional<float>();
-        Tex(D, *(P + TEXT("DiffuseMap")), Str(L, TEXT("diffuse_export_path")), ESCTextureRole::Color);
-        Tex(D, *(P + TEXT("NormalGlossMap")), Str(L, TEXT("normal_export_path")), ESCTextureRole::Normal);
-        Tex(D, *(P + TEXT("RoughnessMap")), Rough, ESCTextureRole::Linear);
-        D.Vectors.Add(*(P + TEXT("Tint")), Tint);
-        if (Snap && Snap->HasField(TEXT("specular"))) D.Vectors.Add(*(P + TEXT("Specular")), Rgb(Snap, TEXT("specular"), FLinearColor::Black));
-        D.Scalars.Add(*(P + TEXT("Metallic")), float(Num(Snap, TEXT("metallic"), 0.0)));
-        D.Scalars.Add(*(P + TEXT("Tiling")), float(Num(L, TEXT("uv_tiling"), 1.0)));
-        Gloss(D, P, Shine, float(Num(L, TEXT("gloss_mult"), 1.0)), !Rough.IsEmpty());
+        Layer(D, L, FString::Printf(TEXT("Layer%d"), Count++), Palette, bSamplesSpecMaps);
     }
     // Unused blend slots repeat the last base layer so any mask channel resolves to authored data.
     for (int32 I = Count; I > 0 && I < Max; ++I)
     {
         const FString From = FString::Printf(TEXT("Layer%d"), Count - 1), To = FString::Printf(TEXT("Layer%d"), I);
         CopyPrefix(D.Scalars, From, To); CopyPrefix(D.Vectors, From, To); CopyPrefix(D.Textures, From, To);
+        CopyPrefix(D.VectorMeans, From, To);
     }
     return Count;
+}
+/** Game shading models of a layer .mtl (layerLibConstants.cfi SHADING_*), authored as the `ShadingModel` param. */
+enum class ESCLayerShading { Standard = 0, ClearCoat = 1, Paint = 2, ClearCoatPaint = 3, Cloth = 4, RetroReflective = 5 };
+/** HardSurface vertex data and static wear (game HardSurface.cfx GetLayerAttribs, CalcAlphas_BlendBased,
+ *  BlendLayers_BranchGradWear; the blend itself is in M_SC_HardSurface, see create_materials.py):
+ *  - %VERTCOLORS: vertex colour G = glow mask, B = AO, A = wear (UseVertexColors);
+ *  - wear amount = WearBlendBase - vertex wear, shaped by the Primary layer's blend map (its TexSlot8, sampled
+ *    with the Primary tiling) and WearDirtBlendFalloff; the Primary layer's ShadingModel selects the paint /
+ *    cloth remap and the paint primer;
+ *  - %WEAR_LAYER: the worn surface is the manifest's Wear layer (BlendLayers_SeparatePrimaryAndWear); otherwise
+ *    it is the Primary layer's textures with the layer's wear tints instead of its own
+ *    (BlendLayers_TintedPrimaryWear + LayerAttribs_ApplyWearTints): albedo x wear diffuse, F0 = wear specular,
+ *    gloss x wear gloss. The engine packs those three per layer; taking them as the layer .mtl's
+ *    WearDiffuseColor / WearSpecularColor / WearGlossiness times the submaterial's per-layer WearTint / WearGloss
+ *    is inferred from the names (the packing code is not in the shader cache);
+ *  - %USE_SPECULAR_MAPS: each layer's TexSlot6 multiplies its F0 (LayerAttribs_ReadSpecular). Without the token
+ *    the read is not compiled in and the map's mean colour scales F0 instead (see Layer). The tinted wear
+ *    surface is the Primary layer's textures, so it takes the Primary spec map either way.
+ *  A missing input leaves static wear off with a warning rather than guessing a shader default. */
+void StaticWear(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPalette* Palette)
+{
+    FObj Primary, Wear;
+    for (const auto& V : Arr(Sub, TEXT("layer_manifest")))
+    {
+        const FObj L = V->Type == EJson::Object ? V->AsObject() : nullptr;
+        if (L && IsWear(L)) { if (!Wear) Wear = L; }
+        else if (L && !Primary) Primary = L;
+    }
+    const TMap<FString, FString> P = LayerParams(Primary);
+    D.Scalars.Add(TEXT("UseVertexColors"), HasToken(Sub, TEXT("VERTCOLORS")) ? 1.f : 0.f);
+
+    const float Base = A.Param(TEXT("WearBlendBase"), 0.f);
+    const FObj Blend = SlotAt(Primary, 8);
+    const bool bSeparate = HasToken(Sub, TEXT("WEAR_LAYER"));
+    FLinearColor WearDiffuse = FLinearColor::White, WearSpecular = FLinearColor::White;
+    FString Missing;
+    if (!Blend) Missing = TEXT("the Primary layer has no blend map (TexSlot8)");
+    else if (!P.Contains(TEXT("WearDirtBlendFalloff"))) Missing = TEXT("the Primary layer has no WearDirtBlendFalloff");
+    else if (bSeparate && !Wear) Missing = TEXT("%WEAR_LAYER without a Wear layer in the manifest");
+    else if (!bSeparate && !(P.Contains(TEXT("WearGlossiness")) && ParseRgb(P.FindRef(TEXT("WearDiffuseColor")), WearDiffuse)
+        && ParseRgb(P.FindRef(TEXT("WearSpecularColor")), WearSpecular))) Missing = TEXT("the Primary layer has no wear tints");
+    const bool bWear = Base > 0.f && Missing.IsEmpty();
+    if (Base > 0.f && !bWear) D.Warnings.Add(FString::Printf(TEXT("WearBlendBase %.3f is not drawn: %s"), Base, *Missing));
+    D.Scalars.Add(TEXT("WearBlendBase"), bWear ? Base : 0.f);
+    if (!bWear) return;
+
+    Tex(D, TEXT("WearBlendMap"), Str(Blend, TEXT("export_path")), ESCTextureRole::Linear);
+    D.Scalars.Add(TEXT("WearFalloff"), FCString::Atof(*P[TEXT("WearDirtBlendFalloff")]));
+    const ESCLayerShading Shading = ESCLayerShading(FCString::Atoi(*P.FindRef(TEXT("ShadingModel"))));
+    const bool bPaint = Shading == ESCLayerShading::Paint || Shading == ESCLayerShading::ClearCoatPaint;
+    const bool bCloth = Shading == ESCLayerShading::Cloth;
+    D.Scalars.Add(TEXT("WearPaint"), bPaint ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("WearCloth"), bCloth ? 1.f : 0.f);
+    if (bPaint || bCloth) D.Warnings.Add(TEXT("worn paint / cloth complement hue (HueLUT) is not supported by the masters; the hue is not shifted"));
+    if (Shading == ESCLayerShading::RetroReflective) D.Warnings.Add(TEXT("retroreflective layer shading is not supported by the masters"));
+    if (bSeparate)
+    {
+        Layer(D, Wear, TEXT("Wear"), Palette, HasToken(Sub, TEXT("USE_SPECULAR_MAPS")));
+    }
+    else
+    {
+        const float WearGloss = FMath::Clamp(FCString::Atof(*P[TEXT("WearGlossiness")]) * float(Num(Primary, TEXT("wear_gloss"), 1.0)), 0.f, 1.f);
+        CopyPrefix(D.Textures, TEXT("Layer0"), TEXT("Wear")); // the Primary diffuse, normal, gloss and spec maps
+        D.Vectors.Add(TEXT("WearTint"), WearDiffuse * Rgb(Primary, TEXT("wear_tint"), FLinearColor::White));
+        D.Vectors.Add(TEXT("WearSpecular"), WearSpecular);
+        if (const FSCTextureKey* Mean = D.VectorMeans.Find(TEXT("Layer0Specular"))) D.VectorMeans.Add(TEXT("WearSpecular"), FSCTextureKey(*Mean));
+        D.Scalars.Add(TEXT("WearTiling"), D.Scalars.FindRef(TEXT("Layer0Tiling")));
+        D.Scalars.Add(TEXT("WearUseRoughnessMap"), D.Scalars.FindRef(TEXT("Layer0UseRoughnessMap")));
+        D.Scalars.Add(TEXT("WearGlossMult"), WearGloss);
+        D.Scalars.Add(TEXT("WearSmoothness"), WearGloss);
+    }
 }
 }
 
@@ -380,22 +515,25 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
 
     if (D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered)
     {
-        const int32 Count = Layers(D, Sub, Palette, D.Master == ESCMaster::HardSurface ? 1 : 4);
+        // HardSurface.cfx samples the layer spec maps under %USE_SPECULAR_MAPS; LayerBlend_V2.cfx never does.
+        const bool bHard = D.Master == ESCMaster::HardSurface;
+        const int32 Count = Layers(D, Sub, Palette, bHard ? 1 : 4, bHard && HasToken(Sub, TEXT("USE_SPECULAR_MAPS")));
         if (Count == 0)
         {
             D.Warnings.Add(TEXT("Layered family without base layers; using M_SC_Fallback with authored colours"));
-            D.Master = ESCMaster::Fallback; D.Textures.Reset(); D.Scalars.Reset(); D.Vectors.Reset();
+            D.Master = ESCMaster::Fallback; D.Textures.Reset(); D.Scalars.Reset(); D.Vectors.Reset(); D.VectorMeans.Reset();
             Direct(D, Sub, A, Palette);
         }
         else
         {
             const FObj Mask = Slot(Sub, TEXT("blend_mask"));
-            if (D.Master == ESCMaster::Layered) // M_SC_HardSurface has one layer and no blend mask
+            if (D.Master == ESCMaster::Layered) // M_SC_HardSurface has no blend mask: one base layer + static wear
             {
                 if (Mask) Tex(D, TEXT("BlendMaskMap"), Str(Mask, TEXT("export_path")), ESCTextureRole::Linear);
                 D.Scalars.Add(TEXT("UseBlendMask"), D.Textures.Contains(TEXT("BlendMaskMap")) ? 1.f : 0.f);
                 D.Scalars.Add(TEXT("BlendMaskTiling"), A.Param(TEXT("BlendMapTiling"), 1.f));
             }
+            else StaticWear(D, Sub, A, Palette);
             MacroSurface(D, Sub, A);
             Emission(D, Sub, A);
         }

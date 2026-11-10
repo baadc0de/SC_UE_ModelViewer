@@ -322,7 +322,7 @@ with ships, so the contract lives there. Same host, loadout and route as round 2
 | No macro normal | **fixed** (TexSlot3 over the blended layers, macro gloss) | hangar 04/14: panel relief on helmet and limb plates, backpack folds |
 | No HAL control | **fixed for AO and luminance**; hue shift not implemented (needs the game's `HueLUT`) | hangar 04: shaded seams and recesses, deeper olive plates |
 | Too bright / mirror patches in strong light | **not fixed** | bulkhead 20, cockpit 23: still blown out; plates mirror the lights more sharply under the game-exact gloss. Cause: over-bright Cutlass interior lights (open) |
-| No wear layers | **not done** | LayerBlend wear is per-instance at runtime (pristine = none); HardSurface static wear is a WP-U2 TODO |
+| No wear layers | LayerBlend: **not done** (per-instance at runtime; pristine = none). HardSurface static wear: **done** 2026-11-10 (WP-U2.md "Static wear") | `wp-u2/wear-*.jpg` |
 
 Side effect on ships (reported, not tuned): every lit master now maps gloss the way the game does, so ship
 exteriors are glossier than before and than the in-game references until static wear is drawn
@@ -334,5 +334,6 @@ cost (§4) is unchanged. Tests: `test_importer.py` 17/17, `test_player.py` 5/5.
 
 1. **Armour and interiors blow out to white in the Cutlass** (bulkhead, cockpit): ship interior light
    intensities (open since the MegaLights demo), now with sharper reflections on glossy metal.
-2. **Ship paint too glossy / too clean**: HardSurface static wear not drawn (WP-U2 TODO).
+2. ~~Ship paint too glossy / too clean~~: fixed 2026-11-10 (HardSurface static wear, palette finish gloss and
+   specular, DDS colour encoding, energy split; WP-U2.md). Dirt and per-instance wear are still not drawn.
 3. Items 2–6 of the round-2 list, unchanged.

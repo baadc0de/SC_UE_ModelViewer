@@ -1,4 +1,5 @@
-// FSCTextureImporter: exported PNG -> transient UTexture2D with per-role colour space and sampler flags.
+// FSCTextureImporter: exported PNG -> transient UTexture2D. Colour encoding comes from the PNG (the exporter
+// copies the source DDS's sRGB state into an sRGB / gAMA chunk); the slot role is the fallback and sampler hint.
 // Decode (and CPU mip chain) is pure and runs on worker threads; Create runs on the game thread.
 #pragma once
 #include "CoreMinimal.h"
@@ -6,7 +7,8 @@
 
 class UTexture2D;
 
-/** How a texture slot is sampled. Only Color is sRGB; Normal is a DDNA tangent-space map. */
+/** How a texture slot is sampled. Normal is a DDNA tangent-space map (always linear). For Color / Linear the
+ *  role only decides the encoding of a PNG that does not state one (Color: sRGB, Linear: linear). */
 enum class ESCTextureRole : uint8 { Color, Normal, Linear };
 
 struct SCBRIDGE_API FSCTextureKey
@@ -23,6 +25,7 @@ struct SCBRIDGE_API FSCDecodedTexture
     FSCTextureKey Key;
     int32 Width = 0, Height = 0;
     TArray<TArray64<uint8>> Mips;
+    bool bSRGB = false; // resolved encoding of the RGB channels (ResolveSRGB)
     FString Error;
 };
 
@@ -54,11 +57,16 @@ public:
      *  accepted keys. Rejected keys carry an Error and are never decompressed. */
     static TArray<FSCDecodedTexture> DecodeAll(const FSCPackageSource& Source, const TArray<FSCTextureKey>& Keys,
         const FSCTextureLimits& Limits = FSCTextureLimits::FromHost());
+    /** Encoding of a PNG's RGB channels: an `sRGB` chunk means sRGB, `gAMA` 1.0 means linear (both written by
+     *  the exporter from the DDS header); a PNG without either falls back to the role. Normal is always linear. */
+    static bool ResolveSRGB(TConstArrayView<uint8> Png, ESCTextureRole Role);
+    /** Linear-light mean RGB of the top mip (sRGB-encoded texels are linearized first); false without texels. */
+    static bool MeanColor(const FSCDecodedTexture& Texture, FLinearColor& Out);
     /** Decoded size of a W x H BGRA8 texture with its full mip chain. */
     static int64 DecodedBytes(int64 Width, int64 Height);
     /** Game thread: transient texture owned by Outer; uncompressed BGRA8, never streamed. */
     static UTexture2D* Create(FSCDecodedTexture&& Decoded, UObject* Outer);
-    /** Box-filtered mip chain down to 1x1 (exported PNGs carry a single level); colour RGB is averaged in
-     *  linear space, alpha / masks / normals as stored. */
+    /** Box-filtered mip chain down to 1x1 (exported PNGs carry a single level); sRGB-encoded RGB (bSRGB) is
+     *  averaged in linear space, alpha / linear data / normals as stored. */
     static void BuildMips(FSCDecodedTexture& Texture);
 };

@@ -21,6 +21,19 @@ const TCHAR* FSCMaterialBuilder::MasterName(ESCMaster Master)
     }
 }
 
+void FSCMaterialBuilder::ApplyTextureMeans(FSCMaterialDesc& Desc, const TMap<FSCTextureKey, FLinearColor>& Means)
+{
+    for (const auto& Pair : Desc.VectorMeans)
+    {
+        FLinearColor* Value = Desc.Vectors.Find(Pair.Key);
+        const FLinearColor* Mean = Means.Find(Pair.Value);
+        if (Value && Mean) { Value->R *= Mean->R; Value->G *= Mean->G; Value->B *= Mean->B; }
+        else Desc.Warnings.Add(FString::Printf(TEXT("%s: the mean colour of %s is not available; the value is not scaled by it"),
+            *Pair.Key.ToString(), *Pair.Value.Path));
+    }
+    Desc.VectorMeans.Reset();
+}
+
 FString FSCMaterialBuilder::ParentPath(ESCMaster Master, ESCBlend Blend, bool bTwoSided)
 {
     // Opaque families have masked / two-sided constant variants; decal and lit-translucent masters have a
