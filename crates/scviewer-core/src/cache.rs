@@ -14,7 +14,11 @@ use std::{
 // finish glossiness as a 0..1 fraction; older packages have untagged textures and a null glossiness.
 // 15: scene.json interiors carry `room_volumes` (the areas `affects_this_area_only` lights are confined to).
 // 16: tile-attached light groups are placed on their container item port (`interactionOffset`).
-pub const CACHE_FORMAT_VERSION: u32 = 16;
+// 17: chrparams events resolve under the `#filepath` in effect at their declaration and pair only with
+//     the CAF that path names, so each exported clip carries the key block of its own CAF (earlier
+//     packages can hold another clip's keys); a clip merged across rigs runs as long as its longest
+//     contributor (earlier packages cut it at the first contributor's length).
+pub const CACHE_FORMAT_VERSION: u32 = 17;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

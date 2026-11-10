@@ -1269,8 +1269,9 @@ have their slot), so those fixes change no pixel there.
   palette a sidecar names.
 - **Seated state.** No seat of the Gladius or the Scorpius accepts a capsule; the pilot's eye point needs the
   seat's idle clip and the rig's camera joint with collision off while seated (`WP-P1.md` follow-ups).
-- **Open / Close clips end in each other's pose** on the Gladius canopy and several panels: an exporter
-  defect in the pairing of DBA clip names with key blocks, recorded with its evidence in `WP-P1.md`
-  ("Follow-ups"). The viewer plays what the package says.
+- **Open / Close clips ended in each other's pose** on the Gladius canopy and several panels — fixed
+  2026-11-10 in the exporter (chrparams events are paired with the CAF their path names; `WP-P1.md`,
+  "Fixed: Open / Close clips ended in each other's pose"). Captures above that show the canopy after E
+  predate the fix.
 - UE's red on-screen warning about the real-time-capture sky light is still in every capture.
 - Frame time was not re-measured; only the three regression ships were captured.

@@ -220,6 +220,16 @@ layer or the wear tints, the Primary layer's `TexSlot8` blend map and glTF
 `COLOR_0` (R damage, G glow, B AO, A wear) under `%VERTCOLORS`; rules and sources in
 `ue/verification/WP-U2.md`.
 
+Clip pairing (2026-11-10): an exported clip holds the keys of the CAF its `.chrparams`
+event names — the `$TracksDatabase` entry of that resolved path (metadata entry `i` owns
+key block `i`), else the loose `.caf`; `#filepath` is a running, case-insensitive
+directive. No name or bone heuristic takes part, and an event whose CAF is stored nowhere
+has no clip. A clip merged by name across rigs has the longest contributor's
+`frame_count`. Layer-1 `CACHE_FORMAT_VERSION` is 17 (earlier packages can hold another
+clip's keys, e.g. Open and Close exchanged). Contract and known gaps: submodule
+`docs/decomposed-export-contract.md` "Animation Records"; validator
+`scripts/verify_clip_pairing.py`; evidence `ue/verification/WP-P1.md`.
+
 Instance palette (2026-11-10): UE resolves an instance's tint palette as the first id that
 `palettes.json` carries of: the instance's `palette_id`; its interior container's `palette_id`;
 the material sidecar's authored `DefaultPalette` (`palette/<lower-case record file name>`); the

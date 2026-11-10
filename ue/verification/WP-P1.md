@@ -437,25 +437,101 @@ point shows the cockpit and the hangar through the canopy (`05-cockpit-eye`); E 
 toggles it (`06`). Evidence: `wp-u3b/glass-gladius-seat-before-after.jpg`. The Gladius row's sit-height
 check stays **not demonstrated** — it needs the seated state.
 
-### Open: Open / Close clips end in each other's pose (exporter)
+### Fixed: Open / Close clips ended in each other's pose (exporter, 2026-11-10)
 
-Seen on the Gladius canopy: after "Open canopy" the canopy is closed and vice versa. The package's clips
-carry the wrong key blocks. `vendor/StarBreaker` `starbreaker-3d/src/animation/dba.rs`
-`match_dba_metadata_to_blocks` pairs the DBA's metadata entries (name, `end_frame`) with its key blocks by
-index, and the two tables are not in the same order; `end_frame` is not used to check the pairing. Comparing
-each clip's metadata `end_frame` with the frame count of the block it was paired with, 14 of the Gladius's
-40 clips disagree — six plain swaps between two clips, and the landing-gear clips shifted against their
-blocks:
+Seen on the Gladius canopy: "Open canopy" closed it. The first reading recorded here — that
+`animation/dba.rs` pairs DBA metadata entries with key blocks in the wrong order — was wrong. Entry `i`
+of a `.dba` metadata table does own key block `i`: in all 548 `.dba` files of 4.10.2 (15 910 blocks) the
+entry's controller count equals the block's and its end frame equals the block's last key. The clips were
+wrong one step earlier, where a `.chrparams` event is paired with a database entry.
 
-| Clip | metadata end frame | paired block's frames |
-| --- | --- | --- |
-| `canopy_close` / `canopy_open` | 125 / 260 | 260 / 125 |
-| `cooler_left_close` / `cooler_right_open` | 150 / 100 | 100 / 150 |
-| `diagnostic_panel_close` / `_open` | 66 / 70 | 70 / 66 |
-| `entrance_panel_close` / `_open` | 32 / 35 | 35 / 32 |
-| `inventory_close` / `_open` | 112 / 119 | 119 / 112 |
-| `landing_gear_idle` / `landing_gear_retract` | 124 / 140 | 140 / 167 |
-| `shield_close` / `_open` | 170 / 180 | 180 / 170 |
+**Rule (from the archive: 4151 `.chrparams`, 548 `.dba`).** An event plays the CAF its resolved path
+names: the tracks-database entry of that name, else the loose `.caf` at that path. Nothing else decides.
+`#filepath` is a running directive — an event resolves under the one in effect where it is declared,
+directive names compare case-insensitively, and the prefix is always joined. Events whose resolved path is
+an entry of their own tracks database: 3821 under the old reading, 4221 of 4223 under this one.
 
-Not fixed here (vendored submodule; needs a `scviewer/<topic>` branch, a failing test on the pairing and
-the engine's actual keying of blocks to metadata). The viewer plays what the package says.
+**Causes** (vendored submodule, branch `scviewer/clip-pairing`, commits `01b9410c`, `9e216d33`):
+
+1. `chrparams.rs` kept one global `#filepath` (the last) and matched directive names case-sensitively. A
+   file declaring several sent every event to the last directory; no path matched.
+2. `animation/matching.rs` then fell back to name-similarity, bone-subset and animevents heuristics, which
+   also overrode valid path matches. Removed (`matching_scores.rs`, `matching_diagnostics.rs` deleted):
+   pairing is by path only, and an event whose CAF is stored nowhere gets no clip.
+3. `rig_sources.rs` gave a clip merged by name across rigs the first contributor's `frame_count`, cutting
+   longer contributors short. It now runs as long as the longest.
+4. The default-pose bake took the first block whose bones fit the skeleton; it now resolves its event by
+   the same rule (`pipeline/default_pose.rs`).
+
+Causes 1–3 and the review fixes each have a test that failed first (`chrparams.rs`,
+`animation/matching_tests.rs`, `rig_sources.rs`, `animation/catalogue_tests.rs`, `animation/dba.rs`,
+`animation/extraction.rs`, `pipeline/clip_catalogue.rs`; synthetic fixture
+`tests/fixtures/clip_catalogue/rigs.zip`). Cause 4 has no failing-first test of its own: it is covered
+by the shared resolver's tests (`clips_for_caf_path`) and by
+`default_pose.rs::default_pose_comes_from_a_loose_caf_when_the_event_names_one`. Layer-1 `CACHE_FORMAT_VERSION` is 17.
+
+**Cross-review (Codex) of `01b9410c`:** no blockers, eight findings. Fixed in `9e216d33`: `#filepath` and
+path join with exactly one separator; a key block that fails to decode stays in the block list as a gap so
+later blocks keep their metadata entry; the default-pose bake reads loose CAFs and rigs without a tracks
+database; a loose CAF that is stored but unreadable is a warning, not silence; a skeleton's `dba_path`
+comes from any database-backed clip. Recorded as gaps, not worked around (submodule
+`docs/decomposed-export-contract.md`, "Known gaps of the pairing"): a merged clip has one length, `fps`,
+anchor set and start pose (shorter contributors hold their last key; played backwards they start late —
+7 frames on the Gladius gear); a loose CAF with several key blocks merges under one name; seven
+`.chrparams` declare names differing only in case and 45 repeat a name (first wins); `Animations.img` is
+not parsed (events whose CAF is in neither their own database nor a loose file get no clip); only the
+last `$TracksDatabase` of a file is read; wildcard rules are not expanded.
+
+**Verification** (exporter `9e216d332ced42806d7e0fe39d444e7be5035bfb:dirty=false`):
+
+```
+$ cd vendor/StarBreaker && CARGO_TARGET_DIR=$PWD/../../target cargo test -p starbreaker-3d --lib
+  test result: ok. 873 passed; 0 failed; 3 ignored
+$ target/debug/scviewer --no-cache decomposed AEGS_Gladius out/dec-r5b-gladius        (and Scorpius, Cutlass)
+$ target/debug/starbreaker p4k extract --filter '**/*.chrparams' -o <extract>          (and '**/*.dba')
+$ python3 -I scripts/verify_clip_pairing.py --extract <extract> out/dec-r5b-gladius out/dec-r5b-scorpius out/dec-r5b-cutlass
+  out/dec-r5b-gladius rigs 13 event=block 58 wrong 0 loose-caf events 2 events without clip 0
+  out/dec-r5b-scorpius rigs 14 event=block 55 wrong 0 loose-caf events 2 events without clip 0
+  out/dec-r5b-cutlass rigs 18 event=block 42 wrong 0 loose-caf events 5 events without clip 0
+```
+
+The same check on the packages exported before the fix exits 1:
+
+| Package | before | after cause 1 only | final |
+| --- | --- | --- | --- |
+| Gladius | 37 right, 21 wrong | 58, 0 | 58, 0 |
+| Scorpius | 54, 1 | 54, 1 | 55, 0 |
+| Cutlass Black | 34, 8 | 36, 6 | 42, 0 |
+
+Clip sets, before → after: Gladius 65 → 64, Scorpius 75 → 75, Cutlass 54 → 55; no event lost its clip.
+Gladius `canopy_open` 125 → 260 frames, `canopy_close` 260 → 125, `landing_gear_extend` 75 → 167.
+`scripts/verify_wp_p1.py` on the three packages with `--datacore`: exit 0. Headless, each exit 0:
+`test_importer.py` (`WP-U1 UNIT_TESTS_OK`), `test_first_person.py` on each package (`WP-P1 HEADLESS_OK`
+×3), `test_player.py` (`WP-P2 HEADLESS_OK`).
+
+**GPU (RTX 4090, Vulkan), final library** — `libscbridge.so` built from
+`9e216d332ced42806d7e0fe39d444e7be5035bfb:dirty=false` (the identity string in the binary; the ThirdParty
+copy is byte-identical to `target/debug/libscbridge.so`), each ship re-processed (`FFI_EXPORT …
+cache_hit=0`), all three routes `EXIT=0`:
+
+- **Gladius** (`cp2-gladius`, canopy fragment toggled twice by E): at rest the canopy is closed and the
+  prompt reads "E: Open canopy"; `FIRST_PERSON_DOOR fragment=Canopy … open=1` raises it and the prompt
+  becomes "E: Close canopy"; the second E (`open=0`) closes it again. Before the fix the first E closed an
+  already-raised canopy. Evidence: `wp-u3b/clip-pairing-gladius-canopy.jpg` (rest / after first E / after
+  second E).
+- **Cutlass Black** (`cutlass-ramp-to-cockpit.txt`): the ramp prompt reads "Open", E logs
+  `FIRST_PERSON_DOOR fragment=SCItemDoor owner=Door_RN_RoomConnector_Breachable_OpenReverse_Cutlass_Ramp
+  joint=Door_Hydrolic_a_top open=1` and the ramp is down with the bay visible; the closed bulkhead blocks
+  until `Door_Bulkhead open=1`; the cockpit is reached. Frame time: first-person 8.19 ms / 8.01 ms, orbit
+  at the same view 6.33 ms.
+- **Scorpius** (`scorpius-smoke.txt`): `FIRST_PERSON_DOOR fragment=Ladder … joint=Ladder_Top open=1`, the
+  hull walk completes.
+
+No "loose CAF", "Failed to parse animation block" or "no default pose" warning in any of the three logs.
+Not looked at on the GPU: the landing-gear motion (its clip length changed 75 → 167 frames on the
+Gladius), the other Gladius panels whose pairing changed, and the Scorpius ladder's end pose (only the
+toggle log line was checked).
+
+Not verified: the default-pose bake on real data (the viewer's "Default pose" option is off by default;
+covered by the synthetic fixture only); loose CAFs are not compared by `verify_clip_pairing.py`; ships
+other than these three.
