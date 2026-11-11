@@ -77,6 +77,76 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         FMatrix MeshWorld;
     };
     TArray<FBindCheck> BindChecks;
+    // WP-P3: the node's CryPhysics colliders, through the render vertices' transform. Default colliders (part >= 1)
+    // become collision triangles; part 0 (filtered / raycast-only in the game) and the damage-physics kinds do not.
+    TMap<FVector3f, int32> PhysicsVertices;
+    auto MeshTriangles = [&](int32 MeshIndex, TArray<FVector>& Tris) {
+        const auto Mesh = ObjectAt(G.Json, TEXT("meshes"), MeshIndex);
+        if (!Mesh) return false;
+        for (const auto& Value : Array(Mesh, TEXT("primitives")))
+        {
+            const auto Primitive = Value->AsObject();
+            const FObject* Attributes;
+            FAccessor P, I;
+            if (!Primitive || Int(Primitive, TEXT("mode"), 4) != 4 || !Primitive->TryGetObjectField(TEXT("attributes"), Attributes) ||
+                !G.Accessor(Int(*Attributes, TEXT("POSITION"), -1), P) || P.Components != 3 || !G.Accessor(Int(Primitive, TEXT("indices"), -1), I) ||
+                I.Components != 1 || I.Count % 3)
+                return false;
+            for (int32 K = 0; K < I.Count; ++K)
+            {
+                const double Raw = I.Get(K, 0);
+                if (Raw < 0 || Raw >= P.Count) return false;
+                Tris.Add(P.Vector(int32(Raw)));
+            }
+        }
+        return true;
+    };
+    auto AddGamePhysics = [&](const FObject& Node, const FString& NodeName, const FMatrix& World, int32 RigIndex, bool bDegenerate) {
+        const FObject* NodeExtras;
+        const TArray<TSharedPtr<FJsonValue>>* Records;
+        if (!Node->TryGetObjectField(TEXT("extras"), NodeExtras) || !(*NodeExtras)->TryGetArrayField(TEXT("sc_physics"), Records)) return true;
+        Out.bHasGamePhysics = true;
+        for (const auto& Value : *Records)
+        {
+            const FObject Shape = Value->AsObject();
+            double Part = -1;
+            FString Kind;
+            if (!Shape || !Shape->TryGetNumberField(TEXT("part"), Part) || !Shape->TryGetStringField(TEXT("kind"), Kind))
+            {
+                Error = TEXT("Invalid sc_physics record on ") + NodeName;
+                return false;
+            }
+            if (Kind == TEXT("damage_mesh") || Kind == TEXT("sdf")) continue; // damage physics, not a collider
+            // Every part collides (`part` is a per-node index), except node-name classes that are no obstacle for an actor.
+            if (!PhysicsBlocksActor(Shape)) { ++Out.PhysicsFilteredShapes; continue; }
+            if (bDegenerate) { Out.Warnings.Add(TEXT("Degenerate node: collider skipped: ") + NodeName); continue; }
+            TArray<FVector> Tris;
+            FString ShapeError;
+            if (!PhysicsShapeTriangles(Shape, Tris, MeshTriangles, ShapeError))
+            {
+                Out.Warnings.Add(NodeName + TEXT(": collider skipped: ") + ShapeError);
+                continue;
+            }
+            ++Out.PhysicsShapes;
+            for (int32 T = 0; T + 2 < Tris.Num(); T += 3)
+            {
+                FVector3f P[3];
+                for (int32 K = 0; K < 3; ++K) P[K] = FVector3f(Position(World.TransformPosition(Tris[T + K])));
+                if (World.Determinant() < 0) Swap(P[1], P[2]);
+                if (P[0].ContainsNaN() || P[1].ContainsNaN() || P[2].ContainsNaN()) { Error = TEXT("Non-finite collider on ") + NodeName; return false; }
+                if (FVector3f::CrossProduct(P[2] - P[0], P[1] - P[0]).IsNearlyZero()) continue;
+                int32 V[3];
+                for (int32 K = 0; K < 3; ++K) // weld exact duplicates: unwelded seams would catch the character's sweeps
+                {
+                    if (const int32* Found = PhysicsVertices.Find(P[K])) V[K] = *Found;
+                    else V[K] = PhysicsVertices.Add(P[K], Out.PhysicsPositions.Add(P[K]));
+                }
+                Out.PhysicsTriangles.Add(FIntVector(V[0], V[1], V[2]));
+                Out.PhysicsTriangleNodes.Add(RigIndex);
+            }
+        }
+        return true;
+    };
     TSet<int32> CheckedSkins;
     TSet<int32> Active, Visited;
     TFunction<bool(int32, const FMatrix&, int32)> Visit;
@@ -114,6 +184,7 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         const FVector Scale = World.GetScaleVector();
         const double ScaleProduct = Scale.X * Scale.Y * Scale.Z;
         const bool bDegenerate = ScaleProduct == 0 || FMath::Abs(World.Determinant() / ScaleProduct) <= 1.e-8;
+        if (!AddGamePhysics(Node, NodeName, World, RigIndex, bDegenerate)) return false;
         if (MeshIndex >= 0 && bDegenerate) Out.Warnings.Add(TEXT("Degenerate node: geometry skipped, transform retained: ") + NodeName);
         if (MeshIndex >= 0 && !bDegenerate)
         {

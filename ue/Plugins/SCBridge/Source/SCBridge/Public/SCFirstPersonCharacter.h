@@ -136,6 +136,11 @@ private:
     /** Last applied light side (WP-U3b §12): -1 none, 0 outside, 1 inside a room volume; and the kit it covered. */
     int8 LightAreaState = -1;
     TWeakObjectPtr<ASCVehicle> LightAreaKit;
+    /** WP-P3: whether the capsule is inside the vehicle's physics grid (-1 unknown), and the vehicle that was for. */
+    int8 GridState = -1;
+    TWeakObjectPtr<ASCVehicle> GridVehicle;
+    /** Ignore the vehicle's hull colliders in Params when a capsule at Centre is in its physics grid (as movement does). */
+    void AddGridIgnores(struct FCollisionQueryParams& Params, const FVector& Centre, double HalfHeight) const;
     double RecoveryZ = -UE_BIG_NUMBER;
     bool bRunning = false;
     void SetRunning(bool bRun);

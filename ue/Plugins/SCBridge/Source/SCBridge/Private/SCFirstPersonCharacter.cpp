@@ -136,6 +136,20 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
             for (UPrimitiveComponent* Primitive : Primitives) FSCLightAreas::SetChannels(Primitive, bInside);
         }
     }
+    // WP-P3: inside the physics grid the vehicle's own (hull) colliders do not block; the grid's contents do.
+    const FVector Axis(0, 0, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+    if (const bool bInGrid = Vehicle->IsInPhysicsGrid(GetActorLocation() - Axis, GetActorLocation() + Axis);
+        GridState != int8(bInGrid) || GridVehicle.Get() != Vehicle)
+    {
+        GridState = int8(bInGrid);
+        GridVehicle = Vehicle;
+        UCapsuleComponent* Capsule = GetCapsuleComponent();
+        Capsule->ClearMoveIgnoreComponents();
+        if (bInGrid)
+            for (UPrimitiveComponent* Hull : Vehicle->HullColliders) Capsule->IgnoreComponentWhenMoving(Hull, true);
+        UE_LOG(LogTemp, Display, TEXT("FP_GRID inside=%d hull_colliders=%d relative=%s"), int32(bInGrid), Vehicle->HullColliders.Num(),
+               *GetVehicleRelativeLocation().ToCompactString());
+    }
     // Single eye anchor; a camera re-attached to another driver (e.g. a head joint) is left alone.
     if (Camera->GetAttachParent() == GetCapsuleComponent()) Camera->SetRelativeLocation(EyeOffset());
     if (HoldSeconds > 0)
@@ -180,6 +194,11 @@ double SegmentToBox(const FBox& Box, const FVector& A, const FVector& B)
     return FMath::Sqrt(At((Lo + Hi) / 2));
 }
 }
+void ASCFirstPersonCharacter::AddGridIgnores(FCollisionQueryParams& Params, const FVector& Centre, double HalfHeight) const
+{
+    if (Vehicle && Vehicle->IsInPhysicsGrid(Centre - FVector(0, 0, HalfHeight), Centre + FVector(0, 0, HalfHeight)))
+        for (const UPrimitiveComponent* Hull : Vehicle->HullColliders) Params.AddIgnoredComponent(Hull);
+}
 bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector& Centre, const FSCSeatBox* Seat) const
 {
     const bool bSeated = Seat != nullptr;
@@ -188,6 +207,7 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
     const double Skin = 2.5; // capsule clearance above the surface it stands on
     const FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, Half);
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSpawn), false, this);
+    AddGridIgnores(Params, Hint + FVector(0, 0, Half), Half);
     // Search a capsule-sized neighbourhood of the helper; never use an asset-name offset.
     // A seat is searched within two capsule diameters (seat bucket, footwell), never beyond.
     for (int32 Ring = 0; Ring <= (bSeated ? 2 : 4); ++Ring)
@@ -348,6 +368,7 @@ void ASCFirstPersonCharacter::ToggleNoclip()
     if (bNoclip)
     {
         FCollisionQueryParams Params(SCENE_QUERY_STAT(SCNoclip), false, this);
+        AddGridIgnores(Params, GetActorLocation(), GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
         if (GetWorld()->OverlapBlockingTestByChannel(GetActorLocation(), FQuat::Identity, ECC_Pawn,
                 GetCapsuleComponent()->GetCollisionShape(), Params))
         {

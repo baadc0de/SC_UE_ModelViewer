@@ -254,3 +254,35 @@ bool ASCVehicle::IsInsideLightArea(const FVector& World) const
         if (Area.Contains(World)) return true;
     return false;
 }
+bool ASCVehicle::IsInPhysicsGrid(const FVector& World) const
+{
+    if (PhysicsGridTriangles.Num() < 3) return false;
+    const FVector P = GetActorTransform().InverseTransformPosition(World);
+    if (!PhysicsGridBounds.IsInside(P)) return false;
+    // Parity of crossings along a ray off every axis and diagonal (no grazing of axis-aligned edges); the ray ends
+    // past the bounds, so every crossing is counted.
+    const FVector End = P + FVector(1, 0.0013, 0.0007).GetSafeNormal() * (PhysicsGridBounds.GetSize().Size() * 2 + 100);
+    int32 Crossings = 0;
+    for (int32 T = 0; T + 2 < PhysicsGridTriangles.Num(); T += 3)
+    {
+        FVector Hit, Normal;
+        if (FMath::SegmentTriangleIntersection(P, End, PhysicsGridTriangles[T], PhysicsGridTriangles[T + 1], PhysicsGridTriangles[T + 2], Hit, Normal))
+            ++Crossings;
+    }
+    return Crossings % 2 == 1;
+}
+bool ASCVehicle::IsInPhysicsGrid(const FVector& Bottom, const FVector& Top) const
+{
+    if (PhysicsGridTriangles.Num() < 3) return false;
+    if (IsInPhysicsGrid(Bottom)) return true;
+    const FTransform& Actor = GetActorTransform();
+    const FVector A = Actor.InverseTransformPosition(Bottom), B = Actor.InverseTransformPosition(Top);
+    if (!PhysicsGridBounds.Intersect(FBox(FVector::Min(A, B), FVector::Max(A, B)))) return false;
+    for (int32 T = 0; T + 2 < PhysicsGridTriangles.Num(); T += 3)
+    {
+        FVector Hit, Normal;
+        if (FMath::SegmentTriangleIntersection(A, B, PhysicsGridTriangles[T], PhysicsGridTriangles[T + 1], PhysicsGridTriangles[T + 2], Hit, Normal))
+            return true;
+    }
+    return false;
+}

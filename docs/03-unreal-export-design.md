@@ -197,6 +197,16 @@ of the engine DDC; the latter is project-local build scratch in `DerivedDataCach
 Collision is applied to the components of the loaded actor only; the floor of the
 Viewer map is the only other collider.
 
+WP-P3 (game collision): when a mesh asset carries the game's CryPhysics colliders (`extras.sc_physics`, see the
+StarBreaker decomposed-export contract), the pawn walks on those instead of render triangles. Each rig owner gets a
+hidden collision-only component blocking `ECC_Pawn` only; render components keep Visibility/Camera traces and
+ignore the pawn. Every collider blocks except the node-name classes `interaction`, `tires_only`, `grid_volume`.
+The vehicle's physics-grid volume (`root_entity.physics_grid`) is kept on `ASCVehicle`; while the capsule's axis
+(feet to head) touches it, the root entity's own colliders (tag `SCHullCollision`, the exterior hull) are ignored
+by movement, spawn and noclip-exit checks, as the game's grid does. Assets without colliders (`.skin`) keep
+render-mesh collision. Debug: `sc.FP.ShowCollision 0|1`, `sc.FP.Blocker [cm]`; logs `GAME_COLLISION`,
+`PHYSICS_GRID`, `FP_GRID`.
+
 WP-P1 implements this in the Runtime module with `ASCFirstPersonCharacter` and a
 Slate HUD. Static/rigid geometry retains the existing complex-as-simple bodies
 attached to receiving bones. Soft skins have a separately owned Chaos triangle

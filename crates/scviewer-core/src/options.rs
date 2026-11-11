@@ -52,6 +52,8 @@ impl GlbOptions {
             } else {
                 TextureContainer::Png
             },
+            // The game's own collision geometry for first-person movement (WP-P3).
+            include_physics: kind == ExportKind::Decomposed,
             kind,
             format: ExportFormat::Glb,
             lod_level: self.lod,
@@ -115,6 +117,8 @@ mod tests {
                 .texture_container,
             TextureContainer::Png
         );
+        assert!(GlbOptions::default().upstream(ExportKind::Decomposed).include_physics);
+        assert!(!GlbOptions::default().upstream(ExportKind::Bundled).include_physics);
         assert_eq!(DecomposedOptions::default().geometry.lod, 0);
         assert_eq!(
             GlbOptions::default()

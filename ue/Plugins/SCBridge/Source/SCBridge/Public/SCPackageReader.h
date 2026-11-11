@@ -109,6 +109,8 @@ struct SCBRIDGE_API FSCSceneManifest
     UPROPERTY(BlueprintReadOnly) TArray<FSCClipRecord> Clips;
     UPROPERTY(BlueprintReadOnly) FSCEngineGlow EngineGlow;
     UPROPERTY(BlueprintReadOnly) FString ContentHash;
+    /** WP-P3: `root_entity.physics_grid` as a triangle soup in the root entity's UE frame (cm); empty without one. */
+    TArray<FVector> PhysicsGrid;
     TArray<FString> MeshAssets() const;
 };
 class SCBRIDGE_API FSCPackageReader

@@ -9,6 +9,9 @@
 #include "SCRigComponent.h"
 #include "SCLightImporter.h"
 #include "Camera/CameraComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "UObject/UObjectIterator.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -249,6 +252,39 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
             const double Depth = Args.IsEmpty() ? C->GetProfile().CapsuleRadius : FCString::Atod(*Args[0]);
             C->SetActorLocation(Hit.ImpactPoint + Dir * Depth, false, nullptr, ETeleportType::TeleportPhysics);
             UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD embed ok=1 pos=%s"), *C->GetVehicleRelativeLocation().ToCompactString());
+        });
+    Add(TEXT("sc.FP.ShowCollision"), TEXT("sc.FP.ShowCollision 0|1: draw the game's own colliders the pawn walks on (WP-P3)"),
+        [Weak](const TArray<FString>& Args) {
+            auto* C = FirstPerson(Weak);
+            if (!C) return;
+            const bool bShow = Flag(Args, 0, true);
+            int32 Count = 0;
+            for (TObjectIterator<UStaticMeshComponent> It; It; ++It)
+                if (It->GetWorld() == C->GetWorld() && It->ComponentHasTag(TEXT("SCGameCollision")))
+                {
+                    It->SetVisibility(bShow);
+                    It->SetHiddenInGame(!bShow);
+                    ++Count;
+                }
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD show_collision=%d components=%d"), bShow, Count);
+        });
+    Add(TEXT("sc.FP.Blocker"), TEXT("sc.FP.Blocker [cm]: sweep the pawn capsule ahead along the view yaw and log what blocks it"),
+        [Weak](const TArray<FString>& Args) {
+            auto* C = FirstPerson(Weak);
+            if (!C) return;
+            const double Reach = Args.IsEmpty() ? 100 : FCString::Atod(*Args[0]);
+            const FVector From = C->GetActorLocation(), Ahead = FRotator(0, C->GetViewRotation().Yaw, 0).Vector();
+            FHitResult Hit;
+            FCollisionQueryParams Q(SCENE_QUERY_STAT(SCBlocker), true, C);
+            Q.AddIgnoredComponents(C->GetCapsuleComponent()->GetMoveIgnoreComponents()); // as movement sees it (WP-P3 grid)
+            const bool bHit = C->GetWorld()->SweepSingleByChannel(Hit, From, From + Ahead * Reach, FQuat::Identity, ECC_Pawn,
+                C->GetCapsuleComponent()->GetCollisionShape(), Q);
+            const UPrimitiveComponent* P = Hit.GetComponent();
+            FString Tags;
+            if (P) for (const FName& T : P->ComponentTags) Tags += T.ToString() + TEXT(" ");
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_BLOCKER hit=%d dist=%.1f component=%s parent=%s socket=%s tags=%s point=%s normal=%s"), bHit,
+                bHit ? Hit.Distance : 0.0, P ? *P->GetName() : TEXT("-"), P && P->GetAttachParent() ? *P->GetAttachParent()->GetName() : TEXT("-"),
+                P ? *P->GetAttachSocketName().ToString() : TEXT("-"), *Tags, *Hit.ImpactPoint.ToCompactString(), *Hit.ImpactNormal.ToCompactString());
         });
     Add(TEXT("sc.FP.Where"), TEXT("sc.FP.Where: log mode, vehicle-relative position and movement state"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_WHERE %s"), *Where(*Weak.Get()));

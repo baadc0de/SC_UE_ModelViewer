@@ -67,7 +67,8 @@ baked locals stay native Y-up; the Blender Z-up animation sidecars are unchanged
 `DecomposedOptions { geometry: GlbOptions }` enables animation sidecars by default;
 its default disables pose baking. Geometry defaults to LOD 0 (Nanite needs no coarser LOD)
 and textures to mip 0. Decomposed exports pass supported textures through as compressed DDS,
-with PNG fallback; bundled GLB retains PNG. Other defaults follow upstream.
+with PNG fallback; bundled GLB retains PNG. Decomposed mesh GLBs also carry the source's
+CryPhysics collision geometry (`extras.sc_physics`, WP-P3; cache format v20). Other defaults follow upstream.
 Cache format v10 includes the animation switch in package keys and invalidates
 packages with the former nondeterministic UI export stamp; the CLI exposes
 `--no-animations` for both folder/tar and bundled GLB exports.

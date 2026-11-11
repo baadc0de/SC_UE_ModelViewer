@@ -45,6 +45,14 @@ struct SCBRIDGE_API FSCDerivedMesh
     int32 DegenerateTriangles = 0;
     bool bHasTangents = true;
     bool bHasSkins = false;
+    /** The game's own collision (WP-P3): the GLB carries the source's CryPhysics geometry (glTF node
+     *  `extras.sc_physics`). Then first-person movement collides with those colliders, except the node-name classes
+     *  that are no obstacle for an actor (`class` interaction / tires_only / grid_volume), never with render triangles. Triangles in UE space like Description's; one rig node per triangle. */
+    bool bHasGamePhysics = false;
+    TArray<FVector3f> PhysicsPositions;
+    TArray<FIntVector> PhysicsTriangles;
+    TArray<int32> PhysicsTriangleNodes;
+    int32 PhysicsShapes = 0, PhysicsFilteredShapes = 0; // colliders used / non-obstacle classes left out
 };
 struct SCBRIDGE_API FSCMeshBuildStats
 {
@@ -60,6 +68,15 @@ public:
     static constexpr uint32 DerivedFormatVersion = 3; // Include engine version/build settings in a processed-cache key.
     static bool Derive(const FSCPackageSource& Source, const FString& Path, FSCDerivedMesh& Out, FString& Error);
     static FSCDerivedMesh Select(const FSCDerivedMesh& Data, const TArray<FTriangleID>& Triangles);
+    /** Collision-only mesh of the game colliders owned by Owner (INDEX_NONE: all), non-Nanite, one slot. */
+    static FSCDerivedMesh SelectPhysics(const FSCDerivedMesh& Data, int32 Owner);
+    /** Triangles of one `extras.sc_physics` record in its node frame (glTF units), outward-wound for the convex
+     *  primitives; false with Error for a malformed record. Trimeshes resolve their glTF mesh through MeshTriangles. */
+    static bool PhysicsShapeTriangles(const TSharedPtr<class FJsonObject>& Shape, TArray<FVector>& Out,
+        TFunctionRef<bool(int32 Mesh, TArray<FVector>& Out)> MeshTriangles, FString& Error);
+    /** Whether an `extras.sc_physics` record blocks an actor: every part does, except node-name classes that are no
+     *  physical obstacle (`class` interaction, tires_only, grid_volume; see the StarBreaker `physics_class` table). */
+    static bool PhysicsBlocksActor(const TSharedPtr<class FJsonObject>& Shape);
     static void SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent);
     /** Worker-thread Chaos BVH. bVertexIndexMap stores the identity external->particle map that
      *  FTriangleMeshImplicitObject::UpdateVertices requires (refittable skinned collision only). */

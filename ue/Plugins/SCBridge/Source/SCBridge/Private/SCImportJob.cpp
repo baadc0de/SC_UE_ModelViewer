@@ -58,6 +58,7 @@ struct FPart
 {
     int32 Owner = INDEX_NONE;
     FSCDerivedMesh Mesh, Translucent;
+    bool bGamePhysics = false; // WP-P3: the game's colliders of Owner; hidden, blocks the pawn only
 };
 /** One unique mesh asset moving through derive -> prepare -> build. */
 struct FMeshSlot
@@ -86,6 +87,7 @@ struct FMeshSlot
     bool bTranslucentNext = false;
     FString PartSuffix;
     TArray<UStaticMesh*> Variants;
+    TSet<int32> GamePhysicsVariants; // indices into Variants
 };
 } // namespace
 
@@ -127,6 +129,7 @@ struct FSCImportJob::FState
     TMap<FString, TArray<int32>> SocketNodes;
     TMap<FString, USkeletalMesh*> RigMeshes;
     TMap<FString, TSet<int32>> MeshTranslucentSlots;
+    TMap<FString, TSet<int32>> GamePhysicsVariants; // per mesh asset: variants holding the game's colliders (WP-P3)
     TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
 
     void Warn(const FString& Path, const FString& Message)
@@ -476,6 +479,33 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             FSCMeshImporter::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
             Slot.Parts.Add(MoveTemp(Part));
         }
+        // WP-P3: the game's colliders, one collision-only part per owner (the rig node they move with).
+        if (Options.bBuildCollision && Data.bHasGamePhysics)
+        {
+            TArray<int32> PhysicsOwners;
+            if (!Slot.bAnimated) PhysicsOwners.Add(INDEX_NONE);
+            else
+            {
+                for (int32 Node : Data.PhysicsTriangleNodes) PhysicsOwners.AddUnique(Node);
+                PhysicsOwners.Sort();
+            }
+            for (int32 Owner : PhysicsOwners)
+            {
+                FPart Part;
+                Part.Owner = Owner;
+                Part.bGamePhysics = true;
+                Part.Mesh = FSCMeshImporter::SelectPhysics(Data, Owner);
+                if (!Part.Mesh.bHasGeometry) continue;
+                FString Error;
+                if (!FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
+                {
+                    Slot.PrepareWarnings.Emplace(Path, Error);
+                    continue;
+                }
+                Slot.CollisionSeconds += Part.Mesh.CollisionDeriveSeconds;
+                Slot.Parts.Add(MoveTemp(Part));
+            }
+        }
     });
 }
 
@@ -563,7 +593,8 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
     const FString& Path = Slot.Path;
     FPart& Part = Slot.Parts[Slot.NextPart];
     const bool bTranslucent = Slot.bTranslucentNext;
-    if (!bTranslucent) Slot.PartSuffix = Slot.Variants.IsEmpty() ? TEXT("") : FString::Printf(TEXT("_Node%d"), Part.Owner);
+    if (!bTranslucent) Slot.PartSuffix = Part.bGamePhysics ? FString::Printf(TEXT("_GameCollision%d"), Part.Owner)
+                                         : Slot.Variants.IsEmpty() ? TEXT("") : FString::Printf(TEXT("_Node%d"), Part.Owner);
     const FString Suffix = Slot.PartSuffix + (bTranslucent ? TEXT("_Translucent") : TEXT(""));
     FSCDerivedMesh& Variant = bTranslucent ? Part.Translucent : Part.Mesh;
     FSCMeshBuildStats Stats;
@@ -576,7 +607,8 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
     else
     {
         Vehicle->Meshes.Add(Mesh);
-        Vehicle->MeshSamples.Add(Mesh, FSCLightAreas::Sample(Variant.Description));
+        if (Part.bGamePhysics) Slot.GamePhysicsVariants.Add(Slot.Variants.Num());
+        else Vehicle->MeshSamples.Add(Mesh, FSCLightAreas::Sample(Variant.Description));
         Slot.Variants.Add(Mesh);
         SocketNodes.FindOrAdd(Path).Add(Variant.SocketNode);
         Result.MeshStats.Add(Path + Suffix, Stats);
@@ -612,6 +644,15 @@ void FSCImportJob::FState::FinishBuild(FMeshSlot& Slot)
     SocketNodes.FindOrAdd(Path);
     Result.ContentHashes.Add(Path, Slot.Data->ContentHash);
     Meshes.Add(Path, MoveTemp(Slot.Variants));
+    if (Slot.Data->bHasGamePhysics)
+    {
+        GamePhysicsVariants.Add(Path, MoveTemp(Slot.GamePhysicsVariants));
+        UE_LOG(LogSCImport, Display, TEXT("GAME_COLLISION path=%s colliders=%d filtered=%d triangles=%d parts=%d"), *Path,
+               Slot.Data->PhysicsShapes, Slot.Data->PhysicsFilteredShapes, Slot.Data->PhysicsTriangles.Num(), GamePhysicsVariants[Path].Num());
+    }
+    Slot.Data->PhysicsPositions.Empty();
+    Slot.Data->PhysicsTriangles.Empty();
+    Slot.Data->PhysicsTriangleNodes.Empty();
     MeshTranslucentSlots.Add(Path, MoveTemp(Slot.TranslucentSlots));
     // Assembly needs helper matrices only. Release CPU geometry and serialized BVH now.
     Slot.Data->Description = FMeshDescription();
@@ -779,6 +820,8 @@ void FSCImportJob::FState::Assemble()
                         V->bCollisionReady = false;
                         Warn(I.EntityName, TEXT("Skeletal collision unavailable"));
                     }
+            // WP-P3: with the game's colliders present, render geometry answers traces but never blocks the pawn.
+            if (GamePhysicsVariants.Contains(I.MeshAsset)) E.Rig->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
             E.Rig->SetVisibility(!I.bInvisible);
             E.Rig->SetHiddenInGame(I.bInvisible);
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
@@ -808,10 +851,32 @@ void FSCImportJob::FState::Assemble()
                     C->SetRelativeTransform(FTransform(FSCMeshImporter::Transform(E.Mesh->RigNodes[Node].World).Inverse()));
                 }
                 C->ComponentTags.Add(FName(*I.MeshAsset));
-                C->SetCollisionProfileName(Options.bBuildCollision && (*Variants)[Variant]->GetBodySetup() &&
-                                                   (*Variants)[Variant]->GetBodySetup()->bCreatedPhysicsMeshes
-                                               ? TEXT("BlockAll")
-                                               : TEXT("NoCollision"));
+                const bool bCollides = Options.bBuildCollision && (*Variants)[Variant]->GetBodySetup() &&
+                                       (*Variants)[Variant]->GetBodySetup()->bCreatedPhysicsMeshes;
+                C->SetCollisionProfileName(bCollides ? TEXT("BlockAll") : TEXT("NoCollision"));
+                if (const TSet<int32>* GameColliders = GamePhysicsVariants.Find(I.MeshAsset))
+                {
+                    if (GameColliders->Contains(Variant)) // the game's colliders: invisible, block movement only
+                    {
+                        C->SetCollisionResponseToAllChannels(ECR_Ignore);
+                        C->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+                        C->SetVisibility(false);
+                        C->SetHiddenInGame(true);
+                        C->CastShadow = false;
+                        C->bAffectDistanceFieldLighting = false;
+                        C->bAffectDynamicIndirectLighting = false;
+                        C->bVisibleInRayTracing = false;
+                        C->ComponentTags.Add(TEXT("SCGameCollision"));
+                        if (bRoot) // the vehicle's own colliders: not blocking inside its physics grid
+                        {
+                            C->ComponentTags.Add(TEXT("SCHullCollision"));
+                            V->HullColliders.Add(C);
+                        }
+                        C->RegisterComponent();
+                        continue;
+                    }
+                    C->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore); // render: traces only
+                }
                 C->SetVisibility(!I.bInvisible);
                 C->SetHiddenInGame(I.bInvisible);
                 const UStaticMesh* Mesh = (*Variants)[Variant];
@@ -881,6 +946,9 @@ void FSCImportJob::FState::Assemble()
         }
         return true;
     };
+    V->PhysicsGridTriangles = Manifest.PhysicsGrid; // the root entity sits at the actor origin
+    V->PhysicsGridBounds.Init();
+    for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
     for (const auto& I : Manifest.Children)
     {
@@ -921,6 +989,7 @@ void FSCImportJob::FState::Assemble()
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
+    UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose
     if (Options.bPublish)
     {

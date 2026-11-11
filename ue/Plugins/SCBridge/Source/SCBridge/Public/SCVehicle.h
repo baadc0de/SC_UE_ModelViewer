@@ -15,6 +15,7 @@ class UMaterialInstanceDynamic;
 class USCRigComponent;
 class USkeletalMesh;
 class ULightComponent;
+class UPrimitiveComponent;
 /** Named helper frames of one placed instance, in its anchor's space (cm, UE axes). "" is the item's source frame. */
 USTRUCT()
 struct SCBRIDGE_API FSCInstanceHelpers
@@ -73,6 +74,17 @@ public:
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
     /** World point inside any room volume of this vehicle (the game's "not the root clip volume"). */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") bool IsInsideLightArea(const FVector& World) const;
+    /** WP-P3: the physics grid's volume (DataCore `physicsGrid.physicsProxy`), a triangle soup in actor space (cm).
+     *  Inside it the game's actors belong to the vehicle's grid, where the vehicle's own colliders (HullColliders,
+     *  the root entity's game collision) do not block them; the interior's and the items' colliders do. */
+    TArray<FVector> PhysicsGridTriangles;
+    FBox PhysicsGridBounds = FBox(ForceInit);
+    UPROPERTY() TArray<TObjectPtr<UPrimitiveComponent>> HullColliders;
+    /** World point inside the physics-grid volume (ray parity); false without a volume. */
+    bool IsInPhysicsGrid(const FVector& World) const;
+    /** World segment touching the volume: Bottom inside, or the segment crossing its surface. An actor is in the grid
+     *  when its upright axis (feet to head) touches it, so a head under a hull overhang already is. */
+    bool IsInPhysicsGrid(const FVector& Bottom, const FVector& Top) const;
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayClip(FName Clip);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool SnapClip(FName Clip, bool bLast);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayFragment(FName Fragment, FName Tag);

@@ -1,4 +1,5 @@
 #include "SCPackageReader.h"
+#include "SCMeshImporter.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -144,6 +145,26 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     if (!Scene->TryGetObjectField(TEXT("root_entity"), Root)) { Error = TEXT("Scene has no root_entity object"); return false; }
     FString Detail;
     if (!Instance(*Root, Out.Root, Detail)) { Out.Root.ImportWarning = Detail; Warn(TEXT("root_entity"), Detail); }
+    // WP-P3: the vehicle's physics-grid volume, in the native SC frame (metres) of the root entity.
+    if (const FReaderObject* Grid; (*Root)->TryGetObjectField(TEXT("physics_grid"), Grid))
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Shapes;
+        if (!(*Grid)->TryGetArrayField(TEXT("shapes"), Shapes)) Warn(TEXT("physics_grid"), TEXT("no shapes"));
+        else
+            for (const auto& Value : *Shapes)
+            {
+                TArray<FVector> Tris;
+                FString ShapeError;
+                const auto Shape = Object(Value);
+                if (!Shape || !FSCMeshImporter::PhysicsShapeTriangles(Shape, Tris, [](int32, TArray<FVector>&) { return false; }, ShapeError))
+                {
+                    Warn(TEXT("physics_grid"), ShapeError.IsEmpty() ? TEXT("malformed shape") : ShapeError);
+                    Out.PhysicsGrid.Reset();
+                    break;
+                }
+                for (const FVector& P : Tris) Out.PhysicsGrid.Add(FSCMeshImporter::Position(FSCMeshImporter::CryToGltf().TransformPosition(P)));
+            }
+    }
     // Nested assemblies (a personal weapon's own children) follow their parent depth-first; ParentId binds
     // them to that instance even when the authored parent name differs from the instance's entity name.
     TArray<FString> NestedPackages; // nested assemblies keep their own palettes next to their manifest
