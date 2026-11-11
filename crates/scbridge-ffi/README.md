@@ -161,3 +161,13 @@ use `scripts/build_ffi.sh --release` or `SC_FFI_PROFILE=release scripts/build_ff
 this builds and stages `target/release/libscbridge.so`. `--check-header` checks the
 C ABI header without staging a library. `SC_FFI_PROFILE` accepts only `debug` or
 `release`; an explicit `--release` overrides it.
+
+
+`sc_dds_prepare(data, len, normal_map, out)` and `sc_dds_mean_rgb(data, len, out_rgb)`
+are handle-free DDS helpers returning `sc_status`; failures use
+`sc_last_error(NULL)` on the calling thread. Preparation validates before mutation,
+rebiases BC4/BC5 SNORM endpoints after clamping -128 to -127, and optionally negates
+BC5 green (normal-map Y). The DX10 format and `sc_dds_info` reflect the prepared
+UNORM payload. Call preparation once per imported texture. Mean RGB covers the
+top mip in linear light, linearizing sRGB before averaging. Output storage is
+zeroed on failure and must not overlap input bytes.

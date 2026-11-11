@@ -65,9 +65,9 @@ with the explicit boolean option. Unkeyed components retain bind values and
 baked locals stay native Y-up; the Blender Z-up animation sidecars are unchanged.
 `include_animations` defaults to true; false omits clips and animation sidecars.
 `DecomposedOptions { geometry: GlbOptions }` enables animation sidecars by default;
-its default disables pose baking. Geometry defaults to LOD 0 (Nanite needs no coarser LOD); other
-defaults follow upstream (mip 2: full-resolution textures exceed the importer's texture budget
-while they are decoded to BGRA8).
+its default disables pose baking. Geometry defaults to LOD 0 (Nanite needs no coarser LOD)
+and textures to mip 0. Decomposed exports pass supported textures through as compressed DDS,
+with PNG fallback; bundled GLB retains PNG. Other defaults follow upstream.
 Cache format v10 includes the animation switch in package keys and invalidates
 packages with the former nondeterministic UI export stamp; the CLI exposes
 `--no-animations` for both folder/tar and bundled GLB exports.
@@ -215,3 +215,11 @@ In schema v2, resolved attached groups occur once in `root_entity.lights` or
 `children[].lights`; other lights remain in `interiors[].lights`. Catalogue and
 export share discovery and transform resolution, and live tests join both by
 `source_container_index` / `source_light_index`.
+
+
+`dds::prepare` validates a package DDS before mutating it, converts BC4/BC5 SNORM
+endpoints to UNORM, and optionally flips BC5 green for UE normals. It updates the
+DX10 format and returns dimensions and payload offsets. `dds::mean_rgb` computes
+the first mip's linear-light RGB mean, excluding padded block texels and applying
+sRGB transfer before averaging. Both operate without an archive/session; malformed
+headers, unsupported formats, and truncated or extra mip bytes return errors.

@@ -21,7 +21,8 @@ use std::{
 // 18: a clip merged across rigs lists every contributing animation in `sources` (rig, fps, frame_count,
 //     start pose) and each channel names its own by `source`; the host times and anchors each track by
 //     it (earlier packages give every track the clip-level length, rate and start pose).
-pub const CACHE_FORMAT_VERSION: u32 = 18;
+// 19: decomposed mip-0 textures use DDS pass-through and separate DDNA smoothness refs.
+pub const CACHE_FORMAT_VERSION: u32 = 19;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

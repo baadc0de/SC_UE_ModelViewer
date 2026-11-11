@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+starbreaker-dds = { path = "../../vendor/StarBreaker/crates/starbreaker-dds" }
+bcdec_rs = "0.2"
 starbreaker-3d.workspace = true
 starbreaker-common.workspace = true
 starbreaker-datacore.workspace = true

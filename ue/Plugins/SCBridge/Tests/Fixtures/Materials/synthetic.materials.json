@@ -60,7 +60,7 @@
    "derived_textures": [
     {
      "role": "roughness",
-     "export_path": "tex/illum_ddna_roughness.png",
+     "export_path": "tex/illum_ddna_smoothness.dds",
      "source_path": "src/illum_ddna.tif"
     }
    ],
@@ -233,7 +233,7 @@
    "derived_textures": [
     {
      "role": "roughness",
-     "export_path": "tex/hard_macro_ddna_roughness.png",
+     "export_path": "tex/hard_macro_ddna_smoothness.dds",
      "source_path": "src/hard_macro_ddna.tif"
     }
    ],
@@ -267,7 +267,7 @@
      },
      "diffuse_export_path": "tex/Primary_diff.png",
      "normal_export_path": "tex/Primary_ddna.png",
-     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "roughness_export_path": "tex/Primary_ddna_smoothness.dds",
      "texture_slots": [
       {
        "slot": "TexSlot6",
@@ -345,7 +345,7 @@
      },
      "diffuse_export_path": "tex/Wear_diff.png",
      "normal_export_path": "tex/Wear_ddna.png",
-     "roughness_export_path": "tex/Wear_ddna_roughness.png",
+     "roughness_export_path": "tex/Wear_ddna_smoothness.dds",
      "texture_slots": [
       {
        "slot": "TexSlot6",
@@ -442,12 +442,12 @@
    "derived_textures": [
     {
      "role": "roughness",
-     "export_path": "tex/blend_decal_ddna_roughness.png",
+     "export_path": "tex/blend_decal_ddna_smoothness.dds",
      "source_path": "src/blend_decal_ddna.tif"
     },
     {
      "role": "roughness",
-     "export_path": "tex/blend_macro_ddna_roughness.png",
+     "export_path": "tex/blend_macro_ddna_smoothness.dds",
      "source_path": "src/blend_macro_ddna.tif"
     }
    ],
@@ -481,7 +481,7 @@
      },
      "diffuse_export_path": "tex/BaseLayer1_diff.png",
      "normal_export_path": "tex/BaseLayer1_ddna.png",
-     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png",
+     "roughness_export_path": "tex/BaseLayer1_ddna_smoothness.dds",
      "resolved_material": {
       "name": "layer",
       "shader": "Layer",
@@ -520,7 +520,7 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/BaseLayer2_diff.png",
      "normal_export_path": "tex/BaseLayer2_ddna.png",
-     "roughness_export_path": "tex/BaseLayer2_ddna_roughness.png"
+     "roughness_export_path": "tex/BaseLayer2_ddna_smoothness.dds"
     },
     {
      "name": "BaseLayer3",
@@ -551,7 +551,7 @@
      },
      "diffuse_export_path": "tex/BaseLayer3_diff.png",
      "normal_export_path": "tex/BaseLayer3_ddna.png",
-     "roughness_export_path": "tex/BaseLayer3_ddna_roughness.png",
+     "roughness_export_path": "tex/BaseLayer3_ddna_smoothness.dds",
      "resolved_material": {
       "name": "layer",
       "shader": "Layer",
@@ -615,7 +615,7 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/WearLayer1_diff.png",
      "normal_export_path": "tex/WearLayer1_ddna.png",
-     "roughness_export_path": "tex/WearLayer1_ddna_roughness.png"
+     "roughness_export_path": "tex/WearLayer1_ddna_smoothness.dds"
     }
    ],
    "palette_routing": {
@@ -685,7 +685,7 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/BaseLayer1_diff.png",
      "normal_export_path": "tex/BaseLayer1_ddna.png",
-     "roughness_export_path": "tex/BaseLayer1_ddna_roughness.png",
+     "roughness_export_path": "tex/BaseLayer1_ddna_smoothness.dds",
      "texture_slots": [
       {
        "slot": "TexSlot6",
@@ -721,7 +721,7 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/WearLayer1_diff.png",
      "normal_export_path": "tex/WearLayer1_ddna.png",
-     "roughness_export_path": "tex/WearLayer1_ddna_roughness.png"
+     "roughness_export_path": "tex/WearLayer1_ddna_smoothness.dds"
     }
    ],
    "palette_routing": {
@@ -781,7 +781,7 @@
    "derived_textures": [
     {
      "role": "roughness",
-     "export_path": "tex/glass_ddna_roughness.png",
+     "export_path": "tex/glass_ddna_smoothness.dds",
      "source_path": "src/glass_ddna.tif"
     }
    ],
@@ -859,7 +859,7 @@
    "derived_textures": [
     {
      "role": "roughness",
-     "export_path": "tex/illum_ddna_roughness.png",
+     "export_path": "tex/illum_ddna_smoothness.dds",
      "source_path": "src/illum_ddna.tif"
     }
    ],
@@ -1508,7 +1508,7 @@
    "derived_textures": [
     {
      "role": "roughness",
-     "export_path": "tex/unused_macro_ddna_roughness.png",
+     "export_path": "tex/unused_macro_ddna_smoothness.dds",
      "source_path": "src/unused_macro_ddna.tif"
     }
    ],
@@ -1900,7 +1900,7 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/Primary_diff.png",
      "normal_export_path": "tex/Primary_ddna.png",
-     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "roughness_export_path": "tex/Primary_ddna_smoothness.dds",
      "texture_slots": [
       {
        "slot": "TexSlot6",
@@ -2019,7 +2019,7 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/Primary_diff.png",
      "normal_export_path": "tex/Primary_ddna.png",
-     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "roughness_export_path": "tex/Primary_ddna_smoothness.dds",
      "texture_slots": [],
      "resolved_material": {
       "name": "layer",
@@ -2123,7 +2123,7 @@
      "palette_channel": null,
      "diffuse_export_path": "tex/Primary_diff.png",
      "normal_export_path": "tex/Primary_ddna.png",
-     "roughness_export_path": "tex/Primary_ddna_roughness.png",
+     "roughness_export_path": "tex/Primary_ddna_smoothness.dds",
      "texture_slots": [
       {
        "slot": "TexSlot8",

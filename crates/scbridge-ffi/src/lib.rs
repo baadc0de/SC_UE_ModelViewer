@@ -3,6 +3,8 @@
 #![allow(non_camel_case_types)]
 // The generated header states the shared pointer/lifetime safety contract.
 #![allow(clippy::missing_safety_doc)]
+mod dds;
+pub use dds::{sc_dds_prepare, sc_dds_mean_rgb};
 mod boundary;
 mod cache;
 mod types;
@@ -290,3 +292,6 @@ pub unsafe extern "C" fn sc_test_panic(h: *mut sc_handle) -> sc_status {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod dds_tests;

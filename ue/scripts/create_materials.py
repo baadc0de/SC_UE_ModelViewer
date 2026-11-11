@@ -143,14 +143,14 @@ class Graph:
         return self.last_uv
 
     def map_smoothness(self, name, uv, group="SC"):
-        """Smoothness stored by the exporter as a grayscale map r = sqrt(1 - smoothness): 1 - r^2."""
-        r = (self.texture(name, self.white_linear, ST.SAMPLERTYPE_MASKS, uv, group), "R")
-        return self.one_minus(self.mul(r, r))
+        """The DDNA smoothness (gloss) map as the game stores it: the _ddna alpha mips (BC4 / R8), red channel,
+        filtered in smoothness space as the game samples it (WP-T1)."""
+        return (self.texture(name, self.white_linear, ST.SAMPLERTYPE_MASKS, uv, group), "R")
 
     def smoothness(self, prefix, uv):
-        """Game smoothness (gloss): lerp(<p>Smoothness, map x <p>GlossMult, <p>UseRoughnessMap)."""
-        from_map = self.mul(self.map_smoothness(prefix + "RoughnessMap", uv), self.scalar(prefix + "GlossMult", 1.0))
-        return self.lerp(self.scalar(prefix + "Smoothness", 0.0), from_map, self.scalar(prefix + "UseRoughnessMap", 0.0))
+        """Game smoothness (gloss): lerp(<p>Smoothness, map x <p>GlossMult, <p>UseSmoothnessMap)."""
+        from_map = self.mul(self.map_smoothness(prefix + "SmoothnessMap", uv), self.scalar(prefix + "GlossMult", 1.0))
+        return self.lerp(self.scalar(prefix + "Smoothness", 0.0), from_map, self.scalar(prefix + "UseSmoothnessMap", 0.0))
 
     def gloss_to_roughness(self, smooth):
         """UE roughness from game smoothness. Game ShadeLib: GlossToRoughness(g) = (1 - min(g, 251/255))^2 is the
@@ -254,7 +254,7 @@ def layered_master(name, count):
     Layers blend like LayerBlend_V2: start from layer N-1, lerp toward layer i by blend-mask channel i (R,G,B).
     UseBlendMask=0 forces mask (1,1,1) which selects Layer0. Smoothness blends as smoothness (layerLib), and
     the material-level maps apply over the blended result (LayerAttribs_AddMacroSurface, then AO):
-      MacroNormalMap / MacroRoughnessMap (UseMacroGloss) at UV x MacroTiling (the builder sets 1: LayerBlend
+      MacroNormalMap / MacroSmoothnessMap (UseMacroGloss) at UV x MacroTiling (the builder sets 1: LayerBlend
         macro maps are untiled): detail-normal blend of the layer normal onto the macro normal; smoothness x
         macro smoothness.
       HalMap at the base UVs (UseHalMap): G = AO over the blend; B = luminance shift, applied to each layer
@@ -295,7 +295,7 @@ def layered_master(name, count):
     macro_uv = g.uv(g.scalar("MacroTiling", 1.0, "Macro"))
     macro = (g.texture("MacroNormalMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, macro_uv, "Macro"), "RGB")
     normal = g.detail_normal(macro, result["normal"])
-    macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroRoughnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
+    macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroSmoothnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
     smooth = g.mul(result["smoothness"], macro_gloss)
     albedo, f0 = g.mul(result["albedo"], ao), g.mul(result["f0"], ao)
     g.last_uv = base_uv
@@ -354,7 +354,7 @@ def hardsurface_master():
         under %WEAR_LAYER, else from the Primary textures with the layer's wear tints); weight
         Layer_RemapWear(wearAlpha) [WEAR_REMAP].
       Normal XY, albedo, F0 and smoothness accumulate by weight, Z is rebuilt (LayerAttribs_BlendNormalize).
-      Then LayerAttribs_AddMacroSurface (MacroNormalMap / MacroRoughnessMap at UV x MacroTiling),
+      Then LayerAttribs_AddMacroSurface (MacroNormalMap / MacroSmoothnessMap at UV x MacroTiling),
         albedo, F0 x AO, AO = vertex B x MacroAOMap.r, and the deferred energy split (Graph.conserve).
       Opacity (alpha test) is the Primary diffuse alpha; the glow is masked by vertex G (GetMaterialAttribs).
     Not drawn: per-instance wear/dirt/damage, detail maps, the paint/cloth complement hue (HueLUT),
@@ -398,7 +398,7 @@ def hardsurface_master():
     macro_uv = g.uv(g.scalar("MacroTiling", 1.0, "Macro"))
     macro = (g.texture("MacroNormalMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, macro_uv, "Macro"), "RGB")
     normal = g.detail_normal(macro, layer_normal)
-    macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroRoughnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
+    macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroSmoothnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
     smooth = g.mul(smooth, macro_gloss)
     ao = g.mul(vertex_ao, (g.texture("MacroAOMap", g.white_linear, ST.SAMPLERTYPE_MASKS, macro_uv, "Macro"), "R"))
     g.last_uv = base_uv

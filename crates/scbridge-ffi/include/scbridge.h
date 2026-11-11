@@ -98,6 +98,18 @@ typedef struct sc_blob {
   size_t len;
 } sc_blob;
 
+/*
+ Validated DDS payload description after adaptation; offsets are from data.
+ */
+typedef struct sc_dds_info {
+  uint32_t dxgi_format;
+  uint32_t width;
+  uint32_t height;
+  uint32_t mip_count;
+  uint64_t data_offset;
+  uint64_t data_size;
+} sc_dds_info;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -193,6 +205,21 @@ void sc_close(struct sc_handle *h);
  */
 enum sc_status sc_test_panic(struct sc_handle *h);
 #endif
+
+/*
+ Validate and adapt a package DDS in place. SNORM becomes UNORM; normal_map
+ requires BC5 and flips green. On failure data is unchanged and *out is zero.
+ data is writable for len bytes; out must not overlap data. Errors are read
+ with sc_last_error(NULL) on this thread. Call once per imported texture.
+ */
+enum sc_status sc_dds_prepare(uint8_t *data, size_t len, bool normal_map, struct sc_dds_info *out);
+
+/*
+ Linear-light mean RGB of the top mip, linearizing sRGB texels before averaging.
+ data is readable for len bytes; out_rgb points to three writable floats and
+ must not overlap data. On failure RGB is zero. Errors use sc_last_error(NULL).
+ */
+enum sc_status sc_dds_mean_rgb(const uint8_t *data, size_t len, float *out_rgb);
 
 /*
  Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses

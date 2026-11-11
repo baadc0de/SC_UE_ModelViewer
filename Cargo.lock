@@ -1218,6 +1218,7 @@ name = "scviewer-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bcdec_rs",
  "bincode",
  "glob-match",
  "once_cell",
@@ -1228,6 +1229,7 @@ dependencies = [
  "starbreaker-3d",
  "starbreaker-common",
  "starbreaker-datacore",
+ "starbreaker-dds",
  "starbreaker-p4k",
  "tar",
  "tempfile",

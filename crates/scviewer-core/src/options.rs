@@ -1,7 +1,7 @@
-//! Serializable viewer export options; defaults follow StarBreaker, except geometry, which is the
-//! full-detail LOD 0 (the viewer renders with Nanite, which needs no coarser mesh LOD).
+//! Serializable viewer export options: full-detail LOD 0 and mip 0.
+//! Decomposed packages preserve compressed DDS blocks; bundled exports retain PNG.
 use serde::{Deserialize, Serialize};
-use starbreaker_3d::{ExportFormat, ExportKind, ExportOptions, MaterialMode};
+use starbreaker_3d::{ExportFormat, ExportKind, ExportOptions, MaterialMode, TextureContainer};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Materials {
@@ -31,9 +31,8 @@ impl Default for GlbOptions {
         Self {
             // StarBreaker's default is a coarser LOD for Blender; Nanite renders LOD 0 at every distance.
             lod: 0,
-            // Texture mips stay StarBreaker's: full-resolution textures, decoded to BGRA8, exceed the
-            // importer's per-import texture budget (they need the game's compressed blocks passed through).
-            mip: o.texture_mip,
+            // Compressed DDS pass-through makes full-resolution textures affordable.
+            mip: 0,
             materials: Materials::Textures,
             attachments: o.include_attachments,
             interior: o.include_interior,
@@ -48,6 +47,11 @@ impl Default for GlbOptions {
 impl GlbOptions {
     pub(crate) fn upstream(&self, kind: ExportKind) -> ExportOptions {
         ExportOptions {
+            texture_container: if kind == ExportKind::Decomposed {
+                TextureContainer::Dds
+            } else {
+                TextureContainer::Png
+            },
             kind,
             format: ExportFormat::Glb,
             lod_level: self.lod,
@@ -97,8 +101,27 @@ mod tests {
     fn viewer_defaults_to_full_detail_geometry() {
         // Nanite renders LOD 0 at every distance; a coarser mesh LOD only loses detail.
         assert_eq!(GlbOptions::default().lod, 0);
+        assert_eq!(GlbOptions::default().mip, 0);
+        assert_eq!(DecomposedOptions::default().geometry.mip, 0);
+        assert_eq!(
+            GlbOptions::default()
+                .upstream(ExportKind::Decomposed)
+                .texture_container,
+            TextureContainer::Dds
+        );
+        assert_eq!(
+            GlbOptions::default()
+                .upstream(ExportKind::Bundled)
+                .texture_container,
+            TextureContainer::Png
+        );
         assert_eq!(DecomposedOptions::default().geometry.lod, 0);
-        assert_eq!(GlbOptions::default().upstream(ExportKind::Decomposed).lod_level, 0);
+        assert_eq!(
+            GlbOptions::default()
+                .upstream(ExportKind::Decomposed)
+                .lod_level,
+            0
+        );
     }
 
     #[test]

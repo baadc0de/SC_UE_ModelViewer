@@ -85,8 +85,15 @@ bool HasVirtualRole(const FObj& Sub, const TCHAR* Role)
         if (V->Type == EJson::Object && Str(V->AsObject(), TEXT("role")) == Role && Str(V->AsObject(), TEXT("export_path")).IsEmpty()) return true;
     return false;
 }
-/** derived_textures[] roughness ref paired with a DDNA source by normalized source_path. */
-FString DerivedRoughness(const FObj& Sub, const FObj& Normal)
+/** The DDNA smoothness map the masters sample (WP-T1): the exporter's DDS of the _ddna alpha mips holds the
+ *  game's smoothness as stored; its PNG fallback holds derived roughness sqrt(1 - smoothness), which the importer
+ *  decodes back to smoothness (ESCTextureRole::DerivedRoughness). */
+ESCTextureRole SmoothnessRole(const FString& Path)
+{
+    return Path.EndsWith(TEXT(".dds"), ESearchCase::IgnoreCase) ? ESCTextureRole::Linear : ESCTextureRole::DerivedRoughness;
+}
+/** derived_textures[] roughness-slot ref (the DDNA smoothness) paired with a DDNA source by normalized source_path. */
+FString DerivedSmoothness(const FObj& Sub, const FObj& Normal)
 {
     if (!Normal) return FString();
     const FString Source = Str(Normal, TEXT("source_path"));
@@ -137,7 +144,7 @@ constexpr float SubstrateDefaultSmoothness = 0.5f;
 void Gloss(FSCMaterialDesc& D, const FString& Prefix, const TOptional<float>& Shininess, float Mult, bool bMap)
 {
     const float Authored = Shininess.IsSet() ? FMath::Clamp(*Shininess / 255.f, 0.f, 1.f) : 1.f;
-    D.Scalars.Add(*(Prefix + TEXT("UseRoughnessMap")), bMap ? 1.f : 0.f);
+    D.Scalars.Add(*(Prefix + TEXT("UseSmoothnessMap")), bMap ? 1.f : 0.f);
     D.Scalars.Add(*(Prefix + TEXT("GlossMult")), Authored * Mult);
     // TODO(WP-R5): upstream should emit a scalar gloss/roughness when Shininess is absent.
     // Mult (layer GlossMult x palette gloss) scales the constant either way: paletteLib `Smoothness *= layerGloss * gloss`.
@@ -149,8 +156,8 @@ void SurfaceGloss(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const
 {
     const FObj Normal = Slot(Sub, NormalRole);
     if (Normal) Tex(D, TEXT("NormalGlossMap"), Str(Normal, TEXT("export_path")), ESCTextureRole::Normal);
-    const FString Rough = DerivedRoughness(Sub, Normal);
-    Tex(D, TEXT("RoughnessMap"), Rough, ESCTextureRole::Linear);
+    const FString Rough = DerivedSmoothness(Sub, Normal);
+    Tex(D, TEXT("SmoothnessMap"), Rough, SmoothnessRole(Rough));
     Gloss(D, FString(), OptionalAttr(A, TEXT("Shininess")), 1.f, !Rough.IsEmpty()); // authored, no placeholder rule
 }
 /** CryEngine MTL_FLAG_REQUIRE_FORWARD_RENDERING. TODO(WP-R5): carry it in the sidecar's alpha_config. */
@@ -349,9 +356,9 @@ void MacroSurface(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
     const bool bHard = D.Master == ESCMaster::HardSurface;
     FObj Normal = HasToken(Sub, bHard ? TEXT("MACRO_NORMAL_MAP") : TEXT("NORMAL_MAP")) ? SlotAt(Sub, 3) : nullptr;
     if (Normal && Str(Normal, TEXT("role")) != TEXT("normal_gloss")) Normal = nullptr;
-    const FString Rough = DerivedRoughness(Sub, Normal);
+    const FString Rough = DerivedSmoothness(Sub, Normal);
     if (Normal) Tex(D, TEXT("MacroNormalMap"), Str(Normal, TEXT("export_path")), ESCTextureRole::Normal);
-    Tex(D, TEXT("MacroRoughnessMap"), Rough, ESCTextureRole::Linear);
+    Tex(D, TEXT("MacroSmoothnessMap"), Rough, SmoothnessRole(Rough));
     D.Scalars.Add(TEXT("UseMacroGloss"), Rough.IsEmpty() ? 0.f : 1.f);
     D.Scalars.Add(TEXT("MacroTiling"), bHard ? A.Param(TEXT("MacroTiling"), 1.f) : 1.f);
     if (bHard)
@@ -407,12 +414,12 @@ void Layer(FSCMaterialDesc& D, const FObj& L, const FString& P, const FSCPalette
         D.Warnings.Add(FString::Printf(TEXT("palette %s has no gloss: layer %s gloss is not scaled"), *ChannelName, *Str(L, TEXT("name"))));
     FLinearColor Tint = Rgb(Snap, TEXT("diffuse"), FLinearColor::White) * Rgb(L, TEXT("tint_color"), FLinearColor::White);
     if (bTintDiffuse) Tint *= Channel;
-    const FString Rough = Str(L, TEXT("roughness_export_path"));
+    const FString Rough = Str(L, TEXT("roughness_export_path")); // the layer's DDNA smoothness (DDS) or its PNG fallback
     double Shininess = 0;
     const TOptional<float> Shine = Snap && Snap->TryGetNumberField(TEXT("shininess"), Shininess) ? TOptional<float>(float(Shininess)) : TOptional<float>();
     Tex(D, *(P + TEXT("DiffuseMap")), Str(L, TEXT("diffuse_export_path")), ESCTextureRole::Color);
     Tex(D, *(P + TEXT("NormalGlossMap")), Str(L, TEXT("normal_export_path")), ESCTextureRole::Normal);
-    Tex(D, *(P + TEXT("RoughnessMap")), Rough, ESCTextureRole::Linear);
+    Tex(D, *(P + TEXT("SmoothnessMap")), Rough, SmoothnessRole(Rough));
     D.Vectors.Add(*(P + TEXT("Tint")), Tint);
     if (bTintSpecular && Finish.Specular.IsSet()) D.Vectors.Add(*(P + TEXT("Specular")), *Finish.Specular);
     else if (Snap && Snap->HasField(TEXT("specular"))) D.Vectors.Add(*(P + TEXT("Specular")), Rgb(Snap, TEXT("specular"), FLinearColor::Black));
@@ -512,7 +519,7 @@ void StaticWear(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const F
         D.Vectors.Add(TEXT("WearSpecular"), WearSpecular);
         if (const FSCTextureKey* Mean = D.VectorMeans.Find(TEXT("Layer0Specular"))) D.VectorMeans.Add(TEXT("WearSpecular"), FSCTextureKey(*Mean));
         D.Scalars.Add(TEXT("WearTiling"), D.Scalars.FindRef(TEXT("Layer0Tiling")));
-        D.Scalars.Add(TEXT("WearUseRoughnessMap"), D.Scalars.FindRef(TEXT("Layer0UseRoughnessMap")));
+        D.Scalars.Add(TEXT("WearUseSmoothnessMap"), D.Scalars.FindRef(TEXT("Layer0UseSmoothnessMap")));
         D.Scalars.Add(TEXT("WearGlossMult"), WearGloss);
         D.Scalars.Add(TEXT("WearSmoothness"), WearGloss);
     }

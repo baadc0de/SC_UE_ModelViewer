@@ -136,3 +136,15 @@ pub struct sc_cache_info {
 pub type sc_progress_cb = Option<
     unsafe extern "C" fn(phase: *const c_char, done: u64, total: u64, user: *mut c_void) -> c_int,
 >;
+
+/// Validated DDS payload description after adaptation; offsets are from data.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct sc_dds_info {
+    pub dxgi_format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub mip_count: u32,
+    pub data_offset: u64,
+    pub data_size: u64,
+}

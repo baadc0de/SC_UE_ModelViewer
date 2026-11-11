@@ -10,6 +10,7 @@
 //! Sessions are single-owner, not Sync; upstream's entity index contains RefCell.
 //! Exact brief-compatible Vec APIs expose status via `cache_status()`. The
 //! `_cached` methods return status alongside data for callers that need it owned.
+pub mod dds;
 mod cache;
 mod cancellation;
 pub use cancellation::{CancelToken, Error};

@@ -63,10 +63,10 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestTrue(TEXT("F0 = authored specular colour"), Near(X->Vectors[TEXT("SpecularColor")], FLinearColor(0.9f, 0.6f, 0.3f)));
         TestEqual(TEXT("diffuse sRGB"), int32(X->Textures[TEXT("DiffuseMap")].Role), int32(ESCTextureRole::Color));
         TestEqual(TEXT("DDNA normal"), int32(X->Textures[TEXT("NormalGlossMap")].Role), int32(ESCTextureRole::Normal));
-        TestEqual(TEXT("derived roughness paired by source_path"), X->Textures[TEXT("RoughnessMap")].Path, FString(TEXT("tex/illum_ddna_roughness.png")));
-        TestEqual(TEXT("roughness linear"), int32(X->Textures[TEXT("RoughnessMap")].Role), int32(ESCTextureRole::Linear));
+        TestEqual(TEXT("derived roughness paired by source_path"), X->Textures[TEXT("SmoothnessMap")].Path, FString(TEXT("tex/illum_ddna_smoothness.dds")));
+        TestEqual(TEXT("roughness linear"), int32(X->Textures[TEXT("SmoothnessMap")].Role), int32(ESCTextureRole::Linear));
         TestEqual(TEXT("spec map colour"), int32(X->Textures[TEXT("SpecularMap")].Role), int32(ESCTextureRole::Color));
-        TestEqual(TEXT("uses roughness map"), X->Scalars[TEXT("UseRoughnessMap")], 1.f);
+        TestEqual(TEXT("uses roughness map"), X->Scalars[TEXT("UseSmoothnessMap")], 1.f);
         TestEqual(TEXT("gloss = shininess / 255"), X->Scalars[TEXT("GlossMult")], 0.8f);
         TestEqual(TEXT("no glow"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
     }
@@ -89,12 +89,12 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("layer gloss x palette gloss"), X->Scalars[TEXT("Layer0GlossMult")], 0.5f * 0.8f);
         TestTrue(TEXT("layer F0 = palette specular"), Near(X->Vectors[TEXT("Layer0Specular")], FLinearColor(0.1f, 0.2f, 0.3f)));
         TestFalse(TEXT("wear layer is not a base layer"), X->Scalars.Contains(TEXT("Layer1Tiling")));
-        TestEqual(TEXT("layer roughness"), X->Textures[TEXT("Layer0RoughnessMap")].Path, FString(TEXT("tex/Primary_ddna_roughness.png")));
+        TestEqual(TEXT("layer roughness"), X->Textures[TEXT("Layer0SmoothnessMap")].Path, FString(TEXT("tex/Primary_ddna_smoothness.dds")));
         // HardSurface.cfx macro surface: %MACRO_NORMAL_MAP = TexSlot3 (+ gloss in its alpha), %MACRO_AO_MAP = TexSlot1,
         // both at baseTC x MacroTiling.
         TestEqual(TEXT("macro normal"), X->Textures[TEXT("MacroNormalMap")].Path, FString(TEXT("tex/hard_macro_ddna.png")));
         TestEqual(TEXT("macro normal role"), int32(X->Textures[TEXT("MacroNormalMap")].Role), int32(ESCTextureRole::Normal));
-        TestEqual(TEXT("macro gloss"), X->Textures[TEXT("MacroRoughnessMap")].Path, FString(TEXT("tex/hard_macro_ddna_roughness.png")));
+        TestEqual(TEXT("macro gloss"), X->Textures[TEXT("MacroSmoothnessMap")].Path, FString(TEXT("tex/hard_macro_ddna_smoothness.dds")));
         TestEqual(TEXT("macro gloss on"), X->Scalars[TEXT("UseMacroGloss")], 1.f);
         TestEqual(TEXT("macro tiling"), X->Scalars[TEXT("MacroTiling")], 3.f);
         TestEqual(TEXT("macro AO is TexSlot1 under %MACRO_AO_MAP"), X->Textures[TEXT("MacroAOMap")].Path, FString(TEXT("tex/hard_macro_ao.png")));
@@ -110,7 +110,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("not cloth"), X->Scalars[TEXT("WearCloth")], 0.f);
         TestTrue(TEXT("complement hue is reported"), X->Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("complement hue")); }));
         TestEqual(TEXT("wear layer diffuse"), X->Textures[TEXT("WearDiffuseMap")].Path, FString(TEXT("tex/Wear_diff.png")));
-        TestEqual(TEXT("wear layer gloss"), X->Textures[TEXT("WearRoughnessMap")].Path, FString(TEXT("tex/Wear_ddna_roughness.png")));
+        TestEqual(TEXT("wear layer gloss"), X->Textures[TEXT("WearSmoothnessMap")].Path, FString(TEXT("tex/Wear_ddna_smoothness.dds")));
         TestTrue(TEXT("wear layer tint x palette"), Near(X->Vectors[TEXT("WearTint")], FLinearColor(0.5f, 0.5f, 0.25f)));
         TestTrue(TEXT("wear layer F0 = palette specular"), Near(X->Vectors[TEXT("WearSpecular")], FLinearColor(0.1f, 0.2f, 0.3f)));
         TestFalse(TEXT("no exporter metallic: the energy split is in the master"), X->Scalars.Contains(TEXT("WearMetallic")) || X->Scalars.Contains(TEXT("Layer0Metallic")));
@@ -128,13 +128,13 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("tinted wear base"), X->Scalars[TEXT("WearBlendBase")], 0.4f);
         TestEqual(TEXT("tinted wear diffuse = Primary diffuse"), X->Textures[TEXT("WearDiffuseMap")].Path, X->Textures[TEXT("Layer0DiffuseMap")].Path);
         TestEqual(TEXT("tinted wear normal = Primary normal"), X->Textures[TEXT("WearNormalGlossMap")].Path, X->Textures[TEXT("Layer0NormalGlossMap")].Path);
-        TestEqual(TEXT("tinted wear gloss map = Primary gloss map"), X->Textures[TEXT("WearRoughnessMap")].Path, X->Textures[TEXT("Layer0RoughnessMap")].Path);
+        TestEqual(TEXT("tinted wear gloss map = Primary gloss map"), X->Textures[TEXT("WearSmoothnessMap")].Path, X->Textures[TEXT("Layer0SmoothnessMap")].Path);
         TestTrue(TEXT("WearDiffuseColor x WearTint"), Near(X->Vectors[TEXT("WearTint")], FLinearColor(0.25f, 0.5f, 0.5f)));
         TestTrue(TEXT("F0 = WearSpecularColor"), Near(X->Vectors[TEXT("WearSpecular")], FLinearColor(0.2f, 0.2f, 0.2f)));
         TestFalse(TEXT("tinted wear has no exporter metallic"), X->Scalars.Contains(TEXT("WearMetallic")));
         TestEqual(TEXT("tinted wear tiling = Primary tiling"), X->Scalars[TEXT("WearTiling")], 3.f);
         TestEqual(TEXT("WearGlossiness x WearGloss"), X->Scalars[TEXT("WearGlossMult")], 0.25f);
-        TestEqual(TEXT("tinted wear uses the Primary gloss map"), X->Scalars[TEXT("WearUseRoughnessMap")], 1.f);
+        TestEqual(TEXT("tinted wear uses the Primary gloss map"), X->Scalars[TEXT("WearUseSmoothnessMap")], 1.f);
         TestEqual(TEXT("ShadingModel 0: no paint remap"), X->Scalars[TEXT("WearPaint")], 0.f);
         TestFalse(TEXT("no %USE_SPECULAR_MAPS: TexSlot6 is not sampled"), X->Textures.Contains(TEXT("Layer0SpecularMap")) || X->Textures.Contains(TEXT("WearSpecularMap")));
         // UseLayerSpecMap = false: the spec map's mean colour scales the layer F0 instead (and the tinted wear F0,
@@ -176,7 +176,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         // LayerBlend_V2.cfx: %NORMAL_MAP = material-level TexSlot3 over all layers (TexSlot2 is the POM decal normal),
         // untiled; TexSlot13 = hue / AO / luminance control, sampled unconditionally.
         TestEqual(TEXT("macro normal is TexSlot3, not the lowest normal slot"), X->Textures[TEXT("MacroNormalMap")].Path, FString(TEXT("tex/blend_macro_ddna.png")));
-        TestEqual(TEXT("macro gloss"), X->Textures[TEXT("MacroRoughnessMap")].Path, FString(TEXT("tex/blend_macro_ddna_roughness.png")));
+        TestEqual(TEXT("macro gloss"), X->Textures[TEXT("MacroSmoothnessMap")].Path, FString(TEXT("tex/blend_macro_ddna_smoothness.dds")));
         TestEqual(TEXT("macro gloss on"), X->Scalars[TEXT("UseMacroGloss")], 1.f);
         TestEqual(TEXT("LayerBlend macro maps are untiled"), X->Scalars[TEXT("MacroTiling")], 1.f);
         TestEqual(TEXT("HAL map"), X->Textures[TEXT("HalMap")].Path, FString(TEXT("tex/blend_hal.png")));
@@ -218,7 +218,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     {
         // paletteLib ApplyPaletteParams: `Smoothness *= layerGloss * gloss` is unconditional, so the palette gloss
         // (0.8) and the layer GlossMult (0.5) also scale a layer without an authored Shininess or a gloss map.
-        TestEqual(TEXT("no gloss map"), X->Scalars[TEXT("Layer0UseRoughnessMap")], 0.f);
+        TestEqual(TEXT("no gloss map"), X->Scalars[TEXT("Layer0UseSmoothnessMap")], 0.f);
         TestEqual(TEXT("no Shininess: default smoothness x layer gloss x palette gloss"), X->Scalars[TEXT("Layer0Smoothness")], 0.5f * 0.5f * 0.8f);
         // The sampling shader multiplies the spec map (LayerAttribs_ReadSpecular) before ApplyTintsAndPalette picks
         // the palette or the layer specular, so the map scales whichever F0 the palette rule selects: the mean
@@ -264,7 +264,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("unset GlassTiling is the shader default"), X->Scalars[TEXT("GlassTiling")], float(Star.GlassTilingDefault));
         TestEqual(TEXT("unset GlassVStretch is the shader default"), X->Scalars[TEXT("GlassVStretch")], float(Star.GlassVStretchDefault));
         TestEqual(TEXT("complete glass: nothing reported"), X->Warnings.Num(), 0);
-        TestEqual(TEXT("glass roughness"), X->Textures[TEXT("RoughnessMap")].Path, FString(TEXT("tex/glass_ddna_roughness.png")));
+        TestEqual(TEXT("glass roughness"), X->Textures[TEXT("SmoothnessMap")].Path, FString(TEXT("tex/glass_ddna_smoothness.dds")));
         // The game leaves the colour alone when the instance carries no palette (paletteIndex == 0).
         const FSCMaterialDesc Bare = FSCMaterialBuilder::Describe(M.Materials[0].Submaterials[int32(X - D.GetData())], nullptr);
         TestTrue(TEXT("no palette: the authored Diffuse"), Near(Bare.Vectors[TEXT("GlassColor")], FLinearColor(0.8f, 0.5f, 0.25f)));
@@ -769,4 +769,121 @@ bool FSCMaterialsTextures::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsSmoothnessPng, "SCBridge.Materials.SmoothnessMapIsTheGameSmoothness", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCMaterialsSmoothnessPng::RunTest(const FString&)
+{
+    // WP-T1: the masters sample the game's DDNA smoothness. The DDS map stores it as is (linear data); the exporter's
+    // PNG fallback stores derived roughness r = sqrt(1 - s), which the importer decodes back to s = 1 - r^2.
+    FSCSceneManifest M; if (!ReadFixture(*this, M)) return false;
+    const FSCSubmaterial* Sub = M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("illum_spec"); });
+    if (!TestNotNull(TEXT("illum_spec fixture"), Sub)) return false;
+    FSCSubmaterial Png = *Sub;
+    Png.Json = Png.Json.Replace(TEXT("tex/illum_ddna_smoothness.dds"), TEXT("tex/illum_ddna_roughness.png"));
+    TestNotEqual(TEXT("fixture carries the smoothness ref"), Png.Json, Sub->Json);
+    const FSCMaterialDesc Dds = FSCMaterialBuilder::Describe(*Sub, &M.Palettes[0]);
+    const FSCMaterialDesc Fallback = FSCMaterialBuilder::Describe(Png, &M.Palettes[0]);
+    TestEqual(TEXT("DDS smoothness: linear data"), int32(Dds.Textures.FindRef(TEXT("SmoothnessMap")).Role), int32(ESCTextureRole::Linear));
+    TestEqual(TEXT("PNG fallback bound as derived roughness"), int32(Fallback.Textures.FindRef(TEXT("SmoothnessMap")).Role), int32(ESCTextureRole::DerivedRoughness));
+    TestEqual(TEXT("PNG fallback still maps gloss"), Fallback.Scalars.FindRef(TEXT("UseSmoothnessMap")), 1.f);
+
+    // Decode: roughness 0 / 128 / 255 -> smoothness 255 / 191 / 0; mips filtered in smoothness space.
+    IImageWrapperModule& Module = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+    TSharedPtr<IImageWrapper> Writer = Module.CreateImageWrapper(EImageFormat::PNG);
+    TArray<uint8> Rgba = {0, 0, 0, 255, 128, 128, 128, 255, 255, 255, 255, 255, 255, 255, 255, 255};
+    Writer->SetRaw(Rgba.GetData(), Rgba.Num(), 4, 1, ERGBFormat::RGBA, 8);
+    const TArray64<uint8>& Bytes = Writer->GetCompressed();
+    const FString Dir = FPaths::ProjectSavedDir() / TEXT("Import/MaterialTests");
+    FFileHelper::SaveArrayToFile(TArrayView<const uint8>(Bytes.GetData(), int32(Bytes.Num())), *(Dir / TEXT("rough.png")));
+    FSCFolderPackageSource Source(Dir);
+    FSCDecodedTexture Smooth;
+    if (TestTrue(TEXT("decode derived roughness"), FSCTextureImporter::Decode(Source, {TEXT("rough.png"), ESCTextureRole::DerivedRoughness}, Smooth)) && Smooth.Mips.Num() == 3)
+    {
+        TestEqual(TEXT("r 0 -> s 255"), int32(Smooth.Mips[0][2]), 255);
+        TestEqual(TEXT("r 128 -> s 191"), int32(Smooth.Mips[0][4 + 2]), 191);
+        TestEqual(TEXT("r 255 -> s 0"), int32(Smooth.Mips[0][8 + 2]), 0);
+        TestEqual(TEXT("grey: green = red"), int32(Smooth.Mips[0][4 + 1]), 191);
+        TestEqual(TEXT("mip averages smoothness"), int32(Smooth.Mips[1][2]), 223); // (255 + 191) / 2
+        TestFalse(TEXT("smoothness is data"), Smooth.bSRGB);
+    }
+    else AddError(TEXT("derived roughness decode"));
+    return true;
+}
+namespace
+{
+/** A package DDS as WP-T1 specifies it: "DDS ", the 124-byte header, a DX10 header, then the mips. */
+TArray<uint8> MakeDds(uint32 Dxgi, uint32 W, uint32 H, uint32 Mips, uint32 TopBytes, const TArray<uint8>& Data)
+{
+    TArray<uint32> Header; Header.SetNumZeroed(31 + 5);
+    Header[0] = 124; Header[1] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000; Header[2] = H; Header[3] = W;
+    Header[4] = TopBytes; Header[6] = Mips; Header[18] = 32; Header[19] = 0x4; Header[20] = 0x30315844; // pixel format: FourCC "DX10"
+    Header[26] = 0x1000 | 0x400000 | 0x8;
+    Header[31] = Dxgi; Header[32] = 3; Header[34] = 1; // DX10: 2D, one slice
+    TArray<uint8> File; File.Append(reinterpret_cast<const uint8*>("DDS "), 4);
+    File.Append(reinterpret_cast<const uint8*>(Header.GetData()), Header.Num() * 4);
+    File.Append(Data);
+    return File;
+}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsDdsTextures, "SCBridge.Materials.DdsBlocksPassThrough", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCMaterialsDdsTextures::RunTest(const FString&)
+{
+    // WP-T1: a package DDS reaches the GPU as the game's blocks in the matching pixel format, its mips as stored.
+    const FString Dir = FPaths::ProjectSavedDir() / TEXT("Import/MaterialTests");
+    // BC5 SNORM normal map 8x8 + 4x4: every block red (100, -50), green (60, -20), indices 0 (all texels = endpoint 0).
+    TArray<uint8> Block = {100, uint8(int8(-50)), 0, 0, 0, 0, 0, 0, 60, uint8(int8(-20)), 0, 0, 0, 0, 0, 0};
+    TArray<uint8> Bc5; for (int32 I = 0; I < 5; ++I) Bc5.Append(Block);
+    FFileHelper::SaveArrayToFile(MakeDds(84, 8, 8, 2, 64, Bc5), *(Dir / TEXT("n.dds")));
+    // BC1 sRGB 4x4, one mip: colour 0 = colour 1 = RGB565 (16, 33, 16) -> (132, 134, 132), indices 0.
+    FFileHelper::SaveArrayToFile(MakeDds(72, 4, 4, 1, 8, {0x30, 0x84, 0x30, 0x84, 0, 0, 0, 0}), *(Dir / TEXT("c.dds")));
+    FFileHelper::SaveArrayToFile(MakeDds(71, 4, 4, 1, 8, {0x30, 0x84, 0x30, 0x84, 0, 0, 0, 0}), *(Dir / TEXT("l.dds")));
+    FFileHelper::SaveArrayToFile(MakeDds(84, 8, 8, 2, 64, TArray<uint8>(Bc5.GetData(), 64)), *(Dir / TEXT("short.dds")));
+    FSCFolderPackageSource Source(Dir);
+
+    FSCDecodedTexture Normal, Color, Linear, Short, AsColor;
+    TestTrue(TEXT("decode BC5 normal"), FSCTextureImporter::Decode(Source, {TEXT("n.dds"), ESCTextureRole::Normal}, Normal));
+    if (!Normal.Error.IsEmpty()) AddError(Normal.Error);
+    TestEqual(TEXT("BC5 normal: PF_BC5"), int32(Normal.PixelFormat), int32(PF_BC5));
+    TestEqual(TEXT("mips as stored"), Normal.MipCount, 2);
+    TestEqual(TEXT("uploads the blocks"), Normal.UploadBytes(), int64(80));
+    TestFalse(TEXT("normal linear"), Normal.bSRGB);
+    if (Normal.IsBlocks() && Normal.Dds.Num() == Normal.DataOffset + 80)
+    {
+        const uint8* B = Normal.Dds.GetData() + Normal.DataOffset;
+        // SNORM -> UNORM: red endpoints re-biased (order kept: 8-value mode), indices untouched.
+        TestEqual(TEXT("red e0 re-biased"), int32(B[0]), 100 + 128);
+        TestEqual(TEXT("red e1 re-biased"), int32(B[1]), -50 + 128);
+        TestEqual(TEXT("red indices untouched"), int32(B[2]), 0);
+        // Green negated (glTF +Y -> UE -Y) in 8-value mode: endpoints (-g1, -g0) re-biased, index 0 -> 1.
+        TestEqual(TEXT("green e0 = -g1"), int32(B[8]), 20 + 128);
+        TestEqual(TEXT("green e1 = -g0"), int32(B[9]), -60 + 128);
+        TestEqual(TEXT("green index 0 -> 1"), int32(B[10]), 0x49);
+    }
+    else AddError(TEXT("BC5 blocks"));
+    TestTrue(TEXT("decode BC5 as colour"), FSCTextureImporter::Decode(Source, {TEXT("n.dds"), ESCTextureRole::Color}, AsColor));
+    if (AsColor.IsBlocks()) TestEqual(TEXT("colour role: green not flipped"), int32(AsColor.Dds[AsColor.DataOffset + 8]), 60 + 128);
+
+    TestTrue(TEXT("decode BC1 sRGB"), FSCTextureImporter::Decode(Source, {TEXT("c.dds"), ESCTextureRole::Linear}, Color));
+    TestEqual(TEXT("BC1: PF_DXT1"), int32(Color.PixelFormat), int32(PF_DXT1));
+    TestTrue(TEXT("encoding from the DXGI format, not the role"), Color.bSRGB);
+    TestTrue(TEXT("decode BC1 linear"), FSCTextureImporter::Decode(Source, {TEXT("l.dds"), ESCTextureRole::Color}, Linear));
+    TestFalse(TEXT("linear BC1 under a colour role"), Linear.bSRGB);
+    FLinearColor SrgbMean, LinearMean;
+    TestTrue(TEXT("sRGB BC1 mean linearized"), FSCTextureImporter::MeanColor(Color, SrgbMean) && FMath::IsNearlyEqual(SrgbMean.R, FLinearColor::sRGBToLinearTable[132], 1e-4f) && FMath::IsNearlyEqual(SrgbMean.G, FLinearColor::sRGBToLinearTable[134], 1e-4f));
+    TestTrue(TEXT("linear BC1 mean as stored"), FSCTextureImporter::MeanColor(Linear, LinearMean) && FMath::IsNearlyEqual(LinearMean.R, 132.f / 255.f, 1e-4f));
+
+    TestFalse(TEXT("a mip short of its blocks is rejected"), FSCTextureImporter::Decode(Source, {TEXT("short.dds"), ESCTextureRole::Normal}, Short));
+    TestFalse(TEXT("rejection explains"), Short.Error.IsEmpty());
+
+    UTexture2D* T = FSCTextureImporter::Create(MoveTemp(Normal), GetTransientPackage());
+    if (TestNotNull(TEXT("BC5 texture"), T))
+    {
+        TestEqual(TEXT("texture BC5"), int32(T->GetPixelFormat()), int32(PF_BC5));
+        TestEqual(TEXT("texture mips"), T->GetNumMips(), 2);
+        TestFalse(TEXT("texture linear"), T->SRGB);
+    }
+    UTexture2D* C = FSCTextureImporter::Create(MoveTemp(Color), GetTransientPackage());
+    if (TestNotNull(TEXT("BC1 texture"), C)) { TestEqual(TEXT("texture DXT1"), int32(C->GetPixelFormat()), int32(PF_DXT1)); TestTrue(TEXT("texture sRGB"), C->SRGB); }
+    return true;
+}
+
 #endif
