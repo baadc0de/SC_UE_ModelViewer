@@ -130,7 +130,10 @@ def build(name, preset, cube, grey_material, emissive_material):
     assert levels.new_level(preset["path"])
     sky = spawn(unreal.SkyLight, "Sky light", (0, 0, 800))
     sky.light_component.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
-    sky.light_component.set_editor_property("real_time_capture", True)
+    # Real-time capture records only sky components (SkyAtmosphere, clouds, IsSky meshes): without an atmosphere it is
+    # black and UE warns on screen. Indoors the sky light captures the lit enclosure once instead (captured scene),
+    # which is what Lumen rays that miss geometry then see.
+    sky.light_component.set_editor_property("real_time_capture", bool(preset["atmosphere"]))
     if preset["sun_lux"]:
         sun = spawn(unreal.DirectionalLight, "Sun", (0, 0, 600), unreal.Rotator(pitch=-45.0, yaw=-30.0, roll=0.0))
         sun.light_component.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)

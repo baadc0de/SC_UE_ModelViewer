@@ -383,10 +383,12 @@ followed by one line per contributing light (lux, candela, distance, radius, con
 the actor blocking it). It is inverse-square with the importer's candela, attenuation
 radius and cone; a line trace stands in for shadows, gobos and the bulb clamp are
 ignored; `gated` counts lights excluded by lighting channel. Every import also logs
-`LIGHT_AREAS volumes=... lights_inside=... lights_outside=... lights_everywhere=...
-meshes_inside=... meshes_outside=... environment_lights=...`: how the package's room
-volumes split lights and meshes between lighting channel 0 (outside) and 1 (inside a
-room). See [WP-U3b verification §12](verification/WP-U3b.md).
+`LIGHT_AREAS volumes=... rooms=... room_channels=<room>:<channel>,... reach=<A>><B>(lights,deepest m[,shared]),...
+conflicts=... lights_inside=... lights_outside=... lights_everywhere=... meshes_inside=... meshes_outside=...
+samples_other_channel=... environment_lights=...`: how the package's room volumes split lights and meshes between
+lighting channel 0 (outside) and the rooms' channels 1 and 2, which room pairs an area-only light reaches, and which
+of those had to share a channel. See [WP-U3b verification §12](verification/WP-U3b.md) and
+[WP-L1](verification/WP-L1.md).
 
 See [WP-P1 verification](verification/WP-P1.md) for exact null-RHI commands,
 results, collision comparison, limitations, and the orchestrator's GPU checklist.

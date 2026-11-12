@@ -145,7 +145,7 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         const auto* Local = Cast<ULocalLightComponent>(Light);
         OK &= (Local != nullptr) == Want.Local && (!Local || Local->IntensityUnits == ELightUnits::Candelas);
         OK &= State.bFallbackShadow == Want.Shadow;
-        OK &= bool(Light->CastShadows) == (Vehicle->bMegaLightsActive || Want.Shadow);
+        OK &= bool(Light->CastShadows) == Want.Shadow; // the authored rule with or without MegaLights (WP-L1)
         Disabled += !Light->IsVisible();
         Fallback += Want.Shadow;
         Shadowed += bool(Light->CastShadows);

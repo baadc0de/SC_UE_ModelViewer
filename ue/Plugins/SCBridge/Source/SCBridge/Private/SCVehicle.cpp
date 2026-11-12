@@ -254,6 +254,19 @@ bool ASCVehicle::IsInsideLightArea(const FVector& World) const
         if (Area.Contains(World)) return true;
     return false;
 }
+FString ASCVehicle::LightRoomAt(const FVector& World) const
+{
+    for (const FSCLightArea& Area : LightAreas)
+        if (FString Room = Area.RoomAt(World); !Room.IsEmpty()) return Room;
+    return FString();
+}
+int32 ASCVehicle::LightChannelAt(const FVector& World) const
+{
+    const FString Room = LightRoomAt(World);
+    if (Room.IsEmpty()) return 0;
+    const int32* Channel = LightRoomChannels.Find(Room);
+    return Channel ? *Channel : 1; // before FSCLightAreas::Apply: the WP-U3b inside channel
+}
 bool ASCVehicle::IsInPhysicsGrid(const FVector& World) const
 {
     if (PhysicsGridTriangles.Num() < 3) return false;

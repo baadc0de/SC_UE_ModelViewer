@@ -1,4 +1,5 @@
-// Room-volume parsing, containment and the two-channel light confinement (see SCLightAreas.h, WP-U3b §12).
+// Room-volume parsing, containment and the per-room light confinement on three lighting channels
+// (see SCLightAreas.h, WP-U3b §12, WP-L1).
 #include "SCLightAreas.h"
 #include "SCVehicle.h"
 #include "SCImporter.h"
@@ -14,6 +15,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "StaticMeshAttributes.h"
 #include "UObject/UObjectIterator.h"
+#include "Algo/Count.h"
 namespace
 {
 // Trimesh containment, the exporter's room_containment.rs: parity of the triangles a +Z ray crosses.
@@ -147,6 +149,21 @@ bool FSCRoomVolume::Contains(const FVector& ContainerPointM) const
     return false;
 }
 
+double FSCRoomVolume::BoundsDistance(const FVector& ContainerPointM) const
+{
+    const FVector P = FromContainer.TransformPosition(ContainerPointM);
+    if (P.ContainsNaN()) return TNumericLimits<double>::Max();
+    FBox Bounds(ForceInit);
+    if (Shape == EShape::Box)
+        Bounds = FBox(Min, Max);
+    else
+    {
+        for (const FVector& Q : Points) Bounds += Q;
+        if (Shape == EShape::Prism) Bounds.Max.Z = Bounds.Min.Z + Height; // the polygon is the base, extruded along +z
+    }
+    return FMath::Sqrt(Bounds.ComputeSquaredDistanceToPoint(P));
+}
+
 bool FSCLightArea::Contains(const FVector& World) const
 {
     const USceneComponent* A = Anchor.Get();
@@ -155,6 +172,27 @@ bool FSCLightArea::Contains(const FVector& World) const
     for (const FSCRoomVolume& Volume : Volumes)
         if (Volume.Contains(Point)) return true;
     return false;
+}
+
+FString FSCLightArea::RoomAt(const FVector& World) const
+{
+    const USceneComponent* A = Anchor.Get();
+    if (!A) return FString();
+    const FVector Point = AnchorToContainer.TransformPosition(A->GetComponentTransform().InverseTransformPosition(World));
+    for (const FSCRoomVolume& Volume : Volumes)
+        if (Volume.Contains(Point)) return Volume.Room;
+    return FString();
+}
+
+double FSCLightArea::RoomDistance(const FVector& World, const FString& Room) const
+{
+    double Best = TNumericLimits<double>::Max();
+    const USceneComponent* A = Anchor.Get();
+    if (!A) return Best;
+    const FVector Point = AnchorToContainer.TransformPosition(A->GetComponentTransform().InverseTransformPosition(World));
+    for (const FSCRoomVolume& Volume : Volumes)
+        if (Volume.Room == Room) Best = FMath::Min(Best, Volume.BoundsDistance(Point));
+    return Best;
 }
 
 TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description)
@@ -198,43 +236,142 @@ void FSCLightAreas::Register(ASCVehicle* Vehicle, USceneComponent* Anchor, const
     if (!Area.Volumes.IsEmpty()) Vehicle->LightAreas.Add(MoveTemp(Area));
 }
 
-void FSCLightAreas::SetChannels(UPrimitiveComponent* Component, bool bInside)
+TMap<FString, int32> FSCLightAreas::ColorRooms(const TArray<FString>& Rooms, const TArray<TPair<FString, FString>>& Reach,
+                                               int32& Conflicts)
 {
-    if (Component) Component->SetLightingChannels(!bInside, bInside, false);
+    TArray<FString> Order; // unique rooms in the given order
+    for (const FString& Room : Rooms) Order.AddUnique(Room);
+    const int32 N = Order.Num();
+    // Reaching lights per unordered room pair (index pair), from one entry per light.
+    TMap<TPair<int32, int32>, int32> Weight;
+    for (const auto& [A, B] : Reach)
+    {
+        const int32 IA = Order.IndexOfByKey(A), IB = Order.IndexOfByKey(B);
+        if (IA == INDEX_NONE || IB == INDEX_NONE || IA == IB) continue;
+        ++Weight.FindOrAdd({FMath::Min(IA, IB), FMath::Max(IA, IB)});
+    }
+    TArray<int32> Pick; // per room: 0 = channel 1, 1 = channel 2
+    Pick.Init(0, N);
+    auto Cost = [&](const TArray<int32>& Bits) {
+        int64 Leak = 0;
+        for (const auto& [Pair, W] : Weight)
+            if (Bits[Pair.Key] == Bits[Pair.Value]) Leak += W;
+        return Leak;
+    };
+    if (N <= MaxExactRooms)
+    {
+        // Every split with the first room on channel 1 (flipping all channels changes nothing): least leak, then the
+        // most balanced split, then the first such split in counting order.
+        int64 BestLeak = TNumericLimits<int64>::Max();
+        int32 BestImbalance = TNumericLimits<int32>::Max();
+        TArray<int32> Bits;
+        Bits.Init(0, N);
+        for (int64 Mask = 0; Mask < (int64(1) << FMath::Max(0, N - 1)); ++Mask)
+        {
+            int32 Ones = 0;
+            for (int32 I = 1; I < N; ++I) Ones += Bits[I] = (Mask >> (I - 1)) & 1;
+            const int64 Leak = Cost(Bits);
+            const int32 Imbalance = FMath::Abs(N - 2 * Ones);
+            if (Leak < BestLeak || (Leak == BestLeak && Imbalance < BestImbalance))
+            {
+                BestLeak = Leak;
+                BestImbalance = Imbalance;
+                Pick = Bits;
+            }
+        }
+    }
+    else
+    {
+        // Greedy: each room takes the channel its coloured neighbours reach it with least, ties to the less used one.
+        int32 Used[2] = {0, 0};
+        for (int32 I = 0; I < N; ++I)
+        {
+            int64 Near[2] = {0, 0};
+            for (const auto& [Pair, W] : Weight)
+                if (const int32 Other = Pair.Key == I ? Pair.Value : Pair.Value == I ? Pair.Key : INDEX_NONE; Other != INDEX_NONE && Other < I)
+                    Near[Pick[Other]] += W;
+            Pick[I] = Near[0] != Near[1] ? int32(Near[1] < Near[0]) : int32(Used[1] < Used[0]);
+            ++Used[Pick[I]];
+        }
+    }
+    TMap<FString, int32> Channel;
+    for (int32 I = 0; I < N; ++I) Channel.Add(Order[I], 1 + Pick[I]);
+    Conflicts = Algo::CountIf(Weight, [&](const auto& Entry) { return Pick[Entry.Key.Key] == Pick[Entry.Key.Value]; });
+    return Channel;
+}
+
+void FSCLightAreas::SetChannel(UPrimitiveComponent* Component, int32 Channel)
+{
+    if (Component) Component->SetLightingChannels(Channel == 0, Channel == 1, Channel == 2);
 }
 
 void FSCLightAreas::Apply(ASCVehicle* Vehicle)
 {
     if (!Vehicle) return;
     int32 Volumes = 0;
-    for (const FSCLightArea& Area : Vehicle->LightAreas) Volumes += Area.Volumes.Num();
+    TArray<FString> Rooms;
+    TMap<FString, FString> RoomNames; // GUID -> authored label, for the log only
+    for (const FSCLightArea& Area : Vehicle->LightAreas)
+        for (const FSCRoomVolume& Volume : Area.Volumes)
+        {
+            ++Volumes;
+            Rooms.AddUnique(Volume.Room);
+            RoomNames.FindOrAdd(Volume.Room, Volume.RoomName);
+        }
     if (Volumes == 0)
     {
         UE_LOG(LogSCImport, Display, TEXT("LIGHT_AREAS volumes=0"));
         return;
     }
-    // Lights: confined to their side when authored area-only; everything else is the game's AffectsEverything.
+    // Lights: the room each sits in, and which other rooms an area-only light's attenuation sphere reaches.
+    TArray<TPair<FString, FString>> Reach;
+    TMap<TPair<FString, FString>, TPair<int32, double>> ReachDetail; // lights per pair, deepest radius overlap (m)
+    for (FSCImportedLightState& State : Vehicle->LightStates)
+    {
+        const ULightComponent* Light = State.Component;
+        if (!Light) continue;
+        const FVector At = Light->GetComponentLocation();
+        State.AreaRoom = Vehicle->LightRoomAt(At);
+        State.bInsideArea = !State.AreaRoom.IsEmpty();
+        if (!State.bAreaOnly || !State.bInsideArea) continue;
+        for (const FString& Other : Rooms)
+        {
+            if (Other == State.AreaRoom) continue;
+            double Distance = TNumericLimits<double>::Max();
+            for (const FSCLightArea& Area : Vehicle->LightAreas) Distance = FMath::Min(Distance, Area.RoomDistance(At, Other));
+            if (Distance > State.RadiusM) continue;
+            Reach.Add({State.AreaRoom, Other}); // one entry per light: the colouring weighs pairs by reaching lights
+            auto& Detail = ReachDetail.FindOrAdd({State.AreaRoom, Other}, {0, 0.});
+            ++Detail.Key;
+            Detail.Value = FMath::Max(Detail.Value, State.RadiusM - Distance);
+        }
+    }
+    int32 Conflicts = 0;
+    Vehicle->LightRoomChannels = ColorRooms(Rooms, Reach, Conflicts);
+    // Area-only lights take their room's channel (0 outside); everything else is the game's AffectsEverything.
     int32 LightsInside = 0, LightsOutside = 0, LightsEverywhere = 0;
     for (FSCImportedLightState& State : Vehicle->LightStates)
     {
         ULightComponent* Light = State.Component;
         if (!Light) continue;
-        State.bInsideArea = Vehicle->IsInsideLightArea(Light->GetComponentLocation());
         if (!State.bAreaOnly)
         {
-            Light->SetLightingChannels(true, true, false);
+            Light->SetLightingChannels(true, true, true);
             ++LightsEverywhere;
         }
         else
         {
-            Light->SetLightingChannels(!State.bInsideArea, State.bInsideArea, false);
+            const int32 Channel = State.bInsideArea ? Vehicle->LightRoomChannels.FindRef(State.AreaRoom) : 0;
+            Light->SetLightingChannels(Channel == 0, Channel == 1, Channel == 2);
             ++(State.bInsideArea ? LightsInside : LightsOutside);
         }
-        UE_LOG(LogSCImport, Verbose, TEXT("LIGHT_AREA_LIGHT name=%s owner=%s area_only=%d inside=%d"), *State.Name, *State.OwnerEntity,
-               State.bAreaOnly, State.bInsideArea);
+        UE_LOG(LogSCImport, Verbose, TEXT("LIGHT_AREA_LIGHT name=%s owner=%s area_only=%d room=%s"), *State.Name, *State.OwnerEntity,
+               State.bAreaOnly, *RoomNames.FindRef(State.AreaRoom));
     }
-    // Surfaces: the game gates per pixel; a component takes the side most of its sampled vertices are on.
-    int32 MeshesInside = 0, MeshesOutside = 0;
+    // Surfaces: the game gates per pixel; a component is inside when most of its sampled vertices are inside a room
+    // (WP-U3b vote) and then takes the room most of those are in (ties: room order). Samples landing in another
+    // channel than their component's are counted: the residual of per-component channels against per-pixel volumes.
+    int32 MeshesInside = 0, MeshesOutside = 0, SamplesTotal = 0, SamplesElsewhere = 0;
     TInlineComponentArray<UPrimitiveComponent*> Primitives(Vehicle);
     for (UPrimitiveComponent* Component : Primitives)
     {
@@ -242,36 +379,57 @@ void FSCLightAreas::Apply(ASCVehicle* Vehicle)
         if (const auto* Static = Cast<UStaticMeshComponent>(Component)) Asset = Static->GetStaticMesh();
         else if (const auto* Skinned = Cast<USkinnedMeshComponent>(Component)) Asset = Skinned->GetSkinnedAsset();
         const TArray<FVector3f>* Samples = Asset ? Vehicle->MeshSamples.Find(Asset) : nullptr;
-        int32 Inside = 0, Total = 0;
+        TArray<FString> SampleRooms;
         if (Samples && !Samples->IsEmpty())
         {
             const FTransform& ToWorld = Component->GetComponentTransform();
-            for (const FVector3f& Sample : *Samples)
-                Inside += Vehicle->IsInsideLightArea(ToWorld.TransformPosition(FVector(Sample)));
-            Total = Samples->Num();
+            for (const FVector3f& Sample : *Samples) SampleRooms.Add(Vehicle->LightRoomAt(ToWorld.TransformPosition(FVector(Sample))));
         }
         else
-        {
-            Inside = Vehicle->IsInsideLightArea(Component->Bounds.Origin);
-            Total = 1;
-        }
-        const bool bInside = 2 * Inside > Total;
-        SetChannels(Component, bInside);
-        ++(bInside ? MeshesInside : MeshesOutside);
-        UE_LOG(LogSCImport, Verbose, TEXT("LIGHT_AREA_MESH component=%s asset=%s inside=%d/%d side=%s"), *Component->GetName(),
-               Component->ComponentTags.Num() ? *Component->ComponentTags[0].ToString() : *GetNameSafe(Asset), Inside, Total,
-               bInside ? TEXT("in") : TEXT("out"));
+            SampleRooms.Add(Vehicle->LightRoomAt(Component->Bounds.Origin));
+        TMap<FString, int32> Votes;
+        int32 Inside = 0;
+        for (const FString& Room : SampleRooms)
+            if (!Room.IsEmpty()) { ++Inside; ++Votes.FindOrAdd(Room); }
+        FString Room;
+        if (2 * Inside > SampleRooms.Num())
+            for (const FString& Candidate : Rooms)
+                if (Votes.FindRef(Candidate) > Votes.FindRef(Room)) Room = Candidate;
+        const int32 Channel = Room.IsEmpty() ? 0 : Vehicle->LightRoomChannels.FindRef(Room);
+        SetChannel(Component, Channel);
+        ++(Room.IsEmpty() ? MeshesOutside : MeshesInside);
+        SamplesTotal += SampleRooms.Num();
+        for (const FString& Sampled : SampleRooms)
+            SamplesElsewhere += (Sampled.IsEmpty() ? 0 : Vehicle->LightRoomChannels.FindRef(Sampled)) != Channel;
+        UE_LOG(LogSCImport, Verbose, TEXT("LIGHT_AREA_MESH component=%s asset=%s inside=%d/%d room=%s channel=%d"), *Component->GetName(),
+               Component->ComponentTags.Num() ? *Component->ComponentTags[0].ToString() : *GetNameSafe(Asset), Inside, SampleRooms.Num(),
+               *RoomNames.FindRef(Room), Channel);
     }
-    // Lights that belong to no vehicle (hangar panels, sun) are not area lights: they reach both sides.
+    // Lights that belong to no vehicle (hangar panels, sun, the player's torch) are not area lights: every channel.
     int32 Environment = 0;
     for (TObjectIterator<ULightComponent> It; It; ++It)
     {
         ULightComponent* Light = *It;
-        if (Light->GetWorld() != Vehicle->GetWorld() || Cast<ASCVehicle>(Light->GetOwner()) || Light->LightingChannels.bChannel1) continue;
-        Light->SetLightingChannels(Light->LightingChannels.bChannel0, true, Light->LightingChannels.bChannel2);
+        if (Light->GetWorld() != Vehicle->GetWorld() || Cast<ASCVehicle>(Light->GetOwner()) ||
+            (Light->LightingChannels.bChannel1 && Light->LightingChannels.bChannel2))
+            continue;
+        Light->SetLightingChannels(Light->LightingChannels.bChannel0, true, true);
         ++Environment;
     }
+    FString Channels;
+    for (const FString& Room : Rooms) Channels += FString::Printf(TEXT("%s%s:%d"), Channels.IsEmpty() ? TEXT("") : TEXT(","), *RoomNames.FindRef(Room),
+                                                                  Vehicle->LightRoomChannels.FindRef(Room));
+    FString Pairs;
+    for (const auto& [Key, Detail] : ReachDetail)
+    {
+        const auto& [A, B] = Key;
+        Pairs += FString::Printf(TEXT("%s%s>%s(%d,%.2fm%s)"), Pairs.IsEmpty() ? TEXT("") : TEXT(","), *RoomNames.FindRef(A), *RoomNames.FindRef(B),
+                                 Detail.Key, Detail.Value,
+                                 Vehicle->LightRoomChannels.FindRef(A) == Vehicle->LightRoomChannels.FindRef(B) ? TEXT(",shared") : TEXT(""));
+    }
     UE_LOG(LogSCImport, Display,
-           TEXT("LIGHT_AREAS volumes=%d lights_inside=%d lights_outside=%d lights_everywhere=%d meshes_inside=%d meshes_outside=%d environment_lights=%d"),
-           Volumes, LightsInside, LightsOutside, LightsEverywhere, MeshesInside, MeshesOutside, Environment);
+           TEXT("LIGHT_AREAS volumes=%d rooms=%d room_channels=%s reach=%s conflicts=%d lights_inside=%d lights_outside=%d "
+                "lights_everywhere=%d meshes_inside=%d meshes_outside=%d samples_other_channel=%d/%d environment_lights=%d"),
+           Volumes, Rooms.Num(), *Channels, Pairs.IsEmpty() ? TEXT("-") : *Pairs, Conflicts, LightsInside, LightsOutside, LightsEverywhere,
+           MeshesInside, MeshesOutside, SamplesElsewhere, SamplesTotal, Environment);
 }

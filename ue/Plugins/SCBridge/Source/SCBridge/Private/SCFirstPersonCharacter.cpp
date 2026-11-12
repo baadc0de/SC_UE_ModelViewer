@@ -40,7 +40,8 @@ ASCFirstPersonCharacter::ASCFirstPersonCharacter()
     Flashlight->SetAttenuationRadius(2000);
     Flashlight->SetOuterConeAngle(35);
     Flashlight->SetVisibility(false);
-    Flashlight->LightingChannels.bChannel1 = true; // not an area light: it reaches both light sides (WP-U3b §12)
+    Flashlight->LightingChannels.bChannel1 = true; // not an area light: it reaches every room channel (WP-U3b §12, WP-L1)
+    Flashlight->LightingChannels.bChannel2 = true;
     SetProfile(FSCCharacterProfile());
 }
 void ASCFirstPersonCharacter::SetProfile(const FSCCharacterProfile& InProfile)
@@ -123,17 +124,17 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     if (!Vehicle || Vehicle->IsActorBeingDestroyed()) { ClearInput(); return; }
-    // The body and its kit are lit like the surfaces around them: by the lights of the side the player stands on.
+    // The body and its kit are lit like the surfaces around them: by the lights of the room the player stands in.
     ASCVehicle* Kit = Body->GetKit();
-    if (const bool bInside = Vehicle->IsInsideLightArea(GetActorLocation()); LightAreaState != int8(bInside) || LightAreaKit.Get() != Kit)
+    if (const int32 Channel = Vehicle->LightChannelAt(GetActorLocation()); LightAreaState != int8(Channel) || LightAreaKit.Get() != Kit)
     {
-        LightAreaState = int8(bInside);
+        LightAreaState = int8(Channel);
         LightAreaKit = Kit;
         for (const AActor* Actor : {static_cast<const AActor*>(this), static_cast<const AActor*>(Kit)})
         {
             if (!Actor) continue;
             TInlineComponentArray<UPrimitiveComponent*> Primitives(Actor);
-            for (UPrimitiveComponent* Primitive : Primitives) FSCLightAreas::SetChannels(Primitive, bInside);
+            for (UPrimitiveComponent* Primitive : Primitives) FSCLightAreas::SetChannel(Primitive, Channel);
         }
     }
     // WP-P3: inside the physics grid the vehicle's own (hull) colliders do not block; the grid's contents do.

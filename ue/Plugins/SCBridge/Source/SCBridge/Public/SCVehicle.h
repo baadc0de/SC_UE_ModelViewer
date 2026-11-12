@@ -74,6 +74,12 @@ public:
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
     /** World point inside any room volume of this vehicle (the game's "not the root clip volume"). */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") bool IsInsideLightArea(const FVector& World) const;
+    /** Room GUID containing the world point; empty outside every room volume. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Lights") FString LightRoomAt(const FVector& World) const;
+    /** Lighting channel of the world point: 0 outside, else its room's channel (set by FSCLightAreas::Apply). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Lights") int32 LightChannelAt(const FVector& World) const;
+    /** Room GUID -> lighting channel 1 or 2 (WP-L1), filled by FSCLightAreas::Apply. */
+    TMap<FString, int32> LightRoomChannels;
     /** WP-P3: the physics grid's volume (DataCore `physicsGrid.physicsProxy`), a triangle soup in actor space (cm).
      *  Inside it the game's actors belong to the vehicle's grid, where the vehicle's own colliders (HullColliders,
      *  the root entity's game collision) do not block them; the interior's and the items' colliders do. */
