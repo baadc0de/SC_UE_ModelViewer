@@ -171,6 +171,11 @@ public:
     void SetEnvironmentState(const FString& State);
     const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
     bool IsEnvironmentLoading() const { return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0; }
+    float GetEnvironmentProgress() const;      // 0..1 over export, parse, import and placement
+    FString GetEnvironmentPhaseText() const;
+    // The side panels (model browser, hierarchy); hidden for scripted runs and by the top-bar toggle.
+    void SetPanelsVisible(bool bVisible) { bPanelsVisible = bVisible; }
+    bool ArePanelsVisible() const { return bPanelsVisible; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadPhaseText() const;
@@ -277,6 +282,7 @@ private:
     void BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source);
     void PlaceEnvironment();
     int32 EnvPlaceInTicks = 0;
+    bool bPanelsVisible = true;
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
     FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)

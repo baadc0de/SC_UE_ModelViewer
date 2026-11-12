@@ -94,6 +94,7 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
             Script.Add({FCString::Atod(*Delay), Command.TrimStartAndEnd()});
         }
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT loaded file=%s steps=%d"), *ScriptFile, Script.Num());
+        InOwner.SetPanelsVisible(false); // scripted runs (captures) show the full-width scene; sc.UI.Panels 1 restores
     }
     if (IsRunningCommandlet()) return; // headless hosts call the subsystem directly; one console registration
     TWeakObjectPtr<USCViewerSubsystem> Weak = &InOwner;

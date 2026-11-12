@@ -4,15 +4,24 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
 #include "GameFramework/Pawn.h"
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
 #include "SCVehicle.h"
 #include "SCViewerPawn.h"
+#include "SCViewerSubsystem.h"
+#include "Components/SpotLightComponent.h"
+#include "Components/RectLightComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/Texture.h"
+#include "Engine/Texture2D.h"
+#include "UObject/StrongObjectPtr.h"
+#include "TextureResource.h"
 
 static FAutoConsoleCommandWithWorldAndArgs GSCLookPP(
     TEXT("sc.Look.PP"), TEXT("sc.Look.PP <PostProcessSettings field> <value>: set it (and its override) on every unbound post-process volume"),
@@ -71,6 +80,160 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookChannels(
             }
         if (bConfine) GSavedChannels.Reset();
         UE_LOG(LogTemp, Display, TEXT("LOOK channels confine=%d lights=%d"), bConfine, Lights);
+    }));
+
+// sc.Look.WallLights <scale>: the environment's wall-facing fixtures (spot/rect lights aimed within 30 degrees of
+// horizontal) at <scale> x their imported intensity; overhead keys (aimed down) and point lights are untouched.
+static TMap<TWeakObjectPtr<ULightComponent>, float> GSavedWallIntensity;
+static FAutoConsoleCommandWithWorldAndArgs GSCLookWallLights(
+    TEXT("sc.Look.WallLights"), TEXT("sc.Look.WallLights <scale>: scale the environment's horizontally aimed spot/rect lights"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World);
+        ASCVehicle* Env = Viewer ? Viewer->GetEnvironment() : nullptr;
+        if (!Env || !Args.IsValidIndex(0)) return;
+        const float Scale = FCString::Atof(*Args[0]);
+        int32 Wall = 0, Other = 0;
+        for (ULightComponent* Light : Env->Lights)
+        {
+            if (!Light || !(Light->IsA<USpotLightComponent>() || Light->IsA<URectLightComponent>())) continue;
+            if (FMath::Abs(Light->GetForwardVector().Z) >= 0.5) { ++Other; continue; } // aimed down (or up): not a wall wash
+            const float Base = GSavedWallIntensity.FindOrAdd(Light, Light->Intensity);
+            Light->SetIntensity(Base * Scale);
+            ++Wall;
+        }
+        UE_LOG(LogTemp, Display, TEXT("LOOK wall_lights scale=%.2f wall=%d other_directional=%d"), Scale, Wall, Other);
+    }));
+
+// sc.Look.Gobo <name part> <0|1>: drop (0) or restore (1) the light function of every light whose gobo texture name
+// contains <name part> (diagnostic: which projector texture produces a pattern).
+static TMap<TWeakObjectPtr<ULightComponent>, TWeakObjectPtr<UMaterialInterface>> GSavedGobo;
+static FAutoConsoleCommandWithWorldAndArgs GSCLookGobo(
+    TEXT("sc.Look.Gobo"), TEXT("sc.Look.Gobo <texture name part> <0|1>: drop or restore matching light functions"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (Args.Num() < 2) return;
+        const bool bOn = FCString::Atoi(*Args[1]) != 0;
+        int32 Matched = 0;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+            for (ULightComponent* Light : It->Lights)
+            {
+                if (!Light) continue;
+                if (bOn)
+                {
+                    if (const auto* Saved = GSavedGobo.Find(Light); Saved && Saved->IsValid())
+                    {
+                        Light->SetLightFunctionMaterial(Saved->Get());
+                        GSavedGobo.Remove(Light);
+                        ++Matched;
+                    }
+                    continue;
+                }
+                UTexture* Gobo = nullptr;
+                const auto* MID = Cast<UMaterialInstanceDynamic>(Light->LightFunctionMaterial);
+                if (!MID || !MID->GetTextureParameterValue(FHashedMaterialParameterInfo(TEXT("Gobo")), Gobo, true) || !Gobo ||
+                    !Gobo->GetName().Contains(Args[0]))
+                    continue;
+                GSavedGobo.Add(Light, Light->LightFunctionMaterial);
+                Light->SetLightFunctionMaterial(nullptr);
+                ++Matched;
+            }
+        UE_LOG(LogTemp, Display, TEXT("LOOK gobo part=%s on=%d lights=%d"), *Args[0], bOn, Matched);
+    }));
+
+// sc.Look.Display <game|ue>: the game's display curve (the M_SC_DisplayMapping blendable) or UE's filmic tonemapper.
+static FAutoConsoleCommandWithWorldAndArgs GSCLookDisplay(
+    TEXT("sc.Look.Display"), TEXT("sc.Look.Display <game|ue>: the game's ported display curve or UE's filmic tonemapper"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        const float Weight = Args.IsValidIndex(0) && Args[0] == TEXT("ue") ? 0.f : 1.f;
+        int32 Changed = 0;
+        for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+            for (FWeightedBlendable& B : It->Settings.WeightedBlendables.Array)
+                if (const auto* MID = Cast<UMaterialInstanceDynamic>(B.Object); MID && MID->Parent && MID->Parent->GetName() == TEXT("M_SC_DisplayMapping"))
+                {
+                    B.Weight = Weight;
+                    ++Changed;
+                }
+        UE_LOG(LogTemp, Display, TEXT("LOOK display=%s blendables=%d"), Weight > 0 ? TEXT("game") : TEXT("ue"), Changed);
+    }));
+
+// sc.Look.BloomStar <points> <length> [intensity]: FFT (convolution) bloom with a generated kernel, a soft core plus
+// <points> diffraction streaks of <length> (fraction of the kernel radius); 0 points returns to the standard bloom.
+static TStrongObjectPtr<UTexture2D> GBloomKernel;
+static FAutoConsoleCommandWithWorldAndArgs GSCLookBloomStar(
+    TEXT("sc.Look.BloomStar"), TEXT("sc.Look.BloomStar <points (0 = standard bloom)> <streak length 0..1> [intensity]"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        const int32 Points = Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) : 0;
+        const float Length = Args.IsValidIndex(1) ? FCString::Atof(*Args[1]) : 0.6f;
+        const float Intensity = Args.IsValidIndex(2) ? FCString::Atof(*Args[2]) : 1.f;
+        if (Points > 0)
+        {
+            constexpr int32 N = 512;
+            TArray<FFloat16Color> Pixels;
+            Pixels.SetNumUninitialized(N * N);
+            const int32 Streaks = Points % 2 ? Points * 2 : Points; // an odd star still yields symmetric spikes
+            for (int32 Y = 0; Y < N; ++Y)
+                for (int32 X = 0; X < N; ++X)
+                {
+                    const float U = (X + 0.5f) / N * 2.f - 1.f, V = (Y + 0.5f) / N * 2.f - 1.f, R = FMath::Sqrt(U * U + V * V);
+                    float K = FMath::Exp(-R * R / 0.00002f) * 40.f + FMath::Exp(-R * R / 0.01f) * 0.01f; // sharp peak (the image) + faint glow
+                    for (int32 I = 0; I < Streaks; ++I)
+                    {
+                        const float A = PI * I / (Streaks / 2.f) * 0.5f + PI / 4.f; // diagonal by default
+                        const float Along = U * FMath::Cos(A) + V * FMath::Sin(A), Across = -U * FMath::Sin(A) + V * FMath::Cos(A);
+                        if (Along > 0) K += 0.05f * FMath::Exp(-Across * Across / 0.000004f) * FMath::Exp(-Along / FMath::Max(0.02f, Length * 0.25f));
+                    }
+                    Pixels[Y * N + X] = FFloat16Color(FLinearColor(K, K, K, 1));
+                }
+            GBloomKernel.Reset(UTexture2D::CreateTransient(N, N, PF_FloatRGBA));
+            void* Data = GBloomKernel->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+            FMemory::Memcpy(Data, Pixels.GetData(), Pixels.Num() * sizeof(FFloat16Color));
+            GBloomKernel->GetPlatformData()->Mips[0].BulkData.Unlock();
+            GBloomKernel->SRGB = false;
+            GBloomKernel->UpdateResource();
+        }
+        int32 Volumes = 0;
+        for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+        {
+            if (!It->bUnbound) continue;
+            FPostProcessSettings& S = It->Settings;
+            S.bOverride_BloomMethod = Points > 0;
+            S.BloomMethod = Points > 0 ? BM_FFT : BM_SOG;
+            S.bOverride_BloomConvolutionTexture = Points > 0;
+            S.BloomConvolutionTexture = Points > 0 ? GBloomKernel.Get() : nullptr;
+            S.bOverride_BloomIntensity = Points > 0;
+            S.BloomIntensity = Intensity;
+            ++Volumes;
+        }
+        UE_LOG(LogTemp, Display, TEXT("LOOK bloom_star points=%d length=%.2f intensity=%.2f volumes=%d"), Points, Length, Intensity, Volumes);
+    }));
+
+// sc.Look.Focus <f-stop> [sensor width mm]: cinematic depth of field focused on what the screen centre sees (a trace
+// along the view); f-stop 0 turns depth of field off.
+static FAutoConsoleCommandWithWorldAndArgs GSCLookFocus(
+    TEXT("sc.Look.Focus"), TEXT("sc.Look.Focus <f-stop (0 = off)> [sensor width mm]: depth of field focused at the screen centre"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+        if (!PC || !PC->PlayerCameraManager || !Args.IsValidIndex(0)) return;
+        const float FStop = FCString::Atof(*Args[0]);
+        const float Sensor = Args.IsValidIndex(1) ? FCString::Atof(*Args[1]) : 36.f;
+        // From 30 cm ahead of the camera (clear of a first-person capsule); the player's own body counts in third person.
+        const FVector Dir = PC->PlayerCameraManager->GetCameraRotation().Vector();
+        const FVector From = PC->PlayerCameraManager->GetCameraLocation() + Dir * 30.0;
+        const FVector To = From + Dir * 100000.0;
+        FHitResult Hit;
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(SCLookFocus), true);
+        const double Distance = World->LineTraceSingleByChannel(Hit, From, To, ECC_Visibility, Query) ? Hit.Distance : 5000.0;
+        for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+        {
+            if (!It->bUnbound) continue;
+            FPostProcessSettings& S = It->Settings;
+            S.bOverride_DepthOfFieldFstop = S.bOverride_DepthOfFieldFocalDistance = S.bOverride_DepthOfFieldSensorWidth = FStop > 0;
+            S.bOverride_DepthOfFieldMinFstop = FStop > 0;
+            S.DepthOfFieldFstop = FStop;
+            S.DepthOfFieldMinFstop = FMath::Min(FStop, 1.2f);
+            S.DepthOfFieldFocalDistance = FStop > 0 ? float(Distance) : 0.f;
+            S.DepthOfFieldSensorWidth = Sensor;
+        }
+        UE_LOG(LogTemp, Display, TEXT("LOOK focus fstop=%.2f sensor=%.0f distance=%.0f hit=%s"), FStop, Sensor, Distance, *GetNameSafe(Hit.GetActor()));
     }));
 
 // sc.Look.Sky <intensity>: every sky light's intensity, then a fresh capture.

@@ -42,9 +42,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogSCViewer, Log, All);
 
 namespace
 {
-// Display convention shared with USCImportLibrary::ImportFolder: the model's lowest point sits this far above the
-// Viewer floor plane (Z = 0). A presentation constant, not a game-data value.
-constexpr double FloorClearanceCm = 100.0;
+// The Viewer map's floor top (ue/scripts/create_viewer.py FLOOR_TOP): a loaded model rests on it by its lowest visible
+// point (landing gear), and an environment's ship floor is moved to it.
+constexpr double ViewerFloorZ = -5.0;
 // Progress-bar shares of the pipeline phases (export dominates cold loads, import dominates cache hits).
 constexpr float ExportShare = 0.45f, ParseShare = 0.05f;
 // Game-thread time per frame given to the import job; the rest of the frame renders the UI and viewport.
@@ -440,11 +440,11 @@ void USCViewerSubsystem::PlaceEnvironment()
     {
         // Placement: the environment's ship floor is the first large (>= 20 m across), upward-facing surface
         // below a point 2 m under its origin (a top-loading hangar's origin is on its roof hatch; the room and the ship
-        // elevator hang below it); it is moved to the map floor (MapFloorZ), where the ship rests.
-        constexpr double MapFloorZ = -5.0, MinFloorSpan = 2000.0;
+        // elevator hang below it); it is moved to the map floor (ViewerFloorZ), where the ship rests.
+        constexpr double MinFloorSpan = 2000.0;
         FCollisionQueryParams Q(SCENE_QUERY_STAT(SCEnvFloor), true);
         if (Vehicle.IsValid()) Q.AddIgnoredActor(Vehicle.Get());
-        double FloorZ = TNumericLimits<double>::Max(), From = -200.0;
+        double FloorZ = TNumericLimits<double>::Max(), From = EnvironmentActor->GetActorLocation().Z - 200.0; // 2 m under the origin (roof hatch)
         FVector2D FloorCentre = FVector2D::ZeroVector; // the ship stands in the middle of the floor part it lands on
         for (int32 Step = 0; Step < 64 && From > Bounds.Min.Z; ++Step)
         {
@@ -468,9 +468,9 @@ void USCViewerSubsystem::PlaceEnvironment()
             if (Hit.GetComponent()) Q.AddIgnoredComponent(Hit.GetComponent());
             From = Hit.ImpactPoint.Z;
         }
-        if (FloorZ < TNumericLimits<double>::Max()) EnvironmentActor->AddActorWorldOffset(FVector(0, 0, MapFloorZ - FloorZ));
+        if (FloorZ < TNumericLimits<double>::Max()) EnvironmentActor->AddActorWorldOffset(FVector(0, 0, ViewerFloorZ - FloorZ));
         UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_PLACE floor_centre=%s floor_z=%.1f offset_z=%.1f"), *FloorCentre.ToString(), FloorZ < TNumericLimits<double>::Max() ? FloorZ : 0.,
-               FloorZ < TNumericLimits<double>::Max() ? MapFloorZ - FloorZ : 0.);
+               FloorZ < TNumericLimits<double>::Max() ? ViewerFloorZ - FloorZ : 0.);
     }
 }
 
@@ -595,6 +595,25 @@ float USCViewerSubsystem::GetLoadProgress() const
     default: return 0.f;
     }
 }
+float USCViewerSubsystem::GetEnvironmentProgress() const
+{
+    if (EnvExport.IsValid()) return ExportShare * (EnvProgress ? EnvProgress->GetFraction() : 0.f);
+    if (EnvParse.IsValid()) return ExportShare;
+    if (EnvJob) return ExportShare + ParseShare + (1.f - ExportShare - ParseShare) * EnvJob->GetFraction();
+    return EnvPlaceInTicks > 0 ? 1.f : 0.f;
+}
+FString USCViewerSubsystem::GetEnvironmentPhaseText() const
+{
+    if (bEnvironmentPending) return TEXT("waiting for the model");
+    if (EnvExport.IsValid())
+    {
+        const FString Step = EnvProgress ? EnvProgress->GetPhase() : FString();
+        return Step.IsEmpty() ? TEXT("Export: starting") : TEXT("Export: ") + Step;
+    }
+    if (EnvParse.IsValid()) return TEXT("Reading package");
+    if (EnvJob) return TEXT("Import: ") + EnvJob->GetPhase();
+    return EnvPlaceInTicks > 0 ? TEXT("Placing") : FString();
+}
 FString USCViewerSubsystem::GetLoadPhaseText() const
 {
     switch (Phase)
@@ -693,8 +712,11 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         if (Stage == ESCImportStage::Succeeded)
         {
             Vehicle = Result.Vehicle;
-            const FBox Bounds = Vehicle->GetComponentsBoundingBox(true);
-            if (Bounds.IsValid) Vehicle->AddActorWorldOffset(FVector(0, 0, FloorClearanceCm - Bounds.Min.Z));
+            const int32 GearClips = Vehicle->RestOnLandingGear();
+            FString LowestPart;
+            const double Lowest = Vehicle->LowestVisibleZ(&LowestPart);
+            UE_LOG(LogSCViewer, Display, TEXT("VIEWER_REST gear_clips=%d lowest_z=%.1f part=%s"), GearClips, Lowest, *LowestPart);
+            if (Lowest < TNumericLimits<double>::Max()) Vehicle->AddActorWorldOffset(FVector(0, 0, ViewerFloorZ - Lowest));
             LoadedEntity = PendingEntity;
             LoadedKey = PendingKey;
             Job.Reset();
@@ -1185,6 +1207,12 @@ static FAutoConsoleCommandWithWorldAndArgs GSCEnvironment(
         if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World)) Viewer->SetEnvironment(Args.IsValidIndex(0) ? FString::Join(Args, TEXT(" ")) : FString());
     }));
 
+static FAutoConsoleCommandWithWorldAndArgs GSCUIPanels(
+    TEXT("sc.UI.Panels"), TEXT("sc.UI.Panels <0|1>: hide or show the side panels (model browser, hierarchy)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World))
+            Viewer->SetPanelsVisible(Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) != 0 : !Viewer->ArePanelsVisible());
+    }));
 static FAutoConsoleCommandWithWorldAndArgs GSCEnvironmentState(
     TEXT("sc.Environment.State"), TEXT("sc.Environment.State <bind|open|closed>: pose the environment's mechanisms (doors, elevators)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {

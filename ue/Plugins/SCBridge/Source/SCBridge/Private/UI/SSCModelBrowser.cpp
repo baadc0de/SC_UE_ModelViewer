@@ -17,7 +17,6 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/Layout/SWrapBox.h"
-#include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -102,24 +101,6 @@ void SSCModelBrowser::Construct(const FArguments& Args)
                     })
                     [SNew(STextBlock).Font(Font(10)).Text(LOCTEXT("Cancel", "Cancel"))]
                 ]
-            ]
-            + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 2)
-            [
-                SNew(SProgressBar)
-                .Percent_Lambda([this] { return Subsystem.IsValid() ? TOptional<float>(Subsystem->GetLoadProgress()) : TOptional<float>(); })
-                .FillColorAndOpacity_Lambda([this] {
-                    const ESCLoadPhase P = Subsystem.IsValid() ? Subsystem->GetLoadPhase() : ESCLoadPhase::Idle;
-                    return FSlateColor(P == ESCLoadPhase::Failed ? Bad() : P == ESCLoadPhase::Succeeded ? Good() : Accent());
-                })
-            ]
-            + SVerticalBox::Slot().AutoHeight()
-            [
-                SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).AutoWrapText(true).Text_Lambda([this] {
-                    if (!Subsystem.IsValid()) return FText();
-                    const FString Entity = Subsystem->IsBusy() ? Subsystem->GetPendingEntity() : Subsystem->GetLastReport().Entity;
-                    return FText::FromString(Entity.IsEmpty() ? Subsystem->GetLoadPhaseText()
-                                                              : Entity + TEXT(" — ") + Subsystem->GetLoadPhaseText());
-                })
             ]
         ]
     ];

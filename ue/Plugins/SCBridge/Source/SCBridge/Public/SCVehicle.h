@@ -68,6 +68,11 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") bool bMegaLightsActive = false;
     /** Refresh after changing the project/scalability ray-tracing settings at runtime. */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") void RefreshLightShadowPolicy();
+    // Lowest point of the visible geometry (not the game's invisible colliders): where the model rests, e.g. landing gear.
+    double LowestVisibleZ(FString* OutPart = nullptr) const;
+    // The ship standing on the ground: every Landing_Gear Mannequin fragment tagged Compress snapped to its last frame
+    // (the game drives that clip by suspension load; its end is the gear compressed, feet flat). Returns the clips posed.
+    int32 RestOnLandingGear();
     /** Room volumes of the interior containers (WP-U3b §12); empty when the vehicle authors no rooms. */
     TArray<FSCLightArea> LightAreas;
     /** Vertex samples per imported mesh asset (mesh-local cm): the input of the inside/outside vote. */

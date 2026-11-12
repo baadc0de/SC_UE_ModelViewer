@@ -22,6 +22,8 @@ private:
     void SetPlayerViewRect(const FVector2D& Origin, const FVector2D& Size);
     TSharedRef<SWidget> MakeTopBar();
     TSharedRef<SWidget> MakeArchiveOverlay();
+    TSharedRef<SWidget> MakeLoadingOverlay();
+    EVisibility PanelVisibility() const;
     TSharedRef<SWidget> MakeFooter();
     TSharedRef<SWidget> MakeCameraButton(const FText& Label, uint8 Mode, const FText& Tip);
     FReply PickArchive();
