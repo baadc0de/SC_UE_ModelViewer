@@ -1,0 +1,45 @@
+# Substrate G-buffer A/B for the Lumen World Cache (plan D12/D13): four Cutlass views (cargo bay, cockpit aft,
+# cockpit forward through the canopy glass, orbit view of the painted hull), each lit through the World Cache
+# (r.Lumen.WorldCache.Allowed 1, reset, settle) and through the Surface Cache (Allowed 0); the cargo bay also
+# shows the World Cache debug counters and samples frame cost in both modes. Run once per
+# r.Substrate.ProjectGBufferFormat (adaptive 1 vs blendable 0) and compare shot by shot.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+1 r.Lumen.WorldCache.Allowed 1
+0 r.Lumen.WorldCache.Reset 1
+5 shot cargo-world-cache
+0 frametime 6 cargo-world-cache
+0 ProfileGPU
+1 r.Lumen.WorldCache.Debug 1
+2 shot cargo-world-cache-stats
+0 r.Lumen.WorldCache.Debug 0
+0 r.Lumen.WorldCache.Allowed 0
+6 shot cargo-surface-cache
+0 frametime 6 cargo-surface-cache
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+1 r.Lumen.WorldCache.Allowed 1
+0 r.Lumen.WorldCache.Reset 1
+5 shot aft-world-cache
+0 r.Lumen.WorldCache.Allowed 0
+6 shot aft-surface-cache
+0 sc.FP.Look 0 10
+1 r.Lumen.WorldCache.Allowed 1
+0 r.Lumen.WorldCache.Reset 1
+5 shot canopy-world-cache
+0 r.Lumen.WorldCache.Allowed 0
+6 shot canopy-surface-cache
+0 sc.Camera orbit
+1 r.Lumen.WorldCache.Allowed 1
+0 r.Lumen.WorldCache.Reset 1
+5 shot hull-world-cache
+0 r.Lumen.WorldCache.Allowed 0
+6 shot hull-surface-cache
+0 r.Lumen.WorldCache.Allowed 1
+1 quit

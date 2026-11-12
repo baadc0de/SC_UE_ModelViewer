@@ -1,0 +1,51 @@
+# Lumen World Cache fill speed by bounce count (plan D13): reset the cache, freeze it 50 ms later
+# (r.Lumen.WorldCache.Freeze keeps sampling but stops updating), screenshot the early cache; a shot
+# after 4 s of unfrozen accumulation is the converged reference. MaxBounces 3 / 5 / 10.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+1 r.Lumen.WorldCache.MaxBounces 3
+2 r.Lumen.WorldCache.Reset 1
+0.05 r.Lumen.WorldCache.Freeze 1
+0.5 shot cargo-b3-50ms
+0 r.Lumen.WorldCache.Freeze 0
+4 shot cargo-b3-converged
+1 r.Lumen.WorldCache.MaxBounces 5
+2 r.Lumen.WorldCache.Reset 1
+0.05 r.Lumen.WorldCache.Freeze 1
+0.5 shot cargo-b5-50ms
+0 r.Lumen.WorldCache.Freeze 0
+4 shot cargo-b5-converged
+1 r.Lumen.WorldCache.MaxBounces 10
+2 r.Lumen.WorldCache.Reset 1
+0.05 r.Lumen.WorldCache.Freeze 1
+0.5 shot cargo-b10-50ms
+0 r.Lumen.WorldCache.Freeze 0
+4 shot cargo-b10-converged
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+1 r.Lumen.WorldCache.MaxBounces 3
+2 r.Lumen.WorldCache.Reset 1
+0.05 r.Lumen.WorldCache.Freeze 1
+0.5 shot aft-b3-50ms
+0 r.Lumen.WorldCache.Freeze 0
+4 shot aft-b3-converged
+1 r.Lumen.WorldCache.MaxBounces 5
+2 r.Lumen.WorldCache.Reset 1
+0.05 r.Lumen.WorldCache.Freeze 1
+0.5 shot aft-b5-50ms
+0 r.Lumen.WorldCache.Freeze 0
+4 shot aft-b5-converged
+1 r.Lumen.WorldCache.MaxBounces 10
+2 r.Lumen.WorldCache.Reset 1
+0.05 r.Lumen.WorldCache.Freeze 1
+0.5 shot aft-b10-50ms
+0 r.Lumen.WorldCache.Freeze 0
+4 shot aft-b10-converged
+1 r.Lumen.WorldCache.MaxBounces 3
+1 quit

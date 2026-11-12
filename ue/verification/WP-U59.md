@@ -2,7 +2,8 @@
 
 Host: UE **5.9.0 preview-1** (`5.9.0-60351404+++UE5+Release-5.9`) at `~/UnrealEngine/5.9`, Vulkan SM6,
 RTX 4090, Star Citizen LIVE 4.10.2. It replaces 5.8.2 (plan D9); the 5.8 install was removed after the
-checks below passed. Decision: plan D13 (`r.Lumen.WorldCache.Supported=1` in `DefaultEngine.ini`).
+checks below passed. Decision: plan D13 — the World Cache is **off** (`r.Lumen.WorldCache.Supported=0`) and the adaptive Substrate
+G-buffer stays (see "Decision" at the end).
 
 ## Install
 
@@ -49,12 +50,26 @@ SC_TIMEOUT=1800 ue/scripts/capture_route.sh u59-cutlass ue/scripts/routes/cutlas
   -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
 ```
 
-**World Cache active.** The log sets `r.Lumen.WorldCache.Supported:1` and allocates
-`Lumen.WorldCache.{Accumulation,HashTable,Lighting,Header}`; `ProfileGPU` in the cargo bay shows a
-`LumenWorldCache` pass (async compute) next to `LumenScreenProbeGather` and `LumenReflections`, and no
-Surface Cache pass (scene update, card capture, scene lighting, radiosity). `r.Lumen.WorldCache.Debug 1`
-draws the cache statistics overlay. Same view, World Cache vs Surface Cache (`r.Lumen.WorldCache.Allowed 0`):
-GPU 7.28 ms vs 6.64 ms mean (+0.64 ms); the two images differ only in the darkest recesses.
+**World Cache runs but stays empty (blocker).** The config sets `r.Lumen.WorldCache.Supported:1`, the cache
+buffers are allocated and `ProfileGPU` shows `LumenWorldCache` with its `TracePaths Bounce0/1`, `LastBounce` and
+`Update` passes (no Surface Cache passes) — but the passes take ~0.013 ms for 14,355 paths and the
+`r.Lumen.WorldCache.Debug 1` overlay reads `Entries 0, NewThisFrame 0, Samples 0` in the cargo bay, the cockpit and
+looking at the stock Viewer hangar, with async compute on or off and with `r.RayTracing.SimplifiedMaterialOverride`
+0 or 1. Cause (engine shaders, 5.9.0 preview-1): the path tracer's first bounce reads the G-buffer in a ray
+generation shader (`LumenWorldCacheTracePaths.usf`, `ReadMaterialData`); with Substrate's adaptive G-buffer
+(`SUBSTRATE_GBUFFER_FORMAT==1`, plan D12) that read is `InternalReadMaterialData_Substrate_Regular`, whose body is
+compiled only when `SUBSTRATE_MATERIALCONTAINER_IS_VIEWRESOURCE`, which `Substrate.ush` defines as 0 for ray
+generation shaders — so every pixel is invalid and every path returns before tracing. The trace shader special-cases
+only the blendable G-buffer (format 0). Consequence, measured with `routes/cutlass-world-cache-control.txt`: clearing
+the cache every frame changes nothing (RMSE 1.3–1.5/255, the noise floor), while the Surface Cache
+(`r.Lumen.WorldCache.Allowed 0`) is brighter in the indirect-lit areas (aft view: dark band 3.2 → 7.0, shadow band
+17.9 → 24.1, mean 38.1 → 44.1 of 255): with this G-buffer the World Cache currently *loses* indirect light.
+
+**MaxBounces sweep** (`routes/cutlass-world-cache-bounces.txt`, 3 / 5 / 10 / 3 at three views): trace-pass cost
+0.04 / 0.06 / 0.17 ms, whole-frame GPU unchanged within noise (7.1–7.9 ms); images identical within the 3-vs-3
+noise floor in dark, shadow and lit bands. With an empty cache this measures nothing about bounce lighting; it has
+to be repeated once the cache fills. `routes/cutlass-world-cache-warmup.txt` (freeze 50 ms after a reset) is the
+fill-speed check for the same rerun.
 
 **Regression route.** `cutlass-ramp-to-cockpit` runs all 81 steps; every shot lands within 2.1 cm of the
 5.8.2 run of the same route (`p3c-cutlass`, WP-P3), wall/bulkhead blocks, noclip refusal and fall recovery
@@ -73,3 +88,40 @@ the GPU column is the comparable one: +1.2 ms in first person, of which ~0.6 ms 
 Known, unchanged from 5.8.2: the transient `Invalid Lod 0 for Rendering Asset: SkeletalMesh` warnings during
 assembly (also in the 5.8.2 logs) and the red on-screen message at the top of the viewport (present in the
 5.8.2 shots too). MegaLights is still marked Experimental in 5.9.0.
+
+## Blendable G-buffer trial (`r.Substrate.ProjectGBufferFormat=0`)
+
+Routes: `routes/cutlass-gbuffer-ab.txt` (cargo bay, cockpit aft, cockpit forward through the canopy; each through
+the World Cache and the Surface Cache) and `routes/cutlass-gbuffer-ab-exterior.txt` (orbit view; Gladius, since the
+Cutlass orbit framing at 85 m puts the camera outside the Viewer hangar and renders black in both formats). First
+launch after the switch: ~5 min of global/material shader compiles; both formats then start warm from the DDC.
+
+**The cache fills.** Cargo bay overlay: `Entries 45617, UsedThisFrame 8936, NewThisFrame 152, Utilization 4.35 %`;
+trace passes 0.15 + 0.19 + 0.04 ms (vs 0.016 ms of early-outs on the adaptive format). Whole-frame GPU in the cargo
+bay: World Cache 7.26 ms, Surface Cache 6.57 ms.
+
+**World Cache vs Surface Cache, blendable** (0-255 grey, viewport): dark band +0.5..+1.0, shadow band +0.6..+1.8 in
+every view — the extra bounce light the cache is meant to add; lit surfaces within ±2.
+
+**Blendable vs adaptive, both on the Surface Cache** (material encoding only): RMSE 6.7 (cargo bay), 6.8 (aft), 2.5
+(canopy), 1.3 (Gladius exterior). The difference sits on the dark metal floors (low diffuse, high F0): the adaptive
+format keeps the slab's Diffuse Albedo / F0 / F90 split (WP-U2, D12) and shows a darker plate with a directional
+sheen; the blendable format refits it into BaseColor/Metallic/Specular (one closure, 20 B/pixel) and the plate reads
+lighter and flatter. Walls, doors, emissives, railings, decals, the Gladius paint/camo and the canopy glass are
+unchanged within noise.
+
+**MaxBounces on the blendable format** (`routes/cutlass-world-cache-bounces.txt`): trace passes 0.24 / 0.35 / 0.49 ms
+for 3 / 5 / 10 bounces; images identical within the 3-vs-3 noise floor (dark/shadow/lit bands within 0.07/255,
+RMSE 1.2–1.9 for every pair). Fill speed (`routes/cutlass-world-cache-warmup.txt`, cache frozen 50 ms after a reset):
+95–99 % of the converged shadow level after 5–6 frames at every bounce count. The last bounce reads the previous
+frame's cache, so bounces beyond 3 add nothing visible in these interiors; keep the default 3.
+
+Headless on the blendable format: importer 35/35, importer + Cutlass package + tar 37/37.
+
+## Decision (owner, 2026-11-12)
+
+Keep the adaptive Substrate G-buffer (`r.Substrate.ProjectGBufferFormat=1`, D12) and turn the World Cache off
+(`r.Lumen.WorldCache.Supported=0`, which also drops its shaders): the adaptive format reproduces the game's own
+material split, and the World Cache's gain in these interiors is small. Re-test with every 5.9.x release: set
+`r.Lumen.WorldCache.Supported=1`, restart, and `r.Lumen.WorldCache.Debug 1` must show `Entries > 0` on the
+adaptive format before it is turned back on.

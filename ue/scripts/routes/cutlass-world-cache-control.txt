@@ -1,0 +1,29 @@
+# Lumen World Cache sensitivity control (plan D13): the same two Cutlass views with the cache working
+# normally, cleared every frame (r.Lumen.WorldCache.ResetEveryNthFrame 1: hits find no cached lighting),
+# and replaced by the Surface Cache (r.Lumen.WorldCache.Allowed 0). Shows how much of the image the cache
+# carries, i.e. the scale against which the MaxBounces sweep is read.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+4 shot cargo-normal
+0 r.Lumen.WorldCache.ResetEveryNthFrame 1
+4 shot cargo-cleared
+0 r.Lumen.WorldCache.ResetEveryNthFrame 0
+0 r.Lumen.WorldCache.Allowed 0
+5 shot cargo-surface-cache
+0 r.Lumen.WorldCache.Allowed 1
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+4 shot aft-normal
+0 r.Lumen.WorldCache.ResetEveryNthFrame 1
+4 shot aft-cleared
+0 r.Lumen.WorldCache.ResetEveryNthFrame 0
+0 r.Lumen.WorldCache.Allowed 0
+5 shot aft-surface-cache
+0 r.Lumen.WorldCache.Allowed 1
+1 quit
