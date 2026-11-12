@@ -89,6 +89,7 @@ struct FMeshSlot
     FString PartSuffix;
     TArray<UStaticMesh*> Variants;
     TSet<int32> GamePhysicsVariants; // indices into Variants
+    bool bGamePhysicsFailed = false; // a game collider part failed to derive or build: render collision stays
 };
 } // namespace
 
@@ -131,6 +132,7 @@ struct FSCImportJob::FState
     TMap<FString, USkeletalMesh*> RigMeshes;
     TMap<FString, TSet<int32>> MeshTranslucentSlots;
     TMap<FString, TSet<int32>> GamePhysicsVariants; // per mesh asset: variants holding the game's colliders (WP-P3)
+    TSet<FString> GamePhysicsReplacesRender; // mesh assets whose every blocking collider was built: render ignores the pawn
     TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
 
     void Warn(const FString& Path, const FString& Message)
@@ -501,6 +503,7 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                 if (!FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
                 {
                     Slot.PrepareWarnings.Emplace(Path, Error);
+                    Slot.bGamePhysicsFailed = true;
                     continue;
                 }
                 Slot.CollisionSeconds += Part.Mesh.CollisionDeriveSeconds;
@@ -604,7 +607,10 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
                                                      !bTranslucent && Options.bBuildCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats,
                                                      AssetError);
     if (!Mesh)
+    {
         Warn(Path + Suffix, AssetError);
+        if (Part.bGamePhysics) Slot.bGamePhysicsFailed = true;
+    }
     else
     {
         Vehicle->Meshes.Add(Mesh);
@@ -648,8 +654,13 @@ void FSCImportJob::FState::FinishBuild(FMeshSlot& Slot)
     if (Slot.Data->bHasGamePhysics)
     {
         GamePhysicsVariants.Add(Path, MoveTemp(Slot.GamePhysicsVariants));
-        UE_LOG(LogSCImport, Display, TEXT("GAME_COLLISION path=%s colliders=%d filtered=%d triangles=%d parts=%d"), *Path,
-               Slot.Data->PhysicsShapes, Slot.Data->PhysicsFilteredShapes, Slot.Data->PhysicsTriangles.Num(), GamePhysicsVariants[Path].Num());
+        // A collider that could not be built must not open a hole: then the render mesh keeps blocking the pawn too.
+        const bool bReplaces = FSCMeshImporter::GamePhysicsReplacesRender(*Slot.Data) && !Slot.bGamePhysicsFailed;
+        if (bReplaces) GamePhysicsReplacesRender.Add(Path);
+        else Warn(Path, TEXT("Game collision incomplete: render geometry keeps blocking movement"));
+        UE_LOG(LogSCImport, Display, TEXT("GAME_COLLISION path=%s colliders=%d filtered=%d failed=%d triangles=%d parts=%d replaces_render=%d"), *Path,
+               Slot.Data->PhysicsShapes, Slot.Data->PhysicsFilteredShapes, Slot.Data->PhysicsFailedShapes + int32(Slot.bGamePhysicsFailed),
+               Slot.Data->PhysicsTriangles.Num(), GamePhysicsVariants[Path].Num(), bReplaces);
     }
     Slot.Data->PhysicsPositions.Empty();
     Slot.Data->PhysicsTriangles.Empty();
@@ -822,7 +833,7 @@ void FSCImportJob::FState::Assemble()
                         Warn(I.EntityName, TEXT("Skeletal collision unavailable"));
                     }
             // WP-P3: with the game's colliders present, render geometry answers traces but never blocks the pawn.
-            if (GamePhysicsVariants.Contains(I.MeshAsset)) E.Rig->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+            if (GamePhysicsReplacesRender.Contains(I.MeshAsset)) E.Rig->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
             E.Rig->SetVisibility(!I.bInvisible);
             E.Rig->SetHiddenInGame(I.bInvisible);
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
@@ -835,7 +846,9 @@ void FSCImportJob::FState::Assemble()
             E.Rig->ResetPose();
             RigSeconds += FPlatformTime::Seconds() - RigStart;
         }
-        if (const auto* Variants = Meshes.Find(I.MeshAsset); Variants && E.Mesh && E.Mesh->bHasGeometry)
+        // An asset can carry game colliders without render triangles (collider-only geometry): still assembled.
+        if (const auto* Variants = Meshes.Find(I.MeshAsset);
+            Variants && E.Mesh && (E.Mesh->bHasGeometry || !GamePhysicsVariants.FindRef(I.MeshAsset).IsEmpty()))
         {
             ++Result.InstanceCount;
             for (int32 Variant = 0; Variant < Variants->Num(); ++Variant)
@@ -876,7 +889,8 @@ void FSCImportJob::FState::Assemble()
                         C->RegisterComponent();
                         continue;
                     }
-                    C->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore); // render: traces only
+                    if (GamePhysicsReplacesRender.Contains(I.MeshAsset))
+                        C->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore); // render: traces only
                 }
                 C->SetVisibility(!I.bInvisible);
                 C->SetHiddenInGame(I.bInvisible);
@@ -948,6 +962,7 @@ void FSCImportJob::FState::Assemble()
         return true;
     };
     V->PhysicsGridTriangles = Manifest.PhysicsGrid; // the root entity sits at the actor origin
+    V->PhysicsGridShapeEnds = Manifest.PhysicsGridShapeEnds;
     V->PhysicsGridBounds.Init();
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));

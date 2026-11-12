@@ -24,7 +24,8 @@ use std::{
 // 19: decomposed mip-0 textures use DDS pass-through and separate DDNA smoothness refs.
 // 23: packages with a LayerBlend_V2 material carry the engine's wear/dirt/frost detail map (render fixture
 //     `shader_textures`, WP-U2b).
-pub const CACHE_FORMAT_VERSION: u32 = 23;
+// 24: `root_entity.physics_grid` composes NMC node matrices down the parent hierarchy (WP-P3 review).
+pub const CACHE_FORMAT_VERSION: u32 = 24;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

@@ -53,6 +53,7 @@ struct SCBRIDGE_API FSCDerivedMesh
     TArray<FIntVector> PhysicsTriangles;
     TArray<int32> PhysicsTriangleNodes;
     int32 PhysicsShapes = 0, PhysicsFilteredShapes = 0; // colliders used / non-obstacle classes left out
+    int32 PhysicsFailedShapes = 0; // blocking colliders that could not be built (malformed record, degenerate node)
 };
 struct SCBRIDGE_API FSCMeshBuildStats
 {
@@ -77,6 +78,9 @@ public:
     /** Whether an `extras.sc_physics` record blocks an actor: every part does, except node-name classes that are no
      *  physical obstacle (`class` interaction, tires_only, grid_volume; see the StarBreaker `physics_class` table). */
     static bool PhysicsBlocksActor(const TSharedPtr<class FJsonObject>& Shape);
+    /** The game's colliders stand in for the render mesh's movement collision only when every blocking collider was
+     *  built; otherwise the render mesh keeps blocking the pawn (a failed collider must not open a hole). */
+    static bool GamePhysicsReplacesRender(const FSCDerivedMesh& Data) { return Data.bHasGamePhysics && Data.PhysicsFailedShapes == 0; }
     static void SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent);
     /** Worker-thread Chaos BVH. bVertexIndexMap stores the identity external->particle map that
      *  FTriangleMeshImplicitObject::UpdateVertices requires (refittable skinned collision only). */

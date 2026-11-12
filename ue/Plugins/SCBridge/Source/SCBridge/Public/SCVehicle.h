@@ -84,6 +84,7 @@ public:
      *  Inside it the game's actors belong to the vehicle's grid, where the vehicle's own colliders (HullColliders,
      *  the root entity's game collision) do not block them; the interior's and the items' colliders do. */
     TArray<FVector> PhysicsGridTriangles;
+    TArray<int32> PhysicsGridShapeEnds; // per shape, end (exclusive) in PhysicsGridTriangles; empty: one shape
     FBox PhysicsGridBounds = FBox(ForceInit);
     UPROPERTY() TArray<TObjectPtr<UPrimitiveComponent>> HullColliders;
     /** World point inside the physics-grid volume (ray parity); false without a volume. */

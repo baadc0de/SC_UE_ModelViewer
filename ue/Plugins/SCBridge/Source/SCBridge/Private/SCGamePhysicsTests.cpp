@@ -31,6 +31,9 @@ public:
 // A synthetic 2 m cube from (0,0,0) to (2,2,2) in the SC frame, outward-wound.
 const TCHAR* CubeShape = TEXT(R"({"kind":"trimesh","part":1,"vertices":[[0,0,0],[2,0,0],[2,2,0],[0,2,0],[0,0,2],[2,0,2],[2,2,2],[0,2,2]],)"
     R"("triangles":[[0,2,1],[0,3,2],[4,5,6],[4,6,7],[0,1,5],[0,5,4],[1,2,6],[1,6,5],[2,3,7],[2,7,6],[3,0,4],[3,4,7]]})");
+// The same cube moved by (1, 1, 1) m: overlaps the first in (1..2)^3.
+const TCHAR* ShiftedCubeShape = TEXT(R"({"kind":"trimesh","part":1,"vertices":[[1,1,1],[3,1,1],[3,3,1],[1,3,1],[1,1,3],[3,1,3],[3,3,3],[1,3,3]],)"
+    R"("triangles":[[0,2,1],[0,3,2],[4,5,6],[4,6,7],[0,1,5],[0,5,4],[1,2,6],[1,6,5],[2,3,7],[2,7,6],[3,0,4],[3,4,7]]})");
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCGamePhysicsClasses, "SCBridge.GamePhysics.Classes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -72,7 +75,29 @@ bool FSCGamePhysicsGrid::RunTest(const FString&)
     TestFalse(TEXT("Beside outside"), Vehicle->IsInPhysicsGrid(FVector(300, 100, 100)));
     TestTrue(TEXT("Axis whose head is inside touches"), Vehicle->IsInPhysicsGrid(FVector(100, 100, -50), FVector(100, 100, 50)));
     TestFalse(TEXT("Axis above the volume does not"), Vehicle->IsInPhysicsGrid(FVector(100, 100, 250), FVector(100, 100, 400)));
+    // WP-P3 review: a ray through an edge shared by two triangles must not decide the parity. The +X face (UE x = 200)
+    // is split along y + z = 200; points whose first ray meets that diagonal are inside.
+    for (int32 K = -50; K <= 50; ++K)
+    {
+        const FVector OnEdge(100, 100, 99.8 + K * 1e-7);
+        if (!Vehicle->IsInPhysicsGrid(OnEdge)) { AddError(FString::Printf(TEXT("Shared-edge point %s classified outside"), *OnEdge.ToString())); break; }
+    }
+    // Two overlapping shapes: a point inside both is inside (each shape is its own closed volume).
+    const FSceneSource Two(FString(TEXT(R"({"version":2,"export_kind":"Decomposed","root_entity":{"entity_name":"Synthetic","physics_grid":{"source_path":"g.cgf","shapes":[)"))
+                           + CubeShape + TEXT(",") + ShiftedCubeShape + TEXT("]}}}"));
+    FSCSceneManifest Overlap;
+    TestTrue(*Error, FSCPackageReader::Read(Two, Overlap, Error));
+    TestEqual(TEXT("Shape ranges"), Overlap.PhysicsGridShapeEnds, TArray<int32>{36, 72});
+    Vehicle->PhysicsGridTriangles = Overlap.PhysicsGrid;
+    Vehicle->PhysicsGridShapeEnds = Overlap.PhysicsGridShapeEnds;
+    Vehicle->PhysicsGridBounds.Init();
+    for (const FVector& P : Overlap.PhysicsGrid) Vehicle->PhysicsGridBounds += P;
+    TestTrue(TEXT("Inside both shapes"), Vehicle->IsInPhysicsGrid(FVector(150, 150, 150)));
+    TestTrue(TEXT("Inside the second only"), Vehicle->IsInPhysicsGrid(FVector(250, 250, 250)));
+    TestTrue(TEXT("Axis wholly inside the overlap touches"), Vehicle->IsInPhysicsGrid(FVector(150, 150, 120), FVector(150, 150, 180)));
+    TestFalse(TEXT("Outside both"), Vehicle->IsInPhysicsGrid(FVector(350, 150, 150)));
     Vehicle->PhysicsGridTriangles.Reset();
+    Vehicle->PhysicsGridShapeEnds.Reset();
     TestFalse(TEXT("No volume, never inside"), Vehicle->IsInPhysicsGrid(FVector(100, 100, 100)));
     return true;
 }

@@ -119,12 +119,13 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
             if (Kind == TEXT("damage_mesh") || Kind == TEXT("sdf")) continue; // damage physics, not a collider
             // Every part collides (`part` is a per-node index), except node-name classes that are no obstacle for an actor.
             if (!PhysicsBlocksActor(Shape)) { ++Out.PhysicsFilteredShapes; continue; }
-            if (bDegenerate) { Out.Warnings.Add(TEXT("Degenerate node: collider skipped: ") + NodeName); continue; }
+            if (bDegenerate) { Out.Warnings.Add(TEXT("Degenerate node: collider skipped: ") + NodeName); ++Out.PhysicsFailedShapes; continue; }
             TArray<FVector> Tris;
             FString ShapeError;
             if (!PhysicsShapeTriangles(Shape, Tris, MeshTriangles, ShapeError))
             {
                 Out.Warnings.Add(NodeName + TEXT(": collider skipped: ") + ShapeError);
+                ++Out.PhysicsFailedShapes;
                 continue;
             }
             ++Out.PhysicsShapes;

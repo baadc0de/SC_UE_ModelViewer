@@ -347,7 +347,7 @@ bool USCImportLibrary::RunUnitTests()
         TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsMasterParameters"), TEXT("FSCMaterialsTextures"), TEXT("FSCMaterialsSmoothnessPng"), TEXT("FSCMaterialsDdsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic"), TEXT("FSCRigSourceTiming"), TEXT("FSCRigSourcePlayback"), TEXT("FSCLightDefaults"), TEXT("FSCLightAuthoredModel"),
         TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement"), TEXT("FSCLightRoomChannels"), TEXT("FSCDirtExterior"), TEXT("FSCLightVerifier"),
         TEXT("FSCStarEngineFixture"), TEXT("FSCStarEngineDomain"), TEXT("FSCStarEngineRules"),
-        TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach"), TEXT("FSCGamePhysicsClasses"), TEXT("FSCGamePhysicsGrid")};
+        TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach"), TEXT("FSCGamePhysicsClasses"), TEXT("FSCGamePhysicsGrid"), TEXT("FSCGamePhysicsFailedCollider")};
     FString Folder;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
     if (FParse::Param(FCommandLine::Get(), TEXT("SCFirstPersonTests"))) Names = {TEXT("FSCFirstPersonCollision")};
@@ -371,3 +371,35 @@ bool USCImportLibrary::RunUnitTests()
     return false;
 #endif
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCGamePhysicsFailedCollider, "SCBridge.GamePhysics.FailedCollider", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCGamePhysicsFailedCollider::RunTest(const FString&)
+{
+    // WP-P3 review: a collider that cannot be built must not leave the render mesh non-blocking.
+    auto Source = Triangle();
+    auto Derived = [&](const TCHAR* Records, FSCDerivedMesh& D) {
+        Source.Files.Add(TEXT("physics.glb"), EditGLB(Source.Files[TEXT("triangle.glb")], [&](TSharedPtr<FJsonObject> O) {
+            TArray<TSharedPtr<FJsonValue>> List;
+            FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Records), List);
+            auto Extras = MakeShared<FJsonObject>();
+            Extras->SetArrayField(TEXT("sc_physics"), List);
+            O->GetArrayField(TEXT("nodes"))[0]->AsObject()->SetObjectField(TEXT("extras"), Extras);
+        }));
+        FString Error;
+        return FSCMeshImporter::Derive(Source, TEXT("physics.glb"), D, Error);
+    };
+    const TCHAR* Box = TEXT(R"({"part":1,"kind":"box","center":[0,0,0],"half_size":[1,1,1],"axes":[[1,0,0],[0,1,0],[0,0,1]]})");
+    FSCDerivedMesh Good, Broken, Damage;
+    TestTrue(TEXT("box derives"), Derived(*FString::Printf(TEXT("[%s]"), Box), Good));
+    TestEqual(TEXT("one collider"), Good.PhysicsShapes, 1);
+    TestTrue(TEXT("complete game physics replaces render collision"), FSCMeshImporter::GamePhysicsReplacesRender(Good));
+    TestTrue(TEXT("box + broken trimesh derives"), Derived(*FString::Printf(TEXT(R"([%s,{"part":1,"kind":"trimesh","mesh":7}])"), Box), Broken));
+    TestEqual(TEXT("the box still builds"), Broken.PhysicsShapes, 1);
+    TestEqual(TEXT("the broken collider is counted"), Broken.PhysicsFailedShapes, 1);
+    TestFalse(TEXT("incomplete game physics keeps render collision"), FSCMeshImporter::GamePhysicsReplacesRender(Broken));
+    TestTrue(TEXT("damage-only derives"), Derived(TEXT(R"([{"part":1,"kind":"damage_mesh","bytes":8}])"), Damage));
+    TestTrue(TEXT("damage-only physics: no collider, as in the game"), Damage.bHasGamePhysics && Damage.PhysicsShapes == 0 && FSCMeshImporter::GamePhysicsReplacesRender(Damage));
+    return true;
+}
+#endif

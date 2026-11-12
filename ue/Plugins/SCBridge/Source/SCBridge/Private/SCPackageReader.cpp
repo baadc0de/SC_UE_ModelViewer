@@ -160,9 +160,11 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
                 {
                     Warn(TEXT("physics_grid"), ShapeError.IsEmpty() ? TEXT("malformed shape") : ShapeError);
                     Out.PhysicsGrid.Reset();
+                    Out.PhysicsGridShapeEnds.Reset();
                     break;
                 }
                 for (const FVector& P : Tris) Out.PhysicsGrid.Add(FSCMeshImporter::Position(FSCMeshImporter::CryToGltf().TransformPosition(P)));
+                Out.PhysicsGridShapeEnds.Add(Out.PhysicsGrid.Num());
             }
     }
     // Nested assemblies (a personal weapon's own children) follow their parent depth-first; ParentId binds

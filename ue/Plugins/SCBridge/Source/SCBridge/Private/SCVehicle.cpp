@@ -273,16 +273,28 @@ bool ASCVehicle::IsInPhysicsGrid(const FVector& World) const
     const FVector P = GetActorTransform().InverseTransformPosition(World);
     if (!PhysicsGridBounds.IsInside(P)) return false;
     // Parity of crossings along a ray off every axis and diagonal (no grazing of axis-aligned edges); the ray ends
-    // past the bounds, so every crossing is counted.
+    // past the bounds, so every crossing is counted. Each shape is its own closed volume (overlapping shapes: inside
+    // any), and hits at the same distance are one crossing (a ray through an edge shared by two triangles).
     const FVector End = P + FVector(1, 0.0013, 0.0007).GetSafeNormal() * (PhysicsGridBounds.GetSize().Size() * 2 + 100);
-    int32 Crossings = 0;
-    for (int32 T = 0; T + 2 < PhysicsGridTriangles.Num(); T += 3)
+    int32 Begin = 0;
+    TArray<double> Hits;
+    for (const int32 ShapeEnd : PhysicsGridShapeEnds.IsEmpty() ? TArray<int32>{PhysicsGridTriangles.Num()} : PhysicsGridShapeEnds)
     {
-        FVector Hit, Normal;
-        if (FMath::SegmentTriangleIntersection(P, End, PhysicsGridTriangles[T], PhysicsGridTriangles[T + 1], PhysicsGridTriangles[T + 2], Hit, Normal))
-            ++Crossings;
+        Hits.Reset();
+        for (int32 T = Begin; T + 2 < FMath::Min(ShapeEnd, PhysicsGridTriangles.Num()); T += 3)
+        {
+            FVector Hit, Normal;
+            if (FMath::SegmentTriangleIntersection(P, End, PhysicsGridTriangles[T], PhysicsGridTriangles[T + 1], PhysicsGridTriangles[T + 2], Hit, Normal))
+                Hits.Add(FVector::Dist(P, Hit));
+        }
+        Begin = ShapeEnd;
+        Hits.Sort();
+        int32 Crossings = 0;
+        for (int32 H = 0; H < Hits.Num(); ++H)
+            if (H == 0 || Hits[H] - Hits[H - 1] > 1e-3) ++Crossings; // 10 um apart: the same surface point
+        if (Crossings % 2 == 1) return true;
     }
-    return Crossings % 2 == 1;
+    return false;
 }
 bool ASCVehicle::IsInPhysicsGrid(const FVector& Bottom, const FVector& Top) const
 {

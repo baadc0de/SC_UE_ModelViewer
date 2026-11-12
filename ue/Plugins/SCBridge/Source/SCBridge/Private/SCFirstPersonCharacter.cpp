@@ -207,8 +207,7 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
     const double WalkableZ = GetCharacterMovement()->GetWalkableFloorZ();
     const double Skin = 2.5; // capsule clearance above the surface it stands on
     const FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, Half);
-    FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSpawn), false, this);
-    AddGridIgnores(Params, Hint + FVector(0, 0, Half), Half);
+    const FCollisionQueryParams Base(SCENE_QUERY_STAT(SCSpawn), false, this);
     // Search a capsule-sized neighbourhood of the helper; never use an asset-name offset.
     // A seat is searched within two capsule diameters (seat bucket, footwell), never beyond.
     for (int32 Ring = 0; Ring <= (bSeated ? 2 : 4); ++Ring)
@@ -216,11 +215,17 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
         {
             const double Angle = Direction * UE_DOUBLE_PI / 4;
             const FVector Offset(FMath::Cos(Angle) * Ring * Radius * 2, FMath::Sin(Angle) * Ring * Radius * 2, 0);
+            // Grid membership (hull colliders ignored inside the vehicle's physics grid) is decided where each query is,
+            // as movement decides it for the capsule: the floor probe at its column, the capsule tests at the candidate.
+            FCollisionQueryParams Column = Base;
+            AddGridIgnores(Column, Hint + Offset + FVector(0, 0, Half), Half);
             FHitResult Hit;
             if (!GetWorld()->LineTraceSingleByChannel(Hit, Hint + Offset + FVector(0, 0, Half + Step),
-                    Hint + Offset - FVector(0, 0, bSeated ? Step : Half * 4), ECC_Pawn, Params) ||
+                    Hint + Offset - FVector(0, 0, bSeated ? Step : Half * 4), ECC_Pawn, Column) ||
                 Hit.ImpactNormal.Z < WalkableZ) continue;
             const FVector Candidate = Hit.ImpactPoint + FVector(0, 0, Half + Skin);
+            FCollisionQueryParams Params = Base;
+            AddGridIgnores(Params, Candidate, Half);
             if (GetWorld()->OverlapBlockingTestByChannel(Candidate, FQuat::Identity, ECC_Pawn, Shape, Params)) continue;
             if (Seat)
             {

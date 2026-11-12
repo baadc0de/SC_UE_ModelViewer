@@ -111,6 +111,7 @@ struct SCBRIDGE_API FSCSceneManifest
     UPROPERTY(BlueprintReadOnly) FString ContentHash;
     /** WP-P3: `root_entity.physics_grid` as a triangle soup in the root entity's UE frame (cm); empty without one. */
     TArray<FVector> PhysicsGrid;
+    TArray<int32> PhysicsGridShapeEnds; // end (exclusive) in PhysicsGrid of each shape: every shape is its own volume
     TArray<FString> MeshAssets() const;
 };
 class SCBRIDGE_API FSCPackageReader
