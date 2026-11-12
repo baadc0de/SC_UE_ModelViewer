@@ -1,0 +1,25 @@
+# SSDO debug views (WP-L2): the patched MegaLights shading pass writes the SSDO AO (r.GeneralPurposeTweak2 2) or the
+# bent normal (3) as diffuse light; lighting-only view mode, Lumen indirect and reflections off, so the image is the term.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+0 viewmode lightingonly
+0 r.Lumen.DiffuseIndirect.Allow 0
+0 r.Lumen.Reflections.Allow 0
+0 r.GeneralPurposeTweak2 2
+4 shot cargo-ao
+0 r.GeneralPurposeTweak2 3
+4 shot cargo-bent
+0 r.GeneralPurposeTweak2 1
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+0 r.GeneralPurposeTweak2 2
+4 shot aft-ao
+0 r.GeneralPurposeTweak2 3
+4 shot aft-bent
+0 r.GeneralPurposeTweak2 1
+1 quit

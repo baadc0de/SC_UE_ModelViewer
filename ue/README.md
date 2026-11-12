@@ -4,6 +4,8 @@ UE **5.9.0** preview-1, `++UE5+Release-5.9`, CL **60351404**, installed at
 `~/UnrealEngine/5.9`; Linux binaries are in `Engine/Binaries/Linux/`. It replaced 5.8.2
 (`++UE5+Release-5.8`, CL 56702186) on 2026-11-12; the Lumen World Cache it was installed for is off for now (plan D13);
 verification and the World Cache / G-buffer A/B routes: [verification/WP-U59.md](verification/WP-U59.md).
+Shader patches (plan D14) are applied to the installed engine with `uv run python ue/scripts/engine_patches.py apply`
+(`check`, `revert`); see [EnginePatches](EnginePatches/README.md).
 WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was
 **82G / 95% used** at start and **76G / 96% used** at final verification.
 The probe's project build products occupy about 434 MiB, plus 17 MiB under

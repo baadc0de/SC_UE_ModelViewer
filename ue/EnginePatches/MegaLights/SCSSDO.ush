@@ -1,0 +1,159 @@
+// SCViewer engine patch (ue/EnginePatches, applied by ue/scripts/engine_patches.py; WP-L2).
+// Star Engine screen-space directional occlusion (SSDO) for lights that cast no shadow.
+//
+// Port of the game's DeferredShading.cfx DirOcclusionPS (default quality: visibility bitmasks, 3 slices x 6 samples
+// per direction), SpatialDenoisePS's encoding (normalised bent normal, w = 1 - AO) and ShadeLib.cfi CalculateSSDO,
+// as TiledShading.cfx applies it: the whole light term of a light that is not a shadow caster (or the sun) is scaled,
+// and MergedTiledShading.cfi scales the ambient (probe) light by 1 - occlusion * r_ssdoAmountAmbient and the probe
+// specular by DeriveSpecularOcclusion(NdotV, 1 - occlusion * r_ssdoAmountReflection, gloss).
+// Constants come from the game's cvar defaults in StarEngineRender.json (SCSSDOParams.ush, generated).
+// Differences from the game: depth is read at mip 0 (the game reads a depth mip chain, mip = log2(offset px) - 3), the
+// 2x2 spatial blur is replaced by a per-frame rotation of the game's 4x4 noise that MegaLights' temporal denoiser
+// averages, and the computation is in translated world space (the game's is view space; the same vectors).
+#pragma once
+
+#include "/Engine/Private/MegaLights/SCSSDOParams.ush"
+
+struct FSCSSDO
+{
+	float3 ConeDir;   // bent normal, world space, normalised
+	float Occlusion;  // 1 - AO^strength
+};
+
+// Translated world position of a pixel centre at linear scene depth (perspective projection).
+float3 SCSSDOPosition(float2 PixelPos, float SceneDepth)
+{
+	const float2 ScreenPos = SvPositionToScreenPosition(float4(PixelPos, 0.0f, 1.0f)).xy;
+	return mul(float4(ScreenPos * SceneDepth, SceneDepth, 1.0f), View.ScreenToTranslatedWorld).xyz;
+}
+
+float SCSSDOAcos(float X)
+{
+	return acosFast(clamp(X, -1.0f, 1.0f));
+}
+
+// DirOcclusionPS (VISIBILITY_BITMASKS, !%_RT_SAMPLE0, !%_RT_GLOBAL_ILLUMINATION) + SpatialDenoisePS encoding.
+FSCSSDO SCComputeSSDO(uint2 ScreenCoord, float SceneDepth, float3 SceneNormalWS, float3 TranslatedWorldPosition)
+{
+	const uint NumSlices = 3;
+	const uint NumSliceSamples = 6;
+	const float CmToM = 0.01f;
+
+	const float2 ViewMin = View.ViewRectMinAndSize.xy;
+	const float2 ViewSize = View.ViewRectMinAndSize.zw;
+	const float2 BaseTC = (float2(ScreenCoord) + 0.5f - ViewMin) / ViewSize;
+	const float3 CameraPos = View.TranslatedWorldCameraOrigin;
+	const float3 ViewRight = View.ViewToTranslatedWorld[0].xyz;
+	const float3 ViewUp = View.ViewToTranslatedWorld[1].xyz;
+
+	const float3 ViewVec = normalize(CameraPos - TranslatedWorldPosition);
+	// centerDepth *= lerp(0.996, 1, saturate(dot(viewVec, sceneNormal))): scales the camera-relative position.
+	const float DepthBias = lerp(0.996f, 1.0f, saturate(dot(ViewVec, SceneNormalWS)));
+	const float3 CenterPos = (TranslatedWorldPosition - CameraPos) * DepthBias;  // camera relative, cm
+	const float CenterDepthM = SceneDepth * DepthBias * CmToM;
+
+	// GetSSDORadius: projScale = 0.5 * P[1][1], invProjScale = 2 / P[1][1], rcpAspectRatio = P[0][0] / P[1][1] (the
+	// game's SSDO constant fill, StarCitizen.exe 4.10.2 at 0x1407eb933..0x1407eb9cf; WP-L2 verification).
+	const float ProjScale = 0.5f * View.ViewToClip[1][1];
+	const float RcpAspectRatio = ViewSize.y / ViewSize.x;
+	const float RadiusTCY = clamp(ProjScale * SC_SSDO_RADIUS_METERS / CenterDepthM, 0.1f, 1.0f);
+	const float2 RadiusSS = float2(RcpAspectRatio, 1.0f) * RadiusTCY;
+	const float RadiusWS = RadiusTCY * CenterDepthM / ProjScale;
+	const float FalloffFactor = Pow2(rcp(RadiusWS));
+	const float Thickness = log2(1.0f + RadiusWS) * 0.5f;
+
+	const uint2 WPos = ScreenCoord;
+	float Noise1 = (1.0f / 16.0f) * float((((WPos.x + WPos.y) & 0x3) << 2) + (WPos.x & 0x3));
+	float Noise2 = (1.0f / 4.0f) * float((WPos.y - WPos.x) & 0x3);
+	#if SC_SSDO_TEMPORAL
+	// Rotate the game's interleaved pattern per frame (R2 sequence) so MegaLights' temporal denoiser does the averaging
+	// the game's 2x2 SpatialDenoisePS does.
+	Noise1 = frac(Noise1 + float(View.StateFrameIndex % 1024u) * 0.7548777f);
+	Noise2 = frac(Noise2 + float(View.StateFrameIndex % 1024u) * 0.5698403f);
+	#endif
+
+	float4 Occl = 0.0f;
+	float SliceWeightSum = 0.0f;
+	for (uint i = 0; i < NumSlices; ++i)
+	{
+		const float SliceAngle = (float(i) + Noise1) * (PI / float(NumSlices));
+		float SinA, CosA;
+		sincos(SliceAngle, SinA, CosA);
+		const float3 SliceDir = ViewRight * CosA + ViewUp * SinA;
+		const float3 SlicePlaneNormal = normalize(cross(SliceDir, ViewVec));
+		float3 ProjNormal = SceneNormalWS - dot(SceneNormalWS, SlicePlaneNormal) * SlicePlaneNormal;
+		const float ProjNormalLen = length(ProjNormal);
+		ProjNormal *= rcp(ProjNormalLen + 1e-6f);
+		const float3 SliceTangent = SliceDir - dot(SliceDir, ViewVec) * ViewVec;
+		const float CosNormal = saturate(dot(ProjNormal, ViewVec));
+		const float AngleNormal = SCSSDOAcos(CosNormal) * sign(dot(SliceTangent, ProjNormal));
+
+		uint OcclBitMask = 0;
+		UNROLL
+		for (uint j = 0; j < 2; ++j)
+		{
+			uint LocalOcclBitMask = 0;
+			for (uint k = 0; k < NumSliceSamples; ++k)
+			{
+				const float S = Pow2((float(k) + Noise2) / float(NumSliceSamples));
+				// offsetTC = (j*2-1) * sliceDir.xy * (radius.xy * s + 1.3 / renderTargetSize.x) * float2(1, -1)
+				const float2 OffsetTC = (float(j) * 2.0f - 1.0f) * float2(CosA, SinA) * (RadiusSS * S + 1.3f * View.ViewSizeAndInvSize.z) * float2(1.0f, -1.0f);
+				const float2 SampleTC = BaseTC + OffsetTC;
+				if (max(abs(SampleTC.x * 2.0f - 1.0f), abs(SampleTC.y * 2.0f - 1.0f)) >= 1.0f)
+				{
+					break;
+				}
+				const float2 SamplePixel = ViewMin + SampleTC * ViewSize;
+				const float SampleDepth = ConvertFromDeviceZ(LookupDeviceZ(uint2(SamplePixel)));
+				const float3 SamplePos = SCSSDOPosition(floor(SamplePixel) + 0.5f, SampleDepth) - CameraPos;
+				const float3 SampleVec = (SamplePos - CenterPos) * CmToM;
+				const float SampleDistSq = max(dot(SampleVec, SampleVec), 1e-8f);
+				const float SdotV = dot(SampleVec, ViewVec);
+				const float SampleHorizonCos = SdotV * rsqrt(SampleDistSq);
+
+				float2 AngleFrontBack;
+				AngleFrontBack.x = SCSSDOAcos(SampleHorizonCos);
+				AngleFrontBack.y = SCSSDOAcos((SdotV - Thickness) * rsqrt(max(SampleDistSq - 2.0f * Thickness * SdotV + Thickness * Thickness, 1e-8f)));
+				AngleFrontBack = (j != 0) ? AngleFrontBack : -AngleFrontBack.yx;
+				AngleFrontBack = saturate((AngleFrontBack - AngleNormal) / PI + 0.5f);
+				AngleFrontBack = AngleFrontBack * AngleFrontBack * (3.0f - 2.0f * AngleFrontBack);
+				const uint BitStart = uint(AngleFrontBack.x * 32.0f);
+				const uint BitSpan = uint(round(saturate(AngleFrontBack.y - AngleFrontBack.x) * 32.0f));
+				// GPU shifts are mod 32, so the game's (1u << 32) - 1 is 0 and a start of 32 shifts by 0; kept as is.
+				LocalOcclBitMask |= ((1u << (BitSpan & 31u)) - 1u) << (BitStart & 31u);
+			}
+			Occl.xyz += (1.0f - 2.0f * float(j)) * SliceTangent * pow(float(countbits(LocalOcclBitMask)) / 32.0f, 0.25f);
+			OcclBitMask |= LocalOcclBitMask;
+		}
+		Occl.w += (1.0f - float(countbits(OcclBitMask)) / 32.0f) * ProjNormalLen;
+		SliceWeightSum += ProjNormalLen;
+	}
+
+	const float AO = pow(saturate(Occl.w / max(SliceWeightSum, 1e-6f)), SC_SSDO_AO_STRENGTH);
+	FSCSSDO Out;
+	Out.ConeDir = normalize(Occl.xyz / float(NumSlices) + SceneNormalWS);
+	Out.Occlusion = 1.0f - saturate(AO);
+	return Out;
+}
+
+// ShadeLib.cfi CalculateSSDO.
+float SCCalculateSSDO(float SurfaceToLightDist, float SurfaceToCameraDist, float3 SurfaceToLightDir, FSCSSDO SSDO, float SSDOStrength)
+{
+	const float CosConeAperture = sqrt(SSDO.Occlusion);
+	const float CosAngle = dot(SurfaceToLightDir, SSDO.ConeDir);
+	const float LightFadeout = saturate(SurfaceToLightDist / SurfaceToCameraDist * 5.0f);
+	return 1.0f - saturate((CosConeAperture - CosAngle) * SSDOStrength * LightFadeout);
+}
+
+// The SSDO of a pixel from the scene depth alone (passes without a material context).
+FSCSSDO SCComputeSSDOAtPixel(uint2 PixelPos, float3 SceneNormalWS)
+{
+	const float SceneDepth = ConvertFromDeviceZ(LookupDeviceZ(PixelPos));
+	return SCComputeSSDO(PixelPos, SceneDepth, SceneNormalWS, SCSSDOPosition(float2(PixelPos) + 0.5f, SceneDepth));
+}
+
+// ShadeLib.cfi DeriveSpecularOcclusion (smoothness = the game's gloss = 1 - UE roughness, see create_materials.py).
+float SCDeriveSpecularOcclusion(float NdotV, float AOAmount, float Smoothness)
+{
+	return saturate(pow(saturate(NdotV) + saturate(AOAmount), exp2(-16.0f * (1.0f - Smoothness) - 1.0f)) - 1.0f + AOAmount);
+}
