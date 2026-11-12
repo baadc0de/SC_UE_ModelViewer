@@ -125,3 +125,30 @@ Keep the adaptive Substrate G-buffer (`r.Substrate.ProjectGBufferFormat=1`, D12)
 material split, and the World Cache's gain in these interiors is small. Re-test with every 5.9.x release: set
 `r.Lumen.WorldCache.Supported=1`, restart, and `r.Lumen.WorldCache.Debug 1` must show `Entries > 0` on the
 adaptive format before it is turned back on.
+
+## MegaLights quality (boiling)
+
+Route `routes/cutlass-megalights-quality.txt`: at two still Cutlass views, per setting two shots 0.2 s apart
+(frame-to-frame difference = temporal noise) and a 5 s frame sample; idle machine. `r.MegaLights.NumSamplesPerPixel`
+is already at its maximum (4, `MegaLights.cpp` `GetNumSamplesPerPixel2d`); the lever is `r.MegaLights.DownsampleMode`.
+
+| Setting | cargo noise / shadow noise / pixels >4 changed | aft noise / shadow / changed | GPU ms cargo / aft |
+|---|---|---|---|
+| DownsampleMode 2 (Epic) | 0.91 / 0.47 / 0.59 % | 1.69 / 0.94 / 1.49 % | 6.23 / 6.53 |
+| 1 (checkerboard) | 0.91 / 0.45 / 0.44 % | 1.63 / 0.79 / 1.25 % | 6.52 / 6.65 |
+| **0 (full resolution)** | **0.59 / 0.33 / 0.23 %** | **1.49 / 0.70 / 0.75 %** | **6.89 / 7.27** |
+| 1 + 24 accumulated frames | 0.86 / 0.46 / 0.53 % | 1.47 / 0.67 / 1.29 % | 6.51 / 6.56 |
+| 0 + 24 accumulated frames | 0.73 / 0.32 / 0.21 % | 1.12 / 0.56 / 0.73 % | 6.87 / 7.16 |
+
+Decision: `ue/SCViewer/Config/DefaultScalability.ini` sets `r.MegaLights.DownsampleMode=0` at `[ShadowQuality@3]`
+(the engine's Cinematic level uses the same value); temporal accumulation stays at 12 (24 helps the cockpit view but
+its ghosting under motion is unmeasured). Verified: the log sets `r.MegaLights.DownsampleMode:0`;
+`cutlass-ramp-to-cockpit` runs all 81 steps (same shot set), GPU 7.17 / 6.53 / 6.97 ms (first person / orbit / first
+person).
+
+**Bias check and the shadow policy.** Without shadow rays MegaLights is within 3–7 % of deferred lighting without
+shadows (cargo 46.3 vs 49.9, aft 58.6 vs 60.5 mean grey; part of it is 5.9's energy-based light culling). With every
+local light ray-traced-shadowed — the WP-U3b substitute for the game's `affectsThisAreaOnly` vis-area confinement —
+the cargo bay drops to 23.3 (aft 44.1): the shadows halve the interior light, while the game shadows only the
+authored `shadowCasting=1` lights (3 of 225 on the Cutlass). Confining lights to their rooms (WP-U3b open item) and
+then shadowing only the authored lights is the fidelity fix; it is not done here.
