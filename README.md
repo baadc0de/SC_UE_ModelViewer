@@ -1,6 +1,6 @@
 # SC_UE_ModelViewer
 
-A **standalone Unreal Engine 5.8 application** that is pointed at a Star Citizen
+A **standalone Unreal Engine 5.9 application** that is pointed at a Star Citizen
 `Data.p4k`, lists the models inside, loads and processes them, and displays them
 **rendered with Nanite and Lumen** — textures, a list of animations you can trigger,
 and first-person exploration of ships with collision. The Unreal Editor is a
@@ -38,7 +38,7 @@ machine the LUG Wine prefix under `~/Games/star-citizen`). Do not set `SC_DATA_P
 crates/scviewer-core   Rust: Session over p4k + DataCore, decomposed export (disk + in-memory), clip catalogue
 crates/scviewer-cli    thin CLI for verification
 crates/scbridge-ffi    C-ABI library (libscbridge.so) the Unreal plugin calls
-ue/SCViewer            UE 5.8 project: game-mode app + Viewer level (Lumen, Nanite, HWRT)
+ue/SCViewer            UE 5.9 project: game-mode app + Viewer level (Lumen, Nanite, HWRT)
 ue/Plugins/SCBridge    runtime module (importer, actor, player, UI) + optional editor module (Keep)
 vendor/StarBreaker     upstream toolkit (submodule, pinned)
 scripts/               helpers (starbreaker.sh, glbinfo.py, golden.sh …)

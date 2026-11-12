@@ -1,8 +1,10 @@
 # SCViewer — WP-U0 Unreal setup and feasibility spikes
 
-UE **5.8.2**, `++UE5+Release-5.8`, CL **56702186**, installed at
-`~/UnrealEngine/5.8`; Linux binaries are in `Engine/Binaries/Linux/`.
-`df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was
+UE **5.9.0** preview-1, `++UE5+Release-5.9`, CL **60351404**, installed at
+`~/UnrealEngine/5.9`; Linux binaries are in `Engine/Binaries/Linux/`. It replaced 5.8.2
+(`++UE5+Release-5.8`, CL 56702186) on 2026-11-12, for the Lumen World Cache (plan D13);
+verification and the World Cache A/B route: [verification/WP-U59.md](verification/WP-U59.md).
+WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was
 **82G / 95% used** at start and **76G / 96% used** at final verification.
 The probe's project build products occupy about 434 MiB, plus 17 MiB under
 `./cache/spike/`; no engine source was changed. Logs/build products are ignored.
@@ -42,7 +44,7 @@ and the separately timed recook follows `InvalidatePhysicsData()`.
 Exact chosen launch command, from the repository root (GPU validation still needed):
 
 ```bash
-"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" \
+"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" \
   "$PWD/ue/SCViewer/SCViewer.uproject" \
   -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
 ```
@@ -109,7 +111,7 @@ These visual checks have **not** passed in this environment.
 Headless commandlet (passed):
 
 ```bash
-"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
+"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor-Cmd" \
   "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript \
   -script="$PWD/ue/scripts/headless_smoke.py" \
   -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC
@@ -279,7 +281,7 @@ Slate UI in every host. Run from the repository root (the cache defaults to
 `./cache/`, resolved from the launch directory):
 
 ```bash
-"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
+"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
   -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
 ```
 

@@ -1,6 +1,6 @@
 # Unreal app and importer design
 
-Target: Unreal Engine 5.8.2 (Linux, `~/UnrealEngine/5.8`, Vulkan RHI). Project
+Target: Unreal Engine 5.9.0 preview-1 (Linux, `~/UnrealEngine/5.9`, Vulkan RHI; 5.8.2 until 2026-11-12). Project
 `ue/SCViewer` (C++). Plugin `ue/Plugins/SCBridge`:
 
 | Module | Type | Contents |

@@ -38,7 +38,8 @@ inherit for all Rust that touches the vendored crates).
   delete `target/debug/incremental` if it reappears. Never a blind `cargo clean`.
   `/` is ~97 % full (~55 GB free); the UE project's `Saved/Import/*.tar` test tars
   are regenerable scratch.
-- Unreal: 5.8.2 at `~/UnrealEngine/5.8`, Vulkan RHI. The deliverable is a standalone
+- Unreal: 5.9.0 preview-1 (CL 60351404) at `~/UnrealEngine/5.9`, Vulkan RHI; it replaced 5.8.2
+  (plan D9) for the Lumen World Cache (D13). The deliverable is a standalone
   game-mode app (plan D2/D3): user-facing code goes in the Runtime module; editor-only
   dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
 

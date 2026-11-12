@@ -43,13 +43,13 @@ if [ "${1:-}" = "--analyse" ]; then analyse "$2" "${3:-15}"; exit; fi
 PKG="$1"; TAG="$2"; shift 2
 OUT=${SC_OUT:-ue/SCViewer/Saved/Import/wp-u3b}; mkdir -p "$OUT"
 LOG=ue/SCViewer/Saved/Import/import.log
-CSVDIR="$HOME/.config/Epic/UnrealEngine/5.8/Saved/Profiling/CSV"  # boot captures use the engine user dir
+CSVDIR="$HOME/.config/Epic/UnrealEngine/5.9/Saved/Profiling/CSV"  # boot captures use the engine user dir
 SETTLE=${SC_SETTLE:-20}; SAMPLE=${SC_SAMPLE:-15}
 EXEC="stat unit, r.ScreenPercentage ${SC_SP:-100}, r.DynamicRes.OperationMode 0${SC_EXEC:+, $SC_EXEC}"
 rm -f "$LOG"; before=$(ls "$CSVDIR" 2>/dev/null | wc -l)
 if [ -n "${SC_MAP:-}" ]; then   # same host arguments as run_import.sh, with the map URL first
   mkdir -p ue/SCViewer/Saved/Import
-  "$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/ue/SCViewer/SCViewer.uproject" "$SC_MAP" \
+  "$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/ue/SCViewer/SCViewer.uproject" "$SC_MAP" \
     -game -windowed -resx=1600 -resy=900 -unattended -nosplash -nop4 -ddc=SCViewerDDC \
     -SCPackage="$(realpath "$PKG")" -abslog="$SC_REPO/$LOG" -vulkan -SCStay -csvGpuStats \
     -csvCaptureFrames=1000000 "-ExecCmds=$EXEC" "$@" >/dev/null 2>&1 &

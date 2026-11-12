@@ -6,7 +6,7 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-lc",
-        "exec \"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor\" \"$PWD/ue/SCViewer/SCViewer.uproject\" -ddc=SCViewerDDC"
+        "exec \"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor\" \"$PWD/ue/SCViewer/SCViewer.uproject\" -ddc=SCViewerDDC"
       ],
       "port": 0
     },
@@ -15,7 +15,7 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-lc",
-        "exec \"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor\" \"$PWD/ue/SCViewer/SCViewer.uproject\" -game -windowed -resx=1600 -resy=900 -ddc=SCViewerDDC"
+        "exec \"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor\" \"$PWD/ue/SCViewer/SCViewer.uproject\" -game -windowed -resx=1600 -resy=900 -ddc=SCViewerDDC"
       ],
       "port": 0
     }
