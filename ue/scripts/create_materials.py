@@ -135,6 +135,17 @@ class Graph:
         return (self.lerp(albedo, colour, alpha), self.lerp(f0, self.const3(DIRT_SPECULAR), alpha),
                 self.lerp(smooth, self.const(DIRT_GLOSS), alpha), alpha)
 
+    def vertex_illum(self):
+        """Illum.cfx %VERTCOLORS (WP-U2c): (albedo factor, glow factor, blending-opacity factor) by VertexColorMode
+        (0 none, 1 rgb, 2 blue/green under %USE_DAMAGE_MAP, 3 alpha) and UseVertexAlpha (set by FSCMaterialBuilder)."""
+        v = self.node(unreal.MaterialExpressionVertexColor)
+        mode = self.scalar("VertexColorMode", 0.0, "Vertex")
+        pins = dict(R=(v, "R"), G=(v, "G"), B=(v, "B"), A=(v, "A"), Mode=mode)
+        albedo = self.custom(VERTEX_ALBEDO, unreal.CustomMaterialOutputType.CMOT_FLOAT3, **pins)
+        glow = self.custom(VERTEX_GLOW, unreal.CustomMaterialOutputType.CMOT_FLOAT3, **pins)
+        opacity = self.lerp(self.const(1.0), (v, "A"), self.scalar("UseVertexAlpha", 0.0, "Vertex"))
+        return albedo, glow, opacity
+
     def texture(self, name, default, sampler, uv, group="SC"):
         e = self.node(unreal.MaterialExpressionTextureSampleParameter2D, parameter_name=name, texture=default,
                       sampler_type=sampler, group=group,
@@ -273,7 +284,9 @@ def surface_master(name):
     normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
     spec = (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB")
     f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)), spec)
-    emissive = g.glow(base, (diffuse, "A"))
+    vertex_albedo, vertex_glow, _ = g.vertex_illum()  # opaque: vertex alpha only scales blending opacity
+    emissive = g.mul(g.glow(base, (diffuse, "A")), vertex_glow)
+    base = g.mul(base, vertex_albedo)
     g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive)
     # Coverage = diffuse alpha x a separate opacity map (HairPBR cards: TexSlot1 `opacity`, red channel);
     # the white default leaves every other family's coverage unchanged.
@@ -351,6 +364,18 @@ def layered_master(name, count):
     g.slab(g.conserve(albedo, f0), f0, None, g.gloss_to_roughness(smooth), normal, emissive)
     g.out(*g.add(g.sub(result["alpha"], g.scalar("AlphaTest", 0.0)), g.const(0.5)), MP.MP_OPACITY_MASK)
     return g.save()
+
+
+# Illum.cfx %VERTCOLORS (WP-U2c): layer.Albedo *= Vert.Color.rgb / .bbb (%USE_DAMAGE_MAP) / .aaa (wind, transmittance,
+# ocean sway); vertGlowMask = .rgb / .ggg / .aaa multiplies the glow, which is taken from the albedo before that multiply.
+VERTEX_ALBEDO = """if (Mode < 0.5) return float3(1, 1, 1);
+if (Mode < 1.5) return float3(R, G, B);
+if (Mode < 2.5) return float3(B, B, B);
+return float3(A, A, A);"""
+VERTEX_GLOW = """if (Mode < 0.5) return float3(1, 1, 1);
+if (Mode < 1.5) return float3(R, G, B);
+if (Mode < 2.5) return float3(G, G, G);
+return float3(A, A, A);"""
 
 
 # Dirt (WP-U2b, docs/work-packages/WP-U2b-dirt.md). common.cfi: DIRT_SPECULAR, DIRT_GLOSS. The game drives the amount and
@@ -622,9 +647,13 @@ def decal_master(name, colour):
         vertex_wear = g.lerp(g.const(0.0), (g.node(unreal.MaterialExpressionVertexColor), "A"), g.scalar("UseVertexColors", 0.0, "Dirt"))
         smooth = g.smoothness("", uv)  # dirt works on smoothness (DIRT_GLOSS); converted with the game's mapping below
         g.last_uv = uv
+        vertex_albedo, vertex_glow, vertex_alpha = g.vertex_illum()  # Illum decals' %VERTCOLORS (WP-U2c)
+        glow = g.mul(g.glow(base, (diffuse, "A")), vertex_glow)
+        base = g.mul(base, vertex_albedo)
+        coverage = g.mul(coverage, vertex_alpha)
         base, f0, smooth, dirt = g.dirt(base, f0, smooth, blend, vertex_wear, g.const(1.0), object_space=False)
         slab = g.slab(g.conserve(base, f0), f0, None, g.gloss_to_roughness(smooth), normal,
-                      g.mul(g.glow(base, (diffuse, "A")), g.one_minus(dirt)), front=False)
+                      g.mul(glow, g.one_minus(dirt)), front=False)
     else:
         slab = g.slab(None, None, None, g.roughness("", uv), normal, front=False)
     decal = g.node(unreal.MaterialExpressionSubstrateConvertToDecal)
@@ -643,9 +672,11 @@ def translucent_master():
     base = g.mul((diffuse, "RGB"), g.vector("DiffuseColor", (1, 1, 1)))
     f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)),
                (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB"))
-    slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal,
-                  g.glow(base, (diffuse, "A")), front=False)
-    g.weight(slab, coverage)
+    vertex_albedo, vertex_glow, vertex_alpha = g.vertex_illum()  # Illum %VERTCOLORS (WP-U2c)
+    emissive = g.mul(g.glow(base, (diffuse, "A")), vertex_glow)
+    base = g.mul(base, vertex_albedo)
+    slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive, front=False)
+    g.weight(slab, g.mul(coverage, vertex_alpha))
     return g.save()
 
 
@@ -661,8 +692,11 @@ def unlit_master():
     alpha = (diffuse, "A")
     gate = g.saturate(g.mul(g.sub(alpha, g.scalar("AlphaGlowCutoff", 0.0)), g.const(1.0e4)))
     weight = g.lerp(g.const(1.0), g.mul(alpha, gate), g.scalar("AlphaWeight", 0.0))
+    # Illum %VERTCOLORS on a glow card (WP-U2c): the glow mask and the blending opacity from the vertex colour.
+    _, vertex_glow, vertex_alpha = g.vertex_illum()
+    weight = g.mul(weight, vertex_alpha)
     unlit = g.node(unreal.MaterialExpressionSubstrateUnlitBSDF)
-    g.link(*g.mul(g.mul(colour, g.scalar("EmissiveStrength", 0.0)), weight), unlit, "EmissiveColor")
+    g.link(*g.mul(g.mul(g.mul(colour, vertex_glow), g.scalar("EmissiveStrength", 0.0)), weight), unlit, "EmissiveColor")
     g.out(unlit, "", MP.MP_FRONT_MATERIAL)
     return g.save()
 

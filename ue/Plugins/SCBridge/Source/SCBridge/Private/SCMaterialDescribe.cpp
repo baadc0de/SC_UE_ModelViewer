@@ -681,6 +681,20 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
         D.Master = ESCMaster::EmissiveUnlit; D.Blend = ESCBlend::Translucent;
         D.Scalars.Add(TEXT("EmissiveStrength"), 0.f);
     }
+    // Illum.cfx %VERTCOLORS (WP-U2c): albedo x vertex rgb (mode 1); x vertex blue = AO under %USE_DAMAGE_MAP (mode 2);
+    // x vertex alpha under wind bending / %TRANSMITTANCE_LIGHTING / %OCEAN_SWAY (mode 3). The glow (taken from the albedo
+    // before that multiply) is masked by the same channels (green under the damage map); blending opacity x vertex alpha
+    // unless %BLENDLAYER. Every master an Illum surface lands on reads these (the relief decal draws no colour).
+    if (F == TEXT("Illum") && D.Master != ESCMaster::MeshDecalRelief)
+    {
+        int32 Mode = 0;
+        if (HasToken(Sub, TEXT("VERTCOLORS")))
+            Mode = HasToken(Sub, TEXT("WIND_BENDING_MAIN")) || HasToken(Sub, TEXT("WIND_BENDING_DETAIL")) || HasToken(Sub, TEXT("TRANSMITTANCE_LIGHTING"))
+                    || HasToken(Sub, TEXT("OCEAN_SWAY")) ? 3 : HasToken(Sub, TEXT("USE_DAMAGE_MAP")) ? 2 : 1;
+        D.Scalars.Add(TEXT("VertexColorMode"), float(Mode));
+        D.Scalars.Add(TEXT("UseVertexAlpha"), Mode != 0 && !HasToken(Sub, TEXT("BLENDLAYER")) ? 1.f : 0.f);
+        if (D.Master == ESCMaster::MeshDecal) D.Scalars.Add(TEXT("UseVertexColors"), 0.f); // MeshDecal's vertex wear is not Illum's
+    }
     D.bNonNanite = D.Blend == ESCBlend::Translucent || D.Master == ESCMaster::Glass || D.Master == ESCMaster::MeshDecal
         || D.Master == ESCMaster::MeshDecalRelief || D.Master == ESCMaster::Translucent || D.Master == ESCMaster::EmissiveUnlit;
     return D;

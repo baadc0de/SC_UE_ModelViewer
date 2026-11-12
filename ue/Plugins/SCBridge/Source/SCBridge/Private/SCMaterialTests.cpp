@@ -79,7 +79,23 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("masked parent"), FSCMaterialBuilder::ParentPath(X->Master, X->Blend, X->bTwoSided),
             FString(TEXT("/SCBridge/Materials/MI_SC_Illum_Masked.MI_SC_Illum_Masked")));
     }
-    Check(TEXT("illum_decal_sheet"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true);
+    if (auto* X = Check(TEXT("illum_decal_sheet"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
+    {
+        // Illum.cfx %VERTCOLORS on an Illum decal: the Illum rule, not MeshDecal's vertex wear (WP-U2c).
+        TestEqual(TEXT("Illum decal: vertex colour multiplies albedo"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 1.f);
+        TestEqual(TEXT("Illum decal: no MeshDecal vertex wear"), X->Scalars.FindRef(TEXT("UseVertexColors"), -1.f), 0.f);
+    }
+    // Illum.cfx %VERTCOLORS (WP-U2c): albedo and glow x vertex rgb (mode 1); under %USE_DAMAGE_MAP x vertex blue, the
+    // glow by green (mode 2); blending opacity x vertex alpha unless %BLENDLAYER. No token, no vertex colour.
+    if (const FSCMaterialDesc* X = Find(D, TEXT("illum_spec")))
+    {
+        TestEqual(TEXT("Illum: vertex rgb"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 1.f);
+        TestEqual(TEXT("Illum: vertex alpha scales opacity"), X->Scalars.FindRef(TEXT("UseVertexAlpha"), -1.f), 1.f);
+    }
+    if (const FSCMaterialDesc* X = Find(D, TEXT("emissives_like")))
+        TestEqual(TEXT("Illum with a damage map: vertex blue is AO"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 2.f);
+    if (const FSCMaterialDesc* X = Find(D, TEXT("illum_masked_glow")))
+        TestEqual(TEXT("Illum without %VERTCOLORS: none"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 0.f);
     if (auto* X = Check(TEXT("hard_primary"), ESCMaster::HardSurface, ESCBlend::Opaque, false, false))
     {
         // snapshot diffuse x layer tint x palette secondary.

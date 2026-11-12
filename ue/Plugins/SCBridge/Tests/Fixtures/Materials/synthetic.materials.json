@@ -31,7 +31,8 @@
    ],
    "decoded_feature_flags": {
     "tokens": [
-     "NORMAL_MAP"
+     "NORMAL_MAP",
+     "VERTCOLORS"
     ]
    },
    "texture_slots": [
@@ -158,7 +159,8 @@
    ],
    "decoded_feature_flags": {
     "tokens": [
-     "DECAL"
+     "DECAL",
+     "VERTCOLORS"
     ]
    },
    "texture_slots": [
