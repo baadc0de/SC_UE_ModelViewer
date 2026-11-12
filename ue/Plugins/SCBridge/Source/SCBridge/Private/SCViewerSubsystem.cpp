@@ -1,6 +1,8 @@
 // USCViewerSubsystem: archive open, async search, the load pipeline with phase progress and cancel, unload with
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "SCViewerAutomation.h"
 #include "SCViewerPawn.h"
@@ -316,6 +318,7 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
     EnvOptions.bPublish = false;        // not the vehicle: routes, first person and light pairing keep the ship
     EnvOptions.bReplacePrevious = false;
     EnvOptions.bHideEffectOnlyPlacements = true;
+    EnvOptions.bInstanceRepeatedParts = true;
     EnvJob = MakeShared<FSCImportJob>(*EnvSource, EnvOptions, EnvSource);
 }
 
@@ -400,6 +403,17 @@ void USCViewerSubsystem::StepEnvironment()
     EnvSource.Reset();
 }
 
+// The bounds of the part a trace hit: the hit instance of an instanced component (its whole box spans every instance).
+static FBox HitPartBox(const FHitResult& Hit)
+{
+    const UPrimitiveComponent* C = Hit.GetComponent();
+    if (!C) return FBox(ForceInit);
+    FTransform Instance;
+    if (const auto* ISM = Cast<UInstancedStaticMeshComponent>(C);
+        ISM && ISM->GetStaticMesh() && Hit.Item != INDEX_NONE && ISM->GetInstanceTransform(Hit.Item, Instance, true))
+        return ISM->GetStaticMesh()->GetBoundingBox().TransformBy(Instance);
+    return C->Bounds.GetBox();
+}
 void USCViewerSubsystem::PlaceEnvironment()
 {
     ASCVehicle* EnvironmentActor = Environment.Get();
@@ -415,7 +429,7 @@ void USCViewerSubsystem::PlaceEnvironment()
         {
             FHitResult Hit;
             if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, FVector(XY.X, XY.Y, From), FVector(XY.X, XY.Y, Bounds.Min.Z - 100), ECC_Visibility, Q)) break;
-            const FVector Size = Hit.GetComponent() ? Hit.GetComponent()->Bounds.GetBox().GetSize() : FVector::ZeroVector;
+            const FVector Size = HitPartBox(Hit).GetSize();
             if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= 200)
             {
                 UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_SURVEY xy=%s z=%.0f span=%.0fx%.0f comp=%s"), *XY.ToString(), Hit.ImpactPoint.Z, Size.X, Size.Y,
@@ -450,7 +464,7 @@ void USCViewerSubsystem::PlaceEnvironment()
         {
             FHitResult Hit;
             if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, FVector(0, 0, From), FVector(0, 0, Bounds.Min.Z - 100), ECC_Visibility, Q)) break;
-            const FBox Part = Hit.GetComponent() ? Hit.GetComponent()->Bounds.GetBox() : FBox(ForceInit);
+            const FBox Part = HitPartBox(Hit);
             const FVector Size = Part.GetSize();
             const UPrimitiveComponent* HitComp = Hit.GetComponent();
             UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_FLOOR_PROBE z=%.1f normal_z=%.2f span=%.0fx%.0f comp=%s comp=%s bounds=%s body_z=%.0f parent=%s socket=%s"),

@@ -71,6 +71,8 @@ class Graph:
         # session cannot add a usage flag at runtime: the proxy would fall back to the engine's default
         # (WorldGrid) material, so the flag is part of the asset.
         self.m.set_editor_property("used_with_skeletal_mesh", True)
+        # Environments draw repeated rigid parts as instanced static meshes (FSCInstancing, LOOK-6); same reason.
+        self.m.set_editor_property("used_with_instanced_static_meshes", True)
         # Explicit clip: mask graphs output (alpha - AlphaTest + 0.5), i.e. a texel survives when alpha >= the
         # instance's authored AlphaTest. UE's default clip (0.3333, Material.cpp) would shift every threshold.
         self.m.set_editor_property("opacity_mask_clip_value", 0.5)

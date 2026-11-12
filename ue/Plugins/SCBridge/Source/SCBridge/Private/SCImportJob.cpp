@@ -3,6 +3,7 @@
 // prepare incl. collision BVH, game-thread UObject build) -> Materials (worker decode overlapped with meshes,
 // game-thread textures/MIDs) -> Assembling (components, lights, publish).
 #include "SCImportJob.h"
+#include "SCInstancing.h"
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
@@ -1028,6 +1029,12 @@ void FSCImportJob::FState::Assemble()
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose
     FSCDirt::MarkExterior(V); // exterior = outside every room, from the channels just set
     FSCDirt::Push(V->GetWorld());
+    if (Options.bInstanceRepeatedParts) // after light areas and dirt set channels / custom data, before emissive proxies attach
+    {
+        const FSCInstancingStats Instancing = FSCInstancing::Consolidate(V);
+        UE_LOG(LogSCImport, Display, TEXT("INSTANCING components=%d consolidated=%d instanced_components=%d"), Instancing.Components,
+               Instancing.Consolidated, Instancing.Instanced);
+    }
     if (!V->Lights.IsEmpty()) FSCEmissive::SetLumen(V, USCViewerSettings::Get()->bEmissiveInLumen); // ships and environments, not the player kit
     if (EffectOnlySkipped) UE_LOG(LogSCImport, Display, TEXT("EFFECT_ONLY_PLACEMENTS skipped=%d"), EffectOnlySkipped);
     if (Options.bPublish)

@@ -1,5 +1,6 @@
 // Look tuning (2026-11-12, plan D15): runtime A/B of post-process settings on the viewer's unbound volume(s).
 // sc.Look.PP <FPostProcessSettings field> <value>: sets the field and its bOverride_ flag (numbers and bools).
+#include "SCLook.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -8,7 +9,6 @@
 #include "GameFramework/Pawn.h"
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
-#include "SCLook.h"
 #include "SCVehicle.h"
 #include "SCViewerPawn.h"
 #include "SCViewerSubsystem.h"

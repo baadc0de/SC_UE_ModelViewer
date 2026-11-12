@@ -46,3 +46,13 @@ stage trustworthy enough to judge the look in it, then prepared the next look ex
 - Depth of field off by default; opt-in for stills (`sc.Look.Focus`), 2000 mm f/1.4 the upper limit before the ship
   reads as a miniature.
 - Next: hangar instancing (render thread), a narrower-FOV hero framing preset, the Scorpius canopy RT/PT mismatch.
+
+## Hangar instancing (LOOK-6)
+
+`FSCImportOptions::bInstanceRepeatedParts` (environments): identical rigid parts (mesh, materials, shadow/lighting flags,
+collision, channels, custom data; not under a rig, no children, not emissive) become one instanced component per group
+(`FSCInstancing::Consolidate`, after light areas and dirt, before emissive proxies). hangar_lrgtop_001: 5851 parts ->
+460 instanced components + 46 individual. Scorpius wide view, single-frame `stat dumpframe`: View Visibility 8.6 -> 1.1 ms,
+scene rendering 14.5 -> 7.6 ms on the render thread; frame time unchanged (GPU-bound, ~14 ms). The SCBridge masters now
+carry `used_with_instanced_static_meshes` (without it the default checker material appeared); the floor probe measures
+the hit instance. Verified: Scorpius orbit/wide. Not yet: Cutlass/Gladius, first-person walking on instanced collision.

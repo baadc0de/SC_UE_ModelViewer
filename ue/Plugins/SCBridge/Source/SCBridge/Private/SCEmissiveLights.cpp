@@ -14,6 +14,7 @@
 // The section's texture (emittance map / albedo, alpha gate) is not sampled: the luminance is the material's nominal
 // one, an upper bound.
 #include "SCEmissiveLights.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "SCVehicle.h"
 #include "Components/RectLightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -61,6 +62,8 @@ TArray<FEmissiveSection> Collect(ASCVehicle* Vehicle, double MinNits)
     for (UStaticMeshComponent* C : Components)
     {
         const UStaticMesh* Mesh = C ? C->GetStaticMesh() : nullptr;
+        // Instanced components (FSCInstancing) hold only non-emissive parts; their single transform is not the parts'.
+        if (C && C->IsA<UInstancedStaticMeshComponent>()) continue;
         if (!Mesh || !C->IsVisible() || C->ComponentHasTag(TEXT("SCGameCollision")) || !Mesh->GetRenderData() ||
             Mesh->GetRenderData()->LODResources.IsEmpty())
             continue;

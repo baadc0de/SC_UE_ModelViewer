@@ -23,6 +23,10 @@ struct SCBRIDGE_API FSCImportOptions
     /** Environments: placements drawn only with VFX shaders (e.g. a hangar's landing hologram) are runtime state
      *  effects in the game (shown while a ship is delivered); they are not placed. */
     bool bHideEffectOnlyPlacements = false;
+    /** Environments: identical rigid static parts (same mesh, materials, shadow/lighting flags, collision, channels and
+     *  custom data, not under a rig) are drawn as one instanced component each; the render thread's per-primitive
+     *  visibility cost dominated a hangar's frame (LOOK-6). Ships keep per-part components (hierarchy, focus). */
+    bool bInstanceRepeatedParts = false;
     FTransform ActorTransform = FTransform::Identity;
 };
 struct SCBRIDGE_API FSCImportResult
