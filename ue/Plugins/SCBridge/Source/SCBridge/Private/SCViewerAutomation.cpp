@@ -26,6 +26,24 @@
 #include "InputCoreTypes.h"
 #include "RenderTimer.h"
 #include "DynamicRHI.h"
+#include "SceneManagement.h"
+#include "SceneView.h"
+#include "SceneViewExtension.h"
+#include <atomic>
+
+// Reads the path tracer's accumulated sample count from the view state of path-traced views (game thread, per frame).
+class FSCPathTracerProbe final : public FSceneViewExtensionBase
+{
+public:
+    explicit FSCPathTracerProbe(const FAutoRegister& AutoRegister) : FSceneViewExtensionBase(AutoRegister) {}
+    virtual void SetupViewFamily(FSceneViewFamily&) override {}
+    virtual void SetupView(FSceneViewFamily& Family, FSceneView& View) override
+    {
+        if (Family.EngineShowFlags.PathTracing && View.State) Samples = View.State->GetPathTracingSampleIndex();
+    }
+    virtual void BeginRenderViewFamily(FSceneViewFamily&) override {}
+    std::atomic<int64> Samples{-1};
+};
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCViewerAutomation, Log, All);
 
@@ -430,6 +448,17 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
         StepAt = Now;
         return;
     }
+    if (Words[0] == TEXT("waitpt"))
+    {
+        // Hold the route until the path tracer has accumulated its full sample count, at most <seconds>.
+        if (!PtProbe) PtProbe = FSceneViewExtensions::NewExtension<FSCPathTracerProbe>();
+        PtProbe->Samples = -1;
+        bPtRestarted = false;
+        WaitPtStart = Now;
+        WaitPtUntil = Now + (Words.IsValidIndex(1) ? FCString::Atod(*Words[1]) : 600.0);
+        StepAt = Now;
+        return;
+    }
     if (Words[0] == TEXT("frametime"))
     {
         SampleTag = Words.IsValidIndex(2) ? Words[2] : TEXT("sample");
@@ -473,6 +502,17 @@ void FSCViewerAutomation::TickScript(USCViewerSubsystem& S)
         if (!bDone) return;
         WaitKitUntil = 0;
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_WAITKIT attached=%d status=\"%s\""), C && C->Body->HasBody(), *S.GetPlayerKitStatus());
+        StepAt = FMath::Max(StepAt, Now + Script[StepIndex].Delay);
+    }
+    if (WaitPtUntil > 0)
+    {
+        static const IConsoleVariable* Spp = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PathTracing.SamplesPerPixel"));
+        const int64 Target = Spp ? Spp->GetInt() : 1, Samples = PtProbe ? PtProbe->Samples.load() : -1;
+        if (Samples >= 0 && Samples < Target) bPtRestarted = true;
+        if (!(bPtRestarted && Samples >= Target) && Now <= WaitPtUntil) return;
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_WAITPT samples=%lld target=%lld seconds=%.1f%s"), Samples, Target, Now - WaitPtStart,
+               Now > WaitPtUntil ? TEXT(" timeout") : TEXT(""));
+        WaitPtUntil = 0;
         StepAt = FMath::Max(StepAt, Now + Script[StepIndex].Delay);
     }
     // A timed move finishes before the next step's delay starts counting.

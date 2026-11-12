@@ -472,7 +472,8 @@ blend-space parameters `MoveSpeed`/`TravelAngle`):
 Console (first person): `sc.Player.Weapon <slot|none>`, `sc.Player.View fp|tp [yaw] [distance]`,
 `sc.Player.State` (`PLAYER_STATE` log), `sc.Player.Load` (start/retry the kit), `sc.Player.Body 0|1`
 (detach/re-attach — frame-time A/B), `sc.FP.Key <key> 0|1` (press/release a key-table key).
-Route pseudo-commands: `waitkit [s]` holds the route until the body is attached; `snap <tag>` is
+Route pseudo-commands: `waitkit [s]` holds the route until the body is attached; `waitpt [s]` holds it until the
+path tracer has accumulated `r.PathTracing.SamplesPerPixel` (put it after `viewmode pathtracing`); `snap <tag>` is
 `shot` without clearing held input (moving shots). `slomo <x>` (engine) slows the animation while
 route delays stay real time (mid-select frames).
 

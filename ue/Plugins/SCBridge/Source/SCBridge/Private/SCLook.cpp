@@ -8,6 +8,7 @@
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
 #include "SCVehicle.h"
+#include "SCViewerPawn.h"
 #include "Components/LightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -119,7 +120,12 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookCamera(
         if (!PC || !PC->GetPawn() || Args.Num() < 5) return;
         const FVector At(FCString::Atod(*Args[0]), FCString::Atod(*Args[1]), FCString::Atod(*Args[2]));
         const FRotator View(FCString::Atod(*Args[4]), FCString::Atod(*Args[3]), 0);
-        PC->GetPawn()->SetActorLocation(At, false, nullptr, ETeleportType::TeleportPhysics);
-        PC->SetControlRotation(View);
+        if (ASCViewerPawn* Viewer = Cast<ASCViewerPawn>(PC->GetPawn()))
+            Viewer->SetView(At, View); // the viewer pawn keeps its own view rotation, not the controller's
+        else
+        {
+            PC->GetPawn()->SetActorLocation(At, false, nullptr, ETeleportType::TeleportPhysics);
+            PC->SetControlRotation(View);
+        }
         UE_LOG(LogTemp, Display, TEXT("LOOK camera at=%s view=%s pawn=%s"), *At.ToCompactString(), *View.ToCompactString(), *PC->GetPawn()->GetClass()->GetName());
     }));

@@ -435,6 +435,7 @@ void USCViewerSubsystem::PlaceEnvironment()
                        *Ref.GetBoneName(B).ToString(), Ref.GetParentIndex(B), *Ref.GetRefBonePose()[B].GetTranslation().ToCompactString(),
                        *Ref.GetRefBonePose()[B].Rotator().ToCompactString(), *Rig->LocalPose[B].GetTranslation().ToCompactString(), *Rig->LocalPose[B].Rotator().ToCompactString());
         }
+    if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(EnvironmentActor);
     SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
     {
         // Placement: the environment's ship floor is the first large (>= 20 m across), upward-facing surface
@@ -1104,7 +1105,11 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
         }
     }
     CameraMode = Mode;
-    if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetCameraMode(Mode);
+    if (ASCViewerPawn* Pawn = GetViewerPawn())
+    {
+        Pawn->SetOrbitObstacle(Environment.Get());
+        Pawn->SetCameraMode(Mode);
+    }
     UE_LOG(LogSCViewer, Display, TEXT("FIRST_PERSON_MODE mode=%d"), int32(Mode));
     return true;
 }

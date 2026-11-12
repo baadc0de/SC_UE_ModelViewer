@@ -18,6 +18,7 @@ constexpr float FlySpeedPerNotch = 1.25f;  // speed factor per wheel notch in fl
 constexpr double FocusEase = 10.0;         // 1/s exponential approach of target and distance
 constexpr double MinDistanceCm = 10.0;
 constexpr double FitMargin = 1.08;        // breathing room around a framed box
+constexpr double ObstacleClearanceCm = 50.0; // orbit camera distance kept from an obstacle in front of it
 } // namespace
 
 ASCViewerPawn::ASCViewerPawn()
@@ -192,5 +193,11 @@ void ASCViewerPawn::Tick(float DeltaSeconds)
 void ASCViewerPawn::ApplyOrbit()
 {
     const FRotator Rot(Pitch, Yaw, 0);
-    SetActorLocationAndRotation(Target - Rot.Vector() * Distance, Rot);
+    double Reach = Distance;
+    // Like a spring arm: an environment wall or pillar between the model and the camera pulls the camera in front of it.
+    FHitResult Hit;
+    if (AActor* Obstacle = OrbitObstacle.Get();
+        Obstacle && Obstacle->ActorLineTraceSingle(Hit, Target, Target - Rot.Vector() * Distance, ECC_Camera, FCollisionQueryParams(SCENE_QUERY_STAT(SCOrbitObstacle), true)))
+        Reach = FMath::Max(MinDistanceCm, Hit.Distance - ObstacleClearanceCm);
+    SetActorLocationAndRotation(Target - Rot.Vector() * Reach, Rot);
 }
