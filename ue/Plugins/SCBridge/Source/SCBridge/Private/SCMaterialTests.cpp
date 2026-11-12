@@ -183,6 +183,16 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("HAL is data, not colour"), int32(X->Textures[TEXT("HalMap")].Role), int32(ESCTextureRole::Linear));
         TestEqual(TEXT("HAL on"), X->Scalars[TEXT("UseHalMap")], 1.f);
         TestFalse(TEXT("LayerBlend has no macro AO map"), X->Textures.Contains(TEXT("MacroAOMap")));
+        // LayerBlend_V2.cfx: WearMap (TexSlot11, R = wear/curvature) is the dirt blend map; %WEAR_DIRT_AO_VERTEX adds
+        // vertex wear (R -> dirt) and vertex AO (B) (WP-U2b).
+        TestEqual(TEXT("wear map is TexSlot11"), X->Textures.Contains(TEXT("WearMap")) ? X->Textures[TEXT("WearMap")].Path : FString(), FString(TEXT("tex/wear.png")));
+        TestEqual(TEXT("wear map is data"), X->Textures.Contains(TEXT("WearMap")) ? int32(X->Textures[TEXT("WearMap")].Role) : -1, int32(ESCTextureRole::Linear));
+        TestEqual(TEXT("vertex wear/dirt/AO on with the token"), X->Scalars.FindRef(TEXT("UseWearDirtAOVertex"), -1.f), 1.f);
+        // GetAlphaBlendDetailMaps: the engine detail map from the render fixture, at baseUV x detailScale.
+        TestEqual(TEXT("dirt detail map from the fixture"), X->Textures.Contains(TEXT("DirtDetailMap")) ? X->Textures[TEXT("DirtDetailMap")].Path : FString(),
+                  FSCStarEngine::Get().WearDirtFrostDetailMap);
+        TestEqual(TEXT("dirt detail scale from the fixture"), X->Scalars.FindRef(TEXT("DirtDetailScale"), -1.f), float(FSCStarEngine::Get().DirtDetailScale));
+        TestEqual(TEXT("dirt details on"), X->Scalars.FindRef(TEXT("UseDirtDetail"), -1.f), 1.f);
     }
     {
         // A palette without `finish` (an export older than the field): both halves are reported, layer values stay.
@@ -213,6 +223,8 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestFalse(TEXT("no macro normal"), X->Textures.Contains(TEXT("MacroNormalMap")));
         TestEqual(TEXT("no macro gloss"), X->Scalars[TEXT("UseMacroGloss")], 0.f);
         TestEqual(TEXT("no HAL"), X->Scalars[TEXT("UseHalMap")], 0.f);
+        TestFalse(TEXT("no wear map"), X->Textures.Contains(TEXT("WearMap")));
+        TestEqual(TEXT("no vertex wear/dirt/AO without the token"), X->Scalars.FindRef(TEXT("UseWearDirtAOVertex"), -1.f), 0.f);
     }
     if (auto* X = Check(TEXT("blend_palette_fold"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
     {
@@ -305,8 +317,21 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("coverage texture"), X->Textures[TEXT("DiffuseMap")].Path, FString(TEXT("tex/decal_diff.png")));
     }
     if (auto* X = Check(TEXT("decal_colour"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
+    {
         TestEqual(TEXT("colour decal parent"), FSCMaterialBuilder::ParentPath(X->Master, X->Blend, X->bTwoSided),
             FString(TEXT("/SCBridge/Materials/MI_SC_MeshDecal_TwoSided.MI_SC_MeshDecal_TwoSided")));
+        // MeshDecal.cfx dirt (WP-U2b): BlendTexture (the exported breakup / wear mask) at baseTC x WearTiling, vertex
+        // wear under %VERTCOLORS (CalculateVertexDirt), AO 1.
+        TestEqual(TEXT("decal dirt blend map"), X->Textures.Contains(TEXT("DirtBlendMap")) ? X->Textures[TEXT("DirtBlendMap")].Path : FString(), FString(TEXT("tex/decal_breakup.png")));
+        TestEqual(TEXT("decal dirt blend map on"), X->Scalars.FindRef(TEXT("UseDirtBlendMap"), -1.f), 1.f);
+        TestEqual(TEXT("decal dirt blend tiling = WearTiling"), X->Scalars.FindRef(TEXT("DirtBlendTiling"), -1.f), 4.f);
+        TestEqual(TEXT("decal vertex wear on with %VERTCOLORS"), X->Scalars.FindRef(TEXT("UseVertexColors"), -1.f), 1.f);
+    }
+    if (auto* X = Check(TEXT("stencil_palette"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
+    {
+        TestEqual(TEXT("no blend texture: the neutral mask"), X->Scalars.FindRef(TEXT("UseDirtBlendMap"), -1.f), 0.f);
+        TestEqual(TEXT("no WearTiling: 1"), X->Scalars.FindRef(TEXT("DirtBlendTiling"), -1.f), 1.f);
+    }
     const float DefaultClip = GetDefault<UMaterial>()->OpacityMaskClipValue;
     if (auto* X = Check(TEXT("forward_trim"), ESCMaster::Illum, ESCBlend::Masked, false, false))
         TestEqual(TEXT("non-emitting forward surface stays masked at the engine default clip"), X->Scalars[TEXT("AlphaTest")], DefaultClip);
@@ -483,7 +508,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // hard_wear_tinted blend map (its wear surface reuses the Primary maps). Two more are read for their mean
     // colour only: the unsampled spec maps of hard_wear_tinted and blend1. GlassPBR adds 2: the glass_thickness
     // height map and the glass_vertex_tint tint map.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 44);
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 47); // + Layered WearMap, the decal DirtBlendMap, the engine detail map (WP-U2b)
     // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;

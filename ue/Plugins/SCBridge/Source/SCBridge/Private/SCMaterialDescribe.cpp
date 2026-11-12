@@ -350,7 +350,9 @@ void Glass(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPal
  *  - macro normal + gloss: TexSlot3 ddna, compiled in by %MACRO_NORMAL_MAP (HardSurface, at baseTC x MacroTiling)
  *    or %NORMAL_MAP (LayerBlend, untiled); LayerAttribs_AddMacroSurface = detail-normal blend, smoothness x gloss;
  *  - HardSurface %MACRO_AO_MAP: TexSlot1, single channel, same UVs (exported with the base_color role);
- *  - LayerBlend TexSlot13: R hue shift, G AO, B luminance shift, sampled unconditionally at baseTC. */
+ *  - LayerBlend TexSlot13: R hue shift, G AO, B luminance shift, sampled unconditionally at baseTC;
+ *  - LayerBlend TexSlot11 WearMap (R = wear / curvature), sampled unconditionally at baseTC: the dirt blend map, and
+ *    %WEAR_DIRT_AO_VERTEX: vertex colour R = wear (CalculateVertexDirt), B = AO (WP-U2b). */
 void MacroSurface(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
 {
     const bool bHard = D.Master == ESCMaster::HardSurface;
@@ -372,6 +374,15 @@ void MacroSurface(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
         const FObj Hal = SlotAt(Sub, 13);
         if (Hal && Str(Hal, TEXT("role")) == TEXT("hal_control")) Tex(D, TEXT("HalMap"), Str(Hal, TEXT("export_path")), ESCTextureRole::Linear);
         D.Scalars.Add(TEXT("UseHalMap"), D.Textures.Contains(TEXT("HalMap")) ? 1.f : 0.f);
+        const FObj Wear = SlotAt(Sub, 11);
+        if (Wear && Str(Wear, TEXT("role")) == TEXT("wear_mask")) Tex(D, TEXT("WearMap"), Str(Wear, TEXT("export_path")), ESCTextureRole::Linear);
+        D.Scalars.Add(TEXT("UseWearDirtAOVertex"), HasToken(Sub, TEXT("WEAR_DIRT_AO_VERTEX")) ? 1.f : 0.f);
+        // GetAlphaBlendDetailMaps: the engine detail map (G = dirt detail) at baseUV x detailScale, at shader quality
+        // above low (the viewer's Epic level); AddBlendAlphaDetails then shapes the dirt alpha.
+        const FSCStarEngine& Game = FSCStarEngine::Get();
+        Tex(D, TEXT("DirtDetailMap"), Game.WearDirtFrostDetailMap, ESCTextureRole::Linear);
+        D.Scalars.Add(TEXT("DirtDetailScale"), float(Game.DirtDetailScale));
+        D.Scalars.Add(TEXT("UseDirtDetail"), 1.f);
         if (A.Param(TEXT("RotateLayerUVs"), 0.f) != 0.f)
             D.Warnings.Add(TEXT("RotateLayerUVs is not supported by the masters; layer UVs are not rotated"));
     }
@@ -634,6 +645,17 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
                 D.Master = ESCMaster::MeshDecalRelief;
             if (D.Master == ESCMaster::MeshDecal) // colour decals: sheet alpha x DecalAlphaMultiplier x DecalDiffuseOpacity
                 D.Scalars.Add(TEXT("Opacity"), Opacity * A.Param(TEXT("DecalAlphaMultiplier"), 1.f) * A.Param(TEXT("DecalDiffuseOpacity"), 1.f));
+            if (D.Master == ESCMaster::MeshDecal)
+            {
+                // MeshDecal.cfx dirt (WP-U2b): BlendTexture ("blend texture for wear and dirt", role Other: the exported
+                // breakup / wear mask) at baseTC x WearTiling; vertex wear (alpha) -> CalculateVertexDirt under %VERTCOLORS.
+                FObj Blend = Slot(Sub, TEXT("breakup"));
+                if (!Blend) Blend = Slot(Sub, TEXT("wear_mask"));
+                if (Blend) Tex(D, TEXT("DirtBlendMap"), Str(Blend, TEXT("export_path")), ESCTextureRole::Linear);
+                D.Scalars.Add(TEXT("UseDirtBlendMap"), D.Textures.Contains(TEXT("DirtBlendMap")) ? 1.f : 0.f);
+                D.Scalars.Add(TEXT("DirtBlendTiling"), A.Param(TEXT("WearTiling"), 1.f));
+                D.Scalars.Add(TEXT("UseVertexColors"), HasToken(Sub, TEXT("VERTCOLORS")) ? 1.f : 0.f);
+            }
         }
         if (D.Master == ESCMaster::EmissiveUnlit && !D.Textures.Contains(TEXT("DiffuseMap")))
         {

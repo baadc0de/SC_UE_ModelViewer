@@ -40,11 +40,18 @@ bool FSCDirtExterior::RunTest(const FString&)
     USCViewerSettings* Settings = USCViewerSettings::Get();
     const float Amount = Settings->DirtAmount;
     const FLinearColor Colour = Settings->DirtColor;
+    const float Underside = Settings->DirtUnderside;
     IConsoleManager::Get().ProcessUserConsoleInput(*FString::Printf(TEXT("sc.Dirt 0.6 %s"), FSCDirt::Presets()[1].Name), *GLog, World);
     TestEqual(TEXT("console sets the amount"), Settings->DirtAmount, 0.6f);
     TestTrue(TEXT("console sets the preset colour"), Settings->DirtColor.Equals(FSCDirt::Presets()[1].Colour));
+    IConsoleManager::Get().ProcessUserConsoleInput(TEXT("sc.Dirt 0.4 Dust 0.75"), *GLog, World);
+    TestEqual(TEXT("console sets the underside bias"), Settings->DirtUnderside, 0.75f);
+    // SH2_SampleValue_Clamped coefficients: w = amount, xyz = the underside bias along object -Z (scaled by amount).
+    const FLinearColor SH = FSCDirt::DirectionCoefficients(*Settings);
+    TestTrue(TEXT("underside tilts dirt toward -Z"), FMath::IsNearlyEqual(SH.B, -0.3f) && SH.R == 0.f && SH.G == 0.f);
     Settings->DirtAmount = Amount;
     Settings->DirtColor = Colour;
+    Settings->DirtUnderside = Underside;
     Vehicle->Destroy();
     World->DestroyWorld(false);
     return true;

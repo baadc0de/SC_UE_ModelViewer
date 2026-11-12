@@ -110,13 +110,28 @@ class Graph:
         return (self.node(unreal.MaterialExpressionScalarParameter, parameter_name=name, default_value=value, group=group,
                           use_custom_primitive_data=True, primitive_data_index=index), "")
 
-    def dirt(self, albedo, f0, smooth, blend_map, vertex_wear, vertex_ao):
+    def dirt(self, albedo, f0, smooth, blend_map, vertex_wear, vertex_ao, object_space=True, detail=None):
         """layerLib.cfi CalcDirtBlendAlpha + LayerAttribs_ApplyDirt with the viewer's dirt: albedo -> DirtColor,
         F0 -> DIRT_SPECULAR, smoothness -> DIRT_GLOSS by the dirt alpha. Returns (albedo, f0, smooth, alpha)."""
-        amount = self.mul(self.collection("DirtAmount"), self.primitive_scalar("DirtExterior", DIRT_EXTERIOR_INDEX, 0.0, "Dirt"))
+        # vertexLib.cfi: objectDirt = SH2_SampleValue_Clamped(normalize(objectNormal x MeshInvSquareNormalizedBounds),
+        # dirtAmountSH); the viewer's coefficients: w = DirtAmount, xyz = DirtSH (FSCDirt::DirectionCoefficients).
+        # The deferred-decal domain has no world -> local transform or object bounds: decals use the world normal (the
+        # viewer's ships stand level) and unit bounds.
+        normal_ws = (self.node(unreal.MaterialExpressionVertexNormalWS), "")
+        if object_space:
+            normal = self.op(unreal.MaterialExpressionTransform, normal_ws, names=("Input",),
+                             transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_WORLD,
+                             transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_LOCAL)
+            extents = (self.node(unreal.MaterialExpressionObjectLocalBounds), "Half Extents")
+        else:
+            normal, extents = normal_ws, self.const3((1, 1, 1))
+        object_dirt = self.custom(DIRT_SH, unreal.CustomMaterialOutputType.CMOT_FLOAT1, Normal=normal, HalfExtents=extents,
+                                  Amount=self.collection("DirtAmount"), SH=self.collection("DirtSH", vector=True))
+        amount = self.mul(object_dirt, self.primitive_scalar("DirtExterior", DIRT_EXTERIOR_INDEX, 0.0, "Dirt"))
         colour = self.collection("DirtColor", vector=True)
         alpha = self.custom(DIRT_ALPHA, unreal.CustomMaterialOutputType.CMOT_FLOAT1, Amount=amount, VertexWear=vertex_wear,
-                            BlendMap=blend_map, VertexAO=vertex_ao, DirtColor=colour)
+                            BlendMap=blend_map, VertexAO=vertex_ao, DirtColor=colour,
+                            Detail=detail if detail is not None else self.const(0.5))  # 0.5 = no details (identity)
         return (self.lerp(albedo, colour, alpha), self.lerp(f0, self.const3(DIRT_SPECULAR), alpha),
                 self.lerp(smooth, self.const(DIRT_GLOSS), alpha), alpha)
 
@@ -317,9 +332,19 @@ def layered_master(name, count):
     normal = g.detail_normal(macro, result["normal"])
     macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroSmoothnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
     smooth = g.mul(result["smoothness"], macro_gloss)
-    # LayerBlend_V2.cfx: dirt after the macro surface, before AO; blendMap is the wear map, which this master does not
-    # sample (uniform 1), and the %WEAR_DIRT_AO_VERTEX vertex dirt is not read (0).
-    albedo, f0, smooth, dirt = g.dirt(result["albedo"], result["f0"], smooth, g.const(1.0), g.const(0.0), ao)
+    # LayerBlend_V2.cfx: dirt after the macro surface, before AO. blendMap = WearMap (TexSlot11, R = wear/curvature) at
+    # the base UVs; %WEAR_DIRT_AO_VERTEX (UseWearDirtAOVertex): vertex R = wear -> vertex dirt, vertex B multiplies AO.
+    wear_map = (g.texture("WearMap", g.white_linear, ST.SAMPLERTYPE_MASKS, base_uv, "Dirt"), "R")
+    colour_v = g.node(unreal.MaterialExpressionVertexColor)
+    use_vertex = g.scalar("UseWearDirtAOVertex", 0.0, "Dirt")
+    vertex_wear = g.lerp(g.const(0.0), (colour_v, "R"), use_vertex)
+    ao = g.mul(ao, g.lerp(g.const(1.0), (colour_v, "B"), use_vertex))
+    # GetAlphaBlendDetailMaps: G of the engine detail map at baseUV x DirtDetailScale (UseDirtDetail; 0.5 = none).
+    detail_uv = g.op(unreal.MaterialExpressionMultiply, (g.node(unreal.MaterialExpressionTextureCoordinate), ""),
+                     g.scalar("DirtDetailScale", 1.0, "Dirt"))
+    detail = g.lerp(g.const(0.5), (g.texture("DirtDetailMap", g.white_linear, ST.SAMPLERTYPE_MASKS, detail_uv, "Dirt"), "G"),
+                    g.scalar("UseDirtDetail", 0.0, "Dirt"))
+    albedo, f0, smooth, dirt = g.dirt(result["albedo"], result["f0"], smooth, wear_map, vertex_wear, ao, detail=detail)
     albedo, f0 = g.mul(albedo, ao), g.mul(f0, ao)
     g.last_uv = base_uv
     emissive = g.mul(g.glow(result["colour"], result["alpha"]), g.one_minus(dirt))  # Emissive *= 1 - dirtAmount
@@ -334,10 +359,18 @@ def layered_master(name, count):
 DIRT_SPECULAR = (0.03, 0.03, 0.03)
 DIRT_GLOSS = 0.0
 DIRT_EXTERIOR_INDEX = 0
+# vertexLib.cfi ENABLE_DIRT + SphericalHarmonics.cfi SH2_SampleValue_Clamped(direction, c) = c.w + dot(direction, c.xyz),
+# direction = normalize(object normal x MeshInvSquareNormalizedBounds), read as 1 / (normalised half extents)^2.
+DIRT_SH = """float3 b = normalize(max(abs(HalfExtents), 1e-4));
+float3 d = normalize(Normal / (b * b));
+return Amount + dot(d, SH);"""
+# Decals without an exported blend texture: a neutral mid mask (viewer choice, owner allowance 2026-11-12).
+DECAL_DIRT_MASK = 0.5
 # layerLib.cfi: `if (objectDirt)`, dirt = saturate(objectDirt - CalculateVertexDirt(wear)) with
 # CalculateVertexDirt(v) = 0.95 v^2, then CalcDirtBlendAlpha(dirtColor, dirt, blendMap, AO): mask = blendMap AO^2,
 # a = CalcBlendAlpha(mask, dirt, softness 1), slope = 1 - (1 - a)^2, result = lerp(slope, a,
-# InverseLerpNormalized(0, 0.15, GetLuminance(dirtColor))); GetLuminance is Rec.709 (common.cfi). No detail maps.
+# InverseLerpNormalized(0, 0.15, GetLuminance(dirtColor))); GetLuminance is Rec.709 (common.cfi); then
+# AddBlendAlphaDetails(alpha, Detail): saturate(0.25 alpha / Detail^2), the identity at Detail 0.5 (no detail map).
 DIRT_ALPHA = """if (Amount <= 0) return 0;
 float dirt = saturate(Amount - 0.95 * VertexWear * VertexWear);
 float mask = BlendMap * VertexAO * VertexAO;
@@ -352,7 +385,8 @@ float blendOut = lerp(1.0, mask * mask, saturate(2 * dirt - 1));
 float a = 1.0 - blendIn * blendOut;
 float slope = 1 - (1 - a) * (1 - a);
 float luminance = dot(DirtColor, float3(0.2126, 0.7152, 0.0722));
-return saturate(lerp(slope, a, saturate(luminance / 0.15)));"""
+float blendAlpha = lerp(slope, a, saturate(luminance / 0.15));
+return saturate(0.25 * blendAlpha / (Detail * Detail));  // AddBlendAlphaDetails (identity at Detail 0.5)"""
 
 
 # Game layerLib.cfi CalcBlendAlpha(blendMap, blendAmt, softness) = 1 - CalcBlendInAlpha x CalcBlendOutAlpha.
@@ -579,8 +613,18 @@ def decal_master(name, colour):
         coverage = g.lerp(coverage, st_cover, use)
         f0 = g.mul(g.vector("SpecularColor", (0.04, 0.04, 0.04)),
                    (g.texture("SpecularMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB"))
-        slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal,
-                      g.glow(base, (diffuse, "A")), front=False)
+        # MeshDecal.cfx dirt (WP-U2b): the decal's own attributes take the viewer dirt, AO 1. BlendTexture at baseTC x
+        # WearTiling when exported (UseDirtBlendMap); without one the mask is DECAL_DIRT_MASK (viewer choice: the
+        # game's default binding is not recoverable from the shader text). Vertex wear under %VERTCOLORS.
+        blend_uv = g.uv(g.scalar("DirtBlendTiling", 1.0, "Dirt"))
+        blend = g.lerp(g.const(DECAL_DIRT_MASK), (g.texture("DirtBlendMap", g.white_linear, ST.SAMPLERTYPE_MASKS, blend_uv, "Dirt"), "R"),
+                       g.scalar("UseDirtBlendMap", 0.0, "Dirt"))
+        vertex_wear = g.lerp(g.const(0.0), (g.node(unreal.MaterialExpressionVertexColor), "A"), g.scalar("UseVertexColors", 0.0, "Dirt"))
+        smooth = g.smoothness("", uv)  # dirt works on smoothness (DIRT_GLOSS); converted with the game's mapping below
+        g.last_uv = uv
+        base, f0, smooth, dirt = g.dirt(base, f0, smooth, blend, vertex_wear, g.const(1.0), object_space=False)
+        slab = g.slab(g.conserve(base, f0), f0, None, g.gloss_to_roughness(smooth), normal,
+                      g.mul(g.glow(base, (diffuse, "A")), g.one_minus(dirt)), front=False)
     else:
         slab = g.slab(None, None, None, g.roughness("", uv), normal, front=False)
     decal = g.node(unreal.MaterialExpressionSubstrateConvertToDecal)
@@ -666,7 +710,10 @@ def dirt_collection():
     colour.set_editor_property("parameter_name", "DirtColor")
     colour.set_editor_property("default_value", unreal.LinearColor(0.0, 0.0, 0.0, 1.0))
     mpc.set_editor_property("scalar_parameters", [amount])
-    mpc.set_editor_property("vector_parameters", [colour])
+    sh = unreal.CollectionVectorParameter()
+    sh.set_editor_property("parameter_name", "DirtSH")
+    sh.set_editor_property("default_value", unreal.LinearColor(0.0, 0.0, 0.0, 0.0))
+    mpc.set_editor_property("vector_parameters", [colour, sh])
     eal.save_loaded_asset(mpc)
     unreal.log(f"SC_MATERIAL {mpc.get_path_name()} collection")
     return mpc

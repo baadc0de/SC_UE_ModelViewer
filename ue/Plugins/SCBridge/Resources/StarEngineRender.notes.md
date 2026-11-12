@@ -34,7 +34,7 @@ Inputs, both part of the installed game (untrusted data, never checked in):
 python3 -I scripts/verify_star_engine_render.py
 # SOURCE exe: …/LIVE/Bin64/StarCitizen.exe
 # SOURCE shaders: Engine\ShaderCache_Vulkan.pak (2391328688 bytes, crc32 aea61527) read in place from …/LIVE/Data.p4k
-# STAR_ENGINE_RENDER OK: 60/60 checks match the installed game
+# STAR_ENGINE_RENDER OK: 62/62 checks match the installed game
 ```
 
 `--exe PATH` and `--p4k PATH` (defaults: the LIVE executable and `Data.p4k` under `~/Games/star-citizen/...`),
@@ -63,6 +63,11 @@ Method:
 - **`shader_functions`** — `sha256` of the space-joined tokens of every overload definition of the function in
   `file`. The functions are not stored (game-derived text does not enter git); the hash pins the source a rule
   or port was written from.
+
+- **`shader_textures`** — a texture's default (`= path ;`) in its declaration in `file`, compared with the
+  decoder's token spacing removed. `WearDirtFrostDetailMap` (LayerBlendParams.cfi) is the engine texture LayerBlend_V2
+  samples for wear/dirt/frost detail at `baseUV × detailScale` (`GetAlphaBlendDetailMaps`); scviewer-core copies it
+  from Data.p4k into packages that contain a LayerBlend_V2 material (WP-U2b).
 
 ## What each value drives
 

@@ -35,4 +35,23 @@ cargo bay RMSE 0.82 (the frame-to-frame noise floor: interiors stay clean), ramp
 Default 30 % Dust: chosen by eye against the owner's Gladius references, which show light grime on panel edges and
 recesses. Not game data — a ship's authored dirt is 0.
 
-Open: decals (`M_SC_MeshDecal`) take no dirt yet; the Layered master's wear map and vertex dirt are not ported.
+
+## Follow-up: the gaps closed (2026-11-12)
+
+Decal dirt, the Layered master's wear map / vertex dirt / engine detail map, and the direction-dependent dirt (see the
+brief). Evidence:
+
+- `scripts/verify_star_engine_render.py`: `STAR_ENGINE_RENDER OK: 62/62` (new: `shader_textures.WearDirtFrostDetailMap`,
+  `shader_constants.detailScale`).
+- `cargo test -p scviewer-core`: 39 passed (new `engine_textures` tests: fixture entry, family detection, the
+  texture copied from the installed Data.p4k and only into LayerBlend_V2 packages).
+- UE unit tests 37/37 (new assertions: Layered `WearMap` / `UseWearDirtAOVertex` / `DirtDetailMap` /
+  `DirtDetailScale`, decal `DirtBlendMap` / `DirtBlendTiling` / `UseVertexColors`, `sc.Dirt` underside); importer
+  + package 39/39; first person and rig OK on the Gladius, Cutlass and Scorpius.
+- GPU `routes/gladius-dirt.txt` (`dirt2`, `dirt3`): with the underside tilt the top of the hull carries less dirt
+  than the first version at the same amount, and the Aegis logo decal takes dirt
+  (`out/smoke/dirt-gaps-before-after.jpg`). The ship and player packages now contain
+  `Engine/EngineAssets/Textures/wearDirtFrost_mask.dds` and the import logs no texture warning (264 before the player
+  path was hooked). The detail map changes 22 pixels of the Gladius at full dirt: its exterior LayerBlend parts are a
+  few gun/component surfaces whose wear maps already hold the dirt back.
+- UE 5.9: the deferred-decal domain rejects the world→local transform, so decals take the world normal.

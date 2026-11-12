@@ -38,6 +38,10 @@ struct SCBRIDGE_API FSCStarEngine
     // shader's values for a material that does not set the parameter.
     double GlassTilingDefault = 0, GlassVStretchDefault = 0;
     double GlassThinFilmThicknessDefault = 0;
+    // LayerBlend_V2 GetAlphaBlendDetailMaps (WP-U2b): the engine's wear/dirt/frost detail map (shader_textures; scviewer-core
+    // copies it into packages with a LayerBlend_V2 material under this path) sampled at baseUV * DirtDetailScale.
+    FString WearDirtFrostDetailMap;
+    double DirtDetailScale = 0;
 
     static FString FixturePath();
     static bool Load(const FString& Path, FSCStarEngine& Out, FString& Error);

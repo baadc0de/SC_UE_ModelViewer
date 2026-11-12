@@ -29,6 +29,9 @@ public:
 
     /** Viewer dirt on exterior surfaces (WP-U2b, FSCDirt): 0 = clean (the game's state for an unflown ship), 1 = full. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtAmount = 0.3f;
+    /** How much more dirt faces pointing down get than faces pointing up (0 = even, 1 = all below); a viewer
+     *  choice for a landed ship (the game's direction-dependent dirt is run-time state). */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtUnderside = 0.5f;
     /** Linear dirt colour; the default is FSCDirt's "Dust" preset (a viewer choice, not game data). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FLinearColor DirtColor = FLinearColor::FromSRGBColor(FColor(118, 108, 92));
 

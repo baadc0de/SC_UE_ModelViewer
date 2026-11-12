@@ -21,6 +21,12 @@ TConstArrayView<FSCDirt::FPreset> FSCDirt::Presets()
     return Values;
 }
 
+FLinearColor FSCDirt::DirectionCoefficients(const USCViewerSettings& Settings)
+{
+    const float Amount = FMath::Clamp(Settings.DirtAmount, 0.f, 1.f);
+    return FLinearColor(0.f, 0.f, -FMath::Clamp(Settings.DirtUnderside, 0.f, 1.f) * Amount, 0.f);
+}
+
 void FSCDirt::Push(UWorld* World)
 {
     static TWeakObjectPtr<UMaterialParameterCollection> Cached;
@@ -30,6 +36,7 @@ void FSCDirt::Push(UWorld* World)
     const USCViewerSettings* Settings = USCViewerSettings::Get();
     Instance->SetScalarParameterValue(TEXT("DirtAmount"), FMath::Clamp(Settings->DirtAmount, 0.f, 1.f));
     Instance->SetVectorParameterValue(TEXT("DirtColor"), Settings->DirtColor);
+    Instance->SetVectorParameterValue(TEXT("DirtSH"), DirectionCoefficients(*Settings));
 }
 
 void FSCDirt::MarkExterior(ASCVehicle* Vehicle)
@@ -51,14 +58,16 @@ namespace
 {
 // sc.Dirt <amount 0..1> [preset]: set the viewer dirt (for routes and the console); saved like the UI does.
 FAutoConsoleCommandWithWorldAndArgs GSCDirtCommand(
-    TEXT("sc.Dirt"), TEXT("sc.Dirt <amount 0..1> [Dust|Sand|Mud|Ash]: viewer dirt on exterior surfaces (WP-U2b)"),
+    TEXT("sc.Dirt"), TEXT("sc.Dirt <amount 0..1> [Dust|Sand|Mud|Ash] [underside 0..1]: viewer dirt on exterior surfaces (WP-U2b)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
         USCViewerSettings* Settings = USCViewerSettings::Get();
         if (Args.IsValidIndex(0)) Settings->DirtAmount = FMath::Clamp(FCString::Atof(*Args[0]), 0.f, 1.f);
         if (Args.IsValidIndex(1))
             for (const FSCDirt::FPreset& Preset : FSCDirt::Presets())
                 if (Args[1].Equals(Preset.Name, ESearchCase::IgnoreCase)) Settings->DirtColor = Preset.Colour;
+        if (Args.IsValidIndex(2)) Settings->DirtUnderside = FMath::Clamp(FCString::Atof(*Args[2]), 0.f, 1.f);
         FSCDirt::Push(World);
-        UE_LOG(LogSCImport, Display, TEXT("DIRT amount=%.2f colour=%s"), Settings->DirtAmount, *Settings->DirtColor.ToString());
+        UE_LOG(LogSCImport, Display, TEXT("DIRT amount=%.2f underside=%.2f colour=%s"), Settings->DirtAmount, Settings->DirtUnderside,
+               *Settings->DirtColor.ToString());
     }));
 }

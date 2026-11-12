@@ -97,6 +97,11 @@
     }
   },
   "shader_constants": {
+    "detailScale": {
+      "value": 16.0,
+      "file": "LayerBlend_V2.cfxb",
+      "pattern": "const float detailScale = (\\S+) ;"
+    },
     "HDR_LUMINANCE_SCALE": {
       "value": 1000.0,
       "file": "common.cfib",
@@ -176,6 +181,13 @@
       "value": 1.0,
       "file": "glassLib.cfib",
       "pattern": "float ThinFilmThickness < .*? ; > = (\\S+) ;"
+    }
+  },
+  "shader_textures": {
+    "WearDirtFrostDetailMap": {
+      "value": "Engine/EngineAssets/Textures/wearDirtFrost_mask.dds",
+      "file": "LayerBlendParams.cfib",
+      "pattern": "WearDirtFrostDetailMap : \\S+ \\( \\S+ , MAT_RESOURCE_SET \\) \\{ \\S+ = ([^;]+?) ;"
     }
   },
   "shader_functions": {

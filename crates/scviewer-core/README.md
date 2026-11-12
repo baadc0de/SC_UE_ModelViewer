@@ -102,7 +102,10 @@ The binary browser index is `entities.v<N>.<buildid>.bin`; unsafe build-id filen
 use a SHA-256 representation. Build identity comes from `Data.BuildId` in the
 adjacent `build_manifest.id`, falling back to archive size and modification time.
 Packages are `<sha256>.tar`, hashing cache format version, build id, canonical
-entity name and all export options, plus `EXPORTER_VERSION`. Index envelopes
+entity name and all export options, plus `EXPORTER_VERSION`.
+A package (entity or player) with a LayerBlend_V2 material also carries the engine textures the
+render fixture's `shader_textures` names (`engine_textures.rs`, WP-U2b): copied from Data.p4k at the
+package mip under their P4k path, since no material authors them. Index envelopes
 also check version/build id/exporter identity. `build.rs` embeds the vendored git
 revision and dirty flag in `EXPORTER_REVISION`, `EXPORTER_DIRTY`, and
 `EXPORTER_VERSION` via compile-time environment constants. It watches vendored

@@ -214,6 +214,26 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
                 return FText::FromString(FString::Printf(TEXT("%d %%"), FMath::RoundToInt(USCViewerSettings::Get()->DirtAmount * 100)));
             })]
         ];
+    TSharedRef<SHorizontalBox> Underside = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("DirtUnderside", "Underside"))]]
+        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+        [
+            SNew(SSlider)
+            .Value_Lambda([] { return USCViewerSettings::Get()->DirtUnderside; })
+            .OnValueChanged_Lambda([PushDirt](float Value) {
+                USCViewerSettings::Get()->DirtUnderside = Value;
+                PushDirt(false);
+            })
+            .OnMouseCaptureEnd_Lambda([PushDirt] { PushDirt(true); })
+        ]
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+        [
+            SNew(SBox).WidthOverride(34)
+            [SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text_Lambda([] {
+                return FText::FromString(FString::Printf(TEXT("%d %%"), FMath::RoundToInt(USCViewerSettings::Get()->DirtUnderside * 100)));
+            })]
+        ];
     return SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Lod", "LOD"), {0, 1, 2, 3}, IntField(&USCViewOptions::Lod))]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Mip", "Texture mip"), {0, 2, 4}, IntField(&USCViewOptions::Mip))]
@@ -238,6 +258,7 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
             ]
         ]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Dirt]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Underside]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[DirtColours];
 }
 

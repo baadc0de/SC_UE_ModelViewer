@@ -22,6 +22,9 @@ public:
     static TConstArrayView<FPreset> Presets();
     /** Write the settings' amount and colour into the world's MPC_SCDirt instance (no-op without the asset). */
     static void Push(UWorld* World);
+    /** SH2 linear coefficients (object space) of the viewer dirt: (0, 0, -Underside x Amount); the constant band
+     *  is the amount itself (game vertexLib.cfi: dirt = SH2_SampleValue_Clamped(scaled object normal, dirtAmountSH)). */
+    static FLinearColor DirectionCoefficients(const class USCViewerSettings& Settings);
     /** Exterior factor per primitive: 1 outside every room (lighting channel 0 only, FSCLightAreas), else 0. */
     static void MarkExterior(ASCVehicle* Vehicle);
 };

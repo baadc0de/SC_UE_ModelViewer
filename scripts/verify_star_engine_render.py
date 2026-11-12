@@ -189,6 +189,12 @@ class Shaders:
         assert len(set(found)) == 1, f"{entry['file']}: /{entry['pattern']}/ matched {found}"
         return float(found[0].rstrip("f").replace(" ", ""))  # `- 14`: the sign is its own token
 
+    def texture(self, entry):
+        """A texture's default path in its declaration; the decoder spaces every token (`Engine / Textures / a . dds`)."""
+        found = re.findall(entry["pattern"], shader_text(self.tokens(entry["file"])))
+        assert len(set(found)) == 1, f"{entry['file']}: /{entry['pattern']}/ matched {found}"
+        return found[0].replace(" ", "")
+
     def function_hash(self, entry, name):
         return hashlib.sha256(" ".join(function_tokens(self.tokens(entry["file"]), name)).encode()).hexdigest()
 
@@ -345,6 +351,7 @@ def main():
         "exe_cvars": exe.cvars(names),
         "shader_constants": {k: shaders.constant(e) for k, e in fixture["shader_constants"].items()},
         "shader_functions": {k: shaders.function_hash(e, k) for k, e in fixture["shader_functions"].items()},
+        "shader_textures": {k: shaders.texture(e) for k, e in fixture.get("shader_textures", {}).items()},
     }
     if args.dump:
         print(json.dumps(live, indent=2))
@@ -363,12 +370,15 @@ def main():
     for name, entry in fixture["shader_constants"].items():
         if live["shader_constants"][name] != entry["value"]:
             bad.append(f"shader_constants.{name}: fixture {entry['value']}, game {live['shader_constants'][name]}")
+    for name, entry in fixture.get("shader_textures", {}).items():
+        if live["shader_textures"][name] != entry["value"]:
+            bad.append(f"shader_textures.{name}: fixture {entry['value']}, game {live['shader_textures'][name]}")
     for name, entry in fixture["shader_functions"].items():
         if live["shader_functions"][name] != entry["sha256"]:
             bad.append(f"shader_functions.{name}: token hash changed ({live['shader_functions'][name]})")
     for line in bad:
         print("MISMATCH", line)
-    checked = len(families) + sum(len(fixture[k]) for k in ("exe_cvars", "shader_constants", "shader_functions"))
+    checked = len(families) + sum(len(fixture.get(k, {})) for k in ("exe_cvars", "shader_constants", "shader_functions", "shader_textures"))
     against = "the installed game" if shaders.installed else "the executable and an extracted shader copy (see SOURCE; not proven to be the installed build)"
     print(f"STAR_ENGINE_RENDER {'FAILED' if bad else 'OK'}: {checked - len(bad)}/{checked} checks match {against}")
     return 1 if bad else 0

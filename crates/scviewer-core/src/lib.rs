@@ -15,6 +15,7 @@ mod cache;
 mod cancellation;
 pub use cancellation::{CancelToken, Error};
 mod catalogue;
+mod engine_textures;
 mod lights;
 mod items;
 mod player;
@@ -364,9 +365,10 @@ impl Session {
             &options.geometry.upstream(ExportKind::Decomposed),
             cancel,
         )?;
-        let package = result
+        let mut package = result
             .decomposed
             .context("upstream returned no decomposed files")?;
+        engine_textures::add_to_package(&mut package, &self.loaded()?.p4k, options.geometry.mip)?;
         self.checkpoint(cancel, 0.94, "Building tar")?;
         let bytes = package::to_tar(&package)?;
         self.checkpoint(cancel, 1.0, "Publishing package")?;

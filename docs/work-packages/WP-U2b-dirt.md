@@ -46,5 +46,19 @@ Made-up values are allowed; choose them against in-game footage. Implemented:
   Defaults 30 % Dust, picked by eye against the owner's Gladius references (`ue/verification/reference/gladius/`)
   and community footage descriptions of flown ships; not game data.
 
-Open: `M_SC_MeshDecal` has no dirt (the game's `MeshDecal.cfx` has its own), so decals stay crisp on dirty paint;
-the Layered master's wear map and vertex dirt are not ported; the game's direction-dependent dirt (SH) is uniform here.
+Follow-up (same day), closing the gaps of the first version:
+
+- `M_SC_Layered`: blend map = `WearMap` (TexSlot11, role `wear_mask`), `%WEAR_DIRT_AO_VERTEX` vertex wear (R) and AO (B),
+  and `GetAlphaBlendDetailMaps`: the engine's `WearDirtFrostDetailMap` (G) at baseUV × `detailScale` through
+  `AddBlendAlphaDetails`. Path and scale are render-fixture values (`shader_textures`, `shader_constants`; re-verified
+  against the installed game, 62/62); `scviewer-core` (`engine_textures.rs`) copies the texture from Data.p4k into
+  every ship and player package with a LayerBlend_V2 material (cache format 23).
+- `M_SC_MeshDecal`: `MeshDecal.cfx` dirt on the decal's own attributes (AO 1): `BlendTexture` (the exported breakup /
+  wear mask) at baseTC × `WearTiling`, vertex wear under `%VERTCOLORS`; decals without a blend texture use a neutral
+  0.5 mask (viewer choice: the game's default binding for the unbound texture is not in the shader text).
+- Direction: `SH2_SampleValue_Clamped` ported — dirt = Amount + dot(normalize(object normal / normalised half
+  extents²), DirtSH); the viewer's DirtSH = (0, 0, −Underside × Amount) with an "Underside" slider (default 50 %).
+  Decals (deferred-decal domain: no world→local transform) use the world normal and unit bounds.
+
+Remaining difference from the game: the SH coefficients are the viewer's (an underside tilt), not a flown ship's
+accumulated state; the decal default mask is a choice.
