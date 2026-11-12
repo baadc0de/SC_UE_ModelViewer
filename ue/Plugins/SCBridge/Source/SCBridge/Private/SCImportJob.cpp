@@ -12,6 +12,8 @@
 #include "SCLightAreas.h"
 #include "SCDirt.h"
 #include "SCEmissiveLights.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
 #include "SCViewerSettings.h"
 #include "SCRigComponent.h"
 #include "Animation/Skeleton.h"
@@ -795,7 +797,7 @@ void FSCImportJob::FState::Assemble()
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
-                                                              bAtHelper, I.SourceTransformBasis == TEXT("cryengine_z_up"));
+                                                              bAtHelper, FSCMeshImporter::InCryFrame(I.SourceTransformBasis, bAtHelper));
         if (!I.Id.IsEmpty())
         {
             // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
@@ -955,12 +957,27 @@ void FSCImportJob::FState::Assemble()
         LightSeconds += FPlatformTime::Seconds() - LightStart;
         return E;
     };
+    int32 EffectOnlySkipped = 0;
+    auto EffectOnly = [&](const FSCSceneInstance& I) {
+        const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
+        if (!Set || Set->Submaterials.IsEmpty()) return false;
+        for (const FSCSubmaterial& Sub : Set->Submaterials)
+        {
+            TSharedPtr<FJsonObject> O;
+            FString Shader;
+            if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Sub.Json), O) || !O || !O->TryGetStringField(TEXT("shader"), Shader) ||
+                !Shader.StartsWith(TEXT("VFX_")))
+                return false;
+        }
+        return true;
+    };
     auto CanPlace = [&](const FSCSceneInstance& I) {
         if (!I.ImportWarning.IsEmpty() || (!I.MeshAsset.IsEmpty() && !Meshes.Contains(I.MeshAsset)))
         {
             Warn(I.EntityName, TEXT("Instance skipped: ") + (I.ImportWarning.IsEmpty() ? I.MeshAsset : I.ImportWarning));
             return false;
         }
+        if (Options.bHideEffectOnlyPlacements && !I.MaterialSidecar.IsEmpty() && EffectOnly(I)) { ++EffectOnlySkipped; return false; }
         return true;
     };
     V->PhysicsGridTriangles = Manifest.PhysicsGrid; // the root entity sits at the actor origin
@@ -1012,6 +1029,7 @@ void FSCImportJob::FState::Assemble()
     FSCDirt::MarkExterior(V); // exterior = outside every room, from the channels just set
     FSCDirt::Push(V->GetWorld());
     if (!V->Lights.IsEmpty()) FSCEmissive::SetLumen(V, USCViewerSettings::Get()->bEmissiveInLumen); // ships and environments, not the player kit
+    if (EffectOnlySkipped) UE_LOG(LogSCImport, Display, TEXT("EFFECT_ONLY_PLACEMENTS skipped=%d"), EffectOnlySkipped);
     if (Options.bPublish)
     {
         V->BuildExploration();

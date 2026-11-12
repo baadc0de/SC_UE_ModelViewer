@@ -183,6 +183,10 @@ bool FSCBasis::RunTest(const FString&)
     const FMatrix Placement = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(2,3,4)), W, true, true);
     const FMatrix InteriorWorld = FSCMeshImporter::Transform(W) * Placement * Container * FSCMeshImporter::Transform(HelperMatrix);
     TestTrue(TEXT("Interior placement composes in source helper frame"), FVector(InteriorWorld.TransformPosition(FVector::ZeroVector)).Equals(FVector(900,200,500), 0.001));
+    // An object container's root-level entity (the hangar's ship elevator, 72 m below the roof hatch) stays below its parent.
+    const FMatrix RootChild = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(0,0,-72)), W, false, FSCMeshImporter::InCryFrame(TEXT("gltf_y_up"), false));
+    TestTrue(TEXT("Child on its parent entity is in the CryEngine frame"), FVector(RootChild.GetOrigin()).Equals(FVector(0,0,-7200), 0.001));
+    TestFalse(TEXT("Child at a helper keeps the glTF frame"), FSCMeshImporter::InCryFrame(TEXT("gltf_y_up"), true));
     auto& Bytes = Source.Files[TEXT("triangle.glb")];
     FFileHelper::SaveArrayToFile(Bytes, *(FPaths::ProjectSavedDir() / TEXT("Import/synthetic.glb")));
     TArray<uint8> HelperBytes = Bytes;

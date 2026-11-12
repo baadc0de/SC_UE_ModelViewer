@@ -3,6 +3,8 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
 #include "SCVehicle.h"
@@ -106,4 +108,18 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookHideGlass(
             }
         }
         UE_LOG(LogTemp, Display, TEXT("LOOK glass hidden=%d components=%d"), bHide, Hidden);
+    }));
+
+// sc.Look.Camera <x> <y> <z> <yaw> <pitch>: put the current pawn (the fly camera in fly mode) at a world position and
+// view direction (look reviews of environments).
+static FAutoConsoleCommandWithWorldAndArgs GSCLookCamera(
+    TEXT("sc.Look.Camera"), TEXT("sc.Look.Camera <x> <y> <z> <yaw> <pitch>: place the current pawn and view (world cm, degrees)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+        if (!PC || !PC->GetPawn() || Args.Num() < 5) return;
+        const FVector At(FCString::Atod(*Args[0]), FCString::Atod(*Args[1]), FCString::Atod(*Args[2]));
+        const FRotator View(FCString::Atod(*Args[4]), FCString::Atod(*Args[3]), 0);
+        PC->GetPawn()->SetActorLocation(At, false, nullptr, ETeleportType::TeleportPhysics);
+        PC->SetControlRotation(View);
+        UE_LOG(LogTemp, Display, TEXT("LOOK camera at=%s view=%s pawn=%s"), *At.ToCompactString(), *View.ToCompactString(), *PC->GetPawn()->GetClass()->GetName());
     }));

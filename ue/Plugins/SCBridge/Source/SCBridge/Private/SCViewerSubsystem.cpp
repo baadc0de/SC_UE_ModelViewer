@@ -258,7 +258,7 @@ void USCViewerSubsystem::CompleteSearches(bool bBlocking)
 bool USCViewerSubsystem::IsBusy() const
 {
     return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing ||
-           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid();
+           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0;
 }
 
 void USCViewerSubsystem::SetEnvironment(const FString& Folder)
@@ -315,11 +315,13 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
     EnvOptions.bBuildCollision = true;
     EnvOptions.bPublish = false;        // not the vehicle: routes, first person and light pairing keep the ship
     EnvOptions.bReplacePrevious = false;
+    EnvOptions.bHideEffectOnlyPlacements = true;
     EnvJob = MakeShared<FSCImportJob>(*EnvSource, EnvOptions, EnvSource);
 }
 
 void USCViewerSubsystem::StepEnvironment()
 {
+    if (EnvPlaceInTicks > 0 && --EnvPlaceInTicks == 0) PlaceEnvironment();
     // The archive's hangars for the picker: listed once per archive session.
     if (ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
         EnvListTask = Client->SearchEnvironments(TEXT("hangar"), 2000);
@@ -391,32 +393,108 @@ void USCViewerSubsystem::StepEnvironment()
         const FBox Bounds = Environment->GetComponentsBoundingBox(true);
         UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_IMPORT seconds=%.1f meshes=%d instances=%d lights=%d bounds=%s"),
                FPlatformTime::Seconds() - EnvStart, Result.MeshCount, Result.InstanceCount, Environment->Lights.Num(), *Bounds.ToString());
-        // Placement: the environment's main floor is the first large (>= 20 m across), upward-facing surface below
-        // its origin (a top-loading hangar's origin is on its roof doors); it is moved to the map floor (MapFloorZ),
-        // where the ship rests. Small objects on the way down (lights, cranes, props) are passed through.
+        EnvPlaceInTicks = 2; // components settle; placement uses the bind pose, then the presented state is applied
+    }
+    else UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), *Result.Error);
+    EnvJob.Reset();
+    EnvSource.Reset();
+}
+
+void USCViewerSubsystem::PlaceEnvironment()
+{
+    ASCVehicle* EnvironmentActor = Environment.Get();
+    if (!EnvironmentActor) return;
+    const FBox Bounds = EnvironmentActor->GetComponentsBoundingBox(true);
+    // Survey (diagnostic): the first upward-facing surface >= 2 m across below each of a few points beside the shaft.
+    for (const FVector2D XY : {FVector2D(0, 5000), FVector2D(0, -5000), FVector2D(7000, 0), FVector2D(-7000, 0), FVector2D(0, 7000), FVector2D(9000, 6000)})
+    {
+        FCollisionQueryParams Q(SCENE_QUERY_STAT(SCEnvSurvey), true);
+        if (Vehicle.IsValid()) Q.AddIgnoredActor(Vehicle.Get());
+        double From = 100.0;
+        for (int32 Step = 0; Step < 32 && From > Bounds.Min.Z; ++Step)
+        {
+            FHitResult Hit;
+            if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, FVector(XY.X, XY.Y, From), FVector(XY.X, XY.Y, Bounds.Min.Z - 100), ECC_Visibility, Q)) break;
+            const FVector Size = Hit.GetComponent() ? Hit.GetComponent()->Bounds.GetBox().GetSize() : FVector::ZeroVector;
+            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= 200)
+            {
+                UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_SURVEY xy=%s z=%.0f span=%.0fx%.0f comp=%s"), *XY.ToString(), Hit.ImpactPoint.Z, Size.X, Size.Y,
+                       Hit.GetComponent()->ComponentTags.Num() ? *FPaths::GetBaseFilename(Hit.GetComponent()->ComponentTags[0].ToString()) : TEXT("-"));
+                break;
+            }
+            if (Hit.GetComponent()) Q.AddIgnoredComponent(Hit.GetComponent());
+            From = Hit.ImpactPoint.Z;
+        }
+    }
+    for (USCRigComponent* Rig : EnvironmentActor->Rigs)
+        if (Rig && Rig->GetSkeletalMeshAsset() && Rig->LocalPose.Num() <= 8)
+        {
+            const FReferenceSkeleton& Ref = Rig->GetSkeletalMeshAsset()->GetRefSkeleton();
+            for (int32 B = 0; B < Ref.GetNum() && B < Rig->LocalPose.Num(); ++B)
+                UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_RIG rig=%s owner=%s bone=%s parent=%d ref_t=%s ref_r=%s pose_t=%s pose_r=%s"), *Rig->GetName(), *Rig->OwnerEntity,
+                       *Ref.GetBoneName(B).ToString(), Ref.GetParentIndex(B), *Ref.GetRefBonePose()[B].GetTranslation().ToCompactString(),
+                       *Ref.GetRefBonePose()[B].Rotator().ToCompactString(), *Rig->LocalPose[B].GetTranslation().ToCompactString(), *Rig->LocalPose[B].Rotator().ToCompactString());
+        }
+    SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
+    {
+        // Placement: the environment's ship floor is the first large (>= 20 m across), upward-facing surface
+        // below a point 2 m under its origin (a top-loading hangar's origin is on its roof hatch; the room and the ship
+        // elevator hang below it); it is moved to the map floor (MapFloorZ), where the ship rests.
         constexpr double MapFloorZ = -5.0, MinFloorSpan = 2000.0;
         FCollisionQueryParams Q(SCENE_QUERY_STAT(SCEnvFloor), true);
         if (Vehicle.IsValid()) Q.AddIgnoredActor(Vehicle.Get());
         double FloorZ = TNumericLimits<double>::Max(), From = -200.0;
+        FVector2D FloorCentre = FVector2D::ZeroVector; // the ship stands in the middle of the floor part it lands on
         for (int32 Step = 0; Step < 64 && From > Bounds.Min.Z; ++Step)
         {
             FHitResult Hit;
             if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, FVector(0, 0, From), FVector(0, 0, Bounds.Min.Z - 100), ECC_Visibility, Q)) break;
             const FBox Part = Hit.GetComponent() ? Hit.GetComponent()->Bounds.GetBox() : FBox(ForceInit);
             const FVector Size = Part.GetSize();
-            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_FLOOR_PROBE z=%.1f normal_z=%.2f span=%.0fx%.0f comp=%s"), Hit.ImpactPoint.Z, Hit.ImpactNormal.Z,
-                   Size.X, Size.Y, Hit.GetComponent() && Hit.GetComponent()->ComponentTags.Num() ? *Hit.GetComponent()->ComponentTags[0].ToString() : TEXT("-"));
-            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= MinFloorSpan) { FloorZ = Hit.ImpactPoint.Z; break; }
+            const UPrimitiveComponent* HitComp = Hit.GetComponent();
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_FLOOR_PROBE z=%.1f normal_z=%.2f span=%.0fx%.0f comp=%s comp=%s bounds=%s body_z=%.0f parent=%s socket=%s"),
+                   Hit.ImpactPoint.Z, Hit.ImpactNormal.Z, Size.X, Size.Y,
+                   HitComp && HitComp->ComponentTags.Num() ? *HitComp->ComponentTags[0].ToString() : TEXT("-"),
+                   HitComp ? *HitComp->GetComponentLocation().ToCompactString() : TEXT("-"), *Part.ToString(),
+                   HitComp && HitComp->GetBodyInstance() && HitComp->GetBodyInstance()->IsValidBodyInstance() ? HitComp->GetBodyInstance()->GetUnrealWorldTransform().GetLocation().Z : -1.,
+                   HitComp ? *GetNameSafe(HitComp->GetAttachParent()) : TEXT("-"), HitComp ? *HitComp->GetAttachSocketName().ToString() : TEXT("-"));
+            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= MinFloorSpan)
+            {
+                FloorZ = Hit.ImpactPoint.Z;
+                FloorCentre = FVector2D(Part.GetCenter());
+                break;
+            }
             if (Hit.GetComponent()) Q.AddIgnoredComponent(Hit.GetComponent());
             From = Hit.ImpactPoint.Z;
         }
-        if (FloorZ < TNumericLimits<double>::Max()) Environment->AddActorWorldOffset(FVector(0, 0, MapFloorZ - FloorZ));
-        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_PLACE floor_z=%.1f offset_z=%.1f"), FloorZ < TNumericLimits<double>::Max() ? FloorZ : 0.,
+        if (FloorZ < TNumericLimits<double>::Max()) EnvironmentActor->AddActorWorldOffset(FVector(0, 0, MapFloorZ - FloorZ));
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_PLACE floor_centre=%s floor_z=%.1f offset_z=%.1f"), *FloorCentre.ToString(), FloorZ < TNumericLimits<double>::Max() ? FloorZ : 0.,
                FloorZ < TNumericLimits<double>::Max() ? MapFloorZ - FloorZ : 0.);
     }
-    else UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), *Result.Error);
-    EnvJob.Reset();
-    EnvSource.Reset();
+}
+
+void USCViewerSubsystem::SetEnvironmentState(const FString& State)
+{
+    EnvironmentState = State.ToLower();
+    ASCVehicle* EnvironmentActor = Environment.Get();
+    if (!EnvironmentActor || !EnvironmentActor->ClipCatalog) return;
+    for (USCRigComponent* Rig : EnvironmentActor->Rigs)
+        if (Rig) Rig->ResetPose();
+    if (EnvironmentState != TEXT("open") && EnvironmentState != TEXT("closed")) { UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_STATE bind")); return; }
+    // Fragment end poses (the game's door fragments Open / Close / Opened / Closed): static Opened/Closed poses first.
+    const bool bOpen = EnvironmentState == TEXT("open");
+    TMap<FString, TPair<int32, FName>> Best;
+    for (const FSCImportedClip& Clip : EnvironmentActor->ClipCatalog->Clips)
+    {
+        FString Owner, Fragment;
+        if (!Clip.Id.ToString().Split(TEXT("__"), &Owner, &Fragment)) continue;
+        Fragment = Fragment.ToLower().Replace(TEXT("door_"), TEXT(""));
+        const int32 Rank = Fragment == (bOpen ? TEXT("opened") : TEXT("closed")) ? 2 : Fragment == (bOpen ? TEXT("open") : TEXT("close")) ? 1 : 0;
+        if (Rank && Rank > Best.FindRef(Owner).Key) Best.Add(Owner, {Rank, Clip.Id});
+    }
+    int32 Snapped = 0;
+    for (const auto& [Owner, Pick] : Best) Snapped += EnvironmentActor->SnapClip(Pick.Value, true);
+    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_STATE %s parts=%d"), *EnvironmentState, Snapped);
 }
 bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOptions)
 {
@@ -1100,4 +1178,10 @@ static FAutoConsoleCommandWithWorldAndArgs GSCEnvironment(
     TEXT("sc.Environment"), TEXT("sc.Environment <package folder|none>: import a game environment (e.g. a hangar socpak package) beside the ship"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
         if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World)) Viewer->SetEnvironment(Args.IsValidIndex(0) ? FString::Join(Args, TEXT(" ")) : FString());
+    }));
+
+static FAutoConsoleCommandWithWorldAndArgs GSCEnvironmentState(
+    TEXT("sc.Environment.State"), TEXT("sc.Environment.State <bind|open|closed>: pose the environment's mechanisms (doors, elevators)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World)) Viewer->SetEnvironmentState(Args.IsValidIndex(0) ? Args[0] : FString());
     }));

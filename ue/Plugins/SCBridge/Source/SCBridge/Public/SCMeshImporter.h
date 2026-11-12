@@ -92,4 +92,10 @@ public:
     static FMatrix Transform(const FMatrix& Gltf);
     static FMatrix CryToGltf();
     static FMatrix InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis);
+    // The exporter builds every child node inside the CryEngine_Z_up root, so a child placed on its parent entity itself
+    // (no helper, e.g. an object container's root-level entities) carries a matrix in that entity's CryEngine frame.
+    static bool InCryFrame(const FString& Basis, bool bAtHelper)
+    {
+        return Basis == TEXT("cryengine_z_up") || (!bAtHelper && Basis == TEXT("gltf_y_up"));
+    }
 };

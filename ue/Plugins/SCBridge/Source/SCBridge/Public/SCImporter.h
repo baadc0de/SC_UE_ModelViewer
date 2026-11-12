@@ -20,6 +20,9 @@ struct SCBRIDGE_API FSCImportOptions
     bool bRigSkinnedMeshes = false;
     /** false: clip sidecars are not read or bound (player kits sample body clips themselves). */
     bool bImportClips = true;
+    /** Environments: placements drawn only with VFX shaders (e.g. a hangar's landing hologram) are runtime state
+     *  effects in the game (shown while a ship is delivered); they are not placed. */
+    bool bHideEffectOnlyPlacements = false;
     FTransform ActorTransform = FTransform::Identity;
 };
 struct SCBRIDGE_API FSCImportResult

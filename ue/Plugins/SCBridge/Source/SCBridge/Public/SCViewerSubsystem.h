@@ -167,8 +167,10 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
     /** The requested environment (folder, archive path or empty) and the archive's hangars (listed once per archive). */
     FString GetEnvironmentRequest() const { return EnvironmentFolder; }
+    /** Pose the environment's mechanisms: "bind" (as exported), "open" or "closed" fragment end poses. */
+    void SetEnvironmentState(const FString& State);
     const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
-    bool IsEnvironmentLoading() const { return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid(); }
+    bool IsEnvironmentLoading() const { return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadPhaseText() const;
@@ -273,6 +275,9 @@ private:
     UPROPERTY() TObjectPtr<ASCFirstPersonCharacter> FirstPerson;
     void StepEnvironment();
     void BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source);
+    void PlaceEnvironment();
+    int32 EnvPlaceInTicks = 0;
+    FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
     FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)
     bool bEnvironmentPending = false;
