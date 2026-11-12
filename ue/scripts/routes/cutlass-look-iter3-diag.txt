@@ -1,0 +1,68 @@
+# Look iteration 2 diagnostics (LOOK-2): exposure locked at EV100 6.7 for real time and path tracer alike.
+# cargo / cargo-aft: rt full, rt direct only (Lumen GI and reflections off), rt without room confinement
+# (sc.Look.Channels 0), pt full (8 bounces), pt direct only (1 bounce). cockpit: rt / pt with and without the
+# glass, rt after a fresh sky capture. Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0 sc.Look.ShadowAll 1
+0 r.PathTracing.SamplesPerPixel 256
+0 sc.Look.PP AutoExposureBiasCurve none
+0 sc.Look.PP AutoExposureBias 0
+0 sc.Look.PP AutoExposureMinBrightness 6.7
+0 sc.Look.PP AutoExposureMaxBrightness 6.7
+1 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+6 shot cargo-rt
+0 r.Lumen.DiffuseIndirect.Allow 0
+0 r.Lumen.Reflections.Allow 0
+6 shot cargo-rt-direct
+0 r.Lumen.DiffuseIndirect.Allow 1
+0 r.Lumen.Reflections.Allow 1
+0 sc.Look.Channels 0
+6 shot cargo-rt-nochan
+0 sc.Look.Channels 1
+0 r.PathTracing.MaxBounces 8
+0 viewmode pathtracing
+240 shot cargo-pt
+0 viewmode lit
+0 r.PathTracing.MaxBounces 1
+0 viewmode pathtracing
+55 shot cargo-pt-direct
+0 viewmode lit
+0 sc.FP.Look 180 -5
+6 shot cargo-aft-rt
+0 r.Lumen.DiffuseIndirect.Allow 0
+0 r.Lumen.Reflections.Allow 0
+6 shot cargo-aft-rt-direct
+0 r.Lumen.DiffuseIndirect.Allow 1
+0 r.Lumen.Reflections.Allow 1
+0 sc.Look.Channels 0
+6 shot cargo-aft-rt-nochan
+0 sc.Look.Channels 1
+0 r.PathTracing.MaxBounces 8
+0 viewmode pathtracing
+55 shot cargo-aft-pt
+0 viewmode lit
+0 r.PathTracing.MaxBounces 1
+0 viewmode pathtracing
+55 shot cargo-aft-pt-direct
+0 viewmode lit
+0 sc.FP.Spawn 1
+1 sc.FP.Look 0 -10
+6 shot cockpit-rt
+0 sc.Look.HideGlass 1
+4 shot cockpit-rt-noglass
+0 r.PathTracing.MaxBounces 8
+0 viewmode pathtracing
+55 shot cockpit-pt-noglass
+0 viewmode lit
+0 sc.Look.HideGlass 0
+0 r.PathTracing.MaxBounces 8
+0 viewmode pathtracing
+55 shot cockpit-pt
+0 viewmode lit
+0 sc.Look.Sky
+6 shot cockpit-rt-recapture
+1 quit

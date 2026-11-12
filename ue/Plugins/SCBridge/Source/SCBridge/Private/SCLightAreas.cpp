@@ -1,6 +1,7 @@
 // Room-volume parsing, containment and the per-room light confinement on three lighting channels
 // (see SCLightAreas.h, WP-U3b §12, WP-L1).
 #include "SCLightAreas.h"
+#include "SCViewerSettings.h"
 #include "SCVehicle.h"
 #include "SCImporter.h"
 #include "SCLightImporter.h"
@@ -354,7 +355,7 @@ void FSCLightAreas::Apply(ASCVehicle* Vehicle)
     {
         ULightComponent* Light = State.Component;
         if (!Light) continue;
-        if (!State.bAreaOnly)
+        if (!State.bAreaOnly || !USCViewerSettings::Get()->bConfineLightsToRooms) // look (D15): no confinement
         {
             Light->SetLightingChannels(true, true, true);
             ++LightsEverywhere;

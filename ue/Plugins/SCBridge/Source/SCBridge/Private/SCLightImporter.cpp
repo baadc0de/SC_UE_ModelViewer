@@ -1,5 +1,7 @@
 // Scene light and projector creation; photometric mapping is shared with the package contract.
 #include "SCLightImporter.h"
+#include "EngineUtils.h"
+#include "SCViewerSettings.h"
 #include "SCStarEngine.h"
 #include "SCVehicle.h"
 #include "SCMeshImporter.h"
@@ -216,7 +218,7 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             Local->SetIntensityUnits(ELightUnits::Candelas);
             const double Radius = FMath::Max(0., LightNumber(J, TEXT("radius_m")));
             Local->SetAttenuationRadius(Radius * 100);
-            Local->SetCastShadows(State.bFallbackShadow);
+            Local->SetCastShadows(State.bFallbackShadow || USCViewerSettings::Get()->bShadowAllLights); // look: every light (D15)
         }
         // Emitter size from the authored bulb / plane (CryEngine's attenuation bulb is the source radius).
         if (bAuthored)
@@ -319,5 +321,14 @@ void FSCLightImporter::RefreshShadows(ASCVehicle* Vehicle)
     Vehicle->bMegaLightsActive = MegaLightsActive();
     for (const auto& State : Vehicle->LightStates)
         if (auto* Local = Cast<ULocalLightComponent>(State.Component))
-            Local->SetCastShadows(State.bFallbackShadow);
+            Local->SetCastShadows(State.bFallbackShadow || USCViewerSettings::Get()->bShadowAllLights);
 }
+
+static FAutoConsoleCommandWithWorldAndArgs GSCLookShadowAll(
+    TEXT("sc.Look.ShadowAll"), TEXT("sc.Look.ShadowAll <0|1>: every ship light casts shadows (look) or only the authored casters"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        USCViewerSettings::Get()->bShadowAllLights = !Args.IsValidIndex(0) || FCString::Atoi(*Args[0]) != 0;
+        int32 Vehicles = 0;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It, ++Vehicles) FSCLightImporter::RefreshShadows(*It);
+        UE_LOG(LogTemp, Display, TEXT("LOOK shadow_all=%d vehicles=%d"), USCViewerSettings::Get()->bShadowAllLights, Vehicles);
+    }));

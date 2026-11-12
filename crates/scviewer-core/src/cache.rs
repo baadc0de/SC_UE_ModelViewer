@@ -25,7 +25,8 @@ use std::{
 // 23: packages with a LayerBlend_V2 material carry the engine's wear/dirt/frost detail map (render fixture
 //     `shader_textures`, WP-U2b).
 // 24: `root_entity.physics_grid` composes NMC node matrices down the parent hierarchy (WP-P3 review).
-pub const CACHE_FORMAT_VERSION: u32 = 24;
+// 25: the browser index lists object containers (`environments`); environment packages (LOOK-3).
+pub const CACHE_FORMAT_VERSION: u32 = 25;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

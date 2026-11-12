@@ -11,6 +11,8 @@
 #include "SCLightImporter.h"
 #include "SCLightAreas.h"
 #include "SCDirt.h"
+#include "SCEmissiveLights.h"
+#include "SCViewerSettings.h"
 #include "SCRigComponent.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
@@ -1009,6 +1011,7 @@ void FSCImportJob::FState::Assemble()
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose
     FSCDirt::MarkExterior(V); // exterior = outside every room, from the channels just set
     FSCDirt::Push(V->GetWorld());
+    if (!V->Lights.IsEmpty()) FSCEmissive::SetLumen(V, USCViewerSettings::Get()->bEmissiveInLumen); // ships and environments, not the player kit
     if (Options.bPublish)
     {
         V->BuildExploration();

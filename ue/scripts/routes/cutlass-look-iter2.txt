@@ -1,0 +1,139 @@
+# Look iteration 2 (2026-11-12): the new default c2 (every light shadowed, SSDO off, Lumen short-range AO with HWRT)
+# and independent variants proposed by the adjudicator: MegaLights shadow screen traces off; surface-cache direct
+# lighting MaxLightsPerTile 16; LumenDiffuseColorBoost 1.3; short-range AO downsample 2; the boost + light limit.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.Look.ShadowAll 1
+0 sc.FP.Spawn Door:2
+1 sc.FP.Look 0 15
+6 shot ramp-c2
+0 frametime 4 ramp-c2
+0 r.MegaLights.ScreenTraces 0
+6 shot ramp-msst0
+0 frametime 4 ramp-msst0
+0 r.MegaLights.ScreenTraces 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+6 shot ramp-mlpt16
+0 frametime 4 ramp-mlpt16
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot ramp-boost13
+0 frametime 4 ramp-boost13
+0 sc.Look.PP LumenDiffuseColorBoost 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 2
+6 shot ramp-aods2
+0 frametime 4 ramp-aods2
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot ramp-combo
+0 frametime 4 ramp-combo
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1
+1 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+6 shot cargo-c2
+0 frametime 4 cargo-c2
+0 r.MegaLights.ScreenTraces 0
+6 shot cargo-msst0
+0 frametime 4 cargo-msst0
+0 r.MegaLights.ScreenTraces 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+6 shot cargo-mlpt16
+0 frametime 4 cargo-mlpt16
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cargo-boost13
+0 frametime 4 cargo-boost13
+0 sc.Look.PP LumenDiffuseColorBoost 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 2
+6 shot cargo-aods2
+0 frametime 4 cargo-aods2
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cargo-combo
+0 frametime 4 cargo-combo
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1
+0 sc.FP.Look 180 -5
+6 shot cargo-aft-c2
+0 frametime 4 cargo-aft-c2
+0 r.MegaLights.ScreenTraces 0
+6 shot cargo-aft-msst0
+0 frametime 4 cargo-aft-msst0
+0 r.MegaLights.ScreenTraces 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+6 shot cargo-aft-mlpt16
+0 frametime 4 cargo-aft-mlpt16
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cargo-aft-boost13
+0 frametime 4 cargo-aft-boost13
+0 sc.Look.PP LumenDiffuseColorBoost 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 2
+6 shot cargo-aft-aods2
+0 frametime 4 cargo-aft-aods2
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cargo-aft-combo
+0 frametime 4 cargo-aft-combo
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+6 shot cockpit-aft-c2
+0 frametime 4 cockpit-aft-c2
+0 r.MegaLights.ScreenTraces 0
+6 shot cockpit-aft-msst0
+0 frametime 4 cockpit-aft-msst0
+0 r.MegaLights.ScreenTraces 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+6 shot cockpit-aft-mlpt16
+0 frametime 4 cockpit-aft-mlpt16
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cockpit-aft-boost13
+0 frametime 4 cockpit-aft-boost13
+0 sc.Look.PP LumenDiffuseColorBoost 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 2
+6 shot cockpit-aft-aods2
+0 frametime 4 cockpit-aft-aods2
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cockpit-aft-combo
+0 frametime 4 cockpit-aft-combo
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1
+1 sc.FP.Look 0 -10
+6 shot cockpit-c2
+0 frametime 4 cockpit-c2
+0 r.MegaLights.ScreenTraces 0
+6 shot cockpit-msst0
+0 frametime 4 cockpit-msst0
+0 r.MegaLights.ScreenTraces 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+6 shot cockpit-mlpt16
+0 frametime 4 cockpit-mlpt16
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cockpit-boost13
+0 frametime 4 cockpit-boost13
+0 sc.Look.PP LumenDiffuseColorBoost 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 2
+6 shot cockpit-aods2
+0 frametime 4 cockpit-aods2
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.DownsampleFactor 1
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 16
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cockpit-combo
+0 frametime 4 cockpit-combo
+0 r.LumenScene.DirectLighting.MaxLightsPerTile 8
+0 sc.Look.PP LumenDiffuseColorBoost 1
+1 quit

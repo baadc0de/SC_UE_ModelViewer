@@ -226,6 +226,74 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportDecomposed(const FStrin
     }, UE::Tasks::ETaskPriority::BackgroundNormal);
 }
 
+UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportEnvironment(const FString& Socpak, const sc_options& Options,
+                                                                   TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
+{
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Socpak, Options, Progress] {
+        FSCExportResult Result;
+        const double Start = FPlatformTime::Seconds();
+        FScopeLock Guard(&Self->HandleLock); // held for the whole export: search/close/last_error wait
+        if (!Self->Handle)
+        {
+            Result.Error = NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+            return Result;
+        }
+        sc_blob Blob{nullptr, 0};
+        // Progress (the callback's user context) is kept alive by this lambda until the call returns.
+        const sc_status Status = sc_export_environment_mem(Self->Handle, TCHAR_TO_UTF8(*Socpak), &Options, &FSCExportProgress::Callback,
+                                                          &Progress.Get(), &Blob);
+        Result.Seconds = FPlatformTime::Seconds() - Start;
+        const uint64 BlobBytes = Status == SC_STATUS_OK ? uint64(Blob.len) : 0; // sc_free_blob zeroes len
+        if (Status == SC_STATUS_OK)
+        {
+            // FSCTarPackageSource holds a TArray<uint8> (int32 count): refuse what it cannot index instead of narrowing.
+            if (Blob.len > size_t(MAX_int32))
+                Result.Error = FText::Format(NSLOCTEXT("SCBridge", "TarTooLarge",
+                                                       "The exported package is {0} bytes; the importer accepts at most {1}. Try a higher LOD or mip."),
+                                             FText::AsNumber(uint64(Blob.len)), FText::AsNumber(MAX_int32));
+            else
+            {
+                Result.Tar.SetNumUninitialized(int32(Blob.len));
+                FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
+                Result.bOK = true;
+            }
+            sc_free_blob(&Blob); // freed on every OK path, including the refused size
+        }
+        else
+        {
+            Result.bCancelled = Status == SC_STATUS_CANCELLED;
+            Result.Error = Self->FailLocked(Status, Result.bPanicked);
+            // Ordinary failures return an empty blob (freeing it is a no-op); after PANIC the blob is unspecified and
+            // must not be touched, so it is left alone (a bounded leak in a crashed session).
+            if (!Result.bPanicked) sc_free_blob(&Blob);
+        }
+        if (Self->Handle) Result.Cache = Self->CacheStatsLocked();
+        UE_LOG(LogSCBridgeClient, Display, TEXT("FFI_EXPORT environment=%s status=%d seconds=%.3f bytes=%llu accepted=%d cache_hit=%d cache_bytes=%llu"),
+               *Socpak, int32(Status), Result.Seconds, BlobBytes, Result.bOK, Result.Cache.bLastHit, Result.Cache.Bytes);
+        return Result;
+    }, UE::Tasks::ETaskPriority::BackgroundNormal);
+}
+
+UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::SearchEnvironments(const FString& Query, int32 Limit)
+{
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Query, Limit] {
+        FSCTextResult Result;
+        FScopeLock Guard(&Self->HandleLock);
+        char* Json = nullptr;
+        const sc_status Status = Self->Handle ? sc_search_environments(Self->Handle, TCHAR_TO_UTF8(*Query), uint32(FMath::Max(1, Limit)), &Json)
+                                              : SC_STATUS_INVALID_ARGUMENT;
+        if (Status != SC_STATUS_OK)
+        {
+            Result.Error = Self->Handle ? Self->FailLocked(Status, Result.bPanicked) : NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+            return Result;
+        }
+        Result.Json = UTF8_TO_TCHAR(Json);
+        sc_free_string(Json);
+        Result.bOK = true;
+        return Result;
+    });
+}
+
 UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& Gender, const FString& Loadout,
                                                                TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
 {

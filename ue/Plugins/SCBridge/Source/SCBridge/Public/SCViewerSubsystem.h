@@ -15,6 +15,8 @@ class ASCViewerPawn;
 class ASCFirstPersonCharacter;
 class USCViewOptions;
 class FSCImportJob;
+class FSCFolderPackageSource;
+class FSCPackageSource;
 class FSCTarPackageSource;
 class FSCViewerAutomation;
 
@@ -156,6 +158,17 @@ public:
      *  (a mid-import state for cancel/teardown tests). False if the import ends first. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForImportedMeshes(int32 MinMeshes, float TimeoutSeconds = 600.f);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") bool IsBusy() const;
+    /** A game environment (e.g. a hangar object container exported as a decomposed package folder) imported beside
+     *  the ship, outside the vehicle slot; the map's own hangar geometry and lights are hidden while it is loaded.
+     *  Folder: a package folder on disk; a `*.socpak` archive path: exported from the open archive (cached, textures
+     *  at least mip 1 so the package fits the 2 GB tar limit). Empty or "none": unload it.
+     *  Also -SCEnvironment=<...>, `sc.Environment <...|none>` and USCViewerSettings::Environment. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void SetEnvironment(const FString& Folder);
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
+    /** The requested environment (folder, archive path or empty) and the archive's hangars (listed once per archive). */
+    FString GetEnvironmentRequest() const { return EnvironmentFolder; }
+    const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
+    bool IsEnvironmentLoading() const { return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid(); }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadPhaseText() const;
@@ -258,6 +271,21 @@ private:
     TWeakObjectPtr<ASCVehicle> Vehicle;
 
     UPROPERTY() TObjectPtr<ASCFirstPersonCharacter> FirstPerson;
+    void StepEnvironment();
+    void BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source);
+    void ShowMapHangar(bool bShow);
+    FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)
+    bool bEnvironmentPending = false;
+    TSharedPtr<FSCPackageSource> EnvSource;
+    TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> EnvProgress;
+    UE::Tasks::TTask<FSCExportResult> EnvExport;
+    UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> EnvParse;
+    TArray<FString> EnvironmentChoices;
+    UE::Tasks::TTask<FSCTextResult> EnvListTask;
+    uint32 EnvListedGeneration = 0;
+    TSharedPtr<FSCImportJob> EnvJob;
+    double EnvStart = 0;
+    TWeakObjectPtr<ASCVehicle> Environment;
     void StepPlayerKit(bool bBlocking);
     void FailPlayerKit(const FString& Error);
     EPlayerKitState KitState = EPlayerKitState::None;

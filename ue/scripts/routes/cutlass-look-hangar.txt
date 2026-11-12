@@ -1,0 +1,37 @@
+# Look iteration 3 (LOOK-3): the designed hangar. Orbit exterior (host camera), the ramp from outside, cargo-aft and
+# cockpit-aft; real time (auto exposure, as used) and path tracer for the exterior views and cargo-aft.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=orbit
+25 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.Look.ShadowAll 1
+0 r.PathTracing.SamplesPerPixel 256
+0 r.PathTracing.MaxBounces 8
+4 shot orbit
+0 frametime 4 orbit
+0 viewmode pathtracing
+240 shot orbit-pt
+0 viewmode lit
+0 sc.Camera first
+1 sc.FP.Spawn Door:2
+1 sc.FP.Look 0 15
+6 shot ramp
+0 frametime 4 ramp
+0 viewmode pathtracing
+60 shot ramp-pt
+0 viewmode lit
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+0 sc.FP.Look 180 -5
+6 shot cargo-aft
+0 frametime 4 cargo-aft
+0 viewmode pathtracing
+60 shot cargo-aft-pt
+0 viewmode lit
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+6 shot cockpit-aft
+0 frametime 4 cockpit-aft
+1 quit

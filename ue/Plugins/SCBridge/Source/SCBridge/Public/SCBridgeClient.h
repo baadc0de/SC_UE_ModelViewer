@@ -91,6 +91,11 @@ public:
     /** The tar is copied out of the FFI blob (freed before return). Cancel through Progress. */
     UE::Tasks::TTask<FSCExportResult> ExportDecomposed(const FString& Entity, const sc_options& Options,
                                                       TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    /** Game environment (object container) package: sc_export_environment_mem; same rules as ExportDecomposed. */
+    UE::Tasks::TTask<FSCExportResult> ExportEnvironment(const FString& Socpak, const sc_options& Options,
+                                                       TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    /** JSON array of object-container paths matching every term of Query (sc_search_environments). */
+    UE::Tasks::TTask<FSCTextResult> SearchEnvironments(const FString& Query, int32 Limit);
     /** Player kit (scbridge_export_player): empty Gender = male, empty Loadout = the exporter's default loadout. */
     UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout,
                                                   TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);

@@ -1,0 +1,4 @@
+{
+  "ssdo": false,
+  "_note": "Look 2026-11-12 (plan D15): every light is shadowed and Lumen short-range AO (HWRT) occludes ambient light, so the game SSDO (WP-L2) is off; true restores it."
+}

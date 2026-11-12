@@ -1,0 +1,155 @@
+# Look iteration 1 (2026-11-12, adjudicator GPT-6 Astra): stacked configurations at five still Cutlass views.
+# c0 baseline; c1 + every light shadowed (sc.Look.ShadowAll); c2 + SSDO off, Lumen short-range AO with HWRT;
+# c3 + reflection hit lighting (LightingMode 2) and Cinematic GI / reflection scalability. At cargo-aft: c3 with
+# reflection screen traces off (c3-rst0) and GI screen traces off (c3-gst0) to find the yellow streaks.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.FP.Spawn Door:2
+1 sc.FP.Look 0 15
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+5 shot ramp-c0
+0 frametime 4 ramp-c0
+0 sc.Look.ShadowAll 1
+5 shot ramp-c1
+0 frametime 4 ramp-c1
+0 r.GeneralPurposeTweak 0
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 1
+5 shot ramp-c2
+0 frametime 4 ramp-c2
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+0 sg.GlobalIlluminationQuality 4
+0 sg.ReflectionQuality 4
+5 shot ramp-c3
+0 frametime 4 ramp-c3
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+1 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+5 shot cargo-c0
+0 frametime 4 cargo-c0
+0 sc.Look.ShadowAll 1
+5 shot cargo-c1
+0 frametime 4 cargo-c1
+0 r.GeneralPurposeTweak 0
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 1
+5 shot cargo-c2
+0 frametime 4 cargo-c2
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+0 sg.GlobalIlluminationQuality 4
+0 sg.ReflectionQuality 4
+5 shot cargo-c3
+0 frametime 4 cargo-c3
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+0 sc.FP.Look 180 -5
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+5 shot cargo-aft-c0
+0 frametime 4 cargo-aft-c0
+0 sc.Look.ShadowAll 1
+5 shot cargo-aft-c1
+0 frametime 4 cargo-aft-c1
+0 r.GeneralPurposeTweak 0
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 1
+5 shot cargo-aft-c2
+0 frametime 4 cargo-aft-c2
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+0 sg.GlobalIlluminationQuality 4
+0 sg.ReflectionQuality 4
+5 shot cargo-aft-c3
+0 frametime 4 cargo-aft-c3
+0 r.Lumen.Reflections.ScreenTraces 0
+5 shot cargo-aft-c3-rst0
+0 r.Lumen.Reflections.ScreenTraces 1
+0 r.Lumen.ScreenProbeGather.ScreenTraces 0
+5 shot cargo-aft-c3-gst0
+0 r.Lumen.ScreenProbeGather.ScreenTraces 1
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+5 shot cockpit-aft-c0
+0 frametime 4 cockpit-aft-c0
+0 sc.Look.ShadowAll 1
+5 shot cockpit-aft-c1
+0 frametime 4 cockpit-aft-c1
+0 r.GeneralPurposeTweak 0
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 1
+5 shot cockpit-aft-c2
+0 frametime 4 cockpit-aft-c2
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+0 sg.GlobalIlluminationQuality 4
+0 sg.ReflectionQuality 4
+5 shot cockpit-aft-c3
+0 frametime 4 cockpit-aft-c3
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+1 sc.FP.Look 0 -10
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+5 shot cockpit-c0
+0 frametime 4 cockpit-c0
+0 sc.Look.ShadowAll 1
+5 shot cockpit-c1
+0 frametime 4 cockpit-c1
+0 r.GeneralPurposeTweak 0
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 1
+5 shot cockpit-c2
+0 frametime 4 cockpit-c2
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+0 sg.GlobalIlluminationQuality 4
+0 sg.ReflectionQuality 4
+5 shot cockpit-c3
+0 frametime 4 cockpit-c3
+0 sc.Look.ShadowAll 0
+0 r.GeneralPurposeTweak 1
+0 r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing 0
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sg.GlobalIlluminationQuality 3
+0 sg.ReflectionQuality 3
+1 quit

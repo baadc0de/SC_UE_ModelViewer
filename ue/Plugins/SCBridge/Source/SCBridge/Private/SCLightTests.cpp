@@ -2,6 +2,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "SCLightImporter.h"
+#include "SCViewerSettings.h"
 #include "SCVehicle.h"
 #include "Engine/World.h"
 #include "Components/LightComponent.h"
@@ -15,10 +16,21 @@
 #include "SCStarEngine.h"
 #include "Algo/AllOf.h"
 
+namespace
+{
+// The tests check the game's authored rules (shadows, WP-L1 room confinement); the look settings (D15) are pinned meanwhile.
+struct FAuthoredShadowRule
+{
+    bool bSaved = USCViewerSettings::Get()->bShadowAllLights, bSavedConfine = USCViewerSettings::Get()->bConfineLightsToRooms;
+    FAuthoredShadowRule() { USCViewerSettings::Get()->bShadowAllLights = false; USCViewerSettings::Get()->bConfineLightsToRooms = true; }
+    ~FAuthoredShadowRule() { USCViewerSettings::Get()->bShadowAllLights = bSaved; USCViewerSettings::Get()->bConfineLightsToRooms = bSavedConfine; }
+};
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightDefaults, "SCBridge.Lights.DefaultsAndShadowBudget",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightDefaults::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     auto* MegaLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.EnableForProject"));
     const int32 Previous = MegaLights->GetInt();
     MegaLights->Set(0, ECVF_SetByCode);
@@ -84,6 +96,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightAuthoredModel, "SCBridge.Lights.Authore
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightAuthoredModel::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     // Synthetic lights (not game data). Point / spot: pi * unit * I * (1 + bulb / tweak)^2; planar: pi * unit * I * w * h,
     // unit = the scene unit in cd/m2 from the extracted fixture.
     const double Unit = UE_DOUBLE_PI * FSCStarEngine::Get().SceneUnitNits;
@@ -128,6 +141,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightVerifier, "SCBridge.Lights.VerifierFoll
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightVerifier::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     auto* MegaLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.EnableForProject"));
     const int32 Previous = MegaLights->GetInt();
     MegaLights->Set(0, ECVF_SetByCode);
@@ -177,6 +191,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightRoomVolumes, "SCBridge.Lights.RoomVolum
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightRoomVolumes::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     // Synthetic shapes (not game data). `transform` is column-major segment -> container, metres, CryEngine axes.
     FString Error;
     FSCRoomVolume Box;
@@ -266,6 +281,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightAreaConfinement, "SCBridge.Lights.AreaC
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightAreaConfinement::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     // Synthetic scene (not game data). Channel 0 = outside every room volume; rooms a, b, c (container x -1..1, 1..3,
     // 3..5) form a light-reach chain a-b-c, so a and c share channel 1 and b takes channel 2.
     auto Channels = [](const FLightingChannels& C) { return int32(C.bChannel0) | int32(C.bChannel1) << 1 | int32(C.bChannel2) << 2; };
@@ -372,6 +388,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightRoomChannels, "SCBridge.Lights.RoomChan
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightRoomChannels::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     // Rooms take channel 1 or 2; rooms a light reaches across never share one when the reach graph allows it.
     int32 Conflicts = -1;
     auto Chain = FSCLightAreas::ColorRooms({TEXT("a"), TEXT("b"), TEXT("c")}, {{TEXT("a"), TEXT("b")}, {TEXT("c"), TEXT("b")}}, Conflicts);

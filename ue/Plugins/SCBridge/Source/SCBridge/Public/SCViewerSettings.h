@@ -29,6 +29,19 @@ public:
 
     /** Viewer dirt on exterior surfaces (WP-U2b, FSCDirt): 0 = clean (the game's state for an unflown ship), 1 = full. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtAmount = 0.3f;
+    /** Look (2026-11-12, GI on): glowing surfaces Lumen cannot see (glow cards, split meshes) still light the scene
+     *  through hidden opaque copies (sc.Emissive.Lumen). Not the game's GI-off renderer. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bEmissiveInLumen = true;
+    /** The environment the ship stands in: an archive object container (a game hangar, exported and cached like
+     *  ships), or "none" for the map's procedural hangar. A viewer choice (LOOK-3); -SCDefaults uses "none" unless
+     *  -SCEnvironment is given. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString Environment =
+        TEXT("Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak");
+    /** Look (2026-11-12): every ship light casts shadows (MegaLights ray-traced), not only the authored casters. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bShadowAllLights = true;
+    /** WP-L1 room confinement (area-only lights reach only their room's lighting channel). Off in the look (D15):
+     *  every light is shadowed, so walls contain the light; the path tracer ignores channels. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bConfineLightsToRooms = false;
     /** How much more dirt faces pointing down get than faces pointing up (0 = even, 1 = all below); a viewer
      *  choice for a landed ship (the game's direction-dependent dirt is run-time state). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtUnderside = 0.5f;

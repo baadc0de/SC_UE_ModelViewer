@@ -178,6 +178,26 @@ enum sc_status sc_export_decomposed_mem(struct sc_handle *h,
                                         struct sc_blob *out_tar);
 
 /*
+ Return a JSON array of object-container paths (`.socpak`, slash-normalised) whose path contains every
+ whitespace-separated term of query (case-insensitive): game environments such as hangars ("hangar").
+ */
+enum sc_status sc_search_environments(struct sc_handle *h,
+                                      const char *query,
+                                      uint32_t limit,
+                                      char **out);
+
+/*
+ Export a game environment (object container, a path from sc_search_environments) as a decomposed package tar,
+ cached like entity packages. Same ownership, progress, cancellation and failure rules as sc_export_decomposed_mem.
+ */
+enum sc_status sc_export_environment_mem(struct sc_handle *h,
+                                         const char *socpak,
+                                         const struct sc_options *options,
+                                         sc_progress_cb progress,
+                                         void *user,
+                                         struct sc_blob *out_tar);
+
+/*
  Borrowed error, valid until the next status-returning call on this handle or close.
  NULL handle reads thread-local open/argument errors, valid until the next call
  on this thread other than sc_last_error. Never free this pointer.

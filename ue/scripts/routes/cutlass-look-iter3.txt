@@ -1,0 +1,64 @@
+# Look iteration 2 (LOOK-2): defaults without room confinement, exposure locked at EV100 6.7; LumenDiffuseColorBoost
+# 1.0 / 1.15 / 1.3 and, in the cockpit, front-layer translucency reflections on the canopy.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.Look.ShadowAll 1
+0 sc.Look.PP AutoExposureBiasCurve none
+0 sc.Look.PP AutoExposureBias 0
+0 sc.Look.PP AutoExposureMinBrightness 6.7
+0 sc.Look.PP AutoExposureMaxBrightness 6.7
+1 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cargo-b1.3
+0 frametime 4 cargo-b1.3
+0 sc.Look.PP LumenDiffuseColorBoost 1.15
+6 shot cargo-b1.15
+0 frametime 4 cargo-b1.15
+0 sc.Look.PP LumenDiffuseColorBoost 1.0
+6 shot cargo-b1.0
+0 frametime 4 cargo-b1.0
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+0 sc.FP.Look 180 -5
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cargo-aft-b1.3
+0 frametime 4 cargo-aft-b1.3
+0 sc.Look.PP LumenDiffuseColorBoost 1.15
+6 shot cargo-aft-b1.15
+0 frametime 4 cargo-aft-b1.15
+0 sc.Look.PP LumenDiffuseColorBoost 1.0
+6 shot cargo-aft-b1.0
+0 frametime 4 cargo-aft-b1.0
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cockpit-aft-b1.3
+0 frametime 4 cockpit-aft-b1.3
+0 sc.Look.PP LumenDiffuseColorBoost 1.15
+6 shot cockpit-aft-b1.15
+0 frametime 4 cockpit-aft-b1.15
+0 sc.Look.PP LumenDiffuseColorBoost 1.0
+6 shot cockpit-aft-b1.0
+0 frametime 4 cockpit-aft-b1.0
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+1 sc.FP.Look 0 -10
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+6 shot cockpit-b1.3
+0 frametime 4 cockpit-b1.3
+0 sc.Look.PP LumenDiffuseColorBoost 1.15
+6 shot cockpit-b1.15
+0 frametime 4 cockpit-b1.15
+0 sc.Look.PP LumenDiffuseColorBoost 1.0
+6 shot cockpit-b1.0
+0 frametime 4 cockpit-b1.0
+0 sc.Look.PP LumenDiffuseColorBoost 1.3
+0 r.Lumen.TranslucencyReflections.FrontLayer.Enable 1
+6 shot cockpit-frontlayer
+0 frametime 4 cockpit-frontlayer
+0 r.Lumen.TranslucencyReflections.FrontLayer.Enable 0
+1 quit

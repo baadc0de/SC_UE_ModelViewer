@@ -13,6 +13,14 @@
 #include "SCImportJob.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
+#include "Dom/JsonValue.h"
+#include "Serialization/JsonSerializer.h"
+#include "HAL/IConsoleManager.h"
+#include "Components/SkyLightComponent.h"
+#include "Components/LightComponent.h"
+#include "Engine/Light.h"
+#include "Engine/StaticMeshActor.h"
+#include "SCPlayerKit.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -75,6 +83,11 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
     if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
+    // Environment: -SCEnvironment wins; -SCDefaults (reproducible review routes) keeps the procedural hangar; else
+    // the saved choice.
+    FString EnvironmentArg;
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCEnvironment="), EnvironmentArg)) SetEnvironment(EnvironmentArg);
+    else if (!FParse::Param(FCommandLine::Get(), TEXT("SCDefaults"))) SetEnvironment(USCViewerSettings::Get()->Environment);
 }
 void USCViewerSubsystem::Deinitialize()
 {
@@ -94,6 +107,11 @@ void USCViewerSubsystem::Deinitialize()
     if (KitClipsTask.IsValid()) KitClipsTask.Wait();
     KitJob.Reset();
     KitSource.Reset();
+    if (EnvProgress) EnvProgress->RequestCancel();
+    if (EnvExport.IsValid()) EnvExport.Wait();
+    if (EnvParse.IsValid()) EnvParse.Wait();
+    if (EnvListTask.IsValid()) EnvListTask.Wait();
+    EnvJob.Reset();
     UnloadInternal(false); // the subsystem owns the loaded vehicle; the host collects garbage afterwards
     Client.Reset();
     Super::Deinitialize();
@@ -239,7 +257,166 @@ void USCViewerSubsystem::CompleteSearches(bool bBlocking)
 
 bool USCViewerSubsystem::IsBusy() const
 {
-    return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
+    return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing ||
+           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid();
+}
+
+void USCViewerSubsystem::SetEnvironment(const FString& Folder)
+{
+    if (EnvProgress) EnvProgress->RequestCancel();
+    if (EnvExport.IsValid()) EnvExport.Wait();
+    if (EnvParse.IsValid()) EnvParse.Wait();
+    EnvExport = {};
+    EnvParse = {};
+    EnvJob.Reset();
+    EnvSource.Reset();
+    if (Environment.IsValid()) Environment->Destroy();
+    Environment.Reset();
+    EnvironmentFolder = Folder.TrimQuotes();
+    bEnvironmentPending = !EnvironmentFolder.IsEmpty() && EnvironmentFolder != TEXT("none");
+    if (!bEnvironmentPending) ShowMapHangar(true);
+    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT request folder=\"%s\""), *EnvironmentFolder);
+}
+
+void USCViewerSubsystem::ShowMapHangar(bool bShow)
+{
+    UWorld* World = GetViewerWorld();
+    if (!World) return;
+    int32 Changed = 0;
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* A = *It;
+        if (Cast<ASCVehicle>(A) || A->GetLevel() != World->PersistentLevel) continue;
+        const bool bMesh = A->IsA<AStaticMeshActor>(), bLight = A->IsA<ALight>();
+        if (!bMesh && !bLight) continue;
+        A->SetActorHiddenInGame(!bShow);
+        A->SetActorEnableCollision(bShow);
+        if (bLight) A->ForEachComponent<ULightComponent>(false, [bShow](ULightComponent* L) { L->SetVisibility(bShow); });
+        ++Changed;
+    }
+    for (TObjectIterator<USkyLightComponent> It; It; ++It)
+        if (It->GetWorld() == World) It->RecaptureSky();
+    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT map_hangar=%s actors=%d"), bShow ? TEXT("shown") : TEXT("hidden"), Changed);
+}
+
+void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source)
+{
+    EnvSource = Source;
+    const FString Scene = FSCPlayerKit::FindRootScene(*EnvSource);
+    if (Scene.IsEmpty())
+    {
+        UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: no single root scene.json in %s"), *EnvironmentFolder);
+        EnvSource.Reset();
+        return;
+    }
+    FSCImportOptions EnvOptions;
+    EnvOptions.World = GetViewerWorld();
+    EnvOptions.ScenePath = Scene;
+    EnvOptions.bBuildCollision = true;
+    EnvOptions.bPublish = false;        // not the vehicle: routes, first person and light pairing keep the ship
+    EnvOptions.bReplacePrevious = false;
+    EnvJob = MakeShared<FSCImportJob>(*EnvSource, EnvOptions, EnvSource);
+}
+
+void USCViewerSubsystem::StepEnvironment()
+{
+    // The archive's hangars for the picker: listed once per archive session.
+    if (ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
+        EnvListTask = Client->SearchEnvironments(TEXT("hangar"), 2000);
+    if (EnvListTask.IsValid() && EnvListTask.IsCompleted())
+    {
+        const FSCTextResult Listed = EnvListTask.GetResult();
+        EnvListTask = {};
+        EnvListedGeneration = ArchiveGeneration;
+        EnvironmentChoices.Reset();
+        TArray<TSharedPtr<FJsonValue>> Values;
+        if (Listed.bOK && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Listed.Json), Values))
+            for (const auto& V : Values) EnvironmentChoices.Add(V->AsString());
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_CHOICES hangars=%d"), EnvironmentChoices.Num());
+    }
+    const bool bShipIdle = Phase != ESCLoadPhase::Exporting && Phase != ESCLoadPhase::Parsing && Phase != ESCLoadPhase::Importing;
+    if (bEnvironmentPending && !EnvJob && !EnvExport.IsValid() && !EnvParse.IsValid() && bShipIdle && GetViewerWorld())
+    {
+        if (EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase))
+        {
+            if (ArchiveState != ESCArchiveState::Ready || !Client) return; // wait for the archive
+            bEnvironmentPending = false;
+            sc_options Ffi;
+            LoadOptions->ToFfi(Ffi);
+            Ffi.mip = FMath::Max<uint32>(Ffi.mip, 1u); // environments: half-resolution textures (tar under 2 GB)
+            EnvProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
+            EnvExport = Client->ExportEnvironment(EnvironmentFolder, Ffi, EnvProgress.ToSharedRef());
+            EnvStart = FPlatformTime::Seconds();
+            return;
+        }
+        bEnvironmentPending = false;
+        EnvStart = FPlatformTime::Seconds();
+        BeginEnvironmentImport(MakeShared<FSCFolderPackageSource>(EnvironmentFolder));
+    }
+    if (EnvExport.IsValid())
+    {
+        if (!EnvExport.IsCompleted()) return;
+        FSCExportResult Exported = EnvExport.GetResult();
+        EnvExport = {};
+        if (!Exported.bOK)
+        {
+            UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: export %s: %s"), *EnvironmentFolder, *Exported.Error.ToString());
+            return;
+        }
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_EXPORT socpak=%s bytes=%d seconds=%.1f cache_hit=%d"), *EnvironmentFolder, Exported.Tar.Num(),
+               Exported.Seconds, Exported.Cache.bLastHit);
+        EnvParse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Tar = MoveTemp(Exported.Tar)]() mutable {
+            return TSharedPtr<FSCTarPackageSource>(MakeShared<FSCTarPackageSource>(MoveTemp(Tar)));
+        });
+        return;
+    }
+    if (EnvParse.IsValid())
+    {
+        if (!EnvParse.IsCompleted()) return;
+        TSharedPtr<FSCTarPackageSource> Parsed = EnvParse.GetResult();
+        EnvParse = {};
+        if (!Parsed || !Parsed->IsValid())
+        {
+            UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), Parsed ? *Parsed->GetError() : TEXT("cannot read the package"));
+            return;
+        }
+        BeginEnvironmentImport(Parsed);
+    }
+    if (!EnvJob || !EnvJob->Tick(false, ImportBudgetSeconds)) return;
+    const FSCImportResult& Result = EnvJob->GetResult();
+    if (EnvJob->GetStage() == ESCImportStage::Succeeded && Result.Vehicle.IsValid())
+    {
+        Environment = Result.Vehicle;
+        ShowMapHangar(false);
+        const FBox Bounds = Environment->GetComponentsBoundingBox(true);
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_IMPORT seconds=%.1f meshes=%d instances=%d lights=%d bounds=%s"),
+               FPlatformTime::Seconds() - EnvStart, Result.MeshCount, Result.InstanceCount, Environment->Lights.Num(), *Bounds.ToString());
+        // Placement: the environment's main floor is the first large (>= 20 m across), upward-facing surface below
+        // its origin (a top-loading hangar's origin is on its roof doors); it is moved to the map floor (MapFloorZ),
+        // where the ship rests. Small objects on the way down (lights, cranes, props) are passed through.
+        constexpr double MapFloorZ = -5.0, MinFloorSpan = 2000.0;
+        FCollisionQueryParams Q(SCENE_QUERY_STAT(SCEnvFloor), true);
+        if (Vehicle.IsValid()) Q.AddIgnoredActor(Vehicle.Get());
+        double FloorZ = TNumericLimits<double>::Max(), From = -200.0;
+        for (int32 Step = 0; Step < 64 && From > Bounds.Min.Z; ++Step)
+        {
+            FHitResult Hit;
+            if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, FVector(0, 0, From), FVector(0, 0, Bounds.Min.Z - 100), ECC_Visibility, Q)) break;
+            const FBox Part = Hit.GetComponent() ? Hit.GetComponent()->Bounds.GetBox() : FBox(ForceInit);
+            const FVector Size = Part.GetSize();
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_FLOOR_PROBE z=%.1f normal_z=%.2f span=%.0fx%.0f comp=%s"), Hit.ImpactPoint.Z, Hit.ImpactNormal.Z,
+                   Size.X, Size.Y, Hit.GetComponent() && Hit.GetComponent()->ComponentTags.Num() ? *Hit.GetComponent()->ComponentTags[0].ToString() : TEXT("-"));
+            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= MinFloorSpan) { FloorZ = Hit.ImpactPoint.Z; break; }
+            if (Hit.GetComponent()) Q.AddIgnoredComponent(Hit.GetComponent());
+            From = Hit.ImpactPoint.Z;
+        }
+        if (FloorZ < TNumericLimits<double>::Max()) Environment->AddActorWorldOffset(FVector(0, 0, MapFloorZ - FloorZ));
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_PLACE floor_z=%.1f offset_z=%.1f"), FloorZ < TNumericLimits<double>::Max() ? FloorZ : 0.,
+               FloorZ < TNumericLimits<double>::Max() ? MapFloorZ - FloorZ : 0.);
+    }
+    else UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), *Result.Error);
+    EnvJob.Reset();
+    EnvSource.Reset();
 }
 bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOptions)
 {
@@ -565,6 +742,7 @@ bool USCViewerSubsystem::Tick(float)
     CompleteSearches(false);
     StepLoad(false);
     StepPlayerKit(false);
+    StepEnvironment();
     PollClientPanic();
     LogPhaseChange();
     if (Automation) Automation->Tick();
@@ -917,3 +1095,9 @@ FSCKeepResult USCViewerSubsystem::Keep()
     }
     return KeepHandler().Execute(Vehicle.Get(), LoadedEntity);
 }
+
+static FAutoConsoleCommandWithWorldAndArgs GSCEnvironment(
+    TEXT("sc.Environment"), TEXT("sc.Environment <package folder|none>: import a game environment (e.g. a hangar socpak package) beside the ship"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World)) Viewer->SetEnvironment(Args.IsValidIndex(0) ? FString::Join(Args, TEXT(" ")) : FString());
+    }));
