@@ -42,6 +42,9 @@ public:
     /** WP-L1 room confinement (area-only lights reach only their room's lighting channel). Off in the look (D15):
      *  every light is shadowed, so walls contain the light; the path tracer ignores channels. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bConfineLightsToRooms = false;
+    // Look (LOOK-6, adjudicated): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard bloom.
+    // 0.05 gives small fixtures a restrained glint; 0.15 suits stills. Console: sc.Look.BloomStar.
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float StarBloom = 0.05f;
     /** How much more dirt faces pointing down get than faces pointing up (0 = even, 1 = all below); a viewer
      *  choice for a landed ship (the game's direction-dependent dirt is run-time state). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtUnderside = 0.5f;

@@ -36,3 +36,13 @@ stage trustworthy enough to judge the look in it, then prepared the next look ex
 - Diaphragm DOF cannot blur a ship 25-70 m away at the viewer's ~90 degree FOV (beyond the hyperfocal distance) without
   a multi-metre virtual sensor. Real bokeh needs the engine's Accumulation DOF plugin (aperture-sampled; Movie Render
   Queue and an editor-only viewport preview in 5.9), to be ported to the game viewport.
+
+## GPT Astra verdict (iteration 6) and what shipped
+
+- Keep LumenDiffuseColorBoost 1.15 (1.0 reduces fill without closing RT/PT gaps) and the hangar's wall fixtures as
+  authored (x0.8 barely changed separation; "near-horizontal" does not identify wall washes reliably).
+- Keep the game's display curve: UE filmic crushed the undersides and left the player glaring white.
+- Star bloom default 0.05 (`USCViewerSettings::StarBloom`, applied at startup; 0 = standard bloom); 0.15 for stills.
+- Depth of field off by default; opt-in for stills (`sc.Look.Focus`), 2000 mm f/1.4 the upper limit before the ship
+  reads as a miniature.
+- Next: hangar instancing (render thread), a narrower-FOV hero framing preset, the Scorpius canopy RT/PT mismatch.

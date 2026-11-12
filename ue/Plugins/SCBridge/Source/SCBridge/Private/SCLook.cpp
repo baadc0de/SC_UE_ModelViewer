@@ -8,6 +8,7 @@
 #include "GameFramework/Pawn.h"
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
+#include "SCLook.h"
 #include "SCVehicle.h"
 #include "SCViewerPawn.h"
 #include "SCViewerSubsystem.h"
@@ -158,52 +159,55 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookDisplay(
 // sc.Look.BloomStar <points> <length> [intensity]: FFT (convolution) bloom with a generated kernel, a soft core plus
 // <points> diffraction streaks of <length> (fraction of the kernel radius); 0 points returns to the standard bloom.
 static TStrongObjectPtr<UTexture2D> GBloomKernel;
+void SCLook::SetBloomStar(UWorld* World, int32 Points, float Length, float Intensity)
+{
+    if (!World) return;
+    if (Points > 0)
+    {
+        constexpr int32 N = 512;
+        TArray<FFloat16Color> Pixels;
+        Pixels.SetNumUninitialized(N * N);
+        const int32 Streaks = Points % 2 ? Points * 2 : Points; // an odd star still yields symmetric spikes
+        for (int32 Y = 0; Y < N; ++Y)
+            for (int32 X = 0; X < N; ++X)
+            {
+                const float U = (X + 0.5f) / N * 2.f - 1.f, V = (Y + 0.5f) / N * 2.f - 1.f, R = FMath::Sqrt(U * U + V * V);
+                float K = FMath::Exp(-R * R / 0.00002f) * 40.f + FMath::Exp(-R * R / 0.01f) * 0.01f; // sharp peak (the image) + faint glow
+                for (int32 I = 0; I < Streaks; ++I)
+                {
+                    const float A = PI * I / (Streaks / 2.f) * 0.5f + PI / 4.f; // diagonal by default
+                    const float Along = U * FMath::Cos(A) + V * FMath::Sin(A), Across = -U * FMath::Sin(A) + V * FMath::Cos(A);
+                    if (Along > 0) K += 0.05f * FMath::Exp(-Across * Across / 0.000004f) * FMath::Exp(-Along / FMath::Max(0.02f, Length * 0.25f));
+                }
+                Pixels[Y * N + X] = FFloat16Color(FLinearColor(K, K, K, 1));
+            }
+        GBloomKernel.Reset(UTexture2D::CreateTransient(N, N, PF_FloatRGBA));
+        void* Data = GBloomKernel->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+        FMemory::Memcpy(Data, Pixels.GetData(), Pixels.Num() * sizeof(FFloat16Color));
+        GBloomKernel->GetPlatformData()->Mips[0].BulkData.Unlock();
+        GBloomKernel->SRGB = false;
+        GBloomKernel->UpdateResource();
+    }
+    int32 Volumes = 0;
+    for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+    {
+        if (!It->bUnbound) continue;
+        FPostProcessSettings& S = It->Settings;
+        S.bOverride_BloomMethod = Points > 0;
+        S.BloomMethod = Points > 0 ? BM_FFT : BM_SOG;
+        S.bOverride_BloomConvolutionTexture = Points > 0;
+        S.BloomConvolutionTexture = Points > 0 ? GBloomKernel.Get() : nullptr;
+        S.bOverride_BloomIntensity = Points > 0;
+        S.BloomIntensity = Intensity;
+        ++Volumes;
+    }
+    UE_LOG(LogTemp, Display, TEXT("LOOK bloom_star points=%d length=%.2f intensity=%.2f volumes=%d"), Points, Length, Intensity, Volumes);
+}
 static FAutoConsoleCommandWithWorldAndArgs GSCLookBloomStar(
     TEXT("sc.Look.BloomStar"), TEXT("sc.Look.BloomStar <points (0 = standard bloom)> <streak length 0..1> [intensity]"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
-        const int32 Points = Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) : 0;
-        const float Length = Args.IsValidIndex(1) ? FCString::Atof(*Args[1]) : 0.6f;
-        const float Intensity = Args.IsValidIndex(2) ? FCString::Atof(*Args[2]) : 1.f;
-        if (Points > 0)
-        {
-            constexpr int32 N = 512;
-            TArray<FFloat16Color> Pixels;
-            Pixels.SetNumUninitialized(N * N);
-            const int32 Streaks = Points % 2 ? Points * 2 : Points; // an odd star still yields symmetric spikes
-            for (int32 Y = 0; Y < N; ++Y)
-                for (int32 X = 0; X < N; ++X)
-                {
-                    const float U = (X + 0.5f) / N * 2.f - 1.f, V = (Y + 0.5f) / N * 2.f - 1.f, R = FMath::Sqrt(U * U + V * V);
-                    float K = FMath::Exp(-R * R / 0.00002f) * 40.f + FMath::Exp(-R * R / 0.01f) * 0.01f; // sharp peak (the image) + faint glow
-                    for (int32 I = 0; I < Streaks; ++I)
-                    {
-                        const float A = PI * I / (Streaks / 2.f) * 0.5f + PI / 4.f; // diagonal by default
-                        const float Along = U * FMath::Cos(A) + V * FMath::Sin(A), Across = -U * FMath::Sin(A) + V * FMath::Cos(A);
-                        if (Along > 0) K += 0.05f * FMath::Exp(-Across * Across / 0.000004f) * FMath::Exp(-Along / FMath::Max(0.02f, Length * 0.25f));
-                    }
-                    Pixels[Y * N + X] = FFloat16Color(FLinearColor(K, K, K, 1));
-                }
-            GBloomKernel.Reset(UTexture2D::CreateTransient(N, N, PF_FloatRGBA));
-            void* Data = GBloomKernel->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
-            FMemory::Memcpy(Data, Pixels.GetData(), Pixels.Num() * sizeof(FFloat16Color));
-            GBloomKernel->GetPlatformData()->Mips[0].BulkData.Unlock();
-            GBloomKernel->SRGB = false;
-            GBloomKernel->UpdateResource();
-        }
-        int32 Volumes = 0;
-        for (TActorIterator<APostProcessVolume> It(World); It; ++It)
-        {
-            if (!It->bUnbound) continue;
-            FPostProcessSettings& S = It->Settings;
-            S.bOverride_BloomMethod = Points > 0;
-            S.BloomMethod = Points > 0 ? BM_FFT : BM_SOG;
-            S.bOverride_BloomConvolutionTexture = Points > 0;
-            S.BloomConvolutionTexture = Points > 0 ? GBloomKernel.Get() : nullptr;
-            S.bOverride_BloomIntensity = Points > 0;
-            S.BloomIntensity = Intensity;
-            ++Volumes;
-        }
-        UE_LOG(LogTemp, Display, TEXT("LOOK bloom_star points=%d length=%.2f intensity=%.2f volumes=%d"), Points, Length, Intensity, Volumes);
+        SCLook::SetBloomStar(World, Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) : 0, Args.IsValidIndex(1) ? FCString::Atof(*Args[1]) : 0.5f,
+                             Args.IsValidIndex(2) ? FCString::Atof(*Args[2]) : 0.05f);
     }));
 
 // sc.Look.Focus <f-stop> [sensor width mm]: cinematic depth of field focused on what the screen centre sees (a trace
