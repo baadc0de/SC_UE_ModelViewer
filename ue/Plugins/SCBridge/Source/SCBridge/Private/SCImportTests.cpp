@@ -345,7 +345,7 @@ bool USCImportLibrary::RunUnitTests()
     bool Passed = true;
     TArray<FString> Names = {TEXT("FSCReaderSparse"), TEXT("FSCReaderPalette"), TEXT("FSCPaths"), TEXT("FSCBasis"), TEXT("FSCReviewTar"), TEXT("FSCReviewPartial"), TEXT("FSCReviewScale"), TEXT("FSCReviewMaterials"),
         TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsMasterParameters"), TEXT("FSCMaterialsTextures"), TEXT("FSCMaterialsSmoothnessPng"), TEXT("FSCMaterialsDdsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic"), TEXT("FSCRigSourceTiming"), TEXT("FSCRigSourcePlayback"), TEXT("FSCLightDefaults"), TEXT("FSCLightAuthoredModel"),
-        TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement"), TEXT("FSCLightRoomChannels"), TEXT("FSCLightVerifier"),
+        TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement"), TEXT("FSCLightRoomChannels"), TEXT("FSCDirtExterior"), TEXT("FSCLightVerifier"),
         TEXT("FSCStarEngineFixture"), TEXT("FSCStarEngineDomain"), TEXT("FSCStarEngineRules"),
         TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach"), TEXT("FSCGamePhysicsClasses"), TEXT("FSCGamePhysicsGrid")};
     FString Folder;

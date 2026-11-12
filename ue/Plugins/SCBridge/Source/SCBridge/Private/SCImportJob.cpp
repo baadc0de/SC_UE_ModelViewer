@@ -10,6 +10,7 @@
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCLightAreas.h"
+#include "SCDirt.h"
 #include "SCRigComponent.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
@@ -991,6 +992,8 @@ void FSCImportJob::FState::Assemble()
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose
+    FSCDirt::MarkExterior(V); // exterior = outside every room, from the channels just set
+    FSCDirt::Push(V->GetWorld());
     if (Options.bPublish)
     {
         V->BuildExploration();

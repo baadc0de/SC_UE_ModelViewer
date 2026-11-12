@@ -4,10 +4,12 @@
 #include "SCViewerSubsystem.h"
 #include "SCViewerSettings.h"
 #include "SCViewOptions.h"
+#include "SCDirt.h"
 #include "Misc/CommandLine.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSearchBox.h"
+#include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
@@ -172,6 +174,46 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
             .OnCheckStateChanged_Lambda([O, M = Mode.Key](ECheckBoxState) { if (O()) O()->MaterialMode = M; })
             [SNew(SBox).Padding(FMargin(5, 1))[SNew(STextBlock).Font(Font(9)).Text(Mode.Value)]]
         ];
+    // Viewer dirt (WP-U2b): live on exterior surfaces, saved with the user settings; not a load option.
+    TWeakObjectPtr<USCViewerSubsystem> WeakSubsystem = Subsystem;
+    auto PushDirt = [WeakSubsystem](bool bSave) {
+        FSCDirt::Push(WeakSubsystem.IsValid() ? WeakSubsystem->GetWorld() : nullptr);
+        if (bSave) USCViewerSettings::Get()->Save();
+    };
+    TSharedRef<SHorizontalBox> DirtColours = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(78)];
+    for (const FSCDirt::FPreset& Preset : FSCDirt::Presets())
+        DirtColours->AddSlot().AutoWidth().Padding(0, 0, 2, 0)
+        [
+            SNew(SCheckBox)
+            .Style(FCoreStyle::Get(), "ToggleButtonCheckbox")
+            .IsChecked_Lambda([C = Preset.Colour] { return USCViewerSettings::Get()->DirtColor.Equals(C) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+            .OnCheckStateChanged_Lambda([C = Preset.Colour, PushDirt](ECheckBoxState) {
+                USCViewerSettings::Get()->DirtColor = C;
+                PushDirt(true);
+            })
+            [SNew(SBox).Padding(FMargin(5, 1))[SNew(STextBlock).Font(Font(9)).Text(FText::FromString(Preset.Name))]]
+        ];
+    TSharedRef<SHorizontalBox> Dirt = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("Dirt", "Dirt"))]]
+        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+        [
+            SNew(SSlider)
+            .Value_Lambda([] { return USCViewerSettings::Get()->DirtAmount; })
+            .OnValueChanged_Lambda([PushDirt](float Value) {
+                USCViewerSettings::Get()->DirtAmount = Value;
+                PushDirt(false);
+            })
+            .OnMouseCaptureEnd_Lambda([PushDirt] { PushDirt(true); })
+        ]
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+        [
+            SNew(SBox).WidthOverride(34)
+            [SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text_Lambda([] {
+                return FText::FromString(FString::Printf(TEXT("%d %%"), FMath::RoundToInt(USCViewerSettings::Get()->DirtAmount * 100)));
+            })]
+        ];
     return SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Lod", "LOD"), {0, 1, 2, 3}, IntField(&USCViewOptions::Lod))]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Mip", "Texture mip"), {0, 2, 4}, IntField(&USCViewOptions::Mip))]
@@ -194,7 +236,9 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
                 })
                 [SNew(STextBlock).Font(Font(8)).Text(LOCTEXT("Defaults", "Core defaults"))]
             ]
-        ];
+        ]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Dirt]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[DirtColours];
 }
 
 TSharedRef<ITableRow> SSCModelBrowser::MakeRow(FHit Hit, const TSharedRef<STableViewBase>& Owner)

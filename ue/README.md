@@ -291,6 +291,10 @@ Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>`,
 `-SCLoad=a,b`, `-SCHold=<s>`, `-SCCamera=fly`, `-SCFlyView=dx,dy,dz,pitch,yaw`,
 `-SCDefaults`, `-SCLod=`, `-SCMip=`, `-SCQuitAfterLoad`, `-SCNoUI`, `-SCHostExposure`; console `sc.Load`,
 `sc.Unload`, `sc.Cancel`, `sc.Camera`. `ue/scripts/capture_viewer.sh` screenshots a run.
+**Dirt** (WP-U2b, [verification/WP-U2b.md](verification/WP-U2b.md)): the options panel's Dirt slider and presets
+(Dust / Sand / Mud / Ash) put the game's dirt rule on exterior surfaces, live and saved per user; `sc.Dirt <amount>
+[preset]` does the same from the console or a route. The game's ships author no dirt; the defaults are viewer choices.
+
 Headless (WP-Q1): `UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/ue_load_gladius.py
 -nullrhi` drives `USCViewerSubsystem.LoadEntity` through the FFI. Settings persist in
 `Saved/Config/<Platform>/GameUserSettings.ini`. Evidence: [verification/WP-V1.md](verification/WP-V1.md).

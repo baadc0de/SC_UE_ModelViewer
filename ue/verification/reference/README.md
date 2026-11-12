@@ -3,7 +3,8 @@
 Screenshots of the real game, supplied by the owner on 2026-11-09, for visual
 comparison of the viewer's output (WP-U2 materials, WP-Q1 golden screenshots).
 They are references only: never derive colours or parameters from them in code
-(all values come from the sidecars and palettes).
+(all values come from the sidecars and palettes). Exception, by the owner's decision (2026-11-12): the viewer's
+dirt defaults (WP-U2b), which no game data defines, were chosen by eye against these images.
 
 ## gladius/ — AEGS Gladius, default (olive / tan) livery
 

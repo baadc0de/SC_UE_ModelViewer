@@ -2,12 +2,12 @@
 
 Run headless inside the Python commandlet with r.Substrate enabled (project default):
   UnrealEditor-Cmd SCViewer.uproject -run=pythonscript -script=<abs>/create_materials.py \
-      -unattended -nop4 -nosplash -ddc=SCViewerDDC
-Everything lives under /SCBridge/Materials (ue/Plugins/SCBridge/Content/Materials). Parameter names are
+      -unattended -nop4 -nosplash -AllowCommandletRendering -ddc=SCViewerDDC
+(UE 5.9 refuses to compile materials under -nullrhi.) Everything lives under /SCBridge/Materials (ue/Plugins/SCBridge/Content/Materials). Parameter names are
 SC-semantic and model-neutral; FSCMaterialBuilder (C++) sets them. No asset values are baked in here:
 every default is a neutral identity (white, flat normal, 0/1) and the builder supplies sidecar data.
 The graphs do carry shading rules of the game's own shaders (gloss -> roughness, layer blend order, macro
-surface, HAL luminance range, HardSurface static wear); those are shader logic, the same for every asset, cited
+surface, HAL luminance range, HardSurface static wear, dirt); those are shader logic, the same for every asset, cited
 where they appear. Game functions with branches or many terms are Custom (HLSL) nodes transcribed from the
 shader text, so they can be read against it.
 """
@@ -99,6 +99,26 @@ class Graph:
     def vector(self, name, value, group="SC"):
         return (self.node(unreal.MaterialExpressionVectorParameter, parameter_name=name,
                           default_value=unreal.LinearColor(*value), group=group), "RGB")
+
+    def collection(self, name, vector=False):
+        """A parameter of the viewer's dirt collection (MPC_SCDirt), set at run time by FSCDirt."""
+        e = (self.node(unreal.MaterialExpressionCollectionParameter, collection=Graph.dirt_collection, parameter_name=name), "")
+        return self.op(unreal.MaterialExpressionComponentMask, e, names=("",), r=True, g=True, b=True, a=False) if vector else e
+
+    def primitive_scalar(self, name, index, value, group="SC"):
+        """A scalar read from the component's custom primitive data slot `index` (FSCDirt writes it)."""
+        return (self.node(unreal.MaterialExpressionScalarParameter, parameter_name=name, default_value=value, group=group,
+                          use_custom_primitive_data=True, primitive_data_index=index), "")
+
+    def dirt(self, albedo, f0, smooth, blend_map, vertex_wear, vertex_ao):
+        """layerLib.cfi CalcDirtBlendAlpha + LayerAttribs_ApplyDirt with the viewer's dirt: albedo -> DirtColor,
+        F0 -> DIRT_SPECULAR, smoothness -> DIRT_GLOSS by the dirt alpha. Returns (albedo, f0, smooth, alpha)."""
+        amount = self.mul(self.collection("DirtAmount"), self.primitive_scalar("DirtExterior", DIRT_EXTERIOR_INDEX, 0.0, "Dirt"))
+        colour = self.collection("DirtColor", vector=True)
+        alpha = self.custom(DIRT_ALPHA, unreal.CustomMaterialOutputType.CMOT_FLOAT1, Amount=amount, VertexWear=vertex_wear,
+                            BlendMap=blend_map, VertexAO=vertex_ao, DirtColor=colour)
+        return (self.lerp(albedo, colour, alpha), self.lerp(f0, self.const3(DIRT_SPECULAR), alpha),
+                self.lerp(smooth, self.const(DIRT_GLOSS), alpha), alpha)
 
     def texture(self, name, default, sampler, uv, group="SC"):
         e = self.node(unreal.MaterialExpressionTextureSampleParameter2D, parameter_name=name, texture=default,
@@ -297,12 +317,42 @@ def layered_master(name, count):
     normal = g.detail_normal(macro, result["normal"])
     macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroSmoothnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
     smooth = g.mul(result["smoothness"], macro_gloss)
-    albedo, f0 = g.mul(result["albedo"], ao), g.mul(result["f0"], ao)
+    # LayerBlend_V2.cfx: dirt after the macro surface, before AO; blendMap is the wear map, which this master does not
+    # sample (uniform 1), and the %WEAR_DIRT_AO_VERTEX vertex dirt is not read (0).
+    albedo, f0, smooth, dirt = g.dirt(result["albedo"], result["f0"], smooth, g.const(1.0), g.const(0.0), ao)
+    albedo, f0 = g.mul(albedo, ao), g.mul(f0, ao)
     g.last_uv = base_uv
-    emissive = g.glow(result["colour"], result["alpha"])
+    emissive = g.mul(g.glow(result["colour"], result["alpha"]), g.one_minus(dirt))  # Emissive *= 1 - dirtAmount
     g.slab(g.conserve(albedo, f0), f0, None, g.gloss_to_roughness(smooth), normal, emissive)
     g.out(*g.add(g.sub(result["alpha"], g.scalar("AlphaTest", 0.0)), g.const(0.5)), MP.MP_OPACITY_MASK)
     return g.save()
+
+
+# Dirt (WP-U2b, docs/work-packages/WP-U2b-dirt.md). common.cfi: DIRT_SPECULAR, DIRT_GLOSS. The game drives the amount and
+# colour per instance at run time (a ship's default `Dirt` is 0); the viewer feeds its own amount and colour through
+# MPC_SCDirt, and FSCDirt marks exterior components (custom primitive data slot DIRT_EXTERIOR_INDEX: 1 = exterior).
+DIRT_SPECULAR = (0.03, 0.03, 0.03)
+DIRT_GLOSS = 0.0
+DIRT_EXTERIOR_INDEX = 0
+# layerLib.cfi: `if (objectDirt)`, dirt = saturate(objectDirt - CalculateVertexDirt(wear)) with
+# CalculateVertexDirt(v) = 0.95 v^2, then CalcDirtBlendAlpha(dirtColor, dirt, blendMap, AO): mask = blendMap AO^2,
+# a = CalcBlendAlpha(mask, dirt, softness 1), slope = 1 - (1 - a)^2, result = lerp(slope, a,
+# InverseLerpNormalized(0, 0.15, GetLuminance(dirtColor))); GetLuminance is Rec.709 (common.cfi). No detail maps.
+DIRT_ALPHA = """if (Amount <= 0) return 0;
+float dirt = saturate(Amount - 0.95 * VertexWear * VertexWear);
+float mask = BlendMap * VertexAO * VertexAO;
+const float maxSlopeRatio = 1.0 / 255.0;
+float inMap = mask * (1 - maxSlopeRatio - 0.001) + maxSlopeRatio + 0.001;
+float softSlope = saturate(2 * dirt);
+float hardSlope = 1.0 / max(softSlope, maxSlopeRatio);
+float softAlpha = inMap * softSlope + 1 - softSlope;
+float hardAlpha = inMap * hardSlope;
+float blendIn = saturate(lerp(hardAlpha, softAlpha, 1.0));
+float blendOut = lerp(1.0, mask * mask, saturate(2 * dirt - 1));
+float a = 1.0 - blendIn * blendOut;
+float slope = 1 - (1 - a) * (1 - a);
+float luminance = dot(DirtColor, float3(0.2126, 0.7152, 0.0722));
+return saturate(lerp(slope, a, saturate(luminance / 0.15)));"""
 
 
 # Game layerLib.cfi CalcBlendAlpha(blendMap, blendAmt, softness) = 1 - CalcBlendInAlpha x CalcBlendOutAlpha.
@@ -357,7 +407,9 @@ def hardsurface_master():
       Then LayerAttribs_AddMacroSurface (MacroNormalMap / MacroSmoothnessMap at UV x MacroTiling),
         albedo, F0 x AO, AO = vertex B x MacroAOMap.r, and the deferred energy split (Graph.conserve).
       Opacity (alpha test) is the Primary diffuse alpha; the glow is masked by vertex G (GetMaterialAttribs).
-    Not drawn: per-instance wear/dirt/damage, detail maps, the paint/cloth complement hue (HueLUT),
+    Dirt: the viewer's uniform amount and colour (MPC_SCDirt) on exterior components (Graph.dirt), not the game's
+      direction-dependent instance dirt.
+    Not drawn: per-instance wear/damage, detail maps, the paint/cloth complement hue (HueLUT),
     retroreflective normals, %SECONDARY_LAYER, stencils, iridescence.
     """
     g = Graph("M_SC_HardSurface", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
@@ -401,11 +453,14 @@ def hardsurface_master():
     macro_gloss = g.lerp(g.const(1.0), g.map_smoothness("MacroSmoothnessMap", macro_uv, "Macro"), g.scalar("UseMacroGloss", 0.0, "Macro"))
     smooth = g.mul(smooth, macro_gloss)
     ao = g.mul(vertex_ao, (g.texture("MacroAOMap", g.white_linear, ST.SAMPLERTYPE_MASKS, macro_uv, "Macro"), "R"))
+    # HardSurface.cfx GetLayerAttribs: dirt after the macro surface, before Albedo/Reflectance *= AO; the blend map is
+    # the wear blend map, the vertex dirt comes from the vertex wear and the dirt AO is the vertex AO.
+    albedo, f0, smooth, dirt = g.dirt(albedo, f0, smooth, blend_map, vertex_wear, vertex_ao)
     g.last_uv = base_uv
     albedo, f0 = g.mul(albedo, ao), g.mul(f0, ao)
     # HardSurface.cfx GetMaterialAttribs: glowColour = attribs.Albedo, the wear-blended albedo after the AO multiply
     # (before the lighting energy split), x the alpha ramp x the vertex glow mask.
-    emissive = g.mul(g.glow(albedo, primary["alpha"], ramp=True), vertex_glow)
+    emissive = g.mul(g.mul(g.glow(albedo, primary["alpha"], ramp=True), vertex_glow), g.one_minus(dirt))  # x (1 - dirt)
     g.slab(g.conserve(albedo, f0), f0, None, g.gloss_to_roughness(smooth), normal, emissive)
     g.out(*g.add(g.sub(primary["alpha"], g.scalar("AlphaTest", 0.0)), g.const(0.5)), MP.MP_OPACITY_MASK)
     return g.save()
@@ -601,6 +656,23 @@ for entry in (os.listdir(CONTENT) if os.path.isdir(CONTENT) else []):
         shutil.rmtree(path, ignore_errors=True)
     elif entry not in KEEP:
         os.remove(path)
+def dirt_collection():
+    """MPC_SCDirt: the viewer's dirt amount and colour (FSCDirt sets them from USCViewerSettings at run time)."""
+    mpc = tools.create_asset("MPC_SCDirt", ROOT, unreal.MaterialParameterCollection, unreal.MaterialParameterCollectionFactoryNew())
+    amount = unreal.CollectionScalarParameter()
+    amount.set_editor_property("parameter_name", "DirtAmount")
+    amount.set_editor_property("default_value", 0.0)
+    colour = unreal.CollectionVectorParameter()
+    colour.set_editor_property("parameter_name", "DirtColor")
+    colour.set_editor_property("default_value", unreal.LinearColor(0.0, 0.0, 0.0, 1.0))
+    mpc.set_editor_property("scalar_parameters", [amount])
+    mpc.set_editor_property("vector_parameters", [colour])
+    eal.save_loaded_asset(mpc)
+    unreal.log(f"SC_MATERIAL {mpc.get_path_name()} collection")
+    return mpc
+
+
+Graph.dirt_collection = dirt_collection()
 Graph.white = default_texture("T_SC_White", (255, 255, 255, 255), True, unreal.TextureCompressionSettings.TC_DEFAULT)
 Graph.white_linear = default_texture("T_SC_WhiteLinear", (255, 255, 255, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.black_linear = default_texture("T_SC_BlackLinear", (0, 0, 0, 255), False, unreal.TextureCompressionSettings.TC_MASKS)

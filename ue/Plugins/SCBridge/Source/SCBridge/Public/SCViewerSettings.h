@@ -27,6 +27,11 @@ public:
      *  exporter's default (first default loadout with a stowed personal weapon). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString PlayerLoadout;
 
+    /** Viewer dirt on exterior surfaces (WP-U2b, FSCDirt): 0 = clean (the game's state for an unflown ship), 1 = full. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtAmount = 0.3f;
+    /** Linear dirt colour; the default is FSCDirt's "Dust" preset (a viewer choice, not game data). */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FLinearColor DirtColor = FLinearColor::FromSRGBColor(FColor(118, 108, 92));
+
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static USCViewerSettings* Get();
     /** -SCPlayerGender=<g> / -SCPlayerLoadout=<p4k path> override the settings for one run. */
     FString ResolvePlayerGender() const;
