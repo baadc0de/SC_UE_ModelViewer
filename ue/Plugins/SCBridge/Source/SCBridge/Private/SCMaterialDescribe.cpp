@@ -291,6 +291,42 @@ bool Stencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCP
     D.Scalars.Add(TEXT("UseStencil"), 1.f);
     return true;
 }
+/** HardSurface %STENCIL_MAP, the game's stencilLib.cfib non-sticker path (ApplyStencil_ThreeChannels ->
+ *  ApplyStencilAsTint on the Primary layer after its tint, palette and primer; the graph is in M_SC_HardSurface):
+ *  TexSlot7 at (UseUV2ForStencil ? UV1 : UV0) x StencilTiling holds three distance fields; colours per channel by
+ *  StencilTintOverride (paletteLib GetPaletteStencilColors): 2, or a $TintPaletteDecal material, = the palette's
+ *  decal red/green/blue; 1 = the palette's primary/secondary/tertiary diffuse; else StencilDiffuseColor{,2,3}.
+ *  The stencil breakup (TexSlot8: diffuse overlay R, wear alpha B) is not in the sidecars: it is taken as neutral
+ *  (no overlay, alpha 1, which makes CalcStencilWearAlpha 1 at any wear). */
+void HardSurfaceStencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPalette* Palette)
+{
+    const FObj Map = HasToken(Sub, TEXT("STENCIL_MAP")) ? Slot(Sub, TEXT("stencil")) : nullptr;
+    const FString Path = Str(Map, TEXT("export_path"));
+    if (HasToken(Sub, TEXT("STENCIL_MAP")) && Path.IsEmpty()) D.Warnings.Add(TEXT("%STENCIL_MAP without a TexSlot7 stencil: not drawn"));
+    D.Scalars.Add(TEXT("UseStencil"), Path.IsEmpty() ? 0.f : 1.f);
+    if (Path.IsEmpty()) return;
+    Tex(D, TEXT("StencilMap"), Path, ESCTextureRole::Linear);
+    D.Scalars.Add(TEXT("StencilTiling"), A.Param(TEXT("StencilTiling"), 1.f));
+    D.Scalars.Add(TEXT("StencilOpacity"), A.Param(TEXT("StencilOpacity"), 1.f));
+    D.Scalars.Add(TEXT("StencilUV2"), A.Param(TEXT("UseUV2ForStencil"), 0.f) != 0.f ? 1.f : 0.f);
+    const int32 Mode = FMath::RoundToInt32(A.Param(TEXT("StencilTintOverride"), 0.f));
+    const bool bDecalColours = Mode == 2 || HasVirtualRole(Sub, TEXT("tint_palette_decal"));
+    const FObj Decal = Child(Palette ? Parse(Palette->Json) : nullptr, TEXT("decal"));
+    const TCHAR* Authored[] = {TEXT("StencilDiffuseColor"), TEXT("StencilDiffuseColor2"), TEXT("StencilDiffuseColor3")};
+    const TCHAR* DecalChannels[] = {TEXT("red"), TEXT("green"), TEXT("blue")};
+    const TCHAR* MainChannels[] = {TEXT("primary"), TEXT("secondary"), TEXT("tertiary")};
+    for (int32 I = 0; I < 3; ++I)
+    {
+        FLinearColor C = FLinearColor::White; // the shader default
+        bool bFromPalette = false;
+        if (bDecalColours && Decal && Decal->HasTypedField<EJson::Array>(DecalChannels[I])) { C = Rgb(Decal, DecalChannels[I], C); bFromPalette = true; }
+        else if (!bDecalColours && Mode == 1) bFromPalette = FSCMaterialBuilder::PaletteColor(Palette, MainChannels[I], C);
+        if ((bDecalColours || Mode == 1) && !bFromPalette && Palette)
+            D.Warnings.Add(FString::Printf(TEXT("stencil colour %d: the palette has no %s colour; the authored colour is used"), I + 1, bDecalColours ? DecalChannels[I] : MainChannels[I]));
+        if (!bFromPalette && A.Params.Contains(Authored[I])) ParseRgb(A.Params[Authored[I]], C);
+        D.Vectors.Add(*FString::Printf(TEXT("StencilColor%d"), I + 1), C);
+    }
+}
 bool IsWear(const FObj& Layer) { return Str(Layer, TEXT("name")).StartsWith(TEXT("Wear"), ESearchCase::IgnoreCase); }
 /** GlassPBR, the game's glassLib.cfib GlassShared (ue/verification/WP-U3b.md §14). The glass is a clear dielectric
  *  over what is behind it: base-layer albedo 0, Reflectance = MatSpecColor.rrr, and a transmissive colour that
@@ -614,7 +650,7 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
                 D.Scalars.Add(TEXT("UseBlendMask"), D.Textures.Contains(TEXT("BlendMaskMap")) ? 1.f : 0.f);
                 D.Scalars.Add(TEXT("BlendMaskTiling"), A.Param(TEXT("BlendMapTiling"), 1.f));
             }
-            else StaticWear(D, Sub, A, Palette);
+            else { StaticWear(D, Sub, A, Palette); HardSurfaceStencil(D, Sub, A, Palette); }
             MacroSurface(D, Sub, A);
             Emission(D, Sub, A);
         }

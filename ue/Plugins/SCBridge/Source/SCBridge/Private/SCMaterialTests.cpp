@@ -442,6 +442,33 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("emittance map on"), X->Scalars[TEXT("UseEmissiveMap")], 1.f);
         TestEqual(TEXT("emittance strength"), X->Scalars[TEXT("EmissiveStrength")], GlowNits(1.5f));
     }
+    // HardSurface %STENCIL_MAP (stencilLib.cfib, non-sticker): TexSlot7 at (UV0 | UV1 by UseUV2ForStencil) x
+    // StencilTiling tints the Primary layer; colours by StencilTintOverride (paletteLib GetPaletteStencilColors):
+    // 0 authored StencilDiffuseColor{,2,3}, 1 the palette's primary/secondary/tertiary, 2 its decal red/green/blue.
+    {
+        struct FCase { const TCHAR* Name; float UV2; FLinearColor C1, C2, C3; };
+        const FCase Cases[] = {
+            {TEXT("hard_stencil_authored"), 0.f, FLinearColor(0.9f, 0.8f, 0.7f), FLinearColor(0.6f, 0.5f, 0.4f), FLinearColor(0.3f, 0.2f, 0.1f)},
+            {TEXT("hard_stencil_main_tints"), 1.f, FLinearColor(0.2f, 0.4f, 0.6f), FLinearColor(0.5f, 0.5f, 0.25f), FLinearColor(0.9f, 0.1f, 0.1f)},
+            {TEXT("hard_stencil_decal_colours"), 0.f, FLinearColor(0.7f, 0.2f, 0.1f), FLinearColor(0.15f, 0.65f, 0.25f), FLinearColor(0.05f, 0.1f, 0.55f)},
+        };
+        for (const FCase& C : Cases)
+            if (auto* X = Check(C.Name, ESCMaster::HardSurface, ESCBlend::Opaque, false, false))
+            {
+                const FString N(C.Name);
+                TestEqual(N + TEXT(": stencil on"), X->Scalars.FindRef(TEXT("UseStencil")), 1.f);
+                TestEqual(N + TEXT(": stencil = TexSlot7"), X->Textures.FindRef(TEXT("StencilMap")).Path, FString(TEXT("tex/camo_stencil.png")));
+                TestEqual(N + TEXT(": stencil is data"), int32(X->Textures.FindRef(TEXT("StencilMap")).Role), int32(ESCTextureRole::Linear));
+                TestEqual(N + TEXT(": StencilTiling"), X->Scalars.FindRef(TEXT("StencilTiling")), 0.75f);
+                TestEqual(N + TEXT(": StencilOpacity"), X->Scalars.FindRef(TEXT("StencilOpacity")), 0.8f);
+                TestEqual(N + TEXT(": UseUV2ForStencil"), X->Scalars.FindRef(TEXT("StencilUV2"), -1.f), C.UV2);
+                TestTrue(N + TEXT(": colour 1"), Near(X->Vectors.FindRef(TEXT("StencilColor1")), C.C1));
+                TestTrue(N + TEXT(": colour 2"), Near(X->Vectors.FindRef(TEXT("StencilColor2")), C.C2));
+                TestTrue(N + TEXT(": colour 3"), Near(X->Vectors.FindRef(TEXT("StencilColor3")), C.C3));
+            }
+        if (const FSCMaterialDesc* X = Find(D, TEXT("hard_primary")))
+            TestEqual(TEXT("HardSurface without %STENCIL_MAP: no stencil"), X->Scalars.FindRef(TEXT("UseStencil"), -1.f), 0.f);
+    }
     if (auto* X = Check(TEXT("stencil_palette"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
     {
         // $TintPaletteDecal: stencil texture from palettes.json decal.export_path, colours from decal red/green/blue.
@@ -527,7 +554,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // hard_wear_tinted blend map (its wear surface reuses the Primary maps). Two more are read for their mean
     // colour only: the unsampled spec maps of hard_wear_tinted and blend1. GlassPBR adds 2: the glass_thickness
     // height map and the glass_vertex_tint tint map.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 47); // + Layered WearMap, the decal DirtBlendMap, the engine detail map (WP-U2b)
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 48); // + Layered WearMap, the decal DirtBlendMap, the engine detail map (WP-U2b), the HardSurface stencil
     // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;

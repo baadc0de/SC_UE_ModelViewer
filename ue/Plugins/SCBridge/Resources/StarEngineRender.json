@@ -318,6 +318,26 @@
     "CalculateSSDO": {
       "file": "ShadeLib.cfib",
       "sha256": "588ccce3f95a3918dd43960be6e62ecb6ae0db83065791c6b0712f85f80a2552"
+    },
+    "CalcStencilWearAlpha": {
+      "file": "stencilLib.cfib",
+      "sha256": "c8522957b2f7e32643e453e0c9fd7b85f7682444879144d71dbbf8a1d8eb8f80"
+    },
+    "CalcStencilParams": {
+      "file": "stencilLib.cfib",
+      "sha256": "7b8d0df8643d8260eeb3f23d671f87b8f9c7178eb4ef7ca03409b60d87528a63"
+    },
+    "GetStencilLayer_Premultiplied": {
+      "file": "stencilLib.cfib",
+      "sha256": "0106f02b8747bbf42dd223554f44b66dc9d6c93139fdc41e91ab8980b4412148"
+    },
+    "ApplyStencilAsTint": {
+      "file": "stencilLib.cfib",
+      "sha256": "ba5b95a64be866590adbff096b8d0d47ef8213904fcc3dfaa3b7b35c3d428441"
+    },
+    "GetPaletteStencilColors": {
+      "file": "paletteLib.cfib",
+      "sha256": "54c2f9aaf555e19d45bbeea0435e3dda0888132110b1cafb704af3c9558abbbc"
     }
   }
 }

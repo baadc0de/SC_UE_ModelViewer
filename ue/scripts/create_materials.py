@@ -433,6 +433,25 @@ return saturate((WearAlpha - startWear) * (1 / (1 - startWear)));"""
 # Game layerLib.cfi Layer_ApplyLayerEffects, paint branch (PaintPrimerStart 0.5, PaintComplementStart 0.9), on
 # the tinted primary layer; wearAmt = 1 - CalcBlendAlpha. rgb = albedo, a = smoothness. The complement-hue
 # shift (Layer_ApplyComplementWearAndHAL: a 3D HueLUT lookup) between wearAmt 0.9 and 1 is not drawn.
+# stencilLib.cfib CalcStencilParams + GetStencilLayer_Premultiplied + ApplyStencilAsTint (non-sticker), applied to
+# the Primary layer after its primer: three distance fields -> anti-aliased channel alphas (x over y over z), x
+# StencilOpacity; albedo = albedo x (1 - total) + sum(colour_i x alpha_i). The breakup texture is neutral (see
+# FSCMaterialBuilder HardSurfaceStencil): CalcStencilWearAlpha = 1 and no diffuse overlay. fwidth is 0 where the
+# hardware has no derivatives (ray tracing; the game zeroes it under subpixel shading too): a hard step there.
+STENCIL_TINT = """float3 w = max(fwidth(Dist), 1e-5);
+float3 a = saturate((Dist - 0.5 + 0.5 * w) / w);
+a.y *= 1.0 - a.x;
+a.z *= 1.0 - (a.x + a.y);
+a *= Opacity;
+return Albedo * (1.0 - (a.x + a.y + a.z)) + C1 * a.x + C2 * a.y + C3 * a.z;
+"""
+STENCIL_PORTED = {
+    "CalcStencilWearAlpha": "c8522957b2f7e32643e453e0c9fd7b85f7682444879144d71dbbf8a1d8eb8f80",
+    "CalcStencilParams": "7b8d0df8643d8260eeb3f23d671f87b8f9c7178eb4ef7ca03409b60d87528a63",
+    "GetStencilLayer_Premultiplied": "0106f02b8747bbf42dd223554f44b66dc9d6c93139fdc41e91ab8980b4412148",
+    "ApplyStencilAsTint": "ba5b95a64be866590adbff096b8d0d47ef8213904fcc3dfaa3b7b35c3d428441",
+    "GetPaletteStencilColors": "54c2f9aaf555e19d45bbeea0435e3dda0888132110b1cafb704af3c9558abbbc",
+}
 WEAR_PRIMER = """float primerAmount = (1 - smoothstep(0.5, 0.9, PrimaryWear)) * Paint;
 float3 baseColor = sqrt(Albedo);
 float maxCol = max(baseColor.r, max(baseColor.g, baseColor.b));
@@ -468,10 +487,12 @@ def hardsurface_master():
       Then LayerAttribs_AddMacroSurface (MacroNormalMap / MacroSmoothnessMap at UV x MacroTiling),
         albedo, F0 x AO, AO = vertex B x MacroAOMap.r, and the deferred energy split (Graph.conserve).
       Opacity (alpha test) is the Primary diffuse alpha; the glow is masked by vertex G (GetMaterialAttribs).
+    Stencil (%STENCIL_MAP, stencilLib.cfib non-sticker): the Primary albedo after its primer is tinted by three
+      anti-aliased distance-field channels of StencilMap (STENCIL_TINT), before the wear blend.
     Dirt: the viewer's uniform amount and colour (MPC_SCDirt) on exterior components (Graph.dirt), not the game's
       direction-dependent instance dirt.
     Not drawn: per-instance wear/damage, detail maps, the paint/cloth complement hue (HueLUT),
-    retroreflective normals, %SECONDARY_LAYER, stencils, iridescence.
+    retroreflective normals, %SECONDARY_LAYER, the stencil breakup texture and %STENCIL_AS_STICKER, iridescence.
     """
     g = Graph("M_SC_HardSurface", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
     base_uv = g.uv(g.scalar("Tiling", 1.0))  # emittance map (g.glow) UVs
@@ -502,6 +523,18 @@ def hardsurface_master():
                     Smoothness=primary["smoothness"], PrimaryWear=g.one_minus(wear_alpha), Paint=paint)
     worn_colour = g.op(unreal.MaterialExpressionComponentMask, worn, names=("",), r=True, g=True, b=True, a=False)
     worn_smooth = g.op(unreal.MaterialExpressionComponentMask, worn, names=("",), r=False, g=False, b=False, a=True)
+    # %STENCIL_MAP (STENCIL_TINT): TexSlot7 at (UseUV2ForStencil ? UV1 : UV0) x StencilTiling; colours resolved by
+    # the builder (StencilTintOverride: authored, palette main tints or palette decal colours).
+    check_ported(STENCIL_PORTED)
+    stencil_uv = g.mul(g.lerp((g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), ""),
+                              (g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=1), ""),
+                              g.scalar("StencilUV2", 0.0, "Stencil")),
+                       g.scalar("StencilTiling", 1.0, "Stencil"))
+    stencil = (g.texture("StencilMap", g.white_linear, ST.SAMPLERTYPE_MASKS, stencil_uv, "Stencil"), "RGB")
+    worn_colour = g.custom(STENCIL_TINT, unreal.CustomMaterialOutputType.CMOT_FLOAT3, Albedo=worn_colour, Dist=stencil,
+                           Opacity=g.mul(g.scalar("StencilOpacity", 1.0, "Stencil"), g.scalar("UseStencil", 0.0, "Stencil")),
+                           C1=g.vector("StencilColor1", (1, 1, 1), "Stencil"), C2=g.vector("StencilColor2", (1, 1, 1), "Stencil"),
+                           C3=g.vector("StencilColor3", (1, 1, 1), "Stencil"))
     blend = lambda a, b: g.lerp(a, b, wear_weight)  # weights (1 - w, w) sum to 1
     albedo = blend(worn_colour, wear["colour"])
     f0 = blend(primary["f0"], wear["f0"])
