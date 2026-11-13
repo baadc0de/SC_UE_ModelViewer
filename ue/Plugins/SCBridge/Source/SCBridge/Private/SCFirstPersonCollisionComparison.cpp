@@ -36,7 +36,7 @@ bool SCCompareDoorCollision(ASCVehicle* Vehicle, USCRigComponent* Rig, FName Joi
         const auto& LOD = C->GetStaticMesh()->GetRenderData()->LODResources[0];
         const FName Bone = C->GetAttachSocketName();
         const FTransform ToBone = C->GetComponentTransform().GetRelativeTransform(Rig->GetSocketTransform(Bone));
-        for (uint32 I=0; I<LOD.GetNumVertices(); ++I)
+        for (uint32 I=0; I<(uint32)LOD.GetNumVertices(); ++I)
             BoneVertices.FindOrAdd(Bone).Add(ToBone.TransformPosition(FVector(LOD.VertexBuffers.PositionVertexBuffer.VertexPosition(I))));
         const auto Indices = LOD.IndexBuffer.GetArrayView();
         for (int32 I=0; I+2<Indices.Num() && !ExactSurfaceHit; I+=3)

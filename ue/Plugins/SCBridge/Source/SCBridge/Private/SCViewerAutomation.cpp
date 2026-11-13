@@ -29,6 +29,7 @@
 #include "SceneManagement.h"
 #include "SceneView.h"
 #include "SceneViewExtension.h"
+#include "UnrealClient.h"
 #include <atomic>
 
 // Reads the path tracer's accumulated sample count from the view state of path-traced views (game thread, per frame).
@@ -457,6 +458,12 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
         // snap: the same marker without touching input (moving shots with sc.FP.Key held).
         if (ASCFirstPersonCharacter* C = S.GetFirstPerson(); C && Words[0] == TEXT("shot")) C->HoldMoveInput(FVector::ZeroVector, 0, false);
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_SHOT tag=%s %s"), Words.IsValidIndex(1) ? *Words[1] : TEXT("shot"), *Where(S));
+        // -SCShotDir=<dir>: also capture the frame in-engine as <dir>/<tag>.png (the game viewport without UI), for
+        // hosts without capture_route.sh's external window grab (Win64).
+        FString ShotDir;
+        if (FParse::Value(FCommandLine::Get(), TEXT("SCShotDir="), ShotDir))
+            FScreenshotRequest::RequestScreenshot(FPaths::Combine(ShotDir, (Words.IsValidIndex(1) ? Words[1] : FString(TEXT("shot"))) + TEXT(".png")),
+                                                  /*bInShowUI=*/false, /*bAddFilenameSuffix=*/false);
         if (ASCFirstPersonCharacter* C = S.GetFirstPerson(); C && FParse::Param(FCommandLine::Get(), TEXT("SCLightProbe")))
         {
             // -SCLightProbe: which lights reach the player and the surface under the crosshair (verification only).

@@ -612,7 +612,7 @@ bool FSCMaterialsPackageRules::RunTest(const FString&)
             // Schema v2 emittance maps can emit without a Glow attribute (e.g. MACRO_EMISSIVE_MAP).
             // Check their authored strength directly; the legacy no-Glow invariant does not apply.
             TSharedPtr<FJsonObject> Json;
-            const TSharedPtr<FJsonObject>* Emissive;
+            const TSharedPtr<FJsonObject>* Emissive = nullptr;
             FString Emittance;
             double AuthoredStrength = 0;
             if (D.bV2 && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Sub.Json), Json)

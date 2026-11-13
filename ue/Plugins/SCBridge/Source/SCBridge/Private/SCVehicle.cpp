@@ -220,15 +220,15 @@ void ASCVehicle::Tick(float DeltaSeconds)
 void ASCVehicle::EvaluateClips()
 {
     if (DirtyMeshes.IsEmpty()) return;
-    TArray<FSCClipPlayback> Layers = HeldPlayback;
-    Layers.Append(Playback);
-    Layers.Sort([](const FSCClipPlayback& A, const FSCClipPlayback& B) { return A.Order < B.Order; });
+    TArray<FSCClipPlayback> ClipLayers = HeldPlayback;
+    ClipLayers.Append(Playback);
+    ClipLayers.Sort([](const FSCClipPlayback& A, const FSCClipPlayback& B) { return A.Order < B.Order; });
     // Only affected rigs are rebuilt. Held layers preserve the last authored pose and overlap order.
     for (USCRigComponent* Rig : Rigs)
     {
         if (!DirtyMeshes.Contains(Rig->GetSkeletalMeshAsset())) continue;
         TArray<FTransform> Pose = Rig->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose();
-        for (const auto& P : Layers)
+        for (const auto& P : ClipLayers)
             for (const auto& B : ClipCatalog->Clips[P.Clip].Bindings)
                 if ((!P.TargetRig.IsValid() || P.TargetRig.Get() == Rig) && B.Mesh == Rig->GetSkeletalMeshAsset())
                     for (const auto& T : B.Tracks)
