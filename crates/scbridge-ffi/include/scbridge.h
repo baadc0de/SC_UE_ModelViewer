@@ -242,6 +242,21 @@ enum sc_status sc_dds_prepare(uint8_t *data, size_t len, bool normal_map, struct
 enum sc_status sc_dds_mean_rgb(const uint8_t *data, size_t len, float *out_rgb);
 
 /*
+ Decode the top mip of raw texel data (no DDS header; dxgi names the format, as
+ the importer uploads it) to BGRA8 for an editable texture source (WP-C1 cook).
+ data is readable for len bytes; out is writable for out_len bytes, which must
+ be at least width * height * 4. BC4/R8 replicate red; BC5 rebuilds blue as the
+ normal's Z. Errors (unsupported format, short data) use sc_last_error(NULL).
+ */
+enum sc_status sc_texels_decode_bgra8(const uint8_t *data,
+                                      size_t len,
+                                      uint32_t dxgi,
+                                      uint32_t width,
+                                      uint32_t height,
+                                      uint8_t *out,
+                                      size_t out_len);
+
+/*
  Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses
  the first default loadout in name order with a stowed personal weapon.
  Strings are UTF-8. Release out_tar with sc_free_blob. Progress and cancellation

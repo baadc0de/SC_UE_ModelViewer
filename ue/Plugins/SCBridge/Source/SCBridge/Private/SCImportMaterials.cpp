@@ -77,7 +77,13 @@ void FSCImportMaterials::Instantiate(ASCVehicle* Vehicle, TArray<FString>& Warni
         if (!SampledKeys.Contains(D.Key)) continue; // mean-only: resolved in Decode
         TextureStats.Bytes += D.UploadBytes();
         const FSCTextureKey Key = D.Key;
-        if (UTexture2D* T = FSCTextureImporter::Create(MoveTemp(D), Vehicle)) { Textures.Add(Key, T); Vehicle->Textures.Add(T); ++TextureStats.Created; }
+        if (UTexture2D* T = FSCTextureImporter::Create(MoveTemp(D), Vehicle))
+        {
+            Textures.Add(Key, T);
+            Vehicle->Textures.Add(T);
+            Vehicle->SourcePaths.Add(T, FString::Printf(TEXT("%s#%d"), *Key.Path, int32(Key.Role)));
+            ++TextureStats.Created;
+        }
     }
     Decoded.Empty();
     TextureStats.CreateSeconds = FPlatformTime::Seconds() - Start;

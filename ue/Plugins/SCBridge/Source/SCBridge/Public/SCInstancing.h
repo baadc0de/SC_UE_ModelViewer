@@ -15,5 +15,5 @@ namespace FSCInstancing
 {
 // Groups identical rigid static parts of the actor (not under a rig, no attached children) and replaces every group of
 // two or more with one UInstancedStaticMeshComponent on the actor root carrying the same settings.
-FSCInstancingStats Consolidate(ASCVehicle* Vehicle);
+SCBRIDGE_API FSCInstancingStats Consolidate(ASCVehicle* Vehicle);
 }

@@ -170,7 +170,14 @@ public:
     /** Pose the environment's mechanisms: "bind" (as exported), "open" or "closed" fragment end poses. */
     void SetEnvironmentState(const FString& State);
     const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
-    bool IsEnvironmentLoading() const { return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0; }
+    bool IsEnvironmentLoading() const
+    {
+        return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
+               (EnvLevel && !Environment.IsValid());
+    }
+    /** The cooked level for an object container path (…/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name>),
+     *  empty when none was cooked. */
+    static FString CookedEnvironmentLevel(const FString& Folder);
     float GetEnvironmentProgress() const;      // 0..1 over export, parse, import and placement
     FString GetEnvironmentPhaseText() const;
     // The side panels (model browser, hierarchy); hidden for scripted runs and by the top-bar toggle.
@@ -295,6 +302,9 @@ private:
     UE::Tasks::TTask<FSCTextResult> EnvListTask;
     uint32 EnvListedGeneration = 0;
     TSharedPtr<FSCImportJob> EnvJob;
+    // WP-C1: a cooked environment level (Content/SC/Hangars/Maps) streamed in instead of the export/import pipeline.
+    UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> EnvLevel;
+    void UnloadEnvironmentLevel();
     double EnvStart = 0;
     TWeakObjectPtr<ASCVehicle> Environment;
     void StepPlayerKit(bool bBlocking);

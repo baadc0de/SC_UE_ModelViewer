@@ -300,6 +300,7 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
                     Texture->UpdateResource(); // sampler state must include clamp for PNG and EXR
                     Vehicle->Textures.Add(Texture);
                     Vehicle->GoboTextures.Add(TexturePath, Texture);
+                    Vehicle->SourcePaths.Add(Texture, TEXT("gobo:") + TexturePath);
                 }
             }
             if (Master && Texture)

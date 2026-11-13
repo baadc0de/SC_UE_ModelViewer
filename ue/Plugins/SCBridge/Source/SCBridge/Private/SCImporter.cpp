@@ -1,5 +1,6 @@
 // Package import entry points: synchronous Import over FSCImportJob, per-world vehicle registry, verification.
 #include "SCImporter.h"
+#include "SCEnvironment.h"
 #include "SCImportJob.h"
 #include "SCVehicle.h"
 #include "SCLightImporter.h"
@@ -62,6 +63,24 @@ ASCVehicle* USCImportLibrary::ImportFolder(UObject* WorldContext, const FString&
         if (Bounds.IsValid) Vehicle->AddActorWorldOffset(FVector(0, 0, 100.0 - Bounds.Min.Z));
     }
     return Result.Vehicle.Get();
+}
+ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath)
+{
+    FSCFolderPackageSource Source(Folder);
+    FSCImportOptions Options;
+    Options.World = GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull);
+    Options.ScenePath = ScenePath;
+    Options.bHideEffectOnlyPlacements = true;
+    Options.bInstanceRepeatedParts = true;
+    Options.bPublish = false; // not the world's current vehicle
+    FSCImportResult Result;
+    if (!FSCImporter::Import(Source, Options, Result)) UE_LOG(LogSCImport, Error, TEXT("IMPORT_FAILED %s"), *Result.Error);
+    return Result.Vehicle.Get();
+}
+double USCImportLibrary::PresentEnvironment(ASCVehicle* Environment, const FString& State, double FloorZ)
+{
+    FSCEnvironment::SetState(Environment, State);
+    return FSCEnvironment::PlaceOnFloor(Environment, FloorZ, nullptr);
 }
 bool USCImportLibrary::VerifyPackage(UObject* Context, const FString& Folder, const FString& Tar)
 {

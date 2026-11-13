@@ -62,6 +62,13 @@ public:
     static bool VerifyRig(ASCVehicle* Vehicle, const FString& PoseReference = TEXT(""), FName PoseClip = NAME_None);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static ASCVehicle* ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision = true);
+    /** An object container package from a (shared) export root as an environment: effect-only placements hidden,
+     *  repeated parts instanced. ScenePath selects the package's scene.json in a root holding several. */
+    UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
+    static ASCVehicle* ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath);
+    /** The door fragments' presented pose ("open", "closed" or "bind"), then the ship floor moved to FloorZ. */
+    UFUNCTION(BlueprintCallable, Category="SC")
+    static double PresentEnvironment(ASCVehicle* Environment, const FString& State = TEXT("open"), double FloorZ = -5.0);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static bool VerifyPackage(UObject* WorldContext, const FString& Folder, const FString& Tar);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))

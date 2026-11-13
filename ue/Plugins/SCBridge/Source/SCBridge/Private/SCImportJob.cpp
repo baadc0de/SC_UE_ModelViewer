@@ -619,6 +619,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
     else
     {
         Vehicle->Meshes.Add(Mesh);
+        Vehicle->SourcePaths.Add(Mesh, Path + Suffix);
         if (Part.bGamePhysics) Slot.GamePhysicsVariants.Add(Slot.Variants.Num());
         else Vehicle->MeshSamples.Add(Mesh, FSCLightAreas::Sample(Variant.Description));
         Slot.Variants.Add(Mesh);

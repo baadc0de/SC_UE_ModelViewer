@@ -39,3 +39,6 @@ ue/**/.vs/
 .env
 .DS_Store
 __pycache__/
+
+# Cooked environments and kept assets are game-derived (WP-C1, Keep as assets)
+ue/SCViewer/Content/SC/

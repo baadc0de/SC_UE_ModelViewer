@@ -19,6 +19,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInstance.h"
 #include "Engine/Texture.h"
 #include "Engine/Texture2D.h"
 #include "UObject/StrongObjectPtr.h"
@@ -238,6 +239,37 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookFocus(
             S.DepthOfFieldSensorWidth = Sensor;
         }
         UE_LOG(LogTemp, Display, TEXT("LOOK focus fstop=%.2f sensor=%.0f distance=%.0f hit=%s"), FStop, Sensor, Distance, *GetNameSafe(Hit.GetActor()));
+    }));
+
+// sc.Look.Probe: the part at the screen centre, its material per slot and every parameter value (diagnostics).
+static FAutoConsoleCommandWithWorldAndArgs GSCLookProbe(
+    TEXT("sc.Look.Probe"), TEXT("sc.Look.Probe: log the part at the screen centre and its material parameters"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+        if (!PC || !PC->PlayerCameraManager) return;
+        const FVector Dir = PC->PlayerCameraManager->GetCameraRotation().Vector();
+        const FVector From = PC->PlayerCameraManager->GetCameraLocation();
+        FHitResult Hit;
+        if (!World->LineTraceSingleByChannel(Hit, From, From + Dir * 100000.0, ECC_Visibility, FCollisionQueryParams(SCENE_QUERY_STAT(SCLookProbe), true)))
+            return;
+        UPrimitiveComponent* C = Hit.GetComponent();
+        const auto* SM = Cast<UStaticMeshComponent>(C);
+        UE_LOG(LogTemp, Display, TEXT("PROBE at=%s comp=%s mesh=%s"), *Hit.ImpactPoint.ToCompactString(), *GetNameSafe(C),
+               SM ? *GetNameSafe(SM->GetStaticMesh()) : TEXT("-"));
+        for (int32 Slot = 0; C && Slot < C->GetNumMaterials(); ++Slot)
+        {
+            UMaterialInterface* M = C->GetMaterial(Slot);
+            const auto* MI = Cast<UMaterialInstance>(M);
+            UE_LOG(LogTemp, Display, TEXT("PROBE slot=%d material=%s parent=%s"), Slot, *GetNameSafe(M), MI ? *GetNameSafe(MI->Parent) : TEXT("-"));
+            if (!MI) continue;
+            for (const FScalarParameterValue& P : MI->ScalarParameterValues)
+                UE_LOG(LogTemp, Display, TEXT("PROBE   s %s=%.4f"), *P.ParameterInfo.Name.ToString(), P.ParameterValue);
+            for (const FVectorParameterValue& P : MI->VectorParameterValues)
+                UE_LOG(LogTemp, Display, TEXT("PROBE   v %s=%s"), *P.ParameterInfo.Name.ToString(), *P.ParameterValue.ToString());
+            for (const FTextureParameterValue& P : MI->TextureParameterValues)
+                UE_LOG(LogTemp, Display, TEXT("PROBE   t %s=%s srgb=%d"), *P.ParameterInfo.Name.ToString(), *GetNameSafe(P.ParameterValue),
+                       P.ParameterValue ? int32(P.ParameterValue->SRGB) : -1);
+        }
     }));
 
 // sc.Look.Sky <intensity>: every sky light's intensity, then a fresh capture.

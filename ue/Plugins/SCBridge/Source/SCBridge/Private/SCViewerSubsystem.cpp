@@ -1,6 +1,12 @@
 // USCViewerSubsystem: archive open, async search, the load pipeline with phase progress and cancel, unload with
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
+#include "SCEnvironment.h"
+#include "Misc/PackageName.h"
+#include "SCDirt.h"
+#include "SCEmissiveLights.h"
+#include "Engine/Level.h"
+#include "Engine/LevelStreamingDynamic.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
@@ -260,7 +266,8 @@ void USCViewerSubsystem::CompleteSearches(bool bBlocking)
 bool USCViewerSubsystem::IsBusy() const
 {
     return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing ||
-           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0;
+           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
+           (EnvLevel && !Environment.IsValid());
 }
 
 void USCViewerSubsystem::SetEnvironment(const FString& Folder)
@@ -272,14 +279,30 @@ void USCViewerSubsystem::SetEnvironment(const FString& Folder)
     EnvParse = {};
     EnvJob.Reset();
     EnvSource.Reset();
-    if (Environment.IsValid()) Environment->Destroy();
+    if (Environment.IsValid() && !EnvLevel) Environment->Destroy(); // a cooked environment leaves with its level
     Environment.Reset();
+    UnloadEnvironmentLevel();
     EnvironmentFolder = Folder.TrimQuotes();
     bEnvironmentPending = !EnvironmentFolder.IsEmpty() && EnvironmentFolder != TEXT("none");
     if (!bEnvironmentPending) ShowMapHangar(true);
     UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT request folder=\"%s\""), *EnvironmentFolder);
 }
 
+void USCViewerSubsystem::UnloadEnvironmentLevel()
+{
+    if (!EnvLevel) return;
+    EnvLevel->SetShouldBeLoaded(false);
+    EnvLevel->SetShouldBeVisible(false);
+    EnvLevel->SetIsRequestingUnloadAndRemoval(true);
+    EnvLevel = nullptr;
+}
+FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
+{
+    const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
+    if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
+    const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
+    return FPackageName::DoesPackageExist(Level) ? Level : FString();
+}
 void USCViewerSubsystem::ShowMapHangar(bool bShow)
 {
     UWorld* World = GetViewerWorld();
@@ -339,9 +362,40 @@ void USCViewerSubsystem::StepEnvironment()
             for (const auto& V : Values) EnvironmentChoices.Add(V->AsString());
         UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_CHOICES hangars=%d"), EnvironmentChoices.Num());
     }
+    if (EnvLevel && !Environment.IsValid())
+    {
+        ULevel* Level = EnvLevel->GetLoadedLevel();
+        if (!Level || !EnvLevel->IsLevelVisible()) return;
+        for (AActor* Actor : Level->Actors)
+            if (auto* Cooked = Cast<ASCVehicle>(Actor)) { Environment = Cooked; break; }
+        if (!Environment.IsValid())
+        {
+            UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: cooked level %s holds no environment actor"), *EnvLevel->GetWorldAssetPackageName());
+            UnloadEnvironmentLevel();
+            return;
+        }
+        // Runtime-only state the cook does not keep: emissive Lumen proxies, dirt parameters, the light shadow policy.
+        ShowMapHangar(false);
+        Environment->RefreshLightShadowPolicy();
+        FSCDirt::Push(GetViewerWorld());
+        if (!Environment->Lights.IsEmpty()) FSCEmissive::SetLumen(Environment.Get(), USCViewerSettings::Get()->bEmissiveInLumen);
+        if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(Environment.Get());
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_COOKED level=%s seconds=%.1f"), *EnvLevel->GetWorldAssetPackageName(), FPlatformTime::Seconds() - EnvStart);
+        return;
+    }
     const bool bShipIdle = Phase != ESCLoadPhase::Exporting && Phase != ESCLoadPhase::Parsing && Phase != ESCLoadPhase::Importing;
     if (bEnvironmentPending && !EnvJob && !EnvExport.IsValid() && !EnvParse.IsValid() && bShipIdle && GetViewerWorld())
     {
+        if (const FString Cooked = CookedEnvironmentLevel(EnvironmentFolder); !Cooked.IsEmpty() && !FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")))
+        {
+            bEnvironmentPending = false;
+            bool bOK = false;
+            EnvStart = FPlatformTime::Seconds();
+            EnvLevel = ULevelStreamingDynamic::LoadLevelInstance(GetViewerWorld(), Cooked, FVector::ZeroVector, FRotator::ZeroRotator, bOK);
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_COOKED_LOAD level=%s ok=%d"), *Cooked, bOK);
+            if (!bOK) EnvLevel = nullptr;
+            return;
+        }
         if (EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase))
         {
             if (ArchiveState != ESCArchiveState::Ready || !Client) return; // wait for the archive
@@ -403,113 +457,19 @@ void USCViewerSubsystem::StepEnvironment()
     EnvSource.Reset();
 }
 
-// The bounds of the part a trace hit: the hit instance of an instanced component (its whole box spans every instance).
-static FBox HitPartBox(const FHitResult& Hit)
-{
-    const UPrimitiveComponent* C = Hit.GetComponent();
-    if (!C) return FBox(ForceInit);
-    FTransform Instance;
-    if (const auto* ISM = Cast<UInstancedStaticMeshComponent>(C);
-        ISM && ISM->GetStaticMesh() && Hit.Item != INDEX_NONE && ISM->GetInstanceTransform(Hit.Item, Instance, true))
-        return ISM->GetStaticMesh()->GetBoundingBox().TransformBy(Instance);
-    return C->Bounds.GetBox();
-}
 void USCViewerSubsystem::PlaceEnvironment()
 {
     ASCVehicle* EnvironmentActor = Environment.Get();
     if (!EnvironmentActor) return;
-    const FBox Bounds = EnvironmentActor->GetComponentsBoundingBox(true);
-    // Survey (diagnostic): the first upward-facing surface >= 2 m across below each of a few points beside the shaft.
-    for (const FVector2D XY : {FVector2D(0, 5000), FVector2D(0, -5000), FVector2D(7000, 0), FVector2D(-7000, 0), FVector2D(0, 7000), FVector2D(9000, 6000)})
-    {
-        FCollisionQueryParams Q(SCENE_QUERY_STAT(SCEnvSurvey), true);
-        if (Vehicle.IsValid()) Q.AddIgnoredActor(Vehicle.Get());
-        double From = 100.0;
-        for (int32 Step = 0; Step < 32 && From > Bounds.Min.Z; ++Step)
-        {
-            FHitResult Hit;
-            if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, FVector(XY.X, XY.Y, From), FVector(XY.X, XY.Y, Bounds.Min.Z - 100), ECC_Visibility, Q)) break;
-            const FVector Size = HitPartBox(Hit).GetSize();
-            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= 200)
-            {
-                UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_SURVEY xy=%s z=%.0f span=%.0fx%.0f comp=%s"), *XY.ToString(), Hit.ImpactPoint.Z, Size.X, Size.Y,
-                       Hit.GetComponent()->ComponentTags.Num() ? *FPaths::GetBaseFilename(Hit.GetComponent()->ComponentTags[0].ToString()) : TEXT("-"));
-                break;
-            }
-            if (Hit.GetComponent()) Q.AddIgnoredComponent(Hit.GetComponent());
-            From = Hit.ImpactPoint.Z;
-        }
-    }
-    for (USCRigComponent* Rig : EnvironmentActor->Rigs)
-        if (Rig && Rig->GetSkeletalMeshAsset() && Rig->LocalPose.Num() <= 8)
-        {
-            const FReferenceSkeleton& Ref = Rig->GetSkeletalMeshAsset()->GetRefSkeleton();
-            for (int32 B = 0; B < Ref.GetNum() && B < Rig->LocalPose.Num(); ++B)
-                UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_RIG rig=%s owner=%s bone=%s parent=%d ref_t=%s ref_r=%s pose_t=%s pose_r=%s"), *Rig->GetName(), *Rig->OwnerEntity,
-                       *Ref.GetBoneName(B).ToString(), Ref.GetParentIndex(B), *Ref.GetRefBonePose()[B].GetTranslation().ToCompactString(),
-                       *Ref.GetRefBonePose()[B].Rotator().ToCompactString(), *Rig->LocalPose[B].GetTranslation().ToCompactString(), *Rig->LocalPose[B].Rotator().ToCompactString());
-        }
     if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(EnvironmentActor);
     SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
-    {
-        // Placement: the environment's ship floor is the first large (>= 20 m across), upward-facing surface
-        // below a point 2 m under its origin (a top-loading hangar's origin is on its roof hatch; the room and the ship
-        // elevator hang below it); it is moved to the map floor (ViewerFloorZ), where the ship rests.
-        constexpr double MinFloorSpan = 2000.0;
-        FCollisionQueryParams Q(SCENE_QUERY_STAT(SCEnvFloor), true);
-        if (Vehicle.IsValid()) Q.AddIgnoredActor(Vehicle.Get());
-        double FloorZ = TNumericLimits<double>::Max(), From = EnvironmentActor->GetActorLocation().Z - 200.0; // 2 m under the origin (roof hatch)
-        FVector2D FloorCentre = FVector2D::ZeroVector; // the ship stands in the middle of the floor part it lands on
-        for (int32 Step = 0; Step < 64 && From > Bounds.Min.Z; ++Step)
-        {
-            FHitResult Hit;
-            if (!GetViewerWorld()->LineTraceSingleByChannel(Hit, FVector(0, 0, From), FVector(0, 0, Bounds.Min.Z - 100), ECC_Visibility, Q)) break;
-            const FBox Part = HitPartBox(Hit);
-            const FVector Size = Part.GetSize();
-            const UPrimitiveComponent* HitComp = Hit.GetComponent();
-            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_FLOOR_PROBE z=%.1f normal_z=%.2f span=%.0fx%.0f comp=%s comp=%s bounds=%s body_z=%.0f parent=%s socket=%s"),
-                   Hit.ImpactPoint.Z, Hit.ImpactNormal.Z, Size.X, Size.Y,
-                   HitComp && HitComp->ComponentTags.Num() ? *HitComp->ComponentTags[0].ToString() : TEXT("-"),
-                   HitComp ? *HitComp->GetComponentLocation().ToCompactString() : TEXT("-"), *Part.ToString(),
-                   HitComp && HitComp->GetBodyInstance() && HitComp->GetBodyInstance()->IsValidBodyInstance() ? HitComp->GetBodyInstance()->GetUnrealWorldTransform().GetLocation().Z : -1.,
-                   HitComp ? *GetNameSafe(HitComp->GetAttachParent()) : TEXT("-"), HitComp ? *HitComp->GetAttachSocketName().ToString() : TEXT("-"));
-            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= MinFloorSpan)
-            {
-                FloorZ = Hit.ImpactPoint.Z;
-                FloorCentre = FVector2D(Part.GetCenter());
-                break;
-            }
-            if (Hit.GetComponent()) Q.AddIgnoredComponent(Hit.GetComponent());
-            From = Hit.ImpactPoint.Z;
-        }
-        if (FloorZ < TNumericLimits<double>::Max()) EnvironmentActor->AddActorWorldOffset(FVector(0, 0, ViewerFloorZ - FloorZ));
-        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_PLACE floor_centre=%s floor_z=%.1f offset_z=%.1f"), *FloorCentre.ToString(), FloorZ < TNumericLimits<double>::Max() ? FloorZ : 0.,
-               FloorZ < TNumericLimits<double>::Max() ? ViewerFloorZ - FloorZ : 0.);
-    }
+    FSCEnvironment::PlaceOnFloor(EnvironmentActor, ViewerFloorZ, Vehicle.Get());
 }
 
 void USCViewerSubsystem::SetEnvironmentState(const FString& State)
 {
     EnvironmentState = State.ToLower();
-    ASCVehicle* EnvironmentActor = Environment.Get();
-    if (!EnvironmentActor || !EnvironmentActor->ClipCatalog) return;
-    for (USCRigComponent* Rig : EnvironmentActor->Rigs)
-        if (Rig) Rig->ResetPose();
-    if (EnvironmentState != TEXT("open") && EnvironmentState != TEXT("closed")) { UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_STATE bind")); return; }
-    // Fragment end poses (the game's door fragments Open / Close / Opened / Closed): static Opened/Closed poses first.
-    const bool bOpen = EnvironmentState == TEXT("open");
-    TMap<FString, TPair<int32, FName>> Best;
-    for (const FSCImportedClip& Clip : EnvironmentActor->ClipCatalog->Clips)
-    {
-        FString Owner, Fragment;
-        if (!Clip.Id.ToString().Split(TEXT("__"), &Owner, &Fragment)) continue;
-        Fragment = Fragment.ToLower().Replace(TEXT("door_"), TEXT(""));
-        const int32 Rank = Fragment == (bOpen ? TEXT("opened") : TEXT("closed")) ? 2 : Fragment == (bOpen ? TEXT("open") : TEXT("close")) ? 1 : 0;
-        if (Rank && Rank > Best.FindRef(Owner).Key) Best.Add(Owner, {Rank, Clip.Id});
-    }
-    int32 Snapped = 0;
-    for (const auto& [Owner, Pick] : Best) Snapped += EnvironmentActor->SnapClip(Pick.Value, true);
-    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_STATE %s parts=%d"), *EnvironmentState, Snapped);
+    FSCEnvironment::SetState(Environment.Get(), EnvironmentState);
 }
 bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOptions)
 {
@@ -611,6 +571,7 @@ float USCViewerSubsystem::GetLoadProgress() const
 }
 float USCViewerSubsystem::GetEnvironmentProgress() const
 {
+    if (EnvLevel && !Environment.IsValid()) return 0.5f;
     if (EnvExport.IsValid()) return ExportShare * (EnvProgress ? EnvProgress->GetFraction() : 0.f);
     if (EnvParse.IsValid()) return ExportShare;
     if (EnvJob) return ExportShare + ParseShare + (1.f - ExportShare - ParseShare) * EnvJob->GetFraction();
@@ -619,6 +580,7 @@ float USCViewerSubsystem::GetEnvironmentProgress() const
 FString USCViewerSubsystem::GetEnvironmentPhaseText() const
 {
     if (bEnvironmentPending) return TEXT("waiting for the model");
+    if (EnvLevel && !Environment.IsValid()) return TEXT("Loading cooked level");
     if (EnvExport.IsValid())
     {
         const FString Step = EnvProgress ? EnvProgress->GetPhase() : FString();

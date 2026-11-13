@@ -232,3 +232,23 @@ fn prepared_bc4_mean_has_zero_green_and_blue() {
         assert_eq!(mean_rgb(&data).unwrap(), [expected, 0.0, 0.0]);
     }
 }
+#[test]
+fn decode_top_bgra8_bc1_solid_and_bc5_flat_normal() {
+    // BC1: both endpoints red 5:6:5 (0xF800), all indices 0 -> every texel (255, 0, 0, 255), written as BGRA.
+    let mut bc1 = vec![0u8; 8];
+    bc1[0..2].copy_from_slice(&0xF800u16.to_le_bytes());
+    bc1[2..4].copy_from_slice(&0xF800u16.to_le_bytes());
+    let out = decode_top_bgra8(&bc1, 71, 4, 4).unwrap();
+    assert_eq!(out.len(), 4 * 4 * 4);
+    assert!(out.chunks_exact(4).all(|p| p == [0, 0, 255, 255]), "{:?}", &out[..4]);
+    // BC5 normal: X = Y = 128 (flat); blue is rebuilt from the unit vector, so Z ~ 1 -> 255.
+    let mut bc5 = vec![0u8; 16];
+    bc5[0] = 128;
+    bc5[1] = 128;
+    bc5[8] = 128;
+    bc5[9] = 128;
+    let out = decode_top_bgra8(&bc5, 83, 4, 4).unwrap();
+    assert!(out.chunks_exact(4).all(|p| p[2].abs_diff(128) <= 1 && p[1].abs_diff(128) <= 1 && p[0] >= 254 && p[3] == 255), "{:?}", &out[..4]);
+    // Unsupported formats are an error, not garbage.
+    assert!(decode_top_bgra8(&bc1, 9999, 4, 4).is_err());
+}

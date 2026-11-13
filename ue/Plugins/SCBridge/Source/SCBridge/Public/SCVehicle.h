@@ -128,6 +128,9 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UStaticMesh>> Meshes;
     /** Transient textures (deduplicated by source path + role) and material instances owned by this import. */
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UTexture2D>> Textures;
+    /** Source identity of imported meshes and textures (package path + variant/role): the editor cook shares assets
+     *  across environments by it. */
+    UPROPERTY() TMap<TObjectPtr<UObject>, FString> SourcePaths;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials;
     /** Instances driven by scene controls.engine_glow (main thrusters). */
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> EngineGlowMaterials;
