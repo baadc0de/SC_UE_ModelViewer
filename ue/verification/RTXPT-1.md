@@ -85,11 +85,53 @@ configured. With `r.Nanite.RayTracing.Update=1` at startup: **3 of 3 runs comple
 RMSE against the 256 spp reference (clean Mega Geometry shot 6.7 %, proxy shot 16.1 %; run 3 is clean, its spawn framed
 the hull a little closer). Three clean runs are evidence, not proof, that the crashes belong to the half-enabled state.
 
+## Scale test: RSI Galaxy in the hightech XL hangar (LOOK-8 `galaxy-htxl`, 2026-11-13)
+
+Same Win64 look (Mega Geometry with `Update` on). Routes `galaxy-rtxpt.txt` (modes, proxies, orbit host camera) and
+`galaxy-rtxpt-reference.txt` (fixed views, two references). Both runs completed; no GPU loss.
+
+| | Golem + hightech small | Galaxy + hightech XL |
+|---|---|---|
+| Lights (ship + environment) | 39 + 495 | 1,298 + 1,691 |
+| Render instances (ship + environment) | 526 + 1,585 | 5,331 + 5,012 |
+| Ship package / first import | 0.9 GB / 43 s | 2.6 GB / 362 s (mesh build 295 s; cached reload 57 s) |
+| Mega Geometry persistent memory, peak | 2.4 GB | 2.9 GB |
+
+GPU ms p50 (1920×1080, DLSS-RR DLAA):
+
+| View | ReSTIR PT + RR (MG) | proxies | ReSTIR GI | Standard PT | ReSTIR PT @ 67 % |
+|---|---|---|---|---|---|
+| orbit (host camera) | 27.3 | 26.6 | 24.9 | 19.3 | 20.1 |
+| exterior (noclip 55 m / 45 m / 15 m) | 30.2 | | | | |
+| hull top | 36.1–36.4 | 28.4 | | | |
+| under the hull (landing-gear floor) | 37.9 | | | | |
+| landing-gear container | 36.2 | 30.7 | 26.1 | | |
+| main body interior | 40.2 | | | | |
+| nose interior | 43.2 | | | | |
+
+Exteriors cost little more than the Golem's despite ~5× the lights and instances; interiors and close hull views
+cost 36–43 ms, and Mega Geometry adds 6–8 ms over the proxies at those views.
+
+**The engine path-tracer reference drops lights here.** It culls through a 2D light grid of at most
+`r.PathTracing.LightGridMaxCount` lights per cell (default 128, hard cap 256 = `RAY_TRACING_LIGHT_COUNT_MAXIMUM`). At
+the default the hull top rendered almost black; at 256 it matches ReSTIR PT on the hull top and in the nose interior.
+`galaxy-rtxpt-reference.txt` therefore sets 256 and adds NvRTX's `viewmode RTXDIPathTracing` (RTXDI light sampling,
+no grid cap; noisier at 60 s and cooler — it clamps paths at `MaxIntensity` 24).
+
+Remaining differences against the grid-256 reference:
+
+- Under the hull the real-time underside is darker; the reference shows a faint warm bounce from the floor.
+- Exterior: the real-time hangar walls are brighter, and both path tracers show saturated blue patches on the walls
+  that no real-time mode shows (also seen on the Golem). Likely explanation, not verified: the importer confines room
+  lights with lighting channels (WP-L1); raster / RTXDI honour them, the path tracers ignore them, so the room and
+  elevator lights leak onto the hangar walls in the references. A 256-light cell may also still overflow there.
+
 ## Open
 
-- Mega Geometry stability over longer sessions and other ships / hangars (only 3 runs × ~2 min with `Update` on).
-- The engine path tracer shows saturated blue emissive patches on the hangar's back wall and doors that no real-time
-  mode shows (emissive / light-function handling differs between the two); not investigated.
+- Mega Geometry stability over longer sessions (now 5 runs × 2–10 min with `Update` on, Golem and Galaxy, no loss).
+- Verify the lighting-channel explanation for the blue wall patches (e.g. a reference with the room-channel lights
+  disabled).
+- The darker real-time underside of the Galaxy (bounce from the floor under a large hull).
 - `Seat` spawns refuse the teleport on the Golem (the route uses `Door`, `Hull` and a noclip placement).
 - A MegaLights comparison on the same Windows build was not run (needs the adaptive G-buffer and a second shader set).
 - Engine shader patches (D14, SSDO) are not applied on Win64; they target MegaLights / Lumen paths this look replaces.
