@@ -154,6 +154,9 @@ public:
     UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> InstanceAnchors;
     /** Helper frames of those instances, by id: port alignment re-parents items at run time (stow <-> hand). */
     UPROPERTY() TMap<FString, FSCInstanceHelpers> InstanceHelpers;
+    /** Helper frames of nested-assembly entries (a personal weapon's attachments: optics, magazines), which carry no
+     *  id, by their anchor (anchor space, as InstanceHelpers): an optic's sight helper replaces the weapon's own. */
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, FSCInstanceHelpers> AttachmentHelpers;
     /** Anchor-relative transform that puts Helper (instance Id) on a joint frame plus Offset (native SC, row form). */
     bool PortRelative(const FString& Id, const FString& Helper, const FMatrix& Offset, FTransform& Out) const;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FString SessionPath;

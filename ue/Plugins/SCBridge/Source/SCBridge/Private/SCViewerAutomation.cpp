@@ -231,6 +231,13 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Torch"), TEXT("sc.FP.Torch 0|1"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak)) C->SetTorch(Flag(Args, 0, true));
     });
+    Add(TEXT("sc.FP.Aim"), TEXT("sc.FP.Aim 0|1: hold / release aim down sights (the right mouse button)"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak))
+        {
+            const bool OK = C->HandleAction(ESCFirstPersonAction::Aim, Flag(Args, 0, true));
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD aim on=%d ok=%d %s"), Flag(Args, 0, true), OK, *C->Body->Describe());
+        }
+    });
     Add(TEXT("sc.FP.Noclip"), TEXT("sc.FP.Noclip 0|1 (an exit inside geometry is refused)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak))
         {

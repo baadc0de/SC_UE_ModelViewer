@@ -85,6 +85,7 @@ void ASCFirstPersonCharacter::ClearInput()
     SetRunning(false);
     StopJumping();
     UnCrouch();
+    Body->SetAiming(false);
 }
 void ASCFirstPersonCharacter::CapsuleHit(UPrimitiveComponent*, AActor*, UPrimitiveComponent*, FVector, const FHitResult&) { ++CapsuleHits; }
 void ASCFirstPersonCharacter::Look(FVector2D Pixels)
@@ -413,7 +414,7 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
         {EKeys::E, A::Interact}, {EKeys::F, A::Torch}, {EKeys::V, A::Noclip}, {EKeys::T, A::Teleport}, {EKeys::Escape, A::Close},
         {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
         {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
-        {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}};
+        {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim}};
     return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
@@ -439,6 +440,11 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
         if (Action == A::Up && !bNoclip) { if (bDown) Jump(); else StopJumping(); }
         if (Action == A::Crouch) SetCrouching(bDown);
         return true;
+    }
+    if (Action == A::Aim) // held: aiming lasts while the button is down
+    {
+        Body->SetAiming(bDown);
+        return Body->HasBody();
     }
     if (!bDown) return false;
     switch (Action)

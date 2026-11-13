@@ -1,7 +1,9 @@
 // WP-P2b: the real player body on ASCFirstPersonCharacter. Takes an imported player-kit actor (rigs for every
 // skinned part, items on their port joints), drives the leader rig with FSCPlayerAnimator, copies the pose to the
 // follower parts by joint name, moves weapons between stow and hand ports, places the camera at the player's
-// camera joint (first person) or behind the body (third person) and hides head parts in first person.
+// camera joint (first person) or behind the body (third person) and hides head parts in first person. Aiming (hold):
+// the arms bring the drawn weapon's sight line onto the view axis, with depth of field on what the sight points at;
+// third person keeps the player character in focus.
 #pragma once
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
@@ -75,6 +77,45 @@ public:
     /** World location of the player's camera joint (eye) this frame; the interaction origin in either view. */
     FVector HeadLocation() const;
 
+    // Aim down sights (first person, weapon armed).
+    /** Hold to aim. First person with an armed weapon: its sight line comes onto the view axis over AimSeconds;
+     *  released (or holstering, third person) it returns to the clip's own pose. */
+    void SetAiming(bool bOn);
+    bool IsAimRequested() const { return bAimRequested; }
+    /** Aim weight applied this frame: 0 = the clip's pose, 1 = sight on the view axis (eased). */
+    float GetAimAlpha() const { return AimAlpha; }
+    /** World frame of the drawn weapon's sight line (X along the line toward the target, Z up); false when no
+     *  weapon is in hand or it has no sight helper. Source: "<owner entity>/<helper>". */
+    bool GetSightFrame(FTransform& Out, FString* Source = nullptr) const;
+    /** Depth-of-field focal distance (cm) and f-stop applied to the camera this frame (0: no player DoF). */
+    float GetFocusDistance() const { return FocusDistance; }
+    float GetFocusFStop() const { return FocusFStop; }
+    /** Hip -> sights time (s). Viewer constant: the weapon's DataCore aimAction.zoomTime is not in the player package. */
+    static constexpr float AimSeconds = 0.25f;
+    /** Local re-orientation of an imported sight helper frame: the game's helper axes (+Y along the sight line, +Z up,
+     *  as weapons and optics author them) carried through the importer's basis, as X along the line and Z up. */
+    static FTransform SightAxes();
+    /** Pure (unit-tested): where the sight frame goes at aim weight Alpha. Alpha 1: origin on the view axis Relief cm
+     *  ahead of the eye, axes = the view (X forward, Z up); Alpha 0: Sight; between: position lerp, rotation slerp. */
+    static FTransform AimTarget(const FTransform& Sight, const FVector& Eye, const FQuat& View, float Relief, float Alpha);
+    /** Pure (unit-tested): new local transform of an arm root (local Local under a parent at ParentSpace in component
+     *  space, component at ComponentToWorld) so that everything below it moves from Sight to Goal (world frames). */
+    static FTransform ArmRootLocal(const FTransform& Local, const FTransform& ParentSpace, const FTransform& ComponentToWorld,
+                                  const FTransform& Sight, const FTransform& Goal);
+    /** Pure (unit-tested): f-stop that fades depth of field in with Weight (blur ~ 1/f-stop); 0 when off. */
+    static float FadedFStop(float FStop, float Weight);
+    /** Pure (unit-tested): the f-stop at which a point at infinity blurs by FarBlur of the image width when focused at
+     *  Focus cm (lens covering FovDegrees on a SensorWidth mm sensor, thin lens); 0 when it cannot (focus inside the lens). */
+    static float FarBlurFStop(float Focus, float FarBlur, float SensorWidth, float FovDegrees);
+    /** Pure (unit-tested): the f-stop (at least FStop) at which a subject reaching Depth cm in front of the focal plane
+     *  at Focus cm blurs by at most MaxBlur of the image width, for a lens covering FovDegrees on a SensorWidth mm
+     *  sensor (thin lens). */
+    static float SubjectFStop(float FStop, float Focus, float Depth, float SensorWidth, float FovDegrees, float MaxBlur);
+    /** Largest blur of the third-person character (fraction of the image width): about 2 px at 1600 px. Viewer look. */
+    static constexpr float MaxSubjectBlur = 1.f / 750;
+    /** Pure (unit-tested): focal distance of Point for a camera at Eye looking along Forward (depth along the view). */
+    static float FocalDepth(const FVector& Eye, const FVector& Forward, const FVector& Point);
+
 private:
     ASCFirstPersonCharacter* Character() const;
     void PlaceWeapon(int32 WeaponIndex, bool bInHand);
@@ -92,6 +133,16 @@ private:
     /** Every submaterial of the rig's part is in the HairPBR family (hair cards, scalp cap, brows, lashes). */
     bool IsHairOnly(const USCRigComponent* Rig) const;
     FSCAnimatorInput MakeInput(float DeltaSeconds) const;
+    /** Leader pose -> leader-pose followers and pose-copy followers (after the aim correction). */
+    void PropagatePose();
+    /** First person: ease the aim weight and move the arm roots so the sight frame meets the eye's view axis. */
+    void ApplyAim(const FVector& EyeWorld, float DeltaSeconds);
+    /** Camera depth of field: aiming, focus on what the view axis hits with only the far field blurred; third person,
+     *  on the character's eye joint with the whole character sharp. */
+    void UpdateDepthOfField(const FVector& EyeWorld, const FVector& HeadWorld, float DeltaSeconds);
+    void ClearDepthOfField();
+    /** Aiming: no blur in front of the focus (engine foreground blur radius 0), restored afterwards. */
+    void SetNearFieldSharp(bool bSharp);
 
     UPROPERTY() TObjectPtr<ASCVehicle> Kit;
     UPROPERTY() TObjectPtr<USCRigComponent> Leader;
@@ -122,4 +173,22 @@ private:
     int32 CameraBone = INDEX_NONE;
     float LastDelta = 0;
     float LastTravelAngle = 0; // unwound, for the +-pi seam
+    /** Sight line of a weapon: a helper frame (X along the line) on the weapon's anchor or on an attachment's anchor,
+     *  and how far behind it the eye sits (cm). */
+    struct FSight
+    {
+        TWeakObjectPtr<USceneComponent> Owner;
+        FTransform Frame;
+        float Relief = 0;
+        FString Source;
+    };
+    TMap<int32, FSight> Sights; // weapon index -> sight
+    /** Leader joints below the lowest common ancestor of the hand joints and the camera joint, toward each hand: the
+     *  aim correction moves these (arms and held weapon) and never the head. */
+    TArray<int32> ArmRoots;
+    bool bAimRequested = false;
+    float AimLinear = 0, AimAlpha = 0;
+    float FocusDistance = 0, FocusFStop = 0;
+    bool bNearFieldSharp = false;
+    float SavedForegroundRadius = 0;
 };

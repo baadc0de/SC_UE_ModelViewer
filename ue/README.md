@@ -420,7 +420,8 @@ Options (settings in `GameUserSettings.ini`, command line overrides one run):
 Keys (same `KeyTable` for Slate and native input): `1`–`9` draw the stowed weapon in that slot
 (slots: stowed weapons with playable select/deselect, ordered by size, then stow-port name — the
 P4-AR loadout gives 1 = P4-AR, 2 = S71), the active slot's key or `H` holsters, another slot's key
-swaps (deselect, then select), keys are ignored mid-transition; `C` toggles a third-person orbit.
+swaps (deselect, then select), keys are ignored mid-transition; holding the right mouse button aims
+down the sights; `C` toggles a third-person orbit.
 E, F, V, T work as in WP-P1 in every weapon state (in third person E reaches from the character's
 eye — the camera joint — along its view, not from the orbit camera).
 
@@ -468,6 +469,28 @@ blend-space parameters `MoveSpeed`/`TravelAngle`):
   unreadable unarmed idle fails the kit (capsule only; the kit actor and data are destroyed). Off-hand two-bone IK to the weapon's off-hand grip
   helper is implemented but off by default (`sc.Player.OffHandIK 1`): the game's clips author their
   left-weapon IK blend at 0 for these states.
+
+- **Aim down sights (hold the right mouse button, `sc.FP.Aim 1|0`)**: first person with an armed
+  weapon. The sight line is the game's `ADS_align` helper (the helper the camera aligns to when a
+  weapon's DataCore `useAdsHelper` is set), read from the weapon GLB; an attachment that carries one
+  (an optic on the sight rail, a nested assembly entry: `ASCVehicle::AttachmentHelpers`) replaces the
+  weapon's own. Its axes are the game's (+Y along the line, +Z up) carried through the importer's
+  basis (`USCPlayerBodyComponent::SightAxes`). The player package has no ADS clips or pose, so over
+  0.25 s (viewer constant; DataCore `aimAction.zoomTime` is not exported) the arm roots — per hand
+  joint, the first joint not on the camera joint's chain (`LeftShoulder`/`RightShoulder`) — take the
+  world delta that puts the sight origin on the view axis and its line along the view (no cant); the
+  head and eye do not move. The eye sits 2 cm (the near plane) behind the helper, or behind the rear
+  end of an optic's geometry (DataCore `adsCameraOffset` is not exported either). Released, holstering
+  or third person: back to the clip's pose. Log: `PLAYER_SIGHT`, `PLAYER_AIM`; `sc.Player.State`
+  reports `sight_axis_cm` / `sight_angle_deg` (0 when aimed).
+- **Depth of field (camera post-process override, viewer look)**: aiming focuses on what the view axis
+  hits (trace ignoring the player) and blurs only the far field — the f-stop is solved so infinity
+  blurs by `sc.Player.AimFarBlur` of the image width (default 0.012), and `r.DOF.Kernel.MaxForegroundRadius`
+  is 0 while aiming (restored after) so the weapon, sights and anything nearer than the focus stay
+  sharp (UE 5.9's diaphragm DOF has no focal region). Third person always focuses on the character's
+  camera joint at `sc.Player.ThirdPersonFStop` (default 0.5), closed down as needed so the nearest
+  visible part of the character blurs at most 1/750 of the width. `sc.Player.DofSensorWidth` (36 mm).
+  No player override otherwise (the level's own look applies).
 
 Console (first person): `sc.Player.Weapon <slot|none>`, `sc.Player.View fp|tp [yaw] [distance]`,
 `sc.Player.State` (`PLAYER_STATE` log), `sc.Player.Load` (start/retry the kit), `sc.Player.Body 0|1`

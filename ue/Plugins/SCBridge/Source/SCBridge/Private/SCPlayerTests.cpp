@@ -1,8 +1,9 @@
 // WP-P2b null-RHI tests: blend-space weights over the whole parameter grid, additive composition at the last
-// frame, the weapon state machine, and (with -SCPlayerPackage=<kit tar>) the imported rig, its player joints and
+// frame, the weapon state machine, the aim pose and depth-of-field math, and (with -SCPlayerPackage=<kit tar>) the imported rig, its player joints and
 // weapon re-parenting between stow and hand ports.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "HAL/IConsoleManager.h"
 #include "SCPlayerAnimator.h"
 #include "SCPlayerBody.h"
 #include "SCPlayerKit.h"
@@ -25,6 +26,7 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "SCAnimImporter.h"
+#include "SCMeshImporter.h"
 
 namespace
 {
@@ -292,6 +294,69 @@ bool FSCPlayerFirstPersonScale::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPlayerAimPose, "SCBridge.Player.AimPose", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCPlayerAimPose::RunTest(const FString&)
+{
+    using B = USCPlayerBodyComponent;
+    // A hip-pose sight frame (canted, low right, aimed off-axis) and an eye looking up and to the left.
+    const FTransform Sight(FRotator(-8, 12, 15).Quaternion(), FVector(30, 18, -25));
+    const FVector Eye(0, 0, 0);
+    const FQuat View = FRotator(10, -20, 0).Quaternion();
+    const FTransform Aligned = B::AimTarget(Sight, Eye, View, 2.f, 1.f);
+    TestTrue(TEXT("aligned: sight origin on the view axis, 2 cm ahead of the eye"), Aligned.GetLocation().Equals(Eye + View.GetForwardVector() * 2, 1e-4));
+    TestTrue(TEXT("aligned: sight line along the view, its up the view's up (no cant)"),
+             Aligned.GetUnitAxis(EAxis::X).Equals(View.GetForwardVector(), 1e-5) && Aligned.GetUnitAxis(EAxis::Z).Equals(View.GetUpVector(), 1e-5));
+    TestTrue(TEXT("weight 0: the clip's own sight frame"), B::AimTarget(Sight, Eye, View, 2.f, 0.f).Equals(Sight, 1e-4));
+    const FTransform Half = B::AimTarget(Sight, Eye, View, 2.f, 0.5f);
+    TestTrue(TEXT("weight 0.5: halfway along the straight path"), Half.GetLocation().Equals((Sight.GetLocation() + Aligned.GetLocation()) / 2, 1e-4));
+    TestTrue(TEXT("weight 0.5: half the rotation"),
+             FMath::IsNearlyEqual(Half.GetRotation().AngularDistance(Sight.GetRotation()), Half.GetRotation().AngularDistance(View), 1e-4));
+    // Imported sight helper (the P8-SC's ADS_align under the GLB's Z-up root, metres): X runs along the sight line
+    // toward a point straight ahead of it, Z toward a point straight above it.
+    {
+        const FMatrix CryUp(FPlane(1, 0, 0, 0), FPlane(0, 0, -1, 0), FPlane(0, 1, 0, 0), FPlane(0, 0, 0, 1));
+        auto Imported = [&](const FVector& P) { return FTransform(FSCMeshImporter::Transform(FTranslationMatrix(P) * CryUp)); };
+        const FTransform Helper = Imported(FVector(0, -0.0118, 0.1765));
+        const FTransform Line = B::SightAxes() * Helper;
+        const FVector Ahead = Imported(FVector(0, 0.3, 0.1765)).GetLocation(), Above = Imported(FVector(0, -0.0118, 0.3)).GetLocation();
+        TestTrue(TEXT("sight helper: X along the line"), Line.GetUnitAxis(EAxis::X).Equals((Ahead - Line.GetLocation()).GetSafeNormal(), 1e-5));
+        TestTrue(TEXT("sight helper: Z up"), Line.GetUnitAxis(EAxis::Z).Equals((Above - Line.GetLocation()).GetSafeNormal(), 1e-5));
+        TestTrue(TEXT("sight helper: origin kept"), Line.GetLocation().Equals(Helper.GetLocation(), 1e-6));
+    }
+    // A two-joint arm under a chest in a turned, moved component: the corrected arm root carries the hand and the
+    // weapon's sight exactly onto the goal, whatever the parent and component frames.
+    const FTransform ComponentToWorld(FRotator(0, 70, 0).Quaternion(), FVector(500, -200, 90));
+    const FTransform Chest(FRotator(5, -3, 2).Quaternion(), FVector(0, 0, 140));
+    const FTransform Clavicle(FRotator(20, 40, -10).Quaternion(), FVector(4, 12, 6));
+    const FTransform Hand(FRotator(-30, 10, 60).Quaternion(), FVector(45, 5, -20));
+    const FTransform SightInHand(FRotator(2, -4, 1).Quaternion(), FVector(10, -3, 8));
+    auto World = [&](const FTransform& Root) { return SightInHand * Hand * Root * Chest * ComponentToWorld; };
+    const FTransform Before = World(Clavicle);
+    const FTransform Goal = B::AimTarget(Before, ComponentToWorld.GetLocation() + FVector(0, 0, 160), View, 3.f, 1.f);
+    const FTransform After = World(B::ArmRootLocal(Clavicle, Chest, ComponentToWorld, Before, Goal));
+    TestTrue(TEXT("arm root correction puts the sight on the goal"), After.Equals(Goal, 1e-3));
+    TestTrue(TEXT("identity goal leaves the arm root"), B::ArmRootLocal(Clavicle, Chest, ComponentToWorld, Before, Before).Equals(Clavicle, 1e-4));
+    // Depth of field fade and focal depth.
+    TestEqual(TEXT("full weight: the f-stop"), B::FadedFStop(2.8f, 1.f), 2.8f);
+    TestTrue(TEXT("half weight: half the blur (double f-stop)"), FMath::IsNearlyEqual(B::FadedFStop(2.8f, 0.5f), 5.6f, 1e-5f));
+    TestEqual(TEXT("no weight: off"), B::FadedFStop(2.8f, 0.f), 0.f);
+    TestEqual(TEXT("f-stop 0: off"), B::FadedFStop(0.f, 1.f), 0.f);
+    // 36 mm sensor at 90 degrees: f = 18 mm. Subject 34 cm deep at 250 cm focus needs f/0.43 for 1/750 of the width.
+    TestEqual(TEXT("shallow subject: the f-stop as set"), B::SubjectFStop(0.5f, 250.f, 34.f, 36.f, 90.f, 1.f / 750), 0.5f);
+    const float Close = B::SubjectFStop(0.5f, 120.f, 34.f, 36.f, 90.f, 1.f / 750);
+    const double Blur = 18.0 * 18.0 * 340.0 / (Close * 860.0 * (1200.0 - 18.0)) / 36.0;
+    TestTrue(FString::Printf(TEXT("close subject: f/%.2f keeps its near edge at the blur limit (%.5f)"), Close, Blur), Close > 0.5f && FMath::IsNearlyEqual(Blur, 1.0 / 750, 1e-6));
+    // Far-field blur: f/N such that infinity blurs by 1.2 % of the width at 15 m focus: 18^2 / (N (15000 - 18)) = 0.432 mm.
+    const float Far = B::FarBlurFStop(1500.f, 0.012f, 36.f, 90.f);
+    TestTrue(FString::Printf(TEXT("far blur: f/%.4f"), Far), FMath::IsNearlyEqual(18.0 * 18.0 / (Far * (15000.0 - 18.0)), 0.012 * 36.0, 1e-6));
+    TestTrue(TEXT("far blur: nearer focus, larger f-stop (same blur at infinity)"), B::FarBlurFStop(300.f, 0.012f, 36.f, 90.f) > Far);
+    TestEqual(TEXT("far blur: none asked"), B::FarBlurFStop(1500.f, 0.f, 36.f, 90.f), 0.f);
+    TestEqual(TEXT("no depth: the f-stop as set"), B::SubjectFStop(0.5f, 120.f, 0.f, 36.f, 90.f, 1.f / 750), 0.5f);
+    TestTrue(TEXT("focal depth along the view"), FMath::IsNearlyEqual(B::FocalDepth(FVector::ZeroVector, FVector(2, 0, 0), FVector(250, 40, -30)), 250.f, 1e-4f));
+    TestEqual(TEXT("behind the camera: no depth"), B::FocalDepth(FVector::ZeroVector, FVector::ForwardVector, FVector(-10, 0, 0)), 0.f);
+    return true;
+}
+
 namespace
 {
 /** Real attachment of a weapon anchor: the hand joint on the leader, or the stow frame (body joint or owner helper). */
@@ -402,6 +467,35 @@ bool FSCPlayerKitRig::RunTest(const FString&)
     {
         C->Body->RequestSlot(0);
         for (int32 Frame = 0; Frame < 300 && C->Body->GetWeaponState() != ESCWeaponState::Armed; ++Frame) C->Body->Step(1.f / 60);
+        // Aim down sights: after the blend the sight line lies on the view axis just ahead of the eye.
+        FTransform Hip, Sight;
+        FString Source;
+        if (C->Body->GetSightFrame(Hip, &Source))
+        {
+            C->Body->SetAiming(true);
+            for (int32 Frame = 0; Frame < 30; ++Frame) C->Body->Step(1.f / 60);
+            TestEqual(TEXT("aimed: full weight"), C->Body->GetAimAlpha(), 1.f);
+            TestTrue(TEXT("aimed: sight frame"), C->Body->GetSightFrame(Sight));
+            const FVector Axis = C->GetViewRotation().Vector(), Offset = Sight.GetLocation() - C->Camera->GetComponentLocation();
+            const double OffAxis = (Offset - Axis * FVector::DotProduct(Offset, Axis)).Size();
+            const double Angle = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(Sight.GetUnitAxis(EAxis::X), Axis), -1.0, 1.0)));
+            AddInfo(FString::Printf(TEXT("sight %s: hip %.1f cm from the eye; aimed %.3f cm off the view axis, %.1f cm ahead, %.3f deg"), *Source,
+                                    FVector::Dist(Hip.GetLocation(), C->Camera->GetComponentLocation()), OffAxis, FVector::DotProduct(Offset, Axis), Angle));
+            TestTrue(TEXT("aimed: sight origin on the view axis"), OffAxis < 0.1);
+            TestTrue(TEXT("aimed: sight line along the view"), Angle < 0.1);
+            TestTrue(TEXT("aimed: ahead of the eye"), FVector::DotProduct(Offset, Axis) > 0);
+            TestTrue(TEXT("aimed: camera still at the camera joint"), FVector::Dist(C->Camera->GetComponentLocation(), C->Body->HeadLocation()) < 5);
+            TestTrue(TEXT("aimed: depth of field on"), C->Body->GetFocusFStop() > 0 && C->Camera->PostProcessSettings.bOverride_DepthOfFieldFocalDistance);
+            IConsoleVariable* Foreground = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DOF.Kernel.MaxForegroundRadius"));
+            TestTrue(TEXT("aimed: nothing in front of the focus blurs"), Foreground && Foreground->GetFloat() == 0.f);
+            C->Body->SetAiming(false);
+            for (int32 Frame = 0; Frame < 30; ++Frame) C->Body->Step(1.f / 60);
+            TestTrue(TEXT("released: foreground blur radius restored"), Foreground && Foreground->GetFloat() > 0.f);
+            TestEqual(TEXT("released: the clip's pose"), C->Body->GetAimAlpha(), 0.f);
+            TestFalse(TEXT("released: no depth of field override"), C->Camera->PostProcessSettings.bOverride_DepthOfFieldFocalDistance);
+        }
+        else
+            AddWarning(TEXT("slot 1 weapon has no sight helper: aim pose not checked"));
         UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
         AStaticMeshActor* Wall = World->SpawnActor<AStaticMeshActor>(AStaticMeshActor::StaticClass(),
             FTransform(FRotator::ZeroRotator, C->GetActorLocation() + C->GetActorForwardVector() * (C->GetCapsuleComponent()->GetScaledCapsuleRadius() + 10 + 50), FVector(1, 4, 4)), Params);
@@ -417,6 +511,9 @@ bool FSCPlayerKitRig::RunTest(const FString&)
             TestTrue(TEXT("camera scale enabled"), C->Camera->bEnableFirstPersonScale && FMath::IsNearlyEqual(C->Camera->FirstPersonScale, C->Body->GetFirstPersonScale()));
             C->Body->SetThirdPerson(true);
             TestEqual(TEXT("third person: world-space body"), C->Body->GetFirstPersonScale(), 1.f);
+            TestTrue(TEXT("third person: depth of field on the character"), C->Body->GetFocusFStop() > 0 &&
+                     FMath::IsNearlyEqual(C->Body->GetFocusDistance(),
+                         USCPlayerBodyComponent::FocalDepth(C->Camera->GetComponentLocation(), C->Camera->GetForwardVector(), C->Body->HeadLocation()), 1.f));
             TestFalse(TEXT("third person: no first-person primitives"), C->Body->AreFirstPersonPrimitivesActive());
             C->Body->SetThirdPerson(false);
             Wall->Destroy();

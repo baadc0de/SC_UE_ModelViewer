@@ -1,9 +1,11 @@
 // USCPlayerBodyComponent: kit attachment, pose transfer leader -> followers, stow/hand re-parenting by port
-// alignment, first-person head hiding (shadows kept), eye at the camera joint and the third-person orbit.
+// alignment, first-person head hiding (shadows kept), eye at the camera joint and the third-person orbit; aim down
+// sights (the arms bring the weapon's sight helper onto the view axis) and the camera's depth of field.
 #include "SCPlayerBody.h"
 #include "HAL/IConsoleManager.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCRigComponent.h"
+#include "SCMeshImporter.h"
 #include "SCVehicle.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -19,9 +21,30 @@ DEFINE_LOG_CATEGORY_STATIC(LogSCPlayer, Log, All);
 // clip places the off hand itself); forcing IK to the grip helper pulls the hand back to the magazine well.
 static TAutoConsoleVariable<int32> CVarOffHandIK(TEXT("sc.Player.OffHandIK"), 0,
     TEXT("1: off-hand two-bone IK to the weapon's off-hand grip helper while armed; 0 (default): the clip's own off hand"));
+// Depth of field (viewer look, not game data): the camera's lens while aiming and in third person.
+static TAutoConsoleVariable<float> CVarAimFarBlur(TEXT("sc.Player.AimFarBlur"), 0.012f,
+    TEXT("aim-down-sights depth of field: blur at infinity as a fraction of the image width, focused on what the sight points "
+         "at; everything nearer than the focus (weapon, sights) stays sharp (0: off)"));
+static TAutoConsoleVariable<float> CVarThirdPersonFStop(TEXT("sc.Player.ThirdPersonFStop"), 0.5f,
+    TEXT("f-stop of the third-person depth of field, focused on the player character (0: off)"));
+static TAutoConsoleVariable<float> CVarDofSensorWidth(TEXT("sc.Player.DofSensorWidth"), 36.f,
+    TEXT("sensor width (mm) of the player camera's depth of field; wider = shallower at the same field of view"));
 
 namespace
 {
+/** The game's aim-down-sights helper: the camera aligns to it when a weapon's useAdsHelper is set (an engine helper
+ *  name, like the IK grip targets; weapons and optics both author it). */
+const TCHAR* const SightHelper = TEXT("ADS_align");
+/** Depth-of-field focus follows a new target at this rate (1/s); range of the aim focus trace (cm). Viewer constants. */
+constexpr float FocusFollowRate = 10;
+constexpr double FocusReach = 100000;
+
+const FTransform* FindSightHelper(const FSCInstanceHelpers& Helpers)
+{
+    for (const auto& Pair : Helpers.Frames)
+        if (Pair.Key.Equals(SightHelper, ESearchCase::IgnoreCase)) return &Pair.Value;
+    return nullptr;
+}
 // Share of a rig's skin weight carried by the subtree of joint Root (by name on the rig's own skeleton).
 float SubtreeInfluence(const USCRigComponent* Rig, FName Root)
 {
@@ -243,6 +266,75 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
             }
         if (Box.IsValid) WeaponBoxes.Add(W, Box);
     }
+    // Sight line per weapon: its sight helper, or an attachment's (an optic on the sight rail replaces the weapon's
+    // own: the game hides the iron sights when an optic attaches). The eye sits behind the helper by the near plane,
+    // and behind the rear end of an optic's geometry (it encloses its helper). DataCore's adsCameraOffset is not in
+    // the player package.
+    Sights.Reset();
+    for (int32 W = 0; W < Data->Weapons.Num(); ++W)
+    {
+        USceneComponent* Anchor = Kit->InstanceAnchors.FindRef(Data->Weapons[W].ChildId);
+        if (!Anchor) continue;
+        FSight Sight;
+        auto Use = [&](USceneComponent* Owner, const FTransform& Frame, const FString& Name) {
+            Sight.Owner = Owner;
+            Sight.Frame = SightAxes() * Frame;
+            Sight.Relief = NearClip;
+            Sight.Source = Name + TEXT("/") + SightHelper;
+        };
+        TArray<USceneComponent*> Under;
+        Anchor->GetChildrenComponents(true, Under);
+        for (USceneComponent* Child : Under)
+            if (const FSCInstanceHelpers* Helpers = Kit->AttachmentHelpers.Find(Child))
+                if (const FTransform* Frame = FindSightHelper(*Helpers))
+                {
+                    Use(Child, *Frame, Child->GetName());
+                    break;
+                }
+        if (!Sight.Owner.IsValid())
+            if (const FSCInstanceHelpers* Helpers = Kit->InstanceHelpers.Find(Data->Weapons[W].ChildId))
+                if (const FTransform* Frame = FindSightHelper(*Helpers)) Use(Anchor, *Frame, Data->Weapons[W].Entity);
+        if (!Sight.Owner.IsValid()) continue;
+        if (Sight.Owner.Get() != Anchor)
+        {
+            TArray<USceneComponent*> Parts;
+            Sight.Owner->GetChildrenComponents(true, Parts);
+            Parts.Add(Sight.Owner.Get());
+            const FTransform ToSight = (Sight.Frame * Sight.Owner->GetComponentTransform()).Inverse();
+            FBox Box(ForceInit);
+            for (USceneComponent* Part : Parts)
+                if (const UPrimitiveComponent* P = Cast<UPrimitiveComponent>(Part))
+                {
+                    const FBox Local = P->CalcBounds(FTransform::Identity).GetBox();
+                    if (Local.IsValid) Box += Local.TransformBy(P->GetComponentTransform() * ToSight);
+                }
+            if (Box.IsValid) Sight.Relief += float(FMath::Max(0.0, -Box.Min.X));
+        }
+        UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_SIGHT weapon=%s sight=%s relief_cm=%.1f"), *Data->Weapons[W].Entity, *Sight.Source, Sight.Relief);
+        Sights.Add(W, MoveTemp(Sight));
+    }
+    // Arm roots: per hand joint, the first joint on its chain that is not on the camera joint's chain (the clavicles
+    // below the chest): moving them carries the arms and the held weapon, never the head.
+    ArmRoots.Reset();
+    {
+        auto Chain = [&](int32 Bone) {
+            TArray<int32> Out;
+            for (; Bone != INDEX_NONE; Bone = LeaderRef.GetParentIndex(Bone)) Out.Insert(Bone, 0);
+            return Out;
+        };
+        const TArray<int32> CameraChain = Chain(LeaderRef.FindBoneIndex(FName(*Data->CameraBone)));
+        for (const FSCItemPort& Hand : Data->HandPorts)
+        {
+            const TArray<int32> HandChain = Chain(LeaderRef.FindBoneIndex(FName(*Hand.AttachBone)));
+            for (int32 Joint : HandChain)
+                if (!CameraChain.Contains(Joint))
+                {
+                    // Skip a root below another (a single chain moves once).
+                    if (!ArmRoots.ContainsByPredicate([&](int32 Other) { return HandChain.Contains(Other); })) ArmRoots.Add(Joint);
+                    break;
+                }
+        }
+    }
     // Weapon slots: stowed weapons the body can draw (an anchor, a hand port, playable select and deselect),
     // ordered by size (primary first), then stow port name (port numbering), then authored order.
     Slots.Reset();
@@ -289,9 +381,11 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
     AddTickPrerequisiteComponent(C->GetCharacterMovement());
     SetComponentTickEnabled(true);
     Step(0); // pose and eye before the first rendered frame
-    UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_BODY attached rigs=%d followers=%d (pose copies %d) head_parts=%d slots=%d clips=%d spine=%d camera=%s forward=%s"),
+    FString Roots;
+    for (int32 R : ArmRoots) Roots += (Roots.IsEmpty() ? TEXT("") : TEXT(",")) + LeaderRef.GetBoneName(R).ToString();
+    UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_BODY attached rigs=%d followers=%d (pose copies %d) head_parts=%d slots=%d clips=%d spine=%d camera=%s forward=%s arm_roots=%s sights=%d"),
            Kit->Rigs.Num(), Followers.Num(), CopyMaps.Num(), HeadParts.Num(), Slots.Num(), ClipStore->Num(), Animator.PitchChain().Num(), *Data->CameraBone,
-           *F.ToCompactString());
+           *F.ToCompactString(), *Roots, Sights.Num());
     return true;
 }
 void USCPlayerBodyComponent::Detach()
@@ -346,6 +440,11 @@ void USCPlayerBodyComponent::Detach()
     WeaponBoxes.Reset();
     Slots.Reset();
     Weapons = FSCWeaponStateMachine();
+    Sights.Reset();
+    ArmRoots.Reset();
+    bAimRequested = false;
+    AimLinear = AimAlpha = 0;
+    ClearDepthOfField();
     bThirdPerson = false;
 }
 void USCPlayerBodyComponent::EndPlay(const EEndPlayReason::Type Reason)
@@ -480,6 +579,13 @@ void USCPlayerBodyComponent::Step(float DeltaSeconds)
         C->GetCharacterMovement()->MaxWalkSpeed = Input.bFast ? C->GetProfile().RunSpeed : C->GetProfile().WalkSpeed;
     Leader->LocalPose = Animator.GetPose();
     Leader->RefreshBoneTransforms();
+    // Crouching shrinks the capsule about its bottom: keep the feet on the floor.
+    Kit->GetRootComponent()->SetRelativeLocation(FVector(0, 0, -C->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()));
+    ApplyView(); // eye, then the aim correction of the arms
+    PropagatePose();
+}
+void USCPlayerBodyComponent::PropagatePose()
+{
     Leader->RefreshFollowerComponents(); // leader-pose followers skin with the leader's buffer: mark them dirty
     for (auto& Pair : CopyMaps)
     {
@@ -489,9 +595,6 @@ void USCPlayerBodyComponent::Step(float DeltaSeconds)
             if (Pair.Value[B] != INDEX_NONE) Rig->LocalPose[B] = Leader->LocalPose[Pair.Value[B]];
         Rig->RefreshBoneTransforms();
     }
-    // Crouching shrinks the capsule about its bottom: keep the feet on the floor.
-    Kit->GetRootComponent()->SetRelativeLocation(FVector(0, 0, -C->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()));
-    ApplyView();
 }
 void USCPlayerBodyComponent::ApplyView()
 {
@@ -518,10 +621,14 @@ void USCPlayerBodyComponent::ApplyView()
         Eye = Capsule.InverseTransformPosition(bBlocked ? Hit.Location : HeadWorld);
         C->Camera->bUsePawnControlRotation = true;
         C->RefreshEye();
-        UpdateFirstPersonScale(Capsule.TransformPosition(Eye), LastDelta);
+        const FVector EyeWorld = Capsule.TransformPosition(Eye);
+        ApplyAim(EyeWorld, LastDelta);
+        UpdateFirstPersonScale(EyeWorld, LastDelta);
+        UpdateDepthOfField(EyeWorld, HeadWorld, LastDelta);
         return;
     }
     UpdateFirstPersonScale(FVector::ZeroVector, -1); // third person: world-space body, scale 1
+    AimLinear = AimAlpha = 0; // the clip's own pose (no sight at the orbit camera)
     // Third person: orbit the camera joint at a presentation distance, pulled in by the level's camera channel.
     const FRotator View = C->GetViewRotation() + FRotator(0, OrbitYaw, 0);
     const FVector Desired = HeadWorld - View.Vector() * OrbitDistance;
@@ -536,6 +643,179 @@ void USCPlayerBodyComponent::ApplyView()
     C->Camera->bUsePawnControlRotation = false;
     C->RefreshEye();
     C->Camera->SetWorldRotation(View);
+    UpdateDepthOfField(Location, HeadWorld, LastDelta);
+}
+FTransform USCPlayerBodyComponent::SightAxes()
+{
+    // A direction d in the helper's own (game) axes is d * basis in the imported frame: a translation through the
+    // importer's transform carries it.
+    const FVector Along = FSCMeshImporter::Transform(FTranslationMatrix(FVector(0, 1, 0))).GetOrigin();
+    const FVector Up = FSCMeshImporter::Transform(FTranslationMatrix(FVector(0, 0, 1))).GetOrigin();
+    return FTransform(FRotationMatrix::MakeFromXZ(Along, Up).ToQuat());
+}
+FTransform USCPlayerBodyComponent::AimTarget(const FTransform& Sight, const FVector& Eye, const FQuat& View, float Relief, float Alpha)
+{
+    const float A = FMath::Clamp(Alpha, 0.f, 1.f);
+    const FVector Aligned = Eye + View.GetForwardVector() * Relief;
+    return FTransform(FQuat::Slerp(Sight.GetRotation(), View, A).GetNormalized(), FMath::Lerp(Sight.GetLocation(), Aligned, double(A)),
+                      Sight.GetScale3D());
+}
+FTransform USCPlayerBodyComponent::ArmRootLocal(const FTransform& Local, const FTransform& ParentSpace, const FTransform& ComponentToWorld,
+                                                const FTransform& Sight, const FTransform& Goal)
+{
+    // World delta D with Sight * D = Goal, carried into component space; the root's component transform takes it last.
+    const FTransform Delta = ComponentToWorld * (Sight.Inverse() * Goal) * ComponentToWorld.Inverse();
+    return Local * ParentSpace * Delta * ParentSpace.Inverse();
+}
+float USCPlayerBodyComponent::FadedFStop(float FStop, float Weight)
+{
+    return FStop > 0 && Weight > 0 ? FStop / FMath::Min(Weight, 1.f) : 0.f;
+}
+float USCPlayerBodyComponent::SubjectFStop(float FStop, float Focus, float Depth, float SensorWidth, float FovDegrees, float MaxBlur)
+{
+    // Thin lens, millimetres: blur of a point at d in front of focus s is c = f^2 (s - d) / (N d (s - f)).
+    const double F = SensorWidth / (2 * FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(double(FovDegrees), 1.0, 170.0)) / 2));
+    const double S = Focus * 10.0, D = (Focus - Depth) * 10.0, C = MaxBlur * SensorWidth;
+    if (Depth <= 0 || D <= F || S <= F || C <= 0) return FStop;
+    return FMath::Max(FStop, float(F * F * (S - D) / (C * D * (S - F))));
+}
+float USCPlayerBodyComponent::FarBlurFStop(float Focus, float FarBlur, float SensorWidth, float FovDegrees)
+{
+    // Thin lens, millimetres: a point at infinity blurs by c = f^2 / (N (s - f)); solve for N with c = FarBlur * width.
+    const double F = SensorWidth / (2 * FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(double(FovDegrees), 1.0, 170.0)) / 2));
+    const double S = Focus * 10.0, C = FarBlur * SensorWidth;
+    return S > F && C > 0 ? float(F * F / (C * (S - F))) : 0.f;
+}
+float USCPlayerBodyComponent::FocalDepth(const FVector& Eye, const FVector& Forward, const FVector& Point)
+{
+    return float(FMath::Max(0.0, FVector::DotProduct(Point - Eye, Forward.GetSafeNormal())));
+}
+void USCPlayerBodyComponent::SetAiming(bool bOn)
+{
+    if (bOn == bAimRequested) return;
+    bAimRequested = bOn;
+    FString Source;
+    FTransform Frame;
+    const bool bSight = GetSightFrame(Frame, &Source);
+    UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_AIM on=%d state=%s sight=%s"), bOn, FSCWeaponStateMachine::Name(Weapons.GetState()),
+           bSight ? *Source : TEXT("-"));
+}
+bool USCPlayerBodyComponent::GetSightFrame(FTransform& Out, FString* Source) const
+{
+    if (!Kit || Weapons.GetState() == ESCWeaponState::Unarmed || !Slots.IsValidIndex(Weapons.GetActive())) return false;
+    const FSight* Sight = Sights.Find(Slots[Weapons.GetActive()]);
+    if (!Sight || !Sight->Owner.IsValid()) return false;
+    Out = Sight->Frame * Sight->Owner->GetComponentTransform();
+    if (Source) *Source = Sight->Source;
+    return true;
+}
+void USCPlayerBodyComponent::ApplyAim(const FVector& EyeWorld, float DeltaSeconds)
+{
+    ASCFirstPersonCharacter* C = Character();
+    const bool bHeld = Weapons.GetState() != ESCWeaponState::Unarmed && Slots.IsValidIndex(Weapons.GetActive());
+    const bool bWant = bAimRequested && Weapons.GetState() == ESCWeaponState::Armed;
+    AimLinear = bHeld ? FMath::FInterpConstantTo(AimLinear, bWant ? 1.f : 0.f, FMath::Max(DeltaSeconds, 0.f), 1.f / AimSeconds) : 0.f;
+    AimAlpha = FMath::SmoothStep(0.f, 1.f, AimLinear);
+    FTransform Sight;
+    if (AimAlpha <= 0 || ArmRoots.IsEmpty() || !GetSightFrame(Sight)) return;
+    // The clip's pose is fresh this frame: blend from its sight frame to the eye-aligned one, moving the arm roots by
+    // the same world delta (hands, weapon and its attachments follow; the head and the eye do not move).
+    const float Relief = Sights.FindChecked(Slots[Weapons.GetActive()]).Relief;
+    const FTransform Goal = AimTarget(Sight, EyeWorld, C->GetViewRotation().Quaternion(), Relief, AimAlpha);
+    const FReferenceSkeleton& Ref = Leader->GetSkeletalMeshAsset()->GetRefSkeleton();
+    const FTransform ComponentToWorld = Leader->GetComponentTransform();
+    TArray<FTransform, TInlineAllocator<2>> Roots;
+    for (int32 Root : ArmRoots)
+    {
+        FTransform Parent = FTransform::Identity;
+        for (int32 B = Ref.GetParentIndex(Root); B != INDEX_NONE; B = Ref.GetParentIndex(B)) Parent = Parent * Leader->LocalPose[B];
+        Roots.Add(ArmRootLocal(Leader->LocalPose[Root], Parent, ComponentToWorld, Sight, Goal));
+    }
+    for (int32 I = 0; I < ArmRoots.Num(); ++I) Leader->LocalPose[ArmRoots[I]] = Roots[I];
+    Leader->RefreshBoneTransforms();
+}
+void USCPlayerBodyComponent::UpdateDepthOfField(const FVector& EyeWorld, const FVector& HeadWorld, float DeltaSeconds)
+{
+    ASCFirstPersonCharacter* C = Character();
+    if (!C || !C->Camera) return;
+    const FVector Forward = bThirdPerson ? C->Camera->GetComponentQuat().GetForwardVector() : C->GetViewRotation().Vector();
+    const float Sensor = CVarDofSensorWidth.GetValueOnGameThread(), Fov = C->Camera->FieldOfView;
+    const bool bAim = !bThirdPerson && AimAlpha > 0 && CVarAimFarBlur.GetValueOnGameThread() > 0;
+    float Target = 0;
+    if (bThirdPerson && CVarThirdPersonFStop.GetValueOnGameThread() > 0)
+        Target = FocalDepth(EyeWorld, Forward, HeadWorld); // the character's eye joint (orbit distance unless pulled in)
+    else if (bAim)
+    {
+        // Aiming: whatever the view axis (= the sight line) hits; the player's own body and kit never block it.
+        FHitResult Hit;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(SCAimFocus), true, C);
+        Params.AddIgnoredActor(Kit);
+        Target = GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, EyeWorld, EyeWorld + Forward * FocusReach, ECC_Visibility, Params)
+                     ? float(Hit.Distance) : float(FocusReach);
+    }
+    if (Target <= 0)
+    {
+        ClearDepthOfField();
+        return;
+    }
+    // Focus snaps when the depth of field turns on, then follows the target smoothly (no pops along edges).
+    FocusDistance = FocusFStop > 0 ? FMath::FInterpTo(FocusDistance, Target, FMath::Max(DeltaSeconds, 0.f), FocusFollowRate) : Target;
+    float FStop;
+    if (bAim)
+        // Far field only: a fixed blur at infinity whatever the focus, faded in with the aim; nothing in front of the
+        // focus blurs (the weapon and its sights stay crisp).
+        FStop = FadedFStop(FarBlurFStop(FocusDistance, CVarAimFarBlur.GetValueOnGameThread(), Sensor, Fov), AimAlpha);
+    else
+    {
+        // Third person: the whole character stays sharp: the f-stop closes until its nearest part (the bounds of every
+        // visible body part and item) blurs at most MaxSubjectBlur (a close orbit keeps the body in focus, a far one
+        // blurs only the surroundings).
+        float Nearest = FocusDistance;
+        for (const TArray<TObjectPtr<UPrimitiveComponent>>* Parts : {&ViewParts, &HeadParts})
+            for (const UPrimitiveComponent* P : *Parts)
+                if (P && P->IsVisible())
+                {
+                    FVector Corners[8];
+                    P->Bounds.GetBox().GetVertices(Corners);
+                    for (const FVector& Corner : Corners) Nearest = FMath::Min(Nearest, FocalDepth(EyeWorld, Forward, Corner));
+                }
+        FStop = SubjectFStop(CVarThirdPersonFStop.GetValueOnGameThread(), FocusDistance, FocusDistance - Nearest, Sensor, Fov, MaxSubjectBlur);
+    }
+    if (FStop <= 0)
+    {
+        ClearDepthOfField();
+        return;
+    }
+    SetNearFieldSharp(bAim);
+    FocusFStop = FStop;
+    FPostProcessSettings& S = C->Camera->PostProcessSettings;
+    C->Camera->PostProcessBlendWeight = 1;
+    S.bOverride_DepthOfFieldFstop = S.bOverride_DepthOfFieldMinFstop = S.bOverride_DepthOfFieldFocalDistance = S.bOverride_DepthOfFieldSensorWidth = true;
+    S.DepthOfFieldFstop = FStop;
+    S.DepthOfFieldMinFstop = FMath::Min(FStop, 1.2f); // the lens' widest aperture must allow the f-stop
+    S.DepthOfFieldFocalDistance = FocusDistance;
+    S.DepthOfFieldSensorWidth = Sensor;
+}
+void USCPlayerBodyComponent::SetNearFieldSharp(bool bSharp)
+{
+    // UE 5.9's diaphragm depth of field has no focal region (DepthOfFieldFocalRegion is mobile only); its foreground
+    // blur is capped by r.DOF.Kernel.MaxForegroundRadius: 0 keeps everything in front of the focus sharp.
+    if (bSharp == bNearFieldSharp) return;
+    IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DOF.Kernel.MaxForegroundRadius"));
+    if (!Var) return;
+    if (bSharp) SavedForegroundRadius = Var->GetFloat();
+    Var->Set(bSharp ? 0.f : SavedForegroundRadius, ECVF_SetByCode);
+    bNearFieldSharp = bSharp;
+}
+void USCPlayerBodyComponent::ClearDepthOfField()
+{
+    FocusDistance = FocusFStop = 0;
+    SetNearFieldSharp(false);
+    ASCFirstPersonCharacter* C = Character();
+    if (!C || !C->Camera) return;
+    // No player override: the level's own look (post-process volumes, sc.Look.Focus) applies.
+    FPostProcessSettings& S = C->Camera->PostProcessSettings;
+    S.bOverride_DepthOfFieldFstop = S.bOverride_DepthOfFieldMinFstop = S.bOverride_DepthOfFieldFocalDistance = S.bOverride_DepthOfFieldSensorWidth = false;
 }
 float USCPlayerBodyComponent::FirstPersonScaleFor(TConstArrayView<float> ProbeDistance, TConstArrayView<float> HitDistance, float Margin, float MinScale)
 {
@@ -671,7 +951,7 @@ FString USCPlayerBodyComponent::HUDLine() const
 {
     if (!Kit) return FString();
     const FSCPlayerWeapon* W = SlotWeapon(Weapons.GetActive());
-    const FString Keys = Slots.IsEmpty() ? TEXT("no stowed weapons") : FString::Printf(TEXT("1-%d draw · H holster"), FMath::Min(Slots.Num(), 9));
+    const FString Keys = Slots.IsEmpty() ? TEXT("no stowed weapons") : FString::Printf(TEXT("1-%d draw · H holster · hold RMB aim"), FMath::Min(Slots.Num(), 9));
     return FString::Printf(TEXT("%s%s · %s · C %s view"), FSCWeaponStateMachine::Name(Weapons.GetState()),
                            W ? *(TEXT(" ") + W->Entity) : TEXT(""), *Keys, bThirdPerson ? TEXT("first-person") : TEXT("third-person"));
 }
@@ -679,8 +959,20 @@ FString USCPlayerBodyComponent::Describe() const
 {
     if (!Kit) return TEXT("body=none");
     const FSCPlayerWeapon* W = SlotWeapon(Weapons.GetActive());
-    return FString::Printf(TEXT("weapon_state=%s weapon=%s parent=%s view=%s oneshot=%.2f offhand_error_cm=%.1f eye=%s %s"),
+    // Sight line against the view axis: the sight origin's distance from the axis and the angle between them.
+    FString Aim = FString::Printf(TEXT("aim=%d alpha=%.2f"), bAimRequested, AimAlpha);
+    FTransform Sight;
+    FString Source;
+    if (const ASCFirstPersonCharacter* C = Character(); C && GetSightFrame(Sight, &Source))
+    {
+        const FVector Axis = C->GetViewRotation().Vector(), Offset = Sight.GetLocation() - C->Camera->GetComponentLocation();
+        Aim += FString::Printf(TEXT(" sight=%s sight_axis_cm=%.2f sight_ahead_cm=%.1f sight_angle_deg=%.2f"), *Source,
+                               (Offset - Axis * FVector::DotProduct(Offset, Axis)).Size(), FVector::DotProduct(Offset, Axis),
+                               FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(Sight.GetUnitAxis(EAxis::X), Axis), -1.0, 1.0))));
+    }
+    Aim += FString::Printf(TEXT(" focus_cm=%.0f fstop=%.2f"), FocusDistance, FocusFStop);
+    return FString::Printf(TEXT("weapon_state=%s weapon=%s parent=%s view=%s oneshot=%.2f offhand_error_cm=%.1f eye=%s %s %s"),
                            FSCWeaponStateMachine::Name(Weapons.GetState()), W ? *W->Entity : TEXT("-"),
                            *WeaponParentBone(Weapons.GetActive()).ToString(), bThirdPerson ? TEXT("tp") : TEXT("fp"), Animator.OneShotProgress(),
-                           Animator.LastOffHandError(), *Eye.ToCompactString(), *Animator.Describe());
+                           Animator.LastOffHandError(), *Eye.ToCompactString(), *Aim, *Animator.Describe());
 }

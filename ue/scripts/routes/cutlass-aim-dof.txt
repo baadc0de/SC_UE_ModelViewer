@@ -1,0 +1,52 @@
+# Aim down sights and player depth of field: Cutlass hangar, default loadout (slot 1 = rifle with an optic, slot 2 =
+# iron sights in the LIVE default). Hip, aimed without and with depth of field, released, second weapon, then
+# third person (depth of field on the character).
+# Host: -SCLoad=DRAK_Cutlass_Black -SCCamera=orbit   (sc.FP.Spawn enters first person)
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0.5 sc.FP.Spawn Door:2
+0 waitkit 900
+1 sc.FP.Look 0 60
+1 sc.FP.Interact
+5 sc.FP.Look 180 0
+1 sc.Player.Weapon 1
+3 sc.Player.State
+0 shot 01-fp-hip-slot1
+0 sc.Player.AimFarBlur 0
+0 sc.FP.Aim 1
+1 sc.Player.State
+0 shot 02-fp-aim-slot1-nodof
+0 sc.Player.AimFarBlur 0.012
+1 sc.Player.State
+0 shot 03-fp-aim-slot1-dof
+0 sc.FP.Look 150 -12
+1 sc.Player.State
+0 shot 04-fp-aim-slot1-dof-near
+0 sc.FP.Look 180 0
+0 sc.FP.Aim 0
+1 sc.Player.State
+0 shot 05-fp-hip-released
+0 sc.Player.Weapon 2
+5 sc.Player.State
+0 shot 06-fp-hip-slot2
+# Slot 2 aims through the key table (the right mouse button), as the viewport's mouse input does.
+0 sc.Player.AimFarBlur 0
+0 sc.FP.Key RightMouseButton 1
+1 sc.Player.State
+0 shot 07-fp-aim-slot2-nodof
+0 sc.Player.AimFarBlur 0.012
+1 sc.Player.State
+0 shot 08-fp-aim-slot2-dof
+0 sc.FP.Key RightMouseButton 0
+1 sc.Player.View tp 150 250
+1 sc.Player.State
+0 shot 09-tp-dof-front
+0 sc.Player.View tp 30 200
+1 sc.Player.State
+0 shot 10-tp-dof-back
+0 sc.Player.View tp 90 120
+1 sc.Player.State
+0 shot 11-tp-dof-close
+0 sc.Player.View fp
+1 sc.Player.State
+0 quit

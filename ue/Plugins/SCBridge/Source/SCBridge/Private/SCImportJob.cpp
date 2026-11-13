@@ -803,15 +803,14 @@ void FSCImportJob::FState::Assemble()
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
                                                               bAtHelper, FSCMeshImporter::InCryFrame(I.SourceTransformBasis, bAtHelper));
-        if (!I.Id.IsEmpty())
-        {
-            // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
-            FSCInstanceHelpers& Helpers = V->InstanceHelpers.FindOrAdd(I.Id);
+        // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
+        auto AddHelpers = [&E](FSCInstanceHelpers& Helpers) {
             Helpers.Frames.Add(FString(), FTransform(FSCMeshImporter::Transform(E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity)));
             if (E.Mesh)
                 for (const auto& Node : E.Mesh->Nodes)
                     if (!Node.Key.IsEmpty() && !Helpers.Frames.Contains(Node.Key)) Helpers.Frames.Add(Node.Key, FTransform(FSCMeshImporter::Transform(Node.Value)));
-        }
+        };
+        if (!I.Id.IsEmpty()) AddHelpers(V->InstanceHelpers.FindOrAdd(I.Id));
         if (I.bBonePort && bAtHelper && !I.Id.IsEmpty())
         {
             FTransform Port;
@@ -822,6 +821,7 @@ void FSCImportJob::FState::Assemble()
         }
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
         if (!I.Id.IsEmpty()) V->InstanceAnchors.Add(I.Id, E.Anchor);
+        else if (!I.ParentId.IsEmpty() && E.Mesh) AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
         V->AddItemSpawn(I, E.Anchor);
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {

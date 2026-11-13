@@ -351,13 +351,13 @@ bool USCImportLibrary::RunUnitTests()
         TEXT("FSCMaterialsFamilies"), TEXT("FSCMaterialsMasters"), TEXT("FSCMaterialsMasterParameters"), TEXT("FSCMaterialsTextures"), TEXT("FSCMaterialsSmoothnessPng"), TEXT("FSCMaterialsDdsTextures"), TEXT("FSCRigMath"), TEXT("FSCSkinBuffers"), TEXT("FSCRigLights"), TEXT("FSCRigPlayback"), TEXT("FSCRigCyclic"), TEXT("FSCRigSourceTiming"), TEXT("FSCRigSourcePlayback"), TEXT("FSCLightDefaults"), TEXT("FSCLightAuthoredModel"),
         TEXT("FSCLightRoomVolumes"), TEXT("FSCLightAreaConfinement"), TEXT("FSCLightRoomChannels"), TEXT("FSCDirtExterior"), TEXT("FSCLightVerifier"),
         TEXT("FSCStarEngineFixture"), TEXT("FSCStarEngineDomain"), TEXT("FSCStarEngineRules"),
-        TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach"), TEXT("FSCGamePhysicsClasses"), TEXT("FSCGamePhysicsGrid"), TEXT("FSCGamePhysicsFailedCollider"), TEXT("FSCHangarCapacityHolds")};
+        TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach"), TEXT("FSCGamePhysicsClasses"), TEXT("FSCGamePhysicsGrid"), TEXT("FSCGamePhysicsFailedCollider"), TEXT("FSCHangarCapacityHolds"), TEXT("FSCPlayerAimPose")};
     FString Folder;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
     if (FParse::Param(FCommandLine::Get(), TEXT("SCFirstPersonTests"))) Names = {TEXT("FSCFirstPersonCollision")};
     if (FParse::Param(FCommandLine::Get(), TEXT("SCPlayerTests")))
     {
-        Names = {TEXT("FSCPlayerBlendWeights"), TEXT("FSCPlayerAdditive"), TEXT("FSCPlayerWeaponStates"), TEXT("FSCPlayerFirstPersonScale")};
+        Names = {TEXT("FSCPlayerBlendWeights"), TEXT("FSCPlayerAdditive"), TEXT("FSCPlayerWeaponStates"), TEXT("FSCPlayerFirstPersonScale"), TEXT("FSCPlayerAimPose")};
         if (FParse::Value(FCommandLine::Get(), TEXT("SCPlayerPackage="), Folder)) Names.Add(TEXT("FSCPlayerKitRig"));
     }
     for (const FString& Name : Names)
