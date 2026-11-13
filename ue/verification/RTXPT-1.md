@@ -25,9 +25,10 @@ MegaLights, on the Drake Golem in the hightech small top hangar (LOOK-8 `golem-h
 2. **NRD plugin.** Without the NRD module NvRTX skips the third-party denoiser chain and opens a modal
    "requires the NRD plugin" dialog, even with DLSS-RR active.
 3. **Mega Geometry.** On the Nanite fallback proxies (`r.Nanite.RayTracing.Update 0`) ReSTIR PT shows a black hangar
-   floor beside the ship, black streaks along hull edges and dark self-shadowing on the fuel tank; Mega Geometry
-   removes all of it. The engine path tracer looked right on the same proxies, so the fault is in the real-time
-   sampled-lighting rays against the proxies — not chased further, Mega Geometry is the configuration.
+   floor beside the ship, black streaks along hull edges and dark self-shadowing on the fuel tank; in the evaluation
+   run Mega Geometry removed all of it. The engine path tracer looked right on the same proxies, so the fault is in
+   the real-time sampled-lighting rays. **Correction (follow-up runs, below):** the artefact came back at the door view
+   in a later run with Mega Geometry on, so Mega Geometry does not reliably fix it — root cause still open.
 4. **5.9-saved assets** (custom versions newer than 5.8): the Viewer map, `Smoke/M_Hangar*` and the SCBridge
    materials were regenerated on 5.8 by `create_viewer.py` and `create_materials.py` (one 5.8 API difference fixed in
    `create_materials.py`: single-input pins are named `""`, not `"Input"`).
@@ -51,12 +52,31 @@ Image (contact sheets of each view against the engine path tracer at 256 spp, 8 
 
 ## Profile (exterior, ReSTIR PT, one ProfileGPU frame: 15.8 ms)
 
-RTXDI 4.5 ms (initial samples 1.8, spatial 1.3, translucency volume 0.9) · DLSS-RR 1.9 ms · **ShadowDepths 4.1 ms**:
-VSM instance culling still runs although RTXDI shadows every light.
+RTXDI 4.5 ms (initial samples 1.8, spatial 1.3, translucency volume 0.9) · DLSS-RR 1.9 ms · ShadowDepths 4.1 ms
+(instance culling; see the follow-up: not VSM and not a real cost).
+
+## Follow-up: VSM and stability (2026-11-13, route `golem-rtxpt-shadows.txt`)
+
+**VSM off saves nothing.** GPU ms p50, VSM on / VSM off (`r.Shadow.Virtual.Enable 0`) / no shadow maps
+(`r.ShadowQuality 0`): exterior 24.71 / 24.93 / 24.37, door 21.22 / 21.08 / 22.68 — run-to-run noise. ProfileGPU
+still shows `ShadowDepths → CullInstances(UnCulled)` at 4.1 ms with VSM off: its timestamps overlap
+`SampledIndirectLighting` (ReSTIR PT, 14.6 ms on async compute), so the 4.1 ms above was an overlap artefact, not
+VSM. The real budget at the exterior view is ReSTIR PT ~14.6, RTXDI 4.8–6.7, DLSS-RR 2.2 ms. Images match too (the
+exterior's 14 % RMSE between the two shots is the first-person body appearing in frame; noise floor 0.9 %). VSM stays
+on: it costs nothing here and still shadows views that sampled lighting does not handle (stateless captures).
+
+**Mega Geometry runs are unstable.** Two of four runs with `r.Nanite.RayTracing 1` lost the GPU about 20 s after the
+ship loaded, before any route step: a page fault during RTXDI direct lighting, then `DXGI_ERROR_DEVICE_HUNG` in
+`SampledIndirectLighting`; both followed bursts of Mega Geometry persistent-memory reallocations. Fixed CLAS pools
+(`r.Nanite.RayTracing.CLAS.Memory.{Root,Streaming}.FixedSizeInMB=1536`) did not prevent the second crash (and doubled
+persistent memory to 4.6 GB), so they are not configured. No crash in four runs without Mega Geometry.
 
 ## Open
 
-- VSM off in the Win64 layer (`r.Shadow.Virtual.Enable 0` or no shadow-casting non-RTXDI light) — ~4 ms.
+- Mega Geometry GPU crashes (2/4 runs) and the black-floor / edge-streak artefact recurring with Mega Geometry on
+  (door view, follow-up run): candidates are the clustered-BLAS build limits (`r.Nanite.RayTracing.BLAS.MaxToBuild`,
+  `BLAS.CLASAddresses.Max` — exceeding them silently falls back to proxies; visible only in
+  `r.Nanite.RayTracing.Stats.Show`) and NvRTX's Nanite tracing in the sampled GI path.
 - The engine path tracer shows saturated blue emissive patches on the hangar's back wall and doors that no real-time
   mode shows (emissive / light-function handling differs between the two); not investigated.
 - `Seat` spawns refuse the teleport on the Golem (the route uses `Door`, `Hull` and a noclip placement).
