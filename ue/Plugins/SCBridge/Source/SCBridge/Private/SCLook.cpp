@@ -342,7 +342,10 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookSky(
         UE_LOG(LogTemp, Display, TEXT("LOOK sky intensity=%s lights=%d"), Args.IsValidIndex(0) ? *Args[0] : TEXT("-"), Count);
     }));
 
-// sc.Look.HideGlass <0|1>: hide the vehicle's components drawn with a glass master material (A/B through-glass views).
+static bool IsGlassMaterial(const UMaterialInterface* M) { return M && GetNameSafe(M->GetMaterial()).Contains(TEXT("Glass")); }
+
+// sc.Look.HideGlass <0|1> [<mesh name part>]: hide the vehicle's components drawn with a glass master material, or only
+// those whose mesh name contains the part (A/B through-glass views).
 static FAutoConsoleCommandWithWorldAndArgs GSCLookHideGlass(
     TEXT("sc.Look.HideGlass"), TEXT("sc.Look.HideGlass <0|1>: hide components drawn with a glass material"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
@@ -356,13 +359,86 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookHideGlass(
             {
                 bool bGlass = false;
                 for (int32 I = 0; I < C->GetNumMaterials() && !bGlass; ++I)
-                    if (const UMaterialInterface* M = C->GetMaterial(I)) bGlass = GetNameSafe(M->GetMaterial()).Contains(TEXT("Glass"));
-                if (!bGlass) continue;
+                    bGlass = IsGlassMaterial(C->GetMaterial(I));
+                if (!bGlass || (Args.IsValidIndex(1) && !GetNameSafe(C->GetStaticMesh()).Contains(Args[1]))) continue;
                 C->SetHiddenInGame(bHide);
                 ++Hidden;
             }
         }
         UE_LOG(LogTemp, Display, TEXT("LOOK glass hidden=%d components=%d"), bHide, Hidden);
+    }));
+
+// sc.Look.GlassRay: the vehicle components drawn with a glass material whose bounds the screen-centre ray crosses
+// (glass has no collision, so sc.Look.Probe cannot hit it), nearest first, with each glass slot's parameters.
+static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassRay(
+    TEXT("sc.Look.GlassRay"), TEXT("sc.Look.GlassRay: log the glass parts on the screen-centre ray and their glass parameters"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+        if (!PC || !PC->PlayerCameraManager) return;
+        const FVector Dir = PC->PlayerCameraManager->GetCameraRotation().Vector();
+        const FVector From = PC->PlayerCameraManager->GetCameraLocation();
+        TArray<TPair<double, UStaticMeshComponent*>> Hits;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+        {
+            TArray<UStaticMeshComponent*> Components;
+            It->GetComponents(Components);
+            for (UStaticMeshComponent* C : Components)
+            {
+                bool bGlass = false;
+                for (int32 I = 0; I < C->GetNumMaterials() && !bGlass; ++I) bGlass = IsGlassMaterial(C->GetMaterial(I));
+                FVector HitPoint, HitNormal; float Time;
+                const FBox Box = C->Bounds.GetBox();
+                if (bGlass && C->IsVisible() && FMath::LineExtentBoxIntersection(Box, From, From + Dir * 100000.0, FVector::ZeroVector, HitPoint, HitNormal, Time))
+                    Hits.Add({Box.IsInside(From) ? 0.0 : FVector::Dist(From, HitPoint), C});
+            }
+        }
+        Hits.Sort([](const auto& A, const auto& B) { return A.Key < B.Key; });
+        for (const auto& [Distance, C] : Hits)
+        {
+            UE_LOG(LogTemp, Display, TEXT("GLASSRAY entry=%.0f comp=%s mesh=%s bounds=%s"), Distance, *GetNameSafe(C),
+                   *GetNameSafe(C->GetStaticMesh()), *C->Bounds.GetBox().ToString());
+            for (int32 Slot = 0; Slot < C->GetNumMaterials(); ++Slot)
+            {
+                const auto* MI = Cast<UMaterialInstance>(C->GetMaterial(Slot));
+                if (!MI || !IsGlassMaterial(MI)) continue;
+                UE_LOG(LogTemp, Display, TEXT("GLASSRAY   slot=%d material=%s"), Slot, *GetNameSafe(MI));
+                for (const FScalarParameterValue& P : MI->ScalarParameterValues)
+                    UE_LOG(LogTemp, Display, TEXT("GLASSRAY     s %s=%.5f"), *P.ParameterInfo.Name.ToString(), P.ParameterValue);
+                for (const FVectorParameterValue& P : MI->VectorParameterValues)
+                    UE_LOG(LogTemp, Display, TEXT("GLASSRAY     v %s=%s"), *P.ParameterInfo.Name.ToString(), *P.ParameterValue.ToString());
+                for (const FTextureParameterValue& P : MI->TextureParameterValues)
+                    UE_LOG(LogTemp, Display, TEXT("GLASSRAY     t %s=%s"), *P.ParameterInfo.Name.ToString(), *GetNameSafe(P.ParameterValue));
+            }
+        }
+        UE_LOG(LogTemp, Display, TEXT("GLASSRAY parts=%d"), Hits.Num());
+    }));
+
+// sc.Look.GlassParam <name> <x> [<y> <z>] [@<instance name part>]: set a scalar (one value) or vector (three) parameter
+// on every glass material instance of the vehicles, or on those whose name contains the part (A/B without a rebuild).
+static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassParam(
+    TEXT("sc.Look.GlassParam"), TEXT("sc.Look.GlassParam <name> <x> [<y> <z>] [@<instance name part>]: set a glass material parameter on glass instances"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& InArgs, UWorld* World) {
+        TArray<FString> Args = InArgs;
+        const FString Filter = Args.Num() && Args.Last().StartsWith(TEXT("@")) ? Args.Pop().Mid(1) : FString();
+        if (Args.Num() < 2) return;
+        TSet<UMaterialInstanceDynamic*> Done;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+        {
+            TArray<UStaticMeshComponent*> Components;
+            It->GetComponents(Components);
+            for (UStaticMeshComponent* C : Components)
+                for (int32 I = 0; I < C->GetNumMaterials(); ++I)
+                {
+                    auto* MID = Cast<UMaterialInstanceDynamic>(C->GetMaterial(I));
+                    if (!MID || !IsGlassMaterial(MID) || Done.Contains(MID) || !MID->GetName().Contains(Filter)) continue;
+                    Done.Add(MID);
+                    if (Args.Num() >= 4)
+                        MID->SetVectorParameterValue(FName(*Args[0]), FLinearColor(FCString::Atof(*Args[1]), FCString::Atof(*Args[2]), FCString::Atof(*Args[3])));
+                    else
+                        MID->SetScalarParameterValue(FName(*Args[0]), FCString::Atof(*Args[1]));
+                }
+        }
+        UE_LOG(LogTemp, Display, TEXT("LOOK glass_param %s filter=%s instances=%d"), *FString::Join(Args, TEXT(" ")), *Filter, Done.Num());
     }));
 
 // sc.Look.Camera <x> <y> <z> <yaw> <pitch>: put the current pawn (the fly camera in fly mode) at a world position and

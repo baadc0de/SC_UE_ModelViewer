@@ -265,8 +265,11 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // by GlassTintStrength only under %USE_TINT_PALETTE; reflectance is MatSpecColor.r; the authored Opacity is never
     // read. Thickness (layer Height) is the vertex blue channel under %PER_VERTEX_CURVATURE times the %HEIGHT_MAP.
     const FSCStarEngine& Star = FSCStarEngine::Get();
-    auto GlassRule = [&](const FSCMaterialDesc& X, bool bVertexHeight, bool bVertexTint, bool bHeightMap, bool bTintMap)
+    auto GlassRule = [&](const FSCMaterialDesc& X, bool bVertexHeight, bool bVertexTint, bool bHeightMap, bool bTintMap, bool bThinFilm)
     {
+        // Without %THIN_FILM the game's Fresnel is lerp(Reflectance, 1, Schlick): the master must bypass UE's thin-film
+        // node, which is not an identity at zero thickness (it adds a film interface and raises F0 several-fold).
+        TestEqual(X.Name + TEXT(" %THIN_FILM switches the film"), X.Scalars.FindRef(TEXT("UseThinFilm"), -1.f), bThinFilm ? 1.f : 0.f);
         TestEqual(X.Name + TEXT(" density scale is the game's"), X.Scalars[TEXT("GlassDensityScale")], float(Star.GlassDensityScale));
         TestEqual(X.Name + TEXT(" colour floor is the game's"), X.Scalars[TEXT("GlassColorFloor")], float(Star.GlassColourFloor));
         TestEqual(X.Name + TEXT(" vertex height bias is the game's"), X.Scalars[TEXT("GlassVertexHeightBias")], float(Star.GlassVertexHeightBias));
@@ -284,7 +287,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     auto Warned = [](const FSCMaterialDesc& X, const TCHAR* What) { return X.Warnings.ContainsByPredicate([What](const FString& W) { return W.Contains(What); }); };
     if (auto* X = Check(TEXT("glass_ext"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
-        GlassRule(*X, false, false, false, false);
+        GlassRule(*X, false, false, false, false, true);
         TestTrue(TEXT("%USE_TINT_PALETTE: Diffuse moved to the palette glass colour by GlassTintStrength"),
                  Near(X->Vectors[TEXT("GlassColor")], FLinearColor(0.45f, 0.55f, 0.275f)));
         TestTrue(TEXT("glass reflectance = Specular.r"), Near(X->Vectors[TEXT("SpecularColor")], FLinearColor(0.05f, 0.05f, 0.05f)));
@@ -299,7 +302,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     }
     if (auto* X = Check(TEXT("glass_thickness"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
-        GlassRule(*X, true, false, true, false);
+        GlassRule(*X, true, false, true, false, false);
         TestTrue(TEXT("no %USE_TINT_PALETTE: a routed palette channel does not tint"), Near(X->Vectors[TEXT("GlassColor")], FLinearColor(0.2f, 0.4f, 0.6f)));
         TestEqual(TEXT("height map is TexSlot8"), X->Textures[TEXT("HeightMap")].Path, FString(TEXT("tex/glass_height.png")));
         TestEqual(TEXT("height map is linear"), int32(X->Textures[TEXT("HeightMap")].Role), int32(ESCTextureRole::Linear));
@@ -309,7 +312,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     }
     if (auto* X = Check(TEXT("glass_vertex_tint"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
-        GlassRule(*X, false, true, false, true);
+        GlassRule(*X, false, true, false, true, false);
         TestEqual(TEXT("tint map is TexSlot4"), X->Textures[TEXT("TintMap")].Path, FString(TEXT("tex/glass_tint.png")));
         TestEqual(TEXT("tint map is colour"), int32(X->Textures[TEXT("TintMap")].Role), int32(ESCTextureRole::Color));
     }
@@ -317,7 +320,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     {
         // What the material leaves out is the shader's own default, and what the export does not carry is reported:
         // the feature would otherwise go missing without a trace.
-        GlassRule(*X, false, false, false, false);
+        GlassRule(*X, false, false, false, false, true);
         TestEqual(TEXT("%THIN_FILM without ThinFilmThickness: the shader default"), X->Scalars[TEXT("ThinFilmThickness")], float(Star.GlassThinFilmThicknessDefault));
         TestTrue(TEXT("%HEIGHT_MAP without an exported TexSlot8 is reported"), Warned(*X, TEXT("TexSlot8")));
         TestTrue(TEXT("%TINT_MAP without an exported TexSlot4 is reported"), Warned(*X, TEXT("TexSlot4")));
@@ -666,6 +669,7 @@ bool FSCMaterialsMasters::RunTest(const FString&)
                     auto Has = [&Infos](FName Name) { return Infos.ContainsByPredicate([Name](const FMaterialParameterInfo& I) { return I.Name == Name; }); };
                     TestTrue(Path + TEXT(" glass UVs: GlassTiling and GlassVStretch, no generic Tiling"),
                              Has(TEXT("GlassTiling")) && Has(TEXT("GlassVStretch")) && !Has(TEXT("Tiling")));
+                    TestTrue(Path + TEXT(" thin film behind its %THIN_FILM switch"), Has(TEXT("UseThinFilm")));
                 }
 #endif
             }

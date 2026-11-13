@@ -586,13 +586,21 @@ def glass_master():
         DensityScale=g.scalar("GlassDensityScale", 0.0))
     mfp = g.node(unreal.MaterialExpressionSubstrateTransmittanceToMFP)
     g.link(*transmittance, mfp, "TransmittanceColor")
+    # Fresnel: the game's lerp(Reflectance, 1, Schlick) (F0 = SpecularColor, F90 = 1); under %THIN_FILM (UseThinFilm)
+    # UE's thin-film node instead. The node is not an identity at zero thickness: it always adds the film's own
+    # dielectric interface (IOR 1.44) and so raises a clear glass's F0 several-fold, which drew a milky reflection over
+    # every canopy (WP-U3b.md section 14.8). It is therefore selected, not fed a zero thickness.
+    f0 = g.vector("SpecularColor", (0.04, 0.04, 0.04))
+    f90 = g.const3((1, 1, 1))
     film = g.node(unreal.MaterialExpressionSubstrateThinFilm)
     g.link(*normal, film, "Normal")
-    g.link(*g.vector("SpecularColor", (0.04, 0.04, 0.04)), film, "F0")
-    g.link(*g.const3((1, 1, 1)), film, "F90")
+    g.link(*f0, film, "F0")
+    g.link(*f90, film, "F90")
     g.link(*g.scalar("ThinFilmThickness", 0.0), film, "Thickness")
-    slab = g.slab(g.const3((0, 0, 0)), (film, "Specular Color"), (film, "Edge Specular Color"), g.roughness("", uv), normal,
-                  None, (mfp, "MFP"), front=False)
+    use_film = g.scalar("UseThinFilm", 0.0)
+    slab = g.slab(g.const3((0, 0, 0)), g.lerp(f0, (film, "Specular Color"), use_film),
+                  g.lerp(f90, (film, "Edge Specular Color"), use_film), g.roughness("", uv), normal, None, (mfp, "MFP"),
+                  front=False)
     slab.set_editor_property("sub_surface_type", unreal.MaterialSubSurfaceType.MSS_SIMPLE_VOLUME)
     g.weight(slab, g.custom(GLASS_COVERAGE, f1, HeightMap=height_map, UseHeightMap=use_height_map,
                             Clip=g.scalar("GlassHeightClip", 0.0)))

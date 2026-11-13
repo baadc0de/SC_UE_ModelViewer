@@ -49,3 +49,5 @@ resolved): the hangar is lit for its own play spaces, not as a ship studio.
 
 The canopy's bounded milky patch is the canopy glass (gone with `sc.Look.HideGlass 1`, unchanged without front-layer
 translucency reflections): a glass-shading investigation, not a post-process setting.
+Resolved in part 2026-11-13 ([WP-U3b](WP-U3b.md) §14.8): it was the bridge pane's reflection of the hangar ceiling,
+three to seven times too strong because of the thin-film node; what remains is the game-strength reflection.

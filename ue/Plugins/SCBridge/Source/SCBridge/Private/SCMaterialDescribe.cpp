@@ -344,7 +344,11 @@ void Glass(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPal
     };
     D.Scalars.Add(TEXT("UseHeightMap"), Map(TEXT("HEIGHT_MAP"), 8, TEXT("HeightMap"), ESCTextureRole::Linear) ? 1.f : 0.f);
     D.Scalars.Add(TEXT("UseTintMap"), Map(TEXT("TINT_MAP"), 4, TEXT("TintMap"), ESCTextureRole::Color) ? 1.f : 0.f);
-    D.Scalars.Add(TEXT("ThinFilmThickness"), HasToken(Sub, TEXT("THIN_FILM")) ? A.Param(TEXT("ThinFilmThickness"), float(Game.GlassThinFilmThicknessDefault)) : 0.f);
+    // The film exists only under %THIN_FILM (ApplyIridescenceIsotropic); without it the Fresnel is the plain dielectric
+    // lerp(Reflectance, 1, Schlick), so the master bypasses UE's thin-film node (not an identity at zero thickness).
+    const bool bThinFilm = HasToken(Sub, TEXT("THIN_FILM"));
+    D.Scalars.Add(TEXT("UseThinFilm"), bThinFilm ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("ThinFilmThickness"), bThinFilm ? A.Param(TEXT("ThinFilmThickness"), float(Game.GlassThinFilmThicknessDefault)) : 0.f);
 }
 /** Material-level maps applied over the blended layers (game HardSurface.cfx / LayerBlend_V2.cfx):
  *  - macro normal + gloss: TexSlot3 ddna, compiled in by %MACRO_NORMAL_MAP (HardSurface, at baseTC x MacroTiling)
