@@ -1019,8 +1019,44 @@ void FSCImportJob::FState::Assemble()
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
         const int32 AreasBefore = V->LightAreas.Num();
         FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
+        TMap<FString, FEntity> ById; // entity ids are unique within one container
         for (const auto& P : Interior.Placements)
-            if (CanPlace(P)) Place(P, Container, bHelper, false);
+            if (CanPlace(P))
+            {
+                FEntity Placed = Place(P, Container, bHelper, false);
+                if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
+            }
+        // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel.
+        for (const auto& P : Interior.Placements)
+        {
+            const FEntity* Panel = ById.Find(P.EntityId);
+            if (!Panel || !Panel->Anchor) continue;
+            TArray<FString> Targets = P.Links;
+            if (!P.LoadoutOwnerEntityId.IsEmpty()) Targets.Add(P.LoadoutOwnerEntityId);
+            for (const FString& Target : Targets)
+                if (const FEntity* Door = ById.Find(Target); Door && Door->Rig && Door->Anchor != Panel->Anchor)
+                {
+                    V->DoorControls.Add(Panel->Anchor, Door->Rig);
+                    break;
+                }
+        }
+        // Proximity sensors: an anchor in the placement frame; the box maps into it like mesh vertices do (CryEngine
+        // local -> glTF -> UE: (y, x, z) x 100), half-extents about the offset.
+        for (const FSCProximitySensor& Sensor : Interior.ProximitySensors)
+        {
+            FSCDoorSensor Door;
+            for (const FString& Target : Sensor.Links)
+                if (const FEntity* Linked = ById.Find(Target); Linked && Linked->Rig) Door.Doors.Add(Linked->Rig);
+            if (Door.Doors.IsEmpty()) continue;
+            Door.Anchor = NewAnchor(Sensor.EntityClass, Container,
+                                    FSCMeshImporter::InstanceTransform(Sensor.LocalMatrix, FMatrix::Identity, bHelper,
+                                                                       FSCMeshImporter::InCryFrame(TEXT("cryengine_z_up"), bHelper)));
+            const FVector Centre = FVector(Sensor.Offset.Y, Sensor.Offset.X, Sensor.Offset.Z) * 100.0;
+            const FVector Half = FVector(Sensor.Extent.Y, Sensor.Extent.X, Sensor.Extent.Z).GetAbs() * 100.0;
+            Door.Box = FBox(Centre - Half, Centre + Half);
+            Door.ExitDelay = Sensor.ExitDelay;
+            V->DoorSensors.Add(MoveTemp(Door));
+        }
         FBox Floor(ForceInit);
         TArray<USceneComponent*> Descendants;
         Container->GetChildrenComponents(true, Descendants);
@@ -1035,6 +1071,7 @@ void FSCImportJob::FState::Assemble()
             V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName,
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
+    UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d"), V->DoorControls.Num(), V->DoorSensors.Num());
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose

@@ -308,6 +308,34 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Where"), TEXT("sc.FP.Where: log mode, vehicle-relative position and movement state"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_WHERE %s"), *Where(*Weak.Get()));
     });
+    Add(TEXT("sc.FP.Pads"), TEXT("sc.FP.Pads: aim at every door panel from 80 cm in front (four sides) and log whether E resolves to its door"),
+        [Weak](const TArray<FString>&) {
+            ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+            if (!V) return;
+            const AActor* Ignore = Weak->GetFirstPerson();
+            int32 Total = 0, Resolved = 0, NoDoor = 0;
+            for (const auto& [Panel, Rig] : V->DoorControls)
+            {
+                const USceneComponent* Anchor = Panel.Get();
+                const int32 Expected = V->DoorForRig(Rig.Get());
+                if (!Anchor) continue;
+                ++Total;
+                if (Expected == INDEX_NONE) { ++NoDoor; continue; }
+                FBox Box(ForceInit);
+                TArray<USceneComponent*> Parts;
+                Anchor->GetChildrenComponents(true, Parts);
+                for (const USceneComponent* Part : Parts)
+                    if (const auto* P = Cast<UPrimitiveComponent>(Part); P && P->IsVisible()) Box += P->Bounds.GetBox();
+                if (!Box.IsValid) continue;
+                bool bOK = false;
+                for (const FVector& D : {FVector::ForwardVector, FVector::BackwardVector, FVector::RightVector, FVector::LeftVector})
+                    bOK |= V->FindInteraction(Box.GetCenter() + D * (Box.GetExtent().GetMax() + 80), -D, 300, Ignore) == Expected;
+                Resolved += bOK;
+                if (!bOK) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PAD_UNRESOLVED panel=%s door=\"%s\" at=%s"), *Anchor->GetName(),
+                                 *V->Doors[Expected].DisplayName, *Box.GetCenter().ToCompactString());
+            }
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS total=%d resolved=%d no_door=%d"), Total, Resolved, NoDoor);
+        });
     Add(TEXT("sc.FP.Probe"), TEXT("sc.FP.Probe [reach cm]: log what the view ray hits (component chain, rig, socket) and the focused interaction"),
         [Weak](const TArray<FString>& Args) {
             auto* C = FirstPerson(Weak);

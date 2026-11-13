@@ -216,7 +216,32 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             if (!Instance(Object(P), Placement, Detail, TEXT("transform"))) { Warn(TEXT("placement"), Detail); continue; }
             Placement.EntityName = String(P->AsObject(), TEXT("cgf_path"));
             Placement.SourceTransformBasis = TEXT("cryengine_z_up");
+            Placement.EntityId = String(P->AsObject(), TEXT("entity_id"));
+            Placement.LoadoutOwnerEntityId = String(P->AsObject(), TEXT("loadout_owner_entity_id"));
+            for (const auto& L : ReaderArray(P->AsObject(), TEXT("links"))) if (L->Type == EJson::String) Placement.Links.Add(L->AsString());
             I.Placements.Add(MoveTemp(Placement));
+        }
+        for (const auto& S : ReaderArray(O, TEXT("proximity_sensors")))
+        {
+            const auto SO = Object(S);
+            if (!SO) continue;
+            FSCProximitySensor Sensor;
+            if (!Matrix(SO, TEXT("transform"), Sensor.LocalMatrix, Detail)) { Warn(TEXT("proximity sensor"), Detail); Detail.Reset(); continue; }
+            Sensor.EntityClass = String(SO, TEXT("entity_class"));
+            Sensor.EntityId = String(SO, TEXT("entity_id"));
+            double Delay = 0;
+            if (SO->TryGetNumberField(TEXT("exit_delay"), Delay)) Sensor.ExitDelay = float(Delay);
+            const FReaderObject* Volume;
+            if (SO->TryGetObjectField(TEXT("volume"), Volume) && String(*Volume, TEXT("kind")) == TEXT("box"))
+            {
+                const auto& E = ReaderArray(*Volume, TEXT("extent"));
+                const auto& Off = ReaderArray(*Volume, TEXT("offset"));
+                if (E.Num() == 3) Sensor.Extent = FVector(E[0]->AsNumber(), E[1]->AsNumber(), E[2]->AsNumber());
+                if (Off.Num() == 3) Sensor.Offset = FVector(Off[0]->AsNumber(), Off[1]->AsNumber(), Off[2]->AsNumber());
+            }
+            for (const auto& L : ReaderArray(SO, TEXT("links"))) if (L->Type == EJson::String) Sensor.Links.Add(L->AsString());
+            if (Sensor.Extent.IsNearlyZero() || Sensor.Links.IsEmpty()) { Warn(TEXT("proximity sensor"), TEXT("no box volume or no linked door: ") + Sensor.EntityId); continue; }
+            I.ProximitySensors.Add(MoveTemp(Sensor));
         }
         Out.Interiors.Add(MoveTemp(I));
     }

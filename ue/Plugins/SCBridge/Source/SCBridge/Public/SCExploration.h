@@ -30,3 +30,12 @@ struct SCBRIDGE_API FSCDoorInteraction
     UPROPERTY(BlueprintReadOnly) FName Joint;
     // Open state is derived from the fragment tag last played on Rig (ASCVehicle::IsDoorOpen).
 };
+/** A door proximity sensor (the game's Door_Ship_Sensor): while the player stands in its box the doors it drives open;
+ *  ExitDelay seconds after the player left every sensor of a door that a sensor opened, the door closes. */
+struct FSCDoorSensor
+{
+    TWeakObjectPtr<USceneComponent> Anchor; // the sensor's frame
+    FBox Box = FBox(ForceInit);             // anchor-local cm
+    float ExitDelay = 0;
+    TArray<TWeakObjectPtr<USCRigComponent>> Doors;
+};

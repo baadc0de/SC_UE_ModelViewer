@@ -32,6 +32,23 @@ struct SCBRIDGE_API FSCSceneInstance
     FMatrix PortOffset = FMatrix::Identity; // port.offset in native SC axes (row-vector, metres)
     FString ImportWarning; // Invalid optional instance: retain identity to suppress descendants.
     FMatrix LocalMatrix = FMatrix::Identity;
+    /** Interior placements: the object-container entity id (unique within its container), the ids its EntityLinks
+     *  name (a door panel names its door), and the entity whose inline loadout attached it (a door's own panels). */
+    FString EntityId;
+    TArray<FString> Links;
+    FString LoadoutOwnerEntityId;
+};
+/** `interiors[].proximity_sensors[]`: a door proximity sensor in its container's placement frame (CryEngine metres). */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCProximitySensor
+{
+    GENERATED_BODY()
+    FString EntityClass, EntityId;
+    FMatrix LocalMatrix = FMatrix::Identity;
+    /** Box half-extents and centre offset in the sensor's own frame (metres). */
+    FVector Extent = FVector::ZeroVector, Offset = FVector::ZeroVector;
+    float ExitDelay = 0;
+    TArray<FString> Links; // entity ids of the doors it drives, in the same container
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCInterior
@@ -41,6 +58,7 @@ struct SCBRIDGE_API FSCInterior
     /** `room_volumes[]` objects verbatim (container-local CryEngine metres); parsed by FSCRoomVolume. */
     UPROPERTY(BlueprintReadOnly) TArray<FString> RoomVolumeJson;
     UPROPERTY(BlueprintReadOnly) TArray<FSCSceneInstance> Placements;
+    TArray<FSCProximitySensor> ProximitySensors;
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSubmaterial

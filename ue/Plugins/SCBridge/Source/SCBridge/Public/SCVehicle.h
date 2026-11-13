@@ -55,6 +55,14 @@ public:
     int32 FindInteraction(FVector Eye, FVector Direction, float Reach = 300, const AActor* Ignore = nullptr) const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool ToggleDoor(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") bool IsDoorOpen(int32 Index) const;
+    /** Door control panels (the game's pads): a panel's anchor -> the rig of the door it operates (scene `links`, or
+     *  the door whose loadout attached it). FindInteraction resolves a panel under the crosshair to its door. */
+    TMap<TWeakObjectPtr<const USceneComponent>, TWeakObjectPtr<USCRigComponent>> DoorControls;
+    TArray<FSCDoorSensor> DoorSensors;
+    /** First-person tick: opens doors whose sensors hold the player, closes the ones a sensor opened after their delay. */
+    void UpdateDoorSensors(const FVector& PlayerWorld, double Now);
+    /** The door interaction driven by a rig (the first one; INDEX_NONE without). */
+    int32 DoorForRig(const USCRigComponent* Rig) const;
     /** Whether the last tag played for Fragment on Rig (nullptr: the untargeted orbit-UI toggle) is Open. */
     bool IsFragmentOpen(FName Fragment, const USCRigComponent* Rig = nullptr) const;
     bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target);
@@ -116,6 +124,8 @@ private:
     TSet<USkeletalMesh*> DirtyMeshes;
     // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle.
     TMap<TPair<const USCRigComponent*, FName>, FName> FragmentTargets;
+    struct FSensorDoorState { double LastInside = -1; float ExitDelay = 0; bool bOpenedBySensor = false; };
+    TMap<int32, FSensorDoorState> SensorDoorStates;
     struct FPendingSpawn
     {
         FName Kind;
