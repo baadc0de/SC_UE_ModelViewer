@@ -77,7 +77,7 @@ ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FSt
     if (!FSCImporter::Import(Source, Options, Result)) UE_LOG(LogSCImport, Error, TEXT("IMPORT_FAILED %s"), *Result.Error);
     return Result.Vehicle.Get();
 }
-double USCImportLibrary::PresentEnvironment(ASCVehicle* Environment, const FString& State, double FloorZ)
+FVector USCImportLibrary::PresentEnvironment(ASCVehicle* Environment, const FString& State, double FloorZ)
 {
     FSCEnvironment::SetState(Environment, State);
     return FSCEnvironment::PlaceOnFloor(Environment, FloorZ, nullptr);

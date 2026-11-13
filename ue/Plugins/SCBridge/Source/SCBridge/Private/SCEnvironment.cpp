@@ -4,6 +4,7 @@
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -49,37 +50,71 @@ int32 FSCEnvironment::SetState(ASCVehicle* Environment, const FString& State)
     return Snapped;
 }
 
-double FSCEnvironment::PlaceOnFloor(ASCVehicle* Environment, double FloorZ, const AActor* Ignore)
+FVector FSCEnvironment::PlaceOnFloor(ASCVehicle* Environment, double FloorZ, const AActor* Ignore)
 {
     UWorld* World = Environment ? Environment->GetWorld() : nullptr;
-    if (!World) return 0;
-    // The ship floor is the first large (>= 20 m across, the ship elevator), upward-facing surface below a point 2 m under
-    // the origin: a top-loading modern hangar's origin is on its roof hatch, with the room and the elevator below it.
-    // Front-loading and utility hangars put the origin on a tiled floor: when nothing lies below, the first upward floor
-    // tile (>= 2 m across) under a point 2 m above the origin is the floor.
-    constexpr double ElevatorSpan = 2000.0, TileSpan = 200.0;
-    const FBox Bounds = Environment->GetComponentsBoundingBox(true);
-    const FVector Origin = Environment->GetActorLocation();
-    auto Probe = [&](double From, double MinFloorSpan) {
+    if (!World) return FVector::ZeroVector;
+    // The ship stands on the environment's ship elevator: its largest flat moving part (attached under a rig, >= 20 m
+    // across, <= 15 m thick) in the presented pose: of the moving parts at least half the largest one's area (the elevator
+    // and the shaft cover doors around it, not roof-hatch leaves or cargo pads) the highest, the platform the ship stands on. Static ceilings and roof frames are larger
+    // but never move. Hangars place their origin differently (modern top-loaders on the roof hatch, front-loaders and
+    // utility hangars on the floor or at a corner), so the elevator, not the origin, decides where the ship goes.
+    constexpr double MinSpan = 2000.0, MaxThickness = 1500.0, SameSize = 0.5;
+    struct FCandidate { FBox Box; double Area; FString Name; };
+    TArray<FCandidate> Candidates;
+    Environment->ForEachComponent<UStaticMeshComponent>(false, [&](UStaticMeshComponent* C) {
+        if (C->IsA<UInstancedStaticMeshComponent>() || !C->IsVisible() || C->bHiddenInGame || C->ComponentHasTag(TEXT("SCGameCollision")) ||
+            C->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+            return;
+        bool bMoving = false;
+        for (const USceneComponent* Parent = C->GetAttachParent(); Parent && !bMoving; Parent = Parent->GetAttachParent())
+            bMoving = Parent->IsA<USCRigComponent>();
+        if (!bMoving) return;
+        const FBox Box = C->Bounds.GetBox();
+        const FVector Size = Box.GetSize();
+        if (FMath::Min(Size.X, Size.Y) >= MinSpan && Size.Z <= MaxThickness)
+            Candidates.Add({Box, Size.X * Size.Y, C->ComponentTags.Num() ? FPaths::GetBaseFilename(C->ComponentTags[0].ToString()) : C->GetName()});
+    });
+    double Largest = 0;
+    for (const FCandidate& Candidate : Candidates)
+    {
+        UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_FLOOR_CANDIDATE %s area_m2=%.0f top_z=%.1f centre=%s"), *Candidate.Name,
+               Candidate.Area / 1.0e4, Candidate.Box.Max.Z, *FVector2D(Candidate.Box.GetCenter()).ToString());
+        Largest = FMath::Max(Largest, Candidate.Area);
+    }
+    const FCandidate* Best = nullptr;
+    for (const FCandidate& Candidate : Candidates)
+        if (Candidate.Area >= Largest * SameSize && (!Best || Candidate.Box.Max.Z > Best->Box.Max.Z)) Best = &Candidate;
+    FVector Offset = FVector::ZeroVector;
+    if (Best)
+    {
+        Offset = FVector(-Best->Box.GetCenter().X, -Best->Box.GetCenter().Y, FloorZ - Best->Box.Max.Z);
+        UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_PLACE elevator=%s floor_z=%.1f offset=%s"), *Best->Name, Best->Box.Max.Z, *Offset.ToString());
+    }
+    else
+    {
+        // No elevator-sized part: the first upward floor surface (>= 2 m across) under a point 2 m above the origin.
         FCollisionQueryParams Query(SCENE_QUERY_STAT(SCEnvFloor), true);
         if (Ignore) Query.AddIgnoredActor(Ignore);
+        const FBox Bounds = Environment->GetComponentsBoundingBox(true);
+        const FVector Origin = Environment->GetActorLocation();
+        double From = Origin.Z + 200.0;
         for (int32 Step = 0; Step < 64 && From > Bounds.Min.Z; ++Step)
         {
             FHitResult Hit;
             if (!World->LineTraceSingleByChannel(Hit, FVector(Origin.X, Origin.Y, From), FVector(Origin.X, Origin.Y, Bounds.Min.Z - 100), ECC_Visibility, Query))
                 break;
-            const FVector Size = HitPartBox(Hit).GetSize();
-            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(Size.X, Size.Y) >= MinFloorSpan) return Hit.ImpactPoint.Z;
+            if (Hit.ImpactNormal.Z > 0.9 && FMath::Min(HitPartBox(Hit).GetSize().X, HitPartBox(Hit).GetSize().Y) >= 200.0)
+            {
+                Offset.Z = FloorZ - Hit.ImpactPoint.Z;
+                break;
+            }
             if (Hit.GetComponent()) Query.AddIgnoredComponent(Hit.GetComponent());
             From = Hit.ImpactPoint.Z;
         }
-        return TNumericLimits<double>::Max();
-    };
-    double Found = Probe(Origin.Z - 200.0, ElevatorSpan);
-    if (Found == TNumericLimits<double>::Max()) Found = Probe(Origin.Z + 200.0, TileSpan);
-    const double Offset = Found < TNumericLimits<double>::Max() ? FloorZ - Found : 0.0;
-    if (Offset != 0) Environment->AddActorWorldOffset(FVector(0, 0, Offset));
-    UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_PLACE floor_z=%.1f offset_z=%.1f"), Found < TNumericLimits<double>::Max() ? Found : 0., Offset);
+        UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_PLACE elevator=none offset=%s"), *Offset.ToString());
+    }
+    if (!Offset.IsZero()) Environment->AddActorWorldOffset(Offset);
     return Offset;
 }
 

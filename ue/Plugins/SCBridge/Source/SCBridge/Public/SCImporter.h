@@ -66,9 +66,10 @@ public:
      *  repeated parts instanced. ScenePath selects the package's scene.json in a root holding several. */
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static ASCVehicle* ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath);
-    /** The door fragments' presented pose ("open", "closed" or "bind"), then the ship floor moved to FloorZ. */
+    /** The door fragments' presented pose ("open", "closed" or "bind"), then the ship elevator moved under the origin
+     *  with its top at FloorZ. Returns the offset applied. */
     UFUNCTION(BlueprintCallable, Category="SC")
-    static double PresentEnvironment(ASCVehicle* Environment, const FString& State = TEXT("open"), double FloorZ = -5.0);
+    static FVector PresentEnvironment(ASCVehicle* Environment, const FString& State = TEXT("open"), double FloorZ = -5.0);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static bool VerifyPackage(UObject* WorldContext, const FString& Folder, const FString& Tar);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))

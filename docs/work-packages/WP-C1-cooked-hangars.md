@@ -31,9 +31,20 @@ exporting and importing an object container on every start.
 - The PNG export was tried first and rejected: its derived-roughness maps and missing layer textures do not match the
   viewer's DDS path (mirror floors, lost projector gobos).
 - Verified: modern top-loading hangars (small: look matches the runtime import; ship on the floor).
-- Open: front-loading and utility hangars put the origin on a tiled floor; the floor rule (elevator >= 20 m below the
-  origin, else a floor tile >= 2 m below a point 2 m above it) gives inconsistent offsets there, and the utility large
-  top-loader shows the ship in darkness. Needs a cooked-vs-runtime comparison per type.
+- Placement: the ship stands on the ship elevator, found by geometry: the largest flat moving part (under a rig,
+  >= 20 m across, <= 15 m thick) in the presented pose; of moving parts at least half that area the highest (the
+  platform, not the shaft cover doors; roof-hatch leaves and cargo pads are smaller; static ceilings never move). Its
+  centre goes under the ship and its top to the map floor. Hangars place their origin differently (modern top-loaders
+  on the roof hatch; front-loading and utility hangars on the floor or at a building corner), so the origin cannot be
+  used. All 14 pick their ship elevator (cook logs `ENVIRONMENT_PLACE elevator=...`); checked in the viewer: modern
+  large top/front, utility large/small top.
+- All 14 cooked (`ue/scripts/cook_hangars.sh`: one editor process per hangar in a memory-capped systemd scope; a
+  single commandlet cooking all of them grew to ~26 GB and was OOM-killed). Content/SC/Hangars ~ the shared pool plus
+  per-hangar materials and levels.
+- Validation (modern large top-loader, Scorpius): hangar ready in 7.6-10.3 s cooked vs 47 s runtime; lit captures within
+  3 % RMSE (cooked at full texture resolution); frames ~2 ms slower cooked (render thread +2.5-4 ms, GPU -0.7 ms), cause
+  not yet found (suspects: streamable cooked textures, level-instance overhead).
+- The viewer's runtime path cannot export utility hangars (binary CryXML .cdf, see Follow-ups); cooked ones load.
 
 ## Follow-ups
 
