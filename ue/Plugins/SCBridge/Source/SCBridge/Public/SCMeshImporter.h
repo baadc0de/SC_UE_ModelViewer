@@ -87,6 +87,10 @@ public:
     static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap = false);
     static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
         bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error);
+    /** Instantiate for many meshes without collision or material (slots get the default material): every mesh is
+     *  configured first and the editor builds them together. A null entry failed (its Errors entry says why). */
+    static TArray<UStaticMesh*> InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,
+                                                 TArray<FString>& Errors);
     // glTF (right, up, backward), metres -> UE (forward, right, up), centimetres.
     static FVector Position(const FVector& V) { return FVector(-V.Z, V.X, V.Y) * 100.0; }
     static FMatrix Transform(const FMatrix& Gltf);

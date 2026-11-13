@@ -20,6 +20,7 @@
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
 #include "Async/Async.h"
+#include "Async/TaskGraphInterfaces.h"
 #include "IImageWrapperModule.h"
 #include "Modules/ModuleManager.h"
 #include "Engine/World.h"
@@ -34,8 +35,10 @@
 
 namespace
 {
-// Unique assets whose derivation may run ahead of the game-thread build (bounds peak CPU mesh memory).
-constexpr int32 DeriveLookAhead = 3;
+// Unique assets whose derivation may run ahead of the game-thread build: one per worker thread, at most MaxDeriveLookAhead
+// (bounds peak CPU mesh memory; a resource budget, not game data). A large ship has ~500 assets.
+constexpr int32 MaxDeriveLookAhead = 12;
+int32 DeriveLookAhead() { return FMath::Clamp(FTaskGraphInterface::Get().GetNumWorkerThreads(), 3, MaxDeriveLookAhead); }
 // Fractions of the whole import assigned to each stage, for the progress bar only.
 constexpr float ReadShare = 0.05f, MeshShare = 0.80f, MaterialShare = 0.05f;
 
@@ -384,7 +387,7 @@ void FSCImportJob::FState::Begin()
 void FSCImportJob::FState::LaunchDerives()
 {
     // Derivation is pure (reads the const source, writes its own slot); several assets run ahead of the build.
-    for (int32 I = Current; I < FMath::Min(Slots.Num(), Current + DeriveLookAhead); ++I)
+    for (int32 I = Current; I < FMath::Min(Slots.Num(), Current + DeriveLookAhead()); ++I)
     {
         FMeshSlot& Slot = Slots[I];
         if (Slot.bDeriveLaunched) continue;
@@ -1011,8 +1014,10 @@ void FSCImportJob::FState::Assemble()
         auto* Container = NewAnchor(
             Interior.Container.EntityName, Parent,
             FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
+        V->InteriorAnchors.Add(Container);
         FSCLightImporter::Build(
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
+        const int32 AreasBefore = V->LightAreas.Num();
         FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
         for (const auto& P : Interior.Placements)
             if (CanPlace(P)) Place(P, Container, bHelper, false);
@@ -1021,7 +1026,12 @@ void FSCImportJob::FState::Assemble()
         Container->GetChildrenComponents(true, Descendants);
         for (const auto* C : Descendants)
             if (const auto* Primitive = Cast<UPrimitiveComponent>(C); Primitive && Primitive->IsCollisionEnabled()) Floor += Primitive->Bounds.GetBox();
-        if (Floor.IsValid)
+        // The container's largest room stands on its floor; without rooms, the bounds of what collides (a container's
+        // collision can reach far below its rooms, e.g. a ship's lift down to the ground).
+        FVector RoomFloor;
+        if (V->LightAreas.Num() > AreasBefore && V->LightAreas.Last().LargestRoomFloor(RoomFloor))
+            V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName, FTransform(RoomFloor));
+        else if (Floor.IsValid)
             V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName,
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }

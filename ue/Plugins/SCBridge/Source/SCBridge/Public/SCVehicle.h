@@ -75,6 +75,8 @@ public:
     int32 RestOnLandingGear();
     /** Room volumes of the interior containers (WP-U3b §12); empty when the vehicle authors no rooms. */
     TArray<FSCLightArea> LightAreas;
+    /** One anchor per interior object container (scene `interiors[]`, in order): the unit of interior streaming. */
+    UPROPERTY() TArray<TObjectPtr<USceneComponent>> InteriorAnchors;
     /** Vertex samples per imported mesh asset (mesh-local cm): the input of the inside/outside vote. */
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
     /** World point inside any room volume of this vehicle (the game's "not the root clip volume"). */

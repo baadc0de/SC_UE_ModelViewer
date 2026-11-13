@@ -23,12 +23,6 @@ bool Emissive(const UStaticMeshComponent* C)
     }
     return false;
 }
-bool UnderRig(const USceneComponent* C)
-{
-    for (const USceneComponent* P = C->GetAttachParent(); P; P = P->GetAttachParent())
-        if (P->IsA<USCRigComponent>()) return true;
-    return false;
-}
 // Everything that makes two parts render, collide and light identically, except their transforms.
 bool SameSetup(const UStaticMeshComponent* A, const UStaticMeshComponent* B)
 {
@@ -52,6 +46,13 @@ uint32 SetupHash(const UStaticMeshComponent* C)
 }
 } // namespace
 
+bool FSCInstancing::UnderRig(const USceneComponent* C)
+{
+    for (const USceneComponent* P = C->GetAttachParent(); P; P = P->GetAttachParent())
+        if (P->IsA<USCRigComponent>()) return true;
+    return false;
+}
+
 FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle)
 {
     FSCInstancingStats Stats;
@@ -63,7 +64,7 @@ FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle)
     {
         // Exactly a plain component (not an instanced one or a subclass), registered, rigid, and a leaf.
         if (!C || C->GetClass() != UStaticMeshComponent::StaticClass() || !C->IsRegistered() || !C->GetStaticMesh() ||
-            !C->GetAttachChildren().IsEmpty() || UnderRig(C) || Emissive(C))
+            !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || Emissive(C))
             continue;
         ++Stats.Components;
         TArray<TArray<UStaticMeshComponent*>>& Bucket = Groups.FindOrAdd(SetupHash(C));

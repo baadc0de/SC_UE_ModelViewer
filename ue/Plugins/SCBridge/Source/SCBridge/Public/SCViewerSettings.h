@@ -45,6 +45,10 @@ public:
     // Look (LOOK-6, adjudicated): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard bloom.
     // 0.05 gives small fixtures a restrained glint; 0.15 suits stills. Console: sc.Look.BloomStar.
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float StarBloom = 0.05f;
+    // Look (LOOK-1) vs frame time: Lumen short-range AO is traced with hardware ray tracing while the world's
+    // ray-tracing segments stay within this budget (SCLook::UpdateShortRangeAO; a performance budget, not game data);
+    // beyond it Lumen's screen-space short-range AO. -1 = always traced, 0 = never. Console: sc.Look.ShortRangeAO.
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") int32 TracedShortRangeAOMaxSegments = 20000;
     /** How much more dirt faces pointing down get than faces pointing up (0 = even, 1 = all below); a viewer
      *  choice for a landed ship (the game's direction-dependent dirt is run-time state). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtUnderside = 0.5f;

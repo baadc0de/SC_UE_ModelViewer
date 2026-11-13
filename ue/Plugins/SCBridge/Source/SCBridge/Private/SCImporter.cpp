@@ -95,7 +95,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
 {
     if (!World) return false;
     FSCFolderPackageSource Disk(Folder);
-    TArray<uint8> Bytes;
+    TArray64<uint8> Bytes;
     if (!FFileHelper::LoadFileToArray(Bytes, *Tar))
     {
         UE_LOG(LogSCImport, Error, TEXT("Cannot read verification tar"));

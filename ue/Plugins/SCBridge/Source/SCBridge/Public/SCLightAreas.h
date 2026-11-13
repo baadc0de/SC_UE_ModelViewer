@@ -28,6 +28,8 @@ struct SCBRIDGE_API FSCRoomVolume
     /** Distance (m) from a container point to the volume's axis-aligned bounds in its own segment space; 0 inside
      *  them. A lower bound of the distance to the volume, used for the light-reach test. */
     double BoundsDistance(const FVector& ContainerPointM) const;
+    /** The volume's axis-aligned bounds in its own segment space (a prism extruded by Height). */
+    FBox SegmentBounds() const;
 };
 
 /** The room volumes of one container, attached to the component its lights and placements hang from. */
@@ -37,6 +39,8 @@ struct SCBRIDGE_API FSCLightArea
     FMatrix AnchorToContainer = FMatrix::Identity; // anchor-local cm (UE axes) -> container-local metres
     TArray<FSCRoomVolume> Volumes;
     bool Contains(const FVector& World) const;
+    /** World point on the floor (lowest bounds corner) under the centre of the area's largest room volume. */
+    bool LargestRoomFloor(FVector& OutWorld) const;
     /** The room GUID of the first volume containing the world point; empty outside every volume. */
     FString RoomAt(const FVector& World) const;
     /** Smallest BoundsDistance (m) from a world point to the volumes of one room in this area; +inf without any. */

@@ -42,14 +42,18 @@ exporting and importing an object container on every start.
   single commandlet cooking all of them grew to ~26 GB and was OOM-killed). Content/SC/Hangars ~ the shared pool plus
   per-hangar materials and levels.
 - Validation (modern large top-loader, Scorpius): hangar ready in 7.6-10.3 s cooked vs 47 s runtime; lit captures within
-  3 % RMSE (cooked at full texture resolution); frames ~2 ms slower cooked (render thread +2.5-4 ms, GPU -0.7 ms), cause
-  not yet found (suspects: streamable cooked textures, level-instance overhead).
-- The viewer's runtime path cannot export utility hangars (binary CryXML .cdf, see Follow-ups); cooked ones load.
+  3 % RMSE (cooked at full texture resolution); frames ~2 ms slower cooked (render thread +2.5-4 ms, GPU -0.7 ms). Likely
+  cause (LOOK-7): traced short-range AO rebuilds the material shader binding table every frame on Vulkan, per ray-traced
+  segment; game hangars now run screen-space short-range AO by budget, which removes that cost.
+- The runtime path exports utility hangars again: StarBreaker's physics step read character definitions (binary CryXML
+  `.cdf`) as chunk files (fixed on `scviewer/cdf-cryxmlb`).
 
 ## Follow-ups
 
 - **Animatable cooked rigs** (owner: later): doors and the ship elevator are baked static in their presented pose because
   Keep cannot persist runtime skeletal meshes yet (`SCKeepAssets.cpp`: no editor ImportedModel). Building the editor
   source model for rigs would let cooked hangars keep their door/elevator clips.
-- Galaxy-class ships as streamed environments (interior object containers as load units); blocked first by StarBreaker's
-  CDF reader rejecting binary CryXML (`gdgt_fps_kegr_fire_extinguisher.cdf`, magic `CryX`).
+- Galaxy-class ships (2026-11-13, `ue/verification/LOOK-7.md`): the RSI Galaxy loads at runtime (47 s warm, 11-15 ms frames
+  in the XL hangar). Measured, streaming its 14 interior containers by camera position would save < 1 ms once short-range
+  AO follows the ray-tracing budget, so it stays one vehicle. Cooking a ship as a map would cut the load to the cooked
+  hangars' ~10 s but bakes its doors, lifts and gear; it waits for animatable cooked rigs above.

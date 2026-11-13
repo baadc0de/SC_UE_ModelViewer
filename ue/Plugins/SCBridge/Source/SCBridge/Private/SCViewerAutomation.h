@@ -50,5 +50,5 @@ private:
     TSharedPtr<FSCPathTracerProbe, ESPMode::ThreadSafe> PtProbe;
     FString PlayerWeapon, PlayerView; // command-line player options, applied once
     bool bPlayerOptionsApplied = false;
-    TArray<float> FrameMs, GameMs, RenderMs, GpuMs;
+    TArray<float> FrameMs, GameMs, RenderMs, RhiMs, GpuMs;
 };

@@ -150,10 +150,8 @@ bool FSCRoomVolume::Contains(const FVector& ContainerPointM) const
     return false;
 }
 
-double FSCRoomVolume::BoundsDistance(const FVector& ContainerPointM) const
+FBox FSCRoomVolume::SegmentBounds() const
 {
-    const FVector P = FromContainer.TransformPosition(ContainerPointM);
-    if (P.ContainsNaN()) return TNumericLimits<double>::Max();
     FBox Bounds(ForceInit);
     if (Shape == EShape::Box)
         Bounds = FBox(Min, Max);
@@ -162,7 +160,14 @@ double FSCRoomVolume::BoundsDistance(const FVector& ContainerPointM) const
         for (const FVector& Q : Points) Bounds += Q;
         if (Shape == EShape::Prism) Bounds.Max.Z = Bounds.Min.Z + Height; // the polygon is the base, extruded along +z
     }
-    return FMath::Sqrt(Bounds.ComputeSquaredDistanceToPoint(P));
+    return Bounds;
+}
+
+double FSCRoomVolume::BoundsDistance(const FVector& ContainerPointM) const
+{
+    const FVector P = FromContainer.TransformPosition(ContainerPointM);
+    if (P.ContainsNaN()) return TNumericLimits<double>::Max();
+    return FMath::Sqrt(SegmentBounds().ComputeSquaredDistanceToPoint(P));
 }
 
 bool FSCLightArea::Contains(const FVector& World) const
@@ -173,6 +178,27 @@ bool FSCLightArea::Contains(const FVector& World) const
     for (const FSCRoomVolume& Volume : Volumes)
         if (Volume.Contains(Point)) return true;
     return false;
+}
+
+bool FSCLightArea::LargestRoomFloor(FVector& OutWorld) const
+{
+    const USceneComponent* A = Anchor.Get();
+    const FSCRoomVolume* Largest = nullptr;
+    double LargestSize = 0;
+    for (const FSCRoomVolume& Volume : Volumes)
+        if (const double Size = Volume.SegmentBounds().GetVolume(); Size > LargestSize) { Largest = &Volume; LargestSize = Size; }
+    if (!A || !Largest) return false;
+    // Segment space -> container metres -> anchor cm -> world, for the bounds' corners: the floor is the lowest corner.
+    const FMatrix SegmentToAnchor = Largest->FromContainer.Inverse() * AnchorToContainer.Inverse();
+    const FTransform& AnchorToWorld = A->GetComponentTransform();
+    const FBox Bounds = Largest->SegmentBounds();
+    FBox World(ForceInit);
+    for (int32 I = 0; I < 8; ++I)
+        World += AnchorToWorld.TransformPosition(SegmentToAnchor.TransformPosition(
+            FVector(I & 1 ? Bounds.Max.X : Bounds.Min.X, I & 2 ? Bounds.Max.Y : Bounds.Min.Y, I & 4 ? Bounds.Max.Z : Bounds.Min.Z)));
+    const FVector Centre = AnchorToWorld.TransformPosition(SegmentToAnchor.TransformPosition(Bounds.GetCenter()));
+    OutWorld = FVector(Centre.X, Centre.Y, World.Min.Z);
+    return !OutWorld.ContainsNaN();
 }
 
 FString FSCLightArea::RoomAt(const FVector& World) const

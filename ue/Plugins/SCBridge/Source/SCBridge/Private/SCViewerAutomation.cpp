@@ -406,8 +406,8 @@ void FSCViewerAutomation::LogFrameSamples()
         for (float X : V) Sum += X;
         return FString::Printf(TEXT("mean=%.2f p50=%.2f p95=%.2f"), Sum / V.Num(), V[V.Num() / 2], V[FMath::Min(V.Num() - 1, V.Num() * 95 / 100)]);
     };
-    UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_FRAMETIME tag=%s frames=%d frame_ms[%s] game_ms[%s] render_ms[%s] gpu_ms[%s]"),
-           *SampleTag, FrameMs.Num(), *Stats(FrameMs), *Stats(GameMs), *Stats(RenderMs), *Stats(GpuMs));
+    UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_FRAMETIME tag=%s frames=%d frame_ms[%s] game_ms[%s] render_ms[%s] rhi_ms[%s] gpu_ms[%s]"),
+           *SampleTag, FrameMs.Num(), *Stats(FrameMs), *Stats(GameMs), *Stats(RenderMs), *Stats(RhiMs), *Stats(GpuMs));
 }
 
 void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
@@ -463,7 +463,7 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
     if (Words[0] == TEXT("frametime"))
     {
         SampleTag = Words.IsValidIndex(2) ? Words[2] : TEXT("sample");
-        FrameMs.Reset(); GameMs.Reset(); RenderMs.Reset(); GpuMs.Reset();
+        FrameMs.Reset(); GameMs.Reset(); RenderMs.Reset(); RhiMs.Reset(); GpuMs.Reset();
         SampleUntil = StepAt = Now + (Words.IsValidIndex(1) ? FCString::Atod(*Words[1]) : 5.0);
         return;
     }
@@ -483,6 +483,7 @@ void FSCViewerAutomation::TickScript(USCViewerSubsystem& S)
         FrameMs.Add(FApp::GetDeltaTime() * 1000);
         GameMs.Add(FPlatformTime::ToMilliseconds(GGameThreadTime));
         RenderMs.Add(FPlatformTime::ToMilliseconds(GRenderThreadTime));
+        RhiMs.Add(FPlatformTime::ToMilliseconds(GRHIThreadTime));
         GpuMs.Add(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles(0)));
         if (Now < SampleUntil) return;
         SampleUntil = 0;

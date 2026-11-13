@@ -198,18 +198,10 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportDecomposed(const FStrin
         const uint64 BlobBytes = Status == SC_STATUS_OK ? uint64(Blob.len) : 0; // sc_free_blob zeroes len
         if (Status == SC_STATUS_OK)
         {
-            // FSCTarPackageSource holds a TArray<uint8> (int32 count): refuse what it cannot index instead of narrowing.
-            if (Blob.len > size_t(MAX_int32))
-                Result.Error = FText::Format(NSLOCTEXT("SCBridge", "TarTooLarge",
-                                                       "The exported package is {0} bytes; the importer accepts at most {1}. Try a higher LOD or mip."),
-                                             FText::AsNumber(uint64(Blob.len)), FText::AsNumber(MAX_int32));
-            else
-            {
-                Result.Tar.SetNumUninitialized(int32(Blob.len));
-                FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
-                Result.bOK = true;
-            }
-            sc_free_blob(&Blob); // freed on every OK path, including the refused size
+            Result.Tar.SetNumUninitialized(int64(Blob.len)); // TArray64: a large ship exceeds 2 GiB at LOD 0
+            FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
+            Result.bOK = true;
+            sc_free_blob(&Blob);
         }
         else
         {
@@ -246,18 +238,10 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportEnvironment(const FStri
         const uint64 BlobBytes = Status == SC_STATUS_OK ? uint64(Blob.len) : 0; // sc_free_blob zeroes len
         if (Status == SC_STATUS_OK)
         {
-            // FSCTarPackageSource holds a TArray<uint8> (int32 count): refuse what it cannot index instead of narrowing.
-            if (Blob.len > size_t(MAX_int32))
-                Result.Error = FText::Format(NSLOCTEXT("SCBridge", "TarTooLarge",
-                                                       "The exported package is {0} bytes; the importer accepts at most {1}. Try a higher LOD or mip."),
-                                             FText::AsNumber(uint64(Blob.len)), FText::AsNumber(MAX_int32));
-            else
-            {
-                Result.Tar.SetNumUninitialized(int32(Blob.len));
-                FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
-                Result.bOK = true;
-            }
-            sc_free_blob(&Blob); // freed on every OK path, including the refused size
+            Result.Tar.SetNumUninitialized(int64(Blob.len)); // TArray64: a large ship exceeds 2 GiB at LOD 0
+            FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
+            Result.bOK = true;
+            sc_free_blob(&Blob);
         }
         else
         {
@@ -315,15 +299,9 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& G
         const uint64 BlobBytes = Status == SC_STATUS_OK ? uint64(Blob.len) : 0;
         if (Status == SC_STATUS_OK)
         {
-            if (Blob.len > size_t(MAX_int32))
-                Result.Error = FText::Format(NSLOCTEXT("SCBridge", "PlayerTarTooLarge", "The player kit is {0} bytes; the importer accepts at most {1}."),
-                                             FText::AsNumber(uint64(Blob.len)), FText::AsNumber(MAX_int32));
-            else
-            {
-                Result.Tar.SetNumUninitialized(int32(Blob.len));
-                FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
-                Result.bOK = true;
-            }
+            Result.Tar.SetNumUninitialized(int64(Blob.len)); // TArray64: a large ship exceeds 2 GiB at LOD 0
+            FMemory::Memcpy(Result.Tar.GetData(), Blob.data, Blob.len);
+            Result.bOK = true;
             sc_free_blob(&Blob);
         }
         else

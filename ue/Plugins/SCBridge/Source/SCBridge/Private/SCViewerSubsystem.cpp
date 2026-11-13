@@ -1,6 +1,7 @@
 // USCViewerSubsystem: archive open, async search, the load pipeline with phase progress and cancel, unload with
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
+#include "SCLook.h"
 #include "SCEnvironment.h"
 #include "Misc/PackageName.h"
 #include "SCDirt.h"
@@ -422,7 +423,7 @@ void USCViewerSubsystem::StepEnvironment()
             UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: export %s: %s"), *EnvironmentFolder, *Exported.Error.ToString());
             return;
         }
-        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_EXPORT socpak=%s bytes=%d seconds=%.1f cache_hit=%d"), *EnvironmentFolder, Exported.Tar.Num(),
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_EXPORT socpak=%s bytes=%lld seconds=%.1f cache_hit=%d"), *EnvironmentFolder, Exported.Tar.Num(),
                Exported.Seconds, Exported.Cache.bLastHit);
         EnvParse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Tar = MoveTemp(Exported.Tar)]() mutable {
             return TSharedPtr<FSCTarPackageSource>(MakeShared<FSCTarPackageSource>(MoveTemp(Tar)));
@@ -464,6 +465,7 @@ void USCViewerSubsystem::PlaceEnvironment()
     if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(EnvironmentActor);
     SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
     FSCEnvironment::PlaceOnFloor(EnvironmentActor, ViewerFloorZ, Vehicle.Get());
+    SCLook::UpdateShortRangeAO(EnvironmentActor->GetWorld());
 }
 
 void USCViewerSubsystem::SetEnvironmentState(const FString& State)
@@ -745,6 +747,7 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
            Report.MaterialSeconds, Report.AssembleSeconds, Report.TotalSeconds, Report.Assets, Report.Instances, Report.Warnings,
            Report.StaticMeshes, Report.SkeletalMeshes, Report.Textures, Report.MaterialInstances, Report.Vehicles, Report.PreviousObjects,
            Report.PreviousObjectsAlive, *Error);
+    if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr) SCLook::UpdateShortRangeAO(World);
     OnLoadFinished.Broadcast(Report);
 }
 
@@ -851,7 +854,7 @@ bool USCViewerSubsystem::RequestPlayerKit()
     {
         Package = FPaths::ConvertRelativePathToFull(FPlatformMisc::LaunchDir(), Package);
         KitParse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Package]() -> TSharedPtr<FSCTarPackageSource> {
-            TArray<uint8> Bytes;
+            TArray64<uint8> Bytes;
             if (!FFileHelper::LoadFileToArray(Bytes, *Package)) return nullptr;
             return MakeShared<FSCTarPackageSource>(MoveTemp(Bytes));
         });
@@ -935,7 +938,7 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
         }
         FSCExportResult Result = MoveTemp(KitExport.GetResult());
         KitExport = {};
-        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_EXPORT ok=%d seconds=%.3f bytes=%d cache_hit=%d"), Result.bOK, Result.Seconds, Result.Tar.Num(),
+        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_EXPORT ok=%d seconds=%.3f bytes=%lld cache_hit=%d"), Result.bOK, Result.Seconds, Result.Tar.Num(),
                Result.Cache.bLastHit);
         if (!Result.bOK)
         {

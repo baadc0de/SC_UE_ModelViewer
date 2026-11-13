@@ -17,6 +17,12 @@
 #include "Components/LightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/SkinnedMeshComponent.h"
+#include "Engine/SkinnedAsset.h"
+#include "Engine/StaticMesh.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "StaticMeshResources.h"
+#include "SCViewerSettings.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInstance.h"
@@ -209,6 +215,55 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookBloomStar(
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
         SCLook::SetBloomStar(World, Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) : 0, Args.IsValidIndex(1) ? FCString::Atof(*Args[1]) : 0.5f,
                              Args.IsValidIndex(2) ? FCString::Atof(*Args[2]) : 0.05f);
+    }));
+
+int64 SCLook::RayTracingSegments(UWorld* World, int32* OutPrimitives)
+{
+    int64 Segments = 0;
+    int32 Primitives = 0;
+    if (World)
+        for (TObjectIterator<UPrimitiveComponent> It; It; ++It)
+        {
+            const UPrimitiveComponent* P = *It;
+            if (P->GetWorld() != World || !P->IsRegistered() || !P->bVisibleInRayTracing) continue;
+            // Hidden primitives stay in the ray-tracing scene only when they feed indirect lighting (Lumen proxies).
+            if ((!P->IsVisible() || P->bHiddenInGame) && !P->bAffectIndirectLightingWhileHidden) continue;
+            int32 Sections = 0;
+            if (const auto* Mesh = Cast<UStaticMeshComponent>(P))
+            {
+                const UStaticMesh* Asset = Mesh->GetStaticMesh();
+                const FStaticMeshRenderData* Data = Asset ? Asset->GetRenderData() : nullptr;
+                Sections = Data && !Data->LODResources.IsEmpty() ? Data->LODResources[0].Sections.Num() : 0;
+            }
+            else if (const auto* Skinned = Cast<USkinnedMeshComponent>(P))
+            {
+                const FSkeletalMeshRenderData* Data = Skinned->GetSkinnedAsset() ? Skinned->GetSkinnedAsset()->GetResourceForRendering() : nullptr;
+                Sections = Data && !Data->LODRenderData.IsEmpty() ? Data->LODRenderData[0].RenderSections.Num() : 0;
+            }
+            if (Sections == 0) continue;
+            Segments += Sections;
+            ++Primitives;
+        }
+    if (OutPrimitives) *OutPrimitives = Primitives;
+    return Segments;
+}
+static int32 GShortRangeAOOverride = -1; // sc.Look.ShortRangeAO: -1 auto (budget), 0 screen space, 1 traced
+void SCLook::UpdateShortRangeAO(UWorld* World)
+{
+    int32 Primitives = 0;
+    const int64 Segments = RayTracingSegments(World, &Primitives);
+    const int32 Budget = USCViewerSettings::Get()->TracedShortRangeAOMaxSegments;
+    const bool bTraced = GShortRangeAOOverride >= 0 ? GShortRangeAOOverride != 0 : (Budget < 0 || Segments <= Budget);
+    if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(TEXT("r.Lumen.ScreenProbeGather.ShortRangeAO.HardwareRayTracing")))
+        Var->Set(bTraced ? 1 : 0, ECVF_SetByCode);
+    UE_LOG(LogTemp, Display, TEXT("LOOK short_range_ao=%s rt_segments=%lld rt_primitives=%d budget=%d override=%d"), bTraced ? TEXT("traced") : TEXT("screen"),
+           Segments, Primitives, Budget, GShortRangeAOOverride);
+}
+static FAutoConsoleCommandWithWorldAndArgs GSCLookShortRangeAO(
+    TEXT("sc.Look.ShortRangeAO"), TEXT("sc.Look.ShortRangeAO [auto|0|1]: short-range AO by ray-tracing budget, screen space, or traced"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (Args.IsValidIndex(0)) GShortRangeAOOverride = Args[0] == TEXT("auto") ? -1 : FCString::Atoi(*Args[0]) != 0;
+        SCLook::UpdateShortRangeAO(World);
     }));
 
 // sc.Look.Focus <f-stop> [sensor width mm]: cinematic depth of field focused on what the screen centre sees (a trace

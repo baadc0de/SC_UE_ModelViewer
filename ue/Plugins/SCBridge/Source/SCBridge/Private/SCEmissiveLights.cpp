@@ -9,8 +9,9 @@
 // sc.Emissive.Lumen <0|1> [MinNits]: 1 gives Lumen the glow it cannot see: a hidden copy of every glowing section
 //   that Lumen ignores (translucent / additive glow cards, or a component kept out of Lumen's scene), built with Lumen
 //   mesh cards and drawn with the section's own material as an opaque instance (same parameters, so the same emission),
-//   that affects indirect lighting only (bAffectIndirectLightingWhileHidden); the visible strips are unchanged.
-//   Development (editor-host) builds only: the opaque instance is a runtime material instance constant.
+//   that affects indirect lighting only (bAffectIndirectLightingWhileHidden); the visible strips are unchanged. Parts are
+//   clustered per 2 m cell of mesh space, built as one batch, and repeated rigid placements are instanced (LOOK-7).
+//   Development (editor-host) builds only: the opaque base per master is a runtime material instance constant.
 // The section's texture (emittance map / albedo, alpha gate) is not sampled: the luminance is the material's nominal
 // one, an upper bound.
 #include "SCEmissiveLights.h"
@@ -23,7 +24,10 @@
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/Material.h"
 #include "StaticMeshResources.h"
+#include "SCInstancing.h"
 #include "SCMeshImporter.h"
 #include "StaticMeshAttributes.h"
 #include "UObject/Package.h"
@@ -258,39 +262,86 @@ void SetLumenProxies(ASCVehicle* Vehicle, bool bOn, double MinNits)
     TArray<TWeakObjectPtr<UStaticMeshComponent>>& GLumenProxies = GLumenProxyMap.FindOrAdd(Vehicle);
 #if WITH_EDITOR
     const double Start = FPlatformTime::Seconds();
-    int32 Parts = 0, Triangles = 0, WithCards = 0;
+    int32 Parts = 0, ClusterCount = 0, Triangles = 0, WithCards = 0, Built = 0, Instanced = 0;
+    double CollectSeconds = 0, DeriveSeconds = 0, BuildSeconds = 0;
     if (bOn && Vehicle)
     {
         TMap<UMaterialInterface*, UMaterialInterface*> Opaque;
-        // One proxy per contiguous part: Lumen's card builder needs the geometry to cover its own bounds (scattered
-        // thin strips in one mesh get no card at all).
-        for (const FEmissiveSection& E : Collect(Vehicle, MinNits))
+        TMap<UMaterial*, UMaterialInstanceConstant*> OpaqueBase;
+        // Proxies are clusters of contiguous parts: Lumen's card builder needs the geometry to cover its own bounds
+        // (scattered thin strips across a large mesh get no card at all), but one mesh per part does not scale (a large
+        // ship has ~16k glowing parts, each a primitive). The parts of one source section inside one ClusterCm cell of
+        // mesh space share a proxy mesh (up to 12 cards each); a cluster is the same in every placement of its mesh, so
+        // its proxy mesh is built once, and the rigid placements of one proxy are drawn as instances.
+        constexpr double ClusterCm = 200.0; // a cell budget (not game data): small enough for cards to cover a cluster
+        struct FCluster { const FEmissiveSection* First = nullptr; TArray<int32> Triangles; };
+        TMap<FString, FCluster> Clusters; // per component, section and mesh-space cell
+        const TArray<FEmissiveSection> Sections = Collect(Vehicle, MinNits); // outlives the clusters that point into it
+        for (const FEmissiveSection& E : Sections)
         {
+            UStaticMeshComponent* C = E.Component;
+            const FStaticMeshSection& Section = C->GetStaticMesh()->GetRenderData()->LODResources[0].Sections[E.Section];
+            const UMaterialInterface* Material = C->GetMaterial(Section.MaterialIndex);
+            const EBlendMode Blend = Material->GetBlendMode();
+            if (C->bAffectDynamicIndirectLighting && (Blend == BLEND_Opaque || Blend == BLEND_Masked)) continue; // Lumen sees it
+            if (E.SourceTriangles.IsEmpty()) continue;
+            const FVector Local = C->GetComponentTransform().InverseTransformPosition(E.Centre) / ClusterCm;
+            FCluster& Cluster = Clusters.FindOrAdd(FString::Printf(TEXT("%p/%d/%d,%d,%d"), C, E.Section, FMath::FloorToInt32(Local.X),
+                                                                   FMath::FloorToInt32(Local.Y), FMath::FloorToInt32(Local.Z)));
+            if (!Cluster.First) Cluster.First = &E;
+            Cluster.Triangles.Append(E.SourceTriangles);
+            ++Parts;
+        }
+        ClusterCount = Clusters.Num();
+        const double DeriveStart = FPlatformTime::Seconds();
+        CollectSeconds = DeriveStart - Start;
+        // Pass 1: one derived mesh per distinct cluster (same mesh, section and triangles in every placement).
+        struct FPlacement { UStaticMeshComponent* Component; UMaterialInterface* Material; int32 Mesh; };
+        TArray<FPlacement> Placements;
+        TArray<FSCDerivedMesh> Derived;
+        TMap<FString, int32> MeshIndex;
+        for (auto& [ClusterKey, Cluster] : Clusters)
+        {
+            const FEmissiveSection& E = *Cluster.First;
+            Cluster.Triangles.Sort();
             UStaticMeshComponent* C = E.Component;
             const UStaticMesh* Mesh = C->GetStaticMesh();
             const FStaticMeshLODResources& LOD = Mesh->GetRenderData()->LODResources[0];
             const FStaticMeshSection& Section = LOD.Sections[E.Section];
             UMaterialInterface* Material = C->GetMaterial(Section.MaterialIndex);
-            const EBlendMode Blend = Material->GetBlendMode();
-            if (C->bAffectDynamicIndirectLighting && (Blend == BLEND_Opaque || Blend == BLEND_Masked)) continue; // Lumen sees it
             const FPositionVertexBuffer& Positions = LOD.VertexBuffers.PositionVertexBuffer;
             const FStaticMeshVertexBuffer& Vertices = LOD.VertexBuffers.StaticMeshVertexBuffer;
             const FColorVertexBuffer& Colours = LOD.VertexBuffers.ColorVertexBuffer;
             if (!Vertices.GetTexCoordData()) continue;
-            const bool bColours = Colours.GetNumVertices() == Positions.GetNumVertices() && Colours.GetVertexData();
-            const FIndexArrayView Indices = LOD.IndexBuffer.GetArrayView();
             UMaterialInterface*& ProxyMaterial = Opaque.FindOrAdd(Material);
             if (!ProxyMaterial)
             {
-                auto* Instance = NewObject<UMaterialInstanceConstant>(GetTransientPackage(), NAME_None, RF_Transient);
-                Instance->SetParentEditorOnly(Material->GetMaterial());
-                Instance->CopyMaterialUniformParametersEditorOnly(Material, true);
-                Instance->BasePropertyOverrides.bOverride_BlendMode = true;
-                Instance->BasePropertyOverrides.BlendMode = BLEND_Opaque;
-                Instance->PostEditChange(); // compiles the opaque permutation
+                // The opaque permutation is compiled once per master (a constant instance with the blend override); each
+                // glowing material is a dynamic instance of it with the material's own parameters (no compile).
+                UMaterial* Master = Material->GetMaterial();
+                UMaterialInstanceConstant*& Base = OpaqueBase.FindOrAdd(Master);
+                if (!Base)
+                {
+                    Base = NewObject<UMaterialInstanceConstant>(GetTransientPackage(), NAME_None, RF_Transient);
+                    Base->SetParentEditorOnly(Master);
+                    Base->BasePropertyOverrides.bOverride_BlendMode = true;
+                    Base->BasePropertyOverrides.BlendMode = BLEND_Opaque;
+                    Base->PostEditChange(); // compiles the opaque permutation
+                }
+                UMaterialInstanceDynamic* Instance = UMaterialInstanceDynamic::Create(Base, Vehicle);
+                Instance->CopyMaterialUniformParameters(Material);
                 ProxyMaterial = Instance;
             }
-            FSCDerivedMesh Data;
+            const FString MeshKey = FString::Printf(TEXT("%p/%d/%d/%d/%d"), Mesh, E.Section, Cluster.Triangles[0], Cluster.Triangles.Last(),
+                                                    Cluster.Triangles.Num());
+            if (const int32* Existing = MeshIndex.Find(MeshKey))
+            {
+                Placements.Add({C, ProxyMaterial, *Existing});
+                continue;
+            }
+            const bool bColours = Colours.GetNumVertices() == Positions.GetNumVertices() && Colours.GetVertexData();
+            const FIndexArrayView Indices = LOD.IndexBuffer.GetArrayView();
+            FSCDerivedMesh& Data = Derived.AddDefaulted_GetRef();
             Data.bEnableNanite = true; // Lumen mesh cards (SCMeshBuild: cards with Nanite)
             Data.bHasTangents = false;
             Data.MaterialNames = {TEXT("Glow")};
@@ -300,9 +351,9 @@ void SetLumenProxies(ASCVehicle* Vehicle, bool bOn, double MinNits)
             A.Register();
             const int32 UVs = FMath::Min<int32>(Vertices.GetNumTexCoords(), 2);
             A.GetVertexInstanceUVs().SetNumChannels(FMath::Max(UVs, 1));
-            const FPolygonGroupID Group = Data.Description.CreatePolygonGroup();
-            A.GetPolygonGroupMaterialSlotNames()[Group] = FName(TEXT("Slot_0"));
-            for (int32 T : E.SourceTriangles)
+            const FPolygonGroupID PolygonGroup = Data.Description.CreatePolygonGroup();
+            A.GetPolygonGroupMaterialSlotNames()[PolygonGroup] = FName(TEXT("Slot_0"));
+            for (int32 T : Cluster.Triangles)
             {
                 TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
                 for (int32 K = 0; K < 3; ++K)
@@ -318,19 +369,51 @@ void SetLumenProxies(ASCVehicle* Vehicle, bool bOn, double MinNits)
                     for (int32 UV = 0; UV < UVs; ++UV) A.GetVertexInstanceUVs().Set(VI, UV, Vertices.GetVertexUV(Index, UV));
                     Corners.Add(VI);
                 }
-                Data.Description.CreateTriangle(Group, Corners);
+                Data.Description.CreateTriangle(PolygonGroup, Corners);
             }
             Data.bHasGeometry = Data.Description.Triangles().Num() > 0;
-            if (!Data.bHasGeometry) continue;
-            FSCMeshBuildStats Stats;
-            FString Error;
-            UStaticMesh* ProxyMesh = FSCMeshImporter::Instantiate(Data, GetTransientPackage(), NAME_None, false, nullptr, Stats, Error);
-            if (!ProxyMesh) { UE_LOG(LogSCEmissive, Warning, TEXT("EMISSIVE_LUMEN %s: %s"), *GetNameSafe(Mesh), *Error); continue; }
+            if (!Data.bHasGeometry) { Derived.Pop(); continue; }
+            MeshIndex.Add(MeshKey, Derived.Num() - 1);
+            Placements.Add({C, ProxyMaterial, Derived.Num() - 1});
+        }
+        // Pass 2: build every proxy mesh together (the editor compiles them in parallel).
+        DeriveSeconds = FPlatformTime::Seconds() - DeriveStart;
+        const double BuildStart = FPlatformTime::Seconds();
+        TArray<const FSCDerivedMesh*> ToBuild;
+        for (const FSCDerivedMesh& D : Derived) ToBuild.Add(&D);
+        TArray<FSCMeshBuildStats> BuildStats;
+        TArray<FString> Errors;
+        const TArray<UStaticMesh*> ProxyMeshes = FSCMeshImporter::InstantiateBatch(ToBuild, GetTransientPackage(), BuildStats, Errors);
+        for (int32 I = 0; I < ProxyMeshes.Num(); ++I)
+        {
+            if (!ProxyMeshes[I]) { UE_LOG(LogSCEmissive, Warning, TEXT("EMISSIVE_LUMEN proxy %d: %s"), I, *Errors[I]); continue; }
+            ++Built;
+            Triangles += BuildStats[I].Triangles;
+            WithCards += BuildStats[I].Cards > 0;
+        }
+        BuildSeconds = FPlatformTime::Seconds() - BuildStart;
+        // Pass 3: rigid placements as instances, parts under a rig as components that follow it.
+        struct FGroup { UStaticMesh* Mesh; UMaterialInterface* Material; FLightingChannels Channels; TArray<FTransform> Instances; };
+        TMap<FString, FGroup> Groups;
+        USceneComponent* Root = Vehicle->GetRootComponent();
+        for (const FPlacement& Placement : Placements)
+        {
+            UStaticMesh* ProxyMesh = ProxyMeshes[Placement.Mesh];
+            if (!ProxyMesh) continue;
+            UStaticMeshComponent* C = Placement.Component;
+            if (!FSCInstancing::UnderRig(C))
+            {
+                const FLightingChannels& L = C->LightingChannels;
+                FGroup& Group = Groups.FindOrAdd(FString::Printf(TEXT("%p/%p/%d%d%d"), ProxyMesh, Placement.Material, L.bChannel0, L.bChannel1, L.bChannel2),
+                                                 FGroup{ProxyMesh, Placement.Material, L, {}});
+                Group.Instances.Add(C->GetComponentTransform().GetRelativeTransform(Root->GetComponentTransform()));
+                continue;
+            }
             auto* Proxy = NewObject<UStaticMeshComponent>(Vehicle, NAME_None, RF_Transient);
             Proxy->SetMobility(EComponentMobility::Movable);
             Proxy->SetupAttachment(C);
             Proxy->SetStaticMesh(ProxyMesh);
-            Proxy->SetMaterial(0, ProxyMaterial);
+            Proxy->SetMaterial(0, Placement.Material);
             Proxy->SetCollisionEnabled(ECollisionEnabled::NoCollision);
             Proxy->CastShadow = false;
             Proxy->bAffectDynamicIndirectLighting = true;
@@ -341,12 +424,30 @@ void SetLumenProxies(ASCVehicle* Vehicle, bool bOn, double MinNits)
             Proxy->ComponentTags.Add(TEXT("SCEmissiveExperiment"));
             Proxy->RegisterComponent();
             GLumenProxies.Add(Proxy);
-            ++Parts;
-            Triangles += Stats.Triangles;
-            WithCards += Stats.Cards > 0;
+        }
+        for (auto& [Key, Group] : Groups)
+        {
+            auto* Proxy = NewObject<UInstancedStaticMeshComponent>(Vehicle, NAME_None, RF_Transient);
+            Proxy->SetMobility(EComponentMobility::Movable); // the actor is moved onto the floor after import
+            Proxy->SetupAttachment(Root);
+            Proxy->SetStaticMesh(Group.Mesh);
+            Proxy->SetMaterial(0, Group.Material);
+            Proxy->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            Proxy->CastShadow = false;
+            Proxy->bAffectDynamicIndirectLighting = true;
+            Proxy->bAffectDistanceFieldLighting = true;
+            Proxy->bAffectIndirectLightingWhileHidden = true;
+            Proxy->SetHiddenInGame(true);
+            Proxy->LightingChannels = Group.Channels;
+            Proxy->ComponentTags.Add(TEXT("SCEmissiveExperiment"));
+            Proxy->RegisterComponent();
+            Proxy->AddInstances(Group.Instances, false, false);
+            GLumenProxies.Add(Proxy);
+            ++Instanced;
         }
     }
-    UE_LOG(LogSCEmissive, Display, TEXT("EMISSIVE_LUMEN proxies=%d with_cards=%d triangles=%d min_nits=%.1f build_s=%.2f"), Parts, WithCards, Triangles, MinNits,
+    UE_LOG(LogSCEmissive, Display, TEXT("EMISSIVE_LUMEN parts=%d clusters=%d meshes=%d with_cards=%d triangles=%d instanced_components=%d components=%d min_nits=%.1f collect_s=%.2f derive_s=%.2f mesh_build_s=%.2f build_s=%.2f"),
+           Parts, ClusterCount, Built, WithCards, Triangles, Instanced, GLumenProxies.Num(), MinNits, CollectSeconds, DeriveSeconds, BuildSeconds,
            FPlatformTime::Seconds() - Start);
 #else
     UE_LOG(LogSCEmissive, Warning, TEXT("EMISSIVE_LUMEN needs a development editor-host build"));

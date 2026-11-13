@@ -65,7 +65,7 @@ struct SCBRIDGE_API FSCExportResult
 {
     bool bOK = false, bCancelled = false, bPanicked = false;
     FText Error;
-    TArray<uint8> Tar;
+    TArray64<uint8> Tar;
     double Seconds = 0;
     FSCCacheStats Cache; // after the export: bLastHit is the package-cache hit of this export
 };
