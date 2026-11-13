@@ -20,6 +20,14 @@ exporting and importing an object container on every start.
    **bake rigs static** in that pose, keep meshes/materials/textures as assets, save the level.
 3. Viewer: `SetEnvironment` loads the cooked level when one exists for the requested container, else falls back to the
    runtime export/import.
+4. Hangar by ship size: the cook records each hangar's ship capacity in `/Game/SC/Hangars/HangarIndex`
+   (`USCHangarIndex`): the ship elevator's footprint, the clear height above it (vertical traces; none = open roof) and
+   whether ships enter through a roof hatch (its largest moving part above the floor lies flat) or front doors. The
+   viewer treats the chosen hangar (settings, environment picker) as a style: after each ship loads it takes the
+   smallest cooked hangar of that style whose platform holds the ship's solid footprint (centred on the elevator) and
+   height, the chosen entrance kind first; none holds it: the largest. `-SCEnvironment` / `sc.Environment` load exactly
+   what they name; `USCViewerSettings::bFitHangarToShip` turns it off. Already-cooked hangars are measured with
+   `SC_COOK_MEASURE=1 ue/scripts/cook_hangars.sh` (~30 s each).
 
 ## Status (2026-11-13)
 
@@ -45,6 +53,10 @@ exporting and importing an object container on every start.
   3 % RMSE (cooked at full texture resolution); frames ~2 ms slower cooked (render thread +2.5-4 ms, GPU -0.7 ms). Likely
   cause (LOOK-7): traced short-range AO rebuilds the material shader binding table every frame on Vulkan, per ray-traced
   segment; game hangars now run screen-space short-range AO by budget, which removes that cost.
+- Capacities (2026-11-13): small 48 x 48 m, medium 88 x 56 m, large 160 x 88 m, XL 304 x 184 m platforms, both styles;
+  clear height 37-72 m (front-loaders and utility top-loaders), modern top-loaders open; entrance kind derived from
+  geometry matches every hangar. Viewer (saved choice util_a large top): Cutlass (35.7 x 26.1 x 10.3 m) -> small top,
+  Galaxy (134.2 x 62.5 x 23.1 m) -> large top, Cutlass again -> small top (`ENVIRONMENT_FIT` log lines).
 - The runtime path exports utility hangars again: StarBreaker's physics step read character definitions (binary CryXML
   `.cdf`) as chunk files (fixed on `scviewer/cdf-cryxmlb`).
 

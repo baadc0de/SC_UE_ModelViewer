@@ -2,6 +2,7 @@
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
 #include "SCLook.h"
+#include "SCHangarIndex.h"
 #include "SCEnvironment.h"
 #include "Misc/PackageName.h"
 #include "SCDirt.h"
@@ -96,7 +97,7 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     // the saved choice.
     FString EnvironmentArg;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCEnvironment="), EnvironmentArg)) SetEnvironment(EnvironmentArg);
-    else if (!FParse::Param(FCommandLine::Get(), TEXT("SCDefaults"))) SetEnvironment(USCViewerSettings::Get()->Environment);
+    else if (!FParse::Param(FCommandLine::Get(), TEXT("SCDefaults"))) SetEnvironment(USCViewerSettings::Get()->Environment, true);
 }
 void USCViewerSubsystem::Deinitialize()
 {
@@ -271,7 +272,50 @@ bool USCViewerSubsystem::IsBusy() const
            (EnvLevel && !Environment.IsValid());
 }
 
-void USCViewerSubsystem::SetEnvironment(const FString& Folder)
+void USCViewerSubsystem::SetEnvironment(const FString& Folder, bool bFitToShip)
+{
+    PreferredEnvironment = Folder.TrimQuotes();
+    bFitEnvironment = bFitToShip && USCViewerSettings::Get()->bFitHangarToShip;
+    RequestEnvironment(PreferredEnvironment);
+    if (bFitEnvironment && Vehicle.IsValid()) FitEnvironmentToShip();
+}
+
+void USCViewerSubsystem::FitEnvironmentToShip()
+{
+    ASCVehicle* Ship = Vehicle.Get();
+    const FString Preferred = PreferredEnvironment.Replace(TEXT("\\"), TEXT("/"));
+    if (!bFitEnvironment || !Ship || !Preferred.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return; // the map's hangar is not measured
+    const USCHangarIndex* Index = USCHangarIndex::Load();
+    if (!Index) return;
+    const FString Style = FPaths::GetCleanFilename(FPaths::GetPath(Preferred));
+    const FSCHangarCapacity* Chosen = Index->Find(Style, FPaths::GetBaseFilename(Preferred));
+    if (!Chosen) return; // not cooked: its capacity is unknown, keep it
+    // The ship stands on the bay centre (world origin) at the viewer floor.
+    FBox ShipBox = FSCEnvironment::SolidBounds(Ship);
+    if (!ShipBox.IsValid) return;
+    ShipBox = ShipBox.ShiftBy(FVector(0, 0, -ViewerFloorZ));
+    const FSCHangarCapacity* Best = nullptr;
+    const FSCHangarCapacity* Largest = nullptr;
+    auto Area = [](const FSCHangarCapacity* H) { return H->BayCm.X * H->BayCm.Y; };
+    auto SameKind = [&](const FSCHangarCapacity* H) { return H->bTopLoading == Chosen->bTopLoading; };
+    // Smallest that holds the ship, the chosen entrance kind (roof hatch / front doors) first; when none holds it, the
+    // largest of the style, again the chosen kind first.
+    for (const FSCHangarCapacity& H : Index->Hangars)
+    {
+        if (H.Style != Style) continue;
+        if (H.Holds(ShipBox) && (!Best || (SameKind(&H) && !SameKind(Best)) || (SameKind(&H) == SameKind(Best) && Area(&H) < Area(Best))))
+            Best = &H;
+        if (!Largest || (SameKind(&H) && !SameKind(Largest)) || (SameKind(&H) == SameKind(Largest) && Area(&H) > Area(Largest))) Largest = &H;
+    }
+    const FSCHangarCapacity* Pick = Best ? Best : Largest;
+    const FString Choice = FPaths::GetPath(Preferred) / Pick->Name + TEXT(".socpak");
+    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_FIT ship_m=%.1fx%.1fx%.1f (x %.1f..%.1f y %.1f..%.1f) preferred=%s holds=%d choice=%s bay_m=%.1fx%.1f clearance_m=%.1f"),
+           ShipBox.GetSize().X / 100, ShipBox.GetSize().Y / 100, ShipBox.Max.Z / 100, ShipBox.Min.X / 100, ShipBox.Max.X / 100, ShipBox.Min.Y / 100,
+           ShipBox.Max.Y / 100, *Chosen->Name, Chosen->Holds(ShipBox), *Pick->Name, Pick->BayCm.X / 100, Pick->BayCm.Y / 100, Pick->ClearanceCm / 100);
+    if (Choice != EnvironmentFolder.Replace(TEXT("\\"), TEXT("/"))) RequestEnvironment(Choice);
+}
+
+void USCViewerSubsystem::RequestEnvironment(const FString& Folder)
 {
     if (EnvProgress) EnvProgress->RequestCancel();
     if (EnvExport.IsValid()) EnvExport.Wait();
@@ -747,6 +791,7 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
            Report.MaterialSeconds, Report.AssembleSeconds, Report.TotalSeconds, Report.Assets, Report.Instances, Report.Warnings,
            Report.StaticMeshes, Report.SkeletalMeshes, Report.Textures, Report.MaterialInstances, Report.Vehicles, Report.PreviousObjects,
            Report.PreviousObjectsAlive, *Error);
+    if (Result == ESCLoadPhase::Succeeded) FitEnvironmentToShip();
     if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr) SCLook::UpdateShortRangeAO(World);
     OnLoadFinished.Broadcast(Report);
 }

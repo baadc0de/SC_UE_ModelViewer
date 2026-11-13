@@ -227,7 +227,7 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
     auto PickEnvironment = [WeakSubsystem](const FString& Request) {
         USCViewerSettings::Get()->Environment = Request;
         USCViewerSettings::Get()->Save();
-        if (WeakSubsystem.IsValid()) WeakSubsystem->SetEnvironment(Request);
+        if (WeakSubsystem.IsValid()) WeakSubsystem->SetEnvironment(Request, true);
     };
     TSharedRef<SHorizontalBox> Environment = SNew(SHorizontalBox)
         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)

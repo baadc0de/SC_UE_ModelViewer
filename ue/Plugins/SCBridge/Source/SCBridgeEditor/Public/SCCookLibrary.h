@@ -17,4 +17,8 @@ public:
      *  makes the actor and its components persistent. The caller saves the level. Returns false on any failed save. */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static bool CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot = TEXT("/Game/SC/Hangars/Shared"));
+    /** Measures a presented environment (rigs alive: before CookEnvironment) and records its ship capacity under
+     *  Style/Name in the hangar index (USCHangarIndex::AssetPath), saving it. Returns false without a ship elevator. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Cook")
+    static bool RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name);
 };

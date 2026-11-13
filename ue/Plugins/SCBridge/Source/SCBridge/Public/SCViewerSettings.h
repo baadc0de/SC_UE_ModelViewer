@@ -35,6 +35,9 @@ public:
     /** The environment the ship stands in: an archive object container (a game hangar, exported and cached like
      *  ships), or "none" for the map's procedural hangar. A viewer choice (LOOK-3); -SCDefaults uses "none" unless
      *  -SCEnvironment is given. */
+    /** Size the chosen hangar to each ship: the smallest cooked hangar of the chosen style whose ship elevator and clear
+     *  height hold it (measured at cook time, USCHangarIndex); false keeps exactly Environment. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bFitHangarToShip = true;
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString Environment =
         TEXT("Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak");
     /** Look (2026-11-12): every ship light casts shadows (MegaLights ray-traced), not only the authored casters. */

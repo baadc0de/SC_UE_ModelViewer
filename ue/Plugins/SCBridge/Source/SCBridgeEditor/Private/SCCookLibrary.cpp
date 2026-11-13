@@ -2,6 +2,7 @@
 #include "SCCookLibrary.h"
 #include "SCBridgeClient.h" // scbridge.h: sc_texels_decode_bgra8
 #include "SCEnvironment.h"
+#include "SCHangarIndex.h"
 #include "SCInstancing.h"
 #include "SCVehicle.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -190,4 +191,34 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     UE_LOG(LogSCCook, Display, TEXT("COOK root=%s pooled_new=%d pooled_reused=%d packages=%d saved=%d instanced=%d warnings=%d seconds=%.1f"), *Root,
            Cook.Created, Cook.Reused, Cook.ToSave.Num(), Saved, Instancing.Instanced, Cook.Warnings.Num(), FPlatformTime::Seconds() - Start);
     return Saved == Cook.ToSave.Num();
+}
+
+bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name)
+{
+    FBox Bay;
+    FString Elevator;
+    if (!FSCEnvironment::FindShipBay(Environment, Bay, &Elevator))
+    {
+        UE_LOG(LogSCCook, Warning, TEXT("HANGAR_CAPACITY %s/%s: no ship elevator"), *Style, *Name);
+        return false;
+    }
+    const double Clearance = FSCEnvironment::BayClearance(Environment, Bay);
+    const FString PackageName = FPackageName::ObjectPathToPackageName(FString(USCHangarIndex::AssetPath));
+    USCHangarIndex* Index = USCHangarIndex::Load();
+    UPackage* Package = Index ? Index->GetPackage() : CreatePackage(*PackageName);
+    if (!Index)
+        Index = NewObject<USCHangarIndex>(Package, *FPackageName::GetShortName(PackageName), RF_Public | RF_Standalone);
+    FSCHangarCapacity& Entry = Index->FindOrAdd(Style, Name);
+    Entry.BayCm = FVector2D(Bay.GetSize());
+    Entry.ClearanceCm = Clearance;
+    Entry.Elevator = Elevator;
+    Entry.bTopLoading = FSCEnvironment::IsTopLoading(Environment, Bay);
+    Package->MarkPackageDirty();
+    FSavePackageArgs Args;
+    Args.TopLevelFlags = RF_Public | RF_Standalone;
+    Args.SaveFlags = SAVE_NoError;
+    const bool bSaved = UPackage::SavePackage(Package, Index, *FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension()), Args);
+    UE_LOG(LogSCCook, Display, TEXT("HANGAR_CAPACITY %s/%s elevator=%s bay_m=%.1fx%.1f clearance_m=%.1f top_loading=%d saved=%d hangars=%d"), *Style, *Name,
+           *Elevator, Entry.BayCm.X / 100, Entry.BayCm.Y / 100, Clearance / 100, Entry.bTopLoading, bSaved, Index->Hangars.Num());
+    return bSaved;
 }

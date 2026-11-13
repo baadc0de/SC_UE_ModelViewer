@@ -162,8 +162,11 @@ public:
      *  the ship, outside the vehicle slot; the map's own hangar geometry and lights are hidden while it is loaded.
      *  Folder: a package folder on disk; a `*.socpak` archive path: exported from the open archive (cached, textures
      *  at least mip 1 so the package fits the 2 GB tar limit). Empty or "none": unload it.
-     *  Also -SCEnvironment=<...>, `sc.Environment <...|none>` and USCViewerSettings::Environment. */
-    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void SetEnvironment(const FString& Folder);
+     *  Also -SCEnvironment=<...>, `sc.Environment <...|none>` and USCViewerSettings::Environment.
+     *  bFitToShip (the viewer's own choice: settings and the environment picker; USCViewerSettings::bFitHangarToShip):
+     *  Folder names the hangar style, and each loaded ship gets the smallest cooked hangar of that style that holds it
+     *  (USCHangarIndex, preferring Folder's roof kind); false (-SCEnvironment, sc.Environment) loads exactly Folder. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void SetEnvironment(const FString& Folder, bool bFitToShip = false);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
     /** The requested environment (folder, archive path or empty) and the archive's hangars (listed once per archive). */
     FString GetEnvironmentRequest() const { return EnvironmentFolder; }
@@ -293,6 +296,11 @@ private:
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
     FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)
+    FString PreferredEnvironment; // what SetEnvironment asked for; EnvironmentFolder may be a larger hangar of its style
+    bool bFitEnvironment = false;
+    void RequestEnvironment(const FString& Folder);
+    /** The hangar for the loaded ship (see SetEnvironment); requests it when it differs from the current one. */
+    void FitEnvironmentToShip();
     bool bEnvironmentPending = false;
     TSharedPtr<FSCPackageSource> EnvSource;
     TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> EnvProgress;

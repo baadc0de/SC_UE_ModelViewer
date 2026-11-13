@@ -50,10 +50,9 @@ int32 FSCEnvironment::SetState(ASCVehicle* Environment, const FString& State)
     return Snapped;
 }
 
-FVector FSCEnvironment::PlaceOnFloor(ASCVehicle* Environment, double FloorZ, const AActor* Ignore)
+bool FSCEnvironment::FindShipBay(const ASCVehicle* Environment, FBox& OutBay, FString* OutName)
 {
-    UWorld* World = Environment ? Environment->GetWorld() : nullptr;
-    if (!World) return FVector::ZeroVector;
+    if (!Environment) return false;
     // The ship stands on the environment's ship elevator: its largest flat moving part (attached under a rig, >= 20 m
     // across, <= 15 m thick) in the presented pose: of the moving parts at least half the largest one's area (the elevator
     // and the shaft cover doors around it, not roof-hatch leaves or cargo pads) the highest, the platform the ship stands on. Static ceilings and roof frames are larger
@@ -85,11 +84,77 @@ FVector FSCEnvironment::PlaceOnFloor(ASCVehicle* Environment, double FloorZ, con
     const FCandidate* Best = nullptr;
     for (const FCandidate& Candidate : Candidates)
         if (Candidate.Area >= Largest * SameSize && (!Best || Candidate.Box.Max.Z > Best->Box.Max.Z)) Best = &Candidate;
-    FVector Offset = FVector::ZeroVector;
-    if (Best)
+    if (!Best) return false;
+    OutBay = Best->Box;
+    if (OutName) *OutName = Best->Name;
+    return true;
+}
+
+double FSCEnvironment::BayClearance(const ASCVehicle* Environment, const FBox& Bay, const AActor* Ignore)
+{
+    UWorld* World = Environment ? Environment->GetWorld() : nullptr;
+    if (!World || !Bay.IsValid) return -1;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(SCEnvBayClearance), true);
+    if (Ignore) Query.AddIgnoredActor(Ignore);
+    const FVector Centre = Bay.GetCenter(), Half = Bay.GetExtent() * 0.5; // inset: halfway to each edge
+    double Lowest = TNumericLimits<double>::Max();
+    for (const FVector2D& D : {FVector2D(0, 0), FVector2D(1, 1), FVector2D(1, -1), FVector2D(-1, 1), FVector2D(-1, -1)})
     {
-        Offset = FVector(-Best->Box.GetCenter().X, -Best->Box.GetCenter().Y, FloorZ - Best->Box.Max.Z);
-        UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_PLACE elevator=%s floor_z=%.1f offset=%s"), *Best->Name, Best->Box.Max.Z, *Offset.ToString());
+        const FVector From(Centre.X + D.X * Half.X, Centre.Y + D.Y * Half.Y, Bay.Max.Z + 50.0);
+        FHitResult Hit;
+        if (World->LineTraceSingleByChannel(Hit, From, From + FVector(0, 0, MaxClearanceCm), ECC_Visibility, Query) &&
+            Hit.GetActor() == Environment)
+            Lowest = FMath::Min(Lowest, Hit.ImpactPoint.Z - Bay.Max.Z);
+    }
+    return Lowest == TNumericLimits<double>::Max() ? -1 : Lowest;
+}
+
+bool FSCEnvironment::IsTopLoading(const ASCVehicle* Environment, const FBox& Bay)
+{
+    if (!Environment || !Bay.IsValid) return false;
+    constexpr double AboveFloorCm = 500.0; // parts reaching no higher than this above the bay are the floor (bay, shaft covers)
+    FBox Door(ForceInit);
+    double DoorFace = 0;
+    Environment->ForEachComponent<UStaticMeshComponent>(false, [&](UStaticMeshComponent* C) {
+        if (C->IsA<UInstancedStaticMeshComponent>() || !C->IsVisible() || C->bHiddenInGame || C->ComponentHasTag(TEXT("SCGameCollision"))) return;
+        bool bMoving = false;
+        for (const USceneComponent* Parent = C->GetAttachParent(); Parent && !bMoving; Parent = Parent->GetAttachParent())
+            bMoving = Parent->IsA<USCRigComponent>();
+        const FBox Box = C->Bounds.GetBox();
+        if (!bMoving || Box.Max.Z <= Bay.Max.Z + AboveFloorCm) return;
+        const FVector S = Box.GetSize();
+        const double Face = FMath::Max3(S.X * S.Y, S.X * S.Z, S.Y * S.Z);
+        if (Face > DoorFace) { DoorFace = Face; Door = Box; }
+    });
+    if (!Door.IsValid) return false;
+    const FVector S = Door.GetSize();
+    return S.Z <= FMath::Min(S.X, S.Y);
+}
+
+FBox FSCEnvironment::SolidBounds(const ASCVehicle* Ship)
+{
+    FBox Box(ForceInit);
+    if (!Ship) return Box;
+    Ship->ForEachComponent<UPrimitiveComponent>(false, [&](UPrimitiveComponent* C) {
+        if (!C->IsRegistered() || !C->IsVisible() || C->bHiddenInGame || !C->CastShadow || C->ComponentHasTag(TEXT("SCGameCollision"))) return;
+        Box += C->Bounds.GetBox();
+    });
+    return Box;
+}
+
+FVector FSCEnvironment::PlaceOnFloor(ASCVehicle* Environment, double FloorZ, const AActor* Ignore)
+{
+    UWorld* World = Environment ? Environment->GetWorld() : nullptr;
+    if (!World) return FVector::ZeroVector;
+    FBox Bay;
+    FString BayName;
+    const bool bBay = FindShipBay(Environment, Bay, &BayName);
+    FVector Offset = FVector::ZeroVector;
+    if (bBay)
+    {
+        Offset = FVector(-Bay.GetCenter().X, -Bay.GetCenter().Y, FloorZ - Bay.Max.Z);
+        UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_PLACE elevator=%s floor_z=%.1f bay_m=%.1fx%.1f offset=%s"), *BayName, Bay.Max.Z,
+               Bay.GetSize().X / 100, Bay.GetSize().Y / 100, *Offset.ToString());
     }
     else
     {
