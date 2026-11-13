@@ -6,7 +6,14 @@ class USCRigComponent;
 /** Spawn categories. Each comes from one data source; StartOrder is the first-person start ranking. */
 struct SCBRIDGE_API FSCSpawnKind
 {
-    static const FName Entrance, SeatAccess, Seat, Interior, Door, Hull, Selected;
+    // One declarator per declaration: MSVC rejects the later declarators of a comma list in an exported class (C2487).
+    static const FName Entrance;
+    static const FName SeatAccess;
+    static const FName Seat;
+    static const FName Interior;
+    static const FName Door;
+    static const FName Hull;
+    static const FName Selected;
     static const TArray<FName>& StartOrder();
 };
 USTRUCT(BlueprintType)

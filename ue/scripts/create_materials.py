@@ -88,7 +88,9 @@ class Graph:
         return e
 
     def link(self, a, out, b, inp):
-        if not mel.connect_material_expressions(a, out, b, inp):
+        # UE 5.8 names the only input of single-input expressions (e.g. Transform) "", 5.9 names it "Input".
+        if not mel.connect_material_expressions(a, out, b, inp) and not (
+                inp == "Input" and mel.connect_material_expressions(a, out, b, "")):
             raise RuntimeError(f"{self.m.get_name()}: cannot link {a.get_name()}.{out!r} -> {b.get_name()}.{inp!r}")
 
     def out(self, a, out, prop):

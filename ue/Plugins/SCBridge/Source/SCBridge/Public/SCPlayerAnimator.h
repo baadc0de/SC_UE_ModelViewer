@@ -117,9 +117,14 @@ class SCBRIDGE_API FSCPlayerAnimator
 {
 public:
     /** Stance tags the two capsule states request (Mannequin PlayerTags vocabulary). */
-    static const FString StandTag, CrouchTag;
+    /** (One declarator per declaration: MSVC rejects comma lists of statics in an exported class, C2487.) */
+    static const FString StandTag;
+    static const FString CrouchTag;
     /** Fragment ids the animator requests (Mannequin PlayerActions vocabulary). */
-    static const FName IdleFragment, MoveFragment, SelectFragment, DeselectFragment;
+    static const FName IdleFragment;
+    static const FName MoveFragment;
+    static const FName SelectFragment;
+    static const FName DeselectFragment;
     /** Below this ground speed (m/s) the idle fragment plays (viewer threshold, not game data). */
     static constexpr float MoveThreshold = 0.05f;
 
