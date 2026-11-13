@@ -40,9 +40,11 @@ impl Session {
         }
         self.checkpoint(cancel, 0.1, "Assembling player")?;
         let loaded = self.loaded()?;
-        let result = loaded.index.with_dependent(|_, idx| {
+        let mut result = loaded.index.with_dependent(|_, idx| {
             starbreaker_3d::character::player::export_player(&loaded.p4k, idx.db, request)
         })?;
+        // The kit's LayerBlend_V2 armour samples the engine detail map too (WP-U2b); player textures are full mip.
+        crate::engine_textures::add_to_package(&mut result, &loaded.p4k, 0)?;
         self.checkpoint(cancel, 0.94, "Building player tar")?;
         let bytes = package::to_tar(&result)?;
         self.checkpoint(cancel, 1.0, "Publishing player")?;

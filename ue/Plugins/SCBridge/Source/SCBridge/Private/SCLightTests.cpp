@@ -2,6 +2,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "SCLightImporter.h"
+#include "SCViewerSettings.h"
 #include "SCVehicle.h"
 #include "Engine/World.h"
 #include "Components/LightComponent.h"
@@ -13,11 +14,23 @@
 #include "Engine/StaticMesh.h"
 #include "SCLightAreas.h"
 #include "SCStarEngine.h"
+#include "Algo/AllOf.h"
 
+namespace
+{
+// The tests check the game's authored rules (shadows, WP-L1 room confinement); the look settings (D15) are pinned meanwhile.
+struct FAuthoredShadowRule
+{
+    bool bSaved = USCViewerSettings::Get()->bShadowAllLights, bSavedConfine = USCViewerSettings::Get()->bConfineLightsToRooms;
+    FAuthoredShadowRule() { USCViewerSettings::Get()->bShadowAllLights = false; USCViewerSettings::Get()->bConfineLightsToRooms = true; }
+    ~FAuthoredShadowRule() { USCViewerSettings::Get()->bShadowAllLights = bSaved; USCViewerSettings::Get()->bConfineLightsToRooms = bSavedConfine; }
+};
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightDefaults, "SCBridge.Lights.DefaultsAndShadowBudget",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightDefaults::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     auto* MegaLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.EnableForProject"));
     const int32 Previous = MegaLights->GetInt();
     MegaLights->Set(0, ECVF_SetByCode);
@@ -83,6 +96,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightAuthoredModel, "SCBridge.Lights.Authore
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightAuthoredModel::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     // Synthetic lights (not game data). Point / spot: pi * unit * I * (1 + bulb / tweak)^2; planar: pi * unit * I * w * h,
     // unit = the scene unit in cd/m2 from the extracted fixture.
     const double Unit = UE_DOUBLE_PI * FSCStarEngine::Get().SceneUnitNits;
@@ -127,6 +141,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightVerifier, "SCBridge.Lights.VerifierFoll
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightVerifier::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     auto* MegaLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MegaLights.EnableForProject"));
     const int32 Previous = MegaLights->GetInt();
     MegaLights->Set(0, ECVF_SetByCode);
@@ -176,6 +191,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightRoomVolumes, "SCBridge.Lights.RoomVolum
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightRoomVolumes::RunTest(const FString&)
 {
+    const FAuthoredShadowRule AuthoredShadows;
     // Synthetic shapes (not game data). `transform` is column-major segment -> container, metres, CryEngine axes.
     FString Error;
     FSCRoomVolume Box;
@@ -265,7 +281,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightAreaConfinement, "SCBridge.Lights.AreaC
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightAreaConfinement::RunTest(const FString&)
 {
-    // Synthetic scene (not game data). Channel 0 = outside every room volume, channel 1 = inside one.
+    const FAuthoredShadowRule AuthoredShadows;
+    // Synthetic scene (not game data). Channel 0 = outside every room volume; rooms a, b, c (container x -1..1, 1..3,
+    // 3..5) form a light-reach chain a-b-c, so a and c share channel 1 and b takes channel 2.
     auto Channels = [](const FLightingChannels& C) { return int32(C.bChannel0) | int32(C.bChannel1) << 1 | int32(C.bChannel2) << 2; };
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
     FSCFolderPackageSource Source(TEXT("/tmp"));
@@ -283,8 +301,14 @@ bool FSCLightAreaConfinement::RunTest(const FString&)
     Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"OutsideArea",%s,"position":[3,0,0],"affects_this_area_only":true})"), Common));
     Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Everywhere",%s,"position":[0,3,0],"affects_this_area_only":false})"), Common));
     Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"Unflagged",%s,"position":[3,0,0]})"), Common));
+    Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"InRoomB",%s,"position":[2,3,0],"affects_this_area_only":true})"), Common));
+    Instance.LightJson.Add(FString::Printf(TEXT(R"({"name":"InRoomC",%s,"position":[4,3,0],"affects_this_area_only":true})"), Common));
     const FString Volume = TEXT(R"({"room":"a","source":"s","kind":"box","transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],)"
                                 R"("box_min":[-1,2,-1],"box_max":[1,4,1]})");
+    const FString VolumeB = TEXT(R"({"room":"b","source":"s","kind":"box","transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],)"
+                                 R"("box_min":[1,2,-1],"box_max":[3,4,1]})");
+    const FString VolumeC = TEXT(R"({"room":"c","source":"s","kind":"box","transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],)"
+                                 R"("box_min":[3,2,-1],"box_max":[5,4,1]})");
     auto* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
     auto* Sphere = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
     auto* Cone = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cone.Cone"));
@@ -312,9 +336,10 @@ bool FSCLightAreaConfinement::RunTest(const FString&)
     auto* Vehicle = World->SpawnActor<ASCVehicle>();
     Vehicle->SetActorLocation(FVector(5000, 0, 0)); // classification is relative to the placed vehicle
     FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
-    FSCLightAreas::Register(Vehicle, Vehicle->GetRootComponent(), {Volume, TEXT(R"({"kind":"sphere"})")}, false, Warnings);
+    FSCLightAreas::Register(Vehicle, Vehicle->GetRootComponent(), {Volume, VolumeB, VolumeC, TEXT(R"({"kind":"sphere"})")}, false,
+                            Warnings);
     TestEqual(TEXT("a malformed volume warns and is dropped"), Warnings.Num(), 1);
-    TestEqual(TEXT("one area with one volume"), Vehicle->LightAreas.Num() == 1 ? Vehicle->LightAreas[0].Volumes.Num() : -1, 1);
+    TestEqual(TEXT("one area with three volumes"), Vehicle->LightAreas.Num() == 1 ? Vehicle->LightAreas[0].Volumes.Num() : -1, 3);
     // Samples are mesh-local cm; a component is inside when more than half of them are.
     Vehicle->MeshSamples.Add(Cube, {FVector3f(0, 0, 0), FVector3f(50, 0, 0), FVector3f(-2000, 0, 0)});   // 2 of 3 inside at (300,0,0)
     Vehicle->MeshSamples.Add(Sphere, {FVector3f(0, 0, 0), FVector3f(2000, 0, 0), FVector3f(-2000, 0, 0), FVector3f(0, 2000, 0)}); // 1 of 4
@@ -323,28 +348,73 @@ bool FSCLightAreaConfinement::RunTest(const FString&)
     auto* Split = AddMesh(Vehicle, Cube, FVector(380, 0, 0));                                           // 1 of 3 inside from here
     auto* UnsampledIn = AddMesh(Vehicle, Cone, FVector(300, 0, 0));                                      // no samples: bounds origin
     auto* UnsampledOut = AddMesh(Vehicle, Cone, FVector(0, 300, 0));
+    auto* InB = AddMesh(Vehicle, Cube, FVector(300, 200, 0)); // container (2,3): room b (2 of 3 samples inside)
+    auto* InC = AddMesh(Vehicle, Cube, FVector(300, 400, 0)); // container (4,3): room c
     FSCLightAreas::Apply(Vehicle);
-    TestEqual(TEXT("four lights"), Vehicle->Lights.Num(), 4);
-    TestEqual(TEXT("area-only light inside a volume: channel 1 only"), Channels(Vehicle->Lights[0]->LightingChannels), 2);
+    TestEqual(TEXT("six lights"), Vehicle->Lights.Num(), 6);
+    TestEqual(TEXT("area-only light in room a: channel 1 only"), Channels(Vehicle->Lights[0]->LightingChannels), 2);
     TestEqual(TEXT("area-only light outside: channel 0 only"), Channels(Vehicle->Lights[1]->LightingChannels), 1);
-    TestEqual(TEXT("affects everything: both"), Channels(Vehicle->Lights[2]->LightingChannels), 3);
-    TestEqual(TEXT("flag absent: both"), Channels(Vehicle->Lights[3]->LightingChannels), 3);
+    TestEqual(TEXT("affects everything: all channels"), Channels(Vehicle->Lights[2]->LightingChannels), 7);
+    TestEqual(TEXT("flag absent: all channels"), Channels(Vehicle->Lights[3]->LightingChannels), 7);
+    TestEqual(TEXT("area-only light in room b (reached from a and c): channel 2 only"), Channels(Vehicle->Lights[4]->LightingChannels), 4);
+    TestEqual(TEXT("area-only light in room c (not reached from a): channel 1, shared with a"),
+              Channels(Vehicle->Lights[5]->LightingChannels), 2);
+    TestEqual(TEXT("light state records its room"), Vehicle->LightStates[4].AreaRoom, FString(TEXT("b")));
+    TestEqual(TEXT("mesh in room b: channel 2"), Channels(InB->LightingChannels), 4);
+    TestEqual(TEXT("mesh in room c: channel 1"), Channels(InC->LightingChannels), 2);
+    TestEqual(TEXT("world query names the room"), Vehicle->LightRoomAt(FVector(5300, 200, 0)), FString(TEXT("b")));
+    TestEqual(TEXT("world query gives the room's channel"), Vehicle->LightChannelAt(FVector(5300, 200, 0)), 2);
+    TestEqual(TEXT("world query outside is channel 0"), Vehicle->LightChannelAt(FVector(300, 0, 0)), 0);
     TestTrue(TEXT("state records the flag"), Vehicle->LightStates[0].bAreaOnly && Vehicle->LightStates[1].bAreaOnly &&
                                                   !Vehicle->LightStates[2].bAreaOnly && !Vehicle->LightStates[3].bAreaOnly);
     TestTrue(TEXT("state records the side"), Vehicle->LightStates[0].bInsideArea && !Vehicle->LightStates[1].bInsideArea &&
-                                                  Vehicle->LightStates[2].bInsideArea && !Vehicle->LightStates[3].bInsideArea);
+                                                  Vehicle->LightStates[2].bInsideArea && !Vehicle->LightStates[3].bInsideArea &&
+                                                  Vehicle->LightStates[4].bInsideArea && Vehicle->LightStates[5].bInsideArea);
     TestEqual(TEXT("majority of samples inside: channel 1"), Channels(Mostly->LightingChannels), 2);
     TestEqual(TEXT("minority of samples inside: channel 0"), Channels(Hull->LightingChannels), 1);
     TestEqual(TEXT("same mesh, different placement: channel 0"), Channels(Split->LightingChannels), 1);
     TestEqual(TEXT("unsampled mesh inside by its bounds origin"), Channels(UnsampledIn->LightingChannels), 2);
     TestEqual(TEXT("unsampled mesh outside by its bounds origin"), Channels(UnsampledOut->LightingChannels), 1);
-    TestEqual(TEXT("environment light reaches both sides"), Channels(HangarLight->LightingChannels), 3);
+    TestEqual(TEXT("environment light reaches every channel"), Channels(HangarLight->LightingChannels), 7);
     TestTrue(TEXT("world query inside"), Vehicle->IsInsideLightArea(FVector(5300, 0, 0)));
     TestFalse(TEXT("world query outside"), Vehicle->IsInsideLightArea(FVector(300, 0, 0)));
     Plain->Destroy();
     Vehicle->Destroy();
     Hangar->Destroy();
     World->DestroyWorld(false);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightRoomChannels, "SCBridge.Lights.RoomChannels",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightRoomChannels::RunTest(const FString&)
+{
+    const FAuthoredShadowRule AuthoredShadows;
+    // Rooms take channel 1 or 2; rooms a light reaches across never share one when the reach graph allows it.
+    int32 Conflicts = -1;
+    auto Chain = FSCLightAreas::ColorRooms({TEXT("a"), TEXT("b"), TEXT("c")}, {{TEXT("a"), TEXT("b")}, {TEXT("c"), TEXT("b")}}, Conflicts);
+    TestEqual(TEXT("chain: a"), Chain.FindRef(TEXT("a")), 1);
+    TestEqual(TEXT("chain: b"), Chain.FindRef(TEXT("b")), 2);
+    TestEqual(TEXT("chain: c shares a's channel"), Chain.FindRef(TEXT("c")), 1);
+    TestEqual(TEXT("chain: no conflicts"), Conflicts, 0);
+    auto Cycle = FSCLightAreas::ColorRooms({TEXT("a"), TEXT("b"), TEXT("c")},
+                                           {{TEXT("a"), TEXT("b")}, {TEXT("b"), TEXT("c")}, {TEXT("c"), TEXT("a")}}, Conflicts);
+    TestEqual(TEXT("odd cycle: one pair must share"), Conflicts, 1);
+    TestTrue(TEXT("odd cycle: channels stay 1 or 2"), Cycle.Num() == 3 && Algo::AllOf(Cycle, [](const auto& P) { return P.Value == 1 || P.Value == 2; }));
+    auto Apart = FSCLightAreas::ColorRooms({TEXT("a"), TEXT("b")}, {}, Conflicts);
+    TestEqual(TEXT("unreached rooms still spread: a"), Apart.FindRef(TEXT("a")), 1);
+    TestEqual(TEXT("unreached rooms still spread: b"), Apart.FindRef(TEXT("b")), 2);
+    TestEqual(TEXT("unreached rooms: no conflicts"), Conflicts, 0);
+    // Weighted odd cycle: the pair with the fewest reaching lights shares a channel (here a-b: 1 + 1 lights).
+    TArray<TPair<FString, FString>> Weighted = {{TEXT("a"), TEXT("b")}, {TEXT("b"), TEXT("a")}};
+    for (int32 I = 0; I < 5; ++I) Weighted.Add({TEXT("b"), TEXT("c")});
+    for (int32 I = 0; I < 9; ++I) Weighted.Add({TEXT("c"), TEXT("a")});
+    auto Lightest = FSCLightAreas::ColorRooms({TEXT("a"), TEXT("b"), TEXT("c")}, Weighted, Conflicts);
+    TestEqual(TEXT("weighted cycle: the lightest pair shares"), Lightest.FindRef(TEXT("a")), Lightest.FindRef(TEXT("b")));
+    TestNotEqual(TEXT("weighted cycle: the heaviest pair is apart"), Lightest.FindRef(TEXT("a")), Lightest.FindRef(TEXT("c")));
+    TestEqual(TEXT("weighted cycle: one conflicting pair"), Conflicts, 1);
+    auto Self = FSCLightAreas::ColorRooms({TEXT("a")}, {{TEXT("a"), TEXT("a")}}, Conflicts);
+    TestEqual(TEXT("a room reaching itself is no conflict"), Conflicts, 0);
+    TestEqual(TEXT("single room: channel 1"), Self.FindRef(TEXT("a")), 1);
     return true;
 }
 #endif

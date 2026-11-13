@@ -142,3 +142,38 @@ ramps); recorded as a gap. Cache v22. Verified:
   cockpit stop X 886 behind the pilot seat base); Scorpius `scorpius-smoke` hull spawn and hull walk restored
   (X 58, Z 310; baseline X 37, Z 303), its cockpit seats refuse a standing capsule now that the cockpit colliders
   count; Gladius `gladius-hull-seat` unchanged.
+
+## Cross-review (Codex, 2026-11-12) and outcomes
+
+Codex reviewed `9f8e9d8..6b8fc6f` and StarBreaker `e8f48151..2b702764` against this brief (read-only). Each finding was
+checked against the code; confirmed defects were fixed test-first (superproject and `scviewer/physics-proxies`
+working trees, not committed):
+
+1. **High — CLI and app do not compile** (`cli/src/common.rs`, `app/src-tauri/src/commands.rs` x2 build
+   `ExportOptions` without `include_physics`; `texture_container` was already missing since `e8f48151`). Fixed: both
+   pass the upstream defaults (`Png`, `false`); `cargo build -p starbreaker`, `cargo check -p starbreaker-app` pass.
+2. **Grid export ignored ancestor transforms** (`physics_grid.rs` used each node's local `bone_to_world`; a zero
+   matrix collapsed the volume). Fixed with `nmc_world_matrices` (extracted from `flatten_nmc_to_world`); tests
+   `grid_node_transforms_compose_down_the_parent_hierarchy`, `zero_node_matrix_is_identity` failed first. Cache v24.
+3. **Collider-only assets were never instantiated** (assembly required render triangles). Fixed: assembled when game
+   collider variants exist. On the Cutlass the only such assets are `$IP_SeatAccess*` interaction volumes (filtered
+   anyway), so no visible change there.
+4. **Spawn reused the hint's grid membership for every candidate.** Fixed: the floor probe decides membership at its
+   column, the capsule tests at the candidate (as movement does). Gladius `gladius-hull-seat` step 07 (E at the
+   ladder) now lands at X 970, Y −73 instead of X 922, Y −189 (both on the hangar floor, neither stuck).
+5. **Grid parity: overlapping shapes and shared edges.** Overlap fixed (each shape its own volume:
+   `PhysicsGridShapeEnds`; the test failed first). Shared-edge double counting did not reproduce (101 points on a
+   diagonal pass before and after); hits at the same distance now count once.
+6. **A collider that failed to build still made the render mesh non-blocking.** Fixed: `PhysicsFailedShapes` and
+   job-level derive/build failures keep render collision (`GamePhysicsReplacesRender`, warning
+   `Game collision incomplete`; test `FSCGamePhysicsFailedCollider` failed first). Damage-only physics (e.g. the
+   Cutlass fire-extinguisher cabinets: one `damage_mesh` record) still means no collider, as in the game.
+7. **Asset reuse ignores `include_physics`** — not reachable by any current caller (only the CLI passes a reuse set,
+   and it never exports physics); documented in the contract instead of changing asset naming.
+
+Verification after the fixes: `starbreaker-3d` lib 911 passed; `scviewer-core` / `scbridge-ffi` green; UE importer
+units 38/38; first-person suite (`FSCFirstPersonCollision`, `P1_VERIFY passed=1`) on Cutlass, Gladius, Scorpius;
+GPU routes with fresh v24 exports: Cutlass `cutlass-ramp-to-cockpit` end to end (grid 98 triangles / 11 hull
+colliders, ramp foot X −1696, cockpit stop X 886, no asset falls back to render collision), Scorpius `scorpius-smoke`
+(grid 31 140 / 114, hull walk X 57.45), Gladius `gladius-hull-seat` (grid 68 / 28; only step 07 changed, above).
+

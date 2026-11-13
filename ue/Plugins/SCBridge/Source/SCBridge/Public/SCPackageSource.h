@@ -29,7 +29,8 @@ private:
 class SCBRIDGE_API FSCTarPackageSource final : public FSCPackageSource
 {
 public:
-    explicit FSCTarPackageSource(TArray<uint8>&& InBytes);
+    explicit FSCTarPackageSource(TArray64<uint8>&& InBytes);
+    explicit FSCTarPackageSource(TArray<uint8>&& InBytes) : FSCTarPackageSource(TArray64<uint8>(MoveTemp(InBytes))) {}
     bool IsValid() const { return Error.IsEmpty(); }
     const FString& GetError() const { return Error; }
     bool Exists(const FString& Path) const override;
@@ -37,7 +38,7 @@ public:
     TArray<FString> ListFiles(const FString& Prefix = TEXT("")) const override;
 private:
     struct FEntry { int64 Offset; int64 Size; };
-    TArray<uint8> Bytes;
+    TArray64<uint8> Bytes; // a whole ship at LOD 0 exceeds 2 GiB; each entry stays below it (ReadBytes)
     struct FExactPathKeys : BaseKeyFuncs<TPair<FString, FEntry>, FString, false>
     {
         static const FString& GetSetKey(const TPair<FString, FEntry>& Entry) { return Entry.Key; }

@@ -31,7 +31,8 @@
    ],
    "decoded_feature_flags": {
     "tokens": [
-     "NORMAL_MAP"
+     "NORMAL_MAP",
+     "VERTCOLORS"
     ]
    },
    "texture_slots": [
@@ -158,7 +159,8 @@
    ],
    "decoded_feature_flags": {
     "tokens": [
-     "DECAL"
+     "DECAL",
+     "VERTCOLORS"
     ]
    },
    "texture_slots": [
@@ -398,7 +400,8 @@
    "decoded_feature_flags": {
     "tokens": [
      "BLEND_MAP",
-     "NORMAL_MAP"
+     "NORMAL_MAP",
+     "WEAR_DIRT_AO_VERTEX"
     ]
    },
    "texture_slots": [
@@ -1166,7 +1169,8 @@
    ],
    "decoded_feature_flags": {
     "tokens": [
-     "DIFFUSE_MAP"
+     "DIFFUSE_MAP",
+     "VERTCOLORS"
     ]
    },
    "texture_slots": [
@@ -1174,6 +1178,12 @@
      "slot": "TexSlot1",
      "role": "base_color",
      "export_path": "tex/decal_diff.png",
+     "is_virtual": false
+    },
+    {
+     "slot": "TexSlot8",
+     "role": "breakup",
+     "export_path": "tex/decal_breakup.png",
      "is_virtual": false
     }
    ],
@@ -1183,7 +1193,7 @@
     "layer_channels": [],
     "material_channel": null
    },
-   "public_params": {},
+   "public_params": {"WearTiling": 4},
    "activation_state": {
     "state": "active",
     "reason": "synthetic"
@@ -2411,6 +2421,624 @@
     }
    },
    "public_params": {},
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 36,
+   "submaterial_name": "hard_stencil_authored",
+   "shader_family": "HardSurface",
+   "shader": "HardSurface",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HardSurface"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Specular",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Shininess",
+     "value": "180"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "WEAR_LAYER",
+     "MACRO_NORMAL_MAP",
+     "MACRO_AO_MAP",
+     "VERTCOLORS",
+     "USE_SPECULAR_MAPS",
+     "STENCIL_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ao.png"
+    },
+    {
+     "slot": "TexSlot3",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ddna.png",
+     "source_path": "src/hard_macro_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    },
+    {
+     "slot": "TexSlot7",
+     "role": "stencil",
+     "is_virtual": false,
+     "export_path": "tex/camo_stencil.png",
+     "source_path": "src/camo_stencil.tif"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/hard_macro_ddna_smoothness.dds",
+     "source_path": "src/hard_macro_ddna.tif"
+    }
+   ],
+   "layer_manifest": [
+    {
+     "name": "Primary",
+     "uv_tiling": 2.0,
+     "tint_color": [
+      0.5,
+      0.5,
+      0.5
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Primary_diff.png",
+     "normal_export_path": "tex/Primary_ddna.png",
+     "roughness_export_path": "tex/Primary_ddna_smoothness.dds",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_spec.png"
+      },
+      {
+       "slot": "TexSlot8",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_blend.png"
+      }
+     ],
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "ShadingModel",
+        "value": "2"
+       },
+       {
+        "name": "WearDirtBlendFalloff",
+        "value": "0.25"
+       },
+       {
+        "name": "WearDiffuseColor",
+        "value": "0.5,0.5,0.5"
+       },
+       {
+        "name": "WearSpecularColor",
+        "value": "0.2,0.2,0.2"
+       },
+       {
+        "name": "WearGlossiness",
+        "value": "0.5"
+       }
+      ]
+     },
+     "wear_tint": [
+      1,
+      1,
+      1
+     ],
+     "wear_gloss": 1.0
+    },
+    {
+     "name": "Wear",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 1.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Wear_diff.png",
+     "normal_export_path": "tex/Wear_ddna.png",
+     "roughness_export_path": "tex/Wear_ddna_smoothness.dds",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Wear_spec.png"
+      }
+     ]
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "secondary"
+    }
+   },
+   "public_params": {
+    "MacroTiling": 3,
+    "WearBlendBase": 0.25,
+    "StencilTintOverride": 0,
+    "StencilDiffuseColor": "0.9,0.8,0.7",
+    "StencilDiffuseColor2": "0.6,0.5,0.4",
+    "StencilDiffuseColor3": "0.3,0.2,0.1",
+    "StencilTiling": 0.75,
+    "StencilOpacity": 0.8,
+    "UseUV2ForStencil": 0
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 37,
+   "submaterial_name": "hard_stencil_main_tints",
+   "shader_family": "HardSurface",
+   "shader": "HardSurface",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HardSurface"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Specular",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Shininess",
+     "value": "180"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "WEAR_LAYER",
+     "MACRO_NORMAL_MAP",
+     "MACRO_AO_MAP",
+     "VERTCOLORS",
+     "USE_SPECULAR_MAPS",
+     "STENCIL_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ao.png"
+    },
+    {
+     "slot": "TexSlot3",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ddna.png",
+     "source_path": "src/hard_macro_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    },
+    {
+     "slot": "TexSlot7",
+     "role": "stencil",
+     "is_virtual": false,
+     "export_path": "tex/camo_stencil.png",
+     "source_path": "src/camo_stencil.tif"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/hard_macro_ddna_smoothness.dds",
+     "source_path": "src/hard_macro_ddna.tif"
+    }
+   ],
+   "layer_manifest": [
+    {
+     "name": "Primary",
+     "uv_tiling": 2.0,
+     "tint_color": [
+      0.5,
+      0.5,
+      0.5
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Primary_diff.png",
+     "normal_export_path": "tex/Primary_ddna.png",
+     "roughness_export_path": "tex/Primary_ddna_smoothness.dds",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_spec.png"
+      },
+      {
+       "slot": "TexSlot8",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_blend.png"
+      }
+     ],
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "ShadingModel",
+        "value": "2"
+       },
+       {
+        "name": "WearDirtBlendFalloff",
+        "value": "0.25"
+       },
+       {
+        "name": "WearDiffuseColor",
+        "value": "0.5,0.5,0.5"
+       },
+       {
+        "name": "WearSpecularColor",
+        "value": "0.2,0.2,0.2"
+       },
+       {
+        "name": "WearGlossiness",
+        "value": "0.5"
+       }
+      ]
+     },
+     "wear_tint": [
+      1,
+      1,
+      1
+     ],
+     "wear_gloss": 1.0
+    },
+    {
+     "name": "Wear",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 1.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Wear_diff.png",
+     "normal_export_path": "tex/Wear_ddna.png",
+     "roughness_export_path": "tex/Wear_ddna_smoothness.dds",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Wear_spec.png"
+      }
+     ]
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "secondary"
+    }
+   },
+   "public_params": {
+    "MacroTiling": 3,
+    "WearBlendBase": 0.25,
+    "StencilTintOverride": 1,
+    "StencilDiffuseColor": "0.9,0.8,0.7",
+    "StencilDiffuseColor2": "0.6,0.5,0.4",
+    "StencilDiffuseColor3": "0.3,0.2,0.1",
+    "StencilTiling": 0.75,
+    "StencilOpacity": 0.8,
+    "UseUV2ForStencil": 1
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
+  },
+  {
+   "index": 38,
+   "submaterial_name": "hard_stencil_decal_colours",
+   "shader_family": "HardSurface",
+   "shader": "HardSurface",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "HardSurface"
+    },
+    {
+     "name": "Diffuse",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Specular",
+     "value": "0.05,0.05,0.05"
+    },
+    {
+     "name": "Shininess",
+     "value": "180"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": [
+     "WEAR_LAYER",
+     "MACRO_NORMAL_MAP",
+     "MACRO_AO_MAP",
+     "VERTCOLORS",
+     "USE_SPECULAR_MAPS",
+     "STENCIL_MAP"
+    ]
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "base_color",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ao.png"
+    },
+    {
+     "slot": "TexSlot3",
+     "role": "normal_gloss",
+     "is_virtual": false,
+     "export_path": "tex/hard_macro_ddna.png",
+     "source_path": "src/hard_macro_ddna.tif",
+     "texture_identity": "ddna_normal",
+     "alpha_semantic": "smoothness"
+    },
+    {
+     "slot": "TexSlot7",
+     "role": "stencil",
+     "is_virtual": false,
+     "export_path": "tex/camo_stencil.png",
+     "source_path": "src/camo_stencil.tif"
+    }
+   ],
+   "derived_textures": [
+    {
+     "role": "roughness",
+     "export_path": "tex/hard_macro_ddna_smoothness.dds",
+     "source_path": "src/hard_macro_ddna.tif"
+    }
+   ],
+   "layer_manifest": [
+    {
+     "name": "Primary",
+     "uv_tiling": 2.0,
+     "tint_color": [
+      0.5,
+      0.5,
+      0.5
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 0.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Primary_diff.png",
+     "normal_export_path": "tex/Primary_ddna.png",
+     "roughness_export_path": "tex/Primary_ddna_smoothness.dds",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_spec.png"
+      },
+      {
+       "slot": "TexSlot8",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Primary_blend.png"
+      }
+     ],
+     "resolved_material": {
+      "name": "layer",
+      "shader": "Layer",
+      "shader_family": "Layer",
+      "authored_public_params": [
+       {
+        "name": "ShadingModel",
+        "value": "2"
+       },
+       {
+        "name": "WearDirtBlendFalloff",
+        "value": "0.25"
+       },
+       {
+        "name": "WearDiffuseColor",
+        "value": "0.5,0.5,0.5"
+       },
+       {
+        "name": "WearSpecularColor",
+        "value": "0.2,0.2,0.2"
+       },
+       {
+        "name": "WearGlossiness",
+        "value": "0.5"
+       }
+      ]
+     },
+     "wear_tint": [
+      1,
+      1,
+      1
+     ],
+     "wear_gloss": 1.0
+    },
+    {
+     "name": "Wear",
+     "uv_tiling": 1.0,
+     "tint_color": [
+      1,
+      1,
+      1
+     ],
+     "gloss_mult": 0.5,
+     "layer_snapshot": {
+      "diffuse": [
+       1,
+       1,
+       1
+      ],
+      "specular": [
+       0.04,
+       0.04,
+       0.04
+      ],
+      "metallic": 1.0,
+      "shininess": 255.0
+     },
+     "palette_channel": {
+      "index": 1,
+      "name": "secondary"
+     },
+     "diffuse_export_path": "tex/Wear_diff.png",
+     "normal_export_path": "tex/Wear_ddna.png",
+     "roughness_export_path": "tex/Wear_ddna_smoothness.dds",
+     "texture_slots": [
+      {
+       "slot": "TexSlot6",
+       "role": "unknown",
+       "is_virtual": false,
+       "export_path": "tex/Wear_spec.png"
+      }
+     ]
+    }
+   ],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": {
+     "index": 1,
+     "name": "secondary"
+    }
+   },
+   "public_params": {
+    "MacroTiling": 3,
+    "WearBlendBase": 0.25,
+    "StencilTintOverride": 2,
+    "StencilDiffuseColor": "0.9,0.8,0.7",
+    "StencilDiffuseColor2": "0.6,0.5,0.4",
+    "StencilDiffuseColor3": "0.3,0.2,0.1",
+    "StencilTiling": 0.75,
+    "StencilOpacity": 0.8,
+    "UseUV2ForStencil": 0
+   },
    "activation_state": {
     "state": "active",
     "reason": "synthetic"

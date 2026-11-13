@@ -1,0 +1,30 @@
+# Viewer dirt sweep (WP-U2b): the Gladius orbit overview and a hull close-up at dirt 0 / 0.3 / 0.6 / 1.0 (Dust),
+# then each preset colour at 0.6, and the dirt restored to the setting the run started with (sc.Dirt 0.3 Dust).
+# Host: -SCDefaults -SCLoad=AEGS_Gladius -SCCamera=orbit
+20 r.VSync 0
+0 sc.Dirt 0 Dust
+2 shot orbit-dust-0
+0 sc.Dirt 0.3 Dust
+2 shot orbit-dust-0.3
+0 sc.Dirt 0.6 Dust
+2 shot orbit-dust-0.6
+0 sc.Dirt 1 Dust
+2 shot orbit-dust-1
+0 sc.Dirt 0.6 Sand
+2 shot orbit-sand-0.6
+0 sc.Dirt 0.6 Mud
+2 shot orbit-mud-0.6
+0 sc.Dirt 0.6 Ash
+2 shot orbit-ash-0.6
+0 sc.FP.Spawn Hull
+1 sc.FP.Look 0 -35
+0 sc.Dirt 0 Dust
+2 shot hull-dust-0
+0 sc.Dirt 0.3 Dust
+2 shot hull-dust-0.3
+0 sc.Dirt 0.6 Dust
+2 shot hull-dust-0.6
+0 sc.Dirt 1 Dust
+2 shot hull-dust-1
+0 sc.Dirt 0.3 Dust
+1 quit

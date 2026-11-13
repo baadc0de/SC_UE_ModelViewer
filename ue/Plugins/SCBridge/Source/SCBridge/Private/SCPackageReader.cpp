@@ -114,6 +114,17 @@ FString FSCPackageReader::Hash(const TArray<uint8>& Bytes)
     FSHA1 H; H.Update(Bytes.GetData(), Bytes.Num()); H.Final(); uint8 Digest[20]; H.GetHash(Digest);
     return BytesToHex(Digest, 20);
 }
+bool FSCSceneManifest::PaintTarget(const FSCSceneInstance& I, int32 Variant, FString& OutSidecar, FString& OutPalette) const
+{
+    if (!Paints.IsValidIndex(Variant)) return false;
+    const FSCPaintVariant& Paint = Paints[Variant];
+    const bool bExterior = !Root.MaterialSidecar.IsEmpty() && I.MaterialSidecar == Root.MaterialSidecar && !Paint.ExteriorSidecar.IsEmpty();
+    const bool bPalette = !Root.PaletteId.IsEmpty() && I.PaletteId == Root.PaletteId && !Paint.PaletteId.IsEmpty();
+    if (!bExterior && !bPalette) return false;
+    OutSidecar = bExterior ? Paint.ExteriorSidecar : I.MaterialSidecar;
+    OutPalette = bPalette ? Paint.PaletteId : I.PaletteId;
+    return true;
+}
 TArray<FString> FSCSceneManifest::MeshAssets() const
 {
     TSet<FString> Paths;
@@ -160,9 +171,11 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
                 {
                     Warn(TEXT("physics_grid"), ShapeError.IsEmpty() ? TEXT("malformed shape") : ShapeError);
                     Out.PhysicsGrid.Reset();
+                    Out.PhysicsGridShapeEnds.Reset();
                     break;
                 }
                 for (const FVector& P : Tris) Out.PhysicsGrid.Add(FSCMeshImporter::Position(FSCMeshImporter::CryToGltf().TransformPosition(P)));
+                Out.PhysicsGridShapeEnds.Add(Out.PhysicsGrid.Num());
             }
     }
     // Nested assemblies (a personal weapon's own children) follow their parent depth-first; ParentId binds
@@ -214,14 +227,58 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             if (!Instance(Object(P), Placement, Detail, TEXT("transform"))) { Warn(TEXT("placement"), Detail); continue; }
             Placement.EntityName = String(P->AsObject(), TEXT("cgf_path"));
             Placement.SourceTransformBasis = TEXT("cryengine_z_up");
+            Placement.EntityId = String(P->AsObject(), TEXT("entity_id"));
+            Placement.LoadoutOwnerEntityId = String(P->AsObject(), TEXT("loadout_owner_entity_id"));
+            for (const auto& L : ReaderArray(P->AsObject(), TEXT("links"))) if (L->Type == EJson::String) Placement.Links.Add(L->AsString());
             I.Placements.Add(MoveTemp(Placement));
         }
+        for (const auto& S : ReaderArray(O, TEXT("proximity_sensors")))
+        {
+            const auto SO = Object(S);
+            if (!SO) continue;
+            FSCProximitySensor Sensor;
+            if (!Matrix(SO, TEXT("transform"), Sensor.LocalMatrix, Detail)) { Warn(TEXT("proximity sensor"), Detail); Detail.Reset(); continue; }
+            Sensor.EntityClass = String(SO, TEXT("entity_class"));
+            Sensor.EntityId = String(SO, TEXT("entity_id"));
+            double Delay = 0;
+            if (SO->TryGetNumberField(TEXT("exit_delay"), Delay)) Sensor.ExitDelay = float(Delay);
+            const FReaderObject* Volume;
+            if (SO->TryGetObjectField(TEXT("volume"), Volume) && String(*Volume, TEXT("kind")) == TEXT("box"))
+            {
+                const auto& E = ReaderArray(*Volume, TEXT("extent"));
+                const auto& Off = ReaderArray(*Volume, TEXT("offset"));
+                if (E.Num() == 3) Sensor.Extent = FVector(E[0]->AsNumber(), E[1]->AsNumber(), E[2]->AsNumber());
+                if (Off.Num() == 3) Sensor.Offset = FVector(Off[0]->AsNumber(), Off[1]->AsNumber(), Off[2]->AsNumber());
+            }
+            for (const auto& L : ReaderArray(SO, TEXT("links"))) if (L->Type == EJson::String) Sensor.Links.Add(L->AsString());
+            if (Sensor.Extent.IsNearlyZero() || Sensor.Links.IsEmpty()) { Warn(TEXT("proximity sensor"), TEXT("no box volume or no linked door: ") + Sensor.EntityId); continue; }
+            I.ProximitySensors.Add(MoveTemp(Sensor));
+        }
         Out.Interiors.Add(MoveTemp(I));
+    }
+    // Paints (optional `paints.json` beside scene.json): each variant's exterior material file is loaded with the
+    // scene's, so a paint can be put on without another read.
+    if (const FString PaintsPath = FPaths::GetPath(Out.ScenePath) / TEXT("paints.json"); Source.Exists(PaintsPath))
+    {
+        FReaderObject O;
+        if (!ReadJson(Source, PaintsPath, O, Detail)) { Warn(PaintsPath, Detail); Detail.Reset(); }
+        for (const auto& V : ReaderArray(O, TEXT("paint_variants")))
+        {
+            if (!Object(V)) { Warn(PaintsPath, TEXT("Invalid paint variant")); continue; }
+            FSCPaintVariant Paint;
+            Paint.DisplayName = String(V->AsObject(), TEXT("display_name"));
+            Paint.PaletteId = String(V->AsObject(), TEXT("palette_id"));
+            Paint.SubgeometryTag = String(V->AsObject(), TEXT("subgeometry_tag"));
+            const FString Sidecar = String(V->AsObject(), TEXT("exterior_material_sidecar"));
+            if (!Sidecar.IsEmpty() && !FSCPackageSource::Normalize(Sidecar, Paint.ExteriorSidecar)) { Warn(PaintsPath, TEXT("Unsafe paint sidecar: ") + Sidecar); continue; }
+            Out.Paints.Add(MoveTemp(Paint));
+        }
     }
     TSet<FString> Sidecars;
     auto Collect = [&](const FSCSceneInstance& I) { if (!I.MaterialSidecar.IsEmpty()) Sidecars.Add(I.MaterialSidecar); };
     Collect(Out.Root); for (const auto& I : Out.Children) Collect(I);
     for (const auto& I : Out.Interiors) for (const auto& P : I.Placements) Collect(P);
+    for (const auto& Paint : Out.Paints) if (!Paint.ExteriorSidecar.IsEmpty()) Sidecars.Add(Paint.ExteriorSidecar);
     TArray<FString> Sorted = Sidecars.Array(); Sorted.Sort();
     for (const FString& Path : Sorted)
     {
@@ -283,6 +340,13 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             if (!Out.Palettes.ContainsByPredicate([&](const FSCPalette& E) { return E.Id == P.Id; })) Out.Palettes.Add(MoveTemp(P));
         }
     }
+    // A paint whose palette or exterior material file the package lacks is dropped (warned): it could not be put on.
+    Out.Paints.RemoveAll([&](const FSCPaintVariant& Paint) {
+        const bool bPalette = Paint.PaletteId.IsEmpty() || Out.Palettes.ContainsByPredicate([&](const FSCPalette& P) { return P.Id == Paint.PaletteId; });
+        const bool bSidecar = Paint.ExteriorSidecar.IsEmpty() || Out.Materials.ContainsByPredicate([&](const FSCMaterialSet& M) { return M.Path == Paint.ExteriorSidecar; });
+        if (!bPalette || !bSidecar) Warn(TEXT("paints.json"), TEXT("Paint without its palette or material file: ") + Paint.Label());
+        return !bPalette || !bSidecar;
+    });
     // Palette resolution, the chain the contract's other consumers apply: the instance's own palette, a
     // placement's container's, the material set's authored DefaultPalette, then the palette of the entity the
     // instance is attached to. An id the package carries no palette for does not resolve; with no resolvable

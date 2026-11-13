@@ -22,6 +22,7 @@
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Notifications/SProgressBar.h"
 #if SC_WITH_DESKTOP_PLATFORM
 #include "DesktopPlatformModule.h"
 #include "IDesktopPlatform.h"
@@ -48,7 +49,8 @@ void SSCViewerRoot::Construct(const FArguments& Args)
         + SVerticalBox::Slot().FillHeight(1.f)
         [
             SNew(SHorizontalBox)
-            + SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(SidePanelWidth)[SNew(SSCModelBrowser).Subsystem(Subsystem.Get())]]
+            + SHorizontalBox::Slot().AutoWidth()
+            [SNew(SBox).WidthOverride(SidePanelWidth).Visibility_Lambda([this] { return PanelVisibility(); })[SNew(SSCModelBrowser).Subsystem(Subsystem.Get())]]
             + SHorizontalBox::Slot().FillWidth(1.f)
             [
                 SAssignNew(View, SOverlay)
@@ -65,9 +67,11 @@ void SSCViewerRoot::Construct(const FArguments& Args)
                     })
                 ]
                 + SOverlay::Slot()[SNew(SSCFirstPersonHUD).Subsystem(Subsystem.Get())]
+                + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(FMargin(0, 0, 0, 36))[MakeLoadingOverlay()]
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[MakeArchiveOverlay()]
             ]
-            + SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(HierarchyWidth)[SNew(SSCHierarchyPanel).Subsystem(Subsystem.Get())]]
+            + SHorizontalBox::Slot().AutoWidth()
+            [SNew(SBox).WidthOverride(HierarchyWidth).Visibility_Lambda([this] { return PanelVisibility(); })[SNew(SSCHierarchyPanel).Subsystem(Subsystem.Get())]]
         ]
         + SVerticalBox::Slot().AutoHeight()[MakeFooter()]
     ];
@@ -160,6 +164,17 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
         + SHorizontalBox::Slot().AutoWidth().Padding(2, 0)
         [MakeCameraButton(LOCTEXT("FirstPerson", "First person"), uint8(ESCCameraMode::FirstPerson),
                           LOCTEXT("FirstPersonTip", "Walk the ship with collision"))]
+        + SHorizontalBox::Slot().AutoWidth().Padding(12, 0, 2, 0)
+        [
+            SNew(SCheckBox)
+            .Style(FCoreStyle::Get(), "ToggleButtonCheckbox")
+            .ToolTipText(LOCTEXT("PanelsTip", "Show or hide the side panels (model browser, hierarchy); console: sc.UI.Panels"))
+            .IsChecked_Lambda([this] { return Subsystem.IsValid() && Subsystem->ArePanelsVisible() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+            .OnCheckStateChanged_Lambda([this](ECheckBoxState State) {
+                if (Subsystem.IsValid()) Subsystem->SetPanelsVisible(State == ECheckBoxState::Checked);
+            })
+            [SNew(SBox).Padding(FMargin(8, 2))[SNew(STextBlock).Font(Font(9)).Text(LOCTEXT("Panels", "Panels"))]]
+        ]
         + SHorizontalBox::Slot().AutoWidth().Padding(2, 0)
         [SNew(SButton).Text(LOCTEXT("SpawnLook", "Spawn where I look"))
             .OnClicked_Lambda([this] { if (Subsystem.IsValid()) Subsystem->SpawnWhereLooking(); return FReply::Handled(); })]
@@ -176,6 +191,57 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
             [SNew(STextBlock).Font(Font(9, true)).Text(LOCTEXT("Keep", "Keep as assets"))]
         ]
     ];
+}
+
+EVisibility SSCViewerRoot::PanelVisibility() const
+{
+    return !Subsystem.IsValid() || Subsystem->ArePanelsVisible() ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+// On-screen loading bars over the 3D view: the model and the environment (hangar), each while it loads; a failed model
+// load stays visible with its reason until the next load.
+TSharedRef<SWidget> SSCViewerRoot::MakeLoadingOverlay()
+{
+    auto Row = [this](TFunction<bool()> Shown, TFunction<float()> Fraction, TFunction<FSlateColor()> Colour, TFunction<FText()> Label) {
+        return SNew(SVerticalBox)
+            .Visibility_Lambda([Shown] { return Shown() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 2)
+            [SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text_Lambda([Label] { return Label(); })]
+            + SVerticalBox::Slot().AutoHeight()
+            [SNew(SBox).HeightOverride(6)[SNew(SProgressBar).Percent_Lambda([Fraction] { return TOptional<float>(Fraction()); })
+                                              .FillColorAndOpacity_Lambda([Colour] { return Colour(); })]];
+    };
+    return SNew(SBorder)
+        .Visibility_Lambda([this] {
+            const bool bModel = Subsystem.IsValid() && (Subsystem->IsBusy() || Subsystem->GetLoadPhase() == ESCLoadPhase::Failed);
+            const bool bEnv = Subsystem.IsValid() && Subsystem->IsEnvironmentLoading();
+            return bModel || bEnv ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
+        })
+        .BorderImage(Fill()).BorderBackgroundColor(FLinearColor(0, 0, 0, 0.55f)).Padding(FMargin(14, 6, 14, 10))
+        [
+            SNew(SBox).WidthOverride(520)
+            [
+                SNew(SVerticalBox)
+                + SVerticalBox::Slot().AutoHeight()
+                [Row([this] { return Subsystem.IsValid() && (Subsystem->IsBusy() || Subsystem->GetLoadPhase() == ESCLoadPhase::Failed); },
+                     [this] { return Subsystem.IsValid() ? Subsystem->GetLoadProgress() : 0.f; },
+                     [this] { return FSlateColor(Subsystem.IsValid() && Subsystem->GetLoadPhase() == ESCLoadPhase::Failed ? Bad() : Accent()); },
+                     [this] {
+                         if (!Subsystem.IsValid()) return FText();
+                         const FString Entity = Subsystem->IsBusy() ? Subsystem->GetPendingEntity() : Subsystem->GetLastReport().Entity;
+                         return FText::FromString(Entity.IsEmpty() ? Subsystem->GetLoadPhaseText() : Entity + TEXT(" — ") + Subsystem->GetLoadPhaseText());
+                     })]
+                + SVerticalBox::Slot().AutoHeight()
+                [Row([this] { return Subsystem.IsValid() && Subsystem->IsEnvironmentLoading(); },
+                     [this] { return Subsystem.IsValid() ? Subsystem->GetEnvironmentProgress() : 0.f; },
+                     [] { return FSlateColor(Accent()); },
+                     [this] {
+                         if (!Subsystem.IsValid()) return FText();
+                         return FText::FromString(TEXT("Hangar ") + FPaths::GetBaseFilename(Subsystem->GetEnvironmentRequest()) + TEXT(" — ") +
+                                                  Subsystem->GetEnvironmentPhaseText());
+                     })]
+            ]
+        ];
 }
 
 TSharedRef<SWidget> SSCViewerRoot::MakeArchiveOverlay()

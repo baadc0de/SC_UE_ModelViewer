@@ -58,6 +58,9 @@ pub(crate) struct BrowserIndex {
     pub exporter_version: String,
     pub entities: Vec<EntityHit>,
     pub paths: Vec<DirEntry>,
+    /// Every object container (`.socpak`) in the archive, slash-normalised: game environments such as hangars.
+    /// (bincode is positional: older indexes are rejected by CACHE_FORMAT_VERSION, not defaulted.)
+    pub environments: Vec<String>,
 }
 
 pub(crate) fn parse_localization(data: &[u8]) -> HashMap<String, String> {
@@ -149,12 +152,18 @@ impl BrowserIndex {
             size: 0,
         }));
         paths.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut environments: Vec<String> = loaded.p4k.entries().iter()
+            .filter(|e| e.name.to_ascii_lowercase().ends_with(".socpak"))
+            .map(|e| normalize(&e.name))
+            .collect();
+        environments.sort();
         Ok(Self {
             version: crate::CACHE_FORMAT_VERSION,
             build_id: build_id.into(),
             exporter_version: crate::EXPORTER_VERSION.into(),
             entities,
             paths,
+            environments,
         })
     }
 }
@@ -169,6 +178,7 @@ mod tests {
             exporter_version: crate::EXPORTER_VERSION.into(),
             entities: Vec::new(),
             paths: Vec::new(),
+            environments: Vec::new(),
         };
         let decode =
             |i: &BrowserIndex| BrowserIndex::decode(&bincode::serialize(i).unwrap(), "build");

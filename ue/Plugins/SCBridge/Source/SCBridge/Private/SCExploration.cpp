@@ -6,6 +6,8 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/MeshComponent.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/Paths.h"
 
 const FName FSCSpawnKind::Entrance(TEXT("Entrance"));
@@ -180,6 +182,10 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
     if (GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Direction.GetSafeNormal() * Reach, ECC_Visibility, Params) &&
         Hit.GetActor() == this)
     {
+        // A door panel (pad) operates its door, wherever the panel stands.
+        for (const USceneComponent* C = Hit.GetComponent(); C; C = C->GetAttachParent())
+            if (const TWeakObjectPtr<USCRigComponent>* Door = DoorControls.Find(C))
+                if (const int32 Index = DoorForRig(Door->Get()); Index != INDEX_NONE) return Index;
         FName Socket = NAME_None;
         const USCRigComponent* Rig = nullptr;
         for (const USceneComponent* C = Hit.GetComponent(); C && !Rig; C = C->GetAttachParent())
@@ -223,5 +229,54 @@ bool ASCVehicle::ToggleDoor(int32 Index)
     if (!PlayFragmentAt(D.Fragment, Tag, D.Rig)) return false;
     UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_DOOR fragment=%s owner=%s joint=%s open=%d label=\"%s\""), *D.Fragment.ToString(),
            D.Rig ? *D.Rig->OwnerEntity : TEXT("-"), *D.Joint.ToString(), IsDoorOpen(Index), *D.DisplayName);
+    return true;
+}
+
+int32 ASCVehicle::DoorForRig(const USCRigComponent* Rig) const
+{
+    for (int32 I = 0; Rig && I < Doors.Num(); ++I)
+        if (Doors[I].Rig == Rig) return I;
+    return INDEX_NONE;
+}
+void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
+{
+    for (const FSCDoorSensor& Sensor : DoorSensors)
+    {
+        const USceneComponent* Anchor = Sensor.Anchor.Get();
+        if (!Anchor || !Sensor.Box.IsInsideOrOn(Anchor->GetComponentTransform().InverseTransformPosition(PlayerWorld))) continue;
+        for (const auto& Rig : Sensor.Doors)
+        {
+            const int32 Door = DoorForRig(Rig.Get());
+            if (Door == INDEX_NONE) continue;
+            FSensorDoorState& State = SensorDoorStates.FindOrAdd(Door);
+            State.LastInside = Now;
+            State.ExitDelay = FMath::Max(State.ExitDelay, Sensor.ExitDelay);
+            if (!IsDoorOpen(Door) && ToggleDoor(Door)) State.bOpenedBySensor = true;
+        }
+    }
+    for (auto& [Door, State] : SensorDoorStates)
+        if (State.bOpenedBySensor && State.LastInside < Now && Now - State.LastInside > State.ExitDelay)
+        {
+            if (IsDoorOpen(Door)) ToggleDoor(Door);
+            State.bOpenedBySensor = false;
+        }
+}
+
+bool ASCVehicle::SetPaint(int32 Index)
+{
+    if (Index != INDEX_NONE && !Manifest.Paints.IsValidIndex(Index)) return false;
+    int32 Swapped = 0;
+    for (const FSCPaintSlot& Entry : PaintSlots)
+    {
+        UMeshComponent* C = Entry.Component.Get();
+        if (!C) continue;
+        UMaterialInterface* Material = Index == INDEX_NONE ? Entry.Default.Get() : Entry.Paints.IsValidIndex(Index) ? Entry.Paints[Index].Get() : nullptr;
+        if (!Material) Material = Entry.Default.Get(); // the paint leaves this slot as authored
+        if (Material && C->GetMaterial(Entry.Slot) != Material) { C->SetMaterial(Entry.Slot, Material); ++Swapped; }
+    }
+    ActivePaint = Index;
+    UE_LOG(LogTemp, Display, TEXT("PAINT index=%d label=\"%s\" palette=%s slots=%d swapped=%d"), Index,
+           Index == INDEX_NONE ? TEXT("default") : *Manifest.Paints[Index].Label(), Index == INDEX_NONE ? *Manifest.Root.PaletteId : *Manifest.Paints[Index].PaletteId,
+           PaintSlots.Num(), Swapped);
     return true;
 }

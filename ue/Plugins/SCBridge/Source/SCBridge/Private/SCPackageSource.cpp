@@ -116,7 +116,7 @@ bool Octal(const uint8* P, int32 N, uint64& Value)
     return true;
 }
 }
-FSCTarPackageSource::FSCTarPackageSource(TArray<uint8>&& InBytes) : Bytes(MoveTemp(InBytes))
+FSCTarPackageSource::FSCTarPackageSource(TArray64<uint8>&& InBytes) : Bytes(MoveTemp(InBytes))
 {
     FString LongName;
     int64 Offset = 0;

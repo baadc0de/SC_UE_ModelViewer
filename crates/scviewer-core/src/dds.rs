@@ -215,6 +215,75 @@ pub fn mean_rgb(data: &[u8]) -> Result<[f32; 3]> {
     Ok(sum.map(|v| (v / count) as f32))
 }
 
+/// Decodes the top mip of raw texel data (no DDS header; `dxgi` names the format) to BGRA8 for an editable
+/// texture source (the editor cook): BC1/2/3/7 and 8-bit RGBA/BGRA as stored; BC4 and R8 replicate red into RGB;
+/// BC5 keeps X/Y in red/green and rebuilds blue as the unit normal's Z. Alpha is opaque where the format has none.
+pub fn decode_top_bgra8(data: &[u8], dxgi: u32, width: u32, height: u32) -> Result<Vec<u8>> {
+    let (w, h) = (width as usize, height as usize);
+    let mut out = vec![0u8; w * h * 4];
+    let mut put = |x: usize, y: usize, rgba: [u8; 4]| {
+        if x < w && y < h {
+            out[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[rgba[2], rgba[1], rgba[0], rgba[3]]);
+        }
+    };
+    match dxgi {
+        28 | 29 | 87 | 91 | 61 => {
+            let stride = if dxgi == 61 { 1 } else { 4 };
+            anyhow::ensure!(data.len() >= w * h * stride, "texel data shorter than {w}x{h}");
+            for (i, p) in data.chunks_exact(stride).take(w * h).enumerate() {
+                let rgba = match dxgi {
+                    61 => [p[0], p[0], p[0], 255],
+                    87 | 91 => [p[2], p[1], p[0], p[3]],
+                    _ => [p[0], p[1], p[2], p[3]],
+                };
+                put(i % w, i / w, rgba);
+            }
+        }
+        71 | 72 | 74 | 75 | 77 | 78 | 80 | 81 | 83 | 84 | 98 | 99 => {
+            let block = if matches!(dxgi, 71 | 72 | 80 | 81) { 8 } else { 16 };
+            let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
+            anyhow::ensure!(data.len() >= bw * bh * block, "block data shorter than {w}x{h}");
+            for (index, b) in data.chunks_exact(block).take(bw * bh).enumerate() {
+                let mut texels = [[0u8; 4]; 16];
+                if matches!(dxgi, 80 | 81 | 83 | 84) {
+                    let (two, signed) = (matches!(dxgi, 83 | 84), matches!(dxgi, 81 | 84));
+                    let mut decoded = [0.0f32; 32];
+                    if two { bcdec_rs::bc5_float(b, &mut decoded, 8, signed) } else { bcdec_rs::bc4_float(b, &mut decoded, 4, signed) }
+                    let unorm = |v: f32| if signed { v * 0.5 + 0.5 } else { v };
+                    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    for i in 0..16 {
+                        texels[i] = if two {
+                            let (x, y) = (unorm(decoded[i * 2]), unorm(decoded[i * 2 + 1]));
+                            let (nx, ny) = (x * 2.0 - 1.0, y * 2.0 - 1.0);
+                            let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
+                            [byte(x), byte(y), byte(nz * 0.5 + 0.5), 255]
+                        } else {
+                            let r = byte(unorm(decoded[i]));
+                            [r, r, r, 255]
+                        };
+                    }
+                } else {
+                    let mut decoded = [0u8; 64];
+                    match dxgi {
+                        71 | 72 => bcdec_rs::bc1(b, &mut decoded, 16),
+                        74 | 75 => bcdec_rs::bc2(b, &mut decoded, 16),
+                        77 | 78 => bcdec_rs::bc3(b, &mut decoded, 16),
+                        _ => bcdec_rs::bc7(b, &mut decoded, 16),
+                    }
+                    for i in 0..16 {
+                        texels[i].copy_from_slice(&decoded[i * 4..i * 4 + 4]);
+                    }
+                }
+                for i in 0..16 {
+                    put((index % bw) * 4 + i % 4, (index / bw) * 4 + i / 4, texels[i]);
+                }
+            }
+        }
+        _ => anyhow::bail!("unsupported texel format {dxgi}"),
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[path = "dds_tests.rs"]
 mod tests;

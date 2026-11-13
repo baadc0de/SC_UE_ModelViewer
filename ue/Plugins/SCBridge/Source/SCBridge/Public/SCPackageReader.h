@@ -32,6 +32,23 @@ struct SCBRIDGE_API FSCSceneInstance
     FMatrix PortOffset = FMatrix::Identity; // port.offset in native SC axes (row-vector, metres)
     FString ImportWarning; // Invalid optional instance: retain identity to suppress descendants.
     FMatrix LocalMatrix = FMatrix::Identity;
+    /** Interior placements: the object-container entity id (unique within its container), the ids its EntityLinks
+     *  name (a door panel names its door), and the entity whose inline loadout attached it (a door's own panels). */
+    FString EntityId;
+    TArray<FString> Links;
+    FString LoadoutOwnerEntityId;
+};
+/** `interiors[].proximity_sensors[]`: a door proximity sensor in its container's placement frame (CryEngine metres). */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCProximitySensor
+{
+    GENERATED_BODY()
+    FString EntityClass, EntityId;
+    FMatrix LocalMatrix = FMatrix::Identity;
+    /** Box half-extents and centre offset in the sensor's own frame (metres). */
+    FVector Extent = FVector::ZeroVector, Offset = FVector::ZeroVector;
+    float ExitDelay = 0;
+    TArray<FString> Links; // entity ids of the doors it drives, in the same container
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCInterior
@@ -41,6 +58,7 @@ struct SCBRIDGE_API FSCInterior
     /** `room_volumes[]` objects verbatim (container-local CryEngine metres); parsed by FSCRoomVolume. */
     UPROPERTY(BlueprintReadOnly) TArray<FString> RoomVolumeJson;
     UPROPERTY(BlueprintReadOnly) TArray<FSCSceneInstance> Placements;
+    TArray<FSCProximitySensor> ProximitySensors;
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSubmaterial
@@ -96,6 +114,19 @@ struct SCBRIDGE_API FSCEngineGlow
     UPROPERTY(BlueprintReadOnly) FString Units;
     UPROPERTY(BlueprintReadOnly) TArray<FSCEngineGlowTarget> Targets;
 };
+/** `paints.json` `paint_variants[]`: a paint the vehicle can wear (the game's tint system): its tint palette and the
+ *  exterior material file it puts on the parts that use the vehicle's own exterior material file. */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCPaintVariant
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) FString DisplayName;   // empty for unnamed paints
+    UPROPERTY(BlueprintReadOnly) FString PaletteId;
+    UPROPERTY(BlueprintReadOnly) FString ExteriorSidecar; // empty: the paint keeps every material file
+    UPROPERTY(BlueprintReadOnly) FString SubgeometryTag;
+    /** Label for pickers: the display name, else the tag. */
+    FString Label() const { return DisplayName.IsEmpty() ? SubgeometryTag : DisplayName; }
+};
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSceneManifest
 {
@@ -106,12 +137,18 @@ struct SCBRIDGE_API FSCSceneManifest
     UPROPERTY(BlueprintReadOnly) TArray<FSCInterior> Interiors;
     UPROPERTY(BlueprintReadOnly) TArray<FSCMaterialSet> Materials;
     UPROPERTY(BlueprintReadOnly) TArray<FSCPalette> Palettes;
+    UPROPERTY(BlueprintReadOnly) TArray<FSCPaintVariant> Paints;
     UPROPERTY(BlueprintReadOnly) TArray<FSCClipRecord> Clips;
     UPROPERTY(BlueprintReadOnly) FSCEngineGlow EngineGlow;
     UPROPERTY(BlueprintReadOnly) FString ContentHash;
     /** WP-P3: `root_entity.physics_grid` as a triangle soup in the root entity's UE frame (cm); empty without one. */
     TArray<FVector> PhysicsGrid;
+    TArray<int32> PhysicsGridShapeEnds; // end (exclusive) in PhysicsGrid of each shape: every shape is its own volume
     TArray<FString> MeshAssets() const;
+    /** What paint Variant puts on an instance (resolved palettes): an instance on the vehicle's own exterior material
+     *  file takes the paint's exterior file; one on the vehicle's palette takes the paint's palette. False when the
+     *  paint does not touch the instance. */
+    bool PaintTarget(const FSCSceneInstance& I, int32 Variant, FString& OutSidecar, FString& OutPalette) const;
 };
 class SCBRIDGE_API FSCPackageReader
 {

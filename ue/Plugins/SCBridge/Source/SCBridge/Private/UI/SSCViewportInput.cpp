@@ -21,11 +21,14 @@ FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent
     const FKey Button = Event.GetEffectingButton();
     const bool bPan = Button == EKeys::MiddleMouseButton || (Button == EKeys::LeftMouseButton && Event.IsShiftDown());
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Unhandled();
+    // First person: the button is also a key-table input (right button held: aim down sights).
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->HandleKey(Button, true);
     Drag = bPan ? EDrag::Pan : EDrag::Rotate;
     return FReply::Handled().CaptureMouse(AsShared()).UseHighPrecisionMouseMovement(AsShared()).SetUserFocus(AsShared());
 }
-FReply SSCViewportInput::OnMouseButtonUp(const FGeometry&, const FPointerEvent&)
+FReply SSCViewportInput::OnMouseButtonUp(const FGeometry&, const FPointerEvent& Event)
 {
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->HandleKey(Event.GetEffectingButton(), false);
     if (Subsystem.IsValid() && Subsystem->GetFirstPerson() && Drag != EDrag::None) return FReply::Handled();
     if (Drag == EDrag::None) return FReply::Unhandled();
     Drag = EDrag::None;

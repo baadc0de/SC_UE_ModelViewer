@@ -51,6 +51,14 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Out.GlassTilingDefault = Value(TEXT("shader_constants"), TEXT("glassTilingDefault"));
     Out.GlassVStretchDefault = Value(TEXT("shader_constants"), TEXT("glassVStretchDefault"));
     Out.GlassThinFilmThicknessDefault = Value(TEXT("shader_constants"), TEXT("glassThinFilmThicknessDefault"));
+    Out.DirtDetailScale = Value(TEXT("shader_constants"), TEXT("detailScale"));
+    {
+        const TSharedPtr<FJsonObject>* Group = nullptr;
+        const TSharedPtr<FJsonObject>* Entry = nullptr;
+        if (!Root->TryGetObjectField(TEXT("shader_textures"), Group) || !(*Group)->TryGetObjectField(TEXT("WearDirtFrostDetailMap"), Entry) ||
+            !(*Entry)->TryGetStringField(TEXT("value"), Out.WearDirtFrostDetailMap) || Out.WearDirtFrostDetailMap.IsEmpty())
+            Missing.Add(TEXT("shader_textures.WearDirtFrostDetailMap"));
+    }
     Out.MultiplierMin = Value(TEXT("exe_cvars"), TEXT("r_ExposureMultiplierMin"));
     Out.MultiplierMax = Value(TEXT("exe_cvars"), TEXT("r_ExposureMultiplierMax"));
     Out.AdaptTimeDark = Value(TEXT("exe_cvars"), TEXT("r_ExposureAdaptTimeDark"));

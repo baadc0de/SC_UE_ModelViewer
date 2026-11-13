@@ -15,6 +15,8 @@ class ASCViewerPawn;
 class ASCFirstPersonCharacter;
 class USCViewOptions;
 class FSCImportJob;
+class FSCFolderPackageSource;
+class FSCPackageSource;
 class FSCTarPackageSource;
 class FSCViewerAutomation;
 
@@ -156,6 +158,37 @@ public:
      *  (a mid-import state for cancel/teardown tests). False if the import ends first. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForImportedMeshes(int32 MinMeshes, float TimeoutSeconds = 600.f);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") bool IsBusy() const;
+    /** A game environment (e.g. a hangar object container exported as a decomposed package folder) imported beside
+     *  the ship, outside the vehicle slot; the map's own hangar geometry and lights are hidden while it is loaded.
+     *  Folder: a package folder on disk; a `*.socpak` archive path: exported from the open archive (cached, textures
+     *  at least mip 1 so the package fits the 2 GB tar limit). Empty or "none": unload it.
+     *  Also -SCEnvironment=<...>, `sc.Environment <...|none>` and USCViewerSettings::Environment.
+     *  bFitToShip (the viewer's own choice: settings and the environment picker; USCViewerSettings::bFitHangarToShip):
+     *  Folder names the hangar style, and each loaded ship gets the smallest cooked hangar of that style that holds it
+     *  (USCHangarIndex, preferring Folder's roof kind); false (-SCEnvironment, sc.Environment) loads exactly Folder. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void SetEnvironment(const FString& Folder, bool bFitToShip = false);
+    /** Put paint Index (Manifest.Paints; INDEX_NONE = the vehicle's own) on the loaded vehicle and remember it for the
+     *  entity (USCViewerSettings::Paints). Also `sc.Paint [index|default|name part]`. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetPaint(int32 Index);
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
+    /** The requested environment (folder, archive path or empty) and the archive's hangars (listed once per archive). */
+    FString GetEnvironmentRequest() const { return EnvironmentFolder; }
+    /** Pose the environment's mechanisms: "bind" (as exported), "open" or "closed" fragment end poses. */
+    void SetEnvironmentState(const FString& State);
+    const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
+    bool IsEnvironmentLoading() const
+    {
+        return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
+               (EnvLevel && !Environment.IsValid());
+    }
+    /** The cooked level for an object container path (…/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name>),
+     *  empty when none was cooked. */
+    static FString CookedEnvironmentLevel(const FString& Folder);
+    float GetEnvironmentProgress() const;      // 0..1 over export, parse, import and placement
+    FString GetEnvironmentPhaseText() const;
+    // The side panels (model browser, hierarchy); hidden for scripted runs and by the top-bar toggle.
+    void SetPanelsVisible(bool bVisible) { bPanelsVisible = bVisible; }
+    bool ArePanelsVisible() const { return bPanelsVisible; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadPhaseText() const;
@@ -258,6 +291,33 @@ private:
     TWeakObjectPtr<ASCVehicle> Vehicle;
 
     UPROPERTY() TObjectPtr<ASCFirstPersonCharacter> FirstPerson;
+    void StepEnvironment();
+    void BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source);
+    void PlaceEnvironment();
+    int32 EnvPlaceInTicks = 0;
+    bool bPanelsVisible = true;
+    FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
+    void ShowMapHangar(bool bShow);
+    FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)
+    FString PreferredEnvironment; // what SetEnvironment asked for; EnvironmentFolder may be a larger hangar of its style
+    bool bFitEnvironment = false;
+    void RequestEnvironment(const FString& Folder);
+    /** The hangar for the loaded ship (see SetEnvironment); requests it when it differs from the current one. */
+    void FitEnvironmentToShip();
+    bool bEnvironmentPending = false;
+    TSharedPtr<FSCPackageSource> EnvSource;
+    TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> EnvProgress;
+    UE::Tasks::TTask<FSCExportResult> EnvExport;
+    UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> EnvParse;
+    TArray<FString> EnvironmentChoices;
+    UE::Tasks::TTask<FSCTextResult> EnvListTask;
+    uint32 EnvListedGeneration = 0;
+    TSharedPtr<FSCImportJob> EnvJob;
+    // WP-C1: a cooked environment level (Content/SC/Hangars/Maps) streamed in instead of the export/import pipeline.
+    UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> EnvLevel;
+    void UnloadEnvironmentLevel();
+    double EnvStart = 0;
+    TWeakObjectPtr<ASCVehicle> Environment;
     void StepPlayerKit(bool bBlocking);
     void FailPlayerKit(const FString& Error);
     EPlayerKitState KitState = EPlayerKitState::None;

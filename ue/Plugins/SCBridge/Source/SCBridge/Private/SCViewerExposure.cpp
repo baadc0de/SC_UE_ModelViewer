@@ -106,6 +106,11 @@ APostProcessVolume* SCViewerExposure::Install(UWorld& World)
         Curve->FloatCurve.SetKeyInterpMode(Curve->FloatCurve.AddKey(float(K.X), float(K.Y)), RCIM_Linear);
     S.bOverride_AutoExposureBiasCurve = true; S.AutoExposureBiasCurve = Curve;
 
+    // Look (2026-11-12, plan D15, adjudicated; ue/verification/LOOK-1.md, LOOK-2.md): Lumen bounces 1.15x the surface's
+    // diffuse colour, a restrained lift of indirect light (1.3 in LOOK-1 partly offset the since-dropped room
+    // confinement; 1.0..1.3 moves the views 1..4 %). Not game data.
+    S.bOverride_LumenDiffuseColorBoost = true; S.LumenDiffuseColorBoost = 1.15f;
+
     // Display mapping: the material ports display curve 1 (HuePreservingShoulder) and replaces UE's tonemapper.
     bool bDisplay = false;
     if (Game.TonemappingCurve != 1)

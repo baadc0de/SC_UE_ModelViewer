@@ -159,8 +159,12 @@ bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool
     }
     return true;
 }
-UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision,
-                                          UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error)
+namespace
+{
+// Instantiate in three steps so that many meshes can build together (InstantiateBatch): configure (game thread), build,
+// then collision and stats once the render data exists.
+UStaticMesh* ConfigureMesh(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision, UMaterialInterface* Material,
+                           FSCMeshBuildStats& Stats)
 {
     check(IsInGameThread());
     UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer, Name, RF_Transient);
@@ -175,7 +179,6 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     Body->CollisionTraceFlag = CTF_UseComplexAsSimple;
     Body->bDoubleSidedGeometry = true;
     Body->bNeverNeedsCookedCollisionData = true; // Avoid the synchronous implicit cook in Build().
-    const double Start = FPlatformTime::Seconds();
 #if WITH_EDITOR
     Mesh->bGenerateMeshDistanceField = Data.bEnableNanite;
     Mesh->GetNaniteSettings().bEnabled = Data.bEnableNanite;
@@ -205,29 +208,39 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
         Info.bEnableCollision = bBuildCollision;
         Mesh->GetSectionInfoMap().Set(0, I, Info);
     }
-    Mesh->Build(true);
-    FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
 #else
     Stats.NaniteReason = TEXT("disabled:non_editor_host");
+#endif
+    return Mesh;
+}
+#if !WITH_EDITOR
+void BuildRuntime(UStaticMesh* Mesh, const FSCDerivedMesh& Data)
+{
     UStaticMesh::FBuildMeshDescriptionsParams Params;
     Params.bFastBuild = true;
     Params.bAllowCpuAccess = false;
     Params.bBuildSimpleCollision = false;
     Mesh->BuildFromMeshDescriptions({&Data.Description}, Params);
+}
 #endif
-    Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
+void AwaitRepresentations(UStaticMesh* Mesh, FSCMeshBuildStats& Stats)
+{
     const double RepresentationStart = FPlatformTime::Seconds();
 #if WITH_EDITOR
     if (GDistanceFieldAsyncQueue) GDistanceFieldAsyncQueue->BlockUntilBuildComplete(Mesh, false);
     if (GCardRepresentationAsyncQueue) GCardRepresentationAsyncQueue->BlockUntilBuildComplete(Mesh, false);
 #endif
     Stats.RepresentationSeconds = FPlatformTime::Seconds() - RepresentationStart;
+}
+bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollision, FSCMeshBuildStats& Stats, FString& Error)
+{
+    auto* Body = Mesh->GetBodySetup();
     if (bBuildCollision)
     {
         if (Data.CollisionBytes.IsEmpty())
         {
             Error = TEXT("Collision requested without DeriveCollision data");
-            return nullptr;
+            return false;
         }
         FMemoryReader Reader(Data.CollisionBytes);
         Reader.SetCustomVersions(Data.CollisionVersions);
@@ -237,7 +250,7 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
         if (Reader.IsError() || !Geometry)
         {
             Error = TEXT("Cannot instantiate derived Chaos BVH");
-            return nullptr;
+            return false;
         }
         Body->TriMeshGeometries.Add(Geometry);
         Body->bCreatedPhysicsMeshes = true;
@@ -252,7 +265,7 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     if (!Render || Render->LODResources.IsEmpty())
     {
         Error = TEXT("Static mesh build produced no render data");
-        return nullptr;
+        return false;
     }
     const auto& LOD = Render->LODResources[0];
     Stats.Triangles = Data.Description.Triangles().Num();
@@ -266,5 +279,53 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     Stats.bMeshCards = LOD.CardRepresentationData != nullptr;
     Stats.Cards = LOD.CardRepresentationData ? LOD.CardRepresentationData->MeshCardsBuildData.CardBuildData.Num() : 0;
 #endif
-    return Mesh;
+    return true;
+}
+} // namespace
+
+UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision,
+                                          UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error)
+{
+    UStaticMesh* Mesh = ConfigureMesh(Data, Outer, Name, bBuildCollision, Material, Stats);
+    if (Data.Description.Triangles().Num() == 0) return Mesh;
+    const double Start = FPlatformTime::Seconds();
+#if WITH_EDITOR
+    Mesh->Build(true);
+    FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
+#else
+    BuildRuntime(Mesh, Data);
+#endif
+    Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
+    AwaitRepresentations(Mesh, Stats);
+    return FinishMesh(Mesh, Data, bBuildCollision, Stats, Error) ? Mesh : nullptr;
+}
+
+TArray<UStaticMesh*> FSCMeshImporter::InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,
+                                                       TArray<FString>& Errors)
+{
+    TArray<UStaticMesh*> Meshes, ToBuild;
+    Stats.SetNum(Data.Num());
+    Errors.SetNum(Data.Num());
+    for (int32 I = 0; I < Data.Num(); ++I)
+    {
+        Meshes.Add(ConfigureMesh(*Data[I], Outer, NAME_None, false, nullptr, Stats[I]));
+        if (Data[I]->Description.Triangles().Num() > 0) ToBuild.Add(Meshes.Last());
+    }
+    const double Start = FPlatformTime::Seconds();
+#if WITH_EDITOR
+    UStaticMesh::BatchBuild(ToBuild, true); // asynchronous: the compiling manager builds them in parallel
+    FStaticMeshCompilingManager::Get().FinishCompilation(ToBuild);
+#else
+    for (int32 I = 0; I < Data.Num(); ++I)
+        if (Data[I]->Description.Triangles().Num() > 0) BuildRuntime(Meshes[I], *Data[I]);
+#endif
+    const double BuildSeconds = FPlatformTime::Seconds() - Start;
+    for (int32 I = 0; I < Data.Num(); ++I)
+    {
+        if (Data[I]->Description.Triangles().Num() == 0) continue;
+        Stats[I].BuildSeconds = BuildSeconds / FMath::Max(1, ToBuild.Num());
+        AwaitRepresentations(Meshes[I], Stats[I]);
+        if (!FinishMesh(Meshes[I], *Data[I], false, Stats[I], Errors[I])) Meshes[I] = nullptr;
+    }
+    return Meshes;
 }

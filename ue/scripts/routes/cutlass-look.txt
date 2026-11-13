@@ -1,0 +1,45 @@
+# Look iteration (2026-11-12, path-traced sci-fi look): five still Cutlass views, each as the real-time render (rt)
+# and as UE's path tracer at 256 spp (pt, the reference look). Tag prefix is set by the capture tag.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 r.PathTracing.SamplesPerPixel 256
+0 r.PathTracing.MaxBounces 8
+0 sc.Camera orbit
+3 sc.Camera orbit
+4 shot ext-rt
+0 frametime 4 ext
+0 viewmode pathtracing
+240 shot ext-pt
+0 viewmode lit
+0 sc.Camera first
+1 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+4 shot cargo-rt
+0 frametime 4 cargo
+0 viewmode pathtracing
+50 shot cargo-pt
+0 viewmode lit
+0 sc.FP.Look 180 -5
+4 shot cargo-aft-rt
+0 frametime 4 cargo-aft
+0 viewmode pathtracing
+50 shot cargo-aft-pt
+0 viewmode lit
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+4 shot cockpit-aft-rt
+0 frametime 4 cockpit-aft
+0 viewmode pathtracing
+50 shot cockpit-aft-pt
+0 viewmode lit
+1 sc.FP.Look 0 -10
+4 shot cockpit-rt
+0 frametime 4 cockpit
+0 viewmode pathtracing
+50 shot cockpit-pt
+0 viewmode lit
+1 quit

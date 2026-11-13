@@ -1,0 +1,92 @@
+# MegaLights quality sweep (WP-U59): at two still Cutlass views, per setting two shots 0.2 s apart (frame-to-frame
+# noise = boiling) and a 5 s frame sample: DownsampleMode 2 (Epic) / 1 / 0, 24-frame temporal accumulation on 1
+# and 0, and a bias check (MegaLights without shadow rays vs deferred lighting without shadows).
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+0 r.MegaLights.DownsampleMode 2
+0 r.MegaLights.Temporal.MaxFramesAccumulated 12
+4 shot cargo-m2-a
+0.2 shot cargo-m2-b
+0 frametime 5 cargo-m2
+0 r.MegaLights.DownsampleMode 1
+4 shot cargo-m1-a
+0.2 shot cargo-m1-b
+0 frametime 5 cargo-m1
+0 r.MegaLights.DownsampleMode 0
+4 shot cargo-m0-a
+0.2 shot cargo-m0-b
+0 frametime 5 cargo-m0
+0 r.MegaLights.DownsampleMode 1
+0 r.MegaLights.Temporal.MaxFramesAccumulated 24
+4 shot cargo-m1t24-a
+0.2 shot cargo-m1t24-b
+0 frametime 5 cargo-m1t24
+0 r.MegaLights.DownsampleMode 0
+4 shot cargo-m0t24-a
+0.2 shot cargo-m0t24-b
+0 frametime 5 cargo-m0t24
+0 r.MegaLights.Temporal.MaxFramesAccumulated 12
+0 r.MegaLights.WorldSpaceTraces 0
+0 r.MegaLights.ScreenTraces 0
+4 shot cargo-ml-unshadowed-a
+0.2 shot cargo-ml-unshadowed-b
+0 frametime 5 cargo-ml-unshadowed
+0 r.MegaLights.WorldSpaceTraces 1
+0 r.MegaLights.ScreenTraces 1
+0 r.MegaLights.EnableForProject 0
+0 r.ShadowQuality 0
+4 shot cargo-deferred-unshadowed-a
+0.2 shot cargo-deferred-unshadowed-b
+0 frametime 5 cargo-deferred-unshadowed
+0 r.ShadowQuality 5
+0 r.MegaLights.EnableForProject 1
+0 r.MegaLights.DownsampleMode 2
+0 r.MegaLights.Temporal.MaxFramesAccumulated 12
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+0 r.MegaLights.DownsampleMode 2
+0 r.MegaLights.Temporal.MaxFramesAccumulated 12
+4 shot aft-m2-a
+0.2 shot aft-m2-b
+0 frametime 5 aft-m2
+0 r.MegaLights.DownsampleMode 1
+4 shot aft-m1-a
+0.2 shot aft-m1-b
+0 frametime 5 aft-m1
+0 r.MegaLights.DownsampleMode 0
+4 shot aft-m0-a
+0.2 shot aft-m0-b
+0 frametime 5 aft-m0
+0 r.MegaLights.DownsampleMode 1
+0 r.MegaLights.Temporal.MaxFramesAccumulated 24
+4 shot aft-m1t24-a
+0.2 shot aft-m1t24-b
+0 frametime 5 aft-m1t24
+0 r.MegaLights.DownsampleMode 0
+4 shot aft-m0t24-a
+0.2 shot aft-m0t24-b
+0 frametime 5 aft-m0t24
+0 r.MegaLights.Temporal.MaxFramesAccumulated 12
+0 r.MegaLights.WorldSpaceTraces 0
+0 r.MegaLights.ScreenTraces 0
+4 shot aft-ml-unshadowed-a
+0.2 shot aft-ml-unshadowed-b
+0 frametime 5 aft-ml-unshadowed
+0 r.MegaLights.WorldSpaceTraces 1
+0 r.MegaLights.ScreenTraces 1
+0 r.MegaLights.EnableForProject 0
+0 r.ShadowQuality 0
+4 shot aft-deferred-unshadowed-a
+0.2 shot aft-deferred-unshadowed-b
+0 frametime 5 aft-deferred-unshadowed
+0 r.ShadowQuality 5
+0 r.MegaLights.EnableForProject 1
+0 r.MegaLights.DownsampleMode 2
+0 r.MegaLights.Temporal.MaxFramesAccumulated 12
+1 quit

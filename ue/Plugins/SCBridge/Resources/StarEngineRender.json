@@ -94,9 +94,42 @@
     "r_HDRDisplayOutput": {
       "kind": "int",
       "value": 0
+    },
+    "r_ssdo": {
+      "kind": "int",
+      "value": 1
+    },
+    "r_ssdoQuality": {
+      "kind": "int",
+      "value": 0
+    },
+    "r_ssdoRadius": {
+      "kind": "float",
+      "value": 4.0
+    },
+    "r_ssdoStrength": {
+      "kind": "float",
+      "value": 2.0
+    },
+    "r_ssdoAmountDirect": {
+      "kind": "float",
+      "value": 1.0
+    },
+    "r_ssdoAmountAmbient": {
+      "kind": "float",
+      "value": 1.0
+    },
+    "r_ssdoAmountReflection": {
+      "kind": "float",
+      "value": 1.0
     }
   },
   "shader_constants": {
+    "detailScale": {
+      "value": 16.0,
+      "file": "LayerBlend_V2.cfxb",
+      "pattern": "const float detailScale = (\\S+) ;"
+    },
     "HDR_LUMINANCE_SCALE": {
       "value": 1000.0,
       "file": "common.cfib",
@@ -176,6 +209,13 @@
       "value": 1.0,
       "file": "glassLib.cfib",
       "pattern": "float ThinFilmThickness < .*? ; > = (\\S+) ;"
+    }
+  },
+  "shader_textures": {
+    "WearDirtFrostDetailMap": {
+      "value": "Engine/EngineAssets/Textures/wearDirtFrost_mask.dds",
+      "file": "LayerBlendParams.cfib",
+      "pattern": "WearDirtFrostDetailMap : \\S+ \\( \\S+ , MAT_RESOURCE_SET \\) \\{ \\S+ = ([^;]+?) ;"
     }
   },
   "shader_functions": {
@@ -262,6 +302,42 @@
     "GlassPBR_PS": {
       "file": "GlassPBR.cfxb",
       "sha256": "eefd2d58d53cd8017ab200d2a9ba3d420b0e8391f47bfd169d20621795b1e79a"
+    },
+    "DirOcclusionPS": {
+      "file": "DeferredShading.cfxb",
+      "sha256": "6d0b80fa581928697ce816a3e809f43d7399f8227ebdecbaef36999a744b2f86"
+    },
+    "SpatialDenoisePS": {
+      "file": "DeferredShading.cfxb",
+      "sha256": "879eea7681ddeafa9c270ff671e25b4d8e0b90bc4c77da095e6340f96516c40a"
+    },
+    "GetSSDORadius": {
+      "file": "DeferredShading.cfxb",
+      "sha256": "e9f5b1cde58cc2688ae88488e068364a81b2f1076202d211287ab7bc05c8a504"
+    },
+    "CalculateSSDO": {
+      "file": "ShadeLib.cfib",
+      "sha256": "588ccce3f95a3918dd43960be6e62ecb6ae0db83065791c6b0712f85f80a2552"
+    },
+    "CalcStencilWearAlpha": {
+      "file": "stencilLib.cfib",
+      "sha256": "c8522957b2f7e32643e453e0c9fd7b85f7682444879144d71dbbf8a1d8eb8f80"
+    },
+    "CalcStencilParams": {
+      "file": "stencilLib.cfib",
+      "sha256": "7b8d0df8643d8260eeb3f23d671f87b8f9c7178eb4ef7ca03409b60d87528a63"
+    },
+    "GetStencilLayer_Premultiplied": {
+      "file": "stencilLib.cfib",
+      "sha256": "0106f02b8747bbf42dd223554f44b66dc9d6c93139fdc41e91ab8980b4412148"
+    },
+    "ApplyStencilAsTint": {
+      "file": "stencilLib.cfib",
+      "sha256": "ba5b95a64be866590adbff096b8d0d47ef8213904fcc3dfaa3b7b35c3d428441"
+    },
+    "GetPaletteStencilColors": {
+      "file": "paletteLib.cfib",
+      "sha256": "54c2f9aaf555e19d45bbeea0435e3dda0888132110b1cafb704af3c9558abbbc"
     }
   }
 }

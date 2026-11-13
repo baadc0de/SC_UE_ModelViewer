@@ -1,5 +1,6 @@
 // Package-level light invariants: counts are derived from the manifest, never ship-name expectations.
 #include "SCLightImporter.h"
+#include "SCViewerSettings.h"
 #include "SCVehicle.h"
 #include "SCImporter.h"
 #include "Dom/JsonObject.h"
@@ -145,7 +146,7 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         const auto* Local = Cast<ULocalLightComponent>(Light);
         OK &= (Local != nullptr) == Want.Local && (!Local || Local->IntensityUnits == ELightUnits::Candelas);
         OK &= State.bFallbackShadow == Want.Shadow;
-        OK &= bool(Light->CastShadows) == (Vehicle->bMegaLightsActive || Want.Shadow);
+        OK &= bool(Light->CastShadows) == (Want.Shadow || USCViewerSettings::Get()->bShadowAllLights); // authored rule (WP-L1), or every light (look, D15)
         Disabled += !Light->IsVisible();
         Fallback += Want.Shadow;
         Shadowed += bool(Light->CastShadows);

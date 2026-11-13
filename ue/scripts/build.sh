@@ -2,7 +2,7 @@
 # WP-U0: serial UBT invocation with scratch kept inside the project.
 set -euo pipefail
 SC_REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-SC_ENGINE=${UE_ENGINE_ROOT:-"$HOME/UnrealEngine/5.8"}
+SC_ENGINE=${UE_ENGINE_ROOT:-"$HOME/UnrealEngine/5.9"}
 SC_TARGET=${1:-SCViewerEditor}
 shift "$(( $# > 0 ? 1 : 0 ))"
 mkdir -p "$SC_REPO/ue/SCViewer/Saved/BuildConfig" "$SC_REPO/ue/SCViewer/Saved/Spikes"

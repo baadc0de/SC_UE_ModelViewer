@@ -15,6 +15,7 @@ mod cache;
 mod cancellation;
 pub use cancellation::{CancelToken, Error};
 mod catalogue;
+mod engine_textures;
 mod lights;
 mod items;
 mod player;
@@ -364,9 +365,10 @@ impl Session {
             &options.geometry.upstream(ExportKind::Decomposed),
             cancel,
         )?;
-        let package = result
+        let mut package = result
             .decomposed
             .context("upstream returned no decomposed files")?;
+        engine_textures::add_to_package(&mut package, &self.loaded()?.p4k, options.geometry.mip)?;
         self.checkpoint(cancel, 0.94, "Building tar")?;
         let bytes = package::to_tar(&package)?;
         self.checkpoint(cancel, 1.0, "Publishing package")?;
@@ -379,6 +381,54 @@ impl Session {
             value: bytes,
             cache_status: CacheStatus::Miss,
         })
+    }
+    /// Object containers (`.socpak`, slash-normalised) whose path contains every whitespace-separated term of
+    /// `query` (case-insensitive): game environments such as hangars (`"hangar"`).
+    pub fn search_environments(&self, query: &str, limit: usize) -> Vec<String> {
+        filter_environments(&self.browser.environments, query, limit)
+    }
+    /// A game environment (object container) as a decomposed package tar: GLB mesh assets, DDS textures, the
+    /// container's lights, interiors and animated children; cached like entity packages (key prefix `socpak:`).
+    pub fn export_environment_decomposed_mem_cached(
+        &self,
+        socpak: &str,
+        options: &DecomposedOptions,
+        cancel: Option<&CancelToken>,
+    ) -> Result<Cached<Vec<u8>>> {
+        self.checkpoint(cancel, 0.0, "Preparing environment")?;
+        let filename = format!("{}.tar", environment_key(&self.build_id, socpak, options)?);
+        if let Some(cache) = &self.cache {
+            if let Some(bytes) = cache.read(&filename)? {
+                if package::validate_tar(&bytes).is_ok() {
+                    self.checkpoint(cancel, 1.0, "Package cache hit")?;
+                    self.status.set(CacheStatus::Hit);
+                    return Ok(Cached { value: bytes, cache_status: CacheStatus::Hit });
+                }
+                cache.remove(&filename)?;
+            }
+        }
+        let loaded = self.loaded()?;
+        let wanted = normalize(socpak).to_ascii_lowercase();
+        let entry = loaded.p4k.entries().iter()
+            .find(|e| normalize(&e.name).to_ascii_lowercase() == wanted)
+            .ok_or_else(|| anyhow!("object container not in the archive: {socpak}"))?;
+        let name = std::path::Path::new(&wanted).file_stem().and_then(|s| s.to_str()).unwrap_or("environment").to_owned();
+        let upstream = options.geometry.upstream(ExportKind::Decomposed);
+        self.checkpoint(cancel, 0.05, "Exporting environment")?;
+        let mut package = loaded.index.with_dependent(|_, idx| -> Result<_> {
+            Ok(starbreaker_3d::socpaks_to_decomposed_blend_with_progress(
+                idx.db, &loaded.p4k, std::slice::from_ref(&entry.name), &name, &upstream, &mut |_| {},
+            )?)
+        })?;
+        engine_textures::add_to_package(&mut package, &loaded.p4k, options.geometry.mip)?;
+        self.checkpoint(cancel, 0.94, "Building tar")?;
+        let bytes = package::to_tar(&package)?;
+        self.checkpoint(cancel, 1.0, "Publishing package")?;
+        if let Some(cache) = &self.cache {
+            cache.write(&filename, &bytes)?;
+        }
+        self.status.set(CacheStatus::Miss);
+        Ok(Cached { value: bytes, cache_status: CacheStatus::Miss })
     }
     pub fn export_entity_decomposed(
         &self,
@@ -425,6 +475,16 @@ fn build_identity(path: &Path) -> Result<(String, Option<String>)> {
         )),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Environments whose path contains every whitespace-separated term of `query` (case-insensitive), in order.
+pub(crate) fn filter_environments(all: &[String], query: &str, limit: usize) -> Vec<String> {
+    let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    all.iter().filter(|p| { let p = p.to_lowercase(); terms.iter().all(|t| p.contains(t.as_str())) }).take(limit).cloned().collect()
+}
+/// Cache key of an environment package: separate from entity packages (`socpak:` + slash-normalised lower-case path).
+pub(crate) fn environment_key(build: &str, socpak: &str, options: &DecomposedOptions) -> Result<String> {
+    cache::package_key(build, &format!("socpak:{}", normalize(socpak).to_ascii_lowercase()), options)
 }
 
 #[cfg(test)]

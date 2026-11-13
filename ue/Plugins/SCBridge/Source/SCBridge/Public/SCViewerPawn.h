@@ -32,6 +32,8 @@ public:
     void Wheel(float Notches);               // orbit: zoom; fly: speed
     void SetMoveKey(int32 Axis, float Value); // 0 forward, 1 right, 2 up; -1..1
     void SetSpeedModifier(float Multiplier) { SpeedModifier = Multiplier; }
+    // Orbit stops short of this actor's geometry between the target and the camera (the environment around the model).
+    void SetOrbitObstacle(AActor* Obstacle) { OrbitObstacle = Obstacle; }
     float GetFlySpeed() const { return FlySpeed; }
 
     UPROPERTY(VisibleAnywhere, Category = "SC|Camera") TObjectPtr<UCameraComponent> Camera;
@@ -45,5 +47,6 @@ private:
     double Distance = 2000, DistanceGoal = 2000;
     float Yaw = -135.f, Pitch = -20.f; // three-quarter front view of a +X-forward model
     FVector Move = FVector::ZeroVector;
+    TWeakObjectPtr<AActor> OrbitObstacle;
     float FlySpeed = 1500.f, SpeedModifier = 1.f;
 };

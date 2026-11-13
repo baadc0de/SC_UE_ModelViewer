@@ -1,6 +1,7 @@
 // FSCTextureImporter: package DDS blocks (prepared by the bridge) or PNG decode + CPU mips on workers, transient
 // UTexture2D creation on the game thread.
 #include "SCTextureImporter.h"
+#include "RHI.h"
 #include "SCBridgeClient.h" // scbridge.h: sc_dds_prepare / sc_dds_mean_rgb
 #include "Async/ParallelFor.h"
 #include "Engine/Texture2D.h"
@@ -13,7 +14,13 @@
 
 FSCTextureLimits FSCTextureLimits::FromHost()
 {
-    FSCTextureLimits L; L.MaxDimension = GetMax2DTextureDimension(); return L;
+    FSCTextureLimits L; L.MaxDimension = GetMax2DTextureDimension();
+    // One import may hold a third of the GPU's dedicated memory (game environments carry ~1000 textures), never less
+    // than the default budget.
+    FTextureMemoryStats Stats;
+    RHIGetTextureMemoryStats(Stats);
+    if (Stats.DedicatedVideoMemory > 0) L.BudgetBytes = FMath::Max(L.BudgetBytes, Stats.DedicatedVideoMemory / 3);
+    return L;
 }
 
 int64 FSCDecodedTexture::UploadBytes() const

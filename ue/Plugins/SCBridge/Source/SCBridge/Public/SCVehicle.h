@@ -55,6 +55,20 @@ public:
     int32 FindInteraction(FVector Eye, FVector Direction, float Reach = 300, const AActor* Ignore = nullptr) const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool ToggleDoor(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") bool IsDoorOpen(int32 Index) const;
+    /** Door control panels (the game's pads): a panel's anchor -> the rig of the door it operates (scene `links`, or
+     *  the door whose loadout attached it). FindInteraction resolves a panel under the crosshair to its door. */
+    TMap<TWeakObjectPtr<const USceneComponent>, TWeakObjectPtr<USCRigComponent>> DoorControls;
+    TArray<FSCDoorSensor> DoorSensors;
+    /** Paints the vehicle can wear (Manifest.Paints) and the mesh slots they touch; SetPaint swaps those slots.
+     *  INDEX_NONE = the vehicle's own (default) paint. */
+    TArray<FSCPaintSlot> PaintSlots;
+    UFUNCTION(BlueprintCallable, Category = "SC|Paint") bool SetPaint(int32 Index);
+    UFUNCTION(BlueprintPure, Category = "SC|Paint") int32 GetPaint() const { return ActivePaint; }
+    int32 ActivePaint = INDEX_NONE;
+    /** First-person tick: opens doors whose sensors hold the player, closes the ones a sensor opened after their delay. */
+    void UpdateDoorSensors(const FVector& PlayerWorld, double Now);
+    /** The door interaction driven by a rig (the first one; INDEX_NONE without). */
+    int32 DoorForRig(const USCRigComponent* Rig) const;
     /** Whether the last tag played for Fragment on Rig (nullptr: the untargeted orbit-UI toggle) is Open. */
     bool IsFragmentOpen(FName Fragment, const USCRigComponent* Rig = nullptr) const;
     bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target);
@@ -68,16 +82,30 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") bool bMegaLightsActive = false;
     /** Refresh after changing the project/scalability ray-tracing settings at runtime. */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") void RefreshLightShadowPolicy();
+    // Lowest point of the visible geometry (not the game's invisible colliders): where the model rests, e.g. landing gear.
+    double LowestVisibleZ(FString* OutPart = nullptr) const;
+    // The ship standing on the ground: every Landing_Gear Mannequin fragment tagged Compress snapped to its last frame
+    // (the game drives that clip by suspension load; its end is the gear compressed, feet flat). Returns the clips posed.
+    int32 RestOnLandingGear();
     /** Room volumes of the interior containers (WP-U3b §12); empty when the vehicle authors no rooms. */
     TArray<FSCLightArea> LightAreas;
+    /** One anchor per interior object container (scene `interiors[]`, in order): the unit of interior streaming. */
+    UPROPERTY() TArray<TObjectPtr<USceneComponent>> InteriorAnchors;
     /** Vertex samples per imported mesh asset (mesh-local cm): the input of the inside/outside vote. */
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
     /** World point inside any room volume of this vehicle (the game's "not the root clip volume"). */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") bool IsInsideLightArea(const FVector& World) const;
+    /** Room GUID containing the world point; empty outside every room volume. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Lights") FString LightRoomAt(const FVector& World) const;
+    /** Lighting channel of the world point: 0 outside, else its room's channel (set by FSCLightAreas::Apply). */
+    UFUNCTION(BlueprintCallable, Category = "SC|Lights") int32 LightChannelAt(const FVector& World) const;
+    /** Room GUID -> lighting channel 1 or 2 (WP-L1), filled by FSCLightAreas::Apply. */
+    TMap<FString, int32> LightRoomChannels;
     /** WP-P3: the physics grid's volume (DataCore `physicsGrid.physicsProxy`), a triangle soup in actor space (cm).
      *  Inside it the game's actors belong to the vehicle's grid, where the vehicle's own colliders (HullColliders,
      *  the root entity's game collision) do not block them; the interior's and the items' colliders do. */
     TArray<FVector> PhysicsGridTriangles;
+    TArray<int32> PhysicsGridShapeEnds; // per shape, end (exclusive) in PhysicsGridTriangles; empty: one shape
     FBox PhysicsGridBounds = FBox(ForceInit);
     UPROPERTY() TArray<TObjectPtr<UPrimitiveComponent>> HullColliders;
     /** World point inside the physics-grid volume (ray parity); false without a volume. */
@@ -102,6 +130,8 @@ private:
     TSet<USkeletalMesh*> DirtyMeshes;
     // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle.
     TMap<TPair<const USCRigComponent*, FName>, FName> FragmentTargets;
+    struct FSensorDoorState { double LastInside = -1; float ExitDelay = 0; bool bOpenedBySensor = false; };
+    TMap<int32, FSensorDoorState> SensorDoorStates;
     struct FPendingSpawn
     {
         FName Kind;
@@ -116,6 +146,9 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UStaticMesh>> Meshes;
     /** Transient textures (deduplicated by source path + role) and material instances owned by this import. */
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UTexture2D>> Textures;
+    /** Source identity of imported meshes and textures (package path + variant/role): the editor cook shares assets
+     *  across environments by it. */
+    UPROPERTY() TMap<TObjectPtr<UObject>, FString> SourcePaths;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials;
     /** Instances driven by scene controls.engine_glow (main thrusters). */
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> EngineGlowMaterials;
@@ -127,6 +160,9 @@ public:
     UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> InstanceAnchors;
     /** Helper frames of those instances, by id: port alignment re-parents items at run time (stow <-> hand). */
     UPROPERTY() TMap<FString, FSCInstanceHelpers> InstanceHelpers;
+    /** Helper frames of nested-assembly entries (a personal weapon's attachments: optics, magazines), which carry no
+     *  id, by their anchor (anchor space, as InstanceHelpers): an optic's sight helper replaces the weapon's own. */
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, FSCInstanceHelpers> AttachmentHelpers;
     /** Anchor-relative transform that puts Helper (instance Id) on a joint frame plus Offset (native SC, row form). */
     bool PortRelative(const FString& Id, const FString& Helper, const FMatrix& Offset, FTransform& Out) const;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FString SessionPath;

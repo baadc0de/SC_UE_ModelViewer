@@ -1,6 +1,9 @@
 // ASCViewerGameMode / ASCViewerPlayerController: pawn wiring, cursor/input mode and the Slate UI root.
 #include "SCViewerGameMode.h"
 #include "SCViewerExposure.h"
+#include "SCLook.h"
+#include "SCLookLighting.h"
+#include "SCViewerSettings.h"
 #include "SCViewerPawn.h"
 #include "UI/SSCViewerRoot.h"
 #include "Engine/Engine.h"
@@ -18,7 +21,10 @@ void ASCViewerGameMode::StartPlay()
 {
     // -SCHostExposure keeps the map's exposure bounds and UE's tonemapper (comparison captures only).
     if (UWorld* World = GetWorld(); World && !FParse::Param(FCommandLine::Get(), TEXT("SCHostExposure")))
+    {
         SCViewerExposure::Install(*World);
+        SCLookLighting::ApplyDefaults(World); // LOOK-8: bloom, threshold, exposure bias
+    }
     Super::StartPlay();
 }
 

@@ -224,6 +224,81 @@ pub unsafe extern "C" fn sc_export_decomposed_mem(
     }
 }
 
+/// Return a JSON array of object-container paths (`.socpak`, slash-normalised) whose path contains every
+/// whitespace-separated term of query (case-insensitive): game environments such as hangars ("hangar").
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_search_environments(
+    h: *mut sc_handle,
+    query: *const c_char,
+    limit: u32,
+    out: *mut *mut c_char,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            json(out, || {
+                Ok(handle(h)?
+                    .session
+                    .search_environments(string(query)?, limit as usize))
+            })
+        })
+    }
+}
+
+/// Export a game environment (object container, a path from sc_search_environments) as a decomposed package tar,
+/// cached like entity packages. Same ownership, progress, cancellation and failure rules as sc_export_decomposed_mem.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_export_environment_mem(
+    h: *mut sc_handle,
+    socpak: *const c_char,
+    options: *const sc_options,
+    progress: sc_progress_cb,
+    user: *mut c_void,
+    out_tar: *mut sc_blob,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            let out = output(out_tar, sc_blob::default())?;
+            let options = options.as_ref().copied().unwrap_or_default().core()?;
+            let socpak = string(socpak)?;
+            let h = handle(h)?;
+            let user_address = user as usize;
+            let cancel = CancelToken::default();
+            let callback_cancel = cancel.clone();
+            h.session.set_progress_callback(progress.map(|cb| {
+                Arc::new(move |fraction: f32, phase: &str| {
+                    let phase = cstring(phase);
+                    if cb(
+                        phase.as_ptr(),
+                        (fraction.clamp(0.0, 1.0) * 1000.0) as u64,
+                        1000,
+                        user_address as *mut c_void,
+                    ) != 0
+                    {
+                        callback_cancel.cancel();
+                    }
+                }) as scviewer_core::ProgressCallback
+            }));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                h.session
+                    .export_environment_decomposed_mem_cached(socpak, &options, Some(&cancel))
+                    .map(|cached| cached.value)
+            }));
+            h.session.set_progress_callback(None);
+            let bytes = match result {
+                Ok(result) => result?,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
+            let mut bytes = bytes.into_boxed_slice();
+            *out = sc_blob {
+                data: bytes.as_mut_ptr(),
+                len: bytes.len(),
+            };
+            std::mem::forget(bytes);
+            Ok(())
+        })
+    }
+}
+
 /// Borrowed error, valid until the next status-returning call on this handle or close.
 /// NULL handle reads thread-local open/argument errors, valid until the next call
 /// on this thread other than sc_last_error. Never free this pointer.

@@ -8,7 +8,7 @@ set -u
 SC_REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$SC_REPO" || exit 1
 TAG=$1; PATTERN=$2; shift 2
-SC_ENGINE=${UE_ENGINE_ROOT:-"$HOME/UnrealEngine/5.8"}
+SC_ENGINE=${UE_ENGINE_ROOT:-"$HOME/UnrealEngine/5.9"}
 OUT=out/smoke; LOGDIR=ue/SCViewer/Saved/Viewer; mkdir -p "$OUT" "$LOGDIR"
 LOG="$LOGDIR/$TAG.log"; rm -f "$LOG"
 "$SC_ENGINE/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/ue/SCViewer/SCViewer.uproject" -game -windowed \

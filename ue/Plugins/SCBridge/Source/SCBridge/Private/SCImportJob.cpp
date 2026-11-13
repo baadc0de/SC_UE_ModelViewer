@@ -3,6 +3,7 @@
 // prepare incl. collision BVH, game-thread UObject build) -> Materials (worker decode overlapped with meshes,
 // game-thread textures/MIDs) -> Assembling (components, lights, publish).
 #include "SCImportJob.h"
+#include "SCInstancing.h"
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
@@ -10,10 +11,16 @@
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCLightAreas.h"
+#include "SCDirt.h"
+#include "SCEmissiveLights.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "SCViewerSettings.h"
 #include "SCRigComponent.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
 #include "Async/Async.h"
+#include "Async/TaskGraphInterfaces.h"
 #include "IImageWrapperModule.h"
 #include "Modules/ModuleManager.h"
 #include "Engine/World.h"
@@ -28,8 +35,10 @@
 
 namespace
 {
-// Unique assets whose derivation may run ahead of the game-thread build (bounds peak CPU mesh memory).
-constexpr int32 DeriveLookAhead = 3;
+// Unique assets whose derivation may run ahead of the game-thread build: one per worker thread, at most MaxDeriveLookAhead
+// (bounds peak CPU mesh memory; a resource budget, not game data). A large ship has ~500 assets.
+constexpr int32 MaxDeriveLookAhead = 12;
+int32 DeriveLookAhead() { return FMath::Clamp(FTaskGraphInterface::Get().GetNumWorkerThreads(), 3, MaxDeriveLookAhead); }
 // Fractions of the whole import assigned to each stage, for the progress bar only.
 constexpr float ReadShare = 0.05f, MeshShare = 0.80f, MaterialShare = 0.05f;
 
@@ -88,6 +97,7 @@ struct FMeshSlot
     FString PartSuffix;
     TArray<UStaticMesh*> Variants;
     TSet<int32> GamePhysicsVariants; // indices into Variants
+    bool bGamePhysicsFailed = false; // a game collider part failed to derive or build: render collision stays
 };
 } // namespace
 
@@ -130,6 +140,7 @@ struct FSCImportJob::FState
     TMap<FString, USkeletalMesh*> RigMeshes;
     TMap<FString, TSet<int32>> MeshTranslucentSlots;
     TMap<FString, TSet<int32>> GamePhysicsVariants; // per mesh asset: variants holding the game's colliders (WP-P3)
+    TSet<FString> GamePhysicsReplacesRender; // mesh assets whose every blocking collider was built: render ignores the pawn
     TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
 
     void Warn(const FString& Path, const FString& Message)
@@ -376,7 +387,7 @@ void FSCImportJob::FState::Begin()
 void FSCImportJob::FState::LaunchDerives()
 {
     // Derivation is pure (reads the const source, writes its own slot); several assets run ahead of the build.
-    for (int32 I = Current; I < FMath::Min(Slots.Num(), Current + DeriveLookAhead); ++I)
+    for (int32 I = Current; I < FMath::Min(Slots.Num(), Current + DeriveLookAhead()); ++I)
     {
         FMeshSlot& Slot = Slots[I];
         if (Slot.bDeriveLaunched) continue;
@@ -500,6 +511,7 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                 if (!FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
                 {
                     Slot.PrepareWarnings.Emplace(Path, Error);
+                    Slot.bGamePhysicsFailed = true;
                     continue;
                 }
                 Slot.CollisionSeconds += Part.Mesh.CollisionDeriveSeconds;
@@ -603,10 +615,14 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
                                                      !bTranslucent && Options.bBuildCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats,
                                                      AssetError);
     if (!Mesh)
+    {
         Warn(Path + Suffix, AssetError);
+        if (Part.bGamePhysics) Slot.bGamePhysicsFailed = true;
+    }
     else
     {
         Vehicle->Meshes.Add(Mesh);
+        Vehicle->SourcePaths.Add(Mesh, Path + Suffix);
         if (Part.bGamePhysics) Slot.GamePhysicsVariants.Add(Slot.Variants.Num());
         else Vehicle->MeshSamples.Add(Mesh, FSCLightAreas::Sample(Variant.Description));
         Slot.Variants.Add(Mesh);
@@ -647,8 +663,13 @@ void FSCImportJob::FState::FinishBuild(FMeshSlot& Slot)
     if (Slot.Data->bHasGamePhysics)
     {
         GamePhysicsVariants.Add(Path, MoveTemp(Slot.GamePhysicsVariants));
-        UE_LOG(LogSCImport, Display, TEXT("GAME_COLLISION path=%s colliders=%d filtered=%d triangles=%d parts=%d"), *Path,
-               Slot.Data->PhysicsShapes, Slot.Data->PhysicsFilteredShapes, Slot.Data->PhysicsTriangles.Num(), GamePhysicsVariants[Path].Num());
+        // A collider that could not be built must not open a hole: then the render mesh keeps blocking the pawn too.
+        const bool bReplaces = FSCMeshImporter::GamePhysicsReplacesRender(*Slot.Data) && !Slot.bGamePhysicsFailed;
+        if (bReplaces) GamePhysicsReplacesRender.Add(Path);
+        else Warn(Path, TEXT("Game collision incomplete: render geometry keeps blocking movement"));
+        UE_LOG(LogSCImport, Display, TEXT("GAME_COLLISION path=%s colliders=%d filtered=%d failed=%d triangles=%d parts=%d replaces_render=%d"), *Path,
+               Slot.Data->PhysicsShapes, Slot.Data->PhysicsFilteredShapes, Slot.Data->PhysicsFailedShapes + int32(Slot.bGamePhysicsFailed),
+               Slot.Data->PhysicsTriangles.Num(), GamePhysicsVariants[Path].Num(), bReplaces);
     }
     Slot.Data->PhysicsPositions.Empty();
     Slot.Data->PhysicsTriangles.Empty();
@@ -777,20 +798,47 @@ void FSCImportJob::FState::Assemble()
         if (const FString* Found = HostChannels.Find(Key)) return *Found;
         return HostChannels.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
     };
+    // Paints: each slot a paint touches keeps that paint's instance (built by the material phase) beside the one bound now.
+    TMap<TPair<FString, FString>, FString> PaintHosts;
+    auto RecordPaint = [&](const FSCSceneInstance& I, UMeshComponent* C, int32 Slot, const FSCDerivedMesh& Mesh)
+    {
+        if (Manifest.Paints.IsEmpty() || !C) return;
+        FSCPaintSlot Entry;
+        Entry.Component = C;
+        Entry.Slot = Slot;
+        Entry.Default = C->GetMaterial(Slot);
+        bool bAny = false;
+        for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
+        {
+            FString Sidecar, Palette;
+            UMaterialInterface* Material = nullptr;
+            if (Manifest.PaintTarget(I, Paint, Sidecar, Palette))
+                if (const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
+                    if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
+                    {
+                        const TPair<FString, FString> Key(Sidecar, I.MeshAsset);
+                        const FString* Host = PaintHosts.Find(Key);
+                        if (!Host) Host = &PaintHosts.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
+                        Material = Materials.Find(Sidecar, Palette, Sub->Index, *Host);
+                    }
+            Entry.Paints.Add(Material);
+            bAny |= Material != nullptr;
+        }
+        if (bAny) V->PaintSlots.Add(MoveTemp(Entry));
+    };
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
-                                                              bAtHelper, I.SourceTransformBasis == TEXT("cryengine_z_up"));
-        if (!I.Id.IsEmpty())
-        {
-            // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
-            FSCInstanceHelpers& Helpers = V->InstanceHelpers.FindOrAdd(I.Id);
+                                                              bAtHelper, FSCMeshImporter::InCryFrame(I.SourceTransformBasis, bAtHelper));
+        // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
+        auto AddHelpers = [&E](FSCInstanceHelpers& Helpers) {
             Helpers.Frames.Add(FString(), FTransform(FSCMeshImporter::Transform(E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity)));
             if (E.Mesh)
                 for (const auto& Node : E.Mesh->Nodes)
                     if (!Node.Key.IsEmpty() && !Helpers.Frames.Contains(Node.Key)) Helpers.Frames.Add(Node.Key, FTransform(FSCMeshImporter::Transform(Node.Value)));
-        }
+        };
+        if (!I.Id.IsEmpty()) AddHelpers(V->InstanceHelpers.FindOrAdd(I.Id));
         if (I.bBonePort && bAtHelper && !I.Id.IsEmpty())
         {
             FTransform Port;
@@ -801,6 +849,7 @@ void FSCImportJob::FState::Assemble()
         }
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
         if (!I.Id.IsEmpty()) V->InstanceAnchors.Add(I.Id, E.Anchor);
+        else if (!I.ParentId.IsEmpty() && E.Mesh) AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
         V->AddItemSpawn(I, E.Anchor);
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {
@@ -821,20 +870,26 @@ void FSCImportJob::FState::Assemble()
                         Warn(I.EntityName, TEXT("Skeletal collision unavailable"));
                     }
             // WP-P3: with the game's colliders present, render geometry answers traces but never blocks the pawn.
-            if (GamePhysicsVariants.Contains(I.MeshAsset)) E.Rig->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+            if (GamePhysicsReplacesRender.Contains(I.MeshAsset)) E.Rig->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
             E.Rig->SetVisibility(!I.bInvisible);
             E.Rig->SetHiddenInGame(I.bInvisible);
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
             const FString& Host = HostFor(I, Set, *E.Mesh);
             for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
-                    if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host)) E.Rig->SetMaterial(Slot, Mat);
+                    if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
+                    {
+                        E.Rig->SetMaterial(Slot, Mat);
+                        RecordPaint(I, E.Rig, Slot, *E.Mesh);
+                    }
             const double RigStart = FPlatformTime::Seconds();
             E.Rig->RegisterComponent();
             E.Rig->ResetPose();
             RigSeconds += FPlatformTime::Seconds() - RigStart;
         }
-        if (const auto* Variants = Meshes.Find(I.MeshAsset); Variants && E.Mesh && E.Mesh->bHasGeometry)
+        // An asset can carry game colliders without render triangles (collider-only geometry): still assembled.
+        if (const auto* Variants = Meshes.Find(I.MeshAsset);
+            Variants && E.Mesh && (E.Mesh->bHasGeometry || !GamePhysicsVariants.FindRef(I.MeshAsset).IsEmpty()))
         {
             ++Result.InstanceCount;
             for (int32 Variant = 0; Variant < Variants->Num(); ++Variant)
@@ -875,7 +930,8 @@ void FSCImportJob::FState::Assemble()
                         C->RegisterComponent();
                         continue;
                     }
-                    C->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore); // render: traces only
+                    if (GamePhysicsReplacesRender.Contains(I.MeshAsset))
+                        C->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore); // render: traces only
                 }
                 C->SetVisibility(!I.bInvisible);
                 C->SetHiddenInGame(I.bInvisible);
@@ -904,6 +960,7 @@ void FSCImportJob::FState::Assemble()
                     // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
                     if (Material) C->SetMaterial(Slot, Material);
+                    if (Material && Material != Materials.Invisible()) RecordPaint(I, C, Slot, *E.Mesh);
                     if (Material && V->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
                 }
                 const double RegisterStart = FPlatformTime::Seconds();
@@ -938,15 +995,31 @@ void FSCImportJob::FState::Assemble()
         LightSeconds += FPlatformTime::Seconds() - LightStart;
         return E;
     };
+    int32 EffectOnlySkipped = 0;
+    auto EffectOnly = [&](const FSCSceneInstance& I) {
+        const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
+        if (!Set || Set->Submaterials.IsEmpty()) return false;
+        for (const FSCSubmaterial& Sub : Set->Submaterials)
+        {
+            TSharedPtr<FJsonObject> O;
+            FString Shader;
+            if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Sub.Json), O) || !O || !O->TryGetStringField(TEXT("shader"), Shader) ||
+                !Shader.StartsWith(TEXT("VFX_")))
+                return false;
+        }
+        return true;
+    };
     auto CanPlace = [&](const FSCSceneInstance& I) {
         if (!I.ImportWarning.IsEmpty() || (!I.MeshAsset.IsEmpty() && !Meshes.Contains(I.MeshAsset)))
         {
             Warn(I.EntityName, TEXT("Instance skipped: ") + (I.ImportWarning.IsEmpty() ? I.MeshAsset : I.ImportWarning));
             return false;
         }
+        if (Options.bHideEffectOnlyPlacements && !I.MaterialSidecar.IsEmpty() && EffectOnly(I)) { ++EffectOnlySkipped; return false; }
         return true;
     };
     V->PhysicsGridTriangles = Manifest.PhysicsGrid; // the root entity sits at the actor origin
+    V->PhysicsGridShapeEnds = Manifest.PhysicsGridShapeEnds;
     V->PhysicsGridBounds.Init();
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
@@ -974,23 +1047,78 @@ void FSCImportJob::FState::Assemble()
         auto* Container = NewAnchor(
             Interior.Container.EntityName, Parent,
             FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
+        V->InteriorAnchors.Add(Container);
         FSCLightImporter::Build(
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
+        const int32 AreasBefore = V->LightAreas.Num();
         FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
+        TMap<FString, FEntity> ById; // entity ids are unique within one container
         for (const auto& P : Interior.Placements)
-            if (CanPlace(P)) Place(P, Container, bHelper, false);
+            if (CanPlace(P))
+            {
+                FEntity Placed = Place(P, Container, bHelper, false);
+                if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
+            }
+        // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel.
+        for (const auto& P : Interior.Placements)
+        {
+            const FEntity* Panel = ById.Find(P.EntityId);
+            if (!Panel || !Panel->Anchor) continue;
+            TArray<FString> Targets = P.Links;
+            if (!P.LoadoutOwnerEntityId.IsEmpty()) Targets.Add(P.LoadoutOwnerEntityId);
+            for (const FString& Target : Targets)
+                if (const FEntity* Door = ById.Find(Target); Door && Door->Rig && Door->Anchor != Panel->Anchor)
+                {
+                    V->DoorControls.Add(Panel->Anchor, Door->Rig);
+                    break;
+                }
+        }
+        // Proximity sensors: an anchor in the placement frame; the box maps into it like mesh vertices do (CryEngine
+        // local -> glTF -> UE: (y, x, z) x 100), half-extents about the offset.
+        for (const FSCProximitySensor& Sensor : Interior.ProximitySensors)
+        {
+            FSCDoorSensor Door;
+            for (const FString& Target : Sensor.Links)
+                if (const FEntity* Linked = ById.Find(Target); Linked && Linked->Rig) Door.Doors.Add(Linked->Rig);
+            if (Door.Doors.IsEmpty()) continue;
+            Door.Anchor = NewAnchor(Sensor.EntityClass, Container,
+                                    FSCMeshImporter::InstanceTransform(Sensor.LocalMatrix, FMatrix::Identity, bHelper,
+                                                                       FSCMeshImporter::InCryFrame(TEXT("cryengine_z_up"), bHelper)));
+            const FVector Centre = FVector(Sensor.Offset.Y, Sensor.Offset.X, Sensor.Offset.Z) * 100.0;
+            const FVector Half = FVector(Sensor.Extent.Y, Sensor.Extent.X, Sensor.Extent.Z).GetAbs() * 100.0;
+            Door.Box = FBox(Centre - Half, Centre + Half);
+            Door.ExitDelay = Sensor.ExitDelay;
+            V->DoorSensors.Add(MoveTemp(Door));
+        }
         FBox Floor(ForceInit);
         TArray<USceneComponent*> Descendants;
         Container->GetChildrenComponents(true, Descendants);
         for (const auto* C : Descendants)
             if (const auto* Primitive = Cast<UPrimitiveComponent>(C); Primitive && Primitive->IsCollisionEnabled()) Floor += Primitive->Bounds.GetBox();
-        if (Floor.IsValid)
+        // The container's largest room stands on its floor; without rooms, the bounds of what collides (a container's
+        // collision can reach far below its rooms, e.g. a ship's lift down to the ground).
+        FVector RoomFloor;
+        if (V->LightAreas.Num() > AreasBefore && V->LightAreas.Last().LargestRoomFloor(RoomFloor))
+            V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName, FTransform(RoomFloor));
+        else if (Floor.IsValid)
             V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName,
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
+    UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d"), V->DoorControls.Num(), V->DoorSensors.Num());
+    UE_LOG(LogSCImport, Display, TEXT("PAINTS variants=%d slots=%d"), Manifest.Paints.Num(), V->PaintSlots.Num());
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose
+    FSCDirt::MarkExterior(V); // exterior = outside every room, from the channels just set
+    FSCDirt::Push(V->GetWorld());
+    if (Options.bInstanceRepeatedParts) // after light areas and dirt set channels / custom data, before emissive proxies attach
+    {
+        const FSCInstancingStats Instancing = FSCInstancing::Consolidate(V);
+        UE_LOG(LogSCImport, Display, TEXT("INSTANCING components=%d consolidated=%d instanced_components=%d"), Instancing.Components,
+               Instancing.Consolidated, Instancing.Instanced);
+    }
+    if (!V->Lights.IsEmpty()) FSCEmissive::SetLumen(V, USCViewerSettings::Get()->bEmissiveInLumen); // ships and environments, not the player kit
+    if (EffectOnlySkipped) UE_LOG(LogSCImport, Display, TEXT("EFFECT_ONLY_PLACEMENTS skipped=%d"), EffectOnlySkipped);
     if (Options.bPublish)
     {
         V->BuildExploration();

@@ -1,0 +1,12 @@
+# Substrate G-buffer A/B, exterior (plan D12/D13): the framed orbit view of the Cutlass hull (paint, decals,
+# canopy glass from outside) through the World Cache and the Surface Cache. Run once per
+# r.Substrate.ProjectGBufferFormat and compare with cutlass-gbuffer-ab.txt's interior shots.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=orbit
+20 r.VSync 0
+0 r.Lumen.WorldCache.Allowed 1
+0 r.Lumen.WorldCache.Reset 1
+5 shot hull-world-cache
+0 r.Lumen.WorldCache.Allowed 0
+6 shot hull-surface-cache
+0 r.Lumen.WorldCache.Allowed 1
+1 quit

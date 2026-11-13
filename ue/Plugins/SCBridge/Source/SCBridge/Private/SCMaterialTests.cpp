@@ -79,7 +79,23 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("masked parent"), FSCMaterialBuilder::ParentPath(X->Master, X->Blend, X->bTwoSided),
             FString(TEXT("/SCBridge/Materials/MI_SC_Illum_Masked.MI_SC_Illum_Masked")));
     }
-    Check(TEXT("illum_decal_sheet"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true);
+    if (auto* X = Check(TEXT("illum_decal_sheet"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
+    {
+        // Illum.cfx %VERTCOLORS on an Illum decal: the Illum rule, not MeshDecal's vertex wear (WP-U2c).
+        TestEqual(TEXT("Illum decal: vertex colour multiplies albedo"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 1.f);
+        TestEqual(TEXT("Illum decal: no MeshDecal vertex wear"), X->Scalars.FindRef(TEXT("UseVertexColors"), -1.f), 0.f);
+    }
+    // Illum.cfx %VERTCOLORS (WP-U2c): albedo and glow x vertex rgb (mode 1); under %USE_DAMAGE_MAP x vertex blue, the
+    // glow by green (mode 2); blending opacity x vertex alpha unless %BLENDLAYER. No token, no vertex colour.
+    if (const FSCMaterialDesc* X = Find(D, TEXT("illum_spec")))
+    {
+        TestEqual(TEXT("Illum: vertex rgb"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 1.f);
+        TestEqual(TEXT("Illum: vertex alpha scales opacity"), X->Scalars.FindRef(TEXT("UseVertexAlpha"), -1.f), 1.f);
+    }
+    if (const FSCMaterialDesc* X = Find(D, TEXT("emissives_like")))
+        TestEqual(TEXT("Illum with a damage map: vertex blue is AO"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 2.f);
+    if (const FSCMaterialDesc* X = Find(D, TEXT("illum_masked_glow")))
+        TestEqual(TEXT("Illum without %VERTCOLORS: none"), X->Scalars.FindRef(TEXT("VertexColorMode"), -1.f), 0.f);
     if (auto* X = Check(TEXT("hard_primary"), ESCMaster::HardSurface, ESCBlend::Opaque, false, false))
     {
         // snapshot diffuse x layer tint x palette secondary.
@@ -183,6 +199,16 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("HAL is data, not colour"), int32(X->Textures[TEXT("HalMap")].Role), int32(ESCTextureRole::Linear));
         TestEqual(TEXT("HAL on"), X->Scalars[TEXT("UseHalMap")], 1.f);
         TestFalse(TEXT("LayerBlend has no macro AO map"), X->Textures.Contains(TEXT("MacroAOMap")));
+        // LayerBlend_V2.cfx: WearMap (TexSlot11, R = wear/curvature) is the dirt blend map; %WEAR_DIRT_AO_VERTEX adds
+        // vertex wear (R -> dirt) and vertex AO (B) (WP-U2b).
+        TestEqual(TEXT("wear map is TexSlot11"), X->Textures.Contains(TEXT("WearMap")) ? X->Textures[TEXT("WearMap")].Path : FString(), FString(TEXT("tex/wear.png")));
+        TestEqual(TEXT("wear map is data"), X->Textures.Contains(TEXT("WearMap")) ? int32(X->Textures[TEXT("WearMap")].Role) : -1, int32(ESCTextureRole::Linear));
+        TestEqual(TEXT("vertex wear/dirt/AO on with the token"), X->Scalars.FindRef(TEXT("UseWearDirtAOVertex"), -1.f), 1.f);
+        // GetAlphaBlendDetailMaps: the engine detail map from the render fixture, at baseUV x detailScale.
+        TestEqual(TEXT("dirt detail map from the fixture"), X->Textures.Contains(TEXT("DirtDetailMap")) ? X->Textures[TEXT("DirtDetailMap")].Path : FString(),
+                  FSCStarEngine::Get().WearDirtFrostDetailMap);
+        TestEqual(TEXT("dirt detail scale from the fixture"), X->Scalars.FindRef(TEXT("DirtDetailScale"), -1.f), float(FSCStarEngine::Get().DirtDetailScale));
+        TestEqual(TEXT("dirt details on"), X->Scalars.FindRef(TEXT("UseDirtDetail"), -1.f), 1.f);
     }
     {
         // A palette without `finish` (an export older than the field): both halves are reported, layer values stay.
@@ -213,6 +239,8 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestFalse(TEXT("no macro normal"), X->Textures.Contains(TEXT("MacroNormalMap")));
         TestEqual(TEXT("no macro gloss"), X->Scalars[TEXT("UseMacroGloss")], 0.f);
         TestEqual(TEXT("no HAL"), X->Scalars[TEXT("UseHalMap")], 0.f);
+        TestFalse(TEXT("no wear map"), X->Textures.Contains(TEXT("WearMap")));
+        TestEqual(TEXT("no vertex wear/dirt/AO without the token"), X->Scalars.FindRef(TEXT("UseWearDirtAOVertex"), -1.f), 0.f);
     }
     if (auto* X = Check(TEXT("blend_palette_fold"), ESCMaster::Layered, ESCBlend::Opaque, false, false))
     {
@@ -237,8 +265,11 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // by GlassTintStrength only under %USE_TINT_PALETTE; reflectance is MatSpecColor.r; the authored Opacity is never
     // read. Thickness (layer Height) is the vertex blue channel under %PER_VERTEX_CURVATURE times the %HEIGHT_MAP.
     const FSCStarEngine& Star = FSCStarEngine::Get();
-    auto GlassRule = [&](const FSCMaterialDesc& X, bool bVertexHeight, bool bVertexTint, bool bHeightMap, bool bTintMap)
+    auto GlassRule = [&](const FSCMaterialDesc& X, bool bVertexHeight, bool bVertexTint, bool bHeightMap, bool bTintMap, bool bThinFilm)
     {
+        // Without %THIN_FILM the game's Fresnel is lerp(Reflectance, 1, Schlick): the master must bypass UE's thin-film
+        // node, which is not an identity at zero thickness (it adds a film interface and raises F0 several-fold).
+        TestEqual(X.Name + TEXT(" %THIN_FILM switches the film"), X.Scalars.FindRef(TEXT("UseThinFilm"), -1.f), bThinFilm ? 1.f : 0.f);
         TestEqual(X.Name + TEXT(" density scale is the game's"), X.Scalars[TEXT("GlassDensityScale")], float(Star.GlassDensityScale));
         TestEqual(X.Name + TEXT(" colour floor is the game's"), X.Scalars[TEXT("GlassColorFloor")], float(Star.GlassColourFloor));
         TestEqual(X.Name + TEXT(" vertex height bias is the game's"), X.Scalars[TEXT("GlassVertexHeightBias")], float(Star.GlassVertexHeightBias));
@@ -256,7 +287,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     auto Warned = [](const FSCMaterialDesc& X, const TCHAR* What) { return X.Warnings.ContainsByPredicate([What](const FString& W) { return W.Contains(What); }); };
     if (auto* X = Check(TEXT("glass_ext"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
-        GlassRule(*X, false, false, false, false);
+        GlassRule(*X, false, false, false, false, true);
         TestTrue(TEXT("%USE_TINT_PALETTE: Diffuse moved to the palette glass colour by GlassTintStrength"),
                  Near(X->Vectors[TEXT("GlassColor")], FLinearColor(0.45f, 0.55f, 0.275f)));
         TestTrue(TEXT("glass reflectance = Specular.r"), Near(X->Vectors[TEXT("SpecularColor")], FLinearColor(0.05f, 0.05f, 0.05f)));
@@ -271,7 +302,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     }
     if (auto* X = Check(TEXT("glass_thickness"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
-        GlassRule(*X, true, false, true, false);
+        GlassRule(*X, true, false, true, false, false);
         TestTrue(TEXT("no %USE_TINT_PALETTE: a routed palette channel does not tint"), Near(X->Vectors[TEXT("GlassColor")], FLinearColor(0.2f, 0.4f, 0.6f)));
         TestEqual(TEXT("height map is TexSlot8"), X->Textures[TEXT("HeightMap")].Path, FString(TEXT("tex/glass_height.png")));
         TestEqual(TEXT("height map is linear"), int32(X->Textures[TEXT("HeightMap")].Role), int32(ESCTextureRole::Linear));
@@ -281,7 +312,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     }
     if (auto* X = Check(TEXT("glass_vertex_tint"), ESCMaster::Glass, ESCBlend::Translucent, false, true))
     {
-        GlassRule(*X, false, true, false, true);
+        GlassRule(*X, false, true, false, true, false);
         TestEqual(TEXT("tint map is TexSlot4"), X->Textures[TEXT("TintMap")].Path, FString(TEXT("tex/glass_tint.png")));
         TestEqual(TEXT("tint map is colour"), int32(X->Textures[TEXT("TintMap")].Role), int32(ESCTextureRole::Color));
     }
@@ -289,7 +320,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     {
         // What the material leaves out is the shader's own default, and what the export does not carry is reported:
         // the feature would otherwise go missing without a trace.
-        GlassRule(*X, false, false, false, false);
+        GlassRule(*X, false, false, false, false, true);
         TestEqual(TEXT("%THIN_FILM without ThinFilmThickness: the shader default"), X->Scalars[TEXT("ThinFilmThickness")], float(Star.GlassThinFilmThicknessDefault));
         TestTrue(TEXT("%HEIGHT_MAP without an exported TexSlot8 is reported"), Warned(*X, TEXT("TexSlot8")));
         TestTrue(TEXT("%TINT_MAP without an exported TexSlot4 is reported"), Warned(*X, TEXT("TexSlot4")));
@@ -305,8 +336,21 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("coverage texture"), X->Textures[TEXT("DiffuseMap")].Path, FString(TEXT("tex/decal_diff.png")));
     }
     if (auto* X = Check(TEXT("decal_colour"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
+    {
         TestEqual(TEXT("colour decal parent"), FSCMaterialBuilder::ParentPath(X->Master, X->Blend, X->bTwoSided),
             FString(TEXT("/SCBridge/Materials/MI_SC_MeshDecal_TwoSided.MI_SC_MeshDecal_TwoSided")));
+        // MeshDecal.cfx dirt (WP-U2b): BlendTexture (the exported breakup / wear mask) at baseTC x WearTiling, vertex
+        // wear under %VERTCOLORS (CalculateVertexDirt), AO 1.
+        TestEqual(TEXT("decal dirt blend map"), X->Textures.Contains(TEXT("DirtBlendMap")) ? X->Textures[TEXT("DirtBlendMap")].Path : FString(), FString(TEXT("tex/decal_breakup.png")));
+        TestEqual(TEXT("decal dirt blend map on"), X->Scalars.FindRef(TEXT("UseDirtBlendMap"), -1.f), 1.f);
+        TestEqual(TEXT("decal dirt blend tiling = WearTiling"), X->Scalars.FindRef(TEXT("DirtBlendTiling"), -1.f), 4.f);
+        TestEqual(TEXT("decal vertex wear on with %VERTCOLORS"), X->Scalars.FindRef(TEXT("UseVertexColors"), -1.f), 1.f);
+    }
+    if (auto* X = Check(TEXT("stencil_palette"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
+    {
+        TestEqual(TEXT("no blend texture: the neutral mask"), X->Scalars.FindRef(TEXT("UseDirtBlendMap"), -1.f), 0.f);
+        TestEqual(TEXT("no WearTiling: 1"), X->Scalars.FindRef(TEXT("DirtBlendTiling"), -1.f), 1.f);
+    }
     const float DefaultClip = GetDefault<UMaterial>()->OpacityMaskClipValue;
     if (auto* X = Check(TEXT("forward_trim"), ESCMaster::Illum, ESCBlend::Masked, false, false))
         TestEqual(TEXT("non-emitting forward surface stays masked at the engine default clip"), X->Scalars[TEXT("AlphaTest")], DefaultClip);
@@ -398,6 +442,33 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         TestEqual(TEXT("emittance map on"), X->Scalars[TEXT("UseEmissiveMap")], 1.f);
         TestEqual(TEXT("emittance strength"), X->Scalars[TEXT("EmissiveStrength")], GlowNits(1.5f));
     }
+    // HardSurface %STENCIL_MAP (stencilLib.cfib, non-sticker): TexSlot7 at (UV0 | UV1 by UseUV2ForStencil) x
+    // StencilTiling tints the Primary layer; colours by StencilTintOverride (paletteLib GetPaletteStencilColors):
+    // 0 authored StencilDiffuseColor{,2,3}, 1 the palette's primary/secondary/tertiary, 2 its decal red/green/blue.
+    {
+        struct FCase { const TCHAR* Name; float UV2; FLinearColor C1, C2, C3; };
+        const FCase Cases[] = {
+            {TEXT("hard_stencil_authored"), 0.f, FLinearColor(0.9f, 0.8f, 0.7f), FLinearColor(0.6f, 0.5f, 0.4f), FLinearColor(0.3f, 0.2f, 0.1f)},
+            {TEXT("hard_stencil_main_tints"), 1.f, FLinearColor(0.2f, 0.4f, 0.6f), FLinearColor(0.5f, 0.5f, 0.25f), FLinearColor(0.9f, 0.1f, 0.1f)},
+            {TEXT("hard_stencil_decal_colours"), 0.f, FLinearColor(0.7f, 0.2f, 0.1f), FLinearColor(0.15f, 0.65f, 0.25f), FLinearColor(0.05f, 0.1f, 0.55f)},
+        };
+        for (const FCase& C : Cases)
+            if (auto* X = Check(C.Name, ESCMaster::HardSurface, ESCBlend::Opaque, false, false))
+            {
+                const FString N(C.Name);
+                TestEqual(N + TEXT(": stencil on"), X->Scalars.FindRef(TEXT("UseStencil")), 1.f);
+                TestEqual(N + TEXT(": stencil = TexSlot7"), X->Textures.FindRef(TEXT("StencilMap")).Path, FString(TEXT("tex/camo_stencil.png")));
+                TestEqual(N + TEXT(": stencil is data"), int32(X->Textures.FindRef(TEXT("StencilMap")).Role), int32(ESCTextureRole::Linear));
+                TestEqual(N + TEXT(": StencilTiling"), X->Scalars.FindRef(TEXT("StencilTiling")), 0.75f);
+                TestEqual(N + TEXT(": StencilOpacity"), X->Scalars.FindRef(TEXT("StencilOpacity")), 0.8f);
+                TestEqual(N + TEXT(": UseUV2ForStencil"), X->Scalars.FindRef(TEXT("StencilUV2"), -1.f), C.UV2);
+                TestTrue(N + TEXT(": colour 1"), Near(X->Vectors.FindRef(TEXT("StencilColor1")), C.C1));
+                TestTrue(N + TEXT(": colour 2"), Near(X->Vectors.FindRef(TEXT("StencilColor2")), C.C2));
+                TestTrue(N + TEXT(": colour 3"), Near(X->Vectors.FindRef(TEXT("StencilColor3")), C.C3));
+            }
+        if (const FSCMaterialDesc* X = Find(D, TEXT("hard_primary")))
+            TestEqual(TEXT("HardSurface without %STENCIL_MAP: no stencil"), X->Scalars.FindRef(TEXT("UseStencil"), -1.f), 0.f);
+    }
     if (auto* X = Check(TEXT("stencil_palette"), ESCMaster::MeshDecal, ESCBlend::Translucent, true, true))
     {
         // $TintPaletteDecal: stencil texture from palettes.json decal.export_path, colours from decal red/green/blue.
@@ -483,7 +554,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // hard_wear_tinted blend map (its wear surface reuses the Primary maps). Two more are read for their mean
     // colour only: the unsampled spec maps of hard_wear_tinted and blend1. GlassPBR adds 2: the glass_thickness
     // height map and the glass_vertex_tint tint map.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 44);
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 48); // + Layered WearMap, the decal DirtBlendMap, the engine detail map (WP-U2b), the HardSurface stencil
     // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;
@@ -625,6 +696,7 @@ bool FSCMaterialsMasters::RunTest(const FString&)
                     auto Has = [&Infos](FName Name) { return Infos.ContainsByPredicate([Name](const FMaterialParameterInfo& I) { return I.Name == Name; }); };
                     TestTrue(Path + TEXT(" glass UVs: GlassTiling and GlassVStretch, no generic Tiling"),
                              Has(TEXT("GlassTiling")) && Has(TEXT("GlassVStretch")) && !Has(TEXT("Tiling")));
+                    TestTrue(Path + TEXT(" thin film behind its %THIN_FILM switch"), Has(TEXT("UseThinFilm")));
                 }
 #endif
             }

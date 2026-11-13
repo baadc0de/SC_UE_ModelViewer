@@ -1,6 +1,16 @@
 // USCViewerSubsystem: archive open, async search, the load pipeline with phase progress and cancel, unload with
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
+#include "SCLook.h"
+#include "SCHangarIndex.h"
+#include "SCEnvironment.h"
+#include "Misc/PackageName.h"
+#include "SCDirt.h"
+#include "SCEmissiveLights.h"
+#include "Engine/Level.h"
+#include "Engine/LevelStreamingDynamic.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "SCViewerAutomation.h"
 #include "SCViewerPawn.h"
@@ -13,6 +23,14 @@
 #include "SCImportJob.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
+#include "Dom/JsonValue.h"
+#include "Serialization/JsonSerializer.h"
+#include "HAL/IConsoleManager.h"
+#include "Components/SkyLightComponent.h"
+#include "Components/LightComponent.h"
+#include "Engine/Light.h"
+#include "Engine/StaticMeshActor.h"
+#include "SCPlayerKit.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -34,9 +52,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogSCViewer, Log, All);
 
 namespace
 {
-// Display convention shared with USCImportLibrary::ImportFolder: the model's lowest point sits this far above the
-// Viewer floor plane (Z = 0). A presentation constant, not a game-data value.
-constexpr double FloorClearanceCm = 100.0;
+// The Viewer map's floor top (ue/scripts/create_viewer.py FLOOR_TOP): a loaded model rests on it by its lowest visible
+// point (landing gear), and an environment's ship floor is moved to it.
+constexpr double ViewerFloorZ = -5.0;
 // Progress-bar shares of the pipeline phases (export dominates cold loads, import dominates cache hits).
 constexpr float ExportShare = 0.45f, ParseShare = 0.05f;
 // Game-thread time per frame given to the import job; the rest of the frame renders the UI and viewport.
@@ -75,6 +93,11 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
     if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
+    // Environment: -SCEnvironment wins; -SCDefaults (reproducible review routes) keeps the procedural hangar; else
+    // the saved choice.
+    FString EnvironmentArg;
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCEnvironment="), EnvironmentArg)) SetEnvironment(EnvironmentArg);
+    else if (!FParse::Param(FCommandLine::Get(), TEXT("SCDefaults"))) SetEnvironment(USCViewerSettings::Get()->Environment, true);
 }
 void USCViewerSubsystem::Deinitialize()
 {
@@ -94,6 +117,11 @@ void USCViewerSubsystem::Deinitialize()
     if (KitClipsTask.IsValid()) KitClipsTask.Wait();
     KitJob.Reset();
     KitSource.Reset();
+    if (EnvProgress) EnvProgress->RequestCancel();
+    if (EnvExport.IsValid()) EnvExport.Wait();
+    if (EnvParse.IsValid()) EnvParse.Wait();
+    if (EnvListTask.IsValid()) EnvListTask.Wait();
+    EnvJob.Reset();
     UnloadInternal(false); // the subsystem owns the loaded vehicle; the host collects garbage afterwards
     Client.Reset();
     Super::Deinitialize();
@@ -239,7 +267,266 @@ void USCViewerSubsystem::CompleteSearches(bool bBlocking)
 
 bool USCViewerSubsystem::IsBusy() const
 {
-    return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
+    return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing ||
+           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
+           (EnvLevel && !Environment.IsValid());
+}
+
+void USCViewerSubsystem::SetEnvironment(const FString& Folder, bool bFitToShip)
+{
+    PreferredEnvironment = Folder.TrimQuotes();
+    bFitEnvironment = bFitToShip && USCViewerSettings::Get()->bFitHangarToShip;
+    RequestEnvironment(PreferredEnvironment);
+    if (bFitEnvironment && Vehicle.IsValid()) FitEnvironmentToShip();
+}
+
+bool USCViewerSubsystem::SetPaint(int32 Index)
+{
+    ASCVehicle* V = Vehicle.Get();
+    if (!V || !V->SetPaint(Index)) return false;
+    USCViewerSettings* Settings = USCViewerSettings::Get();
+    if (Index == INDEX_NONE) Settings->Paints.Remove(Report.Entity);
+    else Settings->Paints.Add(Report.Entity, V->Manifest.Paints[Index].PaletteId);
+    Settings->Save();
+    return true;
+}
+
+void USCViewerSubsystem::FitEnvironmentToShip()
+{
+    ASCVehicle* Ship = Vehicle.Get();
+    const FString Preferred = PreferredEnvironment.Replace(TEXT("\\"), TEXT("/"));
+    if (!bFitEnvironment || !Ship || !Preferred.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return; // the map's hangar is not measured
+    const USCHangarIndex* Index = USCHangarIndex::Load();
+    if (!Index) return;
+    const FString Style = FPaths::GetCleanFilename(FPaths::GetPath(Preferred));
+    const FSCHangarCapacity* Chosen = Index->Find(Style, FPaths::GetBaseFilename(Preferred));
+    if (!Chosen) return; // not cooked: its capacity is unknown, keep it
+    // The ship stands on the bay centre (world origin) at the viewer floor.
+    FBox ShipBox = FSCEnvironment::SolidBounds(Ship);
+    if (!ShipBox.IsValid) return;
+    ShipBox = ShipBox.ShiftBy(FVector(0, 0, -ViewerFloorZ));
+    const FSCHangarCapacity* Best = nullptr;
+    const FSCHangarCapacity* Largest = nullptr;
+    auto Area = [](const FSCHangarCapacity* H) { return H->BayCm.X * H->BayCm.Y; };
+    auto SameKind = [&](const FSCHangarCapacity* H) { return H->bTopLoading == Chosen->bTopLoading; };
+    // Smallest that holds the ship, the chosen entrance kind (roof hatch / front doors) first; when none holds it, the
+    // largest of the style, again the chosen kind first.
+    for (const FSCHangarCapacity& H : Index->Hangars)
+    {
+        if (H.Style != Style) continue;
+        if (H.Holds(ShipBox) && (!Best || (SameKind(&H) && !SameKind(Best)) || (SameKind(&H) == SameKind(Best) && Area(&H) < Area(Best))))
+            Best = &H;
+        if (!Largest || (SameKind(&H) && !SameKind(Largest)) || (SameKind(&H) == SameKind(Largest) && Area(&H) > Area(Largest))) Largest = &H;
+    }
+    const FSCHangarCapacity* Pick = Best ? Best : Largest;
+    const FString Choice = FPaths::GetPath(Preferred) / Pick->Name + TEXT(".socpak");
+    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_FIT ship_m=%.1fx%.1fx%.1f (x %.1f..%.1f y %.1f..%.1f) preferred=%s holds=%d choice=%s bay_m=%.1fx%.1f clearance_m=%.1f"),
+           ShipBox.GetSize().X / 100, ShipBox.GetSize().Y / 100, ShipBox.Max.Z / 100, ShipBox.Min.X / 100, ShipBox.Max.X / 100, ShipBox.Min.Y / 100,
+           ShipBox.Max.Y / 100, *Chosen->Name, Chosen->Holds(ShipBox), *Pick->Name, Pick->BayCm.X / 100, Pick->BayCm.Y / 100, Pick->ClearanceCm / 100);
+    if (Choice != EnvironmentFolder.Replace(TEXT("\\"), TEXT("/"))) RequestEnvironment(Choice);
+}
+
+void USCViewerSubsystem::RequestEnvironment(const FString& Folder)
+{
+    if (EnvProgress) EnvProgress->RequestCancel();
+    if (EnvExport.IsValid()) EnvExport.Wait();
+    if (EnvParse.IsValid()) EnvParse.Wait();
+    EnvExport = {};
+    EnvParse = {};
+    EnvJob.Reset();
+    EnvSource.Reset();
+    if (Environment.IsValid() && !EnvLevel) Environment->Destroy(); // a cooked environment leaves with its level
+    Environment.Reset();
+    UnloadEnvironmentLevel();
+    EnvironmentFolder = Folder.TrimQuotes();
+    bEnvironmentPending = !EnvironmentFolder.IsEmpty() && EnvironmentFolder != TEXT("none");
+    if (!bEnvironmentPending) ShowMapHangar(true);
+    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT request folder=\"%s\""), *EnvironmentFolder);
+}
+
+void USCViewerSubsystem::UnloadEnvironmentLevel()
+{
+    if (!EnvLevel) return;
+    EnvLevel->SetShouldBeLoaded(false);
+    EnvLevel->SetShouldBeVisible(false);
+    EnvLevel->SetIsRequestingUnloadAndRemoval(true);
+    EnvLevel = nullptr;
+}
+FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
+{
+    const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
+    if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
+    const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
+    return FPackageName::DoesPackageExist(Level) ? Level : FString();
+}
+void USCViewerSubsystem::ShowMapHangar(bool bShow)
+{
+    UWorld* World = GetViewerWorld();
+    if (!World) return;
+    int32 Changed = 0;
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* A = *It;
+        if (Cast<ASCVehicle>(A) || A->GetLevel() != World->PersistentLevel) continue;
+        const bool bMesh = A->IsA<AStaticMeshActor>(), bLight = A->IsA<ALight>();
+        if (!bMesh && !bLight) continue;
+        A->SetActorHiddenInGame(!bShow);
+        A->SetActorEnableCollision(bShow);
+        if (bLight) A->ForEachComponent<ULightComponent>(false, [bShow](ULightComponent* L) { L->SetVisibility(bShow); });
+        ++Changed;
+    }
+    for (TObjectIterator<USkyLightComponent> It; It; ++It)
+        if (It->GetWorld() == World) It->RecaptureSky();
+    UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT map_hangar=%s actors=%d"), bShow ? TEXT("shown") : TEXT("hidden"), Changed);
+}
+
+void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source)
+{
+    EnvSource = Source;
+    const FString Scene = FSCPlayerKit::FindRootScene(*EnvSource);
+    if (Scene.IsEmpty())
+    {
+        UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: no single root scene.json in %s"), *EnvironmentFolder);
+        EnvSource.Reset();
+        return;
+    }
+    FSCImportOptions EnvOptions;
+    EnvOptions.World = GetViewerWorld();
+    EnvOptions.ScenePath = Scene;
+    EnvOptions.bBuildCollision = true;
+    EnvOptions.bPublish = false;        // not the vehicle: routes, first person and light pairing keep the ship
+    EnvOptions.bReplacePrevious = false;
+    EnvOptions.bHideEffectOnlyPlacements = true;
+    EnvOptions.bInstanceRepeatedParts = true;
+    EnvJob = MakeShared<FSCImportJob>(*EnvSource, EnvOptions, EnvSource);
+}
+
+void USCViewerSubsystem::StepEnvironment()
+{
+    if (EnvPlaceInTicks > 0 && --EnvPlaceInTicks == 0) PlaceEnvironment();
+    // The archive's hangars for the picker: listed once per archive session.
+    if (ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
+        EnvListTask = Client->SearchEnvironments(TEXT("hangar"), 2000);
+    if (EnvListTask.IsValid() && EnvListTask.IsCompleted())
+    {
+        const FSCTextResult Listed = EnvListTask.GetResult();
+        EnvListTask = {};
+        EnvListedGeneration = ArchiveGeneration;
+        EnvironmentChoices.Reset();
+        TArray<TSharedPtr<FJsonValue>> Values;
+        if (Listed.bOK && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Listed.Json), Values))
+            for (const auto& V : Values) EnvironmentChoices.Add(V->AsString());
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_CHOICES hangars=%d"), EnvironmentChoices.Num());
+    }
+    if (EnvLevel && !Environment.IsValid())
+    {
+        ULevel* Level = EnvLevel->GetLoadedLevel();
+        if (!Level || !EnvLevel->IsLevelVisible()) return;
+        for (AActor* Actor : Level->Actors)
+            if (auto* Cooked = Cast<ASCVehicle>(Actor)) { Environment = Cooked; break; }
+        if (!Environment.IsValid())
+        {
+            UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: cooked level %s holds no environment actor"), *EnvLevel->GetWorldAssetPackageName());
+            UnloadEnvironmentLevel();
+            return;
+        }
+        // Runtime-only state the cook does not keep: emissive Lumen proxies, dirt parameters, the light shadow policy.
+        ShowMapHangar(false);
+        Environment->RefreshLightShadowPolicy();
+        FSCDirt::Push(GetViewerWorld());
+        if (!Environment->Lights.IsEmpty()) FSCEmissive::SetLumen(Environment.Get(), USCViewerSettings::Get()->bEmissiveInLumen);
+        if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(Environment.Get());
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_COOKED level=%s seconds=%.1f"), *EnvLevel->GetWorldAssetPackageName(), FPlatformTime::Seconds() - EnvStart);
+        return;
+    }
+    const bool bShipIdle = Phase != ESCLoadPhase::Exporting && Phase != ESCLoadPhase::Parsing && Phase != ESCLoadPhase::Importing;
+    if (bEnvironmentPending && !EnvJob && !EnvExport.IsValid() && !EnvParse.IsValid() && bShipIdle && GetViewerWorld())
+    {
+        if (const FString Cooked = CookedEnvironmentLevel(EnvironmentFolder); !Cooked.IsEmpty() && !FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")))
+        {
+            bEnvironmentPending = false;
+            bool bOK = false;
+            EnvStart = FPlatformTime::Seconds();
+            EnvLevel = ULevelStreamingDynamic::LoadLevelInstance(GetViewerWorld(), Cooked, FVector::ZeroVector, FRotator::ZeroRotator, bOK);
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_COOKED_LOAD level=%s ok=%d"), *Cooked, bOK);
+            if (!bOK) EnvLevel = nullptr;
+            return;
+        }
+        if (EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase))
+        {
+            if (ArchiveState != ESCArchiveState::Ready || !Client) return; // wait for the archive
+            bEnvironmentPending = false;
+            sc_options Ffi;
+            LoadOptions->ToFfi(Ffi);
+            Ffi.mip = FMath::Max<uint32>(Ffi.mip, 1u); // environments: half-resolution textures (tar under 2 GB)
+            EnvProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
+            EnvExport = Client->ExportEnvironment(EnvironmentFolder, Ffi, EnvProgress.ToSharedRef());
+            EnvStart = FPlatformTime::Seconds();
+            return;
+        }
+        bEnvironmentPending = false;
+        EnvStart = FPlatformTime::Seconds();
+        BeginEnvironmentImport(MakeShared<FSCFolderPackageSource>(EnvironmentFolder));
+    }
+    if (EnvExport.IsValid())
+    {
+        if (!EnvExport.IsCompleted()) return;
+        FSCExportResult Exported = EnvExport.GetResult();
+        EnvExport = {};
+        if (!Exported.bOK)
+        {
+            UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: export %s: %s"), *EnvironmentFolder, *Exported.Error.ToString());
+            return;
+        }
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_EXPORT socpak=%s bytes=%lld seconds=%.1f cache_hit=%d"), *EnvironmentFolder, Exported.Tar.Num(),
+               Exported.Seconds, Exported.Cache.bLastHit);
+        EnvParse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Tar = MoveTemp(Exported.Tar)]() mutable {
+            return TSharedPtr<FSCTarPackageSource>(MakeShared<FSCTarPackageSource>(MoveTemp(Tar)));
+        });
+        return;
+    }
+    if (EnvParse.IsValid())
+    {
+        if (!EnvParse.IsCompleted()) return;
+        TSharedPtr<FSCTarPackageSource> Parsed = EnvParse.GetResult();
+        EnvParse = {};
+        if (!Parsed || !Parsed->IsValid())
+        {
+            UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), Parsed ? *Parsed->GetError() : TEXT("cannot read the package"));
+            return;
+        }
+        BeginEnvironmentImport(Parsed);
+    }
+    if (!EnvJob || !EnvJob->Tick(false, ImportBudgetSeconds)) return;
+    const FSCImportResult& Result = EnvJob->GetResult();
+    if (EnvJob->GetStage() == ESCImportStage::Succeeded && Result.Vehicle.IsValid())
+    {
+        Environment = Result.Vehicle;
+        ShowMapHangar(false);
+        const FBox Bounds = Environment->GetComponentsBoundingBox(true);
+        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_IMPORT seconds=%.1f meshes=%d instances=%d lights=%d bounds=%s"),
+               FPlatformTime::Seconds() - EnvStart, Result.MeshCount, Result.InstanceCount, Environment->Lights.Num(), *Bounds.ToString());
+        EnvPlaceInTicks = 2; // components settle; placement uses the bind pose, then the presented state is applied
+    }
+    else UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), *Result.Error);
+    EnvJob.Reset();
+    EnvSource.Reset();
+}
+
+void USCViewerSubsystem::PlaceEnvironment()
+{
+    ASCVehicle* EnvironmentActor = Environment.Get();
+    if (!EnvironmentActor) return;
+    if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(EnvironmentActor);
+    SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
+    FSCEnvironment::PlaceOnFloor(EnvironmentActor, ViewerFloorZ, Vehicle.Get());
+    SCLook::UpdateShortRangeAO(EnvironmentActor->GetWorld());
+}
+
+void USCViewerSubsystem::SetEnvironmentState(const FString& State)
+{
+    EnvironmentState = State.ToLower();
+    FSCEnvironment::SetState(Environment.Get(), EnvironmentState);
 }
 bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOptions)
 {
@@ -339,6 +626,27 @@ float USCViewerSubsystem::GetLoadProgress() const
     default: return 0.f;
     }
 }
+float USCViewerSubsystem::GetEnvironmentProgress() const
+{
+    if (EnvLevel && !Environment.IsValid()) return 0.5f;
+    if (EnvExport.IsValid()) return ExportShare * (EnvProgress ? EnvProgress->GetFraction() : 0.f);
+    if (EnvParse.IsValid()) return ExportShare;
+    if (EnvJob) return ExportShare + ParseShare + (1.f - ExportShare - ParseShare) * EnvJob->GetFraction();
+    return EnvPlaceInTicks > 0 ? 1.f : 0.f;
+}
+FString USCViewerSubsystem::GetEnvironmentPhaseText() const
+{
+    if (bEnvironmentPending) return TEXT("waiting for the model");
+    if (EnvLevel && !Environment.IsValid()) return TEXT("Loading cooked level");
+    if (EnvExport.IsValid())
+    {
+        const FString Step = EnvProgress ? EnvProgress->GetPhase() : FString();
+        return Step.IsEmpty() ? TEXT("Export: starting") : TEXT("Export: ") + Step;
+    }
+    if (EnvParse.IsValid()) return TEXT("Reading package");
+    if (EnvJob) return TEXT("Import: ") + EnvJob->GetPhase();
+    return EnvPlaceInTicks > 0 ? TEXT("Placing") : FString();
+}
 FString USCViewerSubsystem::GetLoadPhaseText() const
 {
     switch (Phase)
@@ -437,8 +745,11 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         if (Stage == ESCImportStage::Succeeded)
         {
             Vehicle = Result.Vehicle;
-            const FBox Bounds = Vehicle->GetComponentsBoundingBox(true);
-            if (Bounds.IsValid) Vehicle->AddActorWorldOffset(FVector(0, 0, FloorClearanceCm - Bounds.Min.Z));
+            const int32 GearClips = Vehicle->RestOnLandingGear();
+            FString LowestPart;
+            const double Lowest = Vehicle->LowestVisibleZ(&LowestPart);
+            UE_LOG(LogSCViewer, Display, TEXT("VIEWER_REST gear_clips=%d lowest_z=%.1f part=%s"), GearClips, Lowest, *LowestPart);
+            if (Lowest < TNumericLimits<double>::Max()) Vehicle->AddActorWorldOffset(FVector(0, 0, ViewerFloorZ - Lowest));
             LoadedEntity = PendingEntity;
             LoadedKey = PendingKey;
             Job.Reset();
@@ -491,6 +802,16 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
            Report.MaterialSeconds, Report.AssembleSeconds, Report.TotalSeconds, Report.Assets, Report.Instances, Report.Warnings,
            Report.StaticMeshes, Report.SkeletalMeshes, Report.Textures, Report.MaterialInstances, Report.Vehicles, Report.PreviousObjects,
            Report.PreviousObjectsAlive, *Error);
+    if (Result == ESCLoadPhase::Succeeded)
+    {
+        // The paint remembered for this vehicle (its palette id), when the package still offers it.
+        if (ASCVehicle* V = Vehicle.Get())
+            if (const FString* Saved = USCViewerSettings::Get()->Paints.Find(Report.Entity))
+                if (const int32 Index = V->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.PaletteId == *Saved; }); Index != INDEX_NONE)
+                    V->SetPaint(Index);
+        FitEnvironmentToShip();
+    }
+    if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr) SCLook::UpdateShortRangeAO(World);
     OnLoadFinished.Broadcast(Report);
 }
 
@@ -565,6 +886,7 @@ bool USCViewerSubsystem::Tick(float)
     CompleteSearches(false);
     StepLoad(false);
     StepPlayerKit(false);
+    StepEnvironment();
     PollClientPanic();
     LogPhaseChange();
     if (Automation) Automation->Tick();
@@ -596,7 +918,7 @@ bool USCViewerSubsystem::RequestPlayerKit()
     {
         Package = FPaths::ConvertRelativePathToFull(FPlatformMisc::LaunchDir(), Package);
         KitParse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Package]() -> TSharedPtr<FSCTarPackageSource> {
-            TArray<uint8> Bytes;
+            TArray64<uint8> Bytes;
             if (!FFileHelper::LoadFileToArray(Bytes, *Package)) return nullptr;
             return MakeShared<FSCTarPackageSource>(MoveTemp(Bytes));
         });
@@ -680,7 +1002,7 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
         }
         FSCExportResult Result = MoveTemp(KitExport.GetResult());
         KitExport = {};
-        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_EXPORT ok=%d seconds=%.3f bytes=%d cache_hit=%d"), Result.bOK, Result.Seconds, Result.Tar.Num(),
+        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_EXPORT ok=%d seconds=%.3f bytes=%lld cache_hit=%d"), Result.bOK, Result.Seconds, Result.Tar.Num(),
                Result.Cache.bLastHit);
         if (!Result.bOK)
         {
@@ -848,7 +1170,11 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
         }
     }
     CameraMode = Mode;
-    if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetCameraMode(Mode);
+    if (ASCViewerPawn* Pawn = GetViewerPawn())
+    {
+        Pawn->SetOrbitObstacle(Environment.Get());
+        Pawn->SetCameraMode(Mode);
+    }
     UE_LOG(LogSCViewer, Display, TEXT("FIRST_PERSON_MODE mode=%d"), int32(Mode));
     return true;
 }
@@ -917,3 +1243,42 @@ FSCKeepResult USCViewerSubsystem::Keep()
     }
     return KeepHandler().Execute(Vehicle.Get(), LoadedEntity);
 }
+
+static FAutoConsoleCommandWithWorldAndArgs GSCEnvironment(
+    TEXT("sc.Environment"), TEXT("sc.Environment <package folder|none>: import a game environment (e.g. a hangar socpak package) beside the ship"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World)) Viewer->SetEnvironment(Args.IsValidIndex(0) ? FString::Join(Args, TEXT(" ")) : FString());
+    }));
+
+static FAutoConsoleCommandWithWorldAndArgs GSCPaint(
+    TEXT("sc.Paint"), TEXT("sc.Paint [index|default|name part]: list the vehicle's paints, or put one on"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World);
+        ASCVehicle* V = Viewer ? Viewer->GetVehicle() : nullptr;
+        if (!V) return;
+        const TArray<FSCPaintVariant>& Paints = V->Manifest.Paints;
+        if (Args.IsEmpty())
+        {
+            for (int32 I = 0; I < Paints.Num(); ++I)
+                UE_LOG(LogSCViewer, Display, TEXT("PAINT_CHOICE index=%d label=\"%s\" palette=%s sidecar=%s active=%d"), I, *Paints[I].Label(), *Paints[I].PaletteId,
+                       *Paints[I].ExteriorSidecar, V->GetPaint() == I);
+            return;
+        }
+        const FString Arg = FString::Join(Args, TEXT(" "));
+        const bool bDefault = Arg.Equals(TEXT("default"), ESearchCase::IgnoreCase);
+        const int32 Index = Arg.IsNumeric() ? FCString::Atoi(*Arg) : bDefault ? INDEX_NONE
+            : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Arg) || P.PaletteId.Contains(Arg); });
+        if ((Index == INDEX_NONE && !bDefault) || !Viewer->SetPaint(Index))
+            UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" (sc.Paint lists them)"), *Arg);
+    }));
+static FAutoConsoleCommandWithWorldAndArgs GSCUIPanels(
+    TEXT("sc.UI.Panels"), TEXT("sc.UI.Panels <0|1>: hide or show the side panels (model browser, hierarchy)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World))
+            Viewer->SetPanelsVisible(Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) != 0 : !Viewer->ArePanelsVisible());
+    }));
+static FAutoConsoleCommandWithWorldAndArgs GSCEnvironmentState(
+    TEXT("sc.Environment.State"), TEXT("sc.Environment.State <bind|open|closed>: pose the environment's mechanisms (doors, elevators)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World)) Viewer->SetEnvironmentState(Args.IsValidIndex(0) ? Args[0] : FString());
+    }));

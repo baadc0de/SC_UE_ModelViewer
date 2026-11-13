@@ -1,5 +1,7 @@
 // Scene light and projector creation; photometric mapping is shared with the package contract.
 #include "SCLightImporter.h"
+#include "EngineUtils.h"
+#include "SCViewerSettings.h"
 #include "SCStarEngine.h"
 #include "SCVehicle.h"
 #include "SCMeshImporter.h"
@@ -52,9 +54,10 @@ FVector LightBasis(FVector V)
 {
     return FVector(V.Y, V.X, V.Z);
 }
-// WP-U3b (ue/verification/WP-U3b.md): MegaLights shades every local light with ray-traced shadows at a fixed
-// cost. Without it (no supported tracing path, or the project setting off) each shadowed light costs a virtual shadow map and
-// one-pass projection overflows above 16 lights per pixel, so shadow casting is capped by a data rule.
+// Shadows follow the game: only lights authored `shadowParams.shadowCasting` cast them (2-4 per ship), with or without
+// MegaLights. WP-U3b shadowed every light under MegaLights as a stand-in for the game's per-room light confinement;
+// WP-L1 confines lights to their rooms with lighting channels instead (SCLightAreas), so the stand-in is gone.
+// Packages without the authored field keep the radius-quartile rule.
 bool ConsoleEnabled(const TCHAR* Name)
 {
     const auto* CVar = IConsoleManager::Get().FindConsoleVariable(Name);
@@ -146,7 +149,6 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
 {
     auto Basis = [bHelperFrame](FVector V) { return ContainerBasis(V, bHelperFrame); };
     Vehicle->bMegaLightsActive = MegaLightsActive();
-    const bool bShadowCap = !Vehicle->bMegaLightsActive;
     const double ShadowRadius = ShadowRadiusThreshold(Instance.LightJson);
     for (const auto& Text : Instance.LightJson)
     {
@@ -200,7 +202,7 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         }
         State.RadiusM = FMath::Max(0., LightNumber(J, TEXT("radius_m")));
         State.ShadowThresholdM = ShadowRadius;
-        // Fallback (no MegaLights): the authored shadowParams.shadowCasting flag when exported, else the radius quartile.
+        // The authored shadowParams.shadowCasting flag when exported, else the radius quartile.
         const bool bAuthored = HasAuthoredModel(J);
         bool bAuthoredShadow = false;
         State.bFallbackShadow = !Cast<ULocalLightComponent>(Light) ||
@@ -216,7 +218,7 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             Local->SetIntensityUnits(ELightUnits::Candelas);
             const double Radius = FMath::Max(0., LightNumber(J, TEXT("radius_m")));
             Local->SetAttenuationRadius(Radius * 100);
-            Local->SetCastShadows(!bShadowCap || State.bFallbackShadow);
+            Local->SetCastShadows(State.bFallbackShadow || USCViewerSettings::Get()->bShadowAllLights); // look: every light (D15)
         }
         // Emitter size from the authored bulb / plane (CryEngine's attenuation bulb is the source radius).
         if (bAuthored)
@@ -298,6 +300,7 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
                     Texture->UpdateResource(); // sampler state must include clamp for PNG and EXR
                     Vehicle->Textures.Add(Texture);
                     Vehicle->GoboTextures.Add(TexturePath, Texture);
+                    Vehicle->SourcePaths.Add(Texture, TEXT("gobo:") + TexturePath);
                 }
             }
             if (Master && Texture)
@@ -319,5 +322,14 @@ void FSCLightImporter::RefreshShadows(ASCVehicle* Vehicle)
     Vehicle->bMegaLightsActive = MegaLightsActive();
     for (const auto& State : Vehicle->LightStates)
         if (auto* Local = Cast<ULocalLightComponent>(State.Component))
-            Local->SetCastShadows(Vehicle->bMegaLightsActive || State.bFallbackShadow);
+            Local->SetCastShadows(State.bFallbackShadow || USCViewerSettings::Get()->bShadowAllLights);
 }
+
+static FAutoConsoleCommandWithWorldAndArgs GSCLookShadowAll(
+    TEXT("sc.Look.ShadowAll"), TEXT("sc.Look.ShadowAll <0|1>: every ship light casts shadows (look) or only the authored casters"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        USCViewerSettings::Get()->bShadowAllLights = !Args.IsValidIndex(0) || FCString::Atoi(*Args[0]) != 0;
+        int32 Vehicles = 0;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It, ++Vehicles) FSCLightImporter::RefreshShadows(*It);
+        UE_LOG(LogTemp, Display, TEXT("LOOK shadow_all=%d vehicles=%d"), USCViewerSettings::Get()->bShadowAllLights, Vehicles);
+    }));

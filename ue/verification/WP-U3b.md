@@ -1120,7 +1120,8 @@ Port:
   the instance has a palette), `SpecularColor` = `Specular.rrr`, `GlassTiling` / `GlassVStretch`, the
   vertex / map switches from the shader tokens, the TexSlot4 / TexSlot8 maps when the export carries them.
   A parameter the material does not author takes the shader's declared default from the fixture
-  (`GlassTiling`, `GlassVStretch`, `GlassTintStrength`, and `ThinFilmThickness` under `%THIN_FILM`). What
+  (`GlassTiling`, `GlassVStretch`, `GlassTintStrength`, and `ThinFilmThickness` under `%THIN_FILM`;
+  `UseThinFilm` = 1 only under `%THIN_FILM`, §14.8). What
   cannot be applied is reported as an import warning instead of silently dropped: `%HEIGHT_MAP` /
   `%TINT_MAP` without an exported TexSlot8 / TexSlot4, and a material without `Specular` (§14.7).
 - `M_SC_Glass` (`create_materials.py` `glass_master`) reads every glass map at `glassUV`, evaluates the
@@ -1252,8 +1253,8 @@ have their slot), so those fixes change no pixel there.
 - **Not compared with the game.** The glass rule is ported; no in-game capture under a known light set-up
   was matched.
 - Glass features of `GlassShared` that are not mapped: dirt layer and wear smoothness, the game's thin-film
-  LUT (approximated by `SubstrateThinFilm`: the game's `ThinFilmThickness` scales a LUT coordinate, it is
-  not a physical thickness, and `ThinFilmStrength` is not mapped), screen-space refraction offset, curvature
+  LUT (approximated by `SubstrateThinFilm` under `%THIN_FILM` only, §14.8: the game's `ThinFilmThickness` scales
+  a LUT coordinate, it is not a physical thickness, and `ThinFilmStrength` is not mapped), screen-space refraction offset, curvature
   and glare, light amplification, emissive glass (`EmissiveOpacity`), cracks, frost, condensation and the
   glass decal layer.
 - **Host values still outside the fixture** (cross-review finding 5): F0 0.04 for a glass material without
@@ -1275,3 +1276,52 @@ have their slot), so those fixes change no pixel there.
   predate the fix.
 - UE's red on-screen warning about the real-time-capture sky light is still in every capture.
 - Frame time was not re-measured; only the three regression ships were captured.
+
+### 14.8 Milky veil on canopy glass: the thin-film node (2026-11-13)
+
+Symptom (LOOK-8): RSI Galaxy, first person under the bridge canopy in the utility XL hangar, a sharply bounded,
+uniformly grey ellipse over the glass (`out/smoke/canopy-up*.png`).
+
+Measured (new diagnostics in `SCLook.cpp`: `sc.Look.GlassRay` lists the glass parts on the screen-centre ray with
+their parameters, `sc.Look.GlassParam <name> <x> [<y> <z>] [@<instance name part>]` sets a glass parameter live,
+`sc.Look.HideGlass <0|1> [<mesh name part>]` hides only matching parts):
+
+| Test | Veil |
+|---|---|
+| hide the exterior canopy (`rsi_galaxy` `Glass_Cockpit_RTO_NearBlur`, faces outward, culled from inside) | unchanged |
+| hide `rsi_galaxy_bridge_sidewall_right_LOD0_Translucent`, or `SpecularColor` 0 on `rsi_int_master_01` `Glass_Cockpit_RTO_NearBlur` (Specular 0.0212, no `%THIN_FILM`) | gone |
+| Lumen translucency volume off, translucency lighting volume off, reflection environment off, radiance-cache reflections off, front-layer reflections on, sky light 0 | unchanged |
+| path tracer | same veil (so not a real-time translucency artefact) |
+| pane made a mirror (F0 1, smoothness 1), RT front layer and PT | uniform white: it mirrors the hangar's ceiling light panel, seen through the bridge's open roof behind the camera; the ellipse is that opening's edge |
+| `SpecularColor` 0.005 / 0.0212 / 0.04 | veil scales with F0 |
+
+Cause: `M_SC_Glass` fed every glass slab's F0/F90 through `SubstrateThinFilm` with `ThinFilmThickness` 0 when the
+material has no `%THIN_FILM`. The node is not an identity at zero thickness: `F_ThinFilm` always adds the film's
+own dielectric interface (IOR 1.44, R12 = Schlick(0.033)) and `SubstrateGetThinFilmF0F90` refits F0 from that,
+floored at 0.02 x micro-occlusion. Evaluated from the shader code: F0 0.003 → 0.008-0.010, 0.0212 → about
+0.11-0.15, 0.04 → 0.13-0.18 (NoV 0.9-0.4), i.e. three to seven times the game's reflectance. `GlassShared`
+uses `fresnel = lerp(Reflectance, 1, F_Schlick(NoV))` and applies the film only under `%THIN_FILM`
+(`ApplyIridescenceIsotropic`).
+
+Fix: `UseThinFilm` (1 only under `%THIN_FILM`, `SCMaterialDescribe.cpp` `Glass`) selects between the plain
+F0 = `SpecularColor`, F90 = 1 and the thin-film node's output in `glass_master`. Tests first
+(`FSCMaterialsFamilies`: `UseThinFilm` per fixture glass; `FSCMaterialsMasters`: the master has the switch),
+red on the old code (38 passed, 2 failed), green after (40 passed, `UNIT_TESTS_OK`).
+
+GPU (same session, after = new master, before = `sc.Look.GlassParam UseThinFilm 1`, which is the old graph for a
+material without `%THIN_FILM`; display-encoded mean over the veil):
+
+| View | Before | After | Glass hidden |
+|---|---|---|---|
+| Galaxy first person, `sc.FP.Look 0 25` (`out/smoke/ga-fp-{before,after,noglass}.png`) | 115 | 71 | 3 |
+| Galaxy fly 2745 2 1700, pitch 25, real time (`ga-fly-{before,after}`) | 129 | 67 | — |
+| same, path tracer 256 spp (`ga-fly-pt-{before,after}`) | 144 | 81 | — |
+| Cutlass cockpit / Scorpius cockpit / exteriors (`cb-*`, `sb-*`, 3 views each) | no veil | mean abs. difference 0.14-0.61, p99 ≤ 3.3 | — |
+
+What remains on the Galaxy is the game-strength (F0 0.0212, rising to F90 1 at grazing) reflection of the hangar's
+ceiling panel in the sloped bridge pane; path tracer and real time agree on it. Whether that panel's emission is
+as bright as in the game is a lighting question, not glass.
+
+Not done: cooked hangars (WP-C1) carry constant copies of the glass instances made before this change; without
+`UseThinFilm` they take the master default 0, which is right for glass without `%THIN_FILM` but drops the film from
+hangar glass that has it until the hangars are re-cooked.

@@ -40,7 +40,8 @@ ASCFirstPersonCharacter::ASCFirstPersonCharacter()
     Flashlight->SetAttenuationRadius(2000);
     Flashlight->SetOuterConeAngle(35);
     Flashlight->SetVisibility(false);
-    Flashlight->LightingChannels.bChannel1 = true; // not an area light: it reaches both light sides (WP-U3b §12)
+    Flashlight->LightingChannels.bChannel1 = true; // not an area light: it reaches every room channel (WP-U3b §12, WP-L1)
+    Flashlight->LightingChannels.bChannel2 = true;
     SetProfile(FSCCharacterProfile());
 }
 void ASCFirstPersonCharacter::SetProfile(const FSCCharacterProfile& InProfile)
@@ -84,6 +85,7 @@ void ASCFirstPersonCharacter::ClearInput()
     SetRunning(false);
     StopJumping();
     UnCrouch();
+    Body->SetAiming(false);
 }
 void ASCFirstPersonCharacter::CapsuleHit(UPrimitiveComponent*, AActor*, UPrimitiveComponent*, FVector, const FHitResult&) { ++CapsuleHits; }
 void ASCFirstPersonCharacter::Look(FVector2D Pixels)
@@ -123,17 +125,18 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     if (!Vehicle || Vehicle->IsActorBeingDestroyed()) { ClearInput(); return; }
-    // The body and its kit are lit like the surfaces around them: by the lights of the side the player stands on.
+    Vehicle->UpdateDoorSensors(GetActorLocation(), GetWorld()->GetTimeSeconds()); // the game's door proximity sensors
+    // The body and its kit are lit like the surfaces around them: by the lights of the room the player stands in.
     ASCVehicle* Kit = Body->GetKit();
-    if (const bool bInside = Vehicle->IsInsideLightArea(GetActorLocation()); LightAreaState != int8(bInside) || LightAreaKit.Get() != Kit)
+    if (const int32 Channel = Vehicle->LightChannelAt(GetActorLocation()); LightAreaState != int8(Channel) || LightAreaKit.Get() != Kit)
     {
-        LightAreaState = int8(bInside);
+        LightAreaState = int8(Channel);
         LightAreaKit = Kit;
         for (const AActor* Actor : {static_cast<const AActor*>(this), static_cast<const AActor*>(Kit)})
         {
             if (!Actor) continue;
             TInlineComponentArray<UPrimitiveComponent*> Primitives(Actor);
-            for (UPrimitiveComponent* Primitive : Primitives) FSCLightAreas::SetChannels(Primitive, bInside);
+            for (UPrimitiveComponent* Primitive : Primitives) FSCLightAreas::SetChannel(Primitive, Channel);
         }
     }
     // WP-P3: inside the physics grid the vehicle's own (hull) colliders do not block; the grid's contents do.
@@ -206,8 +209,7 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
     const double WalkableZ = GetCharacterMovement()->GetWalkableFloorZ();
     const double Skin = 2.5; // capsule clearance above the surface it stands on
     const FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, Half);
-    FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSpawn), false, this);
-    AddGridIgnores(Params, Hint + FVector(0, 0, Half), Half);
+    const FCollisionQueryParams Base(SCENE_QUERY_STAT(SCSpawn), false, this);
     // Search a capsule-sized neighbourhood of the helper; never use an asset-name offset.
     // A seat is searched within two capsule diameters (seat bucket, footwell), never beyond.
     for (int32 Ring = 0; Ring <= (bSeated ? 2 : 4); ++Ring)
@@ -215,11 +217,17 @@ bool ASCFirstPersonCharacter::FindCapsuleSpot(FVector Hint, double Half, FVector
         {
             const double Angle = Direction * UE_DOUBLE_PI / 4;
             const FVector Offset(FMath::Cos(Angle) * Ring * Radius * 2, FMath::Sin(Angle) * Ring * Radius * 2, 0);
+            // Grid membership (hull colliders ignored inside the vehicle's physics grid) is decided where each query is,
+            // as movement decides it for the capsule: the floor probe at its column, the capsule tests at the candidate.
+            FCollisionQueryParams Column = Base;
+            AddGridIgnores(Column, Hint + Offset + FVector(0, 0, Half), Half);
             FHitResult Hit;
             if (!GetWorld()->LineTraceSingleByChannel(Hit, Hint + Offset + FVector(0, 0, Half + Step),
-                    Hint + Offset - FVector(0, 0, bSeated ? Step : Half * 4), ECC_Pawn, Params) ||
+                    Hint + Offset - FVector(0, 0, bSeated ? Step : Half * 4), ECC_Pawn, Column) ||
                 Hit.ImpactNormal.Z < WalkableZ) continue;
             const FVector Candidate = Hit.ImpactPoint + FVector(0, 0, Half + Skin);
+            FCollisionQueryParams Params = Base;
+            AddGridIgnores(Params, Candidate, Half);
             if (GetWorld()->OverlapBlockingTestByChannel(Candidate, FQuat::Identity, ECC_Pawn, Shape, Params)) continue;
             if (Seat)
             {
@@ -406,7 +414,7 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
         {EKeys::E, A::Interact}, {EKeys::F, A::Torch}, {EKeys::V, A::Noclip}, {EKeys::T, A::Teleport}, {EKeys::Escape, A::Close},
         {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
         {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
-        {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}};
+        {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim}};
     return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
@@ -432,6 +440,11 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
         if (Action == A::Up && !bNoclip) { if (bDown) Jump(); else StopJumping(); }
         if (Action == A::Crouch) SetCrouching(bDown);
         return true;
+    }
+    if (Action == A::Aim) // held: aiming lasts while the button is down
+    {
+        Body->SetAiming(bDown);
+        return Body->HasBody();
     }
     if (!bDown) return false;
     switch (Action)

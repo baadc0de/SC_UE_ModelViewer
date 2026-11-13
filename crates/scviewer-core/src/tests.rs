@@ -453,3 +453,26 @@ fn live_independent_decomposed_exports_are_byte_identical() {
         a.len()
     );
 }
+
+#[test]
+fn environment_search_matches_every_term_case_insensitively() {
+    let all = vec![
+        "Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak".to_string(),
+        "Data/ObjectContainers/PU/loc/mod/common/hangar/util_a/hangar_smlfrnt_003_gm.socpak".to_string(),
+        "Data/ObjectContainers/PU/system/stanton/stanton_skybox.socpak".to_string(),
+    ];
+    let hits = filter_environments(&all, "HANGAR hightech", 10);
+    assert_eq!(hits, vec![all[0].clone()]);
+    assert_eq!(filter_environments(&all, "hangar", 1).len(), 1);
+    assert_eq!(filter_environments(&all, "", 10).len(), 3);
+}
+
+#[test]
+fn environment_cache_key_is_separate_from_entities_and_stable() {
+    let options = DecomposedOptions::default();
+    let path = "Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak";
+    let env = environment_key("build", path, &options).unwrap();
+    assert_eq!(env, environment_key("build", &path.replace('/', "\\"), &options).unwrap());
+    assert_ne!(env, cache::package_key("build", path, &options).unwrap());
+    assert_ne!(env, environment_key("other-build", path, &options).unwrap());
+}

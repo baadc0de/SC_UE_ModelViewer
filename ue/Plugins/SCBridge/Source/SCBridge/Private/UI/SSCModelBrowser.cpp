@@ -1,18 +1,23 @@
 // SSCModelBrowser: search, recents, options and load controls.
 #include "SSCModelBrowser.h"
+#include "SCVehicle.h"
 #include "SCViewerStyle.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerSettings.h"
 #include "SCViewOptions.h"
+#include "SCDirt.h"
+#include "Misc/Paths.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Misc/CommandLine.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSearchBox.h"
+#include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/Layout/SWrapBox.h"
-#include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -98,24 +103,6 @@ void SSCModelBrowser::Construct(const FArguments& Args)
                     [SNew(STextBlock).Font(Font(10)).Text(LOCTEXT("Cancel", "Cancel"))]
                 ]
             ]
-            + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 2)
-            [
-                SNew(SProgressBar)
-                .Percent_Lambda([this] { return Subsystem.IsValid() ? TOptional<float>(Subsystem->GetLoadProgress()) : TOptional<float>(); })
-                .FillColorAndOpacity_Lambda([this] {
-                    const ESCLoadPhase P = Subsystem.IsValid() ? Subsystem->GetLoadPhase() : ESCLoadPhase::Idle;
-                    return FSlateColor(P == ESCLoadPhase::Failed ? Bad() : P == ESCLoadPhase::Succeeded ? Good() : Accent());
-                })
-            ]
-            + SVerticalBox::Slot().AutoHeight()
-            [
-                SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).AutoWrapText(true).Text_Lambda([this] {
-                    if (!Subsystem.IsValid()) return FText();
-                    const FString Entity = Subsystem->IsBusy() ? Subsystem->GetPendingEntity() : Subsystem->GetLastReport().Entity;
-                    return FText::FromString(Entity.IsEmpty() ? Subsystem->GetLoadPhaseText()
-                                                              : Entity + TEXT(" — ") + Subsystem->GetLoadPhaseText());
-                })
-            ]
         ]
     ];
     RebuildRecents();
@@ -172,6 +159,129 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
             .OnCheckStateChanged_Lambda([O, M = Mode.Key](ECheckBoxState) { if (O()) O()->MaterialMode = M; })
             [SNew(SBox).Padding(FMargin(5, 1))[SNew(STextBlock).Font(Font(9)).Text(Mode.Value)]]
         ];
+    // Viewer dirt (WP-U2b): live on exterior surfaces, saved with the user settings; not a load option.
+    TWeakObjectPtr<USCViewerSubsystem> WeakSubsystem = Subsystem;
+    auto PushDirt = [WeakSubsystem](bool bSave) {
+        FSCDirt::Push(WeakSubsystem.IsValid() ? WeakSubsystem->GetWorld() : nullptr);
+        if (bSave) USCViewerSettings::Get()->Save();
+    };
+    TSharedRef<SHorizontalBox> DirtColours = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(78)];
+    for (const FSCDirt::FPreset& Preset : FSCDirt::Presets())
+        DirtColours->AddSlot().AutoWidth().Padding(0, 0, 2, 0)
+        [
+            SNew(SCheckBox)
+            .Style(FCoreStyle::Get(), "ToggleButtonCheckbox")
+            .IsChecked_Lambda([C = Preset.Colour] { return USCViewerSettings::Get()->DirtColor.Equals(C) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+            .OnCheckStateChanged_Lambda([C = Preset.Colour, PushDirt](ECheckBoxState) {
+                USCViewerSettings::Get()->DirtColor = C;
+                PushDirt(true);
+            })
+            [SNew(SBox).Padding(FMargin(5, 1))[SNew(STextBlock).Font(Font(9)).Text(FText::FromString(Preset.Name))]]
+        ];
+    TSharedRef<SHorizontalBox> Dirt = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("Dirt", "Dirt"))]]
+        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+        [
+            SNew(SSlider)
+            .Value_Lambda([] { return USCViewerSettings::Get()->DirtAmount; })
+            .OnValueChanged_Lambda([PushDirt](float Value) {
+                USCViewerSettings::Get()->DirtAmount = Value;
+                PushDirt(false);
+            })
+            .OnMouseCaptureEnd_Lambda([PushDirt] { PushDirt(true); })
+        ]
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+        [
+            SNew(SBox).WidthOverride(34)
+            [SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text_Lambda([] {
+                return FText::FromString(FString::Printf(TEXT("%d %%"), FMath::RoundToInt(USCViewerSettings::Get()->DirtAmount * 100)));
+            })]
+        ];
+    TSharedRef<SHorizontalBox> Underside = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("DirtUnderside", "Underside"))]]
+        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+        [
+            SNew(SSlider)
+            .Value_Lambda([] { return USCViewerSettings::Get()->DirtUnderside; })
+            .OnValueChanged_Lambda([PushDirt](float Value) {
+                USCViewerSettings::Get()->DirtUnderside = Value;
+                PushDirt(false);
+            })
+            .OnMouseCaptureEnd_Lambda([PushDirt] { PushDirt(true); })
+        ]
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+        [
+            SNew(SBox).WidthOverride(34)
+            [SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text_Lambda([] {
+                return FText::FromString(FString::Printf(TEXT("%d %%"), FMath::RoundToInt(USCViewerSettings::Get()->DirtUnderside * 100)));
+            })]
+        ];
+    // Environment (LOOK-3): a game hangar from the archive, or the map's procedural hangar; saved, applied at once.
+    auto EnvironmentLabel = [](const FString& Request) {
+        if (Request.IsEmpty() || Request == TEXT("none")) return FString(TEXT("Procedural hangar"));
+        const FString Clean = Request.Replace(TEXT("\\"), TEXT("/"));
+        return FPaths::GetBaseFilename(FPaths::GetPath(Clean)) + TEXT(" / ") + FPaths::GetBaseFilename(Clean);
+    };
+    auto PickEnvironment = [WeakSubsystem](const FString& Request) {
+        USCViewerSettings::Get()->Environment = Request;
+        USCViewerSettings::Get()->Save();
+        if (WeakSubsystem.IsValid()) WeakSubsystem->SetEnvironment(Request, true);
+    };
+    TSharedRef<SHorizontalBox> Environment = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("Environment", "Environment"))]]
+        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+        [
+            SNew(SComboButton)
+            .ButtonContent()[SNew(STextBlock).Font(Font(9)).Text_Lambda([WeakSubsystem, EnvironmentLabel] {
+                if (!WeakSubsystem.IsValid()) return FText::GetEmpty();
+                const FString Label = EnvironmentLabel(WeakSubsystem->GetEnvironmentRequest());
+                return FText::FromString(WeakSubsystem->IsEnvironmentLoading() ? Label + TEXT(" (loading)") : Label);
+            })]
+            .OnGetMenuContent_Lambda([WeakSubsystem, EnvironmentLabel, PickEnvironment] {
+                FMenuBuilder Menu(true, nullptr);
+                Menu.AddMenuEntry(FText::FromString(EnvironmentLabel(FString())), FText::GetEmpty(), FSlateIcon(),
+                                  FUIAction(FExecuteAction::CreateLambda([PickEnvironment] { PickEnvironment(TEXT("none")); })));
+                if (WeakSubsystem.IsValid())
+                    for (const FString& Choice : WeakSubsystem->GetEnvironmentChoices())
+                        Menu.AddMenuEntry(FText::FromString(EnvironmentLabel(Choice)), FText::FromString(Choice), FSlateIcon(),
+                                          FUIAction(FExecuteAction::CreateLambda([PickEnvironment, Choice] { PickEnvironment(Choice); })));
+                return SNew(SBox).MaxDesiredHeight(480)[Menu.MakeWidget()];
+            })
+        ];
+    // Paint (tint system): the loaded vehicle's paints (paints.json); shown only when it has any. Remembered per vehicle.
+    auto PaintLabel = [WeakSubsystem](int32 Index) {
+        const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+        if (!V || Index == INDEX_NONE || !V->Manifest.Paints.IsValidIndex(Index)) return FString(TEXT("Default paint"));
+        return V->Manifest.Paints[Index].Label();
+    };
+    TSharedRef<SHorizontalBox> Paint = SNew(SHorizontalBox)
+        .Visibility_Lambda([WeakSubsystem] {
+            const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+            return V && !V->Manifest.Paints.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed;
+        })
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("Paint", "Paint"))]]
+        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+        [
+            SNew(SComboButton)
+            .ButtonContent()[SNew(STextBlock).Font(Font(9)).Text_Lambda([WeakSubsystem, PaintLabel] {
+                const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+                return FText::FromString(PaintLabel(V ? V->GetPaint() : INDEX_NONE));
+            })]
+            .OnGetMenuContent_Lambda([WeakSubsystem, PaintLabel] {
+                FMenuBuilder Menu(true, nullptr);
+                const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+                for (int32 Index = INDEX_NONE; V && Index < V->Manifest.Paints.Num(); ++Index)
+                    Menu.AddMenuEntry(FText::FromString(PaintLabel(Index)),
+                                      FText::FromString(Index == INDEX_NONE ? V->Manifest.Root.PaletteId : V->Manifest.Paints[Index].PaletteId), FSlateIcon(),
+                                      FUIAction(FExecuteAction::CreateLambda([WeakSubsystem, Index] { if (WeakSubsystem.IsValid()) WeakSubsystem->SetPaint(Index); })));
+                return SNew(SBox).MaxDesiredHeight(480)[Menu.MakeWidget()];
+            })
+        ];
     return SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Lod", "LOD"), {0, 1, 2, 3}, IntField(&USCViewOptions::Lod))]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Mip", "Texture mip"), {0, 2, 4}, IntField(&USCViewOptions::Mip))]
@@ -194,7 +304,12 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
                 })
                 [SNew(STextBlock).Font(Font(8)).Text(LOCTEXT("Defaults", "Core defaults"))]
             ]
-        ];
+        ]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Dirt]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Underside]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[DirtColours]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Environment]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Paint];
 }
 
 TSharedRef<ITableRow> SSCModelBrowser::MakeRow(FHit Hit, const TSharedRef<STableViewBase>& Owner)

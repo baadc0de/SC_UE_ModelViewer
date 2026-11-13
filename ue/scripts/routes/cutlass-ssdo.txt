@@ -1,0 +1,38 @@
+# Star Engine SSDO on unshadowed lights (WP-L2): at three still Cutlass views, SSDO off (r.GeneralPurposeTweak 0) and
+# on (1, the default), two shots 0.2 s apart per setting (frame-to-frame noise) and a 5 s frame sample.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+0 r.GeneralPurposeTweak 0
+4 shot cargo-off-a
+0.2 shot cargo-off-b
+0 frametime 5 cargo-off
+0 r.GeneralPurposeTweak 1
+4 shot cargo-on-a
+0.2 shot cargo-on-b
+0 frametime 5 cargo-on
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+0 r.GeneralPurposeTweak 0
+4 shot aft-off-a
+0.2 shot aft-off-b
+0 frametime 5 aft-off
+0 r.GeneralPurposeTweak 1
+4 shot aft-on-a
+0.2 shot aft-on-b
+0 frametime 5 aft-on
+1 sc.FP.Look 0 -10
+0 r.GeneralPurposeTweak 0
+4 shot cockpit-off-a
+0.2 shot cockpit-off-b
+0 frametime 5 cockpit-off
+0 r.GeneralPurposeTweak 1
+4 shot cockpit-on-a
+0.2 shot cockpit-on-b
+0 frametime 5 cockpit-on
+1 quit

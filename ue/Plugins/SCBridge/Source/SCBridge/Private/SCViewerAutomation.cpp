@@ -26,6 +26,24 @@
 #include "InputCoreTypes.h"
 #include "RenderTimer.h"
 #include "DynamicRHI.h"
+#include "SceneManagement.h"
+#include "SceneView.h"
+#include "SceneViewExtension.h"
+#include <atomic>
+
+// Reads the path tracer's accumulated sample count from the view state of path-traced views (game thread, per frame).
+class FSCPathTracerProbe final : public FSceneViewExtensionBase
+{
+public:
+    explicit FSCPathTracerProbe(const FAutoRegister& AutoRegister) : FSceneViewExtensionBase(AutoRegister) {}
+    virtual void SetupViewFamily(FSceneViewFamily&) override {}
+    virtual void SetupView(FSceneViewFamily& Family, FSceneView& View) override
+    {
+        if (Family.EngineShowFlags.PathTracing && View.State) Samples = View.State->GetPathTracingSampleIndex();
+    }
+    virtual void BeginRenderViewFamily(FSceneViewFamily&) override {}
+    std::atomic<int64> Samples{-1};
+};
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCViewerAutomation, Log, All);
 
@@ -76,6 +94,7 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
             Script.Add({FCString::Atod(*Delay), Command.TrimStartAndEnd()});
         }
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT loaded file=%s steps=%d"), *ScriptFile, Script.Num());
+        InOwner.SetPanelsVisible(false); // scripted runs (captures) show the full-width scene; sc.UI.Panels 1 restores
     }
     if (IsRunningCommandlet()) return; // headless hosts call the subsystem directly; one console registration
     TWeakObjectPtr<USCViewerSubsystem> Weak = &InOwner;
@@ -212,6 +231,13 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Torch"), TEXT("sc.FP.Torch 0|1"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak)) C->SetTorch(Flag(Args, 0, true));
     });
+    Add(TEXT("sc.FP.Aim"), TEXT("sc.FP.Aim 0|1: hold / release aim down sights (the right mouse button)"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak))
+        {
+            const bool OK = C->HandleAction(ESCFirstPersonAction::Aim, Flag(Args, 0, true));
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD aim on=%d ok=%d %s"), Flag(Args, 0, true), OK, *C->Body->Describe());
+        }
+    });
     Add(TEXT("sc.FP.Noclip"), TEXT("sc.FP.Noclip 0|1 (an exit inside geometry is refused)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak))
         {
@@ -289,6 +315,34 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Where"), TEXT("sc.FP.Where: log mode, vehicle-relative position and movement state"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_WHERE %s"), *Where(*Weak.Get()));
     });
+    Add(TEXT("sc.FP.Pads"), TEXT("sc.FP.Pads: aim at every door panel from 80 cm in front (four sides) and log whether E resolves to its door"),
+        [Weak](const TArray<FString>&) {
+            ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+            if (!V) return;
+            const AActor* Ignore = Weak->GetFirstPerson();
+            int32 Total = 0, Resolved = 0, NoDoor = 0;
+            for (const auto& [Panel, Rig] : V->DoorControls)
+            {
+                const USceneComponent* Anchor = Panel.Get();
+                const int32 Expected = V->DoorForRig(Rig.Get());
+                if (!Anchor) continue;
+                ++Total;
+                if (Expected == INDEX_NONE) { ++NoDoor; continue; }
+                FBox Box(ForceInit);
+                TArray<USceneComponent*> Parts;
+                Anchor->GetChildrenComponents(true, Parts);
+                for (const USceneComponent* Part : Parts)
+                    if (const auto* P = Cast<UPrimitiveComponent>(Part); P && P->IsVisible()) Box += P->Bounds.GetBox();
+                if (!Box.IsValid) continue;
+                bool bOK = false;
+                for (const FVector& D : {FVector::ForwardVector, FVector::BackwardVector, FVector::RightVector, FVector::LeftVector})
+                    bOK |= V->FindInteraction(Box.GetCenter() + D * (Box.GetExtent().GetMax() + 80), -D, 300, Ignore) == Expected;
+                Resolved += bOK;
+                if (!bOK) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PAD_UNRESOLVED panel=%s door=\"%s\" at=%s"), *Anchor->GetName(),
+                                 *V->Doors[Expected].DisplayName, *Box.GetCenter().ToCompactString());
+            }
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS total=%d resolved=%d no_door=%d"), Total, Resolved, NoDoor);
+        });
     Add(TEXT("sc.FP.Probe"), TEXT("sc.FP.Probe [reach cm]: log what the view ray hits (component chain, rig, socket) and the focused interaction"),
         [Weak](const TArray<FString>& Args) {
             auto* C = FirstPerson(Weak);
@@ -387,8 +441,8 @@ void FSCViewerAutomation::LogFrameSamples()
         for (float X : V) Sum += X;
         return FString::Printf(TEXT("mean=%.2f p50=%.2f p95=%.2f"), Sum / V.Num(), V[V.Num() / 2], V[FMath::Min(V.Num() - 1, V.Num() * 95 / 100)]);
     };
-    UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_FRAMETIME tag=%s frames=%d frame_ms[%s] game_ms[%s] render_ms[%s] gpu_ms[%s]"),
-           *SampleTag, FrameMs.Num(), *Stats(FrameMs), *Stats(GameMs), *Stats(RenderMs), *Stats(GpuMs));
+    UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_FRAMETIME tag=%s frames=%d frame_ms[%s] game_ms[%s] render_ms[%s] rhi_ms[%s] gpu_ms[%s]"),
+           *SampleTag, FrameMs.Num(), *Stats(FrameMs), *Stats(GameMs), *Stats(RenderMs), *Stats(RhiMs), *Stats(GpuMs));
 }
 
 void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
@@ -430,10 +484,21 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
         StepAt = Now;
         return;
     }
+    if (Words[0] == TEXT("waitpt"))
+    {
+        // Hold the route until the path tracer has accumulated its full sample count, at most <seconds>.
+        if (!PtProbe) PtProbe = FSceneViewExtensions::NewExtension<FSCPathTracerProbe>();
+        PtProbe->Samples = -1;
+        bPtRestarted = false;
+        WaitPtStart = Now;
+        WaitPtUntil = Now + (Words.IsValidIndex(1) ? FCString::Atod(*Words[1]) : 600.0);
+        StepAt = Now;
+        return;
+    }
     if (Words[0] == TEXT("frametime"))
     {
         SampleTag = Words.IsValidIndex(2) ? Words[2] : TEXT("sample");
-        FrameMs.Reset(); GameMs.Reset(); RenderMs.Reset(); GpuMs.Reset();
+        FrameMs.Reset(); GameMs.Reset(); RenderMs.Reset(); RhiMs.Reset(); GpuMs.Reset();
         SampleUntil = StepAt = Now + (Words.IsValidIndex(1) ? FCString::Atod(*Words[1]) : 5.0);
         return;
     }
@@ -453,6 +518,7 @@ void FSCViewerAutomation::TickScript(USCViewerSubsystem& S)
         FrameMs.Add(FApp::GetDeltaTime() * 1000);
         GameMs.Add(FPlatformTime::ToMilliseconds(GGameThreadTime));
         RenderMs.Add(FPlatformTime::ToMilliseconds(GRenderThreadTime));
+        RhiMs.Add(FPlatformTime::ToMilliseconds(GRHIThreadTime));
         GpuMs.Add(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles(0)));
         if (Now < SampleUntil) return;
         SampleUntil = 0;
@@ -473,6 +539,17 @@ void FSCViewerAutomation::TickScript(USCViewerSubsystem& S)
         if (!bDone) return;
         WaitKitUntil = 0;
         UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_WAITKIT attached=%d status=\"%s\""), C && C->Body->HasBody(), *S.GetPlayerKitStatus());
+        StepAt = FMath::Max(StepAt, Now + Script[StepIndex].Delay);
+    }
+    if (WaitPtUntil > 0)
+    {
+        static const IConsoleVariable* Spp = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PathTracing.SamplesPerPixel"));
+        const int64 Target = Spp ? Spp->GetInt() : 1, Samples = PtProbe ? PtProbe->Samples.load() : -1;
+        if (Samples >= 0 && Samples < Target) bPtRestarted = true;
+        if (!(bPtRestarted && Samples >= Target) && Now <= WaitPtUntil) return;
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SCRIPT_WAITPT samples=%lld target=%lld seconds=%.1f%s"), Samples, Target, Now - WaitPtStart,
+               Now > WaitPtUntil ? TEXT(" timeout") : TEXT(""));
+        WaitPtUntil = 0;
         StepAt = FMath::Max(StepAt, Now + Script[StepIndex].Delay);
     }
     // A timed move finishes before the next step's delay starts counting.

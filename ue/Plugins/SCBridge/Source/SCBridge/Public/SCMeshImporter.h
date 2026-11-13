@@ -53,6 +53,7 @@ struct SCBRIDGE_API FSCDerivedMesh
     TArray<FIntVector> PhysicsTriangles;
     TArray<int32> PhysicsTriangleNodes;
     int32 PhysicsShapes = 0, PhysicsFilteredShapes = 0; // colliders used / non-obstacle classes left out
+    int32 PhysicsFailedShapes = 0; // blocking colliders that could not be built (malformed record, degenerate node)
 };
 struct SCBRIDGE_API FSCMeshBuildStats
 {
@@ -77,15 +78,28 @@ public:
     /** Whether an `extras.sc_physics` record blocks an actor: every part does, except node-name classes that are no
      *  physical obstacle (`class` interaction, tires_only, grid_volume; see the StarBreaker `physics_class` table). */
     static bool PhysicsBlocksActor(const TSharedPtr<class FJsonObject>& Shape);
+    /** The game's colliders stand in for the render mesh's movement collision only when every blocking collider was
+     *  built; otherwise the render mesh keeps blocking the pawn (a failed collider must not open a hole). */
+    static bool GamePhysicsReplacesRender(const FSCDerivedMesh& Data) { return Data.bHasGamePhysics && Data.PhysicsFailedShapes == 0; }
     static void SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent);
     /** Worker-thread Chaos BVH. bVertexIndexMap stores the identity external->particle map that
      *  FTriangleMeshImplicitObject::UpdateVertices requires (refittable skinned collision only). */
     static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap = false);
     static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
         bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error);
+    /** Instantiate for many meshes without collision or material (slots get the default material): every mesh is
+     *  configured first and the editor builds them together. A null entry failed (its Errors entry says why). */
+    static TArray<UStaticMesh*> InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,
+                                                 TArray<FString>& Errors);
     // glTF (right, up, backward), metres -> UE (forward, right, up), centimetres.
     static FVector Position(const FVector& V) { return FVector(-V.Z, V.X, V.Y) * 100.0; }
     static FMatrix Transform(const FMatrix& Gltf);
     static FMatrix CryToGltf();
     static FMatrix InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis);
+    // The exporter builds every child node inside the CryEngine_Z_up root, so a child placed on its parent entity itself
+    // (no helper, e.g. an object container's root-level entities) carries a matrix in that entity's CryEngine frame.
+    static bool InCryFrame(const FString& Basis, bool bAtHelper)
+    {
+        return Basis == TEXT("cryengine_z_up") || (!bAtHelper && Basis == TEXT("gltf_y_up"));
+    }
 };

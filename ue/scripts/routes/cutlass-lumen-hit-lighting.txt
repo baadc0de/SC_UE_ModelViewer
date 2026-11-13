@@ -1,0 +1,44 @@
+# Lumen ray-hit lighting A/B (WP-L1 follow-up): r.Lumen.HardwareRayTracing.LightingMode 0 (Surface Cache),
+# 2 (hit lighting for reflections), 1 (hit lighting for GI and reflections) at three still Cutlass views:
+# a shot and a 5 s frame sample per mode. Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+20 r.VSync 0
+0.5 t.MaxFPS 0
+0 sc.FP.Spawn Interior:1
+0.5 sc.FP.Look 180 0
+0.3 sc.FP.Move 1 0 2.6
+0.5 sc.FP.Look 0 0
+1 sc.FP.Move 1 0 2
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+5 shot cargo-mode0
+0 frametime 5 cargo-mode0
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+5 shot cargo-mode2
+0 frametime 5 cargo-mode2
+0 r.Lumen.HardwareRayTracing.LightingMode 1
+5 shot cargo-mode1
+0 frametime 5 cargo-mode1
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sc.FP.Spawn 1
+1 sc.FP.Look 180 -5
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+5 shot aft-mode0
+0 frametime 5 aft-mode0
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+5 shot aft-mode2
+0 frametime 5 aft-mode2
+0 r.Lumen.HardwareRayTracing.LightingMode 1
+5 shot aft-mode1
+0 frametime 5 aft-mode1
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+0 sc.FP.Look 0 10
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+5 shot canopy-mode0
+0 frametime 5 canopy-mode0
+0 r.Lumen.HardwareRayTracing.LightingMode 2
+5 shot canopy-mode2
+0 frametime 5 canopy-mode2
+0 r.Lumen.HardwareRayTracing.LightingMode 1
+5 shot canopy-mode1
+0 frametime 5 canopy-mode1
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+1 quit

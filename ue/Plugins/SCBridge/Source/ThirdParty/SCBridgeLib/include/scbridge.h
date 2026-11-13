@@ -178,6 +178,26 @@ enum sc_status sc_export_decomposed_mem(struct sc_handle *h,
                                         struct sc_blob *out_tar);
 
 /*
+ Return a JSON array of object-container paths (`.socpak`, slash-normalised) whose path contains every
+ whitespace-separated term of query (case-insensitive): game environments such as hangars ("hangar").
+ */
+enum sc_status sc_search_environments(struct sc_handle *h,
+                                      const char *query,
+                                      uint32_t limit,
+                                      char **out);
+
+/*
+ Export a game environment (object container, a path from sc_search_environments) as a decomposed package tar,
+ cached like entity packages. Same ownership, progress, cancellation and failure rules as sc_export_decomposed_mem.
+ */
+enum sc_status sc_export_environment_mem(struct sc_handle *h,
+                                         const char *socpak,
+                                         const struct sc_options *options,
+                                         sc_progress_cb progress,
+                                         void *user,
+                                         struct sc_blob *out_tar);
+
+/*
  Borrowed error, valid until the next status-returning call on this handle or close.
  NULL handle reads thread-local open/argument errors, valid until the next call
  on this thread other than sc_last_error. Never free this pointer.
@@ -220,6 +240,21 @@ enum sc_status sc_dds_prepare(uint8_t *data, size_t len, bool normal_map, struct
  must not overlap data. On failure RGB is zero. Errors use sc_last_error(NULL).
  */
 enum sc_status sc_dds_mean_rgb(const uint8_t *data, size_t len, float *out_rgb);
+
+/*
+ Decode the top mip of raw texel data (no DDS header; dxgi names the format, as
+ the importer uploads it) to BGRA8 for an editable texture source (WP-C1 cook).
+ data is readable for len bytes; out is writable for out_len bytes, which must
+ be at least width * height * 4. BC4/R8 replicate red; BC5 rebuilds blue as the
+ normal's Z. Errors (unsupported format, short data) use sc_last_error(NULL).
+ */
+enum sc_status sc_texels_decode_bgra8(const uint8_t *data,
+                                      size_t len,
+                                      uint32_t dxgi,
+                                      uint32_t width,
+                                      uint32_t height,
+                                      uint8_t *out,
+                                      size_t out_len);
 
 /*
  Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses

@@ -1,8 +1,12 @@
 # SCViewer — WP-U0 Unreal setup and feasibility spikes
 
-UE **5.8.2**, `++UE5+Release-5.8`, CL **56702186**, installed at
-`~/UnrealEngine/5.8`; Linux binaries are in `Engine/Binaries/Linux/`.
-`df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was
+UE **5.9.0** preview-1, `++UE5+Release-5.9`, CL **60351404**, installed at
+`~/UnrealEngine/5.9`; Linux binaries are in `Engine/Binaries/Linux/`. It replaced 5.8.2
+(`++UE5+Release-5.8`, CL 56702186) on 2026-11-12; the Lumen World Cache it was installed for is off for now (plan D13);
+verification and the World Cache / G-buffer A/B routes: [verification/WP-U59.md](verification/WP-U59.md).
+Shader patches (plan D14) are applied to the installed engine with `uv run python ue/scripts/engine_patches.py apply`
+(`check`, `revert`); see [EnginePatches](EnginePatches/README.md).
+WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was
 **82G / 95% used** at start and **76G / 96% used** at final verification.
 The probe's project build products occupy about 434 MiB, plus 17 MiB under
 `./cache/spike/`; no engine source was changed. Logs/build products are ignored.
@@ -42,7 +46,7 @@ and the separately timed recook follows `InvalidatePhysicsData()`.
 Exact chosen launch command, from the repository root (GPU validation still needed):
 
 ```bash
-"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" \
+"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" \
   "$PWD/ue/SCViewer/SCViewer.uproject" \
   -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
 ```
@@ -109,7 +113,7 @@ These visual checks have **not** passed in this environment.
 Headless commandlet (passed):
 
 ```bash
-"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
+"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor-Cmd" \
   "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript \
   -script="$PWD/ue/scripts/headless_smoke.py" \
   -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC
@@ -279,7 +283,7 @@ Slate UI in every host. Run from the repository root (the cache defaults to
 `./cache/`, resolved from the launch directory):
 
 ```bash
-"$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
+"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
   -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
 ```
 
@@ -289,6 +293,10 @@ Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>`,
 `-SCLoad=a,b`, `-SCHold=<s>`, `-SCCamera=fly`, `-SCFlyView=dx,dy,dz,pitch,yaw`,
 `-SCDefaults`, `-SCLod=`, `-SCMip=`, `-SCQuitAfterLoad`, `-SCNoUI`, `-SCHostExposure`; console `sc.Load`,
 `sc.Unload`, `sc.Cancel`, `sc.Camera`. `ue/scripts/capture_viewer.sh` screenshots a run.
+**Dirt** (WP-U2b, [verification/WP-U2b.md](verification/WP-U2b.md)): the options panel's Dirt slider and presets
+(Dust / Sand / Mud / Ash) put the game's dirt rule on exterior surfaces, live and saved per user; `sc.Dirt <amount>
+[preset]` does the same from the console or a route. The game's ships author no dirt; the defaults are viewer choices.
+
 Headless (WP-Q1): `UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/ue_load_gladius.py
 -nullrhi` drives `USCViewerSubsystem.LoadEntity` through the FFI. Settings persist in
 `Saved/Config/<Platform>/GameUserSettings.ini`. Evidence: [verification/WP-V1.md](verification/WP-V1.md).
@@ -348,6 +356,7 @@ Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mod
 | `sc.FP.Look <yaw> <pitch>` | absolute view, degrees, relative to the vehicle |
 | `sc.FP.Move <fwd> <right> <seconds> [run 0\|1] [up]` | hold movement input (-1..1) for a duration |
 | `sc.FP.Interact` / `sc.FP.Door <index>` | E on the focused interaction / toggle one by index |
+| `sc.Paint [index\|default\|name part]` | list the loaded vehicle's paints (`PAINT_CHOICE`), or put one on (also the side panel's Paint row; remembered per vehicle) |
 | `sc.FP.Crouch 0\|1`, `sc.FP.Jump`, `sc.FP.Torch 0\|1`, `sc.FP.Noclip 0\|1` | as the keys (a refused noclip exit logs `FIRST_PERSON_NOCLIP refused=1`) |
 | `sc.FP.Menu 0\|1` | teleport menu |
 | `sc.FP.Teleport <x y z>` / `sc.FP.Place <x y z>` | vehicle-relative floor hint (checked) / raw capsule placement (noclip tests) |
@@ -381,10 +390,12 @@ followed by one line per contributing light (lux, candela, distance, radius, con
 the actor blocking it). It is inverse-square with the importer's candela, attenuation
 radius and cone; a line trace stands in for shadows, gobos and the bulb clamp are
 ignored; `gated` counts lights excluded by lighting channel. Every import also logs
-`LIGHT_AREAS volumes=... lights_inside=... lights_outside=... lights_everywhere=...
-meshes_inside=... meshes_outside=... environment_lights=...`: how the package's room
-volumes split lights and meshes between lighting channel 0 (outside) and 1 (inside a
-room). See [WP-U3b verification §12](verification/WP-U3b.md).
+`LIGHT_AREAS volumes=... rooms=... room_channels=<room>:<channel>,... reach=<A>><B>(lights,deepest m[,shared]),...
+conflicts=... lights_inside=... lights_outside=... lights_everywhere=... meshes_inside=... meshes_outside=...
+samples_other_channel=... environment_lights=...`: how the package's room volumes split lights and meshes between
+lighting channel 0 (outside) and the rooms' channels 1 and 2, which room pairs an area-only light reaches, and which
+of those had to share a channel. See [WP-U3b verification §12](verification/WP-U3b.md) and
+[WP-L1](verification/WP-L1.md).
 
 See [WP-P1 verification](verification/WP-P1.md) for exact null-RHI commands,
 results, collision comparison, limitations, and the orchestrator's GPU checklist.
@@ -410,7 +421,8 @@ Options (settings in `GameUserSettings.ini`, command line overrides one run):
 Keys (same `KeyTable` for Slate and native input): `1`–`9` draw the stowed weapon in that slot
 (slots: stowed weapons with playable select/deselect, ordered by size, then stow-port name — the
 P4-AR loadout gives 1 = P4-AR, 2 = S71), the active slot's key or `H` holsters, another slot's key
-swaps (deselect, then select), keys are ignored mid-transition; `C` toggles a third-person orbit.
+swaps (deselect, then select), keys are ignored mid-transition; holding the right mouse button aims
+down the sights; `C` toggles a third-person orbit.
 E, F, V, T work as in WP-P1 in every weapon state (in third person E reaches from the character's
 eye — the camera joint — along its view, not from the orbit camera).
 
@@ -459,10 +471,33 @@ blend-space parameters `MoveSpeed`/`TravelAngle`):
   helper is implemented but off by default (`sc.Player.OffHandIK 1`): the game's clips author their
   left-weapon IK blend at 0 for these states.
 
+- **Aim down sights (hold the right mouse button, `sc.FP.Aim 1|0`)**: first person with an armed
+  weapon. The sight line is the game's `ADS_align` helper (the helper the camera aligns to when a
+  weapon's DataCore `useAdsHelper` is set), read from the weapon GLB; an attachment that carries one
+  (an optic on the sight rail, a nested assembly entry: `ASCVehicle::AttachmentHelpers`) replaces the
+  weapon's own. Its axes are the game's (+Y along the line, +Z up) carried through the importer's
+  basis (`USCPlayerBodyComponent::SightAxes`). The player package has no ADS clips or pose, so over
+  0.25 s (viewer constant; DataCore `aimAction.zoomTime` is not exported) the arm roots — per hand
+  joint, the first joint not on the camera joint's chain (`LeftShoulder`/`RightShoulder`) — take the
+  world delta that puts the sight origin on the view axis and its line along the view (no cant); the
+  head and eye do not move. The eye sits 2 cm (the near plane) behind the helper, or behind the rear
+  end of an optic's geometry (DataCore `adsCameraOffset` is not exported either). Released, holstering
+  or third person: back to the clip's pose. Log: `PLAYER_SIGHT`, `PLAYER_AIM`; `sc.Player.State`
+  reports `sight_axis_cm` / `sight_angle_deg` (0 when aimed).
+- **Depth of field (camera post-process override, viewer look)**: aiming focuses on what the view axis
+  hits (trace ignoring the player) and blurs only the far field — the f-stop is solved so infinity
+  blurs by `sc.Player.AimFarBlur` of the image width (default 0.012), and `r.DOF.Kernel.MaxForegroundRadius`
+  is 0 while aiming (restored after) so the weapon, sights and anything nearer than the focus stay
+  sharp (UE 5.9's diaphragm DOF has no focal region). Third person always focuses on the character's
+  camera joint at `sc.Player.ThirdPersonFStop` (default 0.5), closed down as needed so the nearest
+  visible part of the character blurs at most 1/750 of the width. `sc.Player.DofSensorWidth` (36 mm).
+  No player override otherwise (the level's own look applies).
+
 Console (first person): `sc.Player.Weapon <slot|none>`, `sc.Player.View fp|tp [yaw] [distance]`,
 `sc.Player.State` (`PLAYER_STATE` log), `sc.Player.Load` (start/retry the kit), `sc.Player.Body 0|1`
 (detach/re-attach — frame-time A/B), `sc.FP.Key <key> 0|1` (press/release a key-table key).
-Route pseudo-commands: `waitkit [s]` holds the route until the body is attached; `snap <tag>` is
+Route pseudo-commands: `waitkit [s]` holds the route until the body is attached; `waitpt [s]` holds it until the
+path tracer has accumulated `r.PathTracing.SamplesPerPixel` (put it after `viewmode pathtracing`); `snap <tag>` is
 `shot` without clearing held input (moving shots). `slomo <x>` (engine) slows the animation while
 route delays stay real time (mid-select frames).
 

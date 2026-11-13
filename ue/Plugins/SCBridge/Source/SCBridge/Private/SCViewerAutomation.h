@@ -12,6 +12,7 @@
 #include "HAL/IConsoleManager.h"
 
 class USCViewerSubsystem;
+class FSCPathTracerProbe;
 
 class FSCViewerAutomation
 {
@@ -43,7 +44,11 @@ private:
     double StepAt = 0, SampleUntil = 0;
     FString SampleTag;
     double WaitKitUntil = 0; // "waitkit" pseudo-command: hold the route until the player body is attached
+    // "waitpt" pseudo-command: hold the route until the path tracer has accumulated r.PathTracing.SamplesPerPixel
+    double WaitPtUntil = 0, WaitPtStart = 0;
+    bool bPtRestarted = false; // seen below the target since waitpt began (not the previous view's finished image)
+    TSharedPtr<FSCPathTracerProbe, ESPMode::ThreadSafe> PtProbe;
     FString PlayerWeapon, PlayerView; // command-line player options, applied once
     bool bPlayerOptionsApplied = false;
-    TArray<float> FrameMs, GameMs, RenderMs, GpuMs;
+    TArray<float> FrameMs, GameMs, RenderMs, RhiMs, GpuMs;
 };

@@ -45,7 +45,8 @@ enum class ESCFirstPersonAction : uint8
     Forward, Back, Left, Right, Down, Up, Run, Crouch, // held
     Interact, Torch, Noclip, Teleport, Close,          // pressed
     Holster, View,                                     // pressed, player body (WP-P2)
-    Weapon1, Weapon2, Weapon3, Weapon4, Weapon5, Weapon6, Weapon7, Weapon8, Weapon9
+    Weapon1, Weapon2, Weapon3, Weapon4, Weapon5, Weapon6, Weapon7, Weapon8, Weapon9,
+    Aim                                                // held, player body: aim down sights while down
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),

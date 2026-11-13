@@ -291,6 +291,42 @@ bool Stencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCP
     D.Scalars.Add(TEXT("UseStencil"), 1.f);
     return true;
 }
+/** HardSurface %STENCIL_MAP, the game's stencilLib.cfib non-sticker path (ApplyStencil_ThreeChannels ->
+ *  ApplyStencilAsTint on the Primary layer after its tint, palette and primer; the graph is in M_SC_HardSurface):
+ *  TexSlot7 at (UseUV2ForStencil ? UV1 : UV0) x StencilTiling holds three distance fields; colours per channel by
+ *  StencilTintOverride (paletteLib GetPaletteStencilColors): 2, or a $TintPaletteDecal material, = the palette's
+ *  decal red/green/blue; 1 = the palette's primary/secondary/tertiary diffuse; else StencilDiffuseColor{,2,3}.
+ *  The stencil breakup (TexSlot8: diffuse overlay R, wear alpha B) is not in the sidecars: it is taken as neutral
+ *  (no overlay, alpha 1, which makes CalcStencilWearAlpha 1 at any wear). */
+void HardSurfaceStencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPalette* Palette)
+{
+    const FObj Map = HasToken(Sub, TEXT("STENCIL_MAP")) ? Slot(Sub, TEXT("stencil")) : nullptr;
+    const FString Path = Str(Map, TEXT("export_path"));
+    if (HasToken(Sub, TEXT("STENCIL_MAP")) && Path.IsEmpty()) D.Warnings.Add(TEXT("%STENCIL_MAP without a TexSlot7 stencil: not drawn"));
+    D.Scalars.Add(TEXT("UseStencil"), Path.IsEmpty() ? 0.f : 1.f);
+    if (Path.IsEmpty()) return;
+    Tex(D, TEXT("StencilMap"), Path, ESCTextureRole::Linear);
+    D.Scalars.Add(TEXT("StencilTiling"), A.Param(TEXT("StencilTiling"), 1.f));
+    D.Scalars.Add(TEXT("StencilOpacity"), A.Param(TEXT("StencilOpacity"), 1.f));
+    D.Scalars.Add(TEXT("StencilUV2"), A.Param(TEXT("UseUV2ForStencil"), 0.f) != 0.f ? 1.f : 0.f);
+    const int32 Mode = FMath::RoundToInt32(A.Param(TEXT("StencilTintOverride"), 0.f));
+    const bool bDecalColours = Mode == 2 || HasVirtualRole(Sub, TEXT("tint_palette_decal"));
+    const FObj Decal = Child(Palette ? Parse(Palette->Json) : nullptr, TEXT("decal"));
+    const TCHAR* Authored[] = {TEXT("StencilDiffuseColor"), TEXT("StencilDiffuseColor2"), TEXT("StencilDiffuseColor3")};
+    const TCHAR* DecalChannels[] = {TEXT("red"), TEXT("green"), TEXT("blue")};
+    const TCHAR* MainChannels[] = {TEXT("primary"), TEXT("secondary"), TEXT("tertiary")};
+    for (int32 I = 0; I < 3; ++I)
+    {
+        FLinearColor C = FLinearColor::White; // the shader default
+        bool bFromPalette = false;
+        if (bDecalColours && Decal && Decal->HasTypedField<EJson::Array>(DecalChannels[I])) { C = Rgb(Decal, DecalChannels[I], C); bFromPalette = true; }
+        else if (!bDecalColours && Mode == 1) bFromPalette = FSCMaterialBuilder::PaletteColor(Palette, MainChannels[I], C);
+        if ((bDecalColours || Mode == 1) && !bFromPalette && Palette)
+            D.Warnings.Add(FString::Printf(TEXT("stencil colour %d: the palette has no %s colour; the authored colour is used"), I + 1, bDecalColours ? DecalChannels[I] : MainChannels[I]));
+        if (!bFromPalette && A.Params.Contains(Authored[I])) ParseRgb(A.Params[Authored[I]], C);
+        D.Vectors.Add(*FString::Printf(TEXT("StencilColor%d"), I + 1), C);
+    }
+}
 bool IsWear(const FObj& Layer) { return Str(Layer, TEXT("name")).StartsWith(TEXT("Wear"), ESearchCase::IgnoreCase); }
 /** GlassPBR, the game's glassLib.cfib GlassShared (ue/verification/WP-U3b.md §14). The glass is a clear dielectric
  *  over what is behind it: base-layer albedo 0, Reflectance = MatSpecColor.rrr, and a transmissive colour that
@@ -344,13 +380,19 @@ void Glass(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPal
     };
     D.Scalars.Add(TEXT("UseHeightMap"), Map(TEXT("HEIGHT_MAP"), 8, TEXT("HeightMap"), ESCTextureRole::Linear) ? 1.f : 0.f);
     D.Scalars.Add(TEXT("UseTintMap"), Map(TEXT("TINT_MAP"), 4, TEXT("TintMap"), ESCTextureRole::Color) ? 1.f : 0.f);
-    D.Scalars.Add(TEXT("ThinFilmThickness"), HasToken(Sub, TEXT("THIN_FILM")) ? A.Param(TEXT("ThinFilmThickness"), float(Game.GlassThinFilmThicknessDefault)) : 0.f);
+    // The film exists only under %THIN_FILM (ApplyIridescenceIsotropic); without it the Fresnel is the plain dielectric
+    // lerp(Reflectance, 1, Schlick), so the master bypasses UE's thin-film node (not an identity at zero thickness).
+    const bool bThinFilm = HasToken(Sub, TEXT("THIN_FILM"));
+    D.Scalars.Add(TEXT("UseThinFilm"), bThinFilm ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("ThinFilmThickness"), bThinFilm ? A.Param(TEXT("ThinFilmThickness"), float(Game.GlassThinFilmThicknessDefault)) : 0.f);
 }
 /** Material-level maps applied over the blended layers (game HardSurface.cfx / LayerBlend_V2.cfx):
  *  - macro normal + gloss: TexSlot3 ddna, compiled in by %MACRO_NORMAL_MAP (HardSurface, at baseTC x MacroTiling)
  *    or %NORMAL_MAP (LayerBlend, untiled); LayerAttribs_AddMacroSurface = detail-normal blend, smoothness x gloss;
  *  - HardSurface %MACRO_AO_MAP: TexSlot1, single channel, same UVs (exported with the base_color role);
- *  - LayerBlend TexSlot13: R hue shift, G AO, B luminance shift, sampled unconditionally at baseTC. */
+ *  - LayerBlend TexSlot13: R hue shift, G AO, B luminance shift, sampled unconditionally at baseTC;
+ *  - LayerBlend TexSlot11 WearMap (R = wear / curvature), sampled unconditionally at baseTC: the dirt blend map, and
+ *    %WEAR_DIRT_AO_VERTEX: vertex colour R = wear (CalculateVertexDirt), B = AO (WP-U2b). */
 void MacroSurface(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
 {
     const bool bHard = D.Master == ESCMaster::HardSurface;
@@ -372,6 +414,15 @@ void MacroSurface(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
         const FObj Hal = SlotAt(Sub, 13);
         if (Hal && Str(Hal, TEXT("role")) == TEXT("hal_control")) Tex(D, TEXT("HalMap"), Str(Hal, TEXT("export_path")), ESCTextureRole::Linear);
         D.Scalars.Add(TEXT("UseHalMap"), D.Textures.Contains(TEXT("HalMap")) ? 1.f : 0.f);
+        const FObj Wear = SlotAt(Sub, 11);
+        if (Wear && Str(Wear, TEXT("role")) == TEXT("wear_mask")) Tex(D, TEXT("WearMap"), Str(Wear, TEXT("export_path")), ESCTextureRole::Linear);
+        D.Scalars.Add(TEXT("UseWearDirtAOVertex"), HasToken(Sub, TEXT("WEAR_DIRT_AO_VERTEX")) ? 1.f : 0.f);
+        // GetAlphaBlendDetailMaps: the engine detail map (G = dirt detail) at baseUV x detailScale, at shader quality
+        // above low (the viewer's Epic level); AddBlendAlphaDetails then shapes the dirt alpha.
+        const FSCStarEngine& Game = FSCStarEngine::Get();
+        Tex(D, TEXT("DirtDetailMap"), Game.WearDirtFrostDetailMap, ESCTextureRole::Linear);
+        D.Scalars.Add(TEXT("DirtDetailScale"), float(Game.DirtDetailScale));
+        D.Scalars.Add(TEXT("UseDirtDetail"), 1.f);
         if (A.Param(TEXT("RotateLayerUVs"), 0.f) != 0.f)
             D.Warnings.Add(TEXT("RotateLayerUVs is not supported by the masters; layer UVs are not rotated"));
     }
@@ -599,7 +650,7 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
                 D.Scalars.Add(TEXT("UseBlendMask"), D.Textures.Contains(TEXT("BlendMaskMap")) ? 1.f : 0.f);
                 D.Scalars.Add(TEXT("BlendMaskTiling"), A.Param(TEXT("BlendMapTiling"), 1.f));
             }
-            else StaticWear(D, Sub, A, Palette);
+            else { StaticWear(D, Sub, A, Palette); HardSurfaceStencil(D, Sub, A, Palette); }
             MacroSurface(D, Sub, A);
             Emission(D, Sub, A);
         }
@@ -634,6 +685,17 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
                 D.Master = ESCMaster::MeshDecalRelief;
             if (D.Master == ESCMaster::MeshDecal) // colour decals: sheet alpha x DecalAlphaMultiplier x DecalDiffuseOpacity
                 D.Scalars.Add(TEXT("Opacity"), Opacity * A.Param(TEXT("DecalAlphaMultiplier"), 1.f) * A.Param(TEXT("DecalDiffuseOpacity"), 1.f));
+            if (D.Master == ESCMaster::MeshDecal)
+            {
+                // MeshDecal.cfx dirt (WP-U2b): BlendTexture ("blend texture for wear and dirt", role Other: the exported
+                // breakup / wear mask) at baseTC x WearTiling; vertex wear (alpha) -> CalculateVertexDirt under %VERTCOLORS.
+                FObj Blend = Slot(Sub, TEXT("breakup"));
+                if (!Blend) Blend = Slot(Sub, TEXT("wear_mask"));
+                if (Blend) Tex(D, TEXT("DirtBlendMap"), Str(Blend, TEXT("export_path")), ESCTextureRole::Linear);
+                D.Scalars.Add(TEXT("UseDirtBlendMap"), D.Textures.Contains(TEXT("DirtBlendMap")) ? 1.f : 0.f);
+                D.Scalars.Add(TEXT("DirtBlendTiling"), A.Param(TEXT("WearTiling"), 1.f));
+                D.Scalars.Add(TEXT("UseVertexColors"), HasToken(Sub, TEXT("VERTCOLORS")) ? 1.f : 0.f);
+            }
         }
         if (D.Master == ESCMaster::EmissiveUnlit && !D.Textures.Contains(TEXT("DiffuseMap")))
         {
@@ -658,6 +720,20 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     {
         D.Master = ESCMaster::EmissiveUnlit; D.Blend = ESCBlend::Translucent;
         D.Scalars.Add(TEXT("EmissiveStrength"), 0.f);
+    }
+    // Illum.cfx %VERTCOLORS (WP-U2c): albedo x vertex rgb (mode 1); x vertex blue = AO under %USE_DAMAGE_MAP (mode 2);
+    // x vertex alpha under wind bending / %TRANSMITTANCE_LIGHTING / %OCEAN_SWAY (mode 3). The glow (taken from the albedo
+    // before that multiply) is masked by the same channels (green under the damage map); blending opacity x vertex alpha
+    // unless %BLENDLAYER. Every master an Illum surface lands on reads these (the relief decal draws no colour).
+    if (F == TEXT("Illum") && D.Master != ESCMaster::MeshDecalRelief)
+    {
+        int32 Mode = 0;
+        if (HasToken(Sub, TEXT("VERTCOLORS")))
+            Mode = HasToken(Sub, TEXT("WIND_BENDING_MAIN")) || HasToken(Sub, TEXT("WIND_BENDING_DETAIL")) || HasToken(Sub, TEXT("TRANSMITTANCE_LIGHTING"))
+                    || HasToken(Sub, TEXT("OCEAN_SWAY")) ? 3 : HasToken(Sub, TEXT("USE_DAMAGE_MAP")) ? 2 : 1;
+        D.Scalars.Add(TEXT("VertexColorMode"), float(Mode));
+        D.Scalars.Add(TEXT("UseVertexAlpha"), Mode != 0 && !HasToken(Sub, TEXT("BLENDLAYER")) ? 1.f : 0.f);
+        if (D.Master == ESCMaster::MeshDecal) D.Scalars.Add(TEXT("UseVertexColors"), 0.f); // MeshDecal's vertex wear is not Illum's
     }
     D.bNonNanite = D.Blend == ESCBlend::Translucent || D.Master == ESCMaster::Glass || D.Master == ESCMaster::MeshDecal
         || D.Master == ESCMaster::MeshDecalRelief || D.Master == ESCMaster::Translucent || D.Master == ESCMaster::EmissiveUnlit;

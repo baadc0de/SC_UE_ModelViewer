@@ -20,7 +20,14 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
 {
     const double Start = FPlatformTime::Seconds();
     TSet<TPair<FString, FString>> Pairs;
-    auto Collect = [&](const FSCSceneInstance& I) { if (!I.MaterialSidecar.IsEmpty()) Pairs.Add({I.MaterialSidecar, I.PaletteId}); };
+    auto Collect = [&](const FSCSceneInstance& I)
+    {
+        if (!I.MaterialSidecar.IsEmpty()) Pairs.Add({I.MaterialSidecar, I.PaletteId});
+        // Every paint the vehicle can wear is built now, so putting one on only swaps instances.
+        FString Sidecar, Palette;
+        for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
+            if (Manifest.PaintTarget(I, Paint, Sidecar, Palette) && !Sidecar.IsEmpty()) Pairs.Add({Sidecar, Palette});
+    };
     Collect(Manifest.Root); for (const auto& I : Manifest.Children) Collect(I);
     for (const auto& Interior : Manifest.Interiors) for (const auto& P : Interior.Placements) Collect(P);
     TSet<FSCTextureKey> Unique;
@@ -77,7 +84,13 @@ void FSCImportMaterials::Instantiate(ASCVehicle* Vehicle, TArray<FString>& Warni
         if (!SampledKeys.Contains(D.Key)) continue; // mean-only: resolved in Decode
         TextureStats.Bytes += D.UploadBytes();
         const FSCTextureKey Key = D.Key;
-        if (UTexture2D* T = FSCTextureImporter::Create(MoveTemp(D), Vehicle)) { Textures.Add(Key, T); Vehicle->Textures.Add(T); ++TextureStats.Created; }
+        if (UTexture2D* T = FSCTextureImporter::Create(MoveTemp(D), Vehicle))
+        {
+            Textures.Add(Key, T);
+            Vehicle->Textures.Add(T);
+            Vehicle->SourcePaths.Add(T, FString::Printf(TEXT("%s#%d"), *Key.Path, int32(Key.Role)));
+            ++TextureStats.Created;
+        }
     }
     Decoded.Empty();
     TextureStats.CreateSeconds = FPlatformTime::Seconds() - Start;

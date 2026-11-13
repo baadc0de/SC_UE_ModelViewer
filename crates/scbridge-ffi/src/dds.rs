@@ -57,3 +57,34 @@ pub unsafe extern "C" fn sc_dds_mean_rgb(
         })
     }
 }
+
+/// Decode the top mip of raw texel data (no DDS header; dxgi names the format, as
+/// the importer uploads it) to BGRA8 for an editable texture source (WP-C1 cook).
+/// data is readable for len bytes; out is writable for out_len bytes, which must
+/// be at least width * height * 4. BC4/R8 replicate red; BC5 rebuilds blue as the
+/// normal's Z. Errors (unsupported format, short data) use sc_last_error(NULL).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_texels_decode_bgra8(
+    data: *const u8,
+    len: usize,
+    dxgi: u32,
+    width: u32,
+    height: u32,
+    out: *mut u8,
+    out_len: usize,
+) -> sc_status {
+    unsafe {
+        boundary::run(ptr::null_mut(), || {
+            if data.is_null() || out.is_null() || len > isize::MAX as usize || out_len > isize::MAX as usize {
+                return Err(Failure::invalid("NULL texel data/output or invalid length"));
+            }
+            let need = width as usize * height as usize * 4;
+            if out_len < need {
+                return Err(Failure::invalid("output shorter than width * height * 4"));
+            }
+            let decoded = scviewer_core::dds::decode_top_bgra8(std::slice::from_raw_parts(data, len), dxgi, width, height)?;
+            std::slice::from_raw_parts_mut(out, need).copy_from_slice(&decoded);
+            Ok(())
+        })
+    }
+}

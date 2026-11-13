@@ -7,6 +7,7 @@
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
 #include "UnrealClient.h"
+#include "Engine/World.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCViewerCamera, Log, All);
 
@@ -18,6 +19,7 @@ constexpr float FlySpeedPerNotch = 1.25f;  // speed factor per wheel notch in fl
 constexpr double FocusEase = 10.0;         // 1/s exponential approach of target and distance
 constexpr double MinDistanceCm = 10.0;
 constexpr double FitMargin = 1.08;        // breathing room around a framed box
+constexpr double ObstacleClearanceCm = 50.0; // orbit camera distance kept from an obstacle in front of it
 } // namespace
 
 ASCViewerPawn::ASCViewerPawn()
@@ -45,10 +47,15 @@ void ASCViewerPawn::SetCameraMode(ESCCameraMode NewMode)
     if (NewMode == Mode) return;
     if (Mode == ESCCameraMode::Fly && NewMode == ESCCameraMode::Orbit)
     {
-        // Orbit the point the fly camera looks at, at the last orbit distance.
+        // Orbit the point the fly camera looks at: the first surface along the view within the last orbit distance, else
+        // the point at that distance. The camera stays where it is.
         const FRotator Rot = GetActorRotation();
         Yaw = Rot.Yaw;
         Pitch = Rot.Pitch;
+        FHitResult Hit;
+        if (GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, GetActorLocation(), GetActorLocation() + Rot.Vector() * Distance, ECC_Camera,
+                                                               FCollisionQueryParams(SCENE_QUERY_STAT(SCOrbitPivot), true, this)))
+            Distance = FMath::Max(MinDistanceCm, Hit.Distance);
         Target = TargetGoal = GetActorLocation() + Rot.Vector() * Distance;
         DistanceGoal = Distance;
     }
@@ -192,5 +199,14 @@ void ASCViewerPawn::Tick(float DeltaSeconds)
 void ASCViewerPawn::ApplyOrbit()
 {
     const FRotator Rot(Pitch, Yaw, 0);
-    SetActorLocationAndRotation(Target - Rot.Vector() * Distance, Rot);
+    double Reach = Distance;
+    // Like a spring arm: an environment wall or pillar between the model and the camera pulls the camera in front of it.
+    // Only a surface facing the target counts: a target on or under a floor (orbit entered from fly mode) must not drag
+    // the camera to the floor's underside.
+    FHitResult Hit;
+    if (AActor* Obstacle = OrbitObstacle.Get();
+        Obstacle && Obstacle->ActorLineTraceSingle(Hit, Target, Target - Rot.Vector() * Distance, ECC_Camera, FCollisionQueryParams(SCENE_QUERY_STAT(SCOrbitObstacle), true)) &&
+        !Hit.bStartPenetrating && FVector::DotProduct(Hit.ImpactNormal, Rot.Vector()) > 0)
+        Reach = FMath::Max(MinDistanceCm, Hit.Distance - ObstacleClearanceCm);
+    SetActorLocationAndRotation(Target - Rot.Vector() * Reach, Rot);
 }

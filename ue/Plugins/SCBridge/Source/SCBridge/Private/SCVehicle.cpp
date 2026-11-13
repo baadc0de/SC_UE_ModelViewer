@@ -6,6 +6,12 @@
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCRigComponent.h"
+#include "Materials/MaterialInterface.h"
+#include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
+#include "Components/StaticMeshComponent.h"
+#include "Chaos/TriangleMeshImplicitObject.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "SCMeshImporter.h"
 #include "Engine/SkeletalMesh.h"
 ASCVehicle::ASCVehicle()
@@ -254,22 +260,47 @@ bool ASCVehicle::IsInsideLightArea(const FVector& World) const
         if (Area.Contains(World)) return true;
     return false;
 }
+FString ASCVehicle::LightRoomAt(const FVector& World) const
+{
+    for (const FSCLightArea& Area : LightAreas)
+        if (FString Room = Area.RoomAt(World); !Room.IsEmpty()) return Room;
+    return FString();
+}
+int32 ASCVehicle::LightChannelAt(const FVector& World) const
+{
+    const FString Room = LightRoomAt(World);
+    if (Room.IsEmpty()) return 0;
+    const int32* Channel = LightRoomChannels.Find(Room);
+    return Channel ? *Channel : 1; // before FSCLightAreas::Apply: the WP-U3b inside channel
+}
 bool ASCVehicle::IsInPhysicsGrid(const FVector& World) const
 {
     if (PhysicsGridTriangles.Num() < 3) return false;
     const FVector P = GetActorTransform().InverseTransformPosition(World);
     if (!PhysicsGridBounds.IsInside(P)) return false;
     // Parity of crossings along a ray off every axis and diagonal (no grazing of axis-aligned edges); the ray ends
-    // past the bounds, so every crossing is counted.
+    // past the bounds, so every crossing is counted. Each shape is its own closed volume (overlapping shapes: inside
+    // any), and hits at the same distance are one crossing (a ray through an edge shared by two triangles).
     const FVector End = P + FVector(1, 0.0013, 0.0007).GetSafeNormal() * (PhysicsGridBounds.GetSize().Size() * 2 + 100);
-    int32 Crossings = 0;
-    for (int32 T = 0; T + 2 < PhysicsGridTriangles.Num(); T += 3)
+    int32 Begin = 0;
+    TArray<double> Hits;
+    for (const int32 ShapeEnd : PhysicsGridShapeEnds.IsEmpty() ? TArray<int32>{PhysicsGridTriangles.Num()} : PhysicsGridShapeEnds)
     {
-        FVector Hit, Normal;
-        if (FMath::SegmentTriangleIntersection(P, End, PhysicsGridTriangles[T], PhysicsGridTriangles[T + 1], PhysicsGridTriangles[T + 2], Hit, Normal))
-            ++Crossings;
+        Hits.Reset();
+        for (int32 T = Begin; T + 2 < FMath::Min(ShapeEnd, PhysicsGridTriangles.Num()); T += 3)
+        {
+            FVector Hit, Normal;
+            if (FMath::SegmentTriangleIntersection(P, End, PhysicsGridTriangles[T], PhysicsGridTriangles[T + 1], PhysicsGridTriangles[T + 2], Hit, Normal))
+                Hits.Add(FVector::Dist(P, Hit));
+        }
+        Begin = ShapeEnd;
+        Hits.Sort();
+        int32 Crossings = 0;
+        for (int32 H = 0; H < Hits.Num(); ++H)
+            if (H == 0 || Hits[H] - Hits[H - 1] > 1e-3) ++Crossings; // 10 um apart: the same surface point
+        if (Crossings % 2 == 1) return true;
     }
-    return Crossings % 2 == 1;
+    return false;
 }
 bool ASCVehicle::IsInPhysicsGrid(const FVector& Bottom, const FVector& Top) const
 {
@@ -285,4 +316,82 @@ bool ASCVehicle::IsInPhysicsGrid(const FVector& Bottom, const FVector& Top) cons
             return true;
     }
     return false;
+}
+
+double ASCVehicle::LowestVisibleZ(FString* OutPart) const
+{
+    // Candidates by bounds (a rig's bounds are its reference pose, a rotated part's box reaches below its surface), then
+    // the true lowest surface of every candidate near the bottom: a rig's CPU-skinned collision (current pose), else a
+    // fine grid of vertical traces against the part's own collision; bounds only for parts without collision.
+    TArray<const UPrimitiveComponent*> Parts;
+    double BoundsLowest = TNumericLimits<double>::Max();
+    ForEachComponent<UPrimitiveComponent>(false, [&](const UPrimitiveComponent* C) {
+        if (!C->IsRegistered() || !C->IsVisible() || C->bHiddenInGame || C->ComponentHasTag(TEXT("SCGameCollision"))) return;
+        // Only solid surfaces bear weight: parts the importer drew without shadows (glass, glow, decals, light beams) and
+        // parts drawn entirely with translucent materials are skipped.
+        if (!C->CastShadow) return;
+        if (const auto* SM = Cast<UStaticMeshComponent>(C); SM && SM->GetStaticMesh() && SM->GetStaticMesh()->GetRenderData() &&
+                                                            !SM->GetStaticMesh()->GetRenderData()->LODResources.IsEmpty())
+        {
+            bool bSolid = false;
+            for (const FStaticMeshSection& Section : SM->GetStaticMesh()->GetRenderData()->LODResources[0].Sections)
+                if (const UMaterialInterface* M = SM->GetMaterial(Section.MaterialIndex); M && !IsTranslucentBlendMode(*M))
+                    bSolid = true;
+            if (!bSolid) return;
+        }
+        Parts.Add(C);
+        BoundsLowest = FMath::Min(BoundsLowest, C->Bounds.GetBox().Min.Z);
+    });
+    constexpr double CandidateBandCm = 150.0; // a part whose box starts this close to the lowest box may hold the lowest point
+    double Lowest = TNumericLimits<double>::Max();
+    auto TakeAt = [&](const FVector& P, const UPrimitiveComponent* C) {
+        if (P.Z >= Lowest) return;
+        Lowest = P.Z;
+        if (OutPart)
+            *OutPart = FString::Printf(TEXT("%s at %s socket=%s"), C->ComponentTags.Num() ? *C->ComponentTags[0].ToString() : *C->GetName(),
+                                       *P.ToCompactString(), *C->GetAttachSocketName().ToString());
+    };
+    auto Take = [&](double Z, const UPrimitiveComponent* C) { TakeAt(FVector(C->Bounds.Origin.X, C->Bounds.Origin.Y, Z), C); };
+    TArray<FVector3f> Skinned;
+    for (const UPrimitiveComponent* C : Parts)
+    {
+        const FBox Box = C->Bounds.GetBox();
+        if (Box.Min.Z > BoundsLowest + CandidateBandCm) continue;
+        if (const auto* Rig = Cast<USCRigComponent>(C); Rig && Rig->ReadCollisionVertices(Skinned) && !Skinned.IsEmpty())
+        {
+            const FTransform& World = Rig->GetComponentTransform();
+            for (const FVector3f& V : Skinned) TakeAt(World.TransformPosition(FVector(V)), C);
+            continue;
+        }
+        // The part's collision triangles (local space) placed by its current transform: exact, and independent of when the
+        // physics scene catches up with a pose snapped this frame.
+        bool bVertices = false;
+        if (UBodySetup* Body = const_cast<UPrimitiveComponent*>(C)->GetBodySetup())
+        {
+            const FTransform& World = C->GetComponentTransform();
+            for (const Chaos::FTriangleMeshImplicitObjectPtr& Mesh : Body->TriMeshGeometries)
+            {
+                if (!Mesh) continue;
+                const auto& Particles = Mesh->Particles();
+                for (uint32 I = 0; I < Particles.Size(); ++I) TakeAt(World.TransformPosition(FVector(Particles.GetX(I))), C);
+                bVertices |= Particles.Size() > 0;
+            }
+        }
+        if (!bVertices) Take(Box.Min.Z, C);
+    }
+    return Lowest;
+}
+int32 ASCVehicle::RestOnLandingGear()
+{
+    if (!ClipCatalog) return 0;
+    int32 Posed = 0;
+    for (int32 Index = 0; Index < ClipCatalog->Clips.Num(); ++Index)
+    {
+        const FSCImportedClip& C = ClipCatalog->Clips[Index];
+        if (!C.Bindings.IsEmpty() && C.Fragments.ContainsByPredicate([](const auto& F) {
+                return F.Fragment == FName(TEXT("Landing_Gear")) && F.FragmentTags.Contains(FName(TEXT("Compress")));
+            }))
+            Posed += StartClip(Index, 1, true, true) ? 1 : 0;
+    }
+    return Posed;
 }

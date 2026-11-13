@@ -1,5 +1,6 @@
 // Package import entry points: synchronous Import over FSCImportJob, per-world vehicle registry, verification.
 #include "SCImporter.h"
+#include "SCEnvironment.h"
 #include "SCImportJob.h"
 #include "SCVehicle.h"
 #include "SCLightImporter.h"
@@ -63,6 +64,24 @@ ASCVehicle* USCImportLibrary::ImportFolder(UObject* WorldContext, const FString&
     }
     return Result.Vehicle.Get();
 }
+ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath)
+{
+    FSCFolderPackageSource Source(Folder);
+    FSCImportOptions Options;
+    Options.World = GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull);
+    Options.ScenePath = ScenePath;
+    Options.bHideEffectOnlyPlacements = true;
+    Options.bInstanceRepeatedParts = true;
+    Options.bPublish = false; // not the world's current vehicle
+    FSCImportResult Result;
+    if (!FSCImporter::Import(Source, Options, Result)) UE_LOG(LogSCImport, Error, TEXT("IMPORT_FAILED %s"), *Result.Error);
+    return Result.Vehicle.Get();
+}
+FVector USCImportLibrary::PresentEnvironment(ASCVehicle* Environment, const FString& State, double FloorZ)
+{
+    FSCEnvironment::SetState(Environment, State);
+    return FSCEnvironment::PlaceOnFloor(Environment, FloorZ, nullptr);
+}
 bool USCImportLibrary::VerifyPackage(UObject* Context, const FString& Folder, const FString& Tar)
 {
     return FSCImporter::Verify(Folder, Tar, GEngine->GetWorldFromContextObject(Context, EGetWorldErrorMode::ReturnNull));
@@ -76,7 +95,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
 {
     if (!World) return false;
     FSCFolderPackageSource Disk(Folder);
-    TArray<uint8> Bytes;
+    TArray64<uint8> Bytes;
     if (!FFileHelper::LoadFileToArray(Bytes, *Tar))
     {
         UE_LOG(LogSCImport, Error, TEXT("Cannot read verification tar"));
