@@ -167,6 +167,9 @@ public:
      *  Folder names the hangar style, and each loaded ship gets the smallest cooked hangar of that style that holds it
      *  (USCHangarIndex, preferring Folder's roof kind); false (-SCEnvironment, sc.Environment) loads exactly Folder. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void SetEnvironment(const FString& Folder, bool bFitToShip = false);
+    /** Put paint Index (Manifest.Paints; INDEX_NONE = the vehicle's own) on the loaded vehicle and remember it for the
+     *  entity (USCViewerSettings::Paints). Also `sc.Paint [index|default|name part]`. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetPaint(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
     /** The requested environment (folder, archive path or empty) and the archive's hangars (listed once per archive). */
     FString GetEnvironmentRequest() const { return EnvironmentFolder; }

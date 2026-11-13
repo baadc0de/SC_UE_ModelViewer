@@ -6,6 +6,8 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/MeshComponent.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/Paths.h"
 
 const FName FSCSpawnKind::Entrance(TEXT("Entrance"));
@@ -258,4 +260,23 @@ void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
             if (IsDoorOpen(Door)) ToggleDoor(Door);
             State.bOpenedBySensor = false;
         }
+}
+
+bool ASCVehicle::SetPaint(int32 Index)
+{
+    if (Index != INDEX_NONE && !Manifest.Paints.IsValidIndex(Index)) return false;
+    int32 Swapped = 0;
+    for (const FSCPaintSlot& Entry : PaintSlots)
+    {
+        UMeshComponent* C = Entry.Component.Get();
+        if (!C) continue;
+        UMaterialInterface* Material = Index == INDEX_NONE ? Entry.Default.Get() : Entry.Paints.IsValidIndex(Index) ? Entry.Paints[Index].Get() : nullptr;
+        if (!Material) Material = Entry.Default.Get(); // the paint leaves this slot as authored
+        if (Material && C->GetMaterial(Entry.Slot) != Material) { C->SetMaterial(Entry.Slot, Material); ++Swapped; }
+    }
+    ActivePaint = Index;
+    UE_LOG(LogTemp, Display, TEXT("PAINT index=%d label=\"%s\" palette=%s slots=%d swapped=%d"), Index,
+           Index == INDEX_NONE ? TEXT("default") : *Manifest.Paints[Index].Label(), Index == INDEX_NONE ? *Manifest.Root.PaletteId : *Manifest.Paints[Index].PaletteId,
+           PaintSlots.Num(), Swapped);
+    return true;
 }

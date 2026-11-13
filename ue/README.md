@@ -356,6 +356,7 @@ Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mod
 | `sc.FP.Look <yaw> <pitch>` | absolute view, degrees, relative to the vehicle |
 | `sc.FP.Move <fwd> <right> <seconds> [run 0\|1] [up]` | hold movement input (-1..1) for a duration |
 | `sc.FP.Interact` / `sc.FP.Door <index>` | E on the focused interaction / toggle one by index |
+| `sc.Paint [index\|default\|name part]` | list the loaded vehicle's paints (`PAINT_CHOICE`), or put one on (also the side panel's Paint row; remembered per vehicle) |
 | `sc.FP.Crouch 0\|1`, `sc.FP.Jump`, `sc.FP.Torch 0\|1`, `sc.FP.Noclip 0\|1` | as the keys (a refused noclip exit logs `FIRST_PERSON_NOCLIP refused=1`) |
 | `sc.FP.Menu 0\|1` | teleport menu |
 | `sc.FP.Teleport <x y z>` / `sc.FP.Place <x y z>` | vehicle-relative floor hint (checked) / raw capsule placement (noclip tests) |

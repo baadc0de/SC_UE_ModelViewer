@@ -1,5 +1,6 @@
 // SSCModelBrowser: search, recents, options and load controls.
 #include "SSCModelBrowser.h"
+#include "SCVehicle.h"
 #include "SCViewerStyle.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerSettings.h"
@@ -251,6 +252,36 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
                 return SNew(SBox).MaxDesiredHeight(480)[Menu.MakeWidget()];
             })
         ];
+    // Paint (tint system): the loaded vehicle's paints (paints.json); shown only when it has any. Remembered per vehicle.
+    auto PaintLabel = [WeakSubsystem](int32 Index) {
+        const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+        if (!V || Index == INDEX_NONE || !V->Manifest.Paints.IsValidIndex(Index)) return FString(TEXT("Default paint"));
+        return V->Manifest.Paints[Index].Label();
+    };
+    TSharedRef<SHorizontalBox> Paint = SNew(SHorizontalBox)
+        .Visibility_Lambda([WeakSubsystem] {
+            const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+            return V && !V->Manifest.Paints.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed;
+        })
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("Paint", "Paint"))]]
+        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+        [
+            SNew(SComboButton)
+            .ButtonContent()[SNew(STextBlock).Font(Font(9)).Text_Lambda([WeakSubsystem, PaintLabel] {
+                const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+                return FText::FromString(PaintLabel(V ? V->GetPaint() : INDEX_NONE));
+            })]
+            .OnGetMenuContent_Lambda([WeakSubsystem, PaintLabel] {
+                FMenuBuilder Menu(true, nullptr);
+                const ASCVehicle* V = WeakSubsystem.IsValid() ? WeakSubsystem->GetVehicle() : nullptr;
+                for (int32 Index = INDEX_NONE; V && Index < V->Manifest.Paints.Num(); ++Index)
+                    Menu.AddMenuEntry(FText::FromString(PaintLabel(Index)),
+                                      FText::FromString(Index == INDEX_NONE ? V->Manifest.Root.PaletteId : V->Manifest.Paints[Index].PaletteId), FSlateIcon(),
+                                      FUIAction(FExecuteAction::CreateLambda([WeakSubsystem, Index] { if (WeakSubsystem.IsValid()) WeakSubsystem->SetPaint(Index); })));
+                return SNew(SBox).MaxDesiredHeight(480)[Menu.MakeWidget()];
+            })
+        ];
     return SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Lod", "LOD"), {0, 1, 2, 3}, IntField(&USCViewOptions::Lod))]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Mip", "Texture mip"), {0, 2, 4}, IntField(&USCViewOptions::Mip))]
@@ -277,7 +308,8 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
         + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Dirt]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Underside]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[DirtColours]
-        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Environment];
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Environment]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Paint];
 }
 
 TSharedRef<ITableRow> SSCModelBrowser::MakeRow(FHit Hit, const TSharedRef<STableViewBase>& Owner)

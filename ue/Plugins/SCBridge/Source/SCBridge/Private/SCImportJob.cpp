@@ -798,6 +798,34 @@ void FSCImportJob::FState::Assemble()
         if (const FString* Found = HostChannels.Find(Key)) return *Found;
         return HostChannels.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
     };
+    // Paints: each slot a paint touches keeps that paint's instance (built by the material phase) beside the one bound now.
+    TMap<TPair<FString, FString>, FString> PaintHosts;
+    auto RecordPaint = [&](const FSCSceneInstance& I, UMeshComponent* C, int32 Slot, const FSCDerivedMesh& Mesh)
+    {
+        if (Manifest.Paints.IsEmpty() || !C) return;
+        FSCPaintSlot Entry;
+        Entry.Component = C;
+        Entry.Slot = Slot;
+        Entry.Default = C->GetMaterial(Slot);
+        bool bAny = false;
+        for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
+        {
+            FString Sidecar, Palette;
+            UMaterialInterface* Material = nullptr;
+            if (Manifest.PaintTarget(I, Paint, Sidecar, Palette))
+                if (const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
+                    if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
+                    {
+                        const TPair<FString, FString> Key(Sidecar, I.MeshAsset);
+                        const FString* Host = PaintHosts.Find(Key);
+                        if (!Host) Host = &PaintHosts.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
+                        Material = Materials.Find(Sidecar, Palette, Sub->Index, *Host);
+                    }
+            Entry.Paints.Add(Material);
+            bAny |= Material != nullptr;
+        }
+        if (bAny) V->PaintSlots.Add(MoveTemp(Entry));
+    };
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
@@ -849,7 +877,11 @@ void FSCImportJob::FState::Assemble()
             const FString& Host = HostFor(I, Set, *E.Mesh);
             for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
-                    if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host)) E.Rig->SetMaterial(Slot, Mat);
+                    if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
+                    {
+                        E.Rig->SetMaterial(Slot, Mat);
+                        RecordPaint(I, E.Rig, Slot, *E.Mesh);
+                    }
             const double RigStart = FPlatformTime::Seconds();
             E.Rig->RegisterComponent();
             E.Rig->ResetPose();
@@ -928,6 +960,7 @@ void FSCImportJob::FState::Assemble()
                     // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
                     if (Material) C->SetMaterial(Slot, Material);
+                    if (Material && Material != Materials.Invisible()) RecordPaint(I, C, Slot, *E.Mesh);
                     if (Material && V->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
                 }
                 const double RegisterStart = FPlatformTime::Seconds();
@@ -1072,6 +1105,7 @@ void FSCImportJob::FState::Assemble()
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d"), V->DoorControls.Num(), V->DoorSensors.Num());
+    UE_LOG(LogSCImport, Display, TEXT("PAINTS variants=%d slots=%d"), Manifest.Paints.Num(), V->PaintSlots.Num());
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose

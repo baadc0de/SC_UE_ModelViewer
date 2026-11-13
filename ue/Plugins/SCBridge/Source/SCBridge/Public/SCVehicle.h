@@ -59,6 +59,12 @@ public:
      *  the door whose loadout attached it). FindInteraction resolves a panel under the crosshair to its door. */
     TMap<TWeakObjectPtr<const USceneComponent>, TWeakObjectPtr<USCRigComponent>> DoorControls;
     TArray<FSCDoorSensor> DoorSensors;
+    /** Paints the vehicle can wear (Manifest.Paints) and the mesh slots they touch; SetPaint swaps those slots.
+     *  INDEX_NONE = the vehicle's own (default) paint. */
+    TArray<FSCPaintSlot> PaintSlots;
+    UFUNCTION(BlueprintCallable, Category = "SC|Paint") bool SetPaint(int32 Index);
+    UFUNCTION(BlueprintPure, Category = "SC|Paint") int32 GetPaint() const { return ActivePaint; }
+    int32 ActivePaint = INDEX_NONE;
     /** First-person tick: opens doors whose sensors hold the player, closes the ones a sensor opened after their delay. */
     void UpdateDoorSensors(const FVector& PlayerWorld, double Now);
     /** The door interaction driven by a rig (the first one; INDEX_NONE without). */

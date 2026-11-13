@@ -280,6 +280,17 @@ void USCViewerSubsystem::SetEnvironment(const FString& Folder, bool bFitToShip)
     if (bFitEnvironment && Vehicle.IsValid()) FitEnvironmentToShip();
 }
 
+bool USCViewerSubsystem::SetPaint(int32 Index)
+{
+    ASCVehicle* V = Vehicle.Get();
+    if (!V || !V->SetPaint(Index)) return false;
+    USCViewerSettings* Settings = USCViewerSettings::Get();
+    if (Index == INDEX_NONE) Settings->Paints.Remove(Report.Entity);
+    else Settings->Paints.Add(Report.Entity, V->Manifest.Paints[Index].PaletteId);
+    Settings->Save();
+    return true;
+}
+
 void USCViewerSubsystem::FitEnvironmentToShip()
 {
     ASCVehicle* Ship = Vehicle.Get();
@@ -791,7 +802,15 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
            Report.MaterialSeconds, Report.AssembleSeconds, Report.TotalSeconds, Report.Assets, Report.Instances, Report.Warnings,
            Report.StaticMeshes, Report.SkeletalMeshes, Report.Textures, Report.MaterialInstances, Report.Vehicles, Report.PreviousObjects,
            Report.PreviousObjectsAlive, *Error);
-    if (Result == ESCLoadPhase::Succeeded) FitEnvironmentToShip();
+    if (Result == ESCLoadPhase::Succeeded)
+    {
+        // The paint remembered for this vehicle (its palette id), when the package still offers it.
+        if (ASCVehicle* V = Vehicle.Get())
+            if (const FString* Saved = USCViewerSettings::Get()->Paints.Find(Report.Entity))
+                if (const int32 Index = V->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.PaletteId == *Saved; }); Index != INDEX_NONE)
+                    V->SetPaint(Index);
+        FitEnvironmentToShip();
+    }
     if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr) SCLook::UpdateShortRangeAO(World);
     OnLoadFinished.Broadcast(Report);
 }
@@ -1231,6 +1250,27 @@ static FAutoConsoleCommandWithWorldAndArgs GSCEnvironment(
         if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World)) Viewer->SetEnvironment(Args.IsValidIndex(0) ? FString::Join(Args, TEXT(" ")) : FString());
     }));
 
+static FAutoConsoleCommandWithWorldAndArgs GSCPaint(
+    TEXT("sc.Paint"), TEXT("sc.Paint [index|default|name part]: list the vehicle's paints, or put one on"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World);
+        ASCVehicle* V = Viewer ? Viewer->GetVehicle() : nullptr;
+        if (!V) return;
+        const TArray<FSCPaintVariant>& Paints = V->Manifest.Paints;
+        if (Args.IsEmpty())
+        {
+            for (int32 I = 0; I < Paints.Num(); ++I)
+                UE_LOG(LogSCViewer, Display, TEXT("PAINT_CHOICE index=%d label=\"%s\" palette=%s sidecar=%s active=%d"), I, *Paints[I].Label(), *Paints[I].PaletteId,
+                       *Paints[I].ExteriorSidecar, V->GetPaint() == I);
+            return;
+        }
+        const FString Arg = FString::Join(Args, TEXT(" "));
+        const bool bDefault = Arg.Equals(TEXT("default"), ESearchCase::IgnoreCase);
+        const int32 Index = Arg.IsNumeric() ? FCString::Atoi(*Arg) : bDefault ? INDEX_NONE
+            : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Arg) || P.PaletteId.Contains(Arg); });
+        if ((Index == INDEX_NONE && !bDefault) || !Viewer->SetPaint(Index))
+            UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" (sc.Paint lists them)"), *Arg);
+    }));
 static FAutoConsoleCommandWithWorldAndArgs GSCUIPanels(
     TEXT("sc.UI.Panels"), TEXT("sc.UI.Panels <0|1>: hide or show the side panels (model browser, hierarchy)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
