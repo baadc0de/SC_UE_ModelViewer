@@ -2,6 +2,7 @@
 #include "SCViewerGameMode.h"
 #include "SCViewerExposure.h"
 #include "SCLook.h"
+#include "SCLookLighting.h"
 #include "SCViewerSettings.h"
 #include "SCViewerPawn.h"
 #include "UI/SSCViewerRoot.h"
@@ -22,7 +23,7 @@ void ASCViewerGameMode::StartPlay()
     if (UWorld* World = GetWorld(); World && !FParse::Param(FCommandLine::Get(), TEXT("SCHostExposure")))
     {
         SCViewerExposure::Install(*World);
-        if (const float Star = USCViewerSettings::Get()->StarBloom; Star > 0) SCLook::SetBloomStar(World, 4, 0.5f, Star);
+        SCLookLighting::ApplyDefaults(World); // LOOK-8: bloom, threshold, exposure bias
     }
     Super::StartPlay();
 }

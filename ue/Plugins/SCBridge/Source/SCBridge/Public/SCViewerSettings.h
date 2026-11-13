@@ -45,9 +45,21 @@ public:
     /** WP-L1 room confinement (area-only lights reach only their room's lighting channel). Off in the look (D15):
      *  every light is shadowed, so walls contain the light; the path tracer ignores channels. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bConfineLightsToRooms = false;
-    // Look (LOOK-6, adjudicated): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard bloom.
-    // 0.05 gives small fixtures a restrained glint; 0.15 suits stills. Console: sc.Look.BloomStar.
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float StarBloom = 0.05f;
+    // Look (LOOK-6, revised LOOK-8): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard
+    // bloom. LOOK-8 (adjudicated across the Galaxy in XL and the Golem in small hangars): the diffraction streaks veiled
+    // hull edges and cockpits; standard bloom it is. 0.15 still suits stills. Console: sc.Look.BloomStar.
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float StarBloom = LookStarBloom;
+    // Look (LOOK-8, adjudicated): standard bloom intensity and threshold, and an exposure bias on top of the game's
+    // exposure-compensation curve. Console: sc.Look.PP BloomIntensity / BloomThreshold / AutoExposureBias.
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float BloomIntensity = 0.10f;
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float BloomThreshold = 1.0f;
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float ExposureBias = -0.10f;
+    /** Look defaults the saved settings were last migrated to (SCLookLighting::ApplyDefaults): a saved StarBloom from an
+     *  earlier look revision is replaced by the adjudicated default once; later user changes are kept. */
+    UPROPERTY(Config) int32 LookRevision = 0;
+    // 9: LOOK-8 (revision 8 copied the class default object, which config had already loaded, and kept the old value).
+    static constexpr int32 CurrentLookRevision = 9;
+    static constexpr float LookStarBloom = 0.f; // the adjudicated StarBloom (LOOK-8); the migration's target
     // Look (LOOK-1) vs frame time: Lumen short-range AO is traced with hardware ray tracing while the world's
     // ray-tracing segments stay within this budget (SCLook::UpdateShortRangeAO; a performance budget, not game data);
     // beyond it Lumen's screen-space short-range AO. -1 = always traced, 0 = never. Console: sc.Look.ShortRangeAO.
