@@ -50,22 +50,6 @@
     {
       "Name": "AndroidFileServer",
       "Enabled": false
-    },
-    {
-      "Name": "DLSS",
-      "Enabled": true,
-      "Optional": true,
-      "PlatformAllowList": [
-        "Win64"
-      ]
-    },
-    {
-      "Name": "NRD",
-      "Enabled": true,
-      "Optional": true,
-      "PlatformAllowList": [
-        "Win64"
-      ]
     }
   ]
 }

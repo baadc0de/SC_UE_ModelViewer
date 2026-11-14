@@ -3,7 +3,6 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
-#include "SCRenderPath.h"
 #include "SCViewerSettings.generated.h"
 
 UCLASS(BlueprintType, Config = GameUserSettings)
@@ -55,10 +54,6 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float BloomIntensity = 0.10f;
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float BloomThreshold = 1.0f;
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float ExposureBias = -0.10f;
-    /** Lighting path (RTXPT-1): RTX = RTXDI + ReSTIR PT + DLSS-RR (NvRTX, Win64), Lumen = Lumen + MegaLights. Switched
-     *  live (options panel, sc.RenderPath); -SCRenderPath=rtx|lumen overrides one run; RTX falls back to Lumen where
-     *  the renderer cannot do it (SCRenderPath::Resolve). */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") ESCRenderPath RenderPath = ESCRenderPath::RTX;
     /** The paint chosen per vehicle entity: the paint's palette id (paints.json); absent = the vehicle's own paint. */
     UPROPERTY(Config) TMap<FString, FString> Paints;
     /** Look defaults the saved settings were last migrated to (SCLookLighting::ApplyDefaults): a saved StarBloom from an

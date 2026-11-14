@@ -11,15 +11,11 @@ WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available sp
 The probe's project build products occupy about 434 MiB, plus 17 MiB under
 `./cache/spike/`; no engine source was changed. Logs/build products are ignored.
 
-**Win64 / NvRTX (RTXPT-1):** the project also builds and runs on Windows against an NvRTX `nvrtx-5.8` source
-engine with D3D12, real-time path tracing (RTXDI + ReSTIR PT), DLSS Ray Reconstruction and RTX Mega Geometry; the
-Windows-only look is `SCViewer/Config/Windows/WindowsEngine.ini` (it needs Substrate's blendable G-buffer), the FFI
-is staged with `scripts/build_ffi.ps1`, and the build is
+**Win64:** the project also builds and runs on Windows (UE 5.9 from the Epic launcher, D3D12 SM6:
+`SCViewer/Config/Windows/WindowsEngine.ini`; the look is the shared one). The FFI is staged with
+`scripts/build_ffi.ps1` (`scbridge.dll` + import library) and the build is
 `<engine>\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs>\ue\SCViewer\SCViewer.uproject`.
-`-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows). The options panel's "Lighting"
-row, `sc.RenderPath rtx|lumen|toggle` and `-SCRenderPath=` switch live between path tracing and Lumen + MegaLights;
-path tracing needs RTX Mega Geometry, a next-start choice (the checkbox under it, `sc.MegaGeometry 0|1`). Results and requirements:
-[verification/RTXPT-1.md](verification/RTXPT-1.md).
+`-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows).
 
 ## Decision
 

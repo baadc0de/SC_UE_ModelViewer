@@ -43,9 +43,8 @@ inherit for all Rust that touches the vendored crates).
   `ue/EnginePatches`: run `uv run python ue/scripts/engine_patches.py apply` after installing an engine. The deliverable is a standalone
   game-mode app (plan D2/D3): user-facing code goes in the Runtime module; editor-only
   dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
-- Win64: NvRTX `nvrtx-5.8` source engine (D3D12, RTXDI / ReSTIR PT, DLSS-RR, Mega Geometry), Windows-only look in
-  `ue/SCViewer/Config/Windows/WindowsEngine.ini`, FFI via `scripts/build_ffi.ps1` — see `ue/verification/RTXPT-1.md`.
-  Assets saved by 5.9 do not load on 5.8 (newer custom versions); the `create_*.py` scripts regenerate them on 5.8.
+- Win64: UE 5.9 from the Epic launcher, D3D12 SM6 (`ue/SCViewer/Config/Windows/WindowsEngine.ini`), FFI via
+  `scripts/build_ffi.ps1` — see `ue/README.md`. Next target: the 5.9 web (Wasm / WebGPU) platform.
 
 ## Working rules
 
