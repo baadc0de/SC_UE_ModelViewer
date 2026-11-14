@@ -39,10 +39,30 @@ meshes' fallbacks render), Lumen, virtual shadow maps or ray tracing. Setup: Ems
    A cooked ship is `/Game/SC/Ships/Maps/<entity>` (gear down, on the viewer floor, rigs baked static, pool
    `/Game/SC/Ships/Shared`). `LoadEntity` streams it instead of exporting, with or without an archive, on every platform
    (`-SCNoCooked` turns cooked ships and hangars off).
-3. `powershell -File ue/scripts/package_web.ps1 -Ship DRAK_Golem -Hangar hightech_a/hangar_smltop_001` cooks the
-   Viewer map and both levels for Wasm, stages `-SCLoad=<ship> -SCEnvironment=<hangar>` as the command line
-   (`UECommandLine.txt`) and archives to `out/web/<ship>`; `out/web/<ship>/Play_SCViewer.bat` serves it
-   (`serve.py`, cross-origin isolation headers) and opens the page.
+3. Optional, baked lighting (the mobile renderer has no Lumen, so the hangar's 495 lights otherwise give no bounce):
+   `-script=<abs>/ue/scripts/bake_hangar_lighting.py -SCHangar=hightech_a_hangar_smltop_001 [-SCQuality=preview|...|production]
+   [-SCTexelCm=25]` copies the cooked hangar to `<level>_Lit`, makes its components and lights static (light functions
+   dropped: static lights have none; 163 here), sizes each component's lightmap from its extent, gives the pooled
+   meshes generated lightmap UVs (rebuilt and saved in place; the dynamic level is unchanged) and runs Lightmass with
+   reflection captures (Preview: 35 s to 2 min 19 s, 76 MB built data). The viewer streams `<level>_Lit` under
+   `-SCBakedLighting`. The SCBridge masters carry the static-lighting usage (`create_materials.py`): without it a cooked
+   game draws lightmapped meshes with the default (checker) material. Lightmass reports overlapping generated lightmap
+   UVs on about 120 of 582 meshes (dense UV charts); they bake with some light bleeding.
+4. `powershell -File ue/scripts/package_web.ps1 -Ship DRAK_Golem -Hangar hightech_a/hangar_smltop_001 [-BakedLighting]`
+   cooks the Viewer map and both levels (the `_Lit` hangar with `-BakedLighting`) for Wasm, stages
+   `-SCLoad=<ship> -SCEnvironment=<hangar> [-SCBakedLighting]` as the command line (`UECommandLine.txt`) and archives
+   to `out/web/<ship>`; `out/web/<ship>/Play_SCViewer.bat` serves it (`serve.py`, cross-origin isolation headers) and
+   opens the page. On the mobile renderer the viewer keeps UE's tonemapper: the game display-curve port
+   (`M_SC_DisplayMapping`) is desktop-only (it drew a black scene there).
+5. Public builds: package with `-Config Shipping` (the release scan refuses Development builds: source paths and asserts).
+   `SCViewer.Target.cs` maps `ue/Plugins` to `/Plugins` in the Wasm compiler's `-ffile-prefix-map`: the toolchain maps only
+   the engine and project folders, and the plugins' `__FILE__` paths otherwise carry the build machine's user folder.
+   Plan with the engine's `Build/Tools/deploy/deploy.py --stage <out>/Wasm --host netlify --prefix <id> --out <plan>`
+   (release scan; the plan lists the public objects, without `.br` files, which Netlify does not serve), copy those
+   objects and the plan's `netlify.toml` into one folder and run `netlify deploy --dir . --no-build --prod` from it (the
+   CLI reads `netlify.toml` from its working directory). `webdoctor.py <url>` checks the live headers; on Netlify its
+   whole-file `.wasm` check fails only because Netlify Brotli-compresses on the fly at its own level (36 MB vs the
+   staged 26.5 MB `.br`; the decoded body matches the staged file).
 
 Golem in the small hightech hangar (2026-11-14, RTX 4090, Chromium 156 WebGPU): 479 MB download (io store 425 MB,
 code 56 MB brotli), 723 components, 46 lights, 1.28 M triangles. The page reaches the viewer in about 30 s from a local

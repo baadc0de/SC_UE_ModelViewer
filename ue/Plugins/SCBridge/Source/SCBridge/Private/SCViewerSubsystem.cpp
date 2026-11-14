@@ -358,6 +358,8 @@ FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
     const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
     if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
     const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
+    // -SCBakedLighting (the web build): the variant with Lightmass lighting (bake_hangar_lighting.py), when baked.
+    if (FParse::Param(FCommandLine::Get(), TEXT("SCBakedLighting")) && FPackageName::DoesPackageExist(Level + TEXT("_Lit"))) return Level + TEXT("_Lit");
     return FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
 void USCViewerSubsystem::ShowMapHangar(bool bShow)

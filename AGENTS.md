@@ -47,8 +47,9 @@ inherit for all Rust that touches the vendored crates).
   `scripts/build_ffi.ps1`, NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored download) — see
   `ue/README.md`.
 - Web: the 5.9 Wasm / WebGPU build is a separate package of the viewer with one cooked hangar and one cooked ship
-  (`ue/scripts/cook_hangars.py`, `cook_ships.py`, `package_web.ps1`; emsdk 6.0.10 via `WASM_EMSDK_ROOT`). No Data.p4k or
-  FFI in the browser: Wasm builds compile with `SC_WITH_FFI=0`, so code that needs the archive must also work without it.
+  (`ue/scripts/cook_hangars.py`, `cook_ships.py`, `bake_hangar_lighting.py`, `package_web.ps1`; emsdk 6.0.10 via
+  `WASM_EMSDK_ROOT`). No Data.p4k or FFI in the browser: Wasm builds compile with `SC_WITH_FFI=0`, so code that needs
+  the archive must also work without it.
 
 ## Working rules
 

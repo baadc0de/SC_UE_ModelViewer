@@ -10,6 +10,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
+#include "StaticMeshAttributes.h"
+#include "StaticMeshResources.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
@@ -191,6 +193,114 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     UE_LOG(LogSCCook, Display, TEXT("COOK root=%s pooled_new=%d pooled_reused=%d packages=%d saved=%d instanced=%d warnings=%d seconds=%.1f"), *Root,
            Cook.Created, Cook.Reused, Cook.ToSave.Num(), Saved, Instancing.Instanced, Cook.Warnings.Num(), FPlatformTime::Seconds() - Start);
     return Saved == Cook.ToSave.Num();
+}
+
+FString USCCookLibrary::PrepareStaticLighting(ASCVehicle* Environment, double TexelCm, int32 MinResolution, int32 MaxResolution)
+{
+    if (!Environment || !Environment->GetRootComponent()) return TEXT("no environment");
+    const double Start = FPlatformTime::Seconds();
+    // Static all the way down (a static component cannot sit under a movable parent): the root first.
+    Environment->GetRootComponent()->SetMobility(EComponentMobility::Static);
+    TArray<USceneComponent*> SceneComponents;
+    Environment->GetComponents(SceneComponents);
+    for (USceneComponent* C : SceneComponents) C->SetMobility(EComponentMobility::Static);
+
+    int32 LightFunctions = 0;
+    TArray<ULightComponent*> Lights;
+    Environment->GetComponents(Lights);
+    for (ULightComponent* L : Lights)
+        if (L->LightFunctionMaterial)
+        {
+            L->SetLightFunctionMaterial(nullptr);
+            ++LightFunctions;
+        }
+
+    // Lightmap density by world size: the largest extent of one instance (mesh bounds times component scale).
+    TMap<UStaticMesh*, int32> Meshes; // mesh -> the largest resolution a component gives it
+    int64 Texels = 0;
+    TArray<UStaticMeshComponent*> MeshComponents;
+    Environment->GetComponents(MeshComponents);
+    for (UStaticMeshComponent* C : MeshComponents)
+    {
+        UStaticMesh* Mesh = C->GetStaticMesh();
+        if (!Mesh) continue;
+        const FVector Size = Mesh->GetBounds().BoxExtent * 2.0 * C->GetComponentScale().GetAbs();
+        const int32 Wanted = FMath::RoundUpToPowerOfTwo(uint32(FMath::Max(1.0, Size.GetMax() / FMath::Max(TexelCm, 1.0))));
+        C->bOverrideLightMapRes = true;
+        C->OverriddenLightMapRes = FMath::Clamp(Wanted, MinResolution, MaxResolution);
+        int32& Largest = Meshes.FindOrAdd(Mesh, 0);
+        Largest = FMath::Max(Largest, C->OverriddenLightMapRes);
+        const auto* Instanced = Cast<UInstancedStaticMeshComponent>(C);
+        Texels += int64(C->OverriddenLightMapRes) * C->OverriddenLightMapRes * (Instanced ? Instanced->GetInstanceCount() : 1);
+        C->MarkRenderStateDirty();
+    }
+
+    // Generated lightmap UVs in the first free channel of each pooled mesh, packed at the largest resolution its
+    // components use (the chart gutters are sized for it: packed at a smaller one, charts overlap). A mesh an earlier
+    // bake packed at that resolution keeps its UVs.
+    TArray<UStaticMesh*> ToBuild;
+    TArray<FString> Warnings;
+    for (const auto& [Mesh, Resolution] : Meshes)
+    {
+        if (!Mesh->IsSourceModelValid(0) || !Mesh->GetMeshDescription(0))
+        {
+            Warnings.Add(Mesh->GetName() + TEXT(": no source model"));
+            continue;
+        }
+        FStaticMeshSourceModel& Model = Mesh->GetSourceModel(0);
+        if (Model.BuildSettings.bGenerateLightmapUVs && Mesh->GetLightMapCoordinateIndex() == Model.BuildSettings.DstLightmapIndex &&
+            Model.BuildSettings.MinLightmapResolution == Resolution && Mesh->GetLightMapResolution() == Resolution)
+            continue;
+        // An earlier bake's generated channel is not in the description: the source channels are.
+        const int32 Channels = Model.BuildSettings.bGenerateLightmapUVs ? Model.BuildSettings.DstLightmapIndex
+                                                                        : FStaticMeshConstAttributes(*Mesh->GetMeshDescription(0)).GetVertexInstanceUVs().GetNumChannels();
+        if (Channels <= 0 || Channels >= MAX_MESH_TEXTURE_COORDS_MD)
+        {
+            Warnings.Add(FString::Printf(TEXT("%s: %d UV channels, no room for a lightmap"), *Mesh->GetName(), Channels));
+            continue;
+        }
+        Model.BuildSettings.bGenerateLightmapUVs = true;
+        Model.BuildSettings.SrcLightmapIndex = 0;
+        Model.BuildSettings.DstLightmapIndex = Channels;
+        Model.BuildSettings.MinLightmapResolution = Resolution;
+        Mesh->SetLightMapCoordinateIndex(Channels);
+        Mesh->SetLightMapResolution(Resolution);
+        ToBuild.Add(Mesh);
+    }
+    if (!ToBuild.IsEmpty()) UStaticMesh::BatchBuild(ToBuild);
+    int32 Saved = 0;
+    for (UStaticMesh* Mesh : ToBuild)
+    {
+        UPackage* Package = Mesh->GetPackage();
+        Package->MarkPackageDirty();
+        FSavePackageArgs Args;
+        Args.TopLevelFlags = RF_Public | RF_Standalone;
+        Args.SaveFlags = SAVE_NoError;
+        if (UPackage::SavePackage(Package, Mesh, *FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension()), Args))
+            ++Saved;
+        else
+            Warnings.Add(TEXT("save failed: ") + Package->GetName());
+    }
+    // The built render data must carry the lightmap channel (Lightmass reads LOD 0's; a missing one falls back to a
+    // source channel, whose charts overlap).
+    int32 MissingChannel = 0;
+    for (const auto& [Mesh, Resolution] : Meshes)
+    {
+        const FStaticMeshRenderData* Render = Mesh->GetRenderData();
+        const int32 Built = Render && !Render->LODResources.IsEmpty() ? Render->LODResources[0].VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords() : 0;
+        if (Built > Mesh->GetLightMapCoordinateIndex()) continue;
+        if (++MissingChannel <= 5)
+            Warnings.Add(FString::Printf(TEXT("%s: lightmap channel %d, built channels %d, source channels %d, nanite %d"), *Mesh->GetName(),
+                                         Mesh->GetLightMapCoordinateIndex(), Built,
+                                         Mesh->GetMeshDescription(0) ? FStaticMeshConstAttributes(*Mesh->GetMeshDescription(0)).GetVertexInstanceUVs().GetNumChannels() : -1,
+                                         Mesh->IsNaniteEnabled()));
+    }
+    for (const FString& W : Warnings) UE_LOG(LogSCCook, Warning, TEXT("STATIC_LIGHTING_WARNING %s"), *W);
+    const FString Summary = FString::Printf(TEXT("components=%d meshes=%d uv_built=%d saved=%d lights=%d light_functions_dropped=%d lightmap_mtexels=%.1f missing_lightmap_channel=%d warnings=%d seconds=%.1f"),
+                                            SceneComponents.Num(), Meshes.Num(), ToBuild.Num(), Saved, Lights.Num(), LightFunctions, Texels / 1e6,
+                                            MissingChannel, Warnings.Num(), FPlatformTime::Seconds() - Start);
+    UE_LOG(LogSCCook, Display, TEXT("STATIC_LIGHTING %s"), *Summary);
+    return Summary;
 }
 
 bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name)

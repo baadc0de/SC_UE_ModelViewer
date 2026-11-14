@@ -73,6 +73,8 @@ class Graph:
         self.m.set_editor_property("used_with_skeletal_mesh", True)
         # Environments draw repeated rigid parts as instanced static meshes (FSCInstancing, LOOK-6); same reason.
         self.m.set_editor_property("used_with_instanced_static_meshes", True)
+        # Hangars with baked lighting (bake_hangar_lighting.py, the web build) draw lightmapped meshes; same reason.
+        self.m.set_editor_property("used_with_static_lighting", True)
         # Explicit clip: mask graphs output (alpha - AlphaTest + 0.5), i.e. a texel survives when alpha >= the
         # instance's authored AlphaTest. UE's default clip (0.3333, Material.cpp) would shift every threshold.
         self.m.set_editor_property("opacity_mask_clip_value", 0.5)
