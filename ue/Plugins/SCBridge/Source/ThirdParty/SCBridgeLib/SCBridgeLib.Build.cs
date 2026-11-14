@@ -2,6 +2,8 @@ using System.IO;
 using UnrealBuildTool;
 
 // The Rust FFI library (crates/scbridge-ffi), staged by scripts/build_ffi.sh (Linux) or scripts/build_ffi.ps1 (Win64).
+// Other platforms (Wasm: the baked web build) have no library: SC_WITH_FFI=0 and SCBridge's SCBridgeNoFFI.cpp
+// implements the C API as "unsupported", so Data.p4k is never read there.
 public class SCBridgeLib : ModuleRules
 {
     public SCBridgeLib(ReadOnlyTargetRules Target) : base(Target)
@@ -15,6 +17,7 @@ public class SCBridgeLib : ModuleRules
             PublicRuntimeLibraryPaths.Add(Path.GetDirectoryName(Library));
             PublicRuntimeLibraryPaths.Add("$(BinaryOutputDir)");
             RuntimeDependencies.Add("$(BinaryOutputDir)/libscbridge.so", Library);
+            PublicDefinitions.Add("SC_WITH_FFI=1");
         }
         else if (Target.Platform == UnrealTargetPlatform.Win64)
         {
@@ -27,10 +30,11 @@ public class SCBridgeLib : ModuleRules
             {
                 RuntimeDependencies.Add("$(BinaryOutputDir)/scbridge.pdb", Path.Combine(LibDir, "scbridge.pdb"));
             }
+            PublicDefinitions.Add("SC_WITH_FFI=1");
         }
         else
         {
-            throw new BuildException("SCBridgeLib supports Linux and Win64 only.");
+            PublicDefinitions.Add("SC_WITH_FFI=0");
         }
     }
 }

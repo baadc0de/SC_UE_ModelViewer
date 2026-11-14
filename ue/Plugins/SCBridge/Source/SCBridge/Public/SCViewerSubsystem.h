@@ -184,6 +184,11 @@ public:
     /** The cooked level for an object container path (…/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name>),
      *  empty when none was cooked. */
     static FString CookedEnvironmentLevel(const FString& Folder);
+    /** The cooked level of a ship (Content/SC/Ships/Maps/<entity>, ue/scripts/cook_ships.py), empty when none was cooked.
+     *  LoadEntity streams it instead of exporting from the archive, so it also works without one (the web build). */
+    static FString CookedShipLevel(const FString& Entity);
+    /** LoadEntity can run now: the archive is open, or the entity has a cooked level. */
+    bool CanLoad(const FString& Entity) const;
     float GetEnvironmentProgress() const;      // 0..1 over export, parse, import and placement
     FString GetEnvironmentPhaseText() const;
     // The side panels (model browser, hierarchy); hidden for scripted runs and by the top-bar toggle.
@@ -317,6 +322,10 @@ private:
     UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> EnvLevel;
     void UnloadEnvironmentLevel();
     double EnvStart = 0;
+    // A cooked ship level streamed in by LoadEntity (Phase Importing until its vehicle actor is visible).
+    UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> ShipLevel;
+    void StepCookedShip();
+    void UnloadShipLevel();
     TWeakObjectPtr<ASCVehicle> Environment;
     void StepPlayerKit(bool bBlocking);
     void FailPlayerKit(const FString& Error);

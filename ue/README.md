@@ -24,9 +24,30 @@ needs in NVIDIA's 8.7.2 (UE 5.8) source; without the plugin the project builds a
 `ue/scripts/routes/dlss-modes.txt` compares DLAA / TSR / DLSS Quality (Golem, small hightech hangar, RTX 4090, 1080p,
 GPU ms p50: 7.22 / 7.39 / 5.22).
 
-**Web (planned):** a separate 5.9 Wasm / WebGPU build that bakes one level and one ship as cooked assets — no Data.p4k,
-no Rust FFI in the browser (32-bit Wasm, ~2 GB practical memory). Building blocks: cooked hangar levels
-(`cook_hangars.py`, `SCCookLibrary`) and Keep-as-assets for a ship (`SCKeepAssets`).
+**Web:** a separate UE 5.9 Wasm / WebGPU build of the same viewer with one cooked hangar and one cooked ship: no
+Data.p4k and no Rust library in the browser. Wasm builds compile `SCBridgeLib` with `SC_WITH_FFI=0`
+(`SCBridgeNoFFI.cpp`: every `sc_*` call reports unsupported), the UI says "Baked content" and offers no archive picker,
+and the viewer loads only cooked levels. The web renderer is the mobile one (deferred tier): no Nanite (the cooked
+meshes' fallbacks render), Lumen, virtual shadow maps or ray tracing. Setup: Emscripten 6.0.10 from emsdk with
+`WASM_EMSDK_ROOT` pointing at it (Turnkey: `RunUAT Turnkey -command=VerifySdk -platform=Wasm`), Chrome with WebGPU.
+1. Export the ship and the hangar into one root (decomposed GLB + DDS, mip 1 for the web):
+   `starbreaker entity export DRAK_Golem out/web/bake --kind decomposed --format glb --dds --lod 0 --mip 1 --skip-existing-assets`
+   and `starbreaker socpak export 'hangar\hightech_a\hangar_smltop_001.socpak' out/web/bake <same options>`.
+2. Cook them in the editor (`UnrealEditor-Cmd SCViewer.uproject -run=pythonscript -AllowCommandletRendering -unattended
+   -nop4 -SCCookRoot=<abs>/out/web/bake ...`): `-script=<abs>/ue/scripts/cook_hangars.py
+   -SCCookOnly=hightech_a_hangar_smltop_001` and `-script=<abs>/ue/scripts/cook_ships.py -SCCookOnly=DRAK_Golem`.
+   A cooked ship is `/Game/SC/Ships/Maps/<entity>` (gear down, on the viewer floor, rigs baked static, pool
+   `/Game/SC/Ships/Shared`). `LoadEntity` streams it instead of exporting, with or without an archive, on every platform
+   (`-SCNoCooked` turns cooked ships and hangars off).
+3. `powershell -File ue/scripts/package_web.ps1 -Ship DRAK_Golem -Hangar hightech_a/hangar_smltop_001` cooks the
+   Viewer map and both levels for Wasm, stages `-SCLoad=<ship> -SCEnvironment=<hangar>` as the command line
+   (`UECommandLine.txt`) and archives to `out/web/<ship>`; `out/web/<ship>/Play_SCViewer.bat` serves it
+   (`serve.py`, cross-origin isolation headers) and opens the page.
+
+Golem in the small hightech hangar (2026-11-14, RTX 4090, Chromium 156 WebGPU): 479 MB download (io store 425 MB,
+code 56 MB brotli), 723 components, 46 lights, 1.28 M triangles. The page reaches the viewer in about 30 s from a local
+server. The engine warns that the texture streaming pool (192 MB, mobile tier) is 26 MB over budget. Frame rate is not
+measured yet: it was taken only in a hidden, throttled browser pane.
 
 ## Decision
 

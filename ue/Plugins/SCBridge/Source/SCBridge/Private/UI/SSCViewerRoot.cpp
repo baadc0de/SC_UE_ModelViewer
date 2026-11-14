@@ -84,7 +84,7 @@ SSCViewerRoot::~SSCViewerRoot()
 void SSCViewerRoot::Tick(const FGeometry& Geometry, double CurrentTime, float DeltaTime)
 {
     SCompoundWidget::Tick(Geometry, CurrentTime, DeltaTime);
-    if (!bOfferedPicker && Subsystem.IsValid() && Subsystem->GetArchiveState() == ESCArchiveState::Failed)
+    if (!bOfferedPicker && Subsystem.IsValid() && Subsystem->GetArchiveState() == ESCArchiveState::Failed && SC_WITH_FFI) // no FFI: no archive to pick (baked content only)
     {
         bOfferedPicker = true; // discovery failed: offer the native picker right away (outside this tick)
         RegisterActiveTimer(0.f, FWidgetActiveTimerDelegate::CreateLambda([this](double, float) {
@@ -144,7 +144,7 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
                 {
                 case ESCArchiveState::Ready: return FText::Format(LOCTEXT("ArchiveReady", "Archive: {0}"), FText::FromString(Label));
                 case ESCArchiveState::Opening: return FText::Format(LOCTEXT("ArchiveOpening", "Opening {0}…"), FText::FromString(Label));
-                case ESCArchiveState::Failed: return LOCTEXT("ArchiveFailed", "No archive");
+                case ESCArchiveState::Failed: return SC_WITH_FFI ? LOCTEXT("ArchiveFailed", "No archive") : LOCTEXT("BakedOnly", "Baked content");
                 default: return FText();
                 }
             })
@@ -248,7 +248,7 @@ TSharedRef<SWidget> SSCViewerRoot::MakeArchiveOverlay()
 {
     return SNew(SBorder)
         .Visibility_Lambda([this] {
-            return Subsystem.IsValid() && !Subsystem->GetVehicle() && Subsystem->GetArchiveState() != ESCArchiveState::Ready ? EVisibility::Visible : EVisibility::Collapsed;
+            return Subsystem.IsValid() && SC_WITH_FFI && !Subsystem->GetVehicle() && Subsystem->GetArchiveState() != ESCArchiveState::Ready ? EVisibility::Visible : EVisibility::Collapsed;
         })
         .BorderImage(Fill()).BorderBackgroundColor(Bar()).Padding(24)
         [
