@@ -44,7 +44,7 @@ inherit for all Rust that touches the vendored crates).
   game-mode app (plan D2/D3): user-facing code goes in the Runtime module; editor-only
   dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
 - Win64: UE 5.9 from the Epic launcher, D3D12 SM6 (`ue/SCViewer/Config/Windows/WindowsEngine.ini`), FFI via
-  `scripts/build_ffi.ps1`, NVIDIA DLSS / DLAA from `ue/Plugins/NVIDIA/DLSS/` (gitignored download) — see
+  `scripts/build_ffi.ps1`, NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored download) — see
   `ue/README.md`. Next target: the 5.9 web (Wasm / WebGPU) platform as a separate build that bakes one level and one
   ship as cooked assets (no Data.p4k / FFI in the browser).
 

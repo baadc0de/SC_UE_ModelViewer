@@ -18,8 +18,11 @@ The probe's project build products occupy about 434 MiB, plus 17 MiB under
 `-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows). NVIDIA DLSS is enabled on Win64
 (`.uproject` entry, `Optional`; `r.NGX.DLSS.Enable 1`): DLAA at the default 100 % screen percentage, DLSS Super
 Resolution below it (`r.ScreenPercentage 67` = Quality). The plugin is NVIDIA's download (developer.nvidia.com/rtx/dlss,
-not redistributable) unpacked to `ue/Plugins/NVIDIA/DLSS/` (gitignored); without it the project builds and runs with TSR.
-NVIDIA ships it per engine version; for a preview engine the newest release's source is compiled against it.
+not redistributable): `powershell -File scripts/install_dlss.ps1 -Zip <zip>` installs DLSS and its dependency
+StreamlineNGXCommon into `ue/Plugins/NVIDIA/` (gitignored) and applies the casts UE 5.9's compile-time format check
+needs in NVIDIA's 8.7.2 (UE 5.8) source; without the plugin the project builds and runs with TSR.
+`ue/scripts/routes/dlss-modes.txt` compares DLAA / TSR / DLSS Quality (Golem, small hightech hangar, RTX 4090, 1080p,
+GPU ms p50: 7.22 / 7.39 / 5.22).
 
 **Web (planned):** a separate 5.9 Wasm / WebGPU build that bakes one level and one ship as cooked assets — no Data.p4k,
 no Rust FFI in the browser (32-bit Wasm, ~2 GB practical memory). Building blocks: cooked hangar levels
