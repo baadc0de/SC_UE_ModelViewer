@@ -3,12 +3,14 @@
 // Every setting touched here is a run-time renderer cvar: sampled lighting (NvRTX), MegaLights (its shaders compile
 // whenever r.MegaLights.Supported is on, whatever EnableForProject was at startup) and the DLSS denoiser mode. The
 // read-only parts stay as configured at startup: Mega Geometry (r.Nanite.RayTracing, on in the Win64 layer; the engine
-// itself gates it on cluster-operation support) and the Substrate G-buffer format (blendable on Win64, which the RTX
-// path needs; Lumen + MegaLights runs on it too).
+// itself gates it on cluster-operation support; SetMegaGeometryOnNextStart changes it for the next start) and the
+// Substrate G-buffer format (blendable on Win64, which the RTX path needs; Lumen + MegaLights runs on it too).
 #include "SCRenderPath.h"
 #include "SCViewerSettings.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/Optional.h"
 #include "Misc/Parse.h"
 #include "RenderUtils.h"
 #include "RHIGlobals.h"
@@ -56,8 +58,10 @@ FSCRenderFeatures FSCRenderFeatures::Query()
 
 bool FSCRenderFeatures::Supports(ESCRenderPath Path) const
 {
-    // Lumen is always there; without MegaLights its direct lighting is the deferred path.
-    return Path == ESCRenderPath::Lumen || bSampledLighting;
+    // Lumen is always there; without MegaLights its direct lighting is the deferred path. RTX needs Mega Geometry: on the
+    // Nanite fallback proxies the sampled-lighting rays draw black floors and hull streaks (RTXPT-1), so without
+    // full-detail clusters the path is not offered.
+    return Path == ESCRenderPath::Lumen || (bSampledLighting && bMegaGeometry);
 }
 
 FString FSCRenderFeatures::Describe() const
@@ -86,7 +90,7 @@ ESCRenderPath SCRenderPath::Resolve()
         else if (Arg.Equals(TEXT("lumen"), ESearchCase::IgnoreCase)) Want = ESCRenderPath::Lumen;
         else UE_LOG(LogSCRenderPath, Warning, TEXT("RENDER_PATH ignored -SCRenderPath=%s (rtx|lumen)"), *Arg);
     }
-    return FSCRenderFeatures::Query().Supports(Want) ? Want : ESCRenderPath::Lumen;
+    return Want; // Apply falls back (and logs requested= vs path=)
 }
 
 ESCRenderPath SCRenderPath::Apply(ESCRenderPath Path)
@@ -116,6 +120,46 @@ ESCRenderPath SCRenderPath::Apply(ESCRenderPath Path)
     return Path;
 }
 
+bool SCRenderPath::MegaGeometrySupported()
+{
+#if defined(NV_RAYTRACING_CLUSTER_OPS) && NV_RAYTRACING_CLUSTER_OPS
+    return !GUsingNullRHI && GRHIGlobals.RayTracing.SupportsClusterOps;
+#else
+    return false;
+#endif
+}
+
+namespace
+{
+// The next-start choice once changed this run; unset = what this run started with (the config already holds it).
+TOptional<bool> GMegaGeometryNextStart;
+}
+
+bool SCRenderPath::MegaGeometryOnNextStart()
+{
+    return GMegaGeometryNextStart.IsSet() ? GMegaGeometryNextStart.GetValue() : Enabled(TEXT("r.Nanite.RayTracing"));
+}
+
+void SCRenderPath::SetMegaGeometryOnNextStart(bool bOn)
+{
+    // [SystemSettings] in the user layer outranks the project's [/Script/Engine.RendererSettings] value
+    // (Config/Windows/WindowsEngine.ini). The engine itself still requires cluster-operation support at run time.
+    GConfig->SetString(TEXT("SystemSettings"), TEXT("r.Nanite.RayTracing"), bOn ? TEXT("1") : TEXT("0"), GEngineIni);
+    GConfig->Flush(false, GEngineIni);
+    GMegaGeometryNextStart = bOn;
+    UE_LOG(LogSCRenderPath, Display, TEXT("MEGA_GEOMETRY next_start=%d now=%d supported=%d config=%s"), bOn,
+           FSCRenderFeatures::Query().bMegaGeometry, MegaGeometrySupported(), *GEngineIni);
+}
+
+static FAutoConsoleCommand GSCMegaGeometryCommand(
+    TEXT("sc.MegaGeometry"), TEXT("sc.MegaGeometry [0|1]: RTX Mega Geometry from the next start (read-only at run time); no argument logs the state"),
+    FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) {
+        if (!Args.IsEmpty()) SCRenderPath::SetMegaGeometryOnNextStart(FCString::Atoi(*Args[0]) != 0);
+        else
+            UE_LOG(LogSCRenderPath, Display, TEXT("MEGA_GEOMETRY next_start=%d now=%d supported=%d"), SCRenderPath::MegaGeometryOnNextStart(),
+                   FSCRenderFeatures::Query().bMegaGeometry, SCRenderPath::MegaGeometrySupported());
+    }));
+
 static FAutoConsoleCommand GSCRenderPathCommand(
     TEXT("sc.RenderPath"), TEXT("sc.RenderPath [rtx|lumen|toggle]: switch the lighting path live and remember it; no argument logs the state"),
     FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) {
@@ -135,7 +179,10 @@ static FAutoConsoleCommand GSCRenderPathCommand(
             UE_LOG(LogSCRenderPath, Warning, TEXT("sc.RenderPath %s: expected rtx, lumen or toggle"), *Args[0]);
             return;
         }
-        USCViewerSettings* Settings = USCViewerSettings::Get();
-        Settings->RenderPath = SCRenderPath::Apply(Path);
-        Settings->Save();
+        // Remember only what was honoured: an unavailable RTX (e.g. Mega Geometry off) must not overwrite the saved choice.
+        if (SCRenderPath::Apply(Path) == Path)
+        {
+            USCViewerSettings::Get()->RenderPath = Path;
+            USCViewerSettings::Get()->Save();
+        }
     }));

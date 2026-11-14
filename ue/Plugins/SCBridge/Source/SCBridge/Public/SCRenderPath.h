@@ -21,17 +21,27 @@ struct SCBRIDGE_API FSCRenderFeatures
     bool bDLSS = false;            // the DLSS plugin is loaded (RR denoising where the GPU supports it)
 
     static FSCRenderFeatures Query();
+    /** Lumen always; RTX needs sampled lighting and active Mega Geometry (proxy BLASes break the sampled-lighting rays). */
     bool Supports(ESCRenderPath Path) const;
     FString Describe() const;
 };
 
 namespace SCRenderPath
 {
-/** -SCRenderPath=rtx|lumen for this run, else USCViewerSettings::RenderPath; RTX falls back to Lumen when unsupported. */
+/** The requested path: -SCRenderPath=rtx|lumen for this run, else USCViewerSettings::RenderPath. Apply falls back to
+ *  Lumen where RTX is unsupported (including Mega Geometry off), without changing the saved choice. */
 SCBRIDGE_API ESCRenderPath Resolve();
 /** Set the path's renderer state now (live). An unsupported path applies Lumen. Logs RENDER_PATH; returns what applied. */
 SCBRIDGE_API ESCRenderPath Apply(ESCRenderPath Path);
 /** The path last applied (Lumen before the first Apply). */
 SCBRIDGE_API ESCRenderPath Current();
 SCBRIDGE_API const TCHAR* Name(ESCRenderPath Path);
+
+/** RTX Mega Geometry can be built on this GPU / RHI (NvRTX cluster operations), whether or not it is on. */
+SCBRIDGE_API bool MegaGeometrySupported();
+/** Mega Geometry for the next start. r.Nanite.RayTracing is read-only at run time, so the choice is written to the
+ *  user's engine config ([SystemSettings] in Saved/Config/<Platform>/Engine.ini) and takes effect after a restart;
+ *  FSCRenderFeatures::bMegaGeometry is what this run has. */
+SCBRIDGE_API bool MegaGeometryOnNextStart();
+SCBRIDGE_API void SetMegaGeometryOnNextStart(bool bOn);
 }
