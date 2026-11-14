@@ -91,6 +91,7 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     CacheDir = USCViewerSettings::Get()->ResolveCacheDir();
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
+    bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
     if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
@@ -963,6 +964,11 @@ bool USCViewerSubsystem::Tick(float)
         }
         UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE ok=%d seconds=%.3f index_cache_hit=%d cache_bytes=%llu cache_entries=%llu error=\"%s\""),
                Result.bOK, Result.Seconds, Result.bIndexCacheHit, CacheStats.Bytes, CacheStats.Entries, *Result.Error.ToString());
+    }
+    if (bMaxQualityPending && GetViewerWorld())
+    {
+        bMaxQualityPending = false; // after the game user settings applied their scalability at startup
+        SCLook::ApplyMaxQuality();
     }
     CompleteSearches(false);
     StepLoad(false);

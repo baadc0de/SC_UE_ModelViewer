@@ -22,7 +22,19 @@ not redistributable): `powershell -File scripts/install_dlss.ps1 -Zip <zip>` ins
 StreamlineNGXCommon into `ue/Plugins/NVIDIA/` (gitignored) and applies the casts UE 5.9's compile-time format check
 needs in NVIDIA's 8.7.2 (UE 5.8) source; without the plugin the project builds and runs with TSR.
 `ue/scripts/routes/dlss-modes.txt` compares DLAA / TSR / DLSS Quality (Golem, small hightech hangar, RTX 4090, 1080p,
-GPU ms p50: 7.22 / 7.39 / 5.22).
+GPU ms p50: 7.22 / 7.39 / 5.22). `install_dlss.ps1` also declares UE 5.9 in the two `.uplugin` files: with NVIDIA's 5.8.0
+an unattended cook skips the plugin, and a packaged game then stops at start ("Missing global shader FVelocityCombineCS").
+
+**Win64 showcase (standalone directory):** the same cooked ship and hangar as the web build (below), dynamic lighting:
+Nanite, Lumen GI and reflections at Cinematic with hardware ray tracing and hit lighting for GI and reflections
+(`-SCMaxQuality`, `SCLook::ApplyMaxQuality`), DLAA. Cook at full resolution (`--lod 0 --mip 0` exports, the hangar-cook
+standard), then `powershell -File ue/scripts/package_showcase.ps1 -Platform Win64 -Ship DRAK_Golem -Hangar
+hightech_a/hangar_smltop_001 -Config Shipping` writes `out/win64/<ship>`: run `Play_SCViewer.bat` there (a Windows build
+does not read the staged `UECommandLine.txt`, so the launcher passes `-SCLoad`, `-SCEnvironment` and `-SCMaxQuality`;
+`SCViewer.exe` alone is the plain viewer). Shipping keeps no log: `-SCQualityReport=<file>` writes the effective settings,
+and `ue/scripts/routes/showcase-max-quality.txt` takes a shot with and without hit lighting (`-SCScript=... -SCShotDir=...`).
+Golem, small hightech hangar (2026-11-14, RTX 4090, Shipping): 1.7 GB of content; the report reads
+`gi=4 reflections=4 lumen_hwrt=1 lighting_mode=1 hit_shadow_mode=2 probe_downsample=8 nanite=1 dlss=1 screen_percentage=100`.
 
 **Web:** a separate UE 5.9 Wasm / WebGPU build of the same viewer with one cooked hangar and one cooked ship: no
 Data.p4k and no Rust library in the browser. Wasm builds compile `SCBridgeLib` with `SC_WITH_FFI=0`
@@ -48,7 +60,7 @@ meshes' fallbacks render), Lumen, virtual shadow maps or ray tracing. Setup: Ems
    `-SCBakedLighting`. The SCBridge masters carry the static-lighting usage (`create_materials.py`): without it a cooked
    game draws lightmapped meshes with the default (checker) material. Lightmass reports overlapping generated lightmap
    UVs on about 120 of 582 meshes (dense UV charts); they bake with some light bleeding.
-4. `powershell -File ue/scripts/package_web.ps1 -Ship DRAK_Golem -Hangar hightech_a/hangar_smltop_001 [-BakedLighting]`
+4. `powershell -File ue/scripts/package_web.ps1` (`package_showcase.ps1 -Platform Wasm`) `-Ship DRAK_Golem -Hangar hightech_a/hangar_smltop_001 [-BakedLighting]`
    cooks the Viewer map and both levels (the `_Lit` hangar with `-BakedLighting`) for Wasm, stages
    `-SCLoad=<ship> -SCEnvironment=<hangar> [-SCBakedLighting]` as the command line (`UECommandLine.txt`) and archives
    to `out/web/<ship>`; `out/web/<ship>/Play_SCViewer.bat` serves it (`serve.py`, cross-origin isolation headers) and

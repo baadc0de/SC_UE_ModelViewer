@@ -301,6 +301,7 @@ private:
     void PlaceEnvironment();
     int32 EnvPlaceInTicks = 0;
     bool bPanelsVisible = true;
+    bool bMaxQualityPending = false; // -SCMaxQuality: SCLook::ApplyMaxQuality on the first tick with a world
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
     FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)

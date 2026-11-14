@@ -1,0 +1,8 @@
+# Standalone Win64 showcase check (ue/scripts/package_showcase.ps1 -Platform Win64): the staged -SCMaxQuality look
+# (Cinematic Lumen, hit lighting, DLAA) after Lumen has converged, then hit lighting off for comparison.
+# Host: <Out>\Windows\SCViewer.exe -SCScript=<abs>\showcase-max-quality.txt -SCShotDir=<dir> -SCQualityReport=<file>
+25 shot max-quality
+0 r.Lumen.HardwareRayTracing.LightingMode 0
+8 shot surface-cache
+0 r.Lumen.HardwareRayTracing.LightingMode 1
+1 quit

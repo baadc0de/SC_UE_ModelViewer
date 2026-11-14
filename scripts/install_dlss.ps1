@@ -47,4 +47,16 @@ foreach ($f in $fixes) {
     if ($count -ne $f[3]) { throw "UE 5.9 fix: expected $($f[3]) x '$($f[1])' in $($f[0]), found $count" }
     [IO.File]::WriteAllText($file, $text.Replace($f[1], $f[2]))
 }
-Write-Host "Applied $($fixes.Count) UE 5.9 format-string fixes. Build SCViewerEditor to compile the plugin."
+Write-Host "Applied $($fixes.Count) UE 5.9 format-string fixes."
+
+# The plugins declare the zip's engine version (5.8.0). An interactive editor asks whether to load them anyway; an
+# unattended one (the cook of a packaged build) answers No and skips them, so their global shaders are not cooked and the
+# packaged game, which loads them, stops at start ("Missing global shader FVelocityCombineCS"). Declare 5.9.
+foreach ($plugin in 'DLSS', 'StreamlineNGXCommon') {
+    $file = Join-Path $dest "$plugin\$plugin.uplugin"
+    $text = [IO.File]::ReadAllText($file)
+    $count = ([regex]::Matches($text, '"EngineVersion": "5\.8\.0"')).Count
+    if ($count -ne 1) { throw "UE 5.9 fix: expected one EngineVersion 5.8.0 in $plugin.uplugin, found $count" }
+    [IO.File]::WriteAllText($file, $text.Replace('"EngineVersion": "5.8.0"', '"EngineVersion": "5.9.0"'))
+}
+Write-Host "Declared UE 5.9 in DLSS.uplugin and StreamlineNGXCommon.uplugin. Build SCViewerEditor to compile the plugin."

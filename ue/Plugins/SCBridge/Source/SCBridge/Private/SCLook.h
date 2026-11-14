@@ -17,4 +17,9 @@ int64 RayTracingSegments(UWorld* World, int32* OutPrimitives = nullptr);
  *  within USCViewerSettings::TracedShortRangeAOMaxSegments, else Lumen's screen-space short-range AO: the traced pass
  *  is a ray-generation pass, so it costs the per-frame binding table above. Called after every load. */
 void UpdateShortRangeAO(UWorld* World);
+/** -SCMaxQuality (the standalone Win64 showcase, ue/scripts/package_showcase.ps1): Lumen global illumination and
+ *  reflections at Cinematic (BaseScalability @Cine: 8x screen probes, larger trace budgets, front-layer translucency
+ *  reflections) and hardware ray tracing with hit lighting for GI and reflections and area shadows at hits. Applied
+ *  once the game's own settings are (the subsystem's first tick with a world); logs the effective values. */
+void ApplyMaxQuality();
 }
