@@ -40,7 +40,9 @@ public:
     virtual void SetupViewFamily(FSceneViewFamily&) override {}
     virtual void SetupView(FSceneViewFamily& Family, FSceneView& View) override
     {
+#if RHI_RAYTRACING // the path tracer and its sample count exist only with ray tracing (not on Wasm)
         if (Family.EngineShowFlags.PathTracing && View.State) Samples = View.State->GetPathTracingSampleIndex();
+#endif
     }
     virtual void BeginRenderViewFamily(FSceneViewFamily&) override {}
     std::atomic<int64> Samples{-1};
@@ -602,7 +604,9 @@ void FSCViewerAutomation::Tick()
             }
         }
     }
-    if (S->GetArchiveState() == ESCArchiveState::Failed && !Queue.IsEmpty())
+    // A cooked ship loads without the archive (the web build has none).
+    const bool bCookedNext = !Queue.IsEmpty() && !USCViewerSubsystem::CookedShipLevel(Queue[0].TrimStartAndEnd()).IsEmpty();
+    if (S->GetArchiveState() == ESCArchiveState::Failed && !Queue.IsEmpty() && !bCookedNext)
     {
         UE_LOG(LogSCViewerAutomation, Error, TEXT("AUTOMATION archive failed: %s"), *S->GetArchiveError());
         Queue.Empty();
@@ -611,7 +615,7 @@ void FSCViewerAutomation::Tick()
         bQuit = bQueued = false;
         return;
     }
-    if (S->GetArchiveState() != ESCArchiveState::Ready || FPlatformTime::Seconds() < NextAt) return;
+    if ((S->GetArchiveState() != ESCArchiveState::Ready && !bCookedNext) || FPlatformTime::Seconds() < NextAt) return;
     if (Queue.IsEmpty())
     {
         if (bQueued)

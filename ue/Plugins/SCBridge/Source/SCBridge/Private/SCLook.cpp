@@ -9,6 +9,10 @@
 #include "GameFramework/Pawn.h"
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
+#include "Scalability.h"
+#include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
 #include "SCVehicle.h"
 #include "SCViewerPawn.h"
 #include "SCViewerSubsystem.h"
@@ -247,6 +251,34 @@ int64 SCLook::RayTracingSegments(UWorld* World, int32* OutPrimitives)
     if (OutPrimitives) *OutPrimitives = Primitives;
     return Segments;
 }
+void SCLook::ApplyMaxQuality()
+{
+    Scalability::FQualityLevels Levels = Scalability::GetQualityLevels();
+    Levels.GlobalIlluminationQuality = 4; // Cinematic
+    Levels.ReflectionQuality = 4;
+    Scalability::SetQualityLevels(Levels);
+    IConsoleManager& Console = IConsoleManager::Get();
+    auto Set = [&Console](const TCHAR* Name, int32 Value) {
+        if (IConsoleVariable* Var = Console.FindConsoleVariable(Name)) Var->Set(Value, ECVF_SetByCode);
+    };
+    Set(TEXT("r.Lumen.HardwareRayTracing.LightingMode"), 1);           // hit lighting for GI and reflections
+    Set(TEXT("r.Lumen.HardwareRayTracing.HitLighting.ShadowMode"), 2); // area shadows at hits
+    auto Get = [&Console](const TCHAR* Name) {
+        const IConsoleVariable* Var = Console.FindConsoleVariable(Name);
+        return Var ? Var->GetString() : FString(TEXT("-"));
+    };
+    const FString Report = FString::Printf(
+        TEXT("LOOK max_quality gi=%s reflections=%s lumen_hwrt=%s lighting_mode=%s hit_shadow_mode=%s probe_downsample=%s nanite=%s dlss=%s screen_percentage=%s aa=%s"),
+        *Get(TEXT("sg.GlobalIlluminationQuality")), *Get(TEXT("sg.ReflectionQuality")), *Get(TEXT("r.Lumen.HardwareRayTracing")),
+        *Get(TEXT("r.Lumen.HardwareRayTracing.LightingMode")), *Get(TEXT("r.Lumen.HardwareRayTracing.HitLighting.ShadowMode")),
+        *Get(TEXT("r.Lumen.ScreenProbeGather.DownsampleFactor")), *Get(TEXT("r.Nanite")), *Get(TEXT("r.NGX.DLSS.Enable")),
+        *Get(TEXT("r.ScreenPercentage")), *Get(TEXT("r.AntiAliasingMethod")));
+    UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
+    // Shipping keeps no log: -SCQualityReport=<file> writes the line for checks of a packaged build.
+    FString ReportFile;
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCQualityReport="), ReportFile)) FFileHelper::SaveStringToFile(Report + TEXT("\n"), *ReportFile);
+}
+
 static int32 GShortRangeAOOverride = -1; // sc.Look.ShortRangeAO: -1 auto (budget), 0 screen space, 1 traced
 void SCLook::UpdateShortRangeAO(UWorld* World)
 {

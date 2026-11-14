@@ -21,4 +21,10 @@ public:
      *  Style/Name in the hangar index (USCHangarIndex::AssetPath), saving it. Returns false without a ship elevator. */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static bool RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name);
+    /** Readies a cooked environment for a Lightmass bake (ue/scripts/bake_hangar_lighting.py): every component static,
+     *  light functions dropped (static lights have none), each mesh component's lightmap resolution from its size
+     *  (TexelCm per texel, a power of two in [MinResolution, MaxResolution]), and generated lightmap UVs on the pooled
+     *  meshes, which are rebuilt and saved. Returns a one-line summary. */
+    UFUNCTION(BlueprintCallable, Category = "SC|Cook")
+    static FString PrepareStaticLighting(ASCVehicle* Environment, double TexelCm = 25.0, int32 MinResolution = 32, int32 MaxResolution = 1024);
 };

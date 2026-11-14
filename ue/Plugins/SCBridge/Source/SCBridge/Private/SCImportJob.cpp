@@ -937,7 +937,11 @@ void FSCImportJob::FState::Assemble()
                 C->SetHiddenInGame(I.bInvisible);
                 const UStaticMesh* Mesh = (*Variants)[Variant];
                 const TSet<int32>& Translucent = MeshTranslucentSlots.FindRef(I.MeshAsset);
+#if WITH_EDITOR
                 const bool bNanite = Mesh->IsNaniteEnabled();
+#else
+                const bool bNanite = Mesh->HasValidNaniteData(); // IsNaniteEnabled is editor-only; cooked meshes carry the data
+#endif
                 if (!bNanite && !Translucent.IsEmpty())
                 {
                     // Glass/decal/screen split: lit by Lumen but not part of its scene (no cards, no DF).

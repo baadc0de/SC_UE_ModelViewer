@@ -46,11 +46,12 @@ void FSCImporter::Unload(UWorld* World)
         if (Previous->IsValid()) Previous->Get()->Destroy();
     Vehicles.Remove(World);
 }
-ASCVehicle* USCImportLibrary::ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision)
+ASCVehicle* USCImportLibrary::ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision, const FString& ScenePath)
 {
     FSCFolderPackageSource Source(Folder);
     FSCImportOptions Options;
     Options.World = GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull);
+    Options.ScenePath = ScenePath;
     Options.bBuildCollision = bBuildCollision;
     Options.bImportMaterials = !FParse::Param(FCommandLine::Get(), TEXT("SCNoMaterials")); // timing baseline
     FSCImportResult Result;
@@ -63,6 +64,16 @@ ASCVehicle* USCImportLibrary::ImportFolder(UObject* WorldContext, const FString&
         if (Bounds.IsValid) Vehicle->AddActorWorldOffset(FVector(0, 0, 100.0 - Bounds.Min.Z));
     }
     return Result.Vehicle.Get();
+}
+int32 USCImportLibrary::RestOnFloor(ASCVehicle* Vehicle, double FloorZ)
+{
+    if (!Vehicle) return 0;
+    const int32 GearClips = Vehicle->RestOnLandingGear();
+    FString LowestPart;
+    const double Lowest = Vehicle->LowestVisibleZ(&LowestPart);
+    UE_LOG(LogSCImport, Display, TEXT("VIEWER_REST gear_clips=%d lowest_z=%.1f part=%s"), GearClips, Lowest, *LowestPart);
+    if (Lowest < TNumericLimits<double>::Max()) Vehicle->AddActorWorldOffset(FVector(0, 0, FloorZ - Lowest));
+    return GearClips;
 }
 ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath)
 {

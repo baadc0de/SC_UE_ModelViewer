@@ -140,7 +140,11 @@ SSCHierarchyPanel::FItem SSCHierarchyPanel::BuildNode(USceneComponent* Component
         Node->Kind = FNode::EKind::Static;
         const UStaticMesh* Asset = Mesh->GetStaticMesh();
         Node->Label = Asset ? Asset->GetName() : Node->Label;
+#if WITH_EDITOR
         Node->bNanite = Asset && Asset->IsNaniteEnabled() && Asset->HasValidNaniteData();
+#else
+        Node->bNanite = Asset && Asset->HasValidNaniteData(); // IsNaniteEnabled is editor-only
+#endif
         Node->Triangles = StaticTriangles(Asset);
         Node->Drawables = 1;
         TotalNanite += Node->bNanite;

@@ -45,3 +45,6 @@ ue/SCViewer/Content/SC/
 
 # NVIDIA DLSS plugin (downloaded from NVIDIA; its license does not allow redistribution)
 /ue/Plugins/NVIDIA/
+
+# Cook file-open-order logs (written by every Wasm cook)
+ue/SCViewer/Build/*/FileOpenOrder/

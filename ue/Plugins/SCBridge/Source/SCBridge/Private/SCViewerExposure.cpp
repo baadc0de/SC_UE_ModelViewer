@@ -115,6 +115,9 @@ APostProcessVolume* SCViewerExposure::Install(UWorld& World)
     bool bDisplay = false;
     if (Game.TonemappingCurve != 1)
     { UE_LOG(LogSCExposure, Error, TEXT("r_HDRTonemappingCurve=%d has no port: UE's tonemapper stays"), Game.TonemappingCurve); }
+    // The mobile renderer (the web build) drew a black scene with the port as its tonemapper: UE's stays there.
+    else if (World.GetFeatureLevel() < ERHIFeatureLevel::SM5)
+    { UE_LOG(LogSCExposure, Display, TEXT("display curve port is desktop-only (mobile feature level): UE's tonemapper stays")); }
     else if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/SCBridge/Materials/M_SC_DisplayMapping.M_SC_DisplayMapping")))
     {
         UMaterialInstanceDynamic* Display = UMaterialInstanceDynamic::Create(Base, Volume);

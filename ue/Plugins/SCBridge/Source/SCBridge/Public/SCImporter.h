@@ -60,8 +60,13 @@ public:
     static bool RunUnitTests();
     UFUNCTION(BlueprintCallable, Category="SC|Verification")
     static bool VerifyRig(ASCVehicle* Vehicle, const FString& PoseReference = TEXT(""), FName PoseClip = NAME_None);
+    /** ScenePath selects the package in a shared export root holding several (empty: the sole scene.json). */
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
-    static ASCVehicle* ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision = true);
+    static ASCVehicle* ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision = true, const FString& ScenePath = TEXT(""));
+    /** The viewer's resting pose: landing gear deployed (its clips), then the lowest visible part moved to FloorZ.
+     *  Returns the number of gear clips played. */
+    UFUNCTION(BlueprintCallable, Category="SC")
+    static int32 RestOnFloor(ASCVehicle* Vehicle, double FloorZ = -5.0);
     /** An object container package from a (shared) export root as an environment: effect-only placements hidden,
      *  repeated parts instanced. ScenePath selects the package's scene.json in a root holding several. */
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))

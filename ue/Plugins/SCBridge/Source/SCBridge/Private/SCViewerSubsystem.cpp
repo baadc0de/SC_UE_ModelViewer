@@ -21,6 +21,7 @@
 #include "SCViewOptions.h"
 #include "SCViewerSettings.h"
 #include "SCImportJob.h"
+#include "SCImporter.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
 #include "Dom/JsonValue.h"
@@ -90,6 +91,7 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     CacheDir = USCViewerSettings::Get()->ResolveCacheDir();
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
+    bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
     if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
@@ -357,6 +359,8 @@ FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
     const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
     if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
     const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
+    // -SCBakedLighting (the web build): the variant with Lightmass lighting (bake_hangar_lighting.py), when baked.
+    if (FParse::Param(FCommandLine::Get(), TEXT("SCBakedLighting")) && FPackageName::DoesPackageExist(Level + TEXT("_Lit"))) return Level + TEXT("_Lit");
     return FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
 void USCViewerSubsystem::ShowMapHangar(bool bShow)
@@ -528,9 +532,24 @@ void USCViewerSubsystem::SetEnvironmentState(const FString& State)
     EnvironmentState = State.ToLower();
     FSCEnvironment::SetState(Environment.Get(), EnvironmentState);
 }
+FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
+{
+    if (Entity.IsEmpty() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
+    FString Name = Entity.TrimStartAndEnd();
+    for (TCHAR& C : Name)
+        if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
+    const FString Level = TEXT("/Game/SC/Ships/Maps/") + Name;
+    return FPackageName::DoesPackageExist(Level) ? Level : FString();
+}
+bool USCViewerSubsystem::CanLoad(const FString& Entity) const
+{
+    return !IsBusy() && (ArchiveState == ESCArchiveState::Ready || !CookedShipLevel(Entity).IsEmpty());
+}
+
 bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOptions)
 {
-    if (Entity.IsEmpty() || IsBusy() || ArchiveState != ESCArchiveState::Ready)
+    const FString Cooked = CookedShipLevel(Entity);
+    if (Entity.IsEmpty() || IsBusy() || (ArchiveState != ESCArchiveState::Ready && Cooked.IsEmpty()))
     {
         UE_LOG(LogSCViewer, Warning, TEXT("LoadEntity(%s) refused: %s"), *Entity,
                Entity.IsEmpty() ? TEXT("no entity") : IsBusy() ? TEXT("a load is running") : TEXT("archive not open"));
@@ -551,6 +570,22 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
         FinishLoad(ESCLoadPhase::Succeeded, FString());
         return true;
     }
+    if (!Cooked.IsEmpty())
+    {
+        UnloadInternal(true);
+        bool bOK = false;
+        ShipLevel = ULevelStreamingDynamic::LoadLevelInstance(GetViewerWorld(), Cooked, FVector::ZeroVector, FRotator::ZeroRotator, bOK);
+        if (!bOK || !ShipLevel)
+        {
+            ShipLevel = nullptr;
+            FinishLoad(ESCLoadPhase::Failed, TEXT("cannot stream the cooked level ") + Cooked);
+            return false;
+        }
+        ImportStart = FPlatformTime::Seconds();
+        Phase = ESCLoadPhase::Importing;
+        UE_LOG(LogSCViewer, Display, TEXT("VIEWER_LOAD_COOKED entity=%s level=%s"), *Entity, *Cooked);
+        return true;
+    }
     sc_options Ffi;
     LoadOptions->ToFfi(Ffi);
     ExportProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
@@ -561,6 +596,12 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
 void USCViewerSubsystem::CancelLoad()
 {
     if (!IsBusy()) return;
+    if (ShipLevel && !Vehicle.IsValid())
+    {
+        UnloadShipLevel();
+        FinishLoad(ESCLoadPhase::Cancelled, FString());
+        return;
+    }
     Report.MeshesBuiltAtCancel = Job ? Job->GetResult().MeshStats.Num() : 0;
     Report.bWorkersPendingAtCancel = Job ? Job->HasPendingWorkers() : (ExportTask.IsValid() && !ExportTask.IsCompleted()) ||
                                                                           (ParseTask.IsValid() && !ParseTask.IsCompleted());
@@ -668,6 +709,13 @@ FString USCViewerSubsystem::GetLoadPhaseText() const
 
 void USCViewerSubsystem::StepLoad(bool bBlocking)
 {
+    if (ShipLevel && !Vehicle.IsValid())
+    {
+        if (bBlocking)
+            if (UWorld* World = GetViewerWorld()) World->FlushLevelStreaming(); // commandlets and tests: no world tick streams it
+        StepCookedShip();
+        return;
+    }
     if (Phase == ESCLoadPhase::Exporting)
     {
         if (!ExportTask.IsCompleted())
@@ -745,11 +793,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         if (Stage == ESCImportStage::Succeeded)
         {
             Vehicle = Result.Vehicle;
-            const int32 GearClips = Vehicle->RestOnLandingGear();
-            FString LowestPart;
-            const double Lowest = Vehicle->LowestVisibleZ(&LowestPart);
-            UE_LOG(LogSCViewer, Display, TEXT("VIEWER_REST gear_clips=%d lowest_z=%.1f part=%s"), GearClips, Lowest, *LowestPart);
-            if (Lowest < TNumericLimits<double>::Max()) Vehicle->AddActorWorldOffset(FVector(0, 0, ViewerFloorZ - Lowest));
+            USCImportLibrary::RestOnFloor(Vehicle.Get(), ViewerFloorZ);
             LoadedEntity = PendingEntity;
             LoadedKey = PendingKey;
             Job.Reset();
@@ -815,6 +859,38 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
     OnLoadFinished.Broadcast(Report);
 }
 
+void USCViewerSubsystem::StepCookedShip()
+{
+    if (Phase == ESCLoadPhase::Cancelled || Phase == ESCLoadPhase::Failed) return;
+    ULevel* Level = ShipLevel->GetLoadedLevel();
+    if (!Level || !ShipLevel->IsLevelVisible()) return;
+    ASCVehicle* Cooked = nullptr;
+    for (AActor* Actor : Level->Actors)
+        if ((Cooked = Cast<ASCVehicle>(Actor)) != nullptr) break;
+    if (!Cooked)
+    {
+        UnloadShipLevel();
+        FinishLoad(ESCLoadPhase::Failed, TEXT("the cooked ship level holds no vehicle actor"));
+        return;
+    }
+    // Runtime-only state the cook does not keep (as for a cooked environment): the light shadow policy, dirt parameters.
+    Vehicle = Cooked;
+    Cooked->RefreshLightShadowPolicy();
+    FSCDirt::Push(GetViewerWorld());
+    Report.ImportSeconds = FPlatformTime::Seconds() - ImportStart;
+    LoadedEntity = PendingEntity;
+    LoadedKey = PendingKey;
+    FinishLoad(ESCLoadPhase::Succeeded, FString());
+}
+void USCViewerSubsystem::UnloadShipLevel()
+{
+    if (!ShipLevel) return;
+    ShipLevel->SetShouldBeLoaded(false);
+    ShipLevel->SetShouldBeVisible(false);
+    ShipLevel->SetIsRequestingUnloadAndRemoval(true);
+    ShipLevel = nullptr;
+}
+
 void USCViewerSubsystem::UnloadInternal(bool bCollect)
 {
     UWorld* ViewerWorld = GetViewerWorld();
@@ -831,6 +907,12 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect)
     Focused = nullptr;
     ASCVehicle* Previous = Vehicle.Get();
     TArray<TWeakObjectPtr<UObject>> Tracked;
+    if (ShipLevel)
+    {
+        // A cooked ship leaves with its level (its assets are packages, not an import session).
+        UnloadShipLevel();
+        Previous = nullptr;
+    }
     if (Previous)
     {
         TrackSession(Previous, Previous->SessionPath, Tracked);
@@ -882,6 +964,11 @@ bool USCViewerSubsystem::Tick(float)
         }
         UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE ok=%d seconds=%.3f index_cache_hit=%d cache_bytes=%llu cache_entries=%llu error=\"%s\""),
                Result.bOK, Result.Seconds, Result.bIndexCacheHit, CacheStats.Bytes, CacheStats.Entries, *Result.Error.ToString());
+    }
+    if (bMaxQualityPending && GetViewerWorld())
+    {
+        bMaxQualityPending = false; // after the game user settings applied their scalability at startup
+        SCLook::ApplyMaxQuality();
     }
     CompleteSearches(false);
     StepLoad(false);
