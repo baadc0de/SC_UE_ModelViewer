@@ -143,7 +143,35 @@ ProfileGPU: RTX frame `SampledDirectLighting` 5.6 ms + DLSS-RR; Lumen frame `Meg
 reflections 0.7 ms, DLSS upscaling 0.4 ms, no sampled-lighting pass. `-SCRenderPath=lumen` boots on Lumen and leaves
 the saved choice (RTX) alone.
 
+## Mega Geometry setting; RTX requires it (2026-11-14)
+
+Path tracing without Mega Geometry runs on the Nanite fallback proxies, where the sampled-lighting rays draw black floors
+and hull streaks (above), so `FSCRenderFeatures::Supports(RTX)` now also requires active Mega Geometry: with it off or
+unsupported the "Path traced" button is disabled (its tooltip says why) and a saved RTX choice runs as Lumen +
+MegaLights without being overwritten (`RENDER_PATH path=lumen requested=rtx … mega_geometry=0`).
+
+Mega Geometry itself is a next-start choice — `r.Nanite.RayTracing` is read-only at run time: options panel checkbox
+under "Lighting" (shown where the GPU supports cluster operations, with "restart to apply" while the choice differs from
+the running state) and `sc.MegaGeometry [0|1]`. It is written to the user's `Engine.ini` `[SystemSettings]`
+(`Saved/Config/WindowsEditor/` for the editor-binary host), which outranks the project's Windows layer; UE writes user
+`Engine.ini` sections only when whitelisted, so the Windows layer adds `[SectionsToSave] +Section=SystemSettings`
+(diff save: only keys set at run time are written). Turning it off is the fallback if the hang below recurs.
+
+Verified over three starts (Golem): on → `sc.MegaGeometry 0` (user `Engine.ini` gets `r.Nanite.RayTracing=0`) → next
+start Lumen with `mega_geometry=0`, `sc.RenderPath rtx` refused, saved choice still RTX → `sc.MegaGeometry 1` → next
+start path traced with Mega Geometry.
+
+**GPU hang after a paint swap (2026-11-14, not reproduced).** In a ~13 min session (Galaxy demo, ~15 lighting toggles,
+then the ARGO RAFT loaded into the same session) the GPU was lost (`DXGI_ERROR_DEVICE_HUNG`) 7 s after `sc.Paint`
+swapped 33,711 material slots; only 6 frames rendered in between; active breadcrumbs `RayTracingScene → NaniteRT: Stats
+Update` with `BasePass` waiting; Mega Geometry persistent memory had grown to 3.39 GB. Two replays (`paint-swap.txt`: the
+RAFT alone; `paint-swap-session.txt`: the session's order, peak 2.5 GB) completed without loss; each swap costs a 1–2 s
+hitch. Suspected: Mega Geometry under long-session load, with the paint swap as the last straw. An Aftermath dump
+(`.nv-gpudmp`) was written; reading it needs Nsight Graphics.
+
 ## Open
+
+- The paint-swap GPU hang above (needs a reproduction or the Aftermath dump decoded).
 
 - Mega Geometry stability over longer sessions (now 5 runs × 2–10 min with `Update` on, Golem and Galaxy, no loss).
 - The blue wall patches that only the path tracers show (cause open).

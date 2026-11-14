@@ -17,7 +17,8 @@ Windows-only look is `SCViewer/Config/Windows/WindowsEngine.ini` (it needs Subst
 is staged with `scripts/build_ffi.ps1`, and the build is
 `<engine>\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs>\ue\SCViewer\SCViewer.uproject`.
 `-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows). The options panel's "Lighting"
-row, `sc.RenderPath rtx|lumen|toggle` and `-SCRenderPath=` switch live between path tracing and Lumen + MegaLights. Results and requirements:
+row, `sc.RenderPath rtx|lumen|toggle` and `-SCRenderPath=` switch live between path tracing and Lumen + MegaLights;
+path tracing needs RTX Mega Geometry, a next-start choice (the checkbox under it, `sc.MegaGeometry 0|1`). Results and requirements:
 [verification/RTXPT-1.md](verification/RTXPT-1.md).
 
 ## Decision

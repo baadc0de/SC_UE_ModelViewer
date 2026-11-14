@@ -295,15 +295,40 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
             SNew(SCheckBox)
             .Style(FCoreStyle::Get(), "ToggleButtonCheckbox")
             .IsEnabled_Lambda([P = Path.Key] { return FSCRenderFeatures::Query().Supports(P); })
-            .ToolTipText(Path.Key == ESCRenderPath::RTX
-                             ? LOCTEXT("PathTracedTip", "RTXDI direct + ReSTIR PT indirect lighting, DLSS Ray Reconstruction (NvRTX engine, D3D12, RTX GPU)")
-                             : LOCTEXT("LumenTip", "Lumen global illumination and reflections, MegaLights direct lighting"))
+            .ToolTipText_Lambda([P = Path.Key] {
+                if (P == ESCRenderPath::Lumen) return LOCTEXT("LumenTip", "Lumen global illumination and reflections, MegaLights direct lighting");
+                const FSCRenderFeatures F = FSCRenderFeatures::Query();
+                if (F.bSampledLighting && !F.bMegaGeometry)
+                    return LOCTEXT("PathTracedNeedsMG", "Needs RTX Mega Geometry (full-detail ray tracing): turn it on below and restart");
+                return LOCTEXT("PathTracedTip", "RTXDI direct + ReSTIR PT indirect lighting, DLSS Ray Reconstruction (NvRTX engine, D3D12, RTX GPU, Mega Geometry)");
+            })
             .IsChecked_Lambda([P = Path.Key] { return SCRenderPath::Current() == P ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
             .OnCheckStateChanged_Lambda([P = Path.Key](ECheckBoxState) {
-                USCViewerSettings::Get()->RenderPath = SCRenderPath::Apply(P);
+                if (SCRenderPath::Apply(P) != P) return;
+                USCViewerSettings::Get()->RenderPath = P;
                 USCViewerSettings::Get()->Save();
             })
             [SNew(SBox).Padding(FMargin(5, 1))[SNew(STextBlock).Font(Font(9)).Text(Path.Value)]]
+        ];
+    // Mega Geometry (read-only at run time): the choice for the next start; path tracing needs it. Shown where the
+    // GPU can build it.
+    TSharedRef<SHorizontalBox> MegaGeometry = SNew(SHorizontalBox)
+        .Visibility_Lambda([] { return SCRenderPath::MegaGeometrySupported() ? EVisibility::Visible : EVisibility::Collapsed; })
+        + SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(78)]
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+        [
+            SNew(SCheckBox)
+            .ToolTipText(LOCTEXT("MegaGeometryTip", "RTX Mega Geometry: ray trace full-detail Nanite geometry (needed for path tracing). Takes effect after a restart; off = Lumen + MegaLights only."))
+            .IsChecked_Lambda([] { return SCRenderPath::MegaGeometryOnNextStart() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+            .OnCheckStateChanged_Lambda([](ECheckBoxState State) { SCRenderPath::SetMegaGeometryOnNextStart(State == ECheckBoxState::Checked); })
+            [SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("MegaGeometry", "Mega Geometry"))]
+        ]
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+        [
+            SNew(STextBlock).Font(Font(8)).ColorAndOpacity(Dim()).Text(LOCTEXT("RestartToApply", "restart to apply"))
+            .Visibility_Lambda([] {
+                return SCRenderPath::MegaGeometryOnNextStart() != FSCRenderFeatures::Query().bMegaGeometry ? EVisibility::Visible : EVisibility::Collapsed;
+            })
         ];
     return SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Lod", "LOD"), {0, 1, 2, 3}, IntField(&USCViewOptions::Lod))]
@@ -333,7 +358,8 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[DirtColours]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Environment]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Paint]
-        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Lighting];
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Lighting]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MegaGeometry];
 }
 
 TSharedRef<ITableRow> SSCModelBrowser::MakeRow(FHit Hit, const TSharedRef<STableViewBase>& Owner)
