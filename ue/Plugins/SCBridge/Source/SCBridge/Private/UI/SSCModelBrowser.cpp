@@ -6,6 +6,7 @@
 #include "SCViewerSettings.h"
 #include "SCViewOptions.h"
 #include "SCDirt.h"
+#include "SCRenderPath.h"
 #include "Misc/Paths.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/Input/SComboButton.h"
@@ -282,6 +283,28 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
                 return SNew(SBox).MaxDesiredHeight(480)[Menu.MakeWidget()];
             })
         ];
+    // Lighting path (RTXPT-1): switched live and saved with the user settings; RTX only where the renderer has it.
+    TSharedRef<SHorizontalBox> Lighting = SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+        [SNew(SBox).WidthOverride(72)[SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Text()).Text(LOCTEXT("Lighting", "Lighting"))]];
+    const TPair<ESCRenderPath, FText> Paths[] = {{ESCRenderPath::RTX, LOCTEXT("PathTraced", "Path traced")},
+                                                 {ESCRenderPath::Lumen, LOCTEXT("LumenMegaLights", "Lumen + MegaLights")}};
+    for (const auto& Path : Paths)
+        Lighting->AddSlot().AutoWidth().Padding(0, 0, 2, 0)
+        [
+            SNew(SCheckBox)
+            .Style(FCoreStyle::Get(), "ToggleButtonCheckbox")
+            .IsEnabled_Lambda([P = Path.Key] { return FSCRenderFeatures::Query().Supports(P); })
+            .ToolTipText(Path.Key == ESCRenderPath::RTX
+                             ? LOCTEXT("PathTracedTip", "RTXDI direct + ReSTIR PT indirect lighting, DLSS Ray Reconstruction (NvRTX engine, D3D12, RTX GPU)")
+                             : LOCTEXT("LumenTip", "Lumen global illumination and reflections, MegaLights direct lighting"))
+            .IsChecked_Lambda([P = Path.Key] { return SCRenderPath::Current() == P ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+            .OnCheckStateChanged_Lambda([P = Path.Key](ECheckBoxState) {
+                USCViewerSettings::Get()->RenderPath = SCRenderPath::Apply(P);
+                USCViewerSettings::Get()->Save();
+            })
+            [SNew(SBox).Padding(FMargin(5, 1))[SNew(STextBlock).Font(Font(9)).Text(Path.Value)]]
+        ];
     return SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Lod", "LOD"), {0, 1, 2, 3}, IntField(&USCViewOptions::Lod))]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[MakeChoice(LOCTEXT("Mip", "Texture mip"), {0, 2, 4}, IntField(&USCViewOptions::Mip))]
@@ -309,7 +332,8 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Underside]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[DirtColours]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Environment]
-        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Paint];
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Paint]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Lighting];
 }
 
 TSharedRef<ITableRow> SSCModelBrowser::MakeRow(FHit Hit, const TSharedRef<STableViewBase>& Owner)
