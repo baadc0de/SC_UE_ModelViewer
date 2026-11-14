@@ -42,3 +42,6 @@ __pycache__/
 
 # Cooked environments and kept assets are game-derived (WP-C1, Keep as assets)
 ue/SCViewer/Content/SC/
+
+# NVIDIA DLSS plugin (downloaded from NVIDIA; its license does not allow redistribution)
+/ue/Plugins/NVIDIA/

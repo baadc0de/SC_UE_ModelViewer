@@ -1,0 +1,17 @@
+# Win64 anti-aliasing / upscaling A/B (NVIDIA DLSS plugin, ue/README.md): DLAA (DLSS at 100 %, the Win64 default),
+# TSR (r.NGX.DLSS.Enable 0) and DLSS Super Resolution Quality (67 %) at one view; a shot and a 5 s frame-time sample each.
+# Ship-agnostic (host camera). Host: -SCLoad=<entity> [-SCEnvironment=<hangar socpak>] -SCShotDir=<dir>
+30 r.VSync 0
+0.5 t.MaxFPS 0
+0 r.ScreenPercentage 100
+4 shot aa-dlaa
+0 frametime 5 aa-dlaa
+0 r.NGX.DLSS.Enable 0
+4 shot aa-tsr
+0 frametime 5 aa-tsr
+0 r.NGX.DLSS.Enable 1
+0 r.ScreenPercentage 67
+4 shot aa-dlss-quality
+0 frametime 5 aa-dlss-quality
+0 r.ScreenPercentage 100
+1 quit

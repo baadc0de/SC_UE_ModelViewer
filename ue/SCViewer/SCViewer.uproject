@@ -58,14 +58,6 @@
       "PlatformAllowList": [
         "Win64"
       ]
-    },
-    {
-      "Name": "NRD",
-      "Enabled": true,
-      "Optional": true,
-      "PlatformAllowList": [
-        "Win64"
-      ]
     }
   ]
 }

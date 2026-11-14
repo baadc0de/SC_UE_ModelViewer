@@ -11,15 +11,22 @@ WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available sp
 The probe's project build products occupy about 434 MiB, plus 17 MiB under
 `./cache/spike/`; no engine source was changed. Logs/build products are ignored.
 
-**Win64 / NvRTX (RTXPT-1):** the project also builds and runs on Windows against an NvRTX `nvrtx-5.8` source
-engine with D3D12, real-time path tracing (RTXDI + ReSTIR PT), DLSS Ray Reconstruction and RTX Mega Geometry; the
-Windows-only look is `SCViewer/Config/Windows/WindowsEngine.ini` (it needs Substrate's blendable G-buffer), the FFI
-is staged with `scripts/build_ffi.ps1`, and the build is
+**Win64:** the project also builds and runs on Windows (UE 5.9 from the Epic launcher, D3D12 SM6:
+`SCViewer/Config/Windows/WindowsEngine.ini`; the look is the shared one). The FFI is staged with
+`scripts/build_ffi.ps1` (`scbridge.dll` + import library) and the build is
 `<engine>\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs>\ue\SCViewer\SCViewer.uproject`.
-`-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows). The options panel's "Lighting"
-row, `sc.RenderPath rtx|lumen|toggle` and `-SCRenderPath=` switch live between path tracing and Lumen + MegaLights;
-path tracing needs RTX Mega Geometry, a next-start choice (the checkbox under it, `sc.MegaGeometry 0|1`). Results and requirements:
-[verification/RTXPT-1.md](verification/RTXPT-1.md).
+`-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows). NVIDIA DLSS is enabled on Win64
+(`.uproject` entry, `Optional`; `r.NGX.DLSS.Enable 1`): DLAA at the default 100 % screen percentage, DLSS Super
+Resolution below it (`r.ScreenPercentage 67` = Quality). The plugin is NVIDIA's download (developer.nvidia.com/rtx/dlss,
+not redistributable): `powershell -File scripts/install_dlss.ps1 -Zip <zip>` installs DLSS and its dependency
+StreamlineNGXCommon into `ue/Plugins/NVIDIA/` (gitignored) and applies the casts UE 5.9's compile-time format check
+needs in NVIDIA's 8.7.2 (UE 5.8) source; without the plugin the project builds and runs with TSR.
+`ue/scripts/routes/dlss-modes.txt` compares DLAA / TSR / DLSS Quality (Golem, small hightech hangar, RTX 4090, 1080p,
+GPU ms p50: 7.22 / 7.39 / 5.22).
+
+**Web (planned):** a separate 5.9 Wasm / WebGPU build that bakes one level and one ship as cooked assets — no Data.p4k,
+no Rust FFI in the browser (32-bit Wasm, ~2 GB practical memory). Building blocks: cooked hangar levels
+(`cook_hangars.py`, `SCCookLibrary`) and Keep-as-assets for a ship (`SCKeepAssets`).
 
 ## Decision
 
