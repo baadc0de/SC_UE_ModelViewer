@@ -122,15 +122,31 @@ Remaining differences against the grid-256 reference:
 
 - Under the hull the real-time underside is darker; the reference shows a faint warm bounce from the floor.
 - Exterior: the real-time hangar walls are brighter, and both path tracers show saturated blue patches on the walls
-  that no real-time mode shows (also seen on the Golem). Likely explanation, not verified: the importer confines room
-  lights with lighting channels (WP-L1); raster / RTXDI honour them, the path tracers ignore them, so the room and
-  elevator lights leak onto the hangar walls in the references. A 256-light cell may also still overflow there.
+  that no real-time mode shows (also seen on the Golem). Cause open. (An earlier note blamed lighting-channel room
+  confinement; that is off in the look, `bConfineLightsToRooms` = false, so it does not apply.) A 256-light cell may
+  still overflow there.
+
+## Lighting path toggle (2026-11-14)
+
+`SCRenderPath` switches between the two looks **live**: RTX (RTXDI + ReSTIR PT + DLSS-RR) and Lumen + MegaLights
+(DLSS as DLAA only; the Lumen reflection / shadow denoisers that RR replaced go back to their engine defaults). Entry
+points: options panel "Lighting", `sc.RenderPath rtx|lumen|toggle` (no argument logs the state), `-SCRenderPath=` for
+one run; the choice is saved (`USCViewerSettings::RenderPath`, default RTX). RTX falls back to Lumen where the renderer
+lacks sampled lighting (non-NvRTX engines, no hardware ray tracing, adaptive Substrate G-buffer). Only run-time cvars
+are touched — MegaLights compiles whenever `r.MegaLights.Supported` is on, whatever `EnableForProject` was at startup.
+Mega Geometry needs no switch: `IsNaniteRayTracingEnabled()` is `r.Nanite.RayTracing && SupportsClusterOps`, so the
+Win64 layer's setting is on exactly where the GPU supports it; the viewer logs what it found at startup
+(`RENDER_PATH … mega_geometry=`). The G-buffer stays blendable on Win64 in both paths (read-only, needed by RTX).
+
+Route `golem-render-path.txt` (Golem exterior, GPU ms p50): RTX 26.4 → Lumen + MegaLights **8.6** → RTX 26.7.
+ProfileGPU: RTX frame `SampledDirectLighting` 5.6 ms + DLSS-RR; Lumen frame `MegaLights` 1.5 ms, Lumen HWRT
+reflections 0.7 ms, DLSS upscaling 0.4 ms, no sampled-lighting pass. `-SCRenderPath=lumen` boots on Lumen and leaves
+the saved choice (RTX) alone.
 
 ## Open
 
 - Mega Geometry stability over longer sessions (now 5 runs × 2–10 min with `Update` on, Golem and Galaxy, no loss).
-- Verify the lighting-channel explanation for the blue wall patches (e.g. a reference with the room-channel lights
-  disabled).
+- The blue wall patches that only the path tracers show (cause open).
 - The darker real-time underside of the Galaxy (bounce from the floor under a large hull).
 - `Seat` spawns refuse the teleport on the Golem (the route uses `Door`, `Hull` and a noclip placement).
 - A MegaLights comparison on the same Windows build was not run (needs the adaptive G-buffer and a second shader set).

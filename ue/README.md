@@ -16,7 +16,8 @@ engine with D3D12, real-time path tracing (RTXDI + ReSTIR PT), DLSS Ray Reconstr
 Windows-only look is `SCViewer/Config/Windows/WindowsEngine.ini` (it needs Substrate's blendable G-buffer), the FFI
 is staged with `scripts/build_ffi.ps1`, and the build is
 `<engine>\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs>\ue\SCViewer\SCViewer.uproject`.
-`-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows). Results and requirements:
+`-SCShotDir=<dir>` saves route shots in-engine (no `capture_route.sh` on Windows). The options panel's "Lighting"
+row, `sc.RenderPath rtx|lumen|toggle` and `-SCRenderPath=` switch live between path tracing and Lumen + MegaLights. Results and requirements:
 [verification/RTXPT-1.md](verification/RTXPT-1.md).
 
 ## Decision

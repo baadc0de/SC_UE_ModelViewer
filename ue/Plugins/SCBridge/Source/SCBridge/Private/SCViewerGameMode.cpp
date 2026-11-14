@@ -3,6 +3,7 @@
 #include "SCViewerExposure.h"
 #include "SCLook.h"
 #include "SCLookLighting.h"
+#include "SCRenderPath.h"
 #include "SCViewerSettings.h"
 #include "SCViewerPawn.h"
 #include "UI/SSCViewerRoot.h"
@@ -25,6 +26,7 @@ void ASCViewerGameMode::StartPlay()
         SCViewerExposure::Install(*World);
         SCLookLighting::ApplyDefaults(World); // LOOK-8: bloom, threshold, exposure bias
     }
+    SCRenderPath::Apply(SCRenderPath::Resolve()); // RTXPT-1: the saved / -SCRenderPath lighting path
     Super::StartPlay();
 }
 
