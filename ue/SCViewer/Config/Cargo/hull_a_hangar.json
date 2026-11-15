@@ -1,0 +1,64 @@
+{
+  "name": "MISC Hull A in a large high-tech hangar",
+  "ship": "MISC_Hull_A",
+  "environment": "Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak",
+  "drone": {
+    "tractor_beam": {
+      "record": "EntityClassDefinition.grin_multitool_01_default_tractorbeam",
+      "record_guid": "dc0b1117-8590-43c7-9c68-7644ed8c89aa",
+      "action": "TractorBeam",
+      "max_force": 257500.0,
+      "min_distance": 0.5,
+      "max_distance": 150.0,
+      "full_strength_distance": 3.0,
+      "max_volume": 20.0,
+      "volume_force_coefficient": 0.3,
+      "provenance": "Fallback only. With the archive (FFI), the values come from the record at run time (sc_datacore_record: the SWeaponActionFireTractorBeamParams whose name is action; maxForce / minDistance / maxDistance / fullStrengthDistance / maxVolume; log CARGO_TRACTOR source=datacore). These are the values of LIVE 4.10.2 Data.p4k (docs/cargo/datamine.md, Drone and tractor references), used without the archive (Web build, SC_WITH_FFI=0). maxVolume is read in SCU, the unit the boxes occupancy volume is authored in (SStandardCargoUnit): one beam takes 20 SCU, so a 16 SCU box needs one drone and 24 / 32 SCU boxes need two."
+    },
+    "flight": {
+      "max_speed_m_s": 10.0,
+      "max_accel_m_s2": 12.0,
+      "max_jerk_m_s3": 30.0,
+      "drone_mass_kg": 180.0,
+      "min_load_accel_m_s2": 1.0,
+      "normal_clearance_m": 0.3,
+      "clearance_margin_m": 2.0,
+      "formation_spacing_m": 1.5,
+      "sway_amplitude_cm": 4.0,
+      "sway_tilt_deg": 3.0,
+      "sway_frequency_hz": 0.3,
+      "note": "Viewer choices, not game data (sway: gusts in atmosphere, less under load): the game has no cargo-drone entity (docs/cargo/datamine.md). A loaded team accelerates at (N F - m g) / (N drone_mass + m), at most max_accel; a team keeps at least min_load_accel."
+    }
+  },
+  "atmosphere": true,
+  "atmosphere_note": "The hangar is pressurised: drones sway in gusts. No data signal names a room's atmosphere (viewer setting).",
+  "docks": [
+    {"grid": {"owner": "vehicle", "index": 3}, "drones": 2},
+    {"grid": {"owner": "environment", "index": 0}, "drones": 2}
+  ],
+  "stock": [
+    {
+      "grid": {"owner": "vehicle", "index": 0},
+      "boxes": [
+        {"entity": "Carryable_TBO_FL_16SCU_Commodity_Organic", "count": 1, "commodity": "organic", "label": "Organic"}
+      ]
+    },
+    {
+      "grid": {"owner": "environment", "index": 0},
+      "boxes": [
+        {"entity": "Carryable_TBO_FL_16SCU_Commodity_Organic", "count": 1, "commodity": "organic", "label": "Organic", "origin": [0, 10, 0]},
+        {"entity": "Carryable_TBO_FL_2SCU_Commodity_Organic_Fotia", "count": 1, "commodity": "organic_fotia", "label": "Organic (Fotia)", "origin": [0, 10, 2]},
+        {"entity": "Carryable_TBO_FL_32SCU_Commodity_Organic", "count": 1, "commodity": "organic", "label": "Organic"},
+        {"entity": "Carryable_TBO_FL_24SCU_Commodity_Organic", "count": 1, "commodity": "organic", "label": "Organic"},
+        {"entity": "Carryable_TBO_FL_16SCU_Commodity_Organic", "count": 2, "commodity": "organic", "label": "Organic"}
+      ]
+    },
+    {
+      "grid": {"owner": "environment", "index": 1},
+      "boxes": [
+        {"entity": "Carryable_TBO_FL_8SCU_Commodity_Organic", "count": 2, "commodity": "organic", "label": "Organic"},
+        {"entity": "Carryable_TBO_FL_4SCU_Commodity_Organic", "count": 2, "commodity": "organic", "label": "Organic"}
+      ]
+    }
+  ]
+}

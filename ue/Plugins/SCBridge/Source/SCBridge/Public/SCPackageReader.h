@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "SCPackageSource.h"
+#include "Cargo/SCCargoTypes.h"
 #include "SCPackageReader.generated.h"
 
 USTRUCT(BlueprintType)
@@ -25,6 +26,8 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString ParentId;
     /** Lossless authored item-port record (`port`), empty when the instance has none. */
     UPROPERTY(BlueprintReadOnly) FString PortJson;
+    /** Item-port names from the root entity to this item (`port_path`, WP-K1); empty for the root and placements. */
+    UPROPERTY(BlueprintReadOnly) TArray<FString> PortPath;
     /** `port.attachment == "bone"` without a resolved local transform: placed by aligning the port's
      *  item_offset_helper with the parent joint plus the port offset (contract "Player kits"). */
     bool bBonePort = false;
@@ -144,6 +147,10 @@ struct SCBRIDGE_API FSCSceneManifest
     /** WP-P3: `root_entity.physics_grid` as a triangle soup in the root entity's UE frame (cm); empty without one. */
     TArray<FVector> PhysicsGrid;
     TArray<int32> PhysicsGridShapeEnds; // end (exclusive) in PhysicsGrid of each shape: every shape is its own volume
+    /** WP-K1: `inventory_containers[]` of the vehicle (loadout items) and of its interiors (InteriorIndex set). */
+    UPROPERTY(BlueprintReadOnly) TArray<FSCInventoryContainerRecord> InventoryContainers;
+    /** WP-K1: the root item's footprint (`root_entity.inventory_occupancy` & co.); bValid false without one. */
+    UPROPERTY(BlueprintReadOnly) FSCItemOccupancy RootOccupancy;
     TArray<FString> MeshAssets() const;
     /** What paint Variant puts on an instance (resolved palettes): an instance on the vehicle's own exterior material
      *  file takes the paint's exterior file; one on the vehicle's palette takes the paint's palette. False when the

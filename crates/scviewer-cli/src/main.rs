@@ -28,6 +28,10 @@ enum Command {
     Clips {
         entity: String,
     },
+    /// One DataCore record as JSON: `Type.Name`, a bare record name or a GUID.
+    Record {
+        name_or_guid: String,
+    },
     Search {
         q: String,
         #[arg(long, default_value_t = 20)]
@@ -51,6 +55,14 @@ enum Command {
         #[command(flatten)]
         opts: Options,
     },
+    /// A game environment (object container, e.g. a hangar `.socpak` path) as a decomposed package tar, through
+    /// the same cached export the viewer uses.
+    EnvironmentTar {
+        socpak: String,
+        out: PathBuf,
+        #[command(flatten)]
+        opts: Options,
+    },
     Validate {
         dir: PathBuf,
     },
@@ -66,6 +78,12 @@ enum PlayerCommand {
         gender: String,
         #[arg(long)]
         loadout: Option<String>,
+        /// Keep only these loadout weapons (entity class names; repeat or comma-separate). Default: every weapon.
+        #[arg(long = "weapon", value_delimiter = ',')]
+        weapons: Vec<String>,
+        /// Put each kept weapon's default attachments (e.g. magazines) into the wearer's empty ports.
+        #[arg(long)]
+        spare_attachments: bool,
     },
     Loadouts {
         #[arg(long, default_value = "male", value_parser = ["male", "female"])]
@@ -144,9 +162,17 @@ pub(crate) fn main() -> Result<()> {
     )?;
     match cli.command {
         Command::Player { command } => match command {
-            PlayerCommand::Export { out, gender, loadout } => write(
+            PlayerCommand::Export { out, gender, loadout, weapons, spare_attachments } => write(
                 &out,
-                &session.export_player(&scviewer_core::PlayerRequest { gender, loadout }, None)?,
+                &session.export_player(
+                    &scviewer_core::PlayerRequest {
+                        gender,
+                        loadout,
+                        weapons: (!weapons.is_empty()).then_some(weapons),
+                        spare_attachments,
+                    },
+                    None,
+                )?,
             )?,
             PlayerCommand::Loadouts { gender } => println!(
                 "{}",
@@ -176,6 +202,9 @@ pub(crate) fn main() -> Result<()> {
                 call_started.elapsed().as_secs_f64() * 1000.0
             );
             println!("{}", serde_json::to_string_pretty(&catalogue)?);
+        }
+        Command::Record { name_or_guid } => {
+            println!("{}", serde_json::to_string_pretty(&session.datacore_record(&name_or_guid)?)?);
         }
         Command::Search { q, limit } => {
             for hit in session.search_entities(&q, limit) {
@@ -234,6 +263,18 @@ pub(crate) fn main() -> Result<()> {
                 },
                 None,
             )?,
+        )?,
+        Command::EnvironmentTar { socpak, out, opts } => write(
+            &out,
+            &session
+                .export_environment_decomposed_mem_cached(
+                    &socpak,
+                    &DecomposedOptions {
+                        geometry: opts.options(true),
+                    },
+                    None,
+                )?
+                .value,
         )?,
         Command::Validate { .. } => unreachable!(),
     }

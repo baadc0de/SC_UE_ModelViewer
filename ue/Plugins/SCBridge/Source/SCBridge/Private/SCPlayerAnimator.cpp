@@ -775,6 +775,22 @@ bool SCLoadPlayerKit(const FSCPackageSource& Source, const FString& ScenePath, c
     Clips = MakeShared<FSCPlayerClipMap>();
     for (int32 I = 0; I < Names.Num(); ++I)
         if (Parsed[I]) Clips->Add(Names[I], Parsed[I]);
+    // The weapons' own fire clips: raw sidecar JSON, parsed against each weapon's rig when the body attaches.
+    for (FSCPlayerWeapon& Weapon : Kit->Weapons)
+        for (const FSCWeaponFragment& Fragment : Weapon.FireFragments)
+            for (const FSCWeaponFragment::FLayer& Layer : Fragment.Layers)
+            {
+                if (Weapon.FireClipJson.Contains(Layer.Clip)) continue;
+                const FString* Sidecar = Weapon.ClipSidecars.Find(Layer.Clip);
+                TArray<uint8> ClipBytes;
+                FString ClipError;
+                if (!Sidecar || !Source.ReadBytes(*Sidecar, ClipBytes, ClipError))
+                {
+                    ++Failures;
+                    continue;
+                }
+                Weapon.FireClipJson.Add(Layer.Clip, FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(ClipBytes.GetData()), ClipBytes.Num())));
+            }
     Failed = Failures;
     return true;
 }

@@ -2,6 +2,7 @@
 // alignment, first-person head hiding (shadows kept), eye at the camera joint and the third-person orbit; aim down
 // sights (the arms bring the weapon's sight helper onto the view axis) and the camera's depth of field.
 #include "SCPlayerBody.h"
+#include "SCPlayerFire.h"
 #include "HAL/IConsoleManager.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCRigComponent.h"
@@ -9,6 +10,7 @@
 #include "SCVehicle.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
@@ -380,6 +382,8 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
     UpdateProfile();
     AddTickPrerequisiteComponent(C->GetCharacterMovement());
     SetComponentTickEnabled(true);
+    if (!Fire) Fire = MakePimpl<FSCPlayerFire>();
+    Fire->Attach(Kit, *Data);
     Step(0); // pose and eye before the first rendered frame
     FString Roots;
     for (int32 R : ArmRoots) Roots += (Roots.IsEmpty() ? TEXT("") : TEXT(",")) + LeaderRef.GetBoneName(R).ToString();
@@ -390,6 +394,7 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
 }
 void USCPlayerBodyComponent::Detach()
 {
+    if (Fire) Fire->Reset();
     SetComponentTickEnabled(false);
     SetFirstPersonPrimitives(false);
     FirstPersonScale = 1;
@@ -583,6 +588,14 @@ void USCPlayerBodyComponent::Step(float DeltaSeconds)
     Kit->GetRootComponent()->SetRelativeLocation(FVector(0, 0, -C->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()));
     ApplyView(); // eye, then the aim correction of the arms
     PropagatePose();
+    // Fire after the pose: the launch helper rides the drawn weapon where the hands hold it this frame.
+    const int32 Drawn = Weapons.GetState() == ESCWeaponState::Armed && Slots.IsValidIndex(Weapons.GetActive()) ? Slots[Weapons.GetActive()] : INDEX_NONE;
+    if (Fire)
+    {
+        const FVector2D Kick = Fire->Step(DeltaSeconds, Drawn, bAimRequested && !bThirdPerson, C->Camera->GetComponentLocation(),
+                                          C->Camera->GetForwardVector(), GetWorld(), {C, Kit});
+        if (!Kick.IsZero()) C->AddViewKick(Kick.X, Kick.Y);
+    }
 }
 void USCPlayerBodyComponent::PropagatePose()
 {
@@ -621,6 +634,7 @@ void USCPlayerBodyComponent::ApplyView()
         Eye = Capsule.InverseTransformPosition(bBlocked ? Hit.Location : HeadWorld);
         C->Camera->bUsePawnControlRotation = true;
         C->RefreshEye();
+        C->Flashlight->SetRelativeLocationAndRotation(FVector(ASCFirstPersonCharacter::TorchAhead, 0, 0), FRotator::ZeroRotator); // ahead of the eye camera
         const FVector EyeWorld = Capsule.TransformPosition(Eye);
         ApplyAim(EyeWorld, LastDelta);
         UpdateFirstPersonScale(EyeWorld, LastDelta);
@@ -630,7 +644,7 @@ void USCPlayerBodyComponent::ApplyView()
     UpdateFirstPersonScale(FVector::ZeroVector, -1); // third person: world-space body, scale 1
     AimLinear = AimAlpha = 0; // the clip's own pose (no sight at the orbit camera)
     // Third person: orbit the camera joint at a presentation distance, pulled in by the level's camera channel.
-    const FRotator View = C->GetViewRotation() + FRotator(0, OrbitYaw, 0);
+    const FRotator View = C->GetViewRotation() + FRotator(-OrbitPitch, OrbitYaw, 0);
     const FVector Desired = HeadWorld - View.Vector() * OrbitDistance;
     FHitResult Hit;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCThirdPerson), false, C);
@@ -642,6 +656,8 @@ void USCPlayerBodyComponent::ApplyView()
     Eye = Capsule.InverseTransformPosition(Location);
     C->Camera->bUsePawnControlRotation = false;
     C->RefreshEye();
+    // The torch stays with the player's head along the player's view, not on the orbit camera behind.
+    C->Flashlight->SetWorldLocationAndRotation(HeadWorld + C->GetViewRotation().Vector() * ASCFirstPersonCharacter::TorchAhead, C->GetViewRotation());
     C->Camera->SetWorldRotation(View);
     UpdateDepthOfField(Location, HeadWorld, LastDelta);
 }
@@ -889,10 +905,32 @@ void USCPlayerBodyComponent::UpdateFirstPersonScale(const FVector& EyeWorld, flo
     if (USCEyeCameraComponent* Camera = Cast<USCEyeCameraComponent>(C->Camera))
         Camera->NearClip = bThirdPerson ? NearClip : FMath::Max(MinNearClip, NearClip * FirstPersonScale);
 }
+void USCPlayerBodyComponent::AddOrbit(float YawDegrees, float PitchDegrees)
+{
+    OrbitYaw = FRotator::NormalizeAxis(OrbitYaw + YawDegrees);
+    OrbitPitch = FMath::Clamp(OrbitPitch + PitchDegrees, -MaxOrbitPitch, MaxOrbitPitch);
+    if (Kit && bThirdPerson) ApplyView();
+}
+void USCPlayerBodyComponent::ResetOrbit()
+{
+    OrbitYaw = OrbitPitch = 0;
+    UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_VIEW orbit reset"));
+    if (Kit && bThirdPerson) ApplyView();
+}
+void USCPlayerBodyComponent::SetTrigger(bool bDown)
+{
+    if (!Fire) Fire = MakePimpl<FSCPlayerFire>();
+    Fire->SetTrigger(bDown);
+}
+int32 USCPlayerBodyComponent::GetShots() const
+{
+    return Fire ? Fire->GetShots() : 0;
+}
 void USCPlayerBodyComponent::SetThirdPerson(bool bOn, float InOrbitYaw, float InOrbitDistance)
 {
     bThirdPerson = bOn;
     OrbitYaw = InOrbitYaw;
+    OrbitPitch = 0;
     if (InOrbitDistance > 0) OrbitDistance = InOrbitDistance;
     UE_LOG(LogSCPlayer, Display, TEXT("PLAYER_VIEW mode=%s orbit_yaw=%.0f distance=%.0f"), bOn ? TEXT("tp") : TEXT("fp"), OrbitYaw, OrbitDistance);
     if (Kit) ApplyView();

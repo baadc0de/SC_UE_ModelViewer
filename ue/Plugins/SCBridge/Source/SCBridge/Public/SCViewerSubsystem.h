@@ -8,6 +8,7 @@
 #include "Tasks/Task.h"
 #include "SCBridgeClient.h"
 #include "SCPlayerAnimator.h"
+#include "SCVehicleInstances.h"
 #include "SCViewerSubsystem.generated.h"
 
 class ASCVehicle;
@@ -193,6 +194,9 @@ public:
     FString GetEnvironmentPhaseText() const;
     // The side panels (model browser, hierarchy); hidden for scripted runs and by the top-bar toggle.
     void SetPanelsVisible(bool bVisible) { bPanelsVisible = bVisible; }
+    /** -SCShowcase (the standalone showcase build): no viewer chrome (top bar, footer, side panels); the scene, the
+     *  first-person HUD and its teleport menu only. Keys switch the view (C first/third person). */
+    bool IsShowcase() const { return bShowcase; }
     bool ArePanelsVisible() const { return bPanelsVisible; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
@@ -229,6 +233,8 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SpawnWhereLooking();
     /** Folder harness adopts the imported actor without opening an archive. */
     void AdoptPackageVehicle(ASCVehicle* Imported);
+    /** The FFI client (null before OpenArchive): WP-K1 exports cargo box packages through it. */
+    TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> GetClient() const { return Client; }
     /** Cache statistics as of the last export/open (no FFI call). */
     const FSCCacheStats& GetCacheStats() const { return CacheStats; }
 
@@ -244,6 +250,31 @@ public:
     ASCVehicle* GetPlayerKitActor() const { return KitActor; }
     /** Attach the ready kit to the first-person character (no-op if none, not ready or attached). */
     void AttachPlayerKit();
+
+    // Extra vehicle instances (WP-K1 mixed ownership; SCVehicleInstances.h). They start once a vehicle is loaded and
+    // no load runs, one at a time; an entity already imported (the loaded one included) is assembled from its
+    // retained assets. They go with the loaded vehicle (Unload, the next load). -SCExtraVehicles=<Entity>[*N],... and
+    // sc.Vehicle.Spawn / SpawnAt / List / Destroy / Clips / Clip / Focus.
+    /** Queue an instance on free floor beside the loaded vehicle (FSCVehiclePlacement). Entity empty or "loaded": the
+     *  loaded entity. Returns its id (>= 1; ids are not reused). */
+    int32 SpawnVehicleInstance(const FString& Entity);
+    /** Queue an instance at World: landing gear rested and its lowest visible point on World's Z (bRest false: World
+     *  is the actor transform as given). */
+    int32 SpawnVehicleInstance(const FString& Entity, const FTransform& World, bool bRest = true);
+    /** Remove an extra instance (queued, loading or ready); id 0 (the loaded vehicle) is refused. */
+    bool DestroyVehicleInstance(int32 Id);
+    /** The loaded vehicle first, then every ready extra instance by id. */
+    UFUNCTION(BlueprintPure, Category = "SC|Viewer") TArray<ASCVehicle*> GetVehicles() const;
+    /** Every instance with its state (queued and failed ones too); the loaded vehicle is id 0. */
+    TArray<FSCVehicleInstanceInfo> GetVehicleInstances() const;
+    /** Id of a vehicle of the set (0 = the loaded one), INDEX_NONE for any other actor. */
+    int32 GetVehicleInstanceId(const ASCVehicle* InVehicle) const;
+    bool IsSpawningVehicles() const;
+    /** Incremented whenever GetVehicles() changes (an instance ready or gone, the loaded vehicle changed, re-placement). */
+    int32 GetVehiclesRevision() const;
+    /** Broadcast on the same changes (game thread). */
+    FSCOnVehiclesChanged OnVehiclesChanged;
+    FSCVehicleInstances* GetVehicleInstanceSet() const { return VehicleInstances.Get(); }
 
 private:
     bool Tick(float DeltaSeconds);
@@ -264,6 +295,7 @@ private:
     TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client;
     FTSTicker::FDelegateHandle TickHandle;
     TSharedPtr<FSCViewerAutomation> Automation; // shared: type-erased deleter, the class stays private
+    TSharedPtr<FSCVehicleInstances> VehicleInstances;
 
     ESCArchiveState ArchiveState = ESCArchiveState::Closed;
     uint32 ArchiveGeneration = 0;
@@ -301,6 +333,7 @@ private:
     void PlaceEnvironment();
     int32 EnvPlaceInTicks = 0;
     bool bPanelsVisible = true;
+    bool bShowcase = false;
     bool bMaxQualityPending = false; // -SCMaxQuality: SCLook::ApplyMaxQuality on the first tick with a world
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);

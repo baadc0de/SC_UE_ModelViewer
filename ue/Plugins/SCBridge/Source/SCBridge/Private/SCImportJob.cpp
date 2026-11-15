@@ -17,6 +17,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "SCViewerSettings.h"
 #include "SCRigComponent.h"
+#include "Cargo/SCCargoRecords.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
 #include "Async/Async.h"
@@ -31,6 +32,9 @@
 #include "UObject/Package.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Misc/ScopeExit.h"
+#include "Engine/Texture2D.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Animation/AnimSequence.h"
 #include <atomic>
 
 namespace
@@ -111,6 +115,10 @@ struct FSCImportJob::FState
     ESCImportStage Stage = ESCImportStage::Reading;
     std::atomic<bool> bCancel{false};
     double Start = 0;
+    // The job running this state: the import that built it, then (once its assets are retained and it is gone) one
+    // assembly from those assets at a time. Only the running job references the actor and tears a partial one down.
+    const FSCImportJob* RunOwner = nullptr;
+    bool bAssetsSynced = false; // this run's actor's objects are in the asset set (retained or adopted)
 
     // Reading (worker output)
     TFuture<bool> ReadTask;
@@ -183,25 +191,201 @@ struct FSCImportJob::FState
     void Assemble();
 };
 
+/** A finished import's state plus the first actor's asset references, copied onto every actor assembled from it. The
+ *  arrays hold every shared object (the state's own maps point at them without holding them). */
+class FSCImportedAssets : public FGCObject
+{
+public:
+    /** Answers nothing: the package bytes are released on retention; gobo textures come with the shared objects. */
+    class FReleasedSource final : public FSCPackageSource
+    {
+    public:
+        bool Exists(const FString&) const override { return false; }
+        bool ReadBytes(const FString& Path, TArray<uint8>&, FString& Error) const override
+        {
+            Error = TEXT("package bytes released when the import's assets were retained: ") + Path;
+            return false;
+        }
+        TArray<FString> ListFiles(const FString&) const override { return {}; }
+    };
+    TSharedPtr<FSCImportJob::FState> State;
+    FReleasedSource Released;
+    TArray<TObjectPtr<UStaticMesh>> Meshes;
+    TArray<TObjectPtr<USkeletalMesh>> SkeletalMeshes;
+    TArray<TObjectPtr<UTexture2D>> Textures;
+    TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials, EngineGlowMaterials;
+    TMap<TObjectPtr<UObject>, FString> SourcePaths;           // keys are in the arrays above
+    TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
+    TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;       // values are in Textures
+    TObjectPtr<USCClipCatalog> Catalog;                       // the clips with their bindings and sequences
+
+    void Snapshot(const ASCVehicle* V)
+    {
+        Meshes = V->Meshes;
+        SkeletalMeshes = V->SkeletalMeshes;
+        Textures = V->Textures;
+        Materials = V->Materials;
+        EngineGlowMaterials = V->EngineGlowMaterials;
+        SourcePaths = V->SourcePaths;
+        MeshSamples = V->MeshSamples;
+        GoboTextures = V->GoboTextures;
+        Catalog = NewObject<USCClipCatalog>(GetTransientPackage(), NAME_None, RF_Transient);
+        if (V->ClipCatalog) Catalog->Clips = V->ClipCatalog->Clips;
+    }
+    void CopyTo(ASCVehicle* V) const
+    {
+        V->Meshes = Meshes;
+        V->SkeletalMeshes = SkeletalMeshes;
+        V->Textures = Textures;
+        V->Materials = Materials;
+        V->EngineGlowMaterials = EngineGlowMaterials;
+        V->SourcePaths = SourcePaths;
+        V->MeshSamples = MeshSamples;
+        V->GoboTextures = GoboTextures;
+        V->ClipCatalog = NewObject<USCClipCatalog>(V);
+        if (Catalog) V->ClipCatalog->Clips = Catalog->Clips;
+    }
+    /** Objects an assembly created on demand into the shared caches (a host-tinted variant first asked for by this
+     *  actor) stay valid for the next one; returns how many were added. */
+    int32 Adopt(const ASCVehicle* V)
+    {
+        const int32 Before = Materials.Num() + Textures.Num();
+        TSet<const UObject*> Known;
+        for (const UMaterialInstanceDynamic* M : Materials) Known.Add(M);
+        for (const UTexture2D* T : Textures) Known.Add(T);
+        for (UMaterialInstanceDynamic* M : V->Materials)
+            if (M && !Known.Contains(M)) Materials.Add(M);
+        for (UTexture2D* T : V->Textures)
+            if (T && !Known.Contains(T)) Textures.Add(T);
+        return Materials.Num() + Textures.Num() - Before;
+    }
+    int32 Count() const { return Meshes.Num() + SkeletalMeshes.Num() + Textures.Num() + Materials.Num(); }
+
+    virtual void AddReferencedObjects(FReferenceCollector& Collector) override
+    {
+        Collector.AddReferencedObjects(Meshes);
+        Collector.AddReferencedObjects(SkeletalMeshes);
+        Collector.AddReferencedObjects(Textures);
+        Collector.AddReferencedObjects(Materials);
+        Collector.AddReferencedObjects(EngineGlowMaterials);
+        Collector.AddReferencedObject(Catalog);
+    }
+    virtual FString GetReferencerName() const override { return TEXT("FSCImportedAssets"); }
+};
+
 FSCImportJob::FSCImportJob(const FSCPackageSource& Source, FSCImportOptions Options, TSharedPtr<const FSCPackageSource> SourceOwner)
-    : S(MakeUnique<FState>())
+    : S(MakeShared<FState>())
 {
     check(IsInGameThread());
+    S->RunOwner = this;
     S->Source = &Source;
     S->SourceOwner = MoveTemp(SourceOwner);
     S->Options = MoveTemp(Options);
     S->Start = FPlatformTime::Seconds();
     if (!S->Options.World) S->Fail(TEXT("Import requires a world"));
 }
+FSCImportJob::FSCImportJob(TSharedRef<FSCImportedAssets> InAssets, FSCImportOptions InOptions)
+{
+    check(IsInGameThread());
+    if (!InAssets->State || InAssets->State->RunOwner || !InOptions.World)
+    {
+        // Nothing of the asset set is touched: this job fails on a state of its own.
+        S = MakeShared<FState>();
+        S->RunOwner = this;
+        S->Start = FPlatformTime::Seconds();
+        S->Fail(!InOptions.World ? TEXT("Import requires a world") : TEXT("The asset set is in use by another assembly"));
+        return;
+    }
+    Assets = InAssets;
+    S = InAssets->State;
+    S->RunOwner = this;
+    // Per-run state; what the import built (meshes, derived data, materials, the manifest) stays as it is.
+    FSCImportOptions Merged = S->Options;
+    Merged.World = InOptions.World;
+    Merged.ActorTransform = InOptions.ActorTransform;
+    Merged.bPublish = InOptions.bPublish;
+    Merged.bReplacePrevious = InOptions.bReplacePrevious;
+    Merged.bRetainAssets = false;
+    S->Options = Merged;
+    S->Result = FSCImportResult();
+    S->Timings = FSCImportTimings();
+    S->bCancel = false;
+    S->bAssetsSynced = false;
+    S->Start = FPlatformTime::Seconds();
+    S->Vehicle = nullptr;
+    S->Spawned = nullptr;
+    S->Stage = ESCImportStage::Assembling;
+    FActorSpawnParameters Spawn;
+    Spawn.ObjectFlags |= RF_Transient;
+    ASCVehicle* V = S->Options.World->SpawnActor<ASCVehicle>(ASCVehicle::StaticClass(), S->Options.ActorTransform, Spawn);
+    if (!V)
+    {
+        S->Fail(TEXT("Cannot spawn vehicle"));
+        return;
+    }
+    S->Vehicle = V;
+    S->Spawned = V;
+    V->Manifest = S->Manifest;
+    V->SessionPath = S->Session; // the shared objects live in the original import's packages
+    Assets->CopyTo(V);
+    S->Materials.Rebind(V);
+}
 FSCImportJob::~FSCImportJob()
 {
+    if (S->RunOwner != this) return; // an asset set's state run by a later assembly, or by nobody
     S->Drain();
     if (S->Stage != ESCImportStage::Succeeded) S->DestroyPartial();
+    S->RunOwner = nullptr;
+    S->Vehicle = nullptr; // the actor lives on in its world; a retained state references no actor
 }
 void FSCImportJob::AddReferencedObjects(FReferenceCollector& Collector)
 {
+    if (S->RunOwner != this) return;
     Collector.AddReferencedObject(S->Vehicle);
     Collector.AddReferencedObjects(S->KeepAlive);
+}
+int32 FSCImportJob::CountRetainedObjects(const FSCImportedAssets& Retained) { return Retained.Count(); }
+void FSCImportJob::RetainAssets()
+{
+    ASCVehicle* V = S->Vehicle;
+    if (!V) return;
+    TSharedRef<FSCImportedAssets> Retained = MakeShared<FSCImportedAssets>();
+    Retained->State = S;
+    Retained->Snapshot(V);
+    // Assembly needs helper frames, rig nodes, material names and the rigs' collision source; per-triangle and
+    // per-vertex maps and the clip JSON only served derivation and binding.
+    S->ClipJson.Empty();
+    for (auto& Pair : S->Derived)
+        if (Pair.Value)
+        {
+            Pair.Value->TriangleNodes.Empty();
+            Pair.Value->SkinWeights.Empty();
+        }
+    S->Source = &Retained->Released;
+    S->SourceOwner.Reset();
+    // Shared objects the first actor owns (textures, material instances, clip sequences) move to the import's session
+    // package: the asset set and every actor assembled from it outlive any one actor, the first included.
+    UPackage* SharedPackage = CreatePackage(*(S->Session / TEXT("Shared")));
+    SharedPackage->SetFlags(RF_Transient);
+    int32 Moved = 0;
+    auto Detach = [&](UObject* Object) {
+        if (!Object || Object->GetOuter() != V) return;
+        Object->Rename(*MakeUniqueObjectName(SharedPackage, Object->GetClass(), Object->GetFName()).ToString(), SharedPackage,
+                       REN_DontCreateRedirectors | REN_NonTransactional | REN_DoNotDirty);
+        ++Moved;
+    };
+    for (UTexture2D* T : Retained->Textures) Detach(T);
+    for (UMaterialInstanceDynamic* M : Retained->Materials) Detach(M);
+    for (FSCImportedClip& Clip : Retained->Catalog->Clips)
+    {
+        Detach(Clip.Sequence);
+        for (FSCClipBinding& Binding : Clip.Bindings)
+            for (UAnimSequence* Sequence : Binding.Sequences) Detach(Sequence);
+    }
+    Assets = Retained;
+    UE_LOG(LogSCImport, Display, TEXT("IMPORT_ASSETS_RETAINED session=%s objects=%d meshes=%d rigs=%d textures=%d materials=%d detached=%d"),
+           *S->Session, Retained->Count(), Retained->Meshes.Num(), Retained->SkeletalMeshes.Num(), Retained->Textures.Num(),
+           Retained->Materials.Num(), Moved);
 }
 FString FSCImportJob::GetSessionPath() const { return S->Session; }
 ASCVehicle* FSCImportJob::GetSpawnedVehicle() const { return S->Spawned.Get(/*bEvenIfGarbage*/ true); }
@@ -296,6 +480,14 @@ bool FSCImportJob::Tick(bool bBlocking, double BudgetSeconds)
         if (!bBlocking && FPlatformTime::Seconds() - TickStart >= BudgetSeconds) break;
     }
     if (IsFinished()) S->Result.TotalSeconds = FPlatformTime::Seconds() - S->Start;
+    if (IsFinished() && S->Stage == ESCImportStage::Succeeded && S->RunOwner == this && !S->bAssetsSynced)
+    {
+        S->bAssetsSynced = true;
+        if (!Assets && S->Options.bRetainAssets) RetainAssets();
+        else if (Assets && S->Vehicle)
+            if (const int32 Added = Assets->Adopt(S->Vehicle))
+                UE_LOG(LogSCImport, Display, TEXT("IMPORT_ASSETS_ADOPTED session=%s objects=%d"), *S->Session, Added);
+    }
     return IsFinished();
 }
 
@@ -741,33 +933,27 @@ void FSCImportJob::FState::Assemble()
         C->RegisterComponent();
         return C;
     };
-    auto FindParent = [&](const FSCSceneInstance& I, bool& bHelper) -> USceneComponent* {
+    // The frame an item attaches to on its parent entity: the entity's anchor, or the named helper/bone on it.
+    auto ResolveHelper = [&](FEntity* E, const FString& EntityName, const FString& ParentName, const FString& NodeName, bool& bHelper) -> USceneComponent* {
         bHelper = false;
-        if (I.ParentEntityName.IsEmpty() && I.ParentId.IsEmpty()) return V->GetRootComponent();
-        FEntity* E = I.ParentId.IsEmpty() ? Entities.Find(I.ParentEntityName) : EntitiesById.Find(I.ParentId);
-        if (!E || !E->Anchor)
-        {
-            Warn(I.EntityName, TEXT("Unresolved parent entity: ") + I.ParentEntityName);
-            return nullptr;
-        }
-        if (I.ParentNodeName.IsEmpty()) return E->Anchor;
-        if (auto* Existing = E->Helpers.Find(I.ParentNodeName))
+        if (NodeName.IsEmpty()) return E->Anchor;
+        if (auto* Existing = E->Helpers.Find(NodeName))
         {
             bHelper = true;
             return *Existing;
         }
-        if (E->Rig && E->Rig->DoesSocketExist(FName(*I.ParentNodeName)))
+        if (E->Rig && E->Rig->DoesSocketExist(FName(*NodeName)))
         {
-            auto* H = NewAnchor(I.ParentNodeName, E->Rig, FMatrix::Identity);
-            H->AttachToComponent(E->Rig, FAttachmentTransformRules::KeepRelativeTransform, FName(*I.ParentNodeName));
-            E->Helpers.Add(I.ParentNodeName, H);
+            auto* H = NewAnchor(NodeName, E->Rig, FMatrix::Identity);
+            H->AttachToComponent(E->Rig, FAttachmentTransformRules::KeepRelativeTransform, FName(*NodeName));
+            E->Helpers.Add(NodeName, H);
             bHelper = true;
             return H;
         }
-        const FMatrix* Node = E->Mesh ? E->Mesh->Nodes.Find(I.ParentNodeName) : nullptr;
+        const FMatrix* Node = E->Mesh ? E->Mesh->Nodes.Find(NodeName) : nullptr;
         if (!Node && E->Mesh)
             for (const auto& Pair : E->Mesh->Nodes)
-                if (Pair.Key.Equals(I.ParentNodeName, ESearchCase::IgnoreCase))
+                if (Pair.Key.Equals(NodeName, ESearchCase::IgnoreCase))
                 {
                     Node = &Pair.Value;
                     break;
@@ -777,17 +963,28 @@ void FSCImportJob::FState::Assemble()
             // The exporter falls back to the entity's source root when a port has no node.
             Node = &E->Mesh->AttachmentRootMatrix;
             UE_LOG(LogSCImport, Display, TEXT("ATTACHMENT_ROOT_FALLBACK entity=%s helper=%s (resolved local transform retained)"),
-                   *I.ParentEntityName, *I.ParentNodeName);
+                   *ParentName, *NodeName);
         }
         if (!Node)
         {
-            Warn(I.EntityName, TEXT("Unresolved parent helper: ") + I.ParentEntityName + TEXT("/") + I.ParentNodeName);
+            Warn(EntityName, TEXT("Unresolved parent helper: ") + ParentName + TEXT("/") + NodeName);
             return nullptr;
         }
-        auto* Helper = NewAnchor(I.ParentNodeName, E->Anchor, FSCMeshImporter::Transform(*Node));
-        E->Helpers.Add(I.ParentNodeName, Helper);
+        auto* Helper = NewAnchor(NodeName, E->Anchor, FSCMeshImporter::Transform(*Node));
+        E->Helpers.Add(NodeName, Helper);
         bHelper = true;
         return Helper;
+    };
+    auto FindParent = [&](const FSCSceneInstance& I, bool& bHelper) -> USceneComponent* {
+        bHelper = false;
+        if (I.ParentEntityName.IsEmpty() && I.ParentId.IsEmpty()) return V->GetRootComponent();
+        FEntity* E = I.ParentId.IsEmpty() ? Entities.Find(I.ParentEntityName) : EntitiesById.Find(I.ParentId);
+        if (!E || !E->Anchor)
+        {
+            Warn(I.EntityName, TEXT("Unresolved parent entity: ") + I.ParentEntityName);
+            return nullptr;
+        }
+        return ResolveHelper(E, I.EntityName, I.ParentEntityName, I.ParentNodeName, bHelper);
     };
     int32 RenderInstances = 0;
     double RegisterSeconds = 0, LightSeconds = 0, RigSeconds = 0;
@@ -1026,6 +1223,7 @@ void FSCImportJob::FState::Assemble()
     V->PhysicsGridShapeEnds = Manifest.PhysicsGridShapeEnds;
     V->PhysicsGridBounds.Init();
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
+    TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
     if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
     for (const auto& I : Manifest.Children)
     {
@@ -1041,9 +1239,39 @@ void FSCImportJob::FState::Assemble()
         FEntity Placed = Place(I, Parent, bHelper, false);
         if (!I.Id.IsEmpty()) EntitiesById.Add(I.Id, Placed);
         Entities.Add(I.EntityName, Placed);
+        if (!I.PortPath.IsEmpty())
+        {
+            EntitiesByPort.Add(SCCargoRecords::PortKey(I.PortPath), Placed);
+            V->PortAnchors.Add(SCCargoRecords::PortKey(I.PortPath), Placed.Anchor);
+        }
     }
-    for (const auto& Interior : Manifest.Interiors)
+    // WP-K1: one anchor per inventory container in the container entity's frame, axes X = SC y, Y = SC x, Z = SC z
+    // (the frame placed items use: SC (x, y, z) m -> (y, x, z) cm). A loadout grid hangs on its parent item's helper
+    // (following that item's rig); an interior grid on its container (below).
+    V->InventoryAnchors.SetNum(Manifest.InventoryContainers.Num());
+    V->InventoryOwnerRigs.SetNum(Manifest.InventoryContainers.Num());
+    const FMatrix CryToGltf = FSCMeshImporter::CryToGltf();
+    auto ContainerFrame = [&](const FMatrix& Local, bool bHelper) {
+        return bHelper ? FSCMeshImporter::Transform(CryToGltf.Inverse() * Local) : FSCMeshImporter::InstanceTransform(Local, FMatrix::Identity, false, true);
+    };
+    for (int32 C = 0; C < Manifest.InventoryContainers.Num(); ++C)
     {
+        const FSCInventoryContainerRecord& R = Manifest.InventoryContainers[C];
+        if (R.InteriorIndex != INDEX_NONE) continue;
+        FEntity* Owner = R.ParentPortPath.IsEmpty() ? Entities.Find(Manifest.Root.EntityName) : EntitiesByPort.Find(SCCargoRecords::PortKey(R.ParentPortPath));
+        bool bHelper = false;
+        USceneComponent* Parent = Owner && Owner->Anchor ? ResolveHelper(Owner, R.EntityName, SCCargoRecords::PortKey(R.ParentPortPath), R.ParentNodeName, bHelper) : nullptr;
+        if (!Parent)
+        {
+            Warn(R.EntityName, TEXT("Inventory container without its parent item: ") + SCCargoRecords::PortKey(R.ParentPortPath));
+            continue;
+        }
+        V->InventoryAnchors[C] = NewAnchor(TEXT("Inventory_") + R.EntityName, Parent, ContainerFrame(R.LocalMatrix, bHelper));
+        V->InventoryOwnerRigs[C] = Owner->Rig;
+    }
+    for (int32 InteriorIndex = 0; InteriorIndex < Manifest.Interiors.Num(); ++InteriorIndex)
+    {
+        const FSCInterior& Interior = Manifest.Interiors[InteriorIndex];
         bool bHelper;
         auto* Parent = FindParent(Interior.Container, bHelper);
         if (!Parent) continue;
@@ -1074,6 +1302,19 @@ void FSCImportJob::FState::Assemble()
                 if (const FEntity* Door = ById.Find(Target); Door && Door->Rig && Door->Anchor != Panel->Anchor)
                 {
                     V->DoorControls.Add(Panel->Anchor, Door->Rig);
+                    break;
+                }
+        }
+        // WP-K1: the interior's inventory containers in its placement frame; the owner rig is the first linked entity's.
+        for (int32 C = 0; C < Manifest.InventoryContainers.Num(); ++C)
+        {
+            const FSCInventoryContainerRecord& R = Manifest.InventoryContainers[C];
+            if (R.InteriorIndex != InteriorIndex) continue;
+            V->InventoryAnchors[C] = NewAnchor(TEXT("Inventory_") + R.EntityClass, Container, ContainerFrame(R.LocalMatrix, bHelper));
+            for (const FString& Link : R.Links)
+                if (const FEntity* Linked = ById.Find(Link); Linked && Linked->Rig)
+                {
+                    V->InventoryOwnerRigs[C] = Linked->Rig;
                     break;
                 }
         }

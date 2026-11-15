@@ -36,6 +36,21 @@ and `ue/scripts/routes/showcase-max-quality.txt` takes a shot with and without h
 Golem, small hightech hangar (2026-11-14, RTX 4090, Shipping): 1.7 GB of content; the report reads
 `gi=4 reflections=4 lumen_hwrt=1 lighting_mode=1 hit_shadow_mode=2 probe_downsample=8 nanite=1 dlss=1 screen_percentage=100`.
 
+The launcher starts the showcase as a player (`-SCShowcase -SCCamera=first`): no viewer top bar, footer or panels; the
+first-person HUD and its teleport menu stay. Keys: WASD/Shift/Space/Ctrl move, `C` first/third person, `Z` held orbits
+the third-person camera around the player (double-tap: behind again), `T` teleport menu, `F` torch, `1`.. draw a weapon,
+right mouse aims down sights, left mouse fires. The player character is exported from Data.p4k at start (so the build
+needs an installed Star Citizen; a cooked player kit is a follow-up): `package_showcase.ps1 -PlayerLoadout <p4k path>
+-PlayerWeapons <entity>[,...]` (launcher `-SCPlayerLoadout`, `-SCPlayerWeapons`; settings `PlayerLoadout`,
+`PlayerWeapons`, `bPlayerSpareAttachments`) picks the game loadout, keeps only the named weapons and carries their spare
+magazines on the armour's storage ports (the exporter's `PlayerRequest.weapons` / `spare_attachments`, FFI
+`scbridge_export_player_request`). The showcase uses `StarMarine_Marine.xml` with `behr_rifle_ballistic_01` (P4-AR).
+Firing (`FSCPlayerFire`) uses the weapon's first authored fire action: its rate (810 RPM rapid), the fragments of its
+enslavement ADB on the weapon's own rig (trigger, looping bolt; stop fragment on release) and its launch helper; flash,
+tracer, impact spark and view kick are viewer stand-ins (the game's particles and procedural recoil are not imported; a
+ballistic look is the next iteration). The torch is Movable (a Stationary light does not follow the player) and 40 000 cd
+ahead of the helmet. `ue/scripts/routes/showcase-player.txt` checks torch, firing, aiming, third person and `Z`.
+
 **Web:** a separate UE 5.9 Wasm / WebGPU build of the same viewer with one cooked hangar and one cooked ship: no
 Data.p4k and no Rust library in the browser. Wasm builds compile `SCBridgeLib` with `SC_WITH_FFI=0`
 (`SCBridgeNoFFI.cpp`: every `sc_*` call reports unsupported), the UI says "Baked content" and offers no archive picker,
@@ -370,6 +385,40 @@ Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>`,
 Headless (WP-Q1): `UnrealEditor-Cmd … -run=pythonscript -script=ue/scripts/ue_load_gladius.py
 -nullrhi` drives `USCViewerSubsystem.LoadEntity` through the FFI. Settings persist in
 `Saved/Config/<Platform>/GameUserSettings.ini`. Evidence: [verification/WP-V1.md](verification/WP-V1.md).
+
+**Extra vehicle instances** (WP-K1f, [verification/WP-K1.md](verification/WP-K1.md) "K1f"): more vehicles beside the
+loaded one, e.g. several Hull A in one hangar. `-SCExtraVehicles=<Entity>[*N][,...]` (an empty entity, `*2`, is the
+loaded one), `sc.Vehicle.Spawn [entity|loaded] [count]` (free floor), `sc.Vehicle.SpawnAt <entity|loaded> <x m> <y m>
+[floor z m] [yaw]`, `sc.Vehicle.List`, `sc.Vehicle.Destroy <index>`, `sc.Vehicle.Clips <index>`,
+`sc.Vehicle.Clip <index> <clip id|part> [speed]`, `sc.Vehicle.Focus <index|all>`; log `VEHICLE_SPAWN idx=.. entity=..
+at=..`. Instances of an imported entity are assembled from its retained import (`sc.Vehicle.ShareAssets 1`, default:
+shared meshes, rigs, textures and materials; no export, derivation or build), each with its own components, rig pose,
+collision, lights and exploration data. Auto placement: the vehicle's envelope (solid bounds at every clip's last
+frame) plus a 3 m walkway on flat floor at the loaded vehicle's floor height, nearest its footprint first, clear of
+geometry and of the environment's inventory-container access lanes (lattice + the largest permitted item edge);
+re-placed when the environment changes. They unload with the loaded vehicle. API: `USCViewerSubsystem::
+SpawnVehicleInstance / DestroyVehicleInstance / GetVehicles / GetVehicleInstances / OnVehiclesChanged`.
+
+**Cargo by drones** (WP-K1, [brief](../docs/work-packages/WP-K1-cargo-drones.md),
+[verification/WP-K1.md](verification/WP-K1.md)): cargo grids come from the package (`inventory_containers`), boxes are
+exported box entities, drones are stand-in art (`/SCBridge/Cargo`, rebuilt by `ue/scripts/create_cargo_art.py`).
+Scenarios (`ue/SCViewer/Config/Cargo/*.json`, `-SCCargoScenario=<name>`) set the stock, docks and owners:
+
+| Scenario | Host switches | Route |
+|---|---|---|
+| `hull_a_hangar` | `-SCLoad=MISC_Hull_A -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak` | `cargo-hull-a.txt`, `mobiglas-live.txt` |
+| `hull_a_multi` (3 Hull A, 3 owners) | as above | `cargo-multi.txt`, `mobiglas-multi.txt` |
+| `c2_hangar` | `-SCLoad=CRUS_Starlifter_C2 -SCEnvironment=…/hightech_a/hangar_xltop_001.socpak` | `cargo-c2.txt` |
+
+Add `-SCCamera=first` (and `-SCScript=ue/scripts/routes/<route> -SCShotDir=<dir>` for a route). **F1** opens the
+mobiGlas Cargo app (Esc closes): nearby grids, grid detail, transfer composer (from, to, commodity, amount in whole
+boxes, fit preview with refusals), transfers in progress; the view becomes an orbit camera (drag, wheel) around the
+selected ship or elevator. World callouts label boxes in flight and drones; grids too while the mobiGlas is open.
+Console: `sc.Cargo.List`, `sc.Cargo.Preview|Transfer <from> <to> <commodity> <scu> [--owner=<id>]` (grid id,
+`ship`/`elevator` or label text), `sc.Cargo.Cancel <job>`, `sc.Cargo.Access <grid|ship> open|close`, `sc.Cargo.Debug
+0|1` (lattices, slots, routes), `sc.Cargo.Section <grid>` (what route queries see), `sc.MobiGlas [0|1]` and
+`sc.MobiGlas.*` (route stand-ins for clicks), `sc.Env.OpenAccess`. Logs: `CARGO_JOB`, `CARGO_PATH` (found, hits,
+clearance, frame time), `CARGO_TEAM`, `CARGO_PICK`, `ENV_ACCESS`.
 
 **Game photometry** ([verification/WP-U3b.md](verification/WP-U3b.md) §13). Light candela, emissive cd/m²,
 auto exposure and the display curve follow the installed game's renderer. The values the Viewer cannot read

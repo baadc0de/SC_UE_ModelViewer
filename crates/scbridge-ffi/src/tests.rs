@@ -48,6 +48,66 @@ fn invalid_inputs_and_open_errors_are_reported_without_allocations() {
     }
 }
 #[test]
+fn datacore_record_rejects_invalid_arguments_without_allocating() {
+    unsafe {
+        let mut json = ptr::null_mut();
+        assert_eq!(
+            sc_datacore_record(ptr::null_mut(), c"x".as_ptr(), &mut json),
+            sc_status::SC_STATUS_INVALID_ARGUMENT
+        );
+        assert!(json.is_null());
+        assert_eq!(
+            sc_datacore_record(ptr::null_mut(), c"x".as_ptr(), ptr::null_mut()),
+            sc_status::SC_STATUS_INVALID_ARGUMENT
+        );
+    }
+}
+
+#[test]
+fn live_datacore_record_by_name_and_guid_and_missing_is_an_error() {
+    let Ok(found) = starbreaker_common::discover::find_p4k() else {
+        eprintln!("skip: no Data.p4k installed");
+        return;
+    };
+    let path = CString::new(found.path.to_str().unwrap()).unwrap();
+    unsafe {
+        let mut h = ptr::null_mut();
+        assert_eq!(sc_open(path.as_ptr(), ptr::null(), &mut h), sc_status::SC_STATUS_OK);
+        let record = |query: &CStr| -> std::result::Result<serde_json::Value, String> {
+            let mut json = ptr::null_mut();
+            match sc_datacore_record(h, query.as_ptr(), &mut json) {
+                sc_status::SC_STATUS_OK => {
+                    let value = serde_json::from_str(CStr::from_ptr(json).to_str().unwrap()).unwrap();
+                    sc_free_string(json);
+                    Ok(value)
+                }
+                _ => {
+                    assert!(json.is_null());
+                    Err(CStr::from_ptr(sc_last_error(h)).to_string_lossy().into_owned())
+                }
+            }
+        };
+        // Any main entity record serves; its name comes from the archive, not this test.
+        let mut search = ptr::null_mut();
+        assert_eq!(sc_search_entities(h, c"".as_ptr(), 1, &mut search), sc_status::SC_STATUS_OK);
+        let hits: serde_json::Value = serde_json::from_str(CStr::from_ptr(search).to_str().unwrap()).unwrap();
+        sc_free_string(search);
+        // Hits carry the bare entity name and the record GUID.
+        let full_name = format!("EntityClassDefinition.{}", hits[0]["name"].as_str().unwrap());
+        let by_name = record(&CString::new(full_name.as_str()).unwrap()).unwrap();
+        assert_eq!(by_name["__type"], "EntityClassDefinition");
+        assert_eq!(by_name["__record_name"], full_name.as_str());
+        let guid = CString::new(hits[0]["guid"].as_str().unwrap()).unwrap();
+        let by_guid = record(&guid).unwrap();
+        assert_eq!(by_guid["__record_name"], by_name["__record_name"]);
+        assert_eq!(by_guid["__record_id"].as_str(), guid.to_str().ok());
+        let missing = record(c"Synthetic.NoSuchRecord_K1").unwrap_err();
+        assert!(missing.contains("no DataCore record"), "{missing}");
+        sc_close(h);
+    }
+}
+
+#[test]
 fn ffi_defaults_match_core_contract_and_options_validate() {
     let mut output = std::mem::MaybeUninit::<sc_options>::uninit();
     assert_eq!(

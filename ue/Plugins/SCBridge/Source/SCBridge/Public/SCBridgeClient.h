@@ -96,8 +96,16 @@ public:
                                                        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** JSON array of object-container paths matching every term of Query (sc_search_environments). */
     UE::Tasks::TTask<FSCTextResult> SearchEnvironments(const FString& Query, int32 Limit);
-    /** Player kit (scbridge_export_player): empty Gender = male, empty Loadout = the exporter's default loadout. */
-    UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout,
+    /** One DataCore record as JSON (sc_datacore_record): NameOrGuid is `Type.Name`, a bare record name (exact,
+     *  case-insensitive) or a GUID. Objects carry `__type`; references are record GUID strings (look them up the
+     *  same way); `__record_name` / `__record_id` name the record. No match or an ambiguous bare name fails. */
+    UE::Tasks::TTask<FSCTextResult> DataCoreRecord(const FString& NameOrGuid);
+    /** The same, with OnDone called on the game thread. */
+    void DataCoreRecord(const FString& NameOrGuid, TFunction<void(const FSCTextResult&)> OnDone);
+    /** Player kit (scbridge_export_player_request, PlayerRequest JSON): empty Gender = male, empty Loadout = the
+     *  exporter's default loadout, empty Weapons = every loadout weapon; bSpareAttachments puts each kept weapon's
+     *  default attachments (its magazine) into the wearer's empty storage ports. */
+    UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments,
                                                   TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** Blocking; waits for a running export (host lock). */
     FSCCacheStats CacheStats();

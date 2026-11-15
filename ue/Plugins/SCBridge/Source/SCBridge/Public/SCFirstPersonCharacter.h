@@ -46,7 +46,11 @@ enum class ESCFirstPersonAction : uint8
     Interact, Torch, Noclip, Teleport, Close,          // pressed
     Holster, View,                                     // pressed, player body (WP-P2)
     Weapon1, Weapon2, Weapon3, Weapon4, Weapon5, Weapon6, Weapon7, Weapon8, Weapon9,
-    Aim                                                // held, player body: aim down sights while down
+    Aim,                                               // held, player body: aim down sights while down
+    Fire,                                              // held, player body: the drawn weapon fires while down
+    Orbit,                                             // held: third-person camera orbits the player while down;
+                                                       // two presses within DoubleTapSeconds put it behind again
+    MobiGlas                                           // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),
@@ -75,6 +79,9 @@ public:
     UPROPERTY(BlueprintReadOnly) bool bNoclip = false;
     UPROPERTY(BlueprintReadOnly) bool bStuck = false;
     UPROPERTY(BlueprintReadOnly) bool bTeleportMenuOpen = false;
+    /** The mobiGlas is up (WP-K1c): the player stands still (movement presses, mouse look and the weapon are ignored);
+     *  the cursor drives the UI and the live-view orbit camera. */
+    UPROPERTY(BlueprintReadOnly) bool bMobiGlasOpen = false;
     UPROPERTY(BlueprintReadOnly) int32 RecoveryCount = 0;
     UPROPERTY(BlueprintReadOnly) int32 CapsuleHits = 0;
     /** Spawn index used by the last successful teleport (INDEX_NONE before the first). */
@@ -107,6 +114,8 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") void SetMoveInput(FVector Input);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") FString HUDText() const;
     void Look(FVector2D Pixels);
+    /** Weapon kick on the view (degrees; pitch positive up). */
+    void AddViewKick(float PitchDegrees, float YawDegrees);
     /** Absolute view relative to the vehicle (degrees). */
     void SetVehicleRelativeView(float Yaw, float Pitch);
     FRotator GetVehicleRelativeView() const;
@@ -116,8 +125,20 @@ public:
     bool IsHoldingMove() const { return HoldSeconds > 0; }
     void SetCrouching(bool bCrouch);
     void SetTorch(bool bOn);
+    void SetMobiGlasOpen(bool bOpen);
     bool SetNoclip(bool bOn);
     bool IsRunning() const { return bRunning; }
+    /** Two Orbit presses closer than this reset the third-person orbit (viewer input constant, s). */
+    static constexpr float DoubleTapSeconds = 0.3f;
+    /** Torch beam (viewer-owned light, not game data): candelas (a tactical weapon light; 6000 cd brightened a lit
+     *  hangar floor by only a few levels under the game's exposure), cone angles (degrees), reach (cm). */
+    static constexpr float TorchCandelas = 40000;
+    static constexpr float TorchInnerCone = 10;
+    static constexpr float TorchOuterCone = 22;
+    static constexpr float TorchReach = 4000;
+    /** The beam starts this far ahead of the eye (cm): at the eye it sits inside the worn helmet, whose hidden
+     *  shadow-casting shell would block it entirely. */
+    static constexpr float TorchAhead = 35;
 
     static const TArray<TPair<FKey, ESCFirstPersonAction>>& KeyTable();
     bool HandleKey(FKey Key, bool bDown);
@@ -144,6 +165,8 @@ private:
     void AddGridIgnores(struct FCollisionQueryParams& Params, const FVector& Centre, double HalfHeight) const;
     double RecoveryZ = -UE_BIG_NUMBER;
     bool bRunning = false;
+    bool bOrbiting = false; // Orbit held: mouse look orbits the third-person camera instead of turning the player
+    double LastOrbitPress = -1;
     void SetRunning(bool bRun);
     void ApplyHeldInput();
     bool FindCapsuleSpot(FVector Hint, double HalfHeight, FVector& Centre, const FSCSeatBox* Seat = nullptr) const;

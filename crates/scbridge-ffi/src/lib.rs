@@ -134,6 +134,26 @@ pub unsafe extern "C" fn sc_lights(
     }
 }
 
+/// Return one DataCore record as a JSON object: the record `name_or_guid` names, as `Type.Name`
+/// (e.g. `EntityClassDefinition.GRIN_TractorBeam_S1`), a bare record name (exact, case-insensitive) or a
+/// GUID. The `starbreaker dcb query` value shape: objects carry their struct type in `__type`, references
+/// are record GUID strings (resolve them with another call), plus `__record_name` / `__record_id`.
+/// No match, or a bare name several records share, is SC_STATUS_ERROR (the message lists the matches).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_datacore_record(
+    h: *mut sc_handle,
+    name_or_guid: *const c_char,
+    out_json: *mut *mut c_char,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            json(out_json, || {
+                Ok(handle(h)?.session.datacore_record(string(name_or_guid)?)?)
+            })
+        })
+    }
+}
+
 /// Read core cache statistics; broken manifests recover under the cache lock.
 /// Missing/disabled cache reports zero bytes/entries; last_hit is unchanged.
 #[unsafe(no_mangle)]

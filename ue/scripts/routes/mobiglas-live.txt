@@ -1,0 +1,58 @@
+# WP-K1c on live cargo (USCCargoSubsystem, scenario hull_a_hangar): the mobiGlas drives an elevator -> MISC Hull A
+# transfer like clicks would (sc.MobiGlas.* stand-ins), with shots of the panels, the orbit live view and the callouts.
+# sc.UI.Shot captures the window with the Slate UI (route `shot` lines capture the bare viewport).
+# Host: -SCCamera=first -SCLoad=MISC_Hull_A
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak
+#   -SCCargoScenario=hull_a_hangar -SCShowcase -SCShotDir=<dir> -windowed -resx=1920 -resy=1080
+# Steps: open beside the ship (the orbit frames the ship in the live band), orbit + zoom, the elevator selected (orbit
+# re-focuses), plan 32 SCU elevator -> ship (the 32 / 24 SCU boxes refused with their reasons, "will extend before
+# loading"), confirm, the ship extending and boxes in flight with box + drone callouts (mobiGlas open and closed), the
+# finished transfer, Retract refused on the loaded ship, then the open view at 1280x720.
+# Waits first for the box packages and the scenario stock (as cargo-hull-a.txt).
+0 DisableAllScreenMessages
+40 sc.Cargo.List
+0 sc.FP.Noclip 1
+0 sc.Cargo.View ship 26 10 120
+2 sc.MobiGlas 1
+4 sc.UI.Shot live-open
+0 sc.MobiGlas.Orbit -260 40
+0 sc.MobiGlas.Zoom 2
+2 sc.UI.Shot live-orbit-zoom
+0 sc.MobiGlas.Select elevator
+3 sc.UI.Shot live-elevator
+0 sc.MobiGlas.From elevator
+0 sc.MobiGlas.To ship
+0 sc.MobiGlas.Amount 32
+1 sc.UI.Shot live-plan32
+0 sc.MobiGlas.Select ship
+0 sc.MobiGlas.Confirm
+3 sc.UI.Shot live-extending
+12 sc.UI.Shot live-flight-1
+0 shot live-flight-bare 1
+8 sc.UI.Shot live-flight-2
+8 sc.UI.Shot live-flight-3
+0 sc.MobiGlas 0
+0 sc.Cargo.ViewMoving 14 5 30
+1 sc.UI.Shot live-callouts-closed
+6 sc.UI.Shot live-callouts-closed-2
+0 sc.Cargo.View ship 26 10 120
+1 sc.MobiGlas 1
+0 sc.MobiGlas.Select ship
+40 sc.UI.Shot live-progress
+40 sc.UI.Shot live-done
+0 sc.MobiGlas.Select ship
+0 sc.MobiGlas.Extend 0
+1 sc.UI.Shot live-retract-refused
+0 r.SetRes 1280x720w
+3 sc.UI.Shot live-720
+0 r.SetRes 1920x1080w
+0 sc.MobiGlas 0
+1 sc.MobiGlas 1
+1 sc.FP.Key F1 1
+0 sc.FP.Key F1 0
+1 sc.MobiGlas.State
+0 sc.Camera orbit
+2 sc.MobiGlas.State
+1 sc.UI.Shot live-after-unload
+2 sc.Cargo.List
+1 quit

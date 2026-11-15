@@ -80,6 +80,14 @@ bool ASCVehicle::SnapClip(FName Id, bool bLast)
     if (!ClipCatalog) return false;
     return StartClip(ClipCatalog->Clips.IndexOfByPredicate([&](const FSCImportedClip& C) { return C.Id == Id; }), 1, true, bLast);
 }
+bool ASCVehicle::PlayClipAt(int32 Index, USCRigComponent* Target, float Speed)
+{
+    return StartClip(Index, Speed, false, false, {}, Target);
+}
+bool ASCVehicle::SnapClipAt(int32 Index, USCRigComponent* Target, bool bLast)
+{
+    return StartClip(Index, 1, true, bLast, {}, Target);
+}
 bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
 {
     return PlayFragmentAt(Fragment, Tag, nullptr);

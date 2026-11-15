@@ -1,0 +1,33 @@
+# WP-K1 (K1e): freight-elevator access, MISC Hull A in the large high-tech hangar. The presented (open) state shows the
+# elevator gate down and the platform up with its shaft lights above it; the closed state shuts the gate and lowers the
+# platform; sc.Env.OpenAccess then takes, per rig, the end pose that clears each grid's access corridors and carries its
+# floor, and keeps it through later state changes. sc.Env.ProbeAccess logs what blocks each side of each grid.
+# Host: -SCCamera=first -SCLoad=MISC_Hull_A
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak
+#   -SCCargoScenario=hull_a_hangar -SCShotDir=<dir> [-SCLightProbe]
+40 sc.Cargo.List
+0 sc.FP.Noclip 1
+0 sc.Env.ProbeAccess
+1 sc.Cargo.View 1 30 2 127
+2 shot access-presented-front
+0 sc.Cargo.View 1 9 4 127
+1 shot access-presented-inside
+0 sc.Environment.State closed
+1 sc.Env.ProbeAccess
+0 sc.Cargo.View 1 30 2 127
+1 shot access-closed-front
+0 sc.Env.OpenAccess
+6 sc.Env.ProbeAccess
+0 sc.Cargo.View 1 30 2 127
+1 shot access-open-front
+0 sc.Cargo.View 1 22 7 127
+1 shot access-open-outside
+0 sc.Cargo.View 1 9 4 127
+1 shot access-open-inside
+0 sc.Cargo.View 2 30 2 -53
+1 shot access-open-front-2
+0 sc.Environment.State closed
+6 sc.Env.ProbeAccess
+0 sc.Cargo.View 1 30 2 127
+1 shot access-kept-front
+1 quit

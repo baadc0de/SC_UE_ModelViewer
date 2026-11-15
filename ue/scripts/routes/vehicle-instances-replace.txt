@@ -1,0 +1,11 @@
+# WP-K1f: auto-placed instances follow an environment change (VEHICLE_REPLACE): the hangar is requested again (a fresh
+# import of the same socpak), and once it is placed the two instances move to free floor in it.
+# Host: -SCLoad=MISC_Hull_A -SCExtraVehicles=*2
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak -SCShotDir=<dir>
+25 sc.Vehicle.List
+0 sc.Environment Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak
+45 sc.Vehicle.List
+0 sc.Look.Camera 0 0 9000 0 -89
+3 shot replaced-top
+0 sc.Unload
+5 quit

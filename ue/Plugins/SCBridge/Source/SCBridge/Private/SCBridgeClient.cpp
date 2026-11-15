@@ -1,9 +1,12 @@
 // libscbridge client: handle lifetime, host lock, worker execution and JSON/blob conversion.
 #include "SCBridgeClient.h"
+#include "Async/Async.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCBridgeClient, Log, All);
 
@@ -278,10 +281,51 @@ UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::SearchEnvironments(const FStrin
     });
 }
 
-UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& Gender, const FString& Loadout,
-                                                               TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
+UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::DataCoreRecord(const FString& NameOrGuid)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Gender, Loadout, Progress] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), NameOrGuid] {
+        FSCTextResult Result;
+        FScopeLock Guard(&Self->HandleLock);
+        char* Json = nullptr;
+        const sc_status Status = Self->Handle ? sc_datacore_record(Self->Handle, TCHAR_TO_UTF8(*NameOrGuid), &Json) : SC_STATUS_INVALID_ARGUMENT;
+        if (Status != SC_STATUS_OK)
+        {
+            Result.Error = Self->Handle ? Self->FailLocked(Status, Result.bPanicked) : NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+            return Result;
+        }
+        Result.Json = UTF8_TO_TCHAR(Json);
+        sc_free_string(Json);
+        Result.bOK = true;
+        return Result;
+    });
+}
+
+void FSCBridgeClient::DataCoreRecord(const FString& NameOrGuid, TFunction<void(const FSCTextResult&)> OnDone)
+{
+    UE::Tasks::TTask<FSCTextResult> Task = DataCoreRecord(NameOrGuid);
+    UE::Tasks::Launch(UE_SOURCE_LOCATION, [Task, OnDone = MoveTemp(OnDone)]() mutable {
+        AsyncTask(ENamedThreads::GameThread, [Result = Task.GetResult(), OnDone = MoveTemp(OnDone)] { OnDone(Result); });
+    }, UE::Tasks::Prerequisites(Task));
+}
+
+UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons,
+                                                               bool bSpareAttachments, TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
+{
+    TSharedRef<FJsonObject> Request = MakeShared<FJsonObject>();
+    Request->SetStringField(TEXT("gender"), Gender.IsEmpty() ? TEXT("male") : Gender);
+    if (Loadout.IsEmpty()) Request->SetField(TEXT("loadout"), MakeShared<FJsonValueNull>());
+    else Request->SetStringField(TEXT("loadout"), Loadout);
+    if (Weapons.IsEmpty()) Request->SetField(TEXT("weapons"), MakeShared<FJsonValueNull>());
+    else
+    {
+        TArray<TSharedPtr<FJsonValue>> Names;
+        for (const FString& W : Weapons) Names.Add(MakeShared<FJsonValueString>(W));
+        Request->SetArrayField(TEXT("weapons"), Names);
+    }
+    Request->SetBoolField(TEXT("spare_attachments"), bSpareAttachments);
+    FString RequestJson;
+    FJsonSerializer::Serialize(Request, TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&RequestJson));
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), RequestJson, Progress] {
         FSCExportResult Result;
         const double Start = FPlatformTime::Seconds();
         FScopeLock Guard(&Self->HandleLock);
@@ -291,10 +335,8 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& G
             return Result;
         }
         sc_blob Blob{nullptr, 0};
-        const FTCHARToUTF8 GenderUtf8(*Gender), LoadoutUtf8(*Loadout);
-        const sc_status Status = scbridge_export_player(Self->Handle, Gender.IsEmpty() ? nullptr : GenderUtf8.Get(),
-                                                        Loadout.IsEmpty() ? nullptr : LoadoutUtf8.Get(), &FSCExportProgress::Callback,
-                                                        &Progress.Get(), &Blob);
+        const FTCHARToUTF8 RequestUtf8(*RequestJson);
+        const sc_status Status = scbridge_export_player_request(Self->Handle, RequestUtf8.Get(), &FSCExportProgress::Callback, &Progress.Get(), &Blob);
         Result.Seconds = FPlatformTime::Seconds() - Start;
         const uint64 BlobBytes = Status == SC_STATUS_OK ? uint64(Blob.len) : 0;
         if (Status == SC_STATUS_OK)
@@ -311,8 +353,8 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& G
             if (!Result.bPanicked) sc_free_blob(&Blob);
         }
         if (Self->Handle) Result.Cache = Self->CacheStatsLocked();
-        UE_LOG(LogSCBridgeClient, Display, TEXT("FFI_EXPORT_PLAYER gender=%s loadout=%s status=%d seconds=%.3f bytes=%llu accepted=%d cache_hit=%d"),
-               Gender.IsEmpty() ? TEXT("<default>") : *Gender, Loadout.IsEmpty() ? TEXT("<default>") : *Loadout, int32(Status), Result.Seconds,
+        UE_LOG(LogSCBridgeClient, Display, TEXT("FFI_EXPORT_PLAYER request=%s status=%d seconds=%.3f bytes=%llu accepted=%d cache_hit=%d"),
+               *RequestJson, int32(Status), Result.Seconds,
                BlobBytes, Result.bOK, Result.Cache.bLastHit);
         return Result;
     }, UE::Tasks::ETaskPriority::BackgroundNormal);

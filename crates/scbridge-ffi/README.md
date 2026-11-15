@@ -25,6 +25,19 @@ NULL cache disables persistence. Entity search returns a JSON array; clip and
 light queries return the core catalogue objects unchanged. Exact entity names
 are required for catalogues and exports. `sc_blob` owns an uncompressed tar.
 
+`sc_datacore_record(h, name_or_guid, &json)` returns one DataCore record so a host
+reads game values at run time instead of copying them. `name_or_guid` is
+`Type.Name` (`EntityClassDefinition.GRIN_TractorBeam_S1`), a bare record name
+(exact, case-insensitive: `grin_multitool_01_default_tractorbeam`) or a GUID. The
+JSON is the `starbreaker dcb query` value shape (StarBreaker
+`query::record_json`): objects carry their struct type in `__type`, references
+are record GUID strings (resolve them with another call, so one record never
+expands the whole entity graph), and the top object adds `__record_name` and
+`__record_id`. No match, or a bare name several records share, is
+`SC_STATUS_ERROR`; the message lists the matching names. CLI:
+`scviewer record <name|guid>`. UE: `FSCBridgeClient::DataCoreRecord`. The
+no-FFI build (`SC_WITH_FFI=0`) returns `SC_STATUS_UNSUPPORTED`.
+
 Serialize all access to each handle, including error retrieval and close. A
 handle may move between threads. Progress may run on worker/rayon threads and
 must not reenter the handle; callbacks and their borrowed context finish before

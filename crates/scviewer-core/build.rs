@@ -34,7 +34,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PATH");
     let identity = git(&vendor, &["rev-parse", "HEAD"])
         .zip(git(&vendor, &["status", "--porcelain"]))
-        .filter(|_| git(&vendor, &["rev-parse", "--show-toplevel"]).as_deref() == vendor.to_str());
+        // Compare canonical paths: on Windows `canonicalize` yields a verbatim `\\?\C:\...` path and git prints
+        // `C:/...`, so a string comparison never matched there and every build fell back to the Cargo.lock hash
+        // (exporter commits then did not invalidate cached packages).
+        .filter(|_| {
+            git(&vendor, &["rev-parse", "--show-toplevel"])
+                .and_then(|top| Path::new(&top).canonicalize().ok())
+                .is_some_and(|top| top == vendor)
+        });
     let (revision, dirty) = match identity {
         Some((revision, status)) => (revision, !status.is_empty()),
         None => {

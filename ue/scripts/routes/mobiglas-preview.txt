@@ -1,0 +1,50 @@
+# WP-K1c layout check of the mobiGlas Cargo app and the world-space callouts with UI-PREVIEW data: sc.MobiGlas.Preview 1
+# feeds synthetic cargo views (grids placed around the camera, not game data) so the UI can be judged without a cargo
+# scenario. sc.UI.Shot captures the window with the Slate UI (route `shot` lines capture the bare viewport).
+# The player floats (noclip) 32 m off the ship's side looking at it, so the preview grids sit in open space before it.
+# Host: -SCCamera=first -SCLoad=MISC_Hull_A [-SCShowcase] -SCShotDir=<dir> -windowed -resx=1920 -resy=1080
+# Steps: open (default form: elevator -> Hull A, retracted: "will extend before loading", the 32 SCU box refused), the
+# elevator lattice, a retracted Hull A grid, 16 SCU confirmed, a box and drones in flight with the mobiGlas open and
+# closed, the loaded grid refusing to retract, then the same open view at 1280x720. While open the view orbits the
+# selected grid's ship / platform: sc.MobiGlas.Orbit (drag) and sc.MobiGlas.Zoom (wheel) stand in for the mouse;
+# an outside view change while open (sc.FP.Look, sc.Cargo.View, teleports) re-targets the orbit (MOBIGLAS_ORBIT retarget).
+0 DisableAllScreenMessages
+8 sc.FP.Noclip 1
+1 sc.FP.Place 500 -3200 100
+1 sc.FP.Look 90 -5
+1 sc.MobiGlas.Preview 1
+1 sc.MobiGlas 1
+3 sc.UI.Shot mobiglas-open
+0 sc.MobiGlas.Orbit 240 -60
+1 sc.UI.Shot mobiglas-orbited
+0 sc.MobiGlas.Zoom 3
+1 sc.UI.Shot mobiglas-zoomed
+0 sc.FP.Look 150 -10
+1 sc.UI.Shot mobiglas-retarget
+0 sc.FP.Look 90 -5
+0 sc.MobiGlas.Select 1
+1 sc.UI.Shot mobiglas-elevator
+0 sc.MobiGlas.Layer 2
+1 sc.UI.Shot mobiglas-elevator-layer2
+0 sc.MobiGlas.Select 3
+0 sc.MobiGlas.Amount 16
+1 sc.UI.Shot mobiglas-amount16
+0 sc.MobiGlas.Confirm
+1 sc.UI.Shot mobiglas-extending
+6 sc.UI.Shot mobiglas-job-moving
+0 sc.MobiGlas 0
+1 sc.UI.Shot callouts-closed
+0 sc.FP.Look 70 -8
+1 sc.UI.Shot callouts-turned
+0 sc.FP.Look 90 -5
+0 sc.MobiGlas 1
+10 sc.MobiGlas.Select 3
+1 sc.UI.Shot mobiglas-job-done
+0 sc.MobiGlas.Extend 0
+1 sc.UI.Shot mobiglas-retract-refused
+0 r.SetRes 1280x720w
+3 sc.UI.Shot mobiglas-720
+0 sc.MobiGlas 0
+1 sc.UI.Shot closed-720
+0 r.SetRes 1920x1080w
+2 quit

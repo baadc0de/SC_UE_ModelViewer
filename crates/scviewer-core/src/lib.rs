@@ -1,4 +1,4 @@
-//! UI-independent StarBreaker sessions, geometry browsing, clip catalogues, lights and exports.
+//! UI-independent StarBreaker sessions, geometry browsing, clip catalogues, lights, DataCore records and exports.
 //!
 //! Decomposed mesh materials retain `<mtl stem>_<submaterial name>_<NN>`:
 //! `NN` is the zero-based sidecar `submaterials[]` index and the GLB primitive's
@@ -15,6 +15,7 @@ mod cache;
 mod cancellation;
 pub use cancellation::{CancelToken, Error};
 mod catalogue;
+mod datacore;
 mod engine_textures;
 mod lights;
 mod items;

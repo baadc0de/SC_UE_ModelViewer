@@ -7,6 +7,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Misc/Paths.h"
+#include "Algo/AllOf.h"
 #include <limits>
 
 namespace
@@ -154,12 +155,17 @@ bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FS
     Out.RootPort = ParsePort(Obj(Root, TEXT("port")));
     Out.Parts.Add({Str(Root, TEXT("entity_name")), Str(Root, TEXT("mesh_asset")), Str(Root, TEXT("id")), Out.RootPort});
     TMap<FString, FString> ItemTypes;
+    TMap<FString, FObj> ItemNodes;
     for (const auto& V : Arr(Scene, TEXT("children")))
         if (V->Type == EJson::Object)
         {
             const FObj C = V->AsObject();
             Out.Parts.Add({Str(C, TEXT("entity_name")), Str(C, TEXT("mesh_asset")), Str(C, TEXT("id")), ParsePort(Obj(C, TEXT("port")))});
-            if (!Str(C, TEXT("id")).IsEmpty()) ItemTypes.Add(Str(C, TEXT("id")), Str(C, TEXT("item_type")));
+            if (!Str(C, TEXT("id")).IsEmpty())
+            {
+                ItemTypes.Add(Str(C, TEXT("id")), Str(C, TEXT("item_type")));
+                ItemNodes.Add(Str(C, TEXT("id")), C);
+            }
         }
     for (const auto& V : Arr(Root, TEXT("animations")))
         if (V->Type == EJson::Object)
@@ -188,6 +194,48 @@ bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FS
             Weapon.HandGripHelper = GripHelper(Obj(Grips[0]->AsObject(), TEXT("handGrip")));
             Weapon.OffHandGripHelper = GripHelper(Obj(Grips[0]->AsObject(), TEXT("offHandGrip")));
         }
+        for (const auto& A : Arr(W, TEXT("fire_actions")))
+        {
+            if (A->Type != EJson::Object) continue;
+            const FObj F = A->AsObject();
+            FSCFireAction Action;
+            Action.Kind = Str(F, TEXT("kind"));
+            Action.FireRate = Num(F, TEXT("fire_rate"), 0);
+            Action.FireFragment = FName(*Str(F, TEXT("fire_fragment")));
+            Action.StopFragment = FName(*Str(F, TEXT("stop_fragment")));
+            Action.OneShotFragment = FName(*Str(F, TEXT("one_shot_fragment")));
+            Action.FireHelper = Str(F, TEXT("fire_helper"));
+            Action.MuzzleHelper = Str(F, TEXT("muzzle_helper"));
+            Action.EffectHelpers = Strings(F, TEXT("effect_helpers"));
+            Weapon.FireActions.Add(MoveTemp(Action));
+        }
+        for (const auto& FV : Arr(W, TEXT("fire_fragments")))
+        {
+            if (FV->Type != EJson::Object) continue;
+            const FObj F = FV->AsObject();
+            FSCWeaponFragment Fragment;
+            Fragment.Fragment = FName(*Str(F, TEXT("fragment")));
+            Fragment.Tags = Strings(F, TEXT("tags"));
+            Fragment.FragTags = Strings(F, TEXT("frag_tags"));
+            for (const auto& LV : Arr(F, TEXT("layers")))
+                if (LV->Type == EJson::Object)
+                {
+                    const FObj L = LV->AsObject();
+                    bool bLoop = false;
+                    L->TryGetBoolField(TEXT("loop"), bLoop);
+                    Fragment.Layers.Add({FName(*Str(L, TEXT("animation")).ToLower()), bLoop, Num(L, TEXT("speed"), 1)});
+                }
+            Weapon.FireFragments.Add(MoveTemp(Fragment));
+        }
+        // The weapon's own clips resolve in its package_dir (export-root relative), keyed by base name.
+        if (const FObj* Node = ItemNodes.Find(Weapon.ChildId))
+            for (const auto& CV : Arr(*Node, TEXT("animations")))
+                if (CV->Type == EJson::Object)
+                {
+                    FString Path;
+                    if (FSCPackageSource::Normalize(Str(*Node, TEXT("package_dir")) / Str(CV->AsObject(), TEXT("sidecar")), Path))
+                        Weapon.ClipSidecars.Add(FName(*FPaths::GetBaseFilename(Str(CV->AsObject(), TEXT("name"))).ToLower()), Path);
+                }
         Out.Weapons.Add(MoveTemp(Weapon));
     }
     const FObj Motion = Obj(Player, TEXT("motion"));
@@ -341,6 +389,19 @@ FString FSCPlayerKit::FindRootScene(const FSCPackageSource& Source)
         else if (Depth == BestDepth) ++AtBest;
     }
     return AtBest == 1 ? Best : FString();
+}
+const FSCWeaponFragment* FSCPlayerWeapon::FindFireFragment(FName Fragment, bool bAiming) const
+{
+    auto Has = [&](const FString& Tag) {
+        return (bAiming && Tag.Equals(TEXT("ADS"), ESearchCase::IgnoreCase)) ||
+               MannequinTags.ContainsByPredicate([&](const FString& T) { return T.Equals(Tag, ESearchCase::IgnoreCase); });
+    };
+    const FSCWeaponFragment* Best = nullptr;
+    for (const FSCWeaponFragment& F : FireFragments)
+        if (F.Fragment == Fragment && F.FragTags.IsEmpty() && !F.Layers.IsEmpty() && Algo::AllOf(F.Tags, Has) &&
+            (!Best || F.Tags.Num() > Best->Tags.Num()))
+            Best = &F;
+    return Best;
 }
 const FSCPlayerWeapon* FSCPlayerKit::FindWeapon(const FString& ChildId) const
 {

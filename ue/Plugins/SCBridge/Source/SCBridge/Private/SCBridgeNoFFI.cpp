@@ -39,6 +39,11 @@ enum sc_status sc_lights(struct sc_handle*, const char*, char** out)
     if (out) *out = nullptr;
     return SC_STATUS_UNSUPPORTED;
 }
+enum sc_status sc_datacore_record(struct sc_handle*, const char*, char** out_json)
+{
+    if (out_json) *out_json = nullptr;
+    return SC_STATUS_UNSUPPORTED;
+}
 enum sc_status sc_cache_stats(struct sc_handle*, struct sc_cache_info* out)
 {
     if (out) FMemory::Memzero(*out);
@@ -89,6 +94,11 @@ enum sc_status sc_texels_decode_bgra8(const uint8_t*, size_t, uint32_t, uint32_t
     return SC_STATUS_UNSUPPORTED;
 }
 enum sc_status scbridge_export_player(struct sc_handle*, const char*, const char*, sc_progress_cb, void*, struct sc_blob* out_tar)
+{
+    if (out_tar) *out_tar = sc_blob{nullptr, 0};
+    return SC_STATUS_UNSUPPORTED;
+}
+enum sc_status scbridge_export_player_request(struct sc_handle*, const char*, sc_progress_cb, void*, struct sc_blob* out_tar)
 {
     if (out_tar) *out_tar = sc_blob{nullptr, 0};
     return SC_STATUS_UNSUPPORTED;

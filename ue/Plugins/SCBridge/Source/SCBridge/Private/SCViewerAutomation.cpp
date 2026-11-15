@@ -241,6 +241,13 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
             UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD aim on=%d ok=%d %s"), Flag(Args, 0, true), OK, *C->Body->Describe());
         }
     });
+    Add(TEXT("sc.FP.Fire"), TEXT("sc.FP.Fire 0|1: hold / release the trigger of the drawn weapon (the left mouse button)"), [Weak](const TArray<FString>& Args) {
+        if (auto* C = FirstPerson(Weak))
+        {
+            const bool OK = C->HandleAction(ESCFirstPersonAction::Fire, Flag(Args, 0, true));
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD fire on=%d ok=%d shots=%d"), Flag(Args, 0, true), OK, C->Body->GetShots());
+        }
+    });
     Add(TEXT("sc.FP.Noclip"), TEXT("sc.FP.Noclip 0|1 (an exit inside geometry is refused)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak))
         {

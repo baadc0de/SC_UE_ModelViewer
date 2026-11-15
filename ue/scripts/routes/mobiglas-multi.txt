@@ -1,0 +1,30 @@
+# WP-K1c on the mixed-ownership scenario hull_a_multi (three MISC Hull A of three owners sharing the freight elevator):
+# the mobiGlas shows the other owners' ships under OTHER VESSELS (dimmed, never offered as source / destination), their
+# boxes on the elevator hatched in Grid detail and left out of the commodity picker, their transfers through the
+# elevator under OTHER TRAFFIC with their queued / waiting state, and their drones and boxes as neutral callouts.
+# Host: -SCCamera=first -SCLoad=MISC_Hull_A
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak
+#   -SCCargoScenario=hull_a_multi -SCShowcase -SCShotDir=<dir> -windowed -resx=1920 -resy=1080
+0 DisableAllScreenMessages
+80 sc.Cargo.List
+0 sc.FP.Noclip 1
+0 sc.Cargo.View ship 26 10 120
+2 sc.MobiGlas 1
+4 sc.UI.Shot multi-open
+0 sc.MobiGlas.Select elevator
+3 sc.UI.Shot multi-elevator
+0 sc.Cargo.Transfer elevator ship organic 48 --owner=b
+0.3 sc.Cargo.Transfer elevator ship organic 32 --owner=c
+0.3 sc.MobiGlas.From elevator
+0 sc.MobiGlas.To ship
+0 sc.MobiGlas.Amount 32
+1 sc.UI.Shot multi-plan
+0 sc.MobiGlas.Confirm
+8 sc.UI.Shot multi-traffic
+15 sc.UI.Shot multi-traffic-2
+0 sc.MobiGlas 0
+0 sc.Cargo.View MISC+elevator 60 30 150 free
+1 sc.UI.Shot multi-callouts
+10 sc.UI.Shot multi-callouts-2
+0 sc.Cargo.List
+1 quit
