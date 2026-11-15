@@ -19,6 +19,29 @@ struct SCBRIDGE_API FSCItemPort
     int32 Accepts(const FString& ItemType, const FString& SubType) const;
 };
 
+/** One authored fire action (`fire_actions[]`: SCItemWeaponComponentParams.fireActions). */
+struct SCBRIDGE_API FSCFireAction
+{
+    FString Kind;       // the action's DataCore type (rapid, single, ...)
+    float FireRate = 0; // rounds per minute
+    FName FireFragment, StopFragment, OneShotFragment;
+    FString FireHelper, MuzzleHelper; // launch helpers on the weapon (projectile origin, muzzle)
+    TArray<FString> EffectHelpers;    // fire-effect helpers (muzzle flash, shell ejection)
+};
+/** A fragment option of the weapon's enslavement ADB (`fire_fragments[]`): clips of the held weapon's own rig. */
+struct SCBRIDGE_API FSCWeaponFragment
+{
+    struct FLayer
+    {
+        FName Clip; // the weapon's own clip, by base name (lower case)
+        bool bLoop = false;
+        float Speed = 1;
+    };
+    FName Fragment;
+    TArray<FString> Tags, FragTags;
+    TArray<FLayer> Layers;
+};
+
 struct SCBRIDGE_API FSCPlayerWeapon
 {
     FString Entity, ChildId, Subtype, ItemType;
@@ -28,6 +51,15 @@ struct SCBRIDGE_API FSCPlayerWeapon
     /** First authored grip: helper on the weapon that meets the hand port joint ("" = source frame) and the
      *  off-hand grip helper ("" = no off-hand grip). */
     FString HandGripHelper, OffHandGripHelper;
+    TArray<FSCFireAction> FireActions;
+    TArray<FSCWeaponFragment> FireFragments;
+    /** The weapon's own clips (its child `animations`): base name (lower case) -> sidecar path. */
+    TMap<FName, FString> ClipSidecars;
+    /** Sidecar JSON of the clips the fire fragments use (SCLoadPlayerKit); parsed against the weapon rig at attach. */
+    TMap<FName, FString> FireClipJson;
+    /** The option of Fragment for the weapon's state: frag tags none (a loaded weapon), tags within the weapon's
+     *  Mannequin tags (plus ADS when aiming); the most specific such option. Null when none. */
+    const FSCWeaponFragment* FindFireFragment(FName Fragment, bool bAiming) const;
 };
 
 struct SCBRIDGE_API FSCMotionLayer

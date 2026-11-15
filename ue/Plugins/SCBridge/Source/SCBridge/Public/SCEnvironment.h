@@ -5,6 +5,7 @@
 
 class AActor;
 class ASCVehicle;
+class USCRigComponent;
 
 struct FSCRigBakeStats
 {
@@ -16,8 +17,12 @@ struct FSCRigBakeStats
 namespace FSCEnvironment
 {
 // The door fragments' end pose: "open"/"closed" snap each owner's best clip (static Opened/Closed first, then the last
-// frame of Open/Close); anything else is the bind pose. Returns the clips posed.
+// frame of Open/Close); anything else is the bind pose. Then the inventory-container access requests registered for the
+// environment (FSCEnvironmentAccess) are re-applied on top. Returns the clips posed.
 SCBRIDGE_API int32 SetState(ASCVehicle* Environment, const FString& State);
+// The rigs a clip poses: the rigs it binds to (by bone name), narrowed to its owner entity's rigs (Clip.Owner ==
+// Rig->OwnerEntity) when it has any. Generic bone names are shared across entities, so the binding alone over-reaches.
+SCBRIDGE_API TArray<USCRigComponent*> ClipRigs(const ASCVehicle* Vehicle, int32 ClipIndex);
 // Moves the environment so its ship elevator (largest flat moving part >= 20 m across, in the presented pose) is centred under
 // the world origin with its top at FloorZ; without one, the floor under the origin goes to FloorZ. Ignore (the shown
 // ship) is not traced. Returns the offset applied.

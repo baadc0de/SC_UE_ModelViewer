@@ -1,5 +1,6 @@
 // Root of the in-game UI: top bar (archive, camera modes, Keep), model browser | 3D view | hierarchy, footer with
-// load timings, cache, memory and disk headroom; an archive overlay with the p4k picker until sc_open succeeds.
+// load timings, cache, memory and disk headroom; an archive overlay with the p4k picker until sc_open succeeds; the
+// mobiGlas and cargo callouts over the view (WP-K1c).
 #pragma once
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
@@ -24,6 +25,10 @@ private:
     TSharedRef<SWidget> MakeArchiveOverlay();
     TSharedRef<SWidget> MakeLoadingOverlay();
     EVisibility PanelVisibility() const;
+    /** Top bar and footer: hidden in the showcase (-SCShowcase). */
+    EVisibility ChromeVisibility() const;
+    /** Collapsed while the mobiGlas is open (first-person HUD, key help). */
+    EVisibility MobiGlasHidden() const;
     TSharedRef<SWidget> MakeFooter();
     TSharedRef<SWidget> MakeCameraButton(const FText& Label, uint8 Mode, const FText& Tip);
     FReply PickArchive();
@@ -33,6 +38,8 @@ private:
 
     TWeakObjectPtr<USCViewerSubsystem> Subsystem;
     TSharedPtr<SWidget> View;
+    TSharedPtr<SWidget> ViewportInput;           // focus returns here when the mobiGlas closes
+    TSharedPtr<class FSCMobiGlasModel> MobiGlas; // WP-K1c cargo app + callouts state
     FText Notice; // Keep result / picker errors
     bool bOfferedPicker = false; // the picker opens by itself once when the startup open fails
     uint64 UsedMemory = 0, FreeMemory = 0, DiskFree = 0, DiskTotal = 0;

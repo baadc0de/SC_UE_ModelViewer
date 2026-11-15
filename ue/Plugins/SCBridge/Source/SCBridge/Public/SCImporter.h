@@ -27,6 +27,9 @@ struct SCBRIDGE_API FSCImportOptions
      *  custom data, not under a rig) are drawn as one instanced component each; the render thread's per-primitive
      *  visibility cost dominated a hangar's frame (LOOK-6). Ships keep per-part components (hierarchy, focus). */
     bool bInstanceRepeatedParts = false;
+    /** Keep what the import built after success (FSCImportJob::GetRetainedAssets) so more actors of the package can be
+     *  assembled from it without deriving or building again (extra vehicle instances). The package bytes are released. */
+    bool bRetainAssets = false;
     FTransform ActorTransform = FTransform::Identity;
 };
 struct SCBRIDGE_API FSCImportResult

@@ -151,6 +151,17 @@ enum sc_status sc_clip_catalogue(struct sc_handle *h, const char *entity, char *
 enum sc_status sc_lights(struct sc_handle *h, const char *entity, char **out);
 
 /*
+ Return one DataCore record as a JSON object: the record `name_or_guid` names, as `Type.Name`
+ (e.g. `EntityClassDefinition.GRIN_TractorBeam_S1`), a bare record name (exact, case-insensitive) or a
+ GUID. The `starbreaker dcb query` value shape: objects carry their struct type in `__type`, references
+ are record GUID strings (resolve them with another call), plus `__record_name` / `__record_id`.
+ No match, or a bare name several records share, is SC_STATUS_ERROR (the message lists the matches).
+ */
+enum sc_status sc_datacore_record(struct sc_handle *h,
+                                  const char *name_or_guid,
+                                  char **out_json);
+
+/*
  Read core cache statistics; broken manifests recover under the cache lock.
  Missing/disabled cache reports zero bytes/entries; last_hit is unchanged.
  */
@@ -268,6 +279,18 @@ enum sc_status scbridge_export_player(struct sc_handle *h,
                                       sc_progress_cb progress,
                                       void *user,
                                       struct sc_blob *out_tar);
+
+/*
+ Export a contract-v2 player kit from a JSON request: {"gender": "male"|"female",
+ "loadout": <path>|null, "weapons": [<entity class>...]|null, "spare_attachments": bool}
+ (scviewer_core::PlayerRequest; missing fields take its defaults). Same ownership,
+ progress and cancellation rules as scbridge_export_player.
+ */
+enum sc_status scbridge_export_player_request(struct sc_handle *h,
+                                              const char *request_json,
+                                              sc_progress_cb progress,
+                                              void *user,
+                                              struct sc_blob *out_tar);
 
 #ifdef __cplusplus
 }  // extern "C"

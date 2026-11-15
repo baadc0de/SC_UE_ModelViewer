@@ -1,0 +1,44 @@
+# WP-K1f: several vehicles of one entity in one hangar (mixed-ownership groundwork). The loaded MISC Hull A stands on
+# the ship elevator; -SCExtraVehicles=*2 adds two more Hull A instances, assembled from the loaded one's retained import
+# and placed on free floor beside it (envelope = every clip's reach, 3 m walkway, freight-elevator access lanes kept out).
+# Instance 1 extends its hull (misc_hull_a_cargo_deploy, 544 frames) while 0 and 2 stay retracted (each instance
+# animates on its own), then retracts it; instance 2 is destroyed (VEHICLE_DESTROY alive_after_gc), then everything
+# unloads (VEHICLE_RESET, VIEWER_UNLOAD alive_after_gc).
+# Host: -SCLoad=MISC_Hull_A -SCExtraVehicles=*2
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak -SCShotDir=<dir>
+# The script starts once the ship and the hangar are in; the instances follow (about 5-6 s each).
+1 sc.Vehicle.List
+25 sc.Vehicle.List
+0 sc.Vehicle.Focus all
+3 shot instances-all
+0 sc.Look.Camera 4500 -2500 1400 150 -14
+3 shot instances-front
+0 sc.Look.Camera 0 0 9000 0 -89
+3 shot instances-top
+0 sc.Vehicle.Clip 1 cargo_deploy
+1 sc.Look.Camera 4500 -2500 1400 150 -14
+4 shot plates-moving
+20 shot plates-instance1-extended
+0 sc.Look.Camera 0 0 9000 0 -89
+2 shot plates-instance1-extended-top
+0 sc.Vehicle.Clip 1 cargo_deploy -1
+0 sc.Look.Camera 4500 -2500 1400 150 -14
+22 shot plates-instance1-retracted
+0 sc.Vehicle.Destroy 2
+3 sc.Vehicle.List
+0 sc.Look.Camera 0 0 9000 0 -89
+2 shot after-destroy
+# An explicit transform (idx 3: 40 m to the other side, yaw 180, gear rested on the floor), then a fresh import with
+# sharing off (idx 4: export cache + full build, auto-placed), destroyed again (its own session objects freed).
+0 sc.Vehicle.SpawnAt loaded 0 40 -0.05 180
+12 sc.Vehicle.List
+0 sc.Vehicle.ShareAssets 0
+0 sc.Vehicle.Spawn loaded 1
+40 sc.Vehicle.List
+0 sc.Look.Camera 0 0 9000 0 -89
+2 shot explicit-and-fresh
+0 sc.Vehicle.Destroy 4
+3 sc.Vehicle.ShareAssets 1
+0 sc.Unload
+5 sc.Vehicle.List
+1 quit

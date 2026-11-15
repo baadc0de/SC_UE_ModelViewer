@@ -1,0 +1,38 @@
+# Showcase player check: the torch off/on at one view, the P4-AR drawn, a burst fired from the hip and aimed (flash,
+# tracers, the rifle's own rapid_fire clips; the hip burst at slomo 0.05 to catch tracers in flight; the kick returns), then third person (C key) behind, from the front (spare magazines) and back behind after a Z double-tap.
+# Host: -SCShowcase -SCCamera=first -SCLoad=<ship> -SCEnvironment=<hangar> -SCPlayerLoadout=<loadout>
+# -SCPlayerWeapons=behr_rifle_ballistic_01 -SCShotDir=<dir>
+20 sc.FP.Look 0 -25
+1 shot torch-off
+0 sc.FP.Torch 1
+1 shot torch-on
+0 sc.FP.Torch 0
+0 sc.FP.Look 0 0
+0 sc.Player.Weapon 1
+3 shot drawn
+0 slomo 0.05
+0 sc.FP.Fire 1
+0.02 shot firing-hip-1
+0.02 shot firing-hip-2
+0.02 shot firing-hip-3
+0.05 sc.FP.Fire 0
+0 slomo 1
+2 shot recovered
+1 sc.FP.Aim 1
+1 sc.FP.Fire 1
+0.05 shot firing-ads
+0.4 sc.FP.Fire 0
+2 sc.FP.Aim 0
+0 sc.FP.Key C 1
+0 sc.FP.Key C 0
+2 shot third-person
+0 sc.Player.View tp 180 160
+2 shot third-person-front
+0 sc.Player.View tp 120
+1 sc.FP.Key Z 1
+0.05 sc.FP.Key Z 0
+0.05 sc.FP.Key Z 1
+0.05 sc.FP.Key Z 0
+2 shot third-person-reset
+0 sc.FP.Where
+1 quit

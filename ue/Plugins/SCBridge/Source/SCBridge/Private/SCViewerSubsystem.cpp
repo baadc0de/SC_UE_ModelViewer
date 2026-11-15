@@ -91,7 +91,10 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     CacheDir = USCViewerSettings::Get()->ResolveCacheDir();
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
+    VehicleInstances = MakeShared<FSCVehicleInstances>(*this);
     bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
+    bShowcase = FParse::Param(FCommandLine::Get(), TEXT("SCShowcase"));
+    if (bShowcase) bPanelsVisible = false;
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
     if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
@@ -125,6 +128,7 @@ void USCViewerSubsystem::Deinitialize()
     if (EnvListTask.IsValid()) EnvListTask.Wait();
     EnvJob.Reset();
     UnloadInternal(false); // the subsystem owns the loaded vehicle; the host collects garbage afterwards
+    VehicleInstances.Reset();
     Client.Reset();
     Super::Deinitialize();
 }
@@ -770,6 +774,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         FSCImportOptions ImportOptions;
         ImportOptions.World = GetViewerWorld();
         ImportOptions.bBuildCollision = LoadOptions->bCollision;
+        ImportOptions.bRetainAssets = FSCVehicleInstances::ShareAssets(); // extra instances of it are assembled from them
         Job = MakeShared<FSCImportJob>(*Source, ImportOptions, Source);
         ImportStart = FPlatformTime::Seconds();
         Phase = ESCLoadPhase::Importing;
@@ -796,6 +801,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
             USCImportLibrary::RestOnFloor(Vehicle.Get(), ViewerFloorZ);
             LoadedEntity = PendingEntity;
             LoadedKey = PendingKey;
+            if (VehicleInstances) VehicleInstances->SetPrimary(Vehicle.Get(), Job->GetRetainedAssets(), LoadedKey);
             Job.Reset();
         }
         else
@@ -880,6 +886,8 @@ void USCViewerSubsystem::StepCookedShip()
     Report.ImportSeconds = FPlatformTime::Seconds() - ImportStart;
     LoadedEntity = PendingEntity;
     LoadedKey = PendingKey;
+    // TODO(WP-K1): extra instances of a cooked ship (another level instance at a transform); none retained here.
+    if (VehicleInstances) VehicleInstances->SetPrimary(Cooked, nullptr, LoadedKey);
     FinishLoad(ESCLoadPhase::Succeeded, FString());
 }
 void USCViewerSubsystem::UnloadShipLevel()
@@ -907,6 +915,9 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect)
     Focused = nullptr;
     ASCVehicle* Previous = Vehicle.Get();
     TArray<TWeakObjectPtr<UObject>> Tracked;
+    // Extra vehicle instances and their retained assets go with the loaded vehicle (counted in the same accounting).
+    if (VehicleInstances)
+        VehicleInstances->Reset(bCollect ? &Tracked : nullptr, ViewerWorld && !ViewerWorld->bIsTearingDown && !IsEngineExitRequested());
     if (ShipLevel)
     {
         // A cooked ship leaves with its level (its assets are packages, not an import session).
@@ -974,6 +985,7 @@ bool USCViewerSubsystem::Tick(float)
     StepLoad(false);
     StepPlayerKit(false);
     StepEnvironment();
+    if (VehicleInstances) VehicleInstances->Tick();
     PollClientPanic();
     LogPhaseChange();
     if (Automation) Automation->Tick();
@@ -1020,11 +1032,13 @@ bool USCViewerSubsystem::RequestPlayerKit()
     }
     const USCViewerSettings* Settings = USCViewerSettings::Get();
     const FString Gender = Settings->ResolvePlayerGender(), Loadout = Settings->ResolvePlayerLoadout();
+    const TArray<FString> Weapons = Settings->ResolvePlayerWeapons();
+    const bool bSpares = Settings->ResolvePlayerSpareAttachments();
     KitProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
-    KitExport = Client->ExportPlayer(Gender, Loadout, KitProgress.ToSharedRef());
+    KitExport = Client->ExportPlayer(Gender, Loadout, Weapons, bSpares, KitProgress.ToSharedRef());
     KitState = EPlayerKitState::Exporting;
-    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_START gender=%s loadout=%s"), Gender.IsEmpty() ? TEXT("<default>") : *Gender,
-           Loadout.IsEmpty() ? TEXT("<exporter default>") : *Loadout);
+    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_START gender=%s loadout=%s weapons=%s spares=%d"), Gender.IsEmpty() ? TEXT("<default>") : *Gender,
+           Loadout.IsEmpty() ? TEXT("<exporter default>") : *Loadout, Weapons.IsEmpty() ? TEXT("<all>") : *FString::Join(Weapons, TEXT(",")), bSpares);
     return true;
 }
 void USCViewerSubsystem::FailPlayerKit(const FString& Error)
@@ -1202,8 +1216,38 @@ void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
     LoadedEntity = Imported->Manifest.Root.EntityName;
     Report.Entity = LoadedEntity;
     Phase = Report.Result = ESCLoadPhase::Succeeded;
+    if (VehicleInstances) VehicleInstances->SetPrimary(Imported, nullptr, FString()); // folder harness: instances import fresh
     FrameAll();
 }
+
+// ---------------------------------------------------------------- extra vehicle instances (SCVehicleInstances.cpp)
+
+int32 USCViewerSubsystem::SpawnVehicleInstance(const FString& Entity)
+{
+    return VehicleInstances ? VehicleInstances->Spawn(Entity, true, FTransform::Identity, true) : INDEX_NONE;
+}
+int32 USCViewerSubsystem::SpawnVehicleInstance(const FString& Entity, const FTransform& World, bool bRest)
+{
+    return VehicleInstances ? VehicleInstances->Spawn(Entity, false, World, bRest) : INDEX_NONE;
+}
+bool USCViewerSubsystem::DestroyVehicleInstance(int32 Id) { return VehicleInstances && VehicleInstances->Destroy(Id); }
+TArray<ASCVehicle*> USCViewerSubsystem::GetVehicles() const
+{
+    if (VehicleInstances) return VehicleInstances->GetVehicles();
+    TArray<ASCVehicle*> Out;
+    if (Vehicle.IsValid()) Out.Add(Vehicle.Get());
+    return Out;
+}
+TArray<FSCVehicleInstanceInfo> USCViewerSubsystem::GetVehicleInstances() const
+{
+    return VehicleInstances ? VehicleInstances->GetInstances() : TArray<FSCVehicleInstanceInfo>();
+}
+int32 USCViewerSubsystem::GetVehicleInstanceId(const ASCVehicle* InVehicle) const
+{
+    return VehicleInstances ? VehicleInstances->GetId(InVehicle) : (InVehicle && InVehicle == Vehicle.Get() ? 0 : INDEX_NONE);
+}
+bool USCViewerSubsystem::IsSpawningVehicles() const { return VehicleInstances && VehicleInstances->IsSpawning(); }
+int32 USCViewerSubsystem::GetVehiclesRevision() const { return VehicleInstances ? VehicleInstances->GetRevision() : 0; }
 ASCFirstPersonCharacter* USCViewerSubsystem::GetFirstPerson() const
 {
     return CameraMode == ESCCameraMode::FirstPerson ? FirstPerson.Get() : nullptr;

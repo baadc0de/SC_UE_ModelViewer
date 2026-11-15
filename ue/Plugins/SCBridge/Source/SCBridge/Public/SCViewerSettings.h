@@ -26,6 +26,11 @@ public:
     /** Player loadout XML in Data.p4k (e.g. Data/Scripts/Loadouts/Player/DefaultLoadouts/<name>.xml); empty = the
      *  exporter's default (first default loadout with a stowed personal weapon). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString PlayerLoadout;
+    /** Keep only these loadout weapons (entity class names, e.g. behr_rifle_ballistic_01; grenades and melee items
+     *  count as weapons); empty = every weapon of the loadout. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") TArray<FString> PlayerWeapons;
+    /** Carry each kept weapon's spare attachments (its magazines) on the armour's storage ports. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bPlayerSpareAttachments = true;
 
     /** Viewer dirt on exterior surfaces (WP-U2b, FSCDirt): 0 = clean (the game's state for an unflown ship), 1 = full. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float DirtAmount = 0.3f;
@@ -72,10 +77,23 @@ public:
     /** Linear dirt colour; the default is FSCDirt's "Dust" preset (a viewer choice, not game data). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FLinearColor DirtColor = FLinearColor::FromSRGBColor(FColor(118, 108, 92));
 
+    /** WP-K1 cargo scenario (stock per grid, drone docks, drone definition): a JSON file, relative to the project's
+     *  Config/Cargo directory or absolute; empty = no scenario. -SCCargoScenario=<file> overrides it for one run. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoScenario;
+    /** Grids within this distance of the player count as "nearby" in the mobiGlas (metres; a viewer choice). */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") float CargoNearbyRadiusM = 80.f;
+    /** A transfer fails after this many consecutive boxes could not be lifted (and no other box could take their place). */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") int32 CargoPickAttempts = 3;
+    /** Absolute path of the scenario file, empty when none is set. */
+    FString ResolveCargoScenario() const;
+
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static USCViewerSettings* Get();
     /** -SCPlayerGender=<g> / -SCPlayerLoadout=<p4k path> override the settings for one run. */
     FString ResolvePlayerGender() const;
     FString ResolvePlayerLoadout() const;
+    /** -SCPlayerWeapons=<entity>[,<entity>...] / -SCPlayerSpares=0|1 override the settings for one run. */
+    TArray<FString> ResolvePlayerWeapons() const;
+    bool ResolvePlayerSpareAttachments() const;
     void AddRecent(const FString& Entity);
     /** Absolute cache dir resolved from the launch directory (UE changes cwd at startup); empty when disabled.
      *  -SCCacheDir=<dir> overrides the setting for one run. */

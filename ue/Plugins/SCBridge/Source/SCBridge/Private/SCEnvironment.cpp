@@ -1,6 +1,7 @@
 // FSCEnvironment: presented pose, floor placement and static rig baking for environments.
 #include "SCEnvironment.h"
 #include "SCClipCatalog.h"
+#include "SCEnvironmentAccess.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -27,26 +28,54 @@ FBox HitPartBox(const FHitResult& Hit)
 }
 } // namespace
 
+TArray<USCRigComponent*> FSCEnvironment::ClipRigs(const ASCVehicle* Vehicle, int32 ClipIndex)
+{
+    TArray<USCRigComponent*> Bound, Owned;
+    if (!Vehicle || !Vehicle->ClipCatalog || !Vehicle->ClipCatalog->Clips.IsValidIndex(ClipIndex)) return Bound;
+    const FSCImportedClip& Clip = Vehicle->ClipCatalog->Clips[ClipIndex];
+    for (USCRigComponent* Rig : Vehicle->Rigs)
+        if (Rig && Clip.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); }))
+        {
+            Bound.Add(Rig);
+            if (!Clip.Owner.IsEmpty() && Rig->OwnerEntity == Clip.Owner) Owned.Add(Rig);
+        }
+    return Owned.IsEmpty() ? Bound : Owned;
+}
+
 int32 FSCEnvironment::SetState(ASCVehicle* Environment, const FString& State)
 {
     if (!Environment || !Environment->ClipCatalog) return 0;
-    for (USCRigComponent* Rig : Environment->Rigs)
-        if (Rig) Rig->ResetPose();
+    Environment->ResetPose(); // every rig to its bind pose, every held clip layer dropped
     const FString Lower = State.ToLower();
-    if (Lower != TEXT("open") && Lower != TEXT("closed")) { UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_STATE bind")); return 0; }
+    if (Lower != TEXT("open") && Lower != TEXT("closed"))
+    {
+        UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_STATE bind"));
+        FSCEnvironmentAccess::Reapply(Environment); // inventory containers kept accessible (WP-K1)
+        return 0;
+    }
     const bool bOpen = Lower == TEXT("open");
-    TMap<FString, TPair<int32, FName>> Best;
-    for (const FSCImportedClip& Clip : Environment->ClipCatalog->Clips)
+    TMap<FString, TPair<int32, int32>> Best; // owner -> (rank, clip index)
+    const TArray<FSCImportedClip>& Clips = Environment->ClipCatalog->Clips;
+    for (int32 Index = 0; Index < Clips.Num(); ++Index)
     {
         FString Owner, Fragment;
-        if (!Clip.Id.ToString().Split(TEXT("__"), &Owner, &Fragment)) continue;
+        if (!Clips[Index].Id.ToString().Split(TEXT("__"), &Owner, &Fragment)) continue;
         Fragment = Fragment.ToLower().Replace(TEXT("door_"), TEXT(""));
         const int32 Rank = Fragment == (bOpen ? TEXT("opened") : TEXT("closed")) ? 2 : Fragment == (bOpen ? TEXT("open") : TEXT("close")) ? 1 : 0;
-        if (Rank && Rank > Best.FindRef(Owner).Key) Best.Add(Owner, {Rank, Clip.Id});
+        if (Rank && Rank > Best.FindRef(Owner).Key) Best.Add(Owner, {Rank, Index});
     }
+    // Each pick poses its owner's rigs only: clips bind by bone name, and different entities share generic bone names
+    // (a freight elevator's platform and its front gate both animate `VertAnimL`), so an untargeted snap of one owner's
+    // clip would also pose the other's rigs, the last one snapped winning (WP-K1).
     int32 Snapped = 0;
-    for (const auto& [Owner, Pick] : Best) Snapped += Environment->SnapClip(Pick.Value, true);
+    for (const auto& [Owner, Pick] : Best)
+    {
+        bool bAny = false;
+        for (USCRigComponent* Rig : ClipRigs(Environment, Pick.Value)) bAny |= Environment->SnapClipAt(Pick.Value, Rig, true);
+        Snapped += bAny;
+    }
     UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_STATE %s parts=%d"), *Lower, Snapped);
+    FSCEnvironmentAccess::Reapply(Environment); // inventory containers kept accessible (WP-K1)
     return Snapped;
 }
 

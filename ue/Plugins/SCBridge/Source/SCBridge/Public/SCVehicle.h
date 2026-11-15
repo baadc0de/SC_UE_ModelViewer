@@ -116,6 +116,11 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayClip(FName Clip);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool SnapClip(FName Clip, bool bLast);
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") bool PlayFragment(FName Fragment, FName Tag);
+    /** WP-K1: play clip Index of the catalogue on one rig instance (nullptr: every bound rig); Speed < 0 plays it
+     *  backwards from its last frame. */
+    bool PlayClipAt(int32 Index, USCRigComponent* Target, float Speed);
+    /** WP-K1: hold clip Index of the catalogue at its first or last frame on one rig instance (nullptr: every bound rig). */
+    bool SnapClipAt(int32 Index, USCRigComponent* Target, bool bLast);
     /** Toggle a caller-selected open/close tag pair; defaults suit the interact key. */
     UFUNCTION(BlueprintCallable, Category = "SC|Animation")
     bool ToggleClip(FName Fragment, FName OpenTag = "Open", FName CloseTag = "Close");
@@ -163,6 +168,14 @@ public:
     /** Helper frames of nested-assembly entries (a personal weapon's attachments: optics, magazines), which carry no
      *  id, by their anchor (anchor space, as InstanceHelpers): an optic's sight helper replaces the weapon's own. */
     UPROPERTY() TMap<TObjectPtr<USceneComponent>, FSCInstanceHelpers> AttachmentHelpers;
+    /** WP-K1: anchors of placed loadout items by port path (SCCargoRecords::PortKey of `children[].port_path`). */
+    UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> PortAnchors;
+    /** WP-K1: per Manifest.InventoryContainers entry (null when unresolved), the container entity's frame: axes X = SC y,
+     *  Y = SC x, Z = SC z, cm (the frame placed items use). On its parent item's helper/bone, so it follows the rig. */
+    UPROPERTY() TArray<TObjectPtr<USceneComponent>> InventoryAnchors;
+    /** WP-K1: the rig of the item owning each inventory container (its parent item; an interior grid: a linked entity's),
+     *  whose Mannequin fragments open/close it. Null when the owner has none. */
+    UPROPERTY() TArray<TObjectPtr<USCRigComponent>> InventoryOwnerRigs;
     /** Anchor-relative transform that puts Helper (instance Id) on a joint frame plus Offset (native SC, row form). */
     bool PortRelative(const FString& Id, const FString& Helper, const FMatrix& Offset, FTransform& Out) const;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FString SessionPath;

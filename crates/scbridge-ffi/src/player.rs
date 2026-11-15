@@ -30,11 +30,6 @@ pub unsafe extern "C" fn scbridge_export_player(
             } else {
                 string(gender_or_null)?
             };
-            if !matches!(gender.to_ascii_lowercase().as_str(), "male" | "female") {
-                return Err(crate::boundary::Failure::invalid(
-                    "gender must be male or female",
-                ));
-            }
             let request = PlayerRequest {
                 gender: gender.to_owned(),
                 loadout: if loadout_or_null.is_null() {
@@ -42,7 +37,49 @@ pub unsafe extern "C" fn scbridge_export_player(
                 } else {
                     Some(string(loadout_or_null)?.to_owned())
                 },
+                ..Default::default()
             };
+            export(h, &request, progress, user, out)
+        })
+    }
+}
+
+/// Export a contract-v2 player kit from a JSON request: {"gender": "male"|"female",
+/// "loadout": <path>|null, "weapons": [<entity class>...]|null, "spare_attachments": bool}
+/// (scviewer_core::PlayerRequest; missing fields take its defaults). Same ownership,
+/// progress and cancellation rules as scbridge_export_player.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn scbridge_export_player_request(
+    h: *mut sc_handle,
+    request_json: *const c_char,
+    progress: sc_progress_cb,
+    user: *mut c_void,
+    out_tar: *mut sc_blob,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            let out = output(out_tar, sc_blob::default())?;
+            let request: PlayerRequest = serde_json::from_str(string(request_json)?)
+                .map_err(|e| crate::boundary::Failure::invalid(&format!("player request: {e}")))?;
+            export(h, &request, progress, user, out)
+        })
+    }
+}
+
+unsafe fn export(
+    h: *mut sc_handle,
+    request: &PlayerRequest,
+    progress: sc_progress_cb,
+    user: *mut c_void,
+    out: &mut sc_blob,
+) -> Result<(), crate::boundary::Failure> {
+    unsafe {
+        {
+            if !matches!(request.gender.to_ascii_lowercase().as_str(), "male" | "female") {
+                return Err(crate::boundary::Failure::invalid(
+                    "gender must be male or female",
+                ));
+            }
             let h = handle(h)?;
             let user_address = user as usize;
             let cancel = CancelToken::default();
@@ -62,7 +99,7 @@ pub unsafe extern "C" fn scbridge_export_player(
                 }) as scviewer_core::ProgressCallback
             }));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                h.session.export_player(&request, Some(&cancel))
+                h.session.export_player(request, Some(&cancel))
             }));
             h.session.set_progress_callback(None);
             let bytes = match result {
@@ -76,7 +113,7 @@ pub unsafe extern "C" fn scbridge_export_player(
             };
             std::mem::forget(bytes);
             Ok(())
-        })
+        }
     }
 }
 

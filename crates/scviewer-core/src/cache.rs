@@ -26,7 +26,9 @@ use std::{
 //     `shader_textures`, WP-U2b).
 // 24: `root_entity.physics_grid` composes NMC node matrices down the parent hierarchy (WP-P3 review).
 // 25: the browser index lists object containers (`environments`); environment packages (LOOK-3).
-pub const CACHE_FORMAT_VERSION: u32 = 25;
+// 26: scene.json carries inventory containers (`inventory_containers[]`, `interiors[].inventory_containers[]`),
+//     `children[].port_path` and the root item's footprint (`root_entity.inventory_occupancy`, …) (WP-K1).
+pub const CACHE_FORMAT_VERSION: u32 = 26;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

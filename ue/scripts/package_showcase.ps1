@@ -6,9 +6,14 @@
 #     bake_hangar_lighting.py) and adds -SCBakedLighting, which streams it.
 #  -Platform Win64 (standalone directory, out/win64/<ship>): Nanite, Lumen GI and reflections with hardware ray tracing
 #     at the viewer's -SCMaxQuality (Cinematic, hit lighting; SCLook::ApplyMaxQuality) and DLAA (the NVIDIA DLSS plugin at
-#     100 %, ue/README.md); run <Out>\Windows\SCViewer.exe.
+#     100 %, ue/README.md). <Out>\Play_SCViewer.bat starts it as the showcase (-SCShowcase: no viewer panels, first
+#     person with the player character; C third person, Z orbit, T teleport, F torch, LMB fire, RMB aim). The player
+#     character is exported from Data.p4k at start (an installed Star Citizen): -PlayerLoadout picks the game loadout,
+#     -PlayerWeapons keeps only those of its weapons (entity class names), and the kept weapons' spare magazines are
+#     carried on the armour.
 # Usage: ue/scripts/package_showcase.ps1 -Platform Wasm|Win64 -Ship DRAK_Golem -Hangar hightech_a/hangar_smltop_001
-#        [-Config Development|Shipping] [-BakedLighting] [-Out <dir>] [-Engine <UE 5.9>]
+#        [-Config Development|Shipping] [-BakedLighting] [-PlayerLoadout <p4k path>] [-PlayerWeapons <entity>,...]
+#        [-Out <dir>] [-Engine <UE 5.9>]
 param(
     [Parameter(Mandatory = $true)][ValidateSet('Wasm', 'Win64')][string]$Platform,
     [Parameter(Mandatory = $true)][string]$Ship,
@@ -16,7 +21,9 @@ param(
     [string]$Out = '',
     [string]$Engine = 'C:\Program Files\Epic Games\UE_5.9',
     [string]$Config = 'Development',
-    [switch]$BakedLighting
+    [switch]$BakedLighting,
+    [string]$PlayerLoadout = '',
+    [string[]]$PlayerWeapons = @()
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -51,7 +58,10 @@ if ($LASTEXITCODE -ne 0) { throw "BuildCookRun failed ($LASTEXITCODE)" }
 if ($Platform -eq 'Win64') {
     # A Windows build does not read the staged command line (UECommandLine.txt is the web page's): the launcher passes it.
     # SCViewer.exe on its own is the plain viewer (it opens Data.p4k when one is installed).
-    $Launcher = "@echo off`r`nrem SCViewer showcase: $Ship in $Hangar ($Config).`r`nstart `"`" `"%~dp0SCViewer.exe`" -SCLoad=$Ship -SCEnvironment=$Environment$Extra %*`r`n"
+    $Player = ' -SCShowcase -SCCamera=first'
+    if ($PlayerLoadout) { $Player += " -SCPlayerLoadout=$PlayerLoadout" }
+    if ($PlayerWeapons.Count) { $Player += ' -SCPlayerWeapons=' + ($PlayerWeapons -join ',') }
+    $Launcher = "@echo off`r`nrem SCViewer showcase: $Ship in $Hangar ($Config).`r`nstart `"`" `"%~dp0SCViewer.exe`" -SCLoad=$Ship -SCEnvironment=$Environment$Extra$Player %*`r`n"
     [IO.File]::WriteAllText((Join-Path $Out 'Play_SCViewer.bat'), $Launcher)
 }
 Write-Output "PACKAGED $Out"

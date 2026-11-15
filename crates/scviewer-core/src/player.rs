@@ -102,6 +102,18 @@ mod tests {
                 "synthetic_build",
                 &PlayerRequest {
                     loadout: Some("synthetic.xml".into()),
+                    ..a.clone()
+                }
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            key,
+            player_key(
+                "synthetic_build",
+                &PlayerRequest {
+                    weapons: Some(vec!["synthetic_weapon".into()]),
+                    spare_attachments: true,
                     ..a
                 }
             )

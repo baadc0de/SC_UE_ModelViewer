@@ -35,10 +35,17 @@ ASCFirstPersonCharacter::ASCFirstPersonCharacter()
     Camera->bUsePawnControlRotation = true;
     Flashlight = CreateDefaultSubobject<USpotLightComponent>(TEXT("ExplorationFlashlight"));
     Flashlight->SetupAttachment(Camera);
-    // Viewer-owned torch, not an imported game light.
-    Flashlight->SetIntensity(2000);
-    Flashlight->SetAttenuationRadius(2000);
-    Flashlight->SetOuterConeAngle(35);
+    // Movable like every imported light: a local light defaults to Stationary, which does not follow its moving
+    // parent, so the torch stayed where the character spawned.
+    Flashlight->SetMobility(EComponentMobility::Movable);
+    Flashlight->SetRelativeLocation(FVector(TorchAhead, 0, 0));
+    // Viewer-owned torch, not an imported game light. Candelas like every imported light: the viewer meters the scene
+    // with the game's exposure, under which a unitless 2000 was invisible in a lit hangar.
+    Flashlight->SetIntensityUnits(ELightUnits::Candelas);
+    Flashlight->SetIntensity(TorchCandelas);
+    Flashlight->SetAttenuationRadius(TorchReach);
+    Flashlight->SetInnerConeAngle(TorchInnerCone);
+    Flashlight->SetOuterConeAngle(TorchOuterCone);
     Flashlight->SetVisibility(false);
     Flashlight->LightingChannels.bChannel1 = true; // not an area light: it reaches every room channel (WP-U3b §12, WP-L1)
     Flashlight->LightingChannels.bChannel2 = true;
@@ -90,6 +97,12 @@ void ASCFirstPersonCharacter::ClearInput()
 void ASCFirstPersonCharacter::CapsuleHit(UPrimitiveComponent*, AActor*, UPrimitiveComponent*, FVector, const FHitResult&) { ++CapsuleHits; }
 void ASCFirstPersonCharacter::Look(FVector2D Pixels)
 {
+    if (bMobiGlasOpen) return; // the cursor drives the mobiGlas; the view holds still
+    if (bOrbiting && Body->IsThirdPerson())
+    {
+        Body->AddOrbit(Pixels.X * .2f, -Pixels.Y * .2f);
+        return;
+    }
     if (Controller)
     {
         FRotator View = Controller->GetControlRotation();
@@ -97,6 +110,14 @@ void ASCFirstPersonCharacter::Look(FVector2D Pixels)
         View.Pitch = FMath::Clamp(FRotator::NormalizeAxis(View.Pitch - Pixels.Y * .2f), -89.f, 89.f);
         Controller->SetControlRotation(View);
     }
+}
+void ASCFirstPersonCharacter::AddViewKick(float PitchDegrees, float YawDegrees)
+{
+    if (!Controller) return;
+    FRotator View = Controller->GetControlRotation();
+    View.Yaw += YawDegrees;
+    View.Pitch = FMath::Clamp(FRotator::NormalizeAxis(View.Pitch + PitchDegrees), -89.f, 89.f);
+    Controller->SetControlRotation(View);
 }
 void ASCFirstPersonCharacter::SetVehicleRelativeView(float Yaw, float Pitch)
 {
@@ -401,9 +422,25 @@ void ASCFirstPersonCharacter::SetCrouching(bool bCrouch)
 {
     if (bCrouch) Crouch(); else UnCrouch();
 }
+void ASCFirstPersonCharacter::SetMobiGlasOpen(bool bOpen)
+{
+    if (bOpen == bMobiGlasOpen) return;
+    bMobiGlasOpen = bOpen;
+    if (bOpen)
+    {
+        // The mouse now drives the UI and the live-view orbit; the player stands still where it is (its view comes
+        // back unchanged on close): release movement, trigger and sights.
+        ClearInput();
+        Body->SetTrigger(false);
+        bOrbiting = false;
+    }
+    UE_LOG(LogTemp, Display, TEXT("FP_MOBIGLAS open=%d"), bOpen);
+}
 void ASCFirstPersonCharacter::SetTorch(bool bOn)
 {
     Flashlight->SetVisibility(bOn);
+    UE_LOG(LogTemp, Display, TEXT("FP_TORCH on=%d at=%s dir=%s cd=%.0f"), bOn, *Flashlight->GetComponentLocation().ToCompactString(),
+           *Flashlight->GetForwardVector().ToCompactString(), Flashlight->Intensity);
 }
 const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTable()
 {
@@ -414,7 +451,8 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
         {EKeys::E, A::Interact}, {EKeys::F, A::Torch}, {EKeys::V, A::Noclip}, {EKeys::T, A::Teleport}, {EKeys::Escape, A::Close},
         {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
         {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
-        {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim}};
+        {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim},
+        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas}};
     return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
@@ -435,6 +473,7 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     using A = ESCFirstPersonAction;
     if (Action <= A::Crouch) // held actions
     {
+        if (bDown && bMobiGlasOpen) return true; // standing still while the mobiGlas is up (releases still pass)
         if (bDown) Held.Add(Action); else Held.Remove(Action);
         if (HoldSeconds <= 0) ApplyHeldInput();
         if (Action == A::Up && !bNoclip) { if (bDown) Jump(); else StopJumping(); }
@@ -443,8 +482,31 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     }
     if (Action == A::Aim) // held: aiming lasts while the button is down
     {
+        if (bDown && bMobiGlasOpen) return true; // the mouse belongs to the mobiGlas
         Body->SetAiming(bDown);
         return Body->HasBody();
+    }
+    if (Action == A::Fire) // held: the drawn weapon fires while the button is down
+    {
+        if (bDown && bMobiGlasOpen) return true;
+        Body->SetTrigger(bDown);
+        return Body->HasBody();
+    }
+    if (Action == A::Orbit) // held: orbit the third-person camera; a quick second press puts it behind again
+    {
+        bOrbiting = bDown;
+        if (bDown)
+        {
+            const double Now = FPlatformTime::Seconds();
+            if (LastOrbitPress >= 0 && Now - LastOrbitPress < DoubleTapSeconds)
+            {
+                Body->ResetOrbit();
+                LastOrbitPress = -1;
+            }
+            else
+                LastOrbitPress = Now;
+        }
+        return true;
     }
     if (!bDown) return false;
     switch (Action)
@@ -453,7 +515,8 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     case A::Torch: SetTorch(!Flashlight->IsVisible()); return true;
     case A::Noclip: ToggleNoclip(); return true;
     case A::Teleport: bTeleportMenuOpen = !bTeleportMenuOpen; ClearInput(); return true;
-    case A::Close: bTeleportMenuOpen = false; ClearInput(); return true;
+    case A::Close: bTeleportMenuOpen = false; SetMobiGlasOpen(false); ClearInput(); return true;
+    case A::MobiGlas: SetMobiGlasOpen(!bMobiGlasOpen); return true;
     case A::Holster: return Body->RequestSlot(INDEX_NONE);
     case A::View: Body->SetThirdPerson(!Body->IsThirdPerson()); return Body->HasBody();
     default:
@@ -485,7 +548,7 @@ FString ASCFirstPersonCharacter::HUDText() const
         : bStuck ? TEXT("Movement blocked — press V for noclip")
         : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");
     const FString Player = Body->HasBody() ? Body->HUDLine() : BodyStatus;
-    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport"),
+    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport · C view · Z orbit (double-tap: behind) · LMB fire · RMB aim · F1 mobiGlas"),
         bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
         GetVelocity().Size() / 100, Flashlight->IsVisible() ? TEXT("on") : TEXT("off"),
         *GetVehicleRelativeLocation().ToCompactString(), *Prompt, Status, Player.IsEmpty() ? TEXT("") : TEXT("\n"), *Player);

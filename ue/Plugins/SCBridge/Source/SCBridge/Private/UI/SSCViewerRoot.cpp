@@ -5,6 +5,9 @@
 #include "SSCModelBrowser.h"
 #include "SSCViewportInput.h"
 #include "SSCFirstPersonHUD.h"
+#include "Cargo/SSCMobiGlas.h"
+#include "Cargo/SSCCalloutLayer.h"
+#include "Cargo/SCMobiGlasModel.h"
 #include "SCVehicle.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
@@ -40,12 +43,13 @@ constexpr float SystemSampleSeconds = 1.f;
 void SSCViewerRoot::Construct(const FArguments& Args)
 {
     Subsystem = Args._Subsystem;
+    MobiGlas = MakeShared<FSCMobiGlasModel>(Subsystem.Get());
     SampleSystem(0, 0);
     RegisterActiveTimer(SystemSampleSeconds, FWidgetActiveTimerDelegate::CreateSP(this, &SSCViewerRoot::SampleSystem));
     ChildSlot
     [
         SNew(SVerticalBox)
-        + SVerticalBox::Slot().AutoHeight()[MakeTopBar()]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([this] { return ChromeVisibility(); })[MakeTopBar()]]
         + SVerticalBox::Slot().FillHeight(1.f)
         [
             SNew(SHorizontalBox)
@@ -54,26 +58,35 @@ void SSCViewerRoot::Construct(const FArguments& Args)
             + SHorizontalBox::Slot().FillWidth(1.f)
             [
                 SAssignNew(View, SOverlay)
-                + SOverlay::Slot()[SNew(SSCViewportInput).Subsystem(Subsystem.Get())]
+                + SOverlay::Slot()[SAssignNew(ViewportInput, SSCViewportInput).Subsystem(Subsystem.Get())]
                 + SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom).Padding(10)
                 [
+                    SNew(SBox).Visibility_Lambda([this] { return MobiGlasHidden(); })
+                    [
                     SNew(STextBlock).Font(Font(8)).ColorAndOpacity(FLinearColor(1, 1, 1, 0.55f)).Visibility(EVisibility::HitTestInvisible)
                     .Text_Lambda([this] {
                         if (Subsystem.IsValid() && Subsystem->GetCameraMode() == ESCCameraMode::FirstPerson)
-                            return LOCTEXT("FirstHelp", "Click view: mouse look · Esc: release cursor");
+                            return LOCTEXT("FirstHelp", "Click view: mouse look · Esc: release cursor · F1: mobiGlas");
                         const bool bFly = Subsystem.IsValid() && Subsystem->GetCameraMode() == ESCCameraMode::Fly;
                         return bFly ? LOCTEXT("FlyHelp", "Drag: look · WASD move · E/Q up/down · Shift fast · Ctrl slow · wheel: speed · double-click: focus")
                                     : LOCTEXT("OrbitHelp", "Drag: orbit · Shift/middle drag: pan · wheel: zoom · double-click: focus part · F: frame all");
                     })
+                    ]
                 ]
-                + SOverlay::Slot()[SNew(SSCFirstPersonHUD).Subsystem(Subsystem.Get())]
+                // The first-person HUD steps aside while the mobiGlas is up (it would show through the panels' scrim).
+                + SOverlay::Slot()[SNew(SBox).Visibility_Lambda([this] { return MobiGlasHidden(); })[SNew(SSCFirstPersonHUD).Subsystem(Subsystem.Get())]]
+                // WP-K1c: the mobiGlas (F1) and the world-space cargo callouts above it; both shown in the showcase too.
+                + SOverlay::Slot()[SNew(SSCMobiGlas).Model(MobiGlas).OnClosed_Lambda([this] {
+                      if (ViewportInput && FSlateApplication::IsInitialized()) FSlateApplication::Get().SetAllUserFocus(ViewportInput, EFocusCause::SetDirectly);
+                  })]
+                + SOverlay::Slot()[SNew(SSCCalloutLayer).Model(MobiGlas)]
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(FMargin(0, 0, 0, 36))[MakeLoadingOverlay()]
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[MakeArchiveOverlay()]
             ]
             + SHorizontalBox::Slot().AutoWidth()
             [SNew(SBox).WidthOverride(HierarchyWidth).Visibility_Lambda([this] { return PanelVisibility(); })[SNew(SSCHierarchyPanel).Subsystem(Subsystem.Get())]]
         ]
-        + SVerticalBox::Slot().AutoHeight()[MakeFooter()]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([this] { return ChromeVisibility(); })[MakeFooter()]]
     ];
 }
 
@@ -193,6 +206,14 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
     ];
 }
 
+EVisibility SSCViewerRoot::ChromeVisibility() const
+{
+    return Subsystem.IsValid() && Subsystem->IsShowcase() ? EVisibility::Collapsed : EVisibility::Visible;
+}
+EVisibility SSCViewerRoot::MobiGlasHidden() const
+{
+    return MobiGlas && MobiGlas->IsOpen() ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible;
+}
 EVisibility SSCViewerRoot::PanelVisibility() const
 {
     return !Subsystem.IsValid() || Subsystem->ArePanelsVisible() ? EVisibility::Visible : EVisibility::Collapsed;

@@ -1,5 +1,6 @@
 #include "SCPackageReader.h"
 #include "SCMeshImporter.h"
+#include "Cargo/SCCargoRecords.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -67,6 +68,7 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     if (!Out.SourceTransformBasis.IsEmpty() && Out.SourceTransformBasis != TEXT("gltf_y_up") && Out.SourceTransformBasis != TEXT("cryengine_z_up"))
     { Error = TEXT("Unsupported transform basis: ") + Out.SourceTransformBasis; return false; }
     Out.Id = String(O, TEXT("id"));
+    Out.PortPath = SCCargoRecords::PortPath(O);
     const FReaderObject* Port;
     if (O->TryGetObjectField(TEXT("port"), Port))
     {
@@ -149,9 +151,10 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     FReaderObject Scene;
     if (!ReadJson(Source, Out.ScenePath, Scene, Error, &Out.ContentHash)) return false;
     double Version = 0;
-    // Schema v2 (WP-R5) only adds fields (lights, vehicle_light_ports, sidecar emissive/decal objects).
-    if (!Scene->TryGetNumberField(TEXT("version"), Version) || (Version != 1 && Version != 2) || String(Scene, TEXT("export_kind")) != TEXT("Decomposed"))
-    { Error = TEXT("Expected decomposed scene version 1 or 2"); return false; }
+    // Schema v2 (WP-R5) and v3 (WP-K1: port paths, inventory containers, item occupancy) only add fields.
+    if (!Scene->TryGetNumberField(TEXT("version"), Version) || (Version < 1 || Version > 3 || Version != FMath::RoundToDouble(Version)) ||
+        String(Scene, TEXT("export_kind")) != TEXT("Decomposed"))
+    { Error = TEXT("Expected decomposed scene version 1 to 3"); return false; }
     const FReaderObject* Root;
     if (!Scene->TryGetObjectField(TEXT("root_entity"), Root)) { Error = TEXT("Scene has no root_entity object"); return false; }
     FString Detail;
@@ -214,6 +217,9 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             }
         };
     ReadChildren(ReaderArray(Scene, TEXT("children")), FString(), FString());
+    // WP-K1 cargo: the vehicle's inventory containers and the root item's occupancy (interiors' below, by index).
+    SCCargoRecords::ParseOccupancy(*Root, Out.RootOccupancy);
+    SCCargoRecords::AddContainers(Scene, INDEX_NONE, Out, Warn);
     for (const auto& V : ReaderArray(Scene, TEXT("interiors")))
     {
         const auto O = Object(V); FSCInterior I;
@@ -254,6 +260,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             if (Sensor.Extent.IsNearlyZero() || Sensor.Links.IsEmpty()) { Warn(TEXT("proximity sensor"), TEXT("no box volume or no linked door: ") + Sensor.EntityId); continue; }
             I.ProximitySensors.Add(MoveTemp(Sensor));
         }
+        SCCargoRecords::AddContainers(O, Out.Interiors.Num(), Out, Warn);
         Out.Interiors.Add(MoveTemp(I));
     }
     // Paints (optional `paints.json` beside scene.json): each variant's exterior material file is loaded with the

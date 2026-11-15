@@ -23,6 +23,9 @@ public:
     static FString HostChannel(const FSCMaterialSet* Set, const TArray<FString>& SourceNames, const TArray<int32>& SlotTriangles);
     /** Draws nothing (zero-emission additive); for split sections that have no authored instance. */
     UMaterialInterface* Invisible();
+    /** Another actor assembled from the same import (FSCImportJob from retained assets): instances created on demand
+     *  from now on (host-tinted variants, the invisible material) belong to it. */
+    void Rebind(ASCVehicle* NewOwner) { Owner = NewOwner; }
 
     /** Sidecar submaterial for a GLB slot: array ordinal per contract; older compact GLBs carry an explicit
      *  source_name that wins only when the ordinal's name disagrees. */

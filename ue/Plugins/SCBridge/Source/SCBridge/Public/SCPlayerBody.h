@@ -9,12 +9,14 @@
 #include "Components/ActorComponent.h"
 #include "SCPlayerAnimator.h"
 #include "SCImporter.h"
+#include "Templates/PimplPtr.h"
 #include "SCPlayerBody.generated.h"
 
 class ASCVehicle;
 class ASCFirstPersonCharacter;
 class USCRigComponent;
 class UPrimitiveComponent;
+class FSCPlayerFire;
 
 UCLASS()
 class SCBRIDGE_API USCPlayerBodyComponent : public UActorComponent
@@ -54,6 +56,12 @@ public:
 
     // View
     void SetThirdPerson(bool bOn, float OrbitYawDegrees = 0, float OrbitDistance = -1);
+    /** Third person: turn the camera around the player (degrees; pitch positive up), the player keeps facing. */
+    void AddOrbit(float YawDegrees, float PitchDegrees);
+    /** Third person: the camera behind the player again. */
+    void ResetOrbit();
+    /** Orbit pitch range (degrees), a viewer constant. */
+    static constexpr float MaxOrbitPitch = 70.f;
     bool IsThirdPerson() const { return bThirdPerson; }
     bool IsHiddenInFirstPerson(const UPrimitiveComponent* Part) const { return HeadParts.Contains(Part); }
     int32 NumHeadParts() const { return HeadParts.Num(); }
@@ -76,6 +84,10 @@ public:
     bool AreFirstPersonPrimitivesActive() const { return bFirstPersonPrimitives; }
     /** World location of the player's camera joint (eye) this frame; the interaction origin in either view. */
     FVector HeadLocation() const;
+
+    // Fire (weapon armed): hold to fire the drawn weapon (FSCPlayerFire).
+    void SetTrigger(bool bDown);
+    int32 GetShots() const;
 
     // Aim down sights (first person, weapon armed).
     /** Hold to aim. First person with an armed weapon: its sight line comes onto the view axis over AimSeconds;
@@ -168,7 +180,8 @@ private:
     TMap<int32, FName> WeaponAttach; // weapon index -> port joint/helper it sits on now
     FString ProfileWeapon = TEXT("<none>");
     bool bThirdPerson = false;
-    float OrbitYaw = 0, OrbitDistance = 250; // third-person presentation (cm), not game data
+    float OrbitYaw = 0, OrbitPitch = 0, OrbitDistance = 250; // third-person presentation (cm), not game data
+    TPimplPtr<FSCPlayerFire> Fire;
     FVector Eye = FVector::ZeroVector; // capsule space
     int32 CameraBone = INDEX_NONE;
     float LastDelta = 0;
