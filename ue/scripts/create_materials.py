@@ -748,6 +748,29 @@ def unlit_master():
     return g.save()
 
 
+def particle_master(name, blend):
+    """M_SC_Particle_Additive / _Translucent: the game's particle sprites (WP-K4c), unlit. The sprite's texture is a
+    flipbook-aware sample (Niagara's SubImageIndex picks the frame), times the particle colour; EmissiveScale carries
+    the effect's EmissiveLighting. Additive: weighted by texture alpha (AlphaWeight 1) and particle alpha.
+    Translucent: coverage = texture alpha x particle alpha."""
+    g = Graph(name, blend)
+    for usage in ("used_with_niagara_sprites", "used_with_niagara_ribbons", "used_with_niagara_mesh_particles"):
+        g.m.set_editor_property(usage, True)  # a standalone session cannot add the usage at run time
+    sprite = g.node(unreal.MaterialExpressionTextureSampleParameterSubUV, parameter_name="SpriteTexture", texture=g.white,
+                    blend=True, sampler_type=ST.SAMPLERTYPE_COLOR, group="SC")
+    particle = g.node(unreal.MaterialExpressionParticleColor)
+    colour = g.mul(g.mul((sprite, "RGB"), (particle, "RGB")), g.scalar("EmissiveScale", 1.0))
+    alpha = g.mul(g.lerp(g.const(1.0), (sprite, "A"), g.scalar("AlphaWeight", 1.0)), (particle, "A"))
+    unlit = g.node(unreal.MaterialExpressionSubstrateUnlitBSDF)
+    if blend == unreal.BlendMode.BLEND_ADDITIVE:
+        g.link(*g.mul(colour, alpha), unlit, "EmissiveColor")
+        g.out(unlit, "", MP.MP_FRONT_MATERIAL)
+    else:
+        g.link(*colour, unlit, "EmissiveColor")
+        g.weight(unlit, alpha)
+    return g.save()
+
+
 def variants(master, combos=(("_Masked", True, False), ("_TwoSided", False, True), ("_Masked_TwoSided", True, True))):
     """Constant instances that only override blend mode / two-sidedness (shader permutations built here)."""
     for suffix, masked, two_sided in combos:
@@ -812,4 +835,6 @@ glass_master()
 for sided in (decal_master("M_SC_MeshDecal", True), decal_master("M_SC_MeshDecal_Relief", False), translucent_master()):
     variants(sided, (("_TwoSided", False, True),))  # is_double_sided decals keep reverse-facing triangles
 unlit_master()
+particle_master("M_SC_Particle_Additive", unreal.BlendMode.BLEND_ADDITIVE)
+particle_master("M_SC_Particle_Translucent", unreal.BlendMode.BLEND_TRANSLUCENT)
 unreal.log("WP-U2 MATERIALS_OK")

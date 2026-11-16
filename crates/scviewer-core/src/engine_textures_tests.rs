@@ -41,3 +41,20 @@ fn the_detail_map_is_copied_from_the_installed_game() {
     add_to_package(&mut clean, &p4k, 0).unwrap();
     assert_eq!(clean.files.len(), 1, "no LayerBlend_V2 material, no copy");
 }
+
+#[test]
+fn an_effect_texture_reads_as_one_package_dds_with_its_split_mips_merged() {
+    let Ok(found) = starbreaker_common::discover::find_p4k() else {
+        eprintln!("skip: no Data.p4k installed");
+        return;
+    };
+    let p4k = MappedP4k::open(&found.path).unwrap();
+    // A tractor-beam particle texture (WP-K4c), stored as a header file plus `.dds.N` mip siblings; any slash, any case.
+    let path = "data/textures/vfx/glows/glow4_alpha.dds";
+    let raw = p4k.read(p4k.entry_case_insensitive(&path.replace('/', "\\")).expect("in the archive")).unwrap();
+    let full = read_package_dds(&p4k, path, 0).unwrap();
+    assert_eq!(&full[..4], b"DDS ");
+    assert!(full.len() > raw.len(), "split mips merged: {} > {}", full.len(), raw.len());
+    assert!(read_package_dds(&p4k, path, 1).unwrap().len() < full.len(), "from mip 1 down is smaller");
+    assert!(read_package_dds(&p4k, "Data/Textures/none.dds", 0).is_err());
+}

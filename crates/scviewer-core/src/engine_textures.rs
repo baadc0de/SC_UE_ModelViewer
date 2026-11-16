@@ -55,6 +55,16 @@ pub(crate) fn read_package_dds(p4k: &MappedP4k, path: &str, mip: u32) -> Result<
     starbreaker_dds::package::write_package_dds(&dds, mip, false).with_context(|| format!("{path}: unsupported DDS layout"))
 }
 
+impl crate::Session {
+    /// An archive texture (`Data/Textures/….dds`, either slash style, any case) as package DDS bytes: its split mips
+    /// (`.dds.1` …) merged, from `mip` down, in the layout of an exported package's textures (what `sc_dds_prepare`
+    /// reads). Hosts that build assets from effect textures (WP-K4c) read them this way.
+    pub fn p4k_read_dds(&self, path: &str, mip: u32) -> Result<Vec<u8>> {
+        anyhow::ensure!(!path.trim().is_empty(), "empty archive path");
+        read_package_dds(&self.loaded()?.p4k, path.trim().trim_start_matches(['/', '\\']), mip)
+    }
+}
+
 /// Add the fixture textures a package's materials sample (once; an existing file is kept).
 pub(crate) fn add_to_package(package: &mut DecomposedExport, p4k: &MappedP4k, mip: u32) -> Result<()> {
     for (name, path) in fixture_textures()? {

@@ -48,3 +48,6 @@ ue/SCViewer/Content/SC/
 
 # Cook file-open-order logs (written by every Wasm cook)
 ue/SCViewer/Build/*/FileOpenOrder/
+
+# Fab marketplace assets (licensed for use, not redistribution): installed per machine, never committed
+/ue/SCViewer/Content/SciFi_Drone_4/

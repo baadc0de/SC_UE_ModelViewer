@@ -16,9 +16,18 @@
       "Name": "SCBridgeEditor",
       "Type": "Editor",
       "LoadingPhase": "Default"
+    },
+    {
+      "Name": "SCBridgeFx",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
     }
   ],
   "Plugins": [
+    {
+      "Name": "Niagara",
+      "Enabled": true
+    },
     {
       "Name": "Interchange",
       "Enabled": true,

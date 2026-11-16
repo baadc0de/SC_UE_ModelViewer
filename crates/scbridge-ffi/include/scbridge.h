@@ -8,7 +8,7 @@
  * Output storage must not alias inputs or hold an outstanding owned allocation.
  * Every entry point catches Rust unwinding panics (not invalid-pointer faults,
  * allocation aborts, or foreign exceptions). After PANIC, close/reopen the handle.
- * Free returned JSON with sc_free_string and tar bytes with sc_free_blob only.
+ * Free returned JSON/text with sc_free_string and tar/file bytes with sc_free_blob only.
  * sc_last_error returns borrowed storage; never free it.
  */
 
@@ -66,6 +66,14 @@ typedef struct sc_options {
 } sc_options;
 
 /*
+ Owned bytes: an uncompressed tar, or an archive file (sc_p4k_read). Do not change data/len; free exactly once via sc_free_blob.
+ */
+typedef struct sc_blob {
+  uint8_t *data;
+  size_t len;
+} sc_blob;
+
+/*
  Manifest snapshot (payload bytes only, excluding manifest/lock files).
  last_hit reports the last successful core operation, including open/search.
  cap_bytes is core's automatic write cap, not the last eviction request.
@@ -89,14 +97,6 @@ typedef struct sc_cache_info {
  Callback must be thread-safe, must not reenter the handle, throw, or unwind.
  */
 typedef int (*sc_progress_cb)(const char *phase, uint64_t done, uint64_t total, void *user);
-
-/*
- Owned uncompressed tar. Do not change data/len; free exactly once via sc_free_blob.
- */
-typedef struct sc_blob {
-  uint8_t *data;
-  size_t len;
-} sc_blob;
 
 /*
  Validated DDS payload description after adaptation; offsets are from data.
@@ -159,6 +159,65 @@ enum sc_status sc_lights(struct sc_handle *h, const char *entity, char **out);
  */
 enum sc_status sc_datacore_record(struct sc_handle *h,
                                   const char *name_or_guid,
+                                  char **out_json);
+
+/*
+ Read the archive file at path (e.g. `Data/Libs/Particles/Gadgets/tractor_beam.xml`; either slash style,
+ case-insensitive) into an owned blob: the raw bytes as stored, so binary CryXML stays binary.
+ A missing file is SC_STATUS_ERROR. On ordinary failure out_blob is empty. Free with sc_free_blob.
+ */
+enum sc_status sc_p4k_read(struct sc_handle *h,
+                           const char *path,
+                           struct sc_blob *out_blob);
+
+/*
+ Read an archive texture (e.g. the `texture` of a particle emitter, `Data/Textures/VFX/Glows/glow4_alpha.dds`;
+ either slash style, case-insensitive) as one DDS file: the split mips (`.dds.1` …) merged, from mip `mip` down,
+ laid out like an exported package's textures, so sc_dds_prepare accepts it. A missing or non-DDS file is
+ SC_STATUS_ERROR. On ordinary failure out_blob is empty. Free with sc_free_blob.
+ */
+enum sc_status sc_p4k_read_dds(struct sc_handle *h,
+                               const char *path,
+                               uint32_t mip,
+                               struct sc_blob *out_blob);
+
+/*
+ Read the archive file at path as UTF-8 text XML: binary CryXML (`CryXmlB`) is converted, element text kept;
+ plain XML passes through unchanged. A file that is neither CryXML nor UTF-8, or is missing, is
+ SC_STATUS_ERROR. Owned string (free with sc_free_string); on ordinary failure *out_text is NULL.
+ */
+enum sc_status sc_p4k_read_xml(struct sc_handle *h,
+                               const char *path,
+                               char **out_text);
+
+/*
+ Return a particle effect as a JSON object. reference is `<GUID>|<library>.<effect>` (GUID optional), e.g.
+ `2c211ca4-c915-b0c7-5d0e-58fe5c503a16|Gadgets/tractor_beam.fps.beam_only`: the library is
+ `Data/Libs/Particles/<library>.xml`, split at the first '.' after the last '/'. The GUID must be the effect's
+ and wins when the name names another effect. Shape: {reference, library, library_path, effect, guid,
+ matched_by, emitters: [{path, name, parent (index, -1 first), guid, enabled, inheritance, system, spawn,
+ lifetime, size, aspect, color, alpha, speed, emit_angle_deg, focus_angle_deg, gravity_scale, air_resistance,
+ turbulence, position_offset_m, random_offset_m, facing, orient_to_velocity, blend, emissive_lighting,
+ texture (archive .dds path or null), material, geometry, tiles, anim, light, flare, spline,
+ raw (each Params attribute as written), inherited, defaulted}]}. Inheritance="Parent" emitters take omitted
+ params from their parent; the rest from system defaults inferred from the game data. Curves are [t, v...] keys
+ over particle age (age_curve) or emitter strength (strength_curve). See scviewer-core `particles` docs.
+ No such library or effect is SC_STATUS_ERROR.
+ */
+enum sc_status sc_particle_effect(struct sc_handle *h,
+                                  const char *reference,
+                                  char **out_json);
+
+/*
+ Return a MaterialEffects FXLib entry as a JSON object. library_and_effect is `<FXLib>:<effect>`, e.g.
+ `sc_ships_surface_impacts:Metal_Small` (`Data/Libs/MaterialEffects/FXLibs/<FXLib>.xml`, `<Effect name>`,
+ case-insensitive). Shape: {library, library_path, effect, attributes, particles: [{reference (for
+ sc_particle_effect), attributes (the <Particle> and <Name> attributes, e.g. minscale), direction, random_group}],
+ audio: [{trigger, ..., random_group}], random_groups}. Entries of one <RandEffect> share a random_group (one of
+ them plays); others have null. No such library or effect is SC_STATUS_ERROR.
+ */
+enum sc_status sc_material_effect(struct sc_handle *h,
+                                  const char *library_and_effect,
                                   char **out_json);
 
 /*

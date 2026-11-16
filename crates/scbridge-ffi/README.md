@@ -38,6 +38,21 @@ expands the whole entity graph), and the top object adds `__record_name` and
 `scviewer record <name|guid>`. UE: `FSCBridgeClient::DataCoreRecord`. The
 no-FFI build (`SC_WITH_FFI=0`) returns `SC_STATUS_UNSUPPORTED`.
 
+`sc_p4k_read(h, path, &blob)` returns an archive file's bytes as stored and
+`sc_p4k_read_xml(h, path, &text)` its text XML (binary CryXML converted with element
+text kept, plain XML passed through); `path` is an archive path such as
+`Data/Libs/Particles/Gadgets/tractor_beam.xml`, either slash style, any case.
+`sc_p4k_read_dds(h, path, mip, &blob)` returns an archive texture as one package DDS
+(split `.dds.N` mips merged, from `mip` down) that `sc_dds_prepare` accepts: the
+effect textures the UE `SCFxBuild` commandlet imports (WP-K4c).
+`sc_particle_effect(h, "<GUID>|<library>.<effect>", &json)` returns a particle effect
+(`Data/Libs/Particles/<library>.xml`) with all its emitters, their params mapped to
+typed fields plus every attribute as written in `raw`; `sc_material_effect(h,
+"<FXLib>:<effect>", &json)` returns a MaterialEffects FXLib entry's particle
+references and audio triggers. The shape, inheritance and inferred defaults are
+documented in the header and in `scviewer-core/src/particles.rs`. CLI: `scviewer
+p4k-xml <path>`, `scviewer effect <reference>`, `scviewer material-effect <lib:effect>`.
+
 Serialize all access to each handle, including error retrieval and close. A
 handle may move between threads. Progress may run on worker/rayon threads and
 must not reenter the handle; callbacks and their borrowed context finish before

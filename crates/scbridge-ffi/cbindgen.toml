@@ -15,7 +15,7 @@ header = """
  * Output storage must not alias inputs or hold an outstanding owned allocation.
  * Every entry point catches Rust unwinding panics (not invalid-pointer faults,
  * allocation aborts, or foreign exceptions). After PANIC, close/reopen the handle.
- * Free returned JSON with sc_free_string and tar bytes with sc_free_blob only.
+ * Free returned JSON/text with sc_free_string and tar/file bytes with sc_free_blob only.
  * sc_last_error returns borrowed storage; never free it.
  */
 """
