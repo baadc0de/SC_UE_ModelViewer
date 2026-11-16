@@ -31,6 +31,7 @@
 #include "Components/LightComponent.h"
 #include "Engine/Light.h"
 #include "Engine/DirectionalLight.h"
+#include "Components/DirectionalLightComponent.h"
 #include "GameFramework/WorldSettings.h"
 #include "Engine/StaticMeshActor.h"
 #include "SCPlayerKit.h"
@@ -392,18 +393,50 @@ void USCViewerSubsystem::SetSpace(bool bInSpace)
         if (Sun)
         {
             Sun->GetLightComponent()->SetMobility(EComponentMobility::Movable);
-            Sun->GetLightComponent()->SetIntensity(50.f);
+            Sun->GetLightComponent()->SetIntensity(SpaceSunLux);
             Sun->GetLightComponent()->SetCastShadows(true);
+            // The one directional light forward shading, translucency and fog use (the fill below has the default 0).
+            if (UDirectionalLightComponent* C = Cast<UDirectionalLightComponent>(Sun->GetLightComponent())) C->SetForwardShadingPriority(1);
             SpaceSun = Sun;
+        }
+        // A weak fill from the other side, no shadows (viewer choice: starlight and nebula glow; without it the sides
+        // away from the sun are black).
+        ADirectionalLight* Fill = World->SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(35, 40 + 180, 0), Params);
+        if (Fill)
+        {
+            Fill->GetLightComponent()->SetMobility(EComponentMobility::Movable);
+            Fill->GetLightComponent()->SetIntensity(SpaceSunLux * SpaceFillShare);
+            Fill->GetLightComponent()->SetCastShadows(false);
+            Fill->GetLightComponent()->SetLightColor(FLinearColor(0.75f, 0.82f, 1.f));
+            SpaceFill = Fill;
         }
     }
     else if (!bSpace && SpaceSun.IsValid())
     {
         SpaceSun->Destroy();
         SpaceSun.Reset();
+        if (SpaceFill.IsValid()) SpaceFill->Destroy();
+        SpaceFill.Reset();
     }
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_SPACE on=%d gravity_z=%.1f sun=%d"), bSpace, World->GetGravityZ(), SpaceSun.IsValid());
 }
+
+void USCViewerSubsystem::SetSpaceSunLux(float Lux)
+{
+    SpaceSunLux = FMath::Max(Lux, 0.f);
+    if (SpaceSun.IsValid()) SpaceSun->GetLightComponent()->SetIntensity(SpaceSunLux);
+    if (SpaceFill.IsValid()) SpaceFill->GetLightComponent()->SetIntensity(SpaceSunLux * SpaceFillShare);
+    UE_LOG(LogSCViewer, Display, TEXT("VIEWER_SPACE sun_lux=%.0f sun=%d"), SpaceSunLux, SpaceSun.IsValid());
+}
+
+static FAutoConsoleCommandWithWorldAndArgs GSCSpaceSun(
+    TEXT("sc.Space.Sun"), TEXT("sc.Space.Sun [lux]: the space sun's illuminance (no argument logs it)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        USCViewerSubsystem* V = World && World->GetGameInstance() ? World->GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr;
+        if (!V) return;
+        if (Args.IsValidIndex(0)) V->SetSpaceSunLux(FCString::Atof(*Args[0]));
+        else UE_LOG(LogSCViewer, Display, TEXT("VIEWER_SPACE sun_lux=%.0f"), V->GetSpaceSunLux());
+    }));
 
 void USCViewerSubsystem::ShowMapHangar(bool bShow)
 {
@@ -414,7 +447,7 @@ void USCViewerSubsystem::ShowMapHangar(bool bShow)
     for (TActorIterator<AActor> It(World); It; ++It)
     {
         AActor* A = *It;
-        if (Cast<ASCVehicle>(A) || A->GetLevel() != World->PersistentLevel || A == SpaceSun.Get()) continue; // the sun of space stays
+        if (Cast<ASCVehicle>(A) || A->GetLevel() != World->PersistentLevel || A == SpaceSun.Get() || A == SpaceFill.Get()) continue; // the lights of space stay
         const bool bMesh = A->IsA<AStaticMeshActor>(), bLight = A->IsA<ALight>();
         if (!bMesh && !bLight) continue;
         A->SetActorHiddenInGame(!bShow);

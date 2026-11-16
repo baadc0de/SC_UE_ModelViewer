@@ -10,8 +10,14 @@ cargo code paths that assumed a hangar.
 ## Behaviour
 
 1. **Space scenarios.** A scenario with `"space": true` loads no environment (the map hangar stays hidden), sets the
-   world's gravity to zero and lights the scene with a transient sun (directional light; intensity and angle are viewer
-   choices). Vehicles float where the scenario puts them (`at` in metres, `yaw` or `rot` [pitch, yaw, roll]) and are
+   world's gravity to zero and lights the scene with transient lights. Their values are viewer choices, set by the
+   owner after an interactive session:
+   - a sun: a directional light at 8000 lux with shadows and forward-shading priority;
+   - a blue-tinted fill from the opposite side at a tenth of the sun's strength, without shadows. Without it, the
+     sides away from the sun are black.
+
+   A scenario's `sun_lux` or `sc.Space.Sun <lux>` sets the sun (the fill follows). Auto exposure absorbs most of the
+   absolute level: 10 000 and 50 000 lux look alike, 50 lux is dim. Vehicles float where the scenario puts them (`at` in metres, `yaw` or `rot` [pitch, yaw, roll]) and are
    not set down on a floor.
 2. **Obstacles.** `obstacles[]` places game entities (here the mineable asteroids `AsteroidSTypeMineableRock` /
    `AsteroidETypeMineableRock`) as static vehicle instances. They are collision for drones, routes and loose spots like
@@ -89,4 +95,13 @@ Known limits:
   times in about 30 space moves and never in a hangar. With no weight the beam does not keep the box away from the
   drone, and the overlap check counts the drone's own load.
 - Loose cargo does not drift (see Behaviour 4).
-- The sun is a fixed directional light with no fill. Ship shadow sides are dark, as in the game's open space.
+- The sun's direction is fixed (no star from the archive).
+
+## Interactive scenario
+
+`hull_a_space_fleet.json`: four Hull A, each with a dock and two drones, stock on three of them, the five asteroids
+and 13 loose boxes in beacons, for exploring transfers through the mobiGlas.
+
+Recording a session with its UI needs a screen capture of the window. The in-engine `/record` takes the scene before
+the UI, and GDI capture of a D3D12 window is black. ffmpeg's `ddagrab` (Desktop Duplication) on the window's client
+rectangle works.

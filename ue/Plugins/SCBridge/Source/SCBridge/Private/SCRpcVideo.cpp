@@ -198,7 +198,7 @@ bool FSCVideoRecorder::Start(const FString& InPath, double InFps, double InMaxSe
     if (!IFileManager::Get().MakeDirectory(*FrameDir, true)) { OutError = TEXT("cannot create ") + FrameDir; return false; }
     IFileManager::Get().Delete(*Path, false, true, true);
     Fps = FMath::Clamp(InFps, 1.0, 60.0);
-    MaxSeconds = FMath::Clamp(InMaxSeconds, 1.0, 3600.0);
+    MaxSeconds = FMath::Clamp(InMaxSeconds, 1.0, 4 * 3600.0); // an interactive session may run for hours
     Width = FMath::Max(0, InWidth);
     bKeepFrames = bInKeepFrames;
     Times.Reset();
@@ -220,6 +220,25 @@ void FSCVideoRecorder::Stop()
     Phase = EPhase::Draining;
     StoppedAt = FPlatformTime::Seconds();
     if (Extension) Extension->Requests = 0;
+}
+
+void FSCVideoRecorder::Finish(double TimeoutSeconds)
+{
+    if (!IsBusy()) return;
+    Stop();
+    UE_LOG(LogSCRpcVideo, Display, TEXT("RPC_RECORD finishing at shutdown path=%s frames=%d"), *Path, Times.Num());
+    const double Until = FPlatformTime::Seconds() + TimeoutSeconds;
+    while (IsBusy() && FPlatformTime::Seconds() < Until)
+    {
+        Tick();
+        FPlatformProcess::Sleep(0.05f);
+    }
+    if (IsBusy())
+    {
+        // The destructor ends ffmpeg; the frames and their timing list stay for a later encode.
+        bKeepFrames = true;
+        UE_LOG(LogSCRpcVideo, Warning, TEXT("RPC_RECORD not finished within %.0f s at shutdown; frames kept in %s"), TimeoutSeconds, *FrameDir);
+    }
 }
 
 void FSCVideoRecorder::Collect()

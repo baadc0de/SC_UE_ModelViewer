@@ -82,6 +82,8 @@ struct SCBRIDGE_API FSCCargoScenario
 
     /** Space (WP-K3): no environment (the ships float where they are placed), no gravity, no atmosphere. */
     bool bSpace = false;
+    /** The space sun's illuminance in lux (`sun_lux`; viewer choice); unset (< 0): the viewer's default. */
+    double SunLux = -1;
     /** Where each vehicle is (index as VehicleOwners, metres and degrees); unset: placed on free floor beside the first. */
     TArray<TOptional<FTransform>> VehiclePoses;
     /** Other entities placed as they are (asteroids around the ships in space): obstacles to the drones and loads. */

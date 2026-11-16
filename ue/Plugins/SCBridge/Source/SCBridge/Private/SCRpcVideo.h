@@ -23,6 +23,9 @@ public:
     void Tick();
     /** Ends the capture; the file is finished some time later (IsFinished). */
     void Stop();
+    /** At shutdown (game thread, blocking): stops a capture and drains and encodes it there and then, so closing the
+     *  app still leaves the file. Past the timeout the frames are kept instead. */
+    void Finish(double TimeoutSeconds);
     bool IsRecording() const { return Phase == EPhase::Recording; }
     bool IsBusy() const { return Phase == EPhase::Recording || Phase == EPhase::Draining || Phase == EPhase::Encoding; }
     bool IsFinished() const { return Phase == EPhase::Done || Phase == EPhase::Failed; }

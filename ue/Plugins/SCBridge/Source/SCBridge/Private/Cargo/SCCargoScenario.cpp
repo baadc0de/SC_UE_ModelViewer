@@ -123,6 +123,7 @@ bool FSCCargoScenario::Parse(const FString& Json, FSCCargoScenario& Out, FString
             Out.Owners.Add({FName(*Str(V->AsObject(), TEXT("id"))), FText::FromString(Str(V->AsObject(), TEXT("label")))});
     // Space (WP-K3): no environment, no gravity, vacuum (unless the file says otherwise).
     Root->TryGetBoolField(TEXT("space"), Out.bSpace);
+    Root->TryGetNumberField(TEXT("sun_lux"), Out.SunLux);
     if (Out.bSpace && !Root->HasField(TEXT("atmosphere"))) Out.bAtmosphere = false;
     Out.Seed = int32(Num(Root, TEXT("seed"), 1));
     const TArray<TSharedPtr<FJsonValue>>* VehicleList;

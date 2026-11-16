@@ -172,6 +172,9 @@ public:
      *  world (what falls in a hangar floats). Off restores the hangar and the project's gravity. */
     void SetSpace(bool bInSpace);
     bool IsSpace() const { return bSpace; }
+    /** The space sun's illuminance (lux; viewer choice, `sc.Space.Sun`, a scenario's `sun_lux`). */
+    void SetSpaceSunLux(float Lux);
+    float GetSpaceSunLux() const { return SpaceSunLux; }
     /** Put paint Index (Manifest.Paints; INDEX_NONE = the vehicle's own) on the loaded vehicle and remember it for the
      *  entity (USCViewerSettings::Paints). Also `sc.Paint [index|default|name part]`. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetPaint(int32 Index);
@@ -342,7 +345,10 @@ private:
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
     bool bSpace = false;
-    TWeakObjectPtr<class ADirectionalLight> SpaceSun;
+    TWeakObjectPtr<class ADirectionalLight> SpaceSun, SpaceFill;
+    // Viewer choices (WP-K3): bright enough that auto exposure shows the sunlit side clearly; the fill lights the rest.
+    float SpaceSunLux = 8000.f;
+    static constexpr float SpaceFillShare = 0.1f;
     FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)
     FString PreferredEnvironment; // what SetEnvironment asked for; EnvironmentFolder may be a larger hangar of its style
     bool bFitEnvironment = false;
