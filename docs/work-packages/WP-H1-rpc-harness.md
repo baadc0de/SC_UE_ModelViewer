@@ -33,7 +33,7 @@ finds (PATH, or a winget install) as `-SCFfmpeg`.
   cargo scenario has been placed, no job is active, no grid is extending or retracting, every drone is docked, no box
   is off its grid, and no RPC answer is pending (waits aside). The causes are the `reasons` keys: `loading`,
   `vehicle_spawning`, `environment`, `archive`, `cargo_packages`, `cargo_scenario`, `cargo_jobs`,
-  `cargo_grid_access`, `cargo_drones`, `cargo_boxes_moving`, `rpc:<path>`.
+  `cargo_grid_access`, `cargo_drones`, `cargo_boxes_moving`, `cargo_boxes_settling` (loose boxes falling or coming to rest, WP-K2), `rpc:<path>`.
 - **Settled**: idle, and for 0.5 s nothing has moved faster than 1 cm/s (simulated boxes, drones, vehicles, the
   first-person pawn) and nothing is left to stream or compile (`unsettled` keys: `moving`, `camera` (it moved more than 0.5 cm or 0.05° in the last frame), `streaming`, `shaders`,
   `assets`). Screenshots after a settled wait show the final scene.
@@ -51,19 +51,19 @@ world metres, rotations `[pitch, yaw, roll]` degrees, forces newtons.
 | `/catalog` | | Box `packages` (entity, state, scu, mass, size), stored `commodities`, `environments` |
 | `/wait` | `until`: `idle` \| `settled` \| `job` (+ `job`), `timeout_s` (120), `min_s` | Answers once the condition holds on a frame after the request: `waited_s`, `reasons`, `unsettled`, `anomalies`; `ok: false` on timeout |
 | `/mark` | `note` | Writes a `mark` record (a driver's step marker) |
-| `/console` | `cmd` | Runs a console command; `lines`: what it logged |
+| `/console` | `cmd` | Runs a console command; `lines`: what it logged (verification hooks: `sc.Cargo.LoseDrone busy`, `sc.Cargo.Interrupt [job]`) |
 | `/load`, `/unload` | `entity` | Loads / unloads the main vehicle (instance 0) |
 | `/environment` | `folder` | Sets the hangar (object container path) |
 | `/ship/spawn` | `entity` (`loaded`), `x_m`, `y_m`, [`z_m`], [`yaw`]; or none of them: free floor beside the ship; `wait` | `id`; with `wait`, answers when the instance is ready |
 | `/ship/despawn` | `id` | Removes an extra instance (its grids, boxes, docks and drones go; jobs touching them fail) |
 | `/cargo/package` | `entity` | Answers when the box entity's package is exported and imported |
-| `/cargo/spawn` | `grid` (id or selector: `ship`, `elevator`, label text), `entity`, `count`, `commodity`, `label`, `owner` | `boxes`: ids placed (best fit); `warning` when not all fit. Waits for the package. |
+| `/cargo/spawn` | `grid` (id or selector: `ship`, `elevator`, label text), `entity`, `count`, `commodity`, `label`, `owner`; or loose (WP-K2): `at` ([x, y, z] m, `yaw`) or `random` (`seed`: free floor spots near the ship with room above for a pick) | `boxes`: ids placed (best fit); `warning` when not all fit. Waits for the package. Loose boxes fall, come to rest and join or found a beacon. |
 | `/cargo/remove` | `box` \| `grid` \| `all`, `force` | `removed`, `refused`. A box a job holds is refused unless `force`: that job is abandoned (drones let go and fly home) and its boxes in the air go too. |
 | `/cargo/dock` | `grid`, `drones` | A drone dock on the grid |
-| `/cargo/transfer` | `from`, `to` (selectors), `commodity`, `scu`, `owner`, `preview` | `job` (or `error`), `planned_scu`, `moves`, `refusals` |
+| `/cargo/transfer` | `from`, `to` (selectors: grids, or for `from` a beacon id or name, `beacon` / `loose` for all), `commodity`, `scu`, `owner`, `preview` | `job` (or `error`), `planned_scu`, `moves`, `refusals` |
 | `/cargo/cancel` | `job` | |
 | `/cargo/access` | `grid`, `open` | Extends / retracts a grid's mechanism |
-| `/camera` | `mode` (`fly`, `orbit`, `first`); `at` + `look_at` or `rot`; or `focus`: vehicle id or `all` | `mode` |
+| `/camera` | `mode` (`fly`, `orbit`, `first`); `at` + `look_at` or `rot` (a pose: the fly camera unless `mode` says otherwise); or `focus`: vehicle id or `all` (the orbit camera frames it) | `mode` |
 | `/screenshot` | `name` or `path`, `ui` | Answers when the PNG is written: `path`, `bytes` (directory: `-SCShotDir` or `Saved/Screenshots/rpc`) |
 | `/record` | `action`: `start` (`name` or `path`, `fps` 30, `max_s` 300, `width`, `keep_frames`) \| `stop` \| `status` | Viewport video: frames grabbed off the back buffer (no stall), JPEGs written off the game thread with their capture times, encoded by a hidden ffmpeg to H.264 MP4 that plays in real time. `stop` answers when the file is written: `path`, `frames`, `dropped`, `seconds`, `bytes`. Directory: `-SCShotDir` or `Saved/Videos/rpc`. ffmpeg: `-SCFfmpeg=<exe>` or on PATH; without it the frames and their timing list are kept. |
 | `/quit` | `code` | Exits |
@@ -77,18 +77,18 @@ One JSON object per line; every record has `ev`, `t` (world seconds), `wall` (UT
 | `start` / `stop` | `cmd`, `pid`, `port` |
 | `idle` / `busy` / `activity` | `reasons` (activity: the busy reasons changed) |
 | `settled` / `unsettled` | `idle_for_s` / `why` |
-| `state` | `idle`, `settled`, `reasons`, `unsettled`, `frame_ms`, `speed_ms`, `anomalies`, `load` (entity, pending, phase, archive, environment), `vehicles` (id, entity, state, pos, rot, error), `camera` (mode, pos, rot), `cargo`: `grids` (id, kind, vehicle, owner, group, label, access, used / reserved / capacity SCU, boxes, pos), `boxes` (id, entity, scu, commodity, owner, state, grid, job, actor, pos, rot, sim, vel, ang_vel, slot_err_cm), `drones` (id, state, owner, dock, job, move, carrying, pos, vel, beam_force_n, beam_rest_m, beam_len_m, blocked), `docks`, `jobs` (id, state, owner, moves, moves_done, summary, reason, age_s) |
+| `state` | `idle`, `settled`, `reasons`, `unsettled`, `frame_ms`, `speed_ms`, `anomalies`, `load` (entity, pending, phase, archive, environment, space), `vehicles` (id, entity, state, pos, rot, error), `camera` (mode, pos, rot), `cargo`: `grids` (id, kind, vehicle, owner, group, label, access, used / reserved / capacity SCU, boxes, pos), `boxes` (id, entity, scu, commodity, owner, state, grid, job, actor, pos, rot, sim, vel, ang_vel, slot_err_cm), `drones` (id, state, owner, dock, job, move, carrying, pos, vel, beam_force_n, beam_rest_m, beam_len_m, blocked, in_move), `docks`, `beacons` (id, name, origin, origin_label, owner, scu, boxes, pos, accepts_drops), `jobs` (id, state, owner, moves, moves_done, summary, reason, age_s); boxes also carry `beacon` and `origin` |
 | `rpc` / `rpc_done` | `id`, `path`, `body` / `ok`, `ms`, `error` |
 | `log` | `level`, `cat`, `msg`: warnings, errors, and job / scene lines (`CARGO_JOB`, `CARGO_DRONE_OVERLAP`, `VEHICLE_`, …) |
-| `anomaly` / `anomaly_cleared` | `key`: `nan:<kind>:<id>`, `fell:<kind>:<id>` (below −10 m), `box_no_actor`, `box_off_slot` (a stored box > 5 cm from its slot), `box_simulated_on_grid`, `box_loose` (off every grid after a failed move: let down under gravity, and nothing can pick it up again) |
+| `anomaly` / `anomaly_cleared` | `key`: `nan:<kind>:<id>`, `fell:<kind>:<id>` (below −10 m), `box_no_actor`, `box_off_slot` (a stored box > 5 cm from its slot), `box_simulated_on_grid`, `box_stored_without_grid`, `box_reserved_nowhere`, `box_unbeaconed` (loose and at rest but in no beacon), `drone_orphaned` (out of its bay in no move that has not ended) |
 | `mark` | `note` |
 
 ## Exploratory testing
 
 `explore.ps1 -Scenario <c2_hangar|hull_a_hangar|hull_a_multi> -Steps N -Seed S` starts the viewer, waits until the
 scenario settles, then picks seeded random actions among those that make sense in the current state (ship spawn /
-despawn, cargo spawn / remove, removal of a box in the air, transfer, cancel, grid access); about half are followed by
+despawn, cargo spawn / remove, loose boxes put down at random reachable spots and carried from their beacons, removal of a box in the air, a load in flight interrupted or left with too few drones, transfer, cancel, grid access); about half are followed by
 a settled wait, the rest run back to back. After each step it checks that the viewer is alive and answering, and logs
 the step to `steps.ndjson`; at the end it requires the scene to settle with no active job, no drone away and no
-anomaly, and reads the game log for crashes and ensures. Output: `out/h1/explore-…/report.json`, `steps.ndjson`,
+anomaly, every loose box in a beacon and every beacon's members loose, and reads the game log for crashes and ensures (it counts re-targeted loads and boxes let down). Output: `out/h1/explore-…/report.json`, `steps.ndjson`,
 the state log, screenshots.

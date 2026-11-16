@@ -30,6 +30,8 @@
 #include "Components/SkyLightComponent.h"
 #include "Components/LightComponent.h"
 #include "Engine/Light.h"
+#include "Engine/DirectionalLight.h"
+#include "GameFramework/WorldSettings.h"
 #include "Engine/StaticMeshActor.h"
 #include "SCPlayerKit.h"
 #include "Engine/Engine.h"
@@ -367,15 +369,52 @@ FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
     if (FParse::Param(FCommandLine::Get(), TEXT("SCBakedLighting")) && FPackageName::DoesPackageExist(Level + TEXT("_Lit"))) return Level + TEXT("_Lit");
     return FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
+void USCViewerSubsystem::SetSpace(bool bInSpace)
+{
+    UWorld* World = GetViewerWorld();
+    if (!World) return;
+    bSpace = bInSpace;
+    if (bSpace) SetEnvironment(TEXT("none")); // no room around the ship (ShowMapHangar keeps the map's hidden in space)
+    ShowMapHangar(!bSpace);
+    // Gravity: none in space (boxes let go of float on), the project's default otherwise.
+    if (AWorldSettings* Settings = World->GetWorldSettings())
+    {
+        Settings->bWorldGravitySet = bSpace;
+        Settings->WorldGravityZ = 0.f;
+        if (!bSpace) Settings->GetGravityZ();
+    }
+    // A sun: the only light out there (viewer choice: the archive's star lighting is not imported).
+    if (bSpace && !SpaceSun.IsValid())
+    {
+        FActorSpawnParameters Params;
+        Params.ObjectFlags |= RF_Transient;
+        ADirectionalLight* Sun = World->SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(-35, 40, 0), Params);
+        if (Sun)
+        {
+            Sun->GetLightComponent()->SetMobility(EComponentMobility::Movable);
+            Sun->GetLightComponent()->SetIntensity(50.f);
+            Sun->GetLightComponent()->SetCastShadows(true);
+            SpaceSun = Sun;
+        }
+    }
+    else if (!bSpace && SpaceSun.IsValid())
+    {
+        SpaceSun->Destroy();
+        SpaceSun.Reset();
+    }
+    UE_LOG(LogSCViewer, Display, TEXT("VIEWER_SPACE on=%d gravity_z=%.1f sun=%d"), bSpace, World->GetGravityZ(), SpaceSun.IsValid());
+}
+
 void USCViewerSubsystem::ShowMapHangar(bool bShow)
 {
     UWorld* World = GetViewerWorld();
     if (!World) return;
+    bShow &= !bSpace; // in space the map's hangar stays hidden
     int32 Changed = 0;
     for (TActorIterator<AActor> It(World); It; ++It)
     {
         AActor* A = *It;
-        if (Cast<ASCVehicle>(A) || A->GetLevel() != World->PersistentLevel) continue;
+        if (Cast<ASCVehicle>(A) || A->GetLevel() != World->PersistentLevel || A == SpaceSun.Get()) continue; // the sun of space stays
         const bool bMesh = A->IsA<AStaticMeshActor>(), bLight = A->IsA<ALight>();
         if (!bMesh && !bLight) continue;
         A->SetActorHiddenInGame(!bShow);

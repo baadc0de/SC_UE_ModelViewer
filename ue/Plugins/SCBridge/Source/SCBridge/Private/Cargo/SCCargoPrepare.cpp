@@ -226,10 +226,13 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
     TArray<ASCCargoDrone*> Drones;
     for (const int32 Id : M.Drones)
         if (ASCCargoDrone* D = FindDrone(*State, Id)) Drones.Add(D);
-    if (!A || !From || !To || Drones.IsEmpty()) { Why = TEXT("the box, its grids or its drones are gone"); return false; }
+    // Loose cargo (WP-K2) has no source grid: it is lifted straight up from where it lies and levelled at the top.
+    const bool bLoose = M.bLooseSource && !From;
+    if (!A || (!From && !bLoose) || !To || Drones.IsEmpty()) { Why = TEXT("the box, its grids or its drones are gone"); return false; }
+    const FString FromLabel = From ? From->GridLabel.ToString() : LocationLabel(M.Plan.FromGrid).ToString();
     const FVector Size = A->SizeCm();
     const int32 N = Drones.Num();
-    M.FromNormal = From->LatticeToWorld().GetRotation().GetUpVector();
+    M.FromNormal = From ? From->LatticeToWorld().GetRotation().GetUpVector() : FVector::UpVector;
     M.ToNormal = To->LatticeToWorld().GetRotation().GetUpVector();
     M.FromRotation = M.PickRotation = A->GetActorQuat();
     M.TurnStart = -1;
@@ -283,9 +286,9 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
             return false;
         };
         double LiftAt = BaseLift;
-        if (!ClearAlong(A->GetActorTransform(), M.FromNormal, LiftAt, LiftAt)) { OutWhy = FString::Printf(TEXT("no clear space along the normal of %s"), *From->GridLabel.ToString()); return false; }
+        if (!ClearAlong(A->GetActorTransform(), M.FromNormal, LiftAt, LiftAt)) { OutWhy = FString::Printf(TEXT("no clear space along the normal of %s"), *FromLabel); return false; }
         const FVector Lifted = A->GetActorLocation() + M.FromNormal * LiftAt;
-        M.FromRotation = M.PickRotation;
+        M.FromRotation = bLoose ? FQuat(FRotator(0, M.PickRotation.Rotator().Yaw, 0)) : M.PickRotation; // a loose box flies level
         M.SecondPath.Reset();
         // What was planned, once per finished search of the load's route: from where, to where, how it hangs.
         auto ReportLoad = [&](bool bFound, const FVector& GoalAt, const TCHAR* Turn, const FVector& TurnAt) {
@@ -324,7 +327,7 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         }
         // Out of a room (the lift room, a hold) lengthwise through its entrance: a long box lying across the way out turns
         // a quarter at the top of its lift, in free air (swept), before it flies.
-        if (const int32 Axis = EntranceAxis(From); Axis > 0 && HoldAt(Lifted) == From)
+        if (const int32 Axis = From ? EntranceAxis(From) : 0; Axis > 0 && HoldAt(Lifted) == From)
         {
             const FVector Way = From->LatticeToWorld().GetUnitAxis(Axis == 1 ? EAxis::X : EAxis::Y).GetSafeNormal2D();
             const FVector Long = M.PickRotation.RotateVector(Size.X >= Size.Y ? FVector::ForwardVector : FVector::RightVector).GetSafeNormal2D();
@@ -438,7 +441,7 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         if (!bRoute)
         {
             if (M.bRoutePending) return false; // searching: PrepareMove is called again next tick
-            OutWhy = FString::Printf(TEXT("no free route for the %d SCU box from %s to %s (%s)"), Box->Occupancy.StandardCargoUnits, *From->GridLabel.ToString(),
+            OutWhy = FString::Printf(TEXT("no free route for the %d SCU box from %s to %s (%s)"), Box->Occupancy.StandardCargoUnits, *FromLabel,
                                   bHold ? TEXT("a holding point") : *To->GridLabel.ToString(), *SCCargoRouteEndText(M.RouteEnd));
             return false;
         }
@@ -515,7 +518,7 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         if (!bApart && !PlanRoute(Job, M, TEXT("out"), Start, Over, Query, Route, FString::Printf(TEXT("out:%d"), D->DroneId), true))
         {
             if (M.bRoutePending) return false;
-            Why = FString::Printf(TEXT("no free route for drone %d to the box on %s"), D->DroneId, *From->GridLabel.ToString());
+            Why = FString::Printf(TEXT("no free route for drone %d to the box on %s"), D->DroneId, *FromLabel);
             // A drone in the air has no way from where it hovers just now (its surroundings are in motion: a box
             // being set down beside it, a plate): planned again shortly, not a failure of the box.
             if (D->State != ESCCargoDroneState::Docked) M.bKeptHit = true;

@@ -55,6 +55,7 @@ void USCCargoSubsystem::Tick(float DeltaSeconds)
     const double Now = GetWorld()->GetTimeSeconds();
     for (const auto& Pair : State->Grids)
         if (USCCargoGridComponent* Grid = Pair.Value.Get()) UpdateAccess(Grid, Now);
+    TickLoose(Now); // loose cargo at rest joins its beacon (WP-K2)
     TickJobs(DeltaSeconds);
     if (State->bDebug) DebugDraw();
 }
@@ -108,6 +109,7 @@ FSCCargoBoxView BoxView(const FSCCargoBox& B)
     V.JobId = B.JobId;
     const bool bOnGrid = B.State == ESCCargoBoxState::Stored || B.State == ESCCargoBoxState::Reserved;
     V.GridId = bOnGrid ? B.GridId : INDEX_NONE;
+    V.BeaconId = B.BeaconId;
     V.Origin = B.Slot.Origin;
     V.Cells = B.Slot.Cells;
     if (const ASCCargoContainer* A = B.Actor.Get())
@@ -193,7 +195,9 @@ TArray<FSCCargoCommodityView> USCCargoSubsystem::GetCommodities(const TArray<int
     for (const auto& Pair : State->Boxes)
     {
         const FSCCargoBox& B = Pair.Value;
-        if (B.State != ESCCargoBoxState::Stored || (!Grids.IsEmpty() && !Grids.Contains(B.GridId))) continue;
+        // On a grid, or loose in a beacon (WP-K2): counted where it rests.
+        const bool bResting = B.State == ESCCargoBoxState::Stored || (B.State == ESCCargoBoxState::Loose && B.BeaconId != INDEX_NONE);
+        if (!bResting || (!Grids.IsEmpty() && !Grids.Contains(B.GridId != INDEX_NONE ? B.GridId : B.BeaconId))) continue;
         FSCCargoCommodityView* C = Out.FindByPredicate([&](const FSCCargoCommodityView& V) { return V.Commodity == B.Commodity; });
         if (!C)
         {
@@ -306,7 +310,12 @@ FSCCargoPlanInput USCCargoSubsystem::PlanInput(const FSCCargoTransferRequest& Re
     // their ships' drones and the hangar's shared pool. bIgnoreOtherJobs: as if no other transfer held boxes or cells
     // (whether a request could run once they are done: it queues instead of failing).
     const FName Who = RequesterOf(Request);
-    auto Usable = [&](int32 GridId) { const USCCargoGridComponent* G = FindGrid(GridId); return G && (G->Owner.IsNone() || G->Owner == Who); };
+    // Locations: grids, and beacons (loose cargo, WP-K2: whose boxes they hold).
+    auto Usable = [&](int32 Id) {
+        if (const FSCCargoBeacon* Beacon = State->Beacons.Find(Id)) return Beacon->Owner.IsNone() || Beacon->Owner == Who;
+        const USCCargoGridComponent* G = FindGrid(Id);
+        return G && (G->Owner.IsNone() || G->Owner == Who);
+    };
     FSCCargoPlanInput In;
     for (const auto& Pair : State->Grids)
         if (const USCCargoGridComponent* G = Pair.Value.Get())
@@ -329,7 +338,8 @@ FSCCargoPlanInput USCCargoSubsystem::PlanInput(const FSCCargoTransferRequest& Re
         I.Volume = B.VolumeSCU();
         In.Items.Add(B.Id, I);
         const bool bTheirs = !B.Owner.IsNone() && B.Owner != Who;
-        if (bTheirs || (B.State != ESCCargoBoxState::Stored && !(bIgnoreOtherJobs && B.State == ESCCargoBoxState::Reserved))) In.Busy.Add(B.Id);
+        const bool bResting = B.State == ESCCargoBoxState::Stored || (B.State == ESCCargoBoxState::Loose && B.BeaconId != INDEX_NONE);
+        if (bTheirs || (!bResting && !(bIgnoreOtherJobs && B.State == ESCCargoBoxState::Reserved))) In.Busy.Add(B.Id);
         if (B.Commodity == Request.Commodity) In.CommodityLabel = B.CommodityLabel.ToString();
     }
     for (const FSCCargoDock& D : State->Docks)
@@ -339,8 +349,13 @@ FSCCargoPlanInput USCCargoSubsystem::PlanInput(const FSCCargoTransferRequest& Re
         I.bMovable = false;
         In.Items.Add(D.ItemId, I);
     }
+    for (const auto& [Id, Beacon] : State->Beacons)
+    {
+        In.Beacons.Add(Id, Beacon.Boxes);
+        In.BeaconLabels.Add(Id, Beacon.Name);
+    }
     In.FromGrids = Request.FromGrids.FilterByPredicate(Usable);
-    In.ToGrids = Request.ToGrids.FilterByPredicate(Usable);
+    In.ToGrids = Request.ToGrids.FilterByPredicate([&](int32 Id) { return IsBeacon(Id) || Usable(Id); }); // a beacon stays: the planner says why not
     In.Commodity = Request.Commodity;
     In.AmountSCU = Request.AmountSCU;
     In.LiftForceN = State->Scenario.Drone.MaxForceN;
@@ -363,9 +378,9 @@ FSCCargoTransferPreview USCCargoSubsystem::Preview(const FSCCargoTransferRequest
     const double Speed = FMath::Max(1.0, State->Scenario.Drone.MaxSpeedMS * 100.0);
     for (const FSCCargoMovePlan& M : P.Moves)
     {
-        const USCCargoGridComponent *From = FindGrid(M.FromGrid), *To = FindGrid(M.ToGrid);
-        if (!From || !To) continue;
-        const double Legs = FVector::Dist(From->WorldCenter(), To->WorldCenter()) * 2 + 4 * State->Scenario.Drone.ClearanceMarginM * 100.0;
+        if (!FindGrid(M.ToGrid) || (!FindGrid(M.FromGrid) && !IsBeacon(M.FromGrid))) continue;
+
+        const double Legs = FVector::Dist(LocationCentre(M.FromGrid), LocationCentre(M.ToGrid)) * 2 + 4 * State->Scenario.Drone.ClearanceMarginM * 100.0;
         P.EstimatedSeconds += float(Legs / Speed);
     }
     return P;
@@ -413,6 +428,7 @@ void USCCargoSubsystem::Materialize(FSCCargoJob& J, const FSCCargoTransferPrevie
     {
         FSCCargoMove& Move = J.Moves.AddDefaulted_GetRef();
         Move.Plan = M;
+        Move.bLooseSource = IsBeacon(M.FromGrid); // loose cargo (WP-K2)
         Move.MoveId = State->NextMoveId++;
         FSCCargoBox& B = State->Boxes[M.BoxId];
         B.State = ESCCargoBoxState::Reserved;
@@ -430,8 +446,8 @@ void USCCargoSubsystem::Materialize(FSCCargoJob& J, const FSCCargoTransferPrevie
             To->Reserved.Add(M.BoxId);
             if (M.Kind == ESCCargoMoveKind::Carry) ToLabel = To->GroupLabel;
         }
-        if (const USCCargoGridComponent* From = FindGrid(M.FromGrid); From && M.Kind == ESCCargoMoveKind::Carry) FromLabel = From->GroupLabel;
-        Move.DistanceCm = FindGrid(M.FromGrid) && FindGrid(M.ToGrid) ? FVector::Dist(FindGrid(M.FromGrid)->WorldCenter(), FindGrid(M.ToGrid)->WorldCenter()) * 2 : 0;
+        if (M.Kind == ESCCargoMoveKind::Carry) FromLabel = FindGrid(M.FromGrid) ? FindGrid(M.FromGrid)->GroupLabel : LocationLabel(M.FromGrid);
+        Move.DistanceCm = FVector::Dist(LocationCentre(M.FromGrid), LocationCentre(M.ToGrid)) * 2;
     }
     J.Summary = FText::Format(NSLOCTEXT("SCCargo", "JobSummary", "{0} · {1} SCU · {2} → {3}"), CommodityLabel, P.PlannedSCU, FromLabel, ToLabel);
     UE_LOG(LogSCCargo, Display, TEXT("CARGO_JOB id=%d state=Planned owner=%s moves=%d scu=%d requested=%d refusals=%d summary=\"%s\""), J.Id,
@@ -447,6 +463,12 @@ void USCCargoSubsystem::OwnerRefusals(const FSCCargoTransferRequest& Request, FS
     TSet<int32> Grids;
     for (const int32 Id : Request.FromGrids) Grids.Add(Id);
     for (const int32 Id : Request.ToGrids) Grids.Add(Id);
+    for (const int32 Id : Grids)
+        if (const FSCCargoBeacon* B = State->Beacons.Find(Id); B && !B->Owner.IsNone() && B->Owner != Who)
+        {
+            FSCCargoRefusal& R = P.Refusals.AddDefaulted_GetRef();
+            R.Reason = FText::Format(NSLOCTEXT("SCCargo", "BeaconOfOther", "{0} belongs to {1}"), FText::FromString(B->Name), OwnerLabel(B->Owner));
+        }
     for (const int32 Id : Grids)
         if (const USCCargoGridComponent* G = FindGrid(Id); G && !G->Owner.IsNone() && G->Owner != Who)
         {

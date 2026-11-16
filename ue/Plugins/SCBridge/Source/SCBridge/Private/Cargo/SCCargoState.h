@@ -126,6 +126,10 @@ struct FSCCargoBox
     int32 JobId = INDEX_NONE;
     FName Owner; // whose box it is
     TWeakObjectPtr<ASCCargoContainer> Actor;
+    // Loose cargo (WP-K2): its beacon once at rest, the location it was carried from, and since when it has been still.
+    int32 BeaconId = INDEX_NONE;
+    int32 OriginId = INDEX_NONE;
+    double StillSince = -1;
     FVector SizeM() const { return FSCCargoLattice::FromSC(Occupancy.Dimensions); }
     /** Occupancy volume in SCU (the unit the beam's maxVolume is read in): authored in SStandardCargoUnit or
      *  SMicroCargoUnit (1e-6 SCU); else the standard cargo units. */
@@ -135,6 +139,19 @@ struct FSCCargoBox
         if (Occupancy.VolumeUnit == TEXT("SMicroCargoUnit") && Occupancy.Volume > 0) return Occupancy.Volume * 1e-6;
         return Occupancy.StandardCargoUnits;
     }
+};
+
+/** A freestyle cargo beacon (WP-K2; FSCCargoBeaconView): a virtual location grouping loose boxes at rest. Its id comes
+ *  from the grid id counter (a location id). */
+struct FSCCargoBeacon
+{
+    int32 Id = INDEX_NONE;
+    FString Name;
+    int32 OriginId = INDEX_NONE;
+    FText OriginLabel;
+    FName Owner;
+    TArray<int32> Boxes;
+    double Created = 0;
 };
 
 struct FSCCargoDock
@@ -223,6 +240,9 @@ struct FSCCargoMove
     double HangCm = 0, LoadAccel = 0, LoadJerk = 0; // cm, cm/s^2, cm/s^3 of the loaded team
     double DistanceCm = 0;                // planned flight length (ETA)
     FString Failure;
+    bool bInterrupt = false;     // verification (sc.Cargo.Interrupt): fail this move in flight as a lost route would
+    bool bLooseSource = false;   // the box comes from loose cargo (a beacon): lifted straight up, levelled, no source grid
+    TSet<int32> TargetsTried;    // destinations a load let go of in flight was sent to and could not reach (RetargetLoad)
 };
 
 struct FSCCargoJob
@@ -270,6 +290,7 @@ struct FSCCargoState
     TMap<FName, double> SharedServedAt; // owner -> when a move of theirs last took shared drones
     TMap<int32, FSCCargoBox> Boxes;
     TArray<FSCCargoDock> Docks;
+    TMap<int32, FSCCargoBeacon> Beacons; // loose cargo (WP-K2), by location id
     TArray<TWeakObjectPtr<ASCCargoDrone>> Drones;
     int32 NextItemId = 1, NextDroneId = 1, NextJobId = 1, NextMoveId = 1;
     TArray<FSCCargoJob> Jobs;
@@ -277,6 +298,8 @@ struct FSCCargoState
     bool bScenarioTried = false, bScenarioLoadRequested = false;
     uint8 AppliedKinds = 0; // bit per ESCCargoGridKind whose scenario stock and docks are placed
     bool bScenarioPlaced = false; // both kinds placed once (later re-placement after a ship is lost is not waited on)
+    bool bLoosePlaced = false;   // the scenario's loose stock is down (WP-K2)
+    TArray<int32> ObstacleIds;   // vehicle instances the scenario placed as obstacles (WP-K3)
     double LastScenarioWait = -1000;
     FSCCargoBoxLibrary Library;
     bool bDebug = false;
@@ -307,4 +330,7 @@ struct FSCCargoState
 };
 
 /** The drone with DroneId, or null. */
+class UWorld;
 ASCCargoDrone* FindDrone(const FSCCargoState& State, int32 DroneId);
+/** A box actor for a package at Pose: its occupancy collision and mass, and the package meshes (SpawnBox, loose boxes). */
+ASCCargoContainer* SCCargoSpawnBoxActor(UWorld* World, const FSCCargoBoxLibrary::FEntry& Package, const FString& Entity, const FTransform& Pose);

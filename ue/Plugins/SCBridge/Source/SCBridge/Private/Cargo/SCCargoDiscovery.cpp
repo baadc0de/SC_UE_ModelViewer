@@ -94,7 +94,7 @@ void USCCargoSubsystem::ForgetGrids(ESCCargoGridKind Kind, const ASCVehicle* Onl
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_JOB id=%d grid_gone=1 drones_returning=%d"), J.Id, bReturning);
         }
     for (auto It = State->Boxes.CreateIterator(); It; ++It)
-        if (Gone.Contains(It->Value.GridId) || (It->Value.GridId == INDEX_NONE && LostJobs.Contains(It->Value.JobId)))
+        if (Gone.Contains(It->Value.GridId)) // the lost jobs' boxes in the air were let down loose (AbandonJob)
         {
             if (ASCCargoContainer* A = It->Value.Actor.Get()) A->Destroy();
             It.RemoveCurrent();
@@ -120,6 +120,7 @@ void USCCargoSubsystem::ForgetGrids(ESCCargoGridKind Kind, const ASCVehicle* Onl
         State->Grids.Remove(Id);
     }
     State->AppliedKinds &= ~(1u << uint8(Kind));
+    if (Kind == ESCCargoGridKind::Vehicle) WakeLoose(nullptr); // what loose cargo rested on may be gone: it settles again
     UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIDS_LOST kind=%s grids=%d"), Kind == ESCCargoGridKind::Vehicle ? TEXT("vehicle") : TEXT("environment"), Gone.Num());
     ++Revision;
 }

@@ -131,7 +131,7 @@ void SSCMobiGlasNearby::Rebuild()
     BuiltStamp = Model->GetStamp();
     List->ClearChildren();
     if (!Model->HasSource()) { List->AddSlot().AutoHeight()[Empty(LOCTEXT("NoSource", "No cargo system in this scene."))]; return; }
-    if (Model->GetGrids().IsEmpty()) { List->AddSlot().AutoHeight()[Empty(LOCTEXT("NoGrids", "No cargo grids nearby."))]; return; }
+    if (Model->GetGrids().IsEmpty() && Model->GetBeacons().IsEmpty()) { List->AddSlot().AutoHeight()[Empty(LOCTEXT("NoGrids", "No cargo grids nearby."))]; return; }
     TArray<FName> Groups;
     for (const FSCCargoGridView& G : Model->GetGrids()) Groups.AddUnique(G.GroupKey);
     TSharedPtr<FSCMobiGlasModel> M = Model;
@@ -224,6 +224,47 @@ void SSCMobiGlasNearby::Rebuild()
             ];
         }
     }
+    // Loose cargo (WP-K2): one row per beacon, its counts only (no lattice: a clump has no layers or capacity).
+    if (!Model->GetBeacons().IsEmpty())
+    {
+        List->AddSlot().AutoHeight().Padding(0, Groups.IsEmpty() ? 0 : 16, 0, 6)[Txt(LOCTEXT("Loose", "LOOSE CARGO"), Label(), Ink())];
+        for (const FSCCargoBeaconView& Beacon : Model->GetBeacons())
+        {
+            const int32 Id = Beacon.BeaconId;
+            const bool bOther = !Beacon.bMine;
+            auto Sel = [M, Id] { return M->GetSelectedGrid() == Id; };
+            auto Live = [M, Id]() -> const FSCCargoBeaconView* { return M->FindBeacon(Id); };
+            List->AddSlot().AutoHeight().Padding(0, 0, 0, 2)
+            [
+                SNew(SButton).ButtonStyle(&RowButton()).ContentPadding(0)
+                .OnClicked_Lambda([M, Id] { M->SelectGrid(Id); return FReply::Handled(); })
+                [
+                    SNew(SBorder).BorderImage(White()).Padding(FMargin(10, 8))
+                    .BorderBackgroundColor_Lambda([Sel] { return Sel() ? Ink() : FLinearColor::Transparent; })
+                    [
+                        SNew(SHorizontalBox)
+                        + SHorizontalBox::Slot().FillWidth(1)
+                        [
+                            SNew(SVerticalBox)
+                            + SVerticalBox::Slot().AutoHeight()
+                            [SNew(STextBlock).Font(Body()).Text(Beacon.Label).ToolTipText(Beacon.OriginLabel).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+                                 .ColorAndOpacity_Lambda([Sel, bOther] { return FSlateColor(Sel() ? Paper() : bOther ? Ink2() : Ink()); })]
+                            + SVerticalBox::Slot().AutoHeight()
+                            [SNew(STextBlock).Font(Numeric()).ColorAndOpacity_Lambda([Sel] { return FSlateColor(Sel() ? PaperDim() : Ink2()); })
+                                 .Text_Lambda([Live] {
+                                     const FSCCargoBeaconView* B = Live();
+                                     return B ? FText::Format(LOCTEXT("BeaconCounts", "{0} {0}|plural(one=box,other=boxes) · {1} SCU · {2}"), B->Boxes.Num(), B->TotalSCU, B->OriginLabel) : FText();
+                                 })]
+                        ]
+                        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10, 0, 0, 0)
+                        [SNew(SBox).MinDesiredWidth(64).HAlign(HAlign_Right)
+                             [SNew(STextBlock).Font(Numeric()).ColorAndOpacity_Lambda([Sel] { return FSlateColor(Sel() ? PaperDim() : Ink2()); })
+                                  .Text_Lambda([Live] { const FSCCargoBeaconView* B = Live(); return B ? SCMobiGlasText::Metres(B->DistanceM) : FText(); })]]
+                    ]
+                ]
+            ];
+        }
+    }
 }
 
 // ---- Grid detail ----------------------------------------------------------------------------------------------------
@@ -255,8 +296,20 @@ void SSCMobiGlasDetail::Rebuild()
     List->ClearChildren();
     Extra->ClearChildren();
     const FSCCargoGridView* Grid = Model->FindGrid(Model->GetSelectedGrid());
-    if (!Grid) { List->AddSlot().AutoHeight()[Empty(LOCTEXT("NoSelection", "Select a grid to see its layout."))]; return; }
     TSharedPtr<FSCMobiGlasModel> M = Model;
+    const int32 Id = Model->GetSelectedGrid();
+    const FSCCargoBeaconView* Beacon = Grid ? nullptr : Model->FindBeacon(Id);
+    if (!Grid && !Beacon) { List->AddSlot().AutoHeight()[Empty(LOCTEXT("NoSelection", "Select a grid to see its layout."))]; return; }
+    if (Beacon)
+    {
+        // Loose cargo (WP-K2): its name, where it came from, its counts; no lattice, layers or extend / retract.
+        List->AddSlot().AutoHeight()[Txt(Caps(Beacon->Label), Title(), Ink())];
+        List->AddSlot().AutoHeight().Padding(0, 4, 0, 12)
+        [SNew(STextBlock).Font(Label()).ColorAndOpacity(Ink2()).AutoWrapText(true)
+             .Text(Caps(FText::Format(LOCTEXT("BeaconFacts", "Loose cargo · {0} · {1} {1}|plural(one=box,other=boxes)"), Beacon->OriginLabel, Beacon->Boxes.Num())))];
+    }
+    else
+    {
     FNumberFormattingOptions OneDecimal;
     OneDecimal.SetMinimumFractionalDigits(1).SetMaximumFractionalDigits(2);
     auto Num = [&](double V) { return FText::AsNumber(V, &OneDecimal); };
@@ -280,7 +333,6 @@ void SSCMobiGlasDetail::Rebuild()
             ]
         ];
     }
-    const int32 Id = Grid->GridId;
     // State: extended / retracted (cargo only rides on an extended grid) and the control to change it.
     List->AddSlot().AutoHeight().Padding(0, 0, 0, 10)
     [
@@ -303,17 +355,18 @@ void SSCMobiGlasDetail::Rebuild()
         .Text_Lambda([M, Id] { return M->GetAccessError().IsEmpty() ? M->GetAccessControl({Id}).Reason : M->GetAccessError(); })
     ];
     List->AddSlot().AutoHeight()[Layers];
+    }
     // Contents: one row per commodity (and owner); its box sizes listed in the BOXES column ("2 × 8 · 2 × 4").
     struct FRow { FName Commodity; FText Label; int32 SCU = 0, Count = 0, Active = 0; bool bMine = true; FText Owner; TMap<int32, int32> Sizes; };
     TArray<FRow> Rows;
-    for (const FSCCargoBoxView& B : Grid->Boxes)
+    for (const FSCCargoBoxView& B : Grid ? Grid->Boxes : Beacon->Boxes)
     {
         FRow* Row = Rows.FindByPredicate([&B](const FRow& R) { return R.Commodity == B.Commodity && R.bMine == B.bMine && R.Owner.EqualTo(B.OwnerLabel); });
         if (!Row) Row = &Rows.Add_GetRef(FRow{B.Commodity, B.CommodityLabel, 0, 0, 0, B.bMine, B.OwnerLabel});
         ++Row->Count;
         Row->SCU += B.SCU;
         ++Row->Sizes.FindOrAdd(B.SCU);
-        Row->Active += B.State != ESCCargoBoxState::Stored;
+        Row->Active += B.State != ESCCargoBoxState::Stored && B.State != ESCCargoBoxState::Loose;
     }
     Rows.Sort([](const FRow& A, const FRow& B) { return A.SCU > B.SCU; });
     Extra->AddSlot().AutoHeight()
@@ -353,6 +406,7 @@ void SSCMobiGlasDetail::Rebuild()
         + SHorizontalBox::Slot().AutoWidth()
           [Txt(TAttribute<FText>::CreateLambda([M, Id] {
                const FSCCargoGridView* G = M->FindGrid(Id);
+               if (const FSCCargoBeaconView* B = G ? nullptr : M->FindBeacon(Id)) return FText::Format(LOCTEXT("BeaconTotal", "{0} SCU"), B->TotalSCU);
                if (!G) return FText();
                return G->ReservedSCU ? FText::Format(LOCTEXT("TotalIncoming", "{0}  +{1} incoming"), SCMobiGlasText::Scu(G->UsedSCU, G->CapacitySCU), G->ReservedSCU)
                                      : SCMobiGlasText::Scu(G->UsedSCU, G->CapacitySCU);

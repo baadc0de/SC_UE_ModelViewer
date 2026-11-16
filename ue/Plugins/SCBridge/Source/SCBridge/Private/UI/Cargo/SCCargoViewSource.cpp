@@ -31,6 +31,10 @@ public:
         return Cargo.IsValid() ? Cargo->GetGrids(Viewer, RadiusM) : TArray<FSCCargoGridView>();
     }
     virtual float GetNearbyRadiusM() const override { return Cargo.IsValid() ? Cargo->GetNearbyRadiusM() : 0; }
+    virtual TArray<FSCCargoBeaconView> GetBeacons(const FVector& Viewer, float RadiusM) const override
+    {
+        return Cargo.IsValid() ? Cargo->GetBeacons(Viewer, RadiusM) : TArray<FSCCargoBeaconView>();
+    }
     virtual TArray<FSCCargoCommodityView> GetCommodities(const TArray<int32>& Grids) const override
     {
         return Cargo.IsValid() ? Cargo->GetCommodities(Grids) : TArray<FSCCargoCommodityView>();

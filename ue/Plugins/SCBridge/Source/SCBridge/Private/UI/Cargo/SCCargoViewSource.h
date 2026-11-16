@@ -17,6 +17,8 @@ public:
     virtual int32 GetRevision() const = 0;
     virtual TArray<FSCCargoGridView> GetGrids(const FVector& Viewer, float RadiusM) const = 0;
     virtual float GetNearbyRadiusM() const = 0;
+    /** Beacons (loose cargo, WP-K2) within RadiusM of Viewer, nearest first. */
+    virtual TArray<FSCCargoBeaconView> GetBeacons(const FVector& Viewer, float RadiusM) const { return {}; }
     virtual TArray<FSCCargoCommodityView> GetCommodities(const TArray<int32>& Grids) const = 0;
     virtual TArray<FSCCargoDroneView> GetDrones() const = 0;
     virtual TArray<FSCCargoJobView> GetJobs() const = 0;

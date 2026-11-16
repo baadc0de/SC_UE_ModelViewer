@@ -38,6 +38,11 @@ TArray<int32> USCCargoSubsystem::ResolveGrids(const FString& Selector, FName Own
                 : G->GroupLabel.ToString().Contains(Part) || G->GridLabel.ToString().Contains(Part) || SCCargoRecords::PortKey(G->Record.PortPath).Contains(Part);
             if (bMatch) Out.AddUnique(G->GridId);
         }
+        // Beacons (loose cargo, WP-K2): by id, by text in their name, or all of the owner's ("beacon" / "loose").
+        const bool bBeacons = Part.Equals(TEXT("beacon"), ESearchCase::IgnoreCase) || Part.Equals(TEXT("loose"), ESearchCase::IgnoreCase);
+        for (const auto& [Id, B] : State->Beacons)
+            if (Part.IsNumeric() ? FCString::Atoi(*Part) == Id : bBeacons ? (B.Owner.IsNone() || B.Owner == Who) : B.Name.Contains(Part))
+                Out.AddUnique(Id);
     }
     Out.Sort();
     return Out;
@@ -83,6 +88,9 @@ TArray<FString> USCCargoSubsystem::Describe() const
         if (Pair.Value.GridId == INDEX_NONE || Pair.Value.State != ESCCargoBoxState::Stored)
             Lines.Add(FString::Printf(TEXT("BOX id=%d scu=%d state=%s job=%d grid=%d"), Pair.Key, Pair.Value.Occupancy.StandardCargoUnits,
                                       *BoxStates->GetNameStringByValue(int64(Pair.Value.State)), Pair.Value.JobId, Pair.Value.GridId));
+    for (const FSCCargoBeaconView& B : GetBeacons(FVector::ZeroVector, 0))
+        Lines.Add(FString::Printf(TEXT("BEACON id=%d name=\"%s\" origin=%d boxes=%d scu=%d owner=\"%s\" at=%s"), B.BeaconId, *B.Label.ToString(), B.OriginId, B.Boxes.Num(),
+                                  B.TotalSCU, *B.OwnerLabel.ToString(), *B.WorldCenter.ToCompactString()));
     for (const FSCCargoDroneView& D : GetDrones())
         Lines.Add(FString::Printf(TEXT("DRONE id=%d owner=\"%s\" state=%s job=%d carrying=%d at=%s"), D.DroneId, *D.OwnerLabel.ToString(), *DroneStates->GetNameStringByValue(int64(D.State)), D.JobId,
                                   D.CarryingBoxId, *D.WorldLocation.ToCompactString()));
@@ -245,6 +253,11 @@ FAutoConsoleCommandWithWorldAndArgs GSCCargoLoseDrone(TEXT("sc.Cargo.LoseDrone")
                 return;
             }
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_LOSE_DRONE none matches %s"), *Args[0]);
+    }));
+FAutoConsoleCommandWithWorldAndArgs GSCCargoInterrupt(TEXT("sc.Cargo.Interrupt"),
+    TEXT("sc.Cargo.Interrupt [job id]: fail the first load in flight (of that job) as a lost route would (verification: the load is set down on the nearest free slot, else loose)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCCargoSubsystem* S = Cargo(World)) S->InterruptLoad(Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) : INDEX_NONE);
     }));
 FAutoConsoleCommandWithWorldAndArgs GSCCargoSection(TEXT("sc.Cargo.Section"),
     TEXT("sc.Cargo.Section <grids> [reach m=30] [step m=1]: log sections of the collision around the grids (CARGO_SECTION)"),

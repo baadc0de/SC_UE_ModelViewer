@@ -10,14 +10,16 @@
 class ISCCargoViewSource;
 class USCViewerSubsystem;
 
-/** A transfer endpoint: one grid, or every grid of a group ("the ship"). */
+/** A transfer endpoint: one grid, every grid of a group ("the ship"), or a beacon (loose cargo, WP-K2: a source only). */
 struct FSCGridPick
 {
     FName Group;
     int32 GridId = INDEX_NONE;
-    bool IsSet() const { return GridId != INDEX_NONE || !Group.IsNone(); }
+    int32 BeaconId = INDEX_NONE;
+    bool IsSet() const { return GridId != INDEX_NONE || !Group.IsNone() || BeaconId != INDEX_NONE; }
+    bool IsBeacon() const { return BeaconId != INDEX_NONE; }
     bool IsGroup() const { return GridId == INDEX_NONE && !Group.IsNone(); }
-    bool operator==(const FSCGridPick& O) const { return Group == O.Group && GridId == O.GridId; }
+    bool operator==(const FSCGridPick& O) const { return Group == O.Group && GridId == O.GridId && BeaconId == O.BeaconId; }
 };
 
 class FSCMobiGlasModel
@@ -38,6 +40,9 @@ public:
 
     const TArray<FSCCargoGridView>& GetGrids() const { return Grids; }
     const FSCCargoGridView* FindGrid(int32 GridId) const;
+    /** Beacons (loose cargo, WP-K2) near the player, nearest first: shown with their counts, offered as sources. */
+    const TArray<FSCCargoBeaconView>& GetBeacons() const { return Beacons; }
+    const FSCCargoBeaconView* FindBeacon(int32 BeaconId) const;
     const TArray<FSCCargoJobView>& GetJobs() const { return Jobs; }
     const FSCCargoJobView* FindJob(int32 JobId) const;
     const TArray<FSCCargoDroneView>& GetDrones() const { return Drones; }
@@ -66,7 +71,8 @@ public:
     void SetLayer(int32 InLayer) { Layer = InLayer; }
 
     // Transfer form.
-    TArray<FSCGridPick> PickOptions() const;
+    /** Endpoints to offer: grids and groups; beacons too as a source (bAsSource), never as a destination. */
+    TArray<FSCGridPick> PickOptions(bool bAsSource = false) const;
     FText PickLabel(const FSCGridPick& Pick) const;
     TArray<int32> Resolve(const FSCGridPick& Pick) const;
     /** Route selector -> pick: a grid id, "ship" / "vehicle" or "elevator" / "environment" (the nearest such group, whole),
@@ -123,6 +129,7 @@ private:
     static constexpr float OpenRefreshSeconds = 0.25f, ClosedRefreshSeconds = 2.f;
     TArray<int32> SeenGridIds;
     TArray<FSCCargoGridView> Grids;
+    TArray<FSCCargoBeaconView> Beacons;
     TArray<FSCCargoJobView> Jobs;
     TArray<FSCCargoDroneView> Drones;
     TArray<FSCCargoBoxView> MovingBoxes;

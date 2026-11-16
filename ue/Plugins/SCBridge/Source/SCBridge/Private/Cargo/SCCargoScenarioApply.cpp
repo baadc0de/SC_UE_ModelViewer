@@ -51,6 +51,7 @@ void USCCargoSubsystem::TryScenario()
             return;
         }
         for (const FString& Entity : State->Scenario.Entities()) State->Library.Request(Entity);
+        if (State->Scenario.bSpace) Viewer->SetSpace(true); // WP-K3: no hangar, no gravity, a sun
         const FSCCargoDroneDefinition& D = State->Scenario.Drone;
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loaded=\"%s\" ship=%s environment=%s stock=%d docks=%d tractor=%s/%s max_force=%.0f full_strength_m=%.1f"),
                *State->Scenario.Name, *State->Scenario.Ship, *State->Scenario.Environment, State->Scenario.Stock.Num(), State->Scenario.Docks.Num(),
@@ -102,6 +103,18 @@ void USCCargoSubsystem::TryScenario()
         Viewer->LoadEntity(S.Ship, Viewer->GetOptions());
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loading ship=%s environment=%s"), *S.Ship, *S.Environment);
     }
+    // Loose stock (WP-K2): put down once the rest is placed, at its poses or at free reachable spots from the scenario's seed.
+    if (State->bScenarioPlaced && !State->bLoosePlaced && !Viewer->IsSpawningVehicles())
+    {
+        State->bLoosePlaced = true;
+        FRandomStream Rng(S.Seed);
+        for (const FSCCargoScenario::FLoose& L : S.Loose)
+        {
+            FString Error;
+            const TArray<int32> Ids = AddLooseBoxes(L.Entity, L.Count, L.At.GetPtrOrNull(), &Rng, L.Commodity, L.CommodityLabel, L.Owner, Error);
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loose=%s count=%d placed=%d%s"), *L.Entity, L.Count, Ids.Num(), Error.IsEmpty() ? TEXT("") : *(TEXT(" reason=\"") + Error + TEXT("\"")));
+        }
+    }
     if (State->AppliedKinds == 3 || Viewer->IsBusy() || !State->Library.IsSettled()) return;
     // Owners, and the scenario's other vehicles: more instances of its ship, spawned before any stock is placed.
     if (!State->bScenarioVehiclesRequested && Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))
@@ -113,10 +126,19 @@ void USCCargoSubsystem::TryScenario()
         State->VehicleOwners.Add(0, S.VehicleOwners.IsEmpty() ? S.Player : S.VehicleOwners[0]);
         for (int32 I = 1; I < S.VehicleOwners.Num(); ++I)
         {
-            const int32 Id = Viewer->SpawnVehicleInstance(S.Ship);
+            // Placed where the scenario says (in space: floating there), else on free floor beside the first.
+            const TOptional<FTransform>& Pose = S.VehiclePoses.IsValidIndex(I) ? S.VehiclePoses[I] : TOptional<FTransform>();
+            const int32 Id = Pose ? Viewer->SpawnVehicleInstance(S.Ship, *Pose, /*bRest=*/!S.bSpace) : Viewer->SpawnVehicleInstance(S.Ship);
             State->ScenarioVehicleIds.Add(Id);
             State->VehicleOwners.Add(Id, S.VehicleOwners[I]);
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO vehicle=%d instance=%d owner=%s"), I, Id, *S.VehicleOwners[I].ToString());
+        }
+        // Obstacles (asteroids in space): entities placed as they are; drones and loads keep clear of them like any geometry.
+        for (const FSCCargoScenario::FObstacle& O : S.Obstacles)
+        {
+            const int32 Id = Viewer->SpawnVehicleInstance(O.Entity, O.Pose, /*bRest=*/false);
+            State->ObstacleIds.Add(Id);
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO obstacle=%s instance=%d at=%s"), *O.Entity, Id, *(O.Pose.GetLocation() / 100).ToCompactString());
         }
         // Grids found before the owners were known take them now.
         for (const auto& Pair : State->Grids)
@@ -231,19 +253,9 @@ int32 USCCargoSubsystem::SpawnBox(USCCargoGridComponent* Grid, const FString& En
         return INDEX_NONE;
     }
     const FTransform World = Grid->SlotToWorld(Slot, Item.SizeM);
-    FActorSpawnParameters Params;
-    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-    ASCCargoContainer* A = GetWorld()->SpawnActor<ASCCargoContainer>(ASCCargoContainer::StaticClass(), World, Params);
+    ASCCargoContainer* A = SCCargoSpawnBoxActor(GetWorld(), *Package, Entity, World);
     if (!A) return INDEX_NONE;
     A->BoxId = B.Id;
-    A->SetOccupancy(Item.SizeM * 100.0, B.Occupancy.Mass);
-    // The item's frame relative to the occupancy box centre: minus the local bounds' centre (SC axes -> lattice axes, cm).
-    const FSCItemOccupancy& O = B.Occupancy;
-    const FVector EntityOrigin = O.LocalBoundsMax != O.LocalBoundsMin ? -FSCCargoLattice::FromSC((O.LocalBoundsMin + O.LocalBoundsMax) / 2) * 100.0
-                                                                      : FVector(0, 0, -Item.SizeM.Z * 50.0);
-    if (O.LocalBoundsMax == O.LocalBoundsMin)
-        UE_LOG(LogSCCargo, Warning, TEXT("CARGO_BOX %s has no occupancy local bounds: its pivot is taken as the bottom centre"), *Entity);
-    A->SetVisuals(Package->Template.Get(), EntityOrigin);
     A->Lock(Grid, World);
     B.Actor = A;
     B.GridId = Grid->GridId;
@@ -319,4 +331,22 @@ void USCCargoSubsystem::SpawnDock(USCCargoGridComponent* Grid, int32 Drones)
     UE_LOG(LogSCCargo, Display, TEXT("CARGO_DOCK item=%d grid=%d origin=%s bays=%d drones=%d world=%s"), Item.Id, Grid->GridId, *Slot.Origin.ToString(),
            Dock->NumBays(), Drones, *World.GetLocation().ToString());
     ++Revision;
+}
+
+ASCCargoContainer* SCCargoSpawnBoxActor(UWorld* World, const FSCCargoBoxLibrary::FEntry& Package, const FString& Entity, const FTransform& Pose)
+{
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    ASCCargoContainer* A = World ? World->SpawnActor<ASCCargoContainer>(ASCCargoContainer::StaticClass(), Pose, Params) : nullptr;
+    if (!A) return nullptr;
+    const FSCItemOccupancy& O = Package.Occupancy;
+    const FVector SizeM = FSCCargoLattice::FromSC(O.Dimensions);
+    A->SetOccupancy(SizeM * 100.0, O.Mass);
+    // The item's frame relative to the occupancy box centre: minus the local bounds' centre (SC axes -> lattice axes, cm).
+    const FVector EntityOrigin = O.LocalBoundsMax != O.LocalBoundsMin ? -FSCCargoLattice::FromSC((O.LocalBoundsMin + O.LocalBoundsMax) / 2) * 100.0
+                                                                      : FVector(0, 0, -SizeM.Z * 50.0);
+    if (O.LocalBoundsMax == O.LocalBoundsMin)
+        UE_LOG(LogSCCargo, Warning, TEXT("CARGO_BOX %s has no occupancy local bounds: its pivot is taken as the bottom centre"), *Entity);
+    A->SetVisuals(Package.Template.Get(), EntityOrigin);
+    return A;
 }

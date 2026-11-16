@@ -19,6 +19,7 @@ bool FSCMobiGlasModel::IsActive(ESCCargoJobState S)
 void FSCMobiGlasModel::Reset()
 {
     Grids.Reset();
+    Beacons.Reset();
     Jobs.Reset();
     Drones.Reset();
     MovingBoxes.Reset();
@@ -69,9 +70,11 @@ void FSCMobiGlasModel::Refresh(float DeltaSeconds)
         bWasOpen = bOpen;
         NearbyRadiusM = Source->GetNearbyRadiusM();
         Grids = Source->GetGrids(Eye, NearbyRadiusM);
+        Beacons = Source->GetBeacons(Eye, NearbyRadiusM);
         if (!bOpen) Jobs = Source->GetJobs();
         TArray<int32> Ids;
         for (const FSCCargoGridView& G : Grids) Ids.Add(G.GridId);
+        for (const FSCCargoBeaconView& B : Beacons) Ids.Add(B.BeaconId); // location ids: never equal to a grid's
         Ids.Sort(); // distance order changes as the player walks; rebuild only when the set changes
         if (bChanged || Ids != SeenGridIds)
         {
@@ -110,6 +113,10 @@ const FSCCargoGridView* FSCMobiGlasModel::FindGrid(int32 GridId) const
 {
     return Grids.FindByPredicate([GridId](const FSCCargoGridView& G) { return G.GridId == GridId; });
 }
+const FSCCargoBeaconView* FSCMobiGlasModel::FindBeacon(int32 BeaconId) const
+{
+    return Beacons.FindByPredicate([BeaconId](const FSCCargoBeaconView& B) { return B.BeaconId == BeaconId; });
+}
 const FSCCargoJobView* FSCMobiGlasModel::FindJob(int32 JobId) const
 {
     return Jobs.FindByPredicate([JobId](const FSCCargoJobView& J) { return J.JobId == JobId; });
@@ -127,6 +134,7 @@ FText FSCMobiGlasModel::ShortGridName(const FSCCargoGridView& G) const
 FText FSCMobiGlasModel::ShortGridName(int32 GridId) const
 {
     const FSCCargoGridView* G = FindGrid(GridId);
+    if (const FSCCargoBeaconView* B = G ? nullptr : FindBeacon(GridId)) return B->Label; // a location id: a beacon's name
     return G ? ShortGridName(*G) : FText::Format(LOCTEXT("GridN", "Grid {0}"), GridId);
 }
 FText FSCMobiGlasModel::DescribeGrids(const TArray<int32>& GridIds) const
@@ -150,11 +158,12 @@ void FSCMobiGlasModel::SelectGrid(int32 GridId)
 
 void FSCMobiGlasModel::FixSelection()
 {
-    if (!FindGrid(SelectedGrid)) SelectGrid(Grids.IsEmpty() ? INDEX_NONE : Grids[0].GridId);
+    if (!FindGrid(SelectedGrid) && !FindBeacon(SelectedGrid)) SelectGrid(Grids.IsEmpty() ? INDEX_NONE : Grids[0].GridId);
     if (const FSCCargoGridView* G = FindGrid(SelectedGrid)) Layer = FMath::Clamp(Layer, 0, FMath::Max(0, G->Cells.Z - 1));
-    const TArray<FSCGridPick> Options = PickOptions();
+    const TArray<FSCGridPick> Options = PickOptions(), Sources = PickOptions(true);
     auto Valid = [&Options](const FSCGridPick& P) { return Options.Contains(P); };
-    if (!Valid(From) || !Valid(To))
+    if (From.IsBeacon() && !Sources.Contains(From)) From = FSCGridPick(); // the beacon is gone (its last box picked up)
+    if ((!From.IsBeacon() && !Valid(From)) || !Valid(To))
     {
         // Default: from the environment (elevator) to the vehicle as a whole.
         auto Pick = [&](ESCCargoGridKind Kind, const FSCGridPick& Avoid) {
@@ -167,12 +176,12 @@ void FSCMobiGlasModel::FixSelection()
             for (const FSCGridPick& P : Options) if (!(P == Avoid)) return P;
             return FSCGridPick();
         };
-        if (!Valid(From)) From = Pick(ESCCargoGridKind::Environment, To);
+        if (!From.IsBeacon() && !Valid(From)) From = Pick(ESCCargoGridKind::Environment, To);
         if (!Valid(To)) To = Pick(ESCCargoGridKind::Vehicle, From);
     }
 }
 
-TArray<FSCGridPick> FSCMobiGlasModel::PickOptions() const
+TArray<FSCGridPick> FSCMobiGlasModel::PickOptions(bool bAsSource) const
 {
     // Groups in order of their nearest grid; a group of several grids is offered whole, then each grid.
     TArray<FSCGridPick> Out;
@@ -185,11 +194,20 @@ TArray<FSCGridPick> FSCMobiGlasModel::PickOptions() const
         if (Ids.Num() > 1 && IsGroupMine(Group)) Out.Add(FSCGridPick{Group});
         for (int32 Id : Ids) Out.Add(FSCGridPick{NAME_None, Id});
     }
+    // Loose cargo (WP-K2): our beacons, nearest first, as a source only (nothing is set down at a beacon yet).
+    if (bAsSource)
+        for (const FSCCargoBeaconView& B : Beacons)
+            if (B.bMine && B.TotalSCU > 0) Out.Add(FSCGridPick{NAME_None, INDEX_NONE, B.BeaconId});
     return Out;
 }
 FText FSCMobiGlasModel::PickLabel(const FSCGridPick& P) const
 {
     if (!P.IsSet()) return LOCTEXT("PickNone", "Choose…");
+    if (P.IsBeacon())
+    {
+        const FSCCargoBeaconView* B = FindBeacon(P.BeaconId);
+        return B ? FText::Format(LOCTEXT("PickBeacon", "{0} · {1} {1}|plural(one=box,other=boxes)"), B->Label, B->Boxes.Num()) : LOCTEXT("PickBeaconGone", "Loose cargo (gone)");
+    }
     if (P.IsGroup())
     {
         const TArray<int32> Ids = Resolve(P);
@@ -201,7 +219,11 @@ FText FSCMobiGlasModel::PickLabel(const FSCGridPick& P) const
 TArray<int32> FSCMobiGlasModel::Resolve(const FSCGridPick& P) const
 {
     TArray<int32> Ids;
-    if (P.IsGroup())
+    if (P.IsBeacon())
+    {
+        if (FindBeacon(P.BeaconId)) Ids.Add(P.BeaconId); // a location id the planner takes as a source
+    }
+    else if (P.IsGroup())
     {
         for (const FSCCargoGridView& G : Grids) if (G.GroupKey == P.Group) Ids.Add(G.GridId);
     }
@@ -219,6 +241,7 @@ void FSCMobiGlasModel::SetFrom(const FSCGridPick& P)
 }
 void FSCMobiGlasModel::SetTo(const FSCGridPick& P)
 {
+    if (P.IsBeacon()) return; // loose cargo is a source only
     To = P;
     bPreviewDirty = true;
     SubmitError = FText();
@@ -244,10 +267,14 @@ void FSCMobiGlasModel::RefreshCommodities()
     // elevator, are not offered), aggregated from the grid views so it agrees with what the panels show.
     Commodities.Reset();
     for (int32 Id : Resolve(From))
-        if (const FSCCargoGridView* G = FindGrid(Id))
-            for (const FSCCargoBoxView& B : G->Boxes)
+    {
+        const FSCCargoGridView* G = FindGrid(Id);
+        const FSCCargoBeaconView* Beacon = G ? nullptr : FindBeacon(Id);
+        const TArray<FSCCargoBoxView>* Boxes = G ? &G->Boxes : Beacon ? &Beacon->Boxes : nullptr;
+        if (Boxes)
+            for (const FSCCargoBoxView& B : *Boxes)
             {
-                if (!B.bMine || B.State != ESCCargoBoxState::Stored) continue;
+                if (!B.bMine || (B.State != ESCCargoBoxState::Stored && B.State != ESCCargoBoxState::Loose)) continue;
                 FSCCargoCommodityView* C = Commodities.FindByPredicate([&B](const FSCCargoCommodityView& V) { return V.Commodity == B.Commodity; });
                 if (!C)
                 {
@@ -258,6 +285,7 @@ void FSCMobiGlasModel::RefreshCommodities()
                 C->TotalSCU += B.SCU;
                 C->BoxSizesSCU.AddUnique(B.SCU);
             }
+    }
     for (FSCCargoCommodityView& C : Commodities) C.BoxSizesSCU.Sort();
     Commodities.Sort([](const FSCCargoCommodityView& A, const FSCCargoCommodityView& B) { return A.TotalSCU > B.TotalSCU; });
     for (const FSCCargoCommodityView& C : Commodities) CommodityColour(C.Commodity);
@@ -374,6 +402,12 @@ TArray<int32> FSCMobiGlasModel::NeedExtending(const TArray<int32>& GridIds) cons
 FSCGridPick FSCMobiGlasModel::PickFor(const FString& Selector) const
 {
     const FString S = Selector.TrimStartAndEnd();
+    // Beacons (loose cargo, WP-K2): "beacon" / "loose" is the nearest of ours, else by id or text in a beacon's name.
+    const bool bBeacon = S.Equals(TEXT("beacon"), ESearchCase::IgnoreCase) || S.Equals(TEXT("loose"), ESearchCase::IgnoreCase);
+    for (const FSCCargoBeaconView& B : Beacons) // nearest first
+        if (bBeacon ? B.bMine : S.IsNumeric() ? FCString::Atoi(*S) == B.BeaconId : B.Label.ToString().Contains(S))
+            return FSCGridPick{NAME_None, INDEX_NONE, B.BeaconId};
+    if (bBeacon) return FSCGridPick();
     if (S.IsNumeric()) return FindGrid(FCString::Atoi(*S)) ? FSCGridPick{NAME_None, FCString::Atoi(*S)} : FSCGridPick();
     const bool bShip = S.Equals(TEXT("ship"), ESearchCase::IgnoreCase) || S.Equals(TEXT("vehicle"), ESearchCase::IgnoreCase);
     const bool bEnv = S.Equals(TEXT("elevator"), ESearchCase::IgnoreCase) || S.Equals(TEXT("environment"), ESearchCase::IgnoreCase);
