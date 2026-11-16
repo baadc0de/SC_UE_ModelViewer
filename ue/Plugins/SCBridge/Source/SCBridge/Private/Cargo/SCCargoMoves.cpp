@@ -206,7 +206,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
                 continue;
             }
             if (M.Step == EStep::Returning) D->JobId = Job.Id; // a claim let go: it flies home for this job again
-            if (M.Step == EStep::Returning && F.Points.Num() < 2)
+            if (M.Step == EStep::Returning && !F.HasRoute())
             {
                 // No free route home yet (a door, a box in the way): hover and plan again.
                 bAll = false;
@@ -224,7 +224,11 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
                     const FSCCargoDock* Dock = State->Docks.FindByPredicate([&](const FSCCargoDock& K) { return K.ItemId == D->DockItem; });
                     if (Dock && Dock->Actor.IsValid())
                     {
-                        D->Place(Dock->Actor->BayTransform(D->Bay));
+                        // The last snap into the bay is short; a long one is a drone put away from afar (it vanished).
+                        const FTransform Bay = Dock->Actor->BayTransform(D->Bay);
+                        UE_LOG(LogSCCargo, Display, TEXT("CARGO_DOCKED job=%d move=%d drone=%d snap_cm=%.0f"), Job.Id, M.MoveId, D->DroneId,
+                               FVector::Dist(D->GetActorLocation(), Bay.GetLocation()));
+                        D->Place(Bay);
                         D->AttachToActor(Dock->Actor.Get(), FAttachmentTransformRules::KeepWorldTransform);
                     }
                     D->State = ESCCargoDroneState::Docked;
@@ -456,7 +460,9 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             // bring it along (a box held up by something the sweeps did not see).
             // It waits as well while a drone of the team finds no room for its station there (it may clear: a load
             // passing, a door opening); if it does not, the same new route.
-            const bool bBoxBehind = M.bNoStation || (!M.bRigid && FVector::Dist(A->GetActorLocation(), Here) > Def.FullStrengthDistanceM * 100.0);
+            // A route planned because a drone had no station is flown even so: the load leads its drone out of the pocket
+            // it was caught in (the station frees as the load moves on; the guard still sweeps the load's way).
+            const bool bBoxBehind = (M.bNoStation && !M.bLeaveNoStation) || (!M.bRigid && FVector::Dist(A->GetActorLocation(), Here) > Def.FullStrengthDistanceM * 100.0);
             // And for a drone of the team held up behind something (it tucks in and comes after).
             const bool bBehind = bBoxBehind || M.bDroneBehind;
             M.Carry.StopAt = bYield || bBehind ? M.Carry.Dist : (M.bBlockedAhead ? M.ClearTo : -1.0);
@@ -487,7 +493,9 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             {
                 // Waited for and not coming (it rests against something): a route from where the box is.
                 M.NextRetry = Now + FMath::Min(1.0 + M.Replans, 5.0);
-                const bool bFound = Replan(A->GetActorLocation(), M.bNoStation ? TEXT("no_station") : TEXT("left_behind"));
+                const bool bNoStation = M.bNoStation;
+                const bool bFound = Replan(A->GetActorLocation(), bNoStation ? TEXT("no_station") : TEXT("left_behind"));
+                if (bFound && bNoStation) M.bLeaveNoStation = true;
                 M.ClearTo = 0;
                 M.bBlockedAhead = false;
                 if (!bFound && M.Replans > MaxReplans) { Fail(TEXT("no free route from where the load was held up")); return; }

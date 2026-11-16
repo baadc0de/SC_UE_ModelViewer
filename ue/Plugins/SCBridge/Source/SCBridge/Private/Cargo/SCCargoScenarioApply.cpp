@@ -174,11 +174,17 @@ void USCCargoSubsystem::ApplyScenario()
         for (const FSCCargoDockSpec& D : S.Docks) if (D.Grid.Kind == Kind) { bAny = true; bReady &= SelectGrid(D.Grid) != nullptr; }
         for (const FSCCargoStock& St : S.Stock) if (St.Grid.Kind == Kind) { bAny = true; bReady &= SelectGrid(St.Grid) != nullptr; }
         if (bAny && !bReady) continue;
-        // Stock goes only onto usable grids: a grid that extends is extended first (cargo rides only extended grids).
+        // Stock and docks go only onto usable grids: a grid that extends is extended first (cargo rides only extended
+        // grids, and a dock on a retracted plate would fold into the hull with its drones). The scenario stays
+        // applying (activity cargo_scenario) until they are out.
         bool bExtended = true;
         for (const FSCCargoStock& St : S.Stock)
             if (USCCargoGridComponent* G = St.Grid.Kind == Kind ? SelectGrid(St.Grid) : nullptr; G && !G->Movers.IsEmpty())
                 bExtended &= RequestAccess(G, true, GetWorld()->GetTimeSeconds());
+        // A dock grid with nothing to extend is usable once it is ready (Opening until then): waited for as well.
+        for (const FSCCargoDockSpec& D : S.Docks)
+            if (USCCargoGridComponent* G = D.Grid.Kind == Kind ? SelectGrid(D.Grid) : nullptr)
+                bExtended &= G->Movers.IsEmpty() ? G->Access == ESCCargoGridAccess::Open : RequestAccess(G, true, GetWorld()->GetTimeSeconds());
         if (!bExtended) continue;
         State->AppliedKinds |= Bit;
         int32 Boxes = 0, Docks = 0;
@@ -275,6 +281,14 @@ int32 USCCargoSubsystem::SpawnBox(USCCargoGridComponent* Grid, const FString& En
 void USCCargoSubsystem::SpawnDock(USCCargoGridComponent* Grid, int32 Drones)
 {
     if (!Grid) return;
+    // Only on an extended grid (a grid with nothing to extend is always so): retracted, the plate is folded into the
+    // hull, and the dock and its drones would be inside it. Once placed, the grid cannot retract (CanClose).
+    if (Grid->Access != ESCCargoGridAccess::Open)
+    {
+        UE_LOG(LogSCCargo, Warning, TEXT("CARGO_SCENARIO dock not placed on grid %d: the grid is not extended (access=%s)"), Grid->GridId,
+               *StaticEnum<ESCCargoGridAccess>()->GetNameStringByValue(int64(Grid->Access)));
+        return;
+    }
     // A one-cell module: it occupies its cell like any box (the lattice step is the minimum permitted item size).
     FSCCargoItem Item;
     Item.Id = State->NextItemId++;

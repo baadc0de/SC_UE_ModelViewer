@@ -47,6 +47,15 @@ struct SCBRIDGE_API FSCCargoTug
     /** Shares of a force applied at the box's centre for attach points at Along (m, along a line through the centre):
      *  they sum to 1 and leave no moment; the least-squares split (equal for points placed symmetrically). */
     static TArray<double> Shares(const TArray<double>& Along);
+    /** The way a drone's beam pulls (the side of the box its station is on): along ShareN, the force its share of the
+     *  load asks for (N); with under 1 N of it (zero g, the load at rest or drifting) towards the drone, the side it
+     *  holds (AttachToDrone); with neither, up. */
+    static FVector PullDirection(const FVector& ShareN, const FVector& AttachToDrone)
+    {
+        constexpr double MinForceN = 1.0; // next to nothing against a box's mass (viewer choice)
+        if (ShareN.SizeSquared() >= MinForceN * MinForceN) return ShareN.GetSafeNormal();
+        return AttachToDrone.GetSafeNormal(1e-6, FVector::UpVector);
+    }
 
     struct FStation
     {

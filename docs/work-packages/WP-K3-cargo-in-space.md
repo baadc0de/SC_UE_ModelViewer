@@ -54,10 +54,49 @@ cargo code paths that assumed a hangar.
   the claiming move actually flies it, and takes it home again if the claim is let go. The state log reports drones
   with `in_move`, and the anomaly `drone_orphaned` flags a drone out of its bay with no move.
 
+Found in an interactive `hull_a_space_fleet` session (two mobiGlas transfers into the second ship, the second from the
+placed row of three 8 SCU boxes) and reproduced off screen with the same transfers and the state log at 10 Hz:
+
+- **A drone waiting over its box was flown into.** Drone 8 hovered over box 22 while its beam locked on (Attaching).
+  Box 23 of the same job, lifted next to it, flew over it in transit and touched it: the centres passed 1.06 m apart,
+  about the box's half height plus the drone's. Only drones in free flight dodged loads. A drone in Attaching holds
+  nothing in the air (its box is at rest), so now it dodges too (`ASCCargoDrone::DodgesLoads`).
+- **A load stuck under a box that landed after its route was planned.** Box 22 stopped within the margin of box 21,
+  which had been placed on the slot plate of ship 1 beside its own slot. Three things together held it for the full
+  180 s transit limit:
+  - The replan's start rose out of the margin straight up, the hangar rule. Here box 21 was above, so the replan
+    started from within the margin each time and found nothing. Now `FSCCargoRoute::EscapeStart` tries ways out in
+    turn: up first only under gravity, then out along the destination plate's normal, back the way the load came,
+    then the other axes.
+  - In zero g with the load at rest, a drone's share of the force is next to nothing, and its station fell back to
+    "above the box": in box 21 here. Now `FSCCargoTug::PullDirection` keeps the side the drone holds when the force is
+    under 1 N. With gravity the weight always sets the side, so hangars are unchanged.
+  - A drone with no room for its station holds its route, and the replan then waited for that station again. The
+    load could not move, so the station could never free. Now a route planned because a drone had no station is
+    flown even so (`bLeaveNoStation`) until every drone has its station again. The guard still sweeps the load's way.
+
+Two more found by the owner in testing (they apply in hangars as much as in space):
+
+- **Drones vanished when their job ended.** A drone sent home whose home route was still being searched (finished
+  the next frame) was given a one-point flight meaning "hover, plan again". A one-point flight has a length of zero:
+  it counted as arrived at once, and the drone was put into its bay from wherever it was. Seen as drone 7 jumping 30 m
+  from Hull A #1 to its dock on another ship (`CARGO_MOVE … step=Returning` then `step=Done` one frame later). Now the
+  flight stays unstarted (`FSCCargoFlight::HasRoute` is false), so the drone hovers where it is and plans again.
+- **Docks were placed on retracted plates.** The scenario extended stock grids before placing boxes but not dock
+  grids: the Hull A dock went onto "cargoplate top right" while it was still Closed, inside the hull. Now dock grids
+  are extended first like stock grids, the scenario stays applying until they are out, and `SpawnDock` refuses a grid
+  that is not extended (warning). A grid that holds a dock already cannot retract: `CanClose` refuses it ("holds the
+  drone dock") for jobs, the console and the RPC.
+
 ## Tests
 
 - Planner (automation): `SCBridge.Cargo.ZeroGravityTeam` (team size at g = 0: one drone for any mass the beam can
   hold, volume rules unchanged, no drones without lift force).
+- Flight and tug (automation):
+  - `SCBridge.Cargo.EscapeStart`: ways out of a box margin, with gravity or without, with a box above or below.
+  - `SCBridge.Cargo.DodgeLoads`: the drone states that dodge loads, Attaching included.
+  - `SCBridge.Cargo.TugPull`: the beam's side by force, and the held side when there is next to none.
+  - `SCBridge.Cargo.FlightProfile`: a one-point flight has a route (arrived); an unstarted flight has none.
 - Exploratory (RPC): `explore.ps1 -Scenario hull_a_space`: ships spawned floating at random places, loose spawns in
   3D, transfers from beacons, cancels and drones hit in flight; asteroids are never despawned.
 
@@ -91,11 +130,41 @@ cargo code paths that assumed a hangar.
 
 Known limits:
 
-- In zero g a drone can touch its own load (up to 5 cm) while placing it on a Hull A underside plate. This was seen 3
-  times in about 30 space moves and never in a hangar. With no weight the beam does not keep the box away from the
-  drone, and the overlap check counts the drone's own load.
+- In zero g a drone can touch its own load (up to 6 cm) while placing it on an upright Hull A plate.
+  - It was seen 3 times in about 30 space moves, and in the fleet reproduction: drone 5 with box 7, rolled 89° for
+    the plate, on its descent.
+  - The box is held rigidly there, so the beam spring plays no part.
+  - The likely cause is the 1° short of upright: about 4 cm across a 2.5 m face, near the drone's side of the box.
+  - It has never been seen in a hangar. The overlap check counts the drone's own load.
+- A beam only pulls. In zero g a drone could also hold the box from the far side and push, but the attach point is
+  always on the box's top face. With no room on the pulling side, the route waits for a station, or flies on as above.
+- A drone holding a box can graze another team's load (up to 13 cm) when two loads stall or place side by side at a
+  ship's side plates. Seen twice in space runs (seeds 31 and 33). The right of way keeps flying loads apart, but not
+  a load being placed beside a team that waits.
+- Two drones of one dock can come within 1.4 m near the bays when both return at once. Seen once (hull_a_hangar
+  seed 32), now that drones fly the whole way home instead of jumping into their bays. Of two docking, the lower id
+  goes first, but the other turns Docking within 3 m of its bay while the first is still in the corridor.
 - Loose cargo does not drift (see Behaviour 4).
 - The sun's direction is fixed (no star from the archive).
+
+### Verification of the follow-up fixes (2026-11-16)
+
+- `Automation RunTests SCBridge.Cargo`: 48 / 48 Success (new: `EscapeStart`, `DodgeLoads`, `TugPull`; `FlightProfile`
+  extended).
+- Off-screen reproduction of the owner's session: fleet scenario, ship 0 → ship 1 32 SCU, then the placed row →
+  ship 1 24 SCU.
+  - Before: drone 8 flown into, and one move stuck for the 180 s transit limit (job "Partly done").
+  - After: both jobs done, 3 / 3 moves each, in 57 s and 89 s, `overlaps=0`.
+  - Bay snaps: at most 25 cm, against about 30 m in the owner's log.
+- Explorations with HitInFlight 0.5: failures=[], anomalies=[], crash=false in all 10 runs.
+
+  | scenario | seeds | steps | overlaps (kind) |
+  |---|---|---|---|
+  | hull_a_space | 31, 32 | 60 | 4 (a load placed beside a waiting team), 0 |
+  | hull_a_space_fleet | 31, 32, 33 | 40 | 0, 0, 3 (two own load, one beside another team's load) |
+  | hull_a_hangar | 31, 32 | 40 | 0, 2 (two drones docking at one dock) |
+  | c2_hangar | 31, 32 | 40 | 0, 0 |
+  | hull_a_multi | 31 | 40 | 0 |
 
 ## Interactive scenario
 

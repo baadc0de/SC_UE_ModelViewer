@@ -78,6 +78,12 @@ struct SCBRIDGE_API FSCCargoRoute
      *  touching anything (from 0, 10, 25, 50, 100, 200 cm; 200 = at least that), and OutHits: samples overlapping, plus
      *  consecutive samples whose sweep hits. Needs Query.BlockedBy and Query.Free. */
     static double MinClearance(const TArray<FVector>& Samples, const FSCCargoRouteQuery& Query, int32& OutHits, double StepCm = 100);
+    /** A start out of the blocked space a load stopped in (a box placed since its route was planned): the nearest free
+     *  point along each way out in turn, at most MaxCm away. Under gravity up first (the hangar convention); then out
+     *  along OutNormal (the destination plate's normal), back the way it came (Back), then the remaining axes. True with
+     *  OutStart = From when From is free; false (OutStart = From) when no way out is free within reach. */
+    static bool EscapeStart(const FVector& From, const FSCCargoRouteQuery& Query, bool bGravity, const FVector& OutNormal, const FVector& Back,
+                            FVector& OutStart, double MaxCm = 300, double StepCm = 25);
 };
 
 /** The clearance of a route, a sample at a time (FSCCargoRoute::MinClearance; a search measures its route so, within its
@@ -180,6 +186,9 @@ struct SCBRIDGE_API FSCCargoFlight
     /** Advance by Dt; true once at the end and at rest. */
     bool Step(double Dt);
     bool Done() const { return Points.Num() < 2 || (Dist >= Length() - 0.5 && Speed < 1); }
+    /** Started on a route (even one of zero length: a one-point Start is a flight that has arrived); an unstarted flight
+     *  is "no route yet": its drone hovers where it is and plans again. */
+    bool HasRoute() const { return Points.Num() >= 2; }
     double Length() const { return S.IsEmpty() ? 0 : S.Last(); }
     FVector Position() const { return At(Dist); }
     FVector Tangent() const;

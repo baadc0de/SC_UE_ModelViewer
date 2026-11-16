@@ -174,11 +174,12 @@ void ASCCargoDrone::Step(const FVector& Want, const FRotator& Rotation, float Dt
     const double MaxStep = MaxSpeed > 0 ? 2.0 * MaxSpeed * Dt : TNumericLimits<double>::Max();
     FVector To = From + (Want - From).GetClampedToMaxSize(MaxStep);
     const FVector Asked = To;
-    // The loads other teams fly are not swept against the drones; a drone flying alone steps out of their way as
-    // soon as it takes it to. (A team's drones stay with their box: loads keep apart by their right of way, which
-    // reaches as far as the drones over them.)
+    // The loads other teams fly are not swept against the drones; a drone holding no load steps out of their way as
+    // soon as it takes it to, also one hovering over its box at rest while its beams lock on (a load planned before it
+    // came to its station may pass there). (A team's drones stay with their box in the air: loads keep apart by their
+    // right of way, which reaches as far as the drones over them.)
     TArray<FSCCargoDroneSteer::FLoad, TInlineAllocator<8>> Loads;
-    if (State == ESCCargoDroneState::Launching || State == ESCCargoDroneState::ToPickup || State == ESCCargoDroneState::Returning || State == ESCCargoDroneState::Docking) Cargo->DroneLoads(this, Loads);
+    if (DodgesLoads(State)) Cargo->DroneLoads(this, Loads);
     if (!Loads.IsEmpty())
     {
         // With half the clearance a route keeps around its hull: a load in the air sways.

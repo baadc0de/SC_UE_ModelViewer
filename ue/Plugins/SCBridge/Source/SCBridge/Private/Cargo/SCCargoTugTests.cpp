@@ -764,4 +764,19 @@ bool FSCCargoDroneApartTest::RunTest(const FString&)
     TestTrue(TEXT("Nothing to fly beside: no route"), FSCCargoDroneSteer::Beside(TArray<FVector>{From}, From, To, Keep, Ramp).IsEmpty());
     return true;
 }
+
+// Which way a drone's beam pulls (the side of the box its station is on): along the force its share of the load asks
+// for; with next to none (zero g, the load at rest) on the side the drone already holds, so a load at rest under a
+// plate in space keeps a station it has instead of one above it, in the plate. (WP-K3)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoTugPullTest, "SCBridge.Cargo.TugPull", TugTestFlags)
+bool FSCCargoTugPullTest::RunTest(const FString&)
+{
+    const FVector Side(0, -300, 0);
+    TestTrue(TEXT("weight: up, wherever the drone is"), FSCCargoTug::PullDirection(FVector(0, 0, 75000), Side).Equals(FVector::UpVector, 1e-6));
+    TestTrue(TEXT("route acceleration: along it"), FSCCargoTug::PullDirection(FVector(500, 0, 0), Side).Equals(FVector::ForwardVector, 1e-6));
+    TestTrue(TEXT("zero g at rest: the side it holds"), FSCCargoTug::PullDirection(FVector::ZeroVector, Side).Equals(FVector(0, -1, 0), 1e-6));
+    TestTrue(TEXT("zero g, a drift's drag (under 1 N): the side it holds"), FSCCargoTug::PullDirection(FVector(0, 0, 0.2), Side).Equals(FVector(0, -1, 0), 1e-6));
+    TestTrue(TEXT("nothing to go by: up"), FSCCargoTug::PullDirection(FVector::ZeroVector, FVector::ZeroVector).Equals(FVector::UpVector, 1e-6));
+    return true;
+}
 #endif

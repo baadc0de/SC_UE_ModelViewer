@@ -69,6 +69,13 @@ public:
     bool bCanLeave = true;
     double LeaveChecked = -1000;
     bool InDockWay() const { return State == ESCCargoDroneState::Docked || State == ESCCargoDroneState::Launching || State == ESCCargoDroneState::Docking; }
+    /** The states in which a drone holds no load in the air and steps out of the way of loads other teams fly: in
+     *  flight on its own, and hovering over its box while the beams lock on (Attaching: the box is still at rest). */
+    static bool DodgesLoads(ESCCargoDroneState S)
+    {
+        return S == ESCCargoDroneState::Launching || S == ESCCargoDroneState::ToPickup || S == ESCCargoDroneState::Attaching ||
+               S == ESCCargoDroneState::Returning || S == ESCCargoDroneState::Docking;
+    }
     /** The way it came: its places every TrailStepCm, the last TrailPoints of them (not in its dock). From a place
      *  it cannot plan a route out of (a pocket beside a box it has set down), it goes back along this. */
     static constexpr double TrailStepCm = 50;
