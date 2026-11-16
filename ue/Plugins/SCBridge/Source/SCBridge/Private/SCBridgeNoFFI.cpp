@@ -44,6 +44,31 @@ enum sc_status sc_datacore_record(struct sc_handle*, const char*, char** out_jso
     if (out_json) *out_json = nullptr;
     return SC_STATUS_UNSUPPORTED;
 }
+enum sc_status sc_p4k_read(struct sc_handle*, const char*, struct sc_blob* out_blob)
+{
+    if (out_blob) *out_blob = sc_blob{nullptr, 0};
+    return SC_STATUS_UNSUPPORTED;
+}
+enum sc_status sc_p4k_read_dds(struct sc_handle*, const char*, uint32_t, struct sc_blob* out_blob)
+{
+    if (out_blob) *out_blob = sc_blob{nullptr, 0};
+    return SC_STATUS_UNSUPPORTED;
+}
+enum sc_status sc_p4k_read_xml(struct sc_handle*, const char*, char** out_text)
+{
+    if (out_text) *out_text = nullptr;
+    return SC_STATUS_UNSUPPORTED;
+}
+enum sc_status sc_particle_effect(struct sc_handle*, const char*, char** out_json)
+{
+    if (out_json) *out_json = nullptr;
+    return SC_STATUS_UNSUPPORTED;
+}
+enum sc_status sc_material_effect(struct sc_handle*, const char*, char** out_json)
+{
+    if (out_json) *out_json = nullptr;
+    return SC_STATUS_UNSUPPORTED;
+}
 enum sc_status sc_cache_stats(struct sc_handle*, struct sc_cache_info* out)
 {
     if (out) FMemory::Memzero(*out);

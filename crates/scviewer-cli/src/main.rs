@@ -32,6 +32,18 @@ enum Command {
     Record {
         name_or_guid: String,
     },
+    /// An archive file as text XML (binary CryXML converted): `Data/Libs/Particles/Gadgets/tractor_beam.xml`.
+    P4kXml {
+        path: String,
+    },
+    /// A particle effect with its emitters as JSON: `<GUID>|<library>.<effect>` (GUID optional).
+    Effect {
+        reference: String,
+    },
+    /// A MaterialEffects FXLib entry as JSON: `<FXLib>:<effect>`, e.g. `sc_ships_surface_impacts:Metal_Small`.
+    MaterialEffect {
+        library_and_effect: String,
+    },
     Search {
         q: String,
         #[arg(long, default_value_t = 20)]
@@ -205,6 +217,13 @@ pub(crate) fn main() -> Result<()> {
         }
         Command::Record { name_or_guid } => {
             println!("{}", serde_json::to_string_pretty(&session.datacore_record(&name_or_guid)?)?);
+        }
+        Command::P4kXml { path } => print!("{}", session.p4k_read_xml(&path)?),
+        Command::Effect { reference } => {
+            println!("{}", serde_json::to_string_pretty(&session.particle_effect(&reference)?)?);
+        }
+        Command::MaterialEffect { library_and_effect } => {
+            println!("{}", serde_json::to_string_pretty(&session.material_effect(&library_and_effect)?)?);
         }
         Command::Search { q, limit } => {
             for hit in session.search_entities(&q, limit) {

@@ -196,3 +196,72 @@ fn live_cache_stats_recovers_broken_manifest_and_handles_missing_manifest() {
         sc_close(h);
     }
 }
+
+#[test]
+fn archive_and_effect_calls_reject_invalid_arguments_without_allocating() {
+    unsafe {
+        let mut blob = sc_blob::default();
+        assert_eq!(sc_p4k_read(ptr::null_mut(), c"Data/x.xml".as_ptr(), &mut blob), sc_status::SC_STATUS_INVALID_ARGUMENT);
+        assert!(blob.data.is_null() && blob.len == 0);
+        assert_eq!(sc_p4k_read(ptr::null_mut(), c"Data/x.xml".as_ptr(), ptr::null_mut()), sc_status::SC_STATUS_INVALID_ARGUMENT);
+        assert_eq!(sc_p4k_read_dds(ptr::null_mut(), c"Data/x.dds".as_ptr(), 0, &mut blob), sc_status::SC_STATUS_INVALID_ARGUMENT);
+        assert!(blob.data.is_null() && blob.len == 0);
+        assert_eq!(sc_p4k_read_dds(ptr::null_mut(), c"Data/x.dds".as_ptr(), 0, ptr::null_mut()), sc_status::SC_STATUS_INVALID_ARGUMENT);
+        type JsonCall = unsafe extern "C" fn(*mut sc_handle, *const c_char, *mut *mut c_char) -> sc_status;
+        let calls: [JsonCall; 3] = [sc_p4k_read_xml, sc_particle_effect, sc_material_effect];
+        for call in calls {
+            let mut out = ptr::null_mut();
+            assert_eq!(call(ptr::null_mut(), c"x".as_ptr(), &mut out), sc_status::SC_STATUS_INVALID_ARGUMENT);
+            assert!(out.is_null());
+            assert_eq!(call(ptr::null_mut(), c"x".as_ptr(), ptr::null_mut()), sc_status::SC_STATUS_INVALID_ARGUMENT);
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs the installed Data.p4k"]
+fn live_archive_reads_and_effects() {
+    let found = starbreaker_common::discover::find_p4k().expect("Data.p4k");
+    let path = CString::new(found.path.to_str().unwrap()).unwrap();
+    unsafe {
+        let mut h = ptr::null_mut();
+        assert_eq!(sc_open(path.as_ptr(), ptr::null(), &mut h), sc_status::SC_STATUS_OK);
+        let library = c"data/libs/particles/gadgets/TRACTOR_BEAM.xml";
+        let mut blob = sc_blob::default();
+        assert_eq!(sc_p4k_read(h, library.as_ptr(), &mut blob), sc_status::SC_STATUS_OK);
+        assert!(std::slice::from_raw_parts(blob.data, blob.len).starts_with(b"CryXmlB\0"));
+        sc_free_blob(&mut blob);
+        assert_eq!(sc_p4k_read_dds(h, c"data/textures/vfx/glows/GLOW4_ALPHA.dds".as_ptr(), 0, &mut blob), sc_status::SC_STATUS_OK);
+        let mut info = std::mem::zeroed::<sc_dds_info>();
+        assert_eq!(sc_dds_prepare(blob.data, blob.len, false, &mut info), sc_status::SC_STATUS_OK, "a package DDS");
+        assert!(info.width > 0 && info.mip_count > 1);
+        sc_free_blob(&mut blob);
+        let text = |call: unsafe extern "C" fn(*mut sc_handle, *const c_char, *mut *mut c_char) -> sc_status, arg: &CStr| {
+            let mut out = ptr::null_mut();
+            let status = call(h, arg.as_ptr(), &mut out);
+            if status != sc_status::SC_STATUS_OK {
+                assert!(out.is_null());
+                return Err(CStr::from_ptr(sc_last_error(h)).to_string_lossy().into_owned());
+            }
+            let value = CStr::from_ptr(out).to_str().unwrap().to_owned();
+            sc_free_string(out);
+            Ok(value)
+        };
+        let xml = text(sc_p4k_read_xml, library).unwrap();
+        assert!(xml.starts_with("<ParticleLibrary"), "{}", &xml[..60]);
+        let missing = text(sc_p4k_read_xml, c"Data/Libs/Particles/none.xml").unwrap_err();
+        assert!(missing.contains("none.xml"), "{missing}");
+
+        let effect: serde_json::Value = serde_json::from_str(
+            &text(sc_particle_effect, c"2c211ca4-c915-b0c7-5d0e-58fe5c503a16|Gadgets/tractor_beam.fps.beam_only").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(effect["guid"], "2c211ca4-c915-b0c7-5d0e-58fe5c503a16");
+        assert!(effect["emitters"].as_array().unwrap().iter().any(|e| e["path"] == "fps.beam_only.beam_core"));
+        let material: serde_json::Value =
+            serde_json::from_str(&text(sc_material_effect, c"sc_ships_surface_impacts:Metal_Small").unwrap()).unwrap();
+        assert!(material["particles"][0]["reference"].as_str().unwrap().ends_with("Metal.small_impact_gpu"));
+        assert!(text(sc_particle_effect, c"Gadgets/tractor_beam.no_such_effect").is_err());
+        sc_close(h);
+    }
+}

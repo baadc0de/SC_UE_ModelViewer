@@ -1,4 +1,5 @@
-//! UI-independent StarBreaker sessions, geometry browsing, clip catalogues, lights, DataCore records and exports.
+//! UI-independent StarBreaker sessions, geometry browsing, clip catalogues, lights, DataCore records, archive
+//! files, particle effects and exports.
 //!
 //! Decomposed mesh materials retain `<mtl stem>_<submaterial name>_<NN>`:
 //! `NN` is the zero-based sidecar `submaterials[]` index and the GLB primitive's
@@ -29,6 +30,10 @@ pub use lights::{
 mod index;
 mod options;
 mod package;
+mod archive;
+pub mod particle_params;
+mod particles;
+pub use particles::{EffectRef, SYSTEM_DEFAULTS, split_reference};
 
 use anyhow::{Context, Result, anyhow, ensure};
 pub use cache::{

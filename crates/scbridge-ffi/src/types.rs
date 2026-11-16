@@ -97,7 +97,7 @@ impl sc_options {
     }
 }
 
-/// Owned uncompressed tar. Do not change data/len; free exactly once via sc_free_blob.
+/// Owned bytes: an uncompressed tar, or an archive file (sc_p4k_read). Do not change data/len; free exactly once via sc_free_blob.
 #[repr(C)]
 pub struct sc_blob {
     pub data: *mut u8,

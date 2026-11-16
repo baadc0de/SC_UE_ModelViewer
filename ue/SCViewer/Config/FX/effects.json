@@ -1,0 +1,14 @@
+{
+  "_comment": "WP-K4c: the game effects the SCFxBuild commandlet rebuilds as Niagara systems under /Game/SC/FX (ue/Plugins/SCBridge/Source/SCBridgeFx). effects: particle effect references <GUID>|<library>.<effect> (GUIDs from Data/Libs/Particles/<library>.xml); Gadgets/tractor_beam.fps.muzzle_1st has every emitter disabled in LIVE 4.10.2, the multitool tractor record fires tractorbeam/fps_tractorbeam.FPS_Tractor_Beam.Muzzleflash_1st (a light). material_effects: MaterialEffects FXLib entries <lib>:<effect>; each builds the particle effects it plays. unlit_diffuse_scene_units: the viewer's stand-in for scene lighting on particles without EmissiveLighting (the masters are unlit): the luminance, in game scene units (FSCStarEngine::SceneUnitNits cd/m2 each), of a white DiffuseLighting=1 particle. A viewer approximation, not game data.",
+  "effects": [
+    "2c211ca4-c915-b0c7-5d0e-58fe5c503a16|Gadgets/tractor_beam.fps.beam_only",
+    "9427f5a2-8ef7-4aa5-26df-a3716439b0a2|Gadgets/tractor_beam.fps.impact",
+    "daca2f3f-a16d-24d6-bdad-91eea65510f8|Gadgets/tractor_beam.fps.muzzle_1st",
+    "d45268a8-dcf4-8bd7-6b89-46456c08932f|tractorbeam/fps_tractorbeam.FPS_Tractor_Beam.Muzzleflash_1st"
+  ],
+  "material_effects": [
+    "sc_ships_surface_impacts:Metal_Small",
+    "sc_ships_surface_impacts:Metal_Large"
+  ],
+  "unlit_diffuse_scene_units": 1.0
+}

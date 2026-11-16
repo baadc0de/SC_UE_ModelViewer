@@ -154,6 +154,124 @@ pub unsafe extern "C" fn sc_datacore_record(
     }
 }
 
+/// Hand owned bytes to C as a blob (freed with sc_free_blob).
+fn into_blob(out: &mut sc_blob, bytes: Vec<u8>) {
+    let mut bytes = bytes.into_boxed_slice();
+    *out = sc_blob {
+        data: bytes.as_mut_ptr(),
+        len: bytes.len(),
+    };
+    std::mem::forget(bytes);
+}
+
+/// Read the archive file at path (e.g. `Data/Libs/Particles/Gadgets/tractor_beam.xml`; either slash style,
+/// case-insensitive) into an owned blob: the raw bytes as stored, so binary CryXML stays binary.
+/// A missing file is SC_STATUS_ERROR. On ordinary failure out_blob is empty. Free with sc_free_blob.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_p4k_read(
+    h: *mut sc_handle,
+    path: *const c_char,
+    out_blob: *mut sc_blob,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            let out = output(out_blob, sc_blob::default())?;
+            let path = string(path)?;
+            into_blob(out, handle(h)?.session.p4k_read(path)?);
+            Ok(())
+        })
+    }
+}
+
+/// Read an archive texture (e.g. the `texture` of a particle emitter, `Data/Textures/VFX/Glows/glow4_alpha.dds`;
+/// either slash style, case-insensitive) as one DDS file: the split mips (`.dds.1` …) merged, from mip `mip` down,
+/// laid out like an exported package's textures, so sc_dds_prepare accepts it. A missing or non-DDS file is
+/// SC_STATUS_ERROR. On ordinary failure out_blob is empty. Free with sc_free_blob.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_p4k_read_dds(
+    h: *mut sc_handle,
+    path: *const c_char,
+    mip: u32,
+    out_blob: *mut sc_blob,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            let out = output(out_blob, sc_blob::default())?;
+            let path = string(path)?;
+            into_blob(out, handle(h)?.session.p4k_read_dds(path, mip)?);
+            Ok(())
+        })
+    }
+}
+
+/// Read the archive file at path as UTF-8 text XML: binary CryXML (`CryXmlB`) is converted, element text kept;
+/// plain XML passes through unchanged. A file that is neither CryXML nor UTF-8, or is missing, is
+/// SC_STATUS_ERROR. Owned string (free with sc_free_string); on ordinary failure *out_text is NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_p4k_read_xml(
+    h: *mut sc_handle,
+    path: *const c_char,
+    out_text: *mut *mut c_char,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            let out = output(out_text, ptr::null_mut())?;
+            let path = string(path)?;
+            let text = handle(h)?.session.p4k_read_xml(path)?;
+            *out = cstring(&text).into_raw();
+            Ok(())
+        })
+    }
+}
+
+/// Return a particle effect as a JSON object. reference is `<GUID>|<library>.<effect>` (GUID optional), e.g.
+/// `2c211ca4-c915-b0c7-5d0e-58fe5c503a16|Gadgets/tractor_beam.fps.beam_only`: the library is
+/// `Data/Libs/Particles/<library>.xml`, split at the first '.' after the last '/'. The GUID must be the effect's
+/// and wins when the name names another effect. Shape: {reference, library, library_path, effect, guid,
+/// matched_by, emitters: [{path, name, parent (index, -1 first), guid, enabled, inheritance, system, spawn,
+/// lifetime, size, aspect, color, alpha, speed, emit_angle_deg, focus_angle_deg, gravity_scale, air_resistance,
+/// turbulence, position_offset_m, random_offset_m, facing, orient_to_velocity, blend, emissive_lighting,
+/// texture (archive .dds path or null), material, geometry, tiles, anim, light, flare, spline,
+/// raw (each Params attribute as written), inherited, defaulted}]}. Inheritance="Parent" emitters take omitted
+/// params from their parent; the rest from system defaults inferred from the game data. Curves are [t, v...] keys
+/// over particle age (age_curve) or emitter strength (strength_curve). See scviewer-core `particles` docs.
+/// No such library or effect is SC_STATUS_ERROR.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_particle_effect(
+    h: *mut sc_handle,
+    reference: *const c_char,
+    out_json: *mut *mut c_char,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            json(out_json, || {
+                Ok(handle(h)?.session.particle_effect(string(reference)?)?)
+            })
+        })
+    }
+}
+
+/// Return a MaterialEffects FXLib entry as a JSON object. library_and_effect is `<FXLib>:<effect>`, e.g.
+/// `sc_ships_surface_impacts:Metal_Small` (`Data/Libs/MaterialEffects/FXLibs/<FXLib>.xml`, `<Effect name>`,
+/// case-insensitive). Shape: {library, library_path, effect, attributes, particles: [{reference (for
+/// sc_particle_effect), attributes (the <Particle> and <Name> attributes, e.g. minscale), direction, random_group}],
+/// audio: [{trigger, ..., random_group}], random_groups}. Entries of one <RandEffect> share a random_group (one of
+/// them plays); others have null. No such library or effect is SC_STATUS_ERROR.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_material_effect(
+    h: *mut sc_handle,
+    library_and_effect: *const c_char,
+    out_json: *mut *mut c_char,
+) -> sc_status {
+    unsafe {
+        run(h, || {
+            json(out_json, || {
+                Ok(handle(h)?.session.material_effect(string(library_and_effect)?)?)
+            })
+        })
+    }
+}
+
 /// Read core cache statistics; broken manifests recover under the cache lock.
 /// Missing/disabled cache reports zero bytes/entries; last_hit is unchanged.
 #[unsafe(no_mangle)]

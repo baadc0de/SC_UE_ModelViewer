@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 starbreaker-dds = { path = "../../vendor/StarBreaker/crates/starbreaker-dds" }
+starbreaker-cryxml = { path = "../../vendor/StarBreaker/crates/starbreaker-cryxml" }
+roxmltree = "0.21"
 bcdec_rs = "0.2"
 starbreaker-3d.workspace = true
 starbreaker-common.workspace = true
