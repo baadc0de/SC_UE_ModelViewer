@@ -80,6 +80,29 @@ struct SCBRIDGE_API FSCCargoScenario
     TArray<FSCCargoDockSpec> Docks;
     FSCCargoDroneDefinition Drone;
 
+    /** Space (WP-K3): no environment (the ships float where they are placed), no gravity, no atmosphere. */
+    bool bSpace = false;
+    /** Where each vehicle is (index as VehicleOwners, metres and degrees); unset: placed on free floor beside the first. */
+    TArray<TOptional<FTransform>> VehiclePoses;
+    /** Other entities placed as they are (asteroids around the ships in space): obstacles to the drones and loads. */
+    struct FObstacle
+    {
+        FString Entity;
+        FTransform Pose;
+    };
+    TArray<FObstacle> Obstacles;
+    /** Stock put down loose (WP-K2): at a pose, or at free reachable spots drawn from the scenario's seed. */
+    struct FLoose
+    {
+        FString Entity;
+        int32 Count = 1;
+        FName Commodity, Owner;
+        FText CommodityLabel;
+        TOptional<FTransform> At;
+    };
+    TArray<FLoose> Loose;
+    int32 Seed = 1;
+
     bool IsSet() const { return !Path.IsEmpty(); }
     /** Distinct box entities of the stock. */
     TArray<FString> Entities() const;

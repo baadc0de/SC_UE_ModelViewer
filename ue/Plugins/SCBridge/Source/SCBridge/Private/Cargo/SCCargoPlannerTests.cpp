@@ -237,4 +237,16 @@ bool FSCCargoStackedTest::RunTest(const FString&)
     if (P.Moves.Num() == 2) TestEqual(TEXT("top box first"), P.Moves[0].BoxId, 2);
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoZeroGravityTeamTest, "SCBridge.Cargo.ZeroGravityTeam", CargoTestFlags)
+bool FSCCargoZeroGravityTeamTest::RunTest(const FString&)
+{
+    // Space (WP-K3): nothing to hold up; a team is as large as the acceleration it must keep needs.
+    TestEqual(TEXT("weightless: one beam holds any box"), FSCCargoPlanner::DronesFor(30000, 0, 10000), 1);
+    TestEqual(TEXT("the reserve still sizes the team: 2 x 10 kN on 30 t + 2 x 100 kg keeps 0.66 m/s^2, 3 keep 0.99, 4 keep 1.31"),
+              FSCCargoPlanner::DronesFor(30000, 0, 10000, 100, 1.0, 8), 4);
+    TestEqual(TEXT("under gravity the same box needs more"), FSCCargoPlanner::DronesFor(30000, 10, 100000, 100, 1.0, 8), 4);
+    TestEqual(TEXT("negative gravity is no input"), FSCCargoPlanner::DronesFor(30000, -1, 10000, 100, 1.0, 8), 0);
+    return true;
+}
 #endif

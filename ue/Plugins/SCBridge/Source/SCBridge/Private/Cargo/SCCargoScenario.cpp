@@ -25,6 +25,16 @@ FObj Child(const FObj& O, const TCHAR* Key)
     const FObj* C;
     return O && O->TryGetObjectField(Key, C) ? *C : nullptr;
 }
+/** "at": [x, y, z] metres, with "rot": [pitch, yaw, roll] or "yaw" degrees; unset without "at". */
+TOptional<FTransform> Pose(const FObj& O)
+{
+    const TArray<TSharedPtr<FJsonValue>>* At;
+    if (!O || !O->TryGetArrayField(TEXT("at"), At) || At->Num() < 3) return {};
+    FRotator R(0, Num(O, TEXT("yaw")), 0);
+    const TArray<TSharedPtr<FJsonValue>>* Rot;
+    if (O->TryGetArrayField(TEXT("rot"), Rot) && Rot->Num() >= 3) R = FRotator((*Rot)[0]->AsNumber(), (*Rot)[1]->AsNumber(), (*Rot)[2]->AsNumber());
+    return FTransform(R, FVector((*At)[0]->AsNumber(), (*At)[1]->AsNumber(), (*At)[2]->AsNumber()) * 100.0);
+}
 bool Selector(const FObj& O, FSCCargoGridSelector& Out, FString& Error)
 {
     if (!O) { Error = TEXT("grid selector missing"); return false; }
@@ -44,6 +54,7 @@ TArray<FString> FSCCargoScenario::Entities() const
     TArray<FString> Out;
     for (const FSCCargoStock& S : Stock)
         for (const FSCCargoStockEntry& E : S.Boxes) Out.AddUnique(E.Entity);
+    for (const FLoose& L : Loose) Out.AddUnique(L.Entity);
     return Out;
 }
 
@@ -110,12 +121,39 @@ bool FSCCargoScenario::Parse(const FString& Json, FSCCargoScenario& Out, FString
     if (Root->TryGetArrayField(TEXT("owners"), OwnerList))
         for (const auto& V : *OwnerList)
             Out.Owners.Add({FName(*Str(V->AsObject(), TEXT("id"))), FText::FromString(Str(V->AsObject(), TEXT("label")))});
+    // Space (WP-K3): no environment, no gravity, vacuum (unless the file says otherwise).
+    Root->TryGetBoolField(TEXT("space"), Out.bSpace);
+    if (Out.bSpace && !Root->HasField(TEXT("atmosphere"))) Out.bAtmosphere = false;
+    Out.Seed = int32(Num(Root, TEXT("seed"), 1));
     const TArray<TSharedPtr<FJsonValue>>* VehicleList;
     if (Root->TryGetArrayField(TEXT("vehicles"), VehicleList))
         for (const auto& V : *VehicleList)
         {
             const FString Who = Str(V->AsObject(), TEXT("owner"));
             Out.VehicleOwners.Add(Who.IsEmpty() ? Out.Player : FName(*Who));
+            Out.VehiclePoses.Add(Pose(V->AsObject()));
+        }
+    const TArray<TSharedPtr<FJsonValue>>* Things;
+    if (Root->TryGetArrayField(TEXT("obstacles"), Things))
+        for (const auto& V : *Things)
+        {
+            const TOptional<FTransform> At = Pose(V->AsObject());
+            if (Str(V->AsObject(), TEXT("entity")).IsEmpty() || !At) { Error = TEXT("obstacles need entity and at"); return false; }
+            Out.Obstacles.Add({Str(V->AsObject(), TEXT("entity")), *At});
+        }
+    if (Root->TryGetArrayField(TEXT("loose"), Things))
+        for (const auto& V : *Things)
+        {
+            const FObj O = V->AsObject();
+            FLoose L;
+            L.Entity = Str(O, TEXT("entity"));
+            L.Count = int32(Num(O, TEXT("count"), 1));
+            L.Commodity = FName(*Str(O, TEXT("commodity")));
+            L.CommodityLabel = FText::FromString(Str(O, TEXT("label")).IsEmpty() ? L.Commodity.ToString() : Str(O, TEXT("label")));
+            if (!Str(O, TEXT("owner")).IsEmpty()) L.Owner = FName(*Str(O, TEXT("owner")));
+            L.At = Pose(O);
+            if (L.Entity.IsEmpty() || L.Commodity.IsNone()) { Error = TEXT("loose stock needs entity and commodity"); return false; }
+            Out.Loose.Add(MoveTemp(L));
         }
     const FObj Drone = Child(Root, TEXT("drone"));
     const FObj Beam = Child(Drone, TEXT("tractor_beam"));

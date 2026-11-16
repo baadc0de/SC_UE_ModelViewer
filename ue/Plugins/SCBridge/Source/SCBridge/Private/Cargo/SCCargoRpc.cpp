@@ -31,7 +31,7 @@ TArray<FString> USCCargoSubsystem::ActivityReasons() const
     TArray<FString> Out;
     if (!State) return Out;
     if (!State->Library.IsSettled()) Out.Add(TEXT("cargo_packages"));
-    if (State->Scenario.IsSet() && !State->bScenarioPlaced) Out.Add(TEXT("cargo_scenario"));
+    if (State->Scenario.IsSet() && (!State->bScenarioPlaced || (!State->Scenario.Loose.IsEmpty() && !State->bLoosePlaced))) Out.Add(TEXT("cargo_scenario"));
     if (State->Jobs.ContainsByPredicate([](const FSCCargoJob& J) { return J.IsActive(); })) Out.Add(TEXT("cargo_jobs"));
     for (const auto& Pair : State->Grids)
         if (const USCCargoGridComponent* G = Pair.Value.Get();
@@ -46,12 +46,17 @@ TArray<FString> USCCargoSubsystem::ActivityReasons() const
             Out.Add(TEXT("cargo_drones"));
             break;
         }
+    bool bMoving = false, bSettling = false;
     for (const auto& Pair : State->Boxes)
-        if (Pair.Value.State != ESCCargoBoxState::Stored && Pair.Value.State != ESCCargoBoxState::Reserved)
-        {
-            Out.Add(TEXT("cargo_boxes_moving"));
-            break;
-        }
+    {
+        const FSCCargoBox& B = Pair.Value;
+        if (B.State == ESCCargoBoxState::Loose)
+            bSettling |= B.BeaconId == INDEX_NONE || (B.Actor.IsValid() && B.Actor->Body->IsSimulatingPhysics()); // falling, coming to rest
+        else if (B.State != ESCCargoBoxState::Stored && B.State != ESCCargoBoxState::Reserved)
+            bMoving = true;
+    }
+    if (bMoving) Out.Add(TEXT("cargo_boxes_moving"));
+    if (bSettling) Out.Add(TEXT("cargo_boxes_settling"));
     return Out;
 }
 
@@ -116,6 +121,8 @@ TSharedRef<FJsonObject> USCCargoSubsystem::StateJson() const
         O->SetStringField(TEXT("owner"), B.Owner.IsNone() ? FString() : B.Owner.ToString());
         O->SetStringField(TEXT("state"), EnumName(B.State));
         O->SetNumberField(TEXT("grid"), B.GridId);
+        O->SetNumberField(TEXT("beacon"), B.BeaconId); // loose cargo (WP-K2)
+        if (B.OriginId != INDEX_NONE) O->SetNumberField(TEXT("origin"), B.OriginId);
         O->SetNumberField(TEXT("job"), B.JobId);
         const ASCCargoContainer* A = B.Actor.Get();
         O->SetBoolField(TEXT("actor"), A != nullptr);
@@ -160,6 +167,12 @@ TSharedRef<FJsonObject> USCCargoSubsystem::StateJson() const
             O->SetField(TEXT("beam_len_m"), Number(D->BeamLengthM));
         }
         O->SetBoolField(TEXT("blocked"), D->bBlocked);
+        // Out of its bay, a drone belongs to a move that has not ended (flying for it, or home for it).
+        bool bInMove = false;
+        for (const FSCCargoJob& J : State->Jobs)
+            for (const FSCCargoMove& M : J.Moves)
+                bInMove |= M.Step != FSCCargoMove::EStep::Done && M.Step != FSCCargoMove::EStep::Failed && M.Drones.Contains(D->DroneId);
+        O->SetBoolField(TEXT("in_move"), bInMove);
         Drones.Add(MakeShared<FJsonValueObject>(O));
     }
     Root->SetArrayField(TEXT("drones"), Drones);
@@ -175,6 +188,25 @@ TSharedRef<FJsonObject> USCCargoSubsystem::StateJson() const
         Docks.Add(MakeShared<FJsonValueObject>(O));
     }
     Root->SetArrayField(TEXT("docks"), Docks);
+
+    TArray<TSharedPtr<FJsonValue>> Beacons;
+    for (const FSCCargoBeaconView& V : GetBeacons(FVector::ZeroVector, 0))
+    {
+        FObj O = MakeShared<FJsonObject>();
+        O->SetNumberField(TEXT("id"), V.BeaconId);
+        O->SetStringField(TEXT("name"), V.Label.ToString());
+        O->SetNumberField(TEXT("origin"), V.OriginId);
+        O->SetStringField(TEXT("origin_label"), V.OriginLabel.ToString());
+        O->SetStringField(TEXT("owner"), State->Beacons[V.BeaconId].Owner.ToString());
+        O->SetNumberField(TEXT("scu"), V.TotalSCU);
+        TArray<int32> Members;
+        for (const FSCCargoBoxView& B : V.Boxes) Members.Add(B.BoxId);
+        O->SetField(TEXT("boxes"), Ints(Members));
+        O->SetField(TEXT("pos"), Metres(V.WorldCenter));
+        O->SetBoolField(TEXT("accepts_drops"), V.bAcceptsDrops);
+        Beacons.Add(MakeShared<FJsonValueObject>(O));
+    }
+    Root->SetArrayField(TEXT("beacons"), Beacons);
 
     TArray<TSharedPtr<FJsonValue>> Jobs;
     for (const FSCCargoJob& J : State->Jobs)
@@ -264,6 +296,7 @@ void USCCargoSubsystem::ForgetBox(int32 BoxId)
 {
     FSCCargoBox* B = State->Boxes.Find(BoxId);
     if (!B) return;
+    LeaveBeacon(*B);
     if (ASCCargoContainer* A = B->Actor.Get()) A->Destroy();
     for (const auto& Pair : State->Grids)
         if (USCCargoGridComponent* G = Pair.Value.Get())
@@ -286,7 +319,11 @@ bool USCCargoSubsystem::AbandonJob(FSCCargoJob& J, const FText& Why, double Now)
         if (M.Failure.IsEmpty()) M.Failure = Why.ToString();
         for (const int32 D : M.Drones)
             if (ASCCargoDrone* Drone = FindDrone(*State, D)) Drone->Drop();
+        // A box in the air is let down loose where it is (WP-K2); one not lifted yet keeps its place.
+        FSCCargoBox* Box = State->Boxes.Find(M.Plan.BoxId);
+        const bool bLifted = Box && Box->GridId == INDEX_NONE && Box->BeaconId == INDEX_NONE && Box->State != ESCCargoBoxState::Loose && Box->State != ESCCargoBoxState::Reserved;
         ReleaseMove(M);
+        if (bLifted) LetDown(*Box, M.Plan.FromGrid);
         if (M.Step == EStep::Waiting) { FinishMove(J, M, false); continue; }
         if (M.Step != EStep::Returning) SendHome(M, Now);
         bReturning = true;
@@ -300,7 +337,7 @@ bool USCCargoSubsystem::RemoveBox(int32 BoxId, bool bForce, TArray<int32>& OutRe
     const FSCCargoBox* B = State ? State->Boxes.Find(BoxId) : nullptr;
     if (!B) { OutError = FString::Printf(TEXT("no box %d"), BoxId); return false; }
     FSCCargoJob* Job = B->JobId == INDEX_NONE ? nullptr : State->Jobs.FindByPredicate([&](const FSCCargoJob& J) { return J.Id == B->JobId && J.IsActive(); });
-    if (Job || B->State != ESCCargoBoxState::Stored)
+    if (Job || (B->State != ESCCargoBoxState::Stored && B->State != ESCCargoBoxState::Loose)) // resting on a grid or loose: free to go
     {
         if (!bForce)
         {
@@ -312,11 +349,7 @@ bool USCCargoSubsystem::RemoveBox(int32 BoxId, bool bForce, TArray<int32>& OutRe
             const int32 JobId = Job->Id;
             const bool bReturning = AbandonJob(*Job, NSLOCTEXT("SCCargo", "BoxRemoved", "A box of the transfer was removed"), GetWorld()->GetTimeSeconds());
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_JOB id=%d box_removed=%d drones_returning=%d"), JobId, BoxId, bReturning);
-            // The job's boxes left in the air go with it (as when a grid of the job is unloaded).
-            TArray<int32> InAir;
-            for (const auto& Pair : State->Boxes)
-                if (Pair.Key != BoxId && Pair.Value.GridId == INDEX_NONE && Pair.Value.JobId == JobId) InAir.Add(Pair.Key);
-            for (const int32 Id : InAir) { ForgetBox(Id); OutRemoved.Add(Id); }
+            // Its other boxes in the air are let down loose (AbandonJob).
         }
     }
     ForgetBox(BoxId);

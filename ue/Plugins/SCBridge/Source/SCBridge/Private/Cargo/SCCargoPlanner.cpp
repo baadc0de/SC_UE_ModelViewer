@@ -271,7 +271,8 @@ int32 FSCCargoPlanner::TeamSize(const FSCCargoPlanInput& In, const FSCCargoItem&
 
 int32 FSCCargoPlanner::DronesFor(double MassKg, double GravityMS2, double LiftForceN, double DroneKg, double MinAccelMS2, int32 MaxDrones)
 {
-    if (LiftForceN <= 0 || GravityMS2 <= 0) return 0;
+    // Zero gravity (space, WP-K3): no weight to hold; the team is sized by the acceleration it must keep alone.
+    if (LiftForceN <= 0 || GravityMS2 < 0) return 0;
     for (int32 N = FMath::Max(1, DronesFor(MassKg, GravityMS2, LiftForceN)); N <= FMath::Max(MaxDrones, 1); ++N)
         if ((N * LiftForceN - MassKg * GravityMS2) / FMath::Max(N * DroneKg + MassKg, 1e-6) >= MinAccelMS2) return N;
     return 0;
@@ -334,6 +335,7 @@ bool FSCCargoPlanner::Substitute(const FSCCargoPlanInput& In, const FSCCargoMove
 
 int32 FSCCargoPlanner::DronesFor(double MassKg, double GravityMS2, double LiftForceN)
 {
-    if (LiftForceN <= 0 || GravityMS2 <= 0) return 0;
+    if (LiftForceN <= 0) return 0;
+    if (GravityMS2 <= 0) return 1; // weightless (space): one beam holds any box against its weight
     return FMath::Max(1, FMath::CeilToInt(MassKg * GravityMS2 / LiftForceN - 1e-9));
 }

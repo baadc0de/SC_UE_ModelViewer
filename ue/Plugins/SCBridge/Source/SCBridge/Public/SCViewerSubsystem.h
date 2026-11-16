@@ -168,6 +168,10 @@ public:
      *  Folder names the hangar style, and each loaded ship gets the smallest cooked hangar of that style that holds it
      *  (USCHangarIndex, preferring Folder's roof kind); false (-SCEnvironment, sc.Environment) loads exactly Folder. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void SetEnvironment(const FString& Folder, bool bFitToShip = false);
+    /** Space (WP-K3): no environment and the map's own hangar hidden, a sun instead of its lights, and no gravity in the
+     *  world (what falls in a hangar floats). Off restores the hangar and the project's gravity. */
+    void SetSpace(bool bInSpace);
+    bool IsSpace() const { return bSpace; }
     /** Put paint Index (Manifest.Paints; INDEX_NONE = the vehicle's own) on the loaded vehicle and remember it for the
      *  entity (USCViewerSettings::Paints). Also `sc.Paint [index|default|name part]`. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetPaint(int32 Index);
@@ -337,6 +341,8 @@ private:
     bool bMaxQualityPending = false; // -SCMaxQuality: SCLook::ApplyMaxQuality on the first tick with a world
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
+    bool bSpace = false;
+    TWeakObjectPtr<class ADirectionalLight> SpaceSun;
     FString EnvironmentFolder; // a package folder, or an archive object-container path (*.socpak)
     FString PreferredEnvironment; // what SetEnvironment asked for; EnvironmentFolder may be a larger hangar of its style
     bool bFitEnvironment = false;

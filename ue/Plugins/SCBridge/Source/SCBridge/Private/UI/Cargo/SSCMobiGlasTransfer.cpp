@@ -51,7 +51,7 @@ void SSCMobiGlasTransfer::Construct(const FArguments& Args)
     auto Endpoint = [M](bool bFrom) {
         return SSCMobiGlasPicker::FGetOptions::CreateLambda([M, bFrom] {
             TArray<SSCMobiGlasPicker::FOption> Out;
-            for (const FSCGridPick& P : M->PickOptions())
+            for (const FSCGridPick& P : M->PickOptions(bFrom)) // a beacon is offered as a source only
                 Out.Add({M->PickLabel(P), FText(), (bFrom ? M->GetFrom() : M->GetTo()) == P, [M, P, bFrom] { bFrom ? M->SetFrom(P) : M->SetTo(P); }});
             return Out;
         });

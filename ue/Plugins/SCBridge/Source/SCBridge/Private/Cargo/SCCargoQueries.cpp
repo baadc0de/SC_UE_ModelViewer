@@ -668,14 +668,17 @@ bool USCCargoSubsystem::EarlyTurnPoint(FSCCargoMove& M, const ASCCargoContainer*
     }
     TOptional<FVector>& Answer = M.TurnPoints.Add(Key);
     // At the top of the lift, else the nearest point over the grid (its lattice's steps, at the lifted height) the load
-    // reaches in a straight sweep as it was picked.
-    const FTransform Frame = From->LatticeToWorld();
-    const FVector Cell = From->Lattice.CellM * 100.0, Interior = From->Lattice.InteriorM * 100.0;
-    const FVector Local = Frame.InverseTransformPosition(Lifted);
+    // reaches in a straight sweep as it was picked. Loose cargo (no source grid): at the top of its lift only.
     TArray<FVector> Candidates;
-    for (int32 I = FMath::CeilToInt32(-Local.X / Cell.X); Local.X + I * Cell.X <= Interior.X; ++I)
-        for (int32 J = FMath::CeilToInt32(-Local.Y / Cell.Y); Local.Y + J * Cell.Y <= Interior.Y; ++J)
-            Candidates.Add(Frame.TransformPosition(Local + FVector(I * Cell.X, J * Cell.Y, 0)));
+    if (From)
+    {
+        const FTransform Frame = From->LatticeToWorld();
+        const FVector Cell = From->Lattice.CellM * 100.0, Interior = From->Lattice.InteriorM * 100.0;
+        const FVector Local = Frame.InverseTransformPosition(Lifted);
+        for (int32 I = FMath::CeilToInt32(-Local.X / Cell.X); Local.X + I * Cell.X <= Interior.X; ++I)
+            for (int32 J = FMath::CeilToInt32(-Local.Y / Cell.Y); Local.Y + J * Cell.Y <= Interior.Y; ++J)
+                Candidates.Add(Frame.TransformPosition(Local + FVector(I * Cell.X, J * Cell.Y, 0)));
+    }
     if (Candidates.IsEmpty()) Candidates.Add(Lifted); // lifted outside its lattice's footprint
     Candidates.Sort([&](const FVector& P, const FVector& Q) { return FVector::DistSquared(P, Lifted) < FVector::DistSquared(Q, Lifted); });
     int32 Tried = 0;

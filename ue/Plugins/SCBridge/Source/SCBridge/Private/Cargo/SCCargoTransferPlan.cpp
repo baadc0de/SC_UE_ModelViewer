@@ -15,6 +15,7 @@ struct FCandidate
     int32 Z = 0;
     int32 SCU = 0;
     int32 Cover = 0; // boxes resting on it, transitively
+    int32 Beacon = INDEX_NONE; // a beacon's member (Grid = INDEX_NONE): loose cargo, never covered
 };
 FText Reason(const FString& S) { return FText::FromString(S); }
 } // namespace
@@ -31,15 +32,20 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
         Out.Refusals.Add(MoveTemp(R));
     };
     auto GridIndex = [&](int32 Id) { return In.Grids.IndexOfByPredicate([&](const FSCCargoGridModel& G) { return G.GridId == Id; }); };
-    TArray<int32> Sources, Targets;
+    TArray<int32> Sources, Targets, BeaconSources;
     for (const int32 Id : In.FromGrids)
         if (const int32 G = GridIndex(Id); G != INDEX_NONE && !In.ToGrids.Contains(Id)) Sources.AddUnique(G);
+        else if (In.Beacons.Contains(Id)) BeaconSources.AddUnique(Id);
     for (const int32 Id : In.ToGrids)
         if (const int32 G = GridIndex(Id); G != INDEX_NONE) Targets.AddUnique(G);
     const FString Commodity = In.CommodityLabel.IsEmpty() ? In.Commodity.ToString() : In.CommodityLabel;
-    if (Sources.IsEmpty() || Targets.IsEmpty())
+    // Loose cargo is a source only (a beacon has no slots to place a box in yet).
+    for (const int32 Id : In.ToGrids)
+        if (In.Beacons.Contains(Id))
+            Refuse(INDEX_NONE, 0, FString::Printf(TEXT("%s is loose cargo: a source only, choose a grid as destination"), *In.BeaconLabels.FindRef(Id)));
+    if ((Sources.IsEmpty() && BeaconSources.IsEmpty()) || Targets.IsEmpty())
     {
-        Refuse(INDEX_NONE, 0, Sources.IsEmpty() ? TEXT("Choose a source grid other than the destination") : TEXT("Choose a destination grid"));
+        Refuse(INDEX_NONE, 0, Sources.IsEmpty() && BeaconSources.IsEmpty() ? TEXT("Choose a source other than the destination") : TEXT("Choose a destination grid"));
         return Out;
     }
     const FString DestLabel = In.Grids[Targets[0]].GroupLabel;
@@ -49,13 +55,14 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
     // Boxes of the commodity on the sources that are free to move, and their refusals.
     TArray<FCandidate> Pass;
     TMap<int32, int32> GridOfItem;
-    for (const int32 G : Sources)
-        for (const FSCCargoPlacement& P : In.Grids[G].Placed)
+    // One box of a source: a grid's placement (G its grid index, Z its layer) or a beacon's member (G = INDEX_NONE).
+    auto Consider = [&](int32 ItemId, int32 G, int32 Z, int32 Beacon) {
+        const FSCCargoItem* Item = In.Items.Find(ItemId);
+        if (!Item || !Item->bMovable || Item->Commodity != In.Commodity) return;
+        GridOfItem.Add(ItemId, G);
+        if (In.Busy.Contains(ItemId)) return; // another job carries it
+        const FSCCargoPlacement P{ItemId, FIntVector(0, 0, Z)};
         {
-            const FSCCargoItem* Item = In.Items.Find(P.ItemId);
-            if (!Item || !Item->bMovable || Item->Commodity != In.Commodity) continue;
-            GridOfItem.Add(P.ItemId, G);
-            if (In.Busy.Contains(P.ItemId)) continue; // another job carries it
             FString Why;
             bool bRotate = false;
             const bool bExcluded = !Targets.ContainsByPredicate([&](int32 T) {
@@ -64,7 +71,7 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
             if (bExcluded)
             {
                 Refuse(P.ItemId, Item->SCU, FString::Printf(TEXT("%d SCU box (%s) is not accepted by %s"), Item->SCU, *Item->SubType, *DestLabel));
-                continue;
+                return;
             }
             bool bFits = false;
             for (const int32 T : Targets) bFits |= FitsMaxItem(In.Grids[T].Lattice, Item->SizeM, bRotate);
@@ -76,19 +83,19 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
                     if (In.Grids[T].Lattice.MaxItemM.Size() > In.Grids[Widest].Lattice.MaxItemM.Size()) Widest = T;
                 FitsMaxItem(In.Grids[Widest].Lattice, Item->SizeM, bRotate, &Why, In.Grids[Widest].GroupLabel, Item->SCU);
                 Refuse(P.ItemId, Item->SCU, Why);
-                continue;
+                return;
             }
             const int32 Drones = TeamFor(*Item);
             if (Drones == 0 && In.DronesAvailable > 0 && In.LiftForceN > 0)
             {
                 Refuse(P.ItemId, Item->SCU, FString::Printf(TEXT("%d SCU box weighs %.1f t: even %d drones cannot lift it with a working reserve"),
                                                             Item->SCU, Item->MassKg / 1000.0, In.DronesAvailable));
-                continue;
+                return;
             }
             if (Drones == 0 || In.DronesAvailable <= 0)
             {
                 Refuse(P.ItemId, Item->SCU, In.DronesAvailable <= 0 ? TEXT("No cargo drones are docked on the grids") : TEXT("The drones' lift force is unknown"));
-                continue;
+                return;
             }
             if (Drones > In.DronesAvailable)
             {
@@ -98,11 +105,12 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
                     ? FString::Printf(TEXT("%d SCU box needs %d drones (a beam takes %.0f SCU), %d available"), Item->SCU, Drones, In.BeamMaxVolume, In.DronesAvailable)
                     : FString::Printf(TEXT("%d SCU box weighs %.1f t: it needs %d drones, %d available"), Item->SCU, Item->MassKg / 1000.0, Drones,
                                       In.DronesAvailable));
-                continue;
+                return;
             }
             // Covered: the dig-out must be possible on its own (enough drones to hold or room to relocate the cover);
-            // covering boxes of the same commodity may simply be carried first, so they are taken as gone here.
-            const TArray<int32> Cover = In.Grids[G].CoverOf(P.ItemId);
+            // covering boxes of the same commodity may simply be carried first, so they are taken as gone here. A
+            // beacon's members are never covered.
+            const TArray<int32> Cover = G == INDEX_NONE ? TArray<int32>() : In.Grids[G].CoverOf(P.ItemId);
             if (!Cover.IsEmpty())
             {
                 TArray<FSCCargoGridModel> Trial;
@@ -115,14 +123,19 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
                 if (!PlanDigOut(In, Trial, Sources.IndexOfByKey(G), P.ItemId, Drones, TeamFor, Dig, Why))
                 {
                     Refuse(P.ItemId, Item->SCU, Why);
-                    continue;
+                    return;
                 }
             }
-            Pass.Add({P.ItemId, G, P.Origin.Z, Item->SCU, Cover.Num()});
+            Pass.Add({P.ItemId, G, P.Origin.Z, Item->SCU, Cover.Num(), Beacon});
         }
+    };
+    for (const int32 G : Sources)
+        for (const FSCCargoPlacement& P : In.Grids[G].Placed) Consider(P.ItemId, G, P.Origin.Z, INDEX_NONE);
+    for (const int32 B : BeaconSources)
+        for (const int32 Id : In.Beacons[B]) Consider(Id, INDEX_NONE, 0, B);
     if (GridOfItem.IsEmpty())
     {
-        Refuse(INDEX_NONE, 0, FString::Printf(TEXT("No %s on the source grids"), *Commodity));
+        Refuse(INDEX_NONE, 0, FString::Printf(TEXT("No %s at the sources"), *Commodity));
         return Out;
     }
     // Least digging first, then top-down (removal order), larger first within a layer.
@@ -147,6 +160,7 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
         for (const int32 C : Chosen)
         {
             FString Ignored;
+            if (Pass[C].Grid == INDEX_NONE) { Digs.AddDefaulted(); continue; } // loose: nothing to dig out
             if (!PlanDigOut(In, Working, Sources.IndexOfByKey(Pass[C].Grid), Pass[C].Id, TeamFor(In.Items[Pass[C].Id]), TeamFor, Digs.AddDefaulted_GetRef(), Ignored))
                 return false;
         }
@@ -157,7 +171,8 @@ FSCCargoTransferPreview FSCCargoPlanner::Plan(const FSCCargoPlanInput& In)
                 FSCCargoMovePlan M;
                 M.BoxId = Items[I].Id;
                 M.SCU = Items[I].SCU;
-                M.FromGrid = In.Grids[Pass[Chosen[I]].Grid].GridId;
+                const FCandidate& Src = Pass[Chosen[I]];
+                M.FromGrid = Src.Grid == INDEX_NONE ? Src.Beacon : In.Grids[Src.Grid].GridId; // a location id
                 M.ToGrid = Grids[GridOf[I]].GridId;
                 M.Origin = Slots[I].Origin;
                 M.Cells = Slots[I].Cells;

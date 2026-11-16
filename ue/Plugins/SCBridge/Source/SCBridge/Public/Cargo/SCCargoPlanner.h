@@ -81,7 +81,12 @@ struct SCBRIDGE_API FSCCargoPlanInput
     TArray<FSCCargoGridModel> Grids;
     TMap<int32, FSCCargoItem> Items;
     TSet<int32> Busy; // items already reserved by another job
+    /** Location ids (WP-K2): grids (In.Grids) or beacons (Beacons). */
     TArray<int32> FromGrids, ToGrids;
+    /** Beacons (loose cargo, WP-K2): beacon id -> its member items. Sources only (a beacon in ToGrids is refused);
+     *  members are never covered, so they take part in no dig-out. */
+    TMap<int32, TArray<int32>> Beacons;
+    TMap<int32, FString> BeaconLabels; // for reasons
     FName Commodity;
     int32 AmountSCU = 0;
     /** Lift per drone (N), gravity (m/s^2) and the drones the destination's docks hold; DronesAvailable 0 = no drones. */
@@ -123,7 +128,7 @@ public:
     static bool ReturnSlot(const FSCCargoGridModel& Grid, const FSCCargoItem& Item, const FSCCargoPlacement& Planned, FSCCargoPlacement& Out);
     static bool Pack(TArray<FSCCargoGridModel>& Grids, const TArray<FSCCargoItem>& Items, TArray<FSCCargoPlacement>& OutPlacements,
                      TArray<int32>& OutGrid);
-    /** Drones needed to lift MassKg: ceil(m g / F); 0 when the lift is unknown. */
+    /** Drones needed to lift MassKg: ceil(m g / F); 1 weightless (g = 0: space); 0 when the lift is unknown. */
     static int32 DronesFor(double MassKg, double GravityMS2, double LiftForceN);
     /** A box's team: max(by force: lift against its weight, with the input's acceleration reserve; by volume:
      *  ceil(volume / beam max volume)); 0 when no team of up to max(MaxDrones, by volume) keeps the

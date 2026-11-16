@@ -53,16 +53,28 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
                *StaticEnum<ESCCargoMoveKind>()->GetNameStringByValue(int64(M.Plan.Kind)), StepName(Step), M.Drones.Num(), Now - Job.Created);
         ++Revision;
     };
-    auto Fail = [&](const FString& Why) {
+    // A move that cannot go on (WP-K2): a load in flight its team still holds is set down on the nearest free slot it can
+    // reach (RetargetLoad: another grid, a new route); one let go of is let down where it is, loose (a beacon takes it once
+    // at rest). A box not yet lifted keeps its place (grid or beacon: ReleaseMove).
+    auto Fail = [&](const FString& Why, bool bTeamHolds = true) {
+        const bool bLifted = Box && A && Box->GridId == INDEX_NONE && Box->BeaconId == INDEX_NONE && Box->State != ESCCargoBoxState::Loose &&
+                             Box->State != ESCCargoBoxState::Reserved;
+        if (bLifted && bTeamHolds && M.Step == EStep::Transit && M.Plan.Kind != ESCCargoMoveKind::Hold && RetargetLoad(Job, M, Box, A, Why, Now)) return;
         M.Failure = Why;
         for (ASCCargoDrone* D : Drones) D->Drop();
-        if (A && A->Body && !A->Body->IsSimulatingPhysics()) A->Release(); // left where it is, under gravity
         ReleaseMove(M);
-        if (Box && Box->GridId == INDEX_NONE) { Box->State = ESCCargoBoxState::Stored; Box->JobId = INDEX_NONE; }
-        UE_LOG(LogSCCargo, Warning, TEXT("CARGO_MOVE job=%d move=%d box=%d failed at %s: %s"), Job.Id, M.MoveId, M.Plan.BoxId, StepName(M.Step), *Why);
+        if (bLifted) LetDown(*Box, M.Plan.FromGrid); // under gravity, where it is
+        UE_LOG(LogSCCargo, Warning, TEXT("CARGO_MOVE job=%d move=%d box=%d failed at %s: %s%s"), Job.Id, M.MoveId, M.Plan.BoxId, StepName(M.Step), *Why,
+               bLifted ? TEXT(" (let down loose)") : TEXT(""));
         SendHome(M, Now);
     };
-    if (M.Step != EStep::Returning && M.Step != EStep::Holding && (!Box || !A || !From || !To))
+    if (M.bInterrupt)
+    {
+        M.bInterrupt = false;
+        Fail(TEXT("interrupted (verification)"));
+        return;
+    }
+    if (M.Step != EStep::Returning && M.Step != EStep::Holding && (!Box || !A || (!From && !M.bLooseSource) || !To))
     {
         Fail(TEXT("the box or one of its grids is gone"));
         return;
@@ -87,11 +99,11 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             }
         UE_LOG(LogSCCargo, Warning, TEXT("CARGO_TEAM job=%d move=%d box=%d lost_drones team=%d"), Job.Id, M.MoveId, M.Plan.BoxId, Drones.Num());
         const bool bLoaded = M.Step != EStep::Waiting && M.Step != EStep::Outbound && M.Step != EStep::Returning;
-        if (Drones.IsEmpty() && M.Step != EStep::Returning) { Fail(TEXT("the drone team is gone")); return; }
+        if (Drones.IsEmpty() && M.Step != EStep::Returning) { Fail(TEXT("the drone team is gone"), false); return; }
         const int32 ByVolume = Def.MaxVolume > 0 && Box ? FMath::CeilToInt(Box->VolumeSCU() / Def.MaxVolume - 1e-9) : 1;
         if (bLoaded && Box && Drones.Num() < FMath::Max(FSCCargoPlanner::DronesFor(Box->Occupancy.Mass, Gravity(), Def.MaxForceN), ByVolume))
         {
-            Fail(FString::Printf(TEXT("%d drone(s) left cannot hold the box"), Drones.Num()));
+            Fail(FString::Printf(TEXT("%d drone(s) left cannot hold the box"), Drones.Num()), false);
             return;
         }
         if (Box)
@@ -182,7 +194,18 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         {
             ASCCargoDrone* D = Drones[I];
             FSCCargoFlight& F = M.DroneFlights[I];
-            if (M.Step == EStep::Returning && D->MoveId != INDEX_NONE) continue; // claimed by another move on the way home
+            if (M.Step == EStep::Returning && D->MoveId != INDEX_NONE)
+            {
+                // Claimed by another move on the way home: it is that move's once that move flies it. While that move is
+                // still planning its routes the drone hovers and stays this flight's: a claim let go before it flies
+                // (cancelled, no route, another box) brings it back here instead of leaving it in no move at all.
+                const FSCCargoMove* Claim = nullptr;
+                for (const FSCCargoJob& O : State->Jobs)
+                    if (const FSCCargoMove* C = O.Moves.FindByPredicate([&](const FSCCargoMove& X) { return X.MoveId == D->MoveId; })) { Claim = C; break; }
+                if (Claim && Claim->Step == EStep::Waiting) bAll = false;
+                continue;
+            }
+            if (M.Step == EStep::Returning) D->JobId = Job.Id; // a claim let go: it flies home for this job again
             if (M.Step == EStep::Returning && F.Points.Num() < 2)
             {
                 // No free route home yet (a door, a box in the way): hover and plan again.
@@ -300,7 +323,8 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             }
             return;
         }
-        From->Placed.RemoveAll([&](const FSCCargoPlacement& P) { return P.ItemId == Box->Id && P.Origin == Box->Slot.Origin; });
+        if (From) From->Placed.RemoveAll([&](const FSCCargoPlacement& P) { return P.ItemId == Box->Id && P.Origin == Box->Slot.Origin; });
+        else LeaveBeacon(*Box); // loose cargo: off its beacon as it leaves the floor
         Box->GridId = INDEX_NONE;
         Box->State = ESCCargoBoxState::Lifting;
         A->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
@@ -351,7 +375,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
     case EStep::Transit:
     case EStep::Holding:
     {
-        if (Drones.IsEmpty()) { Fail(TEXT("the tractor beam lost the box")); return; }
+        if (Drones.IsEmpty()) { Fail(TEXT("the tractor beam lost the box"), false); return; }
         const bool bOut = M.Plan.Kind == ESCCargoMoveKind::Hold && !M.bRestoring;
         FVector Q;
         FQuat Rotation;

@@ -48,7 +48,8 @@ function Start-SCViewer {
     if ($ShotDir) { $argv += "-SCShotDir=$ShotDir" }
     if ($Extra) { $argv += ($Extra -split ' ' | Where-Object { $_ }) }
     $style = if ($Visible) { 'Normal' } else { 'Minimized' }
-    $p = Start-Process -FilePath "$Engine\Engine\Binaries\Win64\UnrealEditor.exe" -ArgumentList $argv -PassThru -WindowStyle $style
+    # From the repository root: the archive's processed cache goes to ./cache of the working directory (gitignored there).
+    $p = Start-Process -FilePath "$Engine\Engine\Binaries\Win64\UnrealEditor.exe" -ArgumentList $argv -PassThru -WindowStyle $style -WorkingDirectory $root
     $deadline = (Get-Date).AddSeconds($StartTimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if ($p.HasExited) { throw "viewer exited during start (code $($p.ExitCode))" }

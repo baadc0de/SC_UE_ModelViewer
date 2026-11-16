@@ -72,9 +72,10 @@ enum class ESCCargoGridKind : uint8 { Vehicle, Environment };
 UENUM(BlueprintType)
 enum class ESCCargoGridAccess : uint8 { Open, Opening, Closing, Closed };
 
-/** Held: lifted out of the way by drones while a box beneath it is dug out; it goes back afterwards. */
+/** Held: lifted out of the way by drones while a box beneath it is dug out; it goes back afterwards. Loose (WP-K2): off
+ *  every grid and in no job, where it was let down or put (on a floor, at any pose); it belongs to a beacon once at rest. */
 UENUM(BlueprintType)
-enum class ESCCargoBoxState : uint8 { Stored, Reserved, Lifting, InTransit, Placing, Held };
+enum class ESCCargoBoxState : uint8 { Stored, Reserved, Lifting, InTransit, Placing, Held, Loose };
 
 /** Holding: hovering with a box held out of the way (dig-out), waiting to put it back. */
 UENUM(BlueprintType)
@@ -100,7 +101,8 @@ struct SCBRIDGE_API FSCCargoBoxView
     UPROPERTY(BlueprintReadOnly) int32 SCU = 0;
     UPROPERTY(BlueprintReadOnly) FVector SizeM = FVector::ZeroVector; // occupancy dimensions, SC axes
     UPROPERTY(BlueprintReadOnly) double MassKg = 0;
-    UPROPERTY(BlueprintReadOnly) int32 GridId = INDEX_NONE; // INDEX_NONE while carried
+    UPROPERTY(BlueprintReadOnly) int32 GridId = INDEX_NONE; // INDEX_NONE while carried or loose
+    UPROPERTY(BlueprintReadOnly) int32 BeaconId = INDEX_NONE; // loose (WP-K2): its beacon once at rest
     UPROPERTY(BlueprintReadOnly) FIntVector Origin = FIntVector::ZeroValue; // lattice cell of the min corner
     UPROPERTY(BlueprintReadOnly) FIntVector Cells = FIntVector::ZeroValue;  // footprint in lattice cells (as placed)
     UPROPERTY(BlueprintReadOnly) ESCCargoBoxState State = ESCCargoBoxState::Stored;
@@ -146,6 +148,28 @@ struct SCBRIDGE_API FSCCargoGridView
      *  Declared by K1c, filled by K1b ("Shared" for the hangar's grids and drones). */
     UPROPERTY(BlueprintReadOnly) FText OwnerLabel;
     UPROPERTY(BlueprintReadOnly) bool bMine = true;
+};
+
+/** A freestyle cargo beacon (WP-K2): a virtual cargo location (nothing in the world shows it) grouping loose boxes at
+ *  rest near one another that came from the same location and belong to one owner. Its id is a location id like a
+ *  grid's (never equal to one): transfers name it as a source. It has no lattice, layers or capacity: views show its
+ *  counts only. bAcceptsDrops is the place for beacons as destinations (not yet: always false). */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCCargoBeaconView
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) int32 BeaconId = INDEX_NONE;
+    UPROPERTY(BlueprintReadOnly) FText Label;        // "Loose cargo Kestrel-42"
+    UPROPERTY(BlueprintReadOnly) int32 OriginId = INDEX_NONE; // the location its boxes were carried from (INDEX_NONE: put there)
+    UPROPERTY(BlueprintReadOnly) FText OriginLabel;  // "from Hangar Freight Elevator · Grid 1"
+    UPROPERTY(BlueprintReadOnly) FText OwnerLabel;
+    UPROPERTY(BlueprintReadOnly) bool bMine = true;
+    UPROPERTY(BlueprintReadOnly) bool bAcceptsDrops = false;
+    UPROPERTY(BlueprintReadOnly) FVector WorldCenter = FVector::ZeroVector;
+    UPROPERTY(BlueprintReadOnly) FBox WorldBounds = FBox(ForceInit);
+    UPROPERTY(BlueprintReadOnly) float DistanceM = 0; // from the viewer passed to GetBeacons
+    UPROPERTY(BlueprintReadOnly) int32 TotalSCU = 0;
+    UPROPERTY(BlueprintReadOnly) TArray<FSCCargoBoxView> Boxes;
 };
 
 USTRUCT(BlueprintType)

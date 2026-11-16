@@ -81,9 +81,10 @@ void USCCargoSubsystem::ReleaseMove(FSCCargoMove& M)
         To->Placed.RemoveAll([&](const FSCCargoPlacement& P) { return P.ItemId == M.Plan.BoxId && P.Origin == M.Plan.Origin; });
         To->Reserved.Remove(M.Plan.BoxId);
     }
-    if (FSCCargoBox* B = State->Boxes.Find(M.Plan.BoxId); B && B->GridId != INDEX_NONE)
+    if (FSCCargoBox* B = State->Boxes.Find(M.Plan.BoxId); B && (B->GridId != INDEX_NONE || B->BeaconId != INDEX_NONE))
     {
-        B->State = ESCCargoBoxState::Stored;
+        // Not lifted yet: on its grid, or loose in its beacon (WP-K2).
+        B->State = B->GridId != INDEX_NONE ? ESCCargoBoxState::Stored : ESCCargoBoxState::Loose;
         B->JobId = INDEX_NONE;
     }
 }
@@ -93,14 +94,15 @@ bool USCCargoSubsystem::CanPick(int32 BoxId, FString& Why) const
     const FSCCargoBox* Box = State->Boxes.Find(BoxId);
     const USCCargoGridComponent* Grid = Box ? FindGrid(Box->GridId) : nullptr;
     const ASCCargoContainer* A = Box ? Box->Actor.Get() : nullptr;
-    if (!Grid || !A) { Why = TEXT("the box is not on a grid"); return false; }
+    const bool bLoose = Box && !Grid && Box->BeaconId != INDEX_NONE; // loose cargo (WP-K2): lifted straight up from where it lies
+    if ((!Grid && !bLoose) || !A) { Why = TEXT("the box is neither on a grid nor in loose cargo"); return false; }
     // Its lift corridor along the grid normal, with room for the beam and the drones above it.
     double Lift = 0, Hang = 0;
     FString Blocker;
-    if (LiftPlan(A, A->GetActorTransform(), Grid->LatticeToWorld().GetRotation().GetUpVector(), Lift, Hang, &Blocker))
+    if (LiftPlan(A, A->GetActorTransform(), Grid ? Grid->LatticeToWorld().GetRotation().GetUpVector() : FVector::UpVector, Lift, Hang, &Blocker))
         return true;
     Why = FString::Printf(TEXT("%d SCU box on %s: its lift along the grid normal is blocked by %s"), Box->Occupancy.StandardCargoUnits,
-                          *Grid->GridLabel.ToString(), *Blocker);
+                          *(Grid ? Grid->GridLabel : LocationLabel(Box->BeaconId)).ToString(), *Blocker);
     return false;
 }
 
@@ -137,7 +139,8 @@ bool USCCargoSubsystem::StartMove(FSCCargoJob& Job, FSCCargoMove& M, double Now)
 {
     FSCCargoBox* Box = State->Boxes.Find(M.Plan.BoxId);
     USCCargoGridComponent* From = Box ? FindGrid(Box->GridId) : nullptr;
-    if (!Box || !From || !Box->Actor.IsValid())
+    const bool bLoose = Box && !From && Box->BeaconId != INDEX_NONE; // loose cargo (WP-K2): nothing covers it
+    if (!Box || (!From && !bLoose) || !Box->Actor.IsValid())
     {
         M.Failure = TEXT("the box is gone");
         ReleaseMove(M);
@@ -146,12 +149,16 @@ bool USCCargoSubsystem::StartMove(FSCCargoJob& Job, FSCCargoMove& M, double Now)
     }
     // Covered: wait while what rests on it is a task's (it comes off first); otherwise the box cannot be picked. Only
     // what is physically on the grid counts (not the cells reserved for boxes on their way).
-    FSCCargoGridModel Physical = From->Model();
-    Physical.Placed.RemoveAll([&](const FSCCargoPlacement& P) {
-        const FSCCargoBox* B = State->Boxes.Find(P.ItemId);
-        return B && (B->GridId != From->GridId || B->Slot.Origin != P.Origin);
-    });
-    const TArray<int32> Covering = Physical.ItemsOn(Box->Id);
+    TArray<int32> Covering;
+    if (From)
+    {
+        FSCCargoGridModel Physical = From->Model();
+        Physical.Placed.RemoveAll([&](const FSCCargoPlacement& P) {
+            const FSCCargoBox* B = State->Boxes.Find(P.ItemId);
+            return B && (B->GridId != From->GridId || B->Slot.Origin != P.Origin);
+        });
+        Covering = Physical.ItemsOn(Box->Id);
+    }
     FString Why;
     bool bLift = true; // a failure below is the lift's (covered, no headroom) unless the routes failed
     bool bPick = true;

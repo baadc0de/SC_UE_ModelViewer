@@ -422,6 +422,19 @@ Console: `sc.Cargo.List`, `sc.Cargo.Preview|Transfer <from> <to> <commodity> <sc
 `sc.MobiGlas.*` (route stand-ins for clicks), `sc.Env.OpenAccess`. Logs: `CARGO_JOB`, `CARGO_PATH` (found, hits,
 clearance, frame time), `CARGO_TEAM`, `CARGO_PICK`, `CARGO_TUG`, `CARGO_GUARD`, `ENV_ACCESS`.
 
+**Loose cargo** (WP-K2, [brief](../docs/work-packages/WP-K2-cargo-beacons.md)): a load let go of in flight is set down on
+the nearest free slot it can still reach, else let down where it is. A loose box at rest belongs to a freestyle cargo
+beacon: a virtual location with a random name ("Loose cargo Kestrel-86") that remembers where its boxes came from.
+Beacons are transfer sources (a beacon id or name, `beacon` / `loose` for all; never a destination, for now), listed
+in the mobiGlas with their counts only. Verification hooks: `sc.Cargo.Interrupt [job]` (a load in flight fails as a
+lost route would), `sc.Cargo.LoseDrone busy`; the RPC puts boxes down loose (`/cargo/spawn` with `at` or `random`).
+Logs: `CARGO_LOOSE`, `CARGO_BEACON`, `CARGO_RETARGET`, `CARGO_LOOSE_SPOT`.
+
+**Cargo in space** (WP-K3, [brief](../docs/work-packages/WP-K3-cargo-in-space.md)): `-SCCargoScenario=hull_a_space`
+loads two Hull A among asteroids with no hangar, zero gravity and a sun; scenarios gain `space`, `seed`, vehicle poses
+(`at`, `yaw` / `rot`), `obstacles` (game entities placed as static instances) and `loose` stock. In zero g one drone
+holds any box its beam takes by volume, and loose cargo holds station where it was let go.
+
 How a team carries a box (`Cargo/SCCargoTug.h`, `SCCargoTugStep.cpp`; tests `SCBridge.Cargo.Tug*`): the box in the air
 is a simulated body with its mass, and every drone's beam is a spring-damper on its own attach point. The beam's
 numbers are the tractor record's (`maxForce` caps it, full up to `fullStrengthDistance`, nothing at `maxDistance`;

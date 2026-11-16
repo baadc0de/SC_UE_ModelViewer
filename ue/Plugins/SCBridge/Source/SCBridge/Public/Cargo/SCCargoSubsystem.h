@@ -37,6 +37,20 @@ public:
     /** Active jobs first, then the most recent finished ones. */
     TArray<FSCCargoJobView> GetJobs() const;
 
+    // Freestyle cargo beacons (WP-K2, SCCargoBeacons.cpp): loose boxes at rest, grouped; a beacon's id is a location id
+    // (like a grid's, never equal to one) that transfers take as a source.
+    /** Beacons within RadiusM of Viewer (all when RadiusM <= 0), nearest first, DistanceM filled in. */
+    TArray<FSCCargoBeaconView> GetBeacons(const FVector& Viewer, float RadiusM) const;
+    bool GetBeacon(int32 BeaconId, FSCCargoBeaconView& Out) const;
+    bool IsBeacon(int32 LocationId) const;
+    /** A location's name for people: a grid's "group · grid", a beacon's name. */
+    FText LocationLabel(int32 LocationId) const;
+    /** Puts Count boxes of a ready package down loose: at At (each further one a box length aside), or each at a free
+     *  floor spot with a clear lift corridor drawn from Rng (reachable by drones); they fall, come to rest and join or found
+     *  a beacon. The ids placed; OutError says why any was not. */
+    TArray<int32> AddLooseBoxes(const FString& Entity, int32 Count, const FTransform* At, FRandomStream* Rng, FName Commodity, const FText& Label, FName Owner,
+                                FString& OutError);
+
     /** Plan without side effects: which boxes go where, refusals with reasons, the achievable amounts. */
     FSCCargoTransferPreview Preview(const FSCCargoTransferRequest& Request) const;
     /** Plan and start a job; returns its id, or INDEX_NONE with OutError set. */
@@ -86,6 +100,9 @@ public:
     bool RemoveBox(int32 BoxId, bool bForce, TArray<int32>& OutRemoved, FString& OutError);
     /** A drone dock with Drones drones on the grid; false (OutError) when it does not fit. */
     bool AddDock(int32 GridId, int32 Drones, FString& OutError);
+    /** Verification (sc.Cargo.Interrupt): the first load in flight (of JobId; any job when INDEX_NONE) fails as a lost route
+     *  would; false when none is in flight. */
+    bool InterruptLoad(int32 JobId);
     /** A job's state (any job of the session, finished ones too); false when there is no such job. */
     bool FindJobState(int32 JobId, ESCCargoJobState& OutState, FText& OutReason) const;
 
@@ -100,8 +117,24 @@ private:
     /** Fails an active job: every open move lets go of its box and gives back what it holds, its drones fly home (the
      *  job ends when they are back). True when drones are returning. */
     bool AbandonJob(struct FSCCargoJob& Job, const FText& Why, double Now);
-    /** Destroys a box's actor and forgets it, with its cell on its grid. */
+    /** Destroys a box's actor and forgets it, with its cell on its grid (and its place in a beacon). */
     void ForgetBox(int32 BoxId);
+    // Loose cargo (WP-K2)
+    /** Every frame: loose boxes that came to rest are frozen where they lie and join or found a beacon; one that fell out
+     *  of the world is forgotten. */
+    void TickLoose(double Now);
+    /** Lets a box go where it is, under gravity, loose (from OriginId). */
+    void LetDown(struct FSCCargoBox& Box, int32 OriginId);
+    void JoinBeacon(struct FSCCargoBox& Box);
+    void LeaveBeacon(struct FSCCargoBox& Box);
+    /** Loose boxes in Region (all when null) are let go to settle again: what they rested on may be gone. */
+    void WakeLoose(const FBox* Region);
+    /** A load let go of in flight (Why): the nearest open grid its owner may use with a free slot, not tried before, takes
+     *  it (reservation moved, a new approach and route). False when none is left: the caller lets it down. */
+    bool RetargetLoad(struct FSCCargoJob& Job, struct FSCCargoMove& Move, struct FSCCargoBox* Box, class ASCCargoContainer* A, const FString& Why, double Now);
+    /** A free floor spot for a box of SizeCm with room above it for its lift and drones, drawn from Rng in the environment. */
+    bool FindLooseSpot(const FVector& SizeCm, FRandomStream& Rng, FTransform& Out) const;
+    FVector LocationCentre(int32 LocationId) const;
     /** Owners (multi-owner hangars): the label of an owner ("You", "Shared" for None); the requester of a request. */
     FText OwnerLabel(FName Owner) const;
     FSCCargoBoxView OwnedBoxView(const struct FSCCargoBox& Box) const;

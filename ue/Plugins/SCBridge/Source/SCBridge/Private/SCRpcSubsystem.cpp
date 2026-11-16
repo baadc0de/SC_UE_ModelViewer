@@ -356,6 +356,7 @@ private:
             Load->SetStringField(TEXT("phase"), StaticEnum<ESCLoadPhase>()->GetNameStringByValue(int64(V->GetLoadPhase())));
             Load->SetStringField(TEXT("archive"), StaticEnum<ESCArchiveState>()->GetNameStringByValue(int64(V->GetArchiveState())));
             Load->SetStringField(TEXT("environment"), V->GetEnvironmentRequest());
+            Load->SetBoolField(TEXT("space"), V->IsSpace()); // WP-K3: no environment, no gravity
             O->SetObjectField(TEXT("load"), Load);
             TArray<TSharedPtr<FJsonValue>> Vehicles;
             for (const FSCVehicleInstanceInfo& I : V->GetVehicleInstances())
@@ -427,11 +428,20 @@ private:
                     if (Num(B, TEXT("slot_err_cm"), 0) > 5) Found.Add(TEXT("box_off_slot:") + Id);
                     const bool bOnGrid = Num(B, TEXT("grid"), -1) >= 0;
                     if (bOnGrid && State == TEXT("Stored") && Flag(B, TEXT("sim"), false)) Found.Add(TEXT("box_simulated_on_grid:") + Id);
-                    // Off every grid and in no job: let down by a failed move (nothing picks up a box that is not on a grid).
-                    if (!bOnGrid && (State == TEXT("Stored") || State == TEXT("Reserved"))) Found.Add(TEXT("box_loose:") + Id);
+                    // A stored box has a grid; a loose one at rest (frozen) a beacon (WP-K2).
+                    const bool bInBeacon = Num(B, TEXT("beacon"), -1) >= 0;
+                    if (!bOnGrid && State == TEXT("Stored")) Found.Add(TEXT("box_stored_without_grid:") + Id);
+                    if (!bOnGrid && !bInBeacon && State == TEXT("Reserved")) Found.Add(TEXT("box_reserved_nowhere:") + Id);
+                    if (State == TEXT("Loose") && !bInBeacon && !Flag(B, TEXT("sim"), false)) Found.Add(TEXT("box_unbeaconed:") + Id);
                 }
             if (C->TryGetArrayField(TEXT("drones"), Arr))
-                for (const TSharedPtr<FJsonValue>& V : *Arr) Check(TEXT("drone"), V->AsObject());
+                for (const TSharedPtr<FJsonValue>& V : *Arr)
+                {
+                    const TSharedPtr<FJsonObject> D = V->AsObject();
+                    Check(TEXT("drone"), D);
+                    // Out of its bay with no move to fly it: it would hover there for good.
+                    if (Str(D, TEXT("state")) != TEXT("Docked") && !Flag(D, TEXT("in_move"), true)) Found.Add(TEXT("drone_orphaned:") + Str(D, TEXT("id")));
+                }
         }
         for (const FString& K : Found)
             if (!Anomalies.Contains(K))
@@ -821,7 +831,7 @@ private:
         if (B->HasField(TEXT("x_m")) && B->HasField(TEXT("y_m")))
         {
             const double Z = B->HasField(TEXT("z_m")) ? Num(B, TEXT("z_m"), 0) * 100 : V->GetVehicle()->LowestVisibleZ();
-            Id = V->SpawnVehicleInstance(Entity, FTransform(FRotator(0, Num(B, TEXT("yaw"), 0), 0), FVector(Num(B, TEXT("x_m"), 0) * 100, Num(B, TEXT("y_m"), 0) * 100, Z)));
+            Id = V->SpawnVehicleInstance(Entity, FTransform(FRotator(0, Num(B, TEXT("yaw"), 0), 0), FVector(Num(B, TEXT("x_m"), 0) * 100, Num(B, TEXT("y_m"), 0) * 100, Z)), /*bRest=*/!V->IsSpace());
         }
         else Id = V->SpawnVehicleInstance(Entity);
         if (Id == INDEX_NONE) return Respond(Done, Error(TEXT("spawn refused")));
@@ -849,7 +859,13 @@ private:
         if (!C || Entity.IsEmpty()) return Respond(Done, Error(TEXT("entity is needed")));
         FString Err;
         int32 Grid = INDEX_NONE;
-        if (bSpawn && (Grid = ResolveGrid(B, TEXT("grid"), Err)) == INDEX_NONE) return Respond(Done, Error(Err));
+        // Loose (WP-K2): at a point (metres, yaw) or at random free reachable floor spots (seed); else onto a grid.
+        FVector At;
+        const bool bAt = Vec(B, TEXT("at"), At);
+        const bool bLoose = bAt || Flag(B, TEXT("random"), false);
+        const TOptional<FTransform> Pose = bAt ? TOptional<FTransform>(FTransform(FRotator(0, Num(B, TEXT("yaw"), 0), 0), At)) : TOptional<FTransform>();
+        const TSharedRef<FRandomStream> Rng = MakeShared<FRandomStream>(int32(Num(B, TEXT("seed"), FMath::Rand())));
+        if (bSpawn && !bLoose && (Grid = ResolveGrid(B, TEXT("grid"), Err)) == INDEX_NONE) return Respond(Done, Error(Err));
         const int32 Count = FMath::Clamp(int32(Num(B, TEXT("count"), 1)), 1, 500);
         const FString Commodity = Str(B, TEXT("commodity"), TEXT("Test"));
         const FText Label = FText::FromString(Str(B, TEXT("label"), Commodity));
@@ -857,7 +873,7 @@ private:
         if (C->RequestBoxPackage(Entity, Err) < 0) return Respond(Done, Error(Err));
         // The package exports and imports once (it may take a while the first time): answer when it is ready.
         Defer(bSpawn ? TEXT("/cargo/spawn") : TEXT("/cargo/package"), Num(B, TEXT("timeout_s"), 300), false, Done,
-              [this, Entity, Grid, Count, Commodity, Label, Owner, bSpawn](bool) -> TSharedPtr<FJsonObject> {
+              [this, Entity, Grid, Count, Commodity, Label, Owner, bSpawn, bLoose, Pose, Rng](bool) -> TSharedPtr<FJsonObject> {
                   USCCargoSubsystem* Cg = Cargo();
                   if (!Cg) return Error(TEXT("no cargo subsystem"));
                   FString E;
@@ -866,7 +882,8 @@ private:
                   if (State == 0) return nullptr;
                   FObj O = Ok();
                   if (!bSpawn) return O;
-                  const TArray<int32> Ids = Cg->AddBoxes(Grid, Entity, Count, FName(*Commodity), Label, Owner, E);
+                  const TArray<int32> Ids = bLoose ? Cg->AddLooseBoxes(Entity, Count, Pose.GetPtrOrNull(), &Rng.Get(), FName(*Commodity), Label, Owner, E)
+                                                   : Cg->AddBoxes(Grid, Entity, Count, FName(*Commodity), Label, Owner, E);
                   O->SetField(TEXT("boxes"), Ints(Ids));
                   if (!E.IsEmpty()) O->SetStringField(TEXT("warning"), E);
                   O->SetBoolField(TEXT("ok"), !Ids.IsEmpty());
@@ -895,7 +912,8 @@ private:
             for (const TSharedPtr<FJsonValue>& V : S->GetArrayField(TEXT("boxes")))
             {
                 const TSharedPtr<FJsonObject> Box = V->AsObject();
-                if (Flag(B, TEXT("all"), false) || Grids.Contains(int32(Num(Box, TEXT("grid"), -1)))) Targets.Add(int32(Num(Box, TEXT("id"), -1)));
+                if (Flag(B, TEXT("all"), false) || Grids.Contains(int32(Num(Box, TEXT("grid"), -1))) || Grids.Contains(int32(Num(Box, TEXT("beacon"), -1))))
+                    Targets.Add(int32(Num(Box, TEXT("id"), -1)));
             }
         if (Targets.IsEmpty()) return Respond(Done, Error(TEXT("nothing to remove (box, grid or all)")));
         TArray<int32> Removed;
@@ -924,8 +942,13 @@ private:
         R.ToGrids = C->ResolveGrids(Str(B, TEXT("to")), R.Requester);
         R.Commodity = C->ResolveCommodity(Str(B, TEXT("commodity")));
         R.AmountSCU = int32(Num(B, TEXT("scu"), 0));
-        if (R.FromGrids.IsEmpty() || R.ToGrids.IsEmpty() || R.Commodity.IsNone() || R.AmountSCU <= 0)
-            return Respond(Done, Error(TEXT("from, to (grid selectors), commodity (on some grid) and scu > 0 are needed")));
+        // Each missing part named (a beacon emptied since the caller looked is the usual one).
+        TArray<FString> Missing;
+        if (R.FromGrids.IsEmpty()) Missing.Add(FString::Printf(TEXT("from: no grid or beacon matches '%s'"), *Str(B, TEXT("from"))));
+        if (R.ToGrids.IsEmpty()) Missing.Add(FString::Printf(TEXT("to: no grid matches '%s'"), *Str(B, TEXT("to"))));
+        if (R.Commodity.IsNone()) Missing.Add(FString::Printf(TEXT("commodity: '%s' is on no grid or beacon"), *Str(B, TEXT("commodity"))));
+        if (R.AmountSCU <= 0) Missing.Add(TEXT("scu > 0 is needed"));
+        if (!Missing.IsEmpty()) return Respond(Done, Error(FString::Join(Missing, TEXT("; "))));
         const FSCCargoTransferPreview P = C->Preview(R);
         FObj O = Ok();
         O->SetNumberField(TEXT("planned_scu"), P.PlannedSCU);
@@ -962,6 +985,10 @@ private:
         {
             if (V->GetCameraMode() == ESCCameraMode::FirstPerson && !V->SetCameraMode(ESCCameraMode::Fly))
                 return Respond(Done, Error(TEXT("cannot leave first person")));
+            // A pose (at) is the fly camera's: the orbit camera keeps its own pivot and distance, and puts a view set on it
+            // elsewhere (below the floor in the C2 hangar).
+            if (bAt && Mode.IsEmpty() && V->GetCameraMode() == ESCCameraMode::Orbit && !V->SetCameraMode(ESCCameraMode::Fly))
+                return Respond(Done, Error(TEXT("cannot switch to the fly camera")));
             ASCViewerPawn* Pawn = V->GetViewerPawn();
             if (!Pawn) return Respond(Done, Error(TEXT("no viewer pawn")));
             if (!Focus.IsEmpty())
