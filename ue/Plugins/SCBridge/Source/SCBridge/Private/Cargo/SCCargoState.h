@@ -276,6 +276,7 @@ struct FSCCargoState
     FSCCargoScenario Scenario;
     bool bScenarioTried = false, bScenarioLoadRequested = false;
     uint8 AppliedKinds = 0; // bit per ESCCargoGridKind whose scenario stock and docks are placed
+    bool bScenarioPlaced = false; // both kinds placed once (later re-placement after a ship is lost is not waited on)
     double LastScenarioWait = -1000;
     FSCCargoBoxLibrary Library;
     bool bDebug = false;

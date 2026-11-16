@@ -84,28 +84,14 @@ void USCCargoSubsystem::ForgetGrids(ESCCargoGridKind Kind, const ASCVehicle* Onl
     // Jobs touching them fail. Every move still open lets go of its box and gives back what it holds: the reservation on a
     // grid that stays, the box's state, its drones (they fly home and the job ends when they are back). Boxes on the lost
     // grids go with them, and so do the lost jobs' boxes in the air; other transfers keep theirs.
-    using EStep = FSCCargoMove::EStep;
     const double Now = GetWorld()->GetTimeSeconds();
     TSet<int32> LostJobs;
     for (FSCCargoJob& J : State->Jobs)
         if (J.IsActive() && J.Moves.ContainsByPredicate([&](const FSCCargoMove& M) { return Gone.Contains(M.Plan.FromGrid) || Gone.Contains(M.Plan.ToGrid); }))
         {
             LostJobs.Add(J.Id);
-            J.Failure = NSLOCTEXT("SCCargo", "GridGone", "A grid of the transfer was unloaded");
-            bool bReturning = false;
-            for (FSCCargoMove& M : J.Moves)
-            {
-                if (M.Step == EStep::Done || M.Step == EStep::Failed) continue;
-                if (M.Failure.IsEmpty()) M.Failure = J.Failure.ToString();
-                for (const int32 D : M.Drones)
-                    if (ASCCargoDrone* Drone = FindDrone(*State, D)) Drone->Drop();
-                ReleaseMove(M);
-                if (M.Step == EStep::Waiting) { FinishMove(J, M, false); continue; }
-                if (M.Step != EStep::Returning) SendHome(M, Now);
-                bReturning = true;
-            }
+            const bool bReturning = AbandonJob(J, NSLOCTEXT("SCCargo", "GridGone", "A grid of the transfer was unloaded"), Now);
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_JOB id=%d grid_gone=1 drones_returning=%d"), J.Id, bReturning);
-            SetJobState(J, bReturning ? ESCCargoJobState::Moving : ESCCargoJobState::ClosingGrids);
         }
     for (auto It = State->Boxes.CreateIterator(); It; ++It)
         if (Gone.Contains(It->Value.GridId) || (It->Value.GridId == INDEX_NONE && LostJobs.Contains(It->Value.JobId)))

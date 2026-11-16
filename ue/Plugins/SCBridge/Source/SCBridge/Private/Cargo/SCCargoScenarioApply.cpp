@@ -185,6 +185,7 @@ void USCCargoSubsystem::ApplyScenario()
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO applied kind=%s boxes=%d docks=%d drones=%d"),
                Kind == ESCCargoGridKind::Vehicle ? TEXT("vehicle") : TEXT("environment"), Boxes, Docks, State->Drones.Num());
     }
+    State->bScenarioPlaced |= State->AppliedKinds == 3;
 }
 
 int32 USCCargoSubsystem::SpawnBox(USCCargoGridComponent* Grid, const FString& Entity, FName Commodity, const FText& Label, const TOptional<FIntVector>& Origin, bool bRotated)

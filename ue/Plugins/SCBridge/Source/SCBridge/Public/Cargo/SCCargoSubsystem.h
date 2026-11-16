@@ -66,6 +66,29 @@ public:
     /** Logs what surrounds a grid as the route queries see it (CARGO_SECTION: upright and level sections through its middle). */
     void LogSections(int32 GridId, double ReachM, double StepM) const;
 
+    // RPC harness and state log (WP-H1, SCCargoRpc.cpp)
+    /** Why the cargo is not idle, one short key per cause (empty: idle): packages loading, the scenario not yet placed,
+     *  active jobs, grids extending or retracting, drones away from their docks, boxes off their grids. */
+    TArray<FString> ActivityReasons() const;
+    /** Grids, boxes (pose, velocity, slot error), drones (pose, velocity, beam force and lengths), docks and jobs, in
+     *  metres, seconds and newtons. */
+    TSharedRef<class FJsonObject> StateJson() const;
+    /** The fastest thing cargo moves (cm/s): simulated boxes and drones. */
+    double MaxSpeedCmS() const;
+    /** Requested box packages: entity, state and occupancy. */
+    TSharedRef<class FJsonObject> CatalogJson() const;
+    /** Requests a box entity's package (export and import once): 1 ready, 0 still loading, -1 failed (OutError). */
+    int32 RequestBoxPackage(const FString& Entity, FString& OutError);
+    /** Puts Count boxes of a ready package on the grid, best fit; the ids placed. OutError says why any was not. */
+    TArray<int32> AddBoxes(int32 GridId, const FString& Entity, int32 Count, FName Commodity, const FText& Label, FName Owner, FString& OutError);
+    /** Removes a box. One a job holds is refused unless bForce: then that job is abandoned (as when one of its grids is
+     *  unloaded: drones let go and fly home, its boxes in the air go) and the box goes. OutRemoved: every box removed. */
+    bool RemoveBox(int32 BoxId, bool bForce, TArray<int32>& OutRemoved, FString& OutError);
+    /** A drone dock with Drones drones on the grid; false (OutError) when it does not fit. */
+    bool AddDock(int32 GridId, int32 Drones, FString& OutError);
+    /** A job's state (any job of the session, finished ones too); false when there is no such job. */
+    bool FindJobState(int32 JobId, ESCCargoJobState& OutState, FText& OutReason) const;
+
 protected:
     int32 Revision = 0;
 
@@ -74,6 +97,11 @@ private:
     void Discover();
     void DiscoverOn(class ASCVehicle* Actor, ESCCargoGridKind Kind);
     void ForgetGrids(ESCCargoGridKind Kind, const class ASCVehicle* Only = nullptr);
+    /** Fails an active job: every open move lets go of its box and gives back what it holds, its drones fly home (the
+     *  job ends when they are back). True when drones are returning. */
+    bool AbandonJob(struct FSCCargoJob& Job, const FText& Why, double Now);
+    /** Destroys a box's actor and forgets it, with its cell on its grid. */
+    void ForgetBox(int32 BoxId);
     /** Owners (multi-owner hangars): the label of an owner ("You", "Shared" for None); the requester of a request. */
     FText OwnerLabel(FName Owner) const;
     FSCCargoBoxView OwnedBoxView(const struct FSCCargoBox& Box) const;
