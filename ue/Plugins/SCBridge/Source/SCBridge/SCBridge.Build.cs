@@ -22,5 +22,10 @@ public class SCBridge : ModuleRules
         bool bDesktopPlatform = Target.bBuildDeveloperTools;
         if (bDesktopPlatform) PrivateDependencyModuleNames.Add("DesktopPlatform");
         PrivateDefinitions.Add("SC_WITH_DESKTOP_PLATFORM=" + (bDesktopPlatform ? "1" : "0"));
+        // RPC harness and state log (WP-H1): a localhost HTTP server for scripted testing; desktop, not Shipping or Wasm.
+        bool bRpc = Target.Configuration != UnrealTargetConfiguration.Shipping &&
+                    (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Linux || Target.Platform == UnrealTargetPlatform.Mac);
+        if (bRpc) PrivateDependencyModuleNames.AddRange(new[] { "HTTPServer" });
+        PrivateDefinitions.Add("SC_WITH_RPC=" + (bRpc ? "1" : "0"));
     }
 }

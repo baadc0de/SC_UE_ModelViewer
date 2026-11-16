@@ -30,6 +30,8 @@ public:
     /** Game thread, every frame: advances the one running entry. */
     void Tick(USCViewerSubsystem* Viewer, UWorld* World);
     const FEntry* Find(const FString& Entity) const { return Entries.Find(Entity); }
+    /** Every requested entity (RPC catalogue). */
+    TArray<FString> Entities() const { TArray<FString> Out; Entries.GetKeys(Out); return Out; }
     /** Every requested entity is Ready or Failed. */
     bool IsSettled() const;
     void Reset();
