@@ -203,6 +203,96 @@ Approximations, recorded per emitter in the build log:
   - the tractor impact is a blue glow;
   - the metal impacts are an orange flash, sparks and smoke.
 
+### K4c fidelity pass (branch `wp/k4c-fx-fidelity`)
+
+The approximations of steps 1–4, worked through one at a time with before/after previews and an aesthetic review by
+Astra (`out/fk4c/astra/`); the data decides, Astra decides only what the data leaves open. Rules and their reasons are
+in the header comment of `SCFxBuildCommandlet.cpp`; `-Features=` switches them off for comparisons.
+
+**Runtime contract** (User parameters of the built systems; `sc.Fx.Spawn … strength= len= bend=` sets them):
+
+| Parameter | Type | What the runtime sets |
+|---|---|---|
+| `SC.Strength` | float 0..1 | The effect's EmitterStrength input: the tractor's `beamStrengthValues` (stable 1, unstable 0.5, no target 0), blended by the runtime over time (`beamEffectBlendCoeff`). Default 1. |
+| `SC.BeamEnd` | vec3 cm | The beam's end (the target), in the component's space; the component sits at the beam start (the emitter helper), any rotation. |
+| `SC.BeamStartTangent` | vec3 cm | The emitter's forward direction in component space × the beam length. |
+| `SC.BeamLength` | float cm | `|SC.BeamEnd|`. |
+| `SC.BeamLength2` | vec2 cm | (`SC.BeamLength`, `SC.BeamLength`): stateless expressions cannot widen a float. |
+
+Defaults (100 cm along +X) reproduce a 1 m straight beam. The component is no longer scaled.
+
+**Per item:**
+1. **Strength.** The game's strengths are read from DataCore (`effects.json` `strength`: the tractor record's
+   `SWeaponActionFireTractorBeamStrengthValueParams`, values 0 / 0.5 / 1). Each EmitterStrength curve becomes the
+   polynomial in `SC.Strength` through its values there (stateless expressions have add/multiply only): exact at the
+   game's strengths. Colour and alpha go to Dynamic Material Parameter 0 (the masters multiply by it, clamped at 0),
+   speed to the cone velocity scale, light intensity to the light's diffuse/specular scale. Count, lifetime and size
+   curves stay at strength 1: UE 5.9 spawn rates evaluate no expression, lifetimes and random sizes take none.
+2. **Beam length.** Spawn rates bind `SC.BeamLength`: round(EmitPerDistance / 100 / lifetime) spawn infos per emitter,
+   so the beam holds EmitPerDistance particles per metre at any length (beam_core ×1.11 of the data, thin cores exact).
+3. **Spline.** Particles start at the emitter and travel to `SC.BeamEnd` over their life on a quadratic Bezier whose
+   control point is ½ (curvature × tangent + (1 − curvature) × end): velocity + constant acceleration, both stateless
+   expressions of the User vectors, so the beam follows a moving target at once. Spline noise is a static curl field of
+   the noise amplitude over the shortest spatial wavelength. Particle age therefore maps onto distance from the
+   emitter (the data's fades read along the beam) — Astra flagged this as an interpretation to keep in mind.
+4. **Flares.** `Flare` names `Data/Libs/Flares/<library>.xml` (LensFlareLibrary). Glow elements become camera-facing
+   procedural glows ((1 − r)^Gamma), Ghost elements sprites of their texture; colour = the emitter's × Tint,
+   luminance = root × element Brightness × light intensity, the light's age curve. Sizes are screen-space in
+   CryEngine; here they are 2 × emitter Size × element Size × Scale metres × `flare_world_scale` (0.35, Astra). `FakeLight`
+   lights only the flare.
+5. **Soft particles.** Depth fade in the masters: SoftFade = FadeThickness, else half the sprite radius (Astra).
+6. **Velocity stretch.** Ordinary emitters: ScaleSpriteSizeBySpeed (UE scales by speed² to a threshold). Beam
+   emitters: + `SC.BeamLength` × stretch / lifetime of length, growing with the path travelled so it never reaches
+   behind the muzzle (Astra: the centred full-length stretch spilled past both ends).
+7. **Flow maps.** The masters blend flipbook frames along a flow-vector flipbook (FlowTexture × FlowMapIntensity in
+   frame units). The flow maps are uncompressed RGB32 DDS, which the package writer rejects; SCFxBuild reads those
+   raw.
+8. **Refraction.** `M_SC_Particle_Distortion` (Substrate unlit, transmissive, pixel-normal-offset refraction) with
+   NormalTexture or the sprite's alpha as a lens; one twin emitter per Refraction emitter. Verified with a ×40 test
+   (`-RefractionScale=40`) bending the hull; at the data's 0.05 it is subtle (see round 2).
+9. **Other.** RandomFlipU/V (per-particle mirroring in the masters), CameraMaxDistance (distance culling), inherited
+   parent velocity (added to the speed range).
+
+**Viewer stand-ins** (`effects.json`, chosen by Astra where the data is silent): `unlit_diffuse_scene_units` 0.35
+(smoke was 2–4× too self-luminous at 1), `flare_world_scale` 0.35.
+
+**Verification:** UBT `SCViewerEditor Win64 Development` succeeded; `-run=SCFxBuild` (all features)
+`SC_FX_DONE systems=6 textures=10 materials=12 errors=0`; previews per item under `out/fk4c/fx-shots/r0-none` …
+`r9-final`, sheets in `out/fk4c/sheets/`.
+
+**Round 2 (defects in the final sheets):**
+- **Blocky metal flash.** The flash texture (`spark_impacts1_2x2_diff`, BC7) is white RGB with the sparks in alpha.
+  Its alpha ≥ 1/255 region is a blocky blob (BC7 4×4 blocks, 8-bit steps). At EmissiveLighting 10000 (7.2 M cd/m²),
+  even alpha 1/255 clips to white, so the sprite showed that blob. The game removes the skirt with `AlphaErosion`
+  (0.5 × an age curve), which the port skipped. Now AlphaErosion (own or inherited) drives Dynamic Material Parameter
+  1, and the masters cut texture alpha below it and rescale the rest. Filtering, sRGB and tiling were checked and fine.
+- **Beam layers apart.** Two port causes:
+  - the thin cores (SplineCurvature 0.5) and the glow (0.6) took separate curves;
+  - the glow's centred stretch, growing with age, reached past the target.
+  All guided emitters of an effect now ride one curve: the effect's first guided emitter, since the weapon evaluates
+  one beam spline. The stretch length follows a tent over age, 2 min(age, 1 − age), so a centred streak stays
+  between emitter and target. There is no data on how the game blends per-emitter curvatures, so the single spline
+  is an inference.
+- **Refraction did nothing.** Three causes:
+  - a new translucent material defaults to the After-DOF translucency pass, which the distortion pass skips: the
+    master is now Before DOF;
+  - the Substrate Unlit BSDF's Normal is world space (`CompileWithDefaultNormalWS`), so the tangent-space lens tilted
+    the whole quad: it is now transformed tangent → world;
+  - the coverage is now a Substrate weight, so the refracted scene blends by coverage, and pixels without coverage
+    are clipped.
+- **A 1 px rectangle around sprites.** This appeared during round 2. A bisect with `-Features` traced it to the
+  random UV flips. The glow textures keep 2–3/255 alpha on their edge texels, and at EmissiveLighting 100–10000 that
+  border lights up; the flip moved it onto the visible side. Frames are now sampled clamp-to-transparent: clamped
+  half a texel inside their cell, fading to 0 over the outermost texel. That also stops bleed between flipbook
+  frames.
+- **Smoke stand-in.** `unlit_diffuse_scene_units` 0.35 is the value set after Astra's "2–4× too self-luminous, try
+  0.25–0.5".
+
+**Still not ported** (listed per emitter in `skipped`): random first flipbook frame (the stateless SubUV module starts
+at frame 0), AlphaErosion, flare occlusion fade and sensor/dynamics terms, spline noise scrolling and damping, the
+Count cap of per-distance emitters, strength curves on counts, lifetimes and sizes, collisions (Elasticity),
+HalfRes / ResponsiveAA / MinPixels and other render-pipeline flags.
+
 ## Verification
 
 - `SCBridge.Cargo` stays green, with new tests for the heading policy and the multi-cell dock footprint.

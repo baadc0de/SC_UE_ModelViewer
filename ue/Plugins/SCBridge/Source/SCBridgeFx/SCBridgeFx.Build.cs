@@ -11,7 +11,7 @@ public class SCBridgeFx : ModuleRules
         bTreatAsEngineModule = true;
         PrivateDependencyModuleNames.AddRange(new[] {
             "Core", "CoreUObject", "Engine", "Json", "Projects", "RenderCore", "AssetRegistry", "UnrealEd",
-            "Niagara", "NiagaraCore",
+            "Niagara", "NiagaraCore", "XmlParser",
             // SCBridgeLib directly: the commandlet calls the FFI (sc_particle_effect, sc_p4k_read_dds, ...); Win64 DLLs
             // link the import library themselves (see SCBridgeEditor).
             "SCBridge", "SCBridgeLib",

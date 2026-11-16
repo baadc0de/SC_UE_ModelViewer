@@ -1,5 +1,5 @@
 {
-  "_comment": "WP-K4c: the game effects the SCFxBuild commandlet rebuilds as Niagara systems under /Game/SC/FX (ue/Plugins/SCBridge/Source/SCBridgeFx). effects: particle effect references <GUID>|<library>.<effect> (GUIDs from Data/Libs/Particles/<library>.xml); Gadgets/tractor_beam.fps.muzzle_1st has every emitter disabled in LIVE 4.10.2, the multitool tractor record fires tractorbeam/fps_tractorbeam.FPS_Tractor_Beam.Muzzleflash_1st (a light). material_effects: MaterialEffects FXLib entries <lib>:<effect>; each builds the particle effects it plays. unlit_diffuse_scene_units: the viewer's stand-in for scene lighting on particles without EmissiveLighting (the masters are unlit): the luminance, in game scene units (FSCStarEngine::SceneUnitNits cd/m2 each), of a white DiffuseLighting=1 particle. A viewer approximation, not game data.",
+  "_comment": "WP-K4c: the game effects the SCFxBuild commandlet rebuilds as Niagara systems under /Game/SC/FX (ue/Plugins/SCBridge/Source/SCBridgeFx). effects: particle effect references <GUID>|<library>.<effect> (GUIDs from Data/Libs/Particles/<library>.xml); Gadgets/tractor_beam.fps.muzzle_1st has every emitter disabled in LIVE 4.10.2, the multitool tractor record fires tractorbeam/fps_tractorbeam.FPS_Tractor_Beam.Muzzleflash_1st (a light). material_effects: MaterialEffects FXLib entries <lib>:<effect>; each builds the particle effects it plays. unlit_diffuse_scene_units: the viewer's stand-in for scene lighting on particles without EmissiveLighting (the masters are unlit): the luminance, in game scene units (FSCStarEngine::SceneUnitNits cd/m2 each), of a white DiffuseLighting=1 particle. A viewer approximation, not game data: 0.35 from the WP-K4c aesthetic review (out/fk4c/astra/final-1.md: smoke 2-4x too self-luminous at 1). strength: the DataCore record whose struct of the given type names the game strengths an effect EmitterStrength curve is evaluated at (its numeric fields in 0..1, blend coefficients and scales excluded; range_field: the beam range, metres, of the struct owner, for the beam bounds). SCFxBuild bakes the curves as polynomials in User.SC.Strength through those strengths. flare_world_scale: lens-flare elements are sized 2 x emitter Size x element Size x Scale metres x this factor (CryEngine sizes flares on screen; the factor is a viewer stand-in, chosen by the WP-K4c aesthetic review: out/fk4c/astra/item4-7-1.md).",
   "effects": [
     "2c211ca4-c915-b0c7-5d0e-58fe5c503a16|Gadgets/tractor_beam.fps.beam_only",
     "9427f5a2-8ef7-4aa5-26df-a3716439b0a2|Gadgets/tractor_beam.fps.impact",
@@ -10,5 +10,11 @@
     "sc_ships_surface_impacts:Metal_Small",
     "sc_ships_surface_impacts:Metal_Large"
   ],
-  "unlit_diffuse_scene_units": 1.0
+  "strength": {
+    "record": "EntityClassDefinition.grin_multitool_01_default_tractorbeam",
+    "type": "SWeaponActionFireTractorBeamStrengthValueParams",
+    "range_field": "maxDistance"
+  },
+  "unlit_diffuse_scene_units": 0.35,
+  "flare_world_scale": 0.35
 }

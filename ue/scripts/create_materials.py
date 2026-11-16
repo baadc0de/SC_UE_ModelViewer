@@ -748,19 +748,103 @@ def unlit_master():
     return g.save()
 
 
-def particle_master(name, blend):
-    """M_SC_Particle_Additive / _Translucent: the game's particle sprites (WP-K4c), unlit. The sprite's texture is a
-    flipbook-aware sample (Niagara's SubImageIndex picks the frame), times the particle colour; EmissiveScale carries
-    the effect's EmissiveLighting. Additive: weighted by texture alpha (AlphaWeight 1) and particle alpha.
-    Translucent: coverage = texture alpha x particle alpha."""
-    g = Graph(name, blend)
+# Flipbook sample of the particle masters (WP-K4c). The sprite's two frames (Niagara's SubImageIndex: UV0 the current,
+# UV1 the next, Blend between them when the renderer blends sub-images) are read at the frame-local coordinate, which
+# is optionally mirrored per particle (CryEngine RandomFlipU / RandomFlipV, from Niagara's MaterialRandom) and
+# advected by a flow-vector flipbook of the same layout (CryEngine FlowTexture x FlowMapIntensity: the standard
+# motion-vector frame blend, each frame pushed along its flow toward the blend point). GlowGamma > 0 replaces the
+# texture with CryEngine's procedural lens-flare glow, (1 - r)^gamma on the unit disc. FlowStrength is in frame units.
+# Each frame is sampled clamp-to-transparent (see the comment in the loop).
+PARTICLE_SAMPLE = """float2 N = max(float2(FramesU, FramesV), 1.0);
+float w, h;
+Tex.GetDimensions(w, h);
+float2 cellPx = float2(w, h) / N;
+bool fu = FlipU > 0.5 && frac(Rand * 13.17) >= 0.5;
+bool fv = FlipV > 0.5 && frac(Rand * 71.31) >= 0.5;
+float2 uvs[2] = { UV0, UV1 };
+float4 c[2];
+float2 firstLocal = 0.5;
+[unroll] for (int i = 0; i < 2; ++i)
+{
+    float2 cell = min(floor(uvs[i] * N), N - 1.0);
+    float2 local = uvs[i] * N - cell;
+    if (fu) local.x = 1.0 - local.x;
+    if (fv) local.y = 1.0 - local.y;
+    if (i == 0) firstLocal = local;
+    // A frame is clamped to its own texels (half a texel in) and fades to 0 over its outermost texel: no bleed from
+    // the neighbouring frame or, through wrap addressing, the opposite edge, and no lit quad border where a texture's
+    // edge texels keep a little alpha (a 1 px rectangle at high EmissiveLighting).
+    float2 edge = min(local, 1.0 - local) * cellPx;
+    float edgeMask = saturate(min(edge.x, edge.y));
+    local = clamp(local, 0.5 / cellPx, 1.0 - 0.5 / cellPx);
+    float2 uv = (cell + local) / N;
+    float2 flow = (Texture2DSample(Flow, FlowSampler, uv).rg * 2.0 - 1.0) * float2(fu ? -1.0 : 1.0, fv ? -1.0 : 1.0);
+    float push = (i == 0 ? -Blend : 1.0 - Blend) * FlowStrength;
+    c[i] = Texture2DSample(Tex, TexSampler, clamp(uv + flow * push / N, cell / N, (cell + 1.0) / N));
+    c[i].a *= edgeMask;
+}
+float4 s = lerp(c[0], c[1], Blend);
+if (GlowGamma > 0.0)
+    s = float4(1.0, 1.0, 1.0, pow(saturate(1.0 - length(firstLocal * 2.0 - 1.0)), GlowGamma));
+return s;"""
+
+
+def particle_sample(g):
+    """The flipbook sample (PARTICLE_SAMPLE) of a particle master: float4 colour and alpha."""
+    sub = g.node(unreal.MaterialExpressionParticleSubUVProperties)
+    tex = (g.node(unreal.MaterialExpressionTextureObjectParameter, parameter_name="SpriteTexture", texture=g.white,
+                  sampler_type=ST.SAMPLERTYPE_COLOR, group="SC"), "")
+    flow = (g.node(unreal.MaterialExpressionTextureObjectParameter, parameter_name="FlowTexture", texture=g.white_linear,
+                   sampler_type=ST.SAMPLERTYPE_LINEAR_COLOR, group="SC"), "")
+    return g.custom(PARTICLE_SAMPLE, unreal.CustomMaterialOutputType.CMOT_FLOAT4, Tex=tex, Flow=flow,
+                    UV0=(sub, "TextureCoordinate0"), UV1=(sub, "TextureCoordinate1"), Blend=(sub, "Blend"),
+                    Rand=(g.node(unreal.MaterialExpressionParticleRandom), ""),
+                    FramesU=g.scalar("FramesU", 1.0), FramesV=g.scalar("FramesV", 1.0),
+                    FlipU=g.scalar("FlipU", 0.0), FlipV=g.scalar("FlipV", 0.0),
+                    FlowStrength=g.scalar("FlowStrength", 0.0), GlowGamma=g.scalar("GlowGamma", 0.0))
+
+
+def soft_fade(g):
+    """Soft particles (CryEngine SoftParticle): opacity fades to 0 where the sprite meets scene depth over SoftFade cm
+    (0: off)."""
+    distance = g.scalar("SoftFade", 0.0)
+    fade = g.node(unreal.MaterialExpressionDepthFade)
+    g.link(*g.const(1.0), fade, "Opacity")
+    g.link(*g.op(unreal.MaterialExpressionMax, distance, g.const(0.01)), fade, "FadeDistance")
+    return g.lerp(g.const(1.0), (fade, ""), g.saturate(g.mul(distance, g.const(1.0e4))))
+
+
+def particle_usages(g):
     for usage in ("used_with_niagara_sprites", "used_with_niagara_ribbons", "used_with_niagara_mesh_particles"):
         g.m.set_editor_property(usage, True)  # a standalone session cannot add the usage at run time
-    sprite = g.node(unreal.MaterialExpressionTextureSampleParameterSubUV, parameter_name="SpriteTexture", texture=g.white,
-                    blend=True, sampler_type=ST.SAMPLERTYPE_COLOR, group="SC")
+
+
+def particle_master(name, blend):
+    """M_SC_Particle_Additive / _Translucent: the game's particle sprites (WP-K4c), unlit. Flipbook sample
+    (particle_sample: frames, flow, flips, procedural glow) x particle colour x Dynamic Parameter 0 (the effect's
+    EmitterStrength scales per channel, written by SCFxBuild; 1 when unused); EmissiveScale carries the scene unit of
+    EmissiveLighting. Additive: weighted by texture alpha (AlphaWeight 1), particle alpha, DP alpha and the soft fade.
+    Translucent: coverage = the same product."""
+    g = Graph(name, blend)
+    particle_usages(g)
+    sample = particle_sample(g)
     particle = g.node(unreal.MaterialExpressionParticleColor)
-    colour = g.mul(g.mul((sprite, "RGB"), (particle, "RGB")), g.scalar("EmissiveScale", 1.0))
-    alpha = g.mul(g.lerp(g.const(1.0), (sprite, "A"), g.scalar("AlphaWeight", 1.0)), (particle, "A"))
+    dp = g.node(unreal.MaterialExpressionDynamicParameter, default_value=unreal.LinearColor(1.0, 1.0, 1.0, 1.0))
+    rgb = g.op(unreal.MaterialExpressionComponentMask, sample, names=("",), r=True, g=True, b=True, a=False)
+    a = g.op(unreal.MaterialExpressionComponentMask, sample, names=("",), r=False, g=False, b=False, a=True)
+    # The strength scales are polynomials through the game's strengths (SCFxBuild): never below 0 between them.
+    dp_rgb = g.op(unreal.MaterialExpressionMax, (dp, "RGB"), g.const(0.0))
+    dp_a = g.op(unreal.MaterialExpressionMax, g.op(unreal.MaterialExpressionComponentMask, (dp, "RGBA"), names=("",),
+                                                  r=False, g=False, b=False, a=True), g.const(0.0))
+    colour = g.mul(g.mul(g.mul(rgb, (particle, "RGB")), dp_rgb), g.scalar("EmissiveScale", 1.0))
+    # CryEngine AlphaErosion (Dynamic Parameter 1 X = the erosion over the particle's age, 0 when unused): texture alpha
+    # below the threshold is cut, the rest rescaled to 0..1, so low-alpha skirts dissolve first.
+    erosion = g.op(unreal.MaterialExpressionComponentMask,
+                   (g.node(unreal.MaterialExpressionDynamicParameter, parameter_index=1,
+                           default_value=unreal.LinearColor(0.0, 0.0, 0.0, 0.0)), "RGBA"),
+                   names=("",), r=True, g=False, b=False, a=False)
+    a = g.custom("return saturate((A - E) / max(1.0 - E, 1e-3));", unreal.CustomMaterialOutputType.CMOT_FLOAT1, A=a, E=erosion)
+    alpha = g.mul(g.mul(g.mul(g.lerp(g.const(1.0), a, g.scalar("AlphaWeight", 1.0)), (particle, "A")), dp_a), soft_fade(g))
     unlit = g.node(unreal.MaterialExpressionSubstrateUnlitBSDF)
     if blend == unreal.BlendMode.BLEND_ADDITIVE:
         g.link(*g.mul(colour, alpha), unlit, "EmissiveColor")
@@ -768,6 +852,49 @@ def particle_master(name, blend):
     else:
         g.link(*colour, unlit, "EmissiveColor")
         g.weight(unlit, alpha)
+    return g.save()
+
+
+# Screen-space refraction of a distortion sprite (CryEngine Refraction / NormalTexture emitters): a tangent-space normal
+# from NormalTexture when the emitter has one, else the sprite's own alpha as a lens (the normal tilts outward along
+# the alpha gradient's disc). Strength follows Refraction.Strength x particle alpha x soft fade.
+DISTORTION_NORMAL = """float2 p = UV * 2.0 - 1.0;
+float3 lens = normalize(float3(p * Mask, 1.0));
+float3 n = UseNormalMap > 0.5 ? Texture2DSample(NormalTex, NormalTexSampler, UV).xyz * 2.0 - 1.0 : lens;
+return normalize(lerp(float3(0, 0, 1), n, saturate(Amount)));"""
+
+
+def distortion_master():
+    """M_SC_Particle_Distortion: unlit, fully transmissive translucent sprite that only bends the scene behind it
+    (refraction by pixel-normal offset; Refraction input = 1 + RefractionStrength x coverage, an IOR-like offset)."""
+    g = Graph("M_SC_Particle_Distortion", unreal.BlendMode.BLEND_TRANSLUCENT)
+    particle_usages(g)
+    g.m.set_editor_property("refraction_method", unreal.RefractionMode.RM_PIXEL_NORMAL_OFFSET)
+    # Distortion is accumulated for translucency rendered before depth of field only: UE 5.9's default pass for a new
+    # translucent material (After DOF, separate translucency) skips the distortion pass, so nothing would bend.
+    g.m.set_editor_property("translucency_pass", unreal.MaterialTranslucencyPass.MTP_BEFORE_DOF)
+    sample = particle_sample(g)
+    particle = g.node(unreal.MaterialExpressionParticleColor)
+    a = g.op(unreal.MaterialExpressionComponentMask, sample, names=("",), r=False, g=False, b=False, a=True)
+    coverage = g.mul(g.mul(a, (particle, "A")), soft_fade(g))
+    uv = (g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), "")
+    normal_tex = (g.node(unreal.MaterialExpressionTextureObjectParameter, parameter_name="NormalTexture", texture=g.flat_normal,
+                         sampler_type=ST.SAMPLERTYPE_NORMAL, group="SC"), "")
+    normal = g.custom(DISTORTION_NORMAL, unreal.CustomMaterialOutputType.CMOT_FLOAT3, UV=uv, Mask=a, NormalTex=normal_tex,
+                      UseNormalMap=g.scalar("UseNormalMap", 0.0), Amount=coverage)
+    unlit = g.node(unreal.MaterialExpressionSubstrateUnlitBSDF)
+    g.link(*g.const3((0.0, 0.0, 0.0)), unlit, "EmissiveColor")
+    g.link(*g.const3((1.0, 1.0, 1.0)), unlit, "TransmittanceColor")
+    # The Substrate Unlit BSDF takes a world-space normal (CompileWithDefaultNormalWS): a tangent-space normal fed as is
+    # tilts the whole quad by one constant offset (a shifted rectangle, no lens).
+    normal = g.op(unreal.MaterialExpressionTransform, normal, names=("Input",),
+                  transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_TANGENT,
+                  transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
+    g.link(*normal, unlit, "Normal")
+    # Coverage through a Substrate weight (refraction coverage is accounted for): the refracted scene blends in by the
+    # sprite's coverage instead of replacing the scene across the whole quad; pixels without coverage are discarded.
+    g.weight(unlit, g.custom("clip(C - 1e-3); return C;", unreal.CustomMaterialOutputType.CMOT_FLOAT1, C=coverage))
+    g.out(*g.add(g.const(1.0), g.mul(g.scalar("RefractionStrength", 0.0), coverage)), MP.MP_REFRACTION)
     return g.save()
 
 
@@ -837,4 +964,5 @@ for sided in (decal_master("M_SC_MeshDecal", True), decal_master("M_SC_MeshDecal
 unlit_master()
 particle_master("M_SC_Particle_Additive", unreal.BlendMode.BLEND_ADDITIVE)
 particle_master("M_SC_Particle_Translucent", unreal.BlendMode.BLEND_TRANSLUCENT)
+distortion_master()
 unreal.log("WP-U2 MATERIALS_OK")
