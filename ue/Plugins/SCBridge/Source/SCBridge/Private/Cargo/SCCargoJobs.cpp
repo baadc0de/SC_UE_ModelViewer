@@ -45,8 +45,8 @@ void USCCargoSubsystem::SetJobState(FSCCargoJob& Job, ESCCargoJobState NewState,
     if (!Job.IsActive()) Job.Finished = Job.StateSince;
     int32 Done = 0;
     for (const FSCCargoMove& M : Job.Moves) Done += M.Step == EStep::Done;
-    UE_LOG(LogSCCargo, Display, TEXT("CARGO_JOB id=%d state=%s t=%.1f moves=%d done=%d%s"), Job.Id, *StaticEnum<ESCCargoJobState>()->GetNameStringByValue(int64(NewState)),
-           Job.StateSince - Job.Created, Job.Moves.Num(), Done, Reason.IsEmpty() ? TEXT("") : *(TEXT(" reason=\"") + Reason.ToString() + TEXT("\"")));
+    UE_LOG(LogSCCargo, Display, TEXT("CARGO_JOB id=%d state=%s t=%.1f moves=%d done=%d overlaps=%d%s"), Job.Id, *StaticEnum<ESCCargoJobState>()->GetNameStringByValue(int64(NewState)),
+           Job.StateSince - Job.Created, Job.Moves.Num(), Done, ASCCargoDrone::Overlaps, Reason.IsEmpty() ? TEXT("") : *(TEXT(" reason=\"") + Reason.ToString() + TEXT("\"")));
     ++Revision;
 }
 
@@ -113,7 +113,7 @@ bool USCCargoSubsystem::LiftPlan(const ASCCargoContainer* A, const FTransform& P
     for (const TWeakObjectPtr<ASCCargoDrone>& D : State->Drones)
         if (D.IsValid()) DroneHeight = FMath::Max(DroneHeight, D->GetComponentsBoundingBox(false).GetSize().Z);
     const double Wanted = Height + Def.NormalClearanceM * 100.0;
-    const double MinHang = Def.MinDistanceM * 100.0, MaxHang = Def.FullStrengthDistanceM * 100.0;
+    const double MinHang = MinHangCm(A), MaxHang = FMath::Max(MinHang, Def.FullStrengthDistanceM * 100.0);
     const double Reach = Wanted + MaxHang + DroneHeight + MarginCm;
     // Headroom: the box (slightly shrunk: it may touch its neighbours and the floor) swept along the normal.
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCCargoLift), false, A);
@@ -121,7 +121,7 @@ bool USCCargoSubsystem::LiftPlan(const ASCCargoContainer* A, const FTransform& P
     FHitResult Hit;
     const FVector From = Pose.GetLocation() + Normal * 8;
     const FVector LiftHalf = A->SizeCm() / 2 - FVector(6);
-    const TSharedRef<FSCCargoHullRule> Hulls = HullRule(Params, LiftHalf, Pose.GetRotation(), MoveOf(A));
+    const TSharedRef<FSCCargoHullRule> Hulls = HullRule(Params, LiftHalf, Pose.GetRotation());
     const bool bHit = GetWorld()->SweepSingleByChannel(Hit, From, From + Normal * Reach, Pose.GetRotation(), ECC_WorldDynamic,
                                                        FCollisionShape::MakeBox(LiftHalf), Hulls->Along(From, From + Normal * Reach));
     const double Room = bHit ? Hit.Distance : Reach; // how far the box itself can travel
@@ -183,7 +183,8 @@ bool USCCargoSubsystem::StartMove(FSCCargoJob& Job, FSCCargoMove& M, double Now)
         // Only the requester's ships' drones and the hangar's shared pool serve this job.
         const FName Who = RequesterOf(Job.Request);
         for (const TWeakObjectPtr<ASCCargoDrone>& W : State->Drones)
-            if (ASCCargoDrone* D = W.Get(); D && D->MoveId == INDEX_NONE && (D->Owner.IsNone() || D->Owner == Who)) Free.Add(D);
+            // ... that can fly: a docked drone whose way out of its bay is not free stays where it is.
+            if (ASCCargoDrone* D = W.Get(); D && D->MoveId == INDEX_NONE && (D->Owner.IsNone() || D->Owner == Who) && (D->State != ESCCargoDroneState::Docked || CanLeaveBay(D))) Free.Add(D);
         int32 Need = M.Plan.DronesNeeded;
         if (M.Plan.Kind == ESCCargoMoveKind::Hold)
             for (const FSCCargoMove& O : Job.Moves)

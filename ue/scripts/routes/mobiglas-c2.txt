@@ -1,0 +1,34 @@
+# WP-K1 follow-up on the C2 (scenario c2_hangar): the mobiGlas lists every grid in the level however far apart (the
+# XL hangar's elevator and the C2's holds are more than 80 m apart), and what moves as one has one callout: a 32 SCU
+# box with its two-drone team (third line: the drones), a team flying out or home, a lone drone.
+# Host: -SCCamera=first -SCLoad=CRUS_Starlifter_C2
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_xltop_001.socpak
+#   -SCCargoScenario=c2_hangar -SCShotDir=<dir> -windowed -resx=1920 -resy=1080
+# Waits first for the box packages and the scenario stock (as cargo-c2.txt).
+0 DisableAllScreenMessages
+70 sc.Cargo.List
+0 sc.FP.Noclip 1
+0 sc.Cargo.View ship 45 18 60 free
+2 sc.MobiGlas 1
+3 sc.UI.Shot c2m-open
+1 sc.MobiGlas.State
+0 sc.MobiGlas.From elevator
+0 sc.MobiGlas.To ship
+0 sc.MobiGlas.Amount 64
+1 sc.UI.Shot c2m-plan64
+0 sc.MobiGlas.Select ship
+0 sc.MobiGlas.Confirm
+14 sc.MobiGlas 0
+0 sc.Cargo.ViewMoving 16 6 60
+1 sc.UI.Shot c2m-team-1
+6 sc.Cargo.ViewMoving 16 6 150
+1 sc.UI.Shot c2m-team-2
+8 sc.Cargo.ViewMoving 20 6 240
+1 sc.UI.Shot c2m-team-3
+8 sc.Cargo.ViewMoving 16 6 330
+1 sc.UI.Shot c2m-team-4
+0 sc.Cargo.View ship 45 18 60 free
+1 sc.MobiGlas 1
+2 sc.UI.Shot c2m-open-moving
+1 sc.MobiGlas.State
+1 quit

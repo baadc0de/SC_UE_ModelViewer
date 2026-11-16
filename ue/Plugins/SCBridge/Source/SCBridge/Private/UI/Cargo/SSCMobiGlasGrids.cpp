@@ -113,7 +113,7 @@ void SSCMobiGlasNearby::Construct(const FArguments& Args)
     Model = Args._Model;
     ChildSlot
     [
-        Panel(LOCTEXT("Nearby", "Nearby grids"),
+        Panel(LOCTEXT("Nearby", "Cargo grids"),
               TAttribute<FText>::CreateLambda([this] {
                   return Model->GetNearbyRadiusM() > 0 ? FText::Format(LOCTEXT("Within", "{0} M"), FMath::RoundToInt32(Model->GetNearbyRadiusM()))
                                                        : FText();

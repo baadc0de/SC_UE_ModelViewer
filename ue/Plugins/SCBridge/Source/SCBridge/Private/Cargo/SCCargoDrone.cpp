@@ -1,10 +1,12 @@
-// ASCCargoDrone (kinematic flight, rotors, tractor beam, soft physics-handle hold) and ASCCargoDroneDock (bays).
+// ASCCargoDrone (flight, the step every move of it takes: clear of loads and drones, swept and slid; rotors, tractor beam) and ASCCargoDroneDock (bays).
 #include "Cargo/SCCargoDrone.h"
+#include "Cargo/SCCargoSubsystem.h"
+#include "SCCargoState.h"
+#include "EngineUtils.h"
 #include "Cargo/SCCargoFlightPath.h"
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
-#include "PhysicsEngine/PhysicsHandleComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCCargoArt, Log, All);
 
@@ -36,21 +38,14 @@ UStaticMeshComponent* NewPart(AActor* Owner, USceneComponent* Parent, UStaticMes
 }
 } // namespace
 
+int32 ASCCargoDrone::Overlaps = 0;
+static constexpr double OwnBoxGapCm = 2; // kept between the hull and the face of the box it carries, when the box comes up to it
+
 ASCCargoDrone::ASCCargoDrone()
 {
     PrimaryActorTick.bCanEverTick = true;
     RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
     RootComponent->SetMobility(EComponentMobility::Movable);
-    Handle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("Handle"));
-    // Soft hold (acceleration-mode drive, so the same for any mass): the box lags ~a/k behind the beam, sways at about
-    // 1 Hz and settles (a tractor beam, not a rigid arm). Its sag under gravity, g/k, is lifted out by the carrier.
-    Handle->bSoftLinearConstraint = true;
-    Handle->bSoftAngularConstraint = true;
-    Handle->LinearStiffness = HoldStiffness;
-    Handle->LinearDamping = 7.f;
-    Handle->AngularStiffness = 60.f;
-    Handle->AngularDamping = 14.f;
-    Handle->bInterpolateTarget = false;
 }
 
 void ASCCargoDrone::PostInitializeComponents()
@@ -73,6 +68,12 @@ void ASCCargoDrone::PostInitializeComponents()
         }
         Rotors.Add(Rotor);
     }
+    // The collision shape: the hull's and the rotors' bounds, level, about the actor's origin.
+    FBox Shape = Hull->Bounds.GetBox();
+    for (const UStaticMeshComponent* Rotor : Rotors) Shape += Rotor->Bounds.GetBox();
+    HullCentre = Shape.GetCenter() - GetActorLocation();
+    HullHalf = Shape.GetExtent();
+    UE_LOG(LogTemp, Display, TEXT("CARGO_DRONE_SHAPE half=%s centre=%s radius_cm=%.0f"), *HullHalf.ToCompactString(), *HullCentre.ToCompactString(), HullRadius());
     Beam = NewPart(this, RootComponent, Art(TEXT("SM_TractorBeam"), TEXT("/Engine/BasicShapes/Cylinder.Cylinder")));
     Beam->SetCastShadow(false);
     Beam->SetVisibility(false);
@@ -106,6 +107,7 @@ void ASCCargoDrone::Place(const FTransform& World)
     Velocity = FVector::ZeroVector;
     Target = World.GetLocation();
     SetActorTransform(World);
+    Trail.Reset();
 }
 
 void ASCCargoDrone::Tick(float DeltaSeconds)
@@ -130,7 +132,9 @@ void ASCCargoDrone::Tick(float DeltaSeconds)
         const FVector Local = FRotator(0, R.Yaw, 0).UnrotateVector(Accel) / FMath::Max(MaxAccel, 1.f);
         R.Pitch = FMath::FInterpTo(R.Pitch, float(-Local.X * 8.0), Dt, 4.f);
         R.Roll = FMath::FInterpTo(R.Roll, float(Local.Y * 8.0), Dt, 4.f);
-        SetActorLocationAndRotation(GetActorLocation() + Velocity * Dt, R);
+        const FVector Before = GetActorLocation();
+        Step(Before + Velocity * Dt, R, Dt);
+        if (bBlocked) Velocity = (GetActorLocation() - Before) / Dt;
     }
     RotorAngle = FMath::Fmod(RotorAngle + Dt * (State == ESCCargoDroneState::Docked ? 0.f : 2400.f), 360.f);
     for (int32 I = 0; I < Rotors.Num(); ++I)
@@ -142,25 +146,165 @@ FVector ASCCargoDrone::Emitter() const
     return Hull && Hull->DoesSocketExist(TEXT("Tractor")) ? Hull->GetSocketLocation(TEXT("Tractor")) : GetActorLocation() - FVector(0, 0, 20);
 }
 
-void ASCCargoDrone::Pose(const FVector& Location, const FVector& Accel, float Yaw, float DeltaSeconds)
+void ASCCargoDrone::Gusts(float Dt, FVector2D& OutWobble)
 {
-    bFlying = false;
-    const float Dt = FMath::Max(DeltaSeconds, 1e-3f);
     // Gusts: the controller holds the flight point within the sway (a wander of a few cm, a wobble of a few degrees).
+    // Each drone's are its own process (its seed's spectrum, FSCCargoSway).
     SwayGainNow = FMath::FInterpTo(SwayGainNow, SwayGain, Dt, 1.5f);
     const double T = GetWorld() ? GetWorld()->GetTimeSeconds() : 0;
     const uint32 Seed = GetTypeHash(DroneId) ^ 0x5eed;
     SwayNow = SwayGainNow > 1e-3f ? FSCCargoSway::Offset(Seed, T, SwayAmplitudeCm * SwayGainNow, SwayFrequencyHz) : FVector::ZeroVector;
-    const FVector2D Wobble = SwayGainNow > 1e-3f ? FSCCargoSway::Tilt(Seed, T, SwayTiltDeg * SwayGainNow, SwayFrequencyHz) : FVector2D::ZeroVector;
-    const FVector At = Location + SwayNow;
-    Velocity = (At - GetActorLocation()) / Dt;
+    OutWobble = SwayGainNow > 1e-3f ? FSCCargoSway::Tilt(Seed, T, SwayTiltDeg * SwayGainNow, SwayFrequencyHz) : FVector2D::ZeroVector;
+}
+
+void ASCCargoDrone::Step(const FVector& Want, const FRotator& Rotation, float Dt)
+{
+    const FVector From = GetActorLocation();
+    UWorld* World = GetWorld();
+    USCCargoSubsystem* Cargo = World ? World->GetSubsystem<USCCargoSubsystem>() : nullptr;
+    // In its bay, and between the bay and its exit, the dock holds and moves it.
+    if (!Cargo || State == ESCCargoDroneState::Docked || (bDockLeg && InDockWay()))
+    {
+        SetActorLocationAndRotation(Want, Rotation);
+        KeptAt = Want;
+        bBlocked = bOverlapping = false;
+        return;
+    }
+    // No faster than twice its speed limit (a drone held up or turned aside catches up; it never jumps).
+    const double MaxStep = MaxSpeed > 0 ? 2.0 * MaxSpeed * Dt : TNumericLimits<double>::Max();
+    FVector To = From + (Want - From).GetClampedToMaxSize(MaxStep);
+    const FVector Asked = To;
+    // The loads other teams fly are not swept against the drones; a drone flying alone steps out of their way as
+    // soon as it takes it to. (A team's drones stay with their box: loads keep apart by their right of way, which
+    // reaches as far as the drones over them.)
+    TArray<FSCCargoDroneSteer::FLoad, TInlineAllocator<8>> Loads;
+    if (State == ESCCargoDroneState::Launching || State == ESCCargoDroneState::ToPickup || State == ESCCargoDroneState::Returning || State == ESCCargoDroneState::Docking) Cargo->DroneLoads(this, Loads);
+    if (!Loads.IsEmpty())
+    {
+        // With half the clearance a route keeps around its hull: a load in the air sways.
+        const FVector Centre = FSCCargoDroneSteer::Evade(To + HullCentre, HullHalf + FVector(SCCargoFlightTuning::DroneClearanceCm / 2), Loads, MaxAccel);
+        To = From + (Centre - HullCentre - From).GetClampedToMaxSize(MaxStep);
+    }
+    // Its own box in the air sways and lags its route, up to a drone on a short beam: off the face its beam holds.
+    if (FTransform Own; CarryingBoxId != INDEX_NONE)
+        if (FVector OwnHalf; Cargo->DroneOwnBox(this, Own, OwnHalf))
+            To = From + (FSCCargoDroneSteer::OffFace(To + HullCentre, HullHalf + FVector(OwnBoxGapCm), Own, OwnHalf) - HullCentre - From).GetClampedToMaxSize(MaxStep);
+    // The other drones in the air, as they are now: where, how fast, how big.
+    TArray<FSCCargoDroneSteer::FOther, TInlineAllocator<16>> Others;
+    for (TActorIterator<ASCCargoDrone> It(World); It; ++It)
+    {
+        if (*It == this || It->State == ESCCargoDroneState::Docked) continue;
+        FSCCargoDroneSteer::FOther& O = Others.AddDefaulted_GetRef();
+        O.P = It->GetActorLocation();
+        O.V = It->GetVelocity();
+        O.Radius = It->HullRadius();
+    }
+    const FVector Evaded = To;
+    To = FSCCargoDroneSteer::Separate(From, To, HullRadius(), Others, Dt, MaxStep); // no further than any step goes
+    // The surroundings and the boxes: swept with the hull's bounds, slid along what is met.
+    FString By;
+    FVector End = FSCCargoDroneSteer::Slide(From, To, [&](const FVector& A, const FVector& B, double& OutFraction, FVector& OutNormal) {
+        return Cargo->DroneSweep(this, A, B, OutFraction, OutNormal, &By);
+    }, bBlocked);
+    // Held up: what by, once in a while (a drone that slides along something for a while says so once).
+    if (const double Now = World->GetTimeSeconds(); bBlocked && Now - BlockedLogged > 2.0)
+    {
+        BlockedLogged = Now;
+        UE_LOG(LogTemp, Display, TEXT("CARGO_DRONE_BLOCKED drone=%d state=%d at=%s wanted=%s by=%s"), DroneId, int32(State), *From.ToCompactString(), *To.ToCompactString(), *By);
+    }
+    // Slid into another drone's room: stay.
+    for (const FSCCargoDroneSteer::FOther& O : Others)
+        if (FVector::Dist(End, O.P) < HullRadius() + O.Radius && FVector::Dist(From, O.P) >= FVector::Dist(End, O.P)) End = From;
+    SetActorLocationAndRotation(End, Rotation);
+    if (FVector::Dist(KeptAt, End) > KeptSlackCm) KeptAt = End;
+    if (Trail.IsEmpty() || FVector::Dist(Trail.Last(), End) >= TrailStepCm)
+    {
+        if (Trail.Num() >= TrailPoints) Trail.RemoveAt(0);
+        Trail.Add(End);
+    }
+    // What it ended in, if anything (it should never): counted once each time it begins.
+    FString What;
+    for (const FSCCargoDroneSteer::FOther& O : Others)
+        if (FVector::Dist(End, O.P) < HullRadius() + O.Radius) What = TEXT("a drone");
+    if (What.IsEmpty()) Cargo->DroneOverlap(this, End, What);
+    if (!What.IsEmpty() && !bOverlapping)
+    {
+        ++Overlaps;
+        UE_LOG(LogTemp, Warning, TEXT("CARGO_DRONE_OVERLAP drone=%d with=%s at=%s state=%d overlaps=%d from=%s loads=%d evaded_cm=%.0f apart_cm=%.0f slid_cm=%.0f carrying=%d"), DroneId, *What,
+               *End.ToCompactString(), int32(State), Overlaps, *From.ToCompactString(), Loads.Num(), FVector::Dist(Asked, Evaded), FVector::Dist(Evaded, To), FVector::Dist(To, End), CarryingBoxId);
+    }
+    bOverlapping = !What.IsEmpty();
+}
+
+void ASCCargoDrone::Lean(const FVector& Accel, const FVector2D& Wobble, float Yaw, float Dt, const FVector& At)
+{
+    const FVector Before = GetActorLocation();
     FRotator R = GetActorRotation();
     R.Yaw = FMath::FixedTurn(R.Yaw, Yaw, 120.f * Dt);
     // Lean into the acceleration (visual): about 8 degrees at the empty drones' full thrust, plus the gusts' wobble.
     const FVector Local = FRotator(0, R.Yaw, 0).UnrotateVector(Accel) / FMath::Max(MaxAccel, 1.f);
     R.Pitch = FMath::FInterpTo(R.Pitch, float(FMath::Clamp(-Local.X * 8.0 + Wobble.X, -15.0, 15.0)), Dt, 5.f);
     R.Roll = FMath::FInterpTo(R.Roll, float(FMath::Clamp(Local.Y * 8.0 + Wobble.Y, -15.0, 15.0)), Dt, 5.f);
-    SetActorLocationAndRotation(At, R);
+    Step(At, R, Dt);
+    Velocity = (GetActorLocation() - Before) / Dt;
+}
+
+void ASCCargoDrone::Pose(const FVector& Location, const FVector& Accel, float Yaw, float DeltaSeconds)
+{
+    bFlying = false;
+    const float Dt = FMath::Max(DeltaSeconds, 1e-3f);
+    const FVector SwayBefore = SwayNow;
+    FVector2D Wobble;
+    Gusts(Dt, Wobble);
+    FVector At = Location;
+    if (bBody)
+    {
+        // Coming off its own station (a tug just over): the body flies onto the formation point, then keeps it.
+        const FVector Offset = GetActorLocation() - SwayBefore - Flight.P * 100.0; // actor origin from the body's point
+        Flight.Step((Location - Offset) / 100.0, (Location - PoseTarget) / 100.0 / Dt, FVector::ZeroVector, Dt);
+        At = Flight.P * 100.0 + Offset;
+        if (FVector::Dist(At, Location) < 2.0) bBody = false;
+    }
+    PoseTarget = Location;
+    Lean(Accel, Wobble, Yaw, Dt, At + SwayNow);
+}
+
+void ASCCargoDrone::Tug(const FSCCargoTug::FStation& Station, const FVector& ReactionN, float Yaw, float DeltaSeconds)
+{
+    bFlying = false;
+    const float Dt = FMath::Max(DeltaSeconds, 1e-3f);
+    FVector2D Wobble;
+    const FVector SwayBefore = SwayNow;
+    Gusts(Dt, Wobble);
+    // The body is the emitter less the gusts: they push the drone about the point its thrust holds.
+    const FVector Offset = GetActorLocation() - Emitter();
+    if (!bBody)
+    {
+        Flight.P = (Emitter() - SwayBefore) / 100.0;
+        Flight.V = Velocity / 100.0;
+        Flight.A = FVector::ZeroVector;
+        bBody = true;
+    }
+    Flight.Step(Station.Hover, Station.HoverV, ReactionN, Dt);
+    BeamRestM = Station.RestM;
+    PoseTarget = Flight.P * 100.0 + Offset;
+    const FVector Before = GetActorLocation();
+    Lean(Flight.A * 100.0, Wobble, Yaw, Dt, PoseTarget + SwayNow);
+    // Held up or turned aside on the way: the body is where the drone is. Turned aside by its own steering (another
+    // drone passing), its thrust's velocity is as it was: the step moved it, it gave it no speed. (Read as a
+    // velocity, a step away from a drone flying in through the door a load was leaving by sent that load's two
+    // drones 12 and 15 m off within a second.) Held up by something it met, it keeps of its velocity what lies
+    // along the way it slid.
+    if (const FVector Actual = GetActorLocation() - SwayNow - Offset; !Actual.Equals(Flight.P * 100.0, 0.5))
+    {
+        Flight.P = Actual / 100.0;
+        if (bBlocked)
+        {
+            const FVector Went = (GetActorLocation() - Before).GetSafeNormal();
+            Flight.V = Went * FMath::Max(FVector::DotProduct(Flight.V, Went), 0.0);
+            Flight.A = FVector::ZeroVector;
+        }
+    }
 }
 
 void ASCCargoDrone::SetBeam(bool bOn, const FVector& Point, float WidthCm)
@@ -178,18 +322,18 @@ void ASCCargoDrone::SetBeam(bool bOn, const FVector& Point, float WidthCm)
     Beam->SetWorldTransform(FTransform(Along, Base, Scale));
 }
 
-void ASCCargoDrone::Grab(UPrimitiveComponent* Box, const FVector& At, const FRotator& Rotation)
+void ASCCargoDrone::Grab(UPrimitiveComponent* Box)
 {
-    if (!Box) return;
-    Handle->GrabComponentAtLocationWithRotation(Box, NAME_None, At, Rotation);
-    Handle->SetTargetLocationAndRotation(At, Rotation);
+    Held = Box;
+    BeamLengthM = 0; // not measured yet: no rate on the first step
+    BeamForceN = FVector::ZeroVector;
 }
 
-void ASCCargoDrone::Hold(const FVector& At, const FRotator& Rotation) { Handle->SetTargetLocationAndRotation(At, Rotation); }
-
-void ASCCargoDrone::Drop() { Handle->ReleaseComponent(); }
-
-bool ASCCargoDrone::IsHolding() const { return Handle->GetGrabbedComponent() != nullptr; }
+void ASCCargoDrone::Drop()
+{
+    Held = nullptr;
+    BeamForceN = FVector::ZeroVector;
+}
 
 // ---------------------------------------------------------------------------------------------------- dock
 

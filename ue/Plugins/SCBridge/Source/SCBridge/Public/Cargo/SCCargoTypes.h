@@ -246,6 +246,10 @@ struct SCBRIDGE_API FSCCargoDroneView
     UPROPERTY(BlueprintReadOnly) FText Label; // "Drone 1"
     UPROPERTY(BlueprintReadOnly) int32 JobId = INDEX_NONE;
     UPROPERTY(BlueprintReadOnly) int32 CarryingBoxId = INDEX_NONE;
+    /** The move (one box's task) that has claimed the drone and that move's box: drones sharing a move are a team,
+     *  from the flight out to the release. INDEX_NONE when unclaimed (docked, or flying home after its move). */
+    UPROPERTY(BlueprintReadOnly) int32 MoveId = INDEX_NONE;
+    UPROPERTY(BlueprintReadOnly) int32 MoveBoxId = INDEX_NONE;
     UPROPERTY(BlueprintReadOnly) FVector WorldLocation = FVector::ZeroVector;
     UPROPERTY(BlueprintReadOnly) FBox WorldBounds = FBox(ForceInit);
     /** Owner (multi-owner hangars): its dock's owner ("Shared" for the hangar's docks). Declared by K1c, filled by K1b. */

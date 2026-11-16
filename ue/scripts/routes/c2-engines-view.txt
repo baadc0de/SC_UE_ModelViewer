@@ -1,0 +1,22 @@
+# C2 thrusters seen from the hangar floor (port sub-geometry by the port's flags / portTags, not its name).
+# Shots from behind (main thrusters), each side (wing VTOL pods) and the front quarter.
+# Host: -SCCamera=first -SCLoad=CRUS_Starlifter_C2
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_xltop_001.socpak -SCShotDir=<dir>
+30 sc.FP.Spawns
+1 sc.FP.Teleport -7500 0 -1300
+1 sc.FP.Look 0 10
+2 shot 01-rear
+0 sc.FP.Teleport -1000 -6500 -1300
+1 sc.FP.Look 90 10
+2 shot 02-side-a
+0 sc.FP.Look -90 10
+2 shot 02-side-a-back
+0 sc.FP.Teleport -1000 6500 -1300
+1 sc.FP.Look -90 10
+2 shot 03-side-b
+0 sc.FP.Look 90 10
+2 shot 03-side-b-back
+0 sc.FP.Teleport -6000 -5000 -1300
+1 sc.FP.Look 40 10
+2 shot 04-rear-quarter
+1 quit

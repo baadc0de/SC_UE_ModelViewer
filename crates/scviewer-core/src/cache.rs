@@ -28,7 +28,9 @@ use std::{
 // 25: the browser index lists object containers (`environments`); environment packages (LOOK-3).
 // 26: scene.json carries inventory containers (`inventory_containers[]`, `interiors[].inventory_containers[]`),
 //     `children[].port_path` and the root item's footprint (`root_entity.inventory_occupancy`, …) (WP-K1).
-pub const CACHE_FORMAT_VERSION: u32 = 26;
+// 28: in a trimesh collider with both, the triangles without a surface are their own `sc_physics` record, class
+//     `no_surface` (WP-P4; 27 was a development step of the same change).
+pub const CACHE_FORMAT_VERSION: u32 = 28;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

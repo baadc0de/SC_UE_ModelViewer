@@ -7,6 +7,7 @@
 #include "Cargo/SCCargoPlanner.h"
 #include "Cargo/SCCargoScenario.h"
 #include "Cargo/SCCargoFlightPath.h"
+#include "Cargo/SCCargoTug.h"
 #include "SCCargoBoxLibrary.h"
 
 class ASCVehicle;
@@ -41,7 +42,6 @@ struct FSCCargoHullRule
     TArray<FVector> Probes;   // points of the shape, from its centre: upright axes through them are tested
     double HalfZ = 0;         // the shape's half height
     TSharedPtr<FMemo> Memo;   // shared by the queries of one world state
-    uint32 Partners = 0;      // the vehicles whose hulls are out everywhere (the move's own): for the identity
     /** Bit per Hulls entry whose grid the shape centred at Centre is in. */
     uint32 Touched(const FVector& Centre) const;
     const FCollisionQueryParams& For(uint32 Mask) const;
@@ -88,6 +88,7 @@ constexpr double TurnMarginCm = 5;      // around the box while it turns in free
 constexpr double MaxApproachCm = 600;   // how far out along a grid's normal a hover point is looked for
 constexpr double MaxTurnRiseCm = 400;   // how far above the hover point the load may turn
 constexpr double DroneHeightCm = 60;    // beam emitter to rotor tops above the box (the drone's bounds when known)
+constexpr double GuardStretchCm = 50;   // the guard sweeps the route ahead in stretches of this length (as a search samples its route)
 constexpr double PreciseLeadCm = 100;   // the precise zone of an interior grid begins this far before the load reaches its lattice
 constexpr double PreciseSpeedCmS = 200; // flight speed in it (slow: the box follows its beam closely)
 constexpr double FlushInsetCm = 2;      // a box swept onto its slot, or in beside boxes at rest, is taken this much inside its size
@@ -155,10 +156,13 @@ struct FSCCargoMove
     TArray<int32> Drones;                 // drone ids, the lead (holding the box) first
     TArray<FSCCargoFlight> DroneFlights;  // per drone: its own flight out to the box or home (empty, nimble)
     TArray<FVector> Offsets;              // per drone: formation offset in the box's frame (cm)
+    TArray<FVector> Stations;             // per drone: where it hovers attached to the box at rest (world; its flight out ends there)
+    TArray<double> FlightAt, FlightSince; // per drone: how far its flight had got, and since when it has not got on
     FSCCargoFlight Carry;                 // the box centre's flight of the current step (lift, transit, lower)
     FVector FromNormal = FVector::UpVector, ToNormal = FVector::UpVector; // source / destination grid normals (world)
     FQuat FromRotation = FQuat::Identity, ToRotation = FQuat::Identity;
     FTransform CatchFrom;                 // the swinging box's pose when the destination's approach takes it over
+    double CatchStart = -1;               // when the catch began (after the drones of a box that tilts have moved out of its way); < 0: not yet
     FVector HoldPoint = FVector::ZeroVector;
     TArray<FVector> TransitPath;          // the load's planned route from the lift to the hold point / approach (swept free)
     FVector Goal = FVector::ZeroVector;   // its end: where the load turns onto the destination lattice
@@ -191,7 +195,31 @@ struct FSCCargoMove
     }
     bool bStalled = false;                // no route from where the load stopped: it holds position and plans again
     bool bRestoring = false;              // a hold flying its box back
-    double StepStart = 0, LastSample = 0;
+    double StepStart = 0, LastSample = 0, LastTugSample = 0;
+    // The guard: the route is known free up to ClearTo (arclength of Carry), swept in short stretches as the load comes
+    // to need them (its braking distance ahead); bBlockedAhead: the stretch after ClearTo is not free, the load brakes
+    // to rest there. GuardStamp: the world the stretches were swept in.
+    double ClearTo = 0;
+    bool bBlockedAhead = false;
+    FVector RouteV = FVector::ZeroVector; // the route's velocity at the last tug (cm/s), for its acceleration
+    bool bRouteMoving = false;            // RouteV is from the tick before
+    bool bTurning = false, bTilting = false; // the box is being turned this tick (at the top of its lift, at a hold's entrance, as it is caught); and tilted by that turn
+    bool bNoStation = false;              // a drone of the team found no room for even its shortest beam at the route point
+    bool bDroneBehind = false;            // a drone of the team is further from its station than its beam keeps full strength
+    // The room over the route being flown, per drone and stretch (BeamRoom), in the world RoomStamp names.
+    mutable TMap<int64, double> Rooms;
+    mutable uint32 RoomStamp = 0;
+    // Planning: when the move was planned (who was first: a team holds short of its station for loads planned before
+    // it), and a plan that failed against space kept for other teams' drones is tried again from here on.
+    double PlannedAt = 0, PlanRetryAt = 0;
+    bool bReplanning = false;             // a replan's search is under way
+    bool bKeptHit = false;                // this planning (or replan) was stopped somewhere by space kept for other teams' drones
+    TArray<double> HoldAt;                // per drone: where its flight out holds short (HoldShort), checked at HoldChecked
+    double HoldChecked = -1;
+    bool bRigid = false;                  // in the precise zone: the box held rigidly on its route (not simulated)
+    FVector RigidOffset = FVector::ZeroVector; // what it was off the route by when it came in, dying away
+    FQuat RigidRotation = FQuat::Identity;
+    uint32 GuardStamp = 0;
     double HangCm = 0, LoadAccel = 0, LoadJerk = 0; // cm, cm/s^2, cm/s^3 of the loaded team
     double DistanceCm = 0;                // planned flight length (ETA)
     FString Failure;
@@ -269,6 +297,12 @@ struct FSCCargoState
     TSharedPtr<FSCCargoHullRule::FMemo> GridMemo;
     FBox Bounds = FBox(ForceInit);
     double ScuVolumeM3 = 0; // one SCU's volume, from the first standard cargo box's occupancy (data)
+    // Times a route query was stopped by space kept for drones alone (not by the world): a plan that fails with these
+    // may succeed once the drones have moved on.
+    TSharedRef<int64> KeptHits = MakeShared<int64>(0);
+    // The space kept for drones, per kind of query, for this frame (USCCargoSubsystem::KeptSpace).
+    uint64 KeptFrame = MAX_uint64;
+    TMap<TTuple<const FSCCargoMove*, const ASCCargoDrone*, int32, bool>, TSharedRef<struct FSCCargoKeepOut>> KeptByQuery;
 };
 
 /** The drone with DroneId, or null. */

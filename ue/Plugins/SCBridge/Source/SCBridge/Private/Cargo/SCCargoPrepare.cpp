@@ -22,6 +22,8 @@ namespace
 constexpr double SearchRestartCm = 100; // a search whose start moved further than this begins again
 constexpr double EntranceStepCm = 200;  // a hold's turn point is looked for outwards in steps of this
 constexpr double MaxEntranceOutCm = 4000; // ... up to this far beyond the first point outside the hold (viewer choice)
+constexpr double BesideRampKeeps = 5;   // a teammate's route eases away from the first's over this many kept distances
+constexpr double PlanRetrySeconds = 1;  // a plan stopped by space kept for other teams' drones is tried again after this
 FSCCargoPlacement SlotOf(const FSCCargoMovePlan& P)
 {
     FSCCargoPlacement S;
@@ -111,14 +113,35 @@ bool USCCargoSubsystem::PlanRoute(const FSCCargoJob& Job, FSCCargoMove& M, const
     return true;
 }
 
-FVector USCCargoSubsystem::Departure(const ASCCargoDrone* D, const FVector& Exit) const
+FVector USCCargoSubsystem::Departure(ASCCargoDrone* D, const FVector& Exit) const
 {
     // Where a drone leaving (or entering) its bay is clear of the grid its dock stands on: along that grid's normal by
-    // the drone's routing half-size and its clearance.
+    // its routing shape (DroneQuery: the hull's bounds, level, half the clearance and the gusts around them) as far
+    // as that reaches along the normal, and the clearance; further out while that shape does not fit there (a box
+    // standing beside the dock: the drone rises past it before its free route begins). Kept on the drone: the
+    // end of its dock's corridor.
     const FSCCargoDock* Dock = State->Docks.FindByPredicate([&](const FSCCargoDock& K) { return K.ItemId == D->DockItem; });
     const USCCargoGridComponent* Grid = Dock ? FindGrid(Dock->GridId) : nullptr;
     const FVector N = Grid ? Grid->LatticeToWorld().GetRotation().GetUpVector() : FVector::UpVector;
-    return Exit + N * (D->GetComponentsBoundingBox(false).GetExtent().GetMax() + DroneClearanceCm * 2);
+    const FVector Half = D->HullHalf + FVector(DroneClearanceCm / 2 + SwayEnvelopeCm());
+    const double Least = FMath::Abs(N.X) * Half.X + FMath::Abs(N.Y) * Half.Y + FMath::Abs(N.Z) * Half.Z + DroneClearanceCm;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(SCCargoDeparture), /*bTraceComplex=*/true, D);
+    for (const TWeakObjectPtr<ASCCargoDrone>& Other : State->Drones) Params.AddIgnoredActor(Other.Get());
+    for (const FSCCargoDock& K : State->Docks) Params.AddIgnoredActor(K.Actor.Get());
+    if (const APlayerController* PC = GetWorld()->GetFirstPlayerController(); PC && PC->GetPawn()) Params.AddIgnoredActor(PC->GetPawn());
+    for (const auto& Pair : State->Boxes)
+        if (SCCargoIsFlying(Pair.Value.State)) Params.AddIgnoredActor(Pair.Value.Actor.Get());
+    const TSharedRef<FSCCargoHullRule> Hulls = HullRule(Params, Half, FQuat::Identity);
+    D->DockClear = Exit + N * Least;
+    for (double Off = Least; Off <= Least + MaxApproachCm; Off += 25)
+    {
+        const FVector P = Exit + N * Off + D->HullCentre;
+        if (GetWorld()->OverlapAnyTestByObjectType(P, FQuat::Identity, SCCargoObstacles(), FCollisionShape::MakeBox(Half), Hulls->At(P))) continue;
+        D->DockClear = Exit + N * Off;
+        break;
+    }
+    D->bDockClear = true;
+    return D->DockClear;
 }
 
 bool USCCargoSubsystem::HomeFlight(const FSCCargoJob& Job, FSCCargoMove& M, ASCCargoDrone* D, FSCCargoFlight& Out)
@@ -130,12 +153,21 @@ bool USCCargoSubsystem::HomeFlight(const FSCCargoJob& Job, FSCCargoMove& M, ASCC
     if (!DockActor) return false;
     TArray<FVector> Path;
     const FVector Exit = DockActor->BayExit(D->Bay), Clear = Departure(D, Exit);
-    FSCCargoRouteQuery Query = DroneQuery(D);
+    const FVector Ends[] = {D->GetActorLocation(), Clear};
+    FSCCargoRouteQuery Query = DroneQuery(D, &M, Ends);
+    if (Query.Blocked(Ends[0]) || Query.Blocked(Ends[1])) Query = DroneQuery(D, &M, Ends, /*bTight=*/true); // an end within the margin: the bare hull
     Query.CellCache = M.Cells(Query.Identity);
-    if (!PlanRoute(Job, M, TEXT("home"), D->GetActorLocation(), Clear, Query, Path, FString::Printf(TEXT("home:%d"), D->DroneId), false))
+    FVector Start = D->GetActorLocation();
+    TArray<FVector> Via;
+    if (!ClearStart(D, Query, Start, &Via) || !PlanRoute(Job, M, TEXT("home"), Start, Clear, Query, Path, FString::Printf(TEXT("home:%d"), D->DroneId), false))
     {
         if (M.bRoutePending) M.NextRetry = 0; // the search goes on next frame
         return false;
+    }
+    if (!Start.Equals(D->GetActorLocation(), 1.0))
+    {
+        Path.Insert(Via, 0);
+        Path.Insert(D->GetActorLocation(), 0);
     }
     Path.Add(Exit);
     Path.Add(DockActor->BayTransform(D->Bay).GetLocation());
@@ -151,6 +183,38 @@ bool USCCargoSubsystem::EnvironmentAccess(USCCargoGridComponent* Grid, bool bOpe
 }
 
 bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why)
+{
+    // Planned (PlanMove) against the space kept for other teams' drones as it is now. A plan that fails where only
+    // that space stopped it is not a failure of the box: the drones move on, and it is planned again then.
+    const double Now = GetWorld()->GetTimeSeconds();
+    if (Now < M.PlanRetryAt)
+    {
+        M.bRoutePending = true;
+        return false;
+    }
+    const int64 Before = *State->KeptHits;
+    const bool bPlanned = PlanMove(Job, M, Why);
+    M.bKeptHit |= *State->KeptHits != Before;
+    if (bPlanned)
+    {
+        M.PlannedAt = Now;
+        M.bKeptHit = false;
+        return true;
+    }
+    if (M.bRoutePending || !M.bKeptHit) return false;
+    UE_LOG(LogSCCargo, Display, TEXT("CARGO_PLAN_WAIT job=%d move=%d box=%d planned again shortly (space kept for other teams' drones, or its own drone has no way from where it hovers): \"%s\""), Job.Id, M.MoveId, M.Plan.BoxId, *Why);
+    M.bKeptHit = false;
+    M.PlanRetryAt = Now + PlanRetrySeconds;
+    M.Searches.Empty();
+    M.CellCaches.Empty();
+    M.TurnPoints.Empty();
+    M.EntranceOut = 0;
+    M.bRefine = false;
+    M.bRoutePending = true;
+    return false;
+}
+
+bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why)
 {
     RefreshMove(M);
     M.bRoutePending = false; // set again by a search not finished this frame
@@ -169,13 +233,14 @@ bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& 
     M.ToNormal = To->LatticeToWorld().GetRotation().GetUpVector();
     M.FromRotation = M.PickRotation = A->GetActorQuat();
     M.TurnStart = -1;
-    // The beam hangs as long as the tractor's full strength allows, shorter under a ceiling at either end.
-    double Lift = 0, LiftTo = 0, HangTo = 0;
-    LiftPlan(A, A->GetActorTransform(), M.FromNormal, Lift, M.HangCm);
+    // The load's envelope reserves its drones at the shortest beam that holds the box (they can tuck in that far);
+    // in flight each drone pays its beam out where it finds room (TugStep).
+    double Lift = 0, Hang = 0;
+    LiftPlan(A, A->GetActorTransform(), M.FromNormal, Lift, Hang);
+    M.HangCm = MinHangCm(Box->Occupancy.Mass, N);
     const FTransform Slot = To->SlotToWorld(SlotOf(M.Plan), Box->SizeM());
     const bool bHold = M.Plan.Kind == ESCCargoMoveKind::Hold;
-    if (!bHold && LiftPlan(A, Slot, M.ToNormal, LiftTo, HangTo)) M.HangCm = FMath::Min(M.HangCm, HangTo);
-    const double LoadAccel = SCCargoLoadedAccel(N, Def.MaxForceN, Box->Occupancy.Mass, Def.DroneMassKg, Gravity(), Def.MaxAccelMS2);
+    const double LoadAccel = RouteAccel(N, Box->Occupancy.Mass);
     M.LoadAccel = LoadAccel * 100.0;
     M.LoadJerk = Def.MaxJerkMS3 * 100.0 * LoadAccel / FMath::Max<double>(Def.MaxAccelMS2, 1e-3);
     // Formation along the box's long side (the load's route reserves room for its spread).
@@ -210,7 +275,7 @@ bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& 
                 const FVector P = Pose.GetLocation() + N * D;
                 if (Fit.Blocked(P)) continue;
                 const FVector Start = Pose.GetLocation() + N * 8;
-                const TSharedRef<FSCCargoHullRule> Hulls = HullRule(Params, Size / 2 - FVector(6), Pose.GetRotation(), &M);
+                const TSharedRef<FSCCargoHullRule> Hulls = HullRule(Params, Size / 2 - FVector(6), Pose.GetRotation());
                 if (GetWorld()->SweepTestByObjectType(Start, P, Pose.GetRotation(), Types, FCollisionShape::MakeBox(Size / 2 - FVector(6)), Hulls->Along(Start, P))) return false;
                 Out = D;
                 return true;
@@ -379,19 +444,9 @@ bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& 
         }
         return true;
     };
-    // The beam at its full hang first, then reeled in (bReeledIn: kept for the ticks a search takes); when no way is found
-    // on the full-cell lattice either way, once more with half steps where a full step is blocked (bRefine: a passage
-    // narrower than a cell; the costly search, so the last resort).
-    const double MinHang = Def.MinDistanceM * 100.0;
-    if (M.bReeledIn) M.HangCm = FMath::Min(M.HangCm, MinHang);
+    // On the full-cell lattice first; when no way is found, once more with half steps where a full step is blocked
+    // (bRefine: a passage narrower than a cell; the costly search, so the last resort).
     bool bPlanned = PlanLoad(Why);
-    if (!bPlanned && !M.bRoutePending && M.HangCm > MinHang + 1)
-    {
-        M.HangCm = MinHang;
-        M.bReeledIn = true;
-        UE_LOG(LogSCCargo, Display, TEXT("CARGO_PATH job=%d move=%d box=%d reel_in hang_m=%.2f"), Job.Id, M.MoveId, M.Plan.BoxId, M.HangCm / 100);
-        bPlanned = PlanLoad(Why);
-    }
     if (!bPlanned)
     {
         if (M.bRoutePending) return false;
@@ -409,10 +464,17 @@ bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& 
     for (int32 I = 1; I < M.SecondPath.Num(); ++I) M.DistanceCm += FVector::Dist(M.SecondPath[I - 1], M.SecondPath[I]);
     // Each drone out to its place over the box.
     M.DroneFlights.Reset();
+    TArray<FVector> FirstRoute;
+    int32 Apart = 0;
+    // Where each hovers attached: its emitter the hang over the box's top, over the box as it stands (the formation
+    // then holds it there). Kept space for every other drone's route from now on, its teammates' included.
+    M.Stations.Reset();
+    for (int32 I = 0; I < N; ++I)
+        M.Stations.Add(A->GetActorLocation() + M.FromNormal * (Size.Z / 2 + M.HangCm + FVector::Dist(Drones[I]->GetActorLocation(), Drones[I]->Emitter())) + M.PickRotation.RotateVector(M.Offsets[I]));
     for (int32 I = 0; I < N; ++I)
     {
         ASCCargoDrone* D = Drones[I];
-        const FVector Over = A->GetActorLocation() + M.FromNormal * (Size.Z / 2 + M.HangCm) + M.FromRotation.RotateVector(M.Offsets[I]);
+        const FVector Over = M.Stations[I];
         TArray<FVector> Path = {D->GetActorLocation()};
         FVector Start = D->GetActorLocation();
         if (D->State == ESCCargoDroneState::Docked)
@@ -426,17 +488,45 @@ bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& 
             }
         }
         TArray<FVector> Route;
-        FSCCargoRouteQuery Query = DroneQuery(D);
+        const FVector Ends[] = {Start, Over};
+        // Its routing shape; with an end inside that shape's margin (hovering close over a box it set down beside a
+        // plate), the bare hull and its gusts: its steps are swept with the hull whatever the route's margin.
+        FSCCargoRouteQuery Query = DroneQuery(D, &M, Ends);
+        if (Query.Blocked(Start) || Query.Blocked(Over)) Query = DroneQuery(D, &M, Ends, /*bTight=*/true);
         Query.CellCache = M.Cells(Query.Identity);
-        if (!PlanRoute(Job, M, TEXT("out"), Start, Over, Query, Route, FString::Printf(TEXT("out:%d"), D->DroneId), true))
+        // In the air and close to something (the box it has just set down): a short straight step clear of it first.
+        if (TArray<FVector> Via; D->State != ESCCargoDroneState::Docked && ClearStart(D, Query, Start, &Via) && !Start.Equals(D->GetActorLocation(), 1.0))
+        {
+            Path.Append(Via);
+            Path.Add(Start);
+        }
+        // Apart from its teammates: beside the route of the one planned first, the kept distance to its side for each
+        // place further along the box (FSCCargoDroneSteer::Beside), swept like any route. Where that is not free (a
+        // door they all leave by), its own plain route: the drones then follow each other, each keeping its
+        // distance by its own steps.
+        bool bApart = false;
+        if (const double Keep = FSCCargoDroneSteer::Keep(D->HullRadius(), D->HullRadius()); I > 0 && FirstRoute.Num() >= 2 && FVector::Dist(Start, FirstRoute[0]) < BesideRampKeeps * Keep) // they leave one dock
+        {
+            TArray<FVector> Side = FSCCargoDroneSteer::Beside(FirstRoute, Start, Over, I * Keep, BesideRampKeeps * Keep);
+            bApart = Side.Num() >= 2;
+            for (int32 K = 1; bApart && K < Side.Num(); ++K) bApart = Query.Free(Side[K - 1], Side[K]);
+            if (bApart) Route = MoveTemp(Side);
+        }
+        if (!bApart && !PlanRoute(Job, M, TEXT("out"), Start, Over, Query, Route, FString::Printf(TEXT("out:%d"), D->DroneId), true))
         {
             if (M.bRoutePending) return false;
             Why = FString::Printf(TEXT("no free route for drone %d to the box on %s"), D->DroneId, *From->GridLabel.ToString());
+            // A drone in the air has no way from where it hovers just now (its surroundings are in motion: a box
+            // being set down beside it, a plate): planned again shortly, not a failure of the box.
+            if (D->State != ESCCargoDroneState::Docked) M.bKeptHit = true;
             return false;
         }
+        if (I == 0) FirstRoute = Route;
+        if (I > 0) Apart += bApart;
         Path.Append(Route);
         M.DroneFlights.AddDefaulted_GetRef().Start(Path, Def.MaxSpeedMS * 100.0, Def.MaxAccelMS2 * 100.0, Def.MaxJerkMS3 * 100.0);
     }
+    if (N > 1) UE_LOG(LogSCCargo, Display, TEXT("CARGO_APART job=%d move=%d box=%d teammates=%d beside_the_first=%d"), Job.Id, M.MoveId, M.Plan.BoxId, N - 1, Apart);
     UE_LOG(LogSCCargo, Display, TEXT("CARGO_MOVE job=%d move=%d box=%d team=%d load_kg=%.0f loaded_accel_m_s2=%.2f empty_accel_m_s2=%.2f lift_m=%.2f hang_m=%.2f"),
            Job.Id, M.MoveId, M.Plan.BoxId, N, Box->Occupancy.Mass, LoadAccel, Def.MaxAccelMS2, Lift / 100, M.HangCm / 100);
     return true;

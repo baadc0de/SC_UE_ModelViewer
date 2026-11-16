@@ -4,6 +4,7 @@
 // out, catch it over the destination, lower it along that grid's normal, magnetize it onto its slot, and fly home.
 // Log: CARGO_MOVE (steps), CARGO_REPLAN (a blocked route planned again), CARGO_CARRY (box samples in flight).
 #include "Cargo/SCCargoSubsystem.h"
+#include "PhysicsEngine/PhysicsSettings.h"
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoDrone.h"
@@ -21,6 +22,10 @@ constexpr double FlightTurnSeconds = 2.0;  // the turn onto a hold's lattice at 
 constexpr double StepTimeoutSeconds = 180; // a step that takes longer fails the move
 constexpr int32 MaxReplans = 10;           // blocked-ahead replans before a move fails
 constexpr double SwayFadeCm = 300;         // gusts fade in / out over this much of a flight's ends
+constexpr double HoldCheckSeconds = 0.25;  // how often a drone on its way out looks at the loads' routes yet to fly
+constexpr double FlightStallSeconds = 3;   // a lone drone not getting on for this long plans its route again
+constexpr double SwingWaitSeconds = 3;     // a box that tilts as it is caught waits this long at most for its drones to move out
+const double SwingCos = FMath::Cos(FMath::DegreesToRadians(1.0)); // a box's up or a grid's normal further than this from upright: it tilts
 
 const TCHAR* StepName(EStep S)
 {
@@ -29,12 +34,6 @@ const TCHAR* StepName(EStep S)
     return Names[uint8(S)];
 }
 FSCCargoPlacement SlotOf(const FSCCargoMovePlan& P) { return SCCargoSlotOf(P); }
-// Direction turning from A (T = 0) to B (T = 1), eased.
-FVector Turn(const FVector& A, const FVector& B, double T)
-{
-    return FQuat::Slerp(FQuat::Identity, FQuat::FindBetweenNormals(A, B), FMath::SmoothStep(0.0, 1.0, FMath::Clamp(T, 0.0, 1.0))).RotateVector(A);
-}
-constexpr double FormationTurnCm = 400; // the drones swing from over the grid's normal to over the box (up) within this
 } // namespace
 
 void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, double Dt)
@@ -95,12 +94,9 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             Fail(FString::Printf(TEXT("%d drone(s) left cannot hold the box"), Drones.Num()));
             return;
         }
-        // The lead drone holds the beam's constraint: a new lead takes it over where the box is.
-        if ((M.Step == EStep::Transit || M.Step == EStep::Holding) && A && A->Body && !Drones[0]->IsHolding())
-            Drones[0]->Grab(A->Body, A->GetActorLocation() + A->GetActorQuat().GetUpVector() * A->SizeCm().Z / 2, A->GetActorRotation());
         if (Box)
         {
-            const double LoadAccel = SCCargoLoadedAccel(Drones.Num(), Def.MaxForceN, Box->Occupancy.Mass, Def.DroneMassKg, Gravity(), Def.MaxAccelMS2);
+            const double LoadAccel = RouteAccel(Drones.Num(), Box->Occupancy.Mass);
             M.LoadAccel = LoadAccel * 100.0;
             M.LoadJerk = Def.MaxJerkMS3 * 100.0 * LoadAccel / FMath::Max<double>(Def.MaxAccelMS2, 1e-3);
         }
@@ -110,6 +106,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         Fail(TEXT("the move has no drones"));
         return;
     }
+    M.bTurning = M.bTilting = false; // set by the step that turns the box this tick
     const FVector Up = FVector::UpVector;
     const FVector Size = A ? A->SizeCm() : FVector::ZeroVector;
     const double LoadMass = Box ? Box->Occupancy.Mass : 0;
@@ -125,11 +122,12 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
     };
     double FormationFade = 0; // set by the step before Formation
     // Where the drones fly around the box centre Q: Along the beam direction N, over the box's top by the hang length.
-    auto Formation = [&](const FVector& Q, const FVector& N, const FQuat& Rotation, const FVector& Accel, bool bBeams, float Width) {
+    auto Formation = [&](const FVector& Q, const FVector& N, const FQuat& Rotation, const FVector& Accel, bool bBeams, float Width, double Hang = -1) {
         for (int32 I = 0; I < Drones.Num() && I < M.Offsets.Num(); ++I)
         {
             Sway(Drones[I], FormationFade, M.Carry.Speed, LoadMass);
-            const FVector P = Q + N * (Size.Z / 2 + M.HangCm) + Rotation.RotateVector(M.Offsets[I]);
+            // The hang is the beam's length: from the box's top to the emitter under the drone.
+            const FVector P = Q + N * (Size.Z / 2 + (Hang < 0 ? M.HangCm : Hang) + FVector::Dist(Drones[I]->GetActorLocation(), Drones[I]->Emitter())) + Rotation.RotateVector(M.Offsets[I]);
             Drones[I]->Pose(P, Accel, float(Rotation.Rotator().Yaw), float(Dt));
             if (bBeams && A) Drones[I]->SetBeam(true, A->GetActorLocation() + A->GetActorQuat().RotateVector(M.Offsets[I] + FVector(0, 0, Size.Z / 2)), Width);
         }
@@ -151,13 +149,12 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
     {
     case EStep::Waiting:
     {
-        // Planned by PrepareMove (routes swept free): the drones leave their bays.
+        // Planned by PrepareMove (routes swept free). A docked drone leaves its bay when its way out is free
+        // (Outbound, below); one claimed in the air flies on from where it is.
         for (ASCCargoDrone* D : Drones)
-        {
-            if (D->State == ESCCargoDroneState::Docked) D->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-            D->State = ESCCargoDroneState::Launching;
-        }
+            if (D->State != ESCCargoDroneState::Docked) D->State = ESCCargoDroneState::ToPickup;
         Box->State = ESCCargoBoxState::Reserved;
+        M.FlightAt.Reset();
         Enter(EStep::Outbound);
         return;
     }
@@ -165,6 +162,22 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
     case EStep::Returning:
     {
         bool bAll = true;
+        // Out to its box, a drone holds short of its station while a load planned before its own move has yet to fly
+        // through there (looked at a few times a second: the loads' routes yet to fly are long).
+        if (M.Step == EStep::Outbound && Now - M.HoldChecked >= HoldCheckSeconds)
+        {
+            M.HoldChecked = Now;
+            const TArray<double> Before = M.HoldAt;
+            M.HoldAt.Reset();
+            for (int32 I = 0; I < Drones.Num() && I < M.DroneFlights.Num(); ++I)
+            {
+                M.HoldAt.Add(HoldShort(M, Drones[I], M.DroneFlights[I]));
+                if (const bool bWas = Before.IsValidIndex(I) && Before[I] >= 0; bWas != (M.HoldAt[I] >= 0) || (bWas && FMath::Abs(Before[I] - M.HoldAt[I]) > 10))
+                    UE_LOG(LogSCCargo, Display, TEXT("CARGO_HOLD_SHORT job=%d move=%d drone=%d %s at=%s s=%.0f/%.0f flown=%.0f"), Job.Id, M.MoveId, Drones[I]->DroneId,
+                           M.HoldAt[I] < 0 ? TEXT("goes on to its station") : TEXT("holds short of its station (a load has yet to fly through it, or a drone is in its place)"),
+                           *Drones[I]->GetActorLocation().ToCompactString(), M.HoldAt[I], M.DroneFlights[I].Length(), M.DroneFlights[I].Dist);
+            }
+        }
         for (int32 I = 0; I < Drones.Num() && I < M.DroneFlights.Num(); ++I)
         {
             ASCCargoDrone* D = Drones[I];
@@ -197,12 +210,75 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
                 continue;
             }
             bAll = false;
-            F.Step(Dt);
+            // How far it may fly now: not into the dock corridor another drone is using, not onto a station a load
+            // has yet to fly through. In its bay it stays docked until its way out is free (bays nearer to each other
+            // than the drones keep apart so launch one at a time).
+            const double Stop = FlightFree(D, F), Hold = M.Step == EStep::Outbound && M.HoldAt.IsValidIndex(I) ? M.HoldAt[I] : -1.0;
+            if (D->State == ESCCargoDroneState::Docked)
+            {
+                if (M.Step != EStep::Outbound || (Stop >= 0 && Stop <= F.Dist + 1.0) || (Hold >= 0 && Hold <= F.Dist + 1.0)) continue;
+                D->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+                FindBayOwn(D);
+                D->State = ESCCargoDroneState::Launching;
+            }
+            // A dock corridor in use: it brakes for it. A station not free yet: the flight ends short of it for now.
+            F.StopAt = Stop;
+            F.HoldAt = Hold;
+            // Not getting on though no rule holds it (its route ends up within the distance it keeps from a drone
+            // that came to stand there after it was planned): a new route from where it is, round what stands now.
+            if (M.FlightAt.Num() != Drones.Num())
+            {
+                M.FlightAt.Init(0, Drones.Num());
+                M.FlightSince.Init(Now, Drones.Num());
+            }
+            if (Stop >= 0 || Hold >= 0 || F.Dist > M.FlightAt[I] + 1.0)
+            {
+                M.FlightAt[I] = F.Dist;
+                M.FlightSince[I] = Now;
+            }
+            else if (Now - M.FlightSince[I] > FlightStallSeconds)
+            {
+                bool bNew = false;
+                if (M.Step == EStep::Returning) bNew = HomeFlight(Job, M, D, F);
+                else
+                {
+                    TArray<FVector> Path;
+                    const FVector Ends[] = {D->GetActorLocation(), F.Points.Last()};
+                    FSCCargoRouteQuery Query = DroneQuery(D, &M, Ends);
+                    if (Query.Blocked(Ends[0]) || Query.Blocked(Ends[1])) Query = DroneQuery(D, &M, Ends, /*bTight=*/true);
+                    FVector Start = Ends[0];
+                    TArray<FVector> Via;
+                    bNew = ClearStart(D, Query, Start, &Via) && PlanRoute(Job, M, TEXT("out_again"), Start, Ends[1], Query, Path, FString::Printf(TEXT("out_again:%d"), D->DroneId), false);
+                    if (bNew && !Start.Equals(Ends[0], 1.0))
+                    {
+                        Path.Insert(Via, 0);
+                        Path.Insert(Ends[0], 0);
+                    }
+                    if (bNew) F.Start(Path, Def.MaxSpeedMS * 100.0, Def.MaxAccelMS2 * 100.0, Def.MaxJerkMS3 * 100.0);
+                }
+                if (bNew || !M.bRoutePending)
+                {
+                    UE_LOG(LogSCCargo, Display, TEXT("CARGO_FLIGHT_AGAIN job=%d move=%d drone=%d step=%s at=%s found=%d"), Job.Id, M.MoveId, D->DroneId, StepName(M.Step),
+                           *D->GetActorLocation().ToCompactString(), bNew);
+                    M.FlightAt[I] = 0;
+                    M.FlightSince[I] = Now;
+                }
+            }
+            // The flight waits for a drone held up or turned aside (its own steps keep it clear of the other drones
+            // and of what it would fly into); it comes back to its route at no more than twice its speed.
+            if (FVector::Dist(D->GetActorLocation(), F.Position()) <= D->HullRadius() + Def.SwayAmplitudeCm) F.Step(Dt);
             Sway(D, FMath::Min(F.Dist, F.Length() - F.Dist) / SwayFadeCm, F.Speed, 0); // calm at the dock and over the box
+            // Between its bay and the bay's exit the dock moves it (the flight's first leg out, its last leg home).
+            D->bDockLeg = F.S.Num() > 2 && (M.Step == EStep::Outbound ? D->State == ESCCargoDroneState::Launching && F.Dist < F.S[1] : F.Dist > F.S[F.S.Num() - 2]);
             const FVector T = F.Tangent();
             D->Pose(F.Position(), T * F.Accel, FVector(T.X, T.Y, 0).SizeSquared() > 0.04 ? float(T.Rotation().Yaw) : float(D->GetActorRotation().Yaw), float(Dt));
-            if (M.Step == EStep::Outbound && F.Dist > 150) D->State = ESCCargoDroneState::ToPickup;
-            if (M.Step == EStep::Returning && F.Length() - F.Dist < 300) D->State = ESCCargoDroneState::Docking;
+            // Out of its dock's corridor (bay, exit, clear of the dock's grid: the flight's first legs): on its way.
+            if (M.Step == EStep::Outbound && D->State == ESCCargoDroneState::Launching && F.Dist >= (F.S.Num() > 2 ? F.S[2] : 0.0)) D->State = ESCCargoDroneState::ToPickup;
+            if (M.Step == EStep::Returning && F.Length() - F.Dist < 300 && D->State != ESCCargoDroneState::Docking)
+            {
+                FindBayOwn(D);
+                D->State = ESCCargoDroneState::Docking;
+            }
         }
         if (!bAll) return;
         if (M.Step == EStep::Returning) { FinishMove(Job, M, M.Failure.IsEmpty()); return; }
@@ -244,6 +320,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         if (M.Carry.Done() && !M.PickRotation.Equals(M.FromRotation))
         {
             if (M.TurnStart < 0) M.TurnStart = Now;
+            M.bTurning = true;
             const double T = FMath::SmoothStep(0.0, 1.0, (Now - M.TurnStart) / FlightTurnSeconds);
             R = FQuat::Slerp(M.PickRotation, M.FromRotation, T);
             if (T < 1)
@@ -262,7 +339,11 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         M.Carry.Start(M.TransitPath, Def.MaxSpeedMS * 100.0, M.LoadAccel, M.LoadJerk);
         A->Release();
         A->Body->SetPhysicsLinearVelocity(M.Carry.Tangent() * M.Carry.Speed);
-        Drones[0]->Grab(A->Body, Q + M.FromRotation.GetUpVector() * Size.Z / 2, FRotator(M.FromRotation));
+        for (ASCCargoDrone* D : Drones) D->Grab(A->Body); // every drone's beam holds its own attach point (TugStep)
+        M.bRouteMoving = false;
+        M.bRigid = false;
+        M.ClearTo = 0;
+        M.bBlockedAhead = false;
         Box->State = ESCCargoBoxState::InTransit;
         Enter(EStep::Transit);
         return;
@@ -270,18 +351,16 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
     case EStep::Transit:
     case EStep::Holding:
     {
-        if (Drones.IsEmpty() || !Drones[0]->IsHolding()) { Fail(TEXT("the tractor beam lost the box")); return; }
+        if (Drones.IsEmpty()) { Fail(TEXT("the tractor beam lost the box")); return; }
         const bool bOut = M.Plan.Kind == ESCCargoMoveKind::Hold && !M.bRestoring;
         FVector Q;
         FQuat Rotation;
-        FVector N;
         bool bPrecise = false;
         if (M.Step == EStep::Holding)
         {
             // Station keeping: a slow small drift around the holding point.
             Q = M.HoldPoint + FVector(FMath::Sin(Now * 0.7) * 6, FMath::Cos(Now * 0.5) * 6, FMath::Sin(Now * 0.9) * 4);
             Rotation = M.FromRotation;
-            N = Up;
             const FSCCargoMove* Target = Job.Moves.FindByPredicate([&](const FSCCargoMove& O) { return O.Plan.BoxId == M.Plan.ForBoxId && O.Plan.Kind != ESCCargoMoveKind::Hold; });
             bool bRelease = !Target || (Target->Step != EStep::Waiting && Target->Step != EStep::Outbound && Target->Step != EStep::Attaching && Target->Step != EStep::Lifting);
             // Lower blockers (later in the dig) go back first.
@@ -324,72 +403,134 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         }
         else
         {
-            // Guard. Other loads in the air are moving obstacles: the later of two that would meet waits where it is (the
-            // earlier one, lower box id, keeps going). Anything else ahead (static) stops the load and it plans again;
-            // without a route it holds position and retries, and fails after MaxReplans tries.
+            // Guard. The route is swept again as it is flown, along itself in short stretches (never a chord across its
+            // bends), as far ahead as the load needs to brake to rest: what is not free stops it where the free stretch
+            // ends, at its own deceleration (a load stopped dead swings on into what stopped it). Other loads in the
+            // air are moving obstacles: the later of two that would meet brakes and waits (the earlier one, lower box
+            // id, keeps going). Stopped by anything else, the load plans again from there; without a route it holds
+            // position and retries, and fails after MaxReplans tries.
             const FVector Here = M.Carry.Position();
-            const FVector Ahead = M.Carry.At(M.Carry.Dist + FMath::Max(M.Carry.Speed * Dt * 3, 30.0));
-            const bool bYield = !M.bStalled && MustYield(Here, Ahead);
+            const double BrakeCm = M.Carry.Speed * M.Carry.Speed / FMath::Max(2 * 0.7 * M.LoadAccel, 1.0) + FMath::Max(M.Carry.Speed * Dt * 3, 30.0);
+            const double Need = FMath::Min(M.Carry.Length(), M.Carry.Dist + BrakeCm);
+            RefreshMove(M);
+            if (M.GuardStamp != M.WorldStamp || (M.bBlockedAhead && Now >= M.NextRetry && M.Carry.Speed >= 1))
+            {
+                // The world moved (a ramp, a box set down), or what blocked may have gone: swept again from here.
+                M.GuardStamp = M.WorldStamp;
+                M.ClearTo = M.Carry.Dist;
+                M.bBlockedAhead = false;
+            }
+            M.ClearTo = FMath::Max(M.ClearTo, M.Carry.Dist);
+            while (!M.bStalled && !M.bBlockedAhead && M.ClearTo < Need)
+            {
+                const double Next = FMath::Min(Need, M.ClearTo + SCCargoFlightTuning::GuardStretchCm);
+                if (AheadFree(M.Carry.At(M.ClearTo), M.Carry.At(Next))) M.ClearTo = Next;
+                else M.bBlockedAhead = true;
+            }
+            const bool bYield = !M.bStalled && MustYield(Here, M.Carry.At(Need));
+            // The route also waits for a box left behind: beyond the beam's full-strength distance the team could not
+            // bring it along (a box held up by something the sweeps did not see).
+            // It waits as well while a drone of the team finds no room for its station there (it may clear: a load
+            // passing, a door opening); if it does not, the same new route.
+            const bool bBoxBehind = M.bNoStation || (!M.bRigid && FVector::Dist(A->GetActorLocation(), Here) > Def.FullStrengthDistanceM * 100.0);
+            // And for a drone of the team held up behind something (it tucks in and comes after).
+            const bool bBehind = bBoxBehind || M.bDroneBehind;
+            M.Carry.StopAt = bYield || bBehind ? M.Carry.Dist : (M.bBlockedAhead ? M.ClearTo : -1.0);
             if (M.bStalled)
             {
                 // Holding position (the flight is not over: the load is not where it is going).
                 if (Now >= M.NextRetry)
                 {
                     M.NextRetry = Now + FMath::Min(1.0 + M.Replans, 5.0); // backs off
-                    if (Replan(Here, TEXT("stalled"))) M.bStalled = false;
+                    if (Replan(Here, TEXT("stalled")))
+                    {
+                        M.bStalled = false;
+                        M.ClearTo = 0;
+                        M.bBlockedAhead = false;
+                    }
                     else if (M.Replans > MaxReplans) { Fail(TEXT("no free route from where the load stopped")); return; }
                 }
             }
             else if (bYield)
             {
-                M.Carry.Speed = M.Carry.Accel = 0;
                 if (Now >= M.NextRetry)
                 {
                     M.NextRetry = Now + 1;
                     UE_LOG(LogSCCargo, Display, TEXT("CARGO_YIELD job=%d move=%d box=%d waits for a load ahead"), Job.Id, M.MoveId, M.Plan.BoxId);
                 }
             }
-            else if (Now >= M.NextRetry && !Ahead.Equals(Here, 1.0) && !AheadFree(Here, Ahead))
+            else if (bBoxBehind && M.Carry.Speed < 1 && Now >= M.NextRetry && A->Body->GetPhysicsLinearVelocity().Size() < 10)
             {
+                // Waited for and not coming (it rests against something): a route from where the box is.
+                M.NextRetry = Now + FMath::Min(1.0 + M.Replans, 5.0);
+                const bool bFound = Replan(A->GetActorLocation(), M.bNoStation ? TEXT("no_station") : TEXT("left_behind"));
+                M.ClearTo = 0;
+                M.bBlockedAhead = false;
+                if (!bFound && M.Replans > MaxReplans) { Fail(TEXT("no free route from where the load was held up")); return; }
+            }
+            else if (M.bBlockedAhead && M.Carry.Speed < 1 && Now >= M.NextRetry)
+            {
+                // At rest where the free stretch ends: a new route from here.
                 M.NextRetry = Now + 1;
-                M.Carry.Speed = M.Carry.Accel = 0;
-                if (!Replan(Here, TEXT("blocked_ahead")))
+                const bool bFound = Replan(Here, TEXT("blocked_ahead"));
+                M.ClearTo = 0;
+                M.bBlockedAhead = false;
+                if (!bFound)
                 {
                     if (M.Replans > MaxReplans) { Fail(TEXT("no free route from where the load stopped")); return; }
                     M.bStalled = true; // holds position; plans again
                 }
             }
             // In the destination's precise zone (and braking into it): slow, so the box follows its beam closely.
-            const double BrakeCm = M.Carry.Speed * M.Carry.Speed / FMath::Max(2 * 0.7 * M.LoadAccel, 1.0) + SCCargoFlightTuning::PreciseLeadCm;
-            bPrecise = InPreciseZone(M, A, M.Carry.Position()) || InPreciseZone(M, A, M.Carry.At(FMath::Min(M.Carry.Dist + BrakeCm, M.Carry.Length())));
+            const double SlowCm = M.Carry.Speed * M.Carry.Speed / FMath::Max(2 * 0.7 * M.LoadAccel, 1.0) + SCCargoFlightTuning::PreciseLeadCm;
+            bPrecise = InPreciseZone(M, A, M.Carry.Position()) || InPreciseZone(M, A, M.Carry.At(FMath::Min(M.Carry.Dist + SlowCm, M.Carry.Length())));
             M.Carry.SpeedLimit = bPrecise ? SCCargoFlightTuning::PreciseSpeedCmS : 0;
-            if (!bYield && !M.bStalled) M.Carry.Step(Dt);
+            // The route advances with the physics that carries the box: a long frame simulates at most one physics step.
+            if (!M.bStalled) M.Carry.Step(FMath::Min<double>(Dt, UPhysicsSettings::Get()->MaxPhysicsDeltaTime));
             Q = M.Carry.Position();
             Rotation = M.FromRotation; // kept on the way (the route was swept so); turned onto the lattice when caught
-            // The drones fly over the box (the column the route was swept with); off a grid and onto one they swing
-            // over from its normal, close to the ends of the route.
-            const double FromEnd = M.Carry.Length() - M.Carry.Dist;
-            N = M.Carry.Dist < FormationTurnCm ? Turn(M.FromNormal, Up, M.Carry.Dist / FormationTurnCm)
-                : (!bOut && FromEnd < FormationTurnCm ? Turn(M.ToNormal, Up, FromEnd / FormationTurnCm) : Up);
         }
-        // The beam holds the box's top centre; the soft constraint's sag (g / k) is lifted out.
-        // The lead's gusts reach the box through the beam (the soft constraint swings it).
-        const FVector Grab = Q + Rotation.GetUpVector() * Size.Z / 2 + Up * (Gravity() * 100.0 / ASCCargoDrone::HoldStiffness) + Drones[0]->SwayOffset();
         FormationFade = M.Step == EStep::Holding ? 1.0 : FMath::Min(M.Carry.Dist, M.Carry.Length() - M.Carry.Dist) / SwayFadeCm;
         // The gusts die down as the load slows into the precise zone (the route there is swept without their envelope).
         if (bPrecise) FormationFade *= FMath::Clamp(M.Carry.Speed / SCCargoFlightTuning::PreciseSpeedCmS - 1.0, 0.0, 1.0);
-        Drones[0]->Hold(Grab, FRotator(Rotation));
-        Formation(Q, N, Rotation, M.Step == EStep::Holding ? FVector::ZeroVector : M.Carry.Tangent() * M.Carry.Accel, true, 30.f);
+        // At the hold's entrance (the first leg flown): turned onto the hold's lattice (swept when planned), then in.
+        const bool bTurning = M.Step == EStep::Transit && !M.bStalled && M.Carry.Done() && !M.SecondPath.IsEmpty();
+        if (bTurning && M.TurnStart < 0) M.TurnStart = Now;
+        M.bTurning = bTurning;
+        const double TurnT = bTurning ? FMath::SmoothStep(0.0, 1.0, (Now - M.TurnStart) / FlightTurnSeconds) : 0.0;
+        if (bTurning) Rotation = FQuat::Slerp(M.FromRotation, M.SecondRotation, TurnT);
+        // The team tugs: every drone on its own station, its beam's spring on its attach point (TugStep). Each drone's
+        // gusts are its own; the box feels them all through the springs.
+        for (ASCCargoDrone* D : Drones) Sway(D, FormationFade, M.Carry.Speed, LoadMass);
+        // In the precise zone the beams hold the box rigidly on its route (as on the lift and the descent): it passes
+        // boxes at rest 2 cm from them, closer than a spring settles. What it was off the route by when it came in
+        // dies away at the beams' own rate. The drones keep flying their own stations.
+        if (bPrecise && !M.bRigid && A->Body->IsSimulatingPhysics())
+        {
+            M.bRigid = true;
+            M.RigidOffset = A->GetActorLocation() - Q;
+            M.RigidRotation = A->GetActorQuat();
+            A->Body->SetSimulatePhysics(false);
+        }
+        if (M.bRigid)
+        {
+            const double Keep = FMath::Exp(-FMath::Sqrt(FMath::Max(1, Drones.Num()) * TractorBeam().StiffnessNPerM() / FMath::Max(LoadMass, 1.0)) * Dt);
+            M.RigidOffset *= Keep;
+            M.RigidRotation = FQuat::Slerp(Rotation, M.RigidRotation, Keep);
+            A->SetActorLocationAndRotation(Q + M.RigidOffset, M.RigidRotation, false, nullptr, ETeleportType::TeleportPhysics);
+        }
+        // The route's velocity and its whole acceleration (along it and round its bends: the change of that velocity).
+        const double TugDt = FMath::Min<double>(Dt, UPhysicsSettings::Get()->MaxPhysicsDeltaTime);
+        const FVector RouteV = M.Step != EStep::Holding && !M.bStalled ? M.Carry.Tangent() * M.Carry.Speed : FVector::ZeroVector;
+        const FVector RouteA = M.bRouteMoving && TugDt > 0 ? ((RouteV - M.RouteV) / TugDt).GetClampedToMaxSize(M.LoadAccel * UE_DOUBLE_SQRT_2) : FVector::ZeroVector;
+        M.RouteV = RouteV;
+        M.bRouteMoving = true;
+        TugStep(M, A, Drones, Q, Rotation, RouteV, RouteA, Now, TugDt);
         Sample(Q);
         if (M.Step == EStep::Holding || M.bStalled || !M.Carry.Done()) return;
         if (!M.SecondPath.IsEmpty())
         {
-            // At the hold's entrance: turned onto the hold's lattice (swept when planned), then in.
-            if (M.TurnStart < 0) M.TurnStart = Now;
-            const double T = FMath::SmoothStep(0.0, 1.0, (Now - M.TurnStart) / FlightTurnSeconds);
-            Drones[0]->Hold(Q + FQuat::Slerp(M.FromRotation, M.SecondRotation, T).GetUpVector() * Size.Z / 2 + Up * (Gravity() * 100.0 / ASCCargoDrone::HoldStiffness),
-                            FRotator(FQuat::Slerp(M.FromRotation, M.SecondRotation, T)));
-            if (T < 1) return;
+            if (TurnT < 1) return;
             M.FromRotation = M.SecondRotation;
             M.Carry.Start(M.SecondPath, Def.MaxSpeedMS * 100.0, M.LoadAccel, M.LoadJerk);
             M.SecondPath.Reset();
@@ -456,29 +597,52 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         Down.Add(Slot.GetLocation());
         M.Carry.Start(Down, Def.MaxSpeedMS * 100.0, M.LoadAccel, M.LoadJerk);
         Box->State = ESCCargoBoxState::Placing;
+        M.CatchStart = -1;
         Enter(EStep::Lowering);
         return;
     }
     case EStep::Lowering:
     {
         // Caught over the slot (aligned to the lattice), then drawn down along the destination grid's normal.
-        const double Catch = (Now - M.StepStart) / CatchSeconds;
+        // A box that tilts as it is caught (onto a plate standing upright, or back off one) sweeps the sphere about
+        // its centre, and its drones swing from over it to the side the plate's normal points to. They first move
+        // out of that sphere (their beams reach that far: the box hangs still meanwhile), fly round it as it turns,
+        // and come in again along the normal as it goes down. A box that only turns level keeps them over its top.
+        const bool bSwing = FVector::DotProduct(M.CatchFrom.GetRotation().GetUpVector(), M.ToRotation.GetUpVector()) < SwingCos || FVector::DotProduct(M.ToNormal, Up) < SwingCos;
+        double Out = M.HangCm;
+        if (bSwing)
+            for (const ASCCargoDrone* D : Drones) Out = FMath::Max(Out, Size.Size() / 2 + D->HullHalf.Size() + SCCargoFlightTuning::DroneClearanceCm / 2 - Size.Z / 2);
+        if (M.CatchStart < 0)
+        {
+            const FVector Q0 = M.CatchFrom.GetLocation();
+            Formation(Q0, Up, M.CatchFrom.GetRotation(), FVector::ZeroVector, true, 30.f, Out);
+            bool bClear = true;
+            for (const ASCCargoDrone* D : Drones) bClear &= FVector::Dist(D->GetActorLocation(), Q0) >= Size.Z / 2 + Out - SCCargoFlightTuning::DroneClearanceCm / 2;
+            if (bSwing && !bClear && Now - M.StepStart < SwingWaitSeconds) return;
+            M.CatchStart = Now;
+        }
+        const double Catch = (Now - M.CatchStart) / CatchSeconds;
         FVector Q;
         if (Catch < 1)
         {
+            M.bTurning = true;
+            M.bTilting = bSwing;
             // To the turn point at the arriving rotation (the hanging box's lag taken up), then turned there.
             const double Move = FMath::SmoothStep(0.0, 1.0, Catch / 0.4), Turn = FMath::SmoothStep(0.0, 1.0, (Catch - 0.4) / 0.6);
             const FTransform Pose(FQuat::Slerp(M.CatchFrom.GetRotation(), M.ToRotation, Turn), FMath::Lerp(M.CatchFrom.GetLocation(), M.Carry.At(0), Move));
             A->SetActorTransform(Pose, false, nullptr, ETeleportType::TeleportPhysics);
             Q = Pose.GetLocation();
+            // The drones round the turning box: from over it to the plate's normal, at the distance that clears it.
+            const FVector Side = FQuat::Slerp(FQuat::Identity, FQuat::FindBetweenNormals(Up, M.ToNormal), Turn).RotateVector(Up);
+            Formation(Q, Side, Pose.GetRotation(), FVector::ZeroVector, true, 30.f, Out);
         }
         else
         {
             M.Carry.Step(Dt);
             Q = M.Carry.Position();
             A->SetActorLocationAndRotation(Q, M.ToRotation, false, nullptr, ETeleportType::TeleportPhysics);
+            Formation(Q, M.ToNormal, M.ToRotation, M.Carry.Tangent() * M.Carry.Accel, true, 30.f);
         }
-        Formation(Q, M.ToNormal, M.ToRotation, Catch < 1 ? FVector::ZeroVector : M.Carry.Tangent() * M.Carry.Accel, true, 30.f);
         Sample(Q);
         if (Catch < 1 || !M.Carry.Done()) return;
         for (ASCCargoDrone* D : Drones) D->State = ESCCargoDroneState::Releasing;

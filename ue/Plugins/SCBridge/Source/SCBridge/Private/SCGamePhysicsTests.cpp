@@ -42,7 +42,7 @@ bool FSCGamePhysicsClasses::RunTest(const FString&)
     TestTrue(TEXT("Part 0 without a class blocks"), FSCMeshImporter::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0})"))));
     TestTrue(TEXT("Player-only blocks"), FSCMeshImporter::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0,"class":"player_only"})"))));
     TestTrue(TEXT("No-terrain blocks"), FSCMeshImporter::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0,"class":"no_terrain"})"))));
-    for (const TCHAR* Class : {TEXT("interaction"), TEXT("tires_only"), TEXT("grid_volume")})
+    for (const TCHAR* Class : {TEXT("interaction"), TEXT("tires_only"), TEXT("grid_volume"), TEXT("no_surface")})
         TestFalse(FString::Printf(TEXT("%s does not block"), Class),
                   FSCMeshImporter::PhysicsBlocksActor(Parse(FString::Printf(TEXT(R"({"kind":"box","part":1,"class":"%s"})"), Class))));
     return true;

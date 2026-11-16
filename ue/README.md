@@ -411,14 +411,62 @@ Scenarios (`ue/SCViewer/Config/Cargo/*.json`, `-SCCargoScenario=<name>`) set the
 | `c2_hangar` | `-SCLoad=CRUS_Starlifter_C2 -SCEnvironment=…/hightech_a/hangar_xltop_001.socpak` | `cargo-c2.txt` |
 
 Add `-SCCamera=first` (and `-SCScript=ue/scripts/routes/<route> -SCShotDir=<dir>` for a route). **F1** opens the
-mobiGlas Cargo app (Esc closes): nearby grids, grid detail, transfer composer (from, to, commodity, amount in whole
-boxes, fit preview with refusals), transfers in progress; the view becomes an orbit camera (drag, wheel) around the
-selected ship or elevator. World callouts label boxes in flight and drones; grids too while the mobiGlas is open.
+mobiGlas Cargo app (Esc closes): every cargo grid in the level, nearest first (`CargoGridListRadiusM` > 0 limits it),
+grid detail, transfer composer (from, to, commodity, amount in whole boxes, fit preview with refusals), transfers in
+progress; the view becomes an orbit camera (drag, wheel) around the selected ship or elevator. World callouts label
+boxes in flight and drones; grids too while the mobiGlas is open. What moves as one has one callout: a box and the
+drones holding it (their names on a third line), a team flying to or from its box, a lone drone.
 Console: `sc.Cargo.List`, `sc.Cargo.Preview|Transfer <from> <to> <commodity> <scu> [--owner=<id>]` (grid id,
 `ship`/`elevator` or label text), `sc.Cargo.Cancel <job>`, `sc.Cargo.Access <grid|ship> open|close`, `sc.Cargo.Debug
 0|1` (lattices, slots, routes), `sc.Cargo.Section <grid>` (what route queries see), `sc.MobiGlas [0|1]` and
 `sc.MobiGlas.*` (route stand-ins for clicks), `sc.Env.OpenAccess`. Logs: `CARGO_JOB`, `CARGO_PATH` (found, hits,
-clearance, frame time), `CARGO_TEAM`, `CARGO_PICK`, `ENV_ACCESS`.
+clearance, frame time), `CARGO_TEAM`, `CARGO_PICK`, `CARGO_TUG`, `CARGO_GUARD`, `ENV_ACCESS`.
+
+How a team carries a box (`Cargo/SCCargoTug.h`, `SCCargoTugStep.cpp`; tests `SCBridge.Cargo.Tug*`): the box in the air
+is a simulated body with its mass, and every drone's beam is a spring-damper on its own attach point. The beam's
+numbers are the tractor record's (`maxForce` caps it, full up to `fullStrengthDistance`, nothing at `maxDistance`;
+stiffness `maxForce / minDistance`, a viewer reading: the record has none; critical damping). Only the force is
+shared: what the route asks for (weight, the route's acceleration along it and round its bends, the body's drag) is
+split among the attach points with no moment. Each drone then decides for itself, every tick: its beam along its
+share, as long as the beam keeps full strength and a sweep along it finds room (so a drone tucks in under a door or a
+ceiling and its teammate need not), the rest length of its spring (within the record's `minDistance`..`maxDistance`),
+and from that where it hovers. It flies there as a body (`drone_mass_kg`, thrust less the beam's reaction, jerk
+limited), keeps its beam on the box on the way by re-aiming it and paying it out, and is pushed about by its own
+gusts (each drone its own spectrum and strength, bounded by `sway_amplitude_cm` / `sway_tilt_deg`), which the box
+feels through the spring. A load's route reserves its drones at the shortest beam that holds the box
+(`minDistance` plus the stretch for its share), and its speed profile keeps acceleration along and across the route
+together within what the team can give straight up. The guard sweeps the route ahead along itself as far as the
+load needs to brake, and a load that must stop brakes at its own deceleration. On the lift, in a destination's
+precise zone and on the descent onto the slot the box is held rigidly (not simulated): it passes boxes at rest 2 cm
+from them. `CARGO_TUG` logs each beam's length, rest length and force once a second.
+Drones do not collide with each other, with a box or with their surroundings, and no switch turns that off. Every
+step a drone takes outside its dock, however it is flown, is its own (`ASCCargoDrone::Step`): a drone flying alone
+steps out of the way of a load another team flies (`FSCCargoDroneSteer::Evade`: level, across the load's way), every
+drone keeps apart from the others by their positions and velocities (`Separate`), and the step is swept with the
+bounds of hull and rotors and slid along what it meets (`Slide`). What a step still ends in is logged
+(`CARGO_DRONE_OVERLAP`) and totalled on every `CARGO_JOB` line (`overlaps=N`); the four cargo routes end with
+`overlaps=0`. The planner and each drone's flight keep that step from having to act:
+- a team's drones look along the route they fly and come in onto a shorter beam before a lintel, as early as their
+  bodies need to (`FSCCargoTug::RoomAhead`, the room over the route per 40 cm stretch); one held up all the same
+  tucks in to its shortest beam, and the route waits for it;
+- route queries keep space for drones (`FSCCargoKeepOut`, `KeptSpace`): the stations of a team from when its move is
+  planned, drones hovering attached to a box or holding one, drones over a load that is an obstacle; a lone drone's
+  route keeps the distance drones keep from each other, also from its teammates' stations. A plan stopped only by
+  that space is tried again (`CARGO_PLAN_WAIT`), not counted as a failure of the box;
+- a drone on its way out holds short of its station while a load planned before its own move has yet to fly
+  through there, or another team's drone is in its place (`CARGO_HOLD_SHORT`; the flight ends there for now,
+  `FSCCargoFlight::HoldAt`);
+- a docked drone leaves its bay when its way out (bay, exit, clear of the dock's grid) is free of every drone in the
+  air, and a drone in the air stops short of a dock corridor in use (`FSCCargoDroneSteer::FreeAlong`): two bays
+  nearer to each other than the drones keep apart launch and dock one at a time. Between bay and exit the dock
+  moves the drone; one whose exit is not free (a retracted cargo plate beside the dock) is not sent
+  (`CARGO_DRONE_BAY_BLOCKED`);
+- teammates leaving one dock fly beside each other: the second's route runs the kept distance to the side of the
+  first's (`FSCCargoDroneSteer::Beside`, `CARGO_APART`), swept like any route;
+- a box that tilts as it is caught over its slot (onto an upright plate) waits until its drones are out of the
+  sphere it sweeps; they fly round it as it turns and come in along the plate's normal as it goes down;
+- loads keep apart by their right of way, which reaches as far as the drones over them.
+Evidence, job times and what is not covered: [verification/WP-K1.md](verification/WP-K1.md), K1h.
 
 **Game photometry** ([verification/WP-U3b.md](verification/WP-U3b.md) §13). Light candela, emissive cd/m²,
 auto exposure and the display curve follow the installed game's renderer. The values the Viewer cannot read

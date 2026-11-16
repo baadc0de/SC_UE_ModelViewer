@@ -359,6 +359,9 @@ restarted when a box of another transfer was lifted or set down).
   - Hull colliders of the vehicles a move loads or unloads are left out for it everywhere, not by position: the grid's
     volume ends 1 to 2 m short of the hull's shut ramp (cross-review item 2). How the game admits an entity to a ship's
     grid at an open ramp is the missing rule; with it the exception can go.
+    **Resolved by WP-P4** (`docs/work-packages/WP-P4-moving-collision.md`): that plane is the hull collider's cap over
+    the ramp opening (triangles without a surface); caps are no colliders, the exception is deleted and the hull rule
+    is by position for every vehicle.
   - In the precise zone the box still hangs from the physics handle while it passes boxes at rest with a 2 cm inset; a
     kinematic carry there (as the lift and the descent are) would make that exact. In open flight a 30 t box lags its
     flight point by up to 84 cm (the swept margin is 26 cm; the guard sweeps the stretch ahead every frame).
@@ -545,3 +548,355 @@ The not-found searches are first attempts leaving or entering the lift room at f
 `goal_enclosed`, 0.3–90 ms each) that then reel in or turn by the lift and succeed. Cross-reviews: K1a (Codex Terra,
 `out/k1/review-k1a.md`), K1b/K1e (`review-k1b.md`), K1c + C2 routing (`review-k1c.md`) — all findings fixed except the
 accepted move-scoped hull-collider exception (C2 section) and the known issues listed above.
+
+## K1g: drones that hover and tug on their own (Win64, UE 5.9, RTX, 2026-11-15, not committed)
+
+Owner requirements: drones hover as near or as far as they see fit while they keep clear of each other, the box and
+their surroundings; the tugging is a spring with inertia; the spring's length is each drone's own to control;
+teammates sway individually. This replaces the rigid formation and the lead drone's physics handle in flight.
+
+### The stall this started from (`cargo-c2` leaving jobs partly done)
+
+Cause, with the log line that shows it (`CARGO_GUARD`, added for this; `P4_diag1.log`):
+
+```
+CARGO_VIEW moving target=V(X=11976.40, Y=-11176.37, Z=399.98) ...                         (the route's camera cut, t = 22 s)
+CARGO_GUARD move=1 box=4 here=V(X=12270.24, Y=-10879.76, Z=400.00) ahead=V(X=12654.91, Y=-10478.39, Z=380.13) hits=box:SCCargoContainer_4/Body
+```
+
+- The guard swept one straight stretch from the load's route point to `Dist + max(3 * speed * dt, 30 cm)`. The camera
+  cut of `sc.Cargo.ViewMoving` costs a frame of about 0.25 s; at 7.5 m/s that made the stretch 5.6 m: a chord across
+  the route's bend and its descent out of the lift room, through a box standing at rest beside the route. In all four
+  runs with a stall the load stopped within a second of that command, wherever it was (s = 1168, 1319, 1382, 1676).
+- The stop was dead (speed set to 0). The box, hanging from the soft handle, swung on 0.8 m into the stock and came to
+  rest on it, 15 cm above its target; a new route from there began inside the margins of the boxes around it
+  (`end=start_enclosed`), so some runs found one and some failed after ten tries.
+- Why only since WP-P4: nothing near the lift changed (the hangar has no hull colliders and no `no_surface` record,
+  and the plan is the same 166 waypoints). The search got four times slower (644 ms to about 2 400 ms; most likely because the
+  C2 is no longer left out as the move's partner, so every query probes its physics grid: not profiled), so the
+  first load leaves the lift room at t = 20 s instead of 12 s, and the camera cut at t = 22 s now finds it among the stock instead of in the
+  open hangar, where a chord hits nothing. The hold goal 72 cm lower is the port-geometry fix (the ship rests
+  lower) and plays no part.
+
+Fixed in the guard and the carry, not by a margin: the route ahead is swept along itself in 50 cm stretches
+(`GuardStretchCm`, as a search samples its route), as far as the load needs to brake to rest, each stretch once
+(again when the world's stamp changes); what is not free stops the load where the free stretch ends, at its own
+deceleration (`FSCCargoFlight::StopAt`), and so does giving way to another load; the route advances by at most one
+physics step a frame (`MaxPhysicsDeltaTime`), as the box it carries does.
+
+### The model (`Cargo/SCCargoTug.h`, `SCCargoTug.cpp`, `SCCargoTugStep.cpp`, `SCCargoDrone.*`)
+
+- **Box**: simulated, its own mass, gravity, the body's drag. No physics handle.
+- **Beam**: a spring-damper from its anchor to the drone's attach point on the box. Force capped by the tractor
+  record: `maxForce` up to `fullStrengthDistance`, falling to nothing at `maxDistance`. Stiffness `maxForce /
+  minDistance` (257.5 kN / 0.5 m): the record carries none, this is a viewer reading (the whole force for a stretch
+  of the beam's own minimum length). Critical damping for the mass the beam carries; spring and damper are taken
+  implicitly over the step, around the force the beam was set for.
+- **Shared**: only the force. What the route needs (weight, the route's acceleration along it and round its bends,
+  drag) is split among the attach points with no moment about the centre (`FSCCargoTug::Shares`).
+- **Each drone, every tick, for itself** (`FSCCargoTug::Station`): the beam along its share; its length as far as it
+  keeps full strength and a sweep of the drone's bounds along it finds room (surroundings and boxes at rest), never
+  shorter than the record's minimum rest length plus the stretch for its share; the rest length; its hover point
+  that far out. Teammates closer than `formation_spacing_m` move apart. The drone aims its beam and sets the rest
+  length from where its thrust holds it, so on its way out to its station it pays the beam out and the anchor stays
+  where it means it (`FStation::RestAt`, `Anchor`).
+- **Drone body** (`FSCCargoDroneBody`): `drone_mass_kg`, thrust limit `m (g + a_max) + maxForce` less the beam's
+  reaction, jerk limit; critically damped onto its moving station at `max_jerk / max_accel`.
+- **Gusts**: each drone its own process (`FSCCargoSway`: every component's frequency shifted by up to half an octave
+  either way from its seed, own phases, 0.7 to 1 of the amplitude). They move the drone's emitter and with it its
+  anchor: the box feels every drone's, not the lead's.
+- **Planning**: a load's envelope reserves its drones at the shortest beam that holds the box (`MinHangCm`: 0.79 m for
+  a 32 SCU box on two beams; the full-hang-then-reel-in second search is gone). The speed profile of a loaded team
+  uses `(a_up - min_load_accel) / sqrt 2` along and across the route (`RouteAccel`): both at once stay within what
+  the team can give straight up, with `min_load_accel` left for the springs.
+- **Left behind**: the route waits (brakes) while the box is further from it than `fullStrengthDistance`; a box that
+  does not come (it rests against something) gets a new route from where it is (`CARGO_REPLAN reason=left_behind`).
+
+Deviations, stated:
+
+- The spring is anchored: it pulls the attach point to the anchor from any side, not only along the line to the
+  emitter. A rope-like beam (tension along the line only) was built first and flown: sideways it is a pendulum of
+  the beam's length, the 30 t box lagged its route by metres through the lift room's exit and was lost
+  (`P4_tug1.log` of the first attempts). A tractor beam holds what it carries at a point in front of the emitter;
+  that is what the anchor is.
+- The beams also hold the box's attitude (an angular spring at the beams' own frequency): one beam alone would let it
+  spin.
+- Rigid, not simulated, as before on the lift and the descent, and now also in a destination's precise zone: the box
+  passes boxes at rest 2 cm from them, closer than a spring settles (first run with the springs there: the third
+  32 SCU box caught on the second and needed a `left_behind` route). The drones still fly their own stations there.
+- As of K1g the drones' clearance was only what the station's sweep kept, and a drone on its way between two stations
+  (out from under a door) was not swept. K1h below replaces this: every step of a drone is swept.
+
+### Tests (`SCBridge.Cargo`, 31 of 31; new: `TugBeam`, `TugShares`, `TugStation`, `TugDrone`, `TugFlight`, `TugSway`)
+
+- `TugBeam`: the cap's shape, the stiffness, the set force at any step length (1/240, 1/30, 0.25 s), pull from any
+  side, damping, the rest length's range.
+- `TugShares`: shares sum to 1 with no moment (five layouts).
+- `TugStation`: full-strength distance with room, as long as the room under a ceiling, never under the minimum rest
+  length; the rest length follows (reeled in: shorter); on its way out the drone has a shorter rest length and the
+  same anchor; a gust carries the anchor; teammates with different room choose different lengths.
+- `TugDrone`: acceleration left under the beam's reaction; a 3 m step within the thrust and jerk limits, settled.
+- `TugFlight`: a 30 t box on two beams and a 40 kg box on one (a very stiff spring on little mass), from close over
+  the box out to their stations while the route accelerates, cruises and brakes: within 25 cm of the route, 2 cm at
+  the end, the same at 240, 60 and 30 Hz; beams 2.5 m and more in the open, under 1.5 m with 1 m of room; gusts move
+  the box and do not carry it off.
+- `TugSway`: four drones over ten minutes: within the amplitude, and no pair correlated above 0.4 at any shift of up
+  to a period of the slowest component; two phase-shifted copies of one spectrum (the old model) exceed it.
+
+### Runs (final build; logs `ue/SCViewer/Saved/Logs/P4_*.log`, shots `out/p4/shots-*`)
+
+| Run | Result |
+|---|---|
+| `cargo-c2` x 4 (`P4_fin1.log`, `P4_fin2_2.log`, `P4_fin3.log`, `P4_fin4.log`) | every run: job 1 Done 3 of 3 (90.8 / 91.1 / 90.9 / 90.8 s), job 2 Done 3 of 3 (63.2 / 63.2 / 63.2 / 63.1 s); 17 routes found, none not found, `hits=0`, no replan of any kind |
+| `cargo-hull-a` (`P4_hulla.log`) | jobs 1 to 5 Done with every move done (26.5, 39.7, 43.4, 52.6, 60.2 s; before 18.5, 29.7, 45.1, 50.3, 49.2), job 6 fails as designed ("the drone team is gone"); 26 routes found, 1 not found, `hits=0`; replans: 3 `turn_room` on job 1 (the hover point over the slot moved out 25 cm three times), 1 `put_back` |
+| `cargo-multi` (`P4_multi.log`) | jobs 1 to 3 Done (52.7, 84.4, 57.7 s), job 4 queued and answered with the planner's reason; 14 routes found, 1 not found, `hits=0`, no replans |
+| `mobiglas-c2` (`P4_mgc2.log`) | script done, no crash; callouts group the team (`DRONE 3 + DRONE 4 · CARRYING`, `DRONE 5 + DRONE 6 · ATTACHING`, shot `c2m-team-2`) |
+
+The box against its route in transit (`CARGO_CARRY`, one sample a second, `cargo-c2` runs 1 and 2): median 5 cm,
+90 % within 16 cm, 73 cm at worst (the bend up to the ramp at 4 m/s). Before: up to 84 cm in open flight.
+
+Teammates at different distances (`CARGO_TUG`, the same team, the lift room's ceiling over one of them):
+
+```
+CARGO_TUG move=1 box=4 team=2 net_kN=294.0 beams=[ 4:len=2.32 rest=2.60 station=3.00 kN=180.9 3:len=1.60 rest=2.08 station=1.78 kN=180.9 ]   (paying out, 1 s after lift-off)
+CARGO_TUG move=1 box=4 team=2 net_kN=434.2 beams=[ 4:len=2.84 rest=2.46 station=3.00 kN=228.4 3:len=2.83 rest=2.45 station=1.84 kN=224.0 ]
+CARGO_TUG move=1 box=4 team=2 net_kN=336.7 beams=[ 4:len=1.39 rest=1.08 station=1.41 kN=181.6 3:len=1.50 rest=1.26 station=1.41 kN=160.9 ]   (both tucked in under the ramp)
+CARGO_TUG move=1 box=4 team=2 net_kN=300.0 beams=[ 4:len=3.02 rest=2.72 station=3.00 kN=154.5 3:len=3.00 rest=2.72 station=3.00 kN=145.7 ]   (open hangar)
+```
+
+Shots: `out/p4/shots-mgc2/c2m-team-2.png` (the team over a 32 SCU box in the lift room, its two drones at different
+heights), `out/p4/shots-fin3/c2-team-2.png` (open hangar, both out at 3 m). No shot was staged for it.
+
+### Known issues (TODO(WP-K1))
+
+- Loaded flights are slower: the route's acceleration is `(a_up - min_load_accel) / sqrt 2` (4.44 m/s² for a 30 t box
+  on two beams, 7.28 before). `cargo-c2` job 1 takes 91 s (76 s before), Hull A job 1 26.5 s (18.5 s).
+- Hull A job 1: three `turn_room` replans before the descent (the turn onto the lattice is swept from where the box
+  hangs, a few centimetres off its route's end; each try moves the hover point out 25 cm). It ends Done.
+- `CARGO_GUARD` logs every failing sweep: about 68 lines in a `cargo-c2` run, all in the half second while the box
+  before it settles on its slot (the world's stamp changes each frame then). No replan follows.
+- As of K1g drones overlapped their surroundings, boxes and each other (101 counted in a `cargo-c2` run). Closed by
+  K1h below.
+- The beam stiffness (`maxForce / minDistance`) and the attitude hold are viewer choices; `volumeForceCoefficient`
+  is still not applied.
+- The search is still about four times slower than before WP-P4 (not profiled).
+- The editor hung at exit after `SCRIPT_DONE` in the last seven runs here (killed 45 s later by the run script).
+  Two force-killed editors were still lingering as exited processes at the time; whether the hang is theirs or
+  this change's was not established. The runs before them (the same code but for `RouteAccel`) exited normally.
+
+## K1h: drone collision (Win64, UE 5.9, RTX, 2026-11-15, not committed)
+
+Requirement: drones never collide with each other, with a box (their own included) or with their surroundings, with
+that enforced by default; `cargo-c2` four times with every job 3 of 3, `cargo-hull-a`, `cargo-multi` and `mobiglas-c2`
+once each, `overlaps=0` on every `CARGO_JOB` line. State: met in the runs below. There is no switch any more
+(`sc.Cargo.DroneCollision` is gone): every step of a drone that is not in its dock is held to its shape.
+
+What every step does (`ASCCargoDrone::Step`, used by every way a drone moves: flights out and home, formation, tug):
+a drone flying alone steps out of the way of the loads other teams fly (`FSCCargoDroneSteer::Evade`), any drone keeps
+apart from the other drones by their positions and velocities (`Separate`), and the step is swept with the bounds of
+hull and rotors (`CARGO_DRONE_SHAPE half=(48, 49, 18)`) against the surroundings and every box and slid along what it
+meets (`Slide`, `USCCargoSubsystem::DroneSweep`). What it still ends in is counted (`CARGO_DRONE_OVERLAP`, with what
+the step was made of: `evaded_cm`, `apart_cm`, `slid_cm`) and totalled on every `CARGO_JOB` line.
+
+### Causes (from the logs) and what was changed for each
+
+The counts are those of K1g's `cargo-c2` run with the step off (`P4_cnt1.log`: 101 overlaps) and of the first run
+with it on (`P4_col1.log`: job 1 partly done). The later ones turned up one route at a time once the step was on.
+
+1. **A carrying drone against structure (85 of 101).** Without the step a drone's room along its beam was swept with
+   a 40 cm sphere, not its shape, so it paid out to 3 m where its hull did not fit (the lift room's ceiling and door
+   frame, `SCVehicle_0/Instanced_529 / 480 / 477`; the C2's hold, 48 of them). The room is now always the hull's
+   bounds with half the clearance swept from the shortest beam outwards (`USCCargoSubsystem::BeamRoom`).
+2. **Why the enforced run's loads were held up.** A drone picked its beam's length from the room over the route point
+   *here*. At the lift room's door the room drops from 3 m to 1.2 m at once; the drone, still out at 3 m, met the
+   wall over the door, was stopped by its own sweep and stayed there, its hover point being straight through the
+   wall. `P4_col1.log`, team of move 1, one line a second:
+   `3:len=3.43 station=2.09` → `3:len=6.24 station=1.21` → `len=7.73` → `14.09` → `23.71` → … → `150.01` (the
+   tractor's `maxDistance`: its force gone). The 30 t box flew on on one beam, sagged from Z = 300 to 146 and came
+   down at the ramp; the 19 `left_behind` replans started from there.
+   Now each drone looks along the route it flies (`FSCCargoTug::RoomAhead`): the room over the route per 40 cm
+   stretch (swept once, kept while the world stands), and it takes the room of every stretch the route can bring it
+   to sooner than its body needs to come in for it (critically damped at jerk / acceleration, after one thrust
+   swing; the hull's own length counted). Same run after: `station=3.00` → `0.79 / 1.22 / 1.15 / 1.07` through the
+   door with `len` following (`1.37 / 1.16`, `1.05 / 1.06`), `3.00` again 9 s later; no drone left behind in any run
+   below. A drone held up all the same tucks in to its shortest beam for a second, and the route waits while a
+   drone is further from its station than its beam keeps full strength (`FSCCargoMove::bDroneBehind`).
+3. **Loads flown through where other teams hover (4 + the 4 of the enforced run).** Route queries left every drone
+   out, and a load planned 32 cm over the stock passed through drones attached to the boxes there
+   (`drone=5 with=SCCargoContainer_0/Body state=3`). Drones are no colliders, so route queries now test kept space
+   beside the world (`FSCCargoKeepOut`, `USCCargoSubsystem::KeptSpace`): the stations of a team from the moment its
+   move is planned, drones hovering attached or holding a box, drones over a load the query takes as an obstacle.
+   A plan stopped only by kept space is tried again a second later (`CARGO_PLAN_WAIT`) and is not a failed pick; a
+   replan stopped by it does not count against the limit. The other half: a drone on its way out holds short of
+   its station while a load planned before its own move has yet to fly through there, or another team's drone is
+   within the kept distance of it (`USCCargoSubsystem::HoldShort`, `CARGO_HOLD_SHORT`; the load's way up to where
+   it is past the station, its quarter turn at the top of the lift as a cylinder).
+4. **Two drones leaving one dock (10 of the 12 drone against drone).** Bays are 61 cm apart, hulls have a radius of
+   69 cm (`drone=4 … Z=84.07`, `drone=3 … Z=23.07`, both `state=1`). A drone now stays docked until its way out
+   (bay, exit, clear of the dock's grid) is free of every drone in the air, where it is and where it flies in the
+   time that way takes; a drone in the air brakes short of the corridor of a drone that is launching, or docking
+   with the right of way (the lower id) (`FSCCargoDroneSteer::FreeAlong`, `USCCargoSubsystem::FlightFree`). No
+   delay is set anywhere: the kept distance and the dock's sockets decide.
+5. **Teammates on one path (the other 2).** The second teammate's route is the first's, the kept distance to its
+   side between the ends they share (`FSCCargoDroneSteer::Beside`, swept like any route, `CARGO_APART`); where that
+   is not free (a door), its own plain route, and its steps keep the distance. A first version (the first's route as
+   a tube in the second's search) flew: its route came out with 131 corners and 5 s slower, so it was replaced.
+6. **A lone drone's routes were planned for a shape smaller than its hull.** `DroneQuery` took the bounds of the
+   drone's colliding components: it has none, so the shape was a cube of 46 cm half size (clearance and gusts
+   only) against a hull 48 × 49 cm. With the step on, such a route slides along what it was planned past. The
+   shape is now the hull's bounds with half the clearance and the gusts; a dock corridor ends where that shape is
+   clear (`Departure`: past a box standing beside the dock); a drone that starts within its own margin (hovering
+   beside the box it has just set down on a plate) takes a short straight step clear first, or, from a pocket with
+   none, goes back along the way it came to the first place where the shape is free (`ClearStart`, the drone's
+   trail of its last 60 places). Seen on `cargo-multi`: the same drone, claimed again where it hovered under a box
+   on ship B's lower plate, `leg=out found=0 end=start_enclosed … start_blocked=1` 49 times in two minutes.
+7. **A flight held short overshot (found on `cargo-hull-a`, job 2).** `FSCCargoFlight::StopAt` brakes with a
+   jerk-limited swing of thrust; a 19 m flight held at 14 m is still accelerating when it has to brake:
+   `CARGO_HOLD_SHORT … holds short … s=1408/1934` then `goes on … flown=1769`, and the drone took its place under a
+   load about to turn over it (`drone=1 with=SCCargoContainer_4/Body state=3`). A held flight now ends at the
+   point as at its path's end (`FSCCargoFlight::HoldAt`; test `DroneHold`).
+8. **A teammate's station on the other's way (found on `cargo-hull-a`, job 4).** Two drones claimed in the air for a
+   10 m box: the second's route passed its teammate's station; it was kept 173 cm from the hovering teammate (the
+   kept distance) for 180 s (`Outbound took longer than 180 s`). A lone drone's route now keeps the kept distance
+   from its teammates' stations, from other teams' and from any drone standing in the air; a flight that does not
+   get on for 3 s with no rule holding it is planned again from where it is (`CARGO_FLIGHT_AGAIN`).
+9. **Docks on the Hull A's cargo plate.** Standing in bay 0 the hull meets the plate's own structure
+   (`CARGO_DRONE_BAY … hull_meets=[ Mesh_738 740 744 746 748 ]`): in its bay and on the stretch between bay and
+   exit the dock holds and moves the drone (not swept, as a docked drone is not), and what it meets in the bay is
+   left out while it is in the dock's corridor. With the neighbouring plate retracted (`cargo-multi`: a job opens
+   only the plates it uses) the bay's exit is inside that plate: `CARGO_DRONE_BAY_BLOCKED drone=1 dock=1 bay=0
+   blocked=1 by=SCVehicle_1/Mesh_734`. Such a drone is not sent (`CanLeaveBay`); the job uses the others.
+10. **A box tilting onto a plate turned into its own drones (found on `cargo-multi`).** As a box is caught over a
+    slot on an upright plate it turns about its centre while its drones swing from over it to the plate's side:
+    `drone=8 with=SCCargoContainer_1/Body state=4`, 0.97 s into `Lowering`. The drones now first move out of the
+    sphere the box sweeps (their beams reach that far; the box hangs still, at most 3 s), fly round it as it turns
+    and come in along the plate's normal as it goes down. A level turn is as before.
+11. **Stepping out of a load's way.** Three faults, each seen on `cargo-multi`: a drone stepped *down* out of a
+    load's way onto the stock under it (now only level, across the load's velocity); a team's own drones were
+    pushed off their box by another team's load (`drone=8 state=4 at Z=16`; now only a drone flying alone steps
+    aside, and the loads' right of way reaches as far as the drones over them: full-strength distance and the
+    drone's height, 2.8 m more); and for a load flying askew to its own sides the way out was taken from the
+    bounds of what it sweeps, which sent the drone through the load's path to its far side (now the load's side
+    for as long as it is passing; test case in `DroneEvade`). A load being turned counts as the cylinder (tilting:
+    the sphere) it sweeps.
+12. **A step refused though it led out.** A sweep that begins inside something (a load swayed onto the drone) was
+    allowed only along the way out the engine named; a step that ends clear of the thing is now allowed too, and is
+    still swept against everything else.
+13. **A step aside read as a velocity (found on `cargo-c2`, job 2 of one run).** A drone turned aside by another
+    drone was moved the whole kept distance in one step (172 cm), and the tug took the body's velocity from where
+    the step left it: 100 m/s. `K1h_c2_g2.log`: a team's two drones leaving the lift room as two others flew in
+    through the same door, `4:len=1.58 … 3:len=1.58` and a second later `4:len=11.70 … 3:len=14.81`, then up to
+    21 m; the route waited 7 s for them (job 2: 75.7 s against 68.5 s in the run before). No overlap came of it. A
+    step aside is now no longer than any step (`Separate`'s `MaxStep`), and a body moved by its own steering
+    keeps the velocity it had; one held up by something it met keeps what lies along the way it slid.
+14. **A drone at rest under a ceiling stayed there (found on `cargo-hull-a`, job 3 of one run).** The drone holding
+    a 2 SCU box aside paid its beam out to the lift room's ceiling and slid to rest a hair under it. From there the
+    sweep named the ceiling at distance 0 for every step, the one away from it too; the body, set to rest by each
+    held-up step, never took a step long enough to matter: `CARGO_DRONE_BLOCKED drone=2 … by=SCVehicle_0/
+    Instanced_423` 90 times at one place, the route waiting for its drone until `Transit took longer than 180 s`
+    (the box, let go, then fell onto the stock and into a drone there: the one overlap of that run). A step away
+    from a surface the hull rests against is now swept again from a touch's width (0.5 cm) off it, and a step
+    shorter than that is free when the hull, a hair smaller, overlaps nothing where it ends.
+15. **A drone in its own box hanging on its side (found on `cargo-hull-a`, job 5).** A box carried off an upright
+    plate keeps the attitude it stood in: its top faces sideways, and the attach point is the middle of a face
+    that stands upright. The station was that point plus the beam straight up: tucked in to 0.8 m beside boxes at
+    rest, half the hull was in the box (`CARGO_DRONE_BLOCKED drone=4 state=4 … by=SCCargoContainer_5/Body` eight
+    times, then `CARGO_DRONE_OVERLAP drone=4 with=SCCargoContainer_5/Body … carrying=7` as the box, moved rigidly
+    there, came on). The station now keeps the drone's shape beyond the plane of the face its attach point is on
+    (`FSCCargoTug::FStation::KeepOffFace`): beside a face that stands upright the drone hovers that far out and
+    its beam slants; over an upright box nothing changes.
+16. **A drone's own box coming up under it (found on `cargo-c2`, one run of four).** At the lift room's exit the
+    route drops; the box, a body on springs, lagged it by up to 75 cm while a drone was tucked in at 0.8 m over it:
+    `CARGO_DRONE_OVERLAP drone=4 with=SCCargoContainer_4/Body … state=4 … carrying=8` (`K1h_c2_k4.log`, the only
+    overlap of that batch). The station is now kept off the face of the box where it really is as well as where its
+    route has it, and every step of a carrying drone first moves out along that face's normal when the box has come
+    within the hull's reach of it (`FSCCargoDroneSteer::OffFace`, `USCCargoSubsystem::DroneOwnBox`; 2 cm kept).
+
+Design rules kept: a drone decides its own hover point, rest length and distances (all of the above but the kept
+space in route queries and the order of bays is a drone's own rule from what it sees: the others' places and
+velocities, the loads' routes, the room over its route); only the force split is shared by a team; beams are
+spring-dampers capped by the tractor record; box and drones have inertia; teammates sway independently. Drone
+states and `CarryingBoxId` mean what they did (a drone waiting in its bay for its way out is `Docked`; `Launching`
+lasts to the end of the dock's corridor).
+
+### Tests (`SCBridge.Cargo`, 40 of 40; new or extended here)
+
+`UnrealEditor-Cmd.exe <uproject> -ExecCmds="Automation RunTests SCBridge.Cargo; Quit" -TestExit="Automation Test
+Queue Empty" -unattended -nullrhi -nosplash -log=K1h_tests.log` → `**** TEST COMPLETE. EXIT CODE: 0 ****`,
+40 × `Result={Success}`.
+
+- `TugRoomAhead`: a lintel (3 m of room, 1 m for 10 m of route) flown under at 10, 4 and 1 m/s by the drone's body:
+  never more than the sweep's margin over the lintel's height where the hull is under it, out at 3 m until the look
+  reaches it and again after; from rest before a lintel 3 m ahead it is tucked in, 40 m ahead it is not.
+- `TugOwnBox`: the station over an upright box is left as it is and clear of the box at the shortest beam; beside
+  a box on its side it moves out from the face by the shape's reach, at the height it chose. A box rising 75 cm
+  in half a second under a drone 5 cm over it: the drone is never in it and rises by what was missing; beside the
+  box or clear above it, it is left where it is.
+- `DroneKeepOut`: a load's shape swept past a hovering drone's box (through it, 32 cm over the box it hovers on, over
+  it, past its side, short of it, turned a quarter); a station on, above and beyond a load's route, and the last leg
+  that passes it.
+- `DroneLaunch`: two bays 61 cm apart: the second waits in its bay, the two are never nearer than their hulls, both
+  arrive; a path free to its end, up to the kept distance from a drone on it, less when that drone is coming.
+- `DroneHold`: a 21 m flight held at 14 m never goes beyond, rests there, stays when held behind where it is, flies
+  on when let go.
+- `DroneEvade`: a 10 m box at 10 m/s through where a drone hovers (three places): never in it, out level and back;
+  a load coming across towards the drone's side; one 35 m off is left to come nearer; beside its path nothing;
+  out of a standing box by its nearest level side.
+- `DroneApart`: the second teammate's route beside the first's (round a bend, out of a dock): the kept distance
+  between the ends, its own ends exact, as smooth, 5 % longer at most, on the side of its place; a third twice as
+  far out.
+- `DroneSeparate` (K1g's, extended): found inside the kept distance a drone moves out in steps no longer than a
+  step may be. `DroneSlide` (K1g's): unchanged.
+
+### Runs (final build; logs `ue/SCViewer/Saved/Logs/K1h_*_l*.log`, shots `out/p4/shots-K1h_*`)
+
+Host as in `ue/README.md` (`UnrealEditor.exe <uproject> -game -windowed -resx=1600 -resy=900 -nosplash
+-SCCamera=first -SCLoad=… -SCEnvironment=… -SCCargoScenario=… -SCScript=ue/scripts/routes/<route>.txt -SCShotDir=…
+-log=<name>.log`), each stopped by its own process id after `SCRIPT_DONE`.
+
+| Route (log) | Jobs | Overlaps | Other |
+|---|---|---|---|
+| `cargo-c2` 1 (`K1h_c2_l1.log`) | job 1 Done 3 of 3 in 94.8 s, job 2 Done 3 of 3 in 67.9 s | `overlaps=0` on all 10 `CARGO_JOB` lines, no `CARGO_DRONE_OVERLAP` | 13 routes, none not found, no replan, 3 held short, 11 steps held up, longest beam 3.24 m |
+| `cargo-c2` 2 (`K1h_c2_l2.log`) | 95.3 s and 68.1 s, both 3 of 3 | 0 (10 lines) | as run 1 (12 steps held up, 3.16 m) |
+| `cargo-c2` 3 (`K1h_c2_l3.log`) | 95.2 s and 67.8 s, both 3 of 3 | 0 (10 lines) | as run 1 (12, 3.21 m) |
+| `cargo-c2` 4 (`K1h_c2_l4.log`) | 95.0 s and 67.8 s, both 3 of 3 | 0 (10 lines) | as run 1 (11, 3.22 m) |
+| `cargo-hull-a` (`K1h_hulla_l.log`) | jobs 1 to 5 Done (26.7, 33.2, 43.3, 53.7, 58.2 s), job 6 Failed after 12.0 s, `reason="the drone team is gone"` (the lost-drone test, by design) | 0 (30 lines) | 26 routes, none not found, 4 replans, 5 held short, 4 steps held up, longest beam 3.73 m |
+| `cargo-multi` (`K1h_multi_l.log`) | jobs 1, 3, 2 Done (67.5, 80.2, 111.7 s; 2, 2 and 3 moves), job 4 answered with the planner's reason (`No room on MISC Hull A · 2 for any Organic box`, as in K1g) | 0 (17 lines) | 15 routes, none not found, no replan, 3 bays blocked, 2 held short |
+| `mobiglas-c2` (`K1h_mgc2_l.log`) | script done with the job under way (as before) | 0 (3 lines) | 5 routes, 1 held short, callouts group teams |
+
+Job times against K1g's (same routes, step off): `cargo-c2` job 1 94.8 to 95.3 s (90.8 to 91.1 s: +4.5 %), job 2 67.8 to 68.1 s (63.2 s: +7.5 %); `cargo-hull-a` 26.7 / 33.2 / 43.3 / 53.7 /
+58.2 s (26.5 / 39.7 / 43.4 / 52.6 / 60.2 s: within 1.1 s either way, job 2 6.5 s faster); `cargo-multi` 67.5 / 111.7 /
+80.2 s for jobs 1 / 2 / 3 (52.7 / 84.4 / 57.7 s: +28 to +39 %, see the known issue on blocked bays).
+
+Where the time goes on `cargo-c2` job 1 (`K1h_c2_l1.log` against `P4_fin4.log`, seconds from the job's start):
+| Move | K1g: Outbound, Attaching, Transit, Lowering, Done | K1h |
+|---|---|---|
+| 1 | 10.1, 14.0, 16.7, 67.7, 70.3 | 10.1, 15.1, 17.7, 68.7, 71.3 |
+| 2 | 13.1, 17.2, 24.7, 77.4, 80.0 | 13.1, 26.3, 29.0, 79.9, 82.5 |
+| 3 | 14.4, 33.6, 36.2, 88.2, 90.8 | 14.3, 37.1, 39.8, 92.2, 94.8 |
+
+The flights out take longer (drones wait in their bays for the one before, and hold short of stations a load has yet
+to pass: move 2's team attaches 9 s later); the transits are as fast or faster (move 2: 50.9 s against 52.7 s), so
+4 s of the wait remain at the job's end.
+
+### Known issues and what is not verified (TODO(WP-K1))
+
+- Zero overlaps is shown for these four routes, not proved for any scene. The step guarantees a drone never moves
+  *into* the surroundings or a box at rest; what moves onto a drone (a load, a plate) is kept off by the rules
+  above, each of which was written against a case that occurred.
+- A load is still not swept against drones. A team's drones are covered by the loads' right of way and a lone
+  drone steps aside; a lone drone with no room to its side (a doorway with a load coming through) is not handled
+  and did not occur.
+- With a neighbouring Hull A plate retracted, bay 0 of the ship's dock cannot be left, so `cargo-multi` runs with
+  one drone a ship fewer: jobs 1, 2 and 3 take 67.5, 111.7 and 80.2 s (52.7, 84.4 and 57.7 s in K1g). Opening every plate of a ship whose dock is used would
+  give it back; not done (it changes which mechanisms a job moves).
+- The dock holds a drone between bay and exit: that stretch is not swept (on the Hull A plate the hull meets the
+  plate's rails there). It is the dock's own stretch by decision, not by a record.
+- A drone that waits (in its bay, short of its station) waits for as long as the cause lasts; a team waiting for a
+  load that never flies would end with its step's 180 s limit. Not seen.
+- `mobiglas-c2` ends by its script 43 s after the transfer is confirmed, with the job under way (as before): it
+  shows `overlaps=0` up to there and the callouts; it does not show a finished job.
+- The hang at exit after `SCRIPT_DONE` (two exited editor processes still holding port 8000) is unchanged; every
+  run here was stopped by its process id.
+- K1g's own open points (beam stiffness a viewer reading, `volumeForceCoefficient` not applied, the search four
+  times slower than before WP-P4, three `turn_room` replans on Hull A job 1) stand.

@@ -117,6 +117,7 @@ void FSCCargoFlight::Start(const TArray<FVector>& Path, double InMaxSpeed, doubl
     MaxAccel = InMaxAccel;
     MaxJerk = InMaxJerk;
     Dist = Speed = Accel = 0;
+    StopAt = HoldAt = -1;
     S.SetNum(Points.Num());
     VCap.SetNum(Points.Num());
     S[0] = 0;
@@ -162,7 +163,9 @@ FVector FSCCargoFlight::Tangent() const
 bool FSCCargoFlight::Step(double Dt)
 {
     if (Points.Num() < 2 || Dt <= 0) return Done();
-    const double Remaining = Length() - Dist;
+    // Held: the path ends there for now (a flight already beyond it stays where it is).
+    const double End = HoldAt >= 0 ? FMath::Max(FMath::Min(Length(), HoldAt), Dist) : Length();
+    const double Remaining = (StopAt >= 0 ? FMath::Min(End, StopAt) : End) - Dist;
     // Speed the path allows here (curvature, braking to the end); acceleration follows it, its change limited by jerk.
     double Target = FMath::Min(CapAt(Dist), FMath::Sqrt(2 * MaxAccel * 0.7 * FMath::Max(Remaining, 0.0)));
     if (SpeedLimit > 0) Target = FMath::Min(Target, SpeedLimit);
@@ -170,10 +173,10 @@ bool FSCCargoFlight::Step(double Dt)
     Accel += FMath::Clamp(Want - Accel, -MaxJerk * Dt, MaxJerk * Dt);
     Speed = FMath::Max(0.0, Speed + Accel * Dt);
     if (Speed == 0 && Accel < 0) Accel = 0;
-    Dist = FMath::Min(Length(), Dist + Speed * Dt);
-    if (Length() - Dist < 1.0 && Speed < 30)
+    Dist = FMath::Min(End, Dist + Speed * Dt);
+    if (End - Dist < 1.0 && Speed < 30)
     {
-        Dist = Length();
+        Dist = End;
         Speed = Accel = 0;
     }
     return Done();
@@ -196,27 +199,37 @@ double SCCargoLoadedAccel(int32 Drones, double LiftForceN, double LoadKg, double
 
 namespace
 {
-// Sum of three sines (weights 0.55 / 0.3 / 0.15: peak 1), phases from (Seed, Channel).
+// A number in [0, 1) from (Seed, Channel, K, Salt).
+double Unit(uint32 Seed, uint32 Channel, int32 K, uint32 Salt)
+{
+    const uint32 H = HashCombineFast(HashCombineFast(HashCombineFast(GetTypeHash(Seed), GetTypeHash(Channel)), GetTypeHash(K)), GetTypeHash(Salt));
+    return (H % 10000) / 10000.0;
+}
+// Sum of three sines (weights 0.55 / 0.3 / 0.15: peak 1). Each seed (a drone) and channel (an axis) has its own
+// spectrum: every component's frequency is FrequencyHz x (1, 1.73, 2.91) shifted by up to half an octave either way,
+// and its own phase, so two drones' gusts are separate processes, not copies of one out of step.
 double Noise(uint32 Seed, uint32 Channel, double T, double FrequencyHz)
 {
     static const double Mult[3] = {1.0, 1.73, 2.91}, Weight[3] = {0.55, 0.3, 0.15};
     double V = 0;
     for (int32 K = 0; K < 3; ++K)
     {
-        const uint32 H = HashCombineFast(HashCombineFast(GetTypeHash(Seed), GetTypeHash(Channel)), GetTypeHash(K));
-        const double Phase = (H % 10000) / 10000.0 * UE_DOUBLE_TWO_PI;
-        V += Weight[K] * FMath::Sin(UE_DOUBLE_TWO_PI * FrequencyHz * Mult[K] * T + Phase);
+        const double Phase = Unit(Seed, Channel, K, 0) * UE_DOUBLE_TWO_PI;
+        const double Shift = FMath::Pow(2.0, Unit(Seed, Channel, K, 1) - 0.5);
+        V += Weight[K] * FMath::Sin(UE_DOUBLE_TWO_PI * FrequencyHz * Mult[K] * Shift * T + Phase);
     }
     return V;
 }
+// A drone's own share of the scenario's amplitude: 0.7 to 1 of it (never more than the scenario allows).
+double Strength(uint32 Seed) { return 0.7 + 0.3 * Unit(Seed, 99, 0, 2); }
 } // namespace
 
 FVector FSCCargoSway::Offset(uint32 Seed, double T, double AmplitudeCm, double FrequencyHz)
 {
-    return FVector(Noise(Seed, 0, T, FrequencyHz), Noise(Seed, 1, T, FrequencyHz), 0.5 * Noise(Seed, 2, T, FrequencyHz)) * AmplitudeCm;
+    return FVector(Noise(Seed, 0, T, FrequencyHz), Noise(Seed, 1, T, FrequencyHz), 0.5 * Noise(Seed, 2, T, FrequencyHz)) * AmplitudeCm * Strength(Seed);
 }
 
 FVector2D FSCCargoSway::Tilt(uint32 Seed, double T, double TiltDeg, double FrequencyHz)
 {
-    return FVector2D(Noise(Seed, 3, T, FrequencyHz), Noise(Seed, 4, T, FrequencyHz)) * TiltDeg;
+    return FVector2D(Noise(Seed, 3, T, FrequencyHz), Noise(Seed, 4, T, FrequencyHz)) * TiltDeg * Strength(Seed);
 }
