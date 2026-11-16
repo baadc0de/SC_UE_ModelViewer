@@ -203,6 +203,8 @@ public:
 
     void Stop()
     {
+        // A recording still running when the app closes is finished here, not lost (encoding a long one takes minutes).
+        Video.Finish(30 * 60);
         if (TickHandle.IsValid()) FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
         TickHandle.Reset();
         for (FPending& P : Pending) P.Done(Reply(EHttpServerResponseCodes::ServerError, Error(TEXT("shutting down"))));

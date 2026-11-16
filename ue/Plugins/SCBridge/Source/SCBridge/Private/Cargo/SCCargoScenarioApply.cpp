@@ -51,7 +51,11 @@ void USCCargoSubsystem::TryScenario()
             return;
         }
         for (const FString& Entity : State->Scenario.Entities()) State->Library.Request(Entity);
-        if (State->Scenario.bSpace) Viewer->SetSpace(true); // WP-K3: no hangar, no gravity, a sun
+        if (State->Scenario.bSpace)
+        {
+            if (State->Scenario.SunLux >= 0) Viewer->SetSpaceSunLux(float(State->Scenario.SunLux));
+            Viewer->SetSpace(true); // WP-K3: no hangar, no gravity, a sun
+        }
         const FSCCargoDroneDefinition& D = State->Scenario.Drone;
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loaded=\"%s\" ship=%s environment=%s stock=%d docks=%d tractor=%s/%s max_force=%.0f full_strength_m=%.1f"),
                *State->Scenario.Name, *State->Scenario.Ship, *State->Scenario.Environment, State->Scenario.Stock.Num(), State->Scenario.Docks.Num(),

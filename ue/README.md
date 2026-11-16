@@ -431,7 +431,8 @@ lost route would), `sc.Cargo.LoseDrone busy`; the RPC puts boxes down loose (`/c
 Logs: `CARGO_LOOSE`, `CARGO_BEACON`, `CARGO_RETARGET`, `CARGO_LOOSE_SPOT`.
 
 **Cargo in space** (WP-K3, [brief](../docs/work-packages/WP-K3-cargo-in-space.md)): `-SCCargoScenario=hull_a_space`
-loads two Hull A among asteroids with no hangar, zero gravity and a sun; scenarios gain `space`, `seed`, vehicle poses
+loads two Hull A among asteroids with no hangar, zero gravity and a sun (8000 lux and a fill light; `sc.Space.Sun <lux>`,
+scenario `sun_lux`); `hull_a_space_fleet` has four Hull A for exploring transfers by hand; scenarios gain `space`, `seed`, vehicle poses
 (`at`, `yaw` / `rot`), `obstacles` (game entities placed as static instances) and `loose` stock. In zero g one drone
 holds any box its beam takes by volume, and loose cargo holds station where it was let go.
 
