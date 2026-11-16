@@ -59,7 +59,7 @@ void USCCargoSubsystem::Tick(float DeltaSeconds)
     if (State->bDebug) DebugDraw();
 }
 
-float USCCargoSubsystem::GetNearbyRadiusM() const { return USCViewerSettings::Get()->CargoNearbyRadiusM; }
+float USCCargoSubsystem::GetNearbyRadiusM() const { return USCViewerSettings::Get()->CargoGridListRadiusM; }
 
 bool USCCargoSubsystem::InAtmosphere() const
 {
@@ -233,6 +233,14 @@ TArray<FSCCargoDroneView> USCCargoSubsystem::GetDrones() const
             V.Label = FText::Format(NSLOCTEXT("SCCargo", "Drone", "Drone {0}"), D->DroneId);
             V.JobId = D->JobId;
             V.CarryingBoxId = D->CarryingBoxId;
+            V.MoveId = D->MoveId;
+            if (D->MoveId != INDEX_NONE)
+                for (const FSCCargoJob& J : State->Jobs)
+                    if (const FSCCargoMove* M = J.Moves.FindByPredicate([&](const FSCCargoMove& X) { return X.MoveId == D->MoveId; }))
+                    {
+                        V.MoveBoxId = M->Plan.BoxId;
+                        break;
+                    }
             V.WorldLocation = D->GetActorLocation();
             V.WorldBounds = D->GetComponentsBoundingBox(false);
             V.OwnerLabel = OwnerLabel(D->Owner);

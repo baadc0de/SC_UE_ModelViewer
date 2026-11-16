@@ -172,6 +172,8 @@ struct SCBRIDGE_API FSCCargoFlight
     double MaxSpeed = 0, MaxAccel = 0, MaxJerk = 0; // cm/s, cm/s^2, cm/s^3
     double Dist = 0, Speed = 0, Accel = 0;
     double SpeedLimit = 0; // > 0: a lower speed cap for now (reached at the acceleration and jerk limits)
+    double StopAt = -1;    // >= 0: brake to rest by this arclength (the stretch beyond is not known free); < 0: none
+    double HoldAt = -1;    // >= 0: the flight ends at this arclength for now, as at the path's end (never beyond it); < 0: none
 
     /** Start at rest on Path (at least two points). */
     void Start(const TArray<FVector>& Path, double InMaxSpeed, double InMaxAccel, double InMaxJerk);
@@ -187,9 +189,10 @@ struct SCBRIDGE_API FSCCargoFlight
     static double Seconds(double Length, double MaxSpeed, double MaxAccel);
 };
 
-/** Gusts in atmosphere: smooth band-limited noise, three sines per axis at FrequencyHz x (1, 1.73, 2.91) with weights
- *  (0.55, 0.3, 0.15) and phases from Seed (teammates differ). Offset: per axis within +-AmplitudeCm (vertical half);
- *  Tilt (pitch, roll degrees) within +-TiltDeg. */
+/** Gusts in atmosphere: smooth band-limited noise, three sines per axis with weights (0.55, 0.3, 0.15). Each Seed (a
+ *  drone) has its own process: its components' frequencies are FrequencyHz x (1, 1.73, 2.91), each shifted by up to
+ *  half an octave either way, with its own phases and 0.7 to 1 of the amplitude, so teammates sway independently.
+ *  Offset: per axis within +-AmplitudeCm (vertical half); Tilt (pitch, roll degrees) within +-TiltDeg. */
 struct SCBRIDGE_API FSCCargoSway
 {
     static FVector Offset(uint32 Seed, double T, double AmplitudeCm, double FrequencyHz);

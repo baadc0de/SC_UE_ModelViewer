@@ -18,7 +18,7 @@ using namespace SCMobiGlasStyle;
 
 namespace
 {
-constexpr int32 GridKey = 1000000, BoxKey = 2000000, DroneKey = 3000000;
+constexpr int32 GridKey = 1000000, BoxKey = 2000000, DroneKey = 3000000, TeamKey = 4000000;
 bool IsEast(ESCCalloutSide S) { return S == ESCCalloutSide::NE || S == ESCCalloutSide::SE; }
 } // namespace
 
@@ -67,7 +67,7 @@ void SSCCalloutLayer::Gather(const FGeometry& Geometry)
         if (const TOptional<FSlateRect>& Clear = Model->GetClearArea())
             Area = FBox2D(Geometry.AbsoluteToLocal(FVector2D(Clear->Left, Clear->Top)), Geometry.AbsoluteToLocal(FVector2D(Clear->Right, Clear->Bottom)));
         auto Add = [&](int32 Key, EKind Kind, const FString& Name, const FString& Value, const FVector& AnchorWorld, const FBox& Bounds, int32 Priority,
-                       bool bSelected, bool bNeutral = false) {
+                       bool bSelected, bool bNeutral = false, const FString& Extra = FString()) {
             FVector2D Anchor;
             if (!Project(AnchorWorld, Anchor) || !Area.IsInside(Anchor)) return; // behind the camera, off screen, under a panel
             FBox2D Object(ForceInit);
@@ -84,6 +84,7 @@ void SSCCalloutLayer::Gather(const FGeometry& Geometry)
             I.Kind = Kind;
             I.Name = Name;
             I.Value = Value;
+            I.Extra = Extra;
             I.Anchor = Anchor;
             I.Object = Object;
             I.Priority = Priority;
@@ -92,13 +93,48 @@ void SSCCalloutLayer::Gather(const FGeometry& Geometry)
             I.bNeutral = bNeutral;
             I.bSeen = true;
             const FVector2f A = SCMobiGlasPaint::Measure(Name, Label()), B = SCMobiGlasPaint::Measure(Value, Numeric());
-            I.LabelSize = FVector2D(FMath::Max(A.X, B.X) + 2 * CalloutPadX + FocusWidth + 1, A.Y + B.Y + 2 * CalloutPadY);
+            const FVector2f C = Extra.IsEmpty() ? FVector2f::ZeroVector : SCMobiGlasPaint::Measure(Extra, Numeric());
+            I.LabelSize = FVector2D(FMath::Max3(A.X, B.X, C.X) + 2 * CalloutPadX + FocusWidth + 1, A.Y + B.Y + C.Y + 2 * CalloutPadY);
+        };
+        // One callout per thing that moves as one: a box with the drones holding it, a team on its way to (or back
+        // from) a box, a lone drone. A team is the drones that share a move; it joins its box while any of them holds
+        // it (attaching, carrying, holding aside, releasing), so a carried box never has a callout per drone.
+        const TArray<FSCCargoDroneView> Drones = Model->GetDrones();
+        TMap<int32, TArray<const FSCCargoDroneView*>> Teams; // move id -> its drones
+        TMap<int32, TArray<const FSCCargoDroneView*>> Holders; // box id -> the drones holding it
+        auto Holds = [](const FSCCargoDroneView* D) {
+            return D->CarryingBoxId != INDEX_NONE || D->State == ESCCargoDroneState::Attaching || D->State == ESCCargoDroneState::Holding ||
+                   D->State == ESCCargoDroneState::Releasing;
+        };
+        for (const FSCCargoDroneView& D : Drones)
+            if (D.State != ESCCargoDroneState::Docked && D.MoveId != INDEX_NONE) Teams.FindOrAdd(D.MoveId).Add(&D);
+        for (const auto& Pair : Teams)
+            if (Pair.Value.ContainsByPredicate(Holds))
+            {
+                const FSCCargoDroneView* const* Carrier =
+                    Pair.Value.FindByPredicate([](const FSCCargoDroneView* D) { return D->CarryingBoxId != INDEX_NONE; });
+                const int32 Box = Carrier ? (*Carrier)->CarryingBoxId : Pair.Value[0]->MoveBoxId;
+                if (Box != INDEX_NONE) Holders.FindOrAdd(Box).Append(Pair.Value);
+            }
+        for (const FSCCargoDroneView& D : Drones) // a holder without a move (should not happen): still joins its box
+            if (D.MoveId == INDEX_NONE && D.CarryingBoxId != INDEX_NONE && D.State != ESCCargoDroneState::Docked) Holders.FindOrAdd(D.CarryingBoxId).Add(&D);
+        auto Names = [](TConstArrayView<const FSCCargoDroneView*> Team) {
+            TArray<const FSCCargoDroneView*> Sorted(Team.GetData(), Team.Num());
+            Sorted.Sort([](const FSCCargoDroneView& A, const FSCCargoDroneView& B) { return A.DroneId < B.DroneId; });
+            FString Out;
+            for (const FSCCargoDroneView* D : Sorted) Out += (Out.IsEmpty() ? TEXT("") : TEXT(" + ")) + Caps(D->Label.ToString());
+            return Out;
+        };
+        auto Union = [](TConstArrayView<const FSCCargoDroneView*> Team, FBox Bounds) {
+            for (const FSCCargoDroneView* D : Team) Bounds += D->WorldBounds.IsValid ? D->WorldBounds : FBox(D->WorldLocation, D->WorldLocation);
+            return Bounds;
         };
         // Boxes of active jobs: carried ones and the ones still reserved on (or placed onto) a grid.
         TArray<FSCCargoBoxView> Boxes = Model->GetMovingBoxes();
         for (const FSCCargoGridView& G : Model->GetGrids())
             for (const FSCCargoBoxView& B : G.Boxes)
                 if (B.State != ESCCargoBoxState::Stored) Boxes.Add(B);
+        TSet<int32> Joined; // drones already in a box's callout
         for (const FSCCargoBoxView& B : Boxes)
         {
             const FSCCargoJobView* Job = Model->FindJob(B.JobId);
@@ -110,17 +146,42 @@ void SSCCalloutLayer::Gather(const FGeometry& Geometry)
             }
             if (Job && !FSCMobiGlasModel::IsActive(Job->State)) continue;
             const FString Dest = Job ? Caps(Model->DescribeGrids(Job->ToGrids).ToString()) : FString();
+            const TArray<const FSCCargoDroneView*>* Team = Holders.Find(B.BoxId);
+            FString Crew;
+            if (Team)
+            {
+                for (const FSCCargoDroneView* D : *Team) Joined.Add(D->DroneId);
+                Crew = Names(*Team) + TEXT(" · ") + SCMobiGlasText::DroneState(uint8((*Team)[0]->State));
+            }
             Add(BoxKey + B.BoxId, EKind::Box, FString::Printf(TEXT("%s · %d SCU%s"), *Caps(B.CommodityLabel.ToString()), B.SCU,
                 *(B.bMine || B.OwnerLabel.IsEmpty() ? FString() : TEXT(" · ") + Caps(B.OwnerLabel.ToString()))),
-                SCMobiGlasText::BoxState(uint8(B.State)) + (Dest.IsEmpty() ? FString() : TEXT(" → ") + Dest), B.WorldCenter, B.WorldBounds,
-                B.bMine ? 3 : 1, false, !B.bMine); // other owners' cargo: neutral, below ours
+                SCMobiGlasText::BoxState(uint8(B.State)) + (Dest.IsEmpty() ? FString() : TEXT(" → ") + Dest), B.WorldCenter,
+                Team ? Union(*Team, B.WorldBounds) : B.WorldBounds, B.bMine ? 3 : 1, false, !B.bMine, Crew); // other owners' cargo: neutral, below ours
         }
-        for (const FSCCargoDroneView& D : Model->GetDrones())
-            if (D.State != ESCCargoDroneState::Docked)
+        // Teams not (or no longer) at their box: one callout per move, anchored between its drones.
+        auto TeamName = [&](TConstArrayView<const FSCCargoDroneView*> Team, bool& bOther) {
+            const FSCCargoJobView* Job = Model->FindJob(Team[0]->JobId);
+            bOther = Job && !Job->bMine;
+            const FString Owner = bOther && !Team[0]->OwnerLabel.IsEmpty() ? TEXT(" · ") + Caps(Team[0]->OwnerLabel.ToString()) : FString();
+            return Names(Team) + Owner;
+        };
+        for (const auto& Pair : Teams)
+        {
+            TArray<const FSCCargoDroneView*> Free = Pair.Value.FilterByPredicate([&](const FSCCargoDroneView* D) { return !Joined.Contains(D->DroneId); });
+            if (Free.Num() < 2) continue; // a single drone keeps its own callout (below)
+            bool bOther = false;
+            const FString Name = TeamName(Free, bOther);
+            FVector Centre = FVector::ZeroVector;
+            for (const FSCCargoDroneView* D : Free) { Centre += D->WorldLocation; Joined.Add(D->DroneId); }
+            Add(TeamKey + Pair.Key, EKind::Drone, Name, SCMobiGlasText::DroneState(uint8(Free[0]->State)), Centre / Free.Num(), Union(Free, FBox(ForceInit)),
+                bOther ? 1 : 3, false, bOther);
+        }
+        for (const FSCCargoDroneView& D : Drones)
+            if (D.State != ESCCargoDroneState::Docked && !Joined.Contains(D.DroneId))
             {
-                const FSCCargoJobView* Job = Model->FindJob(D.JobId);
-                const bool bOther = Job && !Job->bMine;
-                const FString Name = bOther && !D.OwnerLabel.IsEmpty() ? Caps(D.Label.ToString() + TEXT(" · ") + D.OwnerLabel.ToString()) : Caps(D.Label.ToString());
+                bool bOther = false;
+                const FSCCargoDroneView* One[] = {&D};
+                const FString Name = TeamName(One, bOther);
                 Add(DroneKey + D.DroneId, EKind::Drone, Name, SCMobiGlasText::DroneState(uint8(D.State)), D.WorldLocation, D.WorldBounds, bOther ? 1 : 3, false, bOther);
             }
         if (Model->IsOpen())
@@ -251,6 +312,9 @@ int32 SSCCalloutLayer::OnPaint(const FPaintArgs&, const FGeometry& G, const FSla
         const FVector2f NameSize = Measure(I.Name, Label());
         Text(Out, Layer + 3, G, FVector2f(TextX, Pos.Y + CalloutPadY), I.Name, Label(), Ink().CopyWithNewOpacity(Alpha));
         Text(Out, Layer + 3, G, FVector2f(TextX, Pos.Y + CalloutPadY + NameSize.Y), I.Value, Numeric(), Ink2().CopyWithNewOpacity(Alpha));
+        if (!I.Extra.IsEmpty()) // the crew of a carried box
+            Text(Out, Layer + 3, G, FVector2f(TextX, Pos.Y + CalloutPadY + NameSize.Y + Measure(I.Value, Numeric()).Y), I.Extra, Numeric(),
+                 Ink2().CopyWithNewOpacity(Alpha));
     }
     return Layer + 4;
 }

@@ -415,7 +415,7 @@ bool FPreviewSource::Cancel(int32 JobId)
     }
     for (int32 Id : J->ClosedBefore)
         if (FSCCargoGridView* G = Grid(Id); G && G->bCanClose) SetAccess(*G, ESCCargoGridAccess::Closed);
-    for (FSCCargoDroneView& D : Drones) if (D.JobId == JobId) { D.State = ESCCargoDroneState::Docked; D.JobId = D.CarryingBoxId = INDEX_NONE; }
+    for (FSCCargoDroneView& D : Drones) if (D.JobId == JobId) { D.State = ESCCargoDroneState::Docked; D.JobId = D.CarryingBoxId = D.MoveId = D.MoveBoxId = INDEX_NONE; }
     J->View.State = ESCCargoJobState::Cancelled;
     J->View.StateText = LOCTEXT("Cancelled", "Cancelled");
     J->View.EtaSeconds = 0;
@@ -485,7 +485,8 @@ void FPreviewSource::Advance(float Dt)
                 const int32 Slot = M.Drones.IndexOfByKey(D.DroneId);
                 if (Slot == INDEX_NONE) continue;
                 D.JobId = V.JobId;
-                D.CarryingBoxId = M.Box.BoxId;
+                D.CarryingBoxId = D.MoveBoxId = M.Box.BoxId;
+                D.MoveId = V.JobId * 1000 + V.MovesDone; // the preview's moves: one team per box
                 D.State = T < 0.15 ? ESCCargoDroneState::Attaching : T < 0.85 ? ESCCargoDroneState::Carrying : ESCCargoDroneState::Releasing;
                 D.WorldLocation = At + FVector(0, (Slot - 0.5 * (M.Drones.Num() - 1)) * 90, M.Box.SizeM.Z * 50 + 120);
                 D.WorldBounds = FBox::BuildAABB(D.WorldLocation, FVector(40));
@@ -517,7 +518,7 @@ void FPreviewSource::Advance(float Dt)
                     if (Drones[I].JobId == V.JobId)
                     {
                         Drones[I].State = ESCCargoDroneState::Docked;
-                        Drones[I].JobId = Drones[I].CarryingBoxId = INDEX_NONE;
+                        Drones[I].JobId = Drones[I].CarryingBoxId = Drones[I].MoveId = Drones[I].MoveBoxId = INDEX_NONE;
                         Drones[I].WorldLocation = CellWorld(Grids[1], FVector(0.5, 0.3 + 0.4 * I, 0.5));
                         Drones[I].WorldBounds = FBox::BuildAABB(Drones[I].WorldLocation, FVector(40));
                     }

@@ -1,0 +1,45 @@
+# WP-P4 GPU route: re-enter the Crusader C2 Hercules through its open rear ramp, on foot, with the game's colliders.
+# The hull collider (`Body`) is authored closed; its faces over the ramp opening carry no surface (class `no_surface`)
+# and are no colliders, so what decides is the ramp's own colliders in their pose.
+# 1. Hangar floor 65 m behind the ship's origin, clear of where the ramp comes down; ramp opened (Door 0 = the rear
+#    ramp, FP_DOOR_LIST); walk forward up the ramp into the hold: FP_WHERE X rises past the ramp hinge (X about
+#    -2180) to the hold (X > -2000), FP_GRID inside=1.
+# 2. Walk back out the same way (X < -5000, FP_GRID inside=0).
+# 3. Shut the ramp from inside and walk aft: the ramp's own colliders stop the player in the hold (X stays > -3000).
+# Positions are vehicle-relative centimetres, X forward.
+# Host: -SCCamera=first -SCLoad=CRUS_Starlifter_C2
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_xltop_001.socpak -SCShotDir=<dir>
+30 sc.FP.Spawns
+1 sc.FP.Teleport -6500 0 -1300
+1 sc.FP.Look 0 0
+0.5 sc.FP.Where
+0 shot 01-behind-ramp-shut
+0 sc.FP.Door 0
+20 shot 02-ramp-open
+0 sc.FP.Move 1 0 5
+0.5 sc.FP.Where
+0 sc.FP.Blocker 150
+0 shot 03-ramp-foot
+0 sc.FP.Move 1 0 5
+0.5 sc.FP.Where
+0 sc.FP.Blocker 150
+0 shot 04-on-ramp
+0 sc.FP.Move 1 0 5
+0.5 sc.FP.Where
+1 shot 05-in-hold
+# 2. back out
+0 sc.FP.Look 180 0
+0.5 sc.FP.Move 1 0 16
+0.5 sc.FP.Where
+1 shot 06-out-again
+# 3. in again, shut the ramp, try to leave
+0 sc.FP.Look 0 0
+0.5 sc.FP.Move 1 0 16
+0.5 sc.FP.Where
+0 sc.FP.Door 0
+20 sc.FP.Look 180 0
+0.5 sc.FP.Move 1 0 12
+0.5 sc.FP.Where
+0 sc.FP.Blocker 150
+1 shot 07-ramp-shut-blocks
+1 quit

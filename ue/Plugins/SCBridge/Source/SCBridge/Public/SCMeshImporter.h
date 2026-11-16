@@ -47,7 +47,7 @@ struct SCBRIDGE_API FSCDerivedMesh
     bool bHasSkins = false;
     /** The game's own collision (WP-P3): the GLB carries the source's CryPhysics geometry (glTF node
      *  `extras.sc_physics`). Then first-person movement collides with those colliders, except the node-name classes
-     *  that are no obstacle for an actor (`class` interaction / tires_only / grid_volume), never with render triangles. Triangles in UE space like Description's; one rig node per triangle. */
+     *  that are no obstacle for an actor (`class` interaction / tires_only / grid_volume / no_surface), never with render triangles. Triangles in UE space like Description's; one rig node per triangle. */
     bool bHasGamePhysics = false;
     TArray<FVector3f> PhysicsPositions;
     TArray<FIntVector> PhysicsTriangles;
@@ -76,7 +76,8 @@ public:
     static bool PhysicsShapeTriangles(const TSharedPtr<class FJsonObject>& Shape, TArray<FVector>& Out,
         TFunctionRef<bool(int32 Mesh, TArray<FVector>& Out)> MeshTriangles, FString& Error);
     /** Whether an `extras.sc_physics` record blocks an actor: every part does, except node-name classes that are no
-     *  physical obstacle (`class` interaction, tires_only, grid_volume; see the StarBreaker `physics_class` table). */
+     *  physical obstacle (`class` interaction, tires_only, grid_volume; see the StarBreaker `physics_class` table) and a collider's caps
+     *  over its openings (`no_surface`, WP-P4: what fills the opening blocks with its own colliders, in its pose). */
     static bool PhysicsBlocksActor(const TSharedPtr<class FJsonObject>& Shape);
     /** The game's colliders stand in for the render mesh's movement collision only when every blocking collider was
      *  built; otherwise the render mesh keeps blocking the pawn (a failed collider must not open a hole). */

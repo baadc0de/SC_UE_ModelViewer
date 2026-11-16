@@ -80,8 +80,10 @@ public:
     /** WP-K1 cargo scenario (stock per grid, drone docks, drone definition): a JSON file, relative to the project's
      *  Config/Cargo directory or absolute; empty = no scenario. -SCCargoScenario=<file> overrides it for one run. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoScenario;
-    /** Grids within this distance of the player count as "nearby" in the mobiGlas (metres; a viewer choice). */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") float CargoNearbyRadiusM = 80.f;
+    /** The mobiGlas lists the grids within this distance of the player, nearest first (metres; a viewer choice).
+     *  0 = every grid in the level: a ship and the freight elevator it loads from can be far apart in a large hangar,
+     *  and standing at one must not hide the other. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") float CargoGridListRadiusM = 0.f;
     /** A transfer fails after this many consecutive boxes could not be lifted (and no other box could take their place). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") int32 CargoPickAttempts = 3;
     /** Absolute path of the scenario file, empty when none is set. */

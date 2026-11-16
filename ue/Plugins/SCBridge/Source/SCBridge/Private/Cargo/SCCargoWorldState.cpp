@@ -59,20 +59,14 @@ const FSCCargoMove* USCCargoSubsystem::MoveOf(const AActor* Box) const
     return nullptr;
 }
 
-TSharedRef<FSCCargoHullRule> USCCargoSubsystem::HullRule(const FCollisionQueryParams& Base, const FVector& HalfExtent, const FQuat& Rotation, const FSCCargoMove* Move,
-                                                        const ASCCargoDrone* Drone) const
+TSharedRef<FSCCargoHullRule> USCCargoSubsystem::HullRule(const FCollisionQueryParams& Base, const FVector& HalfExtent, const FQuat& Rotation) const
 {
     // A vehicle's own colliders (the root entity's game collision: its hull as the game collides it with the world
-    // outside, doors and ramps shut whatever pose they are in) act only on what is outside the vehicle's physics grid
-    // (ASCVehicle::HullColliders, WP-P3). A cargo query follows that per position: a vehicle's hull is left out where
-    // the shape is in that vehicle's grid and blocks everywhere else (a load or a drone passing another ship).
-    // The vehicles a move loads or unloads (its grids' and its drones' docks' vehicles) are the exception: their hulls
-    // are left out for that move wherever it flies. The grid's volume does not reach the shut pose of a ramp (C2 rear:
-    // the hull's ramp plane lies 1 to 2 m outside the volume at cargo height, CARGO_SECTION), so by position alone
-    // only a shape reaching across that gap gets in through an open ramp (how the game admits an entity to the grid there is
-    // not known here; TODO(WP-K1): with that rule the exception goes). The ship still blocks as it stands (render
-    // geometry in its pose, the
-    // interior's and the items' colliders).
+    // outside) act only on what is outside the vehicle's physics grid (ASCVehicle::HullColliders, WP-P3). A cargo query
+    // follows that per position: a vehicle's hull is left out where the shape is in that vehicle's grid and blocks
+    // everywhere else, for every vehicle alike. The hull's caps over its openings (triangles without a surface, class
+    // `no_surface`) are no colliders (WP-P4), so the way through an open ramp is free although the grid's volume ends
+    // short of it; what fills an opening (the ramp, a door) blocks with its own colliders in its pose.
     TSharedRef<FSCCargoHullRule> Rule = MakeShared<FSCCargoHullRule>();
     Rule->All = Rule->None = Base;
     WorldHash(); // a changed world forgets the grid answers kept in State->GridMemo
@@ -87,47 +81,20 @@ TSharedRef<FSCCargoHullRule> USCCargoSubsystem::HullRule(const FCollisionQueryPa
         Rule->Probes.Add(Rotation.RotateVector(End));
         Rule->Probes.Add(Rotation.RotateVector(-End));
     }
-    TSet<const ASCVehicle*> Partners;
-    auto GridVehicle = [&](int32 GridId) {
-        const USCCargoGridComponent* G = FindGrid(GridId);
-        if (const ASCVehicle* V = G ? Cast<ASCVehicle>(G->GetOwner()) : nullptr) Partners.Add(V);
-    };
-    auto DockVehicle = [&](const ASCCargoDrone* D) {
-        const FSCCargoDock* Dock = D ? State->Docks.FindByPredicate([&](const FSCCargoDock& K) { return K.ItemId == D->DockItem; }) : nullptr;
-        if (Dock) GridVehicle(Dock->GridId);
-    };
-    if (Move)
-    {
-        GridVehicle(Move->Plan.FromGrid);
-        GridVehicle(Move->Plan.ToGrid);
-        for (const int32 Id : Move->Drones) DockVehicle(FindDrone(*State, Id));
-    }
-    DockVehicle(Drone);
     if (const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld()))
         for (const ASCVehicle* V : Viewer->GetVehicles())
         {
             if (!V || V->HullColliders.IsEmpty()) continue;
-            const bool bPartner = Partners.Contains(V);
-            if (bPartner) Rule->Partners += GetTypeHash(V->GetUniqueID());
-            else if (Rule->Hulls.Num() >= 32) continue;
-            FSCCargoHullRule::FHull* Hull = bPartner ? nullptr : &Rule->Hulls.AddDefaulted_GetRef();
-            if (Hull)
-            {
-                Hull->Vehicle = V;
-                Hull->Without = Base;
-            }
+            if (Rule->Hulls.Num() >= 32) continue;
+            FSCCargoHullRule::FHull& Hull = Rule->Hulls.AddDefaulted_GetRef();
+            Hull.Vehicle = V;
+            Hull.Without = Base;
             for (const UPrimitiveComponent* C : V->HullColliders)
             {
                 Rule->None.AddIgnoredComponent(C);
-                if (bPartner) Rule->All.AddIgnoredComponent(C);
-                else Hull->Without.AddIgnoredComponent(C);
+                Hull.Without.AddIgnoredComponent(C);
             }
         }
-    // The partners' hulls are out of every variant (the per-vehicle ones were copied from Base before).
-    if (Rule->Partners)
-        for (FSCCargoHullRule::FHull& Hull : Rule->Hulls)
-            for (const ASCVehicle* V : Partners)
-                for (const UPrimitiveComponent* C : V->HullColliders) Hull.Without.AddIgnoredComponent(C);
     return Rule;
 }
 

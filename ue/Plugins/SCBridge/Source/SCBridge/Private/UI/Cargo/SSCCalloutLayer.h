@@ -1,5 +1,6 @@
 // World-space callouts over the 3D view (WP-K1c): boxes of active transfers, drones away from their dock and — while
-// the mobiGlas is open — the nearby grids (the selected one in accent). Projects each target's world bounds, solves
+// the mobiGlas is open — the grids (the selected one in accent). What moves as one has one callout: a box and the
+// team holding it (third line: the drones), a team flying to or from its box, a lone drone. Projects each target's world bounds, solves
 // label placement with FSCCalloutSolver every frame (the solver keeps each label's previous side unless it collides),
 // and animates lines (140 ms) and labels (120 ms fade, 6 px slide) around their solved places. Draw-only: no input.
 #pragma once
@@ -27,7 +28,7 @@ private:
     struct FItem
     {
         EKind Kind = EKind::Grid;
-        FString Name, Value; // label line (caps) and numeric line
+        FString Name, Value, Extra; // label line (caps), numeric line, optional third line (a carried box's drones)
         bool bSelected = false, bSeen = false, bLabel = false;
         bool bNeutral = false; // another owner's box / drone: no accent
         FVector2D Anchor = FVector2D::ZeroVector;

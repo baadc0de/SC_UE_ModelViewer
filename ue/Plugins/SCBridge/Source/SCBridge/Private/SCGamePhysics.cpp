@@ -57,7 +57,7 @@ bool FSCMeshImporter::PhysicsBlocksActor(const TSharedPtr<FJsonObject>& Shape)
 {
     FString Class;
     if (Shape) Shape->TryGetStringField(TEXT("class"), Class);
-    return Class != TEXT("interaction") && Class != TEXT("tires_only") && Class != TEXT("grid_volume");
+    return Class != TEXT("interaction") && Class != TEXT("tires_only") && Class != TEXT("grid_volume") && Class != TEXT("no_surface");
 }
 bool FSCMeshImporter::PhysicsShapeTriangles(const TSharedPtr<FJsonObject>& Shape, TArray<FVector>& Out,
     TFunctionRef<bool(int32, TArray<FVector>&)> MeshTriangles, FString& Error)

@@ -21,6 +21,7 @@ void USCCargoSubsystem::SendHome(FSCCargoMove& M, double Now)
 {
     M.bRoutePending = false;
     M.DroneFlights.Reset();
+    M.FlightAt.Reset();
     const FSCCargoJob* Job = State->Jobs.FindByPredicate([&](const FSCCargoJob& J) { return J.Moves.ContainsByPredicate([&](const FSCCargoMove& O) { return &O == &M; }); });
     for (const int32 Id : M.Drones)
     {
@@ -44,7 +45,8 @@ void USCCargoSubsystem::SendHome(FSCCargoMove& M, double Now)
 bool USCCargoSubsystem::RightOfWayYield(const FSCCargoMove& M, int32 BoxId, const ASCCargoContainer* A, const FVector& PA, const FVector& PB, bool bAnyLoad) const
 {
     const FVector Size = A ? A->SizeCm() : FVector::ZeroVector;
-    const double Reach = Size.Size() / 2 + M.HangCm;
+    // As far as either load's drones may be out from it: their beams' full-strength distance and the drone itself.
+    const double Reach = Size.Size() / 2 + FMath::Max(M.HangCm, State->Scenario.Drone.FullStrengthDistanceM * 100.0) + SCCargoFlightTuning::DroneHeightCm;
     for (const auto& Pair : State->Boxes)
     {
         const FSCCargoBox& O = Pair.Value;
@@ -66,7 +68,10 @@ bool USCCargoSubsystem::InsideWaitingLoadAt(const FSCCargoMove& M, const ASCCarg
 bool USCCargoSubsystem::StretchAheadFree(const FSCCargoMove& M, const ASCCargoContainer* A, const FVector& Here, const FVector& Ahead) const
 {
     const FSCCargoRouteQuery Guard = LoadQuery(M, A, InsideWaitingLoadAt(M, A, Here));
-    return Guard.Blocked(Here) || Guard.Free(Here, Ahead);
+    if (Guard.Blocked(Here) || Guard.Free(Here, Ahead)) return true;
+    UE_LOG(LogSCCargo, Display, TEXT("CARGO_GUARD move=%d box=%d here=%s ahead=%s box_at=%s hits=%s"), M.MoveId, M.Plan.BoxId, *Here.ToCompactString(), *Ahead.ToCompactString(),
+           *A->GetActorLocation().ToCompactString(), *Guard.Describe(Here, Ahead));
+    return false;
 }
 
 // The destination slot checked against the grid as it is now: kept while free and supported, else the best free slot
@@ -102,6 +107,15 @@ bool USCCargoSubsystem::ReplanLoad(const FSCCargoJob& Job, FSCCargoMove& M, cons
                                    const FVector& From, const TCHAR* Why, double Now)
 {
     RefreshMove(M);
+    // A new search (none under way): the cells sampled before may have been taken or left by other teams' drones since
+    // (the space kept for them is no part of a query's identity).
+    if (!M.bReplanning)
+    {
+        M.bReplanning = true;
+        M.bKeptHit = false;
+        M.CellCaches.Empty();
+    }
+    const int64 KeptBefore = *State->KeptHits;
     const FSCCargoDroneDefinition& Def = State->Scenario.Drone;
     const FVector Up = FVector::UpVector;
     const FSCCargoRouteQuery Load = LoadQuery(M, A);
@@ -140,16 +154,21 @@ bool USCCargoSubsystem::ReplanLoad(const FSCCargoJob& Job, FSCCargoMove& M, cons
     // there; the right of way keeps the two apart.
     if (!bFound && !M.bRoutePending && InsideWaitingLoadAt(M, A, From))
         bFound = PlanRoute(Job, M, TEXT("replan_through_waiting"), From, Target, LoadQuery(M, A, true), Path, FString(), true);
+    M.bKeptHit |= *State->KeptHits != KeptBefore;
     if (!bFound && M.bRoutePending)
     {
         M.NextRetry = Now; // the search goes on next frame
         return false;
     }
+    M.bReplanning = false;
     for (auto It = M.Searches.CreateIterator(); It; ++It)
         if (It->Key.StartsWith(TEXT("replan"))) It.RemoveCurrent();
     M.Searches.Remove(TEXT("replan_through_waiting"));
-    ++M.Replans;
-    UE_LOG(LogSCCargo, Display, TEXT("CARGO_REPLAN job=%d move=%d box=%d reason=%s found=%d replans=%d"), Job.Id, M.MoveId, M.Plan.BoxId, Why, bFound, M.Replans);
+    // Stopped by space kept for another team's drones alone: they move on, and it is not counted against the limit.
+    const bool bKept = !bFound && M.bKeptHit;
+    if (!bKept) ++M.Replans;
+    UE_LOG(LogSCCargo, Display, TEXT("CARGO_REPLAN job=%d move=%d box=%d reason=%s found=%d replans=%d%s"), Job.Id, M.MoveId, M.Plan.BoxId, Why, bFound, M.Replans,
+           bKept ? TEXT(" waits_for_drones=1") : TEXT(""));
     if (!bFound) return false;
     M.FromRotation = A->GetActorQuat();
     M.Carry.Start(Path, Def.MaxSpeedMS * 100.0, M.LoadAccel, M.LoadJerk);
