@@ -271,7 +271,8 @@ void USCCargoSubsystem::TugStep(FSCCargoMove& M, ASCCargoContainer* A, const TAr
         const FVector WantAttach = Q + Rotation.RotateVector(Local);
         Attach.Add(Box.TransformPositionNoScale(Local));
         Share.Add(Net * Shares[I]);
-        const FVector Dir = Share[I].GetSafeNormal(1e-6, Up);
+        // Along its share of the force; with next to none (zero g, the load at rest) on the side it holds (WP-K3).
+        const FVector Dir = FSCCargoTug::PullDirection(Share[I], D->GetActorLocation() - Attach[I]);
         // Room along the beam: the drone's shape swept out from where it would be on the shortest beam it could fly
         // (BeamRoom), here and, by the drone's own look along the route it flies, ahead: it comes in before a lintel
         // as far as its body needs to (FSCCargoTug::RoomAhead), and goes out again behind it.
@@ -377,6 +378,7 @@ void USCCargoSubsystem::TugStep(FSCCargoMove& M, ASCCargoContainer* A, const TAr
     const double W = FMath::Sqrt(N * Beam.StiffnessNPerM() / Mass);
     const FVector Alpha = (Axis * Angle * W * W - Body->GetPhysicsAngularVelocityInRadians() * 2.0 * W) / (1.0 + 2.0 * W * Dt + W * W * Dt * Dt);
     if (Body->IsSimulatingPhysics()) Body->AddTorqueInRadians(Alpha, NAME_None, /*bAccelChange=*/true);
+    if (!M.bNoStation) M.bLeaveNoStation = false; // every drone has its station again: the route waits for one as before
     if (bSample)
     {
         M.LastTugSample = Now;

@@ -222,6 +222,7 @@ struct FSCCargoMove
     bool bRouteMoving = false;            // RouteV is from the tick before
     bool bTurning = false, bTilting = false; // the box is being turned this tick (at the top of its lift, at a hold's entrance, as it is caught); and tilted by that turn
     bool bNoStation = false;              // a drone of the team found no room for even its shortest beam at the route point
+    bool bLeaveNoStation = false;         // a route planned because a drone had no station: flown even so until it has one again
     bool bDroneBehind = false;            // a drone of the team is further from its station than its beam keeps full strength
     // The room over the route being flown, per drone and stretch (BeamRoom), in the world RoomStamp names.
     mutable TMap<int64, double> Rooms;

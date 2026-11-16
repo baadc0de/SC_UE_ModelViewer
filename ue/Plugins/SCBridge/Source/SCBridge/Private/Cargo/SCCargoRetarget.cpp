@@ -32,7 +32,10 @@ void USCCargoSubsystem::SendHome(FSCCargoMove& M, double Now)
         D->CarryingBoxId = INDEX_NONE;
         D->State = ESCCargoDroneState::Returning;
         D->MoveId = INDEX_NONE; // free for the swarm while it flies home
-        if (!Job || !HomeFlight(*Job, M, D, F)) F.Start({D->GetActorLocation()}, 1, 1, 1); // hovers; planned again shortly
+        // No home route yet (its search goes on next frame, or nothing is free now): the flight stays unstarted, so the
+        // drone hovers where it is and plans again (TickMove, Returning). A one-point flight here would count as
+        // arrived and put the drone straight into its bay, from wherever it is.
+        if (Job) HomeFlight(*Job, M, D, F);
     }
     M.Step = EStep::Returning;
     M.StepStart = Now;
@@ -142,9 +145,10 @@ bool USCCargoSubsystem::ReplanLoad(const FSCCargoJob& Job, FSCCargoMove& M, cons
             }
         }
     }
+    // Out of the margin: up under gravity; in zero g a box may lie above it (an underside plate), so out along the plate's
+    // normal or back the way it came first (FSCCargoRoute::EscapeStart).
     FVector Start = From;
-    for (double Off = 25; Load.Blocked(From) && Off <= 300; Off += 25)
-        if (!Load.Blocked(From + Up * Off)) { Start = From + Up * Off; break; }
+    FSCCargoRoute::EscapeStart(From, Load, Gravity() > 0, M.ToNormal, -M.Carry.Tangent(), Start);
     TArray<FVector> Path;
     FSCCargoRouteQuery Cached = Load;
     const FVector Target = bToEntrance ? M.SecondPath[0] : M.Goal;

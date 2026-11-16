@@ -69,6 +69,31 @@ void FSCCargoClearance::Sample(const TArray<FVector>& Samples, int32 I, const FS
     Min = FMath::Min(Min, Clear);
 }
 
+bool FSCCargoRoute::EscapeStart(const FVector& From, const FSCCargoRouteQuery& Q, bool bGravity, const FVector& OutNormal, const FVector& Back,
+                                FVector& OutStart, double MaxCm, double StepCm)
+{
+    OutStart = From;
+    if (!Q.Blocked || !Q.Blocked(From)) return true;
+    TArray<FVector, TInlineAllocator<10>> Ways;
+    auto Add = [&Ways](const FVector& V) {
+        const FVector D = V.GetSafeNormal();
+        if (!D.IsZero() && !Ways.ContainsByPredicate([&](const FVector& W) { return W.Equals(D, 1e-3); })) Ways.Add(D);
+    };
+    if (bGravity) Add(FVector::UpVector);
+    Add(OutNormal);
+    Add(Back);
+    for (const FVector& Axis : {FVector::UpVector, -FVector::UpVector, FVector::ForwardVector, -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector})
+        Add(Axis);
+    for (const FVector& Way : Ways)
+        for (double Off = StepCm; Off <= MaxCm; Off += StepCm)
+            if (const FVector P = From + Way * Off; !Q.Blocked(P))
+            {
+                OutStart = P;
+                return true;
+            }
+    return false;
+}
+
 double FSCCargoRoute::MinClearance(const TArray<FVector>& Samples, const FSCCargoRouteQuery& Q, int32& OutHits, double StepCm)
 {
     FSCCargoClearance C;

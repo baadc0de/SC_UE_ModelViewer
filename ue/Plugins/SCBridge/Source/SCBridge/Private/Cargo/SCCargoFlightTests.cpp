@@ -6,6 +6,7 @@
 #include "Cargo/SCCargoFlightPath.h"
 #include "Cargo/SCCargoPlanner.h"
 #include "Cargo/SCCargoGridComponent.h"
+#include "Cargo/SCCargoDrone.h"
 
 namespace
 {
@@ -102,6 +103,11 @@ bool FSCCargoProfileTest::RunTest(const FString&)
     FSCCargoFlight Hover;
     Hover.Start({FVector(1, 2, 3)}, 800, 600, 2400);
     TestTrue(TEXT("a one-point flight (holding position) is done where it is"), Hover.Done() && Hover.Position().Equals(FVector(1, 2, 3)));
+    // A one-point flight has arrived (a route of zero length); "no route yet, plan again" is an unstarted flight. A drone
+    // sent home whose home route is still being searched must not count as arrived: it would be put in its bay at once,
+    // from wherever it is (seen as drones vanishing when their job ended).
+    TestTrue(TEXT("a one-point flight counts as a route (arrived)"), Hover.HasRoute());
+    TestFalse(TEXT("an unstarted flight is no route yet"), FSCCargoFlight().HasRoute());
     return true;
 }
 
@@ -255,6 +261,48 @@ bool FSCCargoMoverTest::RunTest(const FString&)
     TestTrue(TEXT("the strut swings it out"), FMath::IsNearlyEqual(Strut.TransformPosition(Point).Y, 600.0, 0.01));
     TestEqual(TEXT("together: strut out, plate unfolded"), FSCCargoMover::OpenEnds(Point, First, {Unfold, Strut}, Centre), 3u);
     TestEqual(TEXT("a strut that swings in: open at its first frame"), FSCCargoMover::OpenEnds(Point, First, {FTransform::Identity, FTransform(FVector(0, -150, 0))}, Centre), 1u);
+    return true;
+}
+
+// A load stopped within a placed box's margin replans from a start out of that margin: straight up under gravity (the
+// hangar convention), but in zero g a box can lie above it (an underside plate), so other ways out are tried: out along
+// the destination plate's normal, back the way it came, then the remaining axes. (WP-K3)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoEscapeStartTest, "SCBridge.Cargo.EscapeStart", FlightTestFlags)
+bool FSCCargoEscapeStartTest::RunTest(const FString&)
+{
+    // A box margin from z 50 up (a box on an underside plate above the load); the load stopped at z 100 inside it.
+    auto Query = [](const FBox& Margin) {
+        FSCCargoRouteQuery Q;
+        Q.Blocked = [Margin](const FVector& P) { return Margin.IsInside(P); };
+        return Q;
+    };
+    const FSCCargoRouteQuery Above = Query(FBox(FVector(-200, -200, 50), FVector(200, 200, 600)));
+    const FVector From(0, 0, 100), Down(0, 0, -1), Back(1, 0, 0);
+    FVector Start;
+    TestTrue(TEXT("zero g, box above: a way out is found"), FSCCargoRoute::EscapeStart(From, Above, false, Down, Back, Start));
+    TestTrue(TEXT("zero g, box above: out along the plate's normal (down)"), Start.Z <= 50 && FMath::IsNearlyEqual(Start.X, 0.0) && !Above.Blocked(Start));
+    TestTrue(TEXT("gravity, box above: up is closed, another way is found"), FSCCargoRoute::EscapeStart(From, Above, true, Down, Back, Start) && !Above.Blocked(Start));
+    // A box margin below (the hangar case): up first, as before.
+    const FSCCargoRouteQuery Below = Query(FBox(FVector(-200, -200, -500), FVector(200, 200, 150)));
+    TestTrue(TEXT("gravity, box below: up"), FSCCargoRoute::EscapeStart(From, Below, true, FVector(1, 0, 0), Back, Start) && Start.Z >= 150 && FMath::IsNearlyEqual(Start.X, 0.0));
+    TestTrue(TEXT("a free start stays where it is"), FSCCargoRoute::EscapeStart(FVector(0, 0, 1000), Below, false, Down, Back, Start) && Start.Equals(FVector(0, 0, 1000)));
+    // Enclosed beyond reach: none, and the start is left as it was.
+    const FSCCargoRouteQuery Deep = Query(FBox(FVector(-2000), FVector(2000)));
+    TestFalse(TEXT("no way out within reach"), FSCCargoRoute::EscapeStart(From, Deep, false, Down, Back, Start));
+    TestTrue(TEXT("no way out: the start as it was"), Start.Equals(From));
+    return true;
+}
+
+// Every drone that is not holding a load steps out of the way of loads other teams fly, also one hovering over its
+// box while the beams lock on (Attaching): the box is still at rest, so the drone is alone in the air. (WP-K3)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoDodgeTest, "SCBridge.Cargo.DodgeLoads", FlightTestFlags)
+bool FSCCargoDodgeTest::RunTest(const FString&)
+{
+    using S = ESCCargoDroneState;
+    for (const S Free : {S::Launching, S::ToPickup, S::Attaching, S::Returning, S::Docking})
+        TestTrue(FString::Printf(TEXT("dodges in state %d"), int32(Free)), ASCCargoDrone::DodgesLoads(Free));
+    for (const S Bound : {S::Docked, S::Carrying, S::Releasing, S::Holding})
+        TestFalse(FString::Printf(TEXT("stays with its box (or bay) in state %d"), int32(Bound)), ASCCargoDrone::DodgesLoads(Bound));
     return true;
 }
 #endif
