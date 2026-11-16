@@ -3,7 +3,9 @@
 // spawns a Niagara system at x y z (cm), or dist cm (default 300) in front of the camera, offset right / up. The
 // system's +X is the game emitter's forward (the emission axis, the beam direction); by default it points up
 // (pitch=90), as an impact on a floor; rel=1 makes the angles camera-relative. every=<s> re-triggers it every s
-// real seconds (bursts are short); sx scales X only (a beam spans 0..100 cm of X).
+// real seconds (bursts are short); sx scales X only. The SCFxBuild runtime contract: strength=<0..1> sets
+// User.SC.Strength; len=<cm> sets a guided beam's User.SC.BeamLength / BeamEnd / BeamStartTangent (the beam leaves
+// along +X), bend=<deg> turns its end about the component's Z so the beam curves.
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
 #include "Engine/World.h"
@@ -91,6 +93,15 @@ void Spawn(const TArray<FString>& Args, UWorld* World)
     {
         UE_LOG(LogSCFxPreview, Warning, TEXT("SC_FX_SPAWN %s failed"), *Path);
         return;
+    }
+    if (const double* Strength = Keys.Find(TEXT("strength"))) C->SetVariableFloat(TEXT("SC.Strength"), float(*Strength));
+    if (const double* Len = Keys.Find(TEXT("len")))
+    {
+        const double Bend = FMath::DegreesToRadians(Key(TEXT("bend"), 0.0));
+        C->SetVariableFloat(TEXT("SC.BeamLength"), float(*Len));
+        C->SetVariableVec2(TEXT("SC.BeamLength2"), FVector2D(*Len, *Len));
+        C->SetVariableVec3(TEXT("SC.BeamEnd"), FVector(FMath::Cos(Bend), FMath::Sin(Bend), 0.0) * *Len);
+        C->SetVariableVec3(TEXT("SC.BeamStartTangent"), FVector(*Len, 0.0, 0.0));
     }
     GSpawned.Add(C);
     const double Every = Key(TEXT("every"), 0.0);

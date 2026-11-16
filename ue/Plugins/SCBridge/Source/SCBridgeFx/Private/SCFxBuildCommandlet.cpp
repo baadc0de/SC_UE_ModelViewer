@@ -2,45 +2,81 @@
 // rebuilt as Niagara systems of lightweight (stateless) emitters, saved under the gitignored /Game/SC/FX (WP-K4c).
 //
 //   UnrealEditor-Cmd.exe SCViewer.uproject -run=SCFxBuild [-Effects=<ref>;<ref>] [-MaterialEffects=<lib:effect>;...]
+//                        [-Features=all|none|<f>,<f>,...] [-RefractionScale=<k> (verification aid; default 1)]
 //
 // Without arguments the lists come from Config/FX/effects.json. An effect `<GUID>|<library>.<effect>` becomes
 // /Game/SC/FX/<library>/<effect> (dots -> underscores); a material effect (FXLib entry) builds the particle effects it
 // plays. Each enabled game emitter with something to draw becomes one lightweight emitter duplicated from the engine's
-// FountainLightweight template (sprite) and, when it carries a LightSource, a second one with a light renderer (a
-// light shares no colour with its sprite). Every rule below is per parameter; nothing is keyed on an effect or asset.
+// FountainLightweight template (sprite) plus, as the data asks: a light-only twin (a light shares no colour with its
+// sprite), a distortion twin (Refraction), and one sprite per lens-flare element (FlareEnabled). Every rule below is
+// per parameter; nothing is keyed on an effect or asset. -Features (strength, beam, spline, flares, soft, stretch,
+// flow, distortion, extras, erosion) switches the WP-K4c fidelity rules off for before/after comparisons.
 //
 // Units and axes. Game values are metres / seconds; UE centimetres (x100). Game vectors map like the importer's
 // (FSCMeshImporter::Position, LightBasis): game (x, y, z) -> UE (y, x, z). The emitter's forward, CryEngine's +Y (the
-// focus / emit axis), is therefore the system's +X. Spline-guided emitters are laid along a 100 cm line from the
-// origin along +X: the runtime orients the component along the beam and scales X to the beam length (the stateless
-// shape and spawn rate take no per-instance length; see SC_FX_SYSTEM lines).
+// focus / emit axis), is therefore the system's +X.
+//
+// Runtime contract (User parameters; the SC_FX_SYSTEM line lists the ones a system has):
+//  SC.Strength          float 0..1, the effect's EmitterStrength input: the tractor beam's beamStrengthValues (stable,
+//                       unstable, noTarget ...; the game blends between them with beamEffectBlendCoeff). Default 1.
+//  SC.BeamEnd           vec3 cm, the beam's end (the target) in the component's space; the component sits at the beam
+//                       start (the emitter helper). Default (100, 0, 0).
+//  SC.BeamStartTangent  vec3 cm, the emitter's forward direction (component space) x the beam length. Default (100,0,0).
+//  SC.BeamLength        float cm, |SC.BeamEnd|. Default 100.
+//  SC.BeamLength2       vec2 cm, (SC.BeamLength, SC.BeamLength) (stateless expressions cannot widen a float). Default
+//                       (100, 100).
 //
 // Mapping (JSON field -> Niagara):
 //  spawn: burst -> Burst spawn info (count x parent count for Spawn=FromParentBirth children; PulsePeriod -> loop);
 //         continuous -> Rate = Count / min(lifetime, EmitterLifeTime) (CryEngine's Count is the number alive at once);
-//         per_distance -> Rate = min(EmitPerDistance x 1 m, Count) / lifetime (along the 1 m beam); SpawnDelay -> delay.
+//         per_distance (spline-guided) -> Rate = EmitPerDistance x SC.BeamLength / lifetime, so the beam holds
+//         EmitPerDistance particles per metre at any length (UE 5.9 spawn rates bind a User float but evaluate no
+//         expression: round(EmitPerDistance / 100 / lifetime) spawn infos each bound to SC.BeamLength in cm);
+//         SpawnDelay -> delay.
 //  lifetime (+Random) -> InitializeParticle Lifetime range [v(1-r), v].
 //  size (+Random, Aspect) -> Sprite Size: CryEngine's Size is a radius -> 2 x 100 x size; age_curve -> ScaleSpriteSize.
-//  color x EmitterStrength curve at strength 1 x (EmissiveLighting + DiffuseLighting x LitSceneUnits) -> particle colour
-//         in scene units; the material instance's EmissiveScale is the game's scene unit (FSCStarEngine::SceneUnitNits,
-//         cd/m2), so a sprite's luminance is the game's. Color Random -> one-random colour range (brightness, not hue);
-//         FakeLight lights are skipped (they feed the flare only); age curves (colour, alpha) ->
-//         ScaleColor.
-//  alpha (+Random, strength curve at 1) -> colour alpha (the additive master weights by it, the translucent covers).
+//  color x (EmissiveLighting + DiffuseLighting x LitSceneUnits) -> particle colour in scene units; the material
+//         instance's EmissiveScale is the game's scene unit (FSCStarEngine::SceneUnitNits, cd/m2). Color Random -> one
+//         random for all channels; age curves (colour, alpha) -> ScaleColor.
+//  EmitterStrength curves (colour, alpha, speed, count, light intensity) -> a polynomial in SC.Strength through the
+//         curve's values at the strengths the game uses (the strength record's values, config "strength"): exact there,
+//         an interpolation between. Colour / alpha go to Dynamic Material Parameter 0 (the masters multiply by it),
+//         speed to the cone velocity scale, light intensity to the light's diffuse/specular scale. Count, lifetime
+//         and size curves stay baked at strength 1 (stateless spawn rates, lifetimes and random sizes take no expression).
 //  speed (+Random) + EmitAngle / FocusAngle -> AddVelocity cone about +X (Niagara's cone angle is the full angle).
 //  gravity_scale -> GravityForce (0, 0, -981 x scale) cm/s2, world space; Drag / AirResistance -> Drag.
-//  position_offset_m -> ShapeLocation offset; random_offset_m (EmissionSize) -> box of 2 x the offset. Spline-guided:
-//         a box 0..100 cm along +X, as wide as 2 x the spline noise amplitude; their offsets (the spline start) dropped.
+//  position_offset_m -> ShapeLocation offset; random_offset_m (EmissionSize) -> box of 2 x the offset.
+//  spline (SplineGuided): particles start at the emitter and travel to SC.BeamEnd over their lifetime on the quadratic
+//         Bezier whose control point is C = 1/2 (curvature x SC.BeamStartTangent + (1 - curvature) x SC.BeamEnd): the
+//         beam leaves along the emitter's forward and bends to the target (straight and uniform when they agree):
+//         velocity (C x 2 / T) + constant acceleration (2 (E - 2C) / T^2). SplineNoise -> curl noise of the noise
+//         amplitude over the spatial wavelength. Their PositionOffset (the spline start) is dropped. All guided emitters
+//         of an effect ride one spline (the weapon's beam): the effect's first guided emitter gives the curvature.
 //  facing Camera -> face camera (OrientToVelocity: velocity aligned); Free -> custom facing along +X.
+//  VelocityStretch -> velocity aligned + ScaleSpriteSizeBySpeed: length x (1 + speed x stretch / size); a guided
+//         beam's sprites (speed = SC.BeamLength / lifetime) get up to + SC.BeamLength x stretch / lifetime of length, on a
+//         tent over age (2 min(age, 1 - age)) so a centred streak never leaves the beam.
 //  tiles / anim -> renderer SubImageSize + SubUVAnimation (lifetime rate: linear over life; fps: loops; AnimRate 0:
 //         a random fixed frame in the first-frame interval).
-//  texture -> imported once to /Game/SC/FX/Textures/<archive path>; material instance per (master, texture) under
-//         /Game/SC/FX/Materials (blend Additive -> M_SC_Particle_Additive, else M_SC_Particle_Translucent).
+//  texture -> imported once to /Game/SC/FX/Textures/<archive path>; material instance per (master, texture, material
+//         parameters) under /Game/SC/FX/Materials: blend Additive -> M_SC_Particle_Additive, else _Translucent.
+//         SoftParticle(V2) -> SoftFade (FadeThickness, else half the sprite radius); RandomFlipU/V -> FlipU/V; FlowTexture x
+//         FlowMapIntensity -> flow-map frame blending; Refraction (Strength) -> a twin on M_SC_Particle_Distortion
+//         (NormalTexture when given).
 //  light -> LightAttributes radius (+ age curve) and a light renderer; colour = particle colour x pi x SceneUnitNits x
 //         Intensity cd (FSCStarEngine::PointCandela's far field, no bulb) x 100^2 (UE's internal cd -> cm units).
-//  RandomAngles y / RandomRotationRate y (raw) -> sprite rotation / rotation rate ranges.
-// EmitterStrength curves are baked at strength 1 (the stable beam); a User float SC.Strength is exposed, unbound.
-// Emitters invisible at strength 1 are added disabled. Every raw attribute not mapped is listed in `skipped`.
+//         FakeLight lights only feed the flare and light nothing.
+//  flare (Flare = <library>.<item>, Data/Libs/Flares/<library>.xml LensFlareLibrary): each Glow element -> a camera
+//         facing procedural glow (1 - r)^Gamma, each Ghost -> a sprite of its texture; colour = the emitter colour x
+//         Tint, luminance = root x element Brightness x the light's intensity (Affectedbylightcolor), age = the light's
+//         age curve; size = 2 x emitter Size x root Size x element Size x Transformation.Scale metres x flare_world_scale (config; CryEngine sizes
+//         flares on screen; the emitter's size stands in for the screen scale).
+//  AlphaErosion (own or inherited; base x ParticleAge curve) -> Dynamic Material Parameter 1 X: the masters cut texture
+//         alpha below it and rescale the rest (low-alpha skirts dissolve; without it emissive sprites clip to their
+//         alpha >= 1/255 silhouette).
+//  RandomAngles y / RandomRotationRate y (raw) -> sprite rotation / rotation rate ranges; CameraMaxDistance -> the
+//         emitter's max distance culling.
+// Every raw attribute not mapped is listed in `skipped`, every approximation in `approx`.
 #include "SCFxBuildCommandlet.h"
 #include "SCBridgeClient.h" // scbridge.h
 #include "SCStarEngine.h"
@@ -61,35 +97,50 @@
 #include "NiagaraSystem.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Stateless/Modules/NiagaraStatelessModule_AccelerationForce.h"
 #include "Stateless/Modules/NiagaraStatelessModule_AddVelocity.h"
+#include "Stateless/Modules/NiagaraStatelessModule_CurlNoiseForce.h"
 #include "Stateless/Modules/NiagaraStatelessModule_Drag.h"
+#include "Stateless/Modules/NiagaraStatelessModule_DynamicMaterialParameters.h"
 #include "Stateless/Modules/NiagaraStatelessModule_GravityForce.h"
 #include "Stateless/Modules/NiagaraStatelessModule_InitializeParticle.h"
 #include "Stateless/Modules/NiagaraStatelessModule_LightAttributes.h"
 #include "Stateless/Modules/NiagaraStatelessModule_ScaleColor.h"
 #include "Stateless/Modules/NiagaraStatelessModule_ScaleSpriteSize.h"
+#include "Stateless/Modules/NiagaraStatelessModule_ScaleSpriteSizeBySpeed.h"
 #include "Stateless/Modules/NiagaraStatelessModule_ShapeLocation.h"
 #include "Stateless/Modules/NiagaraStatelessModule_SpriteFacingAndAlignment.h"
 #include "Stateless/Modules/NiagaraStatelessModule_SpriteRotationRate.h"
 #include "Stateless/Modules/NiagaraStatelessModule_SubUVAnimation.h"
 #include "Stateless/NiagaraStatelessEmitter.h"
+#include "StructUtils/InstancedStruct.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectGlobals.h"
+#include "XmlFile.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCFx, Log, All);
 
 namespace
 {
 using FJson = TSharedPtr<FJsonObject>;
+using FCurve = TArray<TArray<double>>;
 const TCHAR* const TemplatePath = TEXT("/Niagara/DefaultAssets/Templates/Systems/FountainLightweight.FountainLightweight");
 const TCHAR* const AdditiveMaster = TEXT("/SCBridge/Materials/M_SC_Particle_Additive.M_SC_Particle_Additive");
 const TCHAR* const TranslucentMaster = TEXT("/SCBridge/Materials/M_SC_Particle_Translucent.M_SC_Particle_Translucent");
+const TCHAR* const DistortionMaster = TEXT("/SCBridge/Materials/M_SC_Particle_Distortion.M_SC_Particle_Distortion");
 const TCHAR* const Root = TEXT("/Game/SC/FX");
+const TCHAR* const FlareDir = TEXT("Data/Libs/Flares/");
 constexpr double Cm = 100.0;
-constexpr double BeamLengthM = 1.0; // spline-guided emitters span 0..100 cm along +X (header)
 constexpr double GravityMs2 = 9.81;
 constexpr double CandelaToUE = 100.0 * 100.0; // UPointLightComponent::ComputeLightBrightness, inverse-squared Candelas
+// The runtime contract (header).
+const FName UserStrength(TEXT("User.SC.Strength"));
+const FName UserBeamEnd(TEXT("User.SC.BeamEnd"));
+const FName UserBeamTangent(TEXT("User.SC.BeamStartTangent"));
+const FName UserBeamLength(TEXT("User.SC.BeamLength"));
+const FName UserBeamLength2(TEXT("User.SC.BeamLength2"));
+constexpr double DefaultBeamCm = 100.0;
 
 // ---- JSON --------------------------------------------------------------------------------------------------------
 const FJsonValue* Field(const FJson& O, const FString& Path)
@@ -137,9 +188,9 @@ TArray<double> Nums(const FJson& O, const FString& Path)
     return Out;
 }
 /** A curve: [[t, v...], ...] sorted by t; empty when absent. */
-TArray<TArray<double>> Curve(const FJson& O, const FString& Path)
+FCurve Curve(const FJson& O, const FString& Path)
 {
-    TArray<TArray<double>> Keys;
+    FCurve Keys;
     if (const FJsonValue* V = Field(O, Path); V && V->Type == EJson::Array)
         for (const auto& K : V->AsArray())
         {
@@ -152,7 +203,7 @@ TArray<TArray<double>> Curve(const FJson& O, const FString& Path)
     return Keys;
 }
 /** Piecewise linear, clamped to the end keys (CryEngine splines hold their ends). Channel 0 is the first value. */
-double Eval(const TArray<TArray<double>>& Keys, double T, int32 Channel = 0)
+double Eval(const FCurve& Keys, double T, int32 Channel = 0)
 {
     if (Keys.IsEmpty()) return 1.0;
     auto At = [Channel](const TArray<double>& K) { return K.IsValidIndex(Channel + 1) ? K[Channel + 1] : K.Last(); };
@@ -180,13 +231,55 @@ FVector3f Basis(const TArray<double>& V)
     auto C = [&V](int32 i) { return V.IsValidIndex(i) ? float(V[i]) : 0.f; };
     return FVector3f(C(1), C(0), C(2)) * float(Cm);
 }
-/** First number after `key=` in a raw attribute (e.g. RandomAngles "y=360"). */
+/** A raw attribute as written (empty when absent). */
+FString Raw(const FJson& E, const FString& Attr) { return Str(E, TEXT("raw.") + Attr); }
+/** The base value of a raw attribute ("true,..." -> true). */
+bool RawFlag(const FJson& E, const FString& Attr) { return Raw(E, Attr).TrimStart().StartsWith(TEXT("true"), ESearchCase::IgnoreCase); }
+/** First number after `key=` in a raw attribute (e.g. RandomAngles "y=360", SoftParticleV2 "FadeThickness=2.5"). */
 TOptional<double> RawComponent(const FJson& E, const FString& Attr, const FString& Key)
 {
-    const FString Raw = Str(E, TEXT("raw.") + Attr);
-    const int32 At = Raw.Find(Key + TEXT("="));
+    const FString Text = Raw(E, Attr);
+    int32 At = INDEX_NONE;
+    for (int32 From = 0; (At = Text.Find(Key + TEXT("="), ESearchCase::IgnoreCase, ESearchDir::FromStart, From)) != INDEX_NONE; From = At + 1)
+        if (At == 0 || !FChar::IsAlnum(Text[At - 1])) break; // a whole key, not the tail of a longer one
     if (At == INDEX_NONE) return {};
-    return FCString::Atod(*Raw.Mid(At + Key.Len() + 1));
+    return FCString::Atod(*Text.Mid(At + Key.Len() + 1));
+}
+/** The leading number of a raw attribute ("0.078067,Random=1" -> 0.078067). */
+TOptional<double> RawNumber(const FJson& E, const FString& Attr)
+{
+    const FString Text = Raw(E, Attr).TrimStart();
+    if (Text.IsEmpty() || !(FChar::IsDigit(Text[0]) || Text[0] == TEXT('-') || Text[0] == TEXT('.'))) return {};
+    return FCString::Atod(*Text);
+}
+/** A CryEngine curve modifier inside a raw attribute, e.g. "0.5,ParticleAge=(t=0.1,v=0.016;t=1,v=1,flags=4)": keys
+ *  [t, v] sorted by t; a key's missing t or v is 0 (the particles.rs rule). */
+FCurve RawCurve(const FString& Text, const FString& Modifier)
+{
+    FCurve Keys;
+    const int32 At = Text.Find(Modifier + TEXT("=("));
+    if (At == INDEX_NONE) return Keys;
+    const FString Rest = Text.Mid(At + Modifier.Len() + 2);
+    const int32 End = Rest.Find(TEXT(")"));
+    TArray<FString> Parts;
+    (End == INDEX_NONE ? Rest : Rest.Left(End)).ParseIntoArray(Parts, TEXT(";"), false);
+    for (const FString& P : Parts)
+    {
+        double T = 0, V = 0;
+        TArray<FString> Fields;
+        P.ParseIntoArray(Fields, TEXT(","));
+        for (const FString& Fd : Fields)
+        {
+            FString K, Val;
+            if (!Fd.Split(TEXT("="), &K, &Val)) continue;
+            K.TrimStartAndEndInline();
+            if (K == TEXT("t")) T = FCString::Atod(*Val);
+            else if (K == TEXT("v")) V = FCString::Atod(*Val);
+        }
+        Keys.Add({T, V});
+    }
+    Keys.StableSort([](const TArray<double>& A, const TArray<double>& B) { return A[0] < B[0]; });
+    return Keys;
 }
 FString SafeSegment(FString S)
 {
@@ -203,7 +296,7 @@ FString SafePath(const FString& Path)
 }
 
 // ---- distributions -----------------------------------------------------------------------------------------------
-FRichCurve RichCurve(const TArray<TArray<double>>& Keys, int32 Channel, double Scale = 1.0)
+FRichCurve RichCurve(const FCurve& Keys, int32 Channel, double Scale = 1.0)
 {
     FRichCurve C;
     if (Keys.IsEmpty() || Keys[0][0] > 0) C.SetKeyInterpMode(C.AddKey(0.f, float(Eval(Keys, 0, Channel) * Scale)), RCIM_Linear);
@@ -264,7 +357,7 @@ void SetColorRange(FNiagaraDistributionColor& D, const FLinearColor& Min, const 
     D.UpdateValuesFromDistribution();
 }
 /** RGBA curves over particle age (missing channel curves are 1). */
-void SetColorCurve(FNiagaraDistributionColor& D, const TArray<TArray<double>>& Rgb, const TArray<TArray<double>>& A)
+void SetColorCurve(FNiagaraDistributionColor& D, const FCurve& Rgb, const FCurve& A)
 {
     D.Mode = ENiagaraDistributionMode::NonUniformCurve;
     D.ChannelCurves.Reset();
@@ -273,12 +366,182 @@ void SetColorCurve(FNiagaraDistributionColor& D, const TArray<TArray<double>>& R
     D.UpdateValuesFromDistribution();
 }
 
+// ---- stateless expressions (per-instance values from User parameters) --------------------------------------------
+// The expression structs are not exported from Niagara: they are made and filled through reflection (their script
+// structs construct them inside the Niagara module).
+FInstancedStruct Expr(const TCHAR* Struct)
+{
+    UScriptStruct* S = FindObject<UScriptStruct>(nullptr, *FString::Printf(TEXT("/Script/Niagara.%s"), Struct));
+    checkf(S, TEXT("Niagara has no %s"), Struct);
+    FInstancedStruct I;
+    I.InitializeAs(S);
+    return I;
+}
+template <typename T> void SetField(FInstancedStruct& I, const TCHAR* Name, T Value)
+{
+    const FProperty* P = I.GetScriptStruct()->FindPropertyByName(Name);
+    checkf(P && P->GetElementSize() == sizeof(T), TEXT("%s.%s"), *I.GetScriptStruct()->GetName(), Name);
+    *P->ContainerPtrToValuePtr<T>(I.GetMutableMemory()) = MoveTemp(Value);
+}
+FInstancedStruct Op(const TCHAR* Struct, FInstancedStruct A, FInstancedStruct B)
+{
+    FInstancedStruct I = Expr(Struct);
+    SetField(I, TEXT("A"), MoveTemp(A));
+    SetField(I, TEXT("B"), MoveTemp(B));
+    return I;
+}
+FInstancedStruct FConst(double V)
+{
+    FInstancedStruct I = Expr(TEXT("NiagaraStatelessExpressionFloatConstant"));
+    SetField(I, TEXT("A"), float(V));
+    return I;
+}
+FInstancedStruct FBind(FName N)
+{
+    FInstancedStruct I = Expr(TEXT("NiagaraStatelessExpressionFloatBinding"));
+    SetField(I, TEXT("A"), N);
+    return I;
+}
+FInstancedStruct FMul(FInstancedStruct A, FInstancedStruct B) { return Op(TEXT("NiagaraStatelessExpressionFloatMultiply"), MoveTemp(A), MoveTemp(B)); }
+FInstancedStruct FAdd(FInstancedStruct A, FInstancedStruct B) { return Op(TEXT("NiagaraStatelessExpressionFloatAdd"), MoveTemp(A), MoveTemp(B)); }
+FInstancedStruct VConst(const FVector3f& V)
+{
+    FInstancedStruct I = Expr(TEXT("NiagaraStatelessExpressionVec3Constant"));
+    SetField(I, TEXT("A"), V);
+    return I;
+}
+FInstancedStruct VBind(FName N)
+{
+    FInstancedStruct I = Expr(TEXT("NiagaraStatelessExpressionVec3Binding"));
+    SetField(I, TEXT("A"), N);
+    return I;
+}
+FInstancedStruct VMul(FInstancedStruct A, FInstancedStruct B) { return Op(TEXT("NiagaraStatelessExpressionVec3Multiply"), MoveTemp(A), MoveTemp(B)); }
+FInstancedStruct VAdd(FInstancedStruct A, FInstancedStruct B) { return Op(TEXT("NiagaraStatelessExpressionVec3Add"), MoveTemp(A), MoveTemp(B)); }
+FInstancedStruct VSub(FInstancedStruct A, FInstancedStruct B) { return Op(TEXT("NiagaraStatelessExpressionVec3Subtract"), MoveTemp(A), MoveTemp(B)); }
+FInstancedStruct V2Const(const FVector2f& V)
+{
+    FInstancedStruct I = Expr(TEXT("NiagaraStatelessExpressionVec2Constant"));
+    SetField(I, TEXT("A"), V);
+    return I;
+}
+FInstancedStruct V2Bind(FName N)
+{
+    FInstancedStruct I = Expr(TEXT("NiagaraStatelessExpressionVec2Binding"));
+    SetField(I, TEXT("A"), N);
+    return I;
+}
+FInstancedStruct V2Mul(FInstancedStruct A, FInstancedStruct B) { return Op(TEXT("NiagaraStatelessExpressionVec2Multiply"), MoveTemp(A), MoveTemp(B)); }
+FInstancedStruct V2Add(FInstancedStruct A, FInstancedStruct B) { return Op(TEXT("NiagaraStatelessExpressionVec2Add"), MoveTemp(A), MoveTemp(B)); }
+FInstancedStruct VScale(FInstancedStruct A, double K) { return VMul(MoveTemp(A), VConst(FVector3f(float(K)))); }
+
+/** Coefficients c0 + c1 x + ... of the polynomial through (X[i], Y[i]) (Vandermonde, partial pivoting). */
+TArray<double> Interpolate(const TArray<double>& X, const TArray<double>& Y)
+{
+    const int32 N = X.Num();
+    TArray<TArray<double>> M;
+    for (int32 i = 0; i < N; ++i)
+    {
+        TArray<double>& Row = M.AddDefaulted_GetRef();
+        for (int32 j = 0; j < N; ++j) Row.Add(FMath::Pow(X[i], double(j)));
+        Row.Add(Y[i]);
+    }
+    for (int32 c = 0; c < N; ++c)
+    {
+        int32 Pivot = c;
+        for (int32 r = c + 1; r < N; ++r)
+            if (FMath::Abs(M[r][c]) > FMath::Abs(M[Pivot][c])) Pivot = r;
+        M.Swap(c, Pivot);
+        for (int32 r = 0; r < N; ++r)
+            if (r != c && M[c][c] != 0)
+            {
+                const double F = M[r][c] / M[c][c];
+                for (int32 k = c; k <= N; ++k) M[r][k] -= F * M[c][k];
+            }
+    }
+    TArray<double> C;
+    for (int32 i = 0; i < N; ++i) C.Add(M[i][i] != 0 ? M[i][N] / M[i][i] : 0.0);
+    return C;
+}
+
+/** A quantity driven by an EmitterStrength curve: its value at strength 1 and, when it changes over the game's
+ *  strengths, the polynomial expression in SC.Strength through the curve's values there. */
+struct FStrength
+{
+    double At1 = 1;
+    bool bVaries = false;
+    bool bAllZero = false;
+    FInstancedStruct Expr;
+};
+
 // ---- assets --------------------------------------------------------------------------------------------------------
+struct FFeatures
+{
+    bool Strength = true, Beam = true, Spline = true, Flares = true, Soft = true, Stretch = true, Flow = true, Distortion = true,
+         Extras = true, Erosion = true;
+    void Parse(const FString& Spec)
+    {
+        if (Spec.IsEmpty() || Spec == TEXT("all")) return;
+        TArray<FString> On;
+        Spec.ParseIntoArray(On, TEXT(","));
+        auto Is = [&On](const TCHAR* N) { return On.Contains(N); };
+        Strength = Is(TEXT("strength")), Beam = Is(TEXT("beam")), Spline = Is(TEXT("spline")), Flares = Is(TEXT("flares"));
+        Soft = Is(TEXT("soft")), Stretch = Is(TEXT("stretch")), Flow = Is(TEXT("flow")), Distortion = Is(TEXT("distortion"));
+        Extras = Is(TEXT("extras")), Erosion = Is(TEXT("erosion"));
+    }
+    FString ToString() const
+    {
+        TArray<FString> On;
+        auto Add = [&On](bool b, const TCHAR* N) { if (b) On.Add(N); };
+        Add(Strength, TEXT("strength")), Add(Beam, TEXT("beam")), Add(Spline, TEXT("spline")), Add(Flares, TEXT("flares"));
+        Add(Soft, TEXT("soft")), Add(Stretch, TEXT("stretch")), Add(Flow, TEXT("flow")), Add(Distortion, TEXT("distortion"));
+        Add(Extras, TEXT("extras")), Add(Erosion, TEXT("erosion"));
+        return On.IsEmpty() ? FString(TEXT("none")) : FString::Join(On, TEXT(","));
+    }
+};
+
+enum class EKind : uint8 { Sprite, Light, Distortion, Flare };
+enum class ETexRole : uint8 { Color, Flow, Normal };
+
+/** Material instance parameters (header): one instance per distinct set. */
+struct FMat
+{
+    enum class EMaster : uint8 { Additive, Translucent, Distortion } Master = EMaster::Additive;
+    FString Texture, Flow, Normal;
+    FVector2f Frames = FVector2f(1, 1);
+    bool bFlipU = false, bFlipV = false;
+    float FlowStrength = 0, GlowGamma = 0, SoftFade = 0, Refraction = 0;
+    FString Key() const
+    {
+        return FString::Printf(TEXT("%d|%s|%s|%s|%g,%g|%d%d|%g|%g|%g|%g"), int32(Master), *Texture, *Flow, *Normal, Frames.X, Frames.Y,
+                               bFlipU, bFlipV, FlowStrength, GlowGamma, SoftFade, Refraction);
+    }
+};
+
+/** One lens-flare element (Data/Libs/Flares LensFlareLibrary FlareItem) as the builder ports it. */
+struct FFlareElement
+{
+    FString Name;
+    bool bGlow = true;
+    double Gamma = 1, Brightness = 1, Size = 1;
+    FVector2D Scale = FVector2D(1, 1);
+    FLinearColor Tint = FLinearColor::White;
+    FString Texture; // archive path (Ghost elements)
+};
+
 struct FBuilder
 {
     sc_handle* H = nullptr;
     double SceneUnitNits = 0;
-    double LitSceneUnits = 0; // config: luminance (scene units) given to DiffuseLighting x colour of an unlit sprite
+    double LitSceneUnits = 0;   // config: luminance (scene units) given to DiffuseLighting x colour of an unlit sprite
+    double FlareWorldScale = 1; // config flare_world_scale: the viewer's stand-in for CryEngine's screen-space flare size
+    TArray<double> Knots = {1}; // the game's strengths (config "strength" record); the polynomial runs through them
+    double BeamRangeM = 0;      // the strength record's beam range: the beam emitters' bounds
+    TArray<TSharedPtr<FJsonValue>> CurrentEmitters; // the effect being built
+    TOptional<double> GuideCurvature;               // its beam spline's curvature (first guided emitter)
+    FString GuideName;
+    double RefractionScale = 1; // -RefractionScale=<k>: a verification aid that exaggerates refraction (default 1)
+    FFeatures F;
     TMap<FString, UTexture2D*> Textures;
     TMap<FString, UMaterialInterface*> Materials;
     int32 Errors = 0, Systems = 0;
@@ -307,16 +570,124 @@ struct FBuilder
         return true;
     }
 
-    /** An archive .dds as a persistent texture: split mips merged by the bridge (sc_p4k_read_dds), the top mip decoded to
-     *  an editable BGRA8 source (sc_texels_decode_bgra8, as the WP-C1 cook does), sRGB from the DXGI format. */
-    UTexture2D* Texture(const FString& ArchivePath)
+    /** The strength record (config "strength": {record, type}): the distinct values in 0..1 of its numeric fields that
+     *  name strengths (blend coefficients and scales excluded), and its range field for the beam bounds. */
+    void LoadStrengths(const FJson& Config)
     {
-        if (UTexture2D** Found = Textures.Find(ArchivePath)) return *Found;
-        UTexture2D*& Slot = Textures.Add(ArchivePath, nullptr);
+        const FString Record = Str(Config, TEXT("strength.record")), Type = Str(Config, TEXT("strength.type"));
+        if (Record.IsEmpty()) return;
+        char* Text = nullptr;
+        if (sc_datacore_record(H, TCHAR_TO_UTF8(*Record), &Text) != SC_STATUS_OK)
+        {
+            UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR strength record %s: %s"), *Record, UTF8_TO_TCHAR(sc_last_error(H)));
+            ++Errors;
+            return;
+        }
+        const TSharedPtr<FJsonValue> Value = [&] {
+            TSharedPtr<FJsonValue> V;
+            FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(UTF8_TO_TCHAR(Text)), V);
+            return V;
+        }();
+        sc_free_string(Text);
+        FJson Found, Owner;
+        TFunction<void(const TSharedPtr<FJsonValue>&, const FJson&)> Walk = [&](const TSharedPtr<FJsonValue>& V, const FJson& Parent) {
+            if (Found || !V.IsValid()) return;
+            if (V->Type == EJson::Object)
+            {
+                const FJson O = V->AsObject();
+                if (Str(O, TEXT("__type")) == Type)
+                {
+                    Found = O, Owner = Parent;
+                    return;
+                }
+                for (const auto& Pair : O->Values) Walk(Pair.Value, O);
+            }
+            else if (V->Type == EJson::Array)
+                for (const auto& E : V->AsArray()) Walk(E, Parent);
+        };
+        Walk(Value, nullptr);
+        if (!Found)
+        {
+            UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR strength record %s has no %s"), *Record, *Type);
+            ++Errors;
+            return;
+        }
+        TArray<double> Values;
+        TArray<FString> Names;
+        for (const auto& Pair : Found->Values)
+        {
+            const FString Key(Pair.Key.ToView());
+            if (Pair.Value->Type != EJson::Number || Key.Contains(TEXT("Blend")) || Key.Contains(TEXT("Scale"))) continue;
+            const double V = Pair.Value->AsNumber();
+            if (V < 0 || V > 1) continue;
+            Names.Add(FString::Printf(TEXT("%s=%g"), *Key, V));
+            bool bSeen = false;
+            for (double K : Values) bSeen |= FMath::IsNearlyEqual(K, V, 1e-4);
+            if (!bSeen) Values.Add(V);
+        }
+        Values.Sort();
+        if (!Values.IsEmpty()) Knots = Values;
+        const FString RangeField = Str(Config, TEXT("strength.range_field"));
+        if (Owner && !RangeField.IsEmpty()) BeamRangeM = Num(Owner, RangeField);
+        TArray<FString> K;
+        for (double V : Knots) K.Add(FString::Printf(TEXT("%g"), V));
+        UE_LOG(LogSCFx, Display, TEXT("SC_FX strength record=%s %s fields=%s knots=%s blend=%g range_m=%g"), *Record, *Type, *Join(Names),
+               *Join(K), Num(Found, TEXT("beamEffectBlendCoeff")), BeamRangeM);
+    }
+
+    /** A curve's channel (x Scale) over the game's strengths (header). */
+    FStrength Strength(const FCurve& Curve, int32 Channel = 0, double Scale = 1.0) const
+    {
+        FStrength S;
+        S.At1 = Eval(Curve, 1.0, Channel) * Scale;
+        TArray<double> Y;
+        for (double K : Knots) Y.Add(Eval(Curve, K, Channel) * Scale);
+        S.bAllZero = !Y.ContainsByPredicate([](double V) { return V > 0; });
+        for (double V : Y) S.bVaries |= !FMath::IsNearlyEqual(V, Y[0], 1e-6);
+        if (!F.Strength || Curve.IsEmpty() || !S.bVaries)
+        {
+            S.bVaries = false;
+            S.bAllZero = S.At1 <= 0;
+            return S;
+        }
+        const TArray<double> C = Interpolate(Knots, Y);
+        S.Expr = FConst(C.Last());
+        for (int32 k = C.Num() - 2; k >= 0; --k) S.Expr = FAdd(FMul(MoveTemp(S.Expr), FBind(UserStrength)), FConst(C[k]));
+        return S;
+    }
+    static void Apply(FNiagaraDistributionFloat& D, const FStrength& S)
+    {
+        if (S.bVaries)
+        {
+            D.Mode = ENiagaraDistributionMode::Expression;
+            D.ParameterExpression = S.Expr;
+        }
+        else D.InitConstant(float(S.At1));
+    }
+    static void Apply(FNiagaraDistributionRangeFloat& D, const FStrength& S)
+    {
+        if (S.bVaries)
+        {
+            D.Mode = ENiagaraDistributionMode::Expression;
+            D.ParameterExpression = S.Expr;
+        }
+        else SetRange(D, S.At1, S.At1);
+    }
+
+    /** An archive .dds as a persistent texture: split mips merged by the bridge (sc_p4k_read_dds), the top mip decoded to
+     *  an editable BGRA8 source (sc_texels_decode_bgra8, as the WP-C1 cook does). Colour textures take sRGB from the DXGI
+     *  format; flow vectors and normals are data, always linear. */
+    UTexture2D* Texture(const FString& ArchivePath, ETexRole Role = ETexRole::Color)
+    {
+        const FString Key = FString::Printf(TEXT("%d|%s"), int32(Role), *ArchivePath);
+        if (UTexture2D** Found = Textures.Find(Key)) return *Found;
+        UTexture2D*& Slot = Textures.Add(Key, nullptr);
         sc_blob Blob{};
         if (sc_p4k_read_dds(H, TCHAR_TO_UTF8(*ArchivePath), 0, &Blob) != SC_STATUS_OK)
         {
-            UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR texture %s: %s"), *ArchivePath, UTF8_TO_TCHAR(sc_last_error(H)));
+            const FString Why = UTF8_TO_TCHAR(sc_last_error(H));
+            if (UTexture2D* Plain = UncompressedTexture(ArchivePath, Role)) return Slot = Plain;
+            UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR texture %s: %s"), *ArchivePath, *Why);
             ++Errors;
             return nullptr;
         }
@@ -340,46 +711,102 @@ struct FBuilder
         }
         bool bSRGB = true;
         FSCTextureImporter::PixelFormatOf(Info.dxgi_format, bSRGB);
-        const FString Name = SafeSegment(FPaths::GetBaseFilename(ArchivePath));
+        return Slot = SaveTexture(ArchivePath, Role, int32(Info.width), int32(Info.height), Bgra, bSRGB, FString::Printf(TEXT("dxgi=%u"), Info.dxgi_format));
+    }
+
+    /** An editable BGRA8 texture asset under /Game/SC/FX/Textures/<archive path>. */
+    UTexture2D* SaveTexture(const FString& ArchivePath, ETexRole Role, int32 W, int32 Hgt, const TArray64<uint8>& Bgra, bool bSRGB, const FString& Format)
+    {
+        if (Role != ETexRole::Color) bSRGB = false;
+        const FString Name = SafeSegment(FPaths::GetBaseFilename(ArchivePath)) + (Role == ETexRole::Color ? TEXT("") : Role == ETexRole::Flow ? TEXT("_flow") : TEXT("_normal"));
         const FString LongName = FString(Root) / TEXT("Textures") / SafePath(FPaths::GetPath(ArchivePath)) / Name;
         UPackage* Package = PackageFor(LongName);
         UTexture2D* Tex = FindObject<UTexture2D>(Package, *Name);
         if (!Tex) Tex = NewObject<UTexture2D>(Package, *Name, RF_Public | RF_Standalone);
         Tex->PreEditChange(nullptr);
-        Tex->Source.Init(int32(Info.width), int32(Info.height), 1, 1, TSF_BGRA8, Bgra.GetData());
+        Tex->Source.Init(W, Hgt, 1, 1, TSF_BGRA8, Bgra.GetData());
         Tex->SRGB = bSRGB;
-        Tex->CompressionSettings = TC_Default;
+        Tex->CompressionSettings = Role == ETexRole::Normal ? TC_Normalmap : Role == ETexRole::Flow ? TC_VectorDisplacementmap : TC_Default;
         Tex->LODGroup = TEXTUREGROUP_Effects;
         Tex->MipGenSettings = TMGS_FromTextureGroup;
         Tex->PostEditChange();
         if (!Save(Tex)) return nullptr;
-        UE_LOG(LogSCFx, Display, TEXT("SC_FX_TEXTURE %s -> %s %ux%u dxgi=%u srgb=%d"), *ArchivePath, *Tex->GetPathName(), Info.width, Info.height,
-               Info.dxgi_format, bSRGB ? 1 : 0);
-        return Slot = Tex;
+        UE_LOG(LogSCFx, Display, TEXT("SC_FX_TEXTURE %s -> %s %dx%d %s srgb=%d"), *ArchivePath, *Tex->GetPathName(), W, Hgt, *Format, bSRGB ? 1 : 0);
+        return Tex;
     }
 
-    /** Constant instance of a particle master for one texture; EmissiveScale = the game's scene unit in cd/m2. */
-    UMaterialInterface* Material(bool bAdditive, const FString& ArchivePath)
+    /** A legacy uncompressed 32-bit RGB(A) DDS (DDPF_RGB with channel masks, e.g. the flow-vector maps), which the
+     *  package DDS writer does not take: its top level read from the raw archive file (sc_p4k_read). */
+    UTexture2D* UncompressedTexture(const FString& ArchivePath, ETexRole Role)
     {
-        const FString Key = (bAdditive ? TEXT("A|") : TEXT("T|")) + ArchivePath;
+        sc_blob Blob{};
+        if (sc_p4k_read(H, TCHAR_TO_UTF8(*ArchivePath), &Blob) != SC_STATUS_OK) return nullptr;
+        TArray<uint8> Raw(Blob.data, int32(Blob.len));
+        sc_free_blob(&Blob);
+        auto U32 = [&Raw](int32 At) { return At + 4 <= Raw.Num() ? uint32(Raw[At]) | uint32(Raw[At + 1]) << 8 | uint32(Raw[At + 2]) << 16 | uint32(Raw[At + 3]) << 24 : 0u; };
+        constexpr uint32 DdpfRgb = 0x40, DdpfFourCC = 0x4;
+        if (Raw.Num() < 128 || FMemory::Memcmp(Raw.GetData(), "DDS ", 4) != 0) return nullptr;
+        const int32 Hgt = int32(U32(12)), W = int32(U32(16));
+        const uint32 Flags = U32(80), Bits = U32(88);
+        if (!(Flags & DdpfRgb) || (Flags & DdpfFourCC) || Bits != 32 || int64(W) * Hgt * 4 + 128 > Raw.Num()) return nullptr;
+        const uint32 Mask[4] = {U32(92), U32(96), U32(100), U32(104)}; // R G B A
+        auto Channel = [](uint32 Px, uint32 M) -> uint8 {
+            if (!M) return 255;
+            const uint32 Shift = FMath::CountTrailingZeros(M);
+            return uint8(((Px & M) >> Shift) * 255 / (M >> Shift));
+        };
+        TArray64<uint8> Bgra;
+        Bgra.SetNumUninitialized(int64(W) * Hgt * 4);
+        for (int64 i = 0; i < int64(W) * Hgt; ++i)
+        {
+            const uint32 Px = U32(int32(128 + i * 4));
+            Bgra[i * 4 + 0] = Channel(Px, Mask[2]);
+            Bgra[i * 4 + 1] = Channel(Px, Mask[1]);
+            Bgra[i * 4 + 2] = Channel(Px, Mask[0]);
+            Bgra[i * 4 + 3] = Channel(Px, Mask[3]);
+        }
+        return SaveTexture(ArchivePath, Role, W, Hgt, Bgra, false, TEXT("uncompressed-rgb32"));
+    }
+
+    /** Constant instance of a particle master for one parameter set; EmissiveScale = the game's scene unit in cd/m2. */
+    UMaterialInterface* Material(const FMat& M)
+    {
+        const FString Key = M.Key();
         if (UMaterialInterface** Found = Materials.Find(Key)) return *Found;
         UMaterialInterface*& Slot = Materials.Add(Key, nullptr);
-        UTexture2D* Tex = Texture(ArchivePath);
-        UMaterialInterface* Master = LoadObject<UMaterialInterface>(nullptr, bAdditive ? AdditiveMaster : TranslucentMaster);
-        if (!Tex || !Master)
+        const TCHAR* MasterPath = M.Master == FMat::EMaster::Additive ? AdditiveMaster : M.Master == FMat::EMaster::Translucent ? TranslucentMaster : DistortionMaster;
+        UMaterialInterface* Master = LoadObject<UMaterialInterface>(nullptr, MasterPath);
+        UTexture2D* Tex = M.Texture.IsEmpty() ? nullptr : Texture(M.Texture);
+        UTexture2D* Flow = M.Flow.IsEmpty() ? nullptr : Texture(M.Flow, ETexRole::Flow);
+        UTexture2D* Normal = M.Normal.IsEmpty() ? nullptr : Texture(M.Normal, ETexRole::Normal);
+        if (!Master || (!M.Texture.IsEmpty() && !Tex))
         {
-            if (!Master) UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR missing master %s (run ue/scripts/create_materials.py)"), bAdditive ? AdditiveMaster : TranslucentMaster);
+            if (!Master) UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR missing master %s (run ue/scripts/create_materials.py)"), MasterPath);
             ++Errors;
             return nullptr;
         }
-        const FString Name = FString::Printf(TEXT("MI_SC_Particle_%s_%s"), bAdditive ? TEXT("Additive") : TEXT("Translucent"), *Tex->GetName());
+        const TCHAR* Kind = M.Master == FMat::EMaster::Additive ? TEXT("Additive") : M.Master == FMat::EMaster::Translucent ? TEXT("Translucent") : TEXT("Distortion");
+        const FString Name = FString::Printf(TEXT("MI_SC_Particle_%s_%s_%s"), Kind, Tex ? *Tex->GetName() : TEXT("Glow"), *FMD5::HashAnsiString(*Key).Left(8));
         UPackage* Package = PackageFor(FString(Root) / TEXT("Materials") / Name);
         UMaterialInstanceConstant* MI = FindObject<UMaterialInstanceConstant>(Package, *Name);
         if (!MI) MI = NewObject<UMaterialInstanceConstant>(Package, *Name, RF_Public | RF_Standalone);
         MI->PreEditChange(nullptr);
         MI->SetParentEditorOnly(Master);
-        MI->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(TEXT("SpriteTexture")), Tex);
-        MI->SetScalarParameterValueEditorOnly(FMaterialParameterInfo(TEXT("EmissiveScale")), float(SceneUnitNits));
+        MI->ClearParameterValuesEditorOnly();
+        if (Tex) MI->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(TEXT("SpriteTexture")), Tex);
+        if (Flow) MI->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(TEXT("FlowTexture")), Flow);
+        if (Normal) MI->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(TEXT("NormalTexture")), Normal);
+        auto Scalar = [MI](const TCHAR* N, double V) { MI->SetScalarParameterValueEditorOnly(FMaterialParameterInfo(N), float(V)); };
+        Scalar(TEXT("EmissiveScale"), SceneUnitNits);
+        Scalar(TEXT("FramesU"), M.Frames.X);
+        Scalar(TEXT("FramesV"), M.Frames.Y);
+        Scalar(TEXT("FlipU"), M.bFlipU ? 1 : 0);
+        Scalar(TEXT("FlipV"), M.bFlipV ? 1 : 0);
+        Scalar(TEXT("FlowStrength"), Flow ? M.FlowStrength : 0);
+        Scalar(TEXT("GlowGamma"), M.GlowGamma);
+        Scalar(TEXT("SoftFade"), M.SoftFade);
+        Scalar(TEXT("RefractionStrength"), M.Refraction);
+        Scalar(TEXT("UseNormalMap"), Normal ? 1 : 0);
         MI->PostEditChange();
         if (!Save(MI)) return nullptr;
         return Slot = MI;
@@ -392,16 +819,16 @@ struct FBuilder
     };
     struct FSpawn
     {
-        bool bBurst = false;
-        double AmountMin = 0, AmountMax = 0, RateMin = 0, RateMax = 0, Delay = 0, Duration = 1;
+        bool bBurst = false, bBeam = false;
+        double AmountMin = 0, AmountMax = 0, RateMin = 0, RateMax = 0, Delay = 0, Duration = 1, PerCm = 0;
         ENiagaraLoopBehavior Loop = ENiagaraLoopBehavior::Infinite;
     };
 
     /** Spawn rules (header). Parent is the game parent emitter (null for the first). */
-    static FSpawn Spawn(const FJson& E, const FJson& Parent, FLog& L)
+    FSpawn Spawn(const FJson& E, const FJson& Parent, bool bBeam, FLog& L) const
     {
         FSpawn S;
-        const double Count = Num(E, TEXT("spawn.count")) * Eval(Curve(E, TEXT("spawn.count_strength_curve")), 1.0);
+        const double Count = Num(E, TEXT("spawn.count")) * (F.Strength ? 1.0 : Eval(Curve(E, TEXT("spawn.count_strength_curve")), 1.0));
         const double CountRandom = FMath::Clamp(Num(E, TEXT("spawn.count_random")), 0.0, 1.0);
         const double Life = FMath::Max(1e-3, Num(E, TEXT("lifetime.value"), 1) * Eval(Curve(E, TEXT("lifetime.strength_curve")), 1.0));
         double EmitterLife = Num(E, TEXT("spawn.emitter_lifetime"));
@@ -414,7 +841,6 @@ struct FBuilder
             if (EmitterLife <= 0) EmitterLife = Num(Parent, TEXT("lifetime.value"), 1);
             S.Delay += Num(Parent, TEXT("spawn.delay"));
             L.Approx.Add(FString::Printf(TEXT("Spawn=%s:one emitter for %g parent particles at the parent origin"), *OnParent, ParentCount));
-            if (Num(E, TEXT("inherit_velocity")) != 0) L.Skipped.Add(TEXT("inherit_velocity"));
         }
         const FString Mode = Str(E, TEXT("spawn.mode"));
         if (Mode == TEXT("burst"))
@@ -426,34 +852,43 @@ struct FBuilder
             S.Loop = Pulse > 0 ? ENiagaraLoopBehavior::Infinite : ENiagaraLoopBehavior::Once;
             S.Duration = Pulse > 0 ? Pulse : S.Delay + 0.01;
             L.Mapped.Add(Pulse > 0 ? TEXT("spawn.burst+pulse") : TEXT("spawn.burst"));
+            return S;
         }
-        else
+        double Alive = Count * ParentCount;
+        if (Mode == TEXT("per_distance"))
         {
-            double Alive = Count * ParentCount;
-            if (Mode == TEXT("per_distance"))
+            const double PerM = Num(E, TEXT("spawn.per_distance_per_m")) * ParentCount;
+            if (bBeam && F.Beam)
             {
-                Alive = FMath::Min(Num(E, TEXT("spawn.per_distance_per_m")) * BeamLengthM * ParentCount, Alive > 0 ? Alive : DBL_MAX);
-                L.Approx.Add(TEXT("per_distance:EmitPerDistance x 1 m beam alive at once"));
+                // Per metre of beam at any length: the rate follows SC.BeamLength (Spawn builds the expression).
+                S.bBeam = true;
+                S.PerCm = PerM / Cm / Life;
+                L.Mapped.Add(TEXT("spawn.per_distance(SC.BeamLength)"));
+                if (Count > 0) L.Skipped.Add(FString::Printf(TEXT("Count %g (cap; EmitPerDistance holds at any length)"), Count));
             }
-            const double Window = EmitterLife > 0 ? FMath::Min(Life, EmitterLife) : Life;
-            S.RateMax = Alive / Window;
-            S.RateMin = S.RateMax * (1 - CountRandom);
-            S.Loop = EmitterLife > 0 ? ENiagaraLoopBehavior::Once : ENiagaraLoopBehavior::Infinite;
-            S.Duration = EmitterLife > 0 ? EmitterLife : Life;
-            L.Mapped.Add(Mode == TEXT("per_distance") ? TEXT("spawn.per_distance") : TEXT("spawn.continuous"));
+            else
+            {
+                Alive = FMath::Min(PerM, Alive > 0 ? Alive : DBL_MAX);
+                L.Approx.Add(TEXT("per_distance:EmitPerDistance x 1 m alive at once"));
+            }
         }
+        const double Window = EmitterLife > 0 ? FMath::Min(Life, EmitterLife) : Life;
+        S.RateMax = Alive / Window;
+        S.RateMin = S.RateMax * (1 - CountRandom);
+        S.Loop = EmitterLife > 0 ? ENiagaraLoopBehavior::Once : ENiagaraLoopBehavior::Infinite;
+        // Infinite loops re-read bound / expression rates once per loop: keep them short so strength and length follow.
+        S.Duration = EmitterLife > 0 ? EmitterLife : (F.Strength || F.Beam ? FMath::Min(Life, 0.25) : Life);
+        if (Mode != TEXT("per_distance")) L.Mapped.Add(TEXT("spawn.continuous"));
         if (S.Delay > 0) L.Mapped.Add(TEXT("spawn.delay"));
         return S;
     }
 
-    template <typename T> static T* Module(UNiagaraStatelessEmitter* E)
-    {
-        return const_cast<T*>(E->GetModule<T>());
-    }
+    template <typename T> static T* Module(UNiagaraStatelessEmitter* E) { return const_cast<T*>(E->GetModule<T>()); }
 
-    /** Configure one lightweight emitter from a game emitter. bLight: the light-only twin. Returns false when it ends up
-     *  with nothing to draw. */
-    bool Configure(UNiagaraStatelessEmitter* Em, const FJson& E, const FJson& Parent, bool bLight, FLog& L, bool& bInvisibleAtFull)
+    /** Configure one lightweight emitter from a game emitter (Kind: the sprite, its light, distortion or flare twin).
+     *  Returns false when it ends up with nothing to draw; bInvisible when it draws nothing at any game strength. */
+    bool Configure(UNiagaraStatelessEmitter* Em, const FJson& E, const FJson& Parent, EKind Kind, const FFlareElement* Flare, FLog& L,
+                   bool& bInvisible)
     {
         // Every template module off first; each rule below enables what it uses.
         for (UNiagaraStatelessModule* M : Em->GetModules())
@@ -461,7 +896,8 @@ struct FBuilder
         Em->Modify();
 
         const bool bSpline = Has(E, TEXT("spline"));
-        const FSpawn S = Spawn(E, Parent, L);
+        const bool bBeam = bSpline && F.Spline;
+        const FSpawn S = Spawn(E, Parent, bSpline, L);
         FNiagaraEmitterStateData State = Em->GetEmitterState();
         State.InactiveResponse = ENiagaraEmitterInactiveResponse::Complete;
         State.LoopBehavior = S.Loop;
@@ -472,8 +908,12 @@ struct FBuilder
         State.LoopDelay.InitConstant(float(S.Delay));
         State.LoopDelay.ChannelConstantsAndRanges = {float(S.Delay)};
         State.bDelayFirstLoopOnly = true;
-        State.bEnableDistanceCulling = false;
         State.bEnableVisibilityCulling = false;
+        const double CameraMax = RawNumber(E, TEXT("CameraMaxDistance")).Get(0);
+        State.bEnableDistanceCulling = F.Extras && CameraMax > 0;
+        State.bMaxDistanceEnabled = State.bEnableDistanceCulling;
+        State.MaxDistance = float(CameraMax * Cm);
+        if (State.bEnableDistanceCulling) L.Mapped.AddUnique(TEXT("CameraMaxDistance"));
         Em->SetEmitterState(State);
         while (Em->GetNumSpawnInfos() > 0)
         {
@@ -482,40 +922,50 @@ struct FBuilder
         }
         FNiagaraStatelessSpawnInfo& Info = Em->AddSpawnInfo();
         Info.bEnabled = true;
+        const FStrength CountStrength = Strength(Curve(E, TEXT("spawn.count_strength_curve")));
         if (S.bBurst)
         {
             Info.Type = ENiagaraStatelessSpawnInfoType::Burst;
             Info.SpawnTime = float(S.Delay);
+            const double K = CountStrength.At1;
             Info.Amount.Mode = S.AmountMin == S.AmountMax ? ENiagaraDistributionMode::UniformConstant : ENiagaraDistributionMode::UniformRange;
-            Info.Amount.Min = int32(S.AmountMin);
-            Info.Amount.Max = int32(S.AmountMax);
+            Info.Amount.Min = int32(FMath::RoundToDouble(S.AmountMin * K));
+            Info.Amount.Max = int32(FMath::RoundToDouble(S.AmountMax * K));
+            if (CountStrength.bVaries) L.Approx.AddUnique(TEXT("count strength@1 (burst)"));
         }
         else
         {
             Info.Type = ENiagaraStatelessSpawnInfoType::Rate;
-            SetRange(Info.Rate, S.RateMin, S.RateMax);
+            // Spawn rates take a User binding but no expression (UE 5.9 evaluates a spawn-info expression unbuilt), so
+            // a count strength curve stays at 1 and a beam binds SC.BeamLength (particles per cm per second) in as many
+            // spawn infos as the rate needs: EmitPerDistance / 100 / lifetime per cm, rounded to whole spawn infos.
+            if (CountStrength.bVaries) L.Approx.AddUnique(TEXT("count.strength_curve@1 (spawn rates take no expression)"));
+            if (S.bBeam)
+            {
+                const int32 N = FMath::Max(1, FMath::RoundToInt(S.PerCm));
+                for (int32 i = 0; i < N; ++i)
+                {
+                    FNiagaraStatelessSpawnInfo& Each = i == 0 ? Info : Em->AddSpawnInfo();
+                    Each.bEnabled = true;
+                    Each.Type = ENiagaraStatelessSpawnInfoType::Rate;
+                    Each.Rate.Mode = ENiagaraDistributionMode::Binding;
+                    Each.Rate.ParameterBinding = FNiagaraVariableBase(FNiagaraTypeDefinition::GetFloatDef(), UserBeamLength);
+                }
+                if (!FMath::IsNearlyEqual(N, S.PerCm, 0.05)) L.Approx.Add(FString::Printf(TEXT("beam density x%.2f (whole spawn infos)"), N / S.PerCm));
+            }
+            else SetRange(Info.Rate, S.RateMin * CountStrength.At1, S.RateMax * CountStrength.At1);
         }
 
-        // Lifetime.
+        // Lifetime (strength curve baked at 1).
         auto* Init = Module<UNiagaraStatelessModule_InitializeParticle>(Em);
         const double Life = Num(E, TEXT("lifetime.value"), 1) * Eval(Curve(E, TEXT("lifetime.strength_curve")), 1.0);
         const double LifeRandom = FMath::Clamp(Num(E, TEXT("lifetime.random")), 0.0, 1.0);
         SetRange(Init->LifetimeDistribution, Life * (1 - LifeRandom), Life);
         Init->LifetimeDistribution.UpdateValuesFromDistribution();
         L.Mapped.Add(TEXT("lifetime"));
-        if (Has(E, TEXT("lifetime.strength_curve")) || Has(E, TEXT("spawn.count_strength_curve"))) L.Approx.Add(TEXT("strength_curves@1"));
+        if (Has(E, TEXT("lifetime.strength_curve"))) L.Approx.AddUnique(TEXT("lifetime.strength_curve@1"));
 
-        // Colour and alpha (strength curves at 1).
-        const TArray<double> Rgb0 = Nums(E, TEXT("color.rgb"));
-        const auto ColorStrength = Curve(E, TEXT("color.strength_curve"));
-        FLinearColor Rgb(1, 1, 1, 1);
-        for (int32 c = 0; c < 3; ++c) Rgb.Component(c) = float((Rgb0.IsValidIndex(c) ? Rgb0[c] : 1.0) * (ColorStrength.IsEmpty() ? 1.0 : Eval(ColorStrength, 1.0, c)));
-        const double ColorRandom = FMath::Clamp(Num(E, TEXT("color.random")), 0.0, 1.0);
-        if (!ColorStrength.IsEmpty()) L.Approx.AddUnique(TEXT("strength_curves@1"));
-        if (ColorRandom > 0) L.Mapped.Add(TEXT("color.random"));
-        if (Bool(E, TEXT("color.random_hue"))) L.Skipped.Add(TEXT("color.random_hue"));
-
-        // Shape: offsets (or the beam line) as a box.
+        // Shape: offsets as a box; a guided beam starts at the emitter.
         auto* Shape = Module<UNiagaraStatelessModule_ShapeLocation>(Em);
         Shape->SetIsModuleEnabled(true);
         Shape->ShapePrimitive = ENSM_ShapePrimitive::Box;
@@ -524,37 +974,105 @@ struct FBuilder
         const FVector3f Offset = Basis(Nums(E, TEXT("position_offset_m")));
         FVector3f Box = Basis(Nums(E, TEXT("random_offset_m"))).GetAbs() * 2.f;
         FVector3f Centre = Offset;
+        const TArray<double> Amp = Nums(E, TEXT("spline.noise_amplitude_xyz"));
+        const double AmpCm = Cm * (Amp.IsEmpty() ? 0.0 : FMath::Max(Amp));
         if (bSpline)
         {
-            const TArray<double> Amp = Nums(E, TEXT("spline.noise_amplitude"));
-            Box.X = float(BeamLengthM * Cm);
-            Box.Y = FMath::Max(Box.Y, float(2 * Cm * (Amp.IsValidIndex(0) ? Amp[0] : 0)));
-            Box.Z = FMath::Max(Box.Z, float(2 * Cm * (Amp.IsValidIndex(1) ? Amp[1] : 0)));
-            // PositionOffset moves where a guided spline starts; the spline still ends on the target, so a straight box
-            // cannot carry it: the beam emitters share the axis.
             if (!Offset.IsNearlyZero()) L.Approx.Add(TEXT("spline:position_offset dropped (spline start only)"));
-            Centre = FVector3f(float(BeamLengthM * Cm / 2), 0.f, 0.f);
-            L.Approx.Add(TEXT("spline:box along +X 0..100cm, noise amplitude as box width"));
-            L.Skipped.Add(TEXT("spline.noise_motion"));
-            L.Skipped.Add(TEXT("spline.curvature"));
+            Centre = FVector3f::ZeroVector;
+            if (!bBeam)
+            {
+                // Without the guided path: a straight box along +X 0..100 cm (scale the component to the beam).
+                Box.X = float(DefaultBeamCm);
+                Box.Y = FMath::Max(Box.Y, float(2 * Cm * (Amp.IsValidIndex(0) ? Amp[0] : 0)));
+                Box.Z = FMath::Max(Box.Z, float(2 * Cm * (Amp.IsValidIndex(1) ? Amp[1] : 0)));
+                Centre.X = float(DefaultBeamCm / 2);
+                L.Approx.Add(TEXT("spline:box along +X 0..100cm, noise amplitude as box width"));
+            }
         }
         SetVec3(Shape->BoxSize, Box);
         SetPosition(Shape->TransformOffset, Centre);
         L.Mapped.Add(TEXT("position_offset_m"));
         L.Mapped.Add(TEXT("random_offset_m"));
 
-        // Velocity: cone about +X.
-        const double Speed = Num(E, TEXT("speed.value")) * Eval(Curve(E, TEXT("speed.strength_curve")), 1.0);
+        // Motion: the guided beam path, or a cone about +X with forces.
+        const FStrength SpeedStrength = Strength(Curve(E, TEXT("speed.strength_curve")));
+        const double Speed = Num(E, TEXT("speed.value"));
         const double SpeedRandom = FMath::Clamp(Num(E, TEXT("speed.random")), 0.0, 1.0);
-        double BoundsReach = 0;
-        if (Speed > 0 && !bSpline)
+        double BoundsReach = 0, TypicalSpeedCm = Speed * SpeedStrength.At1 * Cm;
+        if (bBeam)
+        {
+            const double T = FMath::Max(Life, 1e-3);
+            // Every guided emitter of an effect rides the one beam spline the weapon evaluates (emitter -> target); the
+            // effect's first guided emitter defines its curvature, so all layers coincide end to end.
+            const double Own = FMath::Clamp(Num(E, TEXT("spline.curvature")), 0.0, 1.0);
+            const double Curv = GuideCurvature.Get(Own);
+            if (!FMath::IsNearlyEqual(Own, Curv))
+                L.Approx.AddUnique(FString::Printf(TEXT("spline:curvature %g -> %g (the effect's beam spline, %s)"), Own, Curv, *GuideName));
+            auto* Vel = Module<UNiagaraStatelessModule_AddVelocity>(Em);
+            Vel->SetIsModuleEnabled(true);
+            Vel->VelocityType = ENSM_VelocityType::Linear;
+            Vel->CoordinateSpace = ENiagaraCoordinateSpace::Local;
+            Vel->LinearVelocityDistribution.Mode = ENiagaraDistributionMode::Expression;
+            Vel->LinearVelocityDistribution.ParameterExpression =
+                VAdd(VScale(VBind(UserBeamTangent), Curv / T), VScale(VBind(UserBeamEnd), (1 - Curv) / T));
+            Vel->LinearVelocityScale.InitConstant(1.f);
+            auto* Acc = Module<UNiagaraStatelessModule_AccelerationForce>(Em);
+            Acc->SetIsModuleEnabled(true);
+            Acc->CoordinateSpace = ENiagaraCoordinateSpace::Local;
+            Acc->AccelerationDistribution.Mode = ENiagaraDistributionMode::Expression;
+            Acc->AccelerationDistribution.ParameterExpression = VScale(VSub(VBind(UserBeamEnd), VBind(UserBeamTangent)), 2 * Curv / (T * T));
+            L.Mapped.Add(TEXT("spline.curvature"));
+            L.Mapped.Add(TEXT("spline(travel start->SC.BeamEnd over lifetime)"));
+            L.Skipped.Add(FString::Printf(TEXT("speed %g m/s (travel is beam length / lifetime)"), Speed));
+            if (Bool(E, TEXT("spline.noise_enabled")) && AmpCm > 0)
+            {
+                // Curl noise of the noise amplitude: the stateless field moves a particle ~ strength x lifetime (cm) along
+                // its path; its frequency is one over the shortest spatial wavelength (SplineNoise SpatialWavelength, m).
+                auto* Noise = Module<UNiagaraStatelessModule_CurlNoiseForce>(Em);
+                Noise->SetIsModuleEnabled(true);
+                Noise->NoiseStrength = float(AmpCm / T);
+                double Wave = 0;
+                const FString SplineRaw = Str(E, TEXT("spline.raw"));
+                const int32 At = SplineRaw.Find(TEXT("SpatialWavelength=("));
+                if (At != INDEX_NONE)
+                {
+                    const FString Inner = SplineRaw.Mid(At + 19, SplineRaw.Mid(At + 19).Find(TEXT(")")));
+                    TArray<FString> Parts;
+                    Inner.ParseIntoArray(Parts, TEXT(","));
+                    for (const FString& P : Parts)
+                    {
+                        const double W = FCString::Atod(*P.Mid(P.Find(TEXT("=")) + 1));
+                        if (W > 0) Wave = Wave > 0 ? FMath::Min(Wave, W) : W;
+                    }
+                }
+                // UE's frequency normalisation (fx.NiagaraStateless.SolveVelocities.Noise.FrequencyNormalize = 50 per cm).
+                Noise->NoiseFrequency = float(Wave > 0 ? 50.0 / (Wave * Cm) : 1.0);
+                Noise->bBiasNoiseFieldEnabled = false;
+                L.Mapped.Add(TEXT("spline.noise(amplitude, wavelength)"));
+                L.Approx.Add(TEXT("spline.noise:static curl field (NoiseVel scroll, noise textures, damping, noise strength curve skipped)"));
+            }
+            TypicalSpeedCm = (BeamRangeM > 0 ? BeamRangeM * Cm : DefaultBeamCm) / T;
+        }
+        else if (Speed > 0 && !bSpline)
         {
             auto* Vel = Module<UNiagaraStatelessModule_AddVelocity>(Em);
             Vel->SetIsModuleEnabled(true);
             Vel->VelocityType = ENSM_VelocityType::InCone;
-            SetRange(Vel->ConeVelocityDistribution, Speed * (1 - SpeedRandom) * Cm, Speed * Cm);
+            double SpeedMax = Speed;
+            // Inherited parent velocity (Spawn=FromParentBirth): the parent's speed x InheritVelocity widens the speed range.
+            const double Inherit = Num(E, TEXT("inherit_velocity"));
+            if (F.Extras && Inherit != 0 && Parent && !Str(E, TEXT("spawn.spawn_on_parent")).IsEmpty())
+            {
+                SpeedMax += FMath::Abs(Inherit) * Num(Parent, TEXT("speed.value"));
+                L.Approx.Add(TEXT("inherit_velocity:parent speed added to the speed range"));
+            }
+            else if (Inherit != 0)
+                L.Skipped.Add(TEXT("inherit_velocity"));
+            SetRange(Vel->ConeVelocityDistribution, Speed * (1 - SpeedRandom) * Cm, SpeedMax * Cm);
             Vel->ConeVelocityDistribution.UpdateValuesFromDistribution();
-            Vel->ConeVelocityScale.InitConstant(1.f);
+            Apply(Vel->ConeVelocityScale, SpeedStrength);
+            if (SpeedStrength.bVaries) L.Mapped.Add(TEXT("speed.strength_curve"));
             Vel->ConeRotationType = ENSM_ConeRotationType::Direction;
             SetVec3(Vel->ConeDirection, FVector3f(1, 0, 0));
             const double EmitMax = Num(E, TEXT("emit_angle_deg.max")), EmitMin = Num(E, TEXT("emit_angle_deg.min"));
@@ -566,7 +1084,7 @@ struct FBuilder
             L.Mapped.Add(TEXT("speed"));
             if (Has(E, TEXT("emit_angle_deg"))) L.Mapped.Add(TEXT("emit_angle_deg"));
             if (Focus > 0) L.Approx.Add(TEXT("focus_angle:widens the cone"));
-            BoundsReach += Speed * Life;
+            BoundsReach += SpeedMax * SpeedStrength.At1 * Life;
         }
         else if (Speed > 0)
             L.Skipped.Add(TEXT("speed(spline travel)"));
@@ -591,39 +1109,65 @@ struct FBuilder
         if (Has(E, TEXT("turbulence"))) L.Skipped.Add(TEXT("turbulence"));
 
         const double Size = Num(E, TEXT("size.value"), 1) * Eval(Curve(E, TEXT("size.strength_curve")), 1.0);
-        if (Has(E, TEXT("size.strength_curve"))) L.Approx.AddUnique(TEXT("strength_curves@1"));
+        if (Has(E, TEXT("size.strength_curve"))) L.Approx.AddUnique(TEXT("size.strength_curve@1"));
         const double Reach = (Offset.Size() / Cm) + (Box.Size() / Cm) + BoundsReach + 2 * Size + 0.5;
+        const double BeamReach = bBeam ? FMath::Max(BeamRangeM, DefaultBeamCm / Cm) : (bSpline ? DefaultBeamCm / Cm : 0.0);
         if (FStructProperty* P = FindFProperty<FStructProperty>(UNiagaraStatelessEmitter::StaticClass(), TEXT("FixedBounds")))
-            *P->ContainerPtrToValuePtr<FBox>(Em) = FBox(FVector(-Reach * Cm), FVector(Reach * Cm + (bSpline ? BeamLengthM * Cm : 0.0)));
+            *P->ContainerPtrToValuePtr<FBox>(Em) = FBox(FVector(-(Reach + BeamReach) * Cm), FVector((Reach + BeamReach) * Cm));
 
         TArray<UNiagaraRendererProperties*> Old = Em->GetRenderers();
         for (UNiagaraRendererProperties* R : Old) Em->RemoveRenderer(R, FGuid());
 
-        if (bLight)
+        // Colour: the emitter's colour without its strength curve (Dynamic Material Parameter 0 carries that).
+        const TArray<double> Rgb0 = Nums(E, TEXT("color.rgb"));
+        const FCurve ColorStrength = Curve(E, TEXT("color.strength_curve"));
+        FStrength ColorS[3];
+        FLinearColor Rgb(1, 1, 1, 1);
+        for (int32 c = 0; c < 3; ++c)
+        {
+            ColorS[c] = Strength(ColorStrength, c);
+            Rgb.Component(c) = float(Rgb0.IsValidIndex(c) ? Rgb0[c] : 1.0);
+        }
+        const bool bColorVaries = ColorS[0].bVaries || ColorS[1].bVaries || ColorS[2].bVaries;
+        const double ColorRandom = FMath::Clamp(Num(E, TEXT("color.random")), 0.0, 1.0);
+        if (ColorRandom > 0) L.Mapped.AddUnique(TEXT("color.random"));
+        if (Bool(E, TEXT("color.random_hue"))) L.Skipped.AddUnique(TEXT("color.random_hue"));
+
+        if (Kind == EKind::Light)
         {
             const FJson Light = Obj(E, TEXT("light"));
-            const double Intensity = Num(Light, TEXT("intensity"), 1) * Eval(Curve(Light, TEXT("strength_curve")), 1.0);
             const double IntensityRandom = FMath::Clamp(Num(Light, TEXT("random")), 0.0, 1.0);
-            const double Candela = UE_DOUBLE_PI * SceneUnitNits * Intensity;
-            const FLinearColor Max(Rgb.R * Candela * CandelaToUE, Rgb.G * Candela * CandelaToUE, Rgb.B * Candela * CandelaToUE, 1.f);
+            const double Candela = UE_DOUBLE_PI * SceneUnitNits * Num(Light, TEXT("intensity"), 1);
+            // Hue at strength 1; intensity x colour luminance over the strengths -> the light's diffuse/specular scale.
+            FLinearColor Max(Rgb.R * ColorS[0].At1, Rgb.G * ColorS[1].At1, Rgb.B * ColorS[2].At1, 1.f);
+            const double Lum1 = Max.GetLuminance();
+            if (Lum1 > 0) Max *= float(Candela * CandelaToUE);
+            Max.A = 1.f;
             FLinearColor Min = Max * float(1 - IntensityRandom);
             Min.A = 1.f;
             SetColorRange(Init->ColorDistribution, Min, Max);
-            bInvisibleAtFull = Candela * FMath::Max3(Rgb.R, Rgb.G, Rgb.B) <= 0;
-            const auto AgeCurve = Curve(Light, TEXT("age_curve"));
+            FCurve Scale;
+            for (double K : Knots)
+            {
+                const FLinearColor C(Rgb.R * Eval(ColorStrength, K, 0), Rgb.G * Eval(ColorStrength, K, 1), Rgb.B * Eval(ColorStrength, K, 2));
+                Scale.Add({K, Eval(Curve(Light, TEXT("strength_curve")), K) * (Lum1 > 0 ? C.GetLuminance() / Lum1 : 0.0)});
+            }
+            const FStrength LightS = Strength(Has(Light, TEXT("strength_curve")) || !ColorStrength.IsEmpty() ? Scale : FCurve());
+            bInvisible = Candela <= 0 || Lum1 <= 0 && !LightS.bVaries;
+            const FCurve AgeCurve = Curve(Light, TEXT("age_curve"));
             if (!AgeCurve.IsEmpty())
             {
-                auto* Scale = Module<UNiagaraStatelessModule_ScaleColor>(Em);
-                Scale->SetIsModuleEnabled(true);
-                TArray<TArray<double>> Rgb3;
+                auto* ScaleColor = Module<UNiagaraStatelessModule_ScaleColor>(Em);
+                ScaleColor->SetIsModuleEnabled(true);
+                FCurve Rgb3;
                 for (const auto& K : AgeCurve) Rgb3.Add({K[0], K[1], K[1], K[1]});
-                SetColorCurve(Scale->ScaleDistribution, Rgb3, {});
+                SetColorCurve(ScaleColor->ScaleDistribution, Rgb3, {});
             }
             auto* Attr = Module<UNiagaraStatelessModule_LightAttributes>(Em);
             Attr->SetIsModuleEnabled(true);
             Attr->bApplyRadius = true;
             const double Radius = Num(Light, TEXT("radius_m")) * Cm;
-            const auto RadiusCurve = Curve(Light, TEXT("radius_age_curve"));
+            const FCurve RadiusCurve = Curve(Light, TEXT("radius_age_curve"));
             if (RadiusCurve.IsEmpty()) Attr->Radius.InitConstant(float(Radius));
             else
             {
@@ -631,6 +1175,11 @@ struct FBuilder
                 Attr->Radius.ChannelCurves = {RichCurve(RadiusCurve, 0, Radius)};
                 Attr->Radius.UpdateValuesFromDistribution();
             }
+            Attr->bApplyDiffuseScale = Attr->bApplySpecularScale = LightS.bVaries || !FMath::IsNearlyEqual(LightS.At1, 1.0);
+            Apply(Attr->DiffuseScale, LightS);
+            Apply(Attr->SpecularScale, LightS);
+            if (LightS.bVaries) L.Mapped.Add(TEXT("light.strength_curve(SC.Strength)"));
+            if (bColorVaries) L.Approx.AddUnique(TEXT("light hue at strength 1"));
             auto* R = NewObject<UNiagaraLightRendererProperties>(Em, NAME_None, RF_Transactional);
             R->bUseInverseSquaredFalloff = true;
             R->bAffectsTranslucency = true;
@@ -639,52 +1188,106 @@ struct FBuilder
             Em->AddRenderer(R, FGuid());
             L.Mapped.Append({TEXT("light.intensity"), TEXT("light.radius_m"), TEXT("color.rgb")});
             if (!AgeCurve.IsEmpty()) L.Mapped.Add(TEXT("light.age_curve"));
-            if (Bool(Light, TEXT("soft_bulb"))) L.Approx.Add(TEXT("light.soft_bulb:point light"));
-            if (Bool(Light, TEXT("affects_this_area_only"))) L.Skipped.Add(TEXT("light.affects_this_area_only"));
+            if (IntensityRandom > 0) L.Mapped.Add(TEXT("light.random(per light)"));
+            if (Bool(Light, TEXT("soft_bulb"))) L.Approx.AddUnique(TEXT("light.soft_bulb:point light"));
+            if (Bool(Light, TEXT("affects_this_area_only"))) L.Skipped.AddUnique(TEXT("light.affects_this_area_only"));
             return true;
         }
 
-        // Sprite: colour x luminance (scene units), alpha, size, curves, facing, flipbook, material.
+        // Sprite-like twins: colour x luminance (scene units), alpha, size, curves, facing, flipbook, material.
         const double Emissive = Num(E, TEXT("emissive_lighting"));
-        const double Luminance = Emissive + Num(E, TEXT("diffuse_lighting")) * LitSceneUnits;
-        if (Emissive <= 0) L.Approx.Add(FString::Printf(TEXT("diffuse_lighting:unlit at %g scene units"), LitSceneUnits));
-        const double Alpha = Num(E, TEXT("alpha.value"), 1) * Eval(Curve(E, TEXT("alpha.strength_curve")), 1.0);
+        double Luminance = Emissive + Num(E, TEXT("diffuse_lighting")) * LitSceneUnits;
+        if (Emissive <= 0 && Kind == EKind::Sprite) L.Approx.AddUnique(FString::Printf(TEXT("diffuse_lighting:unlit at %g scene units"), LitSceneUnits));
+        double Alpha = Num(E, TEXT("alpha.value"), 1);
         const double AlphaRandom = FMath::Clamp(Num(E, TEXT("alpha.random")), 0.0, 1.0);
-        if (Has(E, TEXT("alpha.strength_curve"))) L.Approx.AddUnique(TEXT("strength_curves@1"));
-        const FLinearColor Max(Rgb.R * Luminance, Rgb.G * Luminance, Rgb.B * Luminance, Alpha);
+        FCurve AlphaStrengthCurve = Curve(E, TEXT("alpha.strength_curve"));
+        FCurve AlphaAge = Curve(E, TEXT("alpha.age_curve"));
+        FCurve ColorAge = Curve(E, TEXT("color.age_curve"));
+        FLinearColor Tint = Rgb;
+        double SizeX = 2 * Size * Cm, SizeY = SizeX;
+        if (Kind == EKind::Flare)
+        {
+            // Lens-flare element (header): luminance = root x element brightness x light intensity; the light's age curve.
+            const FJson Light = Obj(E, TEXT("light"));
+            Luminance = Flare->Brightness * Num(Light, TEXT("intensity"), 1);
+            Tint = FLinearColor(Rgb.R * Flare->Tint.R, Rgb.G * Flare->Tint.G, Rgb.B * Flare->Tint.B);
+            Alpha = 1;
+            AlphaStrengthCurve = Curve(Light, TEXT("strength_curve"));
+            AlphaAge = {};
+            ColorAge.Reset();
+            for (const auto& K : Curve(Light, TEXT("age_curve"))) ColorAge.Add({K[0], K[1], K[1], K[1]});
+            SizeX = 2 * Size * Flare->Size * Flare->Scale.X * Cm * FlareWorldScale;
+            SizeY = 2 * Size * Flare->Size * Flare->Scale.Y * Cm * FlareWorldScale;
+            L.Approx.AddUnique(TEXT("flare:world-space sprites sized by the emitter (CryEngine sizes on screen); occlusion by depth"));
+        }
+        const FStrength AlphaS = Strength(AlphaStrengthCurve);
+        const FLinearColor Max(Tint.R * Luminance, Tint.G * Luminance, Tint.B * Luminance, Alpha);
         const FLinearColor Min(Max.R * (1 - ColorRandom), Max.G * (1 - ColorRandom), Max.B * (1 - ColorRandom), Alpha * (1 - AlphaRandom));
         SetColorRange(Init->ColorDistribution, Min, Max);
-        bInvisibleAtFull = Alpha <= 0 || FMath::Max3(Max.R, Max.G, Max.B) <= 0;
+        bool bAnyChannel = false;
+        for (int32 c = 0; c < 3; ++c) bAnyChannel |= Max.Component(c) > 0 && !ColorS[c].bAllZero;
+        bInvisible = Alpha <= 0 || AlphaS.bAllZero || !bAnyChannel;
         L.Mapped.Append({TEXT("color"), TEXT("alpha"), TEXT("emissive_lighting")});
+        if (!F.Strength && (bColorVaries || AlphaS.bVaries)) L.Approx.AddUnique(TEXT("strength_curves@1"));
+
+        // Dynamic Material Parameter 0: the colour / alpha strength scales (1 when the curves are absent).
+        auto* Dyn = Module<UNiagaraStatelessModule_DynamicMaterialParameters>(Em);
+        Dyn->SetIsModuleEnabled(true);
+        Dyn->bParameter0Enabled = true;
+        Dyn->bParameter1Enabled = Dyn->bParameter2Enabled = Dyn->bParameter3Enabled = false;
+        // AlphaErosion (own or inherited): Dynamic Material Parameter 1 X = the erosion threshold over the particle's
+        // age (base x ParticleAge curve); the masters cut texture alpha below it and rescale the rest.
+        const FString ErosionRaw = F.Erosion && Kind != EKind::Flare ? EffectiveRaw(E, TEXT("AlphaErosion")) : FString();
+        if (!ErosionRaw.IsEmpty())
+        {
+            const double Base = FCString::Atod(*ErosionRaw);
+            const FCurve Age = RawCurve(ErosionRaw, TEXT("ParticleAge"));
+            Dyn->bParameter1Enabled = true;
+            FNiagaraStatelessDynamicParameterSet& P1 = Dyn->Parameter1;
+            P1.bXChannelEnabled = true;
+            P1.bYChannelEnabled = P1.bZChannelEnabled = P1.bWChannelEnabled = false;
+            if (Age.IsEmpty()) P1.XChannelDistribution.InitConstant(float(Base));
+            else
+            {
+                P1.XChannelDistribution.Mode = ENiagaraDistributionMode::UniformCurve;
+                P1.XChannelDistribution.ChannelCurves = {RichCurve(Age, 0, Base)};
+                P1.XChannelDistribution.UpdateValuesFromDistribution();
+            }
+            L.Mapped.AddUnique(TEXT("AlphaErosion"));
+        }
+        FNiagaraStatelessDynamicParameterSet& P0 = Dyn->Parameter0;
+        P0.bXChannelEnabled = P0.bYChannelEnabled = P0.bZChannelEnabled = P0.bWChannelEnabled = true;
+        Apply(P0.XChannelDistribution, ColorS[0]);
+        Apply(P0.YChannelDistribution, ColorS[1]);
+        Apply(P0.ZChannelDistribution, ColorS[2]);
+        Apply(P0.WChannelDistribution, AlphaS);
+        if (bColorVaries) L.Mapped.Add(TEXT("color.strength_curve(SC.Strength)"));
+        if (AlphaS.bVaries) L.Mapped.Add(TEXT("alpha.strength_curve(SC.Strength)"));
 
         const double SizeRandom = FMath::Clamp(Num(E, TEXT("size.random")), 0.0, 1.0);
         const double Aspect = Has(E, TEXT("aspect")) ? Num(E, TEXT("aspect"), 1) : 1.0;
-        const double Diameter = 2 * Size * Cm;
-        if (FMath::IsNearlyEqual(Aspect, 1.0)) SetUniformRange(Init->SpriteSizeDistribution, Diameter * (1 - SizeRandom), Diameter);
-        else
-        {
-            SetVec2Range(Init->SpriteSizeDistribution, FVector2f(Diameter * Aspect, Diameter) * float(1 - SizeRandom), FVector2f(Diameter * Aspect, Diameter));
-            L.Approx.Add(TEXT("aspect+random:per-axis range"));
-        }
+        SizeX *= Aspect;
+        if (FMath::IsNearlyEqual(SizeX, SizeY)) SetUniformRange(Init->SpriteSizeDistribution, SizeY * (1 - SizeRandom), SizeY);
+        else SetVec2Range(Init->SpriteSizeDistribution, FVector2f(SizeX, SizeY) * float(1 - SizeRandom), FVector2f(SizeX, SizeY));
         L.Mapped.Add(TEXT("size"));
-        if (TOptional<double> Angle = RawComponent(E, TEXT("RandomAngles"), TEXT("y")))
+        if (TOptional<double> Angle = RawComponent(E, TEXT("RandomAngles"), TEXT("y")); Angle && Kind != EKind::Flare)
         {
             SetRange(Init->SpriteRotationDistribution, -*Angle, *Angle);
             Init->SpriteRotationDistribution.UpdateValuesFromDistribution();
-            L.Mapped.Add(TEXT("RandomAngles.y"));
+            L.Mapped.AddUnique(TEXT("RandomAngles.y"));
         }
         else Init->SpriteRotationDistribution.InitConstant(0.f);
-        if (TOptional<double> Rate = RawComponent(E, TEXT("RandomRotationRate"), TEXT("y")))
+        if (TOptional<double> Rate = RawComponent(E, TEXT("RandomRotationRate"), TEXT("y")); Rate && Kind != EKind::Flare)
         {
             auto* Rot = Module<UNiagaraStatelessModule_SpriteRotationRate>(Em);
             Rot->SetIsModuleEnabled(true);
             Rot->bUseRateScale = false;
             SetRange(Rot->RotationRateDistribution, -*Rate, *Rate);
             Rot->RotationRateDistribution.UpdateValuesFromDistribution();
-            L.Mapped.Add(TEXT("RandomRotationRate.y"));
+            L.Mapped.AddUnique(TEXT("RandomRotationRate.y"));
         }
 
-        const auto SizeCurve = Curve(E, TEXT("size.age_curve"));
+        const FCurve SizeCurve = Kind == EKind::Flare ? FCurve() : Curve(E, TEXT("size.age_curve"));
         if (!SizeCurve.IsEmpty())
         {
             auto* Scale = Module<UNiagaraStatelessModule_ScaleSpriteSize>(Em);
@@ -692,49 +1295,135 @@ struct FBuilder
             Scale->ScaleDistribution.Mode = ENiagaraDistributionMode::UniformCurve;
             Scale->ScaleDistribution.ChannelCurves = {RichCurve(SizeCurve, 0)};
             Scale->ScaleDistribution.UpdateValuesFromDistribution();
-            L.Mapped.Add(TEXT("size.age_curve"));
+            L.Mapped.AddUnique(TEXT("size.age_curve"));
         }
-        const auto ColorCurve = Curve(E, TEXT("color.age_curve"));
-        const auto AlphaCurve = Curve(E, TEXT("alpha.age_curve"));
-        if (!ColorCurve.IsEmpty() || !AlphaCurve.IsEmpty())
+        if (!ColorAge.IsEmpty() || !AlphaAge.IsEmpty())
         {
             auto* Scale = Module<UNiagaraStatelessModule_ScaleColor>(Em);
             Scale->SetIsModuleEnabled(true);
-            SetColorCurve(Scale->ScaleDistribution, ColorCurve, AlphaCurve);
-            if (!ColorCurve.IsEmpty()) L.Mapped.Add(TEXT("color.age_curve"));
-            if (!AlphaCurve.IsEmpty()) L.Mapped.Add(TEXT("alpha.age_curve"));
+            SetColorCurve(Scale->ScaleDistribution, ColorAge, AlphaAge);
+            if (!ColorAge.IsEmpty()) L.Mapped.AddUnique(Kind == EKind::Flare ? TEXT("light.age_curve(flare)") : TEXT("color.age_curve"));
+            if (!AlphaAge.IsEmpty()) L.Mapped.AddUnique(TEXT("alpha.age_curve"));
         }
 
+        // Material.
         auto* R = NewObject<UNiagaraSpriteRendererProperties>(Em, NAME_None, RF_Transactional);
         const FString Blend = Str(E, TEXT("blend"));
-        const bool bAdditive = Blend == TEXT("Additive");
-        if (!bAdditive && Blend != TEXT("AlphaBased")) L.Approx.Add(TEXT("blend ") + Blend + TEXT(":translucent"));
-        R->Material = Material(bAdditive, Str(E, TEXT("texture")));
-        R->SortMode = bAdditive ? ENiagaraSortMode::None : ENiagaraSortMode::ViewDepth;
-        L.Mapped.Add(TEXT("texture"));
-        L.Mapped.Add(TEXT("blend"));
-        const FString Facing = Str(E, TEXT("facing"));
-        const bool bVelocity = Bool(E, TEXT("orient_to_velocity"));
+        FMat M;
+        M.Master = Kind == EKind::Distortion ? FMat::EMaster::Distortion
+                   : (Kind == EKind::Flare || Blend == TEXT("Additive")) ? FMat::EMaster::Additive
+                                                                         : FMat::EMaster::Translucent;
+        if (Kind == EKind::Sprite && Blend != TEXT("Additive") && Blend != TEXT("AlphaBased")) L.Approx.Add(TEXT("blend ") + Blend + TEXT(":translucent"));
+        const TArray<double> Tiles = Kind == EKind::Flare ? TArray<double>() : Nums(E, TEXT("tiles"));
+        if (Tiles.Num() == 2) M.Frames = FVector2f(float(Tiles[0]), float(Tiles[1]));
+        if (Kind == EKind::Flare)
+        {
+            M.Texture = Flare->bGlow ? FString() : Flare->Texture;
+            M.GlowGamma = Flare->bGlow ? float(FMath::Max(Flare->Gamma, 0.01)) : 0.f;
+        }
+        else
+        {
+            M.Texture = Str(E, TEXT("texture"));
+            if (F.Extras)
+            {
+                M.bFlipU = RawFlag(E, TEXT("RandomFlipU"));
+                M.bFlipV = RawFlag(E, TEXT("RandomFlipV"));
+                if (M.bFlipU || M.bFlipV) L.Mapped.AddUnique(TEXT("RandomFlipU/V"));
+            }
+            const FString Flow = Str(E, TEXT("flow_texture"));
+            if (!Flow.IsEmpty() && F.Flow)
+            {
+                M.Flow = Flow;
+                M.FlowStrength = float(RawNumber(E, TEXT("FlowMapIntensity")).Get(0));
+                L.Mapped.AddUnique(TEXT("flow_texture x FlowMapIntensity"));
+            }
+            else if (!Flow.IsEmpty())
+                L.Skipped.AddUnique(TEXT("flow_texture"));
+        }
+        const FString SoftRaw = Raw(E, TEXT("SoftParticleV2")).IsEmpty() ? Raw(E, TEXT("SoftParticle")) : Raw(E, TEXT("SoftParticleV2"));
+        if (F.Soft && SoftRaw.TrimStart().StartsWith(TEXT("true"), ESearchCase::IgnoreCase))
+        {
+            const TOptional<double> Thickness = RawComponent(E, Raw(E, TEXT("SoftParticleV2")).IsEmpty() ? TEXT("SoftParticle") : TEXT("SoftParticleV2"), TEXT("FadeThickness"));
+            M.SoftFade = float(Thickness ? *Thickness * Cm : 0.5 * Size * Cm); // fallback: half the radius (Astra, item5-1)
+            L.Mapped.AddUnique(Thickness ? TEXT("SoftParticle.FadeThickness") : TEXT("SoftParticle"));
+            if (!Thickness) L.Approx.AddUnique(TEXT("soft fade = half the sprite radius (no FadeThickness)"));
+        }
+        if (Kind == EKind::Distortion)
+        {
+            M.Refraction = float(RawComponent(E, TEXT("Refraction"), TEXT("Strength")).Get(0) * RefractionScale);
+            M.Normal = Str(E, TEXT("normal_texture"));
+            L.Mapped.AddUnique(M.Normal.IsEmpty() ? TEXT("Refraction(alpha lens)") : TEXT("Refraction+NormalTexture"));
+        }
+        R->Material = Material(M);
+        R->SortMode = M.Master == FMat::EMaster::Translucent ? ENiagaraSortMode::ViewDepth : ENiagaraSortMode::None;
+        L.Mapped.AddUnique(TEXT("texture"));
+        L.Mapped.AddUnique(TEXT("blend"));
+
+        // Facing and stretch.
+        const FString Facing = Kind == EKind::Flare ? FString(TEXT("Camera")) : Str(E, TEXT("facing"));
+        const double Stretch = Kind == EKind::Flare ? 0.0 : RawNumber(E, TEXT("VelocityStretch")).Get(0);
+        const bool bStretch = F.Stretch && Stretch > 0 && (TypicalSpeedCm > 0);
+        const bool bVelocity = Bool(E, TEXT("orient_to_velocity")) || bStretch;
         R->Alignment = bVelocity ? ENiagaraSpriteAlignment::VelocityAligned : ENiagaraSpriteAlignment::Unaligned;
         R->FacingMode = ENiagaraSpriteFacingMode::FaceCamera;
-        if (bVelocity) L.Mapped.Add(TEXT("orient_to_velocity"));
+        if (Bool(E, TEXT("orient_to_velocity"))) L.Mapped.AddUnique(TEXT("orient_to_velocity"));
+        if (bStretch && bBeam)
+        {
+            // A guided beam's particles travel at SC.BeamLength / lifetime: the stretch speed x VelocityStretch adds
+            // BeamLength x stretch / lifetime to the sprite's length (Y of a velocity-aligned sprite), centred on the
+            // particle like CryEngine's default stretch. UE's ScaleSpriteSizeBySpeed follows speed^2 against a fixed
+            // threshold, so the beam binds the length instead (SC.BeamLength2 = (length, length); size random dropped).
+            Init->SpriteSizeDistribution.Mode = ENiagaraDistributionMode::Expression;
+            Init->SpriteSizeDistribution.ParameterExpression =
+                V2Add(V2Const(FVector2f(float(SizeX), float(SizeY))),
+                      V2Mul(V2Bind(UserBeamLength2), V2Const(FVector2f(0.f, float(Stretch / FMath::Max(Life, 1e-3))))));
+            // Centred like CryEngine stretch, but no streak may leave the beam: the length follows a tent over age,
+            // 2 min(age, 1 - age) x the full stretch, so a streak centred at age x length spans at most [0, length] and
+            // every layer starts at the emitter and ends at SC.BeamEnd. Width keeps the size curve.
+            auto* Scale = Module<UNiagaraStatelessModule_ScaleSpriteSize>(Em);
+            Scale->SetIsModuleEnabled(true);
+            Scale->ScaleDistribution.Mode = ENiagaraDistributionMode::NonUniformCurve;
+            Scale->ScaleDistribution.ChannelCurves = {RichCurve(SizeCurve, 0), RichCurve(FCurve{{0.0, 0.0}, {0.5, 1.0}, {1.0, 0.0}}, 0)};
+            Scale->ScaleDistribution.UpdateValuesFromDistribution();
+            L.Mapped.AddUnique(FString::Printf(TEXT("VelocityStretch(+%.2f x SC.BeamLength, centred, tent over age: stays inside the beam)"), Stretch / FMath::Max(Life, 1e-3)));
+            L.Approx.AddUnique(TEXT("stretch: length 2 min(age, 1 - age) x full so it stays between emitter and target"));
+            if (SizeRandom > 0) L.Approx.AddUnique(TEXT("size.random dropped (stretched beam)"));
+            L.Skipped.AddUnique(TEXT("VelocityStretch.ReachFullStretchTimeMult"));
+        }
+        else if (bStretch)
+        {
+            // CryEngine stretches a sprite by speed x VelocityStretch (s) along its velocity: scale Y (the velocity axis
+            // of a velocity-aligned sprite) to 1 + v x stretch / size at the emitter's typical speed. UE's factor follows
+            // speed^2 up to that speed, so slower particles stretch less than in the game.
+            auto* ByS = Module<UNiagaraStatelessModule_ScaleSpriteSizeBySpeed>(Em);
+            ByS->SetIsModuleEnabled(true);
+            SetRange(ByS->VelocityThreshold, TypicalSpeedCm, TypicalSpeedCm);
+            SetVec2Range(ByS->MinScaleFactor, FVector2f(1, 1), FVector2f(1, 1));
+            const float Factor = float(1.0 + TypicalSpeedCm * Stretch / FMath::Max(SizeY, 1.0));
+            SetVec2Range(ByS->MaxScaleFactor, FVector2f(1, Factor), FVector2f(1, Factor));
+            ByS->bSampleScaleFactorByCurve = false;
+            L.Mapped.AddUnique(FString::Printf(TEXT("VelocityStretch(x%.2f at %.0f cm/s)"), Factor, TypicalSpeedCm));
+            L.Approx.AddUnique(TEXT("stretch follows speed^2 below the typical speed; stretch Random skipped"));
+        }
+        else if (Stretch > 0)
+            L.Skipped.AddUnique(TEXT("VelocityStretch"));
         if (Facing == TEXT("Free") || Facing == TEXT("Horizontal"))
         {
-            auto* F = Module<UNiagaraStatelessModule_SpriteFacingAndAlignment>(Em);
-            F->SetIsModuleEnabled(true);
-            F->bSpriteFacingEnabled = true;
-            F->bSpriteAlignmentEnabled = false;
-            SetVec3(F->SpriteFacing, Facing == TEXT("Free") ? FVector3f(1, 0, 0) : FVector3f(0, 0, 1));
+            auto* Fa = Module<UNiagaraStatelessModule_SpriteFacingAndAlignment>(Em);
+            Fa->SetIsModuleEnabled(true);
+            Fa->bSpriteFacingEnabled = true;
+            Fa->bSpriteAlignmentEnabled = false;
+            SetVec3(Fa->SpriteFacing, Facing == TEXT("Free") ? FVector3f(1, 0, 0) : FVector3f(0, 0, 1));
             R->FacingMode = ENiagaraSpriteFacingMode::CustomFacingVector;
-            L.Mapped.Add(TEXT("facing"));
+            L.Mapped.AddUnique(TEXT("facing"));
         }
         else if (!Facing.IsEmpty() && Facing != TEXT("Camera"))
-            L.Approx.Add(TEXT("facing ") + Facing + TEXT(":camera"));
+            L.Approx.AddUnique(TEXT("facing ") + Facing + TEXT(":camera"));
         else
-            L.Mapped.Add(TEXT("facing"));
+            L.Mapped.AddUnique(TEXT("facing"));
 
-        const TArray<double> Tiles = Nums(E, TEXT("tiles"));
-        const FJson Anim = Obj(E, TEXT("anim"));
+        // Flipbook.
+        const FJson Anim = Kind == EKind::Flare ? nullptr : Obj(E, TEXT("anim"));
         if (Tiles.Num() == 2)
         {
             R->SubImageSize = FVector2D(Tiles[0], Tiles[1]);
@@ -744,7 +1433,7 @@ struct FBuilder
             Sub->NumFrames = FMath::Max(1, Frames);
             Sub->bStartFrameRangeOverride_Enabled = false;
             Sub->bEndFrameRangeOverride_Enabled = false;
-            R->bSubImageBlend = Anim && Bool(Anim, TEXT("blend"));
+            R->bSubImageBlend = (Anim && Bool(Anim, TEXT("blend"))) || !M.Flow.IsEmpty();
             const TArray<double> First = Anim ? Nums(Anim, TEXT("first_frame")) : TArray<double>();
             if (!Anim || Num(Anim, TEXT("rate")) <= 0)
             {
@@ -755,8 +1444,8 @@ struct FBuilder
                 Sub->FrameIndex.Mode = A == B ? ENiagaraDistributionMode::UniformConstant : ENiagaraDistributionMode::UniformRange;
                 Sub->FrameIndex.Min = FMath::Min(A, B);
                 Sub->FrameIndex.Max = FMath::Max(A, B);
-                L.Mapped.Add(TEXT("anim.static_frame"));
-                if (First.Num() == 2) L.Approx.Add(TEXT("first_frame:1-based interval"));
+                L.Mapped.AddUnique(TEXT("anim.static_frame"));
+                if (First.Num() == 2) L.Approx.AddUnique(TEXT("first_frame:1-based interval"));
             }
             else if (Bool(Anim, TEXT("lifetime_rate")))
             {
@@ -767,26 +1456,26 @@ struct FBuilder
                     Sub->AnimationMode = ENSMSubUVAnimation_Mode::InfiniteLoop;
                     Sub->LoopsPerSecond = float(Rate / FMath::Max(Life, 1e-3));
                 }
-                if (!FMath::IsNearlyEqual(Rate, 1.0) && !Bool(Anim, TEXT("cycle"))) L.Approx.Add(TEXT("anim.rate:once over life"));
-                L.Mapped.Add(TEXT("anim"));
-                if (First.Num() == 2) L.Skipped.Add(TEXT("anim.first_frame(random start)"));
+                if (!FMath::IsNearlyEqual(Rate, 1.0) && !Bool(Anim, TEXT("cycle"))) L.Approx.AddUnique(TEXT("anim.rate:once over life"));
+                L.Mapped.AddUnique(TEXT("anim"));
+                if (First.Num() == 2) L.Skipped.AddUnique(TEXT("anim.first_frame(random start: the stateless SubUV module plays from frame 0)"));
             }
             else
             {
                 const double Fps = Num(Anim, TEXT("fps"), Num(Anim, TEXT("rate")));
                 Sub->AnimationMode = Bool(Anim, TEXT("cycle")) ? ENSMSubUVAnimation_Mode::InfiniteLoop : ENSMSubUVAnimation_Mode::Linear;
                 Sub->LoopsPerSecond = float(Fps / FMath::Max(1, Frames));
-                if (!Bool(Anim, TEXT("cycle"))) L.Approx.Add(TEXT("anim.fps once:over life"));
-                L.Mapped.Add(TEXT("anim"));
+                if (!Bool(Anim, TEXT("cycle"))) L.Approx.AddUnique(TEXT("anim.fps once:over life"));
+                L.Mapped.AddUnique(TEXT("anim"));
             }
-            L.Mapped.Add(TEXT("tiles"));
+            L.Mapped.AddUnique(TEXT("tiles"));
         }
         Em->AddRenderer(R, FGuid());
         return R->Material != nullptr;
     }
 
     /** Raw attributes the rules read (anything else of the emitter is reported as skipped). */
-    static bool IsMappedRaw(const FString& K)
+    bool IsMappedRaw(const FString& K) const
     {
         static const TSet<FString> Known = {
             TEXT("Enabled"), TEXT("Inheritance"), TEXT("ParticleSystem"), TEXT("Count"), TEXT("Continuous"), TEXT("ParticleLifeTime"),
@@ -796,7 +1485,107 @@ struct FBuilder
             TEXT("DiffuseLighting"), TEXT("Texture"), TEXT("TextureAnimation"), TEXT("TextureTiling"), TEXT("LightSource"),
             TEXT("PositionOffset"), TEXT("RandomOffset"), TEXT("EmissionSize"), TEXT("RandomAngles"), TEXT("RandomRotationRate"),
             TEXT("Spawn"), TEXT("Comment"), TEXT("SplineGuided"), TEXT("InheritVelocity")};
-        return Known.Contains(K);
+        if (Known.Contains(K)) return true;
+        if (F.Extras && (K == TEXT("CameraMaxDistance") || K == TEXT("RandomFlipU") || K == TEXT("RandomFlipV"))) return true;
+        if (F.Erosion && K == TEXT("AlphaErosion")) return true;
+        if (F.Flares && (K == TEXT("Flare") || K == TEXT("FlareEnabled") || K == TEXT("FakeLight"))) return true;
+        if (F.Soft && (K == TEXT("SoftParticleV2") || K == TEXT("SoftParticle"))) return true;
+        if (F.Stretch && K == TEXT("VelocityStretch")) return true;
+        if (F.Flow && (K == TEXT("FlowTexture") || K == TEXT("FlowMapIntensity"))) return true;
+        if (F.Distortion && (K == TEXT("Refraction") || K == TEXT("NormalTexture"))) return true;
+        return false;
+    }
+
+    /** A raw attribute as the emitter effectively has it: its own, else (Inheritance=Parent, listed in `inherited`) its
+     *  parent's, up the chain of the current effect. */
+    FString EffectiveRaw(const FJson& E, const FString& Attr) const
+    {
+        FJson Cur = E;
+        for (int32 Guard = 0; Cur && Guard < 32; ++Guard)
+        {
+            const FString Own = Raw(Cur, Attr);
+            if (!Own.IsEmpty()) return Own;
+            bool bInherited = false;
+            for (const auto& K : Cur->GetArrayField(TEXT("inherited"))) bInherited |= K->AsString() == Attr;
+            const int32 P = int32(Num(Cur, TEXT("parent"), -1));
+            if (!bInherited || !CurrentEmitters.IsValidIndex(P)) return FString();
+            Cur = CurrentEmitters[P]->AsObject();
+        }
+        return FString();
+    }
+
+    /** The lens-flare elements of `Flare` (<library>.<item>) from Data/Libs/Flares/<library>.xml. */
+    TArray<FFlareElement> FlareElements(const FString& Flare, FLog& L)
+    {
+        TArray<FFlareElement> Out;
+        FString Library, Item;
+        if (!Flare.Split(TEXT("."), &Library, &Item)) return Out;
+        char* Text = nullptr;
+        const FString Path = FlareDir + Library + TEXT(".xml");
+        if (sc_p4k_read_xml(H, TCHAR_TO_UTF8(*Path), &Text) != SC_STATUS_OK)
+        {
+            L.Skipped.AddUnique(FString::Printf(TEXT("flare(%s: %s)"), *Path, UTF8_TO_TCHAR(sc_last_error(H))));
+            return Out;
+        }
+        FXmlFile Xml(UTF8_TO_TCHAR(Text), EConstructMethod::ConstructFromBuffer);
+        sc_free_string(Text);
+        const FXmlNode* RootNode = Xml.GetRootNode();
+        const FXmlNode* RootItem = nullptr;
+        for (const FXmlNode* N : RootNode ? RootNode->GetChildrenNodes() : TArray<FXmlNode*>())
+            if (N->GetTag() == TEXT("FlareItem") && N->GetAttribute(TEXT("Name")).Equals(Item, ESearchCase::IgnoreCase)) RootItem = N;
+        if (!RootItem)
+        {
+            L.Skipped.AddUnique(FString::Printf(TEXT("flare(%s has no %s)"), *Path, *Item));
+            return Out;
+        }
+        auto Params = [](const FXmlNode* N, const TCHAR* Tag) -> const FXmlNode* {
+            const FXmlNode* P = N->FindChildNode(TEXT("Params"));
+            return P ? P->FindChildNode(Tag) : nullptr;
+        };
+        auto Attr = [](const FXmlNode* N, const TCHAR* A, double Default) {
+            const FString V = N ? N->GetAttribute(A) : FString();
+            return V.IsEmpty() ? Default : FCString::Atod(*V);
+        };
+        auto Pair = [](const FXmlNode* N, const TCHAR* A, FVector2D Default) {
+            const FString V = N ? N->GetAttribute(A) : FString();
+            FString X, Y;
+            return V.Split(TEXT(","), &X, &Y) ? FVector2D(FCString::Atod(*X), FCString::Atod(*Y)) : Default;
+        };
+        const FXmlNode* RootCommon = Params(RootItem, TEXT("Common"));
+        const double RootSize = Attr(RootCommon, TEXT("Size"), 1), RootBrightness = Attr(RootCommon, TEXT("Brightness"), 1);
+        for (const FXmlNode* N : RootItem->GetChildrenNodes())
+        {
+            if (N->GetTag() != TEXT("FlareItem") || N->GetAttribute(TEXT("Enable")) == TEXT("0")) continue;
+            const FString Type = N->GetAttribute(TEXT("Type"));
+            const FXmlNode* Common = Params(N, TEXT("Common"));
+            FFlareElement El;
+            El.Name = N->GetAttribute(TEXT("Name"));
+            El.Size = RootSize * Attr(Common, TEXT("Size"), 1);
+            El.Brightness = RootBrightness * Attr(Common, TEXT("Brightness"), 1);
+            El.Scale = Pair(Params(N, TEXT("Transformation")), TEXT("Scale"), FVector2D(1, 1));
+            const FString Tint = Common ? Common->GetAttribute(TEXT("Tint")) : FString();
+            TArray<FString> T;
+            Tint.ParseIntoArray(T, TEXT(","));
+            if (T.Num() == 3) El.Tint = FLinearColor(FCString::Atof(*T[0]), FCString::Atof(*T[1]), FCString::Atof(*T[2]));
+            if (Type == TEXT("Glow"))
+                El.Gamma = Attr(Params(N, TEXT("Glow")), TEXT("Gamma"), 1);
+            else if (const FXmlNode* Ghost = Params(N, TEXT("LensGhost")))
+            {
+                // The archive stores the authored .tif/.dds path as a .dds under Data/.
+                FString Tex = Ghost->GetAttribute(TEXT("Texture")).Replace(TEXT("\\"), TEXT("/"));
+                Tex = (Tex.StartsWith(TEXT("Data/"), ESearchCase::IgnoreCase) ? Tex : TEXT("Data/") + Tex);
+                El.Texture = FPaths::GetBaseFilename(Tex, false) + TEXT(".dds");
+                El.bGlow = false;
+            }
+            else
+            {
+                L.Skipped.AddUnique(TEXT("flare element type ") + Type);
+                continue;
+            }
+            Out.Add(El);
+        }
+        L.Skipped.AddUnique(TEXT("flare occlusion fade, sensor variation, dynamics trigger"));
+        return Out;
     }
 
     /** One game effect (sc_particle_effect JSON) -> /Game/SC/FX/<library>/<effect>. */
@@ -841,23 +1630,43 @@ struct FBuilder
         const FNiagaraEmitterHandle TemplateHandle = System->GetEmitterHandle(0);
 
         const TArray<TSharedPtr<FJsonValue>> Emitters = Effect->GetArrayField(TEXT("emitters"));
+        CurrentEmitters = Emitters;
+        GuideCurvature.Reset();
+        GuideName.Reset();
+        for (const auto& V : Emitters)
+            if (const FJson E = V->AsObject(); Bool(E, TEXT("enabled")) && Has(E, TEXT("spline")))
+            {
+                GuideCurvature = FMath::Clamp(Num(E, TEXT("spline.curvature")), 0.0, 1.0);
+                GuideName = Str(E, TEXT("path"));
+                break;
+            }
         TSet<FName> Used;
         int32 Made = 0;
-        auto Add = [&](const FString& Wanted, const FJson& E, const FJson& Parent, bool bLight, FLog& L) {
+        bool bUsesStrength = false, bUsesBeam = false;
+        auto Add = [&](const FString& Wanted, const FJson& E, const FJson& Parent, EKind Kind, const FFlareElement* Flare, FLog& L) {
             FString Unique = SafeSegment(Wanted);
             for (int32 n = 2; Used.Contains(FName(*Unique)); ++n) Unique = FString::Printf(TEXT("%s_%d"), *SafeSegment(Wanted), n);
             Used.Add(FName(*Unique));
             System->DuplicateEmitterHandle(TemplateHandle, FName(*Unique));
             FNiagaraEmitterHandle& Handle = System->GetEmitterHandles().Last();
             bool bInvisible = false;
-            const bool bOK = Configure(Handle.GetStatelessEmitter(), E, Parent, bLight, L, bInvisible);
+            FLog Local;
+            const bool bOK = Configure(Handle.GetStatelessEmitter(), E, Parent, Kind, Flare, Local, bInvisible);
             if (bInvisible)
             {
                 Handle.SetIsEnabled(false, *System, false);
-                L.Approx.Add(TEXT("disabled:invisible at strength 1"));
+                Local.Approx.Add(TEXT("disabled:invisible at every game strength"));
             }
+            for (const FString& M : Local.Mapped)
+            {
+                L.Mapped.AddUnique(M);
+                bUsesStrength |= M.Contains(TEXT("SC.Strength"));
+                bUsesBeam |= M.Contains(TEXT("SC.BeamLength")) || M.Contains(TEXT("SC.BeamEnd"));
+            }
+            for (const FString& A : Local.Approx) L.Approx.AddUnique(A);
+            for (const FString& S : Local.Skipped) L.Skipped.AddUnique(S);
             ++Made;
-            return bOK;
+            return bOK ? Unique : FString();
         };
         for (int32 i = 0; i < Emitters.Num(); ++i)
         {
@@ -871,13 +1680,14 @@ struct FBuilder
             Local = Local.Replace(TEXT("."), TEXT("_"));
             FLog L;
             TArray<FString> RawKeys;
-            if (const FJson Raw = Obj(E, TEXT("raw")))
-                for (const auto& Pair : Raw->Values) RawKeys.Add(FString(Pair.Key.ToView()));
+            if (const FJson RawObj = Obj(E, TEXT("raw")))
+                for (const auto& Pair : RawObj->Values) RawKeys.Add(FString(Pair.Key.ToView()));
             for (const FString& K : RawKeys)
                 if (!IsMappedRaw(K)) L.Skipped.Add(K);
             for (const auto& K : E->GetArrayField(TEXT("inherited")))
                 if (!IsMappedRaw(K->AsString())) L.Skipped.AddUnique(K->AsString() + TEXT("(inherited)"));
             TArray<FString> Out;
+            auto Emit = [&Out](const FString& N) { if (!N.IsEmpty()) Out.Add(N); };
             if (!Bool(E, TEXT("enabled")))
                 L.Skipped.Insert(TEXT("emitter(disabled in the library)"), 0);
             else
@@ -889,44 +1699,72 @@ struct FBuilder
                 const bool bSprite = !bGeometry && !bCustomMaterial && !Str(E, TEXT("texture")).IsEmpty() && Num(E, TEXT("alpha.value"), 1) > 0;
                 if (!bSprite && !bGeometry && !bCustomMaterial)
                     L.Skipped.Insert(Str(E, TEXT("texture")).IsEmpty() ? TEXT("sprite(no texture)") : TEXT("sprite(alpha 0)"), 0);
-                if (bSprite && Add(Local, E, Parent, false, L)) Out.Add(Local);
-                const FJson Light = Obj(E, TEXT("light"));
-                // FakeLight: the light only feeds the emitter's flare (not ported), it lights nothing.
-                const bool bFakeLight = Str(E, TEXT("raw.FakeLight")).StartsWith(TEXT("true"), ESearchCase::IgnoreCase);
-                if (Light && bFakeLight) L.Skipped.AddUnique(TEXT("light(FakeLight)"));
-                if (Light && !bFakeLight && Num(Light, TEXT("intensity"), 1) > 0 && Num(Light, TEXT("radius_m")) > 0)
+                if (bSprite) Emit(Add(Local, E, Parent, EKind::Sprite, nullptr, L));
+                // Refraction twin (Refraction Strength > 0).
+                if (bSprite && RawComponent(E, TEXT("Refraction"), TEXT("Strength")).Get(0) > 0)
                 {
-                    FLog LightLog;
-                    Add(Local + TEXT("_light"), E, Parent, true, LightLog);
-                    Out.Add(Local + TEXT("_light"));
-                    L.Mapped.Append(LightLog.Mapped);
-                    for (const FString& A : LightLog.Approx) L.Approx.AddUnique(A);
-                    for (const FString& S : LightLog.Skipped) L.Skipped.AddUnique(S);
+                    if (F.Distortion) Emit(Add(Local + TEXT("_refraction"), E, Parent, EKind::Distortion, nullptr, L));
+                    else L.Skipped.AddUnique(TEXT("Refraction"));
                 }
-                if (Bool(E, TEXT("flare_enabled"))) L.Skipped.AddUnique(TEXT("flare"));
-                if (!Str(E, TEXT("flow_texture")).IsEmpty()) L.Skipped.AddUnique(TEXT("flow_texture"));
+                const FJson Light = Obj(E, TEXT("light"));
+                const bool bFakeLight = RawFlag(E, TEXT("FakeLight"));
+                if (Light && bFakeLight) L.Mapped.AddUnique(TEXT("FakeLight(no light: flare only)"));
+                if (Light && !bFakeLight && Num(Light, TEXT("intensity"), 1) > 0 && Num(Light, TEXT("radius_m")) > 0)
+                    Emit(Add(Local + TEXT("_light"), E, Parent, EKind::Light, nullptr, L));
+                const FString Flare = Str(E, TEXT("flare"));
+                if (Bool(E, TEXT("flare_enabled")) && !Flare.IsEmpty())
+                {
+                    if (F.Flares)
+                    {
+                        for (const FFlareElement& El : FlareElements(Flare, L))
+                            Emit(Add(Local + TEXT("_flare_") + El.Name.RightChop(El.Name.Find(TEXT(".")) + 1), E, Parent, EKind::Flare, &El, L));
+                        L.Mapped.AddUnique(TEXT("flare(") + Flare + TEXT(")"));
+                    }
+                    else L.Skipped.AddUnique(TEXT("flare"));
+                }
             }
-            TArray<FString> Mapped;
-            for (const FString& M : L.Mapped) Mapped.AddUnique(M);
             UE_LOG(LogSCFx, Display, TEXT("SC_FX emitter=%s/%s -> %s mapped=%s skipped=%s approx=%s"), *Str(Effect, TEXT("library")), *Path,
-                   Out.IsEmpty() ? TEXT("-") : *FString::Join(Out, TEXT("+")), *Join(Mapped), *Join(L.Skipped), *Join(L.Approx));
+                   Out.IsEmpty() ? TEXT("-") : *FString::Join(Out, TEXT("+")), *Join(L.Mapped), *Join(L.Skipped), *Join(L.Approx));
         }
         System->RemoveEmitterHandle(TemplateHandle);
         if (UNiagaraStatelessEmitter* Orphan = TemplateHandle.GetStatelessEmitter())
             Orphan->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
 
-        // Strength input for the runtime (curves are baked at 1, see header).
-        FNiagaraVariable Strength(FNiagaraTypeDefinition::GetFloatDef(), TEXT("User.SC.Strength"));
-        System->GetExposedParameters().AddParameter(Strength, true, true);
-        System->GetExposedParameters().SetParameterValue(1.0f, Strength);
+        // The runtime contract (header): the parameters this system reads, with their defaults.
+        TArray<FString> Contract;
+        FNiagaraUserRedirectionParameterStore& User = System->GetExposedParameters();
+        auto AddFloat = [&](FName N, float V) {
+            FNiagaraVariable Var(FNiagaraTypeDefinition::GetFloatDef(), N);
+            User.AddParameter(Var, true, true);
+            User.SetParameterValue(V, Var);
+            Contract.Add(FString::Printf(TEXT("%s=%g"), *N.ToString(), V));
+        };
+        auto AddVec = [&](FName N, const FVector3f& V) {
+            FNiagaraVariable Var(FNiagaraTypeDefinition::GetVec3Def(), N);
+            User.AddParameter(Var, true, true);
+            User.SetParameterValue(V, Var);
+            Contract.Add(FString::Printf(TEXT("%s=(%g,%g,%g)"), *N.ToString(), V.X, V.Y, V.Z));
+        };
+        AddFloat(UserStrength, 1.f);
+        if (bUsesBeam)
+        {
+            AddVec(UserBeamEnd, FVector3f(float(DefaultBeamCm), 0, 0));
+            AddVec(UserBeamTangent, FVector3f(float(DefaultBeamCm), 0, 0));
+            AddFloat(UserBeamLength, float(DefaultBeamCm));
+            FNiagaraVariable Var(FNiagaraTypeDefinition::GetVec2Def(), UserBeamLength2);
+            User.AddParameter(Var, true, true);
+            User.SetParameterValue(FVector2f(float(DefaultBeamCm)), Var);
+            Contract.Add(FString::Printf(TEXT("%s=(%g,%g)"), *UserBeamLength2.ToString(), DefaultBeamCm, DefaultBeamCm));
+        }
 
         System->RequestCompile(false);
         System->WaitForCompilationComplete(true, false);
         System->MarkPackageDirty();
         if (!Save(System)) return false;
         ++Systems;
-        UE_LOG(LogSCFx, Display, TEXT("SC_FX_SYSTEM %s <- %s emitters=%d state=%s beam=+X 100cm (scale X to the beam length) user=SC.Strength(unbound, curves baked at 1)"),
-               *System->GetPathName(), *Reference, System->GetEmitterHandles().Num(), System->GetSystemStateModeString());
+        UE_LOG(LogSCFx, Display, TEXT("SC_FX_SYSTEM %s <- %s emitters=%d state=%s user=%s strength=%s features=%s"), *System->GetPathName(),
+               *Reference, System->GetEmitterHandles().Num(), System->GetSystemStateModeString(), *Join(Contract),
+               bUsesStrength ? TEXT("bound") : TEXT("unused"), *F.ToString());
         return Made > 0;
     }
 
@@ -1001,15 +1839,21 @@ int32 USCFxBuildCommandlet::Main(const FString& Params)
     }
 
     FBuilder B;
+    FString FeatureSpec;
+    FParse::Value(*Params, TEXT("Features="), FeatureSpec, false);
+    B.F.Parse(FeatureSpec);
+    FParse::Value(*Params, TEXT("RefractionScale="), B.RefractionScale);
     B.SceneUnitNits = FSCStarEngine::Get().SceneUnitNits;
     B.LitSceneUnits = Num(Config, TEXT("unlit_diffuse_scene_units"), 0.0);
+    B.FlareWorldScale = Num(Config, TEXT("flare_world_scale"), 1.0);
     if (sc_open(nullptr, nullptr, &B.H) != SC_STATUS_OK)
     {
         UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR sc_open: %s"), UTF8_TO_TCHAR(sc_last_error(nullptr)));
         return 1;
     }
-    UE_LOG(LogSCFx, Display, TEXT("SC_FX build effects=%d material_effects=%d scene_unit_nits=%g unlit_diffuse_scene_units=%g"), Effects.Num(),
-           MaterialEffects.Num(), B.SceneUnitNits, B.LitSceneUnits);
+    B.LoadStrengths(Config);
+    UE_LOG(LogSCFx, Display, TEXT("SC_FX build effects=%d material_effects=%d scene_unit_nits=%g unlit_diffuse_scene_units=%g features=%s"),
+           Effects.Num(), MaterialEffects.Num(), B.SceneUnitNits, B.LitSceneUnits, *B.F.ToString());
     for (const FString& E : Effects) B.BuildEffect(E);
     for (const FString& M : MaterialEffects) B.BuildMaterialEffect(M);
     sc_close(B.H);
