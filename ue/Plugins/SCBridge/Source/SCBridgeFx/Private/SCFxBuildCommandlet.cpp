@@ -5,7 +5,7 @@
 //                        [-Features=all|none|<f>,<f>,...] [-RefractionScale=<k> (verification aid; default 1)]
 //
 // Without arguments the lists come from Config/FX/effects.json. An effect `<GUID>|<library>.<effect>` becomes
-// /Game/SC/FX/<library>/<effect> (dots -> underscores); a material effect (FXLib entry) builds the particle effects it
+// /Game/SC/FX/<library>/<effect> (dots -> underscores; SCFxNames.h, the rule the runtime finds it by); a material effect (FXLib entry) builds the particle effects it
 // plays. Each enabled game emitter with something to draw becomes one lightweight emitter duplicated from the engine's
 // FountainLightweight template (sprite) plus, as the data asks: a light-only twin (a light shares no colour with its
 // sprite), a distortion twin (Refraction), and one sprite per lens-flare element (FlareEnabled). Every rule below is
@@ -25,6 +25,12 @@
 //  SC.BeamLength        float cm, |SC.BeamEnd|. Default 100.
 //  SC.BeamLength2       vec2 cm, (SC.BeamLength, SC.BeamLength) (stateless expressions cannot widen a float). Default
 //                       (100, 100).
+//  SC.Scale2            vec2, the effect's scale (s, s), e.g. a MaterialEffects entry's minscale..maxscale: every
+//                       sprite's size is multiplied by it (the runtime also scales the component: positions, speeds).
+//                       Default (1, 1).
+//  SC.SV<i>             float, set by the runtime from SC.Strength (SCFxStrength.h): EmitterStrength curve i of the
+//                       system at that strength, piecewise linear between its keys SC.SK<i>.T (vec4 strengths) and
+//                       SC.SK<i>.V (vec4 values; fewer keys repeat the last). Default: its value at strength 1.
 //
 // Mapping (JSON field -> Niagara):
 //  spawn: burst -> Burst spawn info (count x parent count for Spawn=FromParentBirth children; PulsePeriod -> loop);
@@ -38,9 +44,11 @@
 //  color x (EmissiveLighting + DiffuseLighting x LitSceneUnits) -> particle colour in scene units; the material
 //         instance's EmissiveScale is the game's scene unit (FSCStarEngine::SceneUnitNits, cd/m2). Color Random -> one
 //         random for all channels; age curves (colour, alpha) -> ScaleColor.
-//  EmitterStrength curves (colour, alpha, speed, count, light intensity) -> a polynomial in SC.Strength through the
-//         curve's values at the strengths the game uses (the strength record's values, config "strength"): exact there,
-//         an interpolation between. Colour / alpha go to Dynamic Material Parameter 0 (the masters multiply by it),
+//  EmitterStrength curves (colour, alpha, speed, count, light intensity) -> the curve itself, per channel, as a bound
+//         user float SC.SV<i> the runtime evaluates piecewise linear over strength from the curve's keys (SC.SK<i>.T/V;
+//         stateless expressions have no clamp, and a polynomial through the game's strengths overshot between them:
+//         WP-K4a round 2). Curves of more than 4 keys keep that polynomial (exact at the game's strengths, config
+//         "strength"). Colour / alpha go to Dynamic Material Parameter 0 (the masters multiply by it),
 //         speed to the cone velocity scale, light intensity to the light's diffuse/specular scale. Count, lifetime
 //         and size curves stay baked at strength 1 (stateless spawn rates, lifetimes and random sizes take no expression).
 //  speed (+Random) + EmitAngle / FocusAngle -> AddVelocity cone about +X (Niagara's cone angle is the full angle).
@@ -79,6 +87,7 @@
 // Every raw attribute not mapped is listed in `skipped`, every approximation in `approx`.
 #include "SCFxBuildCommandlet.h"
 #include "SCBridgeClient.h" // scbridge.h
+#include "SCFxNames.h"
 #include "SCStarEngine.h"
 #include "SCTextureImporter.h"
 
@@ -129,7 +138,7 @@ const TCHAR* const TemplatePath = TEXT("/Niagara/DefaultAssets/Templates/Systems
 const TCHAR* const AdditiveMaster = TEXT("/SCBridge/Materials/M_SC_Particle_Additive.M_SC_Particle_Additive");
 const TCHAR* const TranslucentMaster = TEXT("/SCBridge/Materials/M_SC_Particle_Translucent.M_SC_Particle_Translucent");
 const TCHAR* const DistortionMaster = TEXT("/SCBridge/Materials/M_SC_Particle_Distortion.M_SC_Particle_Distortion");
-const TCHAR* const Root = TEXT("/Game/SC/FX");
+const TCHAR* const Root = SCFxNames::Root();
 const TCHAR* const FlareDir = TEXT("Data/Libs/Flares/");
 constexpr double Cm = 100.0;
 constexpr double GravityMs2 = 9.81;
@@ -140,6 +149,7 @@ const FName UserBeamEnd(TEXT("User.SC.BeamEnd"));
 const FName UserBeamTangent(TEXT("User.SC.BeamStartTangent"));
 const FName UserBeamLength(TEXT("User.SC.BeamLength"));
 const FName UserBeamLength2(TEXT("User.SC.BeamLength2"));
+const FName UserScale2(TEXT("User.SC.Scale2"));
 constexpr double DefaultBeamCm = 100.0;
 
 // ---- JSON --------------------------------------------------------------------------------------------------------
@@ -281,19 +291,9 @@ FCurve RawCurve(const FString& Text, const FString& Modifier)
     Keys.StableSort([](const TArray<double>& A, const TArray<double>& B) { return A[0] < B[0]; });
     return Keys;
 }
-FString SafeSegment(FString S)
-{
-    for (TCHAR& C : S)
-        if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
-    return S.IsEmpty() ? FString(TEXT("_")) : S;
-}
-FString SafePath(const FString& Path)
-{
-    TArray<FString> Parts;
-    Path.ParseIntoArray(Parts, TEXT("/"));
-    for (FString& P : Parts) P = SafeSegment(P);
-    return FString::Join(Parts, TEXT("/"));
-}
+// The naming rule the runtime shares (SCFxNames.h).
+using SCFxNames::SafePath;
+using SCFxNames::SafeSegment;
 
 // ---- distributions -----------------------------------------------------------------------------------------------
 FRichCurve RichCurve(const FCurve& Keys, int32 Channel, double Scale = 1.0)
@@ -536,6 +536,13 @@ struct FBuilder
     double LitSceneUnits = 0;   // config: luminance (scene units) given to DiffuseLighting x colour of an unlit sprite
     double FlareWorldScale = 1; // config flare_world_scale: the viewer's stand-in for CryEngine's screen-space flare size
     TArray<double> Knots = {1}; // the game's strengths (config "strength" record); the polynomial runs through them
+    /** The system's EmitterStrength curves the runtime evaluates (SC.SV<i>, keys SC.SK<i>.T / .V), per BuildEffect. */
+    struct FStrengthCurve
+    {
+        TArray<float> T, V;
+        float At1 = 1;
+    };
+    mutable TArray<FStrengthCurve> StrengthCurves;
     double BeamRangeM = 0;      // the strength record's beam range: the beam emitters' bounds
     TArray<TSharedPtr<FJsonValue>> CurrentEmitters; // the effect being built
     TOptional<double> GuideCurvature;               // its beam spline's curvature (first guided emitter)
@@ -648,6 +655,21 @@ struct FBuilder
         {
             S.bVaries = false;
             S.bAllZero = S.At1 <= 0;
+            return S;
+        }
+        if (Curve.Num() <= 4)
+        {
+            // The curve itself (piecewise linear over strength), evaluated by the runtime into a bound user float.
+            FStrengthCurve Want;
+            for (const TArray<double>& K : Curve)
+            {
+                Want.T.Add(float(K.IsEmpty() ? 0.0 : K[0]));
+                Want.V.Add(float(Eval(Curve, K.IsEmpty() ? 0.0 : K[0], Channel) * Scale));
+            }
+            Want.At1 = float(S.At1);
+            int32 Index = StrengthCurves.IndexOfByPredicate([&](const FStrengthCurve& C) { return C.T == Want.T && C.V == Want.V; });
+            if (Index == INDEX_NONE) Index = StrengthCurves.Add(Want);
+            S.Expr = FBind(FName(*FString::Printf(TEXT("User.SC.SV%d"), Index)));
             return S;
         }
         const TArray<double> C = Interpolate(Knots, Y);
@@ -1297,6 +1319,24 @@ struct FBuilder
             Scale->ScaleDistribution.UpdateValuesFromDistribution();
             L.Mapped.AddUnique(TEXT("size.age_curve"));
         }
+        // The effect's scale (CryEngine scales an emitter's sizes with its spawn scale, e.g. a MaterialEffects entry's
+        // minscale..maxscale): the component's scale moves positions and speeds of a local-space emitter, but a sprite's
+        // size takes none, so every sprite's size curve is ranged by User.SC.Scale2 (vec2, default (1, 1)).
+        if (Kind != EKind::Light && !bBeam)
+        {
+            auto* Scale = Module<UNiagaraStatelessModule_ScaleSpriteSize>(Em);
+            if (!Scale->ScaleDistribution.IsCurve())
+            {
+                Scale->SetIsModuleEnabled(true);
+                Scale->ScaleDistribution.Mode = ENiagaraDistributionMode::UniformCurve;
+                Scale->ScaleDistribution.ChannelCurves = {RichCurve(FCurve{{0.0, 1.0}, {1.0, 1.0}}, 0)};
+                Scale->ScaleDistribution.UpdateValuesFromDistribution();
+            }
+            Scale->ScaleCurveRange.ResolvedParameter = FNiagaraVariableBase(FNiagaraTypeDefinition::GetVec2Def(), UserScale2);
+            Scale->ScaleCurveRange.AliasedParameter = Scale->ScaleCurveRange.ResolvedParameter;
+            Scale->ScaleCurveRange.SetDefaultValueEditorOnly(FVector2f(1.f, 1.f));
+            L.Mapped.AddUnique(TEXT("scale(SC.Scale2)"));
+        }
         if (!ColorAge.IsEmpty() || !AlphaAge.IsEmpty())
         {
             auto* Scale = Module<UNiagaraStatelessModule_ScaleColor>(Em);
@@ -1607,8 +1647,8 @@ struct FBuilder
             return false;
         }
         const FString EffectName = Str(Effect, TEXT("effect"));
-        const FString Name = SafeSegment(EffectName.Replace(TEXT("."), TEXT("_")));
-        const FString LongName = FString(Root) / SafePath(Str(Effect, TEXT("library"))) / Name;
+        const FString LongName = SCFxNames::PackageFor(Str(Effect, TEXT("library")), EffectName); // the runtime finds it by the same rule
+        const FString Name = FPaths::GetBaseFilename(LongName);
 
         UNiagaraSystem* Template = LoadObject<UNiagaraSystem>(nullptr, TemplatePath);
         if (!Template || Template->GetEmitterHandles().IsEmpty() || !Template->GetEmitterHandle(0).GetStatelessEmitter())
@@ -1632,6 +1672,7 @@ struct FBuilder
         const TArray<TSharedPtr<FJsonValue>> Emitters = Effect->GetArrayField(TEXT("emitters"));
         CurrentEmitters = Emitters;
         GuideCurvature.Reset();
+        StrengthCurves.Reset();
         GuideName.Reset();
         for (const auto& V : Emitters)
             if (const FJson E = V->AsObject(); Bool(E, TEXT("enabled")) && Has(E, TEXT("spline")))
@@ -1642,7 +1683,7 @@ struct FBuilder
             }
         TSet<FName> Used;
         int32 Made = 0;
-        bool bUsesStrength = false, bUsesBeam = false;
+        bool bUsesStrength = false, bUsesBeam = false, bUsesScale = false;
         auto Add = [&](const FString& Wanted, const FJson& E, const FJson& Parent, EKind Kind, const FFlareElement* Flare, FLog& L) {
             FString Unique = SafeSegment(Wanted);
             for (int32 n = 2; Used.Contains(FName(*Unique)); ++n) Unique = FString::Printf(TEXT("%s_%d"), *SafeSegment(Wanted), n);
@@ -1660,6 +1701,7 @@ struct FBuilder
             for (const FString& M : Local.Mapped)
             {
                 L.Mapped.AddUnique(M);
+                bUsesScale |= M.Contains(TEXT("SC.Scale2"));
                 bUsesStrength |= M.Contains(TEXT("SC.Strength"));
                 bUsesBeam |= M.Contains(TEXT("SC.BeamLength")) || M.Contains(TEXT("SC.BeamEnd"));
             }
@@ -1746,6 +1788,26 @@ struct FBuilder
             Contract.Add(FString::Printf(TEXT("%s=(%g,%g,%g)"), *N.ToString(), V.X, V.Y, V.Z));
         };
         AddFloat(UserStrength, 1.f);
+        if (bUsesScale)
+        {
+            FNiagaraVariable Var(FNiagaraTypeDefinition::GetVec2Def(), UserScale2);
+            User.AddParameter(Var, true, true);
+            User.SetParameterValue(FVector2f(1.f, 1.f), Var);
+            Contract.Add(FString::Printf(TEXT("%s=(1,1)"), *UserScale2.ToString()));
+        }
+        for (int32 i = 0; i < StrengthCurves.Num(); ++i)
+        {
+            const FStrengthCurve& C = StrengthCurves[i];
+            AddFloat(FName(*FString::Printf(TEXT("User.SC.SV%d"), i)), C.At1);
+            auto Pad = [](const TArray<float>& A) { return FVector4f(A[FMath::Min(0, A.Num() - 1)], A[FMath::Min(1, A.Num() - 1)], A[FMath::Min(2, A.Num() - 1)], A[FMath::Min(3, A.Num() - 1)]); };
+            for (const TPair<const TCHAR*, FVector4f>& P : {TPair<const TCHAR*, FVector4f>(TEXT("T"), Pad(C.T)), TPair<const TCHAR*, FVector4f>(TEXT("V"), Pad(C.V))})
+            {
+                FNiagaraVariable Var(FNiagaraTypeDefinition::GetVec4Def(), FName(*FString::Printf(TEXT("User.SC.SK%d.%s"), i, P.Key)));
+                User.AddParameter(Var, true, true);
+                User.SetParameterValue(P.Value, Var);
+                Contract.Add(FString::Printf(TEXT("%s=(%g,%g,%g,%g)"), *Var.GetName().ToString(), P.Value.X, P.Value.Y, P.Value.Z, P.Value.W));
+            }
+        }
         if (bUsesBeam)
         {
             AddVec(UserBeamEnd, FVector3f(float(DefaultBeamCm), 0, 0));

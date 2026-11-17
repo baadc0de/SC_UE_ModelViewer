@@ -1,11 +1,14 @@
 // USCCargoSubsystem scenario: loads the scenario file, requests its box packages, (optionally) loads its ship and
-// environment, and once their grids and the packages are ready puts the stock and the drone docks on the grids.
+// environment, and once their grids and the packages are ready puts the stock and the drone docks on the grids (a dock
+// takes as many lattice cells as its mesh spans, turned to clear bay exits). Once the tractor record is read it starts
+// resolving the game's effects the drones and boxes play (FSCCargoFx).
 #include "Cargo/SCCargoSubsystem.h"
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoDrone.h"
 #include "Cargo/SCCargoGridComponent.h"
 #include "Cargo/SCCargoRecords.h"
+#include "SCCargoFx.h"
 #include "SCViewerSettings.h"
 #include "SCViewerSubsystem.h"
 #include "Engine/World.h"
@@ -97,6 +100,21 @@ void USCCargoSubsystem::TryScenario()
         }
     }
     if (State->TractorLookup != FSCCargoState::ELookup::Done) return; // stock and drones wait for the lift values
+    if (!State->Fx)
+    {
+        // The tractor's effects (WP-K4c), from the record just read (none without the archive: the beam mesh then).
+        State->Fx = MakeShared<FSCCargoFx>();
+        if (FParse::Param(FCommandLine::Get(), TEXT("SCNoCargoFx")))
+        {
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_FX off (-SCNoCargoFx): the beam mesh"));
+        }
+        else
+        {
+            State->Fx->Start(Viewer->GetClient(), S.Drone);
+            float MinScale, MaxScale;
+            State->Fx->Contact(S.Ship, MinScale, MaxScale); // resolved ahead, so the first knock plays too
+        }
+    }
     // Nothing loaded and no -SCLoad: the scenario's own ship and environment.
     FString Ignored;
     if (!State->bScenarioLoadRequested && !S.Ship.IsEmpty() && Viewer->GetLoadedEntity().IsEmpty() && Viewer->GetPendingEntity().IsEmpty() &&
@@ -289,10 +307,14 @@ void USCCargoSubsystem::SpawnDock(USCCargoGridComponent* Grid, int32 Drones)
                *StaticEnum<ESCCargoGridAccess>()->GetNameStringByValue(int64(Grid->Access)));
         return;
     }
-    // A one-cell module: it occupies its cell like any box (the lattice step is the minimum permitted item size).
+    // A module of whole cells: it occupies them like any box (the lattice step is the minimum permitted item size); as
+    // many per axis as its mesh spans (the two-bay dock: two cells long). A turned slot turns it (SlotToWorld), so its
+    // long axis lies along the slot's.
+    const FVector CellCm = Grid->Lattice.CellM * 100.0;
+    const FIntVector Cells = ASCCargoDroneDock::MeshCells(CellCm);
     FSCCargoItem Item;
     Item.Id = State->NextItemId++;
-    Item.SizeM = Grid->Lattice.CellM;
+    Item.SizeM = FVector(Cells) * Grid->Lattice.CellM;
     Item.bMovable = false;
     FSCCargoPlacement Slot;
     if (!FSCCargoPlanner::FindSlot(Grid->Model(), Item, Slot))
@@ -308,24 +330,36 @@ void USCCargoSubsystem::SpawnDock(USCCargoGridComponent* Grid, int32 Drones)
     if (!Dock) return;
     Dock->ItemId = Item.Id;
     Dock->GridId = Grid->GridId;
-    Dock->SetFootprint(Grid->Lattice.CellM * 100.0);
-    // Its bays open to one side: turned about the grid normal (a quarter at a time) to face open space, the first turn
-    // whose bay exits are clear of the ship and the hangar.
+    Dock->SetFootprint(Cells, CellCm);
+    // Its bays open to one side: turned about the grid normal to face open space, the first turn whose bay exits are
+    // all clear of the ship and the hangar (FSCCargoDockFootprint::Turns: quarter turns for a square footprint, half
+    // turns for a long one, which keeps its cells).
     {
         FCollisionQueryParams ExitParams(SCENE_QUERY_STAT(SCCargoDockExit), true, Dock);
         FCollisionObjectQueryParams Types;
         for (const ECollisionChannel C : {ECC_WorldStatic, ECC_WorldDynamic, ECC_PhysicsBody, ECC_Vehicle, ECC_Destructible}) Types.AddObjectTypesToQuery(C);
-        const FCollisionShape Probe = FCollisionShape::MakeSphere(float(Grid->Lattice.CellM.GetMin() * 50.0));
+        // The probe at each exit: the cell in front of the bay, in the dock's frame, from just above the dock's floor
+        // (a sphere of the cell's size there reached into the floor and found no turn clear).
         const FQuat Base = World.GetRotation();
-        for (int32 Turn = 0; Turn < 4; ++Turn)
+        bool bClear = false;
+        FString Tried;
+        for (const int32 Turn : FSCCargoDockFootprint::Turns(Cells))
         {
             Dock->SetActorRotation(Base * FQuat(FVector::UpVector, Turn * UE_HALF_PI));
-            bool bClear = true;
+            bClear = true;
             for (int32 Bay = 0; Bay < FMath::Max(1, Dock->NumBays()); ++Bay)
-                bClear &= !GetWorld()->OverlapAnyTestByObjectType(Dock->BayExit(Bay), FQuat::Identity, Types, Probe, ExitParams);
+            {
+                const FVector Exit = Dock->BayExit(Bay);
+                const double Above = FVector::DotProduct(Exit - Dock->GetActorLocation(), Dock->GetActorUpVector());
+                const FVector Half(CellCm.X / 2 - 2, CellCm.Y / 2 - 2, FMath::Max(1.0, FMath::Min(CellCm.Z / 2, Above) - 2));
+                const bool bFree = !GetWorld()->OverlapAnyTestByObjectType(Exit, Dock->GetActorQuat(), Types, FCollisionShape::MakeBox(Half), ExitParams);
+                Tried += FString::Printf(TEXT(" turn%d/bay%d=%s"), Turn, Bay, bFree ? TEXT("clear") : TEXT("blocked"));
+                bClear &= bFree;
+            }
             if (bClear) break;
-            if (Turn == 3) Dock->SetActorRotation(Base);
         }
+        if (!bClear) Dock->SetActorRotation(Base);
+        UE_LOG(LogSCCargo, Display, TEXT("CARGO_DOCK_EXITS grid=%d%s -> %s"), Grid->GridId, *Tried, bClear ? TEXT("turned") : TEXT("none clear: base turn"));
     }
     Dock->AttachToComponent(Grid, FAttachmentTransformRules::KeepWorldTransform);
     Slot.KeepClear = 1; // its bays open to the side and the drones rise out of it: no box against it
@@ -346,8 +380,8 @@ void USCCargoSubsystem::SpawnDock(USCCargoGridComponent* Grid, int32 Drones)
         Drone->AttachToActor(Dock, FAttachmentTransformRules::KeepWorldTransform);
         State->Drones.Add(Drone);
     }
-    UE_LOG(LogSCCargo, Display, TEXT("CARGO_DOCK item=%d grid=%d origin=%s bays=%d drones=%d world=%s"), Item.Id, Grid->GridId, *Slot.Origin.ToString(),
-           Dock->NumBays(), Drones, *World.GetLocation().ToString());
+    UE_LOG(LogSCCargo, Display, TEXT("CARGO_DOCK item=%d grid=%d origin=%s cells=%s rotated=%d yaw=%.0f bays=%d drones=%d world=%s"), Item.Id, Grid->GridId,
+           *Slot.Origin.ToString(), *Slot.Cells.ToString(), Slot.bRotated, Dock->GetActorRotation().Yaw, Dock->NumBays(), Drones, *World.GetLocation().ToString());
     ++Revision;
 }
 

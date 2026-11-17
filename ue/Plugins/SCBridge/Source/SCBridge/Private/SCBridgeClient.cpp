@@ -308,6 +308,38 @@ void FSCBridgeClient::DataCoreRecord(const FString& NameOrGuid, TFunction<void(c
     }, UE::Tasks::Prerequisites(Task));
 }
 
+void FSCBridgeClient::TextCall(const FString& Argument, sc_status (*Call)(sc_handle*, const char*, char**), TFunction<void(const FSCTextResult&)> OnDone)
+{
+    UE::Tasks::TTask<FSCTextResult> Task = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Argument, Call] {
+        FSCTextResult Result;
+        FScopeLock Guard(&Self->HandleLock);
+        char* Text = nullptr;
+        const sc_status Status = Self->Handle ? Call(Self->Handle, TCHAR_TO_UTF8(*Argument), &Text) : SC_STATUS_INVALID_ARGUMENT;
+        if (Status != SC_STATUS_OK)
+        {
+            Result.Error = Self->Handle ? Self->FailLocked(Status, Result.bPanicked) : NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+            return Result;
+        }
+        Result.Json = UTF8_TO_TCHAR(Text);
+        sc_free_string(Text);
+        Result.bOK = true;
+        return Result;
+    });
+    UE::Tasks::Launch(UE_SOURCE_LOCATION, [Task, OnDone = MoveTemp(OnDone)]() mutable {
+        AsyncTask(ENamedThreads::GameThread, [Result = Task.GetResult(), OnDone = MoveTemp(OnDone)] { OnDone(Result); });
+    }, UE::Tasks::Prerequisites(Task));
+}
+
+void FSCBridgeClient::P4kReadXml(const FString& Path, TFunction<void(const FSCTextResult&)> OnDone)
+{
+    TextCall(Path, &sc_p4k_read_xml, MoveTemp(OnDone));
+}
+
+void FSCBridgeClient::MaterialEffect(const FString& LibraryAndEffect, TFunction<void(const FSCTextResult&)> OnDone)
+{
+    TextCall(LibraryAndEffect, &sc_material_effect, MoveTemp(OnDone));
+}
+
 UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons,
                                                                bool bSpareAttachments, TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
 {

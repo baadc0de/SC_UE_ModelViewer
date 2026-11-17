@@ -1,12 +1,25 @@
-// ASCCargoDrone (flight, the step every move of it takes: clear of loads and drones, swept and slid; rotors, tractor beam) and ASCCargoDroneDock (bays).
+// ASCCargoDrone (flight, the step every move of it takes: clear of loads and drones, swept and slid; its look: the
+// drone_art.json skeletal mesh with its clips, or the K1d stand-in with rotors; its heading; its tractor beam and the
+// game's beam effects) and ASCCargoDroneDock (bays, a footprint of whole lattice cells).
 #include "Cargo/SCCargoDrone.h"
 #include "Cargo/SCCargoSubsystem.h"
+#include "SCCargoDroneAnim.h"
+#include "SCCargoFx.h"
+#include "SCFxStrength.h"
 #include "SCCargoState.h"
 #include "EngineUtils.h"
+#include "AnimationRuntime.h"
+#include "Animation/AnimSequence.h"
 #include "Cargo/SCCargoFlightPath.h"
 #include "Components/PointLightComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
+#include "Rendering/SkeletalMeshLODRenderData.h"
+#include "Rendering/SkeletalMeshRenderData.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCCargoArt, Log, All);
 
@@ -51,12 +64,176 @@ ASCCargoDrone::ASCCargoDrone()
 void ASCCargoDrone::PostInitializeComponents()
 {
     Super::PostInitializeComponents();
-    if (Hull) return;
-    UStaticMesh* HullMesh = Art(TEXT("SM_CargoDrone"), TEXT("/Engine/BasicShapes/Cube.Cube"));
+    if (Hull || Art) return;
+    if (FSCCargoDroneArt::Get().HasArt()) SetupArt();
+    if (!Art) SetupStandIn();
+    UE_LOG(LogTemp, Display, TEXT("CARGO_DRONE_SHAPE half=%s centre=%s radius_cm=%.0f look=%s"), *HullHalf.ToCompactString(), *HullCentre.ToCompactString(), HullRadius(),
+           Art ? TEXT("art") : TEXT("stand-in"));
+    Beam = NewPart(this, RootComponent, ::Art(TEXT("SM_TractorBeam"), TEXT("/Engine/BasicShapes/Cylinder.Cylinder")));
+    Beam->SetCastShadow(false);
+    Beam->SetVisibility(false);
+    Light = NewObject<UPointLightComponent>(this, NAME_None, RF_Transient);
+    const FName LightBone = FSCCargoDroneArt::Get().LightBone;
+    if (Art) Light->SetupAttachment(Art, Art->GetBoneIndex(LightBone) != INDEX_NONE ? LightBone : NAME_None);
+    else Light->SetupAttachment(Hull, Hull->DoesSocketExist(TEXT("Light_Status")) ? FName(TEXT("Light_Status")) : NAME_None);
+    LeanScale = Art ? FSCCargoDroneArt::Get().ActorLeanScale : 1.f;
+    Light->SetIntensityUnits(ELightUnits::Candelas);
+    Light->SetIntensity(20.f);
+    Light->SetAttenuationRadius(250.f);
+    Light->SetLightColor(FLinearColor(0.3f, 0.8f, 1.f));
+    Light->SetCastShadows(false);
+    AddInstanceComponent(Light);
+    Light->RegisterComponent();
+    LastYaw = WantYaw = float(GetActorRotation().Yaw);
+    if (!Art && Hull && Hull->DoesSocketExist(TEXT("Tractor"))) EmitterLocal = Hull->GetSocketTransform(TEXT("Tractor"), RTS_Actor).GetLocation();
+}
+
+double ASCCargoDrone::HullHangCm() const
+{
+    return FSCCargoTug::HullHangCm(EmitterLocal.Z, HullCentre.Z - HullHalf.Z, OwnBoxGapCm);
+}
+
+void ASCCargoDrone::SetupArt()
+{
+    const FSCCargoDroneArt& Cfg = FSCCargoDroneArt::Get();
+    USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *Cfg.Mesh, nullptr, LOAD_NoWarn | LOAD_Quiet);
+    static bool bWarned = false;
+    if (!Mesh)
+    {
+        if (!bWarned)
+        {
+            UE_LOG(LogSCCargoArt, Warning, TEXT("CARGO_DRONE_ART missing %s (drone_art.json): the stand-in drone"), *Cfg.Mesh);
+        }
+        bWarned = true;
+        return;
+    }
+    const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+    const int32 CentreIndex = Ref.FindBoneIndex(Cfg.CentreBone);
+    // The centre bone on the actor origin, the face turned to +X, native size x the art's scale.
+    const FTransform CentreRef = CentreIndex != INDEX_NONE ? FAnimationRuntime::GetComponentSpaceTransformRefPose(Ref, CentreIndex) : FTransform::Identity;
+    const FQuat Yaw(FVector::UpVector, FMath::DegreesToRadians(Cfg.YawOffsetDeg));
+    const FTransform MeshToActor = FTransform(-CentreRef.GetLocation()) * FTransform(Yaw, FVector::ZeroVector, FVector(Cfg.Scale));
+    Art = NewObject<USkeletalMeshComponent>(this, NAME_None, RF_Transient);
+    Art->SetMobility(EComponentMobility::Movable);
+    Art->SetSkeletalMesh(Mesh);
+    Art->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Art->SetGenerateOverlapEvents(false);
+    Art->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered; // a docked drone out of view costs nothing
+    Art->SetAnimationMode(EAnimationMode::AnimationBlueprint, false);
+    Art->SetAnimInstanceClass(USCCargoDroneAnimInstance::StaticClass());
+    Art->SetupAttachment(RootComponent);
+    Art->SetRelativeTransform(MeshToActor);
+    AddInstanceComponent(Art);
+    Art->RegisterComponent();
+    // The actor carries the motion: the centre bone keeps its reference place (within body_bob_cm, in the mesh's own
+    // units); the clips keep their rotations and moving parts.
+    const double BobNative = Cfg.BodyBobCm / FMath::Max(Cfg.Scale, 1e-3);
+    if (USCCargoDroneAnimInstance* Anim = Cast<USCCargoDroneAnimInstance>(Art->GetAnimInstance()))
+    {
+        Anim->YawLockBone = Cfg.YawLockBone;
+        Anim->PlaceLockBone = Cfg.CentreBone;
+        Anim->MaxBob = float(BobNative);
+    }
+    if (const int32 BeamIndex = Ref.FindBoneIndex(Cfg.BeamBone); BeamIndex != INDEX_NONE)
+        EmitterLocal = MeshToActor.TransformPosition(FAnimationRuntime::GetComponentSpaceTransformRefPose(Ref, BeamIndex).GetLocation());
+    // Material slots the art hides (a scanner fan, say), every LOD.
+    TSet<int32> Hidden;
+    const TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
+    for (int32 M = 0; M < Materials.Num(); ++M)
+        if (Cfg.HiddenSlots.Contains(Materials[M].MaterialSlotName)) Hidden.Add(M);
+    const FSkeletalMeshRenderData* Render = Mesh->GetResourceForRendering();
+    if (Render)
+        for (int32 L = 0; L < Render->LODRenderData.Num(); ++L)
+            for (int32 S = 0; S < Render->LODRenderData[L].RenderSections.Num(); ++S)
+                if (const int32 M = Render->LODRenderData[L].RenderSections[S].MaterialIndex; Hidden.Contains(M)) Art->ShowMaterialSection(M, S, false, L);
+    // Its clips.
+    for (const FString& Path : Cfg.AssetPaths())
+    {
+        if (Path == Cfg.Mesh) continue;
+        if (UAnimSequence* Seq = LoadObject<UAnimSequence>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet))
+        {
+            Clips.Add(Path, Seq);
+        }
+        else
+        {
+            UE_LOG(LogSCCargoArt, Warning, TEXT("CARGO_DRONE_ART missing clip %s"), *Path);
+        }
+    }
+    // The hull: the visible sections' vertices (reference pose), as the centre bone carries them through every clip,
+    // in the actor's frame. Its collision shape covers it at every heading: level, square in plan, the radius of its
+    // farthest corner from the origin (the heading turns it about the origin; HullCentre is world-aligned).
+    FBox Vertices(ForceInit);
+    int32 Sections = 0;
+    if (Render && Render->LODRenderData.Num())
+    {
+        const FSkeletalMeshLODRenderData& L = Render->LODRenderData[0];
+        const FPositionVertexBuffer& P = L.StaticVertexBuffers.PositionVertexBuffer;
+        if (P.GetVertexData())
+            for (const FSkelMeshRenderSection& S : L.RenderSections)
+            {
+                if (Hidden.Contains(S.MaterialIndex)) continue;
+                ++Sections;
+                for (uint32 V = S.BaseVertexIndex; V < S.BaseVertexIndex + S.NumVertices && V < P.GetNumVertices(); ++V) Vertices += FVector(P.VertexPosition(V));
+            }
+    }
+    const TCHAR* Source = TEXT("vertices");
+    if (!Vertices.IsValid)
+    {
+        Vertices = Mesh->GetImportedBounds().GetBox(); // no CPU vertex data: the imported bounds (every section)
+        Source = TEXT("imported bounds");
+    }
+    FBox Local(ForceInit);
+    double Radius = 0; // the farthest corner from the origin in plan (a turn about the origin keeps it)
+    int32 Poses = 0;
+    auto AddPose = [&](const FTransform& Delta) {
+        for (int32 C = 0; C < 8; ++C)
+        {
+            const FVector Corner((C & 1) ? Vertices.Max.X : Vertices.Min.X, (C & 2) ? Vertices.Max.Y : Vertices.Min.Y, (C & 4) ? Vertices.Max.Z : Vertices.Min.Z);
+            const FVector P = MeshToActor.TransformPosition(Delta.TransformPosition(Corner));
+            Local += P;
+            Radius = FMath::Max(Radius, P.Size2D());
+        }
+        ++Poses;
+    };
+    AddPose(FTransform::Identity);
+    if (CentreIndex != INDEX_NONE)
+        for (const auto& Pair : Clips)
+        {
+            const UAnimSequence* Seq = Pair.Value;
+            const USkeleton* Skeleton = Seq ? Seq->GetSkeleton() : nullptr;
+            if (!Skeleton) continue;
+            const FReferenceSkeleton& SkelRef = Skeleton->GetReferenceSkeleton();
+            for (int32 K = 0; K <= 8; ++K)
+            {
+                // The centre bone's component-space pose at this time (its parents' local poses chained).
+                const double Time = Seq->GetPlayLength() * K / 8.0;
+                FTransform Posed = FTransform::Identity;
+                for (int32 B = SkelRef.FindBoneIndex(Cfg.CentreBone); B != INDEX_NONE; B = SkelRef.GetParentIndex(B))
+                {
+                    FTransform BoneLocal;
+                    Seq->GetBoneTransform(BoneLocal, FSkeletonPoseBoneIndex(B), FAnimExtractContext(Time), false);
+                    Posed = Posed * BoneLocal;
+                }
+                // As it renders: the centre bone held at its place (the anim instance's lock), within the bob.
+                Posed.SetTranslation(CentreRef.GetTranslation() + (Posed.GetTranslation() - CentreRef.GetTranslation()).GetClampedToMaxSize(BobNative));
+                // Mesh-space vertex -> as the posed centre bone carries it (the yaw-locked turn clips' yaw included:
+                // conservative).
+                AddPose(CentreRef.Inverse() * Posed);
+            }
+        }
+    HullCentre = FVector(0, 0, Local.GetCenter().Z);
+    HullHalf = FVector(Radius, Radius, Local.GetExtent().Z);
+    UE_LOG(LogSCCargoArt, Display, TEXT("CARGO_DRONE_ART mesh=%s hull_from=%s sections=%d poses=%d local_min=%s local_max=%s (actor frame, face +X) plan_radius_cm=%.1f clips=%d"),
+           *Cfg.Mesh, Source, Sections, Poses, *Local.Min.ToCompactString(), *Local.Max.ToCompactString(), Radius, Clips.Num());
+}
+
+void ASCCargoDrone::SetupStandIn()
+{
+    UStaticMesh* HullMesh = ::Art(TEXT("SM_CargoDrone"), TEXT("/Engine/BasicShapes/Cube.Cube"));
     Hull = NewPart(this, RootComponent, HullMesh);
     const bool bArt = Hull->DoesSocketExist(TEXT("Tractor"));
     if (!bArt) Hull->SetRelativeScale3D(FVector(0.8, 0.8, 0.3));
-    UStaticMesh* RotorMesh = Art(TEXT("SM_CargoDroneRotor"), TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+    UStaticMesh* RotorMesh = ::Art(TEXT("SM_CargoDroneRotor"), TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
     for (int32 I = 0; I < 4; ++I)
     {
         const FName Socket(*FString::Printf(TEXT("Fan_%d"), I));
@@ -73,26 +250,11 @@ void ASCCargoDrone::PostInitializeComponents()
     for (const UStaticMeshComponent* Rotor : Rotors) Shape += Rotor->Bounds.GetBox();
     HullCentre = Shape.GetCenter() - GetActorLocation();
     HullHalf = Shape.GetExtent();
-    UE_LOG(LogTemp, Display, TEXT("CARGO_DRONE_SHAPE half=%s centre=%s radius_cm=%.0f"), *HullHalf.ToCompactString(), *HullCentre.ToCompactString(), HullRadius());
-    Beam = NewPart(this, RootComponent, Art(TEXT("SM_TractorBeam"), TEXT("/Engine/BasicShapes/Cylinder.Cylinder")));
-    Beam->SetCastShadow(false);
-    Beam->SetVisibility(false);
-    Light = NewObject<UPointLightComponent>(this, NAME_None, RF_Transient);
-    Light->SetupAttachment(Hull, Hull->DoesSocketExist(TEXT("Light_Status")) ? FName(TEXT("Light_Status")) : NAME_None);
-    Light->SetIntensityUnits(ELightUnits::Candelas);
-    Light->SetIntensity(20.f);
-    Light->SetAttenuationRadius(250.f);
-    Light->SetLightColor(FLinearColor(0.3f, 0.8f, 1.f));
-    Light->SetCastShadows(false);
-    AddInstanceComponent(Light);
-    Light->RegisterComponent();
 }
 
-void ASCCargoDrone::FlyTo(const FVector& InTarget, float Yaw, bool bInFace)
+void ASCCargoDrone::FlyTo(const FVector& InTarget)
 {
     Target = InTarget;
-    TargetYaw = Yaw;
-    bFace = bInFace;
     bFlying = true;
 }
 
@@ -108,6 +270,20 @@ void ASCCargoDrone::Place(const FTransform& World)
     Target = World.GetLocation();
     SetActorTransform(World);
     Trail.Reset();
+    Travel = FVector::ZeroVector;
+    LastYaw = WantYaw = float(World.Rotator().Yaw);
+}
+
+float ASCCargoDrone::Heading(float Yaw, float Dt)
+{
+    const FSCCargoDroneArt& Cfg = FSCCargoDroneArt::Get();
+    // In its dock's corridor (in its bay, launching out of it, docking into it) it faces out of its bay.
+    TOptional<float> BayYaw;
+    if (InDockWay())
+        if (const USCCargoSubsystem* Cargo = GetWorld() ? GetWorld()->GetSubsystem<USCCargoSubsystem>() : nullptr)
+            if (FTransform BayPose; Cargo->DroneBay(this, BayPose)) BayYaw = float(BayPose.Rotator().Yaw);
+    WantYaw = FSCCargoHeading::Target(Yaw, bByLoad ? LoadVelocity : Travel, Cfg.HoverSpeedCmS, BayYaw);
+    return FSCCargoHeading::Turn(Yaw, WantYaw, Cfg.TurnRateDegS, Dt);
 }
 
 void ASCCargoDrone::Tick(float DeltaSeconds)
@@ -127,23 +303,80 @@ void ASCCargoDrone::Tick(float DeltaSeconds)
         Velocity += Change;
         if (Dist < 0.5 && Velocity.SizeSquared() < 1) Velocity = FVector::ZeroVector;
         FRotator R = GetActorRotation();
-        if (bFace) R.Yaw = FMath::FixedTurn(R.Yaw, TargetYaw, 90.f * Dt);
+        R.Yaw = Heading(float(R.Yaw), Dt);
         // Lean into the acceleration (visual only): a few degrees, in the drone's own frame.
         const FVector Local = FRotator(0, R.Yaw, 0).UnrotateVector(Accel) / FMath::Max(MaxAccel, 1.f);
-        R.Pitch = FMath::FInterpTo(R.Pitch, float(-Local.X * 8.0), Dt, 4.f);
-        R.Roll = FMath::FInterpTo(R.Roll, float(Local.Y * 8.0), Dt, 4.f);
+        R.Pitch = FMath::FInterpTo(R.Pitch, float(-Local.X * 8.0 * LeanScale), Dt, 4.f);
+        R.Roll = FMath::FInterpTo(R.Roll, float(Local.Y * 8.0 * LeanScale), Dt, 4.f);
         const FVector Before = GetActorLocation();
         Step(Before + Velocity * Dt, R, Dt);
         if (bBlocked) Velocity = (GetActorLocation() - Before) / Dt;
     }
+    // Its travel (what the heading and the clips follow): its velocity, smoothed.
+    const float Smooth = FSCCargoDroneArt::Get().SmoothingS;
+    Travel = Smooth > 0 && Dt > 0 ? FMath::Lerp(Travel, Velocity, 1.f - FMath::Exp(-Dt / Smooth)) : Velocity;
+    if (State == ESCCargoDroneState::Docked) Travel = FVector::ZeroVector;
     RotorAngle = FMath::Fmod(RotorAngle + Dt * (State == ESCCargoDroneState::Docked ? 0.f : 2400.f), 360.f);
     for (int32 I = 0; I < Rotors.Num(); ++I)
         if (Rotors[I]) Rotors[I]->SetRelativeRotation(FRotator(0, I % 2 ? RotorAngle : -RotorAngle, 0));
+    Animate(Dt);
+}
+
+FString ASCCargoDrone::ClipName() const
+{
+    static const TCHAR* const Motions[] = {TEXT("Idle"), TEXT("Front"), TEXT("Back"), TEXT("Up"), TEXT("Down"), TEXT("Left"), TEXT("Right"), TEXT("TurnLeft"), TEXT("TurnRight"), TEXT("Scanning")};
+    static const TCHAR* const Phases[] = {TEXT("Start"), TEXT("Loop"), TEXT("End")};
+    return FString::Printf(TEXT("%s/%s"), Motions[int32(Motion.Motion)], Phases[int32(Motion.Phase)]);
+}
+
+UAnimSequence* ASCCargoDrone::ClipFor(ESCDroneMotion M, ESCDroneClipPhase P, int32 IdleIndex)
+{
+    const FSCCargoDroneArt& Cfg = FSCCargoDroneArt::Get();
+    for (const FString& Path : {Cfg.Clip(M, P, IdleIndex), Cfg.Clip(M, ESCDroneClipPhase::Loop, IdleIndex)})
+        if (const TObjectPtr<UAnimSequence>* Seq = Clips.Find(Path)) return *Seq;
+    return nullptr;
+}
+
+void ASCCargoDrone::Animate(float Dt)
+{
+    USCCargoDroneAnimInstance* Anim = Art ? Cast<USCCargoDroneAnimInstance>(Art->GetAnimInstance()) : nullptr;
+    if (!Anim || Dt <= 0) return;
+    const FSCCargoDroneArt& Cfg = FSCCargoDroneArt::Get();
+    const float Yaw = float(GetActorRotation().Yaw);
+    YawRate = FMath::Lerp(YawRate, FRotator::NormalizeAxis(Yaw - LastYaw) / Dt, 1.f - FMath::Exp(-Dt / FMath::Max(Cfg.SmoothingS, 1e-3f)));
+    LastYaw = Yaw;
+    FSCCargoDroneMotion::FInput In;
+    In.LocalVelocity = FRotator(0, Yaw, 0).UnrotateVector(Travel);
+    In.YawRateDegS = State == ESCCargoDroneState::Docked ? 0.f : YawRate;
+    In.bScanning = bScanning;
+    const bool bFirst = !bAnimStarted;
+    if (bFirst) Motion.IdleIndex = FMath::Max(DroneId, 0); // each drone its own idle first
+    const bool bChanged = Motion.Step(In, Dt, Cfg, [this](ESCDroneMotion M, ESCDroneClipPhase P) {
+        const UAnimSequence* Seq = ClipFor(M, P, Motion.IdleIndex);
+        return Seq ? Seq->GetPlayLength() : 0.f;
+    });
+    if (!bChanged && !bFirst) return;
+    bAnimStarted = true;
+    const bool bTurn = Motion.Motion == ESCDroneMotion::TurnLeft || Motion.Motion == ESCDroneMotion::TurnRight;
+    Anim->Play(ClipFor(Motion.Motion, Motion.Phase, Motion.IdleIndex), Motion.Loops(), bFirst ? 0.f : Cfg.BlendS, bTurn);
 }
 
 FVector ASCCargoDrone::Emitter() const
 {
+    if (Art)
+    {
+        const FName Bone = FSCCargoDroneArt::Get().BeamBone;
+        if (Art->GetBoneIndex(Bone) != INDEX_NONE) return Art->GetBoneLocation(Bone);
+        return Art->GetComponentLocation();
+    }
     return Hull && Hull->DoesSocketExist(TEXT("Tractor")) ? Hull->GetSocketLocation(TEXT("Tractor")) : GetActorLocation() - FVector(0, 0, 20);
+}
+
+FVector ASCCargoDrone::EmitterForward() const
+{
+    if (Art) return GetActorQuat().RotateVector(FSCCargoDroneArt::Get().BeamAxis);
+    if (Hull && Hull->DoesSocketExist(TEXT("Tractor"))) return Hull->GetSocketQuaternion(TEXT("Tractor")).GetForwardVector();
+    return -GetActorUpVector();
 }
 
 void ASCCargoDrone::Gusts(float Dt, FVector2D& OutWobble)
@@ -237,20 +470,22 @@ void ASCCargoDrone::Step(const FVector& Want, const FRotator& Rotation, float Dt
     bOverlapping = !What.IsEmpty();
 }
 
-void ASCCargoDrone::Lean(const FVector& Accel, const FVector2D& Wobble, float Yaw, float Dt, const FVector& At)
+void ASCCargoDrone::Lean(const FVector& Accel, const FVector2D& Wobble, float Dt, const FVector& At)
 {
     const FVector Before = GetActorLocation();
     FRotator R = GetActorRotation();
-    R.Yaw = FMath::FixedTurn(R.Yaw, Yaw, 120.f * Dt);
+    R.Yaw = Heading(float(R.Yaw), Dt);
+    bByLoad = false; // set again by its task each tick it carries
     // Lean into the acceleration (visual): about 8 degrees at the empty drones' full thrust, plus the gusts' wobble.
     const FVector Local = FRotator(0, R.Yaw, 0).UnrotateVector(Accel) / FMath::Max(MaxAccel, 1.f);
-    R.Pitch = FMath::FInterpTo(R.Pitch, float(FMath::Clamp(-Local.X * 8.0 + Wobble.X, -15.0, 15.0)), Dt, 5.f);
-    R.Roll = FMath::FInterpTo(R.Roll, float(FMath::Clamp(Local.Y * 8.0 + Wobble.Y, -15.0, 15.0)), Dt, 5.f);
+    // With the art the clips lean the body themselves: the actor's share is the art's actor_lean_scale.
+    R.Pitch = FMath::FInterpTo(R.Pitch, float(FMath::Clamp(-Local.X * 8.0 * LeanScale + Wobble.X, -15.0, 15.0)), Dt, 5.f);
+    R.Roll = FMath::FInterpTo(R.Roll, float(FMath::Clamp(Local.Y * 8.0 * LeanScale + Wobble.Y, -15.0, 15.0)), Dt, 5.f);
     Step(At, R, Dt);
     Velocity = (GetActorLocation() - Before) / Dt;
 }
 
-void ASCCargoDrone::Pose(const FVector& Location, const FVector& Accel, float Yaw, float DeltaSeconds)
+void ASCCargoDrone::Pose(const FVector& Location, const FVector& Accel, float DeltaSeconds)
 {
     bFlying = false;
     const float Dt = FMath::Max(DeltaSeconds, 1e-3f);
@@ -267,10 +502,10 @@ void ASCCargoDrone::Pose(const FVector& Location, const FVector& Accel, float Ya
         if (FVector::Dist(At, Location) < 2.0) bBody = false;
     }
     PoseTarget = Location;
-    Lean(Accel, Wobble, Yaw, Dt, At + SwayNow);
+    Lean(Accel, Wobble, Dt, At + SwayNow);
 }
 
-void ASCCargoDrone::Tug(const FSCCargoTug::FStation& Station, const FVector& ReactionN, float Yaw, float DeltaSeconds)
+void ASCCargoDrone::Tug(const FSCCargoTug::FStation& Station, const FVector& ReactionN, float DeltaSeconds)
 {
     bFlying = false;
     const float Dt = FMath::Max(DeltaSeconds, 1e-3f);
@@ -290,7 +525,7 @@ void ASCCargoDrone::Tug(const FSCCargoTug::FStation& Station, const FVector& Rea
     BeamRestM = Station.RestM;
     PoseTarget = Flight.P * 100.0 + Offset;
     const FVector Before = GetActorLocation();
-    Lean(Flight.A * 100.0, Wobble, Yaw, Dt, PoseTarget + SwayNow);
+    Lean(Flight.A * 100.0, Wobble, Dt, PoseTarget + SwayNow);
     // Held up or turned aside on the way: the body is where the drone is. Turned aside by its own steering (another
     // drone passing), its thrust's velocity is as it was: the step moved it, it gave it no speed. (Read as a
     // velocity, a step away from a drone flying in through the door a load was leaving by sent that load's two
@@ -311,6 +546,13 @@ void ASCCargoDrone::Tug(const FSCCargoTug::FStation& Station, const FVector& Rea
 void ASCCargoDrone::SetBeam(bool bOn, const FVector& Point, float WidthCm)
 {
     if (!Beam) return;
+    // Locking its beam onto a box (its scanning clip).
+    bScanning = bOn && State == ESCCargoDroneState::Attaching;
+    if (SetBeamFx(bOn, Point))
+    {
+        Beam->SetVisibility(false);
+        return;
+    }
     Beam->SetVisibility(bOn);
     if (!bOn || !Beam->GetStaticMesh()) return;
     // The beam mesh spans its bounds' Z; stretch that span from the emitter to the point, radius ~ a fifth of its length.
@@ -321,6 +563,89 @@ void ASCCargoDrone::SetBeam(bool bOn, const FVector& Point, float WidthCm)
     const FVector Scale(WidthCm / Width, WidthCm / Width, Length / Span);
     const FVector Base = From - Along.RotateVector(FVector(0, 0, B.Min.Z) * Scale);
     Beam->SetWorldTransform(FTransform(Along, Base, Scale));
+}
+
+bool ASCCargoDrone::SetBeamFx(bool bOn, const FVector& Point)
+{
+    UWorld* World = GetWorld();
+    const USCCargoSubsystem* Cargo = World ? World->GetSubsystem<USCCargoSubsystem>() : nullptr;
+    FSCCargoFx* Fx = Cargo ? Cargo->GetFx() : nullptr;
+    UNiagaraSystem* BeamSystem = Fx ? Fx->Beam() : nullptr;
+    if (!BeamSystem)
+    {
+        // Not built on this machine, or no archive: the K1d beam mesh (said once, by the first drone that beams).
+        static bool bSaid = false;
+        if (bOn && !bSaid)
+        {
+            bSaid = true;
+            UE_LOG(LogSCCargoArt, Display, TEXT("CARGO_FX the drones draw the beam mesh: %s"), Fx ? *Fx->Missing() : TEXT("the tractor record is not read yet"));
+        }
+        return false;
+    }
+    auto Make = [this](TObjectPtr<UNiagaraComponent>& C, UNiagaraSystem* System) {
+        if (C || !System) return;
+        C = NewObject<UNiagaraComponent>(this, NAME_None, RF_Transient);
+        C->SetAsset(System);
+        C->SetAutoActivate(false);
+        C->SetUsingAbsoluteLocation(true);
+        C->SetUsingAbsoluteRotation(true);
+        C->SetUsingAbsoluteScale(true);
+        C->SetupAttachment(RootComponent);
+        AddInstanceComponent(C);
+        C->RegisterComponent();
+    };
+    Make(BeamFx, BeamSystem);
+    Make(HitFx, Fx->Hit());
+    Make(MuzzleFx, Fx->Muzzle());
+    if (!bOn)
+    {
+        // killParticlesOnDeactivate in the data: the beam goes at once.
+        for (UNiagaraComponent* C : {BeamFx.Get(), HitFx.Get(), MuzzleFx.Get()})
+            if (C && C->IsActive()) C->DeactivateImmediate();
+        bBeamOn = false;
+        return true;
+    }
+    // Strength by the beam's state (FSCCargoDroneDefinition::FStrengths): on its box and holding it, stable; on its
+    // box before it holds it (locking on, letting go), unstable. The hit: controlling its target when it holds it,
+    // else the beam's. Shown strengths approach those at beamEffectBlendCoeff per second (from noTarget when it lights).
+    const FSCCargoDroneDefinition::FStrengths& S = Fx->Strengths();
+    const float Dt = World ? World->GetDeltaSeconds() : 0.f;
+    const float BeamWant = S.bSet ? float(IsHolding() ? S.Stable : S.Unstable) : 1.f;
+    const float HitWant = S.bSet ? float(IsHolding() ? S.ImpactControlling : S.Unstable) : 1.f;
+    if (!bBeamOn)
+    {
+        BeamStrength = HitStrength = S.bSet ? float(S.NoTarget) : 1.f;
+        bBeamOn = true;
+    }
+    const float Blend = S.bSet && S.BlendCoeff > 0 ? 1.f - FMath::Exp(-float(S.BlendCoeff) * Dt) : 1.f;
+    BeamStrength += (BeamWant - BeamStrength) * Blend;
+    HitStrength += (HitWant - HitStrength) * Blend;
+    // The beam component at the emitter, its +X the emitter's forward; the end and tangent in its space (no scale).
+    const FVector From = Emitter();
+    const FQuat Along = FRotationMatrix::MakeFromX(EmitterForward()).ToQuat();
+    const FVector End = Along.UnrotateVector(Point - From);
+    const float Length = float(End.Size());
+    BeamFx->SetWorldLocationAndRotation(From, Along);
+    BeamFx->SetVariableVec3(TEXT("SC.BeamEnd"), End);
+    BeamFx->SetVariableVec3(TEXT("SC.BeamStartTangent"), FVector(Length, 0, 0));
+    BeamFx->SetVariableFloat(TEXT("SC.BeamLength"), Length);
+    BeamFx->SetVariableVec2(TEXT("SC.BeamLength2"), FVector2D(Length, Length));
+    SCFxStrength::Set(BeamFx, BeamStrength);
+    if (!BeamFx->IsActive()) BeamFx->Activate(true);
+    if (HitFx)
+    {
+        // The hit on the box, its emit axis back along the beam.
+        HitFx->SetWorldLocationAndRotation(Point, FRotationMatrix::MakeFromX((From - Point).GetSafeNormal(1e-6, FVector::UpVector)).ToQuat());
+        SCFxStrength::Set(HitFx, HitStrength);
+        if (!HitFx->IsActive()) HitFx->Activate(true);
+    }
+    if (MuzzleFx)
+    {
+        MuzzleFx->SetWorldLocationAndRotation(From, Along);
+        SCFxStrength::Set(MuzzleFx, BeamStrength);
+        if (!MuzzleFx->IsActive()) MuzzleFx->Activate(true);
+    }
+    return true;
 }
 
 void ASCCargoDrone::Grab(UPrimitiveComponent* Box)
@@ -345,16 +670,40 @@ ASCCargoDroneDock::ASCCargoDroneDock()
     RootComponent->SetMobility(EComponentMobility::Movable);
 }
 
-void ASCCargoDroneDock::SetFootprint(const FVector& CellCm)
+FIntVector ASCCargoDroneDock::MeshCells(const FVector& CellCm)
+{
+    const UStaticMesh* M = Art(TEXT("SM_CargoDroneDock"), TEXT("/Engine/BasicShapes/Cube.Cube"));
+    return M ? FSCCargoDockFootprint::Cells(M->GetBoundingBox().GetSize(), CellCm) : FIntVector(1);
+}
+
+void ASCCargoDroneDock::SetFootprint(const FIntVector& Cells, const FVector& CellCm)
 {
     if (!Mesh) Mesh = NewPart(this, RootComponent, Art(TEXT("SM_CargoDroneDock"), TEXT("/Engine/BasicShapes/Cube.Cube")));
     if (!Mesh->GetStaticMesh()) return;
-    // Scale the mesh's footprint to one lattice cell; its bounds' bottom centre on the actor origin (the cell floor).
+    // Scale the mesh uniformly so its footprint fills its cells; its bounds' bottom centre on the actor origin (the
+    // footprint's floor centre). Its X lies along the slot's X (a turned slot turns the actor).
     const FBox B = Mesh->GetStaticMesh()->GetBoundingBox();
-    const double Scale = CellCm.X / FMath::Max(B.GetSize().X, 1.0);
+    const double Scale = FSCCargoDockFootprint::Scale(B.GetSize(), Cells, CellCm);
     Mesh->SetRelativeScale3D(FVector(Scale));
     Mesh->SetRelativeLocation(-FVector(B.GetCenter().X, B.GetCenter().Y, B.Min.Z) * Scale);
     Mesh->SetCollisionProfileName(TEXT("BlockAll"));
+    // A neutral fill at each bay's light socket (the drones are dark under the bay's ceiling; WP-K4a review). A viewer
+    // choice, not game data: 8 cd, 1.2 m reach, no shadows.
+    for (int32 I = 0; I < NumBays(); ++I)
+    {
+        const FName Socket(*FString::Printf(TEXT("BayLight_%d"), I));
+        if (!Mesh->DoesSocketExist(Socket) || BayLights.IsValidIndex(I)) continue;
+        UPointLightComponent* L = NewObject<UPointLightComponent>(this, NAME_None, RF_Transient);
+        L->SetupAttachment(Mesh, Socket);
+        L->SetIntensityUnits(ELightUnits::Candelas);
+        L->SetIntensity(8.f);
+        L->SetAttenuationRadius(120.f);
+        L->SetLightColor(FLinearColor(1.f, 0.96f, 0.9f));
+        L->SetCastShadows(false);
+        AddInstanceComponent(L);
+        L->RegisterComponent();
+        BayLights.Add(L);
+    }
 }
 
 int32 ASCCargoDroneDock::NumBays() const
@@ -367,7 +716,14 @@ int32 ASCCargoDroneDock::NumBays() const
 FTransform ASCCargoDroneDock::BayTransform(int32 Bay) const
 {
     const FName Socket(*FString::Printf(TEXT("Bay_%d"), Bay));
-    if (Mesh && Mesh->DoesSocketExist(Socket)) return FTransform(GetActorRotation(), Mesh->GetSocketLocation(Socket));
+    if (Mesh && Mesh->DoesSocketExist(Socket))
+    {
+        // It faces out of its bay: from the bay towards the bay's exit, level in the dock (the bays may open on any side).
+        const FVector At = Mesh->GetSocketLocation(Socket), Up = GetActorUpVector();
+        const FName ExitSocket(*FString::Printf(TEXT("BayExit_%d"), Bay));
+        const FVector Out = Mesh->DoesSocketExist(ExitSocket) ? FVector::VectorPlaneProject(Mesh->GetSocketLocation(ExitSocket) - At, Up) : FVector::ZeroVector;
+        return FTransform(Out.SizeSquared() > 1.0 ? FRotationMatrix::MakeFromXZ(Out, Up).ToQuat() : GetActorQuat(), At);
+    }
     const FBox B = Mesh ? Mesh->Bounds.GetBox() : FBox(GetActorLocation(), GetActorLocation());
     return FTransform(GetActorRotation(), FVector(B.GetCenter().X, B.GetCenter().Y, B.Max.Z + 30 + Bay * 50));
 }

@@ -35,9 +35,14 @@ DRONE_SOCKETS = {**{f"Fan_{i}": (p, (0, 0, 0)) for i, p in enumerate(FANS)},
                  "Light_Port": ((23, -12.6, 7), (0, -90, 0)),
                  "Light_Starboard": ((23, 12.6, 7), (0, 90, 0)),
                  "Light_Status": ((-22, 0, 14), (90, 0, 0))}
-DOCK_SOCKETS = {**{f"Bay_{i}": ((0, 0, z), (0, 0, 0)) for i, z in enumerate((30, 91))},
-                **{f"BayExit_{i}": ((122.5, 0, z), (0, 0, 0)) for i, z in enumerate((30, 91))},
-                **{f"BayLight_{i}": ((62.5, -55, z), (0, 0, 0)) for i, z in enumerate((30, 91))}}
+# WP-K4a round 2 (owner: the Fab drone at about 90 cm, one bay per cell side by side): each bay opens on the dock's
+# long +Y side. Bay_i is where the drone's centre bone rests (its face ~10 cm behind the opening's lip at 1.9x);
+# BayExit_i is 82.5 cm beyond the opening, so the drone's tail clears the roof edge by ~20 cm before it climbs (round-2
+# review, out/k4a/astra/r2final.md; the drone leaves along Bay_i -> BayExit_i, and the runtime faces it that way);
+# BayLight_i is a neutral fill under the roof's front edge.
+DOCK_SOCKETS = {**{f"Bay_{i}": ((x, 7, 57), (0, 90, 0)) for i, x in enumerate((-62.5, 62.5))},
+                **{f"BayExit_{i}": ((x, 145, 57), (0, 90, 0)) for i, x in enumerate((-62.5, 62.5))},
+                **{f"BayLight_{i}": ((x, 50, 112), (0, 0, 0)) for i, x in enumerate((-62.5, 62.5))}}
 
 
 def asset(name, folder, cls, factory):
@@ -312,32 +317,56 @@ def rotor():
 
 def dock():
     m=Mesh()
-    for z,h in ((4,8),(62,6),(122,6)):
-        m.box((0,0,z),(125,125,h),1,1.3)
-        m.box((0,0,z+h/2-.4),(113,111,.8),2,.2)
-        m.box((61,0,z),(3,104,h-1),0,.6)
-    for x in (-56,56):
-        for y in (-56,56):
-            m.box((x,y,62.5),(10,10,119),0,2)
-            for z in (6,119):
-                m.box((x,y,z),(13,13,12),2,1.5)
-                m.box((x+(.3 if x>0 else -.3),y,z),(10,10,4),1,.5)
-    m.box((-59,0,63),(7,103,108),0,2)
-    for z,deck_top in ((30,8),(91,65)):
-        m.box((-54,0,z),(2,44,25),1,1)
-        for y in (-38,38):
-            m.box((-53,y,z),(3,13,32),2,.6)
-        for y in (-10,10):
-            rail_top=z-20
-            m.box((0,y,(deck_top+rail_top)/2),(74,5,rail_top-deck_top),2,.4)
-        m.box((61.7,-55,z),(1.6,4,9),4,.3)
-    for y in (-60.5,60.5):
-        m.box((-7,y,62.5),(84,2,19),0,1)
-        for x in range(-40,41,10):
-            m.box((x,y,62.5),(4,2.5,13),1,.5,20)
-    for z in (13,74):
-        for y in range(-40,41,10):
-            m.box((59,y,z-6),(4,5,.5),0,.1,25)
+    # Two cells (250 x 125 x 125), one bay per cell side by side, each open on the long +Y side and holding one drone
+    # of about 0.9-1 m (the Fab drone at 1.85-2x: ~95 x 80 x 84 cm) facing its opening. Original art: a yellow frame
+    # around dark bays, a closed back with a charging spine, a divider between the bays, a cradle under each drone.
+    W,D,H=250,125,125
+    # Floor plate and roof; frame rails round both.
+    m.box((0,0,1.5),(W-4,D-4,3),1,.4)
+    m.box((0,0,H-2),(W-4,D-4,4),0,.6)
+    for z,h in ((1.5,3),(H-2,4)):
+        for y in (-D/2+3,D/2-3):
+            m.box((0,y,z),(W,6,h),0,.35)
+        for x in (-W/2+3,W/2-3):
+            m.box((x,0,z),(6,D,h),0,.35)
+    # Corner posts and the front / back posts of the divider.
+    for x in (-W/2+4.5,0,W/2-4.5):
+        for y in (-D/2+4.5,D/2-4.5):
+            m.box((x,y,H/2),(8,8,H-6),0,1.0)
+            for z in (9,H-10):
+                m.box((x,y,z),(9,9,7),2,.6)
+    # Closed back: a dark panel with vertical heat-exchanger fins.
+    m.box((0,-D/2+3,H/2),(W-12,4,H-8),2,.4)
+    for x in range(-114,115,12):
+        m.box((x,-D/2+5.6,H/2),(2.4,1.2,H-34),1,.15)
+    # Closed ends; the divider runs from the back to just short of the opening.
+    for x in (-W/2+2,W/2-2):
+        m.box((x,0,H/2),(4,D-12,H-8),2,.4)
+    m.box((0,-4,H/2),(4,D-22,H-8),1,.3)
+    for i in range(2):
+        (bx,by,bz),_=DOCK_SOCKETS[f"Bay_{i}"]
+        # Charging spine on the back panel, facing the drone; its top stands ~10 cm above the drone's body (at 1.9x)
+        # with a cyan charge indicator (WP-K4a round 2 review, out/k4a/astra/r2dock.md).
+        m.box((bx,-D/2+6.5,66),(30,3,70),1,.6)
+        m.box((bx,-D/2+8.2,bz),(18,.6,22),3,.1)
+        m.box((bx,-D/2+8.2,95),(2.6,.6,10),3,.1)
+        # Cradle: two guide rails along the bay under the drone, with support blocks and contact pads that reach to a few
+        # cm under the drone's body (its underside at 1.9x is >= 22.6 cm here, the thruster between the rails lower).
+        for x in (bx-18,bx+18):
+            m.box((x,by-4,5),(5,70,4),1,.4)
+            for y in (by-26,by+18):
+                m.box((x,y,13),(6,9,12),1,.4)
+                m.box((x,y,19.3),(6,9,.6),3,.1)
+        # Threshold: a cyan strip and two chevrons on the floor pointing out of the bay.
+        m.box((bx,D/2-7,3.3),(96,1.6,.6),3,.1)
+        for y in (D/2-22,D/2-34):
+            for side in (-1,1):
+                m.box((bx+side*6.5,y,3.4),(16,3,.6),3,.1,-side*40)
+        # Bay number ticks on the divider's front post.
+        for t in range(i+1):
+            m.box((-6 if i==0 else 6,D/2-1,H-24-t*6),(2,.6,3),3,.1)
+        # A light bar under the roof's front edge (the BayLight socket sits there).
+        m.box((bx,D/2-10,H-5),(70,4,2),4,.3)
     return m
 
 
@@ -362,6 +391,26 @@ def grid_mesh():
     return m
 
 
+def configured_drone():
+    """The skeletal drone Config/Cargo/drone_art.json names, if this machine has it: (mesh, scale, yaw offset, centre
+    bone position). Previews only; the asset name stays in the config."""
+    path=Path(__file__).resolve().parents[1]/'SCViewer/Config/Cargo/drone_art.json'
+    try:
+        art=json.loads(path.read_text(encoding='utf-8')).get('art')
+    except (OSError, ValueError):
+        return None
+    if not art or not EAL.does_asset_exist(art['mesh'].split('.')[0]):
+        return None
+    mesh=u.load_asset(art['mesh'].split('.')[0])
+    pose=u.AnimPoseExtensions.get_reference_pose(mesh.skeleton)
+    t=u.AnimPoseExtensions.get_ref_bone_pose(pose,art.get('centre_bone','root'),u.AnimPoseSpaces.WORLD).translation
+    scale=float(art.get('scale',1))
+    for arg in u.SystemLibrary.get_command_line().split():
+        if arg.startswith('-CargoArtDroneScale='):
+            scale=float(arg.split('=',1)[1])  # previews at another scale (choosing it)
+    return mesh,scale,float(art.get('yaw_offset_deg',0)),(t.x,t.y,t.z)
+
+
 def previews(meshes, mats):
     world=u.EditorLoadingAndSavingUtils.new_blank_map(False)
     actors=u.get_editor_subsystem(u.EditorActorSubsystem)
@@ -377,7 +426,17 @@ def previews(meshes, mats):
     spawn(u.load_asset('/Engine/BasicShapes/Cube'),(0,0,-5),(20,20,.1),material=mats[1])
     vehicle((120,-120,65))
     spawn(meshes['dock'],(0,110,0))
-    vehicle((0,110,30)); vehicle((0,110,91))
+    art=configured_drone()
+    for i in range(2):
+        p,_=DOCK_SOCKETS[f'Bay_{i}']
+        if art:
+            # The drone drone_art.json names (when installed), at its scale, centre bone on the socket, facing +Y (out).
+            mesh,scale,yaw_offset,centre=art
+            a=actors.spawn_actor_from_class(u.SkeletalMeshActor,u.Vector(p[0],110+p[1]-centre[1]*scale,p[2]-centre[2]*scale),u.Rotator(pitch=0,yaw=90+yaw_offset,roll=0))
+            a.skeletal_mesh_component.set_skeletal_mesh_asset(mesh)
+            a.set_actor_scale3d(u.Vector(scale,scale,scale))
+        else:
+            vehicle((p[0],110+p[1],p[2]))
     vehicle((-120,-120,190))
     spawn(meshes['beam'],(-120,-120,171),(.12,.12,1.5),(0,0,180))
     spawn(meshes['grid'],(-120,-120,0),(1.25,1.25,1.25))
@@ -411,7 +470,9 @@ def previews(meshes, mats):
     shots=[]
     for name,eye,target in [('overview',(510,-670,420),(-20,0,65)),
                             ('drone',(300,-340,230),(120,-120,62)),
-                            ('dock',(330,-210,245),(0,110,65)),
+                            ('dock',(330,480,210),(0,110,55)),
+                            ('dock_front',(40,440,95),(0,110,58)),
+                            ('dock_bay',(-40,300,70),(-62.5,110,55)),
                             ('beam',(180,-480,240),(-120,-120,95)),
                             ('diagnostic',(300,-340,230),(120,-120,62))]:
         cap=actors.spawn_actor_from_class(u.SceneCapture2D,u.Vector(*eye),u.MathLibrary.find_look_at_rotation(u.Vector(*eye),u.Vector(*target)))
@@ -459,8 +520,9 @@ if __name__ == '__main__':
             'grid':grid_mesh().save('SM_GridSlotFrame',[grid])}
     assert REPORT['SM_CargoDrone']['triangles'] < 30000
     assert all(b-a<=limit for a,b,limit in zip(REPORT['SM_CargoDrone']['minimum'],REPORT['SM_CargoDrone']['maximum'],(100,100,45)))
-    assert REPORT['SM_CargoDroneDock']['minimum']==[-62.5,-62.5,0]
-    assert REPORT['SM_CargoDroneDock']['maximum']==[62.5,62.5,125]
+    assert REPORT['SM_CargoDroneDock']['triangles'] < 30000
+    assert REPORT['SM_CargoDroneDock']['minimum']==[-125,-62.5,0]
+    assert REPORT['SM_CargoDroneDock']['maximum']==[125,62.5,125]
     (OUT/'validation.json').write_text(json.dumps(REPORT,indent=2))
     previews(meshes,mats)
     u.log('K1D_ART_COMPLETE '+str(OUT))

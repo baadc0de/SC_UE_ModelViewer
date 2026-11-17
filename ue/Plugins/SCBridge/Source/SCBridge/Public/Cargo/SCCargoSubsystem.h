@@ -9,6 +9,7 @@
 #include "SCCargoSubsystem.generated.h"
 
 class UPrimitiveComponent;
+struct FHitResult;
 
 UCLASS()
 class SCBRIDGE_API USCCargoSubsystem : public UTickableWorldSubsystem
@@ -301,6 +302,13 @@ public:
     /** The box Drone carries (its pose and half size), while that box is in the air: its step keeps off the face its
      *  beam holds (FSCCargoDroneSteer::OffFace). False when it carries none. */
     bool DroneOwnBox(const class ASCCargoDrone* Drone, FTransform& OutPose, FVector& OutHalf) const;
+    /** Drone's bay (the pose a drone rests in, facing out of it); false without its dock. */
+    bool DroneBay(const class ASCCargoDrone* Drone, FTransform& OutBay) const;
+    /** The game's effects the drones and boxes play (WP-K4c; SCCargoFx.h); null before the scenario's tractor is read. */
+    class FSCCargoFx* GetFx() const;
+    /** A carried box hit something (its body's hit event): against a ship, that ship's collision effect at the contact,
+     *  over the threshold and rate limit (SCCargoFx.h). */
+    void OnBoxContact(class ASCCargoContainer* Box, AActor* Other, const FHitResult& Hit, const FVector& NormalImpulse);
 
 private:
     /** The move (not ended) of the box that Box is, or null. */

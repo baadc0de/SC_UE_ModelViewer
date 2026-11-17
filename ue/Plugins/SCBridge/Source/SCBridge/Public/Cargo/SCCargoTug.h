@@ -95,6 +95,12 @@ struct SCBRIDGE_API FSCCargoTug
     static double ComeInS(double ExcessM, double RateHz, double SlackM);
     /** How far ahead that look has to reach for a beam that can be RangeM longer than the room (m). */
     static double LookAheadM(double RangeM, double SpeedMS, double AccelMS2, double MaxSpeedMS, double RateHz, double SlackM);
+    /** How close a drone's emitter may come to the face its beam holds (cm): its hull's reach below the emitter (the
+     *  emitter's height over the hull's bottom, none when the emitter is lowest) and the gap it keeps from its box. */
+    static double HullHangCm(double EmitterZCm, double HullBottomZCm, double GapCm) { return FMath::Max(0.0, EmitterZCm - HullBottomZCm) + GapCm; }
+    /** The shortest beam (cm) a drone flies at a share needing StretchCm: the larger of the record's minimum rest length
+     *  and the drone's hull hang (HullHangCm), plus that stretch. */
+    static double ShortestCm(double RecordMinCm, double HullHangCm, double StretchCm) { return FMath::Max(RecordMinCm, HullHangCm) + StretchCm; }
 };
 
 /** Space kept for drones in route queries: where the drones of other teams hover or will take their stations (boxes,
