@@ -106,6 +106,75 @@ COMPOSITE_EDITS = [
 
 
 
+# WP-L3: the range window of every local light is the game's GetLightForcedDistanceFade (ShadeLib), full strength until the
+# last forcedFalloffFraction of the radius, then saturate((1 - d / R) / fraction)^2; UE's is (1 - (d / R)^4)^2, which
+# already halves a light at 0.8 R. Shading (GetLocalLightAttenuation: deferred, MegaLights, Lumen, translucency, volumes)
+# and the light grid's energy estimate (EstimateLocalLight, MegaLights sampling and culling) change together.
+LIGHTING = ENGINE / "Engine" / "Shaders" / "Private" / "DeferredLightingCommon.ush"
+CULLING = ENGINE / "Engine" / "Shaders" / "Private" / "LightCulling.ush"
+
+
+def fade_rcp():
+    fraction = float(json.loads(FIXTURE.read_text())["shader_constants"]["forcedFalloffFraction"]["value"])
+    if not 0 < fraction <= 1:
+        sys.exit(f"forcedFalloffFraction {fraction} is outside (0, 1] in {FIXTURE}")
+    return f"{1.0 / fraction:.6f}f"
+
+
+# WP-L3 also carries GetPhysicalLightAttenuation's tweak term: for a point or spot light the game's falloff is
+# candela / (max(d, bulb) + offset)^2 with offset = bulb (1 - tweak) / tweak (FSCStarEngine::AttenuationOffset), UE's is
+# candela / d^2. UE has no per-light field for the offset; the importer stores it in SoftSourceRadius, which reaches every
+# light path (deferred uniforms, the light grid, Lumen, GPU scene) and which UE reads only as a soft specular radius
+# (GetCapsule -> SphereSinAlphaSoft). The patch drops that reading and scales the light mask by d^2 / (max(d, bulb) +
+# offset)^2. Rect lights are left alone (their SourceRadius is a half-width; their SoftSourceRadius is always 0).
+OFFSET_MASK = (
+    "\t\tif (LightData.SoftSourceRadius != 0 && !LightData.bRectLight)\n"
+    "\t\t{\n"
+    "\t\t\tconst float SCDistance = sqrt(DistanceSqr);\n"
+    "\t\t\tLightMask *= Square( SCDistance / max( max(SCDistance, LightData.SourceRadius) + LightData.SoftSourceRadius, 1e-4f ) );\n"
+    "\t\t}\n"
+)
+
+
+def lighting_edits():
+    return [
+        (
+            "\t\tLightMask = Square( saturate( 1 - Square( DistanceSqr * Square(LightData.InvRadius) ) ) );\n",
+            f"\t\t{MARK}: Star Engine GetLightForcedDistanceFade (WP-L3), in place of (1 - (d / R)^4)^2;\n"
+            "\t\t// the factor is 1 / forcedFalloffFraction from StarEngineRender.json.\n",
+            f"\t\t{MARK}: GetPhysicalLightAttenuation's tweak offset, carried in SoftSourceRadius (WP-L3).\n" + OFFSET_MASK,
+            f"\t\tLightMask = Square( saturate( {fade_rcp()} * (1 - sqrt(DistanceSqr) * LightData.InvRadius) ) );\n",
+        ),
+        (
+            "\tCapsule.SoftRadius = LightData.SoftSourceRadius;\n",
+            f"\t{MARK}: SoftSourceRadius carries the game's attenuation offset (WP-L3), not a soft specular radius.\n",
+            "",
+            "\tCapsule.SoftRadius = 0;\n",
+        ),
+    ]
+
+
+def culling_edits():
+    return [
+        (
+            "\t\tLightFalloff = Pow2(saturate(1.0 - Pow2(NormalizeDistanceSquared))) / DistanceSquared;\n",
+            f"\t\t{MARK}: the light's range window is the game's forced fade (WP-L3, DeferredLightingCommon.ush).\n",
+            "",
+            f"\t\tLightFalloff = Pow2(saturate({fade_rcp()} * (1.0 - sqrt(NormalizeDistanceSquared)))) / DistanceSquared;\n",
+        ),
+        (
+            "\tfloat LightPower = ComputeLightPower(LightData);\n",
+            "",
+            f"\t{MARK}: the game's attenuation offset (WP-L3, DeferredLightingCommon.ush GetLocalLightAttenuation).\n"
+            "\tif (LightData.FalloffExponent == 0 && LightData.SoftSourceRadius != 0 && !LightData.bRectLight)\n"
+            "\t{\n"
+            "\t\tconst float SCDistance = sqrt(max(DistanceSquared, 0.01));\n"
+            "\t\tLightPower *= Pow2(SCDistance / max(max(SCDistance, LightData.SourceRadius) + LightData.SoftSourceRadius, 1e-4f));\n"
+            "\t}\n",
+        ),
+    ]
+
+
 LOOK = PATCHES / "look.json"
 
 
@@ -126,10 +195,29 @@ def params():
     )
 
 
-PATCHED = {SHADING: SHADING_EDITS, COMPOSITE: COMPOSITE_EDITS}
+# WP-L3: a game projector is its texture sampled with a border sampler (TiledShading SpotTexArray,
+# SampStateTrilinearBorder): nothing beyond the texture's square. UE's light-function atlas wraps spot UVs (frac), which
+# tiles the gobo into the frustum corners the importer now opens the cone to; zero spot light functions outside [0, 1].
+ATLAS = ENGINE / "Engine" / "Shaders" / "Private" / "LightFunctionAtlas" / "LightFunctionAtlasCommon.usf"
+ATLAS_EDITS = [
+    (
+        "\tLightFunctionUV = frac(LightFunctionUV);\n",
+        f"\t{MARK}: the game's projector border (WP-L3): a spot light function is zero outside its texture.\n"
+        "\tconst float SCProjectorBorder = (Slot.LightType == LIGHT_TYPE_SPOT && any(LightFunctionUV != saturate(LightFunctionUV))) ? 0.0f : 1.0f;\n",
+        "",
+    ),
+    (
+        "\tFLightFunctionColor LightFunctionColor = SampleLightFunctionSlot(Slot, LightFunctionUV);\n",
+        "",
+        f"\tLightFunctionColor *= SCProjectorBorder; {MARK} (WP-L3)\n",
+    ),
+]
+
+PATCHED = {SHADING: SHADING_EDITS, COMPOSITE: COMPOSITE_EDITS, LIGHTING: lighting_edits, CULLING: culling_edits, ATLAS: ATLAS_EDITS}
 
 
 def patched(path, edits):
+    edits = edits() if callable(edits) else edits
     orig = path.with_name(path.name + ORIG)
     text = (orig if orig.exists() else path).read_text()
     if MARK in text:

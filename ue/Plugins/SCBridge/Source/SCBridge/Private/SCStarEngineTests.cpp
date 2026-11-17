@@ -13,7 +13,8 @@ const TCHAR* SyntheticFixture = TEXT(R"({"schema":"star_engine_render_v1",
   "middleGray":{"value":0.5},"MaxDisplayNitsLDR":{"value":50},"LOG_MIN":{"value":-6},"LOG_MAX":{"value":10},
   "glassColourDensityScale":{"value":0.5},"glassColourFloor":{"value":0.125},"glassVertexHeightBias":{"value":0.2},
   "glassVertexHeightScale":{"value":2},"glassHeightClip":{"value":0.05},"glassTintStrengthDefault":{"value":0.75},
-  "glassTilingDefault":{"value":4},"glassVStretchDefault":{"value":0.5},"glassThinFilmThicknessDefault":{"value":0.25},"detailScale":{"value":3}},
+  "glassTilingDefault":{"value":4},"glassVStretchDefault":{"value":0.5},"glassThinFilmThicknessDefault":{"value":0.25},"detailScale":{"value":3},
+  "forcedFalloffFraction":{"value":0.25}},
  "shader_textures":{"WearDirtFrostDetailMap":{"value":"Synthetic/detail.dds"}},
  "exe_cvars":{"r_ExposureCompensationEV0":{"value":-1},"r_ExposureCompensationEV10":{"value":1},"r_ExposureCompensationEV20":{"value":1},
   "r_ExposureMultiplierMin":{"value":0.01},"r_ExposureMultiplierMax":{"value":8},
@@ -48,6 +49,7 @@ bool FSCStarEngineFixture::RunTest(const FString&)
     TestTrue(TEXT("discard ratios leave a band"), S.DiscardRatioDark >= 0 && S.DiscardRatioBright >= 0 && S.DiscardRatioDark + S.DiscardRatioBright < 1);
     TestTrue(TEXT("glass absorption constants are positive"), S.GlassDensityScale > 0 && S.GlassColourFloor > 0 && S.GlassVertexHeightScale > 0);
     TestTrue(TEXT("glass parameter defaults are in their domain"), S.GlassTilingDefault > 0 && S.GlassVStretchDefault > 0 && S.GlassThinFilmThicknessDefault >= 0);
+    TestTrue(TEXT("the forced fade band is a fraction of the radius"), S.ForcedFadeFraction > 0 && S.ForcedFadeFraction <= 1);
     FSCStarEngine Synthetic;
     if (TestTrue(TEXT("the synthetic fixture loads: ") + Error, LoadText(SyntheticFixture, Synthetic, Error)))
         TestTrue(TEXT("glass parameter defaults are read from the fixture"),
@@ -85,6 +87,8 @@ bool FSCStarEngineDomain::RunTest(const FString&)
         {TEXT("no glass V stretch"), TEXT(R"("glassVStretchDefault":{"value":0.5})"), TEXT(R"("glassVStretchDefault":{"value":0})"), TEXT("glassVStretchDefault")},
         {TEXT("a negative film thickness"), TEXT(R"("glassThinFilmThicknessDefault":{"value":0.25})"), TEXT(R"("glassThinFilmThicknessDefault":{"value":-1})"), TEXT("glassThinFilmThicknessDefault")},
         {TEXT("no vertex height slope"), TEXT(R"("glassVertexHeightScale":{"value":2})"), TEXT(R"("glassVertexHeightScale":{"value":0})"), TEXT("glassVertexHeightScale")},
+        {TEXT("no fade band"), TEXT(R"("forcedFalloffFraction":{"value":0.25})"), TEXT(R"("forcedFalloffFraction":{"value":0})"), TEXT("forcedFalloffFraction")},
+        {TEXT("a fade band wider than the radius"), TEXT(R"("forcedFalloffFraction":{"value":0.25})"), TEXT(R"("forcedFalloffFraction":{"value":1.5})"), TEXT("forcedFalloffFraction")},
         {TEXT("a value that is not finite"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":0.5})"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":1e999})"), TEXT("finite")},
     };
     for (const FCase& C : Cases)
@@ -113,6 +117,30 @@ bool FSCStarEngineRules::RunTest(const FString&)
     TestEqual(TEXT("point: the tweak divides the bulb"), S.PointCandela(2, 0.5, 0.25), Pi * 100 * 2 * 9.0, 1e-9);
     TestEqual(TEXT("point: no bulb"), S.PointCandela(2, 0, 1), Pi * 100 * 2, 1e-9);
     TestEqual(TEXT("planar: pi * unit * I * area"), S.PlanarCandela(2, 0.5, 0.2), Pi * 100 * 2 * 0.1, 1e-9);
+    // GetLightForcedDistanceFade: saturate((1 - d / R) / fraction)^2 (fraction 0.25 here).
+    TestEqual(TEXT("range fade: full inside the fade band"), S.LightRangeFade(5, 10), 1.0, 1e-12);
+    TestEqual(TEXT("range fade: full where the band starts"), S.LightRangeFade(7.5, 10), 1.0, 1e-12);
+    TestEqual(TEXT("range fade: quadratic in the band"), S.LightRangeFade(8, 10), 0.64, 1e-12);
+    TestEqual(TEXT("range fade: deeper in the band"), S.LightRangeFade(9, 10), 0.16, 1e-12);
+    TestEqual(TEXT("range fade: zero at the radius"), S.LightRangeFade(10, 10), 0.0, 1e-12);
+    TestEqual(TEXT("range fade: zero beyond the radius"), S.LightRangeFade(12, 10), 0.0, 1e-12);
+    TestEqual(TEXT("range fade: no radius, no light"), S.LightRangeFade(1, 0), 0.0, 1e-12);
+    // The tweak's distance offset c = bulb (1 - tweak) / tweak: the importer's far-field candela over (max(d, bulb) + c)^2
+    // is GetPhysicalLightAttenuation normalised to the authored intensity 1 m from the bulb surface, at every distance.
+    TestEqual(TEXT("offset: bulb (1 - tweak) / tweak"), S.AttenuationOffset(0.5, 0.25), 1.5, 1e-12);
+    TestEqual(TEXT("offset: tweak 1 has none"), S.AttenuationOffset(0.5, 1), 0.0, 1e-12);
+    TestEqual(TEXT("offset: tweak above 1 pulls it in"), S.AttenuationOffset(0.1, 2), -0.05, 1e-12);
+    TestEqual(TEXT("offset: no bulb, none"), S.AttenuationOffset(0, 0.3), 0.0, 1e-12);
+    TestEqual(TEXT("offset: no falloff term, none"), S.AttenuationOffset(0.5, 0), 0.0, 1e-12);
+    for (const double Tweak : {0.05, 0.3, 1.0, 2.0})
+        for (const double Bulb : {0.05, 0.5, 8.0})
+            for (const double D : {0.01, Bulb, 1.0, 10.0, 40.0})
+            {
+                const auto Shader = [&](double X) { return 1.0 / FMath::Square(FMath::Max(Tweak * X / Bulb - Tweak, 0.0) + 1.0); };
+                const double Game = Pi * 100 * 2 * Shader(D) / Shader(Bulb + 1); // 1 m from the bulb surface, 100 = unit
+                const double Mapped = S.PointCandela(2, Bulb, Tweak) / FMath::Square(FMath::Max(D, Bulb) + S.AttenuationOffset(Bulb, Tweak));
+                TestEqual(FString::Printf(TEXT("offset reproduces the shader (bulb %g, tweak %g, d %g)"), Bulb, Tweak, D), Mapped, Game, Game * 1e-9);
+            }
     TestEqual(TEXT("scene EV = log2(cd/m2) + offset"), S.SceneEV(4.0), 4.0, 1e-12);
     TestEqual(TEXT("EV round trip"), S.NitsAtEV(S.SceneEV(37.0)), 37.0, 1e-9);
     TestEqual(TEXT("compensation: inside the first segment"), S.CompensationAt(5), 0.0, 1e-12);

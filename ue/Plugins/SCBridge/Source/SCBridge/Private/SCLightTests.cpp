@@ -10,6 +10,7 @@
 #include "Misc/CommandLine.h"
 #include "Components/PointLightComponent.h"
 #include "Components/RectLightComponent.h"
+#include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "SCLightAreas.h"
@@ -128,12 +129,49 @@ bool FSCLightAuthoredModel::RunTest(const FString&)
     TestEqual(TEXT("no bulb: the authored intensity at 1 m"), Candela(5), Unit * 2.0, Unit * 1e-5);
     TestEqual(TEXT("bulb is the source radius (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SourceRadius), 10.0, 0.001);
     TestEqual(TEXT("plane is the rect source (cm)"), double(Cast<URectLightComponent>(Vehicle->Lights[2])->SourceWidth), 50.0, 0.001);
+    // The tweak's distance offset bulb * (1 - tweak) / tweak rides in SoftSourceRadius (cm) for the engine shader patch.
+    TestEqual(TEXT("tweak offset is carried (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[4])->SoftSourceRadius), 30.0, 0.001);
+    TestEqual(TEXT("tweak 1: no offset"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SoftSourceRadius), 0.0, 1e-9);
+    TestEqual(TEXT("legacy packages: no offset"), double(Cast<UPointLightComponent>(Vehicle->Lights[3])->SoftSourceRadius), 0.0, 1e-9);
     TestTrue(TEXT("fallback shadows follow shadow_casting (on)"), bool(Vehicle->Lights[0]->CastShadows));
     TestFalse(TEXT("fallback shadows follow shadow_casting (off)"), bool(Vehicle->Lights[1]->CastShadows));
     TestEqual(TEXT("no warnings"), Warnings.Num(), 0);
     Vehicle->Destroy();
     World->DestroyWorld(false);
     MegaLights->Set(Previous, ECVF_SetByCode);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProjectorCone, "SCBridge.Lights.ProjectorCone",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightProjectorCone::RunTest(const FString&)
+{
+    // The game's projector frustum is square with half-angle FOV / 2; UE's cone must contain its corners (half-angle
+    // atan(sqrt 2 tan(FOV / 2))) and the gobo UVs, which UE scales by tan(outer), are pulled back to tan(FOV / 2).
+    const auto Cone = FSCLightImporter::ProjectorCone(50);
+    TestEqual(TEXT("corner half-angle"), Cone.OuterDeg, FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * FMath::Tan(FMath::DegreesToRadians(50.0)))), 1e-9);
+    TestEqual(TEXT("lateral light-function scale undoes the wider cone"), Cone.LateralScale(FMath::DegreesToRadians(Cone.OuterDeg)), 1 / UE_DOUBLE_SQRT_2, 1e-9);
+    // The gobo's UV edge (UE: tan of the outer angle it renders, which GetClampedConeAngles widens by at least 0.001 rad
+    // over the inner) times the lateral scale must land on the FOV frustum.
+    USpotLightComponent* Spot = NewObject<USpotLightComponent>();
+    const auto UvEdge = [Spot](const FSCLightImporter::FProjectorCone& C)
+    {
+        Spot->InnerConeAngle = Spot->OuterConeAngle = float(C.OuterDeg);
+        const double Rendered = Spot->GetClampedConeAngles().Y;
+        return FMath::Tan(Rendered) * C.LateralScale(Rendered);
+    };
+    TestEqual(TEXT("UV edge at the FOV (100-degree FOV)"), UvEdge(Cone), FMath::Tan(FMath::DegreesToRadians(50.0)), 1e-6);
+    TestTrue(TEXT("the rendered cone contains the frustum corners"), FMath::Tan(Spot->GetClampedConeAngles().Y) >= UE_DOUBLE_SQRT_2 * Cone.FovTan);
+    TestTrue(TEXT("the rendered cone barely exceeds them (hard edge just outside the corners)"),
+             FMath::Tan(Spot->GetClampedConeAngles().Y) < UE_DOUBLE_SQRT_2 * Cone.FovTan * 1.01);
+    TestEqual(TEXT("UV edge at the FOV (small)"), UvEdge(FSCLightImporter::ProjectorCone(10)), FMath::Tan(FMath::DegreesToRadians(10.0)), 1e-6);
+    // A frustum whose corners lie beyond UE's limit keeps the limit; the gobo still ends at the FOV.
+    const auto Wide = FSCLightImporter::ProjectorCone(80);
+    TestTrue(TEXT("wide: within UE's cone limit"), Wide.OuterDeg <= FSCLightImporter::MaxSpotConeDeg);
+    TestEqual(TEXT("wide: UV edge still at the FOV"), UvEdge(Wide), FMath::Tan(FMath::DegreesToRadians(80.0)), 1e-6);
+    const auto Flat = FSCLightImporter::ProjectorCone(90);
+    TestEqual(TEXT("180-degree FOV: UE's limit"), Flat.OuterDeg, FSCLightImporter::MaxSpotConeDeg, 1e-9);
+    TestEqual(TEXT("180-degree FOV: UV edge at UE's limit"), UvEdge(Flat), FMath::Tan(FMath::DegreesToRadians(FSCLightImporter::MaxSpotConeDeg)), 1e-4);
     return true;
 }
 

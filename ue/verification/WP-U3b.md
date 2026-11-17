@@ -407,7 +407,7 @@ exactly the "pools everywhere" symptom; H-CE makes them sub-candela.
 | CryEngine | UE (proposed) |
 | --- | --- |
 | inverse square beyond the bulb, saturated inside it | `bUseInverseSquaredFalloff`, `ELightUnits::Candelas`, I = π·10⁴·intensity·b²; **`SourceRadius = bulbRadius`** (point/spot; also gives the specular highlight and penumbra size the addon approximated as 0.05·radius) |
-| zero at `lightRadius`, fade over its last 20 % | `AttenuationRadius = lightRadius` (UE's window (1−(d/R)⁴)² ends at the same R) |
+| zero at `lightRadius`, fade over its last 20 % | `AttenuationRadius = lightRadius` (UE's window (1−(d/R)⁴)² ends at the same R). **Corrected by WP-L3:** the shapes differ (UE's window is already 0.35 at 0.8 R where the game's is 1), so an engine shader patch puts the game's fade in UE's local-light attenuation |
 | `Planar`: `planeWidth × planeHeight` | `URectLight` `SourceWidth/Height = planeWidth/Height`; intensity unit for planar lights is unverified (CE area lights take luminance; candidate L = 10⁴·intensity cd/m², I_normal = L·w·h) — measure |
 | `shadowCasting` | with MegaLights keep shadows on all lights: SC confines non-shadowing lights with `affectsThisAreaOnly` (vis areas), which UE lacks — ray-traced shadows are the containment substitute; without MegaLights shadow exactly the authored `shadowCasting=1` lights (2–4 per ship) instead of the radius-quartile rule of §6 |
 | 1000–1500 m headlights (`attenuationTweak` 0.006–0.007, no shadows, no fade) | keep the authored radius: MegaLights cost was flat (Gladius with both headlights 0.62 ms); revisit only if `attenuationTweak` turns out to scale the falloff distance |
