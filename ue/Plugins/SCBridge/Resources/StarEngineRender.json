@@ -209,6 +209,11 @@
       "value": 1.0,
       "file": "glassLib.cfib",
       "pattern": "float ThinFilmThickness < .*? ; > = (\\S+) ;"
+    },
+    "forcedFalloffFraction": {
+      "value": 0.2,
+      "file": "lightbeam.cfxb",
+      "pattern": "GetLightForcedDistanceFade \\( fLightDist , fInvRadius , \\( 1\\.0 / (\\S+) \\) \\)"
     }
   },
   "shader_textures": {
@@ -234,6 +239,10 @@
     "GetPhysicalLightAttenuation": {
       "file": "ShadeLib.cfib",
       "sha256": "92244c234583e569589e980d5eaffc67f577e275539b56c195803d16560447c8"
+    },
+    "GetLightForcedDistanceFade": {
+      "file": "ShadeLib.cfib",
+      "sha256": "a25301bed777319f4bb4af2a9efcca7ef29ab8e0ec9494922aef14859eb492c0"
     },
     "CalculateEmissive": {
       "file": "ShadeLib.cfib",

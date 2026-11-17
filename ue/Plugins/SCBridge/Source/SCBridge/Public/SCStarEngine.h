@@ -42,6 +42,10 @@ struct SCBRIDGE_API FSCStarEngine
     // copies it into packages with a LayerBlend_V2 material under this path) sampled at baseUV * DirtDetailScale.
     FString WearDirtFrostDetailMap;
     double DirtDetailScale = 0;
+    // GetLightForcedDistanceFade: every local light ends at its radius through saturate((1 - d / R) / fraction)^2, full
+    // strength until the last `fraction` of the radius. The engine shader patch (ue/EnginePatches) puts the same window in
+    // UE's local-light attenuation in place of (1 - (d / R)^4)^2.
+    double ForcedFadeFraction = 0;
 
     static FString FixturePath();
     static bool Load(const FString& Path, FSCStarEngine& Out, FString& Error);
@@ -59,8 +63,16 @@ struct SCBRIDGE_API FSCStarEngine
      * GetPhysicalLightAttenuation = 1 / (tweak * (d - bulb) / bulb + 1)^2; the Lambert pi is folded into the colour.
      */
     double PointCandela(double Intensity, double BulbRadiusM, double AttenuationTweak) const;
+    /**
+     * Distance offset of the same attenuation (m): for every distance it is PointCandela / (max(d, bulb) + offset)^2,
+     * offset = bulb (1 - tweak) / tweak. 0 for tweak 1 (plain inverse square beyond the bulb), negative above 1. UE has
+     * no such term; the importer carries it in SoftSourceRadius and the engine shader patch (WP-L3) applies it.
+     */
+    double AttenuationOffset(double BulbRadiusM, double AttenuationTweak) const;
     /** Normal luminous intensity (cd) of a planar light: its colour is luminance / pi (PlanarLightDiffuse). */
     double PlanarCandela(double Intensity, double WidthM, double HeightM) const;
+    /** The game's range window of a local light at a distance (any unit, the radius' unit): GetLightForcedDistanceFade. */
+    double LightRangeFade(double Distance, double Radius) const;
     /** Scene EV of a luminance in cd/m2 (LogLumToEV). */
     double SceneEV(double Nits) const { return FMath::Log2(Nits) + LuminanceToEV; }
     double NitsAtEV(double EV) const { return FMath::Pow(2.0, EV - LuminanceToEV); }

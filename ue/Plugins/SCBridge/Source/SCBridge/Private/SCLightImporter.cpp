@@ -139,6 +139,15 @@ double FSCLightImporter::StateCandela(const TSharedPtr<FJsonObject>& Light, cons
     return Game.PointCandela(Raw, FMath::Max(0., LightNumber(Light, TEXT("bulb_radius_m"))),
                              LightNumber(Light, TEXT("attenuation_tweak"), 1.0));
 }
+FSCLightImporter::FProjectorCone FSCLightImporter::ProjectorCone(double HalfFovDeg)
+{
+    FProjectorCone Cone;
+    Cone.FovTan = FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(HalfFovDeg, 0.0, MaxSpotConeDeg)));
+    // The square frustum's diagonal, within UE's limit.
+    Cone.OuterDeg = FMath::Min(FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * Cone.FovTan)), MaxSpotConeDeg);
+    return Cone;
+}
+
 FVector FSCLightImporter::ContainerBasis(const FVector& Cry, bool bHelperFrame)
 {
     return bHelperFrame ? FSCMeshImporter::Position(Cry) / 100. : LightBasis(Cry);
@@ -224,7 +233,14 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         if (bAuthored)
         {
             if (auto* Point = Cast<UPointLightComponent>(Light)) // also spot lights
-                Point->SetSourceRadius(FMath::Max(0., LightNumber(J, TEXT("bulb_radius_m"))) * 100);
+            {
+                const double Bulb = FMath::Max(0., LightNumber(J, TEXT("bulb_radius_m")));
+                Point->SetSourceRadius(Bulb * 100);
+                // The attenuation tweak's distance offset (FSCStarEngine::AttenuationOffset). UE has no field for it:
+                // SoftSourceRadius carries it, and the engine shader patch (WP-L3) reads it there instead of as a soft
+                // specular radius. Negative for tweak > 1, which only the editor's property clamp would refuse.
+                Point->SetSoftSourceRadius(FSCStarEngine::Get().AttenuationOffset(Bulb, LightNumber(J, TEXT("attenuation_tweak"), 1.0)) * 100);
+            }
             else if (auto* Rect = Cast<URectLightComponent>(Light))
             {
                 Rect->SetSourceWidth(FMath::Max(0., LightNumber(J, TEXT("plane_width_m"))) * 100);
@@ -306,6 +322,18 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             if (Master && Texture)
             {
                 Light->SetLightFunctionMaterial(GoboMaterial(Vehicle, Master, Texture));
+                // The game's projector is the texture over the square FOV frustum, without a cone falloff: open UE's
+                // cone to the frustum corners (the material zeroes everything outside the texture) and keep the gobo on
+                // the FOV frustum. The exported inner angle is not a game value and is not used for projectors.
+                if (auto* Spot = Cast<USpotLightComponent>(Light))
+                {
+                    const FProjectorCone Cone = ProjectorCone(LightNumber(J, TEXT("outer_angle")));
+                    Spot->SetOuterConeAngle(Cone.OuterDeg);
+                    Spot->SetInnerConeAngle(Cone.OuterDeg);
+                    const double Axial = Spot->LightFunctionScale.Z; // along the light ("z of the user scale", UE)
+                    const double Lateral = Axial * Cone.LateralScale(Spot->GetClampedConeAngles().Y);
+                    Spot->SetLightFunctionScale(FVector(Lateral, Lateral, Axial));
+                }
             }
             else
                 Warnings.Add(Name + TEXT(": gobo unavailable: ") + TexturePath);

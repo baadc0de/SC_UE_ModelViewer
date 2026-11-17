@@ -34,7 +34,7 @@ Inputs, both part of the installed game (untrusted data, never checked in):
 python3 -I scripts/verify_star_engine_render.py
 # SOURCE exe: …/LIVE/Bin64/StarCitizen.exe
 # SOURCE shaders: Engine\ShaderCache_Vulkan.pak (2391328688 bytes, crc32 aea61527) read in place from …/LIVE/Data.p4k
-# STAR_ENGINE_RENDER OK: 62/62 checks match the installed game
+# STAR_ENGINE_RENDER OK: <n>/<n> checks match the installed game
 ```
 
 `--exe PATH` and `--p4k PATH` (defaults: the LIVE executable and `Data.p4k` under `~/Games/star-citizen/...`),
@@ -46,7 +46,7 @@ Any difference is a non-zero exit naming the value. Run it after every game patc
 and, for a changed function hash, the rule ported from that function must be re-derived — never edit a value to
 make the validator pass.
 
-The 60 checks are the 59 fixture values plus one completeness check: the fixture must list exactly the
+The checks (80 as of WP-L3) are the 79 fixture values plus one completeness check: the fixture must list exactly the
 `r_ExposureCompensationEV<n>` cvars the executable registers (the loader builds the compensation curve from
 whatever anchors the fixture carries, so a dropped or invented anchor would otherwise pass). The shader side of
 the same curve — which anchors are read and where the segments join — is pinned by the `CalculateEVCompensation`
@@ -89,6 +89,7 @@ Method:
 | `glassVertexHeightBias`, `glassVertexHeightScale` | `M_SC_Glass` | `%PER_VERTEX_CURVATURE`: `height ×= saturate((vertex blue − 0.25) × 3)` |
 | `glassHeightClip` | `M_SC_Glass` coverage | `clip(heightMap − 0.01)` under `%HEIGHT_MAP` |
 | `glassTintStrengthDefault`, `glassTilingDefault`, `glassVStretchDefault`, `glassThinFilmThicknessDefault` | `FSCMaterialBuilder` `Glass` | the shader's declared default of a public parameter the material does not author (`GlassTintStrength`, `GlassTiling`, `GlassVStretch`; `ThinFilmThickness` under `%THIN_FILM`) |
+| `forcedFalloffFraction` | `FSCStarEngine::LightRangeFade`; the engine shader patch (WP-L3, `ue/scripts/engine_patches.py`) | a local light's range window: `GetLightForcedDistanceFade` = `saturate((1 − d / R) / 0.2)²`, full strength until the last 20 % of `lightRadius`; replaces UE's `(1 − (d / R)⁴)²`. Read from `lightbeam.cfxb`, which passes `1.0 / 0.2` (`volumetricfog.cfxb` passes the same `1 / 0.2f`) |
 
 Recorded as evidence only (they justify a documented residual or a path not taken; nothing reads them):
 `r_exposureMeterMode` 3 and `r_exposureIncidentBlendAmt` 0.5 (the game blends an incident-light meter into the
@@ -107,7 +108,8 @@ Functions and what was taken from each:
 | `PupilAdaptation`, `PigmentAdaptation`, `ExponentialDecay` | adaptation model (two stages; UE gets the pupil stage) |
 | `ParallelReduce_Range` | histogram reduction (discard ratios, threshold range) |
 | `MaterialGlowToLinearGlow`, `CalculateEmissive` | `GlowNits` (material term) and `InstanceGlowNits` (instance term) |
-| `GetPhysicalLightAttenuation` | `PointCandela`: `1 / (tweak · (d − bulb) / bulb + 1)²` |
+| `GetPhysicalLightAttenuation` | `PointCandela`: `1 / (tweak · (d − bulb) / bulb + 1)²`; `AttenuationOffset` = `bulb · (1 − tweak) / tweak`, the distance offset of the same curve (WP-L3: `SoftSourceRadius` + engine shader patch) |
+| `GetLightForcedDistanceFade` | the range window `LightRangeFade` and the engine shader patch (WP-L3) |
 | `PlanarLightDiffuse_LightSpace`, `DiffuseLambert` | `PlanarCandela` and the Lambert π folded into the light colour |
 | `GlassShared` | **ported** to `M_SC_Glass` (`create_materials.py` `glass_master`, which refuses to build when this hash or `ReflectanceToIOR`'s differs from the one its graph was written from): glass UV, clear base layer, absorption, vertex / map modifiers, height clip |
 | `GlassPBR_PS` | call site: what the glass pass hands to `GlassShared` |
@@ -123,6 +125,10 @@ These are stated in WP-U3b §13 with their evidence; they are the places a futur
 
 - The CPU-side normalisation of a point light's intensity includes the attenuation tweak (so that the authored
   intensity is reached one metre from the bulb surface for any tweak). The shader shows only the GPU half.
+- The tiled lighting path (`MergedTiledShading.cfi`) reads the forced-fade factor from the light's
+  `attenuationParams.z`, which the CPU fills; no cvar or light field for it was found in the executable. It is taken
+  to be the `1 / 0.2` the volumetric paths compile in (`forcedFalloffFraction`), which is also the CryEngine 5 value
+  (WP-L3).
 - Planar lights are not normalised on the CPU: the authored intensity is the panel's luminance over π.
 - An entity-effect Glow value (DataCore `materialEffects`, `materialProperty == Glow`; `controls.engine_glow`) is the
   instance-glow amount as the shader receives it. The shader multiplies `instData.glow` by a per-material glow

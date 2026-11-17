@@ -52,6 +52,7 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Out.GlassVStretchDefault = Value(TEXT("shader_constants"), TEXT("glassVStretchDefault"));
     Out.GlassThinFilmThicknessDefault = Value(TEXT("shader_constants"), TEXT("glassThinFilmThicknessDefault"));
     Out.DirtDetailScale = Value(TEXT("shader_constants"), TEXT("detailScale"));
+    Out.ForcedFadeFraction = Value(TEXT("shader_constants"), TEXT("forcedFalloffFraction"));
     {
         const TSharedPtr<FJsonObject>* Group = nullptr;
         const TSharedPtr<FJsonObject>* Entry = nullptr;
@@ -99,6 +100,7 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Require(Out.GlassTilingDefault > 0, TEXT("glassTilingDefault > 0"));
     Require(Out.GlassVStretchDefault > 0, TEXT("glassVStretchDefault > 0"));
     Require(Out.GlassThinFilmThicknessDefault >= 0, TEXT("glassThinFilmThicknessDefault >= 0"));
+    Require(Out.ForcedFadeFraction > 0 && Out.ForcedFadeFraction <= 1, TEXT("0 < forcedFalloffFraction <= 1"));
     Require(Out.MultiplierMin > 0 && Out.MultiplierMin < Out.MultiplierMax, TEXT("0 < r_ExposureMultiplierMin < r_ExposureMultiplierMax"));
     Require(Out.AdaptTimeDark > 0 && Out.AdaptTimeBright > 0 && Out.AdaptTimePupil > 0, TEXT("r_ExposureAdaptTime* > 0 (half-lives)"));
     Require(Out.AdaptRangePupil >= 0, TEXT("r_ExposureAdaptRangePupil >= 0"));
@@ -138,9 +140,22 @@ double FSCStarEngine::PointCandela(double Intensity, double BulbRadiusM, double 
     return UE_DOUBLE_PI * SceneUnitNits * Intensity * FMath::Square(1.0 + BulbRadiusM / AttenuationTweak);
 }
 
+double FSCStarEngine::AttenuationOffset(double BulbRadiusM, double AttenuationTweak) const
+{
+    // (tweak (d - b) / b + 1)^2 = (tweak / b)^2 (d + b (1 - tweak) / tweak)^2 for d >= b; PointCandela holds the rest.
+    if (AttenuationTweak <= 0 || BulbRadiusM <= 0) return 0;
+    return BulbRadiusM * (1.0 - AttenuationTweak) / AttenuationTweak;
+}
+
 double FSCStarEngine::PlanarCandela(double Intensity, double WidthM, double HeightM) const
 {
     return UE_DOUBLE_PI * SceneUnitNits * Intensity * WidthM * HeightM;
+}
+
+double FSCStarEngine::LightRangeFade(double Distance, double Radius) const
+{
+    if (Radius <= 0) return 0;
+    return FMath::Square(FMath::Clamp((1.0 - Distance / Radius) / ForcedFadeFraction, 0.0, 1.0));
 }
 
 double FSCStarEngine::CompensationAt(double MeteredEV) const

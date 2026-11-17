@@ -1,5 +1,6 @@
 // Package-level light invariants: counts are derived from the manifest, never ship-name expectations.
 #include "SCLightImporter.h"
+#include "SCStarEngine.h"
 #include "SCViewerSettings.h"
 #include "SCVehicle.h"
 #include "SCImporter.h"
@@ -39,8 +40,10 @@ TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Poin
         }
         const double Candela = L->Intensity * ULocalLightComponent::GetUnitsConversionFactor(
             L->IntensityUnits, ELightUnits::Candelas, Spot ? FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle)) : -1.f);
-        const double M = FMath::Max3(Cm, Bulb ? double(Bulb->SourceRadius) : 0., 1.) / 100.;
-        const double Lux = Candela / (M * M) * FMath::Square(1 - FMath::Pow(Cm / Radius, 4.)) * Cone;
+        // GetPhysicalLightAttenuation: candela / (max(d, bulb) + offset)^2, the offset in SoftSourceRadius (engine patch).
+        const double M = FMath::Max(1., FMath::Max(Cm, Bulb ? double(Bulb->SourceRadius) : 0.) + (Bulb ? double(Bulb->SoftSourceRadius) : 0.)) / 100.;
+        // The range window is the game's forced fade, which the engine shader patch puts in UE's local-light attenuation.
+        const double Lux = Candela / (M * M) * FSCStarEngine::Get().LightRangeFade(Cm, Radius) * Cone;
         if (Lux <= 0) continue;
         const uint8 Channels = L->LightingChannels.bChannel0 | (L->LightingChannels.bChannel1 << 1) | (L->LightingChannels.bChannel2 << 2);
         if (ReceiverChannels && !(Channels & ReceiverChannels)) { ++Gated; GatedLux += Lux; continue; }

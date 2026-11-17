@@ -211,6 +211,17 @@ bool FSCRigLights::RunTest(const FString&)
     TestEqual(TEXT("HDR gobos decode and bind"), Warnings.Num(), 0);
     TestEqual(TEXT("one texture shared by repeated gobos"), Vehicle->GoboTextures.Num(), 1);
     TestTrue(TEXT("one material shared by repeated gobos"), Vehicle->Lights.Last()->LightFunctionMaterial == Vehicle->Lights[Vehicle->Lights.Num() - 2]->LightFunctionMaterial);
+    if (const auto* Projector = Cast<USpotLightComponent>(Vehicle->Lights.Last()))
+    {
+        // A gobo projector is its texture over the square FOV frustum (the game's SpotTexArray sampling), not a UE cone.
+        const FSCLightImporter::FProjectorCone Cone = FSCLightImporter::ProjectorCone(30);
+        TestEqual(TEXT("projector: cone reaches the frustum corners"), double(Projector->OuterConeAngle), Cone.OuterDeg, 1e-4);
+        TestEqual(TEXT("projector: no cone falloff"), double(Projector->InnerConeAngle), Cone.OuterDeg, 1e-4);
+        TestEqual(TEXT("projector: gobo keeps the FOV frustum (lateral)"), double(Projector->LightFunctionScale.X / Projector->LightFunctionScale.Z),
+                  Cone.LateralScale(Projector->GetClampedConeAngles().Y), 1e-6);
+        TestEqual(TEXT("projector: gobo keeps the FOV frustum (both lateral axes)"), double(Projector->LightFunctionScale.Y),
+                  double(Projector->LightFunctionScale.X), 1e-6);
+    }
     if (UTexture2D* Texture = Vehicle->GoboTextures.FindRef(TEXT("gobo.exr")))
     {
         TestFalse(TEXT("gobo is linear"), Texture->SRGB);
