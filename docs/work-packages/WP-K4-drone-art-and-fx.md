@@ -1074,7 +1074,12 @@ Astra (`out/k4b/astra/r6.md`, sheets `out/k4b/sheets/r6-*`):
 
 **Open:**
 - The returns when a place stops fitting are 4-5 m (median 428 cm): mostly back over the box near the route's end, and
-  both drones of a pair at once. Astra's stagger is not done.
+  both drones of a pair at once. **Staggered since (owner, 2026-11-17):** before the route's piece ends or a precise
+  zone begins, the drones go back to their planned places one at a time (a teammate on its way round, the others keep
+  their grip), and the team looks ahead `LookaheadS` once for each drone still away (`FSCCargoGripPick::ReturnAheadS`,
+  test in `SCCargoTugTests`), so the last is back in time. Calm at once (no route to search on, no places, the box on
+  its side) still sends every drone back together. Verified by build and the unit tests only (the owner asked not to
+  run the scenario suite); the C2/fleet/Hull A runs above predate it.
 - The cap-lifted run (`k6-c2-nocap`, not part of the bar) had one overlap.
 - A drone's first grip of each route piece is uncapped, following the owner's wording ("aside from initial").
 

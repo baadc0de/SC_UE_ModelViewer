@@ -1132,6 +1132,10 @@ bool FSCCargoGripPlacesTest::RunTest(const FString&)
              Round > Straight + 1 && Round > FSCCargoGripPick::MoveCap(Cfg, 2 * In.BoxHalfCm.GetMax()));
     const FVector Shifted = G.Station(0) + FVector(0, 60, 10);
     TestTrue(TEXT("A shift along the same face is within it"), FSCCargoGripPick::WayLength(G.WayRound(G.Station(0), Shifted)) <= FSCCargoGripPick::MoveCap(Cfg, 2 * In.BoxHalfCm.GetMax()));
+    // The returns to the planned places go one at a time: the team looks ahead the lookahead once per drone still away.
+    TestEqual(TEXT("None away: the lookahead"), FSCCargoGripPick::ReturnAheadS(Cfg, 0), double(Cfg.LookaheadS));
+    TestEqual(TEXT("One away: the lookahead"), FSCCargoGripPick::ReturnAheadS(Cfg, 1), double(Cfg.LookaheadS));
+    TestEqual(TEXT("Both of a pair away: twice"), FSCCargoGripPick::ReturnAheadS(Cfg, 2), 2.0 * Cfg.LookaheadS);
     // The interval: within the configured range, each draw its own.
     double Lo = 1e9, Hi = -1e9;
     for (int32 K = 0; K < 1000; ++K)
