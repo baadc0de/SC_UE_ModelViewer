@@ -49,7 +49,7 @@ bool USCCargoSubsystem::RightOfWayYield(const FSCCargoMove& M, int32 BoxId, cons
 {
     const FVector Size = A ? A->SizeCm() : FVector::ZeroVector;
     // As far as either load's drones may be out from it: their beams' full-strength distance and the drone itself.
-    const double Reach = Size.Size() / 2 + FMath::Max(M.HangCm, State->Scenario.Drone.FullStrengthDistanceM * 100.0) + SCCargoFlightTuning::DroneHeightCm;
+    const double Reach = Size.Size() / 2 + FMath::Max(M.HangCm, State->Scenario.Drone.FullStrengthDistanceM * 100.0) + DroneHeightCm();
     for (const auto& Pair : State->Boxes)
     {
         const FSCCargoBox& O = Pair.Value;
@@ -127,7 +127,9 @@ bool USCCargoSubsystem::ReplanLoad(const FSCCargoJob& Job, FSCCargoMove& M, cons
     // margin first rises out of it (a short climb, the only way it can go).
     const FVector GoalNormal = M.Plan.Kind == ESCCargoMoveKind::Hold && !M.bRestoring ? Up : M.ToNormal;
     const bool bToEntrance = !M.SecondPath.IsEmpty(); // first leg into a hold: to its entrance
-    if (!bToEntrance && Load.Blocked(M.Goal))
+    // Held from its ends with a swap back over the box before its goal (WP-K4 round 4): to where that swap is.
+    const bool bToSwap = !bToEntrance && !M.OverLeg.IsEmpty();
+    if (!bToEntrance && !bToSwap && Load.Blocked(M.Goal))
     {
         if (M.Plan.Kind == ESCCargoMoveKind::Hold && !M.bRestoring)
         {
@@ -151,7 +153,7 @@ bool USCCargoSubsystem::ReplanLoad(const FSCCargoJob& Job, FSCCargoMove& M, cons
     FSCCargoRoute::EscapeStart(From, Load, Gravity() > 0, M.ToNormal, -M.Carry.Tangent(), Start);
     TArray<FVector> Path;
     FSCCargoRouteQuery Cached = Load;
-    const FVector Target = bToEntrance ? M.SecondPath[0] : M.Goal;
+    const FVector Target = bToEntrance ? M.SecondPath[0] : bToSwap ? M.OverLeg[0] : M.Goal;
     bool bFound = PlanRoute(Job, M, TEXT("replan"), Start, Target, Cached, Path, TEXT("replan"), true);
     if (bFound && Start != From) Path.Insert(From, 0);
     // Stopped inside the margin of a load that gives way to this one (it waits): plan as if flying loads were not

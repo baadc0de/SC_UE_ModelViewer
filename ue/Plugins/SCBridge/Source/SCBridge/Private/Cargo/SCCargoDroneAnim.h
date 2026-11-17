@@ -2,7 +2,8 @@
 // no anim graph, no Blueprint). A clip played with bLockYaw keeps the yaw-lock bone at its reference yaw: the turn
 // clips rotate the body, but the actor does the turning (its heading policy), so the clip adds only its tilt and sway.
 // In every clip the place-lock bone keeps its reference place (within MaxBob): the actor carries the motion and the
-// clips keep their rotations and moving parts (so the hull built from those poses is what renders).
+// clips keep their rotations and moving parts (so the hull built from those poses is what renders); its tilt (the swing
+// off its reference) is scaled by TiltScale, as the drone's attitude leans it now (WP-K4 round 4).
 #pragma once
 #include "CoreMinimal.h"
 #include "Animation/AnimInstance.h"
@@ -22,6 +23,8 @@ public:
     /** The bone held at its reference place in every clip (the actor carries the motion), within MaxBob (mesh units). */
     FName PlaceLockBone;
     float MaxBob = 0.f;
+    /** The share of the clips' tilt of the place-lock bone that is kept (1: all). */
+    float TiltScale = 1.f;
 
     struct FCommand
     {

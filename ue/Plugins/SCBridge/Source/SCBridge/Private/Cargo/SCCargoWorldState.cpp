@@ -14,7 +14,7 @@ uint32 FSCCargoHullRule::Touched(const FVector& Centre) const
 {
     // The shape is in a vehicle's grid when an upright axis through it (its middle, the ends of its long side) touches
     // the grid's volume: the rule the player's capsule follows (ASCVehicle::IsInPhysicsGrid(Bottom, Top)).
-    uint32 Mask = 0;
+    uint32 Mask = Always;
     for (int32 I = 0; I < Hulls.Num(); ++I)
     {
         const ASCVehicle* V = Hulls[I].Vehicle.Get();
@@ -98,6 +98,20 @@ TSharedRef<FSCCargoHullRule> USCCargoSubsystem::HullRule(const FCollisionQueryPa
     return Rule;
 }
 
+TSharedRef<FSCCargoHullRule> USCCargoSubsystem::DroneHullRule(const FCollisionQueryParams& Base, const ASCCargoDrone* Drone) const
+{
+    // A drone holding its box flies in that load's column, and a load's route takes the column with the box as one
+    // shape (ColumnQuery): where the load is in a vehicle's grid, so are its drones. (Tested alone, a drone at a hold's
+    // entrance ceiling was outside the grid's volume and met the hull's collider there, over a route its load had
+    // been given free; its tug stalled under it.)
+    TSharedRef<FSCCargoHullRule> Rule = HullRule(Base, Drone->StepHalf(), FQuat::Identity);
+    FTransform Own;
+    FVector OwnHalf;
+    if (Drone->CarryingBoxId != INDEX_NONE && DroneOwnBox(Drone, Own, OwnHalf))
+        Rule->Always = HullRule(Base, OwnHalf, Own.GetRotation())->Touched(Own.GetLocation());
+    return Rule;
+}
+
 uint32 USCCargoSubsystem::WorldHash() const
 {
     // The collision world a route is planned in, apart from the cargo: which vehicles there are, where they and the
@@ -145,6 +159,8 @@ void USCCargoSubsystem::RefreshMove(FSCCargoMove& M) const
     M.Searches.Empty();
     M.CellCaches.Empty();
     M.TurnPoints.Empty();
+    M.EndsFinishes.Empty();
+    M.Entrances.Empty();
     M.WorldStamp = Stamp;
 }
 

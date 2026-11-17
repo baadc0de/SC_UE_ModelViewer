@@ -15,6 +15,7 @@
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
+#include "SCFxBeam.h"
 #include "SCFxStrength.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCFxPreview, Log, All);
@@ -100,8 +101,7 @@ void Spawn(const TArray<FString>& Args, UWorld* World)
     if (const double* Len = Keys.Find(TEXT("len")))
     {
         const double Bend = FMath::DegreesToRadians(Key(TEXT("bend"), 0.0));
-        C->SetVariableFloat(TEXT("SC.BeamLength"), float(*Len));
-        C->SetVariableVec2(TEXT("SC.BeamLength2"), FVector2D(*Len, *Len));
+        SCFxBeam::SetLength(C, float(*Len));
         C->SetVariableVec3(TEXT("SC.BeamEnd"), FVector(FMath::Cos(Bend), FMath::Sin(Bend), 0.0) * *Len);
         C->SetVariableVec3(TEXT("SC.BeamStartTangent"), FVector(*Len, 0.0, 0.0));
     }

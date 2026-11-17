@@ -133,7 +133,7 @@ Exact chosen launch command, from the repository root (GPU validation still need
 ```bash
 "$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" \
   "$PWD/ue/SCViewer/SCViewer.uproject" \
-  -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
+  -game -windowed -resx=1920 -resy=1080 -vulkan -ddc=SCViewerDDC
 ```
 
 ## GPU validation (2026-11-09, host B on the RTX 4090)
@@ -369,7 +369,7 @@ Slate UI in every host. Run from the repository root (the cache defaults to
 
 ```bash
 "$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
-  -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
+  -game -windowed -resx=1920 -resy=1080 -vulkan -ddc=SCViewerDDC
 ```
 
 Search, pick options, Load; drag to orbit, Shift/middle-drag to pan, wheel to zoom,

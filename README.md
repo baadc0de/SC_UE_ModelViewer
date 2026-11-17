@@ -76,7 +76,7 @@ scripts/build_ffi.sh                                  # libscbridge.so + header 
 uv run python ue/scripts/engine_patches.py apply      # once per engine install
 ue/scripts/build.sh SCViewerEditor
 "$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
-  -game -windowed -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC
+  -game -windowed -resx=1920 -resy=1080 -vulkan -ddc=SCViewerDDC
 ```
 
 Windows (PowerShell):
@@ -86,7 +86,7 @@ powershell -File scripts/build_ffi.ps1               # scbridge.dll + import lib
 & "C:\Program Files\Epic Games\UE_5.9\Engine\Build\BatchFiles\Build.bat" SCViewerEditor Win64 Development `
   "-Project=$PWD\ue\SCViewer\SCViewer.uproject" -WaitMutex
 & "C:\Program Files\Epic Games\UE_5.9\Engine\Binaries\Win64\UnrealEditor.exe" "$PWD\ue\SCViewer\SCViewer.uproject" `
-  -game -windowed -resx=1600 -resy=900
+  -game -windowed -resx=1920 -resy=1080
 ```
 
 Start the viewer from the repository root, so its cache goes to `./cache/`. Useful switches:

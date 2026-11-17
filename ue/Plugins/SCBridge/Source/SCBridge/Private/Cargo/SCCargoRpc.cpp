@@ -163,8 +163,8 @@ TSharedRef<FJsonObject> USCCargoSubsystem::StateJson() const
         // WP-K4a: where it faces and turns to (degrees), and the clip it shows (motion/phase; the art only).
         O->SetNumberField(TEXT("yaw"), FMath::RoundToDouble(D->GetActorRotation().Yaw * 10) / 10);
         O->SetNumberField(TEXT("heading"), FMath::RoundToDouble(D->HeadingTarget() * 10) / 10);
-        O->SetNumberField(TEXT("pitch"), FMath::RoundToDouble(D->GetActorRotation().Pitch * 10) / 10);
-        O->SetNumberField(TEXT("roll"), FMath::RoundToDouble(D->GetActorRotation().Roll * 10) / 10);
+        O->SetNumberField(TEXT("pitch"), FMath::RoundToDouble(D->LookRotation().Pitch * 10) / 10);
+        O->SetNumberField(TEXT("roll"), FMath::RoundToDouble(D->LookRotation().Roll * 10) / 10);
         O->SetStringField(TEXT("clip"), D->Art ? D->ClipName() : FString());
         if (D->CarryingBoxId != INDEX_NONE)
         {

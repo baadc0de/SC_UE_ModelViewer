@@ -51,6 +51,9 @@ struct SCBRIDGE_API FSCCargoDroneDefinition
     /** maxVolume / volumeForceCoefficient of the action, logged and kept, not applied: their semantics are not
      *  established (see ApplyTractorRecord). */
     double MaxVolume = 0, VolumeForceCoefficient = 0;
+    /** maxAngle: the cone (degrees off the emitter's aim) the beam holds within (round 5: how far below level a drone's
+     *  hold may point); 90 when the record does not say. */
+    double MaxAngleDeg = 90;
     FString TractorSource = TEXT("scenario"); // "datacore" once read from the record
     /** The tractor's effects (WP-K4c), from the same action: its beam (beamGroup.beamEffects[0].particleEffect) and
      *  muzzle (fireEffects[0].firstPerson) particle effect references (`<GUID>|<library>.<effect>`), and its hit effect,

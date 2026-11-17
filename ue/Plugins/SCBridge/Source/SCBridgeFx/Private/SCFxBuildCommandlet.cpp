@@ -31,13 +31,17 @@
 //  SC.SV<i>             float, set by the runtime from SC.Strength (SCFxStrength.h): EmitterStrength curve i of the
 //                       system at that strength, piecewise linear between its keys SC.SK<i>.T (vec4 strengths) and
 //                       SC.SK<i>.V (vec4 values; fewer keys repeat the last). Default: its value at strength 1.
+//  SC.BR<i>             float /s, set by the runtime from SC.BeamLength (SCFxBeam.h): beam emitter i's spawn rate,
+//                       SC.BK<i> (its particles per cm of beam per second, a default the runtime reads) x the length.
 //
 // Mapping (JSON field -> Niagara):
 //  spawn: burst -> Burst spawn info (count x parent count for Spawn=FromParentBirth children; PulsePeriod -> loop);
 //         continuous -> Rate = Count / min(lifetime, EmitterLifeTime) (CryEngine's Count is the number alive at once);
 //         per_distance (spline-guided) -> Rate = EmitPerDistance x SC.BeamLength / lifetime, so the beam holds
 //         EmitPerDistance particles per metre at any length (UE 5.9 spawn rates bind a User float but evaluate no
-//         expression: round(EmitPerDistance / 100 / lifetime) spawn infos each bound to SC.BeamLength in cm);
+//         expression: one spawn info bound to SC.BR<i>, which the runtime sets to SC.BK<i> x SC.BeamLength);
+//         infinite loops last at least lifetime / (MaxGpuSpawnInfos - 1), so the loops alive at once fit the spawn
+//         infos a lightweight emitter draws;
 //         SpawnDelay -> delay.
 //  lifetime (+Random) -> InitializeParticle Lifetime range [v(1-r), v].
 //  size (+Random, Aspect) -> Sprite Size: CryEngine's Size is a radius -> 2 x 100 x size; age_curve -> ScaleSpriteSize.
@@ -106,6 +110,7 @@
 #include "NiagaraSystem.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Stateless/NiagaraStatelessSimulationShader.h" // NiagaraStateless::MaxGpuSpawnInfos
 #include "Stateless/Modules/NiagaraStatelessModule_AccelerationForce.h"
 #include "Stateless/Modules/NiagaraStatelessModule_AddVelocity.h"
 #include "Stateless/Modules/NiagaraStatelessModule_CurlNoiseForce.h"
@@ -150,7 +155,12 @@ const FName UserBeamTangent(TEXT("User.SC.BeamStartTangent"));
 const FName UserBeamLength(TEXT("User.SC.BeamLength"));
 const FName UserBeamLength2(TEXT("User.SC.BeamLength2"));
 const FName UserScale2(TEXT("User.SC.Scale2"));
+// A beam emitter's spawn rate (SC.BR<i>, bound) and its rate per cm of beam (SC.BK<i>, a default the runtime reads).
+FName BeamRateName(int32 Index) { return FName(*FString::Printf(TEXT("User.SC.BR%d"), Index)); }
+FName BeamPerCmName(int32 Index) { return FName(*FString::Printf(TEXT("User.SC.BK%d"), Index)); }
 constexpr double DefaultBeamCm = 100.0;
+// The loops of an infinite emitter whose particles may live at once: its spawn infos on the GPU (one per live loop).
+constexpr double MaxLiveLoops = NiagaraStateless::MaxGpuSpawnInfos;
 
 // ---- JSON --------------------------------------------------------------------------------------------------------
 const FJsonValue* Field(const FJson& O, const FString& Path)
@@ -543,6 +553,7 @@ struct FBuilder
         float At1 = 1;
     };
     mutable TArray<FStrengthCurve> StrengthCurves;
+    TArray<double> BeamRates;   // per beam emitter of the system being built: its particles per cm of beam per second (SC.BK<i>)
     double BeamRangeM = 0;      // the strength record's beam range: the beam emitters' bounds
     TArray<TSharedPtr<FJsonValue>> CurrentEmitters; // the effect being built
     TOptional<double> GuideCurvature;               // its beam spline's curvature (first guided emitter)
@@ -900,6 +911,10 @@ struct FBuilder
         S.Loop = EmitterLife > 0 ? ENiagaraLoopBehavior::Once : ENiagaraLoopBehavior::Infinite;
         // Infinite loops re-read bound / expression rates once per loop: keep them short so strength and length follow.
         S.Duration = EmitterLife > 0 ? EmitterLife : (F.Strength || F.Beam ? FMath::Min(Life, 0.25) : Life);
+        // Every loop whose particles still live is a spawn info of its own on the GPU, and a lightweight emitter draws at
+        // most MaxGpuSpawnInfos of them (UE 5.9: 8; the rest are dropped: "overflowed spawn infos", flicker). Its one
+        // spawn info over 1 + ceil(lifetime / loop) loops: a loop of at least a seventh of the lifetime.
+        if (S.Loop == ENiagaraLoopBehavior::Infinite) S.Duration = FMath::Max(S.Duration, Life / (MaxLiveLoops - 1) * 1.001);
         if (Mode != TEXT("per_distance")) L.Mapped.Add(TEXT("spawn.continuous"));
         if (S.Delay > 0) L.Mapped.Add(TEXT("spawn.delay"));
         return S;
@@ -964,16 +979,13 @@ struct FBuilder
             if (CountStrength.bVaries) L.Approx.AddUnique(TEXT("count.strength_curve@1 (spawn rates take no expression)"));
             if (S.bBeam)
             {
-                const int32 N = FMath::Max(1, FMath::RoundToInt(S.PerCm));
-                for (int32 i = 0; i < N; ++i)
-                {
-                    FNiagaraStatelessSpawnInfo& Each = i == 0 ? Info : Em->AddSpawnInfo();
-                    Each.bEnabled = true;
-                    Each.Type = ENiagaraStatelessSpawnInfoType::Rate;
-                    Each.Rate.Mode = ENiagaraDistributionMode::Binding;
-                    Each.Rate.ParameterBinding = FNiagaraVariableBase(FNiagaraTypeDefinition::GetFloatDef(), UserBeamLength);
-                }
-                if (!FMath::IsNearlyEqual(N, S.PerCm, 0.05)) L.Approx.Add(FString::Printf(TEXT("beam density x%.2f (whole spawn infos)"), N / S.PerCm));
+                // One spawn info bound to this emitter's own rate SC.BR<i>, which the runtime sets to SC.BK<i> (the
+                // rate per cm) x the beam length (SCFxBeam.h). (Copies bound to SC.BeamLength, one per particle per cm
+                // per second, overflowed the spawn infos a lightweight emitter draws: 5 copies x 5 live loops.)
+                const int32 Index = BeamRates.Add(S.PerCm);
+                Info.Rate.Mode = ENiagaraDistributionMode::Binding;
+                Info.Rate.ParameterBinding = FNiagaraVariableBase(FNiagaraTypeDefinition::GetFloatDef(), BeamRateName(Index));
+                L.Mapped.AddUnique(TEXT("SC.BeamLength"));
             }
             else SetRange(Info.Rate, S.RateMin * CountStrength.At1, S.RateMax * CountStrength.At1);
         }
@@ -1673,6 +1685,7 @@ struct FBuilder
         CurrentEmitters = Emitters;
         GuideCurvature.Reset();
         StrengthCurves.Reset();
+        BeamRates.Reset();
         GuideName.Reset();
         for (const auto& V : Emitters)
             if (const FJson E = V->AsObject(); Bool(E, TEXT("enabled")) && Has(E, TEXT("spline")))
@@ -1817,6 +1830,11 @@ struct FBuilder
             User.AddParameter(Var, true, true);
             User.SetParameterValue(FVector2f(float(DefaultBeamCm)), Var);
             Contract.Add(FString::Printf(TEXT("%s=(%g,%g)"), *UserBeamLength2.ToString(), DefaultBeamCm, DefaultBeamCm));
+            for (int32 i = 0; i < BeamRates.Num(); ++i)
+            {
+                AddFloat(BeamPerCmName(i), float(BeamRates[i]));
+                AddFloat(BeamRateName(i), float(BeamRates[i] * DefaultBeamCm));
+            }
         }
 
         System->RequestCompile(false);

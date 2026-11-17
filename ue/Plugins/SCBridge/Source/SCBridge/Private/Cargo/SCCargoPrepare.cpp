@@ -3,6 +3,11 @@
 // front of a failed search reached), and a move's preparation before anything flies: lift along the source normal, the
 // load's route to its hold point or approach (into a hold: to a turn point outside it that the load can reach), the
 // drones' routes out to the box. Nothing flies a route that was not found free. Query shapes: SCCargoQueries.cpp.
+// How the drones hold the box on the way is planned in turn (WP-K4 rounds 4 and 5, CARGO_GRIP / CARGO_GRIP_TIER, TierOrder):
+// over it with a drone's clearance kept over their hulls; else from its ends (a lone drone at the end trailing its route,
+// pushing, or a pair at both, low; swapped to them after the lift or the turn at a hold's entrance, and back over the box
+// where there is room before its slot, or kept down onto it); else over it as tight as it fits. That planned place is in
+// the route's shape; on the way each drone re-picks its own, the ends mostly, where they fit (SCCargoGrip.cpp).
 #include "Cargo/SCCargoSubsystem.h"
 #include "HAL/PlatformTime.h"
 #include "SCCargoState.h"
@@ -50,7 +55,7 @@ bool USCCargoSubsystem::PlanRoute(const FSCCargoJob& Job, FSCCargoMove& M, const
     if (State->SearchFrame != GFrameCounter)
     {
         State->SearchFrame = GFrameCounter;
-        State->SearchUntil = FPlatformTime::Seconds() + FSCCargoState::SearchBudgetSeconds;
+        State->SearchSpent = 0;
     }
     const FString K = SearchKey(Key.IsEmpty() ? FString(What) : Key, Query);
     TSharedPtr<FSCCargoRouteSearch>& Search = M.Searches.FindOrAdd(K);
@@ -68,10 +73,16 @@ bool USCCargoSubsystem::PlanRoute(const FSCCargoJob& Job, FSCCargoMove& M, const
         if (!bKeep) M.Searches.Remove(K); // Search (a reference into the map) is gone after this
         return bFound;
     }
-    if (!Search->IsDone() && !Search->Step(FMath::Max(State->SearchUntil - FPlatformTime::Seconds(), 0.0)))
+    if (!Search->IsDone())
     {
-        M.bRoutePending = true;
-        return false;
+        const double Began = FPlatformTime::Seconds();
+        const bool bDone = Search->Step(FMath::Max(FSCCargoState::SearchBudgetSeconds - State->SearchSpent, 0.0));
+        State->SearchSpent += FPlatformTime::Seconds() - Began;
+        if (!bDone)
+        {
+            M.bRoutePending = true;
+            return false;
+        }
     }
     const FSCCargoRoute Route = Search->Result;
     const double SearchMs = Search->Seconds * 1000, MaxStepMs = Search->MaxStepSeconds * 1000;
@@ -208,8 +219,11 @@ bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& 
     M.Searches.Empty();
     M.CellCaches.Empty();
     M.TurnPoints.Empty();
+    M.EndsFinishes.Empty();
+    M.Entrances.Empty();
     M.EntranceOut = 0;
     M.bRefine = false;
+    M.Tier = M.TierStep = 0; // every way of holding it again
     M.bRoutePending = true;
     return false;
 }
@@ -256,11 +270,51 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         const double Along = (I - (N - 1) / 2.0) * Spacing;
         M.Offsets.Add(bLongX ? FVector(Along, 0, 0) : FVector(0, Along, 0));
     }
+    // How the drones hold it on the way (WP-K4 round 5), tried in turn: 0 from its ends (a team of one or two, low; held
+    // over, with a drone's clearance over their hulls, where it is lifted), 1 over it with that clearance (bRoomy), 2 over
+    // it as tight as it fits (the old way), in the order TierOrder gives: over with room first (the planned place is the
+    // fallback; every route ends beside boxes standing flush), the ends where that finds no way. On the way each drone
+    // holds from where it picks (SCCargoGrip.cpp): the ends about 3 of 4 times, where they fit.
+    using EGrip = FSCCargoMove::EGrip;
+    const TArray<int32> Order = TierOrder(M, A, N);
+    M.TierStep = FMath::Clamp(M.TierStep, 0, Order.Num() - 1);
+    M.Tier = Order[M.TierStep];
+    M.Grip = EGrip::Over;
+    M.EndsPiece = -1;
+    M.OverLeg.Reset();
+    M.bEndsToSlot = false;
+    M.Piece = 0;
+    M.bRoomy = M.Tier < 2; // held over on the way (and at the lift when held from its ends later): with the room
+    const bool bEndsTier = M.Tier == 0;
+    // Each drone's end (a lone drone: the end trailing its route, so it pushes the box ahead of it; it pulls in reverse
+    // where the route doubles back), and the geometry every drone's places round the box are drawn from.
+    M.EndOf.Reset();
+    if (N == 1)
+    {
+        const FVector Axis = M.FromRotation.RotateVector(A->SizeCm().X >= A->SizeCm().Y ? FVector::ForwardVector : FVector::RightVector);
+        M.EndOf.Add(FVector::DotProduct(Axis, Slot.GetLocation() - A->GetActorLocation()) >= 0 ? 0 : 1);
+    }
+    else if (N == 2) M.EndOf = {0, 1};
+    M.Places = EndGrip(A, Box->Occupancy.Mass, Drones, FMath::Clamp(N, 1, 2));
+    M.Ends = bEndsTier ? M.Places : FSCCargoEndGrip();
+    M.Spots.Reset();
+    M.SpotFlights.Reset();
+    M.Picks.Reset();
+    if (M.Ends.bValid)
+    {
+        // Held from its ends the beams have less to spare for the route (their pulls out, their forces near their
+        // lines): the route is flown no harder than both allow (as RouteAccel: the minimum kept, over root two).
+        const double Ends = FMath::Max(M.Ends.MaxAccelMS2 - Def.MinLoadAccelMS2, FMath::Min<double>(M.Ends.MaxAccelMS2, Def.MinLoadAccelMS2)) / UE_DOUBLE_SQRT_2;
+        M.LoadAccel = FMath::Min(M.LoadAccel, Ends * 100.0);
+        M.LoadJerk = Def.MaxJerkMS3 * 100.0 * (M.LoadAccel / 100.0) / FMath::Max<double>(Def.MaxAccelMS2, 1e-3);
+    }
     // The load's route at the beam's hang; under low ceilings and through doors the drones reel the box in to the beam's
     // minimum distance and plan again.
     const double BaseLift = Lift;
     auto PlanLoad = [&](FString& OutWhy) {
         M.RouteEnd = ESCCargoRouteEnd::None;
+        M.Grip = EGrip::Over; // lifted (and turned) held over
+        if (bEndsTier && !M.Ends.bValid) { OutWhy = TEXT("it cannot be held from its ends: ") + M.Ends.Why; return false; }
         const FSCCargoRouteQuery Load = LoadQuery(M, A);
         // The free route begins and ends where the whole hanging load (box, beam, drones above it) is clear: drawn along the
         // grid normal past the box's own lift until it is (the drawn stretch swept with the box itself).
@@ -294,36 +348,129 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         auto ReportLoad = [&](bool bFound, const FVector& GoalAt, const TCHAR* Turn, const FVector& TurnAt) {
             UE_LOG(LogSCCargo, Display,
                    TEXT("CARGO_LOAD job=%d move=%d box=%d found=%d end=%s lifted=%s lift_m=%.2f goal=%s turn=%s turn_at=%s pick_yaw=%.0f flight_yaw=%.0f hang_m=%.2f drones=%d "
-                        "spread_m=%.2f size_m=%s margin_cm=%.0f"),
+                        "spread_m=%.2f size_m=%s margin_cm=%.0f tier=%d grip=%s"),
                    Job.Id, M.MoveId, M.Plan.BoxId, bFound, FSCCargoRoute::EndName(M.RouteEnd), *Lifted.ToCompactString(), LiftAt / 100, *GoalAt.ToCompactString(), Turn,
                    *TurnAt.ToCompactString(), M.PickRotation.Rotator().Yaw, M.FromRotation.Rotator().Yaw, M.HangCm / 100, N,
-                   M.Offsets.Num() > 1 ? M.Offsets.Last().Size() / 100 : 0.0, *(Size / 100).ToCompactString(), DroneClearanceCm / 2 + SwayEnvelopeCm());
+                   M.Offsets.Num() > 1 ? M.Offsets.Last().Size() / 100 : 0.0, *(Size / 100).ToCompactString(), DroneClearanceCm / 2 + SwayEnvelopeCm(), M.Tier,
+                   bEndsTier ? (M.bEndsToSlot ? TEXT("ends_to_slot") : TEXT("ends_then_over")) : TEXT("over"));
+        };
+        // Held from its ends (tier 1): the way onto the slot arriving at Arrive. Over the slot held over when it can be
+        // swapped back there first (SwapOutPoint: OverLeg), else held from its ends down onto it (a level slot). OutTarget:
+        // where the route held from its ends ends. Leaves M.Grip at the ends.
+        auto EndsFinishNow = [&](const FQuat& Arrive, FVector& OutTarget, FString& OutEndsWhy) {
+            M.Grip = EGrip::Over;
+            M.OverLeg.Reset();
+            M.bEndsToSlot = false;
+            FString ApproachWhy;
+            FVector OverGoal, OverApproach, T;
+            FString Note = TEXT("swap_point none: no room over the slot held over: ");
+            const bool bOver = SlotApproach(M, A, Slot, M.ToNormal, Arrive, Def.NormalClearanceM * 50.0, OverGoal, OverApproach, &ApproachWhy);
+            if (!bOver) Note += ApproachWhy;
+            const bool bSwap = bOver && SwapOutPoint(M, A, To, OverGoal, Arrive, T, &Note);
+            if (Note != M.GripNote)
+            {
+                M.GripNote = Note; // said once (planning goes over this every tick while a search runs)
+                UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIP job=%d move=%d box=%d %s"), Job.Id, M.MoveId, M.Plan.BoxId, *Note);
+            }
+            if (bSwap)
+            {
+                M.Goal = OverGoal;
+                M.Approach = OverApproach;
+                if (!T.Equals(OverGoal, 1.0)) M.OverLeg = {T, OverGoal};
+                OutTarget = T;
+                M.Grip = EGrip::Ends;
+                return true;
+            }
+            M.Grip = EGrip::Ends;
+            if (FVector::DotProduct(M.ToNormal, FVector::UpVector) < 0.999 || Slot.GetRotation().GetUpVector().Z < 0.999)
+            {
+                OutEndsWhy = TEXT("no room to swap back over the box, and the slot is not level (held from its ends a box goes down level only)");
+                return false;
+            }
+            if (!SlotApproach(M, A, Slot, M.ToNormal, Arrive, Def.NormalClearanceM * 50.0, M.Goal, M.Approach, &ApproachWhy))
+            {
+                OutEndsWhy = TEXT("no room over the slot held over or from its ends: ") + ApproachWhy;
+                return false;
+            }
+            M.bEndsToSlot = true;
+            OutTarget = M.Goal;
+            return true;
+        };
+        // Once per situation (FSCCargoMove::EndsFinishes).
+        auto EndsFinish = [&](const FQuat& Arrive, FVector& OutTarget, FString& OutEndsWhy) {
+            RefreshMove(M);
+            const FString Key = FString::Printf(TEXT("%s@%u/%d"), *Arrive.ToString(), M.WorldStamp, int32(M.bRefine));
+            if (const FSCCargoMove::FEndsFinish* Known = M.EndsFinishes.Find(Key))
+            {
+                M.Grip = EGrip(Known->Grip);
+                M.bEndsToSlot = Known->bEndsToSlot;
+                M.OverLeg = Known->OverLeg;
+                if (Known->bOK)
+                {
+                    M.Goal = Known->Goal;
+                    M.Approach = Known->Approach;
+                    OutTarget = Known->Target;
+                }
+                OutEndsWhy = Known->Why;
+                return Known->bOK;
+            }
+            FSCCargoMove::FEndsFinish Out;
+            Out.bOK = EndsFinishNow(Arrive, Out.Target, Out.Why);
+            Out.Grip = uint8(M.Grip);
+            Out.bEndsToSlot = M.bEndsToSlot;
+            Out.OverLeg = M.OverLeg;
+            Out.Goal = M.Goal;
+            Out.Approach = M.Approach;
+            if (Out.bOK) M.EndsFinishes.Add(Key, Out); // a miss may clear (kept space): looked for again
+            OutTarget = Out.Target;
+            OutEndsWhy = Out.Why;
+            return Out.bOK;
         };
         // Into a ship's hold from outside it, a long box goes in lengthwise (the hold's entrance passes it only so). It turns
         // onto the hold's lattice where it has room, in free air (swept): by where it was lifted when it can (then it flies
         // the whole way as it will go in, through whatever leads there: a ramp, a channel between tail booms), else
-        // outside the hold's entrance (below).
+        // outside the hold's entrance (below). Held from its ends, the drones swap to its ends after that turn.
         const bool bIntoHold = !bHold && To->bAccessRule && To->Kind == ESCCargoGridKind::Vehicle && HoldAt(Lifted) != To;
         if (FVector TurnAt; bIntoHold && EarlyTurnPoint(M, A, From, Lifted, Slot.GetRotation(), TurnAt))
         {
             const FQuat InHold = Slot.GetRotation();
             M.ToRotation = InHold;
             FString ApproachWhy;
-            if (SlotApproach(M, A, Slot, M.ToNormal, InHold, Def.NormalClearanceM * 50.0, M.Goal, M.Approach, &ApproachWhy))
+            FVector Target;
+            bool bReady = false;
+            if (bEndsTier)
+            {
+                bReady = SwapClear(M, A, TurnAt, InHold, &ApproachWhy) && EndsFinish(InHold, Target, ApproachWhy);
+                if (const FString Note = FString::Printf(TEXT("turn_by_lift=%s not held from its ends there: %s"), *TurnAt.ToCompactString(), *ApproachWhy); !bReady && Note != M.GripNote)
+                {
+                    M.GripNote = Note; // said once (planning goes over this every tick while a search runs)
+                    UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIP job=%d move=%d box=%d %s"), Job.Id, M.MoveId, M.Plan.BoxId, *Note);
+                }
+            }
+            else
+            {
+                bReady = SlotApproach(M, A, Slot, M.ToNormal, InHold, Def.NormalClearanceM * 50.0, M.Goal, M.Approach, &ApproachWhy);
+                Target = M.Goal;
+            }
+            if (bReady)
             {
                 const int32 Reported = State->SearchesReported;
-                const bool bIn = PlanRoute(Job, M, TEXT("load_turned"), TurnAt, M.Goal, LoadQuery(M, A, false, &InHold), M.SecondPath,
+                const bool bIn = PlanRoute(Job, M, TEXT("load_turned"), TurnAt, Target, LoadQuery(M, A, false, &InHold, bEndsTier ? 1 : 0), M.SecondPath,
                                               FString::Printf(TEXT("load_turned:%.0f"), M.HangCm), true);
-                if (State->SearchesReported != Reported) ReportLoad(bIn, M.Goal, TEXT("by_lift"), TurnAt);
+                if (State->SearchesReported != Reported) ReportLoad(bIn, Target, TEXT("by_lift"), TurnAt);
                 if (bIn)
                 {
                     M.SecondRotation = InHold;
                     M.TransitPath = TurnAt.Equals(Lifted, 1.0) ? TArray<FVector>{Lifted} : FSCCargoRoute::Spline({Lifted, TurnAt}, 50);
+                    M.EndsPiece = bEndsTier ? 1 : -1;
                     return true;
                 }
                 if (M.bRoutePending) return false; // searching: PrepareMove is called again next tick
                 M.SecondPath.Reset();
             }
+            M.Grip = EGrip::Over;
+            M.OverLeg.Reset();
+            M.bEndsToSlot = false;
         }
         // Out of a room (the lift room, a hold) lengthwise through its entrance: a long box lying across the way out turns
         // a quarter at the top of its lift, in free air (swept), before it flies.
@@ -342,24 +489,41 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         int32 EntranceIndex = 0;
         if (bIntoHold)
         {
+            // In through the entrance as it goes in (held from its ends: swapped to them after the turn there).
             const FQuat InHold = Slot.GetRotation();
-            const FSCCargoRouteQuery Aligned = LoadQuery(M, A, false, &InHold), Arriving = LoadQuery(M, A);
-            const double Z = Slot.GetLocation().Z + Size.Z / 2 + Def.NormalClearanceM * 50.0;
-            const int32 MaxSteps = FMath::FloorToInt32(MaxEntranceOutCm / EntranceStepCm);
+            // Once per situation (planning goes over this every tick while a search runs; FSCCargoMove::Entrances).
+            RefreshMove(M);
+            const FString Key = FString::Printf(TEXT("%u/%d/%d/%d/%s"), M.WorldStamp, M.EntranceOut, M.Tier, int32(M.bRefine), *M.FromRotation.ToString());
             bool bRoom = false, bSide = false;
-            for (int32 Side = 0; Side < 4 && !bRoom; ++Side)
+            if (const FSCCargoMove::FEntrance* Known = M.Entrances.Find(Key))
             {
-                FVector First, Out;
-                if (!HoldExit(To, Aligned, Z, Side, First, Out)) continue;
-                bSide = true;
-                for (int32 Step = 0; Step <= MaxSteps && !bRoom; ++Step)
-                {
-                    if (EntranceIndex++ < M.EntranceOut) continue;
-                    Entrance = First + Out * EntranceStepCm * Step;
-                    bRoom = !Arriving.Blocked(Entrance) && TurnClear(M, A, Entrance, M.FromRotation, Entrance, InHold, &OutWhy) && Aligned.Free(Entrance, First);
-                }
+                bRoom = Known->bRoom;
+                bSide = Known->bSide;
+                Entrance = Known->At;
+                EntranceIndex = Known->Index;
+                OutWhy = Known->Why;
             }
-            --EntranceIndex; // the one that fits
+            else
+            {
+                const FSCCargoRouteQuery Aligned = LoadQuery(M, A, false, &InHold, bEndsTier ? 1 : 0), Arriving = LoadQuery(M, A, false, nullptr, 0);
+                const double Z = Slot.GetLocation().Z + Size.Z / 2 + Def.NormalClearanceM * 50.0;
+                const int32 MaxSteps = FMath::FloorToInt32(MaxEntranceOutCm / EntranceStepCm);
+                for (int32 Side = 0; Side < 4 && !bRoom; ++Side)
+                {
+                    FVector First, Out;
+                    if (!HoldExit(To, Aligned, Z, Side, First, Out)) continue;
+                    bSide = true;
+                    for (int32 Step = 0; Step <= MaxSteps && !bRoom; ++Step)
+                    {
+                        if (EntranceIndex++ < M.EntranceOut) continue;
+                        Entrance = First + Out * EntranceStepCm * Step;
+                        bRoom = !Arriving.Blocked(Entrance) && TurnClear(M, A, Entrance, M.FromRotation, Entrance, InHold, &OutWhy) && Aligned.Free(Entrance, First) &&
+                                (!bEndsTier || SwapClear(M, A, Entrance, InHold, &OutWhy));
+                    }
+                }
+                --EntranceIndex; // the one that fits
+                if (bRoom) M.Entrances.Add(Key, {bRoom, bSide, Entrance, EntranceIndex, OutWhy}); // a miss may clear (kept space): looked for again
+            }
             if (!bRoom)
             {
                 OutWhy = !bSide               ? FString::Printf(TEXT("no way into %s lengthwise"), *To->GridLabel.ToString())
@@ -368,6 +532,7 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
                 return false;
             }
         }
+        FVector EndsTarget = FVector::ZeroVector; // held from its ends: where that route ends (a swap back over, or the goal)
         if (bHold)
         {
             // A holding point beside the lift corridor, at the lifted height: stepping out along the grid's axes by the box's
@@ -379,7 +544,7 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
             if (const FSCCargoBox* Target = State->Boxes.Find(M.Plan.ForBoxId); Target && Target->Actor.IsValid())
             {
                 const FBox B = Target->Actor->GetComponentsBoundingBox(true);
-                Corridor = B + B.ShiftBy(M.FromNormal * (B.GetSize().Size() + LiftAt + M.HangCm + DroneHeightCm));
+                Corridor = B + B.ShiftBy(M.FromNormal * (B.GetSize().Size() + LiftAt + M.HangCm + DroneHeightCm()));
             }
             bool bFound = false;
             for (int32 K = 1; K <= 6 && !bFound; ++K)
@@ -397,6 +562,23 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
             M.ToRotation = M.FromRotation;
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_HOLD job=%d move=%d box=%d point=%s"), Job.Id, M.MoveId, M.Plan.BoxId, *M.HoldPoint.ToCompactString());
         }
+        else if (bEndsTier)
+        {
+            // Held from its ends: into a hold from its entrance (swapped there), else from the top of its lift (swapped
+            // there, after any turn out of its room); then the way onto the slot.
+            M.ToRotation = Slot.GetRotation();
+            if (!bIntoHold && !SwapClear(M, A, Lifted, M.FromRotation, &OutWhy))
+            {
+                OutWhy = TEXT("no room to swap to the box's ends at the top of its lift: ") + OutWhy;
+                return false;
+            }
+            FString EndsWhy;
+            if (!EndsFinish(bIntoHold ? Slot.GetRotation() : M.FromRotation, EndsTarget, EndsWhy))
+            {
+                OutWhy = FString::Printf(TEXT("held from its ends onto the slot on %s: %s"), *To->GridLabel.ToString(), *EndsWhy);
+                return false;
+            }
+        }
         else
         {
             // The hover point over the slot: the load arrives at its pickup rotation, turns onto the lattice there (swept)
@@ -410,13 +592,16 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
                 return false;
             }
         }
-        FSCCargoRouteQuery Cached = M.FromRotation.Equals(M.PickRotation) ? Load : LoadQuery(M, A); // at the flight rotation
+        // The first piece held from its ends unless it goes into a hold (then the second, from its entrance).
+        const int32 FirstGrip = bEndsTier && !bIntoHold ? 1 : 0;
+        FSCCargoRouteQuery Cached = FirstGrip == 0 && M.FromRotation.Equals(M.PickRotation) ? Load : LoadQuery(M, A, false, nullptr, FirstGrip); // at the flight rotation
+        const FVector Arrival = bEndsTier ? EndsTarget : M.Goal;
         if (bIntoHold)
         {
             // In: from the entrance to the hover point, at the hold's rotation.
             const FQuat InHold = Slot.GetRotation();
-            FSCCargoRouteQuery In = LoadQuery(M, A, false, &InHold);
-            if (!PlanRoute(Job, M, TEXT("load_in"), Entrance, M.Goal, In, M.SecondPath, FString::Printf(TEXT("load_in:%.0f"), M.HangCm), true))
+            FSCCargoRouteQuery In = LoadQuery(M, A, false, &InHold, bEndsTier ? 1 : 0);
+            if (!PlanRoute(Job, M, TEXT("load_in"), Entrance, Arrival, In, M.SecondPath, FString::Printf(TEXT("load_in:%.0f"), M.HangCm), true))
             {
                 if (M.bRoutePending) return false;
                 OutWhy = FString::Printf(TEXT("no free route into %s from its entrance"), *To->GridLabel.ToString());
@@ -425,10 +610,11 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
             M.SecondRotation = InHold;
         }
         const int32 Reported = State->SearchesReported;
-        const bool bRoute = PlanRoute(Job, M, TEXT("load"), Lifted, bIntoHold ? Entrance : M.Goal, Cached, M.TransitPath, FString::Printf(TEXT("load:%.0f"), M.HangCm), true);
+        const bool bRoute = PlanRoute(Job, M, TEXT("load"), Lifted, bIntoHold ? Entrance : Arrival, Cached, M.TransitPath, FString::Printf(TEXT("load:%.0f"), M.HangCm), true);
         if (State->SearchesReported != Reported)
-            ReportLoad(bRoute, bIntoHold ? Entrance : M.Goal, bIntoHold ? TEXT("at_entrance") : M.FromRotation.Equals(M.PickRotation) ? TEXT("at_slot") : TEXT("quarter_at_lift"),
-                    bIntoHold ? Entrance : M.Goal);
+            ReportLoad(bRoute, bIntoHold ? Entrance : Arrival, bIntoHold ? TEXT("at_entrance") : M.FromRotation.Equals(M.PickRotation) ? TEXT("at_slot") : TEXT("quarter_at_lift"),
+                    bIntoHold ? Entrance : Arrival);
+        if (bRoute && bEndsTier) M.EndsPiece = bIntoHold ? 1 : 0;
         if (!bRoute && !M.bRoutePending && bIntoHold && M.RouteEnd == ESCCargoRouteEnd::GoalEnclosed)
         {
             // The turn point cannot be reached from outside: the next one further out, planned from the next tick on.
@@ -447,19 +633,31 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         }
         return true;
     };
-    // On the full-cell lattice first; when no way is found, once more with half steps where a full step is blocked
-    // (bRefine: a passage narrower than a cell; the costly search, so the last resort).
-    bool bPlanned = PlanLoad(Why);
+    // Each way of holding it (M.Tier) on the full-cell lattice first; held from its ends or over as tight as it fits, when
+    // no way is found, once more with half steps where a full step is blocked (bRefine: a passage narrower than a cell;
+    // the costly search, so the last resort). The roomy way over goes straight on to the tight one.
+    const bool bPlanned = PlanLoad(Why);
+    M.Grip = EGrip::Over; // the move starts held over (lifted so)
     if (!bPlanned)
     {
         if (M.bRoutePending) return false;
         const bool bNoWay = M.RouteEnd == ESCCargoRouteEnd::StartEnclosed || M.RouteEnd == ESCCargoRouteEnd::GoalEnclosed || M.RouteEnd == ESCCargoRouteEnd::Budget ||
                             M.RouteEnd == ESCCargoRouteEnd::Smoothing;
-        if (!bNoWay || M.bRefine) return false;
-        M.bRefine = true;
+        UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIP_TIER job=%d move=%d box=%d tier=%d refine=%d failed=\"%s\""), Job.Id, M.MoveId, M.Plan.BoxId, M.Tier, M.bRefine, *Why);
+        const TArray<int32> Tried = TierOrder(M, A, N);
+        if (M.Tier != 1 && bNoWay && !M.bRefine) // the roomy way over goes straight on to the next
+        {
+            M.bRefine = true;
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_PATH job=%d move=%d box=%d refine half_steps=1"), Job.Id, M.MoveId, M.Plan.BoxId);
+        }
+        else if (M.TierStep + 1 < Tried.Num())
+        {
+            ++M.TierStep;
+            M.bRefine = false;
+        }
+        else return false;
         M.EntranceOut = 0;
         M.bRoutePending = true; // planned again from the next tick on
-        UE_LOG(LogSCCargo, Display, TEXT("CARGO_PATH job=%d move=%d box=%d refine half_steps=1"), Job.Id, M.MoveId, M.Plan.BoxId);
         return false;
     }
     M.DistanceCm = 0;
@@ -473,7 +671,7 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
     // then holds it there). Kept space for every other drone's route from now on, its teammates' included.
     M.Stations.Reset();
     for (int32 I = 0; I < N; ++I)
-        M.Stations.Add(A->GetActorLocation() + M.FromNormal * (Size.Z / 2 + M.HangCm + FVector::Dist(Drones[I]->GetActorLocation(), Drones[I]->Emitter())) + M.PickRotation.RotateVector(M.Offsets[I]));
+        M.Stations.Add(A->GetActorLocation() + M.FromNormal * (Size.Z / 2 + M.HangCm + FVector::Dist(Drones[I]->GetActorLocation(), Drones[I]->BodyEmitter())) + M.PickRotation.RotateVector(M.Offsets[I]));
     for (int32 I = 0; I < N; ++I)
     {
         ASCCargoDrone* D = Drones[I];
@@ -530,6 +728,20 @@ bool USCCargoSubsystem::PlanMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why
         M.DroneFlights.AddDefaulted_GetRef().Start(Path, Def.MaxSpeedMS * 100.0, Def.MaxAccelMS2 * 100.0, Def.MaxJerkMS3 * 100.0);
     }
     if (N > 1) UE_LOG(LogSCCargo, Display, TEXT("CARGO_APART job=%d move=%d box=%d teammates=%d beside_the_first=%d"), Job.Id, M.MoveId, M.Plan.BoxId, N - 1, Apart);
+    if (M.EndsPiece >= 0)
+    {
+        UE_LOG(LogSCCargo, Display,
+               TEXT("CARGO_GRIP job=%d move=%d box=%d ends team=%d end=%d piece=%d to_slot=%d over_leg=%d angle_deg=%.1f beam_cm=%.0f out_cm=%.0f rise_cm=%.0f attach_z_cm=%.0f "
+                    "share_kN=%.1f max_accel_m_s2=%.2f route_accel_m_s2=%.2f envelope_cm=%.1f shape_cm=%s..%s"),
+               Job.Id, M.MoveId, M.Plan.BoxId, N, M.EndOf.Num() == 1 ? M.EndOf[0] : -1, M.EndsPiece, M.bEndsToSlot, M.OverLeg.Num(), FMath::RadiansToDegrees(M.Ends.AngleRad),
+               M.Ends.BeamCm, M.Ends.OutCm, M.Ends.RiseCm, M.Ends.AttachZCm, M.Ends.ShareN / 1000, M.Ends.MaxAccelMS2, M.LoadAccel / 100, LoadEnvelopeCm(M),
+               *M.Ends.Shape().Min.ToCompactString(), *M.Ends.Shape().Max.ToCompactString());
+    }
+    else
+    {
+        UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIP job=%d move=%d box=%d over team=%d tier=%d roomy=%d places=%d envelope_cm=%.1f%s%s"), Job.Id, M.MoveId, M.Plan.BoxId, N, M.Tier,
+               M.bRoomy, M.Places.bValid, LoadEnvelopeCm(M), M.Places.bValid ? TEXT("") : TEXT(" why="), M.Places.bValid ? TEXT("") : *M.Places.Why);
+    }
     UE_LOG(LogSCCargo, Display, TEXT("CARGO_MOVE job=%d move=%d box=%d team=%d load_kg=%.0f loaded_accel_m_s2=%.2f empty_accel_m_s2=%.2f lift_m=%.2f hang_m=%.2f"),
            Job.Id, M.MoveId, M.Plan.BoxId, N, Box->Occupancy.Mass, LoadAccel, Def.MaxAccelMS2, Lift / 100, M.HangCm / 100);
     return true;

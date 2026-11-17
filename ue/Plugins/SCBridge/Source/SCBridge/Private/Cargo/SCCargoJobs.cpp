@@ -1,8 +1,10 @@
 // USCCargoSubsystem transfer jobs: Planned -> OpeningGrids -> Moving -> ClosingGrids -> Done (Cancelled / Failed) and the
 // swarm: every job's waiting moves (carry, relocate, hold) claim the nearest free drones when their box can be picked
 // (uncovered, lift corridor clear) and their dig-out group can be staffed at once; a box that cannot be picked is swapped
-// for another eligible one, and after CargoPickAttempts consecutive failures the job fails. Log: CARGO_JOB / CARGO_PICK.
+// for another eligible one, and after CargoPickAttempts consecutive failures the job fails. Log: CARGO_JOB / CARGO_PICK /
+// CARGO_SLOW (a move's tick over 30 ms: its grip search and its tug apart).
 #include "Cargo/SCCargoSubsystem.h"
+#include "HAL/PlatformTime.h"
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoDrone.h"
@@ -75,6 +77,7 @@ void USCCargoSubsystem::ReleaseMove(FSCCargoMove& M)
         M.Searches.Empty();
         M.EntranceOut = 0;
         M.bReeledIn = M.bRefine = false;
+        M.Tier = M.TierStep = 0; // planned afresh: every way of holding it
     }
     if (USCCargoGridComponent* To = FindGrid(M.Plan.ToGrid); To && To->Reserved.Contains(M.Plan.BoxId))
     {
@@ -111,15 +114,18 @@ bool USCCargoSubsystem::LiftPlan(const ASCCargoContainer* A, const FTransform& P
     const FSCCargoDroneDefinition& Def = State->Scenario.Drone;
     constexpr double MarginCm = 30; // kept between the drones and a ceiling (viewer choice)
     const double Height = A->SizeCm().Z;
-    double DroneHeight = 0;
-    for (const TWeakObjectPtr<ASCCargoDrone>& D : State->Drones)
-        if (D.IsValid()) DroneHeight = FMath::Max(DroneHeight, D->GetComponentsBoundingBox(false).GetSize().Z);
+    // The drones over their emitters (their parts do not collide: their actor bounds, colliding parts only, are empty).
+    const double DroneHeight = DroneHeightCm();
     const double Wanted = Height + Def.NormalClearanceM * 100.0;
     const double MinHang = MinHangCm(A), MaxHang = FMath::Max(MinHang, Def.FullStrengthDistanceM * 100.0);
     const double Reach = Wanted + MaxHang + DroneHeight + MarginCm;
     // Headroom: the box (slightly shrunk: it may touch its neighbours and the floor) swept along the normal.
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCCargoLift), false, A);
     for (const TWeakObjectPtr<ASCCargoDrone>& D : State->Drones) Params.AddIgnoredActor(D.Get());
+    // Loads in the air pass (their right of way and the lift's route keep them apart): a box turning over its
+    // neighbour on the elevator is no ceiling (seen as one, the neighbour's pick failed for 0.3 m of headroom).
+    for (const auto& Pair : State->Boxes)
+        if (SCCargoIsFlying(Pair.Value.State) && Pair.Value.Actor.IsValid()) Params.AddIgnoredActor(Pair.Value.Actor.Get());
     FHitResult Hit;
     const FVector From = Pose.GetLocation() + Normal * 8;
     const FVector LiftHalf = A->SizeCm() / 2 - FVector(6);
@@ -228,6 +234,7 @@ bool USCCargoSubsystem::StartMove(FSCCargoJob& Job, FSCCargoMove& M, double Now)
             M.Searches.Empty();
             M.EntranceOut = 0;
             M.bReeledIn = M.bRefine = false;
+            M.Tier = M.TierStep = 0; // planned afresh: every way of holding it
             bPick = false;
             bLift = false; // it could be lifted; there is no way to its place
             Job.Unroutable.Add(Box->Id);
@@ -408,8 +415,16 @@ void USCCargoSubsystem::TickJobs(float DeltaSeconds)
                     ReleaseMove(M);
                     FinishMove(J, M, false);
                 }
-                else if (M.Step == EStep::Waiting) { if (StartMove(J, M, Now)) TickMove(J, M, Now, DeltaSeconds); }
-                else if (!Ended(M.Step)) TickMove(J, M, Now, DeltaSeconds);
+                else
+                {
+                    // A tick of a move that takes long is said (CARGO_SLOW: its grip search and its tug apart).
+                    const double T0 = FPlatformTime::Seconds();
+                    M.GripMs = M.TugMs = 0;
+                    if (M.Step == EStep::Waiting) { if (StartMove(J, M, Now)) TickMove(J, M, Now, DeltaSeconds); }
+                    else if (!Ended(M.Step)) TickMove(J, M, Now, DeltaSeconds);
+                    if (const double Ms = (FPlatformTime::Seconds() - T0) * 1000.0; Ms > 30.0)
+                        UE_LOG(LogSCCargo, Display, TEXT("CARGO_SLOW move=%d box=%d step=%d ms=%.1f grip_ms=%.1f tug_ms=%.1f"), M.MoveId, M.Plan.BoxId, int32(M.Step), Ms, M.GripMs, M.TugMs);
+                }
                 bAllEnded &= Ended(M.Step);
             }
             if (bAllEnded) SetJobState(J, ESCCargoJobState::ClosingGrids);

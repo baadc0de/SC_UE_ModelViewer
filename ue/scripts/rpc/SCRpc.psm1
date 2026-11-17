@@ -36,7 +36,7 @@ function Start-SCViewer {
     # Without -Visible the viewer runs in UE 5.9 agent mode: rendered off screen (no window to take focus), unattended,
     # no modal dialogs; screenshots and /record still capture the viewport.
     param([string]$Extra = '', [int]$Port = 8770, [string]$Log = 'SCRpc.log', [string]$ShotDir = '', [switch]$Visible,
-          [int]$ResX = 1600, [int]$ResY = 900,
+          [int]$ResX = 1920, [int]$ResY = 1080,
           [string]$Engine = 'C:\Program Files\Epic Games\UE_5.9', [int]$StartTimeoutSec = 300)
     Set-SCRpcPort $Port
     $root = (Resolve-Path "$PSScriptRoot\..\..\..").Path

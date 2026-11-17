@@ -14,6 +14,8 @@ the game has its own.
 | K4a | The Fab drone as the drone's look, when installed (stand-in otherwise): native size, re-centred, yaw offset; heading policy; animations from motion; beam from its camera | Opus 5.5 |
 | K4b | The drone dock remade to house it: two lattice cells, two bays | Astra (Codex), reviewed by Opus 5.5 |
 | K4c | The game's particle effects for the tractor beam and box impacts: where they are in the archive, their format, what it takes to show them (research first, then a plan) | Opus 5.5 (research agent) |
+| Round 4 | A pair holding a box from its ends where the room over it is short; each drone's own attitude dynamics (below) | Opus 5.5, reviewed by Astra |
+| Round 5 | The hold to a point; each drone searching for its grip (the ends about 3 of 4 times, where they fit); its wobble on the box; the fleet, the zig-zag (below) | Opus 5.5, reviewed by Astra |
 
 ## K4a — the Fab drone
 
@@ -619,6 +621,462 @@ changes fix them; every run is back to `overlaps=0`.
 | r3s2 | hull_a_hangar, stand-in, no effects | `t=55.6 moves=1 done=1 overlaps=0` (shape (48.15, 49.15, 17.80) as before) |
 
 - Re-shot: `out/k4a/sheets/r3-flight.png` and `r3-team-beams.png` (run r3c4).
+
+### K4 round 4 (2026-11-17): held from the ends where the room is short, and each drone's own wobble
+
+Branch `wp/k4a-drone-height-beam-spawn`, on top of the fixes there (drone height from the hull, `DroneHullRule`, the lift
+plan ignoring loads in flight, the column never ending below the hulls, docked drones powering down).
+
+#### A. Holding a box from its ends (owner: "it would be better if the drone was in front or behind a container ... the
+C2 is a good example")
+
+**Placement** (`FSCCargoEndGrip`, `Cargo/SCCargoTug.h`, pure; tests `SCBridge.Cargo.TugEnds`, `TugEndsSwap`):
+- A pair holds the box from the two end faces of its long axis, one drone beyond each, at about the box's height. Each
+  beam leans out from the vertical by an angle θ to an attach point on its end face.
+- **Force rule.** A beam is a spring along itself, so on station at rest it lies along the force it gives: half the
+  weight straight up (`ShareN` = m g / 2) and a pull out along the axis, `TensionN` = ShareN tan θ. The two pulls cancel;
+  F = ShareN / cos θ must stay within the record's `MaxForceN`. Under the route's acceleration each beam gives half the
+  net force plus its pull (`Force`); the route is flown no harder than keeps both beams within `MaxForceN` and their
+  forces within `EndsMaxTurnDeg` (15°, viewer choice) of their lines, in every direction (`AccelLimit`; the route's
+  acceleration then as `RouteAccel`: the scenario's minimum kept, over √2).
+- **Geometry, from the record, the load and the hull** (no constants): the smallest θ (0.5° steps) at which the emitter is
+  far enough out for the hull, at any heading, to clear the end face (hull half + the emitter's plan offset + 2 cm), the
+  beam between the record's minimum plus its stretch and the full-strength length, and the hull's top at or under the
+  box's top with the attach point on the face (10 cm in from its edges, `EndsInsetCm`). A box lower than that: the
+  lowest drone. The attach point is as high on the face as keeps the hull's top at the box's top.
+- **Only a pair.** One beam alone pulls the box sideways (its pull unopposed), so a lone drone cannot hold a box so; in zero
+  g there is no weight to lean against (held over). The volume rule is unchanged (per beam: the pair holds 2 × 20 SCU).
+- The C2 numbers (`CARGO_GRIP … ends`): in k4b-c2b θ 35.0°, beam 195 cm, out 112 cm, rise 159 cm, attach 114 cm under
+  the centre; 32 SCU: 179.5 kN of 257.5 (tension 102.9 kN), 24 SCU: 157.0 kN; acceleration limit 3.11 m/s², route
+  1.49 m/s² (held over: 4.44). Final (hull 72.44 cm): 16 SCU with a pair, θ 34.0°, beam 197 cm, 88.7 kN, route
+  1.46 m/s². The shape is the box's height, 2 × 2.2 m longer.
+
+**In flight** (`TugStep`, `Formation`): the stations are fixed in the box's frame (`Station`), each beam's anchor set for
+its force (half the net and its pull). The drone keeps off its end face (`FSCCargoTug::FStation::KeepOffFace`, and its
+own steps: `FSCCargoDroneSteer::OffFace` now takes the face its beam holds, `ASCCargoDrone::HeldFace`).
+
+**Planner** (`PlanMove`, in turn, `CARGO_GRIP_TIER` when one fails):
+1. held over with a drone's half clearance (20 cm) kept over the hulls everywhere (`bRoomy`; the precise zone had left
+   0 cm, so the drones on their stations slid along the C2's hold-entrance ceiling);
+2. from the ends (a pair; a lone drone's move asks for a second drone, `CARGO_GRIP_PAIR`, claimed in `StartMove` when one
+   is free, refused when its owner has fewer than two);
+3. held over as tight as it fits (the old way), last. Holds (boxes dug out and put back) are held over.
+Full-cell searches first; half steps (`bRefine`) for tiers 1 and 2.
+
+**Transitions** (`SwapGrip`, `CARGO_GRIP_SWAP`): the box held still (rigidly on its route point), each drone flies round it
+to its new station: up to the higher of the two heights, across, down (`FSCCargoEndGrip::SwapWay`; its hull never enters
+the box: tested), at 0.35 of its top speed; its beam slides from the top face down the end face. A swap needs its room
+(`SwapClear`: the column over the box, each drone's whole way and its end station).
+- **To the ends:** at the top of the lift (not into a hold), or after the turn onto a hold's lattice (by the lift or at its
+  entrance): the second route piece is flown from the ends (`EndsPiece`).
+- **Back over the box:** at the nearest point over the destination lattice at the goal's height where the swap is clear
+  and from which the load held over sweeps straight to its goal (`SwapOutPoint`; `OverLeg`); else, onto a level slot, held
+  from the ends down onto it (`bEndsToSlot`: the descent sweeps the drones beside the box too, `DescentClear`).
+- Every query of the load takes the grip's shape (`LoadQuery`: the box and the column, or the box and the two end hulls,
+  `EndsQuery`), so the guard, replans, the right of way and `HoldShort` follow it.
+
+**Also fixed on the way:**
+- Route searches share 2 ms of *search* time per frame (`SearchSpent`); the planning around them (overlaps, the entrance
+  search repeated every tick) had eaten the budget, and one C2 move planned for 115 s.
+- A deadlock: a team attaching over its box waits for loads lifting near its way up, and such a load was stopped by the
+  space kept for that team's drones (`CARGO_REPLAN … waits_for_drones=1` for 180 s; move 1 failed). A load planned first
+  keeps no space for a later team still attaching (`KeptSpace`); those drones step out of a load's way (`DodgesLoads`).
+
+**Runs** (logs `ue/SCViewer/Saved/Logs/<tag>.log`, outputs `out/k4b/<tag>.out`):
+
+| Run | Scenario | Job line | Notes |
+|---|---|---|---|
+| c2full5 (before) | c2_hangar 208 SCU elevator → C2 | `t=204.7 moves=9 done=8 overlaps=3` | move 9 "no way into Grid 1 lengthwise"; 33 carrying-drone blocks, 18 under the hold-entrance ceiling (Mesh_3639) |
+| k4b-c2b (round-1 look) | the same | `t=598.0 moves=9 done=9 overlaps=0` | moves 3, 4 and 9 from the ends; 8 carrying-drone blocks, 0 at Mesh_3639 |
+| k4b-c2r5 (final) | the same | `t=340.5 moves=9 done=9 overlaps=0` | move 9 from the ends (a pair); 6 carrying-drone blocks, 0 at Mesh_3639 |
+| k4b-hullar5 (final) | hull_a_hangar 16 SCU, environment → ship | `t=54.0 moves=1 done=1 overlaps=0` | held over (tier 0) |
+| k4b-fr5 (final, as r3f2) | hull_a_space_fleet 16 SCU | `t=200.4 moves=2 done=2 overlaps=0` | held over; slower: see Open (k4b-fr4, one build earlier: `t=63.9 … overlaps=0`) |
+
+- **Move 9** was the headroom problem: a 16 SCU box for the C2 hold's upper layer; held over, its column at the hover point
+  needed 4 cm more than the 164 cm under the hold's ceiling. Now its single drone asks for a second, the pair takes it in
+  from the ends and lowers it onto its slot from the ends (`origin=X=0 Y=1 Z=2`).
+- **The overlaps' causes, fixed.** In k4b-c2r4 the baseline's kind came back: an empty drone flying out through the C2's
+  ramp met a load coming in and could not step aside there (`… state=2 … evaded_cm=38 slid_cm=20`: the box came onto it).
+  `HoldShort` looked only at the drone's station; it now holds a drone short of the first point of its whole way ahead that
+  a load planned before it has yet to fly through. The same run had a carrying drone pushed onto its own box by its
+  teammate's separation; its step now keeps off its own box's face after that push too (`ASCCargoDrone::Step`). k4b-c2r5:
+  `overlaps=0`. (Not unit-tested: both live in the subsystem and the drone's world step.)
+- **Time** (340.5 s, before 204.7 s; the last box placed at 331.1 s against 192.6 s): the moves still overlap (no idle
+  gap over 2.4 s), but they wait more on each other. Outbound legs took 251 s together (92 s): drones now hold short of
+  a load's way across their own, not only of their stations (16 holds), and move 9 waited for a second drone. Transit
+  legs took 368 s (249 s): 27 waits for a load ahead (10), move 1's load stopped ~23 s by the stations kept for move 2's
+  team on its way out, moves 7 and 8 about 59 s each (46 s, 32 s). Held from the ends a leg is flown at 1.46 m/s²
+  (held over: 4.44) with one or two 5–7 s swaps; in the final run only move 9 needed it.
+  The intermediate 598 s run (k4b-c2b) had a further cause, fixed since: with the round-1 attitude envelope (hull half
+  73.95 cm) the C2's own dock could not let its two drones out (`CARGO_DRONE_BAY_BLOCKED drone=5/6`), so the job ran on
+  four drones, mostly one move at a time, and three moves were flown from the ends.
+
+#### B. Each drone's own wobble (owner: "more individuality is needed, even if it is faked or forced ... real drones are
+much less 'stable'")
+
+**Model** (`FSCCargoAttitude`, `Cargo/SCCargoDroneArt.h`, pure; tests `SCBridge.Cargo.DroneAttitude`,
+`DroneIndividual`, `DroneAttitudeBounds`), after a multirotor's (Embark has published nothing on ARC Raiders' drones):
+- **Moving is tilting.** The attitude is commanded to `tilt_gain` × the thrust's tilt atan(a / g) for the body's
+  acceleration in its own frame (g 9.81 m/s² for the look, in vacuum too), each drone its own share within ±`gain_spread`;
+  nose down to go forward, rolled into a push sideways; the gusts' wobble on top.
+- **An underdamped spring** (natural frequency and damping ratio per drone, from its id, in the configured ranges) that
+  leads with `tilt_lead` × the command's rate: a start kicks in and overshoots, a stop rocks back past level and settles
+  in decaying swings. Carrying, the lead is `tilt_lead_carrying` (the team's shared starts and stops softer).
+- **Its own corrections:** random kicks (Poisson, `kick_rate_hz`, `kick_deg_s`, each drone its own timing) with a new
+  heading to wander to (`yaw_jitter_deg`), an altitude hunt (two tones, `hunt_cm`, `hunt_hz`), and a drift where its tilt
+  runs ahead of its command (g tan(error), at most `drift_cm`). `max_tilt_deg` bounds the tilt. Sub-stepped at 240 Hz.
+- **Each drone its own onsets and directions** (owner: "the initial vector directions for twitching/wobble need to be
+  independently randomized and pick from a plausible biased distribution"), each drawn from the drone's own stream, per
+  event: it answers its command `onset_min_s`..`onset_max_s` late (0.04–0.26 s, spread over the drone ids by the golden
+  ratio: any two of eight at least 20 ms apart); a motion starting or changing (the command moving on by `event_deg`, at
+  most one per `event_min_s`) kicks it, a further 0..`onset_jitter_s` later; its corrections kick mostly back towards
+  level. Every kick's direction is a wrapped normal (`scatter_deg` 30) about the expected one, `off_axis_share` (15 %) a
+  quarter turn to either side and `opposite_share` (7 %) the other way; its size log-normal (`kick_log_sigma` 0.45) about
+  its median (`event_kick_scale` 0.6 × `kick_deg_s` for a start). Tests `DroneOnset`, `DroneKickDraw`.
+- **Visual layer.** The actor stays level (its yaw is its heading); the look (art or stand-in) hangs under a new
+  `Attitude` component turned and offset by the dynamics. The clips' own lean of the centre bone is scaled by
+  `art.clip_tilt_scale` (the anim instance's `TiltScale`). A drone not posed in a frame (docked; or arrived and waiting for
+  its teammate) goes on settling there (Tick), powered down without corrections.
+- **Hull, honestly:** it is built over the envelope: every pose of the clips as they render (scaled tilt), each tilted by
+  `max_tilt_deg` every 45° round about, plus `drift_cm` in plan and `hunt_cm` up and down (the stand-in's shape too).
+  `CARGO_DRONE_SHAPE half=(72.44, 72.44, 52.66)` (was 69.85, 69.85, 50.69): hull above the emitter 76.7 cm (74.1),
+  hang 30.6 cm (29.2; the record's 50 cm still decides). The kicks and onsets do not widen it (the tilt is clamped).
+- **In its dock's corridor it flies level** (docked, launching, docking: no command, no kicks, its look settles) and its
+  steps there are swept with the bare hull (`StepHalf`, `bay_half=(64.66, 64.66, 42.20)`). With the envelope hull the
+  C2's own dock could no longer let its two drones out (`CARGO_DRONE_BAY_BLOCKED drone=5/6 … SCVehicle_2/Mesh_3563`), and
+  the transfer ran on four drones.
+- **Physics on the body.** The tug, the stations and the formation work with `BodyEmitter()` (the reference emitter on the
+  level actor turned by the heading); the beam is drawn from `Emitter()` (the camera bone as it renders), so the wobble
+  moves no box. The RPC's `pitch` / `roll` are the look's.
+
+**Config** (`drone_art.json` `motion`, documented in its `_comment`; Astra's values): `freq_min_hz` 0.7, `freq_max_hz` 1.7,
+`damp_min` 0.18, `damp_max` 0.3, `tilt_gain` 0.08, `gain_spread` 0.5, `tilt_lead` 3, `tilt_lead_carrying` 1.5,
+`max_tilt_deg` 9, `kick_rate_hz` 1, `kick_deg_s` 26, `hunt_cm` 1.5, `hunt_hz` 0.35, `drift_cm` 2, `yaw_jitter_deg` 2.5,
+`onset_min_s` 0.04, `onset_max_s` 0.26, `onset_jitter_s` 0.12, `event_deg` 0.6, `event_min_s` 0.35, `event_kick_scale`
+0.6, `kick_log_sigma` 0.45, `scatter_deg` 30, `off_axis_share` 0.15, `opposite_share` 0.07;
+`art.actor_lean_scale` 1 (was 0.25), `art.clip_tilt_scale` 0.2.
+
+**Astra** (`out/k4b/astra/r1.md` … `r3.md`; clips `out/k4b/clips/<tag>/<tag>-transfer.mp4` with `rec.txt`, sheets
+`out/k4b/sheets/`; BEFORE is the K4a look emulated with `-SCDroneArt=out/k4b/drone_art_before.json`):
+- **r1** (gain 0.2, spread 0.25, lead 1.5, kicks 16 deg/s, clips 0.5): qualified pass, "livelier, but the pair still reads
+  as moving together". Measured: the drones' bodies, tied to the box, accelerate sideways by up to ~10 m/s² together, so
+  the shared lean dominated. Taken: gain 0.08, spread 0.5, clip tilt 0.2, kicks 20; and lead 3.
+- **r2:** qualified pass, "individuality still secondary; the single drone becomes steady too abruptly". Taken: lead 1.5
+  while carrying, kicks 26, damping 0.18–0.30. Found in the data: an arrived drone waiting for its teammate was not posed,
+  so its attitude froze mid-swing; it now settles in Tick.
+- **r3:** **pass**: "subsequent poses diverge enough to suggest two drones making separate corrections"; the stop "has a
+  convincing diminishing rock-back: roughly +8.8° → −2.8° → +1.3° → level"; no further changes. Its remaining note: the
+  team's opening lean still reads as shared, which the owner then asked for (the onsets and biased kicks above).
+- **r4** (the team's opening, `out/k4b/sheets/r4-*`): **pass**: "the opening responses differ in timing and strength, and
+  subsequent corrections separate clearly … a common physical demand with individual off-axis corrections"; no changes.
+
+**Verification:**
+- UBT `SCViewerEditor Win64 Development`: `Result: Succeeded`.
+- `Automation RunTests SCBridge.Cargo`: `TESTS success=62 fail=0` (55 + `TugEnds`, `TugEndsSwap`, `DroneAttitude`,
+  `DroneIndividual`, `DroneAttitudeBounds`, `DroneOnset`, `DroneKickDraw`; `DroneArtParse` extended). The two `Condition failed` lines are the engine's
+  own UnifiedErrorTest.
+
+**Open:**
+- Carrying drones still meet structure briefly, held over, never under the C2's hold ceiling: the elevator's overhead
+  structure (`Instanced_449/450`) while a box turns at the top of its lift (as before, 3 lines in k4b-c2r5), and the C2's
+  underside on one 141 m route round the ship (beams paid out to 3 m, then a climb; 3 lines). Each a single
+  `CARGO_DRONE_BLOCKED` line, no overlap.
+- Held from the ends, a beam's force turns up to 15° off its line under the route's acceleration (its anchor is set for
+  its share; the station stays fixed in the box's frame).
+- A swap needs its whole room at one point; a swap point is not searched along the route (only at the lift's top, the
+  entrance turn, and over the destination lattice at the goal's height).
+- The fleet run (k4b-fr5) took 200 s (r3f2 56 s, k4b-fr4 64 s): the second load, its drone held short 7 s by the new way
+  check, reached its slot after the first box was placed beside it, replanned its approach (`turn_room`) and then
+  `no_station` ten times before it went down. Clean (`overlaps=0`), but not examined further.
+- Stations of a later team still on its way out are kept for a load planned first (move 1 waited ~23 s in k4b-c2r5);
+  that team holds short of the load's way anyway, so this space could be left out as for a team attaching.
+- The drones' bodies zig-zag laterally by up to ~10 m/s² while carrying (paying beams in and out under ceilings; the box's
+  sway). Before, the small lean hid it; it is the shared part of the team's lean now (tilt_gain 0.08 keeps it to a few
+  degrees). Not examined further.
+
+### K4 round 5 (2026-11-17): held in front, a grip each drone searches for, its wobble on the box
+
+Same branch. The owner's five asks: the fleet slowdown, the carrying drones' synchronised zig-zag, holding the box in
+front (push, or pull in reverse) rather than over it, the drones' wobble passed on to the box (damped), and, refining the
+third: "not rules ... a soft switch and a preference ... a drone should re pick where it wants to be relative to the load
+every so often ... choose only from viable positions when space is scarce."
+
+#### The hold: a tractor beam holds to a point (`FSCCargoEndGrip`, `Cargo/SCCargoTug.h`)
+
+The record (`SWeaponActionFireTractorBeamParams`, the multitool) gives a force (`maxForce` 257.5 kN, `minForce`),
+distances (`minDistance` 0.5 m, `fullStrengthDistance` 3 m, `maxDistance` 150 m), a cone (`maxAngle` 40°, now parsed:
+`FSCCargoDroneDefinition::MaxAngleDeg`, `CARGO_TRACTOR … max_angle`), volume rules and its own movement / rotation limits
+(the held object's: `maxAcceleration` 20 m/s², `maxAngularVelocity` 2.5 rad/s). It has **no damping field and no hold
+distance**: the hold distance is where the drone puts it (between the two distances); the damping stays the spring's
+critical damping (`FSCCargoBeam`, as before).
+
+- **Force.** Each beam gives an equal share of what the route asks of the team (weight, the route's acceleration, the
+  body's drag), in any direction, applied to the box **as a whole** (`AddForce`; it was at each attach point). The box's
+  rotation is the beams' angular hold (the critically damped attitude spring, unchanged). So where a drone holds from
+  no longer shapes the force: a drone can hold from in front, beside or over its box.
+- **Geometry** (pure, `Plan`): in front of an end face, the hull clear of it at any heading (hull half + the emitter's
+  plan offset + 2 cm), its top at the box's top, the hold level (or down onto the face for a box lower than the hull),
+  within the record's cone and distances. The 15° force-turn limit (`EndsMaxTurnDeg`) and the pull-out tension are gone.
+- **Team.** One drone at one end (a lone drone: the end that **trails** its route, so it pushes the box ahead; where the
+  route doubles back it pulls it in reverse; documented preference, `PlanMove`'s `EndOf`), a pair at both ends; the
+  volume rule and the team sizing are unchanged; larger teams hold over (no scenario sizes one). The acceleration limit
+  is each share within the record's force (`AccelLimit`: N·maxForce/m − g, any direction).
+- **Zero g** (the fleet): valid, at the same places (round 4 had no ends grip there, and the over grip's station followed
+  its share's direction, which in zero g fell back to "the side it holds").
+
+**Heading** (`FSCCargoHeading::Target`, `HoldYaw`): a drone holding its box in front or beside it faces the box (its hold
+direction) whichever way it flies: pushing, pulling in reverse, strafing; held over (the hold straight down) it faces the
+load's travel; empty, its own travel; its bay's yaw first in its dock's corridor. The clips follow its velocity in its
+own frame (backwards when it pulls in reverse). The beam starts at the emitter (camera bone) and runs along its own line
+to the hold point (`SetBeamFx` aims the effect along `Point − From`, whichever way the drone faces).
+
+#### The synchronised zig-zag (owner: "~10 m/s² together")
+
+**Cause:** each drone's station lay along its share's direction at the beam length it paid out (`FSCCargoTug::Station`,
+`BeamRoom`, `RoomAhead`): the share swung with the route's acceleration (finite-differenced each tick) and the beams paid
+in and out under ceilings, with a lever of up to 3 m, the same for every teammate, so the team's stations, and the
+drones on them, zig-zagged together. **Fix at the source:** every station is now geometric, fixed in the box's frame on
+its route (`GripNow`): nothing of the share, the box's sway or the room along a beam moves it. `BeamRoom`, the room
+cache and the tuck are gone; the route's shape covers the planned places.
+
+#### Where a drone holds from: a grip it searches for (`FSCCargoGripPick`, `SCCargoGrip.cpp`, drone_art.json `grip`)
+
+- **Planned place** (inside the route's shape: the fallback a drone returns to): over its formation offset at the hang,
+  or its end of the ends grip. Planned in turn (`TierOrder`, `CARGO_GRIP_TIER`): over with room, then the ends, then
+  over as tight as it fits; a hold (dug out and put back) and teams of three or more over only. *Tried first and
+  dropped:* the ends first. Every route ends over a lattice where boxes stand flush beside the slot, and a drone beyond a
+  box's end stands where its neighbour is or goes: runs k5-c2a/b (the C2: a pair's end drone squeezed between its box
+  and the box set down beside its slot, a swap back over taking 140 s, 2 to 7 overlaps) and k5-fleet-h..l (Hull A: the
+  lone drone's end station beside a box at rest, 1 to 2 overlaps). So the preference is the drones', in flight, where the
+  ends fit (below). The ends' route shape also keeps out of slots reserved for boxes still to come (`EndsQuery`), and
+  its drones keep a quarter of a drone's clearance from what stands even in the precise zone (`EndsDroneMarginCm`, 10 cm;
+  it was 5).
+- **Candidates** (`Candidates`): in front of either end, beside either side, over the top; spread across each face
+  (`spread` × its half width), out by up to `extra_reach` more than the hull's clearance (within full strength), up to
+  `extra_height_cm` higher; every one clear of the box, within the cone (ends and sides) and the record's distances.
+- **Pick** (`Pick`): weights by kind (`end_weight` 0.75, `side_weight` 0.1, `over_weight` 0.15; renormalised over the
+  kinds that are viable, so about 3 of 4 picks are an end when all are), a teammate's face × `same_face_weight` (0.15:
+  the team balances), never within the drones' own keep distance (`FSCCargoDroneSteer::Keep` and the emitter's reach) of
+  a teammate's place, its next place or its planned place (it goes back there at any time), nor on a way that crosses
+  one. (With a shorter distance two drones of a pair a metre apart swung each other round at 20 m/s: clip k5-pair.)
+- **Re-pick**: every `interval_min_s` .. `interval_max_s` (3–7 s), each drone its own draw from its own stream, the
+  first one a share of an interval (the team staggered); one drone of a team on its way at a time. It moves there round
+  the box (`WayRound`: up to the higher place, over the top only where the straight way across passes the box) at
+  `move_speed_scale` (0.35) of its top speed, **holding all the while** (its hold slides over the box's nearest face; it
+  keeps off the face it is beyond).
+- **Viable only** (`SpotFits`, `CARGO_GRIP_PICK`): its hull there, on its way there and on its way back to its planned
+  place, swept along the route `lookahead_s` (3 s) ahead at the load's possible speed, against the world, the boxes at rest
+  and other teams' kept space, with the load's margin; clear of every other load in the air and everywhere its drones
+  could be (`OtherLoadNear`, `Reach`); back home in time (within the lookahead less one check). Checked again every 0.5 s
+  (`GripCheckSeconds`); a place that stops fitting sends it back to its planned place. No search (all back to their
+  planned places) in the precise zone, when the route piece ends within the lookahead (a turn, a swap, the descent), off
+  the route (stalled, swapping, turning), or with the box hanging on its side.
+- **Route shape:** chosen: the route is planned with the planned places only; the re-picks are restricted to what fits
+  (above). (The alternative, planning every route with the whole reach, would have left the C2 with no way in.)
+
+#### The wobble on the box (owner: "The wobble should transfer to the load, but damped")
+
+Each drone's hold point (the anchor its spring pulls the box to) turns with its attitude about its body emitter and moves
+with its drift, by `motion.load_transfer` (0.35, a documented viewer choice: alone the hold is a stiff, critically damped
+spring near the wobble's band and would pass the wobble on whole) × `TransferFade` (the gusts' fade: none in the precise
+zone, none at the route's ends) (`ASCCargoDrone::WobbledHold`). The box's spring and mass damp it (a critically damped
+second-order follower passes on no more than its input, less above its frequency); teammates' wobbles are their own, so
+a pair's average. Safety: the route's margin for a load (`LoadEnvelopeCm`) adds the worst case, load_transfer × (the
+longest hold × sin(max_tilt_deg) + drift + hunt) over the gusts' envelope: CARGO_GRIP `envelope_cm=18.0` for the C2's
+boxes (8.0 before).
+
+#### Other fixes
+
+- **Fleet slowdown** (k4b-fr5 200 s): its second load, at rest in zero g under the plate beside the first, had its
+  station recomputed from the share's direction (none in zero g: "the side it holds") each time its approach was replanned
+  (`turn_room`), found no room for it (`no_station`) ten times. Geometric stations end it (regression test:
+  `TugEnds` "zero g … at the very places"). And a load no longer keeps space for a team planned after it still on its way
+  out (as for one attaching): that team holds short of the load's way (`KeptSpace`).
+- **Drones lagged their stations by up to 1.3 m** whenever the route accelerated (`CARGO_TUG_OFF`; the fleet's lone
+  drone circled its end station): the drone's body (`FSCCargoDroneBody`) followed its station on a critically damped
+  spring at W = jerk / acceleration = 2.5 /s with no acceleration fed forward, so a station riding a route at a lagged by
+  a / W² (1.2 m at 7.8 m/s²), every teammate the same way at the same time: the other half of the synchronised zig-zag.
+  The route's acceleration is now fed forward (`FStation::HoverA`; test `TugFeedForward`: within 3 cm, 0.64 m without),
+  and so are the station's own velocity in a turn (the box turning at a hold's entrance: `TugRotation`) and on a drone's
+  way round the box (its way's speed and acceleration; the way waits at rest for a drone held up: fed forward at speed
+  while paused, one drone drifted 7 m off and its move timed out, k5-c2-n).
+  A drone facing its box took its heading from where it was; its emitter is off its centre, so the heading moved it and
+  that the heading again: it takes it from its station now. Before a swap of grip it first flies back onto the station
+  it holds from (`SwapGrip`).
+- A lone drone given its next move where it set its last box down (the C2's hold), with none of its way behind it clear
+  of a load still to come in, used to hold where it was, in that load's way: it now flies aside to a place near it clear
+  of the loads' ways and waits there (`HoldShort`'s refuge, `CARGO_HOLD_SHORT … aside to`) until its way is clear.
+  `HoldShort` tests its way every metre, not only at its corners (a drone leaving the hold met a load coming in between
+  two corners 50 m apart, k5-c2-o). A drone that plans its way out again from where it planned last and is still no
+  nearer (pressed against the C2's ramp, its route found free, its every step blocked) goes back along its trail a
+  couple of metres first, every other time.
+- How a box held from its ends finishes (swap back over it, or the ends down onto the slot) is worked out once per
+  situation (`EndsFinishes`): planning had swept the slot approaches every tick while a search ran (0.3 s a tick).
+- `CARGO_SLOW` (a move's tick over 30 ms, its grip search and tug apart) and `CARGO_SLOW_DRONE` (a drone's tick).
+
+**Config** (drone_art.json, documented in its `_comment`): `motion.load_transfer` 0.35; `grip` block: `end_weight` 0.75,
+`side_weight` 0.1, `over_weight` 0.15, `same_face_weight` 0.15, `spread` 0.6, `extra_reach` 0.5, `extra_height_cm` 30,
+`interval_min_s` 3, `interval_max_s` 7, `lookahead_s` 3, `move_speed_scale` 0.35 (viewer choices).
+
+**Verification:**
+- UBT `SCViewerEditor Win64 Development`: `Result: Succeeded`.
+- `Automation RunTests SCBridge.Cargo`: `TESTS success=64 fail=0` (round 4's 62, `TugEnds` and `TugEndsSwap` rewritten for
+  the hold to a point, the zero-g regression and the ways round the box; new: `GripPlaces` (places round a box, the
+  weights about 3 of 4 at the ends, teammates, the interval), `TugFeedForward`; `DroneHeading` (facing the box held:
+  push, pull in reverse, strafe, its bay first) and `DroneArtParse` (the grip block) extended). The two
+  `Condition failed` lines are the engine's own.
+
+**Runs** (logs `ue/SCViewer/Saved/Logs/<tag>.log`; outputs `out/k4b/<tag>.out`; the final build is `t`):
+
+| Run | Scenario | Job line | Notes |
+|---|---|---|---|
+| k4b-c2r5 (round 4) | c2_hangar 208 SCU elevator → C2 | `t=340.5 moves=9 done=9 overlaps=0` | the baseline |
+| k5-c2-t2 | the same | `t=338.0 moves=9 done=9 overlaps=0` | 24 picks: 19 ends, 3 sides, 2 over; 6 refuges |
+| k5-c2-t3 | the same | `t=337.8 moves=9 done=9 overlaps=0` | 24 picks: 18 ends, 3 sides, 3 over |
+| k5-c2-t | the same | `t=477.8 moves=9 done=6 overlaps=2` | **failed**: see Open |
+| k5-hulla-t | hull_a_hangar 16 SCU, elevator → Hull A | `t=69.3 moves=1 done=1 overlaps=0` | round 4 `t=54.0`: its route 99.7 m (90.5), half of it capped near 3 m/s |
+| k5-fleet-t | hull_a_space_fleet 16 SCU (2 boxes) | `t=49.8 moves=2 done=2 overlaps=0` | round 4 `t=200.4`; round 3 56.4 |
+
+The same code before the last two fixes (refuge waits, trail back) ran the C2 in 348.7 s and 327.3 s (9/9, 0) and once
+failed (`k5-c2-r`, a drone stuck on the ramp); fleet and hull_a were clean in every run of the round from build `m` on.
+
+**Where the time goes** (`out/k4b/k5-c2-t2-times.txt`, per move; sums over moves that overlap in time):
+
+| | Outbound | Transit | Lifting | Lowering | Placing |
+|---|---|---|---|---|---|
+| k4b-c2r5 (round 4) | 250.6 | 368.3 | 19.0 | 18.1 | 5.4 |
+| k5-c2-t2 | 371.6 | 312.8 | 18.8 | 17.8 | 5.4 |
+
+Transit is 56 s shorter (no beams paid in and out, no room checks; the C2's last box planned in 4 s, not 47). Outbound
+is 121 s longer: drones given their next move in the C2's hold wait there, aside, for the loads still to come in
+(43 `CARGO_HOLD_SHORT`, 6 refuges; moves 4-7 outbound 56-70 s each). The job's critical path is move 9: free at 263.6 s,
+19.8 s out, placed at 328.6 s. Fleet (`k5-fleet-t`): 18.4 s before any move (the hangar's grids opening), outbound
+11.5 s, transit 17.1 s (round 4: 160.7 s in move 2 alone, 32 replans), lowering 7.4 s.
+
+**The zig-zag, measured** (each drone's horizontal acceleration from its velocity, `rec.txt` of the clips, 0.09 s samples;
+route acceleration included):
+
+| Clip | RMS | p95 | max | reversals > 2 m/s² |
+|---|---|---|---|---|
+| b-after6 (before: round 4, a pair, 32 SCU) | 7.5 m/s² | 13.6 | 26.4 | 0.28 /s |
+| k5-pair2 (a pair, 32 SCU) | 6.6 / 6.0 | 11.8 / 11.8 | 34.9 / 23.1 | 0.12 / 0.39 /s |
+| k5-single2 (a lone drone, 16 SCU) | 6.2 | 12.4 | 25.7 | 0.15 /s |
+
+The pair's accelerations still correlate (0.61-0.68: the same route), but the off-station spikes are gone with the feed
+forward. `CARGO_TUG_OFF` (a drone over 40 cm off its station, sampled once a second) still logs 185 times in a C2 run:
+see Open.
+
+**Clips and Astra** (`out/k4b/clips/k5-pair2`, `k5-single2`; sheets `out/k4b/sheets/r5-*`; review
+`out/k4b/astra/r5.md`): at the ends the pair's rear drone flies forwards (79 of 141 samples) and its front drone in
+reverse (47 of 137); the lone drone held from its rear end, pushing (46 forwards, 33 strafing, 9 reverse). Astra:
+a) holding from the ends reads as pushing and pulling: **qualified pass** (the pulling drone's facing is hard to read
+against the beam glow); b) the grip changes read as changing grip, not jitter: **qualified pass** (give each arrival a
+clearer ease into a settled hold); c) the end preference: **pass**; d) the box following the wobble: **qualified pass**
+("controlled, does not visibly shake", not distinguishable from camera motion at this framing); e) nothing wrong (no box
+penetration, no bunching): **qualified pass** (smaller contact blooms would show the grip).
+
+**Open:**
+- One C2 run in three still fails (`k5-c2-t`): a drone holding short in the hold at its next move's start was judged
+  clear of a load coming in (`HoldShort`'s legs) and the load met it (`CARGO_DRONE_OVERLAP … state=2`), then three
+  moves timed out. Likely: the legs a lone drone waits for leave out a load's way down onto its slot and the drones of a
+  load held from its ends during its swap, and a drone standing in the hold is no obstacle to the load's guard.
+- Drones still sit up to 1-2 m off their stations at times (`CARGO_TUG_OFF`); not from the route's acceleration any more
+  (fed forward) and not from teammates (kept apart); its cause is not found yet. The hold is to a point, so the force on
+  the box does not change; the route's margin covers the stations, not such a lag.
+- Astra's suggestions (the drone's facing and beam contact easier to see; an ease into each new grip; a fixed-camera
+  close-up to judge the transferred wobble) are not done.
+- hull_a is 15 s slower (its route).
+
+### K4 round 5, reliability and the re-pick cap (2026-11-17)
+
+The owner: "Fix it first" (the C2 failing about one run in three), and, after the clips: "when drones pick new positions
+aside from initial, limit max distance to new position, so they don't shift too far ... the overall pace of picking new
+positions and the wobbling is already looking very good indeed."
+
+**The cause.** Every failing C2 run before this (`k5-c2-q`, `q2`, `r`, `s`, `t`) began the same way: a lone drone that had
+just set its box down in the C2's hold got its next move there, and the next load came into the hold while it was still
+in it. Inside the hold, beside boxes standing flush, it had no room: the load's reach (its box and its drones anywhere
+round it) and the distance drones keep cover the hold's width, so its refuge search found nothing and it held where it
+was. The load came on. It hit the drone (`CARGO_DRONE_OVERLAP … state=2`), or the drone's separation pushed one of the
+load's carrying drones off its station into the hold's structure (`Mesh_4099`, its ceiling), more than 3 m off. The load
+then waited for that drone for good (`Transit took longer than 180 s`, its later moves timing out). The race is timing:
+which move frees which drone where, frame by frame; the same code passed and failed. Two gaps let it happen:
+- `HoldShort` modelled an incoming load as its box and its planned grip only: not its drones' re-picked places, not its
+  swap back over, not its descent onto the slot.
+- Nothing kept a load out of a hold that drones were still in: the guard saw a team's drones while they were placing, but
+  not once they turned for home or took their next move there.
+
+It became frequent in round 5 (the C2's moves 5 and 9 now planned from the ends, drones off their stations pushing each
+other, outbound waits in the hold), but the gap itself dates from round 4 (k4b-c2r4's overlap was a drone in the ramp).
+
+**The fix** (one rule from each side, no cycle):
+- **The hold is entered clear.** A load waits short of its destination's precise zone (25 m, `ZoneGateCm`: outside the
+  C2's ramp) while a drone of another move that holds no load in the air is in the zone or in the load's way into it
+  (`ZoneOccupant`, `InZoneOf`; `CARGO_YIELD … waits short of its hold`, `goes on into its hold`).
+- **Those drones do not wait for it.** `HoldShort` does not hold a drone for a load waiting at its gate, nor for a load
+  still outside its hold while the drone is in that hold or the way into it. The load waits for the drone and the drone
+  goes on out (`FSCCargoTug::DroneWaitsForLoad`; test `WaitClear`: in no case do both wait).
+- **Everywhere else, a waiting drone keeps clear of the load's whole remaining motion**: its box and its drones anywhere
+  round it (`FSCCargoKeepOut::LegShape` over `FSCCargoGripPick::Reach`) on every piece, and its descent onto the slot. It
+  goes aside to a refuge when its own place lies in that motion, and the way to the refuge must also leave the load's way.
+- A load also keeps where drones flying home are, and where a later team's drones holding short are (`KeptSpace`).
+
+The coordinator suggested keeping only "waiting drones go outside" and dropping the gate. Inside the hold there is no
+outside a drone can wait in, so the drone has to leave, and the load has to wait until it has: the gate is that rule seen
+from the load's side. It costs 24 to 74 s of waiting per run (5 to 8 waits, at most 30 s each).
+
+**Reliability** (the final code; logs `ue/SCViewer/Saved/Logs/<tag>.log`; times `out/k4b/<tag>-times.txt`):
+
+| Run | Job line | Gate waits | Refuges |
+|---|---|---|---|
+| k6-c2-a1 | `t=278.1 moves=9 done=9 overlaps=0` | 6 (43.8 s) | 3 |
+| k6-c2-a2 | `t=349.2 moves=9 done=9 overlaps=0` | 5 (74.4 s) | 2 |
+| k6-c2-a3 | `t=319.1 moves=9 done=9 overlaps=0` | 6 (28.5 s) | 2 |
+| k6-c2-a4 | `t=265.1 moves=9 done=9 overlaps=0` | 8 (24.2 s) | 2 |
+| k6-c2-a5 | `t=269.3 moves=9 done=9 overlaps=0` | 6 (33.4 s) | 3 |
+| k6-fleet-a | `t=60.2 moves=2 done=2 overlaps=0` | | |
+| k6-hulla-a | `t=70.0 moves=1 done=1 overlaps=0` | | |
+
+Five in five, with no `CARGO_DRONE_OVERLAP` line in any run. Outbound summed over moves fell to 119-207 s (`k5-c2-t2`:
+372 s) and transit rose to 339-491 s (313 s): the time moved from drones waiting in the hold to loads waiting short of it.
+Tests: `TESTS success=65 fail=0` (`WaitClear` new; `GripPlaces` and `DroneArtParse` extended). These runs used a build
+from before the wait-for rule became one pure function (`DroneWaitsForLoad`, the same conditions); that later build also
+passed the tests, 65/65.
+
+Tried and dropped in this pass:
+- A carrying drone that held its station against lone drones (`k6-c2-u1`): lone drones then overlapped the carrying ones.
+- A lone drone going on when it had no refuge (`k6-c2-x1`): one flew into the ramp as a load came up.
+
+**The station lag** (`CARGO_TUG_OFF`: a drone over 40 cm off its station, sampled once a second; 145-210 per run): two
+thirds come within 6 s of a grip move (by design, the drone's way round the box waits for the drone within its hull's
+radius), the rest at the route's sharp turns. It did not cause the failures: their 2-5 m offsets came from waiting drones
+pushing carrying ones, which no longer happens.
+
+**The re-pick cap** (`grip.max_repick_move_frac` 0.3 of the box's longest side, `max_repick_move_min_cm` 150,
+`max_repick_move_max_cm` 300; `FSCCargoGripPick::MoveCap`, measured along the way round the box, `WayLength`):
+- A drone's first grip is its pick from its planned place over the box, of anywhere round it, and is not capped.
+- After that, a re-pick only considers places within the cap; with none viable, the drone keeps its grip.
+- When its own place stops fitting, it goes to the nearest viable place however far (its planned place at the latest).
+- The cadence and the wobble are unchanged. `CARGO_GRIP_PICK` logs `move_cm` and `cap_cm` (-1 for the first grip).
+
+| Grip moves (cm, along the way) | n | median | 90 % | max |
+|---|---|---|---|---|
+| re-picks, cap lifted (`k6-c2-nocap`) | 7 | 421 | 748 | 748 |
+| re-picks, capped (`k6-c2-a1`..`a5`) | 48 | 69 | 116 | 158 |
+| first grips (`a1`..`a5`) | 61 | 417 | | |
+| moves when a place stops fitting (`a1`..`a5`) | 47 | 428 | | |
+
+Astra (`out/k4b/astra/r6.md`, sheets `out/k4b/sheets/r6-*`):
+- The capped re-picks read as small grip adjustments: **pass** ("the drones stay anchored to their respective ends").
+- The uncapped moves: **qualified pass**. The first grips read as deployment; the returns over the box near the route's
+  end "still risk reading as large relocations". Astra suggests staggering them, one drone keeping its grip while the
+  other moves.
+
+**Open:**
+- The returns when a place stops fitting are 4-5 m (median 428 cm): mostly back over the box near the route's end, and
+  both drones of a pair at once. Astra's stagger is not done.
+- The cap-lifted run (`k6-c2-nocap`, not part of the bar) had one overlap.
+- A drone's first grip of each route piece is uncapped, following the owner's wording ("aside from initial").
 
 ## Verification
 

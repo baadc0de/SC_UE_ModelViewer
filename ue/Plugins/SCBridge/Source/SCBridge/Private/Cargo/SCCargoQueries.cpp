@@ -1,15 +1,20 @@
 // USCCargoSubsystem's collision queries for flying shapes (split from SCCargoPrepare.cpp): a lone drone; a hanging load =
-// the box with its margin, and over it the column the beams and the drones fly in (turned with the box); the collision
+// the box with its margin, and over it the column the beams and the drones fly in (turned with the box), or, held from
+// its ends (WP-K4 round 4), the drones' hulls beyond its end faces (EndsQuery; round 5: kept out of slots reserved for
+// boxes still to come), where a swap between the two is clear
+// (SwapClear, SwapOutPoint) and the ends grip itself from the record, the load and the drones (EndGrip); the collision
 // they test (every object type the ship and hangar block with, complex collision, the game colliders included); each
 // query's identity (what it tests, where the boxes at rest are) for the caches and searches that depend on it; the
 // swept turn and descent onto a slot. The drones are no colliders: the space kept for other teams' drones (KeptSpace)
 // is tested beside the world by every query. And what a lone drone decides from the others: when to leave its bay and
-// when to stop short of a dock (FlightFree), when to hold short of its station (HoldShort), which loads to keep out
+// when to stop short of a dock (FlightFree), when to hold short of its station or of a load's way across its own
+// (HoldShort: the load's whole remaining motion, its drones anywhere round it, the swap, the descent; aside when in it), which loads to keep out
 // of the way of (DroneLoads).
 #include "Cargo/SCCargoSubsystem.h"
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoDrone.h"
+#include "Cargo/SCCargoDroneArt.h"
 #include "Cargo/SCCargoGridComponent.h"
 #include "SCVehicle.h"
 #include "SCRigComponent.h"
@@ -138,11 +143,205 @@ FSCCargoRouteQuery USCCargoSubsystem::ColumnQuery(const FSCCargoMove& M, const A
     const FVector Spread = M.Offsets.Num() > 1 ? Rot.RotateVector(M.Offsets.Last()) : FVector::ZeroVector;
     const double Along = Spread.Size2D();
     const FQuat ColumnRot = Along > 1 ? FQuat(FVector::UpVector, FMath::Atan2(Spread.Y, Spread.X)) : FQuat::Identity;
-    const double Above = M.HangCm + DroneHeightCm;
-    const double Base = DroneHeightCm + MarginCm;
+    const double Above = M.HangCm + DroneHeightCm();
+    const double Base = DroneHeightCm() + MarginCm;
+    // Beyond the drones' hulls, what the box's margin has over a drone's own clearance (the gusts' envelope in the open)
+    // and never less than the hulls: the placing margins of a precise zone (5 cm, -2 cm) had left the column 15 to 22 cm
+    // short of them, and a load was routed along a hold's ceiling its drones could not fly under. Roomy (the first way
+    // a load is planned): also the half clearance a drone keeps along its beam (BeamRoom) over the hulls, so the drones
+    // on their stations do not slide along a ceiling (the C2's hold entrance: 3 cm over their hulls).
+    const double Extra = M.bRoomy ? FMath::Max(MarginCm, DroneClearanceCm / 2) : FMath::Max(MarginCm - DroneClearanceCm / 2, 0.0);
     if (OutTop) *OutTop = TopZ + Above;
-    return RouteQuery(FVector(Along + Base, Base, Above / 2 + MarginCm - DroneClearanceCm / 2), FVector(0, 0, TopZ + Above / 2), A, -1e9, 1e9, false, ColumnRot, bIgnoreFlying,
-                      Ignore, &M);
+    return RouteQuery(FVector(Along + Base, Base, Above / 2 + Extra), FVector(0, 0, TopZ + Above / 2), A, -1e9, 1e9, false, ColumnRot, bIgnoreFlying, Ignore, &M);
+}
+
+namespace
+{
+// The union of shapes: blocked where any is, free where all are; the first that is hit is named (Tags[i]: its name).
+FSCCargoRouteQuery AnyOf(const TArray<FSCCargoRouteQuery>& Parts, const TArray<FString>& Tags)
+{
+    FSCCargoRouteQuery Q = Parts[0];
+    Q.Blocked = [Parts](const FVector& P) {
+        for (const FSCCargoRouteQuery& X : Parts)
+            if (X.Blocked(P)) return true;
+        return false;
+    };
+    Q.Free = [Parts](const FVector& A, const FVector& B) {
+        for (const FSCCargoRouteQuery& X : Parts)
+            if (!X.Free(A, B)) return false;
+        return true;
+    };
+    Q.BlockedBy = [Parts](const FVector& P, double Inflate) {
+        for (const FSCCargoRouteQuery& X : Parts)
+            if (X.BlockedBy(P, Inflate)) return true;
+        return false;
+    };
+    Q.Describe = [Parts, Tags](const FVector& A, const FVector& B) {
+        for (int32 I = 0; I < Parts.Num(); ++I)
+            if (const FString Hit = Parts[I].Describe(A, B); Hit != TEXT("none")) return Tags[I] + Hit;
+        return FString(TEXT("none"));
+    };
+    Q.Identity.Reset();
+    for (int32 I = 0; I < Parts.Num(); ++I) Q.Identity += (I ? TEXT("+") : TEXT("")) + Parts[I].Identity;
+    return Q;
+}
+// How far a box of half size E about C (box frame) reaches above the box's centre turned by R.
+double TopOf(const FQuat& R, const FVector& C, const FVector& E)
+{
+    return R.RotateVector(C).Z + FMath::Abs(R.GetAxisX().Z) * E.X + FMath::Abs(R.GetAxisY().Z) * E.Y + FMath::Abs(R.GetAxisZ().Z) * E.Z;
+}
+} // namespace
+
+FVector USCCargoSubsystem::GripStation(const FSCCargoMove& M, const ASCCargoContainer* A, int32 I, int32 Grip) const
+{
+    if (Grip == 1) return M.Ends.Station(M.EndOf.IsValidIndex(I) ? M.EndOf[I] : (I & 1));
+    // Over: its emitter the hang over the top face, over its formation offset.
+    const FVector Offset = M.Offsets.IsValidIndex(I) ? M.Offsets[I] : FVector::ZeroVector;
+    return FVector(Offset.X, Offset.Y, A->SizeCm().Z / 2 + M.HangCm);
+}
+
+FSCCargoRouteQuery USCCargoSubsystem::EndsQuery(const FSCCargoMove& M, const ASCCargoContainer* A, const FQuat& Rot, double MarginCm, bool bIgnoreFlying,
+                                               const TArray<const UPrimitiveComponent*>* Ignore, bool bSwap, double* OutTop) const
+{
+    // Each drone's hull at its station beyond its end face, at any heading; swapping grips, its whole way there from
+    // over the box (FSCCargoEndGrip::SwapWay): its place over the box, the corner over its station, its station.
+    const FSCCargoEndGrip& G = M.Ends;
+    MarginCm = FMath::Max(MarginCm, EndsDroneMarginCm);
+    TArray<FSCCargoRouteQuery> Parts;
+    double Top = TopOf(Rot, FVector::ZeroVector, A->SizeCm() / 2);
+    TArray<FString> Tags;
+    TArray<FBox> Regions; // box frame, with the margin
+    for (int32 I = 0; I < FMath::Max(M.EndOf.Num(), 1); ++I)
+    {
+        const int32 End = M.EndOf.IsValidIndex(I) ? M.EndOf[I] : 0;
+        const FVector Station = G.Station(End);
+        FBox Region = G.HullAt(Station);
+        Tags.Add(FString::Printf(TEXT("end%d:"), End));
+        if (bSwap)
+        {
+            const FVector Over = GripStation(M, A, I, 0);
+            for (const FVector& P : FSCCargoEndGrip::SwapWay(Over, Station)) Region += G.HullAt(P);
+        }
+        Top = FMath::Max(Top, TopOf(Rot, Region.GetCenter(), Region.GetExtent()));
+        Parts.Add(RouteQuery(Region.GetExtent() + FVector(MarginCm), Rot.RotateVector(Region.GetCenter()), A, -1e9, 1e9, false, Rot, bIgnoreFlying, Ignore, &M));
+        Regions.Add(Region.ExpandBy(MarginCm));
+    }
+    if (OutTop) *OutTop = Top;
+    FSCCargoRouteQuery Q = AnyOf(Parts, Tags);
+    // The slots of the destination reserved for other boxes still to come (round 5): a box held over passes over a
+    // neighbour's slot, one held from its ends puts a drone into it, and the box set down there later would close on that
+    // drone (the C2's hold, a pair carrying a box past the slot of the one before it). Kept clear as though filled.
+    const USCCargoGridComponent* To = FindGrid(M.Plan.ToGrid);
+    if (!To) return Q;
+    TArray<FBox> Slots;
+    FString Ids;
+    const FVector Cell = To->Lattice.CellM * 100.0;
+    for (const FSCCargoPlacement& P : To->Placed)
+        if (P.ItemId != M.Plan.BoxId && To->Reserved.Contains(P.ItemId))
+        {
+            Slots.Add(FBox(FVector(P.Origin) * Cell, FVector(P.Origin + P.Cells) * Cell));
+            Ids += FString::Printf(TEXT(",%d"), P.ItemId);
+        }
+    if (Slots.IsEmpty()) return Q;
+    const FTransform ToLattice = To->LatticeToWorld().Inverse();
+    auto Hits = [Regions, Slots, ToLattice, Rot](const FVector& P) {
+        const FTransform T = FTransform(Rot, P) * ToLattice;
+        for (const FBox& R : Regions)
+        {
+            const FBox L = R.TransformBy(T);
+            for (const FBox& S : Slots)
+                if (L.Intersect(S)) return true;
+        }
+        return false;
+    };
+    auto Along = [Hits](const FVector& From, const FVector& To) {
+        const int32 Steps = FMath::Max(1, FMath::CeilToInt32(FVector::Dist(From, To) / 25.0));
+        for (int32 K = 0; K <= Steps; ++K)
+            if (Hits(FMath::Lerp(From, To, double(K) / Steps))) return true;
+        return false;
+    };
+    const FSCCargoRouteQuery Base = Q;
+    Q.Blocked = [Base, Hits](const FVector& P) { return Base.Blocked(P) || Hits(P); };
+    Q.Free = [Base, Along](const FVector& From, const FVector& To) { return Base.Free(From, To) && !Along(From, To); };
+    Q.BlockedBy = [Base, Hits](const FVector& P, double Inflate) { return Base.BlockedBy(P, Inflate) || Hits(P); };
+    Q.Describe = [Base, Along](const FVector& From, const FVector& To) {
+        const FString Hit = Base.Describe(From, To);
+        return Hit != TEXT("none") || !Along(From, To) ? Hit : FString(TEXT("a slot reserved for a box still to come"));
+    };
+    Q.Identity += TEXT("+reserved") + Ids;
+    return Q;
+}
+
+bool USCCargoSubsystem::SwapClear(const FSCCargoMove& M, const ASCCargoContainer* A, const FVector& P, const FQuat& Rot, FString* OutWhy) const
+{
+    // The box stays where it is (on its route, already free): the drones over it (with the column's margin), on their
+    // ways round its ends, and at the ends. In the precise zone (no gusts) with the turning margin.
+    const double Margin = InPreciseZone(M, A, P) ? TurnMarginCm : DroneClearanceCm / 2 + LoadEnvelopeCm(M);
+    const FSCCargoRouteQuery Over = ColumnQuery(M, A, Rot, Margin, false, nullptr);
+    const FSCCargoRouteQuery Way = EndsQuery(M, A, Rot, Margin, false, nullptr, true);
+    if (!Over.Blocked(P) && !Way.Blocked(P)) return true;
+    if (OutWhy) *OutWhy = Over.Blocked(P) ? TEXT("over:") + Over.Describe(P, P + FVector(0, 0, 1)) : Way.Describe(P, P + FVector(0, 0, 1));
+    return false;
+}
+
+bool USCCargoSubsystem::SwapOutPoint(const FSCCargoMove& M, const ASCCargoContainer* A, const USCCargoGridComponent* To, const FVector& Goal, const FQuat& Rot,
+                                     FVector& OutPoint, FString* OutNote) const
+{
+    // Over To's lattice at the goal's height, its cell steps, nearest the goal first (the goal itself first of all).
+    const FSCCargoRouteQuery OverLoad = LoadQuery(M, A, false, &Rot, 0), EndsLoad = LoadQuery(M, A, false, &Rot, 1);
+    const FTransform Frame = To->LatticeToWorld();
+    const FVector Cell = To->Lattice.CellM * 100.0, Interior = To->Lattice.InteriorM * 100.0;
+    const FVector Local = Frame.InverseTransformPosition(Goal);
+    TArray<FVector> Candidates = {Goal};
+    for (int32 I = FMath::FloorToInt32(-Local.X / Cell.X) - 1; Local.X + I * Cell.X <= Interior.X + Cell.X; ++I)
+        for (int32 J = FMath::FloorToInt32(-Local.Y / Cell.Y) - 1; Local.Y + J * Cell.Y <= Interior.Y + Cell.Y; ++J)
+            if (I || J) Candidates.Add(Frame.TransformPosition(Local + FVector(I * Cell.X, J * Cell.Y, 0)));
+    Candidates.StableSort([&](const FVector& P, const FVector& Q) { return FVector::DistSquared(P, Goal) < FVector::DistSquared(Q, Goal); });
+    int32 Tried = 0;
+    FString Why = TEXT("none tried");
+    for (const FVector& P : Candidates)
+    {
+        ++Tried;
+        if (EndsLoad.Blocked(P) || OverLoad.Blocked(P)) { Why = TEXT("the load does not fit there"); continue; }
+        if (!SwapClear(M, A, P, Rot, &Why)) continue;
+        if (!P.Equals(Goal, 1.0) && !OverLoad.Free(P, Goal)) { Why = TEXT("no straight way on to the goal held over"); continue; }
+        OutPoint = P;
+        if (OutNote) *OutNote = FString::Printf(TEXT("swap_point found=1 at=%s to_goal_m=%.1f tried=%d of %d"), *P.ToCompactString(), FVector::Dist(P, Goal) / 100, Tried, Candidates.Num());
+        return true;
+    }
+    if (OutNote) *OutNote = FString::Printf(TEXT("swap_point found=0 tried=%d last=\"%s\""), Tried, *Why);
+    return false;
+}
+
+FSCCargoEndGrip USCCargoSubsystem::EndGrip(const ASCCargoContainer* A, double MassKg, const TArray<ASCCargoDrone*>& Drones, int32 Team) const
+{
+    FSCCargoEndGrip::FIn In;
+    In.Beam = TractorBeam();
+    In.MassKg = MassKg;
+    In.GravityMS2 = Gravity();
+    In.Team = Team;
+    In.BoxHalfCm = A->SizeCm() / 2;
+    // The largest drone of the team (they are alike); before any drone is known, the first in the scene.
+    for (const ASCCargoDrone* D : Drones)
+    {
+        const FSCCargoEndGrip::FDrone S = D->GripShape();
+        In.Drone.HullHalf = In.Drone.HullHalf.ComponentMax(S.HullHalf);
+        In.Drone.EmitterPlanCm = FMath::Max(In.Drone.EmitterPlanCm, S.EmitterPlanCm);
+        In.Drone.AboveCm = FMath::Max(In.Drone.AboveCm, S.AboveCm);
+        In.Drone.BelowCm = FMath::Max(In.Drone.BelowCm, S.BelowCm);
+    }
+    if (Drones.IsEmpty())
+        for (const TWeakObjectPtr<ASCCargoDrone>& D : State->Drones)
+            if (D.IsValid())
+            {
+                In.Drone = D->GripShape();
+                break;
+            }
+    In.GapCm = ASCCargoDrone::OwnBoxGapCm;
+    In.InsetCm = EndsInsetCm;
+    In.MinAccelMS2 = State->Scenario.Drone.MinLoadAccelMS2;
+    In.MaxAngleDeg = State->Scenario.Drone.MaxAngleDeg;
+    return FSCCargoEndGrip::Plan(In);
 }
 
 bool USCCargoSubsystem::PreciseZone(const FSCCargoMove& M, const ASCCargoContainer* A, FTransform& OutToLattice, FBox& OutZone) const
@@ -163,16 +362,20 @@ bool USCCargoSubsystem::InPreciseZone(const FSCCargoMove& M, const ASCCargoConta
     return PreciseZone(M, A, ToLattice, Zone) && Zone.IsInsideOrOn(ToLattice.TransformPosition(P));
 }
 
-FSCCargoRouteQuery USCCargoSubsystem::LoadQuery(const FSCCargoMove& M, const ASCCargoContainer* A, bool bIgnoreFlying, const FQuat* Rotation) const
+FSCCargoRouteQuery USCCargoSubsystem::LoadQuery(const FSCCargoMove& M, const ASCCargoContainer* A, bool bIgnoreFlying, const FQuat* Rotation, int32 Grip) const
 {
     // The box as it hangs (its pickup orientation, kept on the way, unless asked at another) with a margin, and over it
-    // the column the beams and the drones fly in. Margins grow by the gusts' envelope in atmosphere. In the move's
-    // precise zone (slow, no gusts) the margin is the placing one: a box goes in beside the boxes standing there.
+    // the column the beams and the drones fly in, or held from its ends the drones' hulls beyond its end faces (never
+    // closer than the turning margin: they are no box to come flush with). Margins grow by the gusts' envelope in
+    // atmosphere. In the move's precise zone (slow, no gusts) the margin is the placing one: a box goes in beside the
+    // boxes standing there.
     const FQuat Rot = Rotation ? *Rotation : M.FromRotation;
+    const bool bEnds = (Grip < 0 ? M.Grip == FSCCargoMove::EGrip::Ends : Grip == 1) && M.Ends.bValid;
     double Top = 0;
     auto Shape = [&](double Margin, const TArray<const UPrimitiveComponent*>* Ignore) {
         const FSCCargoRouteQuery Box = RouteQuery(A->SizeCm() / 2 + FVector(Margin), FVector::ZeroVector, A, -1e9, 1e9, false, Rot, bIgnoreFlying, Ignore, &M);
-        const FSCCargoRouteQuery Column = ColumnQuery(M, A, Rot, Margin, bIgnoreFlying, Ignore, &Top);
+        const FSCCargoRouteQuery Column = bEnds ? EndsQuery(M, A, Rot, FMath::Max(Margin, TurnMarginCm), bIgnoreFlying, Ignore, false, &Top)
+                                                : ColumnQuery(M, A, Rot, Margin, bIgnoreFlying, Ignore, &Top);
         FSCCargoRouteQuery Q = Box;
         Q.Blocked = [Box, Column](const FVector& P) { return Box.Blocked(P) || Column.Blocked(P); };
         Q.Free = [Box, Column](const FVector& A, const FVector& B) { return Box.Free(A, B) && Column.Free(A, B); };
@@ -185,7 +388,7 @@ FSCCargoRouteQuery USCCargoSubsystem::LoadQuery(const FSCCargoMove& M, const ASC
         Q.Identity = Box.Identity + TEXT("+") + Column.Identity;
         return Q;
     };
-    FSCCargoRouteQuery Q = Shape(DroneClearanceCm / 2 + SwayEnvelopeCm(), nullptr);
+    FSCCargoRouteQuery Q = Shape(DroneClearanceCm / 2 + LoadEnvelopeCm(M), nullptr);
     FTransform ToLattice;
     FBox Zone;
     if (PreciseZone(M, A, ToLattice, Zone))
@@ -255,20 +458,31 @@ bool USCCargoSubsystem::TurnClear(const FSCCargoMove& M, const ASCCargoContainer
         const FQuat Q = FQuat::Slerp(FromQ, ToQ, T);
         const FVector P = FMath::Lerp(FromP, ToP, T);
         const FSCCargoRouteQuery Box = RouteQuery(A->SizeCm() / 2 + FVector(Margin), FVector::ZeroVector, A, -1e9, 1e9, false, Q, false, nullptr, &M);
-        // The drones over it too, in a level turn (they fly over the box as it turns; in a turn onto a tilted lattice they
-        // swing with the destination's normal, not with the box).
+        // The drones too, in a level turn (over the box, or at its ends, as they hold it; in a turn onto a tilted lattice
+        // they swing with the destination's normal, not with the box).
+        auto Drones = [&]() {
+            return M.Grip == FSCCargoMove::EGrip::Ends && M.Ends.bValid ? EndsQuery(M, A, Q, FMath::Max(Margin, TurnMarginCm), false, nullptr) : ColumnQuery(M, A, Q, Margin, false, nullptr);
+        };
         const bool bBox = Box.Blocked(P);
-        if (!bBox && (!bLevel || !ColumnQuery(M, A, Q, Margin, false, nullptr).Blocked(P))) continue;
+        if (!bBox && (!bLevel || !Drones().Blocked(P))) continue;
         if (OutWhy)
             *OutWhy = FString::Printf(TEXT("turning %.0f deg hits %s%s"), FMath::RadiansToDegrees(FromQ.AngularDistance(Q)), bBox ? TEXT("") : TEXT("(the drones) "),
-                                      *(bBox ? Box : ColumnQuery(M, A, Q, Margin, false, nullptr)).Describe(P, P + FVector(0, 0, 1)));
+                                      *(bBox ? Box : Drones()).Describe(P, P + FVector(0, 0, 1)));
         return false;
     }
     return true;
 }
 
-bool USCCargoSubsystem::DescentClear(const ASCCargoContainer* A, const FQuat& Rotation, const FVector& From, const FVector& To, FString* OutWhy) const
+bool USCCargoSubsystem::DescentClear(const ASCCargoContainer* A, const FQuat& Rotation, const FVector& From, const FVector& To, FString* OutWhy, const FSCCargoMove* M) const
 {
+    // Held from its ends (Move's grip), its drones go down beside its end faces with it: their hulls swept too, with
+    // the turning margin (they come flush with nothing).
+    if (M && M->Grip == FSCCargoMove::EGrip::Ends && M->Ends.bValid)
+        if (const FSCCargoRouteQuery Ends = EndsQuery(*M, A, Rotation, TurnMarginCm, false, nullptr); !Ends.Free(From, To))
+        {
+            if (OutWhy) *OutWhy = TEXT("(the drones at its ends) ") + Ends.Describe(From, To);
+            return false;
+        }
     // What the box overlaps standing in its slot is the grid's own structure (a plate's rails, a floor lip): the planner
     // owns the slot, so only what lies on the way down counts.
     const FVector Half = A->SizeCm() / 2 - FVector(FlushInsetCm);
@@ -295,7 +509,7 @@ bool USCCargoSubsystem::SlotApproach(const FSCCargoMove& M, const ASCCargoContai
     for (double Off = MinCm; Off <= MinCm + MaxApproachCm; Off += 25)
     {
         const FVector Hover = Slot.GetLocation() + Normal * Off;
-        if (!DescentClear(A, ToQ, Hover, Slot.GetLocation(), &Why)) { Why = TEXT("the way down onto the slot hits ") + Why; continue; }
+        if (!DescentClear(A, ToQ, Hover, Slot.GetLocation(), &Why, &M)) { Why = TEXT("the way down onto the slot hits ") + Why; continue; }
         // The turn at the hover point, else higher up (straight above it), then down to it turned.
         for (double Rise = 0; Rise <= MaxTurnRiseCm; Rise += 50)
         {
@@ -316,7 +530,7 @@ FSCCargoRouteQuery USCCargoSubsystem::DroneQuery(const ASCCargoDrone* Drone, con
 {
     // Its hull's bounds (the shape its steps are swept with), and around them half the clearance and the gusts
     // (tight: the gusts alone).
-    const FVector Half = (Drone ? Drone->HullHalf : FVector(DroneHeightCm)) + FVector((bTight ? 0.0 : DroneClearanceCm / 2) + SwayEnvelopeCm());
+    const FVector Half = (Drone ? Drone->HullHalf : FVector(DroneHeightCm())) + FVector((bTight ? 0.0 : DroneClearanceCm / 2) + SwayEnvelopeCm());
     FSCCargoRouteQuery Q = RouteQuery(Half, Drone ? Drone->HullCentre : FVector::ZeroVector, nullptr, -1e9, CeilingZ() - Half.Z, true, FQuat::Identity, false, nullptr, Move, Drone, Ends);
     // With an end inside its margin (tight): half steps where a full one is blocked, so it gets out of a place
     // narrower than a cell (beside a box on a plate).
@@ -370,10 +584,25 @@ TSharedRef<FSCCargoKeepOut> USCCargoSubsystem::KeptSpace(const FSCCargoMove* Mov
             bool bStations = bOwn; // where its drones will be, not where they are
             if (!bOwn) switch (O.Step)
             {
-            // On their way out: their stations over the box are taken.
-            case EStep::Outbound: bStations = true; break;
-            // Hovering over a box at rest, or holding one aside.
-            case EStep::Attaching: case EStep::Placing: case EStep::Holding: break;
+            // On their way out: their stations over the box are taken. A team planned after this load holds short of
+            // its way (HoldShort) where it is clear of it, or waits aside: for it the load keeps where its drones are,
+            // not their stations (a drone given its next move in the hold the load comes into is in its way until it is
+            // aside or gone; round 5).
+            case EStep::Outbound:
+                bStations = !(bLoad && Move && O.PlannedAt > Move->PlannedAt);
+                break;
+            // Flying home from setting a box down: where they are (round 5: they had stood beside the slot they set their
+            // box on, at the slot the next load came into, and the load's guard had not seen them).
+            case EStep::Returning:
+                if (!bLoad) continue;
+                break;
+            // Hovering over a box at rest, or holding one aside. A team still attaching that was planned after this
+            // load gives way to it (it waits for the loads near its way up, and its drones step out of a load's way,
+            // DodgesLoads): no space is kept for it, or each would wait for the other.
+            case EStep::Attaching:
+                if (bLoad && Move && O.PlannedAt > Move->PlannedAt) continue;
+                break;
+            case EStep::Placing: case EStep::Holding: break;
             // Over a load in the air: with the load, when this query takes that as an obstacle (the right of way).
             case EStep::Lifting: case EStep::Transit: case EStep::Lowering:
                 if (!bLoad || bIgnoreFlying || O.Plan.BoxId < CarriedBoxId) continue;
@@ -511,7 +740,7 @@ double USCCargoSubsystem::FlightFree(const ASCCargoDrone* D, const FSCCargoFligh
     return Free < Look ? F.Dist + Free : -1.0;
 }
 
-double USCCargoSubsystem::HoldShort(const FSCCargoMove& M, const ASCCargoDrone* D, const FSCCargoFlight& F) const
+double USCCargoSubsystem::HoldShort(const FSCCargoMove& M, const ASCCargoDrone* D, const FSCCargoFlight& F, FVector* OutRefuge) const
 {
     using EStep = FSCCargoMove::EStep;
     if (!D || F.Points.Num() < 2) return -1;
@@ -527,6 +756,10 @@ double USCCargoSubsystem::HoldShort(const FSCCargoMove& M, const ASCCargoDrone* 
     TArray<FLeg> Legs;
     const double Pad = D->HullHalf.GetMax() + SwayEnvelopeCm();
     const FVector Station = F.Points.Last() + D->HullCentre;
+    // Its way still to fly (its hull's centre at each point): a load may cross it before the station (a ramp both use).
+    TArray<FVector, TInlineAllocator<256>> Ahead;
+    for (int32 I = 0; I < F.Points.Num(); ++I)
+        if (F.S[I] >= F.Dist) Ahead.Add(F.Points[I] + D->HullCentre);
     for (const FSCCargoJob& Job : State->Jobs)
         for (const FSCCargoMove& O : Job.Moves)
         {
@@ -534,13 +767,46 @@ double USCCargoSubsystem::HoldShort(const FSCCargoMove& M, const ASCCargoDrone* 
             const FSCCargoBox* Box = State->Boxes.Find(O.Plan.BoxId);
             const ASCCargoContainer* A = Box ? Box->Actor.Get() : nullptr;
             if (!A) continue;
+            // Not for a load waiting at its hold's gate, nor for one still outside its hold while this drone is in that
+            // hold or the load's way into it: that load waits for this drone (ZoneOccupant), so this one goes on out
+            // (FSCCargoTug::DroneWaitsForLoad; round 5: each had waited for the other).
+            if (!FSCCargoTug::DroneWaitsForLoad(O.bWaitZone, InZoneOf(O, A, D), InPreciseZone(O, A, A->GetActorLocation()))) continue;
             const int32 Before = Legs.Num();
-            auto Add = [&](TArray<FVector> Points, const FQuat& Rotation, bool bTurn = false) {
+            auto Add = [&](TArray<FVector> Points, const FQuat& Rotation, bool bTurn = false, bool bEnds = false) {
                 if (Points.IsEmpty()) return;
-                // Turned there (a level turn): the cylinder about its upright axis.
+                // Its box and its drones wherever they can be round it on the way (round 5: each picks its own place, a
+                // swap takes them round the box, its drones lag their stations): everything they can reach
+                // (FSCCargoGripPick::Reach); turned there (a level turn), the cylinder about the upright axis of that.
                 const FVector Half = A->SizeCm() / 2;
-                Legs.Add({MoveTemp(Points), bTurn ? FQuat::Identity : Rotation, bTurn ? FVector(Half.Size2D(), Half.Size2D(), Half.Z) : Half, O.HangCm + DroneHeightCm});
+                if (O.Places.bValid)
+                {
+                    FSCCargoEndGrip G = O.Places;
+                    G.BoxHalf = Half;
+                    FVector H;
+                    double Up = 0;
+                    FSCCargoKeepOut::LegShape(FSCCargoGripPick::Reach(G, O.HangCm, FSCCargoDroneArt::Get().Grip), H, Up);
+                    Legs.Add({MoveTemp(Points), bTurn ? FQuat::Identity : Rotation, bTurn ? FVector(H.Size2D(), H.Size2D(), H.Z) : H, Up});
+                    return;
+                }
+                // Held from its ends: the box and its drones beyond them, nothing over it.
+                if (bEnds && O.Ends.bValid)
+                {
+                    const FBox S = O.Ends.Shape();
+                    Legs.Add({MoveTemp(Points), Rotation, S.Max.ComponentMax(-S.Min), 0.0});
+                    return;
+                }
+                Legs.Add({MoveTemp(Points), bTurn ? FQuat::Identity : Rotation, bTurn ? FVector(Half.Size2D(), Half.Size2D(), Half.Z) : Half, O.HangCm + DroneHeightCm()});
             };
+            const bool bEndsFirst = O.EndsPiece == 0, bEndsSecond = O.EndsPiece >= 0;
+            // Its way down onto its slot from its goal (the swap back over before it is in the reach above): the last of
+            // its motion, beside a box this drone may just have set down.
+            auto Descent = [&]() {
+                const USCCargoGridComponent* Into = O.Plan.Kind == ESCCargoMoveKind::Hold ? nullptr : FindGrid(O.Plan.ToGrid);
+                const FSCCargoBox* Moving = State->Boxes.Find(O.Plan.BoxId);
+                if (!Into || !Moving) return;
+                Add({O.Goal, Into->SlotToWorld(SCCargoSlotOf(O.Plan), Moving->SizeM()).GetLocation()}, O.ToRotation, false, O.bEndsToSlot);
+            };
+            const FQuat Last = O.SecondPath.IsEmpty() ? O.FromRotation : O.SecondRotation;
             const bool bQuarter = !O.PickRotation.Equals(O.FromRotation, 1e-4); // turned at the top of its lift
             auto Rest = [](const FSCCargoFlight& Flight) {
                 TArray<FVector> Points = {Flight.Position()};
@@ -554,21 +820,27 @@ double USCCargoSubsystem::HoldShort(const FSCCargoMove& M, const ASCCargoDrone* 
                 if (O.TransitPath.IsEmpty()) continue;
                 Add({A->GetActorLocation(), O.TransitPath[0]}, O.PickRotation);
                 if (bQuarter) Add({O.TransitPath[0]}, O.PickRotation, true);
-                Add(O.TransitPath, O.FromRotation);
-                Add(O.SecondPath, O.SecondRotation);
+                Add(O.TransitPath, O.FromRotation, false, bEndsFirst);
+                Add(O.SecondPath, O.SecondRotation, false, bEndsSecond);
+                Add(O.OverLeg, Last);
+                Descent();
                 break;
             case EStep::Lifting:
                 Add(Rest(O.Carry), O.PickRotation);
                 if (bQuarter && !O.TransitPath.IsEmpty()) Add({O.TransitPath[0]}, O.PickRotation, true);
-                Add(O.TransitPath, O.FromRotation);
-                Add(O.SecondPath, O.SecondRotation);
+                Add(O.TransitPath, O.FromRotation, false, bEndsFirst);
+                Add(O.SecondPath, O.SecondRotation, false, bEndsSecond);
+                Add(O.OverLeg, Last);
+                Descent();
                 break;
             case EStep::Transit:
                 if (O.bStalled) continue; // it has no route from where it is; it plans round what is there then
-                Add(Rest(O.Carry), O.FromRotation);
-                Add(O.SecondPath, O.SecondRotation);
+                Add(Rest(O.Carry), O.FromRotation, false, O.Grip == FSCCargoMove::EGrip::Ends);
+                Add(O.SecondPath, O.SecondRotation, false, bEndsSecond);
+                Add(O.OverLeg, Last);
+                Descent();
                 break;
-            case EStep::Lowering: Add(Rest(O.Carry), O.ToRotation); break;
+            case EStep::Lowering: Add(Rest(O.Carry), O.ToRotation, false, O.Grip == FSCCargoMove::EGrip::Ends); break;
             default: continue;
             }
             // Of this load's way: up to where it is past the station (what it flies after that does not keep the drone
@@ -580,7 +852,20 @@ double USCCargoSubsystem::HoldShort(const FSCCargoMove& M, const ASCCargoDrone* 
                     LastLeg = K;
                     LastAt = At;
                 }
-            if (LastLeg == INDEX_NONE) Legs.SetNum(Before);
+            if (LastLeg == INDEX_NONE)
+            {
+                // Not through its station: through its way there? Then all of it counts (they would meet on the way, in a
+                // place too narrow to step aside: the C2's ramp, an empty drone flying out as a load came in).
+                bool bWay = false;
+                for (int32 K = Before; K < Legs.Num() && !bWay; ++K)
+                    for (const FVector& P : Ahead)
+                        if (FSCCargoKeepOut::RoutePasses(Legs[K].Points, Legs[K].Rotation, Legs[K].Half, Legs[K].Above, P, Pad))
+                        {
+                            bWay = true;
+                            break;
+                        }
+                if (!bWay) Legs.SetNum(Before);
+            }
             else
             {
                 Legs.SetNum(LastLeg + 1);
@@ -613,13 +898,55 @@ double USCCargoSubsystem::HoldShort(const FSCCargoMove& M, const ASCCargoDrone* 
             if (FSCCargoKeepOut::RoutePasses(Leg.Points, Leg.Rotation, Leg.Half, Leg.Above, P, Pad + Extra)) return true;
         return false;
     };
-    // Back along its way to the last point clear of them (by the kept distance more): there it waits, and where it
-    // is when it is past that point but not yet in a load's way. Already in one (it came before the load was
-    // planned, or the load took a new route): on to its station; the load's own guard finds it there.
-    int32 I = F.Points.Num() - 1;
-    while (I >= 0 && Passed(F.Points[I] + D->HullCentre, Keep)) --I;
-    if (I < 0) return 0;
-    return F.Dist <= F.S[I] || !Passed(F.Position() + D->HullCentre, 0) ? F.S[I] : -1.0;
+    // The first point of its way ahead that they pass (its station at the latest), then back along its way to the last
+    // point clear of them (by the kept distance more): there it waits, and where it is when it is past that point but
+    // not yet in a load's way. Already in one (it came before the load was planned, or the load took a new route): on
+    // to its station; the load's own guard finds it there.
+    // Along its way, not only at its corners (round 5: a drone leaving the C2's hold met a load coming in between two
+    // corners 50 m apart): every metre and every corner.
+    TArray<double> Along;
+    for (int32 J = 0; J < F.Points.Num(); ++J)
+    {
+        if (J > 0)
+            for (double S = F.S[J - 1] + 100.0; S < F.S[J] - 1.0; S += 100.0) Along.Add(S);
+        Along.Add(F.S[J]);
+    }
+    int32 First = INDEX_NONE;
+    for (int32 J = 0; J < Along.Num() && First == INDEX_NONE; ++J)
+        if (Along[J] >= F.Dist - 1.0 && Passed(F.At(Along[J]) + D->HullCentre, Keep)) First = J;
+    if (First == INDEX_NONE) return -1;
+    int32 I = First;
+    while (I >= 0 && Passed(F.At(Along[I]) + D->HullCentre, Keep)) --I;
+    if (I < 0)
+    {
+        // Nowhere behind it is clear, where it is included (with the kept distance): a place near it clear of them, up,
+        // down or aside (nearest first), that it reaches straight; it waits there instead.
+        const FVector Here = F.Position();
+        if (OutRefuge)
+        {
+            const FSCCargoRouteQuery Q = DroneQuery(D, &M, {Here});
+            TArray<FVector> Tries;
+            for (const double R : {200.0, 400.0, 700.0, 1000.0, 1400.0})
+                for (const FVector& Dir : {FVector::UpVector, -FVector::UpVector, FVector::ForwardVector, -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector,
+                                           FVector(1, 1, 0).GetSafeNormal(), FVector(1, -1, 0).GetSafeNormal(), FVector(-1, 1, 0).GetSafeNormal(), FVector(-1, -1, 0).GetSafeNormal()})
+                    Tries.Add(Here + Dir * R);
+            for (const FVector& P : Tries)
+            {
+                auto Leaves = [&]() { // its way there leaves the loads' ways (none of it, past its first stretch, in them)
+                    for (double S = 150.0; S < FVector::Dist(Here, P); S += 100.0)
+                        if (Passed(Here + (P - Here).GetSafeNormal() * S + D->HullCentre, 0)) return false;
+                    return true;
+                };
+                if (!Passed(P + D->HullCentre, Keep) && !Q.Blocked(P) && Q.Free(Here, P) && Leaves())
+                {
+                    *OutRefuge = P;
+                    break;
+                }
+            }
+        }
+        return 0;
+    }
+    return F.Dist <= Along[I] || !Passed(F.Position() + D->HullCentre, 0) ? Along[I] : -1.0;
 }
 
 bool USCCargoSubsystem::DroneOwnBox(const ASCCargoDrone* Drone, FTransform& OutPose, FVector& OutHalf) const

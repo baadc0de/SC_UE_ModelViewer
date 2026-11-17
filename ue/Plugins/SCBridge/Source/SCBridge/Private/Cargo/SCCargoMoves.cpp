@@ -4,8 +4,19 @@
 // out, catch it over the destination, lower it along that grid's normal, magnetize it onto its slot, and fly home.
 // Flying on its own a drone faces where it flies; a team faces its load's travel (the route's velocity, given to each
 // drone with SetLoadVelocity); the heading itself is the drone's (ASCCargoDrone, FSCCargoHeading).
-// Log: CARGO_MOVE (steps), CARGO_REPLAN (a blocked route planned again), CARGO_CARRY (box samples in flight).
+// A team of one or two may hold the box from its ends on the way (WP-K4 rounds 4 and 5, FSCCargoMove::Grip): it swaps
+// there from over the box at the top of the lift or after the turn at a hold's entrance, and back over it before its slot,
+// the box held still on its route while the drones go round it (SwapGrip); or it keeps the ends down onto the slot. On the
+// way each drone searches for its own grip round the box (GripTick, SCCargoGrip.cpp), and its wobble moves the box through
+// its hold, faded as the gusts are (TransferFade).
+// On its way out a drone in a load's way with none of its way behind clear waits aside (HoldShort's refuge, round 5); one
+// that plans its way again from the same place it last did goes back along its trail first (every other time). A load
+// goes into a hold (its destination's precise zone) only clear of other teams' drones: short of it, it waits while drones
+// that set a box down there are still in it (ZoneOccupant, CARGO_YIELD 'waits short of its hold').
+// Log: CARGO_MOVE (steps), CARGO_REPLAN (a blocked route planned again), CARGO_CARRY (box samples in flight),
+// CARGO_GRIP_SWAP (a swap of grip begun and done).
 #include "Cargo/SCCargoSubsystem.h"
+#include "HAL/PlatformTime.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
@@ -133,20 +144,28 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         D->SwayFrequencyHz = Def.SwayFrequencyHz;
         const double Team = FMath::Max(1, Drones.Num()) * FMath::Max<double>(Def.DroneMassKg, 1.0);
         D->SwayGain = bAir ? float(FMath::Clamp(Fade, 0.0, 1.0) / (1.0 + LoadKg / (Team * 10.0)) * (1.0 + 0.05 * SpeedCmS / 100.0)) : 0.f;
+        D->TransferFade = float(FMath::Clamp(Fade, 0.0, 1.0)); // its wobble on its box: faded as the gusts are (none in the precise zone)
     };
     double FormationFade = 0; // set by the step before Formation
-    // Where the drones fly around the box centre Q: Along the beam direction N, over the box's top by the hang length.
+    // Where the drones fly around the box centre Q: Along the beam direction N, over the box's top by the hang length;
+    // held from its ends (Grip), at their stations beyond its end faces (FSCCargoEndGrip, the box's frame).
     // They carry as a team: each faces the load's travel, LoadV (the route's velocity; zero while it is at rest).
     auto Formation = [&](const FVector& Q, const FVector& N, const FQuat& Rotation, const FVector& Accel, bool bBeams, float Width, double Hang = -1,
                          const FVector& LoadV = FVector::ZeroVector) {
+        const bool bEnds = M.Grip == FSCCargoMove::EGrip::Ends && M.Ends.bValid && Drones.Num() <= 2;
         for (int32 I = 0; I < Drones.Num() && I < M.Offsets.Num(); ++I)
         {
-            Sway(Drones[I], FormationFade, M.Carry.Speed, LoadMass);
-            // The hang is the beam's length: from the box's top to the emitter under the drone.
-            const FVector P = Q + N * (Size.Z / 2 + (Hang < 0 ? M.HangCm : Hang) + FVector::Dist(Drones[I]->GetActorLocation(), Drones[I]->Emitter())) + Rotation.RotateVector(M.Offsets[I]);
-            Drones[I]->SetLoadVelocity(LoadV);
-            Drones[I]->Pose(P, Accel, float(Dt));
-            if (bBeams && A) Drones[I]->SetBeam(true, A->GetActorLocation() + A->GetActorQuat().RotateVector(M.Offsets[I] + FVector(0, 0, Size.Z / 2)), Width);
+            ASCCargoDrone* D = Drones[I];
+            Sway(D, FormationFade, M.Carry.Speed, LoadMass);
+            const int32 End = M.EndOf.IsValidIndex(I) ? M.EndOf[I] : (I & 1);
+            // The hang is the beam's length: from the box's top to the body's emitter under the drone.
+            const FVector P = bEnds ? Q + Rotation.RotateVector(M.Ends.Station(End)) + (D->GetActorLocation() - D->BodyEmitter())
+                                    : Q + N * (Size.Z / 2 + (Hang < 0 ? M.HangCm : Hang) + FVector::Dist(D->GetActorLocation(), D->BodyEmitter())) + Rotation.RotateVector(M.Offsets[I]);
+            D->HeldFace = bEnds ? M.Ends.AxisDir() * FSCCargoEndGrip::Sign(End) : FVector::UpVector;
+            D->SetLoadVelocity(LoadV);
+            if (bEnds) D->SetHold(Rotation.RotateVector(M.Ends.Attach(End) - M.Ends.Station(End))); // it faces the box it holds (from its station)
+            D->Pose(P, Accel, float(Dt));
+            if (bBeams && A) D->SetBeam(true, A->GetActorLocation() + A->GetActorQuat().RotateVector(bEnds ? M.Ends.Attach(End) : M.Offsets[I] + FVector(0, 0, Size.Z / 2)), Width);
         }
     };
     auto Sample = [&](const FVector& Target) {
@@ -188,7 +207,22 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             M.HoldAt.Reset();
             for (int32 I = 0; I < Drones.Num() && I < M.DroneFlights.Num(); ++I)
             {
-                M.HoldAt.Add(HoldShort(M, Drones[I], M.DroneFlights[I]));
+                FVector Refuge(1e30);
+                M.HoldAt.Add(HoldShort(M, Drones[I], M.DroneFlights[I], &Refuge));
+                // Gone aside to a refuge (below): it waits there, not back where it was in the load's way.
+                if (const FSCCargoFlight& G = M.DroneFlights[I]; M.HoldAt.Last() >= 0 && G.Points.Num() >= 3 && G.Points[0].Equals(G.Points[2], 1.0) && G.Dist <= G.S[2])
+                    M.HoldAt.Last() = FMath::Max(M.HoldAt.Last(), G.S[1]);
+                if (FSCCargoFlight& F = M.DroneFlights[I]; Refuge.X < 1e29 && F.HasRoute() && !(F.Points.Num() >= 3 && F.Points[0].Equals(F.Points[2], 1.0)))
+                {
+                    // In a load's way where it is (round 5): aside to the refuge, waiting there, then back on its way.
+                    TArray<FVector> Path = {F.Position(), Refuge, F.Position()};
+                    for (int32 K = 0; K < F.Points.Num(); ++K)
+                        if (F.S[K] > F.Dist + 1) Path.Add(F.Points[K]);
+                    if (Path.Num() < 4) Path.Add(F.Points.Last());
+                    F.Start(Path, Def.MaxSpeedMS * 100.0, Def.MaxAccelMS2 * 100.0, Def.MaxJerkMS3 * 100.0);
+                    M.HoldAt.Last() = F.S[1];
+                    UE_LOG(LogSCCargo, Display, TEXT("CARGO_HOLD_SHORT job=%d move=%d drone=%d in a load's way: aside to %s"), Job.Id, M.MoveId, Drones[I]->DroneId, *Refuge.ToCompactString());
+                }
                 if (const bool bWas = Before.IsValidIndex(I) && Before[I] >= 0; bWas != (M.HoldAt[I] >= 0) || (bWas && FMath::Abs(Before[I] - M.HoldAt[I]) > 10))
                     UE_LOG(LogSCCargo, Display, TEXT("CARGO_HOLD_SHORT job=%d move=%d drone=%d %s at=%s s=%.0f/%.0f flown=%.0f"), Job.Id, M.MoveId, Drones[I]->DroneId,
                            M.HoldAt[I] < 0 ? TEXT("goes on to its station") : TEXT("holds short of its station (a load has yet to fly through it, or a drone is in its place)"),
@@ -280,7 +314,31 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
                     if (Query.Blocked(Ends[0]) || Query.Blocked(Ends[1])) Query = DroneQuery(D, &M, Ends, /*bTight=*/true);
                     FVector Start = Ends[0];
                     TArray<FVector> Via;
-                    bNew = ClearStart(D, Query, Start, &Via) && PlanRoute(Job, M, TEXT("out_again"), Start, Ends[1], Query, Path, FString::Printf(TEXT("out_again:%d"), D->DroneId), false);
+                    // Planned again from where it planned last and still no nearer (round 5: a drone pressed against the
+                    // C2's ramp, its route found free and its every step blocked, for 180 s): back along the way it came
+                    // first, a couple of metres, as far as that way is open.
+                    if (M.FlightAgainAt.Num() != Drones.Num()) M.FlightAgainAt.Init(FVector(1e20), Drones.Num()); // far (1e30: just went back along its trail)
+                    if (FVector::Dist(Ends[0], M.FlightAgainAt[I]) < 10.0)
+                    {
+                        FVector At = Ends[0];
+                        for (int32 K = D->Trail.Num() - 1; K >= 0 && FVector::Dist(At, Ends[0]) < 200.0; --K)
+                        {
+                            double Fraction = 1;
+                            FVector Normal;
+                            if (FVector::Dist(D->Trail[K], At) < 1.0) continue;
+                            if (DroneSweep(D, At, D->Trail[K], Fraction, Normal)) break;
+                            Via.Add(D->Trail[K]);
+                            At = D->Trail[K];
+                        }
+                        if (!Via.IsEmpty()) Start = Via.Pop();
+                        if (Query.Blocked(Start)) // that way back is no start either: as before
+                        {
+                            Start = Ends[0];
+                            Via.Reset();
+                        }
+                        M.FlightAgainAt[I] = FVector(1e30); // the next time from here, the usual way again
+                    }
+                    bNew = (Start.Equals(Ends[0], 1.0) ? ClearStart(D, Query, Start, &Via) : !Query.Blocked(Start)) && PlanRoute(Job, M, TEXT("out_again"), Start, Ends[1], Query, Path, FString::Printf(TEXT("out_again:%d"), D->DroneId), false);
                     if (bNew && !Start.Equals(Ends[0], 1.0))
                     {
                         Path.Insert(Via, 0);
@@ -294,6 +352,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
                            *D->GetActorLocation().ToCompactString(), bNew);
                     M.FlightAt[I] = 0;
                     M.FlightSince[I] = Now;
+                    if (M.FlightAgainAt.IsValidIndex(I) && M.FlightAgainAt[I].X < 1e29 - 1) M.FlightAgainAt[I] = D->GetActorLocation(); // where it planned again (a search done)
                 }
             }
             // The flight waits for a drone held up or turned aside (its own steps keep it clear of the other drones
@@ -350,7 +409,8 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         const FVector Q = M.Carry.Position();
         // Up at the pickup rotation; at the top, turned onto the flight rotation when that differs (out of a room lengthwise).
         FQuat R = M.PickRotation;
-        if (M.Carry.Done() && !M.PickRotation.Equals(M.FromRotation))
+        if (M.Carry.Done() && !M.PickRotation.Equals(M.FromRotation) && M.bSwapping) R = M.FromRotation; // turned: its drones swap grips
+        else if (M.Carry.Done() && !M.PickRotation.Equals(M.FromRotation))
         {
             if (M.TurnStart < 0) M.TurnStart = Now;
             M.bTurning = true;
@@ -365,7 +425,17 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             M.TurnStart = -1;
         }
         A->SetActorLocationAndRotation(Q, R, false, nullptr, ETeleportType::TeleportPhysics);
-        Formation(Q, M.FromNormal, R, M.Carry.Tangent() * M.Carry.Accel, true, 30.f, -1, M.Carry.Tangent() * M.Carry.Speed);
+        if (M.Carry.Done() && M.EndsPiece == 0 && M.Grip == FSCCargoMove::EGrip::Over)
+        {
+            // Held from its ends from the start of its route: the drones swap round to its ends here, the box held still.
+            if (!M.bSwapping)
+            {
+                M.bSwapping = true;
+                M.SwapTo = FSCCargoMove::EGrip::Ends;
+            }
+            if (!SwapGrip(M, A, Drones, Q, R, Now, Dt)) return;
+        }
+        else Formation(Q, M.FromNormal, R, M.Carry.Tangent() * M.Carry.Accel, true, 30.f, -1, M.Carry.Tangent() * M.Carry.Speed);
         Sample(Q);
         if (!M.Carry.Done()) return;
         // Clear of the grid: the planned route begins, the box hanging from the lead drone's beam.
@@ -460,7 +530,22 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
                 if (AheadFree(M.Carry.At(M.ClearTo), M.Carry.At(Next))) M.ClearTo = Next;
                 else M.bBlockedAhead = true;
             }
-            const bool bYield = !M.bStalled && MustYield(Here, M.Carry.At(Need));
+            // Into a hold only clear of other teams' drones (round 5): short of its destination's precise zone the load
+            // waits while drones that set a box down there are still in it; they go on out meanwhile (HoldShort).
+            {
+                double ToZone = -1;
+                const bool bInZone = InPreciseZone(M, A, Here);
+                if (!bInZone)
+                    for (double S = M.Carry.Dist; S <= FMath::Min(M.Carry.Length(), M.Carry.Dist + SCCargoFlightTuning::ZoneGateCm + 100.0); S += 100.0)
+                        if (InPreciseZone(M, A, M.Carry.At(S))) { ToZone = S - M.Carry.Dist; break; }
+                const int32 Occupant = ToZone >= 0 && ToZone <= SCCargoFlightTuning::ZoneGateCm ? ZoneOccupant(M, A) : INDEX_NONE;
+                const bool bWait = FSCCargoTug::WaitsForZone(ToZone, SCCargoFlightTuning::ZoneGateCm, bInZone, Occupant != INDEX_NONE);
+                if (bWait != M.bWaitZone)
+                    UE_LOG(LogSCCargo, Display, TEXT("CARGO_YIELD job=%d move=%d box=%d %s (drone %d)"), Job.Id, M.MoveId, M.Plan.BoxId,
+                           bWait ? TEXT("waits short of its hold for drones in it") : TEXT("goes on into its hold"), Occupant);
+                M.bWaitZone = bWait;
+            }
+            const bool bYield = (!M.bStalled && MustYield(Here, M.Carry.At(Need))) || M.bWaitZone;
             // The route also waits for a box left behind: beyond the beam's full-strength distance the team could not
             // bring it along (a box held up by something the sweeps did not see).
             // It waits as well while a drone of the team finds no room for its station there (it may clear: a load
@@ -536,9 +621,63 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         M.bTurning = bTurning;
         const double TurnT = bTurning ? FMath::SmoothStep(0.0, 1.0, (Now - M.TurnStart) / FlightTurnSeconds) : 0.0;
         if (bTurning) Rotation = FQuat::Slerp(M.FromRotation, M.SecondRotation, TurnT);
+        for (ASCCargoDrone* D : Drones) Sway(D, FormationFade, M.Carry.Speed, LoadMass);
+        // A swap of grip at the end of a route piece (WP-K4 round 4): to the box's ends once it has turned at a hold's
+        // entrance (its second piece is held so); back over it where its route held from the ends ends, unless it goes
+        // down onto its slot so. The box is held still on its route meanwhile (rigidly, its offset dying away at the
+        // beams' rate), the drones go round it to their new stations, and the route goes on once they are there.
+        using EGrip = FSCCargoMove::EGrip;
+        const bool bAtPieceEnd = M.Step == EStep::Transit && !M.bStalled && M.Carry.Done();
+        const bool bSwapIn = bAtPieceEnd && !M.SecondPath.IsEmpty() && TurnT >= 1 && M.EndsPiece == 1 && M.Grip == EGrip::Over;
+        const bool bSwapOut = bAtPieceEnd && M.SecondPath.IsEmpty() && M.Grip == EGrip::Ends && !M.bEndsToSlot;
+        if (M.bSwapping || bSwapIn || bSwapOut)
+        {
+            if (!M.bSwapping)
+            {
+                M.bSwapping = true;
+                M.SwapTo = bSwapIn ? EGrip::Ends : EGrip::Over;
+            }
+            if (!M.bRigid)
+            {
+                M.bRigid = true;
+                M.RigidOffset = A->GetActorLocation() - Q;
+                M.RigidRotation = A->GetActorQuat();
+                A->Body->SetSimulatePhysics(false);
+            }
+            const double Keep = FMath::Exp(-FMath::Sqrt(FMath::Max(1, Drones.Num()) * TractorBeam().StiffnessNPerM() / FMath::Max(LoadMass, 1.0)) * Dt);
+            M.RigidOffset *= Keep;
+            M.RigidRotation = FQuat::Slerp(Rotation, M.RigidRotation, Keep);
+            A->SetActorLocationAndRotation(Q + M.RigidOffset, M.RigidRotation, false, nullptr, ETeleportType::TeleportPhysics);
+            M.bRouteMoving = false;
+            Sample(Q);
+            if (!SwapGrip(M, A, Drones, Q, Rotation, Now, Dt)) return;
+            // Swapped. Out of the precise zone the box hangs from the beams again.
+            if (!InPreciseZone(M, A, Q))
+            {
+                M.bRigid = false;
+                A->SetActorLocationAndRotation(Q, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+                A->Release();
+                A->Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+                A->Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+            }
+            if (M.Grip == EGrip::Over && M.OverLeg.Num() >= 2)
+            {
+                // Back over the box: on along the last leg to the goal, held over.
+                M.Carry.Start(M.OverLeg, Def.MaxSpeedMS * 100.0, M.LoadAccel, M.LoadJerk);
+                M.Piece = 2;
+                M.ClearTo = 0;
+                M.bBlockedAhead = false;
+            }
+            if (M.Grip == EGrip::Over) M.OverLeg.Reset();
+            return;
+        }
+        // Each drone searching for its grip round the box while the route is flown (SCCargoGrip.cpp).
+        const double GripT0 = FPlatformTime::Seconds();
+        GripTick(M, A, Drones, Q, Rotation, M.Step == EStep::Transit && !M.bStalled && !bTurning && !M.Carry.Done(), Now,
+                 FMath::Min<double>(Dt, UPhysicsSettings::Get()->MaxPhysicsDeltaTime));
+        M.GripMs = (FPlatformTime::Seconds() - GripT0) * 1000.0;
         // The team tugs: every drone on its own station, its beam's spring on its attach point (TugStep). Each drone's
         // gusts are its own; the box feels them all through the springs.
-        for (ASCCargoDrone* D : Drones) Sway(D, FormationFade, M.Carry.Speed, LoadMass);
         // In the precise zone the beams hold the box rigidly on its route (as on the lift and the descent): it passes
         // boxes at rest 2 cm from them, closer than a spring settles. What it was off the route by when it came in
         // dies away at the beams' own rate. The drones keep flying their own stations.
@@ -562,7 +701,9 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         const FVector RouteA = M.bRouteMoving && TugDt > 0 ? ((RouteV - M.RouteV) / TugDt).GetClampedToMaxSize(M.LoadAccel * UE_DOUBLE_SQRT_2) : FVector::ZeroVector;
         M.RouteV = RouteV;
         M.bRouteMoving = true;
+        const double TugT0 = FPlatformTime::Seconds();
         TugStep(M, A, Drones, Q, Rotation, RouteV, RouteA, Now, TugDt);
+        M.TugMs = (FPlatformTime::Seconds() - TugT0) * 1000.0;
         Sample(Q);
         if (M.Step == EStep::Holding || M.bStalled || !M.Carry.Done()) return;
         if (!M.SecondPath.IsEmpty())
@@ -570,6 +711,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             if (TurnT < 1) return;
             M.FromRotation = M.SecondRotation;
             M.Carry.Start(M.SecondPath, Def.MaxSpeedMS * 100.0, M.LoadAccel, M.LoadJerk);
+            M.Piece = 1;
             M.SecondPath.Reset();
             M.TurnStart = -1;
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_MOVE job=%d move=%d box=%d turned at the hold entrance"), Job.Id, M.MoveId, M.Plan.BoxId);
@@ -607,8 +749,8 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         const FTransform Slot = To->SlotToWorld(SlotOf(M.Plan), Box->SizeM());
         FString TurnWhy;
         if (!TurnClear(M, A, M.Goal, A->GetActorQuat(), M.Goal, Slot.GetRotation(), &TurnWhy) ||
-            !DescentClear(A, Slot.GetRotation(), M.Approach, Slot.GetLocation(), &TurnWhy) ||
-            (!M.Goal.Equals(M.Approach, 1.0) && !DescentClear(A, Slot.GetRotation(), M.Goal, M.Approach, &TurnWhy)))
+            !DescentClear(A, Slot.GetRotation(), M.Approach, Slot.GetLocation(), &TurnWhy, &M) ||
+            (!M.Goal.Equals(M.Approach, 1.0) && !DescentClear(A, Slot.GetRotation(), M.Goal, M.Approach, &TurnWhy, &M)))
         {
             if (Now < M.NextRetry) return;
             M.NextRetry = Now + 1;
@@ -645,7 +787,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
         // its centre, and its drones swing from over it to the side the plate's normal points to. They first move
         // out of that sphere (their beams reach that far: the box hangs still meanwhile), fly round it as it turns,
         // and come in again along the normal as it goes down. A box that only turns level keeps them over its top.
-        const bool bSwing = FVector::DotProduct(M.CatchFrom.GetRotation().GetUpVector(), M.ToRotation.GetUpVector()) < SwingCos || FVector::DotProduct(M.ToNormal, Up) < SwingCos;
+        const bool bSwing = M.Grip == FSCCargoMove::EGrip::Over && (FVector::DotProduct(M.CatchFrom.GetRotation().GetUpVector(), M.ToRotation.GetUpVector()) < SwingCos || FVector::DotProduct(M.ToNormal, Up) < SwingCos);
         double Out = M.HangCm;
         if (bSwing)
             for (const ASCCargoDrone* D : Drones) Out = FMath::Max(Out, Size.Size() / 2 + D->HullHalf.Size() + SCCargoFlightTuning::DroneClearanceCm / 2 - Size.Z / 2);
@@ -707,4 +849,71 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
     }
     default: return;
     }
+}
+
+bool USCCargoSubsystem::SwapGrip(FSCCargoMove& M, ASCCargoContainer* A, const TArray<ASCCargoDrone*>& Drones, const FVector& Q, const FQuat& Rot, double Now, double Dt)
+{
+    using EGrip = FSCCargoMove::EGrip;
+    const FSCCargoDroneDefinition& Def = State->Scenario.Drone;
+    if (!A || !M.Ends.bValid || Drones.IsEmpty() || Drones.Num() > 2)
+    {
+        M.bSwapping = false;
+        M.SwapFlights.Reset();
+        return true;
+    }
+    const int32 To = M.SwapTo == EGrip::Ends ? 1 : 0;
+    if (M.SwapFlights.Num() != Drones.Num())
+    {
+        // Each drone from where its body is (the box's frame) round the box to its station in the other grip: up, across,
+        // down (FSCCargoEndGrip::SwapWay), at a gentle pace; its steps keep off no face meanwhile (its way is round them).
+        M.SwapFlights.Reset();
+        M.SwapStart = Now;
+        for (int32 I = 0; I < Drones.Num(); ++I)
+        {
+            TArray<FVector> Way;
+            // First back onto the station it holds from now when the route's last turns left it off it (a light drone on a
+            // heavy box lags its station by up to a metre under the route's acceleration; round 5): its way round starts there.
+            const FVector Here = Rot.UnrotateVector(Drones[I]->BodyEmitter() - Q), Home = GripNow(M, A, I, Rot).Station;
+            if (FVector::Dist(Here, Home) > SCCargoFlightTuning::SwapArriveCm) Way.Add(Q + Rot.RotateVector(Here));
+            for (const FVector& P : FSCCargoEndGrip::SwapWay(FVector::Dist(Here, Home) > SCCargoFlightTuning::SwapArriveCm ? Home : Here, GripStation(M, A, I, To)))
+                Way.Add(Q + Rot.RotateVector(P));
+            if (Way.Num() < 2) Way.Add(Way.Last());
+            M.SwapFlights.AddDefaulted_GetRef().Start(Way, Def.MaxSpeedMS * 100.0 * SCCargoFlightTuning::SwapSpeedScale, Def.MaxAccelMS2 * 100.0, Def.MaxJerkMS3 * 100.0);
+            Drones[I]->HeldFace = FVector::ZeroVector;
+        }
+        FString Where; // each drone where it is and where it goes (the box's frame)
+        for (int32 I = 0; I < Drones.Num(); ++I)
+            Where += FString::Printf(TEXT(" d%d=%s->%s"), Drones[I]->DroneId, *Rot.UnrotateVector(Drones[I]->BodyEmitter() - Q).ToCompactString(), *GripStation(M, A, I, To).ToCompactString());
+        UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIP_SWAP move=%d box=%d to=%s at=%s rot=%s box_at=%s%s"), M.MoveId, M.Plan.BoxId, To ? TEXT("ends") : TEXT("over"), *Q.ToCompactString(),
+               *Rot.Rotator().ToCompactString(), *A->GetActorLocation().ToCompactString(), *Where);
+    }
+    bool bThere = true;
+    const FVector Half = A->SizeCm() / 2;
+    for (int32 I = 0; I < Drones.Num(); ++I)
+    {
+        ASCCargoDrone* D = Drones[I];
+        FSCCargoFlight& F = M.SwapFlights[I];
+        // The way waits for a drone held up (its own steps keep it clear of what it meets).
+        if (FVector::Dist(D->BodyEmitter(), F.Position()) <= D->HullRadius()) F.Step(Dt);
+        D->SetLoadVelocity(FVector::ZeroVector); // the load is still: it keeps its heading
+        // Its beam on the box below or beside it: on the top face while it is over it, sliding down the end face to its
+        // attach point as it goes down beyond it. It faces its hold.
+        const FVector E = Rot.UnrotateVector(D->BodyEmitter() - Q);
+        FVector Hold = E.BoundToBox(-Half, Half);
+        if (FMath::Abs(E[M.Ends.Axis]) > Half[M.Ends.Axis]) Hold.Z = FMath::Clamp(E.Z - M.Ends.RiseCm, M.Ends.AttachZCm, Half.Z);
+        const FVector WayAt = Rot.UnrotateVector(F.Position() - Q); // from where its way is, not where it is (see TugStep)
+        D->SetHold(Rot.RotateVector(WayAt.BoundToBox(-Half, Half) - WayAt));
+        D->Pose(F.Position() + (D->GetActorLocation() - D->BodyEmitter()), F.Tangent() * F.Accel, float(Dt));
+        D->SetBeam(true, Q + Rot.RotateVector(Hold), 30.f);
+        bThere &= F.Done() && FVector::Dist(D->BodyEmitter(), F.Points.Last()) <= SCCargoFlightTuning::SwapArriveCm;
+    }
+    if (!bThere) return false;
+    M.Grip = M.SwapTo;
+    M.bSwapping = false;
+    M.SwapFlights.Reset();
+    for (int32 I = 0; I < Drones.Num(); ++I)
+        Drones[I]->HeldFace = M.Grip == EGrip::Ends ? M.Ends.AxisDir() * FSCCargoEndGrip::Sign(M.EndOf.IsValidIndex(I) ? M.EndOf[I] : (I & 1)) : FVector::UpVector;
+    ResetSpots(M, A, Drones, Rot, Now); // each at its planned place in the new grip
+    UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIP_SWAP move=%d box=%d done grip=%s s=%.1f"), M.MoveId, M.Plan.BoxId, M.Grip == EGrip::Ends ? TEXT("ends") : TEXT("over"), Now - M.SwapStart);
+    return true;
 }

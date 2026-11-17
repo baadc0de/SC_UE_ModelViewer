@@ -276,7 +276,7 @@ bool USCCargoSubsystem::FindLooseSpot(const FVector& SizeCm, FRandomStream& Rng,
     const double FloorZ = Ship->LowestVisibleZ();
     const FSCCargoDroneDefinition& Def = State->Scenario.Drone;
     // The least a pick needs above the box (as LiftPlan accepts): half the normal clearance to lift, the beam's shortest hang, the drone.
-    const double Reach = Def.NormalClearanceM * 50.0 + Def.MinDistanceM * 100.0 + SCCargoFlightTuning::DroneHeightCm + 30;
+    const double Reach = Def.NormalClearanceM * 50.0 + Def.MinDistanceM * 100.0 + DroneHeightCm() + 30;
     int32 NoFloor = 0, Blocked = 0, NoRoom = 0, OnGrid = 0, Enclosed = 0;
     // The room's open air: over a drone dock (its drones fly from there), else over the ship.
     FVector Air(ShipBox.GetCenter().X, ShipBox.GetCenter().Y, ShipBox.Max.Z + 200);
@@ -406,7 +406,12 @@ bool USCCargoSubsystem::RetargetLoad(FSCCargoJob& Job, FSCCargoMove& M, FSCCargo
         M.Goal = Goal;
         M.Approach = Approach;
         M.SecondPath.Reset();
+        // Held from its ends (WP-K4 round 4), it goes down onto the new slot so: its approach was found so.
+        M.OverLeg.Reset();
+        M.bEndsToSlot = M.Grip == FSCCargoMove::EGrip::Ends;
         M.TurnPoints.Empty();
+        M.EndsFinishes.Empty();
+        M.Entrances.Empty();
         M.Replans = 0; // a fresh budget towards the new place
         M.bStalled = false;
         M.NextRetry = Now;

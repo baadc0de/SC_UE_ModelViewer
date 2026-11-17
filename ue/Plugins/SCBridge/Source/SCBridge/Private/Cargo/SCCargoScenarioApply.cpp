@@ -88,8 +88,8 @@ void USCCargoSubsystem::TryScenario()
                 FString Error = R.Error.ToString();
                 if (R.bOK && D.ApplyTractorRecord(R.Json, Error))
                 {
-                    UE_LOG(LogSCCargo, Display, TEXT("CARGO_TRACTOR source=datacore record=%s action=%s max_force=%.0f min_distance_m=%.2f max_distance_m=%.1f full_strength_m=%.1f max_volume=%.1f volume_force_coefficient=%.2f"),
-                           *Record, *D.TractorAction, D.MaxForceN, D.MinDistanceM, D.MaxDistanceM, D.FullStrengthDistanceM, D.MaxVolume, D.VolumeForceCoefficient);
+                    UE_LOG(LogSCCargo, Display, TEXT("CARGO_TRACTOR source=datacore record=%s action=%s max_force=%.0f min_distance_m=%.2f max_distance_m=%.1f full_strength_m=%.1f max_volume=%.1f volume_force_coefficient=%.2f max_angle=%.0f"),
+                           *Record, *D.TractorAction, D.MaxForceN, D.MinDistanceM, D.MaxDistanceM, D.FullStrengthDistanceM, D.MaxVolume, D.VolumeForceCoefficient, D.MaxAngleDeg);
                 }
                 else
                 {
