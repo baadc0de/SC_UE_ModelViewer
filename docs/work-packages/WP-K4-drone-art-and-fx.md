@@ -424,7 +424,13 @@ only at boxes.
   has them, and everything under `/Game/SC/FX` (`SC_COOK drone art packages=… effect packages=…`). A machine without
   them cooks without them. No asset name is written in an ini.
 - `SCViewer.Build.cs` stages `Config/Cargo/drone_art.json` and `Config/FX/effects.json` (UFS).
-- Not exercised by a cook in this WP.
+- Verified (2026-11-17) by a Win64 Development `package_showcase.ps1` build (DRAK_Golem, hightech_a/hangar_smltop_001):
+  `SC_COOK drone art packages=25 … effect packages=57`, both JSON files in the UFS manifest. The packaged viewer ran
+  `c2_hangar.json`: `CARGO_DRONE_SHAPE … look=art`, the tractor and contact effects resolved, docks `cells=X=2 Y=1 Z=1
+  bays=2`, `CARGO_JOB id=1 state=Done … overlaps=0`.
+- That run found the plugin's cargo art (`/SCBridge/Cargo`: the stand-in drone, the dock, the beam mesh, all loaded by
+  path) missing from packaged builds since K1d: the dock fell back to a cube with no bays. `DefaultGame.ini` now
+  always cooks `/SCBridge/Cargo`.
 
 **effects.json:** `material_effects` adds `Metal_Tiny`, `Metal_Medium`, `Metal_Giant` (the S1–S5 ship sizes) and
 `tractor_beam_fps:Default`. These build no new system; they share `small` / `large_impact_gpu` and `fps.impact`. The
@@ -478,7 +484,7 @@ only at boxes.
   `surface_type` (and SurfaceTypes.xml's fxGroup) through to the runtime.
 - **Without the archive** (the web build) the effects resolve to nothing, and the beam mesh is drawn. The scenario's
   tractor fallback carries no effect references yet.
-- **Cook rule.** The `ModifyCook` rule is not exercised by a packaged build in this WP.
+- ~~**Cook rule.**~~ Verified by a packaged build (see Packaging); it also fixed `/SCBridge/Cargo` not being cooked.
 - **Bay exits.** The dock's bay-exit probe (a cell-sized sphere at each exit) is unchanged from K1. A sphere at a low exit
   may reach the floor and fail every turn, and the dock then keeps its base turn. This was not examined.
 - **The stand-in's AABB.** The stand-in keeps its world AABB at spawn as its shape (unchanged; inexact at 45°
