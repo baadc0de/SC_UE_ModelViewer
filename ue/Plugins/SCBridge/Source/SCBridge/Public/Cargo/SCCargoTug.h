@@ -265,6 +265,10 @@ struct SCBRIDGE_API FSCCargoGripPick
         for (int32 K = 1; K < Way.Num(); ++K) L += FVector::Dist(Way[K - 1], Way[K]);
         return L;
     }
+    /** How far ahead (s) a team looks for its route's end or a precise zone before its drones go back to their planned
+     *  places: one at a time (Astra, round 6: a pair returning at once read as a relocation), each in about the lookahead,
+     *  so the lookahead once for each drone still away from its place. */
+    static double ReturnAheadS(const FCfg& Cfg, int32 AwayFromPlanned) { return double(Cfg.LookaheadS) * FMath::Max(1, AwayFromPlanned); }
     /** The next interval (s): the configured range, the drone's own draw. */
     static double Interval(const FCfg& Cfg, FRandomStream& Rng) { return FMath::Lerp(double(Cfg.IntervalMinS), double(FMath::Max(Cfg.IntervalMaxS, Cfg.IntervalMinS)), double(Rng.FRand())); }
 };

@@ -6,7 +6,8 @@
 // that does, however far. The route's shape covers each
 // drone's planned place (PlannedSpot: its end of the ends grip, or over its formation offset); every other place is
 // tried against the world as the box flies, and a drone goes back to its planned place before the route's piece ends
-// (a turn, a swap, the descent), in the precise zone, or when its own place stops fitting. Log: CARGO_GRIP_PICK.
+// (a turn, a swap, the descent) or in the precise zone, one drone of the team at a time (ReturnAheadS), or when its own
+// place stops fitting. Log: CARGO_GRIP_PICK.
 // Also the load's route margin with what the drones' wobble passes on to it (LoadEnvelopeCm).
 #include "Cargo/SCCargoSubsystem.h"
 #include "HAL/PlatformTime.h"
@@ -315,12 +316,21 @@ void USCCargoSubsystem::GripTick(FSCCargoMove& M, ASCCargoContainer* A, const TA
     // Searching only while the box hangs upright on a route piece that goes on beyond the lookahead, out of the precise
     // zone: otherwise every drone goes back to its planned place (the route's shape covers it there).
     const FSCCargoFlight& C = M.Carry;
-    const double Ahead = FMath::Min(Def.MaxSpeedMS * 100.0, C.Speed + M.LoadAccel * Cfg.LookaheadS) * Cfg.LookaheadS;
+    // Its drones go back one at a time before the route piece ends or a precise zone begins: it looks that much further
+    // ahead for each drone still away from its planned place (or on its way to another).
+    int32 Away = 0;
+    for (int32 I = 0; I < N; ++I)
+        Away += M.SpotFlights[I].HasRoute() ? !M.SpotTargets[I].bPlanned : !GripNow(M, A, I, Rot).bPlanned;
+    const double AheadS = FSCCargoGripPick::ReturnAheadS(Cfg, Away);
+    const double Ahead = FMath::Min(Def.MaxSpeedMS * 100.0, C.Speed + M.LoadAccel * AheadS) * AheadS;
     FString Calm;
+    // Calm at once (every drone goes back now): no route to search on, no places, the box on its side. Calm ahead (the
+    // route's end, a precise zone): one at a time.
+    bool bAtOnce = true;
     if (!bSearch) Calm = TEXT("not flying its route");
     else if (!G.bValid) Calm = TEXT("no places");
     else if (FMath::Abs(Rot.GetAxisZ().Z) < 0.99) Calm = TEXT("the box hangs on its side");
-    else if (C.Points.Num() < 2 || C.Dist + Ahead >= C.Length()) Calm = TEXT("its route piece ends ahead");
+    else if (bAtOnce = false; C.Points.Num() < 2 || C.Dist + Ahead >= C.Length()) Calm = TEXT("its route piece ends ahead");
     else
         for (double S = C.Dist; S <= C.Dist + Ahead && Calm.IsEmpty(); S += 50.0)
             if (InPreciseZone(M, A, C.At(S))) Calm = TEXT("the precise zone ahead");
@@ -363,9 +373,11 @@ void USCCargoSubsystem::GripTick(FSCCargoMove& M, ASCCargoContainer* A, const TA
         const FSCCargoGripSpot Here = GripNow(M, A, I, Rot);
         if (!Calm.IsEmpty())
         {
-            if (!Here.bPlanned)
+            // One at a time when the end is still ahead: a teammate on its way round, it holds where it is.
+            if (!Here.bPlanned && (bAtOnce || !bAnyMoving))
             {
                 MoveTo(I, Planned, Here.Station);
+                bAnyMoving = !bAtOnce;
                 UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIP_PICK move=%d box=%d drone=%d back=planned why=\"%s\""), M.MoveId, M.Plan.BoxId, D->DroneId, *Calm);
             }
             continue;
