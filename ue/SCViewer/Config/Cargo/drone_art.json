@@ -1,5 +1,5 @@
 {
-  "_comment": "WP-K4a: the cargo drone's look and motion (FSCCargoDroneArt, ue/Plugins/SCBridge/Source/SCBridge/Public/Cargo/SCCargoDroneArt.h). Viewer choices, not game data: the game has no cargo-drone entity. heading applies to every drone: turn_rate_deg_s is the yaw rate it turns towards its heading (90: the art's Rotate clips turn 90 degrees in 1 s); under hover_speed_cm_s of horizontal travel it hovers (keeps its heading, idles); turning in place at turn_clip_rate_deg_s or more plays the turn clip; blend_s crossfades clips; smoothing_s is the time constant of the travel velocity heading and clips follow; a directional clip plays axis_dwell_s before another direction takes over; it starts moving above 1.25 x and idles under 0.75 x hover_speed_cm_s (the dwell and hysteresis from the WP-K4a review, out/k4a/astra/flight.md). art is the Fab pack SciFi Drone 4 (licensed, installed per machine under Content/SciFi_Drone_4, gitignored); without it (or without this block) the drone is the K1d stand-in. mesh at native size x scale; yaw_offset_deg turns its face (+Y in the mesh) to +X; centre_bone sits on the actor origin (the bays hold the drone by it); the beam leaves beam_bone along beam_axis (actor frame); the status light rides light_bone; yaw_lock_bone keeps its reference yaw in the turn clips (the actor turns, the clip adds its sway); body_bob_cm is how far the clips may still move the centre bone (the actor carries the motion; 0: none, WP-K4a round 3); actor_lean_scale scales the actor's own lean into its acceleration (the clips lean the body; round 2); hidden_slots are material slots not drawn (Scanner_Material is a single 92 x 92 cm scan-fan triangle in front of the camera, which also made the imported bounds 92 x 138 cm: the hull is 40 x 49 x 42 cm). clips: idle (each plays once, then the next), front / back / up / down / left / right with start / loop / end, turn_left / turn_right, scanning (locking the beam onto a box).",
+  "_comment": "WP-K4a: the cargo drone's look and motion (FSCCargoDroneArt, ue/Plugins/SCBridge/Source/SCBridge/Public/Cargo/SCCargoDroneArt.h). Viewer choices, not game data: the game has no cargo-drone entity. heading applies to every drone: turn_rate_deg_s is the yaw rate it turns towards its heading (90: the art's Rotate clips turn 90 degrees in 1 s); under hover_speed_cm_s of horizontal travel it hovers (keeps its heading, idles); turning in place at turn_clip_rate_deg_s or more plays the turn clip; blend_s crossfades clips; smoothing_s is the time constant of the travel velocity heading and clips follow; a directional clip plays axis_dwell_s before another direction takes over; it starts moving above 1.25 x and idles under 0.75 x hover_speed_cm_s (the dwell and hysteresis from the WP-K4a review, out/k4a/astra/flight.md). art is the Fab pack SciFi Drone 4 (licensed, installed per machine under Content/SciFi_Drone_4, gitignored); without it (or without this block) the drone is the K1d stand-in. mesh at native size x scale; yaw_offset_deg turns its face (+Y in the mesh) to +X; centre_bone sits on the actor origin (the bays hold the drone by it); the beam leaves beam_bone along beam_axis (actor frame); the status light rides light_bone; yaw_lock_bone keeps its reference yaw in the turn clips (the actor turns, the clip adds its sway); body_bob_cm is how far the clips may still move the centre bone (the actor carries the motion; 0: none, WP-K4a round 3); hidden_slots are material slots not drawn (Scanner_Material is a single 92 x 92 cm scan-fan triangle in front of the camera, which also made the imported bounds 92 x 138 cm: the hull is 40 x 49 x 42 cm). emissive_params are, per material slot, the scalar parameters of its glowing parts: the art's own values x emissive_scale while powered (the owner found them too subtle at 1, 2026-11-17), 0 while docked: in its bay a drone powers down completely (no clip, no glow, no status light). clips: idle (each plays once, then the next), front / back / up / down / left / right with start / loop / end, turn_left / turn_right, scanning (locking the beam onto a box). motion (WP-K4 round 4, every drone, the stand-in too; FSCCargoAttitude): the drone's look moves about its level body as a multirotor's does, its attitude an underdamped spring commanded to tilt_gain x the thrust's tilt atan(a / g), each drone its own share of it within +- gain_spread (g 9.81 m/s^2 for the look, in vacuum too) and leading with tilt_lead x the command's rate (tilt_lead_carrying while it carries: its team's shared starts and stops softer), so a start kicks in, a stop rocks back past level and it settles in a few decaying swings; each drone takes its own natural frequency in freq_min_hz .. freq_max_hz and its own damping ratio in damp_min .. damp_max from its id; its own corrections are random kicks to its attitude (kick_rate_hz per second, kick_deg_s hard) with a wandering heading (yaw_jitter_deg), an altitude hunt (hunt_cm at about hunt_hz) and a drift where its tilt runs ahead of the command (g tan(error), at most drift_cm); max_tilt_deg bounds the attitude. Each drone's onsets and directions are its own, drawn from its own random stream per event (owner, round 4): it answers its command onset_min_s .. onset_max_s late (spread over the drone ids by the golden ratio, so teammates never start in the same frame); a change of its command by event_deg (at most one per event_min_s) is a motion starting or changing and gives a kick of its own, onset_jitter_s at most later, event_kick_scale x kick_deg_s (median); its corrections kick mostly back towards level; every kick's direction is a wrapped normal of scatter_deg about the expected one (the change; back towards level), off_axis_share of them turned a quarter either way and opposite_share the other way, its size log-normal (kick_log_sigma) about its median. It is visual: the hull is built over that envelope (every max_tilt_deg tilt round about, drift_cm and hunt_cm), the physics use the body's emitter, the beam is drawn from the look's. art.clip_tilt_scale keeps that share of the clips' own lean of the centre bone (the attitude leans the drone now); art.actor_lean_scale is the share of the acceleration the attitude leans into with the art (1 for the stand-in). motion.load_transfer (round 5): a drone's wobble moves the box it holds, its hold point turned by its attitude and moved by its drift, by this share (the hold is a stiff, critically damped spring near the wobble's band, so alone it would pass the wobble on whole); faded as the gusts are (none in the precise zone); its worst reach (the hold's distance x sin(max_tilt_deg) + drift_cm, times the share) is added to the route's margin. grip (round 5; FSCCargoGripPick): a carrying drone holds its box from a place of its own and re-picks it every interval_min_s .. interval_max_s (its own draw, teammates staggered), like searching for a better grip: the kinds are weighted end_weight (in front or behind, about 3 of 4), side_weight, over_weight, renormalised over the places that fit; a teammate's face counts same_face_weight as much, a place within the drones' kept distance of a teammate not at all; places spread across a face by spread of its half width, out from it by up to extra_reach more than the hull's clearance (within the beam's full-strength distance), up to extra_height_cm higher than the lowest; a place is viable while the drone's hull fits there along lookahead_s of the route ahead (and on its way there round the box); it moves there at move_speed_scale of its top speed, holding all the while. Its first grip from its planned place is its pick of the whole box; after that a re-pick only considers places its way round the box reaches within max_repick_move_frac of the box's longest side (at least max_repick_move_min_cm, at most max_repick_move_max_cm): a grip adjustment, not a shift (the owner); with none viable within that it keeps its grip; only when its own place stops fitting does it go to the nearest viable place however far (its planned place when the route nears its end). Values chosen with Astra's review (out/k4b/astra/).",
   "heading": {
     "turn_rate_deg_s": 90,
     "hover_speed_cm_s": 20,
@@ -8,10 +8,55 @@
     "smoothing_s": 0.2,
     "axis_dwell_s": 0.2
   },
+  "motion": {
+    "freq_min_hz": 0.7,
+    "freq_max_hz": 1.7,
+    "damp_min": 0.18,
+    "damp_max": 0.3,
+    "tilt_gain": 0.08,
+    "gain_spread": 0.5,
+    "tilt_lead": 3,
+    "tilt_lead_carrying": 1.5,
+    "max_tilt_deg": 9,
+    "kick_rate_hz": 1,
+    "kick_deg_s": 26,
+    "hunt_cm": 1.5,
+    "hunt_hz": 0.35,
+    "drift_cm": 2,
+    "yaw_jitter_deg": 2.5,
+    "onset_min_s": 0.04,
+    "onset_max_s": 0.26,
+    "onset_jitter_s": 0.12,
+    "event_deg": 0.6,
+    "event_min_s": 0.35,
+    "event_kick_scale": 0.6,
+    "kick_log_sigma": 0.45,
+    "scatter_deg": 30,
+    "off_axis_share": 0.15,
+    "opposite_share": 0.07,
+    "load_transfer": 0.35
+  },
+  "grip": {
+    "end_weight": 0.75,
+    "side_weight": 0.1,
+    "over_weight": 0.15,
+    "same_face_weight": 0.15,
+    "spread": 0.6,
+    "extra_reach": 0.5,
+    "extra_height_cm": 30,
+    "interval_min_s": 3,
+    "interval_max_s": 7,
+    "lookahead_s": 3,
+    "move_speed_scale": 0.35,
+    "max_repick_move_frac": 0.3,
+    "max_repick_move_min_cm": 150,
+    "max_repick_move_max_cm": 300
+  },
   "art": {
     "mesh": "/Game/SciFi_Drone_4/Mesh/SKM_SciFi_Drone_4",
     "scale": 1.9,
-    "actor_lean_scale": 0.25,
+    "actor_lean_scale": 1,
+    "clip_tilt_scale": 0.2,
     "body_bob_cm": 0,
     "yaw_offset_deg": -90,
     "centre_bone": "body",
@@ -20,6 +65,12 @@
     "light_bone": "camera",
     "yaw_lock_bone": "body",
     "hidden_slots": ["Scanner_Material"],
+    "emissive_scale": 4,
+    "emissive_params": {
+      "Main_Material": ["Emissive_1_Power", "Emissive_2_Power"],
+      "Visor_Material": ["Emissive Power"],
+      "Flame_Material": ["Emissive Power"]
+    },
     "clips": {
       "idle": [
         "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Idle_1",

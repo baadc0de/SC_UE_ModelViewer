@@ -191,16 +191,72 @@ private:
      *  drone's route out to the box, all swept free (CARGO_PATH). False with Why when any of them has no free route. */
     bool PrepareMove(struct FSCCargoJob& Job, struct FSCCargoMove& Move, FString& Why);
     bool PlanMove(struct FSCCargoJob& Job, struct FSCCargoMove& Move, FString& Why);
-    /** The queries for the hanging load of Move (box + beam + drones above it) and for a lone drone. */
+    /** The queries for the hanging load of Move (the box and its drones: over it with their beams, or at its ends, as
+     *  Grip says: 0 over, 1 the ends, -1 the move's grip now) and for a lone drone. */
     struct FSCCargoRouteQuery LoadQuery(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, bool bIgnoreFlying = false,
-                                        const FQuat* Rotation = nullptr) const;
+                                        const FQuat* Rotation = nullptr, int32 Grip = -1) const;
+    /** The drones of Move's box at its ends (FSCCargoEndGrip), MarginCm around their hulls; bSwap: each drone's whole way
+     *  between its place over the box and its end (a swap of grip). OutTopCm: the shape's top over the box's centre. */
+    struct FSCCargoRouteQuery EndsQuery(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const FQuat& Rotation, double MarginCm, bool bIgnoreFlying,
+                                        const TArray<const UPrimitiveComponent*>* Ignore, bool bSwap = false, double* OutTopCm = nullptr) const;
+    /** Whether the team can swap grips with its box held at P (Rotation): the drones over it, at its ends and on their
+     *  ways between, free. OutWhy names what is in the way. */
+    bool SwapClear(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const FVector& P, const FQuat& Rotation, FString* OutWhy = nullptr) const;
+    /** Where a load arriving from its ends swaps back over the box before its goal (at Rotation): the nearest point over
+     *  To's lattice at the goal's height where the swap is clear and from which the load held over sweeps straight to
+     *  Goal. False: none (it is held from its ends down onto its slot). */
+    bool SwapOutPoint(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const class USCCargoGridComponent* To, const FVector& Goal, const FQuat& Rotation,
+                      FVector& OutPoint, FString* OutNote = nullptr) const;
+    /** The ends grip for Box held by a team of Team (one or two) of Drones: from the tractor record, the load and the
+     *  drones' hulls (round 5: also the geometry every team's grip places are drawn from). */
+    FSCCargoEndGrip EndGrip(const class ASCCargoContainer* Box, double MassKg, const TArray<class ASCCargoDrone*>& Drones, int32 Team) const;
+    /** One tick of a swap of grip (Move.SwapTo): the box held at Q / Rotation, each drone along its way round it. True
+     *  once every drone is at its new station (Move.Grip is then SwapTo). */
+    bool SwapGrip(struct FSCCargoMove& Move, class ASCCargoContainer* Box, const TArray<class ASCCargoDrone*>& Drones, const FVector& Q, const FQuat& Rotation, double Now, double Dt);
+    /** Where drone I of Move hovers (its emitter's station, box frame) in a grip (0 over, 1 the ends: its end, EndOf). */
+    FVector GripStation(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, int32 I, int32 Grip) const;
+    /** Round 5, where a drone holds from (box frame; Rotation: the box as it hangs on its route now). Drone I's planned
+     *  place: its end of the ends grip, else over its formation offset at the hang (inside the route's shape: the
+     *  fallback); where it holds from now (its place, or on its way round the box to its next: the box's surface nearest
+     *  to it, no face). */
+    FSCCargoGripSpot PlannedSpot(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, int32 I, const FQuat& Rotation) const;
+    /** The order the ways of holding a box are planned in (FSCCargoMove::Tier: 0 ends, 1 over with room, 2 over tight). */
+    TArray<int32> TierOrder(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, int32 Team) const;
+    FSCCargoGripSpot GripNow(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, int32 I, const FQuat& Rotation, bool* bOutMoving = nullptr) const;
+    /** Every drone at its planned place, each looking again at its own staggered moment. */
+    void ResetSpots(struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const TArray<class ASCCargoDrone*>& Drones, const FQuat& Rotation, double Now);
+    /** One tick of the drones searching for a good grip (FSCCargoGripPick), the box at Q / Rotation on its route: each
+     *  moves on round the box to the place it picked; or picks again when its time comes; or goes back to its planned
+     *  place when its own no longer fits along the route ahead, the route's piece ends within it (a turn, a swap, the
+     *  descent) or it is in the precise zone (CARGO_GRIP_PICK). */
+    void GripTick(struct FSCCargoMove& Move, class ASCCargoContainer* Box, const TArray<class ASCCargoDrone*>& Drones, const FVector& Q, const FQuat& Rotation,
+                  bool bSearch, double Now, double Dt);
+    /** Whether a drone's hull fits at Spot along the route ahead (Move's lookahead from where its load is), and along its
+     *  ways there from From and from there back to Back (its planned place), with the load's margin. OutWhy: what stops it. */
+    bool SpotFits(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const FSCCargoGripSpot& From, const FSCCargoGripSpot& Spot,
+                  const FSCCargoGripSpot& Back, const FQuat& Rotation, FString* OutWhy = nullptr) const;
+    /** The route's margin for a load (cm): the gusts' envelope (SwayEnvelopeCm) and, round 5, the most its drones' wobble
+     *  moves it through their holds (drone_art.json motion.load_transfer x the longest hold of Move's places x the sine of
+     *  max_tilt_deg, plus its drift and hunt; the box's spring passes no more than that on). */
+    double LoadEnvelopeCm(const struct FSCCargoMove& Move) const;
+    /** A drone of another move in Move's destination's precise zone (its interior, grown by the reach of Box's drones):
+     *  its id, else INDEX_NONE (round 5: the zone is entered clear). */
+    int32 ZoneOccupant(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box) const;
+    /** Whether Drone counts as in Move's destination zone for ZoneOccupant (its interior grown by the reach of Box's drones
+     *  and the distance drones keep). */
+    bool InZoneOf(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const class ASCCargoDrone* Drone) const;
+    /** Another load in the air (not Box) whose box and drones anywhere round it (FSCCargoGripPick::Reach), moving on for
+     *  Seconds at its route's speed, can reach into Region (world): what it is, or empty. */
+    FString OtherLoadNear(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const FBox& Region, double Seconds) const;
     /** The turn onto the destination lattice in free air, swept: the load shape at rotations from FromQ to ToQ (steps of
      *  at most TurnStepDegrees) while moving from FromP to ToP, all free. OutWhy names the first blocker. */
     bool TurnClear(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const FVector& FromP, const FQuat& FromQ, const FVector& ToP,
                    const FQuat& ToQ, FString* OutWhy = nullptr) const;
-    /** The descent from the hover point onto the slot along the grid normal, at the slot's rotation: the box alone,
-     *  2 cm inside its own size (it ends flush with its neighbours and the grid). */
-    bool DescentClear(const class ASCCargoContainer* Box, const FQuat& Rotation, const FVector& From, const FVector& To, FString* OutWhy = nullptr) const;
+    /** The descent from the hover point onto the slot along the grid normal, at the slot's rotation: the box, 2 cm
+     *  inside its own size (it ends flush with its neighbours and the grid), and, when Move holds it from its ends, the
+     *  drones going down beside its end faces. */
+    bool DescentClear(const class ASCCargoContainer* Box, const FQuat& Rotation, const FVector& From, const FVector& To, FString* OutWhy = nullptr,
+                      const struct FSCCargoMove* Move = nullptr) const;
     /** The way onto a slot: a hover point on its normal line (out from MinCm) from which the descent along the normal
      *  is free, and the turn point where the load (arriving at FromQ) turns onto the slot's rotation, swept: the hover
      *  point itself, or above it when the turn needs room (a long box tilting onto a vertical plate near the floor), with
@@ -218,7 +274,8 @@ private:
     bool ClearStart(const class ASCCargoDrone* Drone, const struct FSCCargoRouteQuery& Query, FVector& InOutStart, TArray<FVector>* OutVia = nullptr) const;
     /** A lone drone's query. Ends: where the route begins and ends (kept space there is left out: its bay beside another's). */
     struct FSCCargoRouteQuery DroneQuery(const class ASCCargoDrone* Drone, const struct FSCCargoMove* Move = nullptr, TConstArrayView<FVector> Ends = {}, bool bTight = false) const;
-    /** The drones and beams over Move's box hanging at Rotation (a level box along the formation), MarginCm around them. */
+    /** The drones and beams over Move's box hanging at Rotation (a level box along the formation), MarginCm around them;
+     *  with Move.bRoomy at least a drone's half clearance over their hulls. */
     struct FSCCargoRouteQuery ColumnQuery(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const FQuat& Rotation, double MarginCm,
                                           bool bIgnoreFlying, const TArray<const UPrimitiveComponent*>* Ignore, double* OutTopCm = nullptr) const;
     /** Plans a route with Query and logs its proof (CARGO_PATH: found, minimum clearance, sweep hits). */
@@ -248,6 +305,8 @@ private:
      *  Rotation) is in a vehicle's physics grid, that vehicle's; elsewhere none (WP-P3). One rule for every
      *  query: a hull's opening caps are no colliders (WP-P4), so an open ramp or door is an opening by position alone. */
     TSharedRef<struct FSCCargoHullRule> HullRule(const struct FCollisionQueryParams& Base, const FVector& HalfExtent, const FQuat& Rotation) const;
+    /** A drone's hull rule (its shape, level): a drone holding its box is also in the grids its load is in. */
+    TSharedRef<struct FSCCargoHullRule> DroneHullRule(const struct FCollisionQueryParams& Base, const class ASCCargoDrone* Drone) const;
     /** The tractor record as a beam (Cargo/SCCargoTug.h), and the shortest beam that holds a load's weight shared by a
      *  team (cm): what a load's route reserves over the box for its drones, since they can tuck in that far. */
     struct FSCCargoBeam TractorBeam() const;
@@ -257,6 +316,9 @@ private:
      *  for the springs to correct with, over root two (so both at once stay within it). */
     double RouteAccel(int32 Team, double LoadKg) const;
     double MinHangCm(const class ASCCargoContainer* Box) const;
+    /** How far the drones reach above their emitters (cm): the tallest drone's hull over its emitter (HullAboveCm), the
+     *  room a load's route keeps over its beams' hang; SCCargoFlightTuning::DefaultDroneHeightCm before any drone exists. */
+    double DroneHeightCm() const;
     /** Space kept for drones in a route query (Cargo/SCCargoTug.h): the stations of teams on their way out to their
      *  boxes, the drones hovering attached to a box at rest or holding one, and (a load's query) the drones carrying
      *  a load this query takes as an obstacle. A load's query keeps their hulls; a lone drone's (Drone) keeps the
@@ -277,15 +339,12 @@ private:
      *  corridor another drone is using (launching, or docking with the right of way: the lower id). */
     double FlightFree(const class ASCCargoDrone* Drone, const struct FSCCargoFlight& Flight) const;
     /** Where a drone on its way out to its box holds short (an arclength of Flight; < 0: nowhere): while a load
-     *  planned before its own move has yet to fly through its station (its lift, its turn at the top, its route up
+     *  planned before its own move has yet to fly through its station or across its way there (its lift, its turn at the top, its route up
      *  to where it is past the station), or another team's drone is within the kept distance of it (hovering there
-     *  now, or due there first), the last point of its way that is clear of them. */
-    double HoldShort(const struct FSCCargoMove& Move, const class ASCCargoDrone* Drone, const struct FSCCargoFlight& Flight) const;
-    /** The room along a drone's beam with the box centre at Q on Move's route (cm from the attach point, Attach from Q;
-     *  the beam along Dir): its shape swept out from the shortest beam to the full-strength distance, against the
-     *  surroundings and the boxes at rest. OutTucked: where the shape's centre is on the shortest beam. */
-    double BeamRoom(const struct FSCCargoMove& Move, const class ASCCargoContainer* Box, const class ASCCargoDrone* Drone, const FVector& Q, const FVector& Attach,
-                    const FVector& Dir, double ShortestCm, FVector* OutTucked = nullptr) const;
+     *  now, or due there first), the last point of its way that is clear of them. Where it is is in such a load's way
+     *  already, with none of its way behind clear (it was given this move where it set its last box down, in the hold the
+     *  load comes into): OutRefuge, a place near it out of the loads' ways that it can fly to straight (round 5). */
+    double HoldShort(const struct FSCCargoMove& Move, const class ASCCargoDrone* Drone, const struct FSCCargoFlight& Flight, FVector* OutRefuge = nullptr) const;
     /** One tick of a team tugging its box along its route: the box at Q / Rotation moving at RouteV, accelerating at
      *  RouteA (cm). SCCargoTugStep.cpp. */
     void TugStep(struct FSCCargoMove& Move, class ASCCargoContainer* Box, const TArray<class ASCCargoDrone*>& Drones, const FVector& Q, const FQuat& Rotation,
@@ -313,6 +372,7 @@ public:
 private:
     /** The move (not ended) of the box that Box is, or null. */
     const struct FSCCargoMove* MoveOf(const AActor* Box) const;
+    const struct FSCCargoMove* MoveOfDrone(const class ASCCargoDrone* Drone) const;
     /** The collision world apart from the cargo, hashed per frame: part of a route query's identity. */
     uint32 WorldHash() const;
     /** Drops what a move keeps between ticks (searches, cells, turn points) when the world or the stock changed. */

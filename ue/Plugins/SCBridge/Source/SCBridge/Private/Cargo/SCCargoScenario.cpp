@@ -102,6 +102,7 @@ bool FSCCargoDroneDefinition::ApplyTractorRecord(const FString& RecordJson, FStr
     FullStrengthDistanceM = Num(Action, TEXT("fullStrengthDistance"));
     MaxVolume = Num(Action, TEXT("maxVolume"));
     VolumeForceCoefficient = Num(Action, TEXT("volumeForceCoefficient"));
+    if (const double Angle = Num(Action, TEXT("maxAngle")); Angle > 0) MaxAngleDeg = Angle;
     // Its effects (WP-K4c): references as the record writes them; absent fields leave them empty.
     auto First = [](const FObj& O, const TCHAR* Key) -> FObj {
         const TArray<TSharedPtr<FJsonValue>>* A;
@@ -190,6 +191,7 @@ bool FSCCargoScenario::Parse(const FString& Json, FSCCargoScenario& Out, FString
     D.FullStrengthDistanceM = Num(Beam, TEXT("full_strength_distance"));
     D.MaxVolume = Num(Beam, TEXT("max_volume"));
     D.VolumeForceCoefficient = Num(Beam, TEXT("volume_force_coefficient"));
+    if (const double Angle = Num(Beam, TEXT("max_angle")); Angle > 0) D.MaxAngleDeg = Angle;
     D.MaxSpeedMS = float(Num(Flight, TEXT("max_speed_m_s")));
     D.MaxAccelMS2 = float(Num(Flight, TEXT("max_accel_m_s2")));
     D.ClearanceMarginM = float(Num(Flight, TEXT("clearance_margin_m")));

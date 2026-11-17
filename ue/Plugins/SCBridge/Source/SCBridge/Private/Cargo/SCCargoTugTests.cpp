@@ -2,7 +2,11 @@
 // station (beam length, rest length, hover point), its look along the route for the room ahead, the drone as a body,
 // a box flown by a team at several step lengths, and the independence of teammates' gusts; and of a drone's own
 // steering (SCBridge.Cargo.Drone*): slid along what it meets, apart from other drones, out of its bay when its way
-// is free, out of the way of a load, the space kept for other teams' drones, teammates' routes apart.
+// is free, out of the way of a load, the space kept for other teams' drones, teammates' routes apart; of one drone or a
+// pair holding a box from its ends (SCBridge.Cargo.TugEnds*, round 5: the hold to a point): its geometry, its equal
+// shares, its acceleration limit, zero g, its ways round the box; a drone following its route's station with the
+// route's acceleration fed forward (TugFeedForward); and of where a drone holds from (SCBridge.Cargo.
+// GripPlaces): the places round a box, the weights it picks them by, its teammates, its re-pick interval.
 // All values are synthetic.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
@@ -779,4 +783,366 @@ bool FSCCargoTugPullTest::RunTest(const FString&)
     TestTrue(TEXT("nothing to go by: up"), FSCCargoTug::PullDirection(FVector::ZeroVector, FVector::ZeroVector).Equals(FVector::UpVector, 1e-6));
     return true;
 }
+namespace
+{
+// The C2 pair carrying a 32 SCU box (record and drone as the logs give them; synthetic here): 257.5 kN, 0.5 / 3 m.
+FSCCargoEndGrip::FIn EndsIn()
+{
+    FSCCargoEndGrip::FIn In;
+    In.Beam.MaxForceN = 257500;
+    In.Beam.MinM = 0.5;
+    In.Beam.FullM = 3;
+    In.Beam.MaxM = 150;
+    In.MassKg = 30000;
+    In.GravityMS2 = 9.81;
+    In.Team = 2;
+    In.BoxHalfCm = FVector(500, 125, 125);
+    In.Drone.HullHalf = FVector(69.85, 69.85, 50.69);
+    In.Drone.EmitterPlanCm = 35;
+    In.Drone.AboveCm = 74.1;
+    In.Drone.BelowCm = 27.3;
+    In.GapCm = 2;
+    In.InsetCm = 10;
+    In.MinAccelMS2 = 1;
+    In.MaxAngleDeg = 40;
+    return In;
+}
+// Whether a drone's hull is ever in the box along a way (sampled finely).
+bool WayHitsBox(const FSCCargoEndGrip& G, const TArray<FVector>& Way)
+{
+    const FBox Box = FBox::BuildAABB(FVector::ZeroVector, G.BoxHalf - FVector(0.5));
+    for (int32 I = 1; I < Way.Num(); ++I)
+        for (int32 K = 0; K <= 50; ++K)
+            if (G.HullAt(FMath::Lerp(Way[I - 1], Way[I], K / 50.0)).Intersect(Box)) return true;
+    return false;
+}
+} // namespace
+
+// Holding a box from its ends (WP-K4 round 5: a tractor beam holds to a point): the geometry of one drone in front of
+// each end, the equal shares of the route's force, the acceleration they allow, a lone drone, zero g.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoTugEndsTest, "SCBridge.Cargo.TugEnds", TugTestFlags)
+bool FSCCargoTugEndsTest::RunTest(const FString&)
+{
+    // The geometry: each drone's hull, at any heading, beyond its end face; its top at the box's top; the hold level or
+    // down onto the end face within the record's cone, between its minimum and its full-strength distance.
+    const FSCCargoEndGrip::FIn In = EndsIn();
+    const FSCCargoEndGrip G = FSCCargoEndGrip::Plan(In);
+    TestTrue(FString::Printf(TEXT("A pair can hold a 30 t box from its ends (%s)"), *G.Why), G.bValid);
+    if (!G.bValid) return false;
+    for (int32 End = 0; End < 2; ++End)
+    {
+        const FBox Hull = G.HullAt(G.Station(End));
+        const double S = FSCCargoEndGrip::Sign(End);
+        const double Inner = S > 0 ? Hull.Min.X : -Hull.Max.X;
+        TestTrue(FString::Printf(TEXT("End %d: its hull clears its end face by the gap (inner face %.1f)"), End, Inner), Inner >= In.BoxHalfCm.X + In.GapCm - 1e-6);
+        TestTrue(TEXT("... its top is the box's top"), FMath::IsNearlyEqual(Hull.Max.Z, In.BoxHalfCm.Z, 1e-6));
+        const FVector At = G.Attach(End);
+        TestTrue(TEXT("... its hold is on its end face, inside its edges"),
+                 FMath::IsNearlyEqual(At.X, S * In.BoxHalfCm.X) && FMath::Abs(At.Z) <= In.BoxHalfCm.Z - In.InsetCm + 1e-6 && At.Y == 0);
+        const FVector Line = G.Station(End) - At;
+        TestTrue(TEXT("... out from it, level or above it"), S * Line.X > 0 && Line.Z >= -1e-6 && FMath::IsNearlyEqual(Line.Size(), G.BeamCm, 1e-6));
+        TestTrue(TEXT("... within the record's cone"), FMath::RadiansToDegrees(FMath::Atan2(Line.Z, FMath::Abs(Line.X))) <= In.MaxAngleDeg + 1e-6);
+    }
+    TestTrue(FString::Printf(TEXT("The hold (%.0f cm) is between the record's minimum and full-strength distances"), G.BeamCm),
+             G.BeamCm >= In.Beam.MinM * 100.0 - 1e-6 && G.BeamCm <= In.Beam.FullM * 100.0 + 1e-6);
+    TestTrue(TEXT("The shape is the box's height (the drones fly beside it, not over it)"), FMath::IsNearlyEqual(G.Shape().Max.Z, In.BoxHalfCm.Z, 1e-6));
+    // The force: each beam an equal share of the route's whole ask, in its direction (it holds to a point, the box as a
+    // whole); the shares sum to it.
+    const FVector Net(0, 0, In.MassKg * In.GravityMS2);
+    TestTrue(TEXT("Each beam half the weight, straight up"), G.Force(Net).Equals(Net / 2, 1e-6) && FMath::IsNearlyEqual(G.ShareN, Net.Z / 2, 1e-3));
+    const FVector Sideways = Net + FVector(In.MassKg * 2, -In.MassKg, 0);
+    TestTrue(TEXT("Any direction: the shares sum to the whole"), (G.Force(Sideways) * 2).Equals(Sideways, 1e-6));
+    // The acceleration they allow: up to it every way each share is within the record's force; 5 % more straight up, not.
+    auto Within = [&](const FSCCargoEndGrip& Grip, double Mass, double A, const FVector& D) {
+        return Grip.Force(FVector(0, 0, Mass * In.GravityMS2) + D * Mass * A).Size() <= In.Beam.MaxForceN + 1e-3;
+    };
+    bool bAll = true;
+    for (int32 I = -1; I <= 1; ++I)
+        for (int32 J = -1; J <= 1; ++J)
+            for (int32 Z = -1; Z <= 1; ++Z)
+                if (I || J || Z) bAll &= Within(G, In.MassKg, G.MaxAccelMS2, FVector(I, J, Z).GetSafeNormal());
+    TestTrue(FString::Printf(TEXT("Up to %.2f m/s^2 every way the beams hold"), G.MaxAccelMS2), G.MaxAccelMS2 >= In.MinAccelMS2 && bAll);
+    TestFalse(TEXT("... 5 % more straight up, they do not"), Within(G, In.MassKg, G.MaxAccelMS2 * 1.05, FVector::UpVector));
+    TestTrue(TEXT("That is what the pair has over the weight"), FMath::IsNearlyEqual(G.MaxAccelMS2, FMath::Min(2 * In.Beam.MaxForceN / In.MassKg - In.GravityMS2, 100.0), 1e-6));
+    // A long box on its Y axis: the same geometry along Y.
+    FSCCargoEndGrip::FIn Y = In;
+    Y.BoxHalfCm = FVector(125, 500, 125);
+    const FSCCargoEndGrip GY = FSCCargoEndGrip::Plan(Y);
+    TestTrue(TEXT("Along Y the stations lie beyond the Y faces"),
+             GY.bValid && GY.Axis == 1 && FMath::IsNearlyEqual(GY.Station(1).Y, G.Station(1).X) && FMath::IsNearlyEqual(GY.Station(0).Z, G.Station(0).Z));
+    // A lone drone holds a 16 SCU box in front of it (the owner's case): the same place, the whole force its own.
+    FSCCargoEndGrip::FIn One = In;
+    One.Team = 1;
+    One.MassKg = 15000;
+    One.BoxHalfCm = FVector(250, 125, 125);
+    const FSCCargoEndGrip G1 = FSCCargoEndGrip::Plan(One);
+    TestTrue(FString::Printf(TEXT("One drone holds a 15 t box in front of it (%s)"), *G1.Why), G1.bValid && G1.Force(Net).Equals(Net, 1e-6));
+    FSCCargoEndGrip::FIn Two = One;
+    Two.Team = 2;
+    TestTrue(TEXT("... it has less to spare than a pair would"), G1.MaxAccelMS2 < FSCCargoEndGrip::Plan(Two).MaxAccelMS2);
+    // Zero g (the fleet's case, WP-K4 round 5's regression): held from the same places, nothing about the share or where a
+    // drone drifts decides them (round 4 fell back to "the side it holds" and its station wandered with it).
+    FSCCargoEndGrip::FIn Zero = In;
+    Zero.GravityMS2 = 0;
+    const FSCCargoEndGrip G0 = FSCCargoEndGrip::Plan(Zero);
+    TestTrue(TEXT("Zero g: a pair holds from its ends"), G0.bValid);
+    TestTrue(TEXT("... at the very places it would under weight"), G0.Station(0).Equals(G.Station(0), 1e-9) && G0.Station(1).Equals(G.Station(1), 1e-9) &&
+                                                                   G0.Attach(0).Equals(G.Attach(0), 1e-9));
+    // Not possible: a share at the record's force; a team of three (held over); a hold outside the record's cone.
+    FSCCargoEndGrip::FIn Heavy = In;
+    Heavy.MassKg = 2 * In.Beam.MaxForceN / In.GravityMS2 + 1;
+    TestFalse(TEXT("Not a pair whose shares are the beams' whole force"), FSCCargoEndGrip::Plan(Heavy).bValid);
+    FSCCargoEndGrip::FIn Three = In;
+    Three.Team = 3;
+    TestFalse(TEXT("Not a team of three (held over)"), FSCCargoEndGrip::Plan(Three).bValid);
+    FSCCargoEndGrip::FIn Flat = In;
+    Flat.BoxHalfCm = FVector(500, 125, 30); // lower than the hull: its hold slants up to the face's lowest point
+    TestTrue(TEXT("A flat box: held within a 40 degree cone"), FSCCargoEndGrip::Plan(Flat).bValid);
+    Flat.MaxAngleDeg = 1;
+    TestFalse(TEXT("... not within a 1 degree one"), FSCCargoEndGrip::Plan(Flat).bValid);
+    // A low box (1 m high, under a 1 m hull): its hold at the face's lowest, the drone as low as it gets.
+    FSCCargoEndGrip::FIn Low = In;
+    Low.BoxHalfCm = FVector(500, 125, 50);
+    const FSCCargoEndGrip GLow = FSCCargoEndGrip::Plan(Low);
+    TestTrue(TEXT("A low box: held, the drone's top at the box's top"), GLow.bValid && FMath::IsNearlyEqual(GLow.Shape().Max.Z, Low.BoxHalfCm.Z, 1e-6));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoTugEndsSwapTest, "SCBridge.Cargo.TugEndsSwap", TugTestFlags)
+bool FSCCargoTugEndsSwapTest::RunTest(const FString&)
+{
+    // A drone's way from over the box (its emitter the shortest hang over the top face, over its formation offset) to its
+    // station at the end, and back: up, across, down; its hull, at any heading, never in the box anywhere along it.
+    const FSCCargoEndGrip::FIn In = EndsIn();
+    const FSCCargoEndGrip G = FSCCargoEndGrip::Plan(In);
+    if (!G.bValid) return false;
+    const double Hang = 79; // the shortest hang: the hull's reach under its emitter is less
+    for (int32 End = 0; End < 2; ++End)
+    {
+        const FVector Over(FSCCargoEndGrip::Sign(End) * 300, 0, In.BoxHalfCm.Z + Hang);
+        for (const bool bOut : {true, false})
+        {
+            const TArray<FVector> Way = bOut ? FSCCargoEndGrip::SwapWay(Over, G.Station(End)) : FSCCargoEndGrip::SwapWay(G.Station(End), Over);
+            TestTrue(TEXT("The way starts and ends at the stations"), Way[0].Equals(bOut ? Over : G.Station(End)) && Way.Last().Equals(bOut ? G.Station(End) : Over));
+            TestFalse(FString::Printf(TEXT("End %d, %s: the hull never in the box"), End, bOut ? TEXT("out to the end") : TEXT("back over")), WayHitsBox(G, Way));
+            TestTrue(TEXT("... straight up or across, three legs at most"), Way.Num() <= 4);
+        }
+    }
+    // Round the box from one end to the other (a drone re-picking its grip): over the top, never through it; along one
+    // face (a new spot on the same end): no hop over the box.
+    const TArray<FVector> Across = G.WayRound(G.Station(0), G.Station(1));
+    TestFalse(TEXT("End to end: the hull never in the box"), WayHitsBox(G, Across));
+    TestTrue(TEXT("... over its top"), Across.Num() == 4 && Across[1].Z >= G.OverZ() - 1e-6);
+    const FVector Beside = G.Station(0) + FVector(0, 60, 20);
+    const TArray<FVector> Along = G.WayRound(G.Station(0), Beside);
+    TestTrue(TEXT("Along its own face: no higher than the higher place"), !WayHitsBox(G, Along) && FMath::IsNearlyEqual(Along[1].Z, Beside.Z, 1e-6));
+    // The hold on the way: the box's surface nearest the drone, inside the face's edges.
+    const FVector Near = G.SurfaceNear(FVector(700, 200, 60));
+    TestTrue(FString::Printf(TEXT("Beyond +x and +y, more beyond x: on the +x face inside its edges (%s)"), *Near.ToCompactString()),
+             FMath::IsNearlyEqual(Near.X, 500.0) && FMath::IsNearlyEqual(Near.Y, 125.0 - In.InsetCm) && FMath::IsNearlyEqual(Near.Z, 60.0));
+    TestTrue(TEXT("Over the top: straight below on the top face"), G.SurfaceNear(FVector(100, 20, 300)).Equals(FVector(100, 20, 125)));
+    // Off its own box at its end face: a drone the box sways towards gives way along that face's normal, not up; one
+    // over the top with no face (on its way round) is left where it is.
+    const FVector Hull(69.85, 69.85, 50.69), CmHalf = In.BoxHalfCm;
+    const FVector NearFace(500 + 40, 0, 60); // 40 cm off the +x face: its hull would be in the box
+    const FVector Out = FSCCargoDroneSteer::OffFace(NearFace, Hull, FTransform::Identity, CmHalf, FVector::ForwardVector);
+    TestTrue(FString::Printf(TEXT("Off the +x end face along +x (%s)"), *Out.ToCompactString()), FMath::IsNearlyEqual(Out.X, 500 + Hull.X, 1e-6) && Out.Y == NearFace.Y && Out.Z == NearFace.Z);
+    TestTrue(TEXT("... off a +y face along +y"),
+             FMath::IsNearlyEqual(FSCCargoDroneSteer::OffFace(FVector(0, 125 + 30, 0), Hull, FTransform::Identity, CmHalf, FVector::RightVector).Y, 125 + Hull.Y, 1e-6));
+    const FTransform Turned(FRotator(0, 90, 0));
+    TestTrue(TEXT("... off the -x face along -x, turned with the box"),
+             FSCCargoDroneSteer::OffFace(Turned.TransformPosition(FVector(-540, 0, 60)), Hull, Turned, CmHalf, -FVector::ForwardVector)
+                 .Equals(Turned.TransformPosition(FVector(-500 - Hull.X, 0, 60)), 1e-6));
+    const FVector OverTop(100, 0, 125 + 20);
+    TestTrue(TEXT("No face (swapping): left where it is"), FSCCargoDroneSteer::OffFace(OverTop, Hull, FTransform::Identity, CmHalf, FVector::ZeroVector).Equals(OverTop));
+    TestTrue(TEXT("The top face as before"), FMath::IsNearlyEqual(FSCCargoDroneSteer::OffFace(OverTop, Hull, FTransform::Identity, CmHalf).Z, 125 + Hull.Z, 1e-6));
+    return true;
+}
+
+// A drone following a station that rides its route (WP-K4 round 5, the synchronised zig-zag's source): with the route's
+// acceleration fed forward it stays on it; on the spring alone it lags by a / W^2 (W = jerk / acceleration).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoTugFeedForwardTest, "SCBridge.Cargo.TugFeedForward", TugTestFlags)
+bool FSCCargoTugFeedForwardTest::RunTest(const FString&)
+{
+    auto Lag = [](bool bFeed) {
+        FSCCargoDroneBody B;
+        B.MassKg = 180;
+        B.MaxAccelMS2 = 12;
+        B.MaxJerkMS3 = 30;
+        B.MaxForceN = 257500;
+        B.GravityMS2 = 9.81;
+        const double Dt = 1.0 / 60, Acc = 4.0;
+        double Worst = 0;
+        // From rest, the route's acceleration ramped in at 10 m/s^3 (as a loaded route is flown), then held.
+        const double Tr = 0.4;
+        auto X = [&](double T) { return T < Tr ? Acc * T * T * T / (6 * Tr) : Acc * Tr * Tr / 6 + Acc * Tr / 2 * (T - Tr) + 0.5 * Acc * (T - Tr) * (T - Tr); };
+        auto V = [&](double T) { return T < Tr ? Acc * T * T / (2 * Tr) : Acc * Tr / 2 + Acc * (T - Tr); };
+        for (double T = 0; T < 3.0; T += Dt)
+        {
+            B.Step(FVector(X(T), 0, 0), FVector(V(T), 0, 0), FVector::ZeroVector, Dt, bFeed ? FVector(Acc * FMath::Min(T / Tr, 1.0), 0, 0) : FVector::ZeroVector);
+            if (T > 1.0) Worst = FMath::Max(Worst, FMath::Abs(B.P.X - X(T + Dt))); // where the station is when the step ends
+        }
+        return Worst;
+    };
+    const double Fed = Lag(true), Bare = Lag(false);
+    TestTrue(FString::Printf(TEXT("Fed forward it stays on its station (%.3f m)"), Fed), Fed < 0.03);
+    TestTrue(FString::Printf(TEXT("... on the spring alone it lags (%.2f m, a / W^2 = %.2f m)"), Bare, 4.0 / FMath::Square(30.0 / 12.0)), Bare > 0.5);
+    return true;
+}
+
+// A drone waiting for its next move keeps clear of an incoming load's whole motion (WP-K4 round 5, the C2's one run in
+// three: a drone waiting in the hold beside a load's way was hit by it, and pushed its front drone off its station into
+// the hold's structure): the load's shape is everything its box and drones can reach (LegShape over
+// FSCCargoGripPick::Reach), the waiting drone outside it by the distance drones keep from each other.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoWaitClearTest, "SCBridge.Cargo.WaitClear", TugTestFlags)
+bool FSCCargoWaitClearTest::RunTest(const FString&)
+{
+    FSCCargoEndGrip::FIn In = EndsIn();
+    In.BoxHalfCm = FVector(375, 125, 125); // 24 SCU
+    const FSCCargoEndGrip G = FSCCargoEndGrip::Plan(In);
+    if (!TestTrue(TEXT("A pair's grip"), G.bValid)) return false;
+    const FSCCargoGripPick::FCfg Cfg;
+    const double Hang = 79;
+    const FBox Reach = FSCCargoGripPick::Reach(G, Hang, Cfg);
+    FVector Half;
+    double Above = 0;
+    FSCCargoKeepOut::LegShape(Reach, Half, Above);
+    // A load at rest at the origin, turned 30 degrees: every corner of its reach is inside its shape; a point a little
+    // beyond the reach on each side is not (no pad), so the shape is no bigger than it must be.
+    const FQuat Rot(FVector::UpVector, FMath::DegreesToRadians(30.0));
+    const TArray<FVector> Here = {FVector(100, 200, 300)};
+    bool bCorners = true;
+    for (int32 K = 0; K < 8; ++K)
+    {
+        const FVector Corner((K & 1) ? Reach.Max.X : Reach.Min.X, (K & 2) ? Reach.Max.Y : Reach.Min.Y, (K & 4) ? Reach.Max.Z : Reach.Min.Z);
+        bCorners &= FSCCargoKeepOut::RoutePasses(Here, Rot, Half, Above, Here[0] + Rot.RotateVector(Corner * 0.999), 0);
+    }
+    TestTrue(TEXT("Every corner of the reach (drones beyond the ends, beside, over) is in the load's shape"), bCorners);
+    TestFalse(TEXT("... above the highest place, not"), FSCCargoKeepOut::RoutePasses(Here, Rot, Half, Above, Here[0] + FVector(0, 0, Reach.Max.Z + 5), 0));
+    TestFalse(TEXT("... beyond the farthest end place, not"), FSCCargoKeepOut::RoutePasses(Here, Rot, Half, Above, Here[0] + Rot.RotateVector(FVector(Reach.Max.X + 5, 0, 0)), 0));
+    TestTrue(TEXT("The drones over the box are in it (the column)"), Above > 0 && Half.Z + Above >= Reach.Max.Z - 1e-6);
+    // The hold is entered clear: a load waits short of its destination's zone while other drones are in it.
+    TestTrue(TEXT("Occupied, the zone 20 m ahead: it waits"), FSCCargoTug::WaitsForZone(2000, 2500, false, true));
+    TestFalse(TEXT("... 30 m ahead: not yet"), FSCCargoTug::WaitsForZone(3000, 2500, false, true));
+    TestFalse(TEXT("... already inside: never stops there"), FSCCargoTug::WaitsForZone(0, 2500, true, true));
+    TestFalse(TEXT("... clear: goes on"), FSCCargoTug::WaitsForZone(2000, 2500, false, false));
+    TestFalse(TEXT("... no zone ahead: goes on"), FSCCargoTug::WaitsForZone(-1, 2500, false, true));
+    // The wait-for graph between a load and a lone drone at a hold has no cycle: in every case where the load waits for
+    // the drone (it counts as in the gate, the load short of its hold), the drone does not wait for the load. (The load's
+    // gate counts exactly the drones in its gate: bOccupied = bDroneInGate; bLoadWaitsForZone is what it decided.)
+    bool bCycle = false;
+    for (const double Dist : {-1.0, 0.0, 1000.0, 2500.0, 4000.0})
+        for (const bool bLoadInZone : {false, true})
+            for (const bool bDroneInGate : {false, true})
+            {
+                const bool bLoadWaits = FSCCargoTug::WaitsForZone(Dist, 2500, bLoadInZone, bDroneInGate);
+                const bool bDroneWaits = FSCCargoTug::DroneWaitsForLoad(bLoadWaits, bDroneInGate, bLoadInZone);
+                bCycle |= bLoadWaits && bDroneWaits;
+            }
+    TestFalse(TEXT("No load and drone wait for each other at a hold"), bCycle);
+    TestTrue(TEXT("A drone well outside the hold still waits for a load coming"), FSCCargoTug::DroneWaitsForLoad(false, false, false));
+    TestTrue(TEXT("... and one in the hold for a load already in it (it stands aside)"), FSCCargoTug::DroneWaitsForLoad(false, true, true));
+    TestTrue(TEXT("The drones beyond an end are in it (round 4's ends shape was the box's height only, its swap over left out)"),
+             FSCCargoKeepOut::RoutePasses(Here, Rot, Half, Above, Here[0] + Rot.RotateVector(FVector(Reach.Max.X - 10, 0, Reach.Max.Z - 10)), 0));
+    return true;
+}
+
+// Where a drone holds from (WP-K4 round 5, FSCCargoGripPick): the places round a box, every one clear of it and within
+// the record's cone and distances; picked about 3 of 4 times at the ends, away from teammates; none when none fits.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoGripPlacesTest, "SCBridge.Cargo.GripPlaces", TugTestFlags)
+bool FSCCargoGripPlacesTest::RunTest(const FString&)
+{
+    FSCCargoEndGrip::FIn In = EndsIn();
+    In.Team = 1;
+    In.MassKg = 15000;
+    In.BoxHalfCm = FVector(250, 125, 125);
+    const FSCCargoEndGrip G = FSCCargoEndGrip::Plan(In);
+    if (!TestTrue(TEXT("A lone drone's grip"), G.bValid)) return false;
+    const FSCCargoGripPick::FCfg Cfg;
+    FRandomStream Rng(1234);
+    const double Hang = 79;
+    const TArray<FSCCargoGripSpot> Places = FSCCargoGripPick::Candidates(G, Hang, Cfg, Rng, 60);
+    int32 Kinds[3] = {0, 0, 0};
+    bool bClear = true, bReach = true, bCone = true, bOnFace = true, bInReach = true;
+    const FBox Box = FBox::BuildAABB(FVector::ZeroVector, In.BoxHalfCm + FVector(In.GapCm - 0.5));
+    const FBox All = FSCCargoGripPick::Reach(G, Hang, Cfg);
+    for (const FSCCargoGripSpot& S : Places)
+    {
+        ++Kinds[uint8(S.Kind)];
+        bClear &= !G.HullAt(S.Station).Intersect(Box);
+        const FVector D = S.Attach - S.Station;
+        bReach &= D.Size() >= G.MinCm - 0.5 && D.Size() <= G.FullCm + 0.5;
+        bCone &= S.Kind == FSCCargoGripSpot::EKind::Over || FMath::RadiansToDegrees(FMath::Atan2(FMath::Max(-D.Z, 0.0), D.Size2D())) <= In.MaxAngleDeg + 1e-6;
+        const FVector N = S.FaceNormal(G.Axis);
+        bOnFace &= FMath::IsNearlyEqual(FVector::DotProduct(S.Attach, N), FMath::Abs(FVector::DotProduct(In.BoxHalfCm, N)), 1e-6) &&
+                   FVector::DotProduct(S.Station - S.Attach, N) > 0;
+        bInReach &= All.IsInsideOrOn(G.HullAt(S.Station).Min) && All.IsInsideOrOn(G.HullAt(S.Station).Max);
+    }
+    TestTrue(FString::Printf(TEXT("Places of every kind (end %d, side %d, over %d)"), Kinds[0], Kinds[1], Kinds[2]), Kinds[0] > 0 && Kinds[1] > 0 && Kinds[2] > 0);
+    TestTrue(TEXT("Every hull clear of the box"), bClear);
+    TestTrue(TEXT("Every hold within the record's minimum and full-strength distances"), bReach);
+    TestTrue(TEXT("... and its cone"), bCone);
+    TestTrue(TEXT("Every hold on its face, the drone out from it"), bOnFace);
+    TestTrue(TEXT("Every place within the team's reach (what others keep clear of)"), bInReach);
+    bool bSpread = false;
+    for (const FSCCargoGripSpot& S : Places)
+        if (S.Kind == FSCCargoGripSpot::EKind::End) bSpread |= FMath::Abs(S.Attach.Y) > 5 || FMath::Abs(S.Station.Z - (In.BoxHalfCm.Z - In.Drone.AboveCm)) > 5;
+    TestTrue(TEXT("Not the same centre point: spread across the face and in height"), bSpread);
+
+    // The weights: about 3 of 4 picks at the ends with every kind viable.
+    auto Spot = [](FSCCargoGripSpot::EKind Kind, int32 Face, const FVector& At) {
+        FSCCargoGripSpot S;
+        S.Kind = Kind;
+        S.Face = Face;
+        S.Station = At;
+        return S;
+    };
+    const TArray<FSCCargoGripSpot> Four = {Spot(FSCCargoGripSpot::EKind::End, 0, FVector(-500, 0, 0)), Spot(FSCCargoGripSpot::EKind::End, 1, FVector(500, 0, 0)),
+                                           Spot(FSCCargoGripSpot::EKind::Side, 0, FVector(0, -400, 0)), Spot(FSCCargoGripSpot::EKind::Over, 0, FVector(0, 0, 300))};
+    int32 Count[4] = {0, 0, 0, 0};
+    FRandomStream R(99);
+    const int32 Draws = 8000;
+    for (int32 K = 0; K < Draws; ++K) ++Count[FSCCargoGripPick::Pick(Four, {}, 100, Cfg, R)];
+    const double Ends = double(Count[0] + Count[1]) / Draws;
+    TestTrue(FString::Printf(TEXT("About 3 of 4 at the ends (%.3f)"), Ends), FMath::Abs(Ends - Cfg.EndWeight) < 0.02);
+    TestTrue(FString::Printf(TEXT("... the side and over by their weights (%.3f, %.3f)"), double(Count[2]) / Draws, double(Count[3]) / Draws),
+             FMath::Abs(double(Count[2]) / Draws - Cfg.SideWeight) < 0.02 && FMath::Abs(double(Count[3]) / Draws - Cfg.OverWeight) < 0.02);
+    // A teammate at end 0: its face lowered, its very place out.
+    const TArray<FSCCargoGripSpot> Mate = {Spot(FSCCargoGripSpot::EKind::End, 0, FVector(-500, 0, 0))};
+    int32 WithMate[4] = {0, 0, 0, 0};
+    for (int32 K = 0; K < Draws; ++K) ++WithMate[FSCCargoGripPick::Pick(Four, Mate, 100, Cfg, R)];
+    TestTrue(FString::Printf(TEXT("A teammate's place is never picked (%d)"), WithMate[0]), WithMate[0] == 0);
+    TestTrue(FString::Printf(TEXT("... the other end most (%d of %d): the team balances"), WithMate[1], Draws), WithMate[1] > WithMate[2] + WithMate[3]);
+    TArray<FSCCargoGripSpot> SameFace = Four;
+    SameFace[0].Station = FVector(-500, 300, 0); // another place on the teammate's face
+    int32 Lowered[4] = {0, 0, 0, 0};
+    for (int32 K = 0; K < Draws; ++K) ++Lowered[FSCCargoGripPick::Pick(SameFace, Mate, 100, Cfg, R)];
+    TestTrue(FString::Printf(TEXT("A teammate's face, rarely (%d vs %d)"), Lowered[0], Lowered[1]), Lowered[0] * 3 < Lowered[1]);
+    // Only what is viable (space scarce): a single place is the pick; none is none.
+    TestEqual(TEXT("The only viable place"), FSCCargoGripPick::Pick({Four[3]}, {}, 100, Cfg, R), 0);
+    TestEqual(TEXT("None viable: none"), FSCCargoGripPick::Pick({}, {}, 100, Cfg, R), INDEX_NONE);
+    TestEqual(TEXT("All by teammates: none"), FSCCargoGripPick::Pick({Four[0]}, Mate, 100, Cfg, R), INDEX_NONE);
+    // The move cap (the owner: "limit max distance to new position"): a share of the box's longest side, within bounds;
+    // measured along the way round the box, which from end to end is longer than straight through it.
+    TestEqual(TEXT("A 10 m box: the upper bound"), FSCCargoGripPick::MoveCap(Cfg, 1000), double(Cfg.MaxRepickMoveMaxCm));
+    TestEqual(TEXT("A 2.5 m box: the lower bound"), FSCCargoGripPick::MoveCap(Cfg, 250), double(Cfg.MaxRepickMoveMinCm));
+    TestTrue(TEXT("A 7.5 m box: its share"), FMath::IsNearlyEqual(FSCCargoGripPick::MoveCap(Cfg, 750), 750.0 * Cfg.MaxRepickMoveFrac, 1e-3));
+    const double Straight = FVector::Dist(G.Station(0), G.Station(1)), Round = FSCCargoGripPick::WayLength(G.WayRound(G.Station(0), G.Station(1)));
+    TestTrue(FString::Printf(TEXT("End to end round the box (%.0f cm) is longer than through it (%.0f cm), and beyond the cap"), Round, Straight),
+             Round > Straight + 1 && Round > FSCCargoGripPick::MoveCap(Cfg, 2 * In.BoxHalfCm.GetMax()));
+    const FVector Shifted = G.Station(0) + FVector(0, 60, 10);
+    TestTrue(TEXT("A shift along the same face is within it"), FSCCargoGripPick::WayLength(G.WayRound(G.Station(0), Shifted)) <= FSCCargoGripPick::MoveCap(Cfg, 2 * In.BoxHalfCm.GetMax()));
+    // The interval: within the configured range, each draw its own.
+    double Lo = 1e9, Hi = -1e9;
+    for (int32 K = 0; K < 1000; ++K)
+    {
+        const double T = FSCCargoGripPick::Interval(Cfg, R);
+        Lo = FMath::Min(Lo, T);
+        Hi = FMath::Max(Hi, T);
+    }
+    TestTrue(FString::Printf(TEXT("Re-picks every %.1f .. %.1f s (configured %.1f .. %.1f)"), Lo, Hi, Cfg.IntervalMinS, Cfg.IntervalMaxS),
+             Lo >= Cfg.IntervalMinS && Hi <= Cfg.IntervalMaxS && Hi - Lo > 0.8 * (Cfg.IntervalMaxS - Cfg.IntervalMinS));
+    return true;
+}
+
 #endif

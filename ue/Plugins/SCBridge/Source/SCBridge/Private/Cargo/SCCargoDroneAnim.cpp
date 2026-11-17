@@ -1,4 +1,5 @@
-// USCCargoDroneAnimInstance: two-slot crossfade of sequences, optional yaw lock (header: SCCargoDroneAnim.h).
+// USCCargoDroneAnimInstance: two-slot crossfade of sequences, optional yaw lock, the place lock and its tilt scale
+// (header: SCCargoDroneAnim.h).
 #include "SCCargoDroneAnim.h"
 #include "Animation/AnimInstanceProxy.h"
 #include "Animation/AnimNodeBase.h"
@@ -19,7 +20,7 @@ struct FSCCargoDroneAnimProxy : public FAnimInstanceProxy
     FSlot Current, Previous;
     float Alpha = 1.f, BlendS = 0.f; // Current's weight, rising to 1 over BlendS
     FName LockBone, PlaceBone;
-    float MaxBob = 0.f;
+    float MaxBob = 0.f, TiltScale = 1.f;
 
     explicit FSCCargoDroneAnimProxy(UAnimInstance* Instance) : FAnimInstanceProxy(Instance) {}
 
@@ -30,6 +31,7 @@ struct FSCCargoDroneAnimProxy : public FAnimInstanceProxy
         LockBone = Drone->YawLockBone;
         PlaceBone = Drone->PlaceLockBone;
         MaxBob = Drone->MaxBob;
+        TiltScale = Drone->TiltScale;
         if (!Drone->Pending.bPending) return;
         Drone->Pending.bPending = false;
         Previous = Current;
@@ -80,6 +82,25 @@ struct FSCCargoDroneAnimProxy : public FAnimInstanceProxy
             FAnimationPoseData Mine(Output);
             const FAnimationPoseData Theirs(Other);
             FAnimationRuntime::BlendTwoPosesTogetherInPlace(Mine, Theirs, Alpha);
+        }
+        // The tilt scale: the place-lock bone's swing off its reference (its lean) scaled, its twist kept (bone's parent
+        // space; the drone's root carries no rotation). The drone's attitude leans it instead.
+        if (TiltScale < 1.f && !PlaceBone.IsNone())
+        {
+            const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+            const int32 MeshIndex = Bones.GetPoseBoneIndexForBoneName(PlaceBone);
+            if (MeshIndex != INDEX_NONE)
+            {
+                const FCompactPoseBoneIndex Index = Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(MeshIndex));
+                if (Index.IsValid())
+                {
+                    const FQuat Ref = Bones.GetRefPoseTransform(Index).GetRotation();
+                    FTransform& T = Output.Pose[Index];
+                    FQuat Swing, Twist;
+                    (T.GetRotation() * Ref.Inverse()).ToSwingTwist(FVector::UpVector, Swing, Twist);
+                    T.SetRotation((FQuat::Slerp(FQuat::Identity, Swing, FMath::Max(TiltScale, 0.f)) * Twist * Ref).GetNormalized());
+                }
+            }
         }
         // The yaw lock: the bone's rotation less its twist about the vertical from its reference (bone's parent space;
         // the drone's root carries no rotation), weighted by how much of the pose comes from a locking clip.

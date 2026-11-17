@@ -41,6 +41,7 @@ struct FSCCargoHullRule
     TArray<FHull> Hulls;      // vehicles with hull colliders
     TArray<FVector> Probes;   // points of the shape, from its centre: upright axes through them are tested
     double HalfZ = 0;         // the shape's half height
+    uint32 Always = 0;        // grids the shape is in wherever it is: a carrying drone's are its load's (DroneHullRule)
     TSharedPtr<FMemo> Memo;   // shared by the queries of one world state
     /** Bit per Hulls entry whose grid the shape centred at Centre is in. */
     uint32 Touched(const FVector& Centre) const;
@@ -87,11 +88,17 @@ constexpr double TurnStepDegrees = 10;
 constexpr double TurnMarginCm = 5;      // around the box while it turns in free air
 constexpr double MaxApproachCm = 600;   // how far out along a grid's normal a hover point is looked for
 constexpr double MaxTurnRiseCm = 400;   // how far above the hover point the load may turn
-constexpr double DroneHeightCm = 60;    // beam emitter to rotor tops above the box (the drone's bounds when known)
+constexpr double DefaultDroneHeightCm = 60; // beam emitter to hull top before any drone exists (then USCCargoSubsystem::DroneHeightCm)
 constexpr double GuardStretchCm = 50;   // the guard sweeps the route ahead in stretches of this length (as a search samples its route)
 constexpr double PreciseLeadCm = 100;   // the precise zone of an interior grid begins this far before the load reaches its lattice
 constexpr double PreciseSpeedCmS = 200; // flight speed in it (slow: the box follows its beam closely)
 constexpr double FlushInsetCm = 2;      // a box swept onto its slot, or in beside boxes at rest, is taken this much inside its size
+constexpr double EndsInsetCm = 10;      // held from its ends: an attach point keeps this far from its end face's edges
+constexpr double EndsDroneMarginCm = DroneClearanceCm / 4; // held from its ends, its drones keep this from what stands even in the precise zone (they track a moving station: 5 cm let one graze a box at rest, round 5)
+constexpr double GripCheckSeconds = 0.5; // how often a drone holding from a place of its own checks it still fits along the route ahead
+constexpr double ZoneGateCm = 2500;     // a load waits for its destination's zone to clear this far short of it (outside the C2's ramp)
+constexpr double SwapSpeedScale = 0.35;  // drones swapping grips round their box fly at this share of their top speed
+constexpr double SwapArriveCm = 10;     // ... and are at their new stations within this
 } // namespace SCCargoFlightTuning
 
 /** Why a route search found nothing, for a failure reason. */
@@ -163,7 +170,8 @@ struct FSCCargoDock
 
 /** One task of a job (a planned move: carry, relocate or hold): drones fly out to the box, demagnetize it and lift it
  *  along its grid's normal, carry it hanging from their beams along a planned route (a hold hovers at a holding point
- *  until the box beneath is out, then flies back), lower it along the destination's normal, lock it, fly on. */
+ *  until the box beneath is out, then flies back), lower it along the destination's normal, lock it, fly on. A pair
+ *  may carry it from its ends where the room over it is short (Grip). */
 struct FSCCargoMove
 {
     enum class EStep : uint8 { Waiting, Outbound, Attaching, Lifting, Transit, Lowering, Placing, Returning, Done, Failed, Holding };
@@ -175,6 +183,7 @@ struct FSCCargoMove
     TArray<FVector> Offsets;              // per drone: formation offset in the box's frame (cm)
     TArray<FVector> Stations;             // per drone: where it hovers attached to the box at rest (world; its flight out ends there)
     TArray<double> FlightAt, FlightSince; // per drone: how far its flight had got, and since when it has not got on
+    TArray<FVector> FlightAgainAt;        // ... and where it planned again last (no nearer than that: back along its trail)
     FSCCargoFlight Carry;                 // the box centre's flight of the current step (lift, transit, lower)
     FVector FromNormal = FVector::UpVector, ToNormal = FVector::UpVector; // source / destination grid normals (world)
     FQuat FromRotation = FQuat::Identity, ToRotation = FQuat::Identity;
@@ -191,6 +200,27 @@ struct FSCCargoMove
     int32 EntranceOut = 0;                // into a hold: turn points nearer than this many steps out cannot be reached from outside
     // Where the lifted load can turn onto the hold's lattice before it flies (EarlyTurnPoint's answers per situation; unset: nowhere).
     TMap<FString, TOptional<FVector>> TurnPoints;
+    // How a box held from its ends finishes (PlanMove's EndsFinish: a swap back over it, or the ends down onto its slot),
+    // per situation (the arrival rotation, the world it was worked out in): planning goes over it every tick while a
+    // search runs, and its slot approaches sweep the hold (round 5: 0.3 s a tick for the C2's last box).
+    struct FEndsFinish
+    {
+        bool bOK = false, bEndsToSlot = false;
+        uint8 Grip = 0;
+        FVector Target = FVector::ZeroVector, Goal = FVector::ZeroVector, Approach = FVector::ZeroVector;
+        TArray<FVector> OverLeg;
+        FString Why;
+    };
+    TMap<FString, FEndsFinish> EndsFinishes;
+    // The entrance a load turns at outside a hold (PlanMove), per situation, for the same reason.
+    struct FEntrance
+    {
+        bool bRoom = false, bSide = false;
+        FVector At = FVector::ZeroVector;
+        int32 Index = 0;
+        FString Why;
+    };
+    TMap<FString, FEntrance> Entrances;
     // Into a ship's hold the load flies to the hold's entrance at its pickup rotation, turns there in free air onto the
     // hold's lattice (swept) and flies in lengthwise: SecondPath / SecondRotation (TurnStart: when that turn began).
     FQuat PickRotation = FQuat::Identity;
@@ -218,6 +248,7 @@ struct FSCCargoMove
     // to rest there. GuardStamp: the world the stretches were swept in.
     double ClearTo = 0;
     bool bBlockedAhead = false;
+    bool bWaitZone = false;               // waiting short of its destination's precise zone for other drones to leave it (round 5)
     FVector RouteV = FVector::ZeroVector; // the route's velocity at the last tug (cm/s), for its acceleration
     bool bRouteMoving = false;            // RouteV is from the tick before
     bool bTurning = false, bTilting = false; // the box is being turned this tick (at the top of its lift, at a hold's entrance, as it is caught); and tilted by that turn
@@ -239,6 +270,46 @@ struct FSCCargoMove
     FQuat RigidRotation = FQuat::Identity;
     uint32 GuardStamp = 0;
     double HangCm = 0, LoadAccel = 0, LoadJerk = 0; // cm, cm/s^2, cm/s^3 of the loaded team
+    // How the drones hold the box (WP-K4 round 4): over it (beams down onto its top face) or from its two ends (a pair,
+    // low: FSCCargoEndGrip). Grip is how they hold it now, and so the shape every query of the load takes (LoadQuery).
+    // A move planned with the ends is lifted and turned held over, swapped to the ends where route piece EndsPiece
+    // begins (0 TransitPath, 1 SecondPath), and at the end of its last piece either swapped back over the box at
+    // OverLeg[0] and flown over along OverLeg to its goal, or held from the ends down onto its slot (bEndsToSlot).
+    enum class EGrip : uint8 { Over, Ends };
+    EGrip Grip = EGrip::Over;
+    FSCCargoEndGrip Ends;
+    int32 EndsPiece = -1;                 // -1: held over all the way
+    int32 Piece = 0;                      // the route piece being flown: 0 TransitPath, 1 SecondPath, 2 OverLeg
+    TArray<FVector> OverLeg;
+    bool bEndsToSlot = false;
+    // A swap of grip: the box held still on its route, each drone along its own way round it (FSCCargoEndGrip::SwapWay).
+    bool bSwapping = false;
+    EGrip SwapTo = EGrip::Over;
+    TArray<FSCCargoFlight> SwapFlights;
+    double SwapStart = 0;
+    // Planning, which hold is tried (round 5): 0 from the ends (a team of one or two, low), 1 over
+    // with the room a drone keeps from a ceiling (bRoomy), 2 over as tight as the load fits (the old way, last), in the
+    // order TierOrder gives (TierStep: how far along it): over with room, the ends, over tight; a hold (a box dug out and
+    // put back) and a larger team never from the ends. In flight each drone re-picks its own place (Spots).
+    int32 Tier = 0;
+    int32 TierStep = 0;
+    bool bRoomy = false;
+    // Round 5: the planned ends grip's end per drone (0 the -axis end, 1 +axis; a lone drone: the end trailing its route),
+    // the geometry its places round the box are drawn from (Places: its ends, sides, top, for the team up to two), and where
+    // each drone holds from now (Spots, box frame), the place it is moving to (SpotTargets) along its way round the box
+    // (SpotFlights, box frame), when it looks again for a better grip (NextPick) and when it checks its place still fits
+    // along the route ahead (NextCheck); Picks: its places picked so far (its own random stream's index).
+    TArray<int32> EndOf;
+    FSCCargoEndGrip Places;
+    TArray<FSCCargoGripSpot> Spots, SpotTargets;
+    TArray<FSCCargoFlight> SpotFlights;
+    TArray<double> NextPick, NextCheck;
+    TArray<int32> Picks;
+    TArray<bool> GotGrip;                 // per drone: has taken its first grip off its planned place this route piece (re-picks capped after)
+    FString GripNote;                     // the last planning note logged (CARGO_GRIP), said once
+    double GripMs = 0, TugMs = 0;         // this tick's time in GripTick and TugStep (CARGO_SLOW)
+    FQuat TugRotation = FQuat::Identity;  // the route's rotation at the last tug (its turn: the stations' own velocity, fed forward)
+    double TugAt = -1;
     double DistanceCm = 0;                // planned flight length (ETA)
     FString Failure;
     bool bInterrupt = false;     // verification (sc.Cargo.Interrupt): fail this move in flight as a lost route would
@@ -308,9 +379,10 @@ struct FSCCargoState
     ELookup TractorLookup = ELookup::None; // the tractor record read from the archive (or given up on)
     TSharedPtr<class FSCCargoFx> Fx;       // the game's effects, resolved once the tractor is read (WP-K4c)
     TMap<int32, double> ContactAt;         // box id -> when it last played a contact effect
-    // Route searches of all moves share SearchBudgetSeconds of each frame (from the frame's first search on).
+    // Route searches of all moves share SearchBudgetSeconds of search time each frame (SearchSpent: what they took so
+    // far this frame; the planning around them, its sweeps and overlaps, does not eat into it).
     static constexpr double SearchBudgetSeconds = 0.002;
-    double SearchUntil = 0;
+    double SearchSpent = 0;
     uint64 SearchFrame = 0;
     double SearchMaxStepMs = 0; // the longest single search step so far (what a search costs a frame at worst)
     int32 SearchesReported = 0; // searches finished and logged (CARGO_PATH)

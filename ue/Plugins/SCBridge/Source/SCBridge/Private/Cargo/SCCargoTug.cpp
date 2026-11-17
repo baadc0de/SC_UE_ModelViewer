@@ -1,5 +1,5 @@
-// The tractor-beam spring, the team's force split, a drone's own station and the drone as a body
-// (Cargo/SCCargoTug.h). Pure arithmetic in SI units.
+// The tractor-beam spring, the team's force split, a drone's own station and the drone as a body, holding a box from its
+// ends, and where a drone holds from and re-picks (Cargo/SCCargoTug.h). Pure arithmetic in SI units (grips in cm).
 #include "Cargo/SCCargoTug.h"
 
 double FSCCargoBeam::CapN(double LengthM) const
@@ -124,12 +124,12 @@ double FSCCargoDroneBody::AccelLeft(const FVector& Dir, const FVector& ReactionN
     return FMath::Clamp((FMath::Sqrt(Under) - B) / FMath::Max(MassKg, 1e-6), 0.0, MaxAccelMS2);
 }
 
-void FSCCargoDroneBody::Step(const FVector& Hover, const FVector& HoverV, const FVector& ReactionN, double DtS)
+void FSCCargoDroneBody::Step(const FVector& Hover, const FVector& HoverV, const FVector& ReactionN, double DtS, const FVector& HoverA)
 {
     if (DtS <= 0 || MaxAccelMS2 <= 0) return;
     // Critically damped onto the moving hover point, at the rate the drone can swing its thrust round (jerk / accel).
     const double W = MaxJerkMS3 > 0 ? MaxJerkMS3 / MaxAccelMS2 : 1.0 / DtS;
-    FVector Want = (Hover - P) * W * W + (HoverV - V) * 2.0 * W;
+    FVector Want = HoverA + (Hover - P) * W * W + (HoverV - V) * 2.0 * W;
     if (const double Size = Want.Size(); Size > 1e-9) Want *= FMath::Min(1.0, AccelLeft(Want / Size, ReactionN) / Size);
     const FVector Change = Want - A;
     A += MaxJerkMS3 > 0 ? Change.GetClampedToMaxSize(MaxJerkMS3 * DtS) : Change;
@@ -273,6 +273,13 @@ bool FSCCargoKeepOut::RoutePasses(TConstArrayView<FVector> Route, const FQuat& R
     return bPasses;
 }
 
+void FSCCargoKeepOut::LegShape(const FBox& Reach, FVector& OutHalf, double& OutAbove)
+{
+    const FVector Far = Reach.Max.ComponentMax(-Reach.Min);
+    OutHalf = FVector(Far.X, Far.Y, FMath::Max(-Reach.Min.Z, 0.0));
+    OutAbove = FMath::Max(Reach.Max.Z - OutHalf.Z, 0.0);
+}
+
 double FSCCargoDroneSteer::FreeAlong(TConstArrayView<FVector> Path, double Radius, TConstArrayView<FOther> Others, double LeadS)
 {
     double Along = 0, Clear = 0; // Clear: the last point found clear
@@ -294,13 +301,271 @@ double FSCCargoDroneSteer::FreeAlong(TConstArrayView<FVector> Path, double Radiu
     return Along;
 }
 
-FVector FSCCargoDroneSteer::OffFace(const FVector& To, const FVector& HullHalf, const FTransform& Pose, const FVector& Half)
+FVector FSCCargoDroneSteer::OffFace(const FVector& To, const FVector& HullHalf, const FTransform& Pose, const FVector& Half, const FVector& Face)
 {
+    if (Face.IsNearlyZero()) return To;
     const FQuat R = Pose.GetRotation();
     const FVector Reach = BoundsIn(R, HullHalf), C = R.UnrotateVector(To - Pose.GetLocation());
-    // Over the face (within the box's sides grown by the hull) and not beyond it by the hull's reach: out along it.
-    if (FMath::Abs(C.X) >= Half.X + Reach.X || FMath::Abs(C.Y) >= Half.Y + Reach.Y || C.Z >= Half.Z + Reach.Z || C.Z < 0) return To;
-    return To + R.GetAxisZ() * (Half.Z + Reach.Z - C.Z);
+    // The face's axis and side.
+    const int32 K = FMath::Abs(Face.X) >= FMath::Abs(Face.Y) && FMath::Abs(Face.X) >= FMath::Abs(Face.Z) ? 0 : FMath::Abs(Face.Y) >= FMath::Abs(Face.Z) ? 1 : 2;
+    const double Side = Face[K] >= 0 ? 1.0 : -1.0;
+    // Over the face (within the box's other sides grown by the hull) and not beyond it by the hull's reach: out along it.
+    for (int32 J = 0; J < 3; ++J)
+        if (J != K && FMath::Abs(C[J]) >= Half[J] + Reach[J]) return To;
+    const double Out = Side * C[K];
+    if (Out >= Half[K] + Reach[K] || Out < 0) return To;
+    const FVector Axes[] = {R.GetAxisX(), R.GetAxisY(), R.GetAxisZ()};
+    return To + Axes[K] * (Side * (Half[K] + Reach[K] - Out));
+}
+
+// --------------------------------------------------------------------------------------------- holding from the ends
+
+FBox FSCCargoEndGrip::HullAt(const FVector& StationCm) const
+{
+    // About the emitter: its hull's centre lies within EmitterPlanCm of it in plan (any heading), Above / Below of it
+    // upright.
+    const double Plan = FMath::Max(Drone.HullHalf.X, Drone.HullHalf.Y) + Drone.EmitterPlanCm;
+    const FVector Centre = StationCm + FVector(0, 0, (Drone.AboveCm - Drone.BelowCm) / 2);
+    return FBox::BuildAABB(Centre, FVector(Plan, Plan, (Drone.AboveCm + Drone.BelowCm) / 2));
+}
+
+FBox FSCCargoEndGrip::Shape() const
+{
+    FBox Out = FBox::BuildAABB(FVector::ZeroVector, BoxHalf);
+    Out += HullAt(Station(0));
+    Out += HullAt(Station(1));
+    return Out;
+}
+
+double FSCCargoEndGrip::AccelLimit(const FSCCargoBeam& Beam, double MassKg, double GravityMS2) const
+{
+    // Each beam's share of m (g + a), any direction a: the worst is a straight up, |share| = m (g + a) / N.
+    const double Share = MassKg / FMath::Max(Team, 1);
+    if (Share <= 0) return 100;
+    return FMath::Clamp(Beam.MaxForceN / Share - FMath::Max(GravityMS2, 0.0), 0.0, 100.0);
+}
+
+FSCCargoEndGrip FSCCargoEndGrip::Plan(const FIn& In)
+{
+    FSCCargoEndGrip Out;
+    Out.BoxHalf = In.BoxHalfCm;
+    Out.Drone = In.Drone;
+    Out.Team = In.Team;
+    Out.Axis = In.BoxHalfCm.X >= In.BoxHalfCm.Y ? 0 : 1;
+    Out.InsetCm = In.InsetCm;
+    Out.GapCm = In.GapCm;
+    Out.MaxAngleDeg = In.MaxAngleDeg;
+    const FSCCargoBeam& Beam = In.Beam;
+    Out.MinCm = Beam.MinM * 100.0;
+    Out.FullCm = FMath::Max(Beam.FullM, Beam.MinM) * 100.0;
+    if (In.Team < 1 || In.Team > 2)
+    {
+        Out.Why = TEXT("a box is held from its ends by one or two drones (larger teams hold it over)");
+        return Out;
+    }
+    Out.ShareN = In.MassKg * FMath::Max(In.GravityMS2, 0.0) / In.Team;
+    Out.ForceN = Out.ShareN;
+    if (Out.ShareN >= Beam.MaxForceN)
+    {
+        Out.Why = TEXT("its share of the weight is the beam's whole force");
+        return Out;
+    }
+    const double Hz = In.BoxHalfCm.Z;
+    // Out from the end face far enough for the hull to clear it at any heading; its top at the box's top; the hold level
+    // or down onto the face (the attach point at the emitter's height, kept on the face).
+    Out.ClearCm = FMath::Max(In.Drone.HullHalf.X, In.Drone.HullHalf.Y) + In.Drone.EmitterPlanCm + In.GapCm;
+    const double Inset = FMath::Min(In.InsetCm, Hz);
+    const double StationZ = Hz - In.Drone.AboveCm;
+    Out.AttachZCm = FMath::Clamp(StationZ, -Hz + Inset, FMath::Max(Hz - Inset, -Hz + Inset));
+    Out.OutCm = Out.ClearCm;
+    Out.RiseCm = StationZ - Out.AttachZCm;
+    // Not shorter than the record's minimum distance: further out along the face's normal.
+    if (FMath::Sqrt(FMath::Square(Out.OutCm) + FMath::Square(Out.RiseCm)) < Out.MinCm)
+        Out.OutCm = FMath::Sqrt(FMath::Max(FMath::Square(Out.MinCm) - FMath::Square(Out.RiseCm), 0.0));
+    Out.BeamCm = FMath::Sqrt(FMath::Square(Out.OutCm) + FMath::Square(Out.RiseCm));
+    Out.AngleRad = FMath::Atan2(FMath::Max(-Out.RiseCm, 0.0), Out.OutCm); // below level (the hold points down onto the face)
+    if (Out.BeamCm > Out.FullCm)
+    {
+        Out.Why = FString::Printf(TEXT("the hold (%.0f cm) is beyond the beam's full-strength distance"), Out.BeamCm);
+        return Out;
+    }
+    if (FMath::RadiansToDegrees(FMath::Atan2(FMath::Abs(Out.RiseCm), Out.OutCm)) > In.MaxAngleDeg)
+    {
+        Out.Why = TEXT("the hold is outside the beam's cone (maxAngle)");
+        return Out;
+    }
+    Out.MaxAccelMS2 = Out.AccelLimit(Beam, In.MassKg, In.GravityMS2);
+    if (Out.MaxAccelMS2 < In.MinAccelMS2)
+    {
+        Out.Why = FString::Printf(TEXT("the beams have under %.1f m/s^2 to spare"), In.MinAccelMS2);
+        return Out;
+    }
+    Out.bValid = true;
+    return Out;
+}
+
+TArray<FVector> FSCCargoEndGrip::SwapWay(const FVector& From, const FVector& To, double MinZ)
+{
+    // Up where it is to the higher height (at least MinZ), across, down: from over the box out past its end, or back.
+    const double Z = FMath::Max3(From.Z, To.Z, MinZ);
+    TArray<FVector> Way = {From};
+    for (const FVector& P : {FVector(From.X, From.Y, Z), FVector(To.X, To.Y, Z), To})
+        if (!P.Equals(Way.Last(), 0.5)) Way.Add(P);
+    return Way;
+}
+
+TArray<FVector> FSCCargoEndGrip::WayRound(const FVector& From, const FVector& To) const
+{
+    // Across at the higher height where that clears the box: its plan grown by the hull's reach (any heading) and the gap
+    // passed by the straight way across, or the hull's bottom over its top there.
+    // (A place on a face is out by just that: within a centimetre of it counts as clear, its gap still kept but that.)
+    const double Reach = FMath::Max(Drone.HullHalf.X, Drone.HullHalf.Y) + Drone.EmitterPlanCm + GapCm - 1.0;
+    const FBox Plan(FVector(-BoxHalf.X - Reach, -BoxHalf.Y - Reach, -1e6), FVector(BoxHalf.X + Reach, BoxHalf.Y + Reach, 1e6));
+    const FVector A(From.X, From.Y, 0), B(To.X, To.Y, 0);
+    const bool bCrosses = !(A - B).IsNearlyZero(0.5) ? FMath::LineBoxIntersection(Plan, A, B, B - A) : Plan.IsInside(A);
+    const bool bOver = bCrosses && FMath::Max(From.Z, To.Z) < OverZ();
+    return SwapWay(From, To, bOver ? OverZ() : -1e9);
+}
+
+FVector FSCCargoEndGrip::FaceNear(const FVector& P) const
+{
+    int32 Face = 2;
+    double Most = -1e9;
+    for (int32 K = 0; K < 3; ++K)
+        if (const double Beyond = FMath::Abs(P[K]) - BoxHalf[K]; Beyond > Most) { Most = Beyond; Face = K; }
+    FVector N = FVector::ZeroVector;
+    N[Face] = P[Face] >= 0 ? 1.0 : -1.0;
+    return N;
+}
+
+FVector FSCCargoEndGrip::SurfaceNear(const FVector& P) const
+{
+    FVector Out = P.BoundToBox(-BoxHalf, BoxHalf);
+    // On the face it reaches (the axis it is furthest beyond), within the inset of that face's edges on the others.
+    int32 Face = 0;
+    double Most = -1e9;
+    for (int32 K = 0; K < 3; ++K)
+        if (const double Beyond = FMath::Abs(P[K]) - BoxHalf[K]; Beyond > Most) { Most = Beyond; Face = K; }
+    for (int32 K = 0; K < 3; ++K)
+        if (K != Face)
+        {
+            const double In = FMath::Max(BoxHalf[K] - FMath::Min(InsetCm, BoxHalf[K]), 0.0);
+            Out[K] = FMath::Clamp(Out[K], -In, In);
+        }
+    return Out;
+}
+
+// ---------------------------------------------------------------------------------------------- where a drone holds
+
+FVector FSCCargoGripSpot::FaceNormal(int32 LongAxis) const
+{
+    const double S = Face ? 1.0 : -1.0;
+    switch (Kind)
+    {
+    case EKind::End: return (LongAxis ? FVector::RightVector : FVector::ForwardVector) * S;
+    case EKind::Side: return (LongAxis ? FVector::ForwardVector : FVector::RightVector) * S;
+    default: return FVector::UpVector;
+    }
+}
+
+TArray<FSCCargoGripSpot> FSCCargoGripPick::Candidates(const FSCCargoEndGrip& G, double HangCm, const FCfg& Cfg, FRandomStream& Rng, int32 PerKind)
+{
+    TArray<FSCCargoGripSpot> Out;
+    const FVector H = G.BoxHalf;
+    const int32 A = G.Axis, L = 1 - G.Axis; // the long and the other plan axis
+    const double Inset = FMath::Min(G.InsetCm, H.Z);
+    const FBox Box = FBox::BuildAABB(FVector::ZeroVector, H + FVector(G.GapCm - 0.5));
+    auto Fits = [&](const FSCCargoGripSpot& S) {
+        const double Beam = FVector::Dist(S.Station, S.Attach);
+        if (G.HullAt(S.Station).Intersect(Box) || Beam < G.MinCm - 0.5 || Beam > G.FullCm + 0.5) return false;
+        // In front of a face or beside it: inside the beam's cone about the drone's level facing (it faces the box; it
+        // holds level or down). Over the top it holds straight down from its belly, as every grip over the box always has.
+        if (S.Kind == FSCCargoGripSpot::EKind::Over) return true;
+        const FVector D = S.Attach - S.Station;
+        return FMath::RadiansToDegrees(FMath::Atan2(FMath::Max(-D.Z, 0.0), D.Size2D())) <= G.MaxAngleDeg + 1e-6;
+    };
+    auto Across = [&](double Half) { return (2.0 * Rng.FRand() - 1.0) * Cfg.Spread * FMath::Max(Half - Inset, 0.0); };
+    // In front of a face (an end or a side): out by the clearance and up to ExtraReach more, its top at the box's top and
+    // up to ExtraHeight higher, across the face by Spread; the hold at the emitter's height kept on the face.
+    auto FaceSpot = [&](FSCCargoGripSpot::EKind Kind, int32 Face, int32 Normal, int32 AcrossAxis) {
+        FSCCargoGripSpot S;
+        S.Kind = Kind;
+        S.Face = Face;
+        const double Sign = Face ? 1.0 : -1.0;
+        const double Out = G.ClearCm * (1.0 + Cfg.ExtraReach * Rng.FRand());
+        const double Z = H.Z - G.Drone.AboveCm + Cfg.ExtraHeightCm * Rng.FRand();
+        S.Attach[Normal] = Sign * H[Normal];
+        S.Attach[AcrossAxis] = Across(H[AcrossAxis]);
+        S.Attach.Z = FMath::Clamp(Z, -H.Z + Inset, FMath::Max(H.Z - Inset, -H.Z + Inset));
+        S.Station = S.Attach;
+        S.Station[Normal] = Sign * (H[Normal] + Out);
+        S.Station.Z = Z;
+        return S;
+    };
+    for (int32 K = 0; K < PerKind; ++K)
+    {
+        const int32 Face = Rng.FRand() < 0.5 ? 0 : 1;
+        if (FSCCargoGripSpot S = FaceSpot(FSCCargoGripSpot::EKind::End, Face, A, L); Fits(S)) Out.Add(S);
+        const int32 SideFace = Rng.FRand() < 0.5 ? 0 : 1;
+        if (FSCCargoGripSpot S = FaceSpot(FSCCargoGripSpot::EKind::Side, SideFace, L, A); Fits(S)) Out.Add(S);
+        // Over the top: anywhere along it and across it (spread), at the shortest hang and up to ExtraHeight more.
+        FSCCargoGripSpot O;
+        O.Kind = FSCCargoGripSpot::EKind::Over;
+        O.Attach = FVector(0, 0, H.Z);
+        O.Attach[A] = Across(H[A]);
+        O.Attach[L] = 0.5 * Across(H[L]);
+        O.Station = O.Attach + FVector(0, 0, HangCm + Cfg.ExtraHeightCm * Rng.FRand());
+        if (Fits(O)) Out.Add(O);
+    }
+    return Out;
+}
+
+FBox FSCCargoGripPick::Reach(const FSCCargoEndGrip& G, double HangCm, const FCfg& Cfg)
+{
+    // The farthest places out from each face (at its corners: a side's spread reaches no further), low and as high as the
+    // highest over the top; the ways between them go no further out nor higher.
+    const FVector H = G.BoxHalf;
+    const double Out = G.ClearCm * (1.0 + Cfg.ExtraReach);
+    const double Low = H.Z - G.Drone.AboveCm, High = FMath::Max(H.Z + HangCm + Cfg.ExtraHeightCm, Low + Cfg.ExtraHeightCm);
+    FBox R = FBox::BuildAABB(FVector::ZeroVector, H);
+    for (const double SX : {-1.0, 1.0})
+        for (const double SY : {-1.0, 1.0})
+            for (const double Z : {Low, High}) R += G.HullAt(FVector(SX * (H.X + Out), SY * (H.Y + Out), Z));
+    return R;
+}
+
+int32 FSCCargoGripPick::Pick(TConstArrayView<FSCCargoGripSpot> Viable, TConstArrayView<FSCCargoGripSpot> Teammates, double KeepCm, const FCfg& Cfg, FRandomStream& Rng)
+{
+    // The kind's weight, renormalised over the kinds among Viable (so ends stay about 3 of 4 when all are viable), a
+    // teammate's face lowered, a place within KeepCm of a teammate out.
+    bool bKind[3] = {false, false, false};
+    for (const FSCCargoGripSpot& S : Viable) bKind[uint8(S.Kind)] = true;
+    const float KindWeight[3] = {Cfg.EndWeight, Cfg.SideWeight, Cfg.OverWeight};
+    int32 KindCount[3] = {0, 0, 0};
+    for (const FSCCargoGripSpot& S : Viable) ++KindCount[uint8(S.Kind)];
+    TArray<double> W;
+    double Sum = 0;
+    for (const FSCCargoGripSpot& S : Viable)
+    {
+        double Weight = KindWeight[uint8(S.Kind)] / FMath::Max(KindCount[uint8(S.Kind)], 1); // a kind's weight over its places
+        for (const FSCCargoGripSpot& T : Teammates)
+        {
+            if (FVector::Dist(S.Station, T.Station) < KeepCm) Weight = 0;
+            else if (S.SameFace(T) && S.Kind != FSCCargoGripSpot::EKind::Over) Weight *= Cfg.SameFaceWeight;
+        }
+        W.Add(Weight);
+        Sum += Weight;
+    }
+    if (Sum <= 0) return INDEX_NONE;
+    double R = Rng.FRand() * Sum;
+    for (int32 I = 0; I < W.Num(); ++I)
+    {
+        if (R < W[I]) return I;
+        R -= W[I];
+    }
+    for (int32 I = W.Num() - 1; I >= 0; --I)
+        if (W[I] > 0) return I;
+    return INDEX_NONE;
 }
 
 FVector FSCCargoDroneSteer::Evade(const FVector& To, const FVector& HullHalf, TConstArrayView<FLoad> Loads, double Accel)

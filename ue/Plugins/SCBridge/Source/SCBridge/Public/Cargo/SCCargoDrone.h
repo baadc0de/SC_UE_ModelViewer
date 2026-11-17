@@ -9,7 +9,12 @@
 // else the K1d stand-in (/SCBridge/Cargo meshes by soft path, engine basic shapes when missing; logged once). Its
 // heading is its own (FSCCargoHeading): its bay's in its dock's corridor, else where it (or, carrying as a team, its
 // load) travels, kept while hovering; turning is visual and moves the hull about the emitter, its collision shape
-// covers every heading. Its clips follow its velocity in its own frame (FSCCargoDroneMotion).
+// covers every heading. Its clips follow its velocity in its own frame (FSCCargoDroneMotion). Its attitude (round 4) is
+// its look's own (FSCCargoAttitude, on the Attitude component): it tilts into its acceleration, overshoots and rocks
+// back, wobbles on its own; the actor stays level, the hull covers that envelope, and the physics work with its body's
+// emitter (BodyEmitter), not the one its look shows (Emitter, where the beam is drawn from). Round 5: holding its box in
+// front of it or beside it, it faces the box (SetHold), whichever way it flies; its wobble moves the point it holds the
+// box to, by drone_art.json's load_transfer (WobbledHold), faded as its gusts are.
 // Its beam (WP-K4c): the tractor record's Niagara beam, hit and muzzle (FSCCargoFx) at the beam's strength, blended
 // as the record says; the K1d beam mesh when they are not built.
 // The dock is a grid item of as many lattice cells as its mesh spans (FSCCargoDockFootprint) that stores drones in its
@@ -57,9 +62,22 @@ public:
      *  bounding radius in plan. Every step a drone takes is swept with it (Step). */
     FVector HullCentre = FVector::ZeroVector, HullHalf = FVector(45, 45, 20);
     double HullRadius() const { return HullHalf.Size2D(); }
+    /** The bare hull, without its attitude's envelope: its shape in its dock's corridor, where it flies level (its look
+     *  held still), so a bay built for the drone still lets it out. */
+    FVector BayHullCentre = FVector::ZeroVector, BayHullHalf = FVector(45, 45, 20);
+    /** The shape its steps are swept with now: the bare hull in its dock's corridor, else the hull. */
+    FVector StepHalf() const { return InDockWay() ? BayHullHalf : HullHalf; }
+    FVector StepCentre() const { return InDockWay() ? BayHullCentre : HullCentre; }
     /** How close its emitter may hang over the face its beam holds (cm): its hull's reach below the emitter (reference
      *  pose) plus the gap it keeps from its own box (FSCCargoTug::HullHangCm). */
     double HullHangCm() const;
+    /** How far its hull reaches above its emitter (cm, reference pose; FSCCargoTug::HullAboveCm). */
+    double HullAboveCm() const;
+    /** Its hull as a grip holding a box from its ends sees it (FSCCargoEndGrip::FDrone). */
+    FSCCargoEndGrip::FDrone GripShape() const;
+    /** The face of its own box its beam holds, as that face's outward normal in the box's frame: +z over the box, an end
+     *  face's axis held from the ends, zero on its way between (a swap of grip). Its steps keep off that face (OffFace). */
+    FVector HeldFace = FVector::UpVector;
     /** Its last step met something (the surroundings, a box) and was slid or cut short. */
     bool bBlocked = false;
     /** Times any drone was found overlapping something (the surroundings, a box, another drone) after a step: 0 in a
@@ -68,6 +86,8 @@ public:
     /** Where its hull is kept space for other teams (route queries): its place, followed only once it has moved
      *  KeptSlackCm from it, so a drone hovering in its gusts keeps one box. */
     static constexpr double KeptSlackCm = 10;
+    /** Kept between its hull and the face of the box it carries, when the box comes up to it (cm). */
+    static constexpr double OwnBoxGapCm = 2;
     FVector GetKeptAt() const { return KeptAt; }
     /** What its hull meets standing in its bay (the structure of the grid cell its dock stands on: a plate's rails):
      *  the bay's own, as a box's slot is the grid's. Left out of its sweeps while it is in its dock's corridor
@@ -104,6 +124,9 @@ public:
     double BeamRestM = 0, BeamLengthM = 0;
     FVector BeamForceN = FVector::ZeroVector;
 
+    /** Its look's attitude about its body (FSCCargoAttitude): the art or the stand-in hang under it, turned and offset
+     *  by its dynamics; the actor itself stays level (its yaw is its heading). */
+    UPROPERTY() TObjectPtr<USceneComponent> Attitude;
     UPROPERTY() TObjectPtr<UStaticMeshComponent> Hull; // the stand-in (null with the art)
     UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Rotors;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> Art; // drone_art.json's mesh (null: the stand-in)
@@ -125,13 +148,30 @@ public:
     /** Carrying as a team this tick: it faces its load's direction of travel (Velocity, world cm/s; the route's, not
      *  the formation's wobble), and keeps its heading while the load is at rest. Set before its Pose / Tug. */
     void SetLoadVelocity(const FVector& InVelocity) { LoadVelocity = InVelocity; bByLoad = true; }
+    /** Holding its box in front of it or beside it this tick (round 5): it faces the box (Dir: from it to the hold's
+     *  point, world), whichever way it flies (it pushes, pulls in reverse, strafes). Set before its Pose / Tug. */
+    void SetHold(const FVector& Dir)
+    {
+        if (Dir.SizeSquared2D() > 1e-6) HoldYaw = float(FMath::RadiansToDegrees(FMath::Atan2(Dir.Y, Dir.X)));
+    }
+    /** How much of its wobble its hold passes to its box now (0..1; its task sets it with the gusts' fade). */
+    float TransferFade = 0.f;
+    /** Its hold point (world, cm) as its wobble moves it: turned about its body's emitter by its attitude and moved by its
+     *  drift, by drone_art.json's load_transfer x TransferFade. The box's spring then follows it, damped by its mass. */
+    FVector WobbledHold(const FVector& HoldCm) const;
     /** The heading it turns towards now (degrees; FSCCargoHeading::Target). */
     float HeadingTarget() const { return WantYaw; }
     /** The clip it shows, as motion/phase (e.g. "Front/Loop"; the art's drones). */
     FString ClipName() const;
+    /** Its look's rotation in the world: its heading and its attitude (what the eye sees; the actor stays level). */
+    FRotator LookRotation() const;
     FVector GetVelocity() const override { return Velocity; }
-    /** The emitter in world space: the art's beam bone, the stand-in's Tractor socket. */
+    /** The emitter in world space as it renders: the art's beam bone as posed (its clip, its attitude), the stand-in's
+     *  Tractor socket. The beam is drawn from here. */
     FVector Emitter() const;
+    /** The emitter of the drone's body (world): its reference place on the level actor, turned by its heading only.
+     *  What the tug's physics and the stations work with: the visual wobble (clips, attitude) moves no box. */
+    FVector BodyEmitter() const;
     /** The direction the beam leaves the emitter (world): the art's beam axis, the stand-in socket's forward. */
     FVector EmitterForward() const;
     /** Beam from the emitter to Point (world); bOn false hides it. */
@@ -152,6 +192,7 @@ private:
     FVector Travel = FVector::ZeroVector;       // its velocity, smoothed (FSCCargoDroneArt::SmoothingS)
     FVector LoadVelocity = FVector::ZeroVector; // its team's load's (SetLoadVelocity), this tick
     bool bByLoad = false;
+    TOptional<float> HoldYaw; // this tick's hold direction (SetHold), cleared once its heading is taken
     float WantYaw = 0, YawRate = 0, LastYaw = 0;
     FSCCargoDroneMotion Motion;
     bool bScanning = false;                      // its beam is locking on (shown by the scanning clip)
@@ -166,10 +207,26 @@ private:
     void Animate(float Dt);
     bool bAnimStarted = false;
     UAnimSequence* ClipFor(ESCDroneMotion M, ESCDroneClipPhase P, int32 IdleIndex);
+    /** Power: 1 out of its bay, 0 in it (docked, it powers down completely: no clip plays, its glowing parts and its
+     *  status light are off), eased over the clips' blend time. Glows are the art's emissive parameters
+     *  (FSCCargoDroneArt::EmissiveParams) at their own values x EmissiveScale x Power. */
+    struct FGlow
+    {
+        TWeakObjectPtr<class UMaterialInstanceDynamic> Material;
+        FName Param;
+        float Base = 0;
+    };
+    TArray<FGlow> Glows;
+    float Power = -1; // < 0: not set yet (snaps)
+    float LightCd = 20.f;
+    void SetPower(float Dt);
     /** The beam as the game's effects (beam, hit, muzzle); false when they are not available (the beam mesh then). */
     bool SetBeamFx(bool bOn, const FVector& Point);
     float RotorAngle = 0;
-    float LeanScale = 1.f; // the actor's lean into its acceleration (FSCCargoDroneArt::ActorLeanScale with the art)
+    float LeanScale = 1.f; // the share of its acceleration its attitude leans into (FSCCargoDroneArt::ActorLeanScale with the art)
+    FSCCargoAttitude Att;  // its look's dynamics (FSCCargoDroneArt::FMotion), seeded by its id
+    bool bAttInit = false;
+    uint64 LookFrame = 0;  // the frame a task last posed its look (Look); unposed frames step it in Tick
     FVector EmitterLocal = FVector(0, 0, -20); // the emitter in the actor's frame, reference pose
     float SwayGainNow = 0;
     FVector SwayNow = FVector::ZeroVector;
@@ -185,6 +242,9 @@ private:
     void Step(const FVector& Want, const FRotator& Rotation, float Dt);
     void Gusts(float Dt, FVector2D& OutWobble);
     void Lean(const FVector& Accel, const FVector2D& Wobble, float Dt, const FVector& At);
+    /** Its look this tick: the attitude dynamics on its acceleration (world) in its own frame at Yaw, the gusts' wobble
+     *  on top; applied to Attitude. */
+    void Look(const FVector& Accel, const FVector2D& Wobble, float Dt, float Yaw);
 };
 
 UCLASS()
