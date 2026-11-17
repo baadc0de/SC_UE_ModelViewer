@@ -32,9 +32,14 @@ FSCCargoBeam USCCargoSubsystem::TractorBeam() const
 
 double USCCargoSubsystem::MinHangCm(double LoadKg, int32 Team) const
 {
-    // The shortest beam that holds its share of the weight: the record's minimum rest length and the spring's stretch.
+    // The shortest beam that holds its share of the weight: the record's minimum rest length, or the drones' hull hang
+    // when that is longer (no drone hangs closer to its box than its own reach below its emitter), and the spring's
+    // stretch.
     const FSCCargoBeam Beam = TractorBeam();
-    return (Beam.MinM + Beam.StretchM(FMath::Min(LoadKg * Gravity() / FMath::Max(Team, 1), Beam.MaxForceN))) * 100.0;
+    double Hang = 0;
+    for (const TWeakObjectPtr<ASCCargoDrone>& D : State->Drones)
+        if (D.IsValid()) Hang = FMath::Max(Hang, D->HullHangCm());
+    return FSCCargoTug::ShortestCm(Beam.MinM * 100.0, Hang, Beam.StretchM(FMath::Min(LoadKg * Gravity() / FMath::Max(Team, 1), Beam.MaxForceN)) * 100.0);
 }
 
 double USCCargoSubsystem::RouteAccel(int32 Team, double LoadKg) const
@@ -276,7 +281,8 @@ void USCCargoSubsystem::TugStep(FSCCargoMove& M, ASCCargoContainer* A, const TAr
         // Room along the beam: the drone's shape swept out from where it would be on the shortest beam it could fly
         // (BeamRoom), here and, by the drone's own look along the route it flies, ahead: it comes in before a lintel
         // as far as its body needs to (FSCCargoTug::RoomAhead), and goes out again behind it.
-        const double Shortest = (Beam.MinM + Beam.StretchM(FMath::Min(Share[I].Size(), Beam.MaxForceN))) * 100.0;
+        // Never shorter than its hull lets it hang over its box (its reach below the emitter and the gap it keeps).
+        const double Shortest = FSCCargoTug::ShortestCm(Beam.MinM * 100.0, D->HullHangCm(), Beam.StretchM(FMath::Min(Share[I].Size(), Beam.MaxForceN)) * 100.0);
         FVector Tucked;
         double Room = BeamRoom(M, A, D, Q, Rotation.RotateVector(Local), Dir, Shortest, &Tucked);
         // Not even the bare hull fits on the shortest beam here: the team's route waits (TickMove).
@@ -354,7 +360,8 @@ void USCCargoSubsystem::TugStep(FSCCargoMove& M, ASCCargoContainer* A, const TAr
         D->Flight.GravityMS2 = G;
         // Further from its station than its beam keeps full strength (held up behind something): the route waits for it.
         if (FVector::Dist(D->Emitter() / 100.0, Stations[I].Hover) > Beam.FullM) M.bDroneBehind = true;
-        D->Tug(Stations[I], -D->BeamForceN, float(Rotation.Rotator().Yaw), float(Dt));
+        D->SetLoadVelocity(RouteV); // the team faces its load's travel (the route's, not the box's sway)
+        D->Tug(Stations[I], -D->BeamForceN, float(Dt));
         // The beam as the drone holds it now: aimed and its rest length set from where its thrust holds it
         // (Flight.P), out from where its emitter really is (its gusts carry the anchor). The spring pulls the attach
         // point to that anchor; its damper works on the attach point's velocity against the route's.

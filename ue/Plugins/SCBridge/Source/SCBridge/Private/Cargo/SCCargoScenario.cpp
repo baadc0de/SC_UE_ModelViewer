@@ -102,6 +102,25 @@ bool FSCCargoDroneDefinition::ApplyTractorRecord(const FString& RecordJson, FStr
     FullStrengthDistanceM = Num(Action, TEXT("fullStrengthDistance"));
     MaxVolume = Num(Action, TEXT("maxVolume"));
     VolumeForceCoefficient = Num(Action, TEXT("volumeForceCoefficient"));
+    // Its effects (WP-K4c): references as the record writes them; absent fields leave them empty.
+    auto First = [](const FObj& O, const TCHAR* Key) -> FObj {
+        const TArray<TSharedPtr<FJsonValue>>* A;
+        return O && O->TryGetArrayField(Key, A) && !A->IsEmpty() && (*A)[0]->Type == EJson::Object ? (*A)[0]->AsObject() : nullptr;
+    };
+    const FObj Group = Child(Action, TEXT("beamGroup"));
+    BeamEffect = Str(Child(First(Group, TEXT("beamEffects")), TEXT("particleEffect")), TEXT("path"));
+    HitEffectName = Str(Group, TEXT("hitEffectName"));
+    MuzzleEffect = Str(Child(First(Action, TEXT("fireEffects")), TEXT("firstPerson")), TEXT("path"));
+    if (const FObj S = Child(Action, TEXT("beamStrengthValues")))
+    {
+        Strengths.Stable = Num(S, TEXT("stable"));
+        Strengths.Unstable = Num(S, TEXT("unstable"));
+        Strengths.NoTarget = Num(S, TEXT("noTarget"));
+        Strengths.ImpactControlling = Num(S, TEXT("impactControllingTarget"));
+        Strengths.ImpactInvalid = Num(S, TEXT("impactInvalidTarget"));
+        Strengths.BlendCoeff = Num(S, TEXT("beamEffectBlendCoeff"));
+        Strengths.bSet = true;
+    }
     TractorSource = TEXT("datacore");
     return true;
 }

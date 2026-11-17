@@ -1,6 +1,8 @@
-// ASCCargoContainer: occupancy box body, shared package meshes, carried (simulated) / locked (attached) states.
+// ASCCargoContainer: occupancy box body, shared package meshes, carried (simulated) / locked (attached) states; its
+// body's hits go to the cargo subsystem (a box knocking a ship plays the ship's collision effect, WP-K4c).
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoGridComponent.h"
+#include "Cargo/SCCargoSubsystem.h"
 #include "SCVehicle.h"
 #include "Components/BoxComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -16,7 +18,19 @@ ASCCargoContainer::ASCCargoContainer()
     Body->SetLinearDamping(0.2f);
     Body->SetAngularDamping(2.0f);
     Body->SetHiddenInGame(true);
+    Body->SetNotifyRigidBodyCollision(true); // hit events while it is simulated (carried)
     RootComponent = Body;
+}
+
+void ASCCargoContainer::BeginPlay()
+{
+    Super::BeginPlay();
+    Body->OnComponentHit.AddDynamic(this, &ASCCargoContainer::OnBodyHit);
+}
+
+void ASCCargoContainer::OnBodyHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit)
+{
+    if (USCCargoSubsystem* Cargo = GetWorld() ? GetWorld()->GetSubsystem<USCCargoSubsystem>() : nullptr) Cargo->OnBoxContact(this, OtherActor, Hit, NormalImpulse);
 }
 
 void ASCCargoContainer::SetOccupancy(const FVector& SizeCm, double MassKg)

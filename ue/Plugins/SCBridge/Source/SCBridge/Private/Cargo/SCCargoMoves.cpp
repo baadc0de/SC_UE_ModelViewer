@@ -2,6 +2,8 @@
 // along its grid's normal, carry it hanging from the lead drone's soft beam constraint along a planned route (heavy:
 // acceleration from the beam's force and the load's mass), hold it at a holding point when it is a blocker being dug
 // out, catch it over the destination, lower it along that grid's normal, magnetize it onto its slot, and fly home.
+// Flying on its own a drone faces where it flies; a team faces its load's travel (the route's velocity, given to each
+// drone with SetLoadVelocity); the heading itself is the drone's (ASCCargoDrone, FSCCargoHeading).
 // Log: CARGO_MOVE (steps), CARGO_REPLAN (a blocked route planned again), CARGO_CARRY (box samples in flight).
 #include "Cargo/SCCargoSubsystem.h"
 #include "PhysicsEngine/PhysicsSettings.h"
@@ -134,13 +136,16 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
     };
     double FormationFade = 0; // set by the step before Formation
     // Where the drones fly around the box centre Q: Along the beam direction N, over the box's top by the hang length.
-    auto Formation = [&](const FVector& Q, const FVector& N, const FQuat& Rotation, const FVector& Accel, bool bBeams, float Width, double Hang = -1) {
+    // They carry as a team: each faces the load's travel, LoadV (the route's velocity; zero while it is at rest).
+    auto Formation = [&](const FVector& Q, const FVector& N, const FQuat& Rotation, const FVector& Accel, bool bBeams, float Width, double Hang = -1,
+                         const FVector& LoadV = FVector::ZeroVector) {
         for (int32 I = 0; I < Drones.Num() && I < M.Offsets.Num(); ++I)
         {
             Sway(Drones[I], FormationFade, M.Carry.Speed, LoadMass);
             // The hang is the beam's length: from the box's top to the emitter under the drone.
             const FVector P = Q + N * (Size.Z / 2 + (Hang < 0 ? M.HangCm : Hang) + FVector::Dist(Drones[I]->GetActorLocation(), Drones[I]->Emitter())) + Rotation.RotateVector(M.Offsets[I]);
-            Drones[I]->Pose(P, Accel, float(Rotation.Rotator().Yaw), float(Dt));
+            Drones[I]->SetLoadVelocity(LoadV);
+            Drones[I]->Pose(P, Accel, float(Dt));
             if (bBeams && A) Drones[I]->SetBeam(true, A->GetActorLocation() + A->GetActorQuat().RotateVector(M.Offsets[I] + FVector(0, 0, Size.Z / 2)), Width);
         }
     };
@@ -298,7 +303,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             // Between its bay and the bay's exit the dock moves it (the flight's first leg out, its last leg home).
             D->bDockLeg = F.S.Num() > 2 && (M.Step == EStep::Outbound ? D->State == ESCCargoDroneState::Launching && F.Dist < F.S[1] : F.Dist > F.S[F.S.Num() - 2]);
             const FVector T = F.Tangent();
-            D->Pose(F.Position(), T * F.Accel, FVector(T.X, T.Y, 0).SizeSquared() > 0.04 ? float(T.Rotation().Yaw) : float(D->GetActorRotation().Yaw), float(Dt));
+            D->Pose(F.Position(), T * F.Accel, float(Dt)); // on its own: it faces where it flies (its heading policy)
             // Out of its dock's corridor (bay, exit, clear of the dock's grid: the flight's first legs): on its way.
             if (M.Step == EStep::Outbound && D->State == ESCCargoDroneState::Launching && F.Dist >= (F.S.Num() > 2 ? F.S[2] : 0.0)) D->State = ESCCargoDroneState::ToPickup;
             if (M.Step == EStep::Returning && F.Length() - F.Dist < 300 && D->State != ESCCargoDroneState::Docking)
@@ -360,7 +365,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             M.TurnStart = -1;
         }
         A->SetActorLocationAndRotation(Q, R, false, nullptr, ETeleportType::TeleportPhysics);
-        Formation(Q, M.FromNormal, R, M.Carry.Tangent() * M.Carry.Accel, true, 30.f);
+        Formation(Q, M.FromNormal, R, M.Carry.Tangent() * M.Carry.Accel, true, 30.f, -1, M.Carry.Tangent() * M.Carry.Speed);
         Sample(Q);
         if (!M.Carry.Done()) return;
         // Clear of the grid: the planned route begins, the box hanging from the lead drone's beam.
@@ -673,7 +678,7 @@ void USCCargoSubsystem::TickMove(FSCCargoJob& Job, FSCCargoMove& M, double Now, 
             M.Carry.Step(Dt);
             Q = M.Carry.Position();
             A->SetActorLocationAndRotation(Q, M.ToRotation, false, nullptr, ETeleportType::TeleportPhysics);
-            Formation(Q, M.ToNormal, M.ToRotation, M.Carry.Tangent() * M.Carry.Accel, true, 30.f);
+            Formation(Q, M.ToNormal, M.ToRotation, M.Carry.Tangent() * M.Carry.Accel, true, 30.f, -1, M.Carry.Tangent() * M.Carry.Speed);
         }
         Sample(Q);
         if (Catch < 1 || !M.Carry.Done()) return;

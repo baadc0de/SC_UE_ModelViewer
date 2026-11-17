@@ -52,6 +52,18 @@ struct SCBRIDGE_API FSCCargoDroneDefinition
      *  established (see ApplyTractorRecord). */
     double MaxVolume = 0, VolumeForceCoefficient = 0;
     FString TractorSource = TEXT("scenario"); // "datacore" once read from the record
+    /** The tractor's effects (WP-K4c), from the same action: its beam (beamGroup.beamEffects[0].particleEffect) and
+     *  muzzle (fireEffects[0].firstPerson) particle effect references (`<GUID>|<library>.<effect>`), and its hit effect,
+     *  a MaterialEffects custom effect name (beamGroup.hitEffectName). Empty without the record. */
+    FString BeamEffect, MuzzleEffect, HitEffectName;
+    /** beamStrengthValues: the effects' EmitterStrength by beam state (stable: holding its target, unstable: a target
+     *  not under control, noTarget), the impact's (controlling / invalid target), and beamEffectBlendCoeff, the rate
+     *  (1/s) at which the shown strength approaches the state's. bSet only once read from the record. */
+    struct FStrengths
+    {
+        double Stable = 0, Unstable = 0, NoTarget = 0, ImpactControlling = 0, ImpactInvalid = 0, BlendCoeff = 0;
+        bool bSet = false;
+    } Strengths;
     /** Take the tractor values from a DataCore record JSON (sc_datacore_record's shape, `__type`; the CLI's `_Type_`
      *  also accepted): the SWeaponActionFireTractorBeamParams object named TractorAction. False (values unchanged)
      *  with Error when the record has no such action or it lacks a force. */

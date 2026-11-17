@@ -1,6 +1,6 @@
 // A cargo box in the world (WP-K1): box collision from the item's occupancy dimensions, mass from its data, and the
 // meshes of its package export (shared with every box of the same entity). Simulated while carried; attached to its
-// grid with simulation off once placed.
+// grid with simulation off once placed. Its body's hits while carried go to the cargo subsystem (box contacts, WP-K4c).
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -34,4 +34,11 @@ public:
     void Release();
     FVector SizeCm() const;
     FBox Bounds() const;
+
+protected:
+    virtual void BeginPlay() override;
+
+private:
+    UFUNCTION()
+    void OnBodyHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit);
 };

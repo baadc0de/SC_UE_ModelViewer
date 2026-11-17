@@ -4,7 +4,7 @@
 // system's +X is the game emitter's forward (the emission axis, the beam direction); by default it points up
 // (pitch=90), as an impact on a floor; rel=1 makes the angles camera-relative. every=<s> re-triggers it every s
 // real seconds (bursts are short); sx scales X only. The SCFxBuild runtime contract: strength=<0..1> sets
-// User.SC.Strength; len=<cm> sets a guided beam's User.SC.BeamLength / BeamEnd / BeamStartTangent (the beam leaves
+// User.SC.Strength (and the curves SCFxStrength.h evaluates); scale=<s> also sets SC.Scale2 (sprite sizes); len=<cm> sets a guided beam's User.SC.BeamLength / BeamEnd / BeamStartTangent (the beam leaves
 // along +X), bend=<deg> turns its end about the component's Z so the beam curves.
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
@@ -15,6 +15,7 @@
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
+#include "SCFxStrength.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCFxPreview, Log, All);
 
@@ -88,13 +89,14 @@ void Spawn(const TArray<FString>& Args, UWorld* World)
     const double Uniform = Key(TEXT("scale"), 1.0);
     const FVector Scale(Key(TEXT("sx"), Uniform), Uniform, Uniform);
     UNiagaraComponent* C = UNiagaraFunctionLibrary::SpawnSystemAtLocation(World, System, At, Rot, Scale, /*bAutoDestroy*/ false,
-                                                                          /*bAutoActivate*/ true, ENCPoolMethod::None, /*bPreCullCheck*/ false);
+                                                                          /*bAutoActivate*/ false, ENCPoolMethod::None, /*bPreCullCheck*/ false);
     if (!C)
     {
         UE_LOG(LogSCFxPreview, Warning, TEXT("SC_FX_SPAWN %s failed"), *Path);
         return;
     }
-    if (const double* Strength = Keys.Find(TEXT("strength"))) C->SetVariableFloat(TEXT("SC.Strength"), float(*Strength));
+    if (const double* Strength = Keys.Find(TEXT("strength"))) SCFxStrength::Set(C, float(*Strength));
+    if (Uniform != 1.0) C->SetVariableVec2(TEXT("SC.Scale2"), FVector2D(Uniform, Uniform)); // sprite sizes (SCFxBuild contract)
     if (const double* Len = Keys.Find(TEXT("len")))
     {
         const double Bend = FMath::DegreesToRadians(Key(TEXT("bend"), 0.0));
@@ -103,6 +105,7 @@ void Spawn(const TArray<FString>& Args, UWorld* World)
         C->SetVariableVec3(TEXT("SC.BeamEnd"), FVector(FMath::Cos(Bend), FMath::Sin(Bend), 0.0) * *Len);
         C->SetVariableVec3(TEXT("SC.BeamStartTangent"), FVector(*Len, 0.0, 0.0));
     }
+    C->Activate(true); // after its parameters, so a burst spawns with them
     GSpawned.Add(C);
     const double Every = Key(TEXT("every"), 0.0);
     if (Every > 0)

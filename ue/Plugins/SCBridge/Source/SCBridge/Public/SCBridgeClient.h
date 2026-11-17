@@ -102,6 +102,12 @@ public:
     UE::Tasks::TTask<FSCTextResult> DataCoreRecord(const FString& NameOrGuid);
     /** The same, with OnDone called on the game thread. */
     void DataCoreRecord(const FString& NameOrGuid, TFunction<void(const FSCTextResult&)> OnDone);
+    /** An archive file as UTF-8 XML text (sc_p4k_read_xml: binary CryXML converted, element text kept); in Json.
+     *  OnDone on the game thread. */
+    void P4kReadXml(const FString& Path, TFunction<void(const FSCTextResult&)> OnDone);
+    /** A MaterialEffects FXLib entry `<FXLib>:<effect>` as JSON (sc_material_effect: its particle effect references,
+     *  audio, random groups). OnDone on the game thread. */
+    void MaterialEffect(const FString& LibraryAndEffect, TFunction<void(const FSCTextResult&)> OnDone);
     /** Player kit (scbridge_export_player_request, PlayerRequest JSON): empty Gender = male, empty Loadout = the
      *  exporter's default loadout, empty Weapons = every loadout weapon; bSpareAttachments puts each kept weapon's
      *  default attachments (its magazine) into the wearer's empty storage ports. */
@@ -120,6 +126,8 @@ private:
     /** Caller holds HandleLock: error text for a failed call; on PANIC closes the poisoned handle and flags it. */
     FText FailLocked(sc_status Status, bool& bOutPanicked);
     FSCCacheStats CacheStatsLocked();
+    /** A text-returning call (Call(handle, Argument, &out)) off the game thread; OnDone on the game thread. */
+    void TextCall(const FString& Argument, sc_status (*Call)(sc_handle*, const char*, char**), TFunction<void(const FSCTextResult&)> OnDone);
     mutable FCriticalSection HandleLock; // serializes ALL calls on Handle incl. last_error/close (scbridge.h)
     sc_handle* Handle = nullptr;
     FCriticalSection PanicLock;

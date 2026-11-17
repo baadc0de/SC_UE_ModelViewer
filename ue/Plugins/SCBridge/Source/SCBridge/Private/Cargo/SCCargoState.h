@@ -306,6 +306,8 @@ struct FSCCargoState
     bool bDebug = false;
     enum class ELookup : uint8 { None, Pending, Done };
     ELookup TractorLookup = ELookup::None; // the tractor record read from the archive (or given up on)
+    TSharedPtr<class FSCCargoFx> Fx;       // the game's effects, resolved once the tractor is read (WP-K4c)
+    TMap<int32, double> ContactAt;         // box id -> when it last played a contact effect
     // Route searches of all moves share SearchBudgetSeconds of each frame (from the frame's first search on).
     static constexpr double SearchBudgetSeconds = 0.002;
     double SearchUntil = 0;

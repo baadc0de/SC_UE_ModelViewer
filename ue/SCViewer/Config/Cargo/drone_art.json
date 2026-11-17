@@ -1,0 +1,64 @@
+{
+  "_comment": "WP-K4a: the cargo drone's look and motion (FSCCargoDroneArt, ue/Plugins/SCBridge/Source/SCBridge/Public/Cargo/SCCargoDroneArt.h). Viewer choices, not game data: the game has no cargo-drone entity. heading applies to every drone: turn_rate_deg_s is the yaw rate it turns towards its heading (90: the art's Rotate clips turn 90 degrees in 1 s); under hover_speed_cm_s of horizontal travel it hovers (keeps its heading, idles); turning in place at turn_clip_rate_deg_s or more plays the turn clip; blend_s crossfades clips; smoothing_s is the time constant of the travel velocity heading and clips follow; a directional clip plays axis_dwell_s before another direction takes over; it starts moving above 1.25 x and idles under 0.75 x hover_speed_cm_s (the dwell and hysteresis from the WP-K4a review, out/k4a/astra/flight.md). art is the Fab pack SciFi Drone 4 (licensed, installed per machine under Content/SciFi_Drone_4, gitignored); without it (or without this block) the drone is the K1d stand-in. mesh at native size x scale; yaw_offset_deg turns its face (+Y in the mesh) to +X; centre_bone sits on the actor origin (the bays hold the drone by it); the beam leaves beam_bone along beam_axis (actor frame); the status light rides light_bone; yaw_lock_bone keeps its reference yaw in the turn clips (the actor turns, the clip adds its sway); body_bob_cm is how far the clips may still move the centre bone (the actor carries the motion; 0: none, WP-K4a round 3); actor_lean_scale scales the actor's own lean into its acceleration (the clips lean the body; round 2); hidden_slots are material slots not drawn (Scanner_Material is a single 92 x 92 cm scan-fan triangle in front of the camera, which also made the imported bounds 92 x 138 cm: the hull is 40 x 49 x 42 cm). clips: idle (each plays once, then the next), front / back / up / down / left / right with start / loop / end, turn_left / turn_right, scanning (locking the beam onto a box).",
+  "heading": {
+    "turn_rate_deg_s": 90,
+    "hover_speed_cm_s": 20,
+    "turn_clip_rate_deg_s": 20,
+    "blend_s": 0.25,
+    "smoothing_s": 0.2,
+    "axis_dwell_s": 0.2
+  },
+  "art": {
+    "mesh": "/Game/SciFi_Drone_4/Mesh/SKM_SciFi_Drone_4",
+    "scale": 1.9,
+    "actor_lean_scale": 0.25,
+    "body_bob_cm": 0,
+    "yaw_offset_deg": -90,
+    "centre_bone": "body",
+    "beam_bone": "camera",
+    "beam_axis": [0, 0, -1],
+    "light_bone": "camera",
+    "yaw_lock_bone": "body",
+    "hidden_slots": ["Scanner_Material"],
+    "clips": {
+      "idle": [
+        "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Idle_1",
+        "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Idle_2",
+        "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Idle_3"
+      ],
+      "front": {
+        "start": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_front_start",
+        "loop": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_front_loop",
+        "end": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_front_end"
+      },
+      "back": {
+        "start": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_back_start",
+        "loop": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_back_loop",
+        "end": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_back_end"
+      },
+      "up": {
+        "start": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_up_start",
+        "loop": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_up_loop",
+        "end": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_up_end"
+      },
+      "down": {
+        "start": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_down_start",
+        "loop": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_down_loop",
+        "end": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Move_down_end"
+      },
+      "left": {
+        "start": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Slide_start_L",
+        "loop": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Slide_loop_L",
+        "end": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Slide_end_L"
+      },
+      "right": {
+        "start": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Slide_start_R",
+        "loop": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Slide_loop_R",
+        "end": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Slide_end_R"
+      },
+      "turn_left": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Rotate_L",
+      "turn_right": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Rotate_R",
+      "scanning": "/Game/SciFi_Drone_4/Animations/AS_SciFi_Drone_4_Scanning"
+    }
+  }
+}

@@ -160,6 +160,12 @@ TSharedRef<FJsonObject> USCCargoSubsystem::StateJson() const
         O->SetNumberField(TEXT("carrying"), D->CarryingBoxId);
         O->SetField(TEXT("pos"), Metres(D->GetActorLocation()));
         O->SetField(TEXT("vel"), Metres(D->GetVelocity()));
+        // WP-K4a: where it faces and turns to (degrees), and the clip it shows (motion/phase; the art only).
+        O->SetNumberField(TEXT("yaw"), FMath::RoundToDouble(D->GetActorRotation().Yaw * 10) / 10);
+        O->SetNumberField(TEXT("heading"), FMath::RoundToDouble(D->HeadingTarget() * 10) / 10);
+        O->SetNumberField(TEXT("pitch"), FMath::RoundToDouble(D->GetActorRotation().Pitch * 10) / 10);
+        O->SetNumberField(TEXT("roll"), FMath::RoundToDouble(D->GetActorRotation().Roll * 10) / 10);
+        O->SetStringField(TEXT("clip"), D->Art ? D->ClipName() : FString());
         if (D->CarryingBoxId != INDEX_NONE)
         {
             O->SetField(TEXT("beam_force_n"), Vector(D->BeamForceN, 1));
@@ -184,7 +190,14 @@ TSharedRef<FJsonObject> USCCargoSubsystem::StateJson() const
         O->SetNumberField(TEXT("item"), D.ItemId);
         O->SetNumberField(TEXT("grid"), D.GridId);
         O->SetBoolField(TEXT("actor"), D.Actor.IsValid());
-        if (D.Actor.IsValid()) O->SetField(TEXT("pos"), Metres(D.Actor->GetActorLocation()));
+        if (D.Actor.IsValid())
+        {
+            O->SetField(TEXT("pos"), Metres(D.Actor->GetActorLocation()));
+            O->SetNumberField(TEXT("yaw"), FMath::RoundToDouble(D.Actor->GetActorRotation().Yaw * 10) / 10); // its bays face its +X
+            O->SetNumberField(TEXT("bays"), D.Actor->NumBays());
+            O->SetField(TEXT("fwd"), Vector(D.Actor->GetActorForwardVector(), 0.001)); // out of its bays
+            O->SetField(TEXT("up"), Vector(D.Actor->GetActorUpVector(), 0.001));
+        }
         Docks.Add(MakeShared<FJsonValueObject>(O));
     }
     Root->SetArrayField(TEXT("docks"), Docks);

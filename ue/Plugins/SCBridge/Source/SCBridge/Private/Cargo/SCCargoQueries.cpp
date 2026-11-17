@@ -451,6 +451,15 @@ TArray<FVector> USCCargoSubsystem::DockWay(const ASCCargoDrone* D) const
     return {Actor->BayTransform(D->Bay).GetLocation(), Exit, D->bDockClear ? D->DockClear : Exit};
 }
 
+bool USCCargoSubsystem::DroneBay(const ASCCargoDrone* D, FTransform& OutBay) const
+{
+    const FSCCargoDock* Dock = D ? State->Docks.FindByPredicate([&](const FSCCargoDock& K) { return K.ItemId == D->DockItem; }) : nullptr;
+    const ASCCargoDroneDock* Actor = Dock ? Dock->Actor.Get() : nullptr;
+    if (!Actor) return false;
+    OutBay = Actor->BayTransform(D->Bay);
+    return true;
+}
+
 double USCCargoSubsystem::FlightFree(const ASCCargoDrone* D, const FSCCargoFlight& F) const
 {
     if (!D || F.Points.Num() < 2) return -1;
