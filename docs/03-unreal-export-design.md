@@ -1,6 +1,6 @@
 # Unreal app and importer design
 
-Target: Unreal Engine 5.9.0 preview-1 (Linux, `~/UnrealEngine/5.9`, Vulkan RHI; 5.8.2 until 2026-11-12). Project
+Target: the SCViewer fork of Unreal Engine 5.9 built from source (Win64, D3D12 SM6; plan D17, since 2026-11-18; the 5.9.0 preview-1 binary on Linux / Vulkan before, 5.8.2 until 2026-11-12). Project
 `ue/SCViewer` (C++). Plugin `ue/Plugins/SCBridge`:
 
 | Module | Type | Contents |

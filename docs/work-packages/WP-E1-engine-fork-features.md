@@ -48,6 +48,34 @@ fallbacks such as the kept UE tonemapper), launcher-engine paths and defaults in
 the NVIDIA RTX-fork (UE 5.8) build. Kept: the Win64 showcase package and DLSS (now on the fork), cooked content that
 the showcase uses; `ue/EnginePatches` goes once E1-2, E1-3 and E1-7 carry its patches as engine features.
 
+#### Result (E1-0)
+No engine commit (project-side only).
+- **Removed:** `package_web.ps1`, `bake_hangar_lighting.py`, `SCBridgeNoFFI.cpp` and every `SC_WITH_FFI` definition and
+  branch (the archive picker and overlay no longer test it; `SCBridgeLib` links the library on Linux and Win64 and stops
+  the build elsewhere); the Wasm `-ffile-prefix-map` code in `SCViewer.Target.cs`; the Interchange platform list in the
+  uproject (it existed to exclude Wasm); the mobile-feature-level branch that kept UE's tonemapper
+  (`SCViewerExposure`); `-SCBakedLighting` (`SCViewerSubsystem`) and `USCCookLibrary::PrepareStaticLighting`, which
+  existed only for the web build's Lightmass hangars; `-Platform Wasm` and `-BakedLighting` in `package_showcase.ps1`.
+- **Fork by default:** `Start-SCViewer` (`SCRpc.psm1`), `package_showcase.ps1`, the `.sh` helpers, `.claude/launch.json`
+  and the documented commands (`create_cargo_art.py`, `docs/cargo/art.md`, READMEs) default to
+  `%USERPROFILE%\UnrealEngine-5.9-src` (`~/UnrealEngine-5.9-src`), overridable with `-Engine` / `UE_ENGINE_ROOT`; the
+  PowerShell entry points fail early when no engine is there.
+- **Docs:** plan D17 (D9 and D14 marked superseded), `AGENTS.md`, `README.md`, `ue/README.md` (showcase cooking now
+  stands on its own), `docs/03-unreal-export-design.md`, WP-H1 / K1 / K4, the FFI README and the cargo JSON provenance.
+  `ue/EnginePatches/README.md` says it is for the obsolete binary engine. No NvRTX / RTX-fork run configuration, ini
+  section or script remained; historical records (`ue/verification`, WP-U0 / U2 / U3b, WP-L3 / P4 "not verified" notes)
+  are left as they are.
+- **Kept:** the cooked-ship and cooked-hangar paths (`cook_ships.py`, `cook_hangars.py`, loading without an archive),
+  which the Win64 showcase uses; the `RHI_RAYTRACING` and non-editor Nanite guards (correct for any cooked game);
+  the masters' static-lighting usage (`create_materials.py` and the saved assets; harmless, and dropping it means
+  regenerating every master); the DLSS installer, whose plugin builds against the fork as a project plugin.
+- **Verified:** project build on the fork (`out/e1/E1-0/build-editor.log`, Succeeded; the DLSS modules were up to date, built against the fork earlier today); 81/81
+  tests (`SCBridge.StarEngine`, `.Lights`, `.Rig.Lights`, `.ViewerExposure`, `.Cargo`, `.Hangars`,
+  `.Materials.MasterAssets`; log `E1-0-tests.log`); a game run through `Start-SCViewer` without `-Engine` started the
+  fork's `UnrealEditor.exe`, loaded hangar_medfrnt_001 live from the archive (683 lights, 186 atlas light functions,
+  `display_curve=1`), settled, took `out/e1/E1-0/shots/smoke-medfrnt.png` and quit with code 0, no `Error:` lines
+  (`out/e1/E1-0/smoke.txt`, log `E1-0-smoke.log`). The showcase package itself was not rebuilt.
+
 ### E1-1 Light-function atlas: overflow fix and capacity
 Today: `r.LightFunctionAtlas.Size` ≤ 16 (256 material tiles, `LIGHT_FUNCTION_ATLAS_MAX_LIGHT_FUNCTION_COUNT`), slot
 resolution 128 px, the per-light atlas index a `uint8` (`FLightSceneProxy::LightFunctionAtlasLightIndex`, extra-data
@@ -184,7 +212,7 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 
 | Feature | Engine commit | Project side | Verified |
 |---|---|---|---|
-| E1-0 | — | — | — |
+| E1-0 | none (project only) | Web / Wasm build, `SC_WITH_FFI`, baked hangar lighting, Wasm target code removed; scripts and docs default to the fork; plan D17 | project build, 81/81 tests, medfrnt game run (Result (E1-0)) |
 | E1-1 | `ad613210a` | `DefaultEngine.ini` (MaxLightCount=255 dropped), `SCLightVerification` (`atlas_light_records`), `M_SC_LightFunction` atlas-compatible, uproject `UE_5.9_src` | engine + project build, 11/11 tests, medfrnt + lrgtop runs (Result (E1-1)) |
 | E1-2 | — | — | — |
 | E1-3 | — | — | — |

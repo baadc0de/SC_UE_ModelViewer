@@ -35,8 +35,7 @@ are record GUID strings (resolve them with another call, so one record never
 expands the whole entity graph), and the top object adds `__record_name` and
 `__record_id`. No match, or a bare name several records share, is
 `SC_STATUS_ERROR`; the message lists the matching names. CLI:
-`scviewer record <name|guid>`. UE: `FSCBridgeClient::DataCoreRecord`. The
-no-FFI build (`SC_WITH_FFI=0`) returns `SC_STATUS_UNSUPPORTED`.
+`scviewer record <name|guid>`. UE: `FSCBridgeClient::DataCoreRecord`.
 
 `sc_p4k_read(h, path, &blob)` returns an archive file's bytes as stored and
 `sc_p4k_read_xml(h, path, &text)` its text XML (binary CryXML converted with element

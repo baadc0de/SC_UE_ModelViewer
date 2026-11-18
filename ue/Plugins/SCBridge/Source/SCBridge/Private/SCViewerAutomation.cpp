@@ -40,7 +40,7 @@ public:
     virtual void SetupViewFamily(FSceneViewFamily&) override {}
     virtual void SetupView(FSceneViewFamily& Family, FSceneView& View) override
     {
-#if RHI_RAYTRACING // the path tracer and its sample count exist only with ray tracing (not on Wasm)
+#if RHI_RAYTRACING // the path tracer and its sample count exist only with ray tracing
         if (Family.EngineShowFlags.PathTracing && View.State) Samples = View.State->GetPathTracingSampleIndex();
 #endif
     }
@@ -611,7 +611,7 @@ void FSCViewerAutomation::Tick()
             }
         }
     }
-    // A cooked ship loads without the archive (the web build has none).
+    // A cooked ship loads without the archive.
     const bool bCookedNext = !Queue.IsEmpty() && !USCViewerSubsystem::CookedShipLevel(Queue[0].TrimStartAndEnd()).IsEmpty();
     if (S->GetArchiveState() == ESCArchiveState::Failed && !Queue.IsEmpty() && !bCookedNext)
     {

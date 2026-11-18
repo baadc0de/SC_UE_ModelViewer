@@ -92,7 +92,7 @@ Colour values are **linear RGB**, not 8-bit sRGB. Runtime may create MIDs. The L
 Take the shared UE lock **before** either launch, retry an occupied lock at 60-second intervals for at most 45 minutes, and release it in `finally`. Do not remove another worker's lock. The launch flags below keep shader scratch in the workspace and use this repository's filesystem DDC:
 
 ```powershell
-$editor = "$env:ProgramFiles/Epic Games/UE_5.9/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
+$editor = "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
 $project = "$PWD/ue/SCViewer/SCViewer.uproject"
 $script = "$PWD/ue/scripts/create_cargo_art.py"
 # Build-only/headless path; acquire the shared UE lock first.
@@ -124,5 +124,5 @@ Open `docs/cargo/mobiglas-mock.html` locally at **1920×1080**. It is self-conta
 The top-down selected grid shows 2×4 cells and a single 16 SCU box spanning both height layers. Layer buttons work. The illustrative amount slider snaps to 0 or 16 SCU: one empty full grid remains after the active job's reservation, while the dock occupies a cell on the other grid. The 32 SCU box remains refused by length. Runtime must compute achievable ticks from the actual stock and reservations. Confirm/cancel demonstrate local feedback only and never issue game actions. World dots are 5 px; diagonal leaders are 45°, shelves horizontal, and labels sit beyond projected bounds plus 16 px. Selected/active labels remain outside the objects.
 
 TODO(WP-K1): Integrate socket-driven rotors, lights, beam orientation and bay approach with the cargo actors; verify against the Hull A grid's measured local origin.
-TODO(WP-K1): Validate cooked asset references and Wasm packaging with the K1 runtime integration; art itself has no FFI or external-content dependency.
+TODO(WP-K1): Validate cooked asset references and packaging with the K1 runtime integration; art itself has no FFI or external-content dependency.
 TODO(WP-K1): Cross-review the final art/runtime contract with the other model before merge; no staging or commits performed by the art worker.

@@ -1,5 +1,7 @@
 # Engine shader patches (plan D14)
 
+> Obsolete: written for the binary (launcher) engine, which the UE 5.9 source fork replaced (plan D17). The fork carries the SSDO patches as commits; WP-E1 (E1-2, E1-3, E1-7) replaces them all with engine features, and this folder is then removed.
+
 The installed UE 5.9 is a binary build: its C++ cannot change, its shaders can. A game rendering rule that needs an
 engine shader edit is kept here and applied to `$UE_ENGINE_ROOT` (default `~/UnrealEngine/5.9`) by
 `ue/scripts/engine_patches.py`:

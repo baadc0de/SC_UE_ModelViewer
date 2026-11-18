@@ -20,13 +20,7 @@
     },
     {
       "Name": "Interchange",
-      "Enabled": true,
-      "SupportedTargetPlatforms": [
-        "Win64",
-        "Linux",
-        "Mac",
-        "Android"
-      ]
+      "Enabled": true
     },
     {
       "Name": "InterchangeEditor",

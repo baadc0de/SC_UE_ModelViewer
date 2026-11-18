@@ -49,7 +49,7 @@ EXEC="stat unit, r.ScreenPercentage ${SC_SP:-100}, r.DynamicRes.OperationMode 0$
 rm -f "$LOG"; before=$(ls "$CSVDIR" 2>/dev/null | wc -l)
 if [ -n "${SC_MAP:-}" ]; then   # same host arguments as run_import.sh, with the map URL first
   mkdir -p ue/SCViewer/Saved/Import
-  "$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/ue/SCViewer/SCViewer.uproject" "$SC_MAP" \
+  "${UE_ENGINE_ROOT:-$HOME/UnrealEngine-5.9-src}/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/ue/SCViewer/SCViewer.uproject" "$SC_MAP" \
     -game -windowed -resx=1600 -resy=900 -unattended -nosplash -nop4 -ddc=SCViewerDDC \
     -SCPackage="$(realpath "$PKG")" -abslog="$SC_REPO/$LOG" -vulkan -SCStay -csvGpuStats \
     -csvCaptureFrames=1000000 "-ExecCmds=$EXEC" "$@" >/dev/null 2>&1 &

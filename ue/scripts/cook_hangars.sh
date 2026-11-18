@@ -7,7 +7,7 @@
 set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPORT="$(realpath "${1:-$ROOT_DIR/out/hangars}")"; shift || true
-ENGINE="${UE_ENGINE_ROOT:-$HOME/UnrealEngine/5.9}"
+ENGINE="${UE_ENGINE_ROOT:-$HOME/UnrealEngine-5.9-src}"  # the UE 5.9 source fork (plan D17)
 LOGS="$ROOT_DIR/ue/SCViewer/Saved/Cook"; mkdir -p "$LOGS"
 NAMES=("$@")
 if [ ${#NAMES[@]} -eq 0 ]; then

@@ -2,12 +2,12 @@
 
 From repo root, acquire out/locks/ue.lock atomically; release it in finally.
 Reference captures (offscreen editor; automatically exits after 90 warm ticks):
-  & "$env:ProgramFiles/Epic Games/UE_5.9/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" `
+  & "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" `
     "$PWD/ue/SCViewer/SCViewer.uproject" "-ExecutePythonScript=$PWD/ue/scripts/create_cargo_art.py" `
     -CargoArtWarmPreview -RenderOffscreen -DisablePlugins=DLSS -unattended -nop4 -nosplash `
     -ddc=SCViewerDDC "-ShaderWorkingDir=$PWD/out/k1d/shaders"
 Commandlet generation (immediate captures; no warm frames):
-  & "$env:ProgramFiles/Epic Games/UE_5.9/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" `
+  & "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" `
     "$PWD/ue/SCViewer/SCViewer.uproject" -run=pythonscript `
     "-script=$PWD/ue/scripts/create_cargo_art.py" -unattended -nop4 -nosplash `
     -AllowCommandletRendering -EnablePlugins=GeometryScripting -ddc=SCViewerDDC `

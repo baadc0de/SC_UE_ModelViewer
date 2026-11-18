@@ -123,7 +123,7 @@ submodule branch `scviewer/cryxml-content`.
 
 **Recommended way.** A few Niagara templates made by hand: a beam ribbon along a curve, an impact glow and a muzzle
 flash. At run time they are driven by the values decoded from the library (colours, curves, sizes, counts, textures
-through the existing DDS path) and by the beam strength. The web build needs those values baked at cook time.
+through the existing DDS path) and by the beam strength.
 
 The alternatives:
 - an offline translation of each library emitter into Niagara assets (higher fidelity, much larger);
@@ -172,7 +172,7 @@ Approximations, recorded per emitter in the build log:
 
 **What was built:**
 - **FFI:** `sc_p4k_read`, `sc_p4k_read_xml`, `sc_p4k_read_dds` (split mips merged, through the core's
-  `read_package_dds`), `sc_particle_effect`, `sc_material_effect`; stubbed in `SCBridgeNoFFI.cpp` for the web build.
+  `read_package_dds`), `sc_particle_effect`, `sc_material_effect`.
 - **Core:** `archive.rs` (archive reads, a small XML tree), `particle_params.rs` (the CryEngine parameter syntax) and
   `particles.rs` (effects and material effects). CLI: `scviewer p4k-xml`, `effect`, `material-effect`.
 - **Curve semantics, checked across all 877 libraries:** a key with no `t` or `v` means 0. A curve key's missing colour
@@ -484,7 +484,7 @@ only at boxes.
   ±0.5 cm idle bob. That needs the hull's underside profile, and the idle clips move the body ±1 cm.
 - **The box surface group** is a config stand-in (`metal`). Reading it would take the box package's material
   `surface_type` (and SurfaceTypes.xml's fxGroup) through to the runtime.
-- **Without the archive** (the web build) the effects resolve to nothing, and the beam mesh is drawn. The scenario's
+- **Without the archive** (a cooked showcase on a machine without Star Citizen) the effects resolve to nothing, and the beam mesh is drawn. The scenario's
   tractor fallback carries no effect references yet.
 - ~~**Cook rule.**~~ Verified by a packaged build (see Packaging); it also fixed `/SCBridge/Cargo` not being cooked.
 - **Bay exits.** The dock's bay-exit probe (a cell-sized sphere at each exit) is unchanged from K1. A sphere at a low exit

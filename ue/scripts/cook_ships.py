@@ -1,9 +1,9 @@
 """Cook exported ships into levels (one per ship) with pooled meshes and textures. The viewer's LoadEntity streams
 /Game/SC/Ships/Maps/<entity> instead of exporting from the archive, so a cooked ship also loads where there is no
-archive (the web build, ue/scripts/package_web.ps1).
+archive (the Win64 showcase, ue/scripts/package_showcase.ps1).
 
-Export first (decomposed GLB + DDS into a shared root; the web build uses mip 1):
-  scripts/starbreaker.sh entity export DRAK_Golem out/web/bake --kind decomposed --format glb --dds --lod 0 --mip 1 \
+Export first (decomposed GLB + DDS into a shared root, at full resolution like the hangar cook):
+  scripts/starbreaker.sh entity export DRAK_Golem out/showcase/bake --kind decomposed --format glb --dds --lod 0 --mip 0 \
       --skip-existing-assets
 then cook with a renderer (runtime textures and Nanite builds):
   UnrealEditor-Cmd SCViewer.uproject -run=pythonscript -script=<abs>/cook_ships.py -AllowCommandletRendering -unattended \

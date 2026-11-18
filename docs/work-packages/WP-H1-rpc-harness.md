@@ -20,7 +20,7 @@ exploratory driver `ue/scripts/rpc/explore.ps1`.
 
 | `-SCFfmpeg=<exe>` | ffmpeg for `/record` (default: `ffmpeg` on PATH). |
 
-Built only for desktop targets that are not Shipping (`SC_WITH_RPC`); the Wasm and Shipping packages have neither.
+Built only for desktop targets that are not Shipping (`SC_WITH_RPC`); Shipping packages have neither.
 
 **No window.** `Start-SCViewer` (SCRpc.psm1) launches with UE 5.9's `-AgentMode`: the viewer renders off screen
 (`-RenderOffScreen`), runs unattended, and answers modal dialogs with their default, so nothing takes focus;

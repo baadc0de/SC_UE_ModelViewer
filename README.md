@@ -53,41 +53,39 @@ vendored as a git submodule at `vendor/StarBreaker` (our patches live on `scview
 
 ## Platforms and builds
 
+The engine is the SCViewer fork of UE 5.9, built from source (plan D17): branch `scviewer/5.9` of a local
+`UnrealEngine` checkout (`%USERPROFILE%\UnrealEngine-5.9-src`, registered as `UE_5.9_src`), upstream `5.9` plus engine
+features the viewer needs (WP-E1), with UE's behaviour as the default. It is the only build: there is no launcher-engine,
+web or RTX-fork build.
+
 | Target | Engine / RHI | Notes |
 | --- | --- | --- |
-| Linux (development host) | UE 5.9.0 preview-1 at `~/UnrealEngine/5.9`, Vulkan SM6 | Reads `Data.p4k` from the LUG Wine prefix; engine shader patches in `ue/EnginePatches` (plan D14). |
-| Windows | UE 5.9 from the Epic launcher, D3D12 SM6 | Optional NVIDIA DLSS (`scripts/install_dlss.ps1`, DLAA by default, TSR without it). |
-| Win64 showcase | Shipping package | One cooked ship and hangar at maximum Lumen quality with hardware ray tracing and DLAA, started as a player (`ue/scripts/package_showcase.ps1 -Platform Win64`). |
-| Web | Wasm / WebGPU (mobile renderer) | One cooked ship and hangar, optional baked lighting; no archive and no Rust library in the browser (`SC_WITH_FFI=0`; `ue/scripts/package_web.ps1`). |
+| Windows | UE 5.9 source fork, D3D12 SM6 | Optional NVIDIA DLSS (`scripts/install_dlss.ps1`, compiled against the fork; DLAA by default, TSR without it). |
+| Win64 showcase | Shipping package | One cooked ship and hangar at maximum Lumen quality with hardware ray tracing and DLAA, started as a player (`ue/scripts/package_showcase.ps1`). |
 
 ## Quick start
 
 Star Citizen must be installed: `Data.p4k` is found in the standard RSI install locations. **Do not set
-`SC_DATA_P4K`.** Rust (stable) and the engine for your platform are required.
+`SC_DATA_P4K`.** Rust (stable) and a built UE 5.9 source fork (`Build.bat UnrealEditor Win64 Development` in its
+checkout) are required.
 
 ```bash
 git submodule update --init
 ```
 
-Linux:
-
-```bash
-scripts/build_ffi.sh                                  # libscbridge.so + header into the plugin's ThirdParty module
-uv run python ue/scripts/engine_patches.py apply      # once per engine install
-ue/scripts/build.sh SCViewerEditor
-"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor" "$PWD/ue/SCViewer/SCViewer.uproject" \
-  -game -windowed -resx=1920 -resy=1080 -vulkan -ddc=SCViewerDDC
-```
-
 Windows (PowerShell):
 
 ```powershell
+$UE = "$env:USERPROFILE\UnrealEngine-5.9-src"          # the UE 5.9 source fork
 powershell -File scripts/build_ffi.ps1               # scbridge.dll + import library
-& "C:\Program Files\Epic Games\UE_5.9\Engine\Build\BatchFiles\Build.bat" SCViewerEditor Win64 Development `
+& "$UE\Engine\Build\BatchFiles\Build.bat" SCViewerEditor Win64 Development `
   "-Project=$PWD\ue\SCViewer\SCViewer.uproject" -WaitMutex
-& "C:\Program Files\Epic Games\UE_5.9\Engine\Binaries\Win64\UnrealEditor.exe" "$PWD\ue\SCViewer\SCViewer.uproject" `
+& "$UE\Engine\Binaries\Win64\UnrealEditor.exe" "$PWD\ue\SCViewer\SCViewer.uproject" `
   -game -windowed -resx=1920 -resy=1080
 ```
+
+The Linux shell scripts under `ue/scripts/` (and `scripts/build_ffi.sh`) default to `~/UnrealEngine-5.9-src` too; a
+Linux build of the fork is not set up.
 
 Start the viewer from the repository root, so its cache goes to `./cache/`. Useful switches:
 - `-SCLoad=<entity>`;
@@ -127,7 +125,7 @@ crates/scbridge-ffi     C-ABI library the Unreal plugin calls (scbridge.dll / li
 ue/SCViewer             UE 5.9 project: game-mode app, Viewer map, cargo scenarios (Config/Cargo/*.json)
 ue/Plugins/SCBridge     Runtime module (FFI client, importer, vehicles, player, cargo, mobiGlas, RPC, UI),
                         optional Editor module (cooking, keep as assets), ThirdParty/SCBridgeLib
-ue/EnginePatches        engine shader patches (applied by ue/scripts/engine_patches.py)
+ue/EnginePatches        shader patches for the obsolete binary engine (removed once WP-E1 carries them)
 ue/scripts              builds, cooks, packaging, material generation, routes/, rpc/ (RPC module, explorer)
 ue/verification         verification records and evidence per work package
 scripts/                FFI and StarBreaker builds, DLSS install, export and verification helpers
@@ -141,7 +139,7 @@ out/, cache/            exports and the local cache (gitignored)
 | Doc | Purpose |
 | --- | --- |
 | [docs/01-starbreaker-analysis.md](docs/01-starbreaker-analysis.md) | what StarBreaker provides and the gaps it left |
-| [docs/02-implementation-plan.md](docs/02-implementation-plan.md) | architecture decisions (D1–D16), milestones, work packages and their status, orchestration rules |
+| [docs/02-implementation-plan.md](docs/02-implementation-plan.md) | architecture decisions (D1–D17), milestones, work packages and their status, orchestration rules |
 | [docs/03-unreal-export-design.md](docs/03-unreal-export-design.md) | UE app design: hosts, view flow, object mapping, Nanite / Lumen rules, player modes, UI, FFI |
 | [docs/work-packages/](docs/work-packages/) | one brief per work package (goal, behaviour, data, tests, verification) |
 | [docs/cargo/](docs/cargo/) | cargo datamining and UI research |

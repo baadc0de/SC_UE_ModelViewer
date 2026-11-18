@@ -13,7 +13,7 @@
       "full_strength_distance": 3.0,
       "max_volume": 20.0,
       "volume_force_coefficient": 0.3,
-      "provenance": "Fallback only. With the archive (FFI), the values come from the record at run time (sc_datacore_record: the SWeaponActionFireTractorBeamParams whose name is action; maxForce / minDistance / maxDistance / fullStrengthDistance / maxVolume; log CARGO_TRACTOR source=datacore). These are the values of LIVE 4.10.2 Data.p4k (docs/cargo/datamine.md, Drone and tractor references), used without the archive (Web build, SC_WITH_FFI=0). maxVolume is read in SCU, the unit the boxes occupancy volume is authored in (SStandardCargoUnit): one beam takes 20 SCU, so a 16 SCU box needs one drone and 24 / 32 SCU boxes need two."
+      "provenance": "Fallback only. With the archive (FFI), the values come from the record at run time (sc_datacore_record: the SWeaponActionFireTractorBeamParams whose name is action; maxForce / minDistance / maxDistance / fullStrengthDistance / maxVolume; log CARGO_TRACTOR source=datacore). These are the values of LIVE 4.10.2 Data.p4k (docs/cargo/datamine.md, Drone and tractor references), used when the archive or the record is unavailable. maxVolume is read in SCU, the unit the boxes occupancy volume is authored in (SStandardCargoUnit): one beam takes 20 SCU, so a 16 SCU box needs one drone and 24 / 32 SCU boxes need two."
     },
     "flight": {
       "max_speed_m_s": 10.0,
