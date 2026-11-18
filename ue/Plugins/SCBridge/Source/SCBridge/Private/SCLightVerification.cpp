@@ -32,7 +32,15 @@ TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Poin
         const auto* Spot = Cast<USpotLightComponent>(L);
         const auto* Bulb = Cast<UPointLightComponent>(L);
         double Cone = 1;
-        if (Spot)
+        if (Spot && Spot->Shape == ESpotLightShape::SquareFrustum)
+        {
+            // The engine fork's square frustum (WP-E1 E1-3, LocalLightFalloff.ush): hard-edged square of half-FOV OuterConeAngle
+            // in light space, no cone falloff, nothing in front of the projector near clip.
+            const FVector Local = L->GetComponentTransform().InverseTransformVectorNoScale(Point - Origin);
+            const double Tan = FMath::Tan(USpotLightComponent::GetClampedSquareFrustumHalfAngle(Spot->OuterConeAngle));
+            Cone = Local.X > 0 && FMath::Max(FMath::Abs(Local.Y), FMath::Abs(Local.Z)) <= Local.X * Tan && Local.X >= Spot->ProjectorNearClip ? 1 : 0;
+        }
+        else if (Spot)
         {
             const double CosOuter = FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle));
             const double CosInner = FMath::Cos(FMath::DegreesToRadians(FMath::Min(Spot->InnerConeAngle, Spot->OuterConeAngle)));
@@ -237,6 +245,67 @@ void SetFalloffModels(UWorld* World, bool bOn)
     if (bOn) GSCImportedFalloffs.Reset();
     UE_LOG(LogSCImport, Display, TEXT("LIGHT_FALLOFF_MODELS %s lights=%d"), bOn ? TEXT("imported") : TEXT("ue_default"), Changed);
 }
+
+// The imported projector of one spot light, kept while sc.Lights.ProjectorShape 0 or 2 shows a UE cone in its place.
+struct FSCImportedProjector
+{
+    ESpotLightShape Shape;
+    ELightFunctionAddress Address;
+    float InnerConeAngle;
+    float OuterConeAngle;
+    FVector LightFunctionScale;
+};
+TMap<TWeakObjectPtr<USpotLightComponent>, FSCImportedProjector> GSCImportedProjectors;
+
+// A/B of the engine fork's spot light shape (WP-E1 E1-3) on every square frustum projector the importer made:
+//  1  the import: SquareFrustum + Border (the game's projector).
+//  0  UE's cone with UE's light function wrap at the same angles (OuterConeAngle = half-FOV: the square's inscribed circle).
+//  2  the E1-2 importer's emulation on a UE cone: the cone through the square's corners (inner = outer), the light function
+//     scaled back laterally to the half-FOV, UE's wrap (so the gobo repeats between the square and the cone).
+void SetProjectorShape(UWorld* World, int32 Mode)
+{
+    int32 Changed = 0;
+    for (TObjectIterator<USpotLightComponent> It; It; ++It)
+    {
+        USpotLightComponent* S = *It;
+        if (S->GetWorld() != World || !S->IsRegistered()) continue;
+        const FSCImportedProjector* Saved = GSCImportedProjectors.Find(S);
+        if (!Saved)
+        {
+            if (Mode == 1 || S->Shape != ESpotLightShape::SquareFrustum) continue;
+            Saved = &GSCImportedProjectors.Add(S, {S->Shape, S->LightFunctionAddress, S->InnerConeAngle, S->OuterConeAngle, S->LightFunctionScale});
+        }
+        S->SetShape(Mode == 1 ? Saved->Shape : ESpotLightShape::Cone);
+        S->SetLightFunctionAddress(Mode == 1 ? Saved->Address : ELightFunctionAddress::Wrap);
+        if (Mode == 2)
+        {
+            const double HalfFov = FMath::DegreesToRadians(double(Saved->OuterConeAngle));
+            const float Corner = float(FMath::Min(FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * FMath::Tan(HalfFov))), 88.9));
+            S->SetOuterConeAngle(Corner);
+            S->SetInnerConeAngle(Corner);
+            const double Rendered = FMath::Tan(double(S->GetClampedConeAngles().Y));
+            const double Axial = Saved->LightFunctionScale.Z, Lateral = Axial * FMath::Tan(HalfFov) / Rendered;
+            S->SetLightFunctionScale(FVector(Lateral, Lateral, Axial));
+        }
+        else
+        {
+            S->SetOuterConeAngle(Saved->OuterConeAngle);
+            S->SetInnerConeAngle(Saved->InnerConeAngle);
+            S->SetLightFunctionScale(Saved->LightFunctionScale);
+        }
+        ++Changed;
+    }
+    if (Mode == 1) GSCImportedProjectors.Reset();
+    static const TCHAR* Names[] = {TEXT("cone_wrap"), TEXT("square_border"), TEXT("e12_corner_cone_wrap")};
+    UE_LOG(LogSCImport, Display, TEXT("LIGHT_PROJECTOR_SHAPE %s lights=%d"), Names[FMath::Clamp(Mode, 0, 2)], Changed);
+}
+
+FAutoConsoleCommandWithWorldAndArgs GSCLightsProjectorShape(
+    TEXT("sc.Lights.ProjectorShape"),
+    TEXT("sc.Lights.ProjectorShape <0|1|2>: 1 the imported SquareFrustum + Border projectors; 0 UE's cone + wrap at the same angles; 2 the E1-2 importer's corner cone + lateral light function scale + wrap"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        SetProjectorShape(World, Args.Num() == 0 ? 1 : FMath::Clamp(FCString::Atoi(*Args[0]), 0, 2));
+    }));
 
 FAutoConsoleCommandWithWorldAndArgs GSCLightsFalloffModels(
     TEXT("sc.Lights.FalloffModels"),

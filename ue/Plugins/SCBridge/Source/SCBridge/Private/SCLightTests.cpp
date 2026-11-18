@@ -16,6 +16,14 @@
 #include "SCLightAreas.h"
 #include "SCStarEngine.h"
 #include "Algo/AllOf.h"
+#include "LightDefinitions.h"
+#include "LightSceneProxy.h"
+#include "Misc/ScopeExit.h"
+#include "SceneManagement.h"
+#include "SpotLightSceneProxyDesc.h"
+#include "SCViewerEngineObjectVersion.h"
+#include "Serialization/ObjectReader.h"
+#include "Serialization/ObjectWriter.h"
 
 namespace
 {
@@ -160,36 +168,138 @@ bool FSCLightAuthoredModel::RunTest(const FString&)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProjectorCone, "SCBridge.Lights.ProjectorCone",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProjectorShape, "SCBridge.Lights.ProjectorShape",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FSCLightProjectorCone::RunTest(const FString&)
+bool FSCLightProjectorShape::RunTest(const FString&)
 {
-    // The game's projector frustum is square with half-angle FOV / 2; UE's cone must contain its corners (half-angle
-    // atan(sqrt 2 tan(FOV / 2))) and the gobo UVs, which UE scales by tan(outer), are pulled back to tan(FOV / 2).
-    const auto Cone = FSCLightImporter::ProjectorCone(50);
-    TestEqual(TEXT("corner half-angle"), Cone.OuterDeg, FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * FMath::Tan(FMath::DegreesToRadians(50.0)))), 1e-9);
-    TestEqual(TEXT("lateral light-function scale undoes the wider cone"), Cone.LateralScale(FMath::DegreesToRadians(Cone.OuterDeg)), 1 / UE_DOUBLE_SQRT_2, 1e-9);
-    // The gobo's UV edge (UE: tan of the outer angle it renders, which GetClampedConeAngles widens by at least 0.001 rad
-    // over the inner) times the lateral scale must land on the FOV frustum.
-    USpotLightComponent* Spot = NewObject<USpotLightComponent>();
-    const auto UvEdge = [Spot](const FSCLightImporter::FProjectorCone& C)
+    // The game's projector is its texture over the square frustum of half-angle FOV / 2 (border sampler, no cone falloff). The
+    // engine fork's SquareFrustum spot light (WP-E1 E1-3) is that frustum for OuterConeAngle = FOV / 2: the light function's UVs
+    // span the square (0 and 1 at tan(FOV / 2)), culling / bounds / shadows use the cone through its corners, and the shaders get
+    // the square through the packed spot angles and the light model word (LightDefinitions.h).
+    const double HalfFov = 50.0, Tan = FMath::Tan(FMath::DegreesToRadians(HalfFov));
+    const double Corner = FMath::Atan(UE_DOUBLE_SQRT_2 * Tan);
+    // The proxies need a scene: a registered component in a test world.
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    USpotLightComponent* Spot = NewObject<USpotLightComponent>(World);
+    Spot->InnerConeAngle = 20.f;
+    Spot->OuterConeAngle = float(HalfFov);
+    Spot->RegisterComponentWithWorld(World);
+    ON_SCOPE_EXIT { Spot->UnregisterComponent(); World->DestroyWorld(false); };
+    TestTrue(TEXT("UE default: cone"), Spot->Shape == ESpotLightShape::Cone);
+    TestTrue(TEXT("UE default: wrapping light function"), Spot->LightFunctionAddress == ELightFunctionAddress::Wrap);
+    TestEqual(TEXT("UE default: no near clip"), Spot->ProjectorNearClip, 0.f);
+    TestEqual(TEXT("UE default: bounding cone is the clamped outer cone"), Spot->GetHalfConeAngle(), Spot->GetClampedConeAngles().Y);
+    const auto Packed = [](const USpotLightComponent* S, FLightRenderParameters& P, float& LightFunctionTan, float& BoundingCone)
     {
-        Spot->InnerConeAngle = Spot->OuterConeAngle = float(C.OuterDeg);
-        const double Rendered = Spot->GetClampedConeAngles().Y;
-        return FMath::Tan(Rendered) * C.LateralScale(Rendered);
+        FLightSceneProxy* Proxy = S->CreateSceneProxy();
+        if (!Proxy) return false;
+        Proxy->GetLightShaderParameters(P);
+        LightFunctionTan = Proxy->GetLightFunctionTanOuterAngle();
+        BoundingCone = Proxy->GetOuterConeAngle();
+        delete Proxy;
+        return true;
     };
-    TestEqual(TEXT("UV edge at the FOV (100-degree FOV)"), UvEdge(Cone), FMath::Tan(FMath::DegreesToRadians(50.0)), 1e-6);
-    TestTrue(TEXT("the rendered cone contains the frustum corners"), FMath::Tan(Spot->GetClampedConeAngles().Y) >= UE_DOUBLE_SQRT_2 * Cone.FovTan);
-    TestTrue(TEXT("the rendered cone barely exceeds them (hard edge just outside the corners)"),
-             FMath::Tan(Spot->GetClampedConeAngles().Y) < UE_DOUBLE_SQRT_2 * Cone.FovTan * 1.01);
-    TestEqual(TEXT("UV edge at the FOV (small)"), UvEdge(FSCLightImporter::ProjectorCone(10)), FMath::Tan(FMath::DegreesToRadians(10.0)), 1e-6);
-    // A frustum whose corners lie beyond UE's limit keeps the limit; the gobo still ends at the FOV.
-    const auto Wide = FSCLightImporter::ProjectorCone(80);
-    TestTrue(TEXT("wide: within UE's cone limit"), Wide.OuterDeg <= FSCLightImporter::MaxSpotConeDeg);
-    TestEqual(TEXT("wide: UV edge still at the FOV"), UvEdge(Wide), FMath::Tan(FMath::DegreesToRadians(80.0)), 1e-6);
-    const auto Flat = FSCLightImporter::ProjectorCone(90);
-    TestEqual(TEXT("180-degree FOV: UE's limit"), Flat.OuterDeg, FSCLightImporter::MaxSpotConeDeg, 1e-9);
-    TestEqual(TEXT("180-degree FOV: UV edge at UE's limit"), UvEdge(Flat), FMath::Tan(FMath::DegreesToRadians(FSCLightImporter::MaxSpotConeDeg)), 1e-4);
+    FLightRenderParameters P;
+    float LightFunctionTan = 0, BoundingCone = 0;
+    if (!TestTrue(TEXT("cone proxy"), Packed(Spot, P, LightFunctionTan, BoundingCone))) return false;
+    const FVector2f Clamped = Spot->GetClampedConeAngles();
+    TestEqual(TEXT("cone: UE's spot angles"), double(P.SpotAngles.Y), 1.0 / (FMath::Cos(Clamped.X) - FMath::Cos(Clamped.Y)), 1e-3);
+    TestEqual(TEXT("cone: the model word is UE's (all zero)"), FMath::AsUInt(P.GetPackedDistanceFalloff().Y) & 0xFFFFFFF0u, 0u);
+    TestEqual(TEXT("cone: light function spans the outer cone"), double(LightFunctionTan), FMath::Tan(double(Clamped.Y)), 1e-6);
+
+    Spot->Shape = ESpotLightShape::SquareFrustum;
+    Spot->LightFunctionAddress = ELightFunctionAddress::Border;
+    Spot->ProjectorNearClip = 25.f;
+    TestEqual(TEXT("square: bounding cone through the corners"), double(Spot->GetHalfConeAngle()), Corner, 1e-5);
+    if (!TestTrue(TEXT("square proxy"), Packed(Spot, P, LightFunctionTan, BoundingCone))) return false;
+    TestEqual(TEXT("square: proxy culls with the corner cone"), double(BoundingCone), Corner, 1e-5);
+    TestEqual(TEXT("square: light function UVs span the square (edge at tan(FOV / 2))"), double(LightFunctionTan), Tan, 1e-5);
+    TestEqual(TEXT("square: SpotAngles.x is the corner cone"), double(P.SpotAngles.X), FMath::Cos(Corner), 1e-5);
+    TestEqual(TEXT("square: SpotAngles.y is tan(FOV / 2)"), double(P.SpotAngles.Y), Tan, 1e-5);
+    const uint32 Word = FMath::AsUInt(P.GetPackedDistanceFalloff().Y);
+    TestEqual(TEXT("square: shape in the model word"), (Word >> LIGHT_MODEL_WORD_BIT_OFFSET_SPOT_SHAPE) & LIGHT_MODEL_WORD_MASK_SPOT_SHAPE, uint32(LIGHT_SPOT_SHAPE_SQUARE_FRUSTUM));
+    TestEqual(TEXT("square: near clip in the model word (half, cm)"),
+              uint32((Word >> LIGHT_MODEL_WORD_BIT_OFFSET_PROJECTOR_NEAR_CLIP) & LIGHT_MODEL_WORD_MASK_PROJECTOR_NEAR_CLIP), uint32(FFloat16(25.f).Encoded));
+    // The square's corner direction lies on the bounding cone: a probe just inside it is inside the bounds, a probe outside is not.
+    Spot->SetWorldLocation(FVector::ZeroVector);
+    const FVector CornerDir = FVector(1, Tan, Tan).GetSafeNormal();
+    const FVector Lateral = FVector(0, 1, 1).GetSafeNormal();
+    const double R = Spot->AttenuationRadius;
+    TestTrue(TEXT("square: the corner is inside the bounds"), Spot->AffectsBounds(FBoxSphereBounds(CornerDir * 0.5 * R - Lateral * 2.0, FVector(1), 1)));
+    TestFalse(TEXT("square: past the corner is outside the bounds"), Spot->AffectsBounds(FBoxSphereBounds(CornerDir * 0.5 * R + Lateral * 0.05 * R, FVector(1), 1)));
+    // UE's limit stays: a 90-degree half-FOV is an infinite frustum.
+    const float Wide = USpotLightComponent::GetClampedSquareFrustumHalfAngle(90.f);
+    TestEqual(TEXT("limit: half-FOV clamped like UE's outer cone"), double(Wide), FMath::DegreesToRadians(88.9) + 0.001, 1e-6);
+    TestTrue(TEXT("limit: the corner cone stays below 90 degrees"), USpotLightComponent::GetSquareFrustumEnclosingConeAngle(Wide) < UE_HALF_PI);
+    TestEqual(TEXT("solid angle of a 90-degree (half 45) square frustum: 4 asin(1/2) = 2 pi / 3"),
+              double(USpotLightComponent::GetSquareFrustumSolidAngle(UE_PI / 4)), 2.0 * UE_DOUBLE_PI / 3.0, 1e-5);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProxyDescArchive, "SCBridge.Lights.ProxyDescArchive",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightProxyDescArchive::RunTest(const FString&)
+{
+    // FastGeo writes light descriptors without property tags. The fork's fields (E1-2 falloff models, E1-3 shape, near clip and
+    // light function address) are versioned (FSCViewerEngineObjectVersion): an archive written with UE's layout or E1-2's loads
+    // with UE's defaults for what it lacks and still reads every field after them.
+    FSpotLightSceneProxyDesc Out;
+    Out.LightFunctionAddress = LIGHT_FUNCTION_ADDRESS_BORDER;
+    Out.AttenuationRadius = 500.f;
+    Out.RangeFadeFraction = 0.2f;
+    Out.bBulbOffsetAttenuation = true;
+    Out.AttenuationBulbRadius = 3.f;
+    Out.AttenuationDistanceOffset = -1.f;
+    Out.SourceRadius = 7.f;
+    Out.bUseInverseSquaredFalloff = true;
+    Out.InnerConeAngle = 12.f;
+    Out.OuterConeAngle = 34.f;
+    Out.Shape = uint8(ESpotLightShape::SquareFrustum);
+    Out.ProjectorNearClip = 25.f;
+    const auto RoundTrip = [&Out](int32 WriterVersion, FSpotLightSceneProxyDesc& In, bool& bConsumedAll)
+    {
+        TArray<uint8> Bytes;
+        FObjectWriter Writer(Bytes);
+        if (WriterVersion >= 0)
+        {
+            Writer.SetCustomVersion(FSCViewerEngineObjectVersion::GUID, WriterVersion, TEXT("SCViewerEngineObjectVer"));
+            Writer.SetShouldSkipUpdateCustomVersion(true);
+        }
+        Out.Serialize(Writer);
+        FObjectReader Reader(Bytes);
+        Reader.SetCustomVersions(Writer.GetCustomVersions());
+        In.Serialize(Reader);
+        bConsumedAll = Reader.Tell() == Reader.TotalSize() && !Reader.IsError();
+    };
+    bool bAll = false;
+    FSpotLightSceneProxyDesc Latest;
+    RoundTrip(-1, Latest, bAll);
+    TestTrue(TEXT("latest: every byte read"), bAll);
+    TestEqual(TEXT("latest: light function address"), int32(Latest.LightFunctionAddress), int32(LIGHT_FUNCTION_ADDRESS_BORDER));
+    TestEqual(TEXT("latest: range fade"), Latest.RangeFadeFraction, 0.2f);
+    TestTrue(TEXT("latest: bulb offset"), Latest.bBulbOffsetAttenuation && Latest.AttenuationDistanceOffset == -1.f);
+    TestEqual(TEXT("latest: shape"), int32(Latest.Shape), int32(ESpotLightShape::SquareFrustum));
+    TestEqual(TEXT("latest: near clip"), Latest.ProjectorNearClip, 25.f);
+
+    FSpotLightSceneProxyDesc UE;
+    RoundTrip(FSCViewerEngineObjectVersion::BeforeCustomVersionWasAdded, UE, bAll);
+    TestTrue(TEXT("UE layout: every byte read"), bAll);
+    TestEqual(TEXT("UE layout: Wrap"), int32(UE.LightFunctionAddress), int32(LIGHT_FUNCTION_ADDRESS_WRAP));
+    TestEqual(TEXT("UE layout: UE's range fade"), UE.RangeFadeFraction, 0.f);
+    TestFalse(TEXT("UE layout: UE's distance law"), UE.bBulbOffsetAttenuation);
+    TestEqual(TEXT("UE layout: cone"), int32(UE.Shape), int32(ESpotLightShape::Cone));
+    TestEqual(TEXT("UE layout: no near clip"), UE.ProjectorNearClip, 0.f);
+    TestEqual(TEXT("UE layout: fields after the fork's still read (attenuation radius)"), UE.AttenuationRadius, 500.f);
+    TestEqual(TEXT("UE layout: fields after the fork's still read (source radius)"), UE.SourceRadius, 7.f);
+    TestEqual(TEXT("UE layout: fields after the fork's still read (cone angles)"), UE.OuterConeAngle, 34.f);
+
+    FSpotLightSceneProxyDesc E12;
+    RoundTrip(FSCViewerEngineObjectVersion::LocalLightFalloffModels, E12, bAll);
+    TestTrue(TEXT("E1-2 layout: every byte read"), bAll);
+    TestEqual(TEXT("E1-2 layout: falloff read"), E12.RangeFadeFraction, 0.2f);
+    TestEqual(TEXT("E1-2 layout: cone (no shape yet)"), int32(E12.Shape), int32(ESpotLightShape::Cone));
+    TestEqual(TEXT("E1-2 layout: Wrap (no address yet)"), int32(E12.LightFunctionAddress), int32(LIGHT_FUNCTION_ADDRESS_WRAP));
+    TestEqual(TEXT("E1-2 layout: cone angles"), E12.InnerConeAngle, 12.f);
     return true;
 }
 

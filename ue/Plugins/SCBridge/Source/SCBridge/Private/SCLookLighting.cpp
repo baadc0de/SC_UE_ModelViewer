@@ -61,7 +61,9 @@ void EmissionSamples(const ULightComponent* Light, TArray<TPair<FVector, double>
 {
     constexpr int32 Rings = 8, PerRing = 16;
     const auto* Spot = Cast<USpotLightComponent>(Light);
-    const double MaxAngle = Spot ? FMath::DegreesToRadians(FMath::Clamp(double(Spot->OuterConeAngle), 1.0, 89.0)) : FMath::DegreesToRadians(85.0);
+    // The bounding cone: the outer cone, or the cone through a square frustum projector's corners (WP-E1 E1-3).
+    const double MaxAngle = Spot ? FMath::Clamp(double(Spot->GetHalfConeAngle()), FMath::DegreesToRadians(1.0), FMath::DegreesToRadians(89.0))
+                                 : FMath::DegreesToRadians(85.0);
     Out.Add({FVector::ForwardVector, 1.0});
     for (int32 R = 1; R <= Rings; ++R)
     {

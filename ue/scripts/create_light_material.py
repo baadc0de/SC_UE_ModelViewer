@@ -7,10 +7,9 @@ if not material:
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         "M_SC_LightFunction", "/SCBridge/Materials", unreal.Material, unreal.MaterialFactoryNew())
 material.set_editor_property("material_domain", unreal.MaterialDomain.MD_LIGHT_FUNCTION)
-# WP-E1 E1-1: the TextureCoordinate node below (the border) marks the graph as manipulating texture coordinates, which takes
-# the material out of the light-function atlas (HLSLMaterialTranslator bIsLightFunctionAtlasCompatible): MegaLights then
-# drops every gobo and deferred lights fall back to the per-light pass. The UV is the light function's own coordinate,
-# which is what the atlas renders the material in, so the material declares itself compatible.
+# WP-E1 E1-1: a material outside the light-function atlas (HLSLMaterialTranslator bIsLightFunctionAtlasCompatible) loses its
+# gobo in MegaLights and makes deferred lights fall back to the per-light pass. The graph samples the gobo at the light
+# function's own coordinate, which is what the atlas renders the material in, so the material declares itself compatible.
 material.set_editor_property("force_compatible_with_light_function_atlas", True)
 unreal.MaterialEditingLibrary.delete_all_material_expressions(material)
 sample = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D)
@@ -24,21 +23,11 @@ weights.set_editor_property("constant", unreal.LinearColor(0.2126, 0.7152, 0.072
 luminance = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionDotProduct)
 assert unreal.MaterialEditingLibrary.connect_material_expressions(sample, "RGB", luminance, "A")
 assert unreal.MaterialEditingLibrary.connect_material_expressions(weights, "", luminance, "B")
-# WP-L3: the game samples a projector's texture with a border sampler (TiledShading SpotTexArray, SampStateTrilinearBorder),
-# so nothing reaches past the texture's square; the importer opens the UE cone to that square's corners. Zero outside
-# UV [0, 1] here (the light-function pass without the atlas; the atlas path is patched in ue/scripts/engine_patches.py).
-uv = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate)
-border = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionCustom)
-border.set_editor_property("code", "return all(UV == saturate(UV)) ? 1.0f : 0.0f;")
-border.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
-border_input = unreal.CustomInput()
-border_input.set_editor_property("input_name", "UV")
-border.set_editor_property("inputs", [border_input])
-assert unreal.MaterialEditingLibrary.connect_material_expressions(uv, "", border, "UV")
-masked = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionMultiply)
-assert unreal.MaterialEditingLibrary.connect_material_expressions(luminance, "", masked, "A")
-assert unreal.MaterialEditingLibrary.connect_material_expressions(border, "", masked, "B")
-assert unreal.MaterialEditingLibrary.connect_material_property(masked, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+# The game samples a projector's texture with a border sampler (TiledShading SpotTexArray, SampStateTrilinearBorder), so
+# nothing reaches past the texture's square. The engine fork does that for every light function (WP-E1 E1-3: the importer
+# sets LightFunctionAddress Border, black outside the projected [0, 1] square in the atlas and the per-light pass), so the
+# material is the gobo's luminance only.
+assert unreal.MaterialEditingLibrary.connect_material_property(luminance, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 unreal.MaterialEditingLibrary.recompile_material(material)
 unreal.EditorAssetLibrary.save_loaded_asset(material)
 unreal.log("WP-U3 LIGHT_MATERIAL_OK")

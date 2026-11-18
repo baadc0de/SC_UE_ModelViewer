@@ -165,6 +165,9 @@ Change:
 - **Border.** `M_SC_LightFunction` returns 0 outside UV [0, 1] (`create_light_material.py`; needs
   `-AllowCommandletRendering`). The light-function atlas, which MegaLights uses and which wraps UVs with `frac`, is
   engine-patched to zero spot light functions outside [0, 1].
+- **Superseded (WP-E1 E1-3).** The engine fork renders the square frustum itself: the importer sets `Shape` SquareFrustum
+  with the half-FOV as outer angle and `LightFunctionAddress` Border (`FSCLightImporter::MakeProjector`); the corner cone,
+  the lateral `LightFunctionScale`, the material's border node and the atlas patch are gone. See WP-E1 "Result (E1-3)".
 - **Tests.** `SCBridge.Lights.ProjectorCone` covers the corner angle, the UV edge at the FOV for the angle UE renders, the corners inside the rendered cone, and the 88.9° limit.
   `SCBridge.Rig.Lights` checks that a projector with a bound gobo gets the frustum and that one without keeps its
   cone.

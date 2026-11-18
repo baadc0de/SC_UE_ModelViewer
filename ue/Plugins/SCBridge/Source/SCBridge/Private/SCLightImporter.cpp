@@ -139,13 +139,12 @@ double FSCLightImporter::StateCandela(const TSharedPtr<FJsonObject>& Light, cons
     return Game.PointCandela(Raw, FMath::Max(0., LightNumber(Light, TEXT("bulb_radius_m"))),
                              LightNumber(Light, TEXT("attenuation_tweak"), 1.0));
 }
-FSCLightImporter::FProjectorCone FSCLightImporter::ProjectorCone(double HalfFovDeg)
+void FSCLightImporter::MakeProjector(USpotLightComponent* Spot, double HalfFovDeg)
 {
-    FProjectorCone Cone;
-    Cone.FovTan = FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(HalfFovDeg, 0.0, MaxSpotConeDeg)));
-    // The square frustum's diagonal, within UE's limit.
-    Cone.OuterDeg = FMath::Min(FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * Cone.FovTan)), MaxSpotConeDeg);
-    return Cone;
+    Spot->SetShape(ESpotLightShape::SquareFrustum);
+    Spot->SetOuterConeAngle(float(HalfFovDeg));
+    Spot->SetInnerConeAngle(float(HalfFovDeg)); // unused by the square frustum; no cone falloff in the game either
+    Spot->SetLightFunctionAddress(ELightFunctionAddress::Border);
 }
 
 FVector FSCLightImporter::ContainerBasis(const FVector& Cry, bool bHelperFrame)
@@ -328,18 +327,10 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             if (Master && Texture)
             {
                 Light->SetLightFunctionMaterial(GoboMaterial(Vehicle, Master, Texture));
-                // The game's projector is the texture over the square FOV frustum, without a cone falloff: open UE's
-                // cone to the frustum corners (the material zeroes everything outside the texture) and keep the gobo on
-                // the FOV frustum. The exported inner angle is not a game value and is not used for projectors.
+                // The game's projector is the texture over the square FOV frustum, without a cone falloff (MakeProjector).
+                // The exported inner angle is not a game value and is not used for projectors.
                 if (auto* Spot = Cast<USpotLightComponent>(Light))
-                {
-                    const FProjectorCone Cone = ProjectorCone(LightNumber(J, TEXT("outer_angle")));
-                    Spot->SetOuterConeAngle(Cone.OuterDeg);
-                    Spot->SetInnerConeAngle(Cone.OuterDeg);
-                    const double Axial = Spot->LightFunctionScale.Z; // along the light ("z of the user scale", UE)
-                    const double Lateral = Axial * Cone.LateralScale(Spot->GetClampedConeAngles().Y);
-                    Spot->SetLightFunctionScale(FVector(Lateral, Lateral, Axial));
-                }
+                    MakeProjector(Spot, LightNumber(J, TEXT("outer_angle")));
             }
             else
                 Warnings.Add(Name + TEXT(": gobo unavailable: ") + TexturePath);

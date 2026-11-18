@@ -211,6 +211,123 @@ patched to zero spot light functions outside UV [0, 1]; the non-atlas pass relie
 - The importer then sets the FOV directly; the CPU mapping of the game's `projectorNearPlane` stays unverified and is
   not guessed.
 
+#### Result (E1-3)
+Engine `20605cb76` (with the E1-1 review fixes), after `dd77a0317` (E1-2 review fixes, below).
+- **Contract.** `USpotLightComponent::Shape` { `Cone`, `SquareFrustum` } and `ProjectorNearClip` (cm, >= 0), set through
+  `SetShape` / `SetProjectorNearClip`; `ULightComponent::LightFunctionAddress` { `Wrap`, `Border` } (`SetLightFunctionAddress`);
+  all three carried by the proxy descriptors (`BuildSceneProxyDesc`, versioned serialization) and the proxies. In
+  `SquareFrustum` the outer angle is the half-FOV h, clamped like UE's outer cone (at most 88.9° + 0.001 rad, independent
+  of the inner angle; 90° is an infinite frustum); the lit region is max(|y|, |z|) <= x tan(h) in light space, hard edged,
+  without cone falloff. y and z are the light-space axes the light function's UVs use (`.zyx` of `WorldToLight`), so with a
+  uniform `LightFunctionScale` (UE's default 1024³) the gobo spans the square, u, v = 0 / 1 at its edges; the importer's
+  orientation (`MakeFromXZ(direction, up)`) is unchanged.
+- **Bounds and culling: the enclosing cone** atan(√2 tan h). The spot proxy's outer cone (and its cos / sin / tan) is that
+  cone in this shape, so every cone consumer covers the square's corners unchanged: CPU bounding sphere and `AffectsBounds`
+  (component and proxy), light grid culling (view and world grid), the deferred stencil cone, the whole-scene shadow
+  projection (`InvTanOuterCone`, so the spot shadow frustum and VSM contain the corners), Lumen's light culling, ray-traced
+  shadow rays, the path tracer's light bounds. Lumens convert over the square's solid angle 4 asin(sin² h).
+- **Shading: the square.** `GetSpotLightShapeAttenuation` (`LocalLightFalloff.ush`) replaces the cone term in
+  `GetLocalLightAttenuation`, so deferred, clustered / forward, MegaLights (sampling and shading), Lumen (surface cache,
+  HWRT, world cache), volumetric fog, the translucency volume, heterogeneous volumes, clouds, Substrate forward and
+  ray-traced lighting evaluate it; the path tracer calls the same function in its hit, sample and estimate paths (its
+  volume sampler keeps the enclosing cone's importance, since the square's corners can be lit where the cone term at the
+  closest point is not); the reflection light-shape pass (`SceneVisibility.cpp`) tests the square. The projector near
+  clip zeroes the light where the axial light-space depth is below it, in either shape; it multiplies the attenuation, so
+  no light function or light function fade restores it.
+- **Packing (no new lanes).** The packed spot angles become (cos of the enclosing cone, tan h) in this shape; a consumer
+  that still reads them as a cone sees a falloff that is non-zero exactly inside the enclosing cone, i.e. a conservative
+  cone test. The shape and the near clip go into E1-2's falloff float4, whose `.y` is now a model word stored bit for bit
+  (`LightDefinitions.h`): bits 0..3 distance attenuation model, 4..7 spot shape, 16..31 near clip as a half. All-zero and
+  a default `FVector4f` still mean UE's behaviour, and every packed form E1-2 extended (forward record, light uniforms,
+  GPU scene, Lumen, path tracer) carries them without growing. The axes come from the light's `Tangent` (light-space z),
+  which every packed form already carries.
+- **Light function border.** `Border` is tested on the unwrapped projected UVs (outside [0, 1] or behind the light gives
+  0) before `frac` in `LightFunctionAtlasCommon.usf` (light record parameter bit 24) and before the material in the per-
+  light passes (`LightFunctionCommon.ush`; `LightFunctionParameters.z` = 2 from `FLightFunctionSharedParameters`, the
+  ray tracing, path tracing, Lumen and mobile setups). Inside the square the atlas sample is UE's: the UV is saturated
+  and the slot's half-texel inset keeps bilinear taps in the tile, so the edge texels end the gobo; with `Border` the
+  UVs are no longer wrapped (u = 1 is not folded onto u = 0). The light function's projection angle is now a proxy
+  virtual (`GetLightFunctionTanOuterAngle`: the half-FOV for a square frustum) used by the atlas and all per-light passes.
+- **E1-1 review fixes** (`out/e1/followups.md`). HIGH: the gobo no longer repeats outside its square (the border above).
+  LOW: `LightFunctionAtlas.cpp` checks material compatibility before the record budget, counts incompatible lights in
+  every non-shipping build, and words the warnings as "not sampling the atlas", naming the fallback (deferred lighting's
+  per-light light function pass; the atlas-only paths draw no light function).
+- **Mobile** keeps the shape and the near clip (and the light's axes) while it still drops E1-2's falloff. Per-vertex
+  forward translucency ignores spot shapes as UE ignores spot cones there. **Not covered:** GPU / CPU Lightmass bakes
+  (static lights; GPU Lightmass would read tan h as a cone falloff), the editor's spot light visualizer (draws a cone).
+- **Project.** `FSCLightImporter::MakeProjector`: a projector whose gobo binds gets `SquareFrustum`, outer = inner = the
+  game's half-FOV, `Border`; `FProjectorCone` and the lateral `LightFunctionScale` rescale are gone (the scale stays UE's
+  uniform default). `ProjectorNearClip` stays 0: the export carries no field that can be shown to map to the shader's
+  `projDepthCutoff` (WP-L3 part 3). `create_light_material.py` lost its border node (luminance of the gobo only, still atlas
+  compatible); `M_SC_LightFunction` regenerated with the fork's editor. The probe evaluates the square;
+  `sc.Lights.ProjectorShape 0|1|2` switches every imported projector to UE's cone + wrap at the same angles (0), back to
+  the import (1), or to the E1-2 importer's emulation (2: corner cone, lateral light function scale, wrap). The look's floor
+  wash samples the bounding cone (`GetHalfConeAngle`).
+- **Tests** (tests first): with the new expectations and the old importer, `SCBridge.Rig.Lights` failed on exactly the
+  four projector checks (`'projector: square frustum'`, `'outer angle is the game's half-FOV' to be 30 ... was 39.23`,
+  `'gobo black outside its square (border)'`, `'uniform light function scale'`; `out/e1/E1-3/tests-first.log`) while the
+  engine-contract tests passed; after the importer change 12/12 (`SCBridge.StarEngine`, `.Lights`, `.Rig.Lights`, log
+  `E1-3-tests.log`). New: `SCBridge.Lights.ProjectorShape` (UE defaults; enclosing cone on component and proxy; light
+  function tangent = tan h; packed spot angles and model word incl. the near clip half; corner inside / beyond-corner
+  outside `AffectsBounds`; the 88.9° clamp; the solid angle) replaces `ProjectorCone`; `SCBridge.Lights.ProxyDescArchive`.
+- **Runs** (fork, medfrnt, WP-L3's poses and region boxes, `out/e1/E1-3/run1.txt` MegaLights, `run2.txt` deferred via
+  `r.MegaLights.Allowed 0`; `regions-run1.txt`, `regions-run2.txt`, `signed.txt`, `shots/`; logs `E1-3-run1.log`,
+  `E1-3-run2.log`). The atlas log reads `186 light(s) with a light function, 186 sampling the atlas ...; not sampling the
+  atlas: 0 with a material that is not atlas compatible, 0 over the light records, 0 over the material tiles`; each toggle
+  logged `LIGHT_PROJECTOR_SHAPE ... lights=241`. "E1-2 emulation" is `sc.Lights.ProjectorShape 2` (it reproduces E1-2's
+  own captures within 0.4 %):
+
+  | View, region | WP-L3 part 3 | E1-2 (fork) | square + border, ML | cone + wrap, ML | E1-2 emulation, ML | square + border, deferred | cone + wrap, deferred |
+  |---|---|---|---|---|---|---|---|
+  | top, pad centre | n/a | 0.1455 | 0.1455 | 0.1456 | 0.1457 | 0.1474 | 0.1473 |
+  | top, side walkways L / R | 0.210 / 0.190 | 0.0446 / 0.0760 | 0.0446 / 0.0760 | 0.0449 / 0.0763 | 0.0447 / 0.0761 | 0.0456 / 0.0758 | 0.0459 / 0.0759 |
+  | top, centre / left walkway | 0.62 | 3.26 | 3.26 | 3.24 | 3.26 | 3.23 | 3.21 |
+  | ref, near / mid / far pad | n/a / n/a / 0.114 | 0.2189 / 0.1711 / 0.0557 | 0.2191 / 0.1714 / 0.0554 | 0.2188 / 0.1715 / 0.0555 | 0.2187 / 0.1712 / 0.0559 | 0.2186 / 0.1722 / 0.0565 | 0.2185 / 0.1722 / 0.0565 |
+  | ref, upper walls / elevator | 0.097 / 0.133 | 0.0684 / 0.0801 | 0.0679 / 0.0796 | 0.0680 / 0.0796 | 0.0685 / 0.0802 | 0.0691 / 0.0824 | 0.0691 / 0.0823 |
+  | long, right floor / right wall | n/a | 0.2290 / 0.0701 | 0.2295 / 0.0701 | 0.2298 / 0.0701 | 0.2289 / 0.0701 | 0.2291 / 0.0707 | 0.2295 / 0.0707 |
+
+  The square changes region means by under 1 %: of the hangar's four gobos (`out/hangar-light/gobos.png`) three lie inside
+  the square's inscribed circle and the fourth only softly reaches its corners, so square and inscribed cone differ on
+  ≤ 0.03 % of pixels (signed, > 8 levels). What the border removes is the E1-2 state's wrapped gobo between the square
+  and the corner cone (the E1-1 review's HIGH item): against the square the E1-2 emulation is brighter on 0.011 % (top),
+  0.18 % (ref) and 0.54 % (long) of pixels and darker on at most 0.01 %, the same in MegaLights and deferred
+  (0.011 / 0.19 / 0.54 %); recapturing the square changes ≤ 0.001 %. The light it removes is the elevator canopy's top
+  and the upper wall bulges' edges (`shots/border_long_ml.png`, `border_long_def.png`: E1-2 emulation, square, their
+  difference ×8; `crop_ref_header_*.png`, `crop_long_wall_*.png`). The deferred column is ~1 % brighter than MegaLights
+  (renderer difference, the same for every shape); the first deferred capture after the switch was still adapting and is
+  not in the table.
+- **WP-L3 part 3 re-judged.** Its "walkways 5x brighter" (0.210 / 0.190) does not reproduce: with the gobos in the atlas
+  and the border, the corrected footprint keeps the walkways at 0.045 / 0.076 and the pad centre at 3.3× the left
+  walkway, as E1-2 found. Astra (`out/e1/E1-3/astra/`, gpt-6.2-astra, reference `out/hangar-light/ref/reference.jpg`
+  against the reference-pose captures): square and cone are "a visual tie on both surfaces", 5/10 each; what still differs
+  is light range / overlap (the reference's A1 pool is separated from the foreground by a darker band through the hatch,
+  ours fills it; the right walkway is too evenly lit between the amber fixtures) and softer highlight shoulders
+  (post-processing), not the projector shape. So the game's square frustum stays (it is the game's rule and costs nothing
+  visible); the remaining pool mismatch is a range / placement question (the 2020 light set predates 4.10.2's).
+- **UE default unchanged.** Cone + Wrap packs UE's spot angles, a zero model word and `LightFunctionParameters.z` 1, and
+  the atlas border bit is 0 (`ProjectorShape` test); the cone term is UE's expression; the deferred / MegaLights region
+  means with the falloff models on match E1-2's run to 0.1 %.
+- **Open.** Mobile, the path tracer, Lumen HWRT and ray-traced lighting were not run (compile and review only). The near
+  clip is implemented and packed but not set by the importer (no export field proven to map to `projDepthCutoff`).
+
+#### E1-2 review fixes
+Engine `dd77a0317` (`SCViewer: falloff models review fixes`, `out/e1/E1-2/terra-review.md`):
+1. `EstimateLocalLight` (light grid cell and per-pixel energy culling) evaluates the bulb offset law and its range window at
+   the true distance; the 0.01 cm² clamp stays for UE's inverse square and exponent branches only.
+2. Per-vertex forward translucency: `FSimpleDeferredLightData` carries the unpacked models (`ConvertToSimpleLight`), and
+   `GetSimpleDynamicLighting` uses the shared law and window; zero-initialised simple lights evaluate UE's
+   1 / (d² + 1) · (1 − (d/R)⁴)² as before.
+3. Path tracer capsules: the ratio d² / (max(d, b) + c)² assumes a sphere emitter's geometric 1 / d², which an extended capsule
+   does not produce near the light. Normalising the capsule's sampled contribution would need its irradiance integral per
+   sample, out of proportion for a light shape SC content does not use (`SourceLength` 0), so capsule point / spot lights
+   (`SourceLength` > 0) keep UE's distance law in the path tracer (explicit fallback; range window still applied).
+4. FastGeo: a custom version `FSCViewerEngineObjectVersion` (`SCViewerEngineObjectVersion.h`) guards the E1-2 fields in
+   `FLocalLightSceneProxyDesc::Serialize` (and E1-3's in the light and spot descriptors): an archive written without them
+   loads UE's defaults and reads every later field at the right offset (`SCBridge.Lights.ProxyDescArchive` writes UE's,
+   E1-2's and the current layout and reads all three back). Archives written by `362370d99` alone (unversioned, never
+   shipped) are not readable.
+`SCVIEWER_ENGINE_LIGHT_FALLOFF` 2.
+
 ### E1-4 Display curve in the engine tonemapper
 Today: `M_SC_DisplayMapping`, a post-process material at `BL_REPLACING_TONEMAPPER`, ports the game's
 `HuePreservingShoulder` (it compresses **max RGB** and desaturates by channel ratio; luminance only drives reference
@@ -272,8 +389,8 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 |---|---|---|---|
 | E1-0 | none (project only) | Web / Wasm build, `SC_WITH_FFI`, baked hangar lighting, Wasm target code removed; scripts and docs default to the fork; plan D17 | project build, 81/81 tests, medfrnt game run (Result (E1-0)) |
 | E1-1 | `ad613210a` | `DefaultEngine.ini` (MaxLightCount=255 dropped), `SCLightVerification` (`atlas_light_records`), `M_SC_LightFunction` atlas-compatible, uproject `UE_5.9_src` | engine + project build, 11/11 tests, medfrnt + lrgtop runs (Result (E1-1)) |
-| E1-2 | `362370d99` | importer: range fade (all local lights) + bulb offset law (authored point / spot), no `SoftSourceRadius`; probe; `sc.Lights.FalloffModels`; tests | engine + project build, 11/11 tests, medfrnt run with UE-default A/B (Result (E1-2)) |
-| E1-3 | — | — | — |
+| E1-2 | `362370d99`, review fixes `dd77a0317` (E1-3 section) | importer: range fade (all local lights) + bulb offset law (authored point / spot), no `SoftSourceRadius`; probe; `sc.Lights.FalloffModels`; tests | engine + project build, 11/11 tests, medfrnt run with UE-default A/B (Result (E1-2)) |
+| E1-3 | `20605cb76` (+ `dd77a0317` E1-2 review fixes) | importer `MakeProjector` (SquareFrustum, half-FOV, Border; no corner cone / lateral scale), `M_SC_LightFunction` without border node (regenerated), square-aware probe, `sc.Lights.ProjectorShape 0\|1\|2`, tests | engine + project build, tests first, 12/12 tests, medfrnt MegaLights + deferred runs, Astra (Result (E1-3)) |
 | E1-4 | — | — | — |
 | E1-5 | — | — | — |
 | E1-6 | — | — | — |

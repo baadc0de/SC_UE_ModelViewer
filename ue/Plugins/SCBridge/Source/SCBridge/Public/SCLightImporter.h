@@ -28,24 +28,12 @@ public:
     // that cannot shade that surface and reports them as `gated`.
     static TArray<FString> Probe(const UWorld* World, const FVector& Point, const AActor* Ignore, int32 Top, uint8 ReceiverChannels = 0);
     // A game projector is its texture over a square frustum of half-angle FOV / 2 (TiledShading samples SpotTexArray at
-    // the projected position, border = 0) with no cone falloff. In UE the spot cone must reach the frustum corners and
-    // the light function, whose UVs UE scales by tan(outer), is scaled back laterally to the FOV frustum.
-    // UE's spot inner-cone limit (USpotLightComponent::GetClampedConeAngles), not a game value. UE renders the outer
-    // angle at least 0.001 rad wider than the inner one and scales light-function UVs by the tangent of that rendered
-    // angle, so the lateral scale is taken from the component's clamped angles (LateralScale).
-    static constexpr double MaxSpotConeDeg = 88.9;
-    struct FProjectorCone
-    {
-        double OuterDeg = 0; // UE outer = inner cone half-angle as set on the component
-        double FovTan = 0;   // tan(FOV / 2): where the gobo's edge must land
-        // LightFunctionScale.X / .Z = .Y / .Z for the outer angle UE renders (radians, GetClampedConeAngles().Y).
-        double LateralScale(double RenderedOuterRad) const
-        {
-            const double RenderedTan = FMath::Tan(RenderedOuterRad);
-            return RenderedTan > 0 ? FovTan / RenderedTan : 1.0;
-        }
-    };
-    static FProjectorCone ProjectorCone(double HalfFovDeg);
+    // the projected position with a border sampler) with no cone falloff. The engine fork's spot light shape (WP-E1 E1-3)
+    // renders exactly that: Shape SquareFrustum with OuterConeAngle = FOV / 2 (UE's light function UVs then span the
+    // square: LightFunctionScale stays uniform) and LightFunctionAddress Border (black outside the gobo). The engine keeps
+    // UE's 88.9-degree limit on the half-FOV. The game's near-depth cut (projDepthCutoff) is not set: the CPU mapping of
+    // projectorNearPlane is unverified (ProjectorNearClip stays 0).
+    static void MakeProjector(class USpotLightComponent* Spot, double HalfFovDeg);
     // Container-local CryEngine vector (metres) -> the axes of the component its lights hang from (still metres).
     static FVector ContainerBasis(const FVector& Cry, bool bHelperFrame);
     static void Build(const FSCPackageSource& Source, const FSCSceneInstance& Instance, ASCVehicle* Vehicle, USceneComponent* Parent,
