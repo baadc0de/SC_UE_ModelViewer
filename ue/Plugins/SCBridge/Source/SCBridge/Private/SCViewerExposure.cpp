@@ -10,8 +10,8 @@
 #if !defined(SCVIEWER_ENGINE_TONE_CURVE) || SCVIEWER_ENGINE_TONE_CURVE < 2
 #error "SCBridge needs the SCViewer fork of UE 5.9 with the display curve (WP-E1 E1-4 with its review fixes, SCVIEWER_ENGINE_TONE_CURVE 2)"
 #endif
-#if !defined(SCVIEWER_ENGINE_EXPOSURE) || SCVIEWER_ENGINE_EXPOSURE < 3
-#error "SCBridge needs the SCViewer fork of UE 5.9 with the exposure features (WP-E1 E1-5, SCVIEWER_ENGINE_EXPOSURE 3)"
+#if !defined(SCVIEWER_ENGINE_EXPOSURE) || SCVIEWER_ENGINE_EXPOSURE < 4
+#error "SCBridge needs the SCViewer fork of UE 5.9 with the exposure features and their review fixes (WP-E1 E1-5, SCVIEWER_ENGINE_EXPOSURE 4)"
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCExposure, Log, All);
@@ -129,12 +129,14 @@ void FSCExposureSettings::Apply(FPostProcessSettings& S, bool bGameMeter, bool b
     S.bOverride_AutoExposureSpeedDown = true; S.AutoExposureSpeedDown = SpeedDown;
     // A field and its override: the value when on, UE's default and no override when off.
 #define SC_EXPOSURE_SET(On, Field, Value) S.bOverride_##Field = (On); S.Field = (On) ? (Value) : UE.Field
-    SC_EXPOSURE_SET(bGameMeter, AutoExposureMeter, Meter);
+    // The meter and adaptation are overridden either way (game: the game's; ue: UE's Reflected / Default), so a lower-priority volume's
+    // choice never wins over the A/B; their parameters are the viewer's only with the game's choice.
+    S.bOverride_AutoExposureMeter = true; S.AutoExposureMeter = bGameMeter ? Meter : EAutoExposureMeter::Reflected;
+    S.bOverride_AutoExposureAdaptation = true; S.AutoExposureAdaptation = bGameAdaptation ? EAutoExposureAdaptation::TwoStage : EAutoExposureAdaptation::Default;
     SC_EXPOSURE_SET(bGameMeter, AutoExposureIncidentBlend, IncidentBlend);
     SC_EXPOSURE_SET(bGameMeter, AutoExposureIncidentClampDown, IncidentClampDown);
     SC_EXPOSURE_SET(bGameMeter, AutoExposureIncidentClampUp, IncidentClampUp);
     SC_EXPOSURE_SET(bGameMeter, AutoExposureIncidentSmoothingHalfLife, IncidentSmoothingHalfLife);
-    SC_EXPOSURE_SET(bGameAdaptation, AutoExposureAdaptation, EAutoExposureAdaptation::TwoStage);
     SC_EXPOSURE_SET(bGameAdaptation, AutoExposureSlowAdaptationHalfLifeBrighter, SlowHalfLifeBrighter);
     SC_EXPOSURE_SET(bGameAdaptation, AutoExposureSlowAdaptationHalfLifeDarker, SlowHalfLifeDarker);
     SC_EXPOSURE_SET(bGameAdaptation, AutoExposureFastAdaptationHalfLife, FastHalfLife);

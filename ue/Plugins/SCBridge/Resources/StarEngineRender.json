@@ -4,7 +4,17 @@
     "branch": "sc-alpha-4.10.2",
     "version": "4.10.197.2878",
     "change": 12913470,
-    "notes": "StarEngineRender.notes.md"
+    "notes": "StarEngineRender.notes.md",
+    "additions": [
+      {
+        "work_package": "WP-E1 E1-5",
+        "source": "the installed LIVE build read by scripts/verify_star_engine_render.py on 2026-11-18 (StarCitizen.exe and Engine/ShaderCache_Vulkan.pak)",
+        "version": "4.10.0",
+        "change": 13165946,
+        "entries": ["exe_cvars.r_exposureIncidentSmoothingTime", "meterMaxCompensationPerBlend", "meterMinCompensationPerBlend", "incidentMiddleGray", "CalcUpdatedFrameState", "ApplyEyeAdaptation", "ExposureAdaptationCS"],
+        "note": "extracted from and validated against change 13165946; the entries above it were extracted from change 12913470 and validated (87/87) against 13165946 too"
+      }
+    ]
   },
   "exe_cvars": {
     "r_exposureMeterMode": {

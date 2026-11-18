@@ -15,6 +15,10 @@ any fixture change.
 | `version` | `4.10.197.2878` | `Version` |
 | `change` | `12913470` | `RequestedP4ChangeNum` |
 
+Later additions record their own source in `extracted_from.additions`: the WP-E1 E1-5 entries (`r_exposureIncidentSmoothingTime`,
+the incident clamp factors, `incidentMiddleGray` and three function hashes) come from the installed 4.10.0 build, change `13165946`,
+which the whole fixture was validated against on 2026-11-18 (87/87).
+
 Inputs, both part of the installed game (untrusted data, never checked in):
 
 - `LIVE/Bin64/StarCitizen.exe` — the cvar defaults.

@@ -62,16 +62,26 @@ double BakedBias(const FSCExposureSettings& E, const UE::AutoExposure::FCompensa
     const int32 Low = FMath::Min(FMath::FloorToInt32(At), N - 1), High = FMath::Min(Low + 1, N - 1);
     return FMath::Log2(FMath::Lerp(Texel(Low), Texel(High), At - Low));
 }
-// Sets a console variable for the scope of a test and restores it.
+// Sets a console variable for the scope of a test and restores its value and its set-by priority (a value from an ini keeps ini
+// priority afterwards, so later lower-priority changes in the same editor process still apply).
 struct FScopedConsoleValue
 {
     IConsoleVariable* Variable;
     FString Saved;
+    EConsoleVariableFlags SavedSetBy = ECVF_SetByConstructor;
     FScopedConsoleValue(const TCHAR* Name, const TCHAR* Value) : Variable(IConsoleManager::Get().FindConsoleVariable(Name))
     {
-        if (Variable) { Saved = Variable->GetString(); Variable->Set(Value, ECVF_SetByCode); }
+        if (!Variable) return;
+        Saved = Variable->GetString();
+        SavedSetBy = EConsoleVariableFlags(Variable->GetFlags() & ECVF_SetByMask);
+        Variable->Set(Value, ECVF_SetByCode);
     }
-    ~FScopedConsoleValue() { if (Variable) Variable->Set(*Saved, ECVF_SetByCode); }
+    ~FScopedConsoleValue()
+    {
+        if (!Variable) return;
+        Variable->SetFlags(EConsoleVariableFlags((Variable->GetFlags() & ~ECVF_SetByMask) | SavedSetBy));
+        Variable->Set(*Saved, SavedSetBy);
+    }
 };
 }
 
@@ -138,7 +148,48 @@ bool FSCViewerExposureLutPolicy::RunTest(const FString&)
         const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
         TestTrue(TEXT("linear extrapolation keeps UE's upper end"), D.MinX == 2.f && D.MaxX == 20.f);
     }
+    // None cycles like Cycle in FRichCurve::RemapTimeValue (only Constant holds): UE's end, and outside the keys the LUT (clamped
+    // addressing over the domain) gives what GetFloatValue gives (Astra E1-5 review 12).
+    Curve->FloatCurve.PreInfinityExtrap = RCCE_None;
+    Curve->FloatCurve.PostInfinityExtrap = RCCE_None;
+    {
+        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        TestTrue(TEXT("none extrapolation keeps UE's domain"), D.MinX == -10.f && D.MaxX == 20.f);
+    }
+    Curve->FloatCurve.PreInfinityExtrap = RCCE_Constant;
     Curve->FloatCurve.PostInfinityExtrap = RCCE_Constant;
+    {
+        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        for (const float X : {-30.f, -10.f, 0.f, 1.9f, 41.f, 60.f})
+            TestEqual(FString::Printf(TEXT("held ends: the LUT at %g is the curve's"), X), Curve->GetFloatValue(FMath::Clamp(X, D.MinX, D.MaxX)), Curve->GetFloatValue(X), 1e-6f);
+    }
+    // Degenerate settings give a usable domain (two samples at least, a positive width; Astra E1-5 review 15).
+    for (const TCHAR* Policy0 : {TEXT("0"), TEXT("1")})
+    {
+        FScopedConsoleValue P(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.Domain"), Policy0);
+        FScopedConsoleValue One(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.NumSamples"), TEXT("1"));
+        FScopedConsoleValue Lo(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MinX"), TEXT("3"));
+        FScopedConsoleValue Hi(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxX"), TEXT("3"));
+        FScopedConsoleValue NoStep(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxStep"), TEXT("0"));
+        UCurveFloat* Flat = NewObject<UCurveFloat>(GetTransientPackage());
+        Flat->FloatCurve.AddKey(3.f, 1.f);
+        Flat->FloatCurve.AddKey(3.f, 2.f);
+        for (const UCurveFloat* C : {static_cast<const UCurveFloat*>(nullptr), static_cast<const UCurveFloat*>(Flat), static_cast<const UCurveFloat*>(Curve)})
+        {
+            const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(C);
+            TestTrue(FString::Printf(TEXT("policy %s: at least two samples"), Policy0), D.NumSamples >= 2);
+            TestTrue(FString::Printf(TEXT("policy %s: a positive width"), Policy0), D.MaxX > D.MinX);
+        }
+    }
+    {
+        // The scoped override restores the priority the value had (Astra E1-5 review 17).
+        IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxStep"));
+        const uint32 Before = V->GetFlags() & ECVF_SetByMask;
+        {
+            FScopedConsoleValue Temp(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxStep"), TEXT("0.25"));
+        }
+        TestEqual(TEXT("the set-by priority is restored"), V->GetFlags() & ECVF_SetByMask, Before);
+    }
     Curve->FloatCurve.Reset();
     Curve->FloatCurve.AddKey(5.f, 1.f);
     {
@@ -194,8 +245,9 @@ bool FSCViewerExposureInstall::RunTest(const FString&)
         FPostProcessSettings U = S;
         E.Apply(U, false, false);
         const FPostProcessSettings& UE = FPostProcessSettings::GetDefault();
-        TestTrue(TEXT("ue: no meter override, UE's reflected meter"), !U.bOverride_AutoExposureMeter && U.AutoExposureMeter == EAutoExposureMeter::Reflected);
-        TestTrue(TEXT("ue: no adaptation override"), !U.bOverride_AutoExposureAdaptation && U.AutoExposureAdaptation == UE.AutoExposureAdaptation);
+        // Overridden, not cleared: a lower-priority volume's meter or adaptation must not win (Astra E1-5 review 16).
+        TestTrue(TEXT("ue: UE's reflected meter, overridden"), U.bOverride_AutoExposureMeter && U.AutoExposureMeter == EAutoExposureMeter::Reflected);
+        TestTrue(TEXT("ue: UE's adaptation, overridden"), U.bOverride_AutoExposureAdaptation && U.AutoExposureAdaptation == UE.AutoExposureAdaptation);
         TestTrue(TEXT("ue: the pupil speed"), U.bOverride_AutoExposureSpeedUp && U.AutoExposureSpeedUp == E.SpeedUp);
         TestTrue(TEXT("ue: the same curve and bounds"), U.AutoExposureBiasCurve == S.AutoExposureBiasCurve && U.AutoExposureMinBrightness == S.AutoExposureMinBrightness);
     }
@@ -546,6 +598,39 @@ bool FSCViewerExposureToneCurveDomain::RunTest(const FString&)
             TestTrue(FString::Printf(TEXT("finite: %s"), *Case), bFinite);
             TestTrue(FString::Printf(TEXT("continuous: %s (worst slope %.3f)"), *Case, WorstSlope), WorstSlope < 4.0);
         }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureUeSelection, "SCBridge.ViewerExposure.UeSelection",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerExposureUeSelection::RunTest(const FString&)
+{
+    // sc.Look.Exposure ue over a map volume that opts into the game-style meter and adaptation: the viewer volume's explicit
+    // Reflected / Default wins in the blended view (Astra E1-5 review 16; clearing the override let the map's choice through).
+    const FSCExposureSettings E = FSCExposureSettings::From(SyntheticGame(), FSCEngineExposure::FromEngine());
+    FPostProcessSettings Map;
+    Map.bOverride_AutoExposureMeter = true; Map.AutoExposureMeter = EAutoExposureMeter::Incident;
+    Map.bOverride_AutoExposureAdaptation = true; Map.AutoExposureAdaptation = EAutoExposureAdaptation::TwoStage;
+    FSceneViewFamily Family(FSceneViewFamily::ConstructionValues(nullptr, nullptr, FEngineShowFlags(ESFIM_Game)).SetTime(FGameTime()));
+    FSceneViewInitOptions Init;
+    Init.ViewFamily = &Family;
+    Init.SetViewRectangle(FIntRect(0, 0, 64, 64));
+    Init.ViewOrigin = FVector::ZeroVector;
+    Init.ViewRotationMatrix = FMatrix::Identity;
+    Init.ProjectionMatrix = FReversedZPerspectiveMatrix(UE_HALF_PI / 2, 1.f, 1.f, 10.f);
+    for (const bool bGame : {false, true})
+    {
+        FPostProcessSettings Viewer;
+        E.Apply(Viewer, bGame, bGame);
+        FSceneView View(Init);
+        View.StartFinalPostprocessSettings(FVector::ZeroVector);
+        View.OverridePostProcessSettings(Map, 1.f);
+        View.OverridePostProcessSettings(Viewer, 1.f);
+        const FFinalPostProcessSettings& F = View.FinalPostProcessSettings;
+        TestEqual(FString::Printf(TEXT("%s: the blended meter"), bGame ? TEXT("game") : TEXT("ue")), int32(F.AutoExposureMeter),
+                  int32(bGame ? E.Meter : EAutoExposureMeter::Reflected));
+        TestEqual(FString::Printf(TEXT("%s: the blended adaptation"), bGame ? TEXT("game") : TEXT("ue")), int32(F.AutoExposureAdaptation),
+                  int32(bGame ? EAutoExposureAdaptation::TwoStage : EAutoExposureAdaptation::Default));
+    }
     return true;
 }
 #endif

@@ -63,8 +63,8 @@ struct SCBRIDGE_API FSCExposureSettings
 
     /**
      * The viewer volume's exposure settings. Always: the histogram method, brightness bounds, percentiles, histogram range, compensation
-     * (bias 0; the curve is set by Install). bGameMeter: the game's meter; else UE's reflected meter (no override). bGameAdaptation: the
-     * two-stage adaptation; else UE's adaptation at the pupil speed.
+     * (bias 0; the curve is set by Install). bGameMeter: the game's meter; else UE's reflected meter (overridden). bGameAdaptation: the
+     * two-stage adaptation; else UE's adaptation (overridden) at the pupil speed.
      */
     void Apply(FPostProcessSettings& Settings, bool bGameMeter, bool bGameAdaptation) const;
 };

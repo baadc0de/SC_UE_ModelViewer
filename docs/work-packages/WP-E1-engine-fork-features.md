@@ -587,6 +587,50 @@ gained `r_exposureIncidentSmoothingTime` (0.5), `meterMaxCompensationPerBlend` (
   term). The game's histogram `r_ExposureThresholdRange` rejection stays unmodelled (as before). Mobile keeps UE's meter and
   adaptation. Fix 1 of the E1-4 review was not exercised in a run (the hangar has no simple lights or per-vertex translucency).
 
+#### E1-5 review fixes
+Engine `0d847e519` (`SCViewer: auto exposure review fixes`; Terra `out/e1/E1-5/terra-review.md` items T1–T7, Astra
+`out/e1/E1-5/astra-code-review.md` items A1–A18, A1/A4/A6/A7/A8/A14 being Terra's T2/T1/T6/T5/T3/T7): `SCVIEWER_ENGINE_EXPOSURE` 4.
+- **Two-stage adaptation (T1, A4, A13).** The stages adapt to the unclamped target and the brightness bounds limit the output
+  scale (0.18 × the curve's compensation at the bound / the bound; the user's bias is not in the limit), as Star Engine's
+  `CalcExposureAndNoise` clamps its final exposure; the scale is 0.18 / 2^(slow + fast) with no re-clamp in UE's uncompensated
+  space. Steady state is unchanged inside the bounds and beyond them wherever the curve holds its end value (the SC mapping's curve
+  ends at the bounds). Luminances are floored (2^−60) so a zero target cannot write a non-finite history.
+- **Curve snapshot (T2, A1, A2, A12, A15).** `FSceneView::AutoExposureCompensationCurve` (`UE::AutoExposure::
+  FCompensationCurveSnapshot`, made in `EndFinalPostprocessSettings` on the game thread: keys, LUT domain, contents hash) is all the
+  renderer reads of the curve: LUT key, bake, shader scale / bias and the CPU curve without a LUT. The illuminance passes (before
+  the LUT task is waited on) bind a dummy LUT and do not read the view state's. Only `RCCE_Constant` ends are held (`RCCE_None`
+  cycles in `FRichCurve::RemapTimeValue`); every domain has ≥ 2 samples and MaxX > MinX.
+- **Incident meter (T4, T5, T6, A7, A9, A10, A11).** A linear-space reduction of the illuminance texture (`IncidentMeterReduceCS`,
+  64 × 64-texel tiles of Σ luminance × meter weight and Σ weight; the eye adaptation pass sums the tiles) replaces the second
+  histogram, so `HistogramLogMax` no longer clips it; unlit pixels are written as −1 (no sample), so a dark lit surface counts as 0
+  with any `BlackHistogramBucketInfluence`. Every non-Reflected meter keeps the scene colour histogram (reflected meter, Incident's
+  fallback, local exposure). A view takes the family illuminance texture only where its own passes wrote it; the illuminance
+  shaders stop at their view rect; `bEyeAdaptationAllViewPixels` reduces the union of the family's illuminance rects.
+- **Fallbacks and state (T3, A3, A5, T7, A14).** Desktop forward (`IsForwardShadingEnabled`) meters Reflected. Basic eye adaptation
+  reads the view state's three-record history, not the one-record system fallback. An absent meter state is `MeterStateNone` in all
+  four lanes (`MeterStateNoneVector`; `FVector4f(x)` had left 0, 0, 1); mobile writes it. `GetLastAutoExposureReadback` returns the
+  last readback whole under a lock; `sc.Look.ExposureLog` uses it.
+- **Project (A16–A18).** `sc.Look.Exposure ue` overrides the meter and adaptation to Reflected / Default instead of clearing the
+  override (test `SCBridge.ViewerExposure.UeSelection` blends a map volume with Incident / TwoStage under it; `.Install` updated);
+  the tests' scoped cvar restores the set-by priority; `StarEngineRender.json` `extracted_from.additions` records change 13165946
+  for the E1-5 entries (notes updated).
+- **Runs** (medfrnt, `out/e1/E1-5/review/`: `rv0.txt` on the E1-5 engine, `rv1.txt` with the fixes; `steps-rv*.txt` from
+  `scripts/steps.py`; logs `E1-5-rv0.log`, `E1-5-rv1.log`). Steady state unchanged: `sc.Look.Exposure ue` equal to ±0.0001 stops at
+  all six poses, the game chain ref −9.0971 / −9.0971, floor −10.0551 / −10.0552. The incident meter no longer depends on the
+  histogram range: with `HistogramLogMax` 25.966 → 12 → 10 → 8 it read 7.240 → 7.220 → 7.211 → 6.977 (ref) and 8.624 → 7.916 (floor)
+  before, 7.2264 / 8.6110 at every maximum after (the linear mean is 0.014 stops below the old bucket mean at the default range).
+  Compensation +3 with the target beyond a bound: before, 99.5 % of the change within 0.1 s at the upper bound (and −3 at the lower
+  bound 99 % within 0.25 s); after, none within 0.5 s, t50 1.5 s, t90 2.6 s, and only +1.23 stops (the limit holds the other 1.77 the
+  scene lies beyond it); at the lower bound (6 stops of saturation) the output stays at its limit, as the game's clamp would. Released
+  after 30 s of saturation, the exposure takes the adapted state within 0.1 s (the state kept adapting; before, it re-adapted from the
+  bound). Incident alone at ref: −9.8655 → −9.8567 (its reflected lane is now measured: 4.94).
+- **Tests** (tests first where the rule is pure): `.CompensationLutPolicy` (None ends keep UE's domain, held ends match
+  `GetFloatValue` outside the keys, degenerate domains valid, the scoped cvar keeps its priority), `.UeSelection`, `.Install`;
+  25/25 with `SCBridge.Fx`, `.StarEngine`, `.Lights`, `.Rig.Lights`, `.Materials.MasterAssets` (`E1-6-tests.log`).
+- **Not covered.** No run reached desktop forward, split screen, panoramic / cube captures, mobile or the Basic method (the fixes
+  there are by reading and compiling); A13's zero target was not provoked. The GPU cost of the linear reduction was not profiled
+  separately (it replaces the second histogram, one 64 × 64-texel tile per group).
+
 ### E1-6 Niagara lightweight emitters
 Today: `NiagaraStateless::MaxGpuSpawnInfos` = 8 (overflow drops live loops; our FX builder stretches loop durations);
 spawn-rate bindings cannot evaluate expressions; expressions have add / multiply only; sprite size ignores component
@@ -596,6 +640,64 @@ scale for local-space emitters; the FX commandlet needs `bTreatAsEngineModule` t
 - Export a narrow stateless authoring API so the commandlet is an ordinary module.
 - Then, separately: spawn-rate expression evaluation; clamp / min / max / lerp expressions; an explicit sprite-size
   scale policy (UE default unchanged).
+
+#### Result (E1-6)
+Engine `ad5c402d9` (capacity), `05559963d` (expression exports), `9f382da2b` (spawn-info expressions), `c7a0e82f7` (min / max /
+clamp / lerp); `SCVIEWER_ENGINE_NIAGARA_STATELESS` 4.
+- **Capacity (a).** `NiagaraStateless::MaxGpuSpawnInfos` is 32 (UE 5.9: 8), one constant in the new public header
+  `NiagaraShader/Public/Stateless/NiagaraStatelessSpawnInfoCapacity.h` (no cvar: it sizes the shader parameter arrays and the
+  simulation shader's define). Overflows are logged (non-shipping, `LogNiagara` "has overflowed spawn infos (N of C)", once per
+  emitter when its worst overflow grows; UE drew it on screen in the editor only). Cost: 8 scalar arrays × 4 B × 24 = 768 B more
+  shader parameters per stateless emitter instance (per dispatch upload); GPU (`ProfileGPU`, 40 steam jets, the stateless
+  dispatches `FNiagaraStatelessComputeManager_OnPreRender`, 40 dispatches): 0.035 / 0.033 ms at 8, 0.034 / 0.034 ms at 32 with the
+  same 1 s loops (8 intervals each), 0.036 / 0.035 ms at 32 with 0.25 s loops (29 intervals each): within run-to-run noise.
+  Builder: the loop guard is `SCFxRules::LoopDuration(min(lifetime, 0.25 s), lifetime, NiagaraStateless::MaxGpuSpawnInfos)`
+  (the engine's constant; tests `SCBridge.Fx.LoopGuard`, `.EngineCapacity`): a loop is stretched only where 1 + ceil(lifetime /
+  loop) would not fit, now for lifetimes over 7.75 s instead of 1.75 s. The project's tractor / impact set never needed the stretch
+  (lifetimes ≤ 1 s, ≤ 5 live loops) and builds unchanged loops; a pulse burst whose bursts would not fit is reported (none in the
+  data). `-LoopCapacity=<n>` builds for another capacity (verification aid).
+- **Narrow API (b), at a documented boundary.** Exported: the capacity (public header) and the expression structs (NIAGARA_API), so
+  the commandlet builds expressions typed instead of through reflection. Not done: dropping `bTreatAsEngineModule`. The commandlet
+  configures the emitter, its spawn infos, the emitter state (`FNiagaraEmitterStateData`, `Niagara/Internal`) and 16 module
+  classes with their settings and enums, all in `Niagara/Internal/Stateless`, whose headers include the build / simulation contexts
+  and shader-parameter builders: a public header set means moving most of that tree (the whole authoring surface, and merge
+  conflicts with every upstream change to it), and a facade without those types means reflection by property name (losing the type
+  checking the commandlet has). The editor-only `SCBridgeFx` module keeps the flag; the rest of the plugin is an ordinary module.
+- **Spawn-rate expressions (c1).** Spawn rate, spawn probability, loop duration and loop delay in Expression mode are built against
+  the emitter's bindings and evaluated per loop (UE 5.9 evaluated the unbuilt expression: a binding inside it read offset −1).
+  Builder: a beam emitter's rate is `PerCm × SC.BeamLength` (the runtime no longer sets `SC.BR<i>` / reads `SC.BK<i>`); a constant
+  rate with a count strength curve is `rate × curve(SC.Strength)` (none in the data).
+- **Expressions (c2).** `Min`, `Max`, `Clamp`, `Lerp` (float). Builder: every EmitterStrength curve is the exact piecewise-linear
+  curve held at its ends, `Base + Σ Rise × clamp((s − From) × Scale, 0, 1)` (`SCFxRules::ClampSum`, test `SCBridge.Fx.ClampSum`):
+  the runtime's `SC.SV<i>` / `SC.SK<i>` evaluation (`SCFxStrength.h`) and the > 4-key polynomial are gone.
+- **Sprite size and scale (c3), no engine change.** UE 5.9 already has the policy: the stateless template's Apply Owner Scale To
+  Attributes module (`FNiagaraStatelessSystemScaleBuildData`: initial sprite size off by default = ignores the component's scale;
+  by the largest axis or one axis, with an amount; also light radius, ribbon width, decal size, velocity, forces, camera offset),
+  applied in `InitializeParticle`'s shader parameters, with fixed bounds that follow the component transform. A second enum would
+  duplicate it. Builder: sprite-like emitters (not guided beams, not lights) enable it (largest axis, amount 1); `SC.Scale2` and the
+  runtime's `SetVariableVec2("SC.Scale2")` (cargo contacts, `sc.Fx.Spawn scale=`) are gone.
+- **Runs** (medfrnt, `out/e1/E1-6/`: `run-*.txt`, `summary-*.txt`, `shots/`, logs `E1-6-*.log`; FX builds `E1-6-fxbuild-*.log`, all
+  `SC_FX_DONE systems=11 textures=10 materials=13 errors=0`; the set plus the game's steam jet `Generic_Steam_FX`
+  `steam_jet_4x8m_loop_1_gpu_decoupled`, 7 s lifetime, Count Random 0.125, so its loops never coalesce). "overflowed spawn infos":
+  (a) engine at 8 (a local measurement build of these commits), old builder: 0 (the steam's loop stretched to 1.001 s, 8 intervals);
+  (b) engine at 8, new builder sized for 32 (`-LoopCapacity=32`: the steam at 0.25 s, 29 intervals): the steam overflows, 21
+  warnings up to "29 of 8"; (c) the fork at 32, default build: 0. Tractor beam (strength 0.5, 6 m, bent 15°) and metal impact
+  (scale 2) before (a) and after (c): PSNR 51.0 dB (55.1 dB for the beam at strength 1) against 34.9 dB between consecutive frames
+  of one run. Tests: `SCBridge.Fx.LoopGuard`, `.EngineCapacity` (failed on the 8 build, as it should), `.ClampSum`; 25/25 on the
+  fork (`E1-6-tests.log`).
+- **Astra** (`out/e1/E1-6/astra/fx.md`, gpt-6.2-astra, frame sheets `shots/sheet_before.png`, `sheet_after.png`,
+  `sheet_steam_after.png`): beam "no visible regression"; impact "same effect", the fuller AFTER burst put down to randomness and
+  re-trigger phase, "no consistent enlargement or shrinkage suggesting a sprite-scale regression"; steam "visually continuous";
+  verdict: acceptable as a drop-in replacement.
+- **UE default.** Non-expression spawn-info and emitter-state distributions take the unchanged code paths; constant expressions
+  evaluate as before; the new expression structs are additions; the scale policy is UE's own module, off by default; the overflow
+  log is a diagnostic. Run (a) above is UE-default content for these paths (bound and ranged rates only): the old builder's systems
+  ran unchanged on the new engine (0 overflows; (b) against (c) and (a) against (c) visually equal). The capacity itself is a
+  deliberate change for all content (more intervals drawn, never fewer).
+- **Not covered.** The steam jet sits at the floor in the first runs (its soft-particle fade, half of a 14 m radius, hid it); the
+  visible steam frames are the fork's only (no 8-capacity steam frames). `SC.BeamLength2` stays (a float → vec2 conversion was not
+  needed for the data). Cooked showcase FX were not rebuilt; systems built before E1-6 need `-run=SCFxBuild` (the runtime no longer
+  sets `SC.SV` / `SC.BR` / `SC.Scale2`).
 
 ### E1-7 SSDO as an engine feature
 Today: patches in `MegaLightsShading.usf` and `DiffuseIndirectComposite.usf`, constants in a generated header,
@@ -623,6 +725,6 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 | E1-2 | `362370d99`, review fixes `dd77a0317` (E1-3 section) | importer: range fade (all local lights) + bulb offset law (authored point / spot), no `SoftSourceRadius`; probe; `sc.Lights.FalloffModels`; tests | engine + project build, 11/11 tests, medfrnt run with UE-default A/B (Result (E1-2)) |
 | E1-3 | `20605cb76` (+ `dd77a0317` E1-2 review fixes), review fixes `4470238ea` | importer `MakeProjector` (SquareFrustum, half-FOV, Border; no corner cone / lateral scale), `M_SC_LightFunction` without border node (regenerated), square-aware probe, `sc.Lights.ProjectorShape 0\|1\|2`, tests | engine + project build, tests first, 12/12 tests, medfrnt MegaLights + deferred runs, Astra (Result (E1-3)); review fixes: tests first, 17/17, medfrnt rerun unchanged (E1-3 review fixes) |
 | E1-4 | `3079e8bc3`, review fixes `c1e0610d4` | `FSCDisplayCurve` (curve + fidelity baseline on the viewer volume), `sc.Look.Display` switches the method, `M_SC_DisplayMapping` + its script + `KEEP` entry removed, hash guard moved to a test, notes / README; review: `bOverriddenNoneAssetsClear` in the baseline, tests `.BaselineBlend`, `.ToneCurveDomain` | engine + project build, 17/17 tests, LUT vs analytic at 32³ / 64³ / 128³, medfrnt runs material vs engine vs UE Filmic, Astra (Result (E1-4)); review fixes: 21/21 tests, MegaLights overflow run (E1-4 review fixes, Result (E1-5)) |
-| E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)) |
-| E1-6 | — | — | — |
+| E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)); review fixes `0d847e519` (Terra T1–T7, Astra A1–A18; `sc.Look.Exposure ue` overrides, scoped cvar priority, fixture provenance): 25/25 tests, medfrnt before / after runs (E1-5 review fixes) |
+| E1-6 | `ad5c402d9`, `05559963d`, `9f382da2b`, `c7a0e82f7` | SCFxBuild: loop guard from the engine constant (`SCFxRules.h`), typed expressions, beam spawn-rate and count expressions, clamp-sum strength curves, owner-scale sprite sizes, `-LoopCapacity`; runtime contract reduced (`SCFxStrength.h`, `SCFxBeam.h`, cargo contacts, `sc.Fx.Spawn`); `bTreatAsEngineModule` kept (boundary); tests `SCBridge.Fx.*`; WP-K4 contract note | engine + project build, FX build errors=0, 25/25 tests, medfrnt overflow runs at 8 / 32, GPU cost, before / after frames, Astra (Result (E1-6)) |
 | E1-7 | — | — | — |

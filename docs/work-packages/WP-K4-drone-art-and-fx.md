@@ -226,6 +226,12 @@ in the header comment of `SCFxBuildCommandlet.cpp`; `-Features=` switches them o
 
 Defaults (100 cm along +X) reproduce a 1 m straight beam. The component is no longer scaled.
 
+**Since WP-E1 E1-6** (the fork's stateless expressions) this table is the whole contract: the built systems evaluate their
+EmitterStrength curves (exact piecewise-linear clamp expressions in `SC.Strength`) and the beam emitters' spawn rates (expressions of
+`SC.BeamLength`) themselves, and an effect's scale is the component's scale (sprite sizes through Niagara's Apply Owner Scale To
+Attributes module). `SC.SV<i>` / `SC.SK<i>`, `SC.BR<i>` / `SC.BK<i>` and `SC.Scale2` (below, K4a round 2) are gone; systems built
+before E1-6 need a rebuild (`-run=SCFxBuild`).
+
 **Per item:**
 1. **Strength.** The game's strengths are read from DataCore (`effects.json` `strength`: the tractor record's
    `SWeaponActionFireTractorBeamStrengthValueParams`, values 0 / 0.5 / 1). Each EmitterStrength curve becomes the
