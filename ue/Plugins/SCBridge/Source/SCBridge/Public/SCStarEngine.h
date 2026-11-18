@@ -22,6 +22,15 @@ struct SCBRIDGE_API FSCStarEngine
     double AdaptTimePupil = 0, AdaptRangePupil = 0;              // pupil half-life (s) and range (stops)
     double DiscardRatioDark = 0, DiscardRatioBright = 0;         // histogram fractions left out of the meter
     double MeterLogMin = 0, MeterLogMax = 0;                     // LOG_MIN / LOG_MAX: the meter's log2 scene-unit range
+    // The meter (CalcLogLumMetered, OpticsExposure.cfxb): r_exposureMeterMode 0 reflected, 1 incident, 2 blend, 3 clamped blend of the
+    // reflected and the incident meter, in log2 luminance; the blend moves r_exposureIncidentBlendAmt of the way to the incident one,
+    // clamped to [reflected - MaxCompensationPerBlend * blend, reflected - MinCompensationPerBlend * blend] (mode 3).
+    int32 ExposureMeterMode = 0;                                 // r_exposureMeterMode
+    double IncidentBlendAmount = 0;                              // r_exposureIncidentBlendAmt
+    double IncidentSmoothingTime = 0;                            // r_exposureIncidentSmoothingTime: half-life (s) of the incident meter
+    double MeterMaxCompensationPerBlend = 0;                     // maxCompensation = this * IncidentBlendAmt (stops below reflected)
+    double MeterMinCompensationPerBlend = 0;                     // minCompensation = this * IncidentBlendAmt (<= 0: stops above reflected)
+    double IncidentMiddleGrey = 0;                               // ExposureAdaptationCS: incident luminance = this * white-diffuse luminance
     int32 TonemappingCurve = 0;                                  // r_HDRTonemappingCurve
     double TonemappingCurveToe = 0;                              // r_HDRTonemappingCurveToe
     // GlassPBR (glassLib.cfib GlassShared). Absorption per unit of layer height:

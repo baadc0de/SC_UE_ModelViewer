@@ -46,7 +46,7 @@ Any difference is a non-zero exit naming the value. Run it after every game patc
 and, for a changed function hash, the rule ported from that function must be re-derived — never edit a value to
 make the validator pass.
 
-The checks (80 as of WP-L3) are the 79 fixture values plus one completeness check: the fixture must list exactly the
+The checks (87 as of WP-E1 E1-5) are the 86 fixture values plus one completeness check: the fixture must list exactly the
 `r_ExposureCompensationEV<n>` cvars the executable registers (the loader builds the compensation curve from
 whatever anchors the fixture carries, so a dropped or invented anchor would otherwise pass). The shader side of
 the same curve — which anchors are read and where the segments join — is pinned by the `CalculateEVCompensation`
@@ -83,7 +83,10 @@ Method:
 | `r_ExposureCompensationEV0/4/8/12/16` | `CompensationAt` | anchors of `CalculateEVCompensation`; the scene EV is the number in the cvar name |
 | `r_ExposureMultiplierMin/Max` | `EVAtMultiplier` → UE min / max brightness | clamp of the exposure multiplier |
 | `r_ExposureDiscardRatioDark/Bright` | UE histogram low / high percent | histogram fractions left out of the meter |
-| `r_ExposureAdaptTimeDark/Bright/Pupil`, `r_ExposureAdaptRangePupil` | UE adaptation speed (pupil stage) | `PigmentAdaptation` / `PupilAdaptation` half-lives |
+| `r_ExposureAdaptTimeDark/Bright/Pupil`, `r_ExposureAdaptRangePupil` | the engine fork's two-stage adaptation (slow half-lives brighter / darker, fast half-life and range; WP-E1 E1-5); the pupil half-life also gives UE's one-stage speed for `sc.Look.Exposure ue` | `PigmentAdaptation` / `PupilAdaptation` half-lives and pupil range |
+| `r_exposureMeterMode`, `r_exposureIncidentBlendAmt`, `r_exposureIncidentSmoothingTime` | the fork's `AutoExposureMeter` (3 = Clamped Blend), its blend and the incident meter's smoothing half-life (`FSCExposureSettings`) | `CalcLogLumMetered`; `incidentSmooth` in `CalcUpdatedFrameState` |
+| `meterMaxCompensationPerBlend`, `meterMinCompensationPerBlend` | the blend's clamp: at most 3 × blend stops below and 2 × blend above the reflected meter (`IncidentClampDown` / `Up`) | `CalcLogLumMetered` (`OpticsExposure.cfxb`) |
+| `incidentMiddleGray` | `SCBridge.ViewerExposure.Meter` checks it equals UE's middle grey, the incident meter's calibration in the fork | `ExposureAdaptationCS`: incident luminance = 0.18 × white-diffuse luminance |
 | `r_HDRTonemappingCurve`, `r_HDRTonemappingCurveToe` | `FSCDisplayCurve` → the engine tone curve (`ETonemappingMethod::HuePreservingShoulder`, its Toe Scale) | curve 1 = `HuePreservingShoulder`, toe 1.0 |
 | `glassColourDensityScale`, `glassColourFloor` | `M_SC_Glass` (instance parameters from `FSCStarEngine`) | `density = (1 / max(transmissive, 0.01) − 1) × 0.1`, `transmittance = exp(−density × path)` (`GlassShared`) |
 | `glassVertexHeightBias`, `glassVertexHeightScale` | `M_SC_Glass` | `%PER_VERTEX_CURVATURE`: `height ×= saturate((vertex blue − 0.25) × 3)` |
@@ -92,8 +95,7 @@ Method:
 | `forcedFalloffFraction` | `FSCStarEngine::LightRangeFade`; the engine shader patch (WP-L3, `ue/scripts/engine_patches.py`) | a local light's range window: `GetLightForcedDistanceFade` = `saturate((1 − d / R) / 0.2)²`, full strength until the last 20 % of `lightRadius`; replaces UE's `(1 − (d / R)⁴)²`. Read from `lightbeam.cfxb`, which passes `1.0 / 0.2` (`volumetricfog.cfxb` passes the same `1 / 0.2f`) |
 
 Recorded as evidence only (they justify a documented residual or a path not taken; nothing reads them):
-`r_exposureMeterMode` 3 and `r_exposureIncidentBlendAmt` 0.5 (the game blends an incident-light meter into the
-reflected one; UE meters reflected luminance only), `r_ExposureThresholdRange` (dynamic-range threshold of the
+`r_ExposureThresholdRange` (dynamic-range threshold of the
 histogram reduction, not emulated), `r_ExposureTargetEV` 0 (no fixed target: the compensation curve is in
 force), `r_HDRDisplayOutput` 0 with `r_HDRDisplayMaxNits` / `r_HDRDisplayRefWhite` (the SDR branch of
 `DisplayMapping` is the one ported).
@@ -104,8 +106,9 @@ Functions and what was taken from each:
 |---|---|
 | `HuePreservingShoulder`, `GetLuminance`, `ToSRGB` | **ported** to the engine fork's tonemapper (`HuePreservingShoulder` in `PostProcessCombineLUTs.usf`, WP-E1 E1-4; UE's `LinearToSrgb` is the encode); `SCBridge.ViewerExposure.DisplayCurve` fails when one of these hashes differs from the one the port was written from |
 | `DisplayMapping` | call site: which curve, peak and toe the SDR path uses |
-| `CalculateEVCompensation`, `LogLumToEV`, `CalcExposureAndNoise`, `CalcLogLumMetered` | the exposure rule in `FSCStarEngine::CompensationAt` / `LogMultiplierAt` |
-| `PupilAdaptation`, `PigmentAdaptation`, `ExponentialDecay` | adaptation model (two stages; UE gets the pupil stage) |
+| `CalculateEVCompensation`, `LogLumToEV`, `CalcExposureAndNoise` | the exposure rule in `FSCStarEngine::CompensationAt` / `LogMultiplierAt` |
+| `CalcLogLumMetered`, `CalcUpdatedFrameState`, `ExposureAdaptationCS` | **ported** to the engine fork's meter (`ComputeMeteredLuminance` in `PostProcessEyeAdaptation.usf`, WP-E1 E1-5): the clamped blend, the incident meter's smoothing and its middle-grey calibration; `FSCExposureSettings::GameMeteredLog` is the C++ port the test compares the engine rule with |
+| `PupilAdaptation`, `PigmentAdaptation`, `ExponentialDecay`, `ApplyEyeAdaptation` | **ported** to the fork's two-stage adaptation (`EyeAdaptationCommon`, `TWO_STAGE_ADAPTATION`); `SCBridge.ViewerExposure.Meter` fails when one of these hashes (or the meter's) differs from the one the port was written from |
 | `ParallelReduce_Range` | histogram reduction (discard ratios, threshold range) |
 | `MaterialGlowToLinearGlow`, `CalculateEmissive` | `GlowNits` (material term) and `InstanceGlowNits` (instance term) |
 | `GetPhysicalLightAttenuation` | `PointCandela`: `1 / (tweak · (d − bulb) / bulb + 1)²`; `AttenuationOffset` = `bulb · (1 − tweak) / tweak`, the distance offset of the same curve (WP-L3: `SoftSourceRadius` + engine shader patch) |
@@ -135,6 +138,13 @@ These are stated in WP-U3b §13 with their evidence; they are the places a futur
   factor (`GetPerInstanceGlowFactor`, constant `PM_TintOverWrite_Opacity_fAlphaRef_GlowFactor.w`) whose value,
   and any CPU-side scaling between the effect value and `instData.glow`, were not established (taken as 1).
   Evidence for the reading: WP-U3b §13.3.
+- The incident meter is a proxy (WP-E1 E1-5). The game's (`exposureincident.cfib`, `r_exposureIncidentMode` 1,
+  `r_exposureIncidentNumScenePos` 128, `r_exposureIncidentNumVectors` 64; not in the fixture) places virtual Lambert receivers
+  15 cm in front of 128 screen positions' depth, lights them with the tiled lights (shadows, projectors, the bulb
+  attenuation), probes and sky over 64 weighted directions, and averages the white-diffuse luminance arithmetically. The fork
+  takes, per pixel, the white-diffuse luminance UE reconstructs from scene colour and the GBuffer (the ignore-materials path)
+  at the surface's own normal, unlit pixels left out, also averaged arithmetically; both are scaled by 0.18. The sampling
+  positions and directions differ, so the meters agree on scale, not sample for sample.
 - The executable's cvar defaults are the values in force. Checked for this build: none of the 53 `.cfg` files in
   `Data.p4k` (`starbreaker p4k extract --filter '**/*.cfg'`, including every `Engine/Config/CVarGroups/sys_spec_*.cfg`)
   sets an `r_Exposure*`, `r_HDRTonemapping*` or `r_HDRDisplay*` cvar, and the install has no `user.cfg`. The

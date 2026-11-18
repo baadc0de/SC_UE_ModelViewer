@@ -42,6 +42,9 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Out.MaxDisplayNitsLDR = Value(TEXT("shader_constants"), TEXT("MaxDisplayNitsLDR"));
     Out.MeterLogMin = Value(TEXT("shader_constants"), TEXT("LOG_MIN"));
     Out.MeterLogMax = Value(TEXT("shader_constants"), TEXT("LOG_MAX"));
+    Out.MeterMaxCompensationPerBlend = Value(TEXT("shader_constants"), TEXT("meterMaxCompensationPerBlend"));
+    Out.MeterMinCompensationPerBlend = Value(TEXT("shader_constants"), TEXT("meterMinCompensationPerBlend"));
+    Out.IncidentMiddleGrey = Value(TEXT("shader_constants"), TEXT("incidentMiddleGray"));
     Out.GlassDensityScale = Value(TEXT("shader_constants"), TEXT("glassColourDensityScale"));
     Out.GlassColourFloor = Value(TEXT("shader_constants"), TEXT("glassColourFloor"));
     Out.GlassVertexHeightBias = Value(TEXT("shader_constants"), TEXT("glassVertexHeightBias"));
@@ -68,6 +71,9 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Out.AdaptRangePupil = Value(TEXT("exe_cvars"), TEXT("r_ExposureAdaptRangePupil"));
     Out.DiscardRatioDark = Value(TEXT("exe_cvars"), TEXT("r_ExposureDiscardRatioDark"));
     Out.DiscardRatioBright = Value(TEXT("exe_cvars"), TEXT("r_ExposureDiscardRatioBright"));
+    Out.ExposureMeterMode = int32(Value(TEXT("exe_cvars"), TEXT("r_exposureMeterMode")));
+    Out.IncidentBlendAmount = Value(TEXT("exe_cvars"), TEXT("r_exposureIncidentBlendAmt"));
+    Out.IncidentSmoothingTime = Value(TEXT("exe_cvars"), TEXT("r_exposureIncidentSmoothingTime"));
     Out.TonemappingCurve = int32(Value(TEXT("exe_cvars"), TEXT("r_HDRTonemappingCurve")));
     Out.TonemappingCurveToe = Value(TEXT("exe_cvars"), TEXT("r_HDRTonemappingCurveToe"));
     // The compensation anchors carry their scene EV in the cvar name (r_ExposureCompensationEV<n>).
@@ -104,6 +110,12 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Require(Out.MultiplierMin > 0 && Out.MultiplierMin < Out.MultiplierMax, TEXT("0 < r_ExposureMultiplierMin < r_ExposureMultiplierMax"));
     Require(Out.AdaptTimeDark > 0 && Out.AdaptTimeBright > 0 && Out.AdaptTimePupil > 0, TEXT("r_ExposureAdaptTime* > 0 (half-lives)"));
     Require(Out.AdaptRangePupil >= 0, TEXT("r_ExposureAdaptRangePupil >= 0"));
+    Require(Out.ExposureMeterMode >= 0 && Out.ExposureMeterMode <= 3, TEXT("r_exposureMeterMode in 0..3"));
+    Require(Out.IncidentBlendAmount >= 0 && Out.IncidentBlendAmount <= 1, TEXT("0 <= r_exposureIncidentBlendAmt <= 1"));
+    Require(Out.IncidentSmoothingTime >= 0, TEXT("r_exposureIncidentSmoothingTime >= 0"));
+    Require(Out.MeterMaxCompensationPerBlend >= 0 && Out.MeterMinCompensationPerBlend <= 0,
+            TEXT("meterMaxCompensationPerBlend >= 0 >= meterMinCompensationPerBlend (a clamp around the reflected meter)"));
+    Require(Out.IncidentMiddleGrey > 0, TEXT("incidentMiddleGray > 0"));
     Require(Out.DiscardRatioDark >= 0 && Out.DiscardRatioBright >= 0 && Out.DiscardRatioDark + Out.DiscardRatioBright < 1,
             TEXT("r_ExposureDiscardRatioDark/Bright >= 0 and sum < 1"));
     for (int32 I = 1; I < Out.Compensation.Num(); ++I)

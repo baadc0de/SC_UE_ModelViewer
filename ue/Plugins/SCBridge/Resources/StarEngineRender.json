@@ -15,6 +15,10 @@
       "kind": "float",
       "value": 0.5
     },
+    "r_exposureIncidentSmoothingTime": {
+      "kind": "float",
+      "value": 0.5
+    },
     "r_ExposureDiscardRatioDark": {
       "kind": "float",
       "value": 0.01
@@ -155,6 +159,21 @@
       "file": "OpticsExposure.cfxb",
       "pattern": "float middleGray = (\\S+) ;"
     },
+    "meterMaxCompensationPerBlend": {
+      "value": 3.0,
+      "file": "OpticsExposure.cfxb",
+      "pattern": "const float maxCompensation = (\\S+) \\* IncidentBlendAmt ;"
+    },
+    "meterMinCompensationPerBlend": {
+      "value": -2.0,
+      "file": "OpticsExposure.cfxb",
+      "pattern": "const float minCompensation = (- \\S+|\\S+) \\* IncidentBlendAmt ;"
+    },
+    "incidentMiddleGray": {
+      "value": 0.18,
+      "file": "OpticsExposure.cfxb",
+      "pattern": "float middleGray = (\\S+) ; float avgLumIncident"
+    },
     "LOG_MIN": {
       "value": -14.0,
       "file": "Histogram.cfib",
@@ -275,6 +294,18 @@
     "CalcLogLumMetered": {
       "file": "OpticsExposure.cfxb",
       "sha256": "64c1a2f44cce6bea06bc3c49d4cbaf9e9cfc0973d71b9290f1c0c1de9a5b7ad1"
+    },
+    "CalcUpdatedFrameState": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "4f563d3dc44fe11d044df4d53c97dca4dd4c1f86542ed4ff0ca22cf27701bb0f"
+    },
+    "ApplyEyeAdaptation": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "2c7f8bd7f1908e23dd39654b4042b3de4e42c2e65bbc97ec189d67051d1c9f63"
+    },
+    "ExposureAdaptationCS": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "503485836a216f3a3d3ad92c0bc1bb2a39636e1eaff049a729d4a3dcabe52909"
     },
     "PlanarLightDiffuse_LightSpace": {
       "file": "AreaLightDiffuse.cfib",

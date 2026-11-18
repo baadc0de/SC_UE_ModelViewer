@@ -457,6 +457,34 @@ Engine `3079e8bc3` (`SCVIEWER_ENGINE_TONE_CURVE` 1).
 - **Open.** Mobile and HDR output were not run (code review only). UE grading in this mode (non-neutral white balance /
   colour wheels) is implemented but not exercised.
 
+#### E1-4 review fixes
+Engine `c1e0610d4` (`SCViewer: tone curve and light-function review fixes`, `out/e1/E1-4/terra-review.md`; it also covers the
+E1-3 review fixes): `SCVIEWER_ENGINE_LIGHT_FUNCTION_ATLAS` 2, `SCVIEWER_ENGINE_SPOT_SHAPE` 3, `SCVIEWER_ENGINE_TONE_CURVE` 2.
+1. **HIGH, simple / per-vertex lights.** `GetSimpleDynamicLighting` (`DeferredLightingCommon.ush`): the E1-3 review's near clip
+   test sat between the inverse-squared branch and its `else`, so every inverse-squared light there (per-vertex forward
+   translucency, clustered and mobile deferred simple lights, i.e. Niagara light renderers) got the exponent falloff
+   `RadialAttenuation(.., 0)` in place of its distance law, UE content included. The pair is restored; the near clip applies after
+   it. No test reaches the shader (no CPU path evaluates it); checked by reading and compiling.
+2. / 3. **Inherited LUT and local exposure curves.** UE's blending ignores an overridden None asset (`IF_PP`), so a map volume's
+   grading LUT and local exposure curves survived the viewer's neutral baseline. New `FPostProcessSettings::bOverriddenNoneAssetsClear`
+   (default off = UE): an overridden None Color Grading LUT blends towards the identity LUT (`FFinalPostProcessSettings::LerpTo`
+   takes the neutral entry) by weight × intensity, and an overridden None local exposure curve, exposure compensation curve or
+   metering mask clears the inherited one (view blending and `FPostProcessUtils`). `FSCDisplayCurve::Apply` sets it in game display.
+   Test `SCBridge.ViewerExposure.BaselineBlend` blends a real `FSceneView`: a lower-priority volume with a LUT and both curves, the
+   viewer volume over it: no map LUT, identity weight 1, no curves; at viewer weight 0.5 the LUT is half map, half identity; with
+   `sc.Look.Display ue` (flag off) and UE's own None overrides the map's LUT and curves stay (UE behaviour unchanged).
+4. **Tone curve domain.** The peak is raised on the render thread, after blending, to
+   `FPostProcessSettings::GetHuePreservingShoulderMinMaxDisplayNits(RefWhite)` = 52 · max(1, RefWhite) (peak ≥ 0.5 + 0.15 in display
+   units: knee at or above the toe range, desaturation denominator positive); UI ClampMin 52. Below it the curve jumped at the knee,
+   crushed the darks (negative knee) and, under a peak of 0.2, took a negative pow base (NaN; 8 nits did). Test
+   `SCBridge.ViewerExposure.ToneCurveDomain` (a C++ port of the engine function): NaN at 8 nits; finite and continuous at the
+   domain edge for reference whites 0.5 / 1 / 2 and toes 0 / 1 / 10 over neutral and saturated ramps; the game's 80 nits inside.
+5. **Atlas overflow under MegaLights.** A stochastic light whose atlas-compatible light function got no record (record or tile
+   capacity) now leaves MegaLights / LumenPT for the unbatched deferred path (`GatherAndSortLights`), whose per-light light function
+   pass draws its gobo; it used to stay stochastic and sample record 0 (white). Shadow setup has already treated it as a MegaLights
+   light, so on that path it has no shadow maps (unshadowed unless MegaLights uses VSM); the atlas warnings say so. Run: see
+   Result (E1-5).
+
 ### E1-5 Exposure: LUT fix, dual meter, two-stage adaptation
 Today: the game's chain is mapped onto UE's histogram exposure by a runtime volume; the compensation-curve LUT must be
 re-domained by cvars before the curve exists (it rebakes only on a curve or sample-count change); the lens-attenuation
@@ -471,6 +499,93 @@ pupil 0.4 s plus pigment 5 s / 2 s).
   reduction, documented as a proxy for the game's `exposureincident.cfib` sampling.
 - Optional second adaptation stage ported from the game's `PupilAdaptation` / `PigmentAdaptation` coupling
   (separate view states, reset on cuts).
+
+#### Result (E1-5)
+Engine `cfe9d5032` (LUT key, key-range domain, conversion API), `cfc636921` (meter), `03d211bcb` (two-stage adaptation), after
+`c1e0610d4` (E1-4 review fixes, above); `SCVIEWER_ENGINE_EXPOSURE` 3. Game data read from the installed 4.10.0 build (change
+13165946) with `scripts/verify_star_engine_render.py` (MSVC `dumpbin` standing in for `objdump`): the game's `OpticsExposure` /
+`exposureincident` / `Histogram` sources (`out/e1/E1-5/game-exposure-shaders.txt`, not committed) and the cvars; the fixture
+gained `r_exposureIncidentSmoothingTime` (0.5), `meterMaxCompensationPerBlend` (3), `meterMinCompensationPerBlend` (−2),
+`incidentMiddleGray` (0.18) and the hashes of `CalcUpdatedFrameState`, `ApplyEyeAdaptation`, `ExposureAdaptationCS`
+(`STAR_ENGINE_RENDER OK: 87/87`).
+- **LUT fix (a).** The compensation curve LUT's cache key is the curve, its baked domain (MinX, MaxX, sample count) and a hash of
+  its contents; UE keyed it on the curve pointer and sample count only. Opt-in `r.EyeAdaptation.ExposureCompensationCurveLUT.Domain 1`
+  bakes over the curve's key range at ends with Constant / None extrapolation (UE's [MinX, MaxX] kept at other ends), with
+  `...MaxStep` the largest spacing; the shader's scale / bias comes from the same pure function (`UE::AutoExposure::
+  GetCompensationCurveLUTDomain`), so bake and lookup cannot disagree. Public API `AutoExposureConversion.h` (`UE::AutoExposure`:
+  luminance max, middle grey, extended range, curve input, transition distance, LUT domain); the renderer's
+  `LuminanceMaxFromLensAttenuation` calls it. Tests first, as a run (baseline, old engine): setting MinX / MaxX after the curve
+  existed moved the exposure by +4.21 stops (stale LUT addressed with the new domain; `baseB.txt`). Fixed engine: the same and two
+  other domains give the same exposure to 0.0003 stops (`runC.txt` lutA–D).
+- **Meter (b).** `AutoExposureMeter` { Reflected (default), Incident, ClampedBlend } with `AutoExposureIncidentBlend`, `...ClampDown`,
+  `...ClampUp`, `...SmoothingHalfLife`, orthogonal to the method. Incident signal: UE's ignore-materials white-diffuse luminance
+  (the existing illuminance passes, run for views that need it; unlit pixels written as no sample) reduced by a second histogram to
+  its arithmetic mean and rescaled to UE's middle grey (the game scales by its `incidentMiddleGray` 0.18, checked equal by
+  `SCBridge.ViewerExposure.Meter`). A proxy for `exposureincident.cfib` (128 scene positions × 64 directions of virtual Lambert
+  receivers), documented in `StarEngineRender.notes.md`. ClampedBlend: log2 M = log2 R + clamp(b (log2 I − log2 R), −down, +up) on
+  the two reduced meters, the incident one smoothed first, before compensation and adaptation. Explicit fallback to Reflected:
+  Basic / Manual, mobile / forward, path tracer, debug views, fixed exposure, frames without the illuminance texture. The eye
+  adaptation buffer gained a third float4 (log2 R, log2 I, slow, fast), read back as `GetLastAutoExposureMeterState`.
+- **Two-stage adaptation (c).** `AutoExposureAdaptation` { Default, TwoStage } with slow half-lives brighter / darker, fast
+  half-life and range: T = log2(clamped M) − log2(compensation) (the game's `logLumTarget` = metered − EV compensation); slow → T,
+  fast → clamp(T − slow, ±range), scale = 0.18 / 2^(slow + fast); state in the buffer's z / w, reset on cuts, forced targets and a
+  missing / foreign history. Histogram and Basic methods.
+- **Cost** (`ProfileGPU`, 1920×1080, medfrnt ref view; `gpu-profile.txt`): Reflected runs one histogram (0.016 ms) and no illuminance
+  pass; ClampedBlend adds SetupExposureIlluminance 0.007–0.009 ms, CalculateExposureIlluminance 0.033–0.034 ms and the incident
+  histogram 0.015–0.017 ms, ≈ 0.057 ms per frame in all. `HistogramEyeAdaptation` stays 0.004–0.005 ms.
+- **Project.** `FSCExposureSettings::From` derives the meter (`r_exposureMeterMode` 3 → ClampedBlend, blend 0.5, clamp −1.5 / +1.0 =
+  3 × / 2 × blend, smoothing 0.5 s; mode 2 an unclamped blend, 1 incident, 0 reflected) and the adaptation (pigment bright 2 s /
+  dark 5 s as the slow stage, pupil 0.4 s and 2 stops as the fast stage) from the fixture; `Apply(S, bGameMeter, bGameAdaptation)`;
+  `GameMeteredLog` is the C++ port of `CalcLogLumMetered` the test compares the engine rule with (all four modes, worst < 1e-5 stops).
+  Removed: the LUT cvar re-domain before the curve existed and the plugin's copy of the lens-attenuation rule (`FSCEngineExposure::
+  FromEngine` reads the API). `DefaultEngine.ini` sets `Domain=1`, `MaxStep=0.015625` (1/64 stop, a host precision choice).
+  `sc.Look.Exposure <game|ue> [<game|ue>]` (meter, adaptation) is the A/B; `sc.Look.ExposureLog [s]` logs exposure, both meters and
+  the stages (per frame for traces). Tests: new `.CompensationLutPolicy`, `.Meter`; `.CompensationLut`, `.Install`, `.Settings`
+  rewritten; `SCBridge.StarEngine.*` read the new fixture values; 21/21 with `.StarEngine`, `.Lights`, `.Rig.Lights`,
+  `.Materials.MasterAssets` (`out/e1/E1-5/tests.log`).
+- **Runs** (fork, medfrnt; `out/e1/E1-5/`: `baseA.txt` / `baseB.txt` before any change, `runC.txt`, `runD.txt`, `regions-*.txt`,
+  `shots/`, logs `E1-5-*.log`). Steady-state log2 exposure (and metered luminance, UE units):
+
+  | View | (1) before E1-5 | (2) Reflected, UE adaptation (`ue`) | (3) ClampedBlend + two-stage (`game`) | log2 R / log2 I in (3) |
+  |---|---|---|---|---|
+  | ref | −8.583 (32.3) | −8.484 (32.4) | −9.098 (63.9) | 5.00 / 7.24 |
+  | top | −8.742 (38.6) | −8.644 (38.7) | −9.258 (76.4) | 5.26 / 7.56 |
+  | long | −8.497 (27.2) | −8.398 (27.2) | −8.808 (46.3) | 4.75 / 6.32 |
+  | up | −7.919 (7.92) | −7.821 (7.94) | −8.033 (13.0) | 2.98 / 4.41 |
+  | ceil | −7.672 (4.68) | −7.574 (4.69) | −7.823 (7.99) | 2.22 / 3.78 |
+  | floor | −9.531 (92.4) | −9.430 (92.5) | −10.055 (184.9) | 6.53 / 8.62 |
+
+  Region means (full frame, sRGB-decoded): ref 0.1307 / 0.1398 / 0.0916, top 0.1124 / 0.1201 / 0.0787, long 0.1218 / 0.1302 /
+  0.0985. Against the game's own rule (compensation curve and clamp from the fixture, at the measured meter) (2) and (3) are exact to
+  ±0.0006 stops at every settled view; (1) was 0.100 stops darker at all six views, uniformly (not slope dependent, so a
+  multiplicative error of the old LUT path, not a domain shift; the old engine is gone, so its cause was not isolated further).
+  The incident proxy reads 1.4–2.2 stops above the reflected meter, so the clamp's +1 stop binds in most views: the game meter
+  exposes 0.2–0.6 stops darker than the reflected one.
+- **Adaptation step** (`step.py`, Star Engine's two-stage model with the fixture's half-lives against the traced exposure; ceiling ↔
+  floor sweep in five frames under the 75° camera-reset threshold, then a 3-stop compensation step with the scene fixed;
+  `step-*.txt`, `step-*.csv`): with the game chain (3) and the model driven by the traced meters, RMS 0.001 stops (worst 0.024) on
+  both camera steps; on the ±3-stop steps (beyond the 2-stop fast range) RMS 0.011 stops, t50 / t90 0.61 / 2.19 s measured against
+  0.59 / 2.17 s modelled (darker target: the 5 s slow half-life) and 0.45 / 1.12 s against 0.44 / 1.11 s (brighter, 2 s). Fed a
+  plain step target instead, the brightening camera step lags the model (t50 0.68 against 0.33 s): the incident meter's 0.5 s
+  smoothing, which the game has too. UE's adaptation (2) is unchanged by E1-5: its camera steps match the baseline (1) to 0.01 s
+  (t50 0.41 / 0.40 s, t90 1.32 / 1.28 s, RMS against the game model 0.106 / 0.067 stops in both).
+- **UE default unchanged.** Meter Reflected and adaptation Default select UE's shader paths (`AUTO_EXPOSURE_METER 0`, no
+  `TWO_STAGE_ADAPTATION`), write UE's [0] / [1] lanes, skip the illuminance passes and the second histogram (profile), and the
+  LUT keeps UE's domain with `Domain 0`; in the runs, `sc.Look.Exposure ue` matched the rule to 0.0005 stops and its adaptation the
+  baseline's; the settings default to Reflected / Default with UE-neutral parameters (not SC's).
+- **E1-4 review fix 5 run** (`overflow-diff.txt`, `shots/diff4_overflow_*`): `r.LightFunctionAtlas.MaxLightCount 64` under
+  MegaLights (123 of 186 gobo lights over the records). Old engine: against the uncapped view 69.8 / 55.4 / 0.5 % of pixels > 8
+  levels (ref / long / top), the ref frame 37 % brighter (gobos lost). Fixed engine: 1.9 / 0.9 / 0.02 %, mean 1.4 / 1.0 / 0.5
+  levels: the gobos stay; what differs is the overflowed lights' MegaLights shadows (the elevator canopy) and a 0.03-stop exposure
+  shift.
+- **Astra** (`out/e1/E1-5/astra/`, gpt-6.2-astra; the 2020 reference against (2) and (3) at the ref pose): (2) is "narrowly"
+  closer; (3) "looks mildly underexposed ... by a few tenths of a stop"; the remaining differences are the pad's light pool (light
+  intensity / range), shadow depth in the wall recesses (tone curve / GI) and the changed set dressing. The project keeps the
+  game's chain (it is the game's rule; the reference predates the current light set); the open question is the incident proxy,
+  which may read higher than the game's virtual receivers and so darken (3) through the clamp.
+- **Open.** The incident meter is a proxy, not a port of `exposureincident.cfib`'s sampling (positions, 64 directions, the sun
+  term). The game's histogram `r_ExposureThresholdRange` rejection stays unmodelled (as before). Mobile keeps UE's meter and
+  adaptation. Fix 1 of the E1-4 review was not exercised in a run (the hangar has no simple lights or per-vertex translucency).
 
 ### E1-6 Niagara lightweight emitters
 Today: `NiagaraStateless::MaxGpuSpawnInfos` = 8 (overflow drops live loops; our FX builder stretches loop durations);
@@ -507,7 +622,7 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 | E1-1 | `ad613210a` | `DefaultEngine.ini` (MaxLightCount=255 dropped), `SCLightVerification` (`atlas_light_records`), `M_SC_LightFunction` atlas-compatible, uproject `UE_5.9_src` | engine + project build, 11/11 tests, medfrnt + lrgtop runs (Result (E1-1)) |
 | E1-2 | `362370d99`, review fixes `dd77a0317` (E1-3 section) | importer: range fade (all local lights) + bulb offset law (authored point / spot), no `SoftSourceRadius`; probe; `sc.Lights.FalloffModels`; tests | engine + project build, 11/11 tests, medfrnt run with UE-default A/B (Result (E1-2)) |
 | E1-3 | `20605cb76` (+ `dd77a0317` E1-2 review fixes), review fixes `4470238ea` | importer `MakeProjector` (SquareFrustum, half-FOV, Border; no corner cone / lateral scale), `M_SC_LightFunction` without border node (regenerated), square-aware probe, `sc.Lights.ProjectorShape 0\|1\|2`, tests | engine + project build, tests first, 12/12 tests, medfrnt MegaLights + deferred runs, Astra (Result (E1-3)); review fixes: tests first, 17/17, medfrnt rerun unchanged (E1-3 review fixes) |
-| E1-4 | `3079e8bc3` | `FSCDisplayCurve` (curve + fidelity baseline on the viewer volume), `sc.Look.Display` switches the method, `M_SC_DisplayMapping` + its script + `KEEP` entry removed, hash guard moved to a test, notes / README | engine + project build, 17/17 tests, LUT vs analytic at 32³ / 64³ / 128³, medfrnt runs material vs engine vs UE Filmic, Astra (Result (E1-4)) |
-| E1-5 | — | — | — |
+| E1-4 | `3079e8bc3`, review fixes `c1e0610d4` | `FSCDisplayCurve` (curve + fidelity baseline on the viewer volume), `sc.Look.Display` switches the method, `M_SC_DisplayMapping` + its script + `KEEP` entry removed, hash guard moved to a test, notes / README; review: `bOverriddenNoneAssetsClear` in the baseline, tests `.BaselineBlend`, `.ToneCurveDomain` | engine + project build, 17/17 tests, LUT vs analytic at 32³ / 64³ / 128³, medfrnt runs material vs engine vs UE Filmic, Astra (Result (E1-4)); review fixes: 21/21 tests, MegaLights overflow run (E1-4 review fixes, Result (E1-5)) |
+| E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)) |
 | E1-6 | — | — | — |
 | E1-7 | — | — | — |

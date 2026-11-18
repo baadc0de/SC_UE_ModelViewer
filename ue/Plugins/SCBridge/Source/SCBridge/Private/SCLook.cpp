@@ -36,6 +36,12 @@
 #include "Engine/Texture2D.h"
 #include "UObject/StrongObjectPtr.h"
 #include "TextureResource.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/GameViewportClient.h"
+#include "SceneView.h"
+#include "SceneManagement.h"
+#include "Containers/Ticker.h"
+#include "AutoExposureConversion.h"
 
 static FAutoConsoleCommandWithWorldAndArgs GSCLookPP(
     TEXT("sc.Look.PP"), TEXT("sc.Look.PP <PostProcessSettings field> <value>: set it (and its override) on every unbound post-process volume"),
@@ -169,6 +175,70 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookDisplay(
             }
         UE_LOG(LogTemp, Display, TEXT("LOOK display=%s tone_curve=%s volumes=%d"), bGame ? TEXT("game") : TEXT("ue"),
                bGame && Display.bSupported ? TEXT("HuePreservingShoulder") : TEXT("project"), Changed);
+    }));
+
+// sc.Look.ExposureLog [seconds]: the first local player's eye adaptation as the renderer read it back (exposure scale, metered
+// average luminance, pre-exposure): one LOOK_EXPOSURE line now, or with <seconds> one LOOK_EXPOSURE_TRACE line per frame for that long
+// (diagnostics for adaptation runs; the readback trails the GPU by a few frames).
+namespace
+{
+FSceneViewStateInterface* SCFirstViewState(UWorld* World)
+{
+    // The player's view state as its scene views get it (ULocalPlayer keeps ViewStates private).
+    ULocalPlayer* Player = World ? World->GetFirstLocalPlayerFromController() : nullptr;
+    FViewport* Viewport = Player && Player->ViewportClient ? Player->ViewportClient->Viewport : nullptr;
+    FSceneViewInitOptions Options;
+    return Viewport && Player->CalcSceneViewInitOptions(Options, Viewport) ? Options.SceneViewStateInterface : nullptr;
+}
+FString SCExposureFields(const FSceneViewStateInterface& State)
+{
+    const float Exposure = State.GetLastEyeAdaptationExposure();
+    // The fork's meter state (WP-E1 E1-5): log2 reflected / incident meter, slow / fast stage of the two-stage adaptation.
+    const FVector4f Meter = State.GetLastAutoExposureMeterState();
+    const auto Lane = [](float V) { return UE::AutoExposure::IsMeterStateValid(V) ? FString::Printf(TEXT("%.4f"), V) : FString(TEXT("none")); };
+    return FString::Printf(TEXT("exposure=%.6g log2_exposure=%.4f metered=%.6g pre_exposure=%.6g log2_reflected=%s log2_incident=%s slow=%s fast=%s"), Exposure,
+                           Exposure > 0 ? FMath::Log2(Exposure) : 0.f, State.GetLastAverageSceneLuminance(), State.GetPreExposure(),
+                           *Lane(Meter.X), *Lane(Meter.Y), *Lane(Meter.Z), *Lane(Meter.W));
+}
+}
+static FAutoConsoleCommandWithWorldAndArgs GSCLookExposureLog(
+    TEXT("sc.Look.ExposureLog"), TEXT("sc.Look.ExposureLog [seconds]: log the eye adaptation readback now, or every frame for <seconds>"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        const FSceneViewStateInterface* State = SCFirstViewState(World);
+        if (!State) { UE_LOG(LogTemp, Warning, TEXT("LOOK_EXPOSURE no view state")); return; }
+        UE_LOG(LogTemp, Display, TEXT("LOOK_EXPOSURE %s"), *SCExposureFields(*State));
+        const double Seconds = Args.IsValidIndex(0) ? FCString::Atod(*Args[0]) : 0.0;
+        if (Seconds <= 0) return;
+        const double Start = FPlatformTime::Seconds();
+        TWeakObjectPtr<UWorld> WeakWorld(World);
+        FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakWorld, Start, Seconds](float) {
+            const FSceneViewStateInterface* S = SCFirstViewState(WeakWorld.Get());
+            const double T = FPlatformTime::Seconds() - Start;
+            if (S) UE_LOG(LogTemp, Display, TEXT("LOOK_EXPOSURE_TRACE t=%.4f %s"), T, *SCExposureFields(*S));
+            return S && T < Seconds;
+        }));
+    }));
+
+// sc.Look.Exposure <game|ue> [<game|ue>]: the game's meter (r_exposureMeterMode: the clamped blend of the reflected and incident meters)
+// and its pupil / pigment adaptation as the engine's two-stage adaptation (game), or UE's reflected meter and one-stage adaptation at
+// the pupil's speed (ue, the mapping before WP-E1 E1-5). The first argument sets the meter, the second the adaptation (default: the
+// first). The compensation curve, brightness bounds and percentiles stay the game's either way.
+static FAutoConsoleCommandWithWorldAndArgs GSCLookExposure(
+    TEXT("sc.Look.Exposure"), TEXT("sc.Look.Exposure <game|ue> [<game|ue>]: meter, then adaptation (default: same) the game's or UE's"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        const bool bGameMeter = !(Args.IsValidIndex(0) && Args[0] == TEXT("ue"));
+        const bool bGameAdaptation = Args.IsValidIndex(1) ? Args[1] != TEXT("ue") : bGameMeter;
+        const FSCExposureSettings E = FSCExposureSettings::From(FSCStarEngine::Get(), FSCEngineExposure::FromEngine());
+        int32 Changed = 0;
+        for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+            if (It->Tags.Contains(SCViewerExposure::VolumeTag))
+            {
+                E.Apply(It->Settings, bGameMeter, bGameAdaptation);
+                ++Changed;
+            }
+        UE_LOG(LogTemp, Display, TEXT("LOOK exposure meter=%s adaptation=%s volumes=%d"),
+               bGameMeter ? *StaticEnum<EAutoExposureMeter>()->GetNameStringByValue(int64(E.Meter)) : TEXT("Reflected(ue)"),
+               bGameAdaptation ? TEXT("TwoStage") : TEXT("Default(ue)"), Changed);
     }));
 
 // sc.Look.BloomStar <points> <length> [intensity]: FFT (convolution) bloom with a generated kernel, a soft core plus

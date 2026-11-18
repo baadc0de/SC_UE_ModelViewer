@@ -14,12 +14,14 @@ const TCHAR* SyntheticFixture = TEXT(R"({"schema":"star_engine_render_v1",
   "glassColourDensityScale":{"value":0.5},"glassColourFloor":{"value":0.125},"glassVertexHeightBias":{"value":0.2},
   "glassVertexHeightScale":{"value":2},"glassHeightClip":{"value":0.05},"glassTintStrengthDefault":{"value":0.75},
   "glassTilingDefault":{"value":4},"glassVStretchDefault":{"value":0.5},"glassThinFilmThicknessDefault":{"value":0.25},"detailScale":{"value":3},
-  "forcedFalloffFraction":{"value":0.25}},
+  "forcedFalloffFraction":{"value":0.25},"meterMaxCompensationPerBlend":{"value":4},"meterMinCompensationPerBlend":{"value":-1},
+  "incidentMiddleGray":{"value":0.18}},
  "shader_textures":{"WearDirtFrostDetailMap":{"value":"Synthetic/detail.dds"}},
  "exe_cvars":{"r_ExposureCompensationEV0":{"value":-1},"r_ExposureCompensationEV10":{"value":1},"r_ExposureCompensationEV20":{"value":1},
   "r_ExposureMultiplierMin":{"value":0.01},"r_ExposureMultiplierMax":{"value":8},
   "r_ExposureAdaptTimeDark":{"value":4},"r_ExposureAdaptTimeBright":{"value":2},"r_ExposureAdaptTimePupil":{"value":0.5},
   "r_ExposureAdaptRangePupil":{"value":2},"r_ExposureDiscardRatioDark":{"value":0.05},"r_ExposureDiscardRatioBright":{"value":0.1},
+  "r_exposureMeterMode":{"value":3},"r_exposureIncidentBlendAmt":{"value":0.25},"r_exposureIncidentSmoothingTime":{"value":0.75},
   "r_HDRTonemappingCurve":{"value":1},"r_HDRTonemappingCurveToe":{"value":0.5}}})");
 bool LoadText(const FString& Text, FSCStarEngine& Out, FString& Error)
 {
@@ -54,6 +56,11 @@ bool FSCStarEngineFixture::RunTest(const FString&)
     if (TestTrue(TEXT("the synthetic fixture loads: ") + Error, LoadText(SyntheticFixture, Synthetic, Error)))
         TestTrue(TEXT("glass parameter defaults are read from the fixture"),
                  Synthetic.GlassTilingDefault == 4 && Synthetic.GlassVStretchDefault == 0.5 && Synthetic.GlassThinFilmThicknessDefault == 0.25);
+    TestTrue(TEXT("the meter is read from the fixture (WP-E1 E1-5)"),
+             Synthetic.ExposureMeterMode == 3 && Synthetic.IncidentBlendAmount == 0.25 && Synthetic.IncidentSmoothingTime == 0.75 &&
+             Synthetic.MeterMaxCompensationPerBlend == 4 && Synthetic.MeterMinCompensationPerBlend == -1 && Synthetic.IncidentMiddleGrey == 0.18);
+    TestTrue(TEXT("the game's meter: clamped blend of the reflected and the incident meter"),
+             S.ExposureMeterMode == 3 && S.IncidentBlendAmount == 0.5 && S.MeterMaxCompensationPerBlend == 3 && S.MeterMinCompensationPerBlend == -2);
 
     FSCStarEngine Broken;
     TestFalse(TEXT("a fixture without a constant is refused"),
@@ -89,6 +96,9 @@ bool FSCStarEngineDomain::RunTest(const FString&)
         {TEXT("no vertex height slope"), TEXT(R"("glassVertexHeightScale":{"value":2})"), TEXT(R"("glassVertexHeightScale":{"value":0})"), TEXT("glassVertexHeightScale")},
         {TEXT("no fade band"), TEXT(R"("forcedFalloffFraction":{"value":0.25})"), TEXT(R"("forcedFalloffFraction":{"value":0})"), TEXT("forcedFalloffFraction")},
         {TEXT("a fade band wider than the radius"), TEXT(R"("forcedFalloffFraction":{"value":0.25})"), TEXT(R"("forcedFalloffFraction":{"value":1.5})"), TEXT("forcedFalloffFraction")},
+        {TEXT("an unknown meter mode"), TEXT(R"("r_exposureMeterMode":{"value":3})"), TEXT(R"("r_exposureMeterMode":{"value":4})"), TEXT("r_exposureMeterMode")},
+        {TEXT("a blend past the incident meter"), TEXT(R"("r_exposureIncidentBlendAmt":{"value":0.25})"), TEXT(R"("r_exposureIncidentBlendAmt":{"value":1.5})"), TEXT("r_exposureIncidentBlendAmt")},
+        {TEXT("a meter clamp that excludes the reflected meter"), TEXT(R"("meterMinCompensationPerBlend":{"value":-1})"), TEXT(R"("meterMinCompensationPerBlend":{"value":1})"), TEXT("meterMinCompensationPerBlend")},
         {TEXT("a value that is not finite"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":0.5})"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":1e999})"), TEXT("finite")},
     };
     for (const FCase& C : Cases)

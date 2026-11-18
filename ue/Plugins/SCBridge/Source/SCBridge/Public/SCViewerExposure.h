@@ -1,47 +1,72 @@
 // The game's exposure and display chain (FSCStarEngine) expressed as UE post-process settings.
 #pragma once
 #include "CoreMinimal.h"
+#include "Engine/Scene.h"
 
 class APostProcessVolume;
 class UWorld;
 struct FPostProcessSettings;
 struct FSCStarEngine;
 
-/** The host engine's eye-adaptation conventions the mapping depends on (console variables). */
+/** The host engine's eye-adaptation conventions the mapping depends on (the fork's public UE::AutoExposure API, WP-E1 E1-5). */
 struct SCBRIDGE_API FSCEngineExposure
 {
-    double LuminanceMax = 1;                   // LuminanceMaxFromLensAttenuation()
+    double LuminanceMax = 1;                   // UE::AutoExposure::GetLuminanceMax()
     bool bExtendedRange = false;               // r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange
     double ExponentialTransitionDistance = 0;  // r.EyeAdaptation.ExponentialTransitionDistance, stops
-    static FSCEngineExposure FromConsole();
+    double MiddleGrey = 0.18;                  // UE::AutoExposure::MiddleGrey: what the metered luminance is exposed to
+    static FSCEngineExposure FromEngine();
 };
 
 /**
- * UE histogram auto-exposure settings that reproduce the game's reflected-light exposure (ue/verification/WP-U3b.md §13):
- * the EV-compensation curve as the exposure-compensation curve, the multiplier clamp as the brightness bounds,
- * the histogram discard ratios as the percentile band and the pupil half-life as the adaptation speed.
+ * UE histogram auto-exposure settings that reproduce the game's exposure chain (ue/verification/WP-U3b.md 13; fork features WP-E1
+ * E1-5): the EV-compensation curve as the exposure-compensation curve, the multiplier clamp as the brightness bounds, the histogram
+ * discard ratios as the percentile band, the game's meter (r_exposureMeterMode: the reflected and the incident meter, blended and
+ * clamped) as the engine's AutoExposureMeter, and its pupil / pigment adaptation as the engine's two-stage adaptation.
  */
 struct SCBRIDGE_API FSCExposureSettings
 {
-    /** The middle grey UE's eye adaptation exposes the metered luminance to (EyeAdaptationCommon, kMiddleGrey). */
-    static constexpr double EngineMiddleGrey = 0.18;
-
     float MinBrightness = 0, MaxBrightness = 0;     // AutoExposureMin/MaxBrightness
     float LowPercent = 0, HighPercent = 0;          // AutoExposureLow/HighPercent
-    float SpeedUp = 0, SpeedDown = 0;               // stops per second
     float HistogramLogMin = 0, HistogramLogMax = 0;
-    TArray<FVector2D> BiasCurve;                    // linear keys (curve input EV100, stops), constant outside
     /**
-     * UE bakes the bias curve into a LUT of evenly spaced samples (r.EyeAdaptation.ExposureCompensationCurveLUT.*)
-     * and holds its end samples outside. The domain is the key range, so the clamp ends are sample points, and the
-     * sample spacing is at most CurveLutStep stops: a knot between two samples is then off by no more than
-     * (slope change) * step / 4 stops. A host precision choice, not a game value.
+     * Linear keys (curve input EV100, stops), constant outside. The renderer bakes the curve over its key range
+     * (r.EyeAdaptation.ExposureCompensationCurveLUT.Domain 1 and MaxStep in DefaultEngine.ini), so the clamp ends are sample points.
      */
-    static constexpr double CurveLutStep = 1.0 / 64;
-    float CurveLutMinX = 0, CurveLutMaxX = 0;
-    int32 CurveLutSamples = 0;
+    TArray<FVector2D> BiasCurve;
+
+    // UE's one-stage adaptation (the "ue" adaptation): UE adapts exponentially inside the transition distance D with time constant
+    // D / speed; the game's pupil decays with half-life AdaptTimePupil = ln2 * time constant. Stops per second.
+    float SpeedUp = 0, SpeedDown = 0;
+
+    // The game's meter (CalcLogLumMetered) as the engine's AutoExposureMeter.
+    EAutoExposureMeter Meter = EAutoExposureMeter::Reflected;
+    float IncidentBlend = 0;              // r_exposureIncidentBlendAmt
+    float IncidentClampDown = 0;          // maxCompensation = MeterMaxCompensationPerBlend * blend (stops below the reflected meter)
+    float IncidentClampUp = 0;            // -minCompensation (stops above it)
+    float IncidentSmoothingHalfLife = 0;  // r_exposureIncidentSmoothingTime
+    /** Clamp of the unclamped blend (mode 2), stops: far beyond any scene's meter difference. */
+    static constexpr float UnclampedBlendStops = 1.0e6f;
+
+    // The game's PigmentAdaptation (slow) and PupilAdaptation (fast) as the engine's two-stage adaptation.
+    float SlowHalfLifeBrighter = 0;       // r_ExposureAdaptTimeBright
+    float SlowHalfLifeDarker = 0;         // r_ExposureAdaptTimeDark
+    float FastHalfLife = 0;               // r_ExposureAdaptTimePupil
+    float FastRange = 0;                  // r_ExposureAdaptRangePupil
 
     static FSCExposureSettings From(const FSCStarEngine& Game, const FSCEngineExposure& Host);
+
+    /** The game's metered log2 luminance (CalcLogLumMetered) for its meter mode, reflected and incident log2 luminances. */
+    static double GameMeteredLog(const FSCStarEngine& Game, double LogReflected, double LogIncident);
+    /** The engine's meter (ComputeMeteredLuminance, PostProcessEyeAdaptation.usf) with these settings, in log2 luminance. */
+    double EngineMeteredLog(double LogReflected, double LogIncident) const;
+
+    /**
+     * The viewer volume's exposure settings. Always: the histogram method, brightness bounds, percentiles, histogram range, compensation
+     * (bias 0; the curve is set by Install). bGameMeter: the game's meter; else UE's reflected meter (no override). bGameAdaptation: the
+     * two-stage adaptation; else UE's adaptation at the pupil speed.
+     */
+    void Apply(FPostProcessSettings& Settings, bool bGameMeter, bool bGameAdaptation) const;
 };
 
 /**

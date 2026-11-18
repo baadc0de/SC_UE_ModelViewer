@@ -461,11 +461,16 @@ fallback — a missing or out-of-domain fixture is fatal). Re-check it after eve
 `python3 -I scripts/verify_star_engine_render.py` → `STAR_ENGINE_RENDER OK: 47/47 checks match the installed
 game`. At `StartPlay` the game mode spawns an unbound post-process volume above the map's own
 (`SCViewerExposure::Install`, log line `VIEWER_GAME_EXPOSURE …`): histogram exposure with the game's
-EV-compensation curve, multiplier clamp, discard ratios and pupil half-life, plus the game's display curve as the
+EV-compensation curve, multiplier clamp and discard ratios, the game's meter (`r_exposureMeterMode` 3: the reflected meter
+blended towards an incident one, clamped; the fork's Meter `Clamped Blend`) and its pupil / pigment adaptation (the fork's
+two-stage adaptation; WP-E1 E1-5), the compensation curve baked over its key range
+(`r.EyeAdaptation.ExposureCompensationCurveLUT.Domain=1` in `DefaultEngine.ini`), plus the game's display curve as the
 engine fork's tone curve (Film > Method `Hue Preserving Shoulder` with the fixture's peak and toe, `FSCDisplayCurve`;
 WP-E1 E1-4), neutral grading, no UE lens vignette and local exposure off; `sc.Look.Display ue` switches the volume
-to UE's tonemapper as the project sets it. `SCBridge.ViewerExposure.DisplayCurve` fails when the game's curve
-functions' hashes in the fixture differ from the ones the engine port was written from. `-SCHostExposure` skips the
+to UE's tonemapper as the project sets it, `sc.Look.Exposure ue` (or `ue game`, `game ue`: meter, then adaptation) to UE's
+reflected meter and one-stage adaptation, `sc.Look.ExposureLog [seconds]` logs the exposure and both meters.
+`SCBridge.ViewerExposure.DisplayCurve` and `.Meter` fail when the game's curve, meter or adaptation functions' hashes in
+the fixture differ from the ones the engine ports were written from. `-SCHostExposure` skips the
 volume (map exposure, UE tonemapper) for comparison captures.
 
 ## RPC harness and state log (WP-H1)
