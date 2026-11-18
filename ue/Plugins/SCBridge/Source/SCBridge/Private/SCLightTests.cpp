@@ -129,10 +129,28 @@ bool FSCLightAuthoredModel::RunTest(const FString&)
     TestEqual(TEXT("no bulb: the authored intensity at 1 m"), Candela(5), Unit * 2.0, Unit * 1e-5);
     TestEqual(TEXT("bulb is the source radius (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SourceRadius), 10.0, 0.001);
     TestEqual(TEXT("plane is the rect source (cm)"), double(Cast<URectLightComponent>(Vehicle->Lights[2])->SourceWidth), 50.0, 0.001);
-    // The tweak's distance offset bulb * (1 - tweak) / tweak rides in SoftSourceRadius (cm) for the engine shader patch.
-    TestEqual(TEXT("tweak offset is carried (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[4])->SoftSourceRadius), 30.0, 0.001);
-    TestEqual(TEXT("tweak 1: no offset"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SoftSourceRadius), 0.0, 1e-9);
-    TestEqual(TEXT("legacy packages: no offset"), double(Cast<UPointLightComponent>(Vehicle->Lights[3])->SoftSourceRadius), 0.0, 1e-9);
+    // GetPhysicalLightAttenuation is the engine fork's bulb offset law (WP-E1 E1-2): candela / (max(d, b) + c)^2 with the
+    // bulb b and the tweak's distance offset c = b (1 - tweak) / tweak, both in cm, on authored point and spot lights.
+    const auto* Bulb = Cast<ULocalLightComponent>(Vehicle->Lights[0]);
+    const auto* Tweaked = Cast<ULocalLightComponent>(Vehicle->Lights[4]);
+    TestEqual(TEXT("authored point: bulb offset law"), Bulb->DistanceAttenuation, ELightDistanceAttenuation::BulbOffset);
+    TestEqual(TEXT("authored point: the bulb (cm)"), double(Bulb->AttenuationBulbRadius), 10.0, 0.001);
+    TestEqual(TEXT("tweak 1: no offset"), double(Bulb->AttenuationDistanceOffset), 0.0, 1e-9);
+    TestEqual(TEXT("authored spot: bulb offset law"), Cast<ULocalLightComponent>(Vehicle->Lights[1])->DistanceAttenuation, ELightDistanceAttenuation::BulbOffset);
+    TestEqual(TEXT("tweaked spot: bulb offset law"), Tweaked->DistanceAttenuation, ELightDistanceAttenuation::BulbOffset);
+    TestEqual(TEXT("tweak offset is carried (cm)"), double(Tweaked->AttenuationDistanceOffset), 30.0, 0.001);
+    TestEqual(TEXT("planar: UE's area law"), Cast<ULocalLightComponent>(Vehicle->Lights[2])->DistanceAttenuation, ELightDistanceAttenuation::Default);
+    TestEqual(TEXT("legacy packages: UE's law"), Cast<ULocalLightComponent>(Vehicle->Lights[3])->DistanceAttenuation, ELightDistanceAttenuation::Default);
+    TestEqual(TEXT("no bulb: no bulb offset law"), Cast<ULocalLightComponent>(Vehicle->Lights[5])->DistanceAttenuation, ELightDistanceAttenuation::Default);
+    // SoftSourceRadius keeps its UE meaning (the soft specular radius); the importer leaves it alone.
+    TestEqual(TEXT("soft source radius untouched"), double(Cast<UPointLightComponent>(Vehicle->Lights[4])->SoftSourceRadius), 0.0, 1e-9);
+    // GetLightForcedDistanceFade is every local light's range fade: the squared linear tail over the fixture's fraction.
+    for (int32 I = 0; I < 6; ++I)
+    {
+        const auto* Local = Cast<ULocalLightComponent>(Vehicle->Lights[I]);
+        TestEqual(TEXT("forced fade: squared linear tail"), Local->RangeFade, ELightRangeFade::SquaredLinearTail);
+        TestEqual(TEXT("forced fade: the fixture's fraction"), double(Local->RangeFadeFraction), FSCStarEngine::Get().ForcedFadeFraction, 1e-6);
+    }
     TestTrue(TEXT("fallback shadows follow shadow_casting (on)"), bool(Vehicle->Lights[0]->CastShadows));
     TestFalse(TEXT("fallback shadows follow shadow_casting (off)"), bool(Vehicle->Lights[1]->CastShadows));
     TestEqual(TEXT("no warnings"), Warnings.Num(), 0);

@@ -140,6 +140,64 @@ it as a soft radius).
   path tracer and ray-traced lighting evaluate the same law without changing their sampling PDFs.
 - Packing: a seventh float4 in the forward light record (+16 B per light); no rect-field reuse.
 
+#### Result (E1-2)
+Engine `362370d99`.
+- **Contract.** `ULocalLightComponent::RangeFade` / `RangeFadeFraction` (clamped to [0.001, 1]) and `DistanceAttenuation` /
+  `AttenuationBulbRadius` / `AttenuationDistanceOffset` (cm), set through `SetRangeFade` / `SetDistanceAttenuation` (render
+  state dirty), carried by `FLocalLightSceneProxyDesc` (built and serialized; cooked FastGeo data must be rebuilt) and the
+  proxy. A bulb offset law outside its domain (`IsValidBulbOffsetAttenuation`: finite, b >= 0, b + c > 0) logs a warning
+  and renders UE's law; the editor greys the law out on rect lights. `SoftSourceRadius` is UE's again.
+- **Packing.** One float4 everywhere (`LightDefinitions.h`: x range fade scale 1/F or 0, y model, z b, w c; all-zero and a
+  default `FVector4f` (0,0,0,1) both mean UE's falloff), packed by `FLightRenderParameters::GetPackedDistanceFalloff`
+  and unpacked by `LocalLightFalloff.ush`: `FLightShaderParameters` (C++ / HLSL / `Light_*` root parameters), the
+  forward record's 7th float4 (`LightGridCommon.ush`, `WorldLightGridInjection.usf`), `FLightSceneData` (96 -> 112 B),
+  Lumen's packed light (144 -> 160 B), `FPathTracingLight` (128 -> 144 B). Full float precision (no half for c).
+- **Exact law, not a mask.** UE's inverse square comes from the capsule integrators (`IntegrateLight`, `CreateAreaLight`:
+  `1 / (d^2 + DistBiasSqr)`, or the line integral for capsules). In BulbOffset mode they return `1 / (max(d, b) + c)^2`
+  (point law from the centre) in place of it, so the product is exactly the law, flat inside the bulb (WP-L3's
+  `d^2 / (...)^2` mask also skipped the bulb clamp at tweak 1). The horizon wrap keeps the geometric sphere size.
+- **Consumers changed:** `GetLocalLightAttenuation` (deferred, clustered, forward / translucency, MegaLights shading,
+  Lumen surface cache / HWRT / world cache, volumetric fog, heterogeneous volumes, clouds, ray-traced lighting, Substrate
+  paths: all via `FDeferredLightData` + `GetCapsule`); the translucency volume's legacy `1/(d^2+1)`; the mobile SH
+  translucency term; `EstimateLocalLight` (light grid cell estimate via a new `ViewSpaceDistanceFalloffData` buffer,
+  world grid from the forward record, per-pixel `PassesLightGridEnergyCull` in MegaLights / Lumen / RT): both terms
+  decrease monotonically, so the cell's nearest point keeps culling conservative with negative c; path tracer
+  `ComputeAttenuationFalloff` (range fade times `d^2 / (max(d,b)+c)^2`, PDFs unchanged); reference `IntegrateBxDF`.
+- **Documented as unchanged:** simple / Niagara lights and directional / sky lights (packed as UE's falloff); mobile
+  (explicit fallback: `UnpackLightDistanceFalloff` returns UE's falloff under `SHADING_PATH_MOBILE`, and
+  `MobileOverrideDeferredLightParameters` resets it); GPU Lightmass (static bakes, its lights are zero = UE's);
+  VSM / shadow / distance-field / capsule-shadow code (geometry only); rect lights drawn as spots (`RectAsSpotLight`,
+  exponent falloff).
+- **Project.** The importer sets every local light's range fade to SquaredLinearTail with F =
+  `FSCStarEngine::ForcedFadeFraction` (0.2) and authored point / spot lights' law to BulbOffset with b = bulb (cm) and
+  c = `AttenuationOffset(bulb, tweak)` (cm) when valid (no bulb: UE's law); it no longer writes `SoftSourceRadius`. The
+  probe evaluates the lights' own properties. `sc.Lights.FalloffModels 0|1` swaps every light to UE's falloff and back
+  (A/B). Tests first: with the new expectations and the old importer `SCBridge.Lights.AuthoredCryEngineModel` failed
+  (`Expected 'tweak offset is carried (cm)' to be 30 ... was 0`, `'soft source radius untouched' ... was 30`,
+  `'forced fade: the fixture's fraction' to be 0.2 ... was 1`); after the importer change 11/11
+  (`SCBridge.StarEngine`, `.Lights`, `.Rig.Lights`; log `E1-2-tests.log`).
+- **Run** (fork, medfrnt, WP-L3's poses, one session; `out/e1/E1-2/run1.txt`, `regions.txt`, `shots/`, log
+  `E1-2-run1.log`; WP-L3's region boxes and method):
+
+  | View, region | WP-L3 before | WP-L3 + offset | fork, UE default | fork, models | fork, models again |
+  |---|---|---|---|---|---|
+  | top, pad centre | 0.0839 | 0.1459 | 0.0842 | 0.1455 | 0.1457 |
+  | top, side walkways L / R | 0.0818 / 0.0839 | 0.0438 / 0.0761 | 0.0824 / 0.0840 | 0.0446 / 0.0760 | 0.0447 / 0.0761 |
+  | top, centre / left walkway | 1.03 | 3.33 | 1.02 | 3.26 | 3.26 |
+  | ref, near / mid / far pad | 0.1426 / 0.1089 / 0.1006 | 0.2201 / 0.1721 / 0.0548 | 0.1422 / 0.1088 / 0.1013 | 0.2189 / 0.1711 / 0.0557 | 0.2187 / 0.1711 / 0.0559 |
+  | ref, upper walls / elevator | 0.1104 / 0.1050 | 0.0676 / 0.0795 | 0.1109 / 0.1054 | 0.0684 / 0.0801 | 0.0684 / 0.0801 |
+  | long, right floor / right wall | 0.4579 / 0.1309 | 0.2302 / 0.0702 | 0.4568 / 0.1304 | 0.2290 / 0.0701 | 0.2289 / 0.0701 |
+
+  The engine feature reproduces the patched law (fade + offset) within 1-2 %, and with the properties at Default the
+  fork renders UE's falloff again (matches WP-L3's unpatched "before" within 1 %); toggling back reproduces the first
+  capture to 0.0002. The fork's images match WP-L3's "+ offset" stage, not its part 3 ("+ projector frustum") numbers
+  (top walkways 0.210 / 0.190): those were taken while `M_SC_LightFunction` was outside the atlas, so MegaLights drew
+  the opened frustum without its gobos (E1-1); with the gobos back the square textures cut the light to about the
+  earlier footprint. Not separately verified.
+- **Open.** Mobile does not render the models (explicit fallback). A capsule light (SourceLength > 0) in BulbOffset mode
+  falls off from its centre. The atlas border (E1-3) still wraps gobos outside the square on the fork. The path tracer
+  and Lumen paths were not exercised in a run (compile and code review only).
+
 ### E1-3 Spot projector shape
 Today: the importer opens inner = outer = atan(√2 tan(FOV/2)) and rescales `LightFunctionScale`; the atlas shader is
 patched to zero spot light functions outside UV [0, 1]; the non-atlas pass relies on a Custom node in
@@ -214,7 +272,7 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 |---|---|---|---|
 | E1-0 | none (project only) | Web / Wasm build, `SC_WITH_FFI`, baked hangar lighting, Wasm target code removed; scripts and docs default to the fork; plan D17 | project build, 81/81 tests, medfrnt game run (Result (E1-0)) |
 | E1-1 | `ad613210a` | `DefaultEngine.ini` (MaxLightCount=255 dropped), `SCLightVerification` (`atlas_light_records`), `M_SC_LightFunction` atlas-compatible, uproject `UE_5.9_src` | engine + project build, 11/11 tests, medfrnt + lrgtop runs (Result (E1-1)) |
-| E1-2 | — | — | — |
+| E1-2 | `362370d99` | importer: range fade (all local lights) + bulb offset law (authored point / spot), no `SoftSourceRadius`; probe; `sc.Lights.FalloffModels`; tests | engine + project build, 11/11 tests, medfrnt run with UE-default A/B (Result (E1-2)) |
 | E1-3 | — | — | — |
 | E1-4 | — | — | — |
 | E1-5 | — | — | — |

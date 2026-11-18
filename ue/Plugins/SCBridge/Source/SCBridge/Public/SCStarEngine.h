@@ -43,8 +43,8 @@ struct SCBRIDGE_API FSCStarEngine
     FString WearDirtFrostDetailMap;
     double DirtDetailScale = 0;
     // GetLightForcedDistanceFade: every local light ends at its radius through saturate((1 - d / R) / fraction)^2, full
-    // strength until the last `fraction` of the radius. The engine shader patch (ue/EnginePatches) puts the same window in
-    // UE's local-light attenuation in place of (1 - (d / R)^4)^2.
+    // strength until the last `fraction` of the radius. The importer sets it as the light's range fade (engine fork,
+    // ULocalLightComponent::RangeFade = SquaredLinearTail with RangeFadeFraction = fraction; UE's is (1 - (d / R)^4)^2).
     double ForcedFadeFraction = 0;
 
     static FString FixturePath();
@@ -65,8 +65,8 @@ struct SCBRIDGE_API FSCStarEngine
     double PointCandela(double Intensity, double BulbRadiusM, double AttenuationTweak) const;
     /**
      * Distance offset of the same attenuation (m): for every distance it is PointCandela / (max(d, bulb) + offset)^2,
-     * offset = bulb (1 - tweak) / tweak. 0 for tweak 1 (plain inverse square beyond the bulb), negative above 1. UE has
-     * no such term; the importer carries it in SoftSourceRadius and the engine shader patch (WP-L3) applies it.
+     * offset = bulb (1 - tweak) / tweak. 0 for tweak 1 (plain inverse square beyond the bulb), negative above 1. The
+     * importer sets it as the light's bulb offset law (engine fork, ULocalLightComponent::DistanceAttenuation = BulbOffset).
      */
     double AttenuationOffset(double BulbRadiusM, double AttenuationTweak) const;
     /** Normal luminous intensity (cd) of a planar light: its colour is luminance / pi (PlanarLightDiffuse). */

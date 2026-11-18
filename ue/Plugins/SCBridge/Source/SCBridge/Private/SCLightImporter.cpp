@@ -228,6 +228,9 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             const double Radius = FMath::Max(0., LightNumber(J, TEXT("radius_m")));
             Local->SetAttenuationRadius(Radius * 100);
             Local->SetCastShadows(State.bFallbackShadow || USCViewerSettings::Get()->bShadowAllLights); // look: every light (D15)
+            // GetLightForcedDistanceFade: every light fades over the last forcedFalloffFraction of its radius (the fixture), in
+            // place of UE's (1 - (d / R)^4)^2 (engine fork, WP-E1 E1-2).
+            Local->SetRangeFade(ELightRangeFade::SquaredLinearTail, float(FSCStarEngine::Get().ForcedFadeFraction));
         }
         // Emitter size from the authored bulb / plane (CryEngine's attenuation bulb is the source radius).
         if (bAuthored)
@@ -236,10 +239,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             {
                 const double Bulb = FMath::Max(0., LightNumber(J, TEXT("bulb_radius_m")));
                 Point->SetSourceRadius(Bulb * 100);
-                // The attenuation tweak's distance offset (FSCStarEngine::AttenuationOffset). UE has no field for it:
-                // SoftSourceRadius carries it, and the engine shader patch (WP-L3) reads it there instead of as a soft
-                // specular radius. Negative for tweak > 1, which only the editor's property clamp would refuse.
-                Point->SetSoftSourceRadius(FSCStarEngine::Get().AttenuationOffset(Bulb, LightNumber(J, TEXT("attenuation_tweak"), 1.0)) * 100);
+                // GetPhysicalLightAttenuation: candela / (max(d, bulb) + offset)^2 with the attenuation tweak's distance offset
+                // (FSCStarEngine::AttenuationOffset; negative for tweak > 1), the engine fork's bulb offset law (WP-E1 E1-2).
+                // A light without a bulb has no such law (b + c = 0) and keeps UE's inverse square.
+                const double BulbCm = Bulb * 100;
+                const double OffsetCm = FSCStarEngine::Get().AttenuationOffset(Bulb, LightNumber(J, TEXT("attenuation_tweak"), 1.0)) * 100;
+                if (ULocalLightComponent::IsValidBulbOffsetAttenuation(float(BulbCm), float(OffsetCm)))
+                    Point->SetDistanceAttenuation(ELightDistanceAttenuation::BulbOffset, float(BulbCm), float(OffsetCm));
             }
             else if (auto* Rect = Cast<URectLightComponent>(Light))
             {
