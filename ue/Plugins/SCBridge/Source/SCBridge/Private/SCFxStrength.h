@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
+#include "SCFxContract.h"
 
 namespace SCFxStrength
 {
@@ -12,6 +13,7 @@ namespace SCFxStrength
 inline void Set(UNiagaraComponent* Component, float Strength)
 {
     if (!Component) return;
+    SCFxContract::Check(Component->GetAsset()); // non-shipping: a system built for an older runtime contract (E1-6 review)
     Component->SetVariableFloat(TEXT("SC.Strength"), Strength);
 }
 } // namespace SCFxStrength

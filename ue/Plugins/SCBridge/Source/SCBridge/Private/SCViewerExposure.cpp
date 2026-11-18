@@ -163,7 +163,7 @@ void FSCDisplayCurve::Apply(FPostProcessSettings& S, bool bGame) const
 #define SC_DISPLAY_NEUTRAL(Field) SC_DISPLAY_SET(Field, UE.Field)
     // The overridden None grading LUT and local exposure curves below clear what a map volume set (fork, E1-4 review; UE ignores an
     // overridden None asset, so a lower-priority volume's LUT or curve would survive the neutral baseline).
-    S.bOverriddenNoneAssetsClear = bOn;
+    S.OverriddenNoneAssetsClear = bOn ? int32(EPostProcessOverriddenNoneAsset::All) : 0;
     SC_DISPLAY_SET(TonemappingMethod, ETonemappingMethod::HuePreservingShoulder);
     SC_DISPLAY_SET(HuePreservingShoulderMaxDisplayNits, MaxDisplayNits);
     SC_DISPLAY_SET(HuePreservingShoulderRefWhiteScale, RefWhiteScale);

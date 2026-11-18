@@ -16,6 +16,7 @@
 #include "ShowFlags.h"
 #include "Engine/Texture2D.h"
 #include "AutoExposureConversion.h"
+#include "Engine/PostProcessUtils.h"
 
 namespace
 {
@@ -62,27 +63,6 @@ double BakedBias(const FSCExposureSettings& E, const UE::AutoExposure::FCompensa
     const int32 Low = FMath::Min(FMath::FloorToInt32(At), N - 1), High = FMath::Min(Low + 1, N - 1);
     return FMath::Log2(FMath::Lerp(Texel(Low), Texel(High), At - Low));
 }
-// Sets a console variable for the scope of a test and restores its value and its set-by priority (a value from an ini keeps ini
-// priority afterwards, so later lower-priority changes in the same editor process still apply).
-struct FScopedConsoleValue
-{
-    IConsoleVariable* Variable;
-    FString Saved;
-    EConsoleVariableFlags SavedSetBy = ECVF_SetByConstructor;
-    FScopedConsoleValue(const TCHAR* Name, const TCHAR* Value) : Variable(IConsoleManager::Get().FindConsoleVariable(Name))
-    {
-        if (!Variable) return;
-        Saved = Variable->GetString();
-        SavedSetBy = EConsoleVariableFlags(Variable->GetFlags() & ECVF_SetByMask);
-        Variable->Set(Value, ECVF_SetByCode);
-    }
-    ~FScopedConsoleValue()
-    {
-        if (!Variable) return;
-        Variable->SetFlags(EConsoleVariableFlags((Variable->GetFlags() & ~ECVF_SetByMask) | SavedSetBy));
-        Variable->Set(*Saved, SavedSetBy);
-    }
-};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureLut, "SCBridge.ViewerExposure.CompensationLut",
@@ -124,28 +104,30 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureLutPolicy, "SCBridge.ViewerExp
 bool FSCViewerExposureLutPolicy::RunTest(const FString&)
 {
     // The fork's domain policy (UE::AutoExposure::GetCompensationCurveLUTDomain): UE's [MinX, MaxX] by default, the key range only
-    // where the curve is constant beyond its keys (UE's extrapolation semantics preserved).
-    FScopedConsoleValue MinX(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MinX"), TEXT("-10"));
-    FScopedConsoleValue MaxX(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxX"), TEXT("20"));
-    FScopedConsoleValue Samples(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.NumSamples"), TEXT("64"));
-    FScopedConsoleValue Step(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxStep"), TEXT("0.5"));
+    // where the curve is constant beyond its keys (UE's extrapolation semantics preserved). The policy's inputs are passed explicitly
+    // (FCompensationCurveLUTPolicy), so the test changes no console variable (Astra E1-5 review 2: a scoped override left history).
+    using UE::AutoExposure::FCompensationCurveLUTDomain;
+    using UE::AutoExposure::FCompensationCurveLUTPolicy;
+    using UE::AutoExposure::GetCompensationCurveLUTDomain;
+    FCompensationCurveLUTPolicy Ue;
+    Ue.MinX = -10.f; Ue.MaxX = 20.f; Ue.NumSamples = 64; Ue.MaxStep = 0.5f; Ue.Domain = 0; Ue.MaxTextureSamples = 16384;
+    FCompensationCurveLUTPolicy Keys = Ue;
+    Keys.Domain = 1;
     UCurveFloat* Curve = NewObject<UCurveFloat>(GetTransientPackage());
     Curve->FloatCurve.AddKey(2.f, -1.f);
     Curve->FloatCurve.AddKey(40.f, 3.f);
     {
-        FScopedConsoleValue Policy(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.Domain"), TEXT("0"));
-        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        const FCompensationCurveLUTDomain D = GetCompensationCurveLUTDomain(&Curve->FloatCurve, Ue);
         TestTrue(TEXT("UE's policy: the cvar domain and sample count"), D.MinX == -10.f && D.MaxX == 20.f && D.NumSamples == 64);
     }
-    FScopedConsoleValue Policy(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.Domain"), TEXT("1"));
     {
-        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        const FCompensationCurveLUTDomain D = GetCompensationCurveLUTDomain(&Curve->FloatCurve, Keys);
         TestTrue(TEXT("key range: both ends constant"), D.MinX == 2.f && D.MaxX == 40.f);
         TestEqual(TEXT("key range: ceil(38 / 0.5) + 1 samples"), D.NumSamples, 77);
     }
     Curve->FloatCurve.PostInfinityExtrap = RCCE_Linear;
     {
-        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        const FCompensationCurveLUTDomain D = GetCompensationCurveLUTDomain(&Curve->FloatCurve, Keys);
         TestTrue(TEXT("linear extrapolation keeps UE's upper end"), D.MinX == 2.f && D.MaxX == 20.f);
     }
     // None cycles like Cycle in FRichCurve::RemapTimeValue (only Constant holds): UE's end, and outside the keys the LUT (clamped
@@ -153,49 +135,55 @@ bool FSCViewerExposureLutPolicy::RunTest(const FString&)
     Curve->FloatCurve.PreInfinityExtrap = RCCE_None;
     Curve->FloatCurve.PostInfinityExtrap = RCCE_None;
     {
-        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        const FCompensationCurveLUTDomain D = GetCompensationCurveLUTDomain(&Curve->FloatCurve, Keys);
         TestTrue(TEXT("none extrapolation keeps UE's domain"), D.MinX == -10.f && D.MaxX == 20.f);
     }
     Curve->FloatCurve.PreInfinityExtrap = RCCE_Constant;
     Curve->FloatCurve.PostInfinityExtrap = RCCE_Constant;
     {
-        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        const FCompensationCurveLUTDomain D = GetCompensationCurveLUTDomain(&Curve->FloatCurve, Keys);
         for (const float X : {-30.f, -10.f, 0.f, 1.9f, 41.f, 60.f})
             TestEqual(FString::Printf(TEXT("held ends: the LUT at %g is the curve's"), X), Curve->GetFloatValue(FMath::Clamp(X, D.MinX, D.MaxX)), Curve->GetFloatValue(X), 1e-6f);
     }
-    // Degenerate settings give a usable domain (two samples at least, a positive width; Astra E1-5 review 15).
-    for (const TCHAR* Policy0 : {TEXT("0"), TEXT("1")})
-    {
-        FScopedConsoleValue P(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.Domain"), Policy0);
-        FScopedConsoleValue One(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.NumSamples"), TEXT("1"));
-        FScopedConsoleValue Lo(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MinX"), TEXT("3"));
-        FScopedConsoleValue Hi(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxX"), TEXT("3"));
-        FScopedConsoleValue NoStep(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxStep"), TEXT("0"));
-        UCurveFloat* Flat = NewObject<UCurveFloat>(GetTransientPackage());
-        Flat->FloatCurve.AddKey(3.f, 1.f);
-        Flat->FloatCurve.AddKey(3.f, 2.f);
-        for (const UCurveFloat* C : {static_cast<const UCurveFloat*>(nullptr), static_cast<const UCurveFloat*>(Flat), static_cast<const UCurveFloat*>(Curve)})
+    // Degenerate settings give a usable domain (two samples at least, a positive width; Astra E1-5 review 15), also where MinX + 1 is
+    // not representable above MinX (2^24: review 2), which falls back to UE's default [-10, 20].
+    UCurveFloat* Flat = NewObject<UCurveFloat>(GetTransientPackage());
+    Flat->FloatCurve.AddKey(3.f, 1.f);
+    Flat->FloatCurve.AddKey(3.f, 2.f);
+    for (const int32 Domain : {0, 1})
+        for (const float X : {3.f, 16777216.f, -16777216.f, 3.0e38f})
         {
-            const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(C);
-            TestTrue(FString::Printf(TEXT("policy %s: at least two samples"), Policy0), D.NumSamples >= 2);
-            TestTrue(FString::Printf(TEXT("policy %s: a positive width"), Policy0), D.MaxX > D.MinX);
+            FCompensationCurveLUTPolicy P = Ue;
+            P.Domain = Domain; P.NumSamples = 1; P.MinX = X; P.MaxX = X; P.MaxStep = 0.f;
+            for (const FRichCurve* C : {static_cast<const FRichCurve*>(nullptr), static_cast<const FRichCurve*>(&Flat->FloatCurve), static_cast<const FRichCurve*>(&Curve->FloatCurve)})
+            {
+                const FCompensationCurveLUTDomain D = GetCompensationCurveLUTDomain(C, P);
+                const FString At = FString::Printf(TEXT("domain %d, MinX = MaxX = %g"), Domain, X);
+                TestTrue(At + TEXT(": at least two samples"), D.NumSamples >= 2);
+                TestTrue(At + TEXT(": a positive, finite width"), D.MaxX > D.MinX && FMath::IsFinite(D.MaxX - D.MinX));
+            }
         }
-    }
+    // UE's domain is limited by the texture only (a 16384-sample D3D12 LUT stays 16384; review 2: it was capped at the key-range
+    // policy's 8192); the key-range policy keeps its cap.
     {
-        // The scoped override restores the priority the value had (Astra E1-5 review 17).
-        IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxStep"));
-        const uint32 Before = V->GetFlags() & ECVF_SetByMask;
-        {
-            FScopedConsoleValue Temp(TEXT("r.EyeAdaptation.ExposureCompensationCurveLUT.MaxStep"), TEXT("0.25"));
-        }
-        TestEqual(TEXT("the set-by priority is restored"), V->GetFlags() & ECVF_SetByMask, Before);
+        FCompensationCurveLUTPolicy P = Ue;
+        P.NumSamples = 16384;
+        TestEqual(TEXT("UE's domain: 16384 samples kept"), GetCompensationCurveLUTDomain(&Curve->FloatCurve, P).NumSamples, 16384);
+        P.MaxTextureSamples = 4096;
+        TestEqual(TEXT("UE's domain: at most the texture's width"), GetCompensationCurveLUTDomain(&Curve->FloatCurve, P).NumSamples, 4096);
+        P = Keys;
+        P.NumSamples = 16384;
+        TestEqual(TEXT("key range: at most the policy's cap"), GetCompensationCurveLUTDomain(&Curve->FloatCurve, P).NumSamples, UE::AutoExposure::MaxCompensationCurveLUTSamples);
     }
     Curve->FloatCurve.Reset();
     Curve->FloatCurve.AddKey(5.f, 1.f);
     {
-        const UE::AutoExposure::FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
+        const FCompensationCurveLUTDomain D = GetCompensationCurveLUTDomain(&Curve->FloatCurve, Keys);
         TestTrue(TEXT("one key: UE's domain"), D.MinX == -10.f && D.MaxX == 20.f && D.NumSamples == 64);
     }
+    // The cvar-driven entry point is the policy read from the console variables (read only).
+    TestTrue(TEXT("the cvar entry point evaluates FromConsoleVariables"),
+             GetCompensationCurveLUTDomain(Curve) == GetCompensationCurveLUTDomain(&Curve->FloatCurve, FCompensationCurveLUTPolicy::FromConsoleVariables()));
     // The engine's conversions are the ones the mapping derives from.
     const FSCEngineExposure Host = FSCEngineExposure::FromEngine();
     TestEqual(TEXT("middle grey"), Host.MiddleGrey, double(UE::AutoExposure::MiddleGrey));
@@ -467,7 +455,7 @@ bool FSCViewerExposureBaselineBlend::RunTest(const FString&)
 {
     // The final view, not only the volume: a lower-priority map volume grades with a LUT and turns local exposure on with both
     // contrast curves; the viewer volume (game display) blends over it. UE ignores an overridden None asset, so the fork's
-    // FPostProcessSettings::bOverriddenNoneAssetsClear (WP-E1 E1-4 review) is what clears them.
+    // FPostProcessSettings::OverriddenNoneAssetsClear (WP-E1 E1-4 review; per asset since the E1-1..E1-4 review) is what clears them.
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
     APostProcessVolume* Volume = SCViewerExposure::Install(*World);
     if (!TestNotNull(TEXT("the volume spawns"), Volume)) { World->DestroyWorld(false); return false; }
@@ -517,7 +505,7 @@ bool FSCViewerExposureBaselineBlend::RunTest(const FString&)
         // UE's tonemapper (sc.Look.Display ue) clears the viewer's display overrides: the map's grading and local exposure are back.
         FPostProcessSettings UEDisplay = Volume->Settings;
         FSCDisplayCurve::From(FSCStarEngine::Get()).Apply(UEDisplay, false);
-        TestFalse(TEXT("ue display: the flag is off"), bool(UEDisplay.bOverriddenNoneAssetsClear));
+        TestEqual(TEXT("ue display: no asset clears"), UEDisplay.OverriddenNoneAssetsClear, 0);
         const FFinalPostProcessSettings F = Blend(UEDisplay, 1.f);
         TestEqual(TEXT("ue display: the map's LUT"), LutWeight(F, Lut), 1.f, 1e-6f);
         TestTrue(TEXT("ue display: the map's curves"), F.LocalExposureHighlightContrastCurve == Highlight && F.LocalExposureShadowContrastCurve == Shadow);
@@ -559,6 +547,10 @@ FVector3d EngineHuePreservingShoulder(const FVector3d& Col, double MaxDisplayNit
     return Compressed * Ratios * AdjustedRefWhiteScale;
 }
 bool IsFiniteColor(const FVector3d& C) { return FMath::IsFinite(C.X) && FMath::IsFinite(C.Y) && FMath::IsFinite(C.Z); }
+// The fork's clear intent (every asset, as the viewer volume sets it) and the curve's monotonic domain (E1-1..E1-4 review 5, 6).
+void SCEnableOverriddenNoneAssetsClear(FPostProcessSettings& S) { S.OverriddenNoneAssetsClear = int32(EPostProcessOverriddenNoneAsset::All); }
+float SCHuePreservingShoulderMinToeScale() { return FPostProcessSettings::GetHuePreservingShoulderMinToeScale(); }
+float SCHuePreservingShoulderMinRefWhiteScale() { return FPostProcessSettings::GetHuePreservingShoulderMinRefWhiteScale(); }
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureToneCurveDomain, "SCBridge.ViewerExposure.ToneCurveDomain",
@@ -631,6 +623,107 @@ bool FSCViewerExposureUeSelection::RunTest(const FString&)
         TestEqual(FString::Printf(TEXT("%s: the blended adaptation"), bGame ? TEXT("game") : TEXT("ue")), int32(F.AutoExposureAdaptation),
                   int32(bGame ? EAutoExposureAdaptation::TwoStage : EAutoExposureAdaptation::Default));
     }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureComposedClear, "SCBridge.ViewerExposure.ComposedClear",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerExposureComposedClear::RunTest(const FString&)
+{
+    // Clear intent is per asset through composition (Astra E1-1..E1-4 review 5): one camera layer overrides the metering mask with
+    // None the UE way (ignored: the map's mask stays), another clears only its grading LUT. Composed (FPostProcessUtils, as Gameplay
+    // Cameras compose layers) in either order and applied over a map with a mask and a LUT, the mask stays and the LUT is cleared.
+    UTexture2D* Lut = NewObject<UTexture2D>(GetTransientPackage());
+    UTexture2D* Mask = NewObject<UTexture2D>(GetTransientPackage());
+    FPostProcessSettings Map;
+    Map.bOverride_ColorGradingLUT = true; Map.ColorGradingLUT = Lut;
+    Map.bOverride_ColorGradingIntensity = true; Map.ColorGradingIntensity = 1.f;
+    Map.bOverride_AutoExposureMeterMask = true; Map.AutoExposureMeterMask = Mask;
+    FPostProcessSettings UeNoneMask;
+    UeNoneMask.bOverride_AutoExposureMeterMask = true; UeNoneMask.AutoExposureMeterMask = nullptr;
+    FPostProcessSettings ClearLut;
+    ClearLut.bOverride_ColorGradingLUT = true; ClearLut.ColorGradingLUT = nullptr;
+    SCEnableOverriddenNoneAssetsClear(ClearLut);
+
+    FSceneViewFamily Family(FSceneViewFamily::ConstructionValues(nullptr, nullptr, FEngineShowFlags(ESFIM_Game)).SetTime(FGameTime()));
+    FSceneViewInitOptions Init;
+    Init.ViewFamily = &Family;
+    Init.SetViewRectangle(FIntRect(0, 0, 64, 64));
+    Init.ViewOrigin = FVector::ZeroVector;
+    Init.ViewRotationMatrix = FMatrix::Identity;
+    Init.ProjectionMatrix = FReversedZPerspectiveMatrix(UE_HALF_PI / 2, 1.f, 1.f, 10.f);
+    const auto Check = [&](const FPostProcessSettings& Camera, const TCHAR* Case) {
+        FSceneView View(Init);
+        View.StartFinalPostprocessSettings(FVector::ZeroVector);
+        View.OverridePostProcessSettings(Map, 1.f);
+        View.OverridePostProcessSettings(Camera, 1.f);
+        const FFinalPostProcessSettings& F = View.FinalPostProcessSettings;
+        float LutWeight = 0;
+        for (const FFinalPostProcessSettings::FLUTBlenderEntry& E : F.ContributingLUTs) if (E.LUTTexture == Lut) LutWeight += E.Weight;
+        TestTrue(FString::Printf(TEXT("%s: the map's metering mask stays"), Case), F.AutoExposureMeterMask == Mask);
+        TestEqual(FString::Printf(TEXT("%s: the map's LUT is cleared"), Case), LutWeight, 0.f);
+    };
+    {
+        FPostProcessSettings Composed = UeNoneMask;
+        FPostProcessUtils::OverridePostProcessSettings(Composed, ClearLut);
+        Check(Composed, TEXT("UE None mask, then LUT clear"));
+    }
+    {
+        FPostProcessSettings Composed = ClearLut;
+        FPostProcessUtils::OverridePostProcessSettings(Composed, UeNoneMask);
+        Check(Composed, TEXT("LUT clear, then UE None mask"));
+    }
+    {
+        FPostProcessSettings Blended = UeNoneMask;
+        FPostProcessUtils::BlendPostProcessSettings(Blended, ClearLut, 1.f);
+        Check(Blended, TEXT("blend to the LUT clear"));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureToneCurveOrder, "SCBridge.ViewerExposure.ToneCurveOrder",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerExposureToneCurveOrder::RunTest(const FString&)
+{
+    // The curve keeps brightness order (Astra E1-1..E1-4 review 6): over neutral and coloured ramps the largest output channel never
+    // decreases as the input brightens, everywhere in the parameter domain the engine allows (UI ClampMin and render-thread clamp).
+    // Outside it, a toe of -9 (the old ClampMin) maps neutral 0.02 to 0.64 and 0.10 to 0.28, and reference whites below 0.2 reverse
+    // the shoulder.
+    const float MinToe = SCHuePreservingShoulderMinToeScale(), MinRefWhite = SCHuePreservingShoulderMinRefWhiteScale();
+    TestTrue(TEXT("old toe floor reverses the darks"),
+             EngineHuePreservingShoulder(FVector3d(0.02), 80, 1, -9).X > EngineHuePreservingShoulder(FVector3d(0.10), 80, 1, -9).X);
+    const auto Ordered = [](double Nits, double RefWhite, double Toe) {
+        const FVector3d Hues[] = {FVector3d(1, 1, 1), FVector3d(1, 0.2, 0.05), FVector3d(0.05, 0.2, 1), FVector3d(0.1, 1, 0.1),
+                                  FVector3d(1, 0.05, 0.05), FVector3d(1, 1, 0.02), FVector3d(0.3, 0.05, 1)};
+        for (const FVector3d& Hue : Hues)
+        {
+            double Prev = -1;
+            for (int32 I = 0; I <= 4000; ++I)
+            {
+                const double K = FMath::Pow(10.0, -6.0 + 8.0 * I / 4000);
+                const double V = EngineHuePreservingShoulder(Hue * K, Nits, RefWhite, Toe).GetMax();
+                if (V < Prev * (1 - 1e-12) - 1e-15) return false;
+                Prev = V;
+            }
+        }
+        return true;
+    };
+    TestFalse(TEXT("outside the domain: reference white 0.1 reverses the shoulder"), Ordered(80, 0.1, 0));
+    for (const double RefWhite : {double(MinRefWhite), 0.5, 1.0, 2.0, 8.0})
+        for (const double Toe : {double(MinToe), 0.0, 1.0, 10.0})
+            for (const double Scale : {1.0, 1.54, 5.0, 20.0})
+            {
+                const double Nits = FPostProcessSettings::GetHuePreservingShoulderMinMaxDisplayNits(float(RefWhite)) * Scale;
+                TestTrue(FString::Printf(TEXT("ordered: ref white %.2f toe %.1f %.0f nits"), RefWhite, Toe, Nits), Ordered(Nits, RefWhite, Toe));
+            }
+#if WITH_EDITORONLY_DATA
+    // The editor's limits are the domain.
+    const UScriptStruct* Struct = FPostProcessSettings::StaticStruct();
+    const FProperty* ToeProperty = Struct->FindPropertyByName(TEXT("HuePreservingShoulderToeScale"));
+    const FProperty* RefWhiteProperty = Struct->FindPropertyByName(TEXT("HuePreservingShoulderRefWhiteScale"));
+    TestEqual(TEXT("toe ClampMin is the domain"), ToeProperty ? FCString::Atof(*ToeProperty->GetMetaData(TEXT("ClampMin"))) : 0.f, MinToe);
+    TestEqual(TEXT("reference white ClampMin is the domain"), RefWhiteProperty ? FCString::Atof(*RefWhiteProperty->GetMetaData(TEXT("ClampMin"))) : 0.f, MinRefWhite);
+#endif
     return true;
 }
 #endif

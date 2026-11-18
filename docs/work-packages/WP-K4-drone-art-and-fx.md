@@ -230,7 +230,9 @@ Defaults (100 cm along +X) reproduce a 1 m straight beam. The component is no lo
 EmitterStrength curves (exact piecewise-linear clamp expressions in `SC.Strength`) and the beam emitters' spawn rates (expressions of
 `SC.BeamLength`) themselves, and an effect's scale is the component's scale (sprite sizes through Niagara's Apply Owner Scale To
 Attributes module). `SC.SV<i>` / `SC.SK<i>`, `SC.BR<i>` / `SC.BK<i>` and `SC.Scale2` (below, K4a round 2) are gone; systems built
-before E1-6 need a rebuild (`-run=SCFxBuild`).
+before E1-6 need a rebuild (`-run=SCFxBuild`). Since the E1-6 review the contract is versioned: every built system carries the int User
+parameter `SC.FxContract` (`SCFxRules::FxContractVersion`, 2); the runtime warns `SC_FX_STALE` (non-shipping) for a system without it or
+with an older one, `-run=SCFxBuild -VerifyContract` fails on one, and `ue/scripts/package_showcase.ps1` refuses to package while one exists.
 
 **Per item:**
 1. **Strength.** The game's strengths are read from DataCore (`effects.json` `strength`: the tractor record's

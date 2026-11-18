@@ -32,33 +32,40 @@ TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Poin
         const auto* Spot = Cast<USpotLightComponent>(L);
         const auto* Bulb = Cast<UPointLightComponent>(L);
         double Cone = 1;
+        const FVector Local = L->GetComponentTransform().InverseTransformVectorNoScale(Point - Origin);
         if (Spot && Spot->Shape == ESpotLightShape::SquareFrustum)
         {
             // The engine fork's square frustum (WP-E1 E1-3, LocalLightFalloff.ush): hard-edged square of half-FOV OuterConeAngle
-            // in light space, no cone falloff, nothing in front of the projector near clip.
-            const FVector Local = L->GetComponentTransform().InverseTransformVectorNoScale(Point - Origin);
+            // in light space, no cone falloff.
             const double Tan = FMath::Tan(USpotLightComponent::GetClampedSquareFrustumHalfAngle(Spot->OuterConeAngle));
-            Cone = Local.X > 0 && FMath::Max(FMath::Abs(Local.Y), FMath::Abs(Local.Z)) <= Local.X * Tan && Local.X >= Spot->ProjectorNearClip ? 1 : 0;
+            Cone = Local.X > 0 && FMath::Max(FMath::Abs(Local.Y), FMath::Abs(Local.Z)) <= Local.X * Tan ? 1 : 0;
         }
         else if (Spot)
         {
-            const double CosOuter = FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle));
-            const double CosInner = FMath::Cos(FMath::DegreesToRadians(FMath::Min(Spot->InnerConeAngle, Spot->OuterConeAngle)));
+            // UE's cone at the clamped angles the renderer uses (GetClampedConeAngles).
+            const FVector2f Angles = Spot->GetClampedConeAngles();
+            const double CosOuter = FMath::Cos(double(Angles.Y)), CosInner = FMath::Cos(double(Angles.X));
             const double CosPoint = FVector::DotProduct(L->GetForwardVector(), (Point - Origin).GetSafeNormal());
             Cone = FMath::Square(FMath::Clamp((CosPoint - CosOuter) / FMath::Max(1e-4, CosInner - CosOuter), 0., 1.));
         }
-        const double Candela = L->Intensity * ULocalLightComponent::GetUnitsConversionFactor(
-            L->IntensityUnits, ELightUnits::Candelas, Spot ? FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle)) : -1.f);
+        // The projector near clip, in either shape (GetSpotLightShapeAttenuation): no light in front of the axial depth.
+        if (Spot && Spot->ProjectorNearClip > 0 && Local.X < Spot->ProjectorNearClip) Cone = 0;
+        // Lumens spread over the shape's solid angle as the renderer converts them (USpotLightComponent::ComputeLightBrightness):
+        // the square frustum's 4 asin(sin^2 h), else UE's cone of the bounding half angle.
+        const double Candela = Spot && Spot->Shape == ESpotLightShape::SquareFrustum && L->IntensityUnits == ELightUnits::Lumens
+                                   ? L->Intensity / USpotLightComponent::GetSquareFrustumSolidAngle(USpotLightComponent::GetClampedSquareFrustumHalfAngle(Spot->OuterConeAngle))
+                                   : L->Intensity * ULocalLightComponent::GetUnitsConversionFactor(L->IntensityUnits, ELightUnits::Candelas, Spot ? Spot->GetCosHalfConeAngle() : -1.f);
         // The light's own falloff models (engine fork, WP-E1 E1-2), as the renderer evaluates them (LocalLightFalloff.ush):
-        // GetPhysicalLightAttenuation is the bulb offset law candela / (max(d, b) + c)^2 on point and spot lights, UE's
-        // inverse square otherwise; GetLightForcedDistanceFade is the squared linear range fade.
+        // the bulb offset law candela / (max(d, b) + c)^2 on point and spot lights, else UE's inverse square regularised as the
+        // renderer does, 1 / (d^2 + 1 cm^2) (GetLocalLightDistanceAttenuation's DistBiasSqr); the range window as selected.
         const bool bBulbOffset = Bulb && L->DistanceAttenuation == ELightDistanceAttenuation::BulbOffset &&
                                  ULocalLightComponent::IsValidBulbOffsetAttenuation(L->AttenuationBulbRadius, L->AttenuationDistanceOffset);
-        const double M = (bBulbOffset ? FMath::Max(Cm, double(L->AttenuationBulbRadius)) + double(L->AttenuationDistanceOffset) : FMath::Max(1., Cm)) / 100.;
+        const double M2 = bBulbOffset ? FMath::Square((FMath::Max(Cm, double(L->AttenuationBulbRadius)) + double(L->AttenuationDistanceOffset)) / 100.)
+                                      : (Cm * Cm + 1.0) / 1e4;
         const double Fade = L->RangeFade == ELightRangeFade::SquaredLinearTail
                                 ? FMath::Square(FMath::Clamp((1.0 - Cm / Radius) / double(L->RangeFadeFraction), 0.0, 1.0))
                                 : FMath::Square(FMath::Clamp(1.0 - FMath::Square(FMath::Square(Cm / Radius)), 0.0, 1.0));
-        const double Lux = Candela / (M * M) * Fade * Cone;
+        const double Lux = Candela / M2 * Fade * Cone;
         if (Lux <= 0) continue;
         const uint8 Channels = L->LightingChannels.bChannel0 | (L->LightingChannels.bChannel1 << 1) | (L->LightingChannels.bChannel2 << 2);
         if (ReceiverChannels && !(Channels & ReceiverChannels)) { ++Gated; GatedLux += Lux; continue; }
@@ -207,6 +214,18 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
 
 namespace
 {
+// After a restore: drop the saved lights of that world only (other worlds, e.g. a second PIE world, keep theirs) and every
+// entry whose light is gone.
+template <typename TComponent, typename TSaved>
+void ForgetWorld(TMap<TWeakObjectPtr<TComponent>, TSaved>& Saved, const UWorld* World)
+{
+    for (auto It = Saved.CreateIterator(); It; ++It)
+    {
+        const TComponent* Light = It.Key().Get();
+        if (!Light || Light->GetWorld() == World) It.RemoveCurrent();
+    }
+}
+
 // The imported falloff models of one light, kept while sc.Lights.FalloffModels 0 shows UE's falloff in their place.
 struct FSCImportedFalloff
 {
@@ -242,7 +261,7 @@ void SetFalloffModels(UWorld* World, bool bOn)
             ++Changed;
         }
     }
-    if (bOn) GSCImportedFalloffs.Reset();
+    if (bOn) ForgetWorld(GSCImportedFalloffs, World);
     UE_LOG(LogSCImport, Display, TEXT("LIGHT_FALLOFF_MODELS %s lights=%d"), bOn ? TEXT("imported") : TEXT("ue_default"), Changed);
 }
 
@@ -262,6 +281,8 @@ TMap<TWeakObjectPtr<USpotLightComponent>, FSCImportedProjector> GSCImportedProje
 //  0  UE's cone with UE's light function wrap at the same angles (OuterConeAngle = half-FOV: the square's inscribed circle).
 //  2  the E1-2 importer's emulation on a UE cone: the cone through the square's corners (inner = outer), the light function
 //     scaled back laterally to the half-FOV, UE's wrap (so the gobo repeats between the square and the cone).
+//  3  as 2 with the Border address: the light function alone cuts the corner cone to the square (verifies the border, e.g. when
+//     the light function fades out by screen size).
 void SetProjectorShape(UWorld* World, int32 Mode)
 {
     int32 Changed = 0;
@@ -276,8 +297,8 @@ void SetProjectorShape(UWorld* World, int32 Mode)
             Saved = &GSCImportedProjectors.Add(S, {S->Shape, S->LightFunctionAddress, S->InnerConeAngle, S->OuterConeAngle, S->LightFunctionScale});
         }
         S->SetShape(Mode == 1 ? Saved->Shape : ESpotLightShape::Cone);
-        S->SetLightFunctionAddress(Mode == 1 ? Saved->Address : ELightFunctionAddress::Wrap);
-        if (Mode == 2)
+        S->SetLightFunctionAddress(Mode == 1 ? Saved->Address : Mode == 3 ? ELightFunctionAddress::Border : ELightFunctionAddress::Wrap);
+        if (Mode >= 2)
         {
             const double HalfFov = FMath::DegreesToRadians(double(Saved->OuterConeAngle));
             const float Corner = float(FMath::Min(FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * FMath::Tan(HalfFov))), 88.9));
@@ -295,16 +316,16 @@ void SetProjectorShape(UWorld* World, int32 Mode)
         }
         ++Changed;
     }
-    if (Mode == 1) GSCImportedProjectors.Reset();
-    static const TCHAR* Names[] = {TEXT("cone_wrap"), TEXT("square_border"), TEXT("e12_corner_cone_wrap")};
-    UE_LOG(LogSCImport, Display, TEXT("LIGHT_PROJECTOR_SHAPE %s lights=%d"), Names[FMath::Clamp(Mode, 0, 2)], Changed);
+    if (Mode == 1) ForgetWorld(GSCImportedProjectors, World);
+    static const TCHAR* Names[] = {TEXT("cone_wrap"), TEXT("square_border"), TEXT("e12_corner_cone_wrap"), TEXT("corner_cone_border")};
+    UE_LOG(LogSCImport, Display, TEXT("LIGHT_PROJECTOR_SHAPE %s lights=%d"), Names[FMath::Clamp(Mode, 0, 3)], Changed);
 }
 
 FAutoConsoleCommandWithWorldAndArgs GSCLightsProjectorShape(
     TEXT("sc.Lights.ProjectorShape"),
-    TEXT("sc.Lights.ProjectorShape <0|1|2>: 1 the imported SquareFrustum + Border projectors; 0 UE's cone + wrap at the same angles; 2 the E1-2 importer's corner cone + lateral light function scale + wrap"),
+    TEXT("sc.Lights.ProjectorShape <0|1|2|3>: 1 the imported SquareFrustum + Border projectors; 0 UE's cone + wrap at the same angles; 2 the E1-2 importer's corner cone + lateral light function scale + wrap; 3 that corner cone with the Border address"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
-        SetProjectorShape(World, Args.Num() == 0 ? 1 : FMath::Clamp(FCString::Atoi(*Args[0]), 0, 2));
+        SetProjectorShape(World, Args.Num() == 0 ? 1 : FMath::Clamp(FCString::Atoi(*Args[0]), 0, 3));
     }));
 
 FAutoConsoleCommandWithWorldAndArgs GSCLightsFalloffModels(

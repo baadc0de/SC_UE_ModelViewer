@@ -24,6 +24,7 @@
 #include "SCViewerEngineObjectVersion.h"
 #include "Serialization/ObjectReader.h"
 #include "Serialization/ObjectWriter.h"
+#include "Misc/Parse.h"
 
 namespace
 {
@@ -590,6 +591,132 @@ bool FSCLightRoomChannels::RunTest(const FString&)
     auto Self = FSCLightAreas::ColorRooms({TEXT("a")}, {{TEXT("a"), TEXT("a")}}, Conflicts);
     TestEqual(TEXT("a room reaching itself is no conflict"), Conflicts, 0);
     TestEqual(TEXT("single room: channel 1"), Self.FindRef(TEXT("a")), 1);
+    return true;
+}
+
+namespace
+{
+// The light grid's cell estimate (LightCulling.ush EstimateLocalLight, engine fork WP-E1 E1-2), statement for statement, with the
+// range window and distance law of LocalLightFalloff.ush. RangeFadeScale 0: UE's window; > 0: 1 / F (squared linear tail).
+double EngineRangeFade(double DistSq, double InvRadius, double RangeFadeScale)
+{
+    if (RangeFadeScale > 0) return FMath::Square(FMath::Clamp(RangeFadeScale * (1.0 - FMath::Sqrt(DistSq) * InvRadius), 0.0, 1.0));
+    return FMath::Square(FMath::Clamp(1.0 - FMath::Square(DistSq * FMath::Square(InvRadius)), 0.0, 1.0));
+}
+double EngineDistanceLaw(double DistSq, double DistBiasSq, bool bBulb, double B, double C)
+{
+    return bBulb ? 1.0 / FMath::Square(FMath::Max(FMath::Sqrt(DistSq), B) + C) : 1.0 / (DistSq + DistBiasSq);
+}
+double EngineEstimateLocalLight(double DistSq, double Power, double InvRadius, double FalloffExponent, double RangeFadeScale, bool bBulb, double B, double C)
+{
+    if (FalloffExponent <= 0 && bBulb)
+        return Power * EngineRangeFade(DistSq, InvRadius, RangeFadeScale) * EngineDistanceLaw(DistSq, 0, bBulb, B, C) / UE_DOUBLE_PI;
+    const double TrueDistSq = DistSq;
+    DistSq = FMath::Max(DistSq, 0.01);
+    double Falloff = 1;
+    if (FalloffExponent > 0)
+        Falloff = FMath::Pow(1.0 - FMath::Clamp(DistSq * FMath::Square(InvRadius), 0.0, 1.0), FalloffExponent);
+    else
+        Falloff = EngineRangeFade(RangeFadeScale > 0 ? TrueDistSq : DistSq, InvRadius, RangeFadeScale) * EngineDistanceLaw(DistSq, 0, bBulb, B, C);
+    return Power * Falloff / UE_DOUBLE_PI;
+}
+double ProbeLux(const UWorld* World, const FVector& Point)
+{
+    const TArray<FString> Lines = FSCLightImporter::Probe(World, Point, nullptr, 0);
+    double Lux = -1;
+    if (Lines.Num()) FParse::Value(*Lines[0], TEXT("lux_unshadowed="), Lux);
+    return Lux;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightGridEstimate, "SCBridge.Lights.LightGridEstimate",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightGridEstimate::RunTest(const FString&)
+{
+    // The cell estimate is evaluated at the cell's nearest point (0 inside a cell that contains the light) and must not cull a cell
+    // the light lights (Astra E1-1..E1-4 review 4): a tiny range-fade-only light (SquaredLinearTail, UE's inverse square, radius
+    // 0.05 cm) has a positive window everywhere inside its radius.
+    const double Radius = 0.05, InvRadius = 1.0 / Radius, Tail = 1.0 / 0.2;
+    TestTrue(TEXT("tiny tail light: positive estimate at the light"), EngineEstimateLocalLight(0, 1, InvRadius, 0, Tail, false, 0, 0) > 0);
+    TestTrue(TEXT("tiny tail light: positive estimate inside its radius"), EngineEstimateLocalLight(FMath::Square(0.04), 1, InvRadius, 0, Tail, false, 0, 0) > 0);
+    TestEqual(TEXT("tiny tail light: none at its radius"), EngineEstimateLocalLight(FMath::Square(Radius), 1, InvRadius, 0, Tail, false, 0, 0), 0.0);
+    // Conservative: never below what shading gives there (shading's inverse square is 1 / (d^2 + 1)).
+    for (const double D : {0.0, 0.01, 0.02, 0.03, 0.04})
+        TestTrue(FString::Printf(TEXT("tiny tail light: estimate >= shading at %.2f cm"), D),
+                 EngineEstimateLocalLight(D * D, 1, InvRadius, 0, Tail, false, 0, 0) >= EngineRangeFade(D * D, InvRadius, Tail) * EngineDistanceLaw(D * D, 1, false, 0, 0) / UE_DOUBLE_PI);
+    // UE's window keeps UE's estimate (clamped distance), unchanged.
+    TestEqual(TEXT("UE window: UE's estimate at the light"), EngineEstimateLocalLight(0, 1, 1.0 / 100, 0, 0, false, 0, 0),
+              EngineRangeFade(0.01, 1.0 / 100, 0) / 0.01 / UE_DOUBLE_PI, 1e-9);
+    // The negative-offset bulb (E1-2 review) stays at the true distance: its peak 1 / (b + c)^2.
+    TestEqual(TEXT("bulb offset: the peak at the light"), EngineEstimateLocalLight(0, 1, 1.0 / 100, 0, Tail, true, 0.05, -0.04), 1.0 / FMath::Square(0.01) / UE_DOUBLE_PI, 1e-3);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProbeFollowsRenderer, "SCBridge.Lights.ProbeFollowsRenderer",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightProbeFollowsRenderer::RunTest(const FString&)
+{
+    // The probe's lux is the renderer's law (Astra E1-1..E1-4 review 11): UE's inverse square regularised as 1 / (d^2 + 1 cm^2), the
+    // projector near clip in either spot shape, lumens over the square frustum's solid angle. Lights 50 m apart, 10 m radius each.
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    const auto Make = [World](UClass* Class, const FVector& At) {
+        auto* L = NewObject<ULocalLightComponent>(World, Class);
+        L->SetMobility(EComponentMobility::Movable);
+        L->IntensityUnits = ELightUnits::Candelas;
+        L->Intensity = 100.f;
+        L->AttenuationRadius = 1000.f;
+        L->SetWorldLocation(At);
+        L->RegisterComponentWithWorld(World);
+        return L;
+    };
+    auto* Point = Make(UPointLightComponent::StaticClass(), FVector(0, 0, 0));
+    auto* Cone = Cast<USpotLightComponent>(Make(USpotLightComponent::StaticClass(), FVector(5000, 0, 0)));
+    Cone->InnerConeAngle = 20.f; Cone->OuterConeAngle = 30.f; Cone->ProjectorNearClip = 50.f;
+    auto* Square = Cast<USpotLightComponent>(Make(USpotLightComponent::StaticClass(), FVector(10000, 0, 0)));
+    Square->Shape = ESpotLightShape::SquareFrustum; Square->OuterConeAngle = 45.f;
+    Square->IntensityUnits = ELightUnits::Lumens; Square->Intensity = 1000.f;
+    ON_SCOPE_EXIT { Point->UnregisterComponent(); Cone->UnregisterComponent(); Square->UnregisterComponent(); World->DestroyWorld(false); };
+    const auto Window = [](double D) { return FMath::Square(1.0 - FMath::Square(FMath::Square(D / 1000.0))); };
+    TestEqual(TEXT("point at 1 cm: 100 cd x 1e4 / (1 + 1)"), ProbeLux(World, FVector(1, 0, 0)), 100.0 * 1e4 / 2.0 * Window(1), 0.1);
+    TestEqual(TEXT("cone in front of its near clip: no light"), ProbeLux(World, FVector(5020, 0, 0)), 0.0, 1e-6);
+    TestEqual(TEXT("cone behind its near clip: lit"), ProbeLux(World, FVector(5100, 0, 0)), 100.0 * 1e4 / (1e4 + 1) * Window(100), 0.1);
+    const double Candela = 1000.0 / USpotLightComponent::GetSquareFrustumSolidAngle(UE_PI / 4);
+    TestEqual(TEXT("square in lumens: over the square's solid angle"), ProbeLux(World, FVector(10100, 0, 0)), Candela * 1e4 / (1e4 + 1) * Window(100), 0.1);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightComparisonRestorePerWorld, "SCBridge.Lights.ComparisonRestorePerWorld",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightComparisonRestorePerWorld::RunTest(const FString&)
+{
+    // sc.Lights.ProjectorShape / FalloffModels restore one world without erasing another world's saved lights (Astra E1-1..E1-4
+    // review 12): two worlds switched to UE's cone / falloff, the first restored, then the second.
+    UWorld* Worlds[2] = {UWorld::CreateWorld(EWorldType::Game, false), UWorld::CreateWorld(EWorldType::Game, false)};
+    USpotLightComponent* Spots[2];
+    UPointLightComponent* Points[2];
+    for (int32 I = 0; I < 2; ++I)
+    {
+        Spots[I] = NewObject<USpotLightComponent>(Worlds[I]);
+        Spots[I]->SetMobility(EComponentMobility::Movable);
+        Spots[I]->Shape = ESpotLightShape::SquareFrustum; Spots[I]->LightFunctionAddress = ELightFunctionAddress::Border; Spots[I]->OuterConeAngle = 40.f;
+        Spots[I]->RegisterComponentWithWorld(Worlds[I]);
+        Points[I] = NewObject<UPointLightComponent>(Worlds[I]);
+        Points[I]->SetMobility(EComponentMobility::Movable);
+        Points[I]->RangeFade = ELightRangeFade::SquaredLinearTail; Points[I]->RangeFadeFraction = 0.2f;
+        Points[I]->RegisterComponentWithWorld(Worlds[I]);
+    }
+    ON_SCOPE_EXIT { for (int32 I = 0; I < 2; ++I) { Spots[I]->UnregisterComponent(); Points[I]->UnregisterComponent(); Worlds[I]->DestroyWorld(false); } };
+    const auto Run = [](const TCHAR* Command, UWorld* World) { IConsoleManager::Get().ProcessUserConsoleInput(Command, *GLog, World); };
+    for (UWorld* W : Worlds) { Run(TEXT("sc.Lights.ProjectorShape 0"), W); Run(TEXT("sc.Lights.FalloffModels 0"), W); }
+    TestTrue(TEXT("both worlds compare on UE's cone"), Spots[0]->Shape == ESpotLightShape::Cone && Spots[1]->Shape == ESpotLightShape::Cone);
+    TestTrue(TEXT("both worlds compare on UE's range window"), Points[0]->RangeFade == ELightRangeFade::Default && Points[1]->RangeFade == ELightRangeFade::Default);
+    Run(TEXT("sc.Lights.ProjectorShape 1"), Worlds[0]); Run(TEXT("sc.Lights.FalloffModels 1"), Worlds[0]);
+    TestTrue(TEXT("first world restored: square"), Spots[0]->Shape == ESpotLightShape::SquareFrustum && Spots[0]->LightFunctionAddress == ELightFunctionAddress::Border);
+    TestTrue(TEXT("second world still compares: cone"), Spots[1]->Shape == ESpotLightShape::Cone);
+    Run(TEXT("sc.Lights.ProjectorShape 1"), Worlds[1]); Run(TEXT("sc.Lights.FalloffModels 1"), Worlds[1]);
+    TestTrue(TEXT("second world restored: square"), Spots[1]->Shape == ESpotLightShape::SquareFrustum && Spots[1]->LightFunctionAddress == ELightFunctionAddress::Border);
+    TestTrue(TEXT("first world restored: tail window"), Points[0]->RangeFade == ELightRangeFade::SquaredLinearTail);
+    TestTrue(TEXT("second world restored: tail window"), Points[1]->RangeFade == ELightRangeFade::SquaredLinearTail);
     return true;
 }
 #endif

@@ -193,12 +193,13 @@ FSceneViewStateInterface* SCFirstViewState(UWorld* World)
 FString SCExposureFields(const FSceneViewStateInterface& State)
 {
     // One coherent copy of the fork's readback (WP-E1 E1-5; the render thread publishes it under a lock): exposure, metered luminance
-    // and the meter state (log2 reflected / incident meter, slow / fast stage of the two-stage adaptation) from the same frame.
+    // and the meter state (log2 reflected / incident meter, slow / fast stage of the two-stage adaptation) from the same frame. The view
+    // state's pre-exposure is not in the trace (E1-5 review 2: a render-thread value read here unsynchronised, from another frame).
     const UE::AutoExposure::FEyeAdaptationReadback R = State.GetLastAutoExposureReadback();
     const FVector4f& Meter = R.MeterState;
     const auto Lane = [](float V) { return UE::AutoExposure::IsMeterStateValid(V) ? FString::Printf(TEXT("%.4f"), V) : FString(TEXT("none")); };
-    return FString::Printf(TEXT("exposure=%.6g log2_exposure=%.4f metered=%.6g pre_exposure=%.6g log2_reflected=%s log2_incident=%s slow=%s fast=%s"), R.Exposure,
-                           R.Exposure > 0 ? FMath::Log2(R.Exposure) : 0.f, R.AverageSceneLuminance, State.GetPreExposure(),
+    return FString::Printf(TEXT("exposure=%.6g log2_exposure=%.4f metered=%.6g log2_reflected=%s log2_incident=%s slow=%s fast=%s"), R.Exposure,
+                           R.Exposure > 0 ? FMath::Log2(R.Exposure) : 0.f, R.AverageSceneLuminance,
                            *Lane(Meter.X), *Lane(Meter.Y), *Lane(Meter.Z), *Lane(Meter.W));
 }
 }

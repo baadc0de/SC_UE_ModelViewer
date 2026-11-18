@@ -46,6 +46,12 @@ foreach ($Level in @($ShipLevel, $HangarLevel)) {
 $Environment = "Data/ObjectContainers/PU/loc/mod/common/hangar/$Style/$HangarName.socpak"
 $Maps = "/Game/Maps/Viewer+$ShipLevel+$HangarLevel"
 
+# The built FX must carry the current generated contract (WP-E1 E1-6 review): systems built for an older runtime contract load but
+# play with stale behaviour, so they are refused here (rebuild them with -run=SCFxBuild).
+$Editor = Join-Path $Engine 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
+& $Editor $Project -run=SCFxBuild -VerifyContract -unattended -nosplash -nopause
+if ($LASTEXITCODE -ne 0) { throw "Stale FX under /Game/SC/FX (SC_FX_STALE in the log): rebuild them with -run=SCFxBuild first." }
+
 & (Join-Path $Engine 'Engine\Build\BatchFiles\RunUAT.bat') BuildCookRun "-project=$Project" "-platform=$Platform" "-clientconfig=$Config" `
     -build -cook -stage -pak -iostore -package -archive "-archivedirectory=$Out" "-map=$Maps" -nocompileeditor -unattended -utf8output `
     "-cmdline=-SCLoad=$Ship -SCEnvironment=$Environment$Extra"

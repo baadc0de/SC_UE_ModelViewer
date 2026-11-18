@@ -4,6 +4,8 @@
 //   UnrealEditor-Cmd.exe SCViewer.uproject -run=SCFxBuild [-Effects=<ref>;<ref>] [-MaterialEffects=<lib:effect>;...]
 //                        [-Features=all|none|<f>,<f>,...] [-RefractionScale=<k> (verification aid; default 1)]
 //                        [-LoopCapacity=<n> (verification aid: size loops for n spawn infos; default the engine's)]
+//   UnrealEditor-Cmd.exe SCViewer.uproject -run=SCFxBuild -VerifyContract   (exit 1 when a built system under /Game/SC/FX is
+//                        stale: no SC.FxContract or an older one than SCFxRules::FxContractVersion; the showcase package runs it)
 //
 // Without arguments the lists come from Config/FX/effects.json. An effect `<GUID>|<library>.<effect>` becomes
 // /Game/SC/FX/<library>/<effect> (dots -> underscores; SCFxNames.h, the rule the runtime finds it by); a material effect (FXLib entry) builds the particle effects it
@@ -41,7 +43,9 @@
 //         loop: WP-E1 E1-6);
 //         infinite loops re-read their rates per loop and last min(lifetime, 0.25 s) so strength and beam length follow,
 //         stretched only where the loops alive at once (1 + ceil(lifetime / loop)) would not fit the spawn infos a
-//         lightweight emitter draws (NiagaraStateless::MaxGpuSpawnInfos; SCFxRules.h); a pulse burst whose bursts
+//         lightweight emitter draws (NiagaraStateless::GetMaxSpawnInfos(), the engine's effective limit
+//         fx.Niagara.Stateless.MaxSpawnInfos, which the project's DefaultEngine.ini raises to 32 for the editor, the game and
+//         this commandlet alike; SCFxRules.h); a pulse burst whose bursts
 //         alive at once do not fit is reported (its period is the data's);
 //         SpawnDelay -> delay.
 //  lifetime (+Random) -> InitializeParticle Lifetime range [v(1-r), v].
@@ -93,6 +97,7 @@
 #include "SCBridgeClient.h" // scbridge.h
 #include "SCFxNames.h"
 #include "SCFxRules.h"
+#include "SCFxContract.h"
 #include "SCStarEngine.h"
 #include "SCTextureImporter.h"
 
@@ -161,8 +166,11 @@ const FName UserBeamLength(TEXT("User.SC.BeamLength"));
 const FName UserBeamLength2(TEXT("User.SC.BeamLength2"));
 constexpr double DefaultBeamCm = 100.0;
 // The spawn infos a lightweight emitter draws on the GPU: the loops (and bursts) of a looping emitter whose particles may
-// live at once must fit them (SCFxRules::LoopDuration; the engine's constant, so the guard follows the engine).
-constexpr int32 SpawnInfoCapacity = int32(NiagaraStateless::MaxGpuSpawnInfos);
+// live at once must fit them (SCFxRules::LoopDuration). The engine's effective limit (WP-E1 E1-6 review:
+// fx.Niagara.Stateless.MaxSpawnInfos, UE's 8 by default, 32 in the project's DefaultEngine.ini, which this commandlet reads as
+// the game does), so the guard follows what the project ships with.
+int32 SpawnInfoCapacity() { return int32(NiagaraStateless::GetMaxSpawnInfos()); }
+const FName UserFxContract(TEXT("User.SC.FxContract"));
 // Infinite loops re-read bound and expression rates once per loop: this short, so strength and beam length follow.
 constexpr double FollowLoopSeconds = 0.25;
 
@@ -530,7 +538,7 @@ struct FBuilder
     TOptional<double> GuideCurvature;               // its beam spline's curvature (first guided emitter)
     FString GuideName;
     double RefractionScale = 1; // -RefractionScale=<k>: a verification aid that exaggerates refraction (default 1)
-    int32 LoopCapacity = SpawnInfoCapacity; // -LoopCapacity=<n>: a verification aid, loops sized for another engine's capacity
+    int32 LoopCapacity = SpawnInfoCapacity(); // -LoopCapacity=<n>: a verification aid, loops sized for another engine's capacity
     FFeatures F;
     TMap<FString, UTexture2D*> Textures;
     TMap<FString, UMaterialInterface*> Materials;
@@ -630,8 +638,12 @@ struct FBuilder
     {
         FStrength S;
         S.At1 = Eval(Curve, 1.0, Channel) * Scale;
+        // Classified over the configured strengths and every authored key in [0, 1] (E1-6 review: a curve peaking between the
+        // knots is neither constant nor invisible).
+        TArray<double> KeyTimes;
+        for (const TArray<double>& K : Curve) KeyTimes.Add(K[0]);
         TArray<double> Y;
-        for (double K : Knots) Y.Add(Eval(Curve, K, Channel) * Scale);
+        for (double K : SCFxRules::ClassificationStrengths(Knots, KeyTimes)) Y.Add(Eval(Curve, K, Channel) * Scale);
         S.bAllZero = !Y.ContainsByPredicate([](double V) { return V > 0; });
         for (double V : Y) S.bVaries |= !FMath::IsNearlyEqual(V, Y[0], 1e-6);
         if (!F.Strength || Curve.IsEmpty() || !S.bVaries)
@@ -845,8 +857,8 @@ struct FBuilder
             S.Duration = Pulse > 0 ? Pulse : S.Delay + 0.01;
             L.Mapped.Add(Pulse > 0 ? TEXT("spawn.burst+pulse") : TEXT("spawn.burst"));
             // A pulse's bursts alive at once are spawn infos too; the period is the data's, so an overflow is reported.
-            if (Pulse > 0 && SCFxRules::LiveLoops(Life, Pulse) > LoopCapacity)
-                L.Approx.Add(FString::Printf(TEXT("pulse %.3gs: %d bursts alive > %d spawn infos (the oldest are not drawn)"), Pulse, SCFxRules::LiveLoops(Life, Pulse), LoopCapacity));
+            if (Pulse > 0 && SCFxRules::LiveBursts(Life, Pulse) > LoopCapacity)
+                L.Approx.Add(FString::Printf(TEXT("pulse %.3gs: %d bursts alive > %d spawn infos (the newest are not drawn)"), Pulse, SCFxRules::LiveBursts(Life, Pulse), LoopCapacity));
             return S;
         }
         double Alive = Count * ParentCount;
@@ -1156,13 +1168,23 @@ struct FBuilder
             FLinearColor Min = Max * float(1 - IntensityRandom);
             Min.A = 1.f;
             SetColorRange(Init->ColorDistribution, Min, Max);
-            FCurve Scale;
-            for (double K : Knots)
+            // E1-6 review: the light's intensity curve and its colour's luminance (relative to strength 1) are two exact piecewise-linear
+            // curves in SC.Strength (the colour's at its own keys: a weighted sum of the channels), multiplied; resampling their product
+            // at the knots lost the authored breaks and was wrong between them.
+            const FStrength IntensityS = Strength(Curve(Light, TEXT("strength_curve")));
+            FCurve ColorLuminance;
+            for (const TArray<double>& K : ColorStrength)
             {
-                const FLinearColor C(Rgb.R * Eval(ColorStrength, K, 0), Rgb.G * Eval(ColorStrength, K, 1), Rgb.B * Eval(ColorStrength, K, 2));
-                Scale.Add({K, Eval(Curve(Light, TEXT("strength_curve")), K) * (Lum1 > 0 ? C.GetLuminance() / Lum1 : 0.0)});
+                const FLinearColor C(Rgb.R * Eval(ColorStrength, K[0], 0), Rgb.G * Eval(ColorStrength, K[0], 1), Rgb.B * Eval(ColorStrength, K[0], 2));
+                ColorLuminance.Add({K[0], Lum1 > 0 ? C.GetLuminance() / Lum1 : 0.0});
             }
-            const FStrength LightS = Strength(Has(Light, TEXT("strength_curve")) || !ColorStrength.IsEmpty() ? Scale : FCurve());
+            const FStrength ColorLumS = Strength(ColorLuminance);
+            FStrength LightS;
+            LightS.At1 = IntensityS.At1 * ColorLumS.At1;
+            LightS.bVaries = IntensityS.bVaries || ColorLumS.bVaries;
+            LightS.bAllZero = IntensityS.bAllZero || ColorLumS.bAllZero;
+            if (LightS.bVaries)
+                LightS.Expr = FMul(IntensityS.bVaries ? IntensityS.Expr : FConst(IntensityS.At1), ColorLumS.bVaries ? ColorLumS.Expr : FConst(ColorLumS.At1));
             bInvisible = Candela <= 0 || Lum1 <= 0 && !LightS.bVaries;
             const FCurve AgeCurve = Curve(Light, TEXT("age_curve"));
             if (!AgeCurve.IsEmpty())
@@ -1771,6 +1793,13 @@ struct FBuilder
             Contract.Add(FString::Printf(TEXT("%s=(%g,%g,%g)"), *N.ToString(), V.X, V.Y, V.Z));
         };
         AddFloat(UserStrength, 1.f);
+        {
+            // E1-6 review: the generated contract's version (SCFxRules::FxContractVersion), which the runtime and the package check.
+            FNiagaraVariable Var(FNiagaraTypeDefinition::GetIntDef(), UserFxContract);
+            User.AddParameter(Var, true, true);
+            User.SetParameterValue(SCFxRules::FxContractVersion, Var);
+            Contract.Add(FString::Printf(TEXT("%s=%d"), *UserFxContract.ToString(), SCFxRules::FxContractVersion));
+        }
         if (bUsesBeam)
         {
             AddVec(UserBeamEnd, FVector3f(float(DefaultBeamCm), 0, 0));
@@ -1839,8 +1868,35 @@ USCFxBuildCommandlet::USCFxBuildCommandlet()
     LogToConsole = true;
 }
 
+// -VerifyContract: every built system under /Game/SC/FX carries the current generated contract (E1-6 review). Systems built before it
+// load with stale behaviour (the runtime no longer writes SC.SV / SC.BR / SC.Scale2), so the showcase package refuses them.
+static int32 VerifyContract()
+{
+    IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+    Registry.SearchAllAssets(true);
+    TArray<FAssetData> Assets;
+    Registry.GetAssetsByPath(TEXT("/Game/SC/FX"), Assets, true);
+    int32 Systems = 0, Stale = 0;
+    for (const FAssetData& Asset : Assets)
+    {
+        if (Asset.AssetClassPath != UNiagaraSystem::StaticClass()->GetClassPathName()) continue;
+        const UNiagaraSystem* System = Cast<UNiagaraSystem>(Asset.GetAsset());
+        if (!System) continue;
+        ++Systems;
+        const int32 Version = SCFxContract::Of(*System);
+        if (Version < SCFxRules::FxContractVersion)
+        {
+            ++Stale;
+            UE_LOG(LogSCFx, Error, TEXT("SC_FX_STALE %s contract=%d (current %d): rebuild with -run=SCFxBuild"), *System->GetPathName(), Version, SCFxRules::FxContractVersion);
+        }
+    }
+    UE_LOG(LogSCFx, Display, TEXT("SC_FX_CONTRACT systems=%d stale=%d version=%d"), Systems, Stale, SCFxRules::FxContractVersion);
+    return Stale == 0 ? 0 : 1;
+}
+
 int32 USCFxBuildCommandlet::Main(const FString& Params)
 {
+    if (FParse::Param(*Params, TEXT("VerifyContract"))) return VerifyContract();
     FModuleManager::Get().LoadModuleChecked(TEXT("NiagaraEditor")); // system compilation
     const FString ConfigPath = FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("FX/effects.json"));
     FString ConfigText;
@@ -1880,7 +1936,7 @@ int32 USCFxBuildCommandlet::Main(const FString& Params)
     }
     B.LoadStrengths(Config);
     UE_LOG(LogSCFx, Display, TEXT("SC_FX build effects=%d material_effects=%d scene_unit_nits=%g unlit_diffuse_scene_units=%g features=%s spawn_infos=%d loop_capacity=%d"),
-           Effects.Num(), MaterialEffects.Num(), B.SceneUnitNits, B.LitSceneUnits, *B.F.ToString(), SpawnInfoCapacity, B.LoopCapacity);
+           Effects.Num(), MaterialEffects.Num(), B.SceneUnitNits, B.LitSceneUnits, *B.F.ToString(), SpawnInfoCapacity(), B.LoopCapacity);
     for (const FString& E : Effects) B.BuildEffect(E);
     for (const FString& M : MaterialEffects) B.BuildMaterialEffect(M);
     sc_close(B.H);

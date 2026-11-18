@@ -485,6 +485,83 @@ E1-3 review fixes): `SCVIEWER_ENGINE_LIGHT_FUNCTION_ATLAS` 2, `SCVIEWER_ENGINE_S
    light, so on that path it has no shadow maps (unshadowed unless MegaLights uses VSM); the atlas warnings say so. Run: see
    Result (E1-5).
 
+#### E1-1..E1-4 cumulative review fixes
+Engine `9e2a37dd8` (`SCViewer: light function, falloff and tone curve review fixes`; Astra `out/e1/E1-1to4/astra-code-review.md`,
+12 items): `SCVIEWER_ENGINE_LIGHT_FUNCTION_ATLAS` 3, `SCVIEWER_ENGINE_LIGHT_FALLOFF` 3, `SCVIEWER_ENGINE_SPOT_SHAPE` 4,
+`SCVIEWER_ENGINE_TONE_CURVE` 3.
+1. **Atlas overflow under LumenPT.** The E1-4 review's fallback (a stochastic light whose atlas-compatible light function got no record
+   moves to the unbatched deferred path) asks the active stochastic renderer: MegaLights' atlas flag or, under LumenPT direct lighting
+   (which turns MegaLights off), the new `ELightFunctionAtlasSystem::LumenPT`. LumenPT's candidate loop takes only the cells' stochastic
+   range (`NumMegaLights` / `MegaLightsDataStartIndex` and the stochastic directional lights), as MegaLights does, so the rerouted light
+   is lit once, by deferred lighting; with LumenPT every other light is stochastic, so the loop is UE's otherwise. LumenPT's indirect
+   bounces (`SampleDirectLighting`, world cache) keep every light and sample record 0 (white) for a rerouted one (documented, not changed).
+2. **Border when faded by screen size.** `CheckForLightFunction` and the per-light pass's early-out keep a Border light function with a
+   perspective projection (`FLightFunctionSharedParameters::KeepsLightFunctionBorderWhenFaded`): the pass fades it to its disabled
+   brightness and still masks it black outside the square (before, the light lost its light function and lit its whole cone). The atlas
+   has no screen-size fade (UE's), so there such a light keeps its gobo.
+3. **One light function parameter builder.** `FLightFunctionSharedParameters::GetLightFunctionSharedParameters` (with the shared
+   `GetLightFunctionPerspectiveProjection`, also the atlas's tangent) feeds the path tracer, ray-traced lighting, Lumen and mobile deferred:
+   a rect light with a light function cone angle gets the perspective projection and its Border everywhere. This changes UE content in
+   those four passes, which projected such a rect light as planar unlike UE's own deferred pass and atlas (a consistency fix).
+4. **Light grid estimate.** The squared-linear-tail window is evaluated at the true distance; only the inverse square's denominator keeps
+   the 0.01 cm^2 clamp (a light under 0.1 cm radius had a zero estimate in its own cell). UE's window keeps UE's clamped evaluation.
+5. **Clear intent per asset.** `FPostProcessSettings::OverriddenNoneAssetsClear` is a bitmask (`EPostProcessOverriddenNoneAsset`; default 0 =
+   UE) replacing the E1-4 review's bool; `FPostProcessUtils::OverridePostProcessSettings` / `BlendPostProcessSettings` carry each asset's
+   bit with the asset (none for an unoverridden default that blending flips to). `FSCDisplayCurve::Apply` sets every asset.
+6. **Monotonic tone curve.** Toe Scale >= `GetHuePreservingShoulderMinToeScale()` (-2) and Reference White Scale >=
+   `GetHuePreservingShoulderMinRefWhiteScale()` (0.25), UI ClampMin and render-thread clamp. Below about -3.5 the toe lifts the darkest
+   tones above brighter ones (-9: neutral 0.02 -> 0.64, 0.10 -> 0.28); with a negative toe a reference white below 1 adds a falling factor,
+   and below about 0.2 the shoulder reverses for any toe; -2 / 0.25 keep a margin (scan over neutral and saturated ramps, peaks to 10000 nits).
+7. **Atlas slot origins as integer texels** (16 bits each; `FLightFunctionAtlasGlobalParameters::Slot_InvAtlasResolution`): the sampler
+   rebuilds the texel centre. Over every Size 2..32 and SlotResolution 32..1024 within 16K, the old normalised packing missed the first
+   texel centre of 1007 of 2770 tile columns towards the left neighbour, worst 0.117 texels (Size 31 / 512, column 5: 2560.406 for 2560.5);
+   now worst 7.7e-4 texels, fp32 rounding (`out/e1/E1-1to4/fix/atlas-decode.txt`).
+8. **Volumetric soft fading of a square frustum** fades towards the square's faces (lateral distance max(|y|, |z|) against x tan h), not
+   the enclosing cone (`GetSpotLightVolumetricSoftFading`: volumetric fog and MegaLights volume).
+9. **Reflection-capture light shapes** evaluate the light's range window (squared linear tail) and its bulb offset law relative to the
+   emitter sphere's own 1 / d^2.
+10. **Atlas size clamp** before the multiply (Size 32 x SlotResolution 2^27 wrapped to 0 in uint32 and passed the check).
+11. **Probe** (`SCLightVerification.cpp`): the near clip in both shapes, lumens over the square's solid angle (a cone over UE's clamped half
+   angle), UE's regularised 1 / (d^2 + 1 cm^2).
+12. **Per-world A/B restore.** `sc.Lights.ProjectorShape 1` / `FalloffModels 1` forget only that world's saved lights (and expired ones).
+   New `sc.Lights.ProjectorShape 3`: the corner cone with the Border address (the light function alone cuts the square), for the checks.
+- **Tests first** (`out/e1/E1-1to4/fix/testsfirst.log`, old engine and plugin): `SCBridge.Lights.LightGridEstimate` (the port of
+  `LightCulling.ush`: tiny tail light estimate 0 at and inside its radius, below shading), `.ProbeFollowsRenderer` (1e6 for 5e5 lux at
+  1 cm; 2500 lux in front of a cone's near clip; 543.3 for 477.3 lux for 1000 lm over a 45-degree square), `.ComparisonRestorePerWorld`
+  (the second world stayed on the comparison), `SCBridge.ViewerExposure.ComposedClear` (a UE-style None metering mask composed with a LUT
+  clear, both orders and a blend, over a map with a mask and a LUT: the bool cleared the mask in all three), `.ToneCurveOrder` (ClampMin
+  -9 / 0.01). After the fixes all pass: `Automation RunTests SCBridge` 135 of 139 (`out/e1/E1-1to4/fix/tests.log`), every
+  `.ViewerExposure` / `.StarEngine` / `.Lights` / `.Rig.Lights` / `.Materials.MasterAssets` / `.Fx` test (30); the four failures are
+  outside these features and need inputs this run does not give (`Package.FolderTarImport` and `Player.KitRigAndWeapons` need
+  `-SCPackage` / `-SCPlayerPackage`; `Materials.FamilyMapping` rejects a scene v3 package, `FirstPerson.SkeletalCollision` fails without a
+  message).
+- **Runs** (fork, medfrnt; `out/e1/E1-1to4/fix/`: `run.txt`, `run2.txt`, `rvfix1.txt`, `regions*.txt`, `border-fade.txt`, `shots*/`; logs
+  `E1-1to4-fix.log`, `E1-1to4-fix2.log`, `E1-5-rvfix1.log`). The atlas logs `186 light(s) with a light function, 186 sampling the atlas`
+  at Size 8 / 128 and at Size 31 / 512 (961 tiles, 15872 px), no warning, no error.
+  - *Unchanged:* E1-5's review script (`out/e1/E1-5/review/scripts/run.ps1`) on this engine gives the steady exposures of `rv1` to 0.0001
+    stops at all six poses for both chains (game ref -9.0972 / -9.0971, floor -10.0551 / -10.0552; UE ref -8.4843 / -8.4844) and the WP-L3
+    region means of its shots to 0.0001 (game ref padNear 0.1532 / 0.1532, walkR 0.1786 / 0.1787, top padC 0.1014 / 0.1014, long floorR
+    0.1853 / 0.1854; `regions-rv.txt`). E1-3's and E1-4's tables predate E1-5's exposure chain, so their absolute means are not comparable;
+    E1-5's run had matched them. In the case run (look defaults on load: the look's -0.1 exposure bias, so 0.095 stops below the
+    explicit chain), square + border and cone + wrap still differ by under 1 % per region under MegaLights (ref padNear 0.1432 / 0.1421,
+    long floorR 0.1728 / 0.1731) and MegaLights / deferred by the renderer difference E1-3 saw.
+  - *Border when faded (item 2):* deferred with the per-light pass (`r.MegaLights.Allowed 0`, `r.Deferred.UsesLightFunctionAtlas 0`),
+    every light function faded by screen size (`r.Shadow.TexelsPerPixel 0.0001`). The corner cone with Border (mode 3) against the square:
+    brighter on 0.024 % (ref) / 0.014 % (long) of pixels by > 8 levels, frame mean 0.0956 / 0.0957; what the old early-out drew (no light
+    function: mode 2 faded, the light filling its corner cone): brighter on 65.6 % / 52.3 % of pixels, frame mean 0.1244 at 0.50 stops less
+    exposure. Under MegaLights the faded and unfaded mode 3 differ on 0.002 % / 0.004 % (the atlas kept the border; before, the faded light
+    had no atlas light function at all, `m3_ml_nolf`: brighter on 41 % / 44 %). Unfaded, mode 3 against the square: 0.26 % / 0.024 % per-light
+    pass, 0.010 % MegaLights.
+  - *Non-power-of-two atlas (item 7):* Size 31 / SlotResolution 512 against Size 8 / 128: 0.012 % / 0.004 % / 0.005 % / 0.003 % of pixels
+    (ref / top / long / up) by > 8 levels, as two captures at one size (0.006 / 0.003 / 0.004 / 0.002 %): no seam. The hangar's 14 gobos do
+    not include a black tile next to a white one, so the bleed itself is shown by the decode table above, not by a capture.
+- **UE default unchanged.** Wrap lights, Default falloff windows and `OverriddenNoneAssetsClear` 0 take UE's code paths; LumenPT's loop is
+  UE's when every light is stochastic; the per-light pass's early-out and UE's histogram path are unchanged for non-Border lights; the
+  exceptions are item 3 (rect lights with a light function cone angle in four passes) and the tone curve's new clamps (Hue Preserving
+  Shoulder only).
+- **Not covered.** LumenPT, the path tracer, ray-traced lighting, mobile and reflection captures were compiled, not run; no rect light
+  with a light function cone angle exists in SC content.
+
 ### E1-5 Exposure: LUT fix, dual meter, two-stage adaptation
 Today: the game's chain is mapped onto UE's histogram exposure by a runtime volume; the compensation-curve LUT must be
 re-domained by cvars before the curve exists (it rebakes only on a curve or sample-count change); the lens-attenuation
@@ -631,6 +708,45 @@ Engine `0d847e519` (`SCViewer: auto exposure review fixes`; Terra `out/e1/E1-5/t
   there are by reading and compiling); A13's zero target was not provoked. The GPU cost of the linear reduction was not profiled
   separately (it replaces the second histogram, one 64 × 64-texel tile per group).
 
+#### E1-5 review fixes 2
+Engine `3808c1160` (`SCViewer: auto exposure review fixes 2`; Terra `out/e1/E1-6/terra-review.md` 1-3, Astra
+`out/e1/E1-6/astra-code-review.md` E1-5 table): `SCVIEWER_ENGINE_EXPOSURE` 5.
+- **LUT task race (A, High).** `GetEyeAdaptationFixedExposure` (from `UpdatePreExposure`, while the curve LUT task may still replace the
+  view state's LUT) builds its scalars with `bCurveLUTReady` false: it ignores the curve and now never reads the LUT pointer.
+- **Curve snapshot after view extensions.** `FSceneRenderer`'s constructor (the game-thread handoff) retakes `FViewInfo::
+  AutoExposureCompensationCurve` from the final settings, after `ULocalPlayer`'s extension `SetupView`; `r.SplitScreenDebug` clones copy
+  the snapshot with their settings.
+- **CPU-curve output limits.** On the path without a LUT the two-stage limits take the curve at the brightness bounds from the snapshot
+  (`ExposureCompensationCurveAtMin / Max`); they had used the factor at the last metered luminance, so the limits moved with the scene.
+- **Incident meter.** Reconstruction is unfloored linear luminance (the histogram's 2^HistogramLogMin floor brightened a dark room); the
+  tile sum carries its weight to the decision (`ComputeIncidentMeanLuminance` returns mean and weight): only zero weight falls back to the
+  reflected meter, a valid black reading is floored at 2^-60 for its logarithm; the illuminance texture is `PF_R32_FLOAT` when a view
+  meters incident light (a pre-exposed reconstruction over a small albedo could pass half float's 65504, and the infinite sample dropped
+  out with its weight); UE's ignore-materials path alone keeps `PF_R16F` and its floored luminance.
+- **Multi-view (explicit fallbacks, per the coordinator's guidance).** With several views the illuminance rects are `GetDownscaledViewRect`
+  for every pass that writes or reads them (no column shared by adjacent views; a single view keeps UE's rect). An all-view-pixels incident
+  meter (cube captures, panoramas) needs every family view to write its rect, the rects to tile their union, and one pre-exposure; any
+  other family (mixed meters, gaps, differing pre-exposures) meters reflected light, warned once (non-shipping), rather than a per-rect
+  reduction. The HDR visualizer reads the illuminance texture only where the view's own passes wrote it (scene colour otherwise).
+- **Trace.** `sc.Look.ExposureLog` drops `pre_exposure` (a render-thread value read unsynchronised, possibly from another frame).
+- **LUT domain.** `UE::AutoExposure::FCompensationCurveLUTPolicy` holds the policy's inputs (`FromConsoleVariables`), and
+  `GetCompensationCurveLUTDomain(Curve, Policy)` evaluates it without console variables (the cvar entry point is that with
+  `FromConsoleVariables`). A degenerate width falls back to [MinX, MinX + 1] and, where MinX + 1 is not above MinX (|MinX| >= 2^24) or MinX
+  is not finite, to UE's [-10, 20]; Domain 0's sample count is limited by the texture (`GetMax2DTextureDimension`, a 16384-sample D3D12 LUT
+  stays 16384), the 8192 cap applies to the key-range policy only.
+- **Tests.** `SCBridge.ViewerExposure.CompensationLutPolicy` runs on `FCompensationCurveLUTPolicy` and sets no console variable (the
+  scoped override and its history residue are gone): degenerate widths at MinX = MaxX = 3, +-2^24 and 3e38 in both policies give two
+  samples and a positive, finite width; Domain 0 keeps 16384 samples (4096 with a 4096 texture), the key range keeps its cap; the cvar
+  entry point equals `FromConsoleVariables`. These need the new API, so they are not tests first; the rest of the batch is GPU-side.
+- **Runs** (medfrnt, E1-5's review script; `out/e1/E1-5/review/rv2.txt`, `steps-rv2.txt`, log `E1-5-rv2.log`): steady exposure against `rv1`
+  within 0.0005 stops at every pose and case (game ref -9.0972 / -9.0971, floor -10.0551 / -10.0552; UE unchanged to 0.0001; incident
+  alone ref -9.8572 / -9.8567); the incident meter reads 0.0005 stops above `rv1` (ref 7.2269 / 7.2264, floor 8.6115 / 8.6110: the
+  unfloored, FP32 reconstruction) and stays independent of `HistogramLogMax` (7.2269 / 7.2268 at 25.966 / 8). Compensation steps at the
+  bounds as `rv1` (upper +3: t50 1.49 s, t90 2.63 s, +1.231 stops; -3: t50 0.16 s; release within 0.1 s). No error lines.
+- **Not covered.** No run reached split screen, `r.SplitScreenDebug`, cube captures, a view extension that swaps the curve, or the HDR
+  visualizer (by reading and compiling); the half-float overflow was not provoked in a scene (the hangar's reconstructions stay far below
+  it).
+
 ### E1-6 Niagara lightweight emitters
 Today: `NiagaraStateless::MaxGpuSpawnInfos` = 8 (overflow drops live loops; our FX builder stretches loop durations);
 spawn-rate bindings cannot evaluate expressions; expressions have add / multiply only; sprite size ignores component
@@ -699,6 +815,55 @@ clamp / lerp); `SCVIEWER_ENGINE_NIAGARA_STATELESS` 4.
   needed for the data). Cooked showcase FX were not rebuilt; systems built before E1-6 need `-run=SCFxBuild` (the runtime no longer
   sets `SC.SV` / `SC.BR` / `SC.Scale2`).
 
+#### E1-6 review fixes
+Engine `e2ec17572` (`SCViewer: stateless spawn review fixes`; Terra `out/e1/E1-6/terra-review.md` 4-5, Astra
+`out/e1/E1-6/astra-code-review.md` E1-6 table): `SCVIEWER_ENGINE_NIAGARA_STATELESS` 5.
+- **Capacity per the WP rule.** `NiagaraStateless::MaxGpuSpawnInfos` (32) is the compiled storage; the effective limit is
+  `NiagaraStateless::GetMaxSpawnInfos()`, the cvar `fx.Niagara.Stateless.MaxSpawnInfos` (default `DefaultMaxSpawnInfos` = UE 5.9's 8,
+  clamped to [1, 32]; the overflow log and the on-screen message name it). The project sets 32 in `DefaultEngine.ini` `[SystemSettings]`,
+  which the editor, the game and the SCFxBuild commandlet all read, so the builder's loop guard (`SpawnInfoCapacity()`) is the limit the
+  project ships with (`SC_FX build ... spawn_infos=32`). UE content that does not opt in draws what UE draws.
+- **Expression validation (High).** `FNiagaraStatelessExpression::ValidateTree`: a set, concrete root of the distribution's type, set
+  operands of the struct their property declares (`BaseStruct`, where metadata exists), binding leaves that name a parameter. The emitter
+  build validates spawn rate / probability and loop duration / delay expressions before building them; an invalid one is logged
+  (`LogNiagara` warning naming the emitter, the distribution and the problem) and becomes the distribution's constant (its Min). Every
+  binding leaf whose name resolves to no renderer binding builds as its type's default constant instead of a binding at offset -4 (Float,
+  Vec2, Vec3, Vec4, Color). Unbuilt, only a valid constant expression is evaluated.
+- **Expression-aware filtering.** An Expression spawn rate is kept at build whatever its literal Min / Max (`FNiagaraStatelessSpawnInfo::
+  IsValid`); with an Expression loop duration a burst's time is checked per loop against the evaluated duration only.
+- **Parameter collections.** `CacheParameterCollectionReferences` also walks the emitter state's and the spawn infos' distributions
+  (`FNiagaraDistributionBase::ForEachParameterBinding` over `FNiagaraEmitterStateData` / `FNiagaraStatelessSpawnInfo`), so a collection that
+  only a spawn or loop expression binds is bound at run time and referenced for cook.
+- **Rate change.** The residual between loops is the fraction of a particle the last loop left (`ResidualSpawnTime` x `ResidualSpawnRate`);
+  at a new rate it is that fraction's time at the new rate, so a rate change places the next birth and backdates none (1 / s to 100 / s
+  after a 0.25 s residual made 25 particles appear already aged); at an unchanged rate it is UE's residual time, bit for bit.
+- **Builder** (`SCFxBuildCommandlet.cpp`, `SCFxRules.h`): strength curves are classified over the configured strengths, 0, 1 and every
+  authored key in [0, 1] (`ClassificationStrengths`), so a curve peaking between the knots is neither constant nor invisible; a light's
+  intensity curve and its colour's luminance curve (relative to strength 1, at the colour curve's own keys) are two exact expressions,
+  multiplied (no resampling of their product at the knots); a zero-width key interval is a strict step (`StepScale`: the later value from
+  the next float above the key; the float expression is tested, `EvalFloat`); pulse bursts are counted with an exclusive expiry
+  (`LiveBursts`: 8 s at 0.25 s keeps 32, not 33) and the warning says the newest are not drawn; a rate loop is stretched only where its live
+  loops do not fit (7.75 s at 0.25 s fits 32 exactly and keeps 0.25 s).
+- **Stale FX.** The generated contract is versioned: SCFxBuild writes the user parameter `SC.FxContract` = `SCFxRules::FxContractVersion` (2);
+  the runtime (`SCFxContract::Check`, from `SCFxStrength::Set`, non-shipping) warns `SC_FX_STALE` once per system without it or with an older
+  one; `-run=SCFxBuild -VerifyContract` lists every system under `/Game/SC/FX` and fails on a stale one, and `ue/scripts/package_showcase.ps1`
+  runs it before cooking and refuses stale systems. The legacy setters (`SC.SV`, `SC.BR`, `SC.Scale2`) stay removed.
+- **Tests** (tests first for the builder rules: `out/e1/E1-6/review/testsfirst.log`, the new `SCBridge.Fx.ReviewRules` against the E1-6
+  rules: the exact fit stretched to 0.25025 s, 33 / 33 / 34 bursts where 32 / 32 / 33 are alive, the step's later value
+  0.218 / 0.060 / 0.25 at the next float, the peak at 0.25 classified as 0). After the fixes: `.ReviewRules`, `.ClampSum` (no skipped
+  ramp), `.LoopGuard`, `.EngineCapacity` (storage 32, UE default 8, the project's effective 32), `.ExpressionValidation` (engine API: a
+  bound rate x 2 valid; an empty root, an unnamed binding, an empty operand, a vec3 root, a vec3 operand of a float multiply rejected);
+  `Automation RunTests SCBridge` 137 of 141 (`out/e1/E1-6/review/tests.log`; the same four failures outside these features as above).
+- **Runs** (`out/e1/E1-6/`: `fxbuild-rv-stdout.log`, `review/verify-stdout.log`, `review/run-rv.txt`, `review/psnr.txt`, `review/shots/`;
+  logs `E1-6-fxbuild-rv.log`, `E1-6-verify.log`, `E1-6-rv.log`). FX build `SC_FX build ... spawn_infos=32 loop_capacity=32`, `SC_FX_DONE
+  systems=11 textures=10 materials=13 errors=0`; the steam jet keeps 0.25 s loops (live_loops=29/32), nothing stretched. `-VerifyContract`:
+  `SC_FX_CONTRACT systems=7 stale=0 version=2` after the rebuild. Game run (beam, impact, steam): 0 overflowing emitters, no
+  `SC_FX_STALE`; PSNR against E1-6's `c32` frames: visual 39.8 / 42.8 / 49.9 / 52.3 dB (E1-6's own before / after 41.3 / 42.9 / 51.0 /
+  52.8), beam 55.1 / 55.1 dB (55.1 / 55.0), steam 44.5 to 45.6 dB; consecutive frames of one run 34.7 dB.
+- **Not covered.** A cooked showcase package was not built (the verify step was run on its own); a Niagara parameter collection driving a
+  spawn rate was not exercised in a run (code and the reference walk only); the rate-change residual was checked by reading (the project's
+  beams change length continuously).
+
 ### E1-7 SSDO as an engine feature
 Today: patches in `MegaLightsShading.usf` and `DiffuseIndirectComposite.usf`, constants in a generated header,
 switched by `r.GeneralPurposeTweak`; off in the current look (D15).
@@ -724,7 +889,7 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 | E1-1 | `ad613210a` | `DefaultEngine.ini` (MaxLightCount=255 dropped), `SCLightVerification` (`atlas_light_records`), `M_SC_LightFunction` atlas-compatible, uproject `UE_5.9_src` | engine + project build, 11/11 tests, medfrnt + lrgtop runs (Result (E1-1)) |
 | E1-2 | `362370d99`, review fixes `dd77a0317` (E1-3 section) | importer: range fade (all local lights) + bulb offset law (authored point / spot), no `SoftSourceRadius`; probe; `sc.Lights.FalloffModels`; tests | engine + project build, 11/11 tests, medfrnt run with UE-default A/B (Result (E1-2)) |
 | E1-3 | `20605cb76` (+ `dd77a0317` E1-2 review fixes), review fixes `4470238ea` | importer `MakeProjector` (SquareFrustum, half-FOV, Border; no corner cone / lateral scale), `M_SC_LightFunction` without border node (regenerated), square-aware probe, `sc.Lights.ProjectorShape 0\|1\|2`, tests | engine + project build, tests first, 12/12 tests, medfrnt MegaLights + deferred runs, Astra (Result (E1-3)); review fixes: tests first, 17/17, medfrnt rerun unchanged (E1-3 review fixes) |
-| E1-4 | `3079e8bc3`, review fixes `c1e0610d4` | `FSCDisplayCurve` (curve + fidelity baseline on the viewer volume), `sc.Look.Display` switches the method, `M_SC_DisplayMapping` + its script + `KEEP` entry removed, hash guard moved to a test, notes / README; review: `bOverriddenNoneAssetsClear` in the baseline, tests `.BaselineBlend`, `.ToneCurveDomain` | engine + project build, 17/17 tests, LUT vs analytic at 32³ / 64³ / 128³, medfrnt runs material vs engine vs UE Filmic, Astra (Result (E1-4)); review fixes: 21/21 tests, MegaLights overflow run (E1-4 review fixes, Result (E1-5)) |
-| E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)); review fixes `0d847e519` (Terra T1–T7, Astra A1–A18; `sc.Look.Exposure ue` overrides, scoped cvar priority, fixture provenance): 25/25 tests, medfrnt before / after runs (E1-5 review fixes) |
-| E1-6 | `ad5c402d9`, `05559963d`, `9f382da2b`, `c7a0e82f7` | SCFxBuild: loop guard from the engine constant (`SCFxRules.h`), typed expressions, beam spawn-rate and count expressions, clamp-sum strength curves, owner-scale sprite sizes, `-LoopCapacity`; runtime contract reduced (`SCFxStrength.h`, `SCFxBeam.h`, cargo contacts, `sc.Fx.Spawn`); `bTreatAsEngineModule` kept (boundary); tests `SCBridge.Fx.*`; WP-K4 contract note | engine + project build, FX build errors=0, 25/25 tests, medfrnt overflow runs at 8 / 32, GPU cost, before / after frames, Astra (Result (E1-6)) |
+| E1-4 | `3079e8bc3`, review fixes `c1e0610d4`; E1-1..E1-4 cumulative review fixes `9e2a37dd8` | `FSCDisplayCurve` (curve + fidelity baseline on the viewer volume), `sc.Look.Display` switches the method, `M_SC_DisplayMapping` + its script + `KEEP` entry removed, hash guard moved to a test, notes / README; review: `bOverriddenNoneAssetsClear` in the baseline, tests `.BaselineBlend`, `.ToneCurveDomain` | engine + project build, 17/17 tests, LUT vs analytic at 32³ / 64³ / 128³, medfrnt runs material vs engine vs UE Filmic, Astra (Result (E1-4)); review fixes: 21/21 tests, MegaLights overflow run (E1-4 review fixes, Result (E1-5)); cumulative fixes (12 items, incl. probe and per-world A/B): tests first, 135/139 `SCBridge` (the 4 outside these features), medfrnt runs: E1-5 exposures and regions to 0.0001, border when faded, non-power-of-two atlas (E1-1..E1-4 cumulative review fixes) |
+| E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)); review fixes `0d847e519` (Terra T1–T7, Astra A1–A18; `sc.Look.Exposure ue` overrides, scoped cvar priority, fixture provenance): 25/25 tests, medfrnt before / after runs (E1-5 review fixes); review fixes 2 `3808c1160` (LUT task race, snapshot after view extensions, CPU-curve limits, incident weight / FP32 / unfloored, multi-view fallbacks, LUT policy API; trace without pre-exposure, isolated policy test): 137/141 `SCBridge`, E1-5 steady state and steps within 0.0005 stops (E1-5 review fixes 2) |
+| E1-6 | `ad5c402d9`, `05559963d`, `9f382da2b`, `c7a0e82f7` | SCFxBuild: loop guard from the engine constant (`SCFxRules.h`), typed expressions, beam spawn-rate and count expressions, clamp-sum strength curves, owner-scale sprite sizes, `-LoopCapacity`; runtime contract reduced (`SCFxStrength.h`, `SCFxBeam.h`, cargo contacts, `sc.Fx.Spawn`); `bTreatAsEngineModule` kept (boundary); tests `SCBridge.Fx.*`; WP-K4 contract note | engine + project build, FX build errors=0, 25/25 tests, medfrnt overflow runs at 8 / 32, GPU cost, before / after frames, Astra (Result (E1-6)); review fixes `e2ec17572` (effective limit cvar, default 8, 32 in `DefaultEngine.ini`; expression validation; expression-aware filtering; collections; rate residual) and the builder / contract fixes (`SCFxContract.h`, `-VerifyContract`, package check): tests first, 137/141, FX build errors=0, verify stale=0, 0 overflows, PSNR as E1-6 (E1-6 review fixes) |
 | E1-7 | — | — | — |
