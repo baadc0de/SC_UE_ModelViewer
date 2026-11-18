@@ -10,6 +10,7 @@
 #include "Components/LocalLightComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "HAL/IConsoleManager.h"
+#include "LightDefinitions.h" // light function atlas capacities (engine fork, WP-E1 E1-1)
 #include "Components/SpotLightComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Engine/World.h"
@@ -173,12 +174,19 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         }
     }
     OK &= Materials.Num() == Textures.Num() && Vehicle->GoboTextures.Num() == Textures.Num();
+    // The light function atlas capacities as the engine clamps them (LightDefinitions.h; LightFunctionAtlas.cpp): material tiles
+    // (Size^2, Size in [2, LIGHT_FUNCTION_ATLAS_MAX_EDGE_SIZE]) and light records (MaxLightCount, -1 = every addressable record;
+    // record 0 is reserved). The engine logs what it allocated ("LightFunctionAtlas: ...").
     const auto* Atlas = IConsoleManager::Get().FindConsoleVariable(TEXT("r.LightFunctionAtlas.Size"));
-    const int32 Edge = Atlas ? Atlas->GetInt() : 0;
+    const auto* AtlasLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.LightFunctionAtlas.MaxLightCount"));
+    const int32 Edge = FMath::Clamp(Atlas ? Atlas->GetInt() : 0, 2, int32(LIGHT_FUNCTION_ATLAS_MAX_EDGE_SIZE));
+    const int32 MaxRecords = int32(LIGHT_FUNCTION_ATLAS_MAX_LIGHT_RECORD_COUNT);
+    const int32 MaxLights = AtlasLights ? AtlasLights->GetInt() : -1;
+    const int32 Records = FMath::Max((MaxLights < 0 ? MaxRecords : FMath::Min(MaxLights, MaxRecords)) - 1, 0);
     UE_LOG(LogSCImport, Display,
            TEXT("LIGHT_VERIFY passed=%d components=%d enabled=%d disabled=%d projectors=%d gobo_textures=%d gobo_materials=%d "
-                "fallback_selected=%d shadow_flags=%d visible_shadowed=%d megalights_active=%d atlas_slots=%d"),
+                "fallback_selected=%d shadow_flags=%d visible_shadowed=%d megalights_active=%d atlas_slots=%d atlas_light_records=%d"),
            OK, Vehicle->Lights.Num(), Vehicle->Lights.Num() - Disabled, Disabled, Projectors, Textures.Num(), Materials.Num(), Fallback,
-           Shadowed, VisibleShadowed, Vehicle->bMegaLightsActive, Edge * Edge);
+           Shadowed, VisibleShadowed, Vehicle->bMegaLightsActive, Edge * Edge, Records);
     return OK;
 }

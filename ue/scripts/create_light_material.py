@@ -7,6 +7,11 @@ if not material:
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         "M_SC_LightFunction", "/SCBridge/Materials", unreal.Material, unreal.MaterialFactoryNew())
 material.set_editor_property("material_domain", unreal.MaterialDomain.MD_LIGHT_FUNCTION)
+# WP-E1 E1-1: the TextureCoordinate node below (the border) marks the graph as manipulating texture coordinates, which takes
+# the material out of the light-function atlas (HLSLMaterialTranslator bIsLightFunctionAtlasCompatible): MegaLights then
+# drops every gobo and deferred lights fall back to the per-light pass. The UV is the light function's own coordinate,
+# which is what the atlas renders the material in, so the material declares itself compatible.
+material.set_editor_property("force_compatible_with_light_function_atlas", True)
 unreal.MaterialEditingLibrary.delete_all_material_expressions(material)
 sample = unreal.MaterialEditingLibrary.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D)
 sample.set_editor_property("parameter_name", "Gobo")
