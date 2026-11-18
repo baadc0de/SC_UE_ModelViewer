@@ -922,9 +922,8 @@ if not unreal.SystemLibrary.get_console_variable_bool_value("r.Substrate"):
 # Regenerate from scratch so the checked-in assets always equal this script's output. Packages that the
 # commandlet has not loaded are removed on disk first (editor-side deletion leaves them in this session).
 CONTENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Plugins", "SCBridge", "Content", "Materials")
-# M_SC_LightFunction belongs to create_light_material.py (WP-U3) and M_SC_DisplayMapping to
-# create_display_mapping_material.py (WP-U3b §13); both are kept.
-KEEP = {"M_SC_LightFunction.uasset", "M_SC_DisplayMapping.uasset"}
+# M_SC_LightFunction belongs to create_light_material.py (WP-U3) and is kept.
+KEEP = {"M_SC_LightFunction.uasset"}
 for entry in (os.listdir(CONTENT) if os.path.isdir(CONTENT) else []):
     path = os.path.join(CONTENT, entry)
     if os.path.isdir(path):

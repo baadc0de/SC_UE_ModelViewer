@@ -3,7 +3,7 @@
 Companion to `StarEngineRender.json` (JSON carries no comments). The fixture holds the values of the game's
 renderer that the Viewer cannot read at run time: cvar defaults compiled into the game executable and
 constants / functions of its tokenised shader sources. `FSCStarEngine` (`Public/SCStarEngine.h`) loads it with
-no in-code fallback; `ue/scripts/create_display_mapping_material.py` reads the function hashes. The rules
+no in-code fallback; the test `SCBridge.ViewerExposure.DisplayCurve` pins the display-curve function hashes. The rules
 built on these values are derived in `ue/verification/WP-U3b.md` §13. Update this file in the same commit as
 any fixture change.
 
@@ -78,13 +78,13 @@ Method:
 | `sqrGlowFactor` | `GlowNits` | material glow is quadratic: scene units = Glow² × 400 (`MaterialGlowToLinearGlow`) |
 | `HDR_LUMINANCE_SCALE` (again) | `InstanceGlowNits` | per-instance glow is linear: `CalculateEmissive` adds `instanceGlow × glowColour` to the converted material glow, so an instance amount is already in scene units |
 | `middleGray` | `LogMultiplierAt` | `exposure = middleGray / exp2(logLumTarget)` (`CalcExposureAndNoise`) |
-| `MaxDisplayNitsLDR` | display-mapping material | SDR peak passed to the display curve (`DisplayMapping`) |
+| `MaxDisplayNitsLDR` | `FSCDisplayCurve` → the engine tone curve's Max Display Nits | SDR peak passed to the display curve (`DisplayMapping`) |
 | `LOG_MIN`, `LOG_MAX` | `FSCExposureSettings` histogram range | the meter's log2 scene-unit range (`Histogram.cfib`) |
 | `r_ExposureCompensationEV0/4/8/12/16` | `CompensationAt` | anchors of `CalculateEVCompensation`; the scene EV is the number in the cvar name |
 | `r_ExposureMultiplierMin/Max` | `EVAtMultiplier` → UE min / max brightness | clamp of the exposure multiplier |
 | `r_ExposureDiscardRatioDark/Bright` | UE histogram low / high percent | histogram fractions left out of the meter |
 | `r_ExposureAdaptTimeDark/Bright/Pupil`, `r_ExposureAdaptRangePupil` | UE adaptation speed (pupil stage) | `PigmentAdaptation` / `PupilAdaptation` half-lives |
-| `r_HDRTonemappingCurve`, `r_HDRTonemappingCurveToe` | display-mapping material | curve 1 = `HuePreservingShoulder`, toe 1.0 |
+| `r_HDRTonemappingCurve`, `r_HDRTonemappingCurveToe` | `FSCDisplayCurve` → the engine tone curve (`ETonemappingMethod::HuePreservingShoulder`, its Toe Scale) | curve 1 = `HuePreservingShoulder`, toe 1.0 |
 | `glassColourDensityScale`, `glassColourFloor` | `M_SC_Glass` (instance parameters from `FSCStarEngine`) | `density = (1 / max(transmissive, 0.01) − 1) × 0.1`, `transmittance = exp(−density × path)` (`GlassShared`) |
 | `glassVertexHeightBias`, `glassVertexHeightScale` | `M_SC_Glass` | `%PER_VERTEX_CURVATURE`: `height ×= saturate((vertex blue − 0.25) × 3)` |
 | `glassHeightClip` | `M_SC_Glass` coverage | `clip(heightMap − 0.01)` under `%HEIGHT_MAP` |
@@ -102,7 +102,7 @@ Functions and what was taken from each:
 
 | Function | Role |
 |---|---|
-| `HuePreservingShoulder`, `GetLuminance`, `ToSRGB` | **ported** to the Custom node of `M_SC_DisplayMapping`; `create_display_mapping_material.py` refuses to build when one of these hashes differs from the one its port was written from |
+| `HuePreservingShoulder`, `GetLuminance`, `ToSRGB` | **ported** to the engine fork's tonemapper (`HuePreservingShoulder` in `PostProcessCombineLUTs.usf`, WP-E1 E1-4; UE's `LinearToSrgb` is the encode); `SCBridge.ViewerExposure.DisplayCurve` fails when one of these hashes differs from the one the port was written from |
 | `DisplayMapping` | call site: which curve, peak and toe the SDR path uses |
 | `CalculateEVCompensation`, `LogLumToEV`, `CalcExposureAndNoise`, `CalcLogLumMetered` | the exposure rule in `FSCStarEngine::CompensationAt` / `LogMultiplierAt` |
 | `PupilAdaptation`, `PigmentAdaptation`, `ExponentialDecay` | adaptation model (two stages; UE gets the pupil stage) |

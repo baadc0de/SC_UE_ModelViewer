@@ -220,6 +220,15 @@ bool FSCLightProjectorShape::RunTest(const FString&)
     TestEqual(TEXT("square: shape in the model word"), (Word >> LIGHT_MODEL_WORD_BIT_OFFSET_SPOT_SHAPE) & LIGHT_MODEL_WORD_MASK_SPOT_SHAPE, uint32(LIGHT_SPOT_SHAPE_SQUARE_FRUSTUM));
     TestEqual(TEXT("square: near clip in the model word (half, cm)"),
               uint32((Word >> LIGHT_MODEL_WORD_BIT_OFFSET_PROJECTOR_NEAR_CLIP) & LIGHT_MODEL_WORD_MASK_PROJECTOR_NEAR_CLIP), uint32(FFloat16(25.f).Encoded));
+    // The near clip is packed as a half (E1-3 review): the setter and the proxy descriptor clamp to the half's range (65504 cm) with
+    // a warning, so the property never promises a depth the packed light cannot hold.
+    AddExpectedMessage(TEXT("above the packed range"), EAutomationExpectedMessageFlags::Contains, 0);
+    Spot->SetMobility(EComponentMobility::Movable);
+    Spot->SetProjectorNearClip(100000.f);
+    TestEqual(TEXT("near clip: the setter clamps to the packed range"), Spot->ProjectorNearClip, 65504.f);
+    Spot->ProjectorNearClip = 100000.f; // as a serialized value would arrive
+    TestEqual(TEXT("near clip: the proxy descriptor clamps to the packed range"), USpotLightComponent::BuildSceneProxyDesc(*Spot).ProjectorNearClip, 65504.f);
+    Spot->ProjectorNearClip = 25.f;
     // The square's corner direction lies on the bounding cone: a probe just inside it is inside the bounds, a probe outside is not.
     Spot->SetWorldLocation(FVector::ZeroVector);
     const FVector CornerDir = FVector(1, Tan, Tan).GetSafeNormal();

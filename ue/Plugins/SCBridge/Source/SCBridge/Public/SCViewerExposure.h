@@ -4,6 +4,7 @@
 
 class APostProcessVolume;
 class UWorld;
+struct FPostProcessSettings;
 struct FSCStarEngine;
 
 /** The host engine's eye-adaptation conventions the mapping depends on (console variables). */
@@ -43,8 +44,38 @@ struct SCBRIDGE_API FSCExposureSettings
     static FSCExposureSettings From(const FSCStarEngine& Game, const FSCEngineExposure& Host);
 };
 
+/**
+ * The game's SDR display mapping (DisplayMapping in HDRPostProcess.cfxb: HuePreservingShoulder, saturate, sRGB encode) as the
+ * engine's tone curve (fork feature SCVIEWER_ENGINE_TONE_CURVE: ETonemappingMethod::HuePreservingShoulder in the tonemapping LUT;
+ * UE encodes the output). r_HDRTonemappingCurve 1 selects it; the SDR branch calls it with MaxDisplayNitsLDR and the curve toe
+ * (ue/verification/WP-U3b.md 13.5).
+ */
+struct SCBRIDGE_API FSCDisplayCurve
+{
+    bool bSupported = false;  // the game's curve has an engine implementation (r_HDRTonemappingCurve 1)
+    int32 GameCurve = 0;      // r_HDRTonemappingCurve
+    float MaxDisplayNits = 0; // MaxDisplayNitsLDR
+    /**
+     * hdrRefWhiteScale. The SDR branch's argument is a renderer constant the fixture does not carry; SDR output has no separate
+     * paper white, so it is the curve's neutral 1 (no reference white scaling), as the replaced material had it.
+     */
+    float RefWhiteScale = 1;
+    float ToeScale = 0;       // r_HDRTonemappingCurveToe
+
+    static FSCDisplayCurve From(const FSCStarEngine& Game);
+
+    /**
+     * The viewer volume's display settings. bGame (and a supported curve): the curve, and the fidelity baseline around it: neutral
+     * colour grading, no UE lens vignette (the game's vignetting map is not modelled), local exposure off. Otherwise every one of
+     * these overrides is cleared, so UE's tonemapper renders as the project and the map set it.
+     */
+    void Apply(FPostProcessSettings& Settings, bool bGame) const;
+};
+
 namespace SCViewerExposure
 {
+/** Actor tag of the volume Install spawns (sc.Look.Display finds it by this). */
+SCBRIDGE_API extern const FName VolumeTag;
 /** Spawn the unbound volume that applies the game's exposure and display mapping above every volume of the map. */
 SCBRIDGE_API APostProcessVolume* Install(UWorld& World);
 }

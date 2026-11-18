@@ -6,8 +6,10 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
-#include "Materials/MaterialInstanceDynamic.h"
-#include "Materials/MaterialInterface.h"
+#include "SCViewerEngineFeatures.h"
+#if !defined(SCVIEWER_ENGINE_TONE_CURVE) || SCVIEWER_ENGINE_TONE_CURVE < 1
+#error "SCBridge needs the SCViewer fork of UE 5.9 with the display curve (WP-E1 E1-4, SCVIEWER_ENGINE_TONE_CURVE)"
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCExposure, Log, All);
 
@@ -64,6 +66,47 @@ FSCExposureSettings FSCExposureSettings::From(const FSCStarEngine& Game, const F
     return Out;
 }
 
+FSCDisplayCurve FSCDisplayCurve::From(const FSCStarEngine& Game)
+{
+    FSCDisplayCurve Out;
+    Out.GameCurve = Game.TonemappingCurve;
+    Out.bSupported = Game.TonemappingCurve == 1; // HuePreservingShoulder; 2 (HuePreservingShoulder2023) has no engine curve
+    Out.MaxDisplayNits = float(Game.MaxDisplayNitsLDR);
+    Out.ToeScale = float(Game.TonemappingCurveToe);
+    return Out;
+}
+
+void FSCDisplayCurve::Apply(FPostProcessSettings& S, bool bGame) const
+{
+    const bool bOn = bGame && bSupported;
+    const FPostProcessSettings& UE = FPostProcessSettings::GetDefault();
+    // A field and its override: the value when on, UE's default and no override when off.
+#define SC_DISPLAY_SET(Field, Value) S.bOverride_##Field = bOn; S.Field = bOn ? (Value) : UE.Field
+#define SC_DISPLAY_NEUTRAL(Field) SC_DISPLAY_SET(Field, UE.Field)
+    SC_DISPLAY_SET(TonemappingMethod, ETonemappingMethod::HuePreservingShoulder);
+    SC_DISPLAY_SET(HuePreservingShoulderMaxDisplayNits, MaxDisplayNits);
+    SC_DISPLAY_SET(HuePreservingShoulderRefWhiteScale, RefWhiteScale);
+    SC_DISPLAY_SET(HuePreservingShoulderToeScale, ToeScale);
+    SC_DISPLAY_SET(VignetteIntensity, 0.f);
+    // Neutral grading: UE's defaults over whatever a map volume grades (ToneCurveAmount scales the curve itself).
+    SC_DISPLAY_NEUTRAL(ToneCurveAmount);
+    SC_DISPLAY_NEUTRAL(TemperatureType); SC_DISPLAY_NEUTRAL(WhiteTemp); SC_DISPLAY_NEUTRAL(WhiteTint);
+    SC_DISPLAY_NEUTRAL(ColorSaturation); SC_DISPLAY_NEUTRAL(ColorContrast); SC_DISPLAY_NEUTRAL(ColorGamma); SC_DISPLAY_NEUTRAL(ColorGain); SC_DISPLAY_NEUTRAL(ColorOffset);
+    SC_DISPLAY_NEUTRAL(ColorSaturationShadows); SC_DISPLAY_NEUTRAL(ColorContrastShadows); SC_DISPLAY_NEUTRAL(ColorGammaShadows); SC_DISPLAY_NEUTRAL(ColorGainShadows); SC_DISPLAY_NEUTRAL(ColorOffsetShadows);
+    SC_DISPLAY_NEUTRAL(ColorSaturationMidtones); SC_DISPLAY_NEUTRAL(ColorContrastMidtones); SC_DISPLAY_NEUTRAL(ColorGammaMidtones); SC_DISPLAY_NEUTRAL(ColorGainMidtones); SC_DISPLAY_NEUTRAL(ColorOffsetMidtones);
+    SC_DISPLAY_NEUTRAL(ColorSaturationHighlights); SC_DISPLAY_NEUTRAL(ColorContrastHighlights); SC_DISPLAY_NEUTRAL(ColorGammaHighlights); SC_DISPLAY_NEUTRAL(ColorGainHighlights); SC_DISPLAY_NEUTRAL(ColorOffsetHighlights);
+    SC_DISPLAY_NEUTRAL(ColorCorrectionShadowsMax); SC_DISPLAY_NEUTRAL(ColorCorrectionHighlightsMin); SC_DISPLAY_NEUTRAL(ColorCorrectionHighlightsMax);
+    SC_DISPLAY_NEUTRAL(SceneColorTint); SC_DISPLAY_NEUTRAL(ColorGradingIntensity); SC_DISPLAY_NEUTRAL(ColorGradingLUT);
+    // Local exposure off: the renderer skips it when both contrast scales and the detail strength are 1 and no curve is set.
+    SC_DISPLAY_NEUTRAL(LocalExposureHighlightContrastScale); SC_DISPLAY_NEUTRAL(LocalExposureShadowContrastScale);
+    SC_DISPLAY_NEUTRAL(LocalExposureDetailStrength);
+    SC_DISPLAY_NEUTRAL(LocalExposureHighlightContrastCurve); SC_DISPLAY_NEUTRAL(LocalExposureShadowContrastCurve);
+#undef SC_DISPLAY_NEUTRAL
+#undef SC_DISPLAY_SET
+}
+
+const FName SCViewerExposure::VolumeTag(TEXT("SCViewerExposure"));
+
 APostProcessVolume* SCViewerExposure::Install(UWorld& World)
 {
     const FSCStarEngine& Game = FSCStarEngine::Get();
@@ -88,6 +131,7 @@ APostProcessVolume* SCViewerExposure::Install(UWorld& World)
     APostProcessVolume* Volume = World.SpawnActor<APostProcessVolume>(Spawn);
     if (!Volume) { UE_LOG(LogSCExposure, Error, TEXT("VIEWER_GAME_EXPOSURE failed: cannot spawn the volume")); return nullptr; }
     Volume->bUnbound = true; Volume->bEnabled = true; Volume->BlendWeight = 1.f; Volume->Priority = Priority;
+    Volume->Tags.Add(VolumeTag);
 
     FPostProcessSettings& S = Volume->Settings;
     S.bOverride_AutoExposureMethod = true; S.AutoExposureMethod = AEM_Histogram;
@@ -111,26 +155,19 @@ APostProcessVolume* SCViewerExposure::Install(UWorld& World)
     // confinement; 1.0..1.3 moves the views 1..4 %). Not game data.
     S.bOverride_LumenDiffuseColorBoost = true; S.LumenDiffuseColorBoost = 1.15f;
 
-    // Display mapping: the material ports display curve 1 (HuePreservingShoulder) and replaces UE's tonemapper.
-    bool bDisplay = false;
-    if (Game.TonemappingCurve != 1)
-    { UE_LOG(LogSCExposure, Error, TEXT("r_HDRTonemappingCurve=%d has no port: UE's tonemapper stays"), Game.TonemappingCurve); }
-    else if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/SCBridge/Materials/M_SC_DisplayMapping.M_SC_DisplayMapping")))
-    {
-        UMaterialInstanceDynamic* Display = UMaterialInstanceDynamic::Create(Base, Volume);
-        Display->SetScalarParameterValue(TEXT("MaxDisplayNits"), float(Game.MaxDisplayNitsLDR));
-        Display->SetScalarParameterValue(TEXT("RefWhiteScale"), 1.f); // SDR output: reference white is display white
-        Display->SetScalarParameterValue(TEXT("ToeScale"), float(Game.TonemappingCurveToe));
-        S.AddBlendable(Display, 1.f);
-        bDisplay = true;
-    }
-    else { UE_LOG(LogSCExposure, Error, TEXT("M_SC_DisplayMapping is missing (ue/scripts/create_display_mapping_material.py): UE's tonemapper stays")); }
+    // Display mapping: the game's display curve as the engine's tone curve (WP-E1 E1-4), with the fidelity baseline around it.
+    const FSCDisplayCurve Display = FSCDisplayCurve::From(Game);
+    if (!Display.bSupported)
+        UE_LOG(LogSCExposure, Error, TEXT("r_HDRTonemappingCurve=%d has no engine tone curve: UE's tonemapper stays"), Display.GameCurve);
+    Display.Apply(S, true);
+    const bool bDisplay = Display.bSupported;
 
     // The volume registered itself at its default priority when it spawned; the world keeps its volumes sorted.
     World.RemovePostProcessVolume(Volume);
     World.AddPostProcessVolume(TWeakInterfacePtr<IInterface_PostProcessVolume>(Volume));
-    UE_LOG(LogSCExposure, Display, TEXT("VIEWER_GAME_EXPOSURE priority=%.0f brightness=%.3f..%.3f percent=%.1f..%.1f speed=%.3f histogram=%.3f..%.3f keys=%d first=(%.3f,%.3f) last=(%.3f,%.3f) lut=%.3f..%.3f/%d display_curve=%d"),
+    UE_LOG(LogSCExposure, Display, TEXT("VIEWER_GAME_EXPOSURE priority=%.0f brightness=%.3f..%.3f percent=%.1f..%.1f speed=%.3f histogram=%.3f..%.3f keys=%d first=(%.3f,%.3f) last=(%.3f,%.3f) lut=%.3f..%.3f/%d display_curve=%d tone_curve=%s max_nits=%.1f ref_white=%.2f toe=%.2f"),
            Priority, E.MinBrightness, E.MaxBrightness, E.LowPercent, E.HighPercent, E.SpeedUp, E.HistogramLogMin, E.HistogramLogMax,
-           E.BiasCurve.Num(), E.BiasCurve[0].X, E.BiasCurve[0].Y, E.BiasCurve.Last().X, E.BiasCurve.Last().Y, E.CurveLutMinX, E.CurveLutMaxX, E.CurveLutSamples, bDisplay ? Game.TonemappingCurve : 0);
+           E.BiasCurve.Num(), E.BiasCurve[0].X, E.BiasCurve[0].Y, E.BiasCurve.Last().X, E.BiasCurve.Last().Y, E.CurveLutMinX, E.CurveLutMaxX, E.CurveLutSamples, bDisplay ? Game.TonemappingCurve : 0,
+           bDisplay ? TEXT("HuePreservingShoulder") : TEXT("project"), S.HuePreservingShoulderMaxDisplayNits, S.HuePreservingShoulderRefWhiteScale, S.HuePreservingShoulderToeScale);
     return Volume;
 }

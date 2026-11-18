@@ -328,10 +328,43 @@ Engine `dd77a0317` (`SCViewer: falloff models review fixes`, `out/e1/E1-2/terra-
    shipped) are not readable.
 `SCVIEWER_ENGINE_LIGHT_FALLOFF` 2.
 
+#### E1-3 review fixes
+Engine `4470238ea` (`SCViewer: spot shape review fixes`, `out/e1/E1-3/terra-review.md`; `SCVIEWER_ENGINE_SPOT_SHAPE` 2):
+1. **Border after the fades.** The out-of-square predicate is kept and applied after the light function's distance and shadow
+   fades (which lerp towards the disabled brightness, 0.5 by default): in the atlas sampler and, through
+   `GetLightFunctionBorderMask` (`LightFunctionCommon.ush`), in the deferred light function pass, Lumen direct lighting, mobile
+   deferred, volumetric fog and ray tracing / the path tracer's miss shader. The translucency volume injection does not fade,
+   so its early black suffices.
+2. **Atlas capacity fallback.** `GatherAndSortLights` treats a light as atlas compatible only when it also holds an atlas record
+   (index ≠ 0; the atlas update is a prerequisite of the sort in deferred and runs before it in mobile), so a compatible light
+   skipped for record or tile capacity takes the unbatched path with the per-light light function pass, as the atlas warning
+   says, instead of the clustered / atlas path without its gobo. The atlas-only paths (MegaLights, Lumen, fog) still draw it
+   without a light function.
+3. **Near clip range.** The honest option, not more bits: the model word has no free 32-bit lane (E1-2's float4 is full), so
+   `LIGHT_PROJECTOR_NEAR_CLIP_MAX` (65504 cm, the half's range; step 2⁻¹¹ of the depth, 0.5 cm at 10 m) is named in
+   `LightDefinitions.h`, the property has `ClampMax` 65504, and `SetProjectorNearClip` and `BuildSceneProxyDesc` clamp to it
+   with a warning (`LogSpotLight`). Tests first: with the old engine `SCBridge.Lights.ProjectorShape` failed on the two new
+   checks (`'near clip: the setter clamps to the packed range' to be 65504 ... was 100000`, same for the proxy descriptor;
+   `out/e1/E1-3/review-fixes-testsfirst.log`).
+4. **Per-vertex forward translucency** applies the near clip: `FSimpleDeferredLightData` carries the light direction
+   (`ConvertToSimpleLight`; zero for real simple lights, whose near clip is 0) and `GetSimpleDynamicLighting` zeroes the light in
+   front of the plane. Spot cones and shapes stay ignored there, as UE ignores cones.
+5. **Reflection-capture light shapes** (`SceneVisibility.cpp`) apply the near clip for cone spot lights too.
+
+Verified: engine + project build, 17/17 tests (`SCBridge.ViewerExposure`, `.StarEngine`, `.Lights`, `.Rig.Lights`,
+`.Materials.MasterAssets`; `out/e1/E1-3/review-fixes-tests.log`); a medfrnt run on the fixed engine (MegaLights, then
+`r.MegaLights.Allowed 0`; `out/e1/E1-3/review-fixes-run.txt`, `review-fixes-regions.txt`, `shots-review/`; this run already has
+E1-4's engine tone curve). The atlas logs 186 lights sampling it and no warning. The square changes ≤ 0.008 % of pixels by more
+than 8 levels against the same view before the fixes (MegaLights), the E1-2 emulation is brighter than the square on 0.019 /
+0.195 / 0.544 % of pixels (top / ref / long, MegaLights) and 0.018 / 0.225 / 0.547 % (deferred), against E1-3's 0.011 / 0.18 /
+0.54 % and 0.011 / 0.19 / 0.54 %, and the deferred square's region means are E1-3's within 0.3 % (the 32³ display-curve LUT's
+bias, Result (E1-4)). As expected: the hangar's projectors are within their fade distances, under the atlas capacity and use no
+near clip, so the fixes change nothing here.
+
 ### E1-4 Display curve in the engine tonemapper
 Today: `M_SC_DisplayMapping`, a post-process material at `BL_REPLACING_TONEMAPPER`, ports the game's
 `HuePreservingShoulder` (it compresses **max RGB** and desaturates by channel ratio; luminance only drives reference
-white), bypassing UE's grading and local exposure; it drew black on the mobile path (Web keeps UE's tonemapper).
+white), bypassing UE's grading and local exposure; it drew black on the mobile path (the Web build that met it is gone, E1-0).
 - `FPostProcessSettings`: `ToneCurve` { `Filmic` (default), `HuePreservingShoulder` } plus its parameters
   (max display nits, reference-white scale, toe scale), blended and overridable like the other film settings, included
   in the LUT cache key.
@@ -340,6 +373,89 @@ white), bypassing UE's grading and local exposure; it drew black on the mobile p
   colours, saturated emissives, the shoulder); if the LUT error is visible, an analytic branch in the tonemap pass with
   a grading-only LUT. Mobile is audited separately.
 - Fidelity baseline for SC content: neutral grading, local exposure off.
+
+#### Result (E1-4)
+Engine `3079e8bc3` (`SCVIEWER_ENGINE_TONE_CURVE` 1).
+- **Contract.** UE 5.9 already has a tone curve switch, `FPostProcessSettings::TonemappingMethod` (Film > Method:
+  Project Default, Filmic, Standard ACES), so the curve is a fourth method, `ETonemappingMethod::HuePreservingShoulder`,
+  rather than a second, overlapping `ToneCurve` enum. It is also a valid project default (`r.DefaultFeature.TonemappingMethod`
+  3) and `r.LUT.TonemappingMethod 3`. Parameters `HuePreservingShoulderMaxDisplayNits` (default 80, the sRGB reference
+  display white), `HuePreservingShoulderRefWhiteScale` (1) and `HuePreservingShoulderToeScale` (0), each with an override
+  bit, interpolated when volumes blend (`SceneView.cpp`, `PostProcessUtils.cpp`); the method switches (`SET_PP`) like
+  UE's. Tagged properties, so no custom version.
+- **Shader** (`PostProcessCombineLUTs.usf`). `HuePreservingShoulder` is the game's function (`Tonemapping.cfib`) statement
+  for statement, checked against the p4k's shader source (`out/e1/E1-4/game-tonemapping.txt`): the largest channel is
+  compressed (linear to MaxDisplayLum − 0.5, exponential shoulder towards MaxDisplayLum = nits / 80 / adjusted reference
+  white, power toe below 0.15), the channel ratios are desaturated towards white with hue-dependent exponents, and luminance
+  only drives the reference white scale. It runs in linear sRGB primaries, is saturated (the game's SDR `DisplayMapping`
+  saturates before `ToSRGB`), and takes the place of the film curve and blue correction; Expand Gamut is skipped. White
+  balance and colour correction before it, the legacy LDR LUTs, `r.Color.*`, tint / fade, display gamma, output gamut and
+  device encoding after it are UE's (Filmic's code path); `ToneCurveAmount` blends from the linear colour as for Filmic.
+  The LUT cache key holds the method and the three parameters (taken from the view, like the method, even with colour
+  grading off); LUTMax is 1. HDR output devices remap the SDR result through ACES like Filmic ("Automatic HDR", inner LUT).
+- **Mobile.** The mobile renderer uses the same LUT pass (`AddCombineLUTPass` from `MobileShadingRenderer` and the mobile
+  post-process chain), so the method works there; mobile LDR (gamma only) has no tone curve for any method. Not changed:
+  exposure-fusion local exposure and the HDR visualisation keep their internal film curve (as for Standard ACES).
+- **LUT against the analytic curve** (`out/e1/E1-4/lutcheck.txt`, `lutcheck128.txt`; the bake and the tonemap lookup
+  emulated in float64: log shaper, texel-centre trilinear, 10-bit storage; error in 8-bit output levels, max over channels;
+  the game's parameters 80 / 1 / 1):
+
+  | Set | 32³ p99 / max | 64³ p99 / max | 128³ p99 / max |
+  |---|---|---|---|
+  | neutral ramp 2⁻¹²…2⁵ | 6.5 / 6.8 | 3.2 / 3.4 | 1.6 / 1.7 |
+  | dark colours (max channel 10⁻⁴…0.05) | 0.5 / 0.9 | 0.25 / 0.37 | 0.25 / 0.25 |
+  | shoulder (max channel 0.3…4) | 6.1 / 6.8 | 3.0 / 3.4 | 1.5 / 1.7 |
+  | saturated emissives (0.1…40) | 2.2 / 4.6 | 0.9 / 2.6 | 0.3 / 1.1 |
+  | general (10⁻³…40, log) | 4.7 / 6.8 | 2.3 / 3.4 | 1.1 / 1.7 |
+
+  The error falls as 1/N, not 1/N²: max-RGB has a crease along the neutral axis, which trilinear cells straddle, so the
+  worst case is near-neutral highlights on the shoulder (display 0.85…0.95). Above the LUT's log domain (linear 43.7) each
+  channel is clamped (p99 10, max 16 levels at any size, UE's limit for every method).
+- **Runs** (fork, medfrnt, WP-L3's ref / top / long poses plus `up` at the ceiling grilles, a lit doorway and a window;
+  `out/e1/E1-4/run{A,B,C}.txt`, `regions.txt`, `diff-bands.txt`, `diff-crosssession.txt`, `shots/`; logs `E1-4-a.log`,
+  `E1-4-b.log`, `E1-4-c.log`). A: the material (before its removal) and `sc.Look.Display ue`; B and C: the engine curve
+  (`VIEWER_GAME_EXPOSURE ... tone_curve=HuePreservingShoulder max_nits=80.0 ref_white=1.00 toe=1.00`), `r.LUT.Size`
+  32 / 64 / 128, `sc.Look.Display ue`. Region means (sRGB-decoded luminance):
+
+  | View, region | material | engine 32³ | engine 64³ | engine 128³ | UE Filmic, before | UE Filmic, fork |
+  |---|---|---|---|---|---|---|
+  | top, pad centre / walkway L / R | 0.1455 / 0.0446 / 0.0760 | 0.1460 / 0.0448 / 0.0766 | 0.1457 / 0.0448 / 0.0764 | 0.1456 / 0.0449 / 0.0765 | 0.1312 / 0.0235 / 0.0455 | 0.1312 / 0.0235 / 0.0455 |
+  | ref, near pad / elevator / walkway R | 0.2192 / 0.0796 / 0.2512 | 0.2200 / 0.0798 / 0.2518 | 0.2193 / 0.0796 / 0.2513 | 0.2192 / 0.0796 / 0.2512 | 0.1780 / 0.0535 / 0.1968 | 0.1779 / 0.0535 / 0.1968 |
+  | long, right floor / right wall | 0.2294 / 0.0701 | 0.2299 / 0.0702 | 0.2293 / 0.0700 | 0.2293 / 0.0700 | 0.1742 / 0.0446 | 0.1742 / 0.0446 |
+  | up, grilles / doorway / window | 0.0556 / 0.2483 / 0.1884 | 0.0557 / 0.2485 / 0.1886 | 0.0556 / 0.2482 / 0.1883 | 0.0556 / 0.2483 / 0.1882 | 0.0371 / 0.2319 / 0.1397 | 0.0371 / 0.2319 / 0.1397 |
+
+  Per pixel (max channel, 8-bit levels): engine 32³ against the material mean 0.8…1.3, p99 4…6, > 8 levels on 0.12…0.27 %
+  of pixels; recapturing the material in its session mean 0.4…0.5, p99 2, 0.00 %; the engine curve across sessions (B
+  against C) mean 0.35…0.67, p99 2, ≤ 0.03 %. The LUT shows as a bias in bright pixels (sRGB 200…244: −0.4…−0.5 levels
+  at 32³, −0.2 at 64³, ≈ 0 at 128³) and in region means (+0.3…0.6 % at 32³, ≤ 0.1 % at 64³ / 128³). The rest of the
+  difference does not shrink with the LUT size: it lies on geometric edges (`shots/diff8_*_32.png`, `diff16_up_128.png`),
+  is neither a pixel offset (best alignment 0, 0) nor sharpening or blur (edge regression slope 0.00); its cause between
+  the material path and the tonemap pass was not identified and is not pursued (the material path is gone).
+- **Astra** (`out/e1/E1-4/astra/`, gpt-6.2-astra, material against engine 32³, `up` and `ref` views, ×8 differences, crops
+  of the doorway, window and lit walls): "No visible tonal difference at normal scale"; the 32³ LUT "is sufficient for a
+  faithful look in these views"; the edge differences "look like sampling or anti-aliasing variation". So no analytic
+  branch in the tonemap pass, and the project keeps UE's `r.LUT.Size` 32 (64 halves the LUT error if it is ever wanted).
+- **UE default unchanged.** `TonemappingMethod` defaults to Project Default and the project default to Filmic; the Filmic
+  and ACES permutations compile the same code (the only shared edit is an `#if` around Expand Gamut that they take). In the
+  runs, UE's Filmic through `sc.Look.Display ue` matches the pre-fork engine's capture region for region to 0.0001, per pixel
+  mean 0.51…0.66, p99 2, ≤ 0.04 % over 8 levels, i.e. cross-session noise.
+- **Project.** `FSCDisplayCurve` (`SCViewerExposure.h`): `From(FSCStarEngine)` derives the method from
+  `r_HDRTonemappingCurve` (1 only; 2, `HuePreservingShoulder2023`, has no engine curve and keeps UE's tonemapper with an
+  error), the peak from `MaxDisplayNitsLDR`, the toe from `r_HDRTonemappingCurveToe`; reference white stays the curve's
+  neutral 1 (the SDR branch's argument is a renderer constant the fixture does not carry, as for the material). `Apply`
+  sets the curve and the fidelity baseline on the viewer volume (neutral grading over any map grading, `ToneCurveAmount` 1,
+  no UE lens vignette (the material had none; the game's vignetting map is not modelled), local exposure off), or clears
+  every one of those overrides (`sc.Look.Display ue`: UE's tonemapper as the project and map set it, Filmic with UE's
+  vignette). `Install` tags the volume (`SCViewerExposure::VolumeTag`) and no longer adds a blendable; the log line names
+  the curve. Removed: `M_SC_DisplayMapping.uasset`, `ue/scripts/create_display_mapping_material.py`, its `KEEP` entry in
+  `create_materials.py`; the port's hash guard moved to `SCBridge.ViewerExposure.DisplayCurve` (fails when the fixture's
+  `HuePreservingShoulder` / `GetLuminance` / `ToSRGB` hashes differ from the ones the engine port was written from);
+  `StarEngineRender.notes.md` and `ue/README.md` updated (WP-U3b §13.5 and WP-L3 are historical records and keep their
+  wording). Tests: new `SCBridge.ViewerExposure.DisplayCurve` (parameter derivation, unsupported curve, game / UE settings,
+  hash guard), `.Install` checks the tag, the method, the peak and no blendable; 17/17 with `SCBridge.ViewerExposure`,
+  `.StarEngine`, `.Lights`, `.Rig.Lights`, `.Materials.MasterAssets` (log `E1-4-tests.log`).
+- **Open.** Mobile and HDR output were not run (code review only). UE grading in this mode (non-neutral white balance /
+  colour wheels) is implemented but not exercised.
 
 ### E1-5 Exposure: LUT fix, dual meter, two-stage adaptation
 Today: the game's chain is mapped onto UE's histogram exposure by a runtime volume; the compensation-curve LUT must be
@@ -390,8 +506,8 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 | E1-0 | none (project only) | Web / Wasm build, `SC_WITH_FFI`, baked hangar lighting, Wasm target code removed; scripts and docs default to the fork; plan D17 | project build, 81/81 tests, medfrnt game run (Result (E1-0)) |
 | E1-1 | `ad613210a` | `DefaultEngine.ini` (MaxLightCount=255 dropped), `SCLightVerification` (`atlas_light_records`), `M_SC_LightFunction` atlas-compatible, uproject `UE_5.9_src` | engine + project build, 11/11 tests, medfrnt + lrgtop runs (Result (E1-1)) |
 | E1-2 | `362370d99`, review fixes `dd77a0317` (E1-3 section) | importer: range fade (all local lights) + bulb offset law (authored point / spot), no `SoftSourceRadius`; probe; `sc.Lights.FalloffModels`; tests | engine + project build, 11/11 tests, medfrnt run with UE-default A/B (Result (E1-2)) |
-| E1-3 | `20605cb76` (+ `dd77a0317` E1-2 review fixes) | importer `MakeProjector` (SquareFrustum, half-FOV, Border; no corner cone / lateral scale), `M_SC_LightFunction` without border node (regenerated), square-aware probe, `sc.Lights.ProjectorShape 0\|1\|2`, tests | engine + project build, tests first, 12/12 tests, medfrnt MegaLights + deferred runs, Astra (Result (E1-3)) |
-| E1-4 | — | — | — |
+| E1-3 | `20605cb76` (+ `dd77a0317` E1-2 review fixes), review fixes `4470238ea` | importer `MakeProjector` (SquareFrustum, half-FOV, Border; no corner cone / lateral scale), `M_SC_LightFunction` without border node (regenerated), square-aware probe, `sc.Lights.ProjectorShape 0\|1\|2`, tests | engine + project build, tests first, 12/12 tests, medfrnt MegaLights + deferred runs, Astra (Result (E1-3)); review fixes: tests first, 17/17, medfrnt rerun unchanged (E1-3 review fixes) |
+| E1-4 | `3079e8bc3` | `FSCDisplayCurve` (curve + fidelity baseline on the viewer volume), `sc.Look.Display` switches the method, `M_SC_DisplayMapping` + its script + `KEEP` entry removed, hash guard moved to a test, notes / README | engine + project build, 17/17 tests, LUT vs analytic at 32³ / 64³ / 128³, medfrnt runs material vs engine vs UE Filmic, Astra (Result (E1-4)) |
 | E1-5 | — | — | — |
 | E1-6 | — | — | — |
 | E1-7 | — | — | — |

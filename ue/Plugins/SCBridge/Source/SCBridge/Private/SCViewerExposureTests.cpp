@@ -8,6 +8,10 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Math/Float16.h"
+#include "Dom/JsonObject.h"
+#include "Misc/FileHelper.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -100,6 +104,12 @@ bool FSCViewerExposureInstall::RunTest(const FString&)
         TestEqual(TEXT("LUT MinX"), Vars[0]->GetFloat(), E.CurveLutMinX);
         TestEqual(TEXT("LUT MaxX"), Vars[1]->GetFloat(), E.CurveLutMaxX);
         TestEqual(TEXT("LUT NumSamples"), Vars[2]->GetInt(), E.CurveLutSamples);
+        // The display curve is the engine's tone curve on this volume (no replacing-tonemapper blendable), found by its tag.
+        TestTrue(TEXT("tagged for sc.Look.Display"), Volume->Tags.Contains(SCViewerExposure::VolumeTag));
+        TestEqual(TEXT("no post-process material"), Volume->Settings.WeightedBlendables.Array.Num(), 0);
+        TestTrue(TEXT("the game's display curve"), Volume->Settings.bOverride_TonemappingMethod &&
+                 Volume->Settings.TonemappingMethod == ETonemappingMethod::HuePreservingShoulder);
+        TestEqual(TEXT("its peak from the fixture"), double(Volume->Settings.HuePreservingShoulderMaxDisplayNits), FSCStarEngine::Get().MaxDisplayNitsLDR, 1e-5);
     }
     for (int32 I = 0; I < 3; ++I) Vars[I]->Set(*Saved[I], ECVF_SetByCode);
     World->DestroyWorld(false);
@@ -151,6 +161,83 @@ bool FSCViewerExposureSettings::RunTest(const FString&)
     TestEqual(TEXT("legacy max brightness"), double(L.MaxBrightness) / (G.NitsAtEV(EVHigh) / 0.18), 1.0, 1e-5);
     TestEqual(TEXT("legacy histogram min: log2 cd/m2"), double(L.HistogramLogMin), -6 + FMath::Log2(100.0), 1e-4);
     TestEqual(TEXT("legacy bias keys keep the EV100 axis"), L.BiasCurve[1].X, 10 - 2 - FMath::Log2(0.18), 1e-9);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureDisplayCurve, "SCBridge.ViewerExposure.DisplayCurve",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerExposureDisplayCurve::RunTest(const FString&)
+{
+    // Parameters: DisplayMapping's SDR branch calls curve 1 with MaxDisplayNitsLDR and the curve toe; reference white is neutral.
+    const FSCDisplayCurve D = FSCDisplayCurve::From(SyntheticGame());
+    TestTrue(TEXT("curve 1 is the engine's hue preserving shoulder"), D.bSupported);
+    TestEqual(TEXT("peak: MaxDisplayNitsLDR"), D.MaxDisplayNits, 50.f);
+    TestEqual(TEXT("reference white: neutral in SDR"), D.RefWhiteScale, 1.f);
+    TestEqual(TEXT("toe: r_HDRTonemappingCurveToe"), D.ToeScale, 0.5f);
+    const FSCStarEngine& Game = FSCStarEngine::Get();
+    const FSCDisplayCurve Fixture = FSCDisplayCurve::From(Game);
+    TestEqual(TEXT("fixture: supported iff curve 1"), Fixture.bSupported, Game.TonemappingCurve == 1);
+    TestEqual(TEXT("fixture peak"), double(Fixture.MaxDisplayNits), Game.MaxDisplayNitsLDR, 1e-5);
+    TestEqual(TEXT("fixture toe"), double(Fixture.ToeScale), Game.TonemappingCurveToe, 1e-6);
+    FSCStarEngine Curve2 = SyntheticGame();
+    Curve2.TonemappingCurve = 2; // HuePreservingShoulder2023: no engine curve
+    const FSCDisplayCurve Unsupported = FSCDisplayCurve::From(Curve2);
+    TestFalse(TEXT("curve 2 has no engine curve"), Unsupported.bSupported);
+
+    // Game: the curve, no lens vignette, neutral grading over a graded volume, local exposure off.
+    const FPostProcessSettings& UE = FPostProcessSettings::GetDefault();
+    FPostProcessSettings S;
+    S.bOverride_ColorSaturation = true; S.ColorSaturation = FVector4(0.5, 0.5, 0.5, 1);
+    S.bOverride_WhiteTemp = true; S.WhiteTemp = 4000;
+    S.bOverride_LocalExposureHighlightContrastScale = true; S.LocalExposureHighlightContrastScale = 0.6f;
+    S.bOverride_ToneCurveAmount = true; S.ToneCurveAmount = 0.5f;
+    D.Apply(S, true);
+    TestTrue(TEXT("game: hue preserving shoulder"), S.bOverride_TonemappingMethod && S.TonemappingMethod == ETonemappingMethod::HuePreservingShoulder);
+    TestTrue(TEXT("game: peak"), S.bOverride_HuePreservingShoulderMaxDisplayNits && S.HuePreservingShoulderMaxDisplayNits == 50.f);
+    TestTrue(TEXT("game: reference white"), S.bOverride_HuePreservingShoulderRefWhiteScale && S.HuePreservingShoulderRefWhiteScale == 1.f);
+    TestTrue(TEXT("game: toe"), S.bOverride_HuePreservingShoulderToeScale && S.HuePreservingShoulderToeScale == 0.5f);
+    TestTrue(TEXT("game: no UE lens vignette"), S.bOverride_VignetteIntensity && S.VignetteIntensity == 0.f);
+    TestTrue(TEXT("game: neutral saturation"), S.bOverride_ColorSaturation && S.ColorSaturation == UE.ColorSaturation);
+    TestTrue(TEXT("game: neutral white balance"), S.bOverride_WhiteTemp && S.WhiteTemp == UE.WhiteTemp);
+    TestTrue(TEXT("game: the whole curve"), S.bOverride_ToneCurveAmount && S.ToneCurveAmount == 1.f);
+    TestTrue(TEXT("game: local exposure off"), S.bOverride_LocalExposureHighlightContrastScale && S.LocalExposureHighlightContrastScale == 1.f &&
+             S.bOverride_LocalExposureShadowContrastScale && S.LocalExposureShadowContrastScale == 1.f &&
+             S.bOverride_LocalExposureDetailStrength && S.LocalExposureDetailStrength == 1.f && !S.LocalExposureHighlightContrastCurve);
+    // UE: every display override cleared, values back to UE's defaults (Project Default method, UE's vignette).
+    D.Apply(S, false);
+    TestFalse(TEXT("ue: no method override"), bool(S.bOverride_TonemappingMethod));
+    TestTrue(TEXT("ue: project default method"), S.TonemappingMethod == UE.TonemappingMethod);
+    TestFalse(TEXT("ue: no peak override"), bool(S.bOverride_HuePreservingShoulderMaxDisplayNits));
+    TestTrue(TEXT("ue: UE's vignette"), !S.bOverride_VignetteIntensity && S.VignetteIntensity == UE.VignetteIntensity);
+    TestFalse(TEXT("ue: grading not overridden"), S.bOverride_ColorSaturation || S.bOverride_WhiteTemp || S.bOverride_ToneCurveAmount);
+    TestFalse(TEXT("ue: local exposure not overridden"), S.bOverride_LocalExposureHighlightContrastScale || S.bOverride_LocalExposureShadowContrastScale);
+    // The engine's HuePreservingShoulder (PostProcessCombineLUTs.usf, WP-E1 E1-4) is a statement-for-statement port of the game's
+    // function with these token hashes (scripts/verify_star_engine_render.py re-derives the fixture's from the installed game; UE's
+    // LinearToSrgb is ToSRGB's encode). A game patch that changes them fails here: port the new function into the engine.
+    {
+        FString Text;
+        TSharedPtr<FJsonObject> Root;
+        const bool bRead = FFileHelper::LoadFileToString(Text, *FSCStarEngine::FixturePath()) &&
+                           FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) && Root;
+        const TSharedPtr<FJsonObject>* Functions = nullptr;
+        if (TestTrue(TEXT("fixture has shader functions"), bRead && Root->TryGetObjectField(TEXT("shader_functions"), Functions)))
+        {
+            const TPair<const TCHAR*, const TCHAR*> Ported[] = {
+                {TEXT("HuePreservingShoulder"), TEXT("765ad7fe9ff17ee77f7ff1f13107cf9fe9d4cf8e656393e11debae841dbd345b")},
+                {TEXT("GetLuminance"), TEXT("eab8d913434ab6867181ae9c532ac58f21003e7f8c6b4556281300f07bd6220f")},
+                {TEXT("ToSRGB"), TEXT("8c9a59f93c51fd030960b1cfff84ba735e9faa86b35993a420140f081ccfde59")}};
+            for (const auto& [Name, Hash] : Ported)
+            {
+                const TSharedPtr<FJsonObject>* Entry = nullptr;
+                FString FixtureHash;
+                if ((*Functions)->TryGetObjectField(Name, Entry)) (*Entry)->TryGetStringField(TEXT("sha256"), FixtureHash);
+                TestEqual(FString::Printf(TEXT("the engine port matches the game's %s"), Name), FixtureHash, FString(Hash));
+            }
+        }
+    }
+    // An unsupported curve leaves UE's tonemapper in place even when the game's display is asked for.
+    FPostProcessSettings U;
+    Unsupported.Apply(U, true);
+    TestFalse(TEXT("unsupported curve: UE's tonemapper"), U.bOverride_TonemappingMethod || U.bOverride_VignetteIntensity);
     return true;
 }
 #endif

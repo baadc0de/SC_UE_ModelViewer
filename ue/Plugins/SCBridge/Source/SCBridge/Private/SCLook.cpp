@@ -27,6 +27,8 @@
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "StaticMeshResources.h"
 #include "SCViewerSettings.h"
+#include "SCViewerExposure.h"
+#include "SCStarEngine.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInstance.h"
@@ -151,20 +153,22 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGobo(
         UE_LOG(LogTemp, Display, TEXT("LOOK gobo part=%s on=%d lights=%d"), *Args[0], bOn, Matched);
     }));
 
-// sc.Look.Display <game|ue>: the game's display curve (the M_SC_DisplayMapping blendable) or UE's filmic tonemapper.
+// sc.Look.Display <game|ue>: the game's display curve as the engine's tone curve with its fidelity baseline (FSCDisplayCurve), or
+// UE's tonemapper as the project and the map set it (Filmic by default, with UE's lens vignette).
 static FAutoConsoleCommandWithWorldAndArgs GSCLookDisplay(
-    TEXT("sc.Look.Display"), TEXT("sc.Look.Display <game|ue>: the game's ported display curve or UE's filmic tonemapper"),
+    TEXT("sc.Look.Display"), TEXT("sc.Look.Display <game|ue>: the game's display curve (engine tone curve) or UE's tonemapper"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
-        const float Weight = Args.IsValidIndex(0) && Args[0] == TEXT("ue") ? 0.f : 1.f;
+        const bool bGame = !(Args.IsValidIndex(0) && Args[0] == TEXT("ue"));
+        const FSCDisplayCurve Display = FSCDisplayCurve::From(FSCStarEngine::Get());
         int32 Changed = 0;
         for (TActorIterator<APostProcessVolume> It(World); It; ++It)
-            for (FWeightedBlendable& B : It->Settings.WeightedBlendables.Array)
-                if (const auto* MID = Cast<UMaterialInstanceDynamic>(B.Object); MID && MID->Parent && MID->Parent->GetName() == TEXT("M_SC_DisplayMapping"))
-                {
-                    B.Weight = Weight;
-                    ++Changed;
-                }
-        UE_LOG(LogTemp, Display, TEXT("LOOK display=%s blendables=%d"), Weight > 0 ? TEXT("game") : TEXT("ue"), Changed);
+            if (It->Tags.Contains(SCViewerExposure::VolumeTag))
+            {
+                Display.Apply(It->Settings, bGame);
+                ++Changed;
+            }
+        UE_LOG(LogTemp, Display, TEXT("LOOK display=%s tone_curve=%s volumes=%d"), bGame ? TEXT("game") : TEXT("ue"),
+               bGame && Display.bSupported ? TEXT("HuePreservingShoulder") : TEXT("project"), Changed);
     }));
 
 // sc.Look.BloomStar <points> <length> [intensity]: FFT (convolution) bloom with a generated kernel, a soft core plus
