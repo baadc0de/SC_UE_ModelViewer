@@ -179,7 +179,7 @@ Result (`shots/p3_shape_*`, sheet `shape_compare.png`):
 
 Wall washes, the elevator surround and the walkways now take the light of the square gobos' full frustum. Against
 the 2020 reference this moves away: Astra calls it "broader and flatter", with the pad pool losing its separation.
-The game shader leaves no room for a cone, so the change stays. The 2020 shot predates the current light set
+The game shader leaves no room for a cone, so the change stays; the owner confirmed keeping it (2026-11-18). The 2020 shot predates the current light set
 (Alpha 3.10 against 4.10.2 data, modules redesigned). **Not verified against a current in-game capture of this
 hangar; that is the evidence that would settle it.**
 
