@@ -4,6 +4,7 @@
 #include "SCViewerPawn.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
+#include "SCLookLighting.h"
 #include "Cargo/SCCargoViewSource.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -94,6 +95,11 @@ bool SSCViewportInput::HandleKey(const FKey& Key, bool bDown)
     if (Key == EKeys::F1 && bDown)
     {
         SCCargoUI::SetMobiGlasOpen(Subsystem.Get(), !SCCargoUI::IsMobiGlasOpen(Subsystem.Get())); // orbit / fly: no character key table
+        return true;
+    }
+    if (Key == EKeys::O && bDown && Subsystem.IsValid())
+    {
+        SCLookLighting::ToggleSSDO(Subsystem->GetWorld()); // the same key as first person (KeyTable)
         return true;
     }
     if (Key == EKeys::F && bDown && Subsystem.IsValid())

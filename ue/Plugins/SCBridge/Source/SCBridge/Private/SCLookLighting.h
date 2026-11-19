@@ -13,4 +13,7 @@ void ApplyDefaults(UWorld* World);
  *  washes, classified by tracing their emission against the environment) get Scale x their authored intensity;
  *  1 restores. Returns the lights scaled. */
 int32 SetPerimeterFloorWash(UWorld* World, float Scale);
+/** Key O (first person and orbit): flips the game's SSDO on the viewer volume through sc.Look.SSDO, so the console and the key
+ *  share one path and one log line. Returns the new state. */
+bool ToggleSSDO(UWorld* World);
 }

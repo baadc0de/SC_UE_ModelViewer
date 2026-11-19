@@ -46,7 +46,7 @@ Golem, small hightech hangar (2026-11-14, RTX 4090, Shipping): 1.7 GB of content
 The launcher starts the showcase as a player (`-SCShowcase -SCCamera=first`): no viewer top bar, footer or panels; the
 first-person HUD and its teleport menu stay. Keys: WASD/Shift/Space/Ctrl move, `C` first/third person, `Z` held orbits
 the third-person camera around the player (double-tap: behind again), `T` teleport menu, `F` torch, `1`.. draw a weapon,
-right mouse aims down sights, left mouse fires. The player character is exported from Data.p4k at start (so the build
+right mouse aims down sights, left mouse fires, `O` the game's SSDO on / off (also in orbit view; `sc.Look.SSDO`). The player character is exported from Data.p4k at start (so the build
 needs an installed Star Citizen; a cooked player kit is a follow-up): `package_showcase.ps1 -PlayerLoadout <p4k path>
 -PlayerWeapons <entity>[,...]` (launcher `-SCPlayerLoadout`, `-SCPlayerWeapons`; settings `PlayerLoadout`,
 `PlayerWeapons`, `bPlayerSpareAttachments`) picks the game loadout, keeps only the named weapons and carries their spare

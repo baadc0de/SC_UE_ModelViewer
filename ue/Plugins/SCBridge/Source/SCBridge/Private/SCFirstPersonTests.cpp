@@ -492,4 +492,20 @@ bool FSCFirstPersonSeatReach::RunTest(const FString&)
     World->DestroyWorld(false);
     return !HasAnyErrors();
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFirstPersonKeyTable, "SCBridge.FirstPerson.KeyTable",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFirstPersonKeyTable::RunTest(const FString&)
+{
+    // One action per key, and O toggles the game's SSDO (look A/B without the console).
+    TSet<FKey> Keys;
+    for (const auto& Entry : ASCFirstPersonCharacter::KeyTable())
+    {
+        TestFalse(*FString::Printf(TEXT("%s bound once"), *Entry.Key.ToString()), Keys.Contains(Entry.Key));
+        Keys.Add(Entry.Key);
+    }
+    const auto* SSDO = ASCFirstPersonCharacter::KeyTable().FindByPredicate([](const auto& E) { return E.Value == ESCFirstPersonAction::LookSSDO; });
+    TestTrue(TEXT("O toggles SSDO"), SSDO && SSDO->Key == EKeys::O);
+    return true;
+}
 #endif

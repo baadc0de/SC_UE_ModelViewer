@@ -50,7 +50,8 @@ enum class ESCFirstPersonAction : uint8
     Fire,                                              // held, player body: the drawn weapon fires while down
     Orbit,                                             // held: third-person camera orbits the player while down;
                                                        // two presses within DoubleTapSeconds put it behind again
-    MobiGlas                                           // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    MobiGlas,                                          // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    LookSSDO                                           // pressed: the game's SSDO on / off (sc.Look.SSDO), for look A/B
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),

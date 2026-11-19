@@ -17,6 +17,13 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCLookLighting, Log, All);
 
+bool SCLookLighting::ToggleSSDO(UWorld* World)
+{
+    const bool bOn = !USCViewerSettings::Get()->bStarEngineSSDO;
+    IConsoleManager::Get().ProcessUserConsoleInput(bOn ? TEXT("sc.Look.SSDO game") : TEXT("sc.Look.SSDO off"), *GLog, World);
+    return bOn;
+}
+
 void SCLookLighting::ApplyDefaults(UWorld* World)
 {
     if (!World) return;
