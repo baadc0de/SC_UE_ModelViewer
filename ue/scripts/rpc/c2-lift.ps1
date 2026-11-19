@@ -1,4 +1,4 @@
-﻿# WP-P5 P5-1 verification: the C2 Hercules internal lift, operated from its real buttons in first person (RPC driver).
+# WP-P5 P5-1 verification: the C2 Hercules internal lift, operated from its real buttons in first person (RPC driver).
 #   Import-Module ue/scripts/rpc/SCRpc.psm1
 #   $p = Start-SCViewer -Port 8771 -ShotDir <dir> -Extra '-SCLoad=CRUS_Starlifter_C2 -SCEnvironment=<hangar socpak> -SCCamera=first'
 #   Invoke-SC /wait @{ until = 'idle'; timeout_s = 1500 }
