@@ -74,6 +74,15 @@ FString USCViewerSettings::ResolveCargoScenario() const
     }
     return FPaths::ConvertRelativePathToFull(Value);
 }
+bool USCViewerSettings::MigrateLook()
+{
+    if (LookRevision >= CurrentLookRevision) return false;
+    // A value saved under an earlier look revision is that revision's default, not a user choice (no UI sets these), so it moves to
+    // the new one; later user changes are kept.
+    if (LookRevision < 9) StarBloom = LookStarBloom; // LOOK-8: the standard bloom replaced the star bloom
+    LookRevision = CurrentLookRevision;
+    return true;
+}
 void USCViewerSettings::Save()
 {
     SaveConfig();

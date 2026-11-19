@@ -4,7 +4,6 @@
 #include "SCViewerPawn.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
-#include "SCLookLighting.h"
 #include "Cargo/SCCargoViewSource.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -25,8 +24,14 @@ FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Unhandled();
     if (SCCargoUI::IsMobiGlasOpen(Subsystem.Get())) return FReply::Unhandled(); // the cursor belongs to the mobiGlas
     // First person: the button is also a key-table input (right button held: aim down sights).
-    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->HandleKey(Button, true);
-    Drag = bPan ? EDrag::Pan : EDrag::Rotate;
+    const bool bFirstPerson = Subsystem.IsValid() && Subsystem->GetFirstPerson();
+    if (bFirstPerson) Subsystem->GetFirstPerson()->HandleKey(Button, true);
+    // Already captured (a second button while looking: right button to aim, left to fire): keep the capture. Asking for it again
+    // makes Slate release it first (FSlateUser::SetPointerCaptor), whose OnMouseCaptureLost ended the look until the window was
+    // refocused (2026-11-19).
+    const bool bKeepCapture = HasMouseCapture() && Drag != EDrag::None;
+    if (!bKeepCapture || !bFirstPerson) Drag = bPan ? EDrag::Pan : EDrag::Rotate;
+    if (bKeepCapture) return FReply::Handled();
     return FReply::Handled().CaptureMouse(AsShared()).UseHighPrecisionMouseMovement(AsShared()).SetUserFocus(AsShared());
 }
 FReply SSCViewportInput::OnMouseButtonUp(const FGeometry&, const FPointerEvent& Event)
@@ -95,11 +100,6 @@ bool SSCViewportInput::HandleKey(const FKey& Key, bool bDown)
     if (Key == EKeys::F1 && bDown)
     {
         SCCargoUI::SetMobiGlasOpen(Subsystem.Get(), !SCCargoUI::IsMobiGlasOpen(Subsystem.Get())); // orbit / fly: no character key table
-        return true;
-    }
-    if (Key == EKeys::O && bDown && Subsystem.IsValid())
-    {
-        SCLookLighting::ToggleSSDO(Subsystem->GetWorld()); // the same key as first person (KeyTable)
         return true;
     }
     if (Key == EKeys::F && bDown && Subsystem.IsValid())

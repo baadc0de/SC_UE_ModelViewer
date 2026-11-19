@@ -341,17 +341,11 @@ bool FSCPlayerAimPose::RunTest(const FString&)
     TestTrue(TEXT("half weight: half the blur (double f-stop)"), FMath::IsNearlyEqual(B::FadedFStop(2.8f, 0.5f), 5.6f, 1e-5f));
     TestEqual(TEXT("no weight: off"), B::FadedFStop(2.8f, 0.f), 0.f);
     TestEqual(TEXT("f-stop 0: off"), B::FadedFStop(0.f, 1.f), 0.f);
-    // 36 mm sensor at 90 degrees: f = 18 mm. Subject 34 cm deep at 250 cm focus needs f/0.43 for 1/750 of the width.
-    TestEqual(TEXT("shallow subject: the f-stop as set"), B::SubjectFStop(0.5f, 250.f, 34.f, 36.f, 90.f, 1.f / 750), 0.5f);
-    const float Close = B::SubjectFStop(0.5f, 120.f, 34.f, 36.f, 90.f, 1.f / 750);
-    const double Blur = 18.0 * 18.0 * 340.0 / (Close * 860.0 * (1200.0 - 18.0)) / 36.0;
-    TestTrue(FString::Printf(TEXT("close subject: f/%.2f keeps its near edge at the blur limit (%.5f)"), Close, Blur), Close > 0.5f && FMath::IsNearlyEqual(Blur, 1.0 / 750, 1e-6));
-    // Far-field blur: f/N such that infinity blurs by 1.2 % of the width at 15 m focus: 18^2 / (N (15000 - 18)) = 0.432 mm.
+    // Far-field blur (36 mm sensor at 90 degrees: f = 18 mm): f/N such that infinity blurs by 1.2 % of the width at 15 m focus: 18^2 / (N (15000 - 18)) = 0.432 mm.
     const float Far = B::FarBlurFStop(1500.f, 0.012f, 36.f, 90.f);
     TestTrue(FString::Printf(TEXT("far blur: f/%.4f"), Far), FMath::IsNearlyEqual(18.0 * 18.0 / (Far * (15000.0 - 18.0)), 0.012 * 36.0, 1e-6));
     TestTrue(TEXT("far blur: nearer focus, larger f-stop (same blur at infinity)"), B::FarBlurFStop(300.f, 0.012f, 36.f, 90.f) > Far);
     TestEqual(TEXT("far blur: none asked"), B::FarBlurFStop(1500.f, 0.f, 36.f, 90.f), 0.f);
-    TestEqual(TEXT("no depth: the f-stop as set"), B::SubjectFStop(0.5f, 120.f, 0.f, 36.f, 90.f, 1.f / 750), 0.5f);
     TestTrue(TEXT("focal depth along the view"), FMath::IsNearlyEqual(B::FocalDepth(FVector::ZeroVector, FVector(2, 0, 0), FVector(250, 40, -30)), 250.f, 1e-4f));
     TestEqual(TEXT("behind the camera: no depth"), B::FocalDepth(FVector::ZeroVector, FVector::ForwardVector, FVector(-10, 0, 0)), 0.f);
     return true;
@@ -511,9 +505,8 @@ bool FSCPlayerKitRig::RunTest(const FString&)
             TestTrue(TEXT("camera scale enabled"), C->Camera->bEnableFirstPersonScale && FMath::IsNearlyEqual(C->Camera->FirstPersonScale, C->Body->GetFirstPersonScale()));
             C->Body->SetThirdPerson(true);
             TestEqual(TEXT("third person: world-space body"), C->Body->GetFirstPersonScale(), 1.f);
-            TestTrue(TEXT("third person: depth of field on the character"), C->Body->GetFocusFStop() > 0 &&
-                     FMath::IsNearlyEqual(C->Body->GetFocusDistance(),
-                         USCPlayerBodyComponent::FocalDepth(C->Camera->GetComponentLocation(), C->Camera->GetForwardVector(), C->Body->HeadLocation()), 1.f));
+            // The third-person depth of field was removed (owner, 2026-11-19): no player override there.
+            TestTrue(TEXT("third person: no depth of field"), C->Body->GetFocusFStop() == 0 && !C->Camera->PostProcessSettings.bOverride_DepthOfFieldFocalDistance);
             TestFalse(TEXT("third person: no first-person primitives"), C->Body->AreFirstPersonPrimitivesActive());
             C->Body->SetThirdPerson(false);
             Wall->Destroy();

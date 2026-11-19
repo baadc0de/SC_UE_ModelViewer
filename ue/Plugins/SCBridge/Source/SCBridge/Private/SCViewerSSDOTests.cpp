@@ -172,7 +172,7 @@ bool FSCViewerSSDOBlend::RunTest(const FString&)
         TestEqual(TEXT("half weight: reflection amount lerps from 0"), Half.SSDOReflectionAmount, 0.375f, 1e-6f);
     }
     {
-        // The installed viewer volume follows the setting: off by default (the look, D15), the game's with bStarEngineSSDO.
+        // The installed viewer volume follows the setting: the game's SSDO with bStarEngineSSDO (on in the look), none without.
         USCViewerSettings* Settings = USCViewerSettings::Get();
         const bool bSaved = Settings->bStarEngineSSDO;
         for (const bool bOn : {false, true})
@@ -203,15 +203,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerSSDOShippedDefault, "SCBridge.ViewerEx
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCViewerSSDOShippedDefault::RunTest(const FString&)
 {
-    // The shipped look keeps the game's SSDO off (D15): the class default, and no shipped config file turns it on. Read in isolation from
-    // the user's saved GameUserSettings (a developer may enable it there; E1-7 review).
-    TestFalse(TEXT("the class default is off"), USCViewerSettings::bStarEngineSSDOShipped);
-    const FString Path = FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("DefaultGameUserSettings.ini"));
-    FConfigFile File;
-    File.Read(Path);
-    bool bShipped = USCViewerSettings::bStarEngineSSDOShipped;
-    File.GetBool(TEXT("/Script/SCBridge.SCViewerSettings"), TEXT("bStarEngineSSDO"), bShipped);
-    TestFalse(TEXT("the shipped DefaultGameUserSettings.ini does not turn it on"), bShipped);
+    // The game's SSDO is always on, part of the look (owner, 2026-11-19): on in a fresh settings object, and not a saved (config)
+    // property, so no user's GameUserSettings.ini can turn it off (a stale bStarEngineSSDO=False line is ignored).
+    const USCViewerSettings* Fresh = NewObject<USCViewerSettings>(GetTransientPackage(), NAME_None, RF_Transient);
+    TestTrue(TEXT("on by default"), Fresh->bStarEngineSSDO);
+    TestNull(TEXT("not a saved setting"), USCViewerSettings::StaticClass()->FindPropertyByName(TEXT("bStarEngineSSDO")));
+    TestTrue(TEXT("the running settings have it on"), USCViewerSettings::Get()->bStarEngineSSDO);
     return true;
 }
 

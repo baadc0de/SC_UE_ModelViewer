@@ -254,8 +254,8 @@ APostProcessVolume* SCViewerExposure::Install(UWorld& World)
     Display.Apply(S, true);
     const bool bDisplay = Display.bSupported;
 
-    // The game's SSDO (engine fork, WP-E1 E1-7): off in the look (plan D15: Lumen's short-range AO occludes ambient light, every light
-    // is shadowed); USCViewerSettings::bStarEngineSSDO or sc.Look.SSDO game turns it on.
+    // The game's SSDO (engine fork, WP-E1 E1-7): on in the look (owner, 2026-11-19; it replaces Lumen's short-range AO term by term).
+    // USCViewerSettings::bStarEngineSSDO; sc.Look.SSDO or key O switches it.
     const FSCSSDOSettings SSDO = FSCSSDOSettings::From(Game);
     const bool bSSDO = USCViewerSettings::Get()->bStarEngineSSDO;
     if (bSSDO && !SSDO.bSupported)

@@ -22,6 +22,7 @@ void ASCViewerGameMode::StartPlay()
     // -SCHostExposure keeps the map's exposure bounds and UE's tonemapper (comparison captures only).
     if (UWorld* World = GetWorld(); World && !FParse::Param(FCommandLine::Get(), TEXT("SCHostExposure")))
     {
+        SCLookLighting::MigrateLookSettings(); // first: the volume reads the look settings (SSDO)
         SCViewerExposure::Install(*World);
         SCLookLighting::ApplyDefaults(World); // LOOK-8: bloom, threshold, exposure bias
     }

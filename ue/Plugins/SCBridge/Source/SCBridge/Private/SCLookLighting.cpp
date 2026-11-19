@@ -17,26 +17,20 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCLookLighting, Log, All);
 
-bool SCLookLighting::ToggleSSDO(UWorld* World)
+void SCLookLighting::MigrateLookSettings()
 {
-    const bool bOn = !USCViewerSettings::Get()->bStarEngineSSDO;
-    IConsoleManager::Get().ProcessUserConsoleInput(bOn ? TEXT("sc.Look.SSDO game") : TEXT("sc.Look.SSDO off"), *GLog, World);
-    return bOn;
+    USCViewerSettings* Settings = USCViewerSettings::Get();
+    if (!Settings->MigrateLook()) return;
+    Settings->Save();
+    UE_LOG(LogSCLookLighting, Display, TEXT("LOOK settings migrated to look revision %d (star_bloom=%.2f)"), Settings->LookRevision,
+           Settings->StarBloom);
 }
 
 void SCLookLighting::ApplyDefaults(UWorld* World)
 {
     if (!World) return;
     USCViewerSettings* Settings = USCViewerSettings::Get();
-    if (Settings->LookRevision < USCViewerSettings::CurrentLookRevision)
-    {
-        // LOOK-8 replaced the star bloom by the standard bloom; a StarBloom saved under an earlier revision is that old
-        // default, not a user choice (no UI sets it), so it moves to the new one.
-        Settings->StarBloom = USCViewerSettings::LookStarBloom; // not the CDO: config already loaded the old value into it
-        Settings->LookRevision = USCViewerSettings::CurrentLookRevision;
-        Settings->Save();
-        UE_LOG(LogSCLookLighting, Display, TEXT("LOOK settings migrated to look revision %d"), Settings->LookRevision);
-    }
+    MigrateLookSettings(); // normally already done before the viewer volume was installed (ASCViewerGameMode::StartPlay)
     if (Settings->StarBloom > 0) SCLook::SetBloomStar(World, 4, 0.5f, Settings->StarBloom);
     int32 Volumes = 0;
     for (TActorIterator<APostProcessVolume> It(World); It; ++It)

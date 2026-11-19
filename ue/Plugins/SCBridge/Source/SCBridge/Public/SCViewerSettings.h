@@ -51,10 +51,10 @@ public:
      *  every light is shadowed, so walls contain the light; the path tracer ignores channels. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bConfineLightsToRooms = false;
     /** WP-L2 / WP-E1 E1-7: the game's screen-space directional occlusion (the engine fork's SSDO, from the fixture) on lights that cast
-     *  no shadow, the sun and ambient light, in place of Lumen's short-range AO. Off in the look (D15). Console: sc.Look.SSDO. */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bStarEngineSSDO = bStarEngineSSDOShipped;
-    /** The shipped default of bStarEngineSSDO (the look, D15): what a user's config overrides (SCBridge.ViewerExposure.SSDO.ShippedDefault). */
-    static constexpr bool bStarEngineSSDOShipped = false;
+     *  no shadow, the sun and ambient light, in place of Lumen's short-range AO. Always on, part of the look (owner, 2026-11-19; D15 had
+     *  it off): not a saved setting, so no user config can turn it off. sc.Look.SSDO game|off switches it for this session only
+     *  (diagnostics, routes). */
+    bool bStarEngineSSDO = true;
     // Look (LOOK-6, revised LOOK-8): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard
     // bloom. LOOK-8 (adjudicated across the Galaxy in XL and the Golem in small hangars): the diffraction streaks veiled
     // hull edges and cockpits; standard bloom it is. 0.15 still suits stills. Console: sc.Look.BloomStar.
@@ -71,6 +71,9 @@ public:
     UPROPERTY(Config) int32 LookRevision = 0;
     // 9: LOOK-8 (revision 8 copied the class default object, which config had already loaded, and kept the old value).
     static constexpr int32 CurrentLookRevision = 9;
+    /** Moves values saved under an earlier look revision to this revision's defaults (they were defaults, not choices) and
+     *  records the revision; returns whether anything changed (the caller saves). Runs before the viewer volume is installed. */
+    bool MigrateLook();
     static constexpr float LookStarBloom = 0.f; // the adjudicated StarBloom (LOOK-8); the migration's target
     // Look (LOOK-1) vs frame time: Lumen short-range AO is traced with hardware ray tracing while the world's
     // ray-tracing segments stay within this budget (SCLook::UpdateShortRangeAO; a performance budget, not game data);
