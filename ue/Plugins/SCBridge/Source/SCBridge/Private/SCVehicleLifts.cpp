@@ -8,7 +8,10 @@
 #include "Components/LightComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/Pawn.h"
 #include "Misc/ScopeExit.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCLiftLinks, Log, All);
@@ -17,6 +20,20 @@ namespace
 {
 constexpr int32 MaxLinkDepth = 8; // a link chain longer than this is a cycle in the data (logged, not followed)
 const FName LiftTag(TEXT("SCLift"));
+
+/** The box of the carriage's own colliders (its placement and the riders attached below it) in the vehicle frame Frame:
+ *  the components that block the player. */
+FBox CarriageBox(const FTransform& Frame, const USceneComponent* Carriage)
+{
+    FBox Local(ForceInit);
+    TArray<USceneComponent*> Parts;
+    Carriage->GetChildrenComponents(true, Parts);
+    for (const USceneComponent* Part : Parts)
+        if (const auto* P = Cast<UPrimitiveComponent>(Part);
+            P && P->IsRegistered() && P->IsCollisionEnabled() && P->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block)
+            Local += P->CalcBounds(P->GetComponentTransform().GetRelativeTransform(Frame)).GetBox();
+    return Local;
+}
 }
 
 // ----------------------------------------------------------------------------------------------------- dispatcher
@@ -177,16 +194,11 @@ FSCLiftHost::ELeg ASCVehicle::SweepLiftLeg(int32 LiftIndex, int32 From, int32 To
     const USceneComponent* Container = Anchor ? Anchor->GetAttachParent() : nullptr;
     if (!Carriage || !Container || !GetWorld() || !Lift->Stops.IsValidIndex(From) || !Lift->Stops.IsValidIndex(To)) return FSCLiftHost::ELeg::Clear;
     const FTransform Frame = GetActorTransform();
-    FBox Local(ForceInit);
-    TArray<USceneComponent*> Parts;
-    Carriage->GetChildrenComponents(true, Parts);
-    for (const USceneComponent* Part : Parts)
-        if (const auto* P = Cast<UPrimitiveComponent>(Part);
-            P && P->IsRegistered() && P->IsCollisionEnabled() && P->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block)
-            Local += P->CalcBounds(P->GetComponentTransform().GetRelativeTransform(Frame)).GetBox();
+    const FBox Local = CarriageBox(Frame, Carriage);
     if (!Local.IsValid) return FSCLiftHost::ELeg::Clear;
     const FVector Start = Frame.TransformPosition(Local.GetCenter());
-    const FVector End = Start + Container->GetComponentTransform().TransformVector(Lift->Stops[To].Local - Lift->Stops[From].Local);
+    // From where the carriage stands (its stop, or short of it on a surface its last leg met).
+    const FVector End = Start + Container->GetComponentTransform().TransformVector(Lift->Stops[To].Local - Lift->LocalAt(Lift->S));
     const FBox Here = Local;
     const FBox There = Local.ShiftBy(Frame.InverseTransformVector(End - Start));
     const FBox Path = Here + There;
@@ -213,6 +225,52 @@ int32 ASCVehicle::LiftCarrying(const USceneComponent* C) const
             for (int32 I = 0; I < Lifts.Num(); ++I)
                 if (Lifts[I]->Anchor.Get() == C) return I;
     return INDEX_NONE;
+}
+bool SCVehicleLifts::GroundContact(const ASCVehicle* V, int32 LiftIndex, int32 To, double& OutTravel, FString& OutBy)
+{
+    // WP-P5 ground stop: the box of the carriage's colliders swept from where it stands toward stop To. The first blocking
+    // surface it meets on the way down (what the player stands on: the hangar pad, terrain, cargo) ends the leg; the vehicle
+    // itself (hull, gear, the carriage) and pawns (the riders) are not ground, nor is anything the box already overlaps where
+    // it stands. Hits are taken in order along the sweep, and only those that face the motion (a wall the box grazes does not).
+    const FSCLift* Lift = V && V->Lifts.IsValidIndex(LiftIndex) ? V->Lifts[LiftIndex].Get() : nullptr;
+    const USceneComponent* Anchor = Lift ? Lift->Anchor.Get() : nullptr;
+    const USceneComponent* Carriage = Lift ? Lift->CarriageAnchor.Get() : nullptr;
+    const USceneComponent* Container = Anchor ? Anchor->GetAttachParent() : nullptr;
+    UWorld* World = V ? V->GetWorld() : nullptr;
+    if (!Carriage || !Container || !World || !Lift->Stops.IsValidIndex(To)) return false;
+    const FTransform Frame = V->GetActorTransform();
+    const FBox Local = CarriageBox(Frame, Carriage);
+    if (!Local.IsValid) return false;
+    const FVector Leg = Container->GetComponentTransform().TransformVector(Lift->Stops[To].Local - Lift->LocalAt(Lift->S));
+    const double Length = Leg.Size();
+    if (Length < 1.0 || Leg.Z >= 0) return false; // the ground is under the carriage: only a leg downward can meet it
+    const FVector Dir = Leg / Length;
+    const FVector Start = Frame.TransformPosition(Local.GetCenter());
+    const FCollisionShape Box = FCollisionShape::MakeBox(FVector3f(Local.GetExtent() * Frame.GetScale3D().GetAbs()));
+    FCollisionObjectQueryParams Objects;
+    Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+    Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(SCLiftGround), false, V);
+    TArray<FHitResult> Hits;
+    World->SweepMultiByObjectType(Hits, Start, Start + Leg, Frame.GetRotation(), Objects, Box, Params);
+    Hits.Sort([](const FHitResult& A, const FHitResult& B) { return A.Time < B.Time; });
+    for (const FHitResult& H : Hits)
+    {
+        const UPrimitiveComponent* C = H.GetComponent();
+        const AActor* A = H.GetActor();
+        if (!C || H.bStartPenetrating || A == V || (A && (A->IsA<APawn>() || A->IsAttachedTo(V))) ||
+            C->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block || FVector::DotProduct(H.Normal, Dir) > -0.1)
+            continue;
+        OutTravel = H.Time * Length / 100.0;
+        const double Bottom = Frame.InverseTransformPosition(Start + Leg * H.Time).Z - Local.GetExtent().Z;
+        OutBy = FString::Printf(TEXT("%s/%s (%s) carriage_bottom_z_cm=%.1f"), A ? *A->GetName() : TEXT("-"), *C->GetName(),
+                                C->IsA<UStaticMeshComponent>() && Cast<UStaticMeshComponent>(C)->GetStaticMesh()
+                                    ? *Cast<UStaticMeshComponent>(C)->GetStaticMesh()->GetName()
+                                    : *C->GetClass()->GetName(),
+                                Bottom);
+        return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------------------------------------- assembly
@@ -415,6 +473,9 @@ void SCVehicleLifts::BuildInteriorLifts(ASCVehicle* V, int32 InteriorIndex, cons
         };
         Lift->Host.SweepLeg = [Weak, LiftId](int32 From, int32 To, FString& By) {
             return Weak.IsValid() ? Weak->SweepLiftLeg(LiftId, From, To, By) : FSCLiftHost::ELeg::Clear;
+        };
+        Lift->Host.GroundContact = [Weak, LiftId](int32 To, double& Travel, FString& By) {
+            return Weak.IsValid() && SCVehicleLifts::GroundContact(Weak.Get(), LiftId, To, Travel, By);
         };
         Lift->CarriageAnchor = Carriage->Anchor;
         UE_LOG(LogSCLiftLinks, Display,

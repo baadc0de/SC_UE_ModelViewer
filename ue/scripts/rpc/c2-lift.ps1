@@ -41,6 +41,12 @@ function Watch([string]$Tag, [int]$Stop, [double[]]$ShotAtS) {
     }
     throw "lift did not open at stop $Stop"
 }
+function OnCarriage {
+    # Stand in the middle of the carriage, wherever it is (floor hint 40 cm under its node): a walk-in can end on the
+    # landing's lip, which keeps the player behind when the carriage leaves.
+    $z = [double](((C 'sc.Lift.Where' | Select-String 'LIFT_WHERE lift=0' | Select-Object -First 1) -replace '.* z_cm=(\S+) .*', '$1'))
+    [void](C "sc.FP.Teleport -300 -784 $($z - 40)"); Start-Sleep 1; C 'sc.Lift.Where' | Select-String 'player base'
+}
 $CallHold = '4d52b73d-3b67-9a88-213d-f4c8017747a4'; $CallTop = '49b375f1-d5fb-1ee4-5f46-9a8fcffce2b2'
 $Panel = '4e867e5a-7436-4974-761c-883613ff8998'; $Ground = '49bd738e-4318-f2b7-487a-8fee884c3a93'
 $Sweep = @(-6, -8.5, -10, -12, -14, -16)
@@ -72,21 +78,30 @@ if (Step 'walk in, ride down to Lower Deck') {
     C 'sc.FP.Interact' | Select-String 'FP_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0'); Watch 'c5-descending' 1 @(11.5)
 }
 if (Step 'Exit Ship: the belly hatch opens, the carriage descends to the ground') {
+    OnCarriage
     Aim -90 $PanelSweep $Panel | Out-Null; Choose 2
     Shot 'd1-exit-ship-chosen' -Ui; C 'sc.FP.Interact' | Select-String 'FP_PANEL_PRESS'; [void](C 'sc.FP.Look 90 -30')
     Watch 'd2-through-hatch' 0 @(4.5, 2.2); C 'sc.FP.Where'
+    # The ground stop: the carriage rests on the first surface under it (LIFT_GROUND_CONTACT), the player on the carriage.
+    Start-Sleep 0.5; C 'sc.Lift.Where'; [void](C 'sc.FP.Look 90 -45'); Start-Sleep 0.5; Shot 'd2-ground-stop-edge'
 }
 if (Step 'step off onto the hangar floor, the open hatch from below') {
     [void](C 'sc.FP.Look 90 0'); [void](C 'sc.FP.Move 1 0 0.8'); Start-Sleep 2; C 'sc.FP.Where'
     [void](C 'sc.FP.Torch 1'); [void](C 'sc.FP.Look -90 35'); Start-Sleep 0.6; Shot 'd3-hatch-open-from-ground'
-    [void](C 'sc.FP.Look -90 -5'); Start-Sleep 0.4; Shot 'd4-carriage-at-ground'; [void](C 'sc.FP.Torch 0')
+    [void](C 'sc.FP.Look -90 -5'); Start-Sleep 0.4; Shot 'd4-carriage-at-ground'
+    # Further out, eye level near the pad: the carriage's underside against the pad.
+    [void](C 'sc.FP.Look 90 0'); [void](C 'sc.FP.Move 1 0 0.9'); Start-Sleep 1.5; [void](C 'sc.FP.Crouch 1'); Start-Sleep 0.6
+    [void](C 'sc.FP.Look -90 -8'); Start-Sleep 0.5; Shot 'd5-carriage-on-pad'; C 'sc.FP.Where'
+    [void](C 'sc.FP.Look -110 -8'); Start-Sleep 0.4; Shot 'd6-carriage-on-pad-oblique'; [void](C 'sc.FP.Crouch 0'); [void](C 'sc.FP.Torch 0')
+    # The pad's height beside the carriage (vehicle frame), to compare with LIFT_GROUND_CONTACT carriage_bottom_z_cm.
+    [void](C 'sc.FP.Look -90 -89'); Start-Sleep 0.3; C 'sc.FP.Probe' | Select-Object -First 1
 }
 if (Step 'carriage up (Arrived at 1 closes the hatch), doors closed, then the ground call (sc.Lift.Send: the button is a helper)') {
     C 'sc.Lift.Request 0 1' | Select-String 'LIFT_CMD'; WaitLift; C 'sc.Lift.Doors 0 close' | Select-String 'LIFT_CMD'; WaitLift; Start-Sleep 5
     C "sc.Lift.Send $Ground Descend" | Select-String 'LINK_DELIVER'; Watch 'e1-ground-call' 0 @(3.4)
 }
 if (Step 'over the carriage, ride up to Lower Deck') {
-    [void](C 'sc.FP.Teleport -300 -784 -1505'); Start-Sleep 1; C 'sc.FP.Where'
+    OnCarriage; C 'sc.FP.Where' # the carriage stands on the pad, short of the authored stop
     Aim -90 $PanelSweep $Panel | Out-Null; Choose 1
     C 'sc.FP.Interact' | Select-String 'FP_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0'); Watch 'e2-ride-up' 1 @(3.4); C 'sc.FP.Where'
 }

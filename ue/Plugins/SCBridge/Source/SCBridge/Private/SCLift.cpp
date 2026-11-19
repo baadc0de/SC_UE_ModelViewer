@@ -98,6 +98,24 @@ ESCLiftSpeedPhase FSCLiftProfile::PhaseAt(double T) const
     return ESCLiftSpeedPhase::RampDown;
 }
 
+FSCLiftLegPlan FSCLiftLegPlan::Make(double StartS, double StopS, TOptional<double> ContactTravel, double MaxSpeed, double EasingDistance)
+{
+    FSCLiftLegPlan P;
+    P.StartS = StartS;
+    P.EndS = StopS;
+    P.AuthoredDistance = P.Distance = FMath::Abs(StopS - StartS);
+    // A contact counts when it lies inside the leg: from where the carriage stands up to (not at) the authored stop.
+    constexpr double Tolerance = 1e-4; // metres
+    if (ContactTravel.IsSet() && *ContactTravel >= 0 && *ContactTravel < P.AuthoredDistance - Tolerance)
+    {
+        P.bContact = true;
+        P.Distance = *ContactTravel;
+        P.EndS = StartS + (StopS >= StartS ? 1.0 : -1.0) * P.Distance;
+    }
+    P.Profile = FSCLiftProfile::Make(P.Distance, MaxSpeed, EasingDistance);
+    return P;
+}
+
 // ---------------------------------------------------------------------------------------------------------------- lift
 FName FSCLift::PhaseName(ESCLiftSpeedPhase Phase) { return FName(LexToString(Phase)); }
 
@@ -311,13 +329,28 @@ void FSCLift::BeginLeg(int32 To)
     GatewayRetry = INDEX_NONE;
     FromStop = CurrentStop;
     TargetStop = To;
-    const double Distance = FMath::Abs(Stops[To].S - Stops[FromStop].S);
-    Direction = Stops[To].S > Stops[FromStop].S ? 1 : -1;
-    Leg = FSCLiftProfile::Make(Distance, MaxSpeed, EasingDistance);
+    // The leg starts where the carriage stands (short of its stop when it rests on a surface it met) and ends at the stop,
+    // or on the first blocking surface under the carriage on the way (WP-P5 ground stop).
+    TOptional<double> Contact;
+    FString ContactBy;
+    if (double Travel = 0; Host.GroundContact && Host.GroundContact(To, Travel, ContactBy)) Contact = Travel;
+    const FSCLiftLegPlan Plan = FSCLiftLegPlan::Make(S, Stops[To].S, Contact, MaxSpeed, EasingDistance);
+    Direction = Stops[To].S > S ? 1 : -1;
+    Leg = Plan.Profile;
+    LegStartS = Plan.StartS;
+    LegEndS = Plan.EndS;
+    bLegContact = Plan.bContact;
+    bAtContact = false;
     LegTime = 0;
     NextPass = FromStop + Direction;
+    const double Distance = Plan.Distance;
     UE_LOG(LogSCLift, Display, TEXT("LIFT_DEPARTED lift=%d from=%d to=%d dist_m=%.3f predicted_s=%.3f peak_v=%.3f t=%.3f"), Id, FromStop, To, Distance,
            Leg.Duration(), Leg.PeakSpeed, Clock);
+    if (Plan.bContact)
+        UE_LOG(LogSCLift, Display,
+               TEXT("LIFT_GROUND_CONTACT lift=%d stop=%d authored_z=%.1f contact_z=%.1f authored_dist_m=%.3f dist_m=%.3f authored_s=%.3f predicted_s=%.3f by=%s t=%.3f"),
+               Id, To, Stops[To].ZCm, ZAt(Plan.EndS), Plan.AuthoredDistance, Plan.Distance,
+               FSCLiftProfile::Make(Plan.AuthoredDistance, MaxSpeed, EasingDistance).Duration(), Leg.Duration(), *ContactBy, Clock);
     OnDeparted.Broadcast(FromStop);
     CurrentStop = INDEX_NONE;
     SetState(ESCLiftState::Moving);
@@ -328,11 +361,12 @@ void FSCLift::Arrive()
     const double Distance = Leg.Distance;
     CurrentStop = TargetStop;
     TargetStop = INDEX_NONE;
-    MoveTo(Stops[CurrentStop].S);
+    MoveTo(LegEndS); // the stop, or the surface the leg met (arrival all the same: doors, events, logs)
+    bAtContact = bLegContact;
     V = 0;
     SpeedPhase = ESCLiftSpeedPhase::None;
-    UE_LOG(LogSCLift, Display, TEXT("LIFT_ARRIVED lift=%d stop=%d name=\"%s\" t_leg=%.3f predicted_s=%.3f dist_m=%.3f z_cm=%.1f t=%.3f"), Id,
-           CurrentStop, *Stops[CurrentStop].Name, LegTime, Leg.Duration(), Distance, Stops[CurrentStop].ZCm, Clock);
+    UE_LOG(LogSCLift, Display, TEXT("LIFT_ARRIVED lift=%d stop=%d name=\"%s\" t_leg=%.3f predicted_s=%.3f dist_m=%.3f z_cm=%.1f contact=%d t=%.3f"), Id,
+           CurrentStop, *Stops[CurrentStop].Name, LegTime, Leg.Duration(), Distance, ZAt(S), bAtContact, Clock);
     Phase(TEXT("Stop"));
     SetState(ESCLiftState::Idle);
     OnArrived.Broadcast(CurrentStop);
@@ -475,7 +509,7 @@ void FSCLift::Tick(double DeltaSeconds)
             SpeedPhase = P;
             Phase(PhaseName(P));
         }
-        MoveTo(Stops[FromStop].S + Direction * Leg.PositionAt(T));
+        MoveTo(LegStartS + Direction * Leg.PositionAt(T));
         while (Stops.IsValidIndex(NextPass) && NextPass != TargetStop && (S - Stops[NextPass].S) * Direction >= 0)
         {
             UE_LOG(LogSCLift, Display, TEXT("LIFT_PASSED lift=%d stop=%d t=%.3f"), Id, NextPass, Clock);
@@ -559,8 +593,8 @@ FString FSCLift::Describe() const
 {
     TArray<FString> Q;
     for (const FSCLiftRequest& R : Queue) Q.Add(FString::FromInt(R.Stop));
-    return FString::Printf(TEXT("lift=%d s_m=%.3f z_cm=%.1f v=%.3f state=%s phase=%s at=%d target=%d queue=[%s]"), Id, S, ZAt(S), V,
-                           LexToString(State), LexToString(SpeedPhase), CurrentStop, TargetStop, *FString::Join(Q, TEXT(",")));
+    return FString::Printf(TEXT("lift=%d s_m=%.3f z_cm=%.1f v=%.3f state=%s phase=%s at=%d target=%d queue=[%s] contact=%d"), Id, S, ZAt(S), V,
+                           LexToString(State), LexToString(SpeedPhase), CurrentStop, TargetStop, *FString::Join(Q, TEXT(",")), bAtContact);
 }
 
 // ---------------------------------------------------------------------------------------------------------- network

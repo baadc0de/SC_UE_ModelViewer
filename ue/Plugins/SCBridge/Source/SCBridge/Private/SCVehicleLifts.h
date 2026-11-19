@@ -23,4 +23,8 @@ void BuildInteriorLifts(ASCVehicle* Vehicle, int32 InteriorIndex, const FSCInter
                         const TMap<FString, FSCLiftBuildPart>& Parts);
 /** The entity ids that are lift carriages (an entity that is a lift is not a door pad, DOORS-1). */
 TSet<FString> CarriageIds(const FSCInterior& Interior);
+/** WP-P5 ground stop: the first blocking surface under lift LiftIndex's carriage on its way down from where it stands to stop
+ *  To (a sweep of the box of its colliders against world collision; the vehicle and pawns excluded). OutTravel: metres along
+ *  the leg; OutBy: what was hit and where the carriage's bottom rests. False: nothing in the leg, or not a leg downward. */
+bool GroundContact(const ASCVehicle* Vehicle, int32 LiftIndex, int32 To, double& OutTravel, FString& OutBy);
 }

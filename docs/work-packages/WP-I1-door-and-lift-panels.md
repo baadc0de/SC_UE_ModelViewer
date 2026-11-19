@@ -511,6 +511,179 @@ live Rust test checks.
 - The 5 non-hittable C2 pads (placement or geometry).
 - The I1-1 items above: escape-pod placement, the medical drop-off door frame, I1-2 aspect.
 
+## Labels and state UI (research, 2026-11-19)
+
+**Owner (binding):** "The panels should be drawing the UI for the floor selection, but they do not. Same for door and
+other panel associated buttons. They are missing actual labels and state UI." Door and lift panels are inherited from
+the game; HUDs and MFDs stay out (section 7).
+
+Read-only research: no build, no vendor edit. Evidence and the full log are in `out/panel-ui-datamine/` (`NOTES.md`). The C2
+and hangar packages were re-rendered with `starbreaker ui render --dump-ir-dir`; the door render is byte-identical to the
+PNG in the package, so the IR dumps describe exactly what the viewer shows.
+
+### Why the text is missing
+
+Text rendering is not the cause. Glyphs come from the BuildingBlocks SWF font library, and `@` keys resolve through
+`global.ini`. The door pad's IR holds the resolved texts OPEN, LOCK, UNLOCK, NO POWER and EMERGENCY OVERRIDE (the last four
+on inactive nodes), and "OPEN" is in the PNG. The labels go missing, or land in the wrong place, at four points before
+drawing, all in `starbreaker-ui` or the exporter:
+
+1. **The large button component is not built.** `BuildingBlocks_ComponentGeneralButtonLarge` is not a node type that
+   starbreaker-ui knows (`bb_scene/types.rs` `BbNodeType`). It is not expanded from its template
+   `ButtonGeneralLargeComponentStandard`, although that template is in DataCore. `bb_resolve/engine_04.rs`
+   `expand_widget_standards` expands only icons, the primary and secondary buttons and scrollbars.
+   - **Door pad.** The main button (`DoorButton`) gets no frame, no background and no label layout. Its node spans the
+     whole content area (78, 47, 1764 × 903) and draws "OPEN" left-aligned at the edge. The blue bar under the text is the
+     button shelf (`ButtonContainer`), and the lighter box is `LightButton_Emergency_Toggle`, not the door button.
+   - **Hangar elevator panel.** `Button_Call` has the same defect, which cuts "CALL ELEVATOR" off at the left edge.
+   - **Other components.** `ComponentLabelCaptionPair` (the transit floor labels), lists and checkboxes are not
+     expanded either.
+2. **Labels set by a style are dropped.** `BuildingBlocks_FieldModifierLocalization` on the `Text` field falls into
+   `bb_brand_apply/modifiers.rs` `apply_modifier`'s fallback arm. It is logged as unrecognised, and the raw `@key` is
+   written to a field the IR never reads (24 times in the C2 render log). This is how `LightControl_Component` labels
+   its rows On, Auxiliary and Emergency, so the light panel's rows show an icon and an empty bar. Only the `ParamInputN`
+   form is handled (`bb_scene/clone_expand.rs`). The INI keys are `ui_label_auxiliary,P` and `ui_label_Emergency,P`, so the
+   fix must look them up with that suffix.
+
+   `out/panels/v2/door_button-0.png` is this light panel (bed light, `Screen_LightControl`, drawn sideways), not a
+   door pad.
+3. **Two binding operations are not evaluated.** `BuildingBlocks_BindingsBooleanFromTagSwitch` and
+   `BindingsOperation_BooleanFromLocalizationIsEmpty` are missing from `bb_bindings/eval.rs`, as is
+   `BindingsTagFromTagSwitch`. An unevaluated binding keeps the authored value.
+   - **Hangar panel.** `StyleColor_BG_Overlay.IsActive` and `Button_Call.Disabled` are a tag switch on
+     `StateType.EnableState.TagGUID` that defaults to false. The overlay therefore stays on. This is very likely the red
+     field of Q1, the disabled or lockdown look rather than the idle one.
+   - **Door header.** `Text_RoomName` stays active with no text. This is harmless.
+4. **The export passes none of the panel entity's own values.** `ui_pipeline.rs` `UiBindingView` carries the canvas,
+   kind, helper, aspect and a transit location key. It carries no user variables and no state, and starbreaker-3d reads
+   no `UserVariables` at all.
+   - **Room name.** The door header's room name is `ui_LocationName`, a localized-string user variable. Its class default
+     is `@LOC_EMPTY`, and no C2 instance overrides it, so the C2 pads show no room name in the game either.
+   - **Hidden controls.** Every C2 `ControlPanel_Screen_DoorControl_9x16_Small` instance in `top_deck_c2` overrides the bool
+     user variables at index 0, 2, 4 and 5 to true: `ui_HideLockControls`, `ui_HideSensorControls`,
+     `ui_HideLightControls` and `ui_HideEmergencyLightControls` (`.soc` `EntityComponentUserVariables`). The export still
+     draws the emergency-light toggle these hide.
+   - **Transit labels.** On the hangar panels, `transitdisplay.panelLocation` ("YOUR LOCATION …") and `currentStopName`
+     ("ELEVATOR LOCATION …") are empty. The binding's `transit_location_loc_key` is null, because the transit manager is
+     not in the hangar's data (WP-P5 §2).
+
+**Root cause, in one line:** unsupported BuildingBlocks constructs in starbreaker-ui (the large button component,
+style-set localized text, two boolean operations), plus an export that passes no panel-entity values. Fonts, glyphs and
+localization work.
+
+### Door panels: states and what they change
+
+The state comes from the pad's `SInteractionStateMachineParams`, which mirrors the linked door. Everything else is
+bindings in `I_Door_Standard` and its sub-canvases `IC_DoorHeader`, `IC_DoorButtonShelf` and `IC_DoorFooter`:
+
+| Input | Effect |
+|---|---|
+| label index `(ui_AccessDenied ? 4 : 0) + (doorlocked ? 2 : 0) + (dooropened ? 0 : 1)` | `DoorButton` text: 0 **Close**, 1 **Open**, 2–3 **Locked**, 4–7 **Access Denied** (`BindingsLocalizationFromIntegerSwitch`; upper-cased by the label style) |
+| `state.doorlockstate.doorlocked` | button `Disabled`; footer status icon |
+| `state.dooropenstate.dooropening` / `doorclosing` | the "animate 1" state tag on the button: a colour animation while the door moves |
+| `state.dooropenstate.dooropened`, `doorlocked`, `doorbreachedstate.doorbreached` | footer `Icon_DoorStatus` SVG |
+| `state.powerstate.powerlost` | hides the main content and shows NO POWER |
+| `state.overrideablestate.CanOverride` | EMERGENCY OVERRIDE overlay and its colour |
+| `ui_LocationName`, `ui_Hide*`, `ui_HideDoorButton`, `ui_AccessDenied` | per-instance user variables: room name, which shelf buttons exist |
+
+For the C2 the useful set is **Closed (OPEN)**, **Open (CLOSE)**, **Moving** (OPEN or CLOSE with the animate tag, which
+one still image cannot show faithfully), **Locked** and **No power**. The light panel adds its light state (`lightson`,
+`lightslow`, `lightsalarm`, `lightswitch*`). `DefaultValueRegistry::insert_path` can pin each state path; the CLI cannot,
+so no CLOSE or LOCKED render was made here.
+
+### Lift panels: where the UI really is
+
+- **C2 floor panel (`CRUS_Hercules_Elevator_ButtonsInner`).** The earlier "no UI content" finding stands, with one
+  refinement.
+  - The panel and the call buttons have no UI components. The floor names exist only as the display names on the panel's
+    interaction point (`$proxy_elevator_button`): Top Deck (primary), Lower Deck and Exit Ship. That is the game's
+    interaction prompt, which P5-1 already lists with mouse-wheel choice.
+  - **Refinement.** The carriage `CRUS_Hercules_Lift_Platform` does carry UI:
+    - canvas `I_Door_Standard_Elevator`: one large button reading CALL, UP or Wait from the carriage's door state, through
+      the user variables `UpOverride` `@panel_call`, `DownOverride` `@panel_up` and `WaitOverride`;
+    - a render-to-texture component, a kiosk component, and a full copy of the door panel's state machine.
+
+    The platform mesh has no screen, though: its NMC nodes are `Lift_Platform`, `Decal_Lift_Platform` and `$nav_a/b`,
+    and no primitive uses `RTT_Screens`. On the C2 that canvas has nowhere to draw. The exported carriage placement has
+    `ui_bindings: []`, which `ui_binding_for_record` should not produce; this is unexplained and matters only if a face
+    exists.
+  - **The face.** The inner panel's one screen face is a rounded 0.27 × 0.23 m plate that samples UV u 2.387–2.504,
+    v 0.640–0.738. That is a window of about 12 % × 10 % of a texture, with the plate's aspect (1.19 against 1.18), not a
+    full canvas. What the game shows there is not in the data: Q2, which needs a capture.
+  - **Owner decision.** There is no game data for a floor list drawn on the C2's panel. Drawing one would be our own UI,
+    not an inherited one.
+- **C2 call buttons.** They show no screen UI. Their feedback is the geometry tags `WaitingForAscend` /
+  `WaitingForDescend` (Q2) and the button sound (I1-4).
+- **Hangar elevator call panel (`I_Trn_Elevator_Exterior`).** It has a "YOUR LOCATION" floor name
+  (`transitdisplay.panelLocation`), an "ELEVATOR LOCATION" current stop (`currentStopName`), and the large CALL ELEVATOR
+  button, which reads ELEVATOR CALLED when `stopManuallyRequestedAtDisplayLocation` is set. The two names need the
+  hangar's transit line, which is not in the hangar's data (WP-P5 P5-4).
+- **A real floor-select list** is `I_Trn_Elevator_Interior`, on transit carriages: a `WidgetList` of
+  `ComponentGeneralListItem` bound to `name` and `stoprequested`, plus `currentStopName`, `nextStopName`,
+  `traveldirection` and `@elevator_currentfloor`. This is P5-4's carriages (890J, Carrack, Idris …), not the C2.
+
+### Options
+
+| | What | Effort | Fidelity | Data path | Where | Risks |
+|---|---|---|---|---|---|---|
+| **(a) Fix starbreaker-ui, bake one image per state** | the four fixes above; the exporter feeds class and instance user variables and pins `state.*` per state; `ui_bindings[].state_images[]`; the viewer swaps the image on door and lift events | M–L (exporter M; viewer S, the I1-3 bookkeeping) | High for every bounded state: door labels and all their states, light rows, call or called | DataCore canvases → IR → PNG per (canvas, aspect, user-variable values, state) | upstream, submodule branch `scviewer/panel-screens`, tests first; viewer `SCImportJob` / panel component | starbreaker-ui's parity regime (`ui_check.sh`, frozen targets: a new expansion type must use the second ID band so it cannot renumber frozen IDs); no in-game reference for these canvases yet; render count (about 5 states × aspects × variable sets per canvas); generated paths must carry the key |
+| **(b) Bake static, draw dynamic text in UE** | (a)'s static parts, plus floor or stop names drawn into the text-field rect from the IR | M on top of (a) | Medium: the font is the game's SWF glyphs in (a) but a UE font here; the layout is redone | the IR's text rects and styles in the package; strings from loc | viewer | a second text and layout engine; nothing to gain for door pads, whose texts are a closed set; lift names are a closed set per lift too (`lifts[].stops[]`), so (a) can bake them |
+| **(c) Live canvases in UE (UMG / Slate → render target)** | interpret the canvas description at runtime | XL | High only after re-implementing BuildingBlocks (styles, bindings, layout, SWF shapes) | the IR or the raw canvases | viewer | duplicates starbreaker-ui; out of proportion for panels with a handful of states |
+| (a2) Render on demand through the FFI | (a)'s renderer, called per new state at runtime and cached | M on top of (a) | as (a), plus unbounded text | the P4k at runtime | `scbridge-ffi` | cooked and showcase builds have no P4k at runtime; a hitch per render |
+
+**Recommendation: (a).** Every label the owner names is a closed set that the game's own canvases describe: door
+Open / Close / Locked / Access Denied / No power, the light rows, call or called. The C2 floor names are the interaction
+prompt, which P5-1 shows, and the hangar's floor names need a transit line that is not in the data. (b) and (c) add a
+second UI engine without gaining fidelity.
+
+### Recommended next slice: I1-5 "panel labels" (exporter, then I1-3 on top)
+
+Submodule branch `scviewer/panel-screens`. Each defect gets a failing test first in starbreaker-ui, against an extracted
+fixture with a provenance note (crate rules: no copied game values, no name branches).
+
+1. **Large button.** `ComponentGeneralButtonLarge` becomes a node type, expanded from `ButtonGeneralLargeComponentStandard`
+   in the second expansion ID band.
+2. **Style-set text.** `FieldModifierLocalization` on `Text` sets the node's text through the loc fetcher, including the
+   `,P` keys.
+3. **Boolean operations.** `BindingsBooleanFromTagSwitch`, `BindingsTagFromTagSwitch` and
+   `BindingsOperation_BooleanFromLocalizationIsEmpty` are evaluated.
+4. **Panel-entity values.**
+   - The exporter reads the owner's `UserVariablesComponentParams` class defaults and the `.soc` instance overrides
+     (`EntityComponentUserVariables`, by `__index`).
+   - It passes them to the registry for that binding.
+   - The generated image path carries a hash of the values. Shared output paths are first-written-wins today (§8).
+5. **Docs.** `decomposed-export-contract.md`; the cache version + 1.
+
+**Done means:**
+
+- **C2 door pad.** The render shows a framed, centred OPEN button, and no emergency-light toggle on the C2 instances
+  that hide it.
+- **Light panel.** The rows read On / Auxiliary / Emergency.
+- **Hangar call panel.** It shows a centred CALL ELEVATOR with no red overlay.
+- **Evidence.** `ui render --dump-ir-dir` IR diffs and PNGs in the PR.
+- **Tests.**
+  - `bash scripts/ui_check.sh` reports ALL GREEN, with no drift on frozen targets (Clipper GOLD).
+  - `cargo test -p starbreaker-3d --lib` passes.
+  - The viewer's `SCREEN_BIND` counts are unchanged.
+- **Review.** Astra compares the in-game shots against owner captures of a C2 corridor pad (closed, open, locked), a bed
+  light panel and a high-tech hangar elevator panel. No capture exists yet; without them parity is unverified.
+
+**Then I1-3 (states) on top:**
+
+- the exporter renders the door set (Closed, Open, Locked, No power, plus Moving as the animation's sample) and the
+  transit called state into `state_images[]`;
+- the viewer swaps images on the door bookkeeping (`IsDoorOpen`, fragment start and end, lock) and on the lift's
+  `OnRequested` / `OnArrived`.
+
+**Done means:** in first person, a C2 pad reads OPEN, then CLOSE while its door is open, and LOCKED when locked. A
+hangar panel reads ELEVATOR CALLED after a press.
+
+**Not in this slice:**
+
+- a floor list on the C2's inner panel: there is no game data for one, so it needs an owner decision and the Q2 capture;
+- the hangar's floor and stop names, which need P5-4's transit line;
+- I1-2 aspect, which composes with this: the render key already includes the aspect.
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:
@@ -555,7 +728,9 @@ Facts for the replacement work:
 ## 9. Open questions
 
 1. Is the hangar elevator panel's red field the game's idle look, or an unpinned `state.PowerState.NoPower` (or power
-   default)? Needs an in-game capture of a high-tech hangar elevator panel.
+   default)? Needs an in-game capture of a high-tech hangar elevator panel. Research of 2026-11-19 (section "Labels and
+   state UI"): probably neither. It is `StyleColor_BG_Overlay`, whose `BindingsBooleanFromTagSwitch` starbreaker-ui does
+   not evaluate, so the overlay keeps its authored "active".
 2. What do the C2 lift buttons' `Screen` faces show in game, and what do the geometry tags `WaitingForAscend` /
    `WaitingForLobbyTop` switch on `CRUS_Starlifter_Elevator_Call_Button.cga` and `_Inner_Buttons.cga`? (The inner
    buttons' face samples UV 2.39–2.50 × 0.64–0.74, a sub-window of something.) Needs a capture and a CGA, MTL and NMC

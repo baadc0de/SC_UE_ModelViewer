@@ -592,6 +592,14 @@ instancing), keeping their world transforms. The carriage stands at its rest nod
   the game, logged once as `LIFT_PROFILE`): constant acceleration a = MaxSpeed² / (2 · EasingDistance) over the ramp,
   cruise, the mirror ramp down; a leg shorter than two ramps is a triangle. C2: hold ↔ top 4.956 s, ground ↔ hold 4.750 s,
   ground ↔ top 6.957 s.
+- **Ground stop.** A leg downward ends on the first blocking surface under the carriage when that lies above the stop: the
+  box of the carriage's colliders is swept from where it stands toward the stop against world collision (what blocks the
+  player; the vehicle itself, pawns and anything the box already overlaps are not ground). The leg's profile is made for the
+  shortened distance, so the carriage ramps down onto the surface, and the arrival is the stop's (doors, `Arrived at <N>`,
+  logs); the next leg starts from there. `LIFT_GROUND_CONTACT lift stop authored_z contact_z authored_dist_m dist_m
+  authored_s predicted_s by` (z: container frame, cm). Nothing hit: the authored stop. A reading, not game data
+  (`SCItemElevatorParams.Collision` is null on every lift class; WP-P5 "Ground stop"): the C2's ground stop (z −14.65 m)
+  lies 0.6 m below the hangar pad in the viewer's landed pose.
 - **Logic** (`PoweredDown`, `Idle`, `Closing`, `WaitingForGateway`, `Moving`, `Opening`, `Open`): a request where the
   carriage stands only opens its doors. With the doors open, the next leg waits for `OpenWaitTime` since they opened and
   `QueueWaitTime` since the first request; the gate and the stop's landing door close (`CloseAllDoors`; the carriage never
@@ -632,7 +640,7 @@ instancing), keeping their world transforms. The carriage stands at its rest nod
 
 Logs: `LIFT_BUILD`, `LIFT_REQUESTED`, `LIFT_STATE`, `LIFT_DEPARTED` (predicted leg time), `LIFT_PHASE`
 (`Start`/`RampUp`/`FullSpeed`/`RampDown`/`Stop`/`PowerUp`/`PowerDown`), `LIFT_PASSED`, `LIFT_ARRIVED lift stop t_leg
-predicted_s dist_m`, `LIFT_DOOR`, `LIFT_BLOCKED`, `LIFT_GATEWAY`, `LIFT_IGNORED`, `LIFT_TRAVERSAL`. RPC: `/wait until=lift_idle [lift=<id>]` (no request
+predicted_s dist_m z_cm contact`, `LIFT_GROUND_CONTACT`, `LIFT_DOOR`, `LIFT_BLOCKED`, `LIFT_GATEWAY`, `LIFT_IGNORED`, `LIFT_TRAVERSAL`. RPC: `/wait until=lift_idle [lift=<id>]` (no request
 queued, not moving, no door of the lift in motion, its gateway doors included) and `lifts[]` in `/state` and `SCState.ndjson`. The scripted C2 run is
 `ue/scripts/rpc/c2-lift.ps1` (WP-P5 "Result (P5-1)").
 

@@ -280,6 +280,86 @@ bool FSCLiftFaultsTest::RunTest(const FString&)
     return true;
 }
 
+// WP-P5 ground stop: a leg toward a stop below the ground ends on the first surface under the carriage, with the profile made
+// for the shortened distance; without a contact in the leg the authored stop ends it. The C2's case: the ground stop is
+// 0.6 m below the hangar pad of the viewer's landed pose (s 0.6 m along the path from stop 0).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLiftGroundStopTest, "SCBridge.Lift.GroundStop", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLiftGroundStopTest::RunTest(const FString&)
+{
+    constexpr double HoldS = 6.775, Surface = 0.6;
+    const double Authored = FSCLiftProfile::Make(HoldS, C2MaxSpeed, C2Easing).Duration();
+    // The rule alone.
+    {
+        const FSCLiftLegPlan P = FSCLiftLegPlan::Make(HoldS, 0, HoldS - Surface, C2MaxSpeed, C2Easing);
+        TestTrue(TEXT("contact above the stop shortens the leg"), P.bContact);
+        TestNearlyEqual(TEXT("ends on the surface"), P.EndS, Surface, 1e-9);
+        TestNearlyEqual(TEXT("shortened distance"), P.Distance, HoldS - Surface, 1e-9);
+        TestNearlyEqual(TEXT("authored distance kept"), P.AuthoredDistance, HoldS, 1e-9);
+        const FSCLiftProfile Short = FSCLiftProfile::Make(HoldS - Surface, C2MaxSpeed, C2Easing);
+        TestNearlyEqual(TEXT("time recomputed for the shortened distance"), P.Profile.Duration(), Short.Duration(), 1e-9);
+        TestTrue(TEXT("shorter than the authored leg"), P.Profile.Duration() < Authored - 0.1);
+        TestNearlyEqual(TEXT("rests at the contact"), P.Profile.PositionAt(P.Profile.Duration()), HoldS - Surface, 1e-6);
+        TestTrue(TEXT("decelerates into the contact"), P.Profile.PhaseAt(P.Profile.Duration() - 0.05) == ESCLiftSpeedPhase::RampDown &&
+                                                         P.Profile.VelocityAt(P.Profile.Duration() - 0.05) < 0.1);
+        for (const TOptional<double>& None : {TOptional<double>(), TOptional<double>(HoldS), TOptional<double>(HoldS + 1), TOptional<double>(-0.5)})
+        {
+            const FSCLiftLegPlan N = FSCLiftLegPlan::Make(HoldS, 0, None, C2MaxSpeed, C2Easing);
+            TestFalse(TEXT("no contact in the leg"), N.bContact);
+            TestNearlyEqual(TEXT("the authored stop"), N.EndS, 0.0, 1e-9);
+            TestNearlyEqual(TEXT("the authored time"), N.Profile.Duration(), Authored, 1e-9);
+        }
+    }
+    // In the lift: hold -> ground stops on the surface and arrives there (doors, events); ground -> hold starts from it;
+    // hold -> top (no surface under a leg upward) is unchanged.
+    FSCSceneManifest M;
+    if (!ReadC2(*this, M)) return false;
+    FSCLift Lift;
+    Lift.Init(M.Interiors[0].Lifts[0], [](const FVector& V) { return StopCm(V); });
+    FStubDoors Doors;
+    Doors.Bind(Lift);
+    ON_SCOPE_EXIT { Doors.Release(); };
+    Lift.Gate.Add({TEXT("gate"), Doors.Make(TEXT("gate"), 0.5)});
+    TArray<FString> Emitted;
+    Lift.Host.Emit = [&](const FString& Entity, FName Interaction) { Emitted.Add(Entity + TEXT(":") + Interaction.ToString()); };
+    Lift.Host.GroundContact = [&](int32 To, double& Travel, FString& By) {
+        if (To != 0 || Lift.S <= Surface) return false;
+        Travel = Lift.S - Surface;
+        By = TEXT("pad");
+        return true;
+    };
+    auto Ride = [&](int32 To) {
+        Lift.ReceiveCarriage(*FString::Printf(TEXT("From Elevator call %d"), To), TEXT("panel"), NAME_None);
+        double Departed = -1, Arrived = -1, Last = Lift.S;
+        bool bMonotonic = true;
+        for (int32 I = 0; I < 3000 && !(Lift.CurrentStop == To && Lift.State == ESCLiftState::Open); ++I)
+        {
+            Lift.Tick(1.0 / 60);
+            if (Departed < 0 && Lift.State == ESCLiftState::Moving) Departed = Lift.Clock;
+            if (Lift.State == ESCLiftState::Moving) { bMonotonic &= (Lift.S - Last) * (To == 0 ? -1 : 1) >= -1e-9; Last = Lift.S; }
+            if (Arrived < 0 && Lift.CurrentStop == To) Arrived = Lift.Clock;
+        }
+        TestTrue(*FString::Printf(TEXT("monotonic to %d"), To), bMonotonic);
+        return Arrived - Departed;
+    };
+    const double Down = Ride(0);
+    TestEqual(TEXT("arrived at the ground stop"), Lift.CurrentStop, 0);
+    TestEqual(TEXT("doors open there"), Lift.State, ESCLiftState::Open);
+    TestTrue(TEXT("on the surface"), Lift.bAtContact);
+    TestNearlyEqual(TEXT("contact height"), Lift.ZAt(Lift.S), -1465.0 + Surface * 100, 0.01);
+    TestNearlyEqual(TEXT("shortened leg time"), Down, FSCLiftProfile::Make(HoldS - Surface, C2MaxSpeed, C2Easing).Duration(), 0.04);
+    TestTrue(TEXT("Arrived at 0 is emitted"), Emitted.Contains(TEXT("platform:Arrived at 0")));
+    TestTrue(TEXT("the gate opened"), !Doors.Log.IsEmpty() && Doors.Log.Last().EndsWith(TEXT("gate open")));
+    const double Up = Ride(1);
+    TestEqual(TEXT("back at the hold"), Lift.CurrentStop, 1);
+    TestFalse(TEXT("not on a surface"), Lift.bAtContact);
+    TestNearlyEqual(TEXT("hold height"), Lift.ZAt(Lift.S), -787.5, 0.01);
+    TestNearlyEqual(TEXT("up from the surface: the shortened distance"), Up, FSCLiftProfile::Make(HoldS - Surface, C2MaxSpeed, C2Easing).Duration(), 0.04);
+    const double Top = Ride(2);
+    TestNearlyEqual(TEXT("hold -> top unchanged"), Top, 4.956, 0.04);
+    TestNearlyEqual(TEXT("top height"), Lift.ZAt(Lift.S), -50.0, 0.01);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLiftDispatchTest, "SCBridge.Lift.Dispatch", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLiftDispatchTest::RunTest(const FString&)
 {

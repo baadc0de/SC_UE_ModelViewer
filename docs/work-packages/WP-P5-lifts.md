@@ -683,15 +683,96 @@ ground stop sits in the hangar floor**.
 
 **Findings.**
 
-- **The ground stop is 60 cm below the hangar floor.** The node is at z −14.65 m. In the viewer's landed pose (gear
+- **The ground stop was 60 cm below the hangar floor.** The node is at z −14.65 m. In the viewer's landed pose (gear
   compressed, on the xltop ship-elevator pad `ht_hangar_ship_elev_xl_a`) the pad surface is at about −14.05 m, so the
-  carriage stops 60 cm into the pad and the player at the ground stands on the pad above it; the rising carriage lifts
-  them off it. Not changed: nothing in the data says where the game stops the carriage on the ground. An in-game capture
-  of the C2's ground stop is needed (with Q1).
+  carriage stopped 60 cm into the pad and the player at the ground stood on the pad above it. Fixed by the ground-stop
+  rule below.
 - **R3 (hull over the shaft)** did not occur: no hull collider caps the belly opening, and the rider passes the hatch
   plane on the carriage.
 - The carriage gate (`CRUS_Starlifter_Elevator_Inner_Gate`, 15 frames on `walltop`) closes and opens with the carriage
   (`LIFT_DOOR role=gate`), but is not distinct in the stills.
+
+### Ground stop (P5-1 follow-up, 2026-11-19)
+
+**What the data says.** It authors no ground stop.
+
+- `SCItemElevatorParams` (DataCore schema, `Game2.dcb` of LIVE 4.10.2) has a field the earlier dumps left out,
+  `Collision`. It is a strong pointer to `SElevatorBaseCollisionParams` with two subtypes:
+  - `SElevatorBBoxCollisionParams` (`Scale`);
+  - `SElevatorCustomCollisionParams` (`Extent`, `Offset` Vec3).
+
+  The executable names `CSCItemElevator::DoesElevatorCollide` and `CSCItemElevator::FillIntersectionParams : unhandled
+  collision type`. So the game can test a carriage volume for intersection. `Collision` is **null on all 20 lift classes**,
+  the C2's included, and the C2's `.soc` instance does not override it.
+- `SCItemElevatorPathNodeParams` carries only `Type`, `TeleportTimeScale`, the five interactions, `gatewayParams`
+  (`timingInTransit`, `interaction`) and `accessibilityParams`: nothing about the ground, collision or landing gear.
+- The exported stops are unchanged: Floor-003 at z −14.65 m, the same x/y as the other stops.
+- The executable's elevator strings have no "stop on ground contact" setting. Its only elevator cvars are
+  `g_freight_elevator.*` (freight kiosks).
+- Landing gear: the C2's `crus_starlifter_landingsystem` springs are front `lengthTarget` 8.625 (min 7.43, max 9.5) and
+  mains 8.64 (min 7.403, max 9.7). In the game the ship rests on these springs. The viewer poses it on the end of the
+  `Landing_Gear` `Compress` clip (`RestOnLandingGear`). If that end is the spring's minimum, the game ship stands up to about
+  1.2 m higher than the viewer's. The authored stop might then reach the ground there, or even stay above it. Not settled
+  (Q8).
+
+The owner's reading (the travel is over-extended and the game stops the carriage on contact) is therefore code behaviour,
+not data. The intersection test the executable names is the likely mechanism, but the C2's data does not switch it on.
+
+**Rule implemented** (`FSCLiftLegPlan`, `SCVehicleLifts::GroundContact`):
+
+- When a leg starts downward, the box of the carriage's own colliders is swept from where it stands toward the stop.
+  - The sweep is against world collision: `WorldStatic` / `WorldDynamic` components that block the player.
+  - It ignores the vehicle itself (hull, gear, carriage), pawns (the riders), actors attached to the vehicle, anything the
+    box already overlaps, and hits whose normal does not oppose the motion.
+- The first hit above the stop ends the leg there.
+- The profile is made for the shortened distance, so it ramps down onto the surface.
+- The arrival is the stop's own: `Arrived at <N>`, gate, events and `LIFT_ARRIVED … contact=1`.
+- The next leg starts from the contact.
+- When nothing is hit, the authored stop is used.
+- Log: `LIFT_GROUND_CONTACT lift stop authored_z contact_z authored_dist_m dist_m authored_s predicted_s by` (with
+  `carriage_bottom_z_cm`, vehicle frame).
+
+Hold ↔ top is unchanged: no surface lies under an upward leg, and the ship is not ground. The test is
+`SCBridge.Lift.GroundStop`:
+
+- the rule alone: a contact above the stop gives the contact and the recomputed time; unset, at the stop, beyond it or
+  negative gives the authored stop;
+- the lift with a stub surface: hold → ground arrives on it (doors, `Arrived at 0`), ground → hold takes the shortened leg,
+  hold → top is still 4.956 s.
+
+**Run** (`P5_ground_run2.log`, `ue/scripts/rpc/c2-lift.ps1`, shots and `driver.txt` in `out/lifts/ground`).
+`c2-lift.ps1` now stands the player in the middle of the carriage (`OnCarriage`) before "Exit Ship" and before the ride up
+from the ground. In run 1 (`P5_ground_run1.log`) the walk-in ended on the hold's lip (Y −763.8 instead of −784), and the
+player stayed in the hold when the carriage left.
+
+- `LIFT_GROUND_CONTACT stop=0 authored_z=-1465.0 contact_z=-1384.1 authored_dist_m=6.775 dist_m=5.966 authored_s=4.750
+  predicted_s=4.458 by=SCVehicle_0/Mesh_147 (ht_hangar_ship_elev_xl_a_LOD0_GameCollision3) carriage_bottom_z_cm=-1505.6`.
+  The carriage node stops 80.9 cm above the authored stop. Its floor is about 21 cm above the pad, the platform's
+  thickness. Before the fix it was 60 cm below the pad.
+- **The pad beside the carriage** (`sc.FP.Probe` straight down from the pad) is at Z **−1505.59**. The carriage's bottom is
+  at −1505.6: the gap is under 0.1 cm.
+- Legs (`t_leg` vs predicted):
+
+  | Leg | Predicted | `t_leg` |
+  |---|---|---|
+  | hold → top, 7.375 m | 4.956 s | 4.964, 4.957 |
+  | top → hold, 7.375 m | 4.956 s | 4.958, 4.964 |
+  | hold → ground, 5.966 m (was 6.775 m / 4.750 s) | 4.458 s | 4.463, 4.464 |
+  | ground → hold, 5.966 m | 4.458 s | 4.460, 4.465 |
+
+- At the ground stop the player stands on the carriage (`LIFT_WHERE player base=Mesh_3127`, the platform). Stepping off
+  onto the pad drops the capsule 21.6 cm (Z −1393.8 → −1415.4). The ground call brought the carriage back to the same
+  contact. Teleported onto it, the player rode up to the hold.
+- `LIFT_RIDE` on the carriage: 66 of 67 samples at rel_z −785.20 / floor 2.15 cm, one at −785.08 / 2.26. No
+  `FIRST_PERSON_RECOVER`, no stuck.
+- **Astra** (gpt-6.2-astra, high; d2, d4, d5, d6; `out/lifts/ground/astra-ground-check.txt`): **OK**. Nothing sinks into
+  the pad and nothing floats above it. The plinth's lower edge meets the pad, and a step of about 20 cm looks plausible.
+- Tests: `Automation RunTests SCBridge` (`P5_ground_tests.log`) passes 166 of 170, the new `Lift.GroundStop` included. The
+  4 failures are the known `Package.FolderTarImport`, `Player.KitRigAndWeapons`, `Materials.FamilyMapping` and
+  `FirstPerson.SkeletalCollision`.
+
+Q8 (open): where does the game's C2 stand on its gear, and where does its carriage stop on the ground? Does
+`DoesElevatorCollide` run with a null `Collision`? This needs an in-game capture (with Q1).
 
 ### Regressions
 

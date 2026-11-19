@@ -36,6 +36,19 @@ struct SCBRIDGE_API FSCLiftProfile
     ESCLiftSpeedPhase PhaseAt(double T) const;
 };
 
+/** Where one leg ends and how it moves. Rule (WP-P5 ground stop): a leg toward a stop ends early where the carriage first
+ *  meets a blocking surface on its way (ContactTravel: metres along the leg from StartS), and the profile is made for that
+ *  shortened distance, so the carriage still ramps down to rest on the surface. Without a contact inside the leg (unset,
+ *  negative, or at or beyond the stop) the authored stop ends it. The game's data names no ground stop (SCItemElevatorParams
+ *  `Collision` is null on every lift class of LIVE 4.10.2): this is the viewer's reading, see WP-P5 "Ground stop". */
+struct SCBRIDGE_API FSCLiftLegPlan
+{
+    double StartS = 0, EndS = 0, AuthoredDistance = 0, Distance = 0;
+    bool bContact = false;
+    FSCLiftProfile Profile;
+    static FSCLiftLegPlan Make(double StartS, double StopS, TOptional<double> ContactTravel, double MaxSpeed, double EasingDistance);
+};
+
 /** A door the lift drives: its rig and the clip rate (door timing `animation_speed`). */
 struct FSCLiftDoor
 {
@@ -79,6 +92,10 @@ struct FSCLiftHost
     TFunction<ELeg(int32 From, int32 To, FString& OutBy)> SweepLeg;
     /** Deliver again the door deliveries (open verbs) of a request's source interaction; returns the doors started. */
     TFunction<int32(const FString& Source, FName Interaction)> RedeliverDoors;
+    /** The first blocking surface under the carriage on its leg from where it stands toward stop To (world collision; the
+     *  vehicle itself and the carriage's riders excluded): the travel to it in metres along the leg, and what it is. False:
+     *  nothing in the way, or not a leg downward. Unset (tests): the authored stops end every leg. */
+    TFunction<bool(int32 To, double& OutTravel, FString& OutBy)> GroundContact;
 };
 
 class SCBRIDGE_API FSCLift
@@ -105,6 +122,8 @@ public:
     ESCLiftSpeedPhase SpeedPhase = ESCLiftSpeedPhase::None;
     int32 CurrentStop = 0, TargetStop = INDEX_NONE, FromStop = INDEX_NONE;
     double S = 0, V = 0;
+    /** The carriage stands short of CurrentStop, on the surface its last leg met (S is then not the stop's S). */
+    bool bAtContact = false;
     TArray<FSCLiftRequest> Queue;
     double Clock = 0;
 
@@ -146,6 +165,8 @@ public:
 
 private:
     FSCLiftProfile Leg;
+    double LegStartS = 0, LegEndS = 0; // the leg runs from LegStartS to LegEndS (the stop, or the surface it meets first)
+    bool bLegContact = false;
     /** Doors whose last Open/Close found no clip: they cannot move, so they are not waited for. */
     TSet<TWeakObjectPtr<const USCRigComponent>> Inert;
     double LegTime = 0, StateTime = 0, OpenedAt = -1, IdleSince = 0;
