@@ -2,6 +2,7 @@
 #include "CoreMinimal.h"
 #include "SCPackageSource.h"
 #include "Cargo/SCCargoTypes.h"
+#include "SCInteractionRecords.h"
 #include "SCPackageReader.generated.h"
 
 /** `ui_bindings[]` of a child or placement (decomposed-export-contract "UI bindings"): a UI screen the entity carries,
@@ -69,6 +70,13 @@ struct SCBRIDGE_API FSCSceneInstance
     FString EntityId;
     TArray<FString> Links;
     FString LoadoutOwnerEntityId;
+    /** WP-P5 (interior placements): the `.soc` entity name, its interaction links, the entity it rides, its door timing
+     *  and the interaction points of its class. */
+    FString SocEntityName;
+    TArray<FSCInteractionLink> InteractionLinks;
+    FSCParentAttachment Parent;
+    FSCDoorTiming Door;
+    TArray<FSCInteractionPoint> InteractionPoints;
     /** `ui_bindings[]`: the UI screens this entity carries (WP-I1). */
     TArray<FSCUiBinding> UiBindings;
     /** Every image a screen face of this instance may show (FSCUiBinding::PanelImage), decoded with the material
@@ -105,6 +113,9 @@ struct SCBRIDGE_API FSCInterior
     UPROPERTY(BlueprintReadOnly) TArray<FString> RoomVolumeJson;
     UPROPERTY(BlueprintReadOnly) TArray<FSCSceneInstance> Placements;
     TArray<FSCProximitySensor> ProximitySensors;
+    /** WP-P5: geometry-less interactive entities (`entities[]`) and lift carriages (`lifts[]`). */
+    TArray<FSCInteriorEntity> Entities;
+    TArray<FSCLiftRecord> Lifts;
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSubmaterial

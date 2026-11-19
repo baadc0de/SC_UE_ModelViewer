@@ -32,7 +32,10 @@ use std::{
 //     `no_surface` (WP-P4; 27 was a development step of the same change).
 // 29: scene lights carry `specular_multiplier` (miscParams.specularMultiplier, class-inherited, default 1).
 // 30: ui_bindings carry `source_item_type` (the UI owner's AttachDef.Type) and `source_owner_resolved` (WP-I1 review).
-pub const CACHE_FORMAT_VERSION: u32 = 30;
+// 31: interiors carry lifts (`interiors[].lifts[]`), geometry-less interactive entities (`interiors[].entities[]`), and
+//     placements their interaction links, parent attachment, door timing and interaction points; a root item port an
+//     entity occupies is no longer placed a second time (WP-P5).
+pub const CACHE_FORMAT_VERSION: u32 = 31;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

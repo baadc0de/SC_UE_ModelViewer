@@ -61,6 +61,13 @@ FReply SSCViewportInput::OnMouseMove(const FGeometry& Geometry, const FPointerEv
 }
 FReply SSCViewportInput::OnMouseWheel(const FGeometry&, const FPointerEvent& Event)
 {
+    // First person: the wheel is a key-table input (pick among a lift panel's interactions, WP-P5).
+    if (ASCFirstPersonCharacter* FP = Subsystem.IsValid() ? Subsystem->GetFirstPerson() : nullptr)
+    {
+        if (!SCCargoUI::IsMobiGlasOpen(Subsystem.Get()) && Event.GetWheelDelta() != 0)
+            FP->HandleKey(Event.GetWheelDelta() > 0 ? EKeys::MouseScrollUp : EKeys::MouseScrollDown, true);
+        return FReply::Handled();
+    }
     if (ASCViewerPawn* Pawn = Subsystem.IsValid() ? Subsystem->GetViewerPawn() : nullptr) Pawn->Wheel(Event.GetWheelDelta());
     return FReply::Handled();
 }

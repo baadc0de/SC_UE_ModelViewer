@@ -8,6 +8,8 @@ class FJsonObject;
 class SCBRIDGE_API FSCLightImporter
 {
 public:
+    /** Component tag prefix naming the entity an attached light rides (`parent_entity_id`, WP-P5). */
+    static constexpr const TCHAR* RidesTagPrefix = TEXT("SCRides:");
     static void RefreshShadows(ASCVehicle* Vehicle);
     // UE candela for one light state. Packages with the authored light fields (bulb_radius_m, …) use the game
     // renderer's model (FSCStarEngine::PointCandela / PlanarCandela; ue/verification/WP-U3b.md §13); older packages

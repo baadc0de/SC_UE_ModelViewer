@@ -127,6 +127,7 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
         })));
     RegisterFirstPersonCommands();
     RegisterPlayerCommands();
+    RegisterLiftCommands();
 }
 
 namespace
@@ -429,9 +430,13 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
                                          P->GetAttachSocketName().IsNone() ? TEXT("") : *(TEXT("@") + P->GetAttachSocketName().ToString()));
                 if (Rig) break;
             }
-            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PROBE hit=%d dist=%.0f point=%s focus=%d chain=%s"), bHit, Hit.Distance,
+            // WP-P5: the lift panel E would press (its entity and the wheel's pick), when one is focused.
+            FString PanelId;
+            FName Choice;
+            const bool bPanel = C->FocusedPanel(PanelId, Choice);
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PROBE hit=%d dist=%.0f point=%s focus=%d panel=%s choice=%s chain=%s"), bHit, Hit.Distance,
                    C->Vehicle ? *C->Vehicle->GetActorTransform().InverseTransformPosition(Hit.ImpactPoint).ToCompactString() : TEXT("-"),
-                   C->FocusedInteraction(), *Chain);
+                   C->FocusedInteraction(), bPanel ? *PanelId : TEXT("-"), bPanel ? *Choice.ToString() : TEXT("-"), *Chain);
         });
     Add(TEXT("sc.SpawnWhereLooking"), TEXT("sc.SpawnWhereLooking: orbit/fly camera ray -> first person on that surface"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn_where_looking ok=%d"), Weak->SpawnWhereLooking());

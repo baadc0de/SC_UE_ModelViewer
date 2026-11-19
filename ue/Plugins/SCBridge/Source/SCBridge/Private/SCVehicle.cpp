@@ -67,7 +67,7 @@ bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, con
     (P.bPlaying ? Playback : HeldPlayback).Add(MoveTemp(P));
     MarkDirty(Index);
     EvaluateClips();
-    SetActorTickEnabled(!Playback.IsEmpty());
+    UpdateTickEnabled();
     return true;
 }
 bool ASCVehicle::PlayClip(FName Id)
@@ -92,7 +92,7 @@ bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
 {
     return PlayFragmentAt(Fragment, Tag, nullptr);
 }
-bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target)
+bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target, float SpeedScale)
 {
     if (!ClipCatalog) return false;
     struct FOption
@@ -104,19 +104,40 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
     };
     TArray<FOption> Options;
     const uint64 OrderBefore = NextOrder;
+    auto Matches = [&](const FSCClipFragment& F) {
+        return F.Fragment == Fragment && F.OptionWeight > 0 && (Tag.IsNone() || F.Tags.Contains(Tag) || F.FragmentTags.Contains(Tag));
+    };
+    // Geometries that share bone names bind each other's clips (the C2's hold and top lift doors): a rig plays the clips
+    // authored for its own geometry (the clip's owner) when it has any, never another geometry's at random.
+    auto OwnPath = [](FString Path) {
+        Path.ReplaceInline(TEXT("\\"), TEXT("/"));
+        Path.RemoveFromStart(TEXT("Data/"), ESearchCase::IgnoreCase);
+        return Path;
+    };
+    const FString TargetOwner = Target ? OwnPath(Target->OwnerEntity) : FString();
+    auto OwnClip = [&](const FSCImportedClip& C) { return !TargetOwner.IsEmpty() && OwnPath(C.Owner).Equals(TargetOwner, ESearchCase::IgnoreCase); };
+    auto Binds = [&](const FSCImportedClip& C) {
+        return !C.Bindings.IsEmpty() &&
+               (!Target || C.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Target->GetSkeletalMeshAsset(); }));
+    };
+    // An alias keeps metadata but plays its canonical animation; only what would play counts for the preference.
+    auto Alias = [&](const FSCImportedClip& C, const FSCClipFragment& F) {
+        return !F.AnimationNames.Contains(C.Id) && F.AnimationNames.ContainsByPredicate([&](FName Id) {
+            return ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) { return Other.Id == Id; });
+        });
+    };
+    const bool bOwnClips = ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& C) {
+        return Binds(C) && OwnClip(C) && C.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return Matches(F) && !Alias(C, F); });
+    });
     for (int32 Index = 0; Index < ClipCatalog->Clips.Num(); ++Index)
     {
         const auto& C = ClipCatalog->Clips[Index];
-        if (C.Bindings.IsEmpty() || (Target && !C.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Target->GetSkeletalMeshAsset(); }))) continue;
+        if (!Binds(C) || (bOwnClips && !OwnClip(C))) continue;
         for (const auto& F : C.Fragments)
         {
-            if (F.Fragment != Fragment || F.OptionWeight <= 0 || (!Tag.IsNone() && !F.Tags.Contains(Tag) && !F.FragmentTags.Contains(Tag)))
-                continue;
+            if (!Matches(F)) continue;
             // Aliases keep metadata, but play the canonical animation only once.
-            if (!F.AnimationNames.Contains(C.Id) && F.AnimationNames.ContainsByPredicate([&](FName Id) {
-                    return ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) { return Other.Id == Id; });
-                }))
-                continue;
+            if (Alias(C, F)) continue;
             const FString Key = F.OptionId.IsEmpty() ? F.Json : F.OptionId;
             FOption* Option = Options.FindByPredicate([&](const FOption& O) { return O.Key == Key; });
             if (!Option)
@@ -127,7 +148,7 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
                 NewOption.Scopes = F.Scopes;
                 Option = &Options.Add_GetRef(MoveTemp(NewOption));
             }
-            Option->Clips.Add(Index, F.Speed);
+            Option->Clips.Add(Index, F.Speed * SpeedScale);
         }
     }
     // Weighted alternatives compete for scopes; disjoint scope groups can run together.
@@ -199,14 +220,17 @@ void ASCVehicle::ResetPose()
     HeldPlayback.Reset();
     DirtyMeshes.Reset();
     FragmentTargets.Reset();
-    SetActorTickEnabled(false);
+    UpdateTickEnabled();
     for (USCRigComponent* Rig : Rigs)
         Rig->ResetPose();
 }
 void ASCVehicle::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    if (!ClipCatalog || Playback.IsEmpty() || DeltaSeconds <= 0) return;
+    if (DeltaSeconds <= 0) return;
+    // Lifts first (pre-physics, before the riders' movement: FSCLift moves the carriage anchor, doors start here).
+    for (const TSharedPtr<FSCLift>& Lift : Lifts) Lift->Tick(DeltaSeconds);
+    if (!ClipCatalog || Playback.IsEmpty()) { UpdateTickEnabled(); return; }
     for (int32 I = Playback.Num() - 1; I >= 0; --I)
     {
         auto& P = Playback[I];
@@ -223,7 +247,13 @@ void ASCVehicle::Tick(float DeltaSeconds)
         }
     }
     EvaluateClips();
-    SetActorTickEnabled(!Playback.IsEmpty());
+    UpdateTickEnabled();
+}
+void ASCVehicle::UpdateTickEnabled()
+{
+    bool bLifts = false;
+    for (const TSharedPtr<FSCLift>& Lift : Lifts) bLifts |= Lift->NeedsTick();
+    SetActorTickEnabled(!Playback.IsEmpty() || bLifts);
 }
 void ASCVehicle::EvaluateClips()
 {

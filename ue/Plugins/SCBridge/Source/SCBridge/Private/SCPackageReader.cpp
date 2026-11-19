@@ -109,6 +109,153 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     }
     return Matrix(O, MatrixKey, Out.LocalMatrix, Error);
 }
+// WP-P5: interaction wiring of a placement or entity (decomposed-export-contract "Interaction wiring, entities and lifts").
+double Number(const FReaderObject& O, const TCHAR* Key, double Default)
+{
+    double V = Default;
+    return O && O->TryGetNumberField(Key, V) && FMath::IsFinite(V) ? V : Default;
+}
+TArray<FSCInteractionLink> InteractionLinks(const FReaderObject& O)
+{
+    TArray<FSCInteractionLink> Out;
+    for (const auto& V : ReaderArray(O, TEXT("interaction_links")))
+        if (const FReaderObject L = V && V->Type == EJson::Object ? V->AsObject() : nullptr)
+            Out.Add({FName(*String(L, TEXT("source_slot"))), String(L, TEXT("target_entity_id")), FName(*String(L, TEXT("target_slot")))});
+    return Out;
+}
+FSCParentAttachment ParentAttachment(const FReaderObject& O)
+{
+    FSCParentAttachment Out;
+    const FReaderObject* P;
+    if (O && O->TryGetObjectField(TEXT("parent_attachment"), P))
+    {
+        Out.ParentEntityId = String(*P, TEXT("parent_entity_id"));
+        Out.AttachmentType = String(*P, TEXT("attachment_type"));
+        Out.AttachmentTarget = String(*P, TEXT("attachment_target"));
+    }
+    return Out;
+}
+TArray<FSCInteractionPoint> InteractionPoints(const FReaderObject& O)
+{
+    TArray<FSCInteractionPoint> Out;
+    for (const auto& V : ReaderArray(O, TEXT("interaction_points")))
+    {
+        const FReaderObject P = V && V->Type == EJson::Object ? V->AsObject() : nullptr;
+        if (!P) continue;
+        FSCInteractionPoint& Point = Out.AddDefaulted_GetRef();
+        Point.HelperName = String(P, TEXT("helper_name"));
+        Point.Radius = float(Number(P, TEXT("radius"), 0));
+        FString Ignored;
+        Point.bHasHelperTransform = P->HasTypedField<EJson::Array>(TEXT("helper_transform")) && Matrix(P, TEXT("helper_transform"), Point.HelperTransform, Ignored);
+        for (const auto& IV : ReaderArray(P, TEXT("interactions")))
+            if (const FReaderObject I = IV && IV->Type == EJson::Object ? IV->AsObject() : nullptr)
+            {
+                FSCPointInteraction& Interaction = Point.Interactions.AddDefaulted_GetRef();
+                Interaction.Name = FName(*String(I, TEXT("name")));
+                Interaction.DisplayName = String(I, TEXT("display_name"));
+                I->TryGetBoolField(TEXT("primary"), Interaction.bPrimary);
+            }
+    }
+    return Out;
+}
+void ReadInteractions(const FReaderObject& O, FSCSceneInstance& Out)
+{
+    Out.SocEntityName = String(O, TEXT("entity_name"));
+    Out.InteractionLinks = InteractionLinks(O);
+    Out.Parent = ParentAttachment(O);
+    Out.InteractionPoints = InteractionPoints(O);
+    const FReaderObject* Door;
+    if (O && O->TryGetObjectField(TEXT("door"), Door))
+    {
+        Out.Door.bValid = true;
+        double Speed = 0;
+        Out.Door.bSpeedKnown = (*Door)->TryGetNumberField(TEXT("animation_speed"), Speed) && FMath::IsFinite(Speed);
+        Out.Door.AnimationSpeed = Out.Door.bSpeedKnown ? float(Speed) : 1.f;
+        (*Door)->TryGetBoolField(TEXT("use_auto_close_delay"), Out.Door.bUseAutoCloseDelay);
+        Out.Door.AutoCloseDelay = float(Number(*Door, TEXT("auto_close_delay"), 0));
+    }
+}
+template <typename FWarn>
+void ReadLiftRecords(const FReaderObject& O, FSCInterior& I, FWarn&& Warn)
+{
+    FString Detail;
+    for (const auto& V : ReaderArray(O, TEXT("entities")))
+    {
+        const FReaderObject E = V && V->Type == EJson::Object ? V->AsObject() : nullptr;
+        if (!E) continue;
+        FSCInteriorEntity Entity;
+        if (!Matrix(E, TEXT("transform"), Entity.LocalMatrix, Detail)) { Warn(TEXT("interior entity"), Detail); Detail.Reset(); continue; }
+        Entity.EntityId = String(E, TEXT("entity_id"));
+        Entity.EntityName = String(E, TEXT("entity_name"));
+        Entity.EntityClass = String(E, TEXT("entity_class"));
+        Entity.Kind = String(E, TEXT("kind"));
+        for (const auto& L : ReaderArray(E, TEXT("links"))) if (L->Type == EJson::String) Entity.Links.Add(L->AsString());
+        Entity.InteractionLinks = InteractionLinks(E);
+        Entity.Parent = ParentAttachment(E);
+        Entity.InteractionPoints = InteractionPoints(E);
+        for (const auto& TV : ReaderArray(E, TEXT("traversal_links")))
+            if (const FReaderObject T = TV && TV->Type == EJson::Object ? TV->AsObject() : nullptr)
+                Entity.TraversalLinks.Add({FName(*String(T, TEXT("local_interaction"))), String(T, TEXT("item_port_name")),
+                                           FName(*String(T, TEXT("linked_interaction_name")))});
+        I.Entities.Add(MoveTemp(Entity));
+    }
+    for (const auto& V : ReaderArray(O, TEXT("lifts")))
+    {
+        const FReaderObject L = V && V->Type == EJson::Object ? V->AsObject() : nullptr;
+        if (!L) continue;
+        FSCLiftRecord Lift;
+        Lift.EntityId = String(L, TEXT("entity_id"));
+        Lift.EntityName = String(L, TEXT("entity_name"));
+        Lift.EntityClass = String(L, TEXT("entity_class"));
+        Lift.GridGeometry = String(L, TEXT("grid_geometry"));
+        Lift.RestNodeId = String(L, TEXT("rest_node_id"));
+        const FReaderObject* P;
+        if (L->TryGetObjectField(TEXT("params"), P))
+        {
+            Lift.MaxSpeed = float(Number(*P, TEXT("max_speed"), -1));
+            Lift.EasingDistance = float(Number(*P, TEXT("easing_distance"), -1));
+            Lift.OpenWaitTime = float(Number(*P, TEXT("open_wait_time"), -1));
+            Lift.QueueWaitTime = float(Number(*P, TEXT("queue_wait_time"), -1));
+            Lift.IdlingPeriod = float(Number(*P, TEXT("idling_period"), -1));
+            (*P)->TryGetBoolField(TEXT("slow_down_at_bends"), Lift.bSlowDownAtBends);
+            Lift.OpenInnerDoorInteraction = FName(*String(*P, TEXT("open_inner_door_interaction")));
+            Lift.OpenInnerDoorFinishedInteraction = FName(*String(*P, TEXT("open_inner_door_finished_interaction")));
+            Lift.CloseAllDoorsInteraction = FName(*String(*P, TEXT("close_all_doors_interaction")));
+            Lift.CloseInnerDoorFinishedInteraction = FName(*String(*P, TEXT("close_inner_door_finished_interaction")));
+        }
+        for (const auto& SV : ReaderArray(L, TEXT("stops")))
+        {
+            const FReaderObject S = SV && SV->Type == EJson::Object ? SV->AsObject() : nullptr;
+            if (!S) continue;
+            FSCLiftStopRecord Stop;
+            Stop.Index = int32(Number(S, TEXT("index"), Lift.Stops.Num()));
+            Stop.NodeEntityId = String(S, TEXT("node_entity_id"));
+            Stop.NodeEntityName = String(S, TEXT("node_entity_name"));
+            Stop.Kind = String(S, TEXT("kind"));
+            const auto& Pos = ReaderArray(S, TEXT("position"));
+            if (Pos.Num() == 3) Stop.Position = FVector(Pos[0]->AsNumber(), Pos[1]->AsNumber(), Pos[2]->AsNumber());
+            for (const auto& D : ReaderArray(S, TEXT("landing_door_ids"))) if (D->Type == EJson::String) Stop.LandingDoorIds.Add(D->AsString());
+            Stop.TeleportTimeScale = float(Number(S, TEXT("teleport_time_scale"), 1));
+            Stop.GatewayTimingInTransit = float(Number(S, TEXT("gateway_timing_in_transit"), -1));
+            Stop.GatewayInteraction = String(S, TEXT("gateway_interaction"));
+            const FReaderObject* Access;
+            if (S->TryGetObjectField(TEXT("accessibility"), Access))
+            {
+                Stop.AccessibilityKind = String(*Access, TEXT("kind"));
+                Stop.AccessibleTimingInTransit = float(Number(*Access, TEXT("accessible_timing_in_transit"), -1));
+            }
+            Lift.Stops.Add(MoveTemp(Stop));
+        }
+        for (const auto& R : ReaderArray(L, TEXT("riders"))) if (R->Type == EJson::String) Lift.Riders.Add(R->AsString());
+        // The motion profile needs both speeds (a lift without them cannot move: reported, not invented).
+        if (Lift.Stops.Num() < 2 || Lift.MaxSpeed <= 0 || Lift.EasingDistance < 0)
+        {
+            Warn(TEXT("lift"), FString::Printf(TEXT("%s: fewer than two stops or no MaxSpeed/EasingDistance; not operable"), *Lift.EntityId));
+            continue;
+        }
+        I.Lifts.Add(MoveTemp(Lift));
+    }
+}
 }
 FMatrix FSCPackageReader::PortOffset(const TSharedPtr<FJsonObject>& Port)
 {
@@ -306,6 +453,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             Placement.EntityId = String(P->AsObject(), TEXT("entity_id"));
             Placement.LoadoutOwnerEntityId = String(P->AsObject(), TEXT("loadout_owner_entity_id"));
             for (const auto& L : ReaderArray(P->AsObject(), TEXT("links"))) if (L->Type == EJson::String) Placement.Links.Add(L->AsString());
+            ReadInteractions(P->AsObject(), Placement);
             I.Placements.Add(MoveTemp(Placement));
         }
         for (const auto& S : ReaderArray(O, TEXT("proximity_sensors")))
@@ -330,6 +478,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             if (Sensor.Extent.IsNearlyZero() || Sensor.Links.IsEmpty()) { Warn(TEXT("proximity sensor"), TEXT("no box volume or no linked door: ") + Sensor.EntityId); continue; }
             I.ProximitySensors.Add(MoveTemp(Sensor));
         }
+        ReadLiftRecords(O, I, Warn);
         SCCargoRecords::AddContainers(O, Out.Interiors.Num(), Out, Warn);
         Out.Interiors.Add(MoveTemp(I));
     }

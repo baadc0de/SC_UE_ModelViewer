@@ -166,7 +166,7 @@ int32 ASCVehicle::NearestDoor(FVector Position, float Reach) const
     for (int32 I = 0; I < Doors.Num(); ++I)
     {
         const auto& D = Doors[I];
-        if (!D.Rig) continue;
+        if (!D.Rig || LiftDrivenRigs.Contains(D.Rig.Get())) continue;
         const double Candidate = FVector::DistSquared(Position, D.Rig->GetSocketLocation(D.Joint));
         if (Candidate <= Distance) { Distance = Candidate; Best = I; }
     }
@@ -194,7 +194,7 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
             if (!Rig) Socket = C->GetAttachSocketName();
         }
         TArray<int32> OnRig;
-        for (int32 I = 0; Rig && I < Doors.Num(); ++I)
+        for (int32 I = 0; Rig && !LiftDrivenRigs.Contains(Rig) && I < Doors.Num(); ++I)
             if (Doors[I].Rig == Rig) OnRig.AddUnique(I);
         if (OnRig.Num() == 1) return OnRig[0]; // the entity is the interaction (a door, a seat)
         if (OnRig.Num() > 1)
@@ -247,7 +247,8 @@ void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
         for (const auto& Rig : Sensor.Doors)
         {
             const int32 Door = DoorForRig(Rig.Get());
-            if (Door == INDEX_NONE) continue;
+            // A lift's doors open and close with its carriage (WP-P5): a sensor reopening one would undo the handshake.
+            if (Door == INDEX_NONE || LiftDrivenRigs.Contains(Rig.Get())) continue;
             FSensorDoorState& State = SensorDoorStates.FindOrAdd(Door);
             State.LastInside = Now;
             State.ExitDelay = FMath::Max(State.ExitDelay, Sensor.ExitDelay);

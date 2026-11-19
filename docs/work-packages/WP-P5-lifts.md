@@ -571,3 +571,206 @@ target/debug/starbreaker.exe nmc dump <CRUS_Starlifter_Elevator_Platform.cga and
 
 Package evidence: `out/screens-datamine/c2` (C2 `scene.json`, 2026-11-19), `out/screens-datamine/hangar`
 (`hangar_xltop_001`), `out/k1e/pkg` (lrgtop clip sidecars). Findings log: `out/lifts-datamine/NOTES.md`.
+
+## Result (P5-1)
+
+**State (2026-11-19):** the C2 Hercules lift works in first person from its real call buttons and floor panel, hold ↔
+top deck and down through the belly hatch to the ground and back. Exporter on submodule branch `scviewer/lifts`
+(`a95900c0`, review fixes `2c99e25c`), cache format 31. Nothing committed in this repo.
+
+### Exporter (`vendor/StarBreaker`, contract "Interaction wiring, entities and lifts")
+
+- **Placements** carry `entity_name`, `interaction_links[] {source_slot, target_entity_id, target_slot}`
+  (`InteractionLinkController`, authored order), `parent_attachment {parent_entity_id, attachment_type,
+  attachment_target, offset_*}`, `door {animation_speed, use_auto_close_delay, auto_close_delay}` (class
+  `SCItemDoorParams` with the instance's `PropertiesDataCore` overrides, found by component `__type`) and
+  `interaction_points[] {helper_name, radius, helper_transform, interactions[{name, display_name_key, display_name,
+  primary}]}` (English `global.ini`, loaded once per build on first use) (`socpak/entity_interactions.rs`,
+  `pipeline/interior_interactions.rs`).
+- **`interiors[].entities[]`**: geometry-less interactive entities, by component: path nodes
+  (`SCItemElevatorPathNodeParams`), transit gateways and limbo nodes (`TransitGatewayParams` / `TransitLimboNodeParams`;
+  `TransitGateway` and `TransitManager` left the class skip list, they have no geometry), and helper-only entities that
+  offer interactions and send links (the C2's two ground call buttons, with their `$IP_Button1` frames from the NMC).
+  Each carries its `traversal_links[]` (`SEntityTraversingTreeParams`, the local interaction resolved: Floor-003
+  `GatewayOpen` → `hardpoint_Elevator_Exterior_Door` `OpenSelf`).
+- **`interiors[].lifts[]`** (`pipeline/lifts.rs`): per `SCItemElevatorParams` carriage the six values and four
+  interaction names, `grid_geometry`, `rest_node_id`, `stops[]` in chain order (kind from the node's `Type`, position,
+  landing doors, teleport scale, gateway timing and interaction, accessibility) and `riders[]`. A branched, cyclic or
+  disconnected node graph is logged and that lift is not exported.
+- **Bug fixed (test first):** a root container `ItemPort` that a `.soc` entity occupies (`TileAttachmentParams`) was
+  placed a second time from the port. The C2 had a second, static carriage 1 m below the hold, in the shaft.
+- Tests: `socpak::lift_tests` (7, from the C2's own `.soc` entities: 13 links / 11 distinct, parents, overrides,
+  traversal, tile ports, the port duplicate), `pipeline::lifts::tests` (the chain rule: order, branched, cyclic, two
+  lifts; and `c2_lift_resolves_from_game_data` on LIVE 4.10.2: three stops ground / hold / top, rest Floor-001, riders
+  gate and panel, landing doors, params, grid, ground buttons as interaction entities showing "Call Elevator", the floor
+  panel's Top Deck / Lower Deck / Exit Ship, one carriage), `pipeline::interior_interactions::tests` (3).
+
+### Viewer (`ue/Plugins/SCBridge`)
+
+- `SCInteractionRecords.h`, `SCPackageReader.*`: the new fields (a lift without two stops or speeds is reported and
+  left out).
+- `SCLift.h/.cpp`: `FSCLiftProfile` (the constant-acceleration reading; `LIFT_PROFILE` states it in the log), `FSCLift`
+  (model, queue, door handshake, gateway wait, events `OnRequested` … `OnPhase`, typed and slot inputs per §6) and
+  `FSCInteractionNetwork` (link routing, door verbs, stop slots).
+- `SCVehicleLifts.*`: assembly at import (moving anchor `Lift_<id>`, carriage and riders re-parented keeping their world
+  transforms, gate / landing / gateway doors, stop names from the panel interactions routed to them, lift panels) and
+  the dispatcher `ASCVehicle::SendInteraction`.
+- `SCVehicle.*`: lifts tick first; `PlayFragmentAt` takes a speed scale (`DoorAnimationSpeed`) and **prefers the clips
+  authored for the target rig's own geometry**. This was a bug (test first): the C2's hold and top lift doors share bone
+  names, so each played the other's clip at random, and the hold door opened in 1.67 s with its cage left closed,
+  blocking the way in.
+- `SCImportJob.cpp`: an entity that is a lift is not a door pad (`DOOR_LINKS panels=34 sensors=8`, one control fewer
+  than before: carriage → gate). `SCExploration.cpp`: doors a lift drives are not toggled by E (in the first run E on the
+  top landing door opened it onto the empty shaft). `SCInstancing.*`: parts under a lift anchor are not instanced.
+- `SCFirstPersonCharacter.*`, `UI/SSCViewportInput.cpp`: E on a lift panel sends its chosen interaction; the HUD lists
+  the point's interactions and the mouse wheel picks one; `LIFT_RIDE`; the character ticks after the vehicle.
+- `SCLiftCommands.cpp` (`sc.Lift.*`), `SCRpcSubsystem.cpp` (`/wait until=lift_idle`, `lifts[]` in `/state`),
+  `SCViewerAutomation.cpp` (`FP_PROBE … panel= choice=`), `ue/scripts/rpc/c2-lift.ps1` (the scripted run below). The
+  route runner has no "wait for the lift", so the run is an RPC driver rather than `ue/scripts/routes/c2-lift.txt`, and
+  the evidence is here rather than in `ue/verification/WP-P5.md`.
+- Tests: `SCBridge.Lift.Profile`, `.StopOrder`, `.QueueAndDoors`, `.Dispatch`, `SCBridge.Rig.FragmentPrefersOwnClip`.
+
+### Tests
+
+| Suite | Result |
+|---|---|
+| `cargo test -p starbreaker-3d --lib` | 966 passed, 4 ignored (the new lift tests included; `c2_lift_resolves_from_game_data` ran against LIVE 4.10.2) |
+| `cargo test -p scviewer-core` | 52 passed, 2 ignored |
+| `Automation RunTests SCBridge` (`P5_tests_full.log`) | 165 of 169 pass; the 4 failures are the known `Package.FolderTarImport`, `Player.KitRigAndWeapons`, `Materials.FamilyMapping`, `FirstPerson.SkeletalCollision`. New: `SCBridge.Lift.Profile`, `.StopOrder`, `.QueueAndDoors`, `.Faults`, `.Dispatch`, `SCBridge.Rig.FragmentPrefersOwnClip` (failed 5/16 and 7/16 before its fix) |
+
+### Scripted first-person run (C2 in `hangar_xltop_001`, `ue/scripts/rpc/c2-lift.ps1`)
+
+The final build's run is `P5_run6.log` (shots in `out/lifts/run4`, driver output `out/lifts/run4/driver.txt`); the run
+before the review fixes (`P5_run3.log`, shots `out/lifts/run3-before-review`) gave the same sequence and timings.
+
+`LIFT_LIST`: one lift, stops 0 "Exit Ship" z_cm −1465, 1 "Lower Deck" −787.5, 2 "Top Deck" −50; rests at the hold
+(`LIFT_BUILD … rest=1 riders=2 moved=3 gate=1 gateways=1 panels=3`).
+
+| Leg (`P5_run6.log`) | Predicted | `t_leg` | Δ max |
+|---|---|---|---|
+| hold → top, 7.375 m | 4.956 s | 4.963, 4.959, 4.967 | 0.011 s |
+| top → hold | 4.956 s | 4.959, 4.960 | 0.004 s |
+| hold → ground, 6.775 m | 4.750 s | 4.756, 4.751 | 0.006 s |
+| ground → hold | 4.750 s | 4.754, 4.755 | 0.005 s |
+| top → ground, 14.15 m | 6.957 s | 6.958 | 0.001 s |
+
+1. Hold, the real call button by crosshair (`FP_PANEL_PRESS … Descend`): the carriage is there, so only the gate and
+   the hold door open (2.67 s, the hold door's own 80-frame clip). Walked in; the base is the carriage.
+2. Floor panel, "Top Deck" (primary): after `QueueWaitTime` the gate and the hold door close, the carriage climbs, the
+   gate and the top door open. The player's Z rose 737.5 cm (−797.19 → −59.69). Walked out onto the top deck.
+3. `sc.Lift.Request 0 1` sent it down empty; the real top call button brought it back up and opened it.
+4. Wheel to "Lower Deck" and ridden down; wheel to "Exit Ship": `RequestSurface` → carriage `From Elevator call 0` and
+   hatch `Open`. The hatch's 6.67 s ended before the doors had closed, so the gateway check passed at once; down to the
+   ground, `FP_GRID inside=0` at Z −1150 on the way. Stepped off onto the hangar floor.
+5. Carriage sent up (`Arrived at 1` → hatch `Close`), doors closed, then the ground call (`sc.Lift.Send
+   <Buttons_Exterior-000> Descend` → Floor-003 `DescentRequest` + hatch `Open`): **`WaitingForGateway` 6.67 s**
+   (136.902 → 143.571) for the hatch, then down. Ridden back up to "Lower Deck"; `Arrived at 1` closed the hatch.
+6. After the review fixes, a ground call during a hold → top leg: `Arrived at 2` closed the hatch, the queued ground
+   request's own link opened it again (`LINK_REDELIVER`, `LIFT_GATEWAY reopened=1`), and the carriage went top → ground.
+
+**Ride check** (`LIFT_RIDE`, once a second): on every leg the base stayed the carriage platform
+(`CRUS_Starlifter_Elevator_Platform`), with the capsule's feet −785.20 … −786.11 cm relative to the carriage anchor and
+the floor distance 2.15 cm on every sample while moving (run 3: −785.15 … −786.28 and 1.97 … 2.19); no
+`FIRST_PERSON_RECOVER`, no stuck. The only other bases were walked on: the hold threshold and the top landing door's sill,
+and the hangar pad at the ground (below).
+
+**Astra** (gpt-6.2-astra, high, the 16 shots of run 3 in `out/lifts/run3-before-review`, answer in
+`out/lifts/astra-verdict.txt`): the motion
+reads correctly (rails and pedestal fixed to the rider, the shaft passing, nothing left behind at a landing); the landing
+door states are sensible and the hatch is open from below; no player or carriage passes through the hull, the hatch or a
+landing door. It could not make out a closed carriage gate in the travel shots, and flagged **d4: the carriage at the
+ground stop sits in the hangar floor**.
+
+**Findings.**
+
+- **The ground stop is 60 cm below the hangar floor.** The node is at z −14.65 m. In the viewer's landed pose (gear
+  compressed, on the xltop ship-elevator pad `ht_hangar_ship_elev_xl_a`) the pad surface is at about −14.05 m, so the
+  carriage stops 60 cm into the pad and the player at the ground stands on the pad above it; the rising carriage lifts
+  them off it. Not changed: nothing in the data says where the game stops the carriage on the ground. An in-game capture
+  of the C2's ground stop is needed (with Q1).
+- **R3 (hull over the shaft)** did not occur: no hull collider caps the belly opening, and the rider passes the hatch
+  plane on the carriage.
+- The carriage gate (`CRUS_Starlifter_Elevator_Inner_Gate`, 15 frames on `walltop`) closes and opens with the carriage
+  (`LIFT_DOOR role=gate`), but is not distinct in the stills.
+
+### Regressions
+
+On the final build (`P5_reg2_*.log`; the pre-review build gave the same numbers, `P5_reg_*.log`):
+
+- **`DOOR_LINKS panels=34 sensors=8`**: one control fewer than WP-I1's 35 (the carriage → gate), nothing else.
+  `FP_DOOR_LIST` still has 34 doors.
+- **`c2-ramp-walk-in`**: ramp foot X −4796, on the ramp −3090, hold **−1386.1** (WP-P4: −1388), back out −6885 (−6887),
+  in again −1385.9 (−1387), ramp shut: stopped at −3142.5 (−3144).
+- **`cutlass-ramp-to-cockpit`**: bulkhead −105.3 (WP-P4: −109), cockpit **1064.77** (1064.77), the second noclip exit
+  refused as before.
+- **`cargo-c2`** (scenario `c2_hangar`): job 1 Done, 3 of 3 moves (141.8 s), after four `load_turned` searches ended
+  `start_enclosed` at the hangar's freight elevator (start X 11675 … 12175, Y −11700, blocked by the hangar's instanced
+  game colliders) and were replanned; job 2 was still moving when the route ended. Both runs identical. Not attributed to
+  P5: the failing leg starts in the hangar, whose export is identical before and after this slice (5031 placements, no
+  difference), the environment opens its grids through `PlayClipAt` (not the fragment path changed here), and the last
+  clean `cargo-c2` (WP-P4, 2026-11-15) predates nine cargo and drone commits (WP-K1 … K4). A run of `cargo-c2` on the
+  base commit would settle it; not done.
+- The carriage is movable but at rest after load (`LIFT_LIST … at=1 state=Idle`), and the hangar has no lifts.
+
+### Review
+
+Terra (gpt-6.1-terra, xhigh) and Astra (gpt-6.2-astra, high) on `out/lifts/review/{repo,submodule}.diff` (answers in
+`out/lifts/review/terra-review.md`, `astra-code-review.md`). Fixed once:
+
+- **The leg check** (both, high): the span test counted only the linked gateway doors. Now every door of the vehicle whose
+  origin lies in the leg's path (the box of the carriage's colliders from start to end, the lift's own doors excepted)
+  decides: closed blocks, playing waits, open is clear. A true shape sweep was tried and dropped: the carriage colliders
+  are trimeshes (no shape sweep), the box sweep hit the shaft's own rear wall above the hold, and a door rig's colliders
+  include its fixed parts (the hatch's guide rails run up the shaft), so it blocked hold → top and top → hold. Hull or
+  cargo obstacles in a shaft are not detected (low, below).
+- **A ground call lost to `Arrived at 2`** (Astra, high): a closed gateway door in the path is opened again once by the
+  door deliveries of the queued requests' own links (`LINK_REDELIVER`, `LIFT_GATEWAY`); checked in the game (ground call
+  during hold → top: the hatch reopened at the top and the carriage went down, `t_leg` 6.958 s vs 6.957 s).
+- **Leaving with a door open** (Astra, high): before a leg the gate and the stop's landing door must be closed (closed
+  if needed); a door that stays open blocks it (`reason=door_did_not_close`).
+- **A door without a clip strands the lift** (both, high): such a door is not waited for (`played=0`); one stuck open
+  blocks the leg and the lift stands open. Test `SCBridge.Lift.Faults`. A landing door without a placed rig is reported
+  at build.
+- **Sensors reopening lift doors** (Terra, high): proximity sensors skip the doors a lift drives.
+- **`CancelStop` during the gateway wait** (both, medium): the chosen leg is dropped (test).
+- **`lift_idle` while the hatch still moves** (Astra, medium): gateway doors count.
+- **A closing door reversed mid-stroke** (Astra, medium): the doors are not reopened while they close (a new clip
+  starts at its far end); a call at the stop is served after.
+- **Rider hierarchy** (both, medium): each rider hangs on its own parent (the carriage or another rider), at the named
+  socket when the parent is a rig. **Riding lights** (Terra, medium): lights carry `parent_entity_id` (exporter) and are
+  re-parented with the carriage (`LIFT_BUILD lights=`; none on the C2).
+- **Port dedup** (Terra, medium): a port is dropped only once its `.soc` occupant was placed.
+- **Instance interaction-point overrides** (Astra, medium): an empty `Interactions` array removes that point (the hatch's
+  point 0); a replacing override is logged.
+- **Gateway contract dropped by the reader** (Astra, medium): traversal links, gateway interaction and accessibility are
+  read; traversal links are logged as unresolved (`LIFT_TRAVERSAL … reason=item_port_not_exported`, Q4).
+- **Clip-owner preference vs aliases** (Astra, medium): the preference is taken among the options that would play.
+- **Door timing invented** (Astra, medium): absent or non-numeric values are `null` in the export and reported at build;
+  the clip then plays at its own rate.
+- **Repeated containers** (Astra, medium): unique anchor names; an id found in several interiors is reported and the
+  first is used (panels send in their own interior).
+
+Not fixed: **cooked builds** (Astra, high; the brief's R7): `cook_ships.py` bakes rigs and clears the clip catalogue, and
+the lift's assembly is runtime state, so a cooked C2 has a static lift. That needs the lift inputs serialised into the
+cook and rebuilt on load: a slice of its own, before a cooked C2 is shown.
+
+Lows (open):
+
+- The leg check counts doors only (by origin in the path box); static geometry or cargo in a shaft is not an obstacle.
+- Cancelling the target during `Moving` is not defined (the leg completes); a request made during a leg is served after
+  it (no stop at a passed requested stop).
+- `SendInteraction(id)` without an interior picks the first interior holding the id (reported when ambiguous).
+- An instance override that replaces a point's interactions with entries is not applied (logged).
+- `FP_CMD interact` still logs the focused door after a panel press (the `FP_PANEL_PRESS` line is the press).
+- The mouse wheel was exercised through `sc.FP.Key MouseScrollDown`, not a physical wheel.
+
+### Not covered
+
+- Hangar platforms, transit gateways (exported, not used by the viewer), the P5-2 lifts (600i, 890J, waypoint and
+  teleport nodes, `Request descent from N`, `ElevatorArrived`), audio and effect tags (`OnPhase` fires, nothing listens).
+- The Q1–Q3 readings (profile shape, dwell and batching, `timingInTransit`) are unverified against the game.
+- The ground call button has no geometry: it is pressed with `sc.Lift.Send` until WP-I1 makes helper-only panels
+  pressable (its `helper_transform` is exported).
+- A request made during a leg is served after the leg: the carriage does not stop at a requested stop it passes.
+- Cooked builds (R7): the ship cook bakes rigs and clears the clip catalogue, and the lift is runtime state, so a cooked
+  C2 has a static lift (review, not fixed).

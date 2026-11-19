@@ -267,6 +267,9 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         Vehicle->Lights.Add(Light);
         Light->SetMobility(EComponentMobility::Movable);
         Light->ComponentTags.Add(FName(*Name));
+        // The entity an attached light rides (a lift carriage re-parents it, WP-P5).
+        if (const FString Rides = LightString(J, TEXT("parent_entity_id")); !Rides.IsEmpty())
+            Light->ComponentTags.Add(FName(*(FSCLightImporter::RidesTagPrefix + Rides)));
         FSCImportedLightState State;
         State.Component = Light;
         State.Name = Name;

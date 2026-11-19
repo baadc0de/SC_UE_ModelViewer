@@ -4,6 +4,7 @@
 // game-thread textures/MIDs) -> Assembling (components, lights, publish).
 #include "SCImportJob.h"
 #include "SCInstancing.h"
+#include "SCVehicleLifts.h"
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
@@ -1362,11 +1363,13 @@ void FSCImportJob::FState::Assemble()
                 FEntity Placed = Place(P, Container, bHelper, false);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
             }
-        // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel.
+        // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel. A lift carriage links
+        // its gate (a door) but operates it itself: an entity that is a lift is not a pad (WP-P5).
+        const TSet<FString> Carriages = SCVehicleLifts::CarriageIds(Interior);
         for (const auto& P : Interior.Placements)
         {
             const FEntity* Panel = ById.Find(P.EntityId);
-            if (!Panel || !Panel->Anchor) continue;
+            if (!Panel || !Panel->Anchor || Carriages.Contains(P.EntityId)) continue;
             TArray<FString> Targets = P.Links;
             if (!P.LoadoutOwnerEntityId.IsEmpty()) Targets.Add(P.LoadoutOwnerEntityId);
             for (const FString& Target : Targets)
@@ -1375,6 +1378,12 @@ void FSCImportJob::FState::Assemble()
                     V->DoorControls.Add(Panel->Anchor, Door->Rig);
                     break;
                 }
+        }
+        // WP-P5: the interior's interaction links and lifts (carriage and riders re-parented under a moving anchor).
+        {
+            TMap<FString, FSCLiftBuildPart> Parts;
+            for (const auto& [Id, Placed] : ById) Parts.Add(Id, {Placed.Anchor, Placed.Rig});
+            SCVehicleLifts::BuildInteriorLifts(V, InteriorIndex, Interior, Container, bHelper, Parts);
         }
         // WP-K1: the interior's inventory containers in its placement frame; the owner rig is the first linked entity's.
         for (int32 C = 0; C < Manifest.InventoryContainers.Num(); ++C)

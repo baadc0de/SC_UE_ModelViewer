@@ -8,6 +8,7 @@
 #include "SCLightAreas.h"
 #include "UObject/ObjectKey.h"
 #include "SCExploration.h"
+#include "SCLift.h"
 #include "SCVehicle.generated.h"
 class UTexture2D;
 class UMaterialInstanceDynamic;
@@ -71,7 +72,45 @@ public:
     int32 DoorForRig(const USCRigComponent* Rig) const;
     /** Whether the last tag played for Fragment on Rig (nullptr: the untargeted orbit-UI toggle) is Open. */
     bool IsFragmentOpen(FName Fragment, const USCRigComponent* Rig = nullptr) const;
-    bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target);
+    /** SpeedScale multiplies the fragment's own clip speed (a door's DoorAnimationSpeed). */
+    bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target, float SpeedScale = 1.f);
+
+    // ------------------------------------------------------------------------------------------ WP-P5 lifts and links
+    /** One lift per package `lifts[]` record, ticked by the vehicle. */
+    TArray<TSharedPtr<FSCLift>> Lifts;
+    /** Exported interaction links by interior, and what each entity is (door, carriage, stop). */
+    FSCInteractionNetwork Interactions;
+    /** A panel that operates a lift (its links reach a carriage or a stop): the press path until WP-I1 has its own. */
+    struct FLiftPanel
+    {
+        int32 Interior = INDEX_NONE;
+        FString EntityId, Label;
+        TArray<FSCPointInteraction> Choices; // the interaction point's interactions that send a link, in authored order
+    };
+    TMap<TWeakObjectPtr<const USceneComponent>, FLiftPanel> LiftPanels;
+    /** Doors a lift opens and closes itself (its gate and landing doors): not toggled by E (FindInteraction / NearestDoor),
+     *  as the C2's lift doors offer the player no interaction of their own. sc.FP.Door still drives them. */
+    TSet<TWeakObjectPtr<const USCRigComponent>> LiftDrivenRigs;
+    /** WP-P5 §6: follow SourceEntityId's exported links whose source slot is Interaction and deliver each target slot to its
+     *  target (a lift carriage or stop, or a door). Returns the deliveries handled. The first interior holding the id. */
+    int32 SendInteraction(const FString& SourceEntityId, FName Interaction);
+    int32 SendInteractionIn(int32 Interior, const FString& SourceEntityId, FName Interaction);
+    /** Nesting of SendInteractionIn (a lift's own events are sent while a delivery runs); bounds link cycles in the data. */
+    int32 SendDepth = 0;
+    /** The lift panel under the view ray (its anchor owns the hit part), or null. */
+    const FLiftPanel* FindLiftPanel(FVector Eye, FVector Direction, float Reach, const AActor* Ignore) const;
+    /** WP-P5 section 5 step 3: which door stands in lift LiftIndex's leg From -> To (a sweep of the carriage's collision box). */
+    FSCLiftHost::ELeg SweepLiftLeg(int32 LiftIndex, int32 From, int32 To, FString& OutBy);
+    /** Deliver again the opening door deliveries of a source's interaction (a queued request's gateway); returns the doors started. */
+    int32 RedeliverDoorLinks(int32 Interior, const FString& SourceEntityId, FName Interaction);
+    /** The lift whose carriage carries component C (C or an ancestor is its anchor), INDEX_NONE otherwise. */
+    int32 LiftCarrying(const USceneComponent* C) const;
+    /** Door helpers by rig (the rig's door interaction, BuildExploration). */
+    bool PlayDoorRig(USCRigComponent* Rig, bool bOpen, float Speed);
+    bool IsRigOpen(const USCRigComponent* Rig) const;
+    bool IsRigPlaying(const USCRigComponent* Rig) const;
+    /** Tick while clips play or a lift has work. */
+    void UpdateTickEnabled();
 
     virtual void Tick(float DeltaSeconds) override;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USkeletalMesh>> SkeletalMeshes;

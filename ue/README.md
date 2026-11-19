@@ -495,7 +495,7 @@ volume (map exposure, UE tonemapper) for comparison captures.
 
 `-SCRpc[=port]` (8770) opens a localhost HTTP/JSON API for driving the viewer from scripts: load, spawn and despawn
 ships, add and remove boxes and docks, transfers, grid access, camera, screenshots, video (`/record`, MP4 through a
-hidden ffmpeg) and console commands, plus `/wait` until the scene is idle, settled or a job is finished. It also
+hidden ffmpeg) and console commands, plus `/wait` until the scene is idle, settled, a job is finished or the lifts are idle. It also
 writes `Saved/Logs/SCState.ndjson`: scene state (boxes with pose, velocity and slot error, drones with beam forces,
 jobs), idle / settled events, warnings and anomalies, rotated by size (`-SCStateLogMaxMB`, `-SCStateLogFiles`).
 Desktop non-Shipping builds only. The routes and records are in `docs/work-packages/WP-H1-rpc-harness.md`.
@@ -518,7 +518,7 @@ Load a package, then choose **First person** or **Spawn where I look** in Orbit.
 Collision readiness includes the soft skin's animated triangle body. Click the
 viewport for mouse look; Esc releases capture. WASD walks, Shift runs, Space jumps,
 Ctrl crouches, E toggles the interaction under the crosshair (else the nearest
-driven joint) within 3 m, F toggles the camera torch, V toggles noclip (Space/Q
+driven joint) within 3 m or presses a lift panel (the mouse wheel picks among its interactions, WP-P5), F toggles the camera torch, V toggles noclip (Space/Q
 vertical), T opens the teleport list. One key table (`ASCFirstPersonCharacter::KeyTable`)
 drives both Slate and native input.
 
@@ -579,6 +579,62 @@ and must find none (`FP_PADS_NEGATIVE ok=1`). Cooked levels are stamped with `US
 cook is refused by `package_showcase.ps1` and reported STALE by the cook scripts, which also refuse to cook an export whose
 `ui_bindings` lack the screen-role fields; pooled meshes are keyed by their Nanite build and section topology. Known gap: the exporter renders door panels at 16:9,
 and the image is stretched onto square and portrait faces until slice I1-2 (`docs/work-packages/WP-I1-door-and-lift-panels.md`).
+
+### Lifts (WP-P5)
+
+A package's `interiors[].lifts[]` record (an `SCItemElevatorParams` carriage: speed, easing, dwell and queue waits, stops in
+chain order with their landing doors, riders) becomes an `FSCLift` owned by the vehicle (`ASCVehicle::Lifts`, ticked
+before the riders move). At import the carriage and every entity riding it (`parent_attachment`: the C2's gate and floor
+panel) are re-parented under a moving anchor `Lift_<entity_id>` (tag `SCLift`, left out of instancing and emissive
+instancing), keeping their world transforms. The carriage stands at its rest node with its doors closed.
+
+- **Motion.** One leg is a speed profile from `MaxSpeed` and `EasingDistance`. The reading (WP-P5 Q1, not yet compared with
+  the game, logged once as `LIFT_PROFILE`): constant acceleration a = MaxSpeed² / (2 · EasingDistance) over the ramp,
+  cruise, the mirror ramp down; a leg shorter than two ramps is a triangle. C2: hold ↔ top 4.956 s, ground ↔ hold 4.750 s,
+  ground ↔ top 6.957 s.
+- **Logic** (`PoweredDown`, `Idle`, `Closing`, `WaitingForGateway`, `Moving`, `Opening`, `Open`): a request where the
+  carriage stands only opens its doors. With the doors open, the next leg waits for `OpenWaitTime` since they opened and
+  `QueueWaitTime` since the first request; the gate and the stop's landing door close (`CloseAllDoors`; the carriage never
+  leaves with one open, and a closing door is not reversed: a call at the stop is served once they have closed). A door
+  of the vehicle whose origin lies in the leg's path (the box of the carriage's colliders from start to end, not counting
+  the lift's own doors: the C2 belly hatch) is waited for while its clip plays and blocks the leg when closed
+  (`LIFT_BLOCKED`), unless the links of the requests for that stop open it again (`LIFT_GATEWAY`, `LINK_REDELIVER`: a
+  ground call made while the carriage rose to the top, whose `Arrived at 2` closed the hatch). The carriage moves
+  (nearest requested stop in its direction, else the nearest), emits `Arrived at <N>` along its links (the C2 closes the
+  hatch) and opens the gate and that stop's landing door. A stop's `DoorOpen` / `DoorClose` with the carriage elsewhere is
+  ignored (`LIFT_IGNORED`). A door without the clip asked for is not waited for (`LIFT_DOOR … played=0`); one that stays
+  open blocks the leg (`reason=door_did_not_close`). Traversal-tree links (`LIFT_TRAVERSAL`) are reported, not delivered:
+  the item port they reach is not exported.
+- **Doors** play their own Open/Close fragment at the door's `DoorAnimationSpeed` (a door whose data has no usable speed
+  plays at the clip's own rate, with a `LIFT_BUILD` warning); a door rig plays the clips authored for its own geometry
+  when it has any (the C2's hold and top lift doors share bone names). The doors a lift drives (gate, landing doors) are
+  not toggled by E nor by proximity sensors; `sc.FP.Door` still does. Riders hang on their own parent (the carriage or
+  another rider, at its socket when the parent is a rig), and lights whose entity rides the carriage
+  (`parent_entity_id`) move with it.
+- **Riding** is UE based movement on the carriage's own colliders; the character ticks after the vehicle. While the
+  movement base belongs to a carriage the character logs `LIFT_RIDE lift= base= asset= rel_z_cm= floor_dist_cm=` once a
+  second (and on every change).
+- **Press path** (until WP-I1 has its own): a placed entity whose `interaction_links` reach the carriage or one of its
+  stops is a lift panel. E on it (the crosshair on its collision, else on its parts' bounds) sends the chosen interaction
+  of its interaction point through `ASCVehicle::SendInteraction`, which follows the exported links (`LINK_DELIVER`,
+  `LINK_SEND`). The HUD lists the point's interactions ("E: [Top Deck]  Lower Deck  Exit Ship"); the **mouse wheel**
+  picks one (`FP_PANEL_CHOICE`), a new focus starts at the point's primary interaction. `sc.FP.Probe` names the focused
+  `panel=` and `choice=`.
+
+| Command | Effect |
+| --- | --- |
+| `sc.Lift.List` | `LIFT_LIST id entity class stops at state gate gateways riders`, one `LIFT_STOP lift index node z_cm s_m name doors` per stop, one `LIFT_PANEL` per panel |
+| `sc.Lift.Call <lift> <stop>` | as a call button at that stop (`AscentRequest` / `DescentRequest` on its node) |
+| `sc.Lift.Request <lift> <stop>` | as the floor panel (`From Elevator call <stop>`) |
+| `sc.Lift.Doors <lift> open\|close` | `OpenInnerDoor` + the stop's `DoorOpen` / `CloseAllDoors` + `DoorClose` |
+| `sc.Lift.Send <entity_id> <interaction>` | fire an entity's interaction along its exported links (the press path without a crosshair; the C2's helper-only ground buttons) |
+| `sc.Lift.Where` | `LIFT_WHERE lift s_m z_cm v state phase at target queue`, and the player's movement base |
+
+Logs: `LIFT_BUILD`, `LIFT_REQUESTED`, `LIFT_STATE`, `LIFT_DEPARTED` (predicted leg time), `LIFT_PHASE`
+(`Start`/`RampUp`/`FullSpeed`/`RampDown`/`Stop`/`PowerUp`/`PowerDown`), `LIFT_PASSED`, `LIFT_ARRIVED lift stop t_leg
+predicted_s dist_m`, `LIFT_DOOR`, `LIFT_BLOCKED`, `LIFT_GATEWAY`, `LIFT_IGNORED`, `LIFT_TRAVERSAL`. RPC: `/wait until=lift_idle [lift=<id>]` (no request
+queued, not moving, no door of the lift in motion, its gateway doors included) and `lifts[]` in `/state` and `SCState.ndjson`. The scripted C2 run is
+`ue/scripts/rpc/c2-lift.ps1` (WP-P5 "Result (P5-1)").
 
 ### Scripted first person (GPU evidence, reused by WP-P2)
 

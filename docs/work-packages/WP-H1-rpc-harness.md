@@ -49,7 +49,7 @@ world metres, rotations `[pitch, yaw, roll]` degrees, forces newtons.
 | `/health` | | `port`, `pid`, `log`, `idle`, `settled`, `reasons`, `anomalies_total`, `frame` |
 | `/state` | | The state record (below) |
 | `/catalog` | | Box `packages` (entity, state, scu, mass, size), stored `commodities`, `environments` |
-| `/wait` | `until`: `idle` \| `settled` \| `job` (+ `job`), `timeout_s` (120), `min_s` | Answers once the condition holds on a frame after the request: `waited_s`, `reasons`, `unsettled`, `anomalies`; `ok: false` on timeout |
+| `/wait` | `until`: `idle` \| `settled` \| `job` (+ `job`) \| `lift_idle` (+ `lift`, default every lift; WP-P5), `timeout_s` (120), `min_s` | Answers once the condition holds on a frame after the request: `waited_s`, `reasons`, `unsettled`, `anomalies` (`lift_idle`: and `lifts[]`); `ok: false` on timeout |
 | `/mark` | `note` | Writes a `mark` record (a driver's step marker) |
 | `/console` | `cmd` | Runs a console command; `lines`: what it logged (verification hooks: `sc.Cargo.LoseDrone busy`, `sc.Cargo.Interrupt [job]`) |
 | `/load`, `/unload` | `entity` | Loads / unloads the main vehicle (instance 0) |

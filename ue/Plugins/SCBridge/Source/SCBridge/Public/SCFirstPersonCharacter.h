@@ -50,7 +50,8 @@ enum class ESCFirstPersonAction : uint8
     Fire,                                              // held, player body: the drawn weapon fires while down
     Orbit,                                             // held: third-person camera orbits the player while down;
                                                        // two presses within DoubleTapSeconds put it behind again
-    MobiGlas                                           // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    MobiGlas,                                          // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    InteractNext, InteractPrev                         // pressed (mouse wheel): pick among the interactions of the focused point
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),
@@ -106,6 +107,14 @@ public:
      *  must touch it, so a clear pocket beside the seat (behind its back, past a bulkhead) is refused. */
     bool TeleportToSeat(FVector Floor, const FBox& Seat, const FTransform& Frame = FTransform::Identity);
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Interact();
+    /** WP-P5: E on a lift panel under the crosshair sends its chosen interaction through ASCVehicle::SendInteraction.
+     *  The chosen interaction of the focused lift panel (mouse wheel: CycleInteraction), INDEX_NONE without a panel. */
+    int32 FocusedPanelChoice() const;
+    /** The focused lift panel's entity id and chosen interaction; false without one. */
+    bool FocusedPanel(FString& EntityId, FName& Choice) const;
+    void CycleInteraction(int32 Step);
+    /** The interaction index the wheel picked on the focused point; reset to the point's primary when the focus changes. */
+    int32 PanelChoice = 0;
     /** Interaction E would toggle now: under the crosshair within reach, else the nearest joint in reach. */
     int32 FocusedInteraction() const;
     /** Where E reaches from: the eye camera in first person, the body's camera joint in third person. */
@@ -169,6 +178,11 @@ private:
     /** WP-P3: whether the capsule is inside the vehicle's physics grid (-1 unknown), and the vehicle that was for. */
     int8 GridState = -1;
     TWeakObjectPtr<ASCVehicle> GridVehicle;
+    /** WP-P5: the lift panel focused last tick (its choice resets when the focus moves) and the riding log. */
+    FString PanelFocusId;
+    int32 RideLift = INDEX_NONE;
+    double LastRideLog = -1;
+    void UpdateLiftFocusAndRide();
     /** Ignore the vehicle's hull colliders in Params when a capsule at Centre is in its physics grid (as movement does). */
     void AddGridIgnores(struct FCollisionQueryParams& Params, const FVector& Centre, double HalfHeight) const;
     double RecoveryZ = -UE_BIG_NUMBER;
