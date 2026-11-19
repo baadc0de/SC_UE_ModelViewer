@@ -13,6 +13,10 @@
 #if !defined(SCVIEWER_ENGINE_EXPOSURE) || SCVIEWER_ENGINE_EXPOSURE < 4
 #error "SCBridge needs the SCViewer fork of UE 5.9 with the exposure features and their review fixes (WP-E1 E1-5, SCVIEWER_ENGINE_EXPOSURE 4)"
 #endif
+#if !defined(SCVIEWER_ENGINE_SSDO) || SCVIEWER_ENGINE_SSDO < 1
+#error "SCBridge needs the SCViewer fork of UE 5.9 with screen-space directional occlusion (WP-E1 E1-7, SCVIEWER_ENGINE_SSDO 1)"
+#endif
+#include "SCViewerSettings.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCExposure, Log, All);
 
@@ -186,6 +190,31 @@ void FSCDisplayCurve::Apply(FPostProcessSettings& S, bool bGame) const
 #undef SC_DISPLAY_SET
 }
 
+FSCSSDOSettings FSCSSDOSettings::From(const FSCStarEngine& Game)
+{
+    FSCSSDOSettings Out;
+    Out.bSupported = Game.SSDOQuality == 0; // DirOcclusionPS without %_RT_SAMPLE0: the engine's default search (r.SSDO.Quality 1)
+    Out.Radius = float(Game.SSDORadiusM * 100.0);
+    Out.Strength = float(Game.SSDOStrength);
+    // r_ssdo 0: the game renders no SSDO, so every amount is 0.
+    Out.DirectAmount = Game.bSSDO ? float(Game.SSDOAmountDirect) : 0.f;
+    Out.AmbientAmount = Game.bSSDO ? float(Game.SSDOAmountAmbient) : 0.f;
+    Out.ReflectionAmount = Game.bSSDO ? float(Game.SSDOAmountReflection) : 0.f;
+    return Out;
+}
+
+void FSCSSDOSettings::Apply(FPostProcessSettings& S, bool bGame) const
+{
+    const bool bOn = bGame && bSupported;
+    const FPostProcessSettings& UE = FPostProcessSettings::GetDefault();
+    S.bOverride_SSDORadius = bOn; S.SSDORadius = bOn ? Radius : UE.SSDORadius;
+    S.bOverride_SSDOStrength = bOn; S.SSDOStrength = bOn ? Strength : UE.SSDOStrength;
+    // Off is explicit (amounts overridden to 0): the viewer volume's choice wins over a lower-priority volume's.
+    S.bOverride_SSDODirectAmount = true; S.SSDODirectAmount = bOn ? DirectAmount : 0.f;
+    S.bOverride_SSDOAmbientAmount = true; S.SSDOAmbientAmount = bOn ? AmbientAmount : 0.f;
+    S.bOverride_SSDOReflectionAmount = true; S.SSDOReflectionAmount = bOn ? ReflectionAmount : 0.f;
+}
+
 const FName SCViewerExposure::VolumeTag(TEXT("SCViewerExposure"));
 
 APostProcessVolume* SCViewerExposure::Install(UWorld& World)
@@ -222,15 +251,24 @@ APostProcessVolume* SCViewerExposure::Install(UWorld& World)
     Display.Apply(S, true);
     const bool bDisplay = Display.bSupported;
 
+    // The game's SSDO (engine fork, WP-E1 E1-7): off in the look (plan D15: Lumen's short-range AO occludes ambient light, every light
+    // is shadowed); USCViewerSettings::bStarEngineSSDO or sc.Look.SSDO game turns it on.
+    const FSCSSDOSettings SSDO = FSCSSDOSettings::From(Game);
+    const bool bSSDO = USCViewerSettings::Get()->bStarEngineSSDO;
+    if (bSSDO && !SSDO.bSupported)
+        UE_LOG(LogSCExposure, Error, TEXT("r_ssdoQuality=%d has no engine SSDO search: SSDO stays off"), Game.SSDOQuality);
+    SSDO.Apply(S, bSSDO);
+
     // The volume registered itself at its default priority when it spawned; the world keeps its volumes sorted.
     World.RemovePostProcessVolume(Volume);
     World.AddPostProcessVolume(TWeakInterfacePtr<IInterface_PostProcessVolume>(Volume));
     const UE::AutoExposure::FCompensationCurveLUTDomain Lut = UE::AutoExposure::GetCompensationCurveLUTDomain(Curve);
-    UE_LOG(LogSCExposure, Display, TEXT("VIEWER_GAME_EXPOSURE priority=%.0f brightness=%.3f..%.3f percent=%.1f..%.1f speed=%.3f histogram=%.3f..%.3f keys=%d first=(%.3f,%.3f) last=(%.3f,%.3f) lut=%.3f..%.3f/%d meter=%s blend=%.2f clamp=-%.2f..+%.2f incident_smoothing=%.2f adaptation=two_stage slow=%.2f/%.2f fast=%.2f range=%.2f display_curve=%d tone_curve=%s max_nits=%.1f ref_white=%.2f toe=%.2f"),
+    UE_LOG(LogSCExposure, Display, TEXT("VIEWER_GAME_EXPOSURE priority=%.0f brightness=%.3f..%.3f percent=%.1f..%.1f speed=%.3f histogram=%.3f..%.3f keys=%d first=(%.3f,%.3f) last=(%.3f,%.3f) lut=%.3f..%.3f/%d meter=%s blend=%.2f clamp=-%.2f..+%.2f incident_smoothing=%.2f adaptation=two_stage slow=%.2f/%.2f fast=%.2f range=%.2f display_curve=%d tone_curve=%s max_nits=%.1f ref_white=%.2f toe=%.2f ssdo=%s"),
            Priority, E.MinBrightness, E.MaxBrightness, E.LowPercent, E.HighPercent, E.SpeedUp, E.HistogramLogMin, E.HistogramLogMax,
            E.BiasCurve.Num(), E.BiasCurve[0].X, E.BiasCurve[0].Y, E.BiasCurve.Last().X, E.BiasCurve.Last().Y, Lut.MinX, Lut.MaxX, Lut.NumSamples,
            *StaticEnum<EAutoExposureMeter>()->GetNameStringByValue(int64(E.Meter)), E.IncidentBlend, E.IncidentClampDown, E.IncidentClampUp, E.IncidentSmoothingHalfLife,
            E.SlowHalfLifeBrighter, E.SlowHalfLifeDarker, E.FastHalfLife, E.FastRange, bDisplay ? Game.TonemappingCurve : 0,
-           bDisplay ? TEXT("HuePreservingShoulder") : TEXT("project"), S.HuePreservingShoulderMaxDisplayNits, S.HuePreservingShoulderRefWhiteScale, S.HuePreservingShoulderToeScale);
+           bDisplay ? TEXT("HuePreservingShoulder") : TEXT("project"), S.HuePreservingShoulderMaxDisplayNits, S.HuePreservingShoulderRefWhiteScale, S.HuePreservingShoulderToeScale,
+           bSSDO && SSDO.bSupported ? TEXT("game") : TEXT("off"));
     return Volume;
 }

@@ -22,7 +22,9 @@ const TCHAR* SyntheticFixture = TEXT(R"({"schema":"star_engine_render_v1",
   "r_ExposureAdaptTimeDark":{"value":4},"r_ExposureAdaptTimeBright":{"value":2},"r_ExposureAdaptTimePupil":{"value":0.5},
   "r_ExposureAdaptRangePupil":{"value":2},"r_ExposureDiscardRatioDark":{"value":0.05},"r_ExposureDiscardRatioBright":{"value":0.1},
   "r_exposureMeterMode":{"value":3},"r_exposureIncidentBlendAmt":{"value":0.25},"r_exposureIncidentSmoothingTime":{"value":0.75},
-  "r_HDRTonemappingCurve":{"value":1},"r_HDRTonemappingCurveToe":{"value":0.5}}})");
+  "r_HDRTonemappingCurve":{"value":1},"r_HDRTonemappingCurveToe":{"value":0.5},
+  "r_ssdo":{"value":1},"r_ssdoQuality":{"value":0},"r_ssdoRadius":{"value":2.5},"r_ssdoStrength":{"value":3},
+  "r_ssdoAmountDirect":{"value":0.25},"r_ssdoAmountAmbient":{"value":0.5},"r_ssdoAmountReflection":{"value":0.75}}})");
 bool LoadText(const FString& Text, FSCStarEngine& Out, FString& Error)
 {
     const FString Path = FPaths::CreateTempFilename(*FPaths::ProjectIntermediateDir(), TEXT("StarEngine"), TEXT(".json"));
@@ -59,6 +61,10 @@ bool FSCStarEngineFixture::RunTest(const FString&)
     TestTrue(TEXT("the meter is read from the fixture (WP-E1 E1-5)"),
              Synthetic.ExposureMeterMode == 3 && Synthetic.IncidentBlendAmount == 0.25 && Synthetic.IncidentSmoothingTime == 0.75 &&
              Synthetic.MeterMaxCompensationPerBlend == 4 && Synthetic.MeterMinCompensationPerBlend == -1 && Synthetic.IncidentMiddleGrey == 0.18);
+    TestTrue(TEXT("the SSDO is read from the fixture (WP-E1 E1-7)"),
+             Synthetic.bSSDO && Synthetic.SSDOQuality == 0 && Synthetic.SSDORadiusM == 2.5 && Synthetic.SSDOStrength == 3 &&
+             Synthetic.SSDOAmountDirect == 0.25 && Synthetic.SSDOAmountAmbient == 0.5 && Synthetic.SSDOAmountReflection == 0.75);
+    TestTrue(TEXT("the game's SSDO: on, quality 0, a positive radius"), S.bSSDO && S.SSDOQuality == 0 && S.SSDORadiusM > 0);
     TestTrue(TEXT("the game's meter: clamped blend of the reflected and the incident meter"),
              S.ExposureMeterMode == 3 && S.IncidentBlendAmount == 0.5 && S.MeterMaxCompensationPerBlend == 3 && S.MeterMinCompensationPerBlend == -2);
 
@@ -99,6 +105,8 @@ bool FSCStarEngineDomain::RunTest(const FString&)
         {TEXT("an unknown meter mode"), TEXT(R"("r_exposureMeterMode":{"value":3})"), TEXT(R"("r_exposureMeterMode":{"value":4})"), TEXT("r_exposureMeterMode")},
         {TEXT("a blend past the incident meter"), TEXT(R"("r_exposureIncidentBlendAmt":{"value":0.25})"), TEXT(R"("r_exposureIncidentBlendAmt":{"value":1.5})"), TEXT("r_exposureIncidentBlendAmt")},
         {TEXT("a meter clamp that excludes the reflected meter"), TEXT(R"("meterMinCompensationPerBlend":{"value":-1})"), TEXT(R"("meterMinCompensationPerBlend":{"value":1})"), TEXT("meterMinCompensationPerBlend")},
+        {TEXT("no SSDO radius"), TEXT(R"("r_ssdoRadius":{"value":2.5})"), TEXT(R"("r_ssdoRadius":{"value":0})"), TEXT("r_ssdoRadius")},
+        {TEXT("a negative SSDO amount"), TEXT(R"("r_ssdoAmountAmbient":{"value":0.5})"), TEXT(R"("r_ssdoAmountAmbient":{"value":-1})"), TEXT("r_ssdoAmount")},
         {TEXT("a value that is not finite"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":0.5})"), TEXT(R"("r_HDRTonemappingCurveToe":{"value":1e999})"), TEXT("finite")},
     };
     for (const FCase& C : Cases)

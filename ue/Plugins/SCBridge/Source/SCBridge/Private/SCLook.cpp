@@ -243,6 +243,26 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookExposure(
                bGameAdaptation ? TEXT("TwoStage") : TEXT("Default(ue)"), Changed);
     }));
 
+// sc.Look.SSDO <game|off>: the game's screen-space directional occlusion (fixture radius, strength and amounts on the engine fork's SSDO,
+// WP-E1 E1-7; it replaces Lumen's short-range AO term by term) or none (the look, D15). Also the setting later volumes are installed with.
+static FAutoConsoleCommandWithWorldAndArgs GSCLookSSDO(
+    TEXT("sc.Look.SSDO"), TEXT("sc.Look.SSDO <game|off>: the game's screen-space directional occlusion on the viewer volume, or none (the look)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        const bool bGame = Args.IsValidIndex(0) && (Args[0] == TEXT("game") || Args[0] == TEXT("1"));
+        USCViewerSettings::Get()->bStarEngineSSDO = bGame;
+        const FSCSSDOSettings S = FSCSSDOSettings::From(FSCStarEngine::Get());
+        int32 Changed = 0;
+        for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+            if (It->Tags.Contains(SCViewerExposure::VolumeTag))
+            {
+                S.Apply(It->Settings, bGame);
+                ++Changed;
+            }
+        UE_LOG(LogTemp, Display, TEXT("LOOK ssdo=%s supported=%d radius=%.1f strength=%.2f direct=%.2f ambient=%.2f reflection=%.2f volumes=%d"),
+               bGame && S.bSupported ? TEXT("game") : TEXT("off"), S.bSupported, S.Radius, S.Strength, S.DirectAmount, S.AmbientAmount,
+               S.ReflectionAmount, Changed);
+    }));
+
 // sc.Look.BloomStar <points> <length> [intensity]: FFT (convolution) bloom with a generated kernel, a soft core plus
 // <points> diffraction streaks of <length> (fraction of the kernel radius); 0 points returns to the standard bloom.
 static TStrongObjectPtr<UTexture2D> GBloomKernel;

@@ -872,6 +872,84 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
   MegaLights and the indirect composite. Defined interplay with Lumen short-range AO (no double darkening). Never
   injected into world-space caches or the path tracer.
 
+#### Result (E1-7)
+Engine `6f5b30b63` (`SCViewer: screen-space directional occlusion as an engine feature`), superseding `b65d09ad1` / `9cad77abb` (their
+shader edits, `SCSSDO.ush` and the generated `SCSSDOParams.ush` are removed; no history rewrite); `SCVIEWER_ENGINE_SSDO` 1.
+- **Settings.** `FPostProcessSettings` `SSDORadius` (cm, default 200), `SSDOStrength` (1), `SSDODirectAmount`, `SSDOAmbientAmount`,
+  `SSDOReflectionAmount` (default 0: UE's behaviour, no pass), override bits, interpolated in `SceneView` and `PostProcessUtils`. Console:
+  `r.SSDO` 0 off / 1 as the settings ask (default) / 2 forced on (amounts left at 0 count as 1); `r.SSDO.Quality` 0..2 = 2 x 4, **3 x 6**
+  (default, the game's `r_ssdoQuality` 0), 4 x 8 slices x samples per side; `r.SSDO.TemporalNoise` (per-frame rotation of the 4x4 noise, the
+  port's stand-in for `SpatialDenoisePS`'s blur); `r.SSDO.Debug` 1 AO / 2 bent normal over the lit scene colour (also `vis SSDO`). Clamps:
+  amounts >= 0, non-finite = 0, radius [1, 100000] cm, strength >= 0. `UE::SSDO` (`ScreenSpaceDirectionalOcclusionSettings.h`, Engine) is
+  the rule the renderer applies: `ResolveViewSettings`, `DirectLightFactor` (`CalculateSSDO`), `DeriveSpecularOcclusion`,
+  `ComposeIndirectOcclusion`, `GetLumenShortRangeAOIntensity`.
+- **One pass.** An `SSDO(Quality=n)` compute pass per view after the base pass and decals (`DeferredShadingRenderer.cpp`, before the
+  indirect composite and the lights): the WP-L2 port of `DirOcclusionPS` (same search; radius in cm projected with `0.5 P[1][1]`, thickness in
+  metres) on the scene depth and the top-layer / GBuffer normal, writing bent normal and occlusion (`PF_FloatRGBA`). It runs only where an
+  amount is positive or a debug view is on, never for forward shading, the path tracer, ray-traced overlays or reflection captures (mobile
+  has its own renderer and never resolves it). Consumers bind `FSSDOConsumerParameters` (texture and amounts; a dummy and 0 where off) and read
+  it through `ScreenSpaceDirectionalOcclusionCommon.ush`: MegaLights shading (GBuffer input) and the per-light deferred pass (standard and
+  simple lights; new, the patches had no deferred path) scale the light term of lights without dynamic shadows and of directional lights; the
+  Lumen indirect composite (screen probe gather, Substrate and GBuffer paths, in `GetShadingOcclusion`) takes its occlusion from the SSDO.
+  Explicit fallbacks (no SSDO): mobile, forward, clustered deferred, translucency (forward, volume, front layer), hair strands, volumetric fog
+  and MegaLights volumes, LumenPT, SSGI and the deferred sky light, ray-traced lighting, the path tracer, reflection captures. Nothing writes it
+  into the Lumen surface cache, radiance cache or world cache (all consumers are screen-space passes).
+- **Lumen short-range AO interplay (rule).** Term by term, the SSDO's or Lumen's, never their product: diffuse indirect occlusion =
+  `SSDOAmbientAmount > 0 ? saturate(1 - w x amount) : Lumen's`; rough specular occlusion = `SSDOReflectionAmount > 0 ?
+  DeriveSpecularOcclusion(NoV, saturate(1 - w x amount), 1 - roughness) : Lumen's`. When both terms are the SSDO's, Lumen's short-range AO
+  intensity is 0 for the view (`SSDO::GetLumenShortRangeAOIntensity` at every Lumen call site), so it is neither computed nor applied during
+  integration (`...ShortRangeAO.ApplyDuringIntegration`). Lumen's material AO (in its integration) and short-range GI stay. Tested as a pure
+  rule (`SCBridge.ViewerExposure.SSDO.LumenInterplay`) and in the run below.
+- **Project.** Fixture: `DeriveSpecularOcclusion` hash added (`TiledShading.cfxb`, not `ShadeLib.cfi` as WP-L2 said; read from the installed
+  `Data.p4k` pak, crc32 8e895d78; the four other SSDO hashes re-checked equal); `FSCStarEngine` loads `r_ssdo*` with domain checks;
+  `FSCSSDOSettings::From / Apply` (radius m -> cm, strength, amounts; `r_ssdo` 0 -> amounts 0; `r_ssdoQuality` != 0 unsupported); the viewer
+  volume applies it from `USCViewerSettings::bStarEngineSSDO` (**default off**, the look D15; off = amounts overridden to 0, so a map volume
+  cannot turn it on); `sc.Look.SSDO <game|off>`. Tests: new `SCBridge.ViewerExposure.SSDO.Mapping` (fixture mapping, override / clear,
+  ported hashes, UE default = no pass), `.Blend` (viewer over an opt-in map volume, half-weight lerp, install follows the setting), `.Rules`
+  (`r.SSDO` modes, debug, unsupported view, clamps), `.LumenInterplay` (the rule; `DirectLightFactor` = the game's `CalculateSSDO` to
+  < 1e-5 over 360 cases); `SCBridge.StarEngine.*` read and range-check the new fixture values. Removed: `ue/EnginePatches/`,
+  `ue/scripts/engine_patches.py`, every `r.GeneralPurposeTweak` use (routes `cutlass-ssdo*.txt`, `cutlass-look-iter1*.txt` now use
+  `sc.Look.SSDO` / `r.SSDO.Debug`); AGENTS.md, README, `ue/README.md`, plan D14, WP-L2, WP-L3, LOOK-1, the WP-L2 verification, the fixture
+  notes and `DefaultScalability.ini` updated.
+- **Runs** (fork, medfrnt, 1920x1080, E1-5's poses; `out/e1/E1-7/`: `run-old.txt`, `run-new.txt`, `run-def.txt`, `shots/`,
+  `pairstats*.txt`; logs `E1-7-old.log`, `E1-7-new.log`, `E1-7-def.log`). Baseline "old" = engine `e2ec17572` with the patch header's amounts
+  set to the fixture's (1, 1, 1; the committed header had 0, the look) and `r.GeneralPurposeTweak` 0 / 1. PSNR (dB) and pixels > 8 levels:
+
+  | Pair | ref | long | up | top |
+  |---|---|---|---|---|
+  | noise floor: two shots of one setting in one run (off / on) | 53.2 / 54.0 | | | |
+  | **UE unchanged:** old off vs new off | 52.7, 0.02 % | 52.9, 0.01 % | 53.1, 0.01 % | 53.2, 0.02 % |
+  | **equivalence:** old on vs new on | 52.6, 0.02 % | 52.4, 0.01 % | 53.7, 0.01 % | 53.3, 0.02 % |
+  | equivalence with unshadowed lights (`sc.Look.ShadowAll 0`): old on vs new on | 54.6 | 52.7 | 53.9 | |
+  | effect: new off vs new on | 49.8, 0.07 % | 47.6, 0.18 % | 42.9, 0.84 % | 53.6 |
+  | effect with unshadowed lights: off vs on | 46.5, 0.40 % | 43.0, 0.99 % | 40.9, 2.12 % | |
+  | **interplay:** SSDO on, Lumen SR-AO on vs off | 52.8, 0.02 % | 52.9, 0.01 % | 53.6, 0.01 % | |
+  | reference: SSDO off, Lumen SR-AO on vs off | 49.0, 0.14 % | 47.7, 0.26 % | 43.3, 1.31 % | |
+  | `r.SSDO 0` with the game's settings vs off | 52.1 | 52.5 | | |
+  | deferred lights (`r.MegaLights.Allowed 0`, unshadowed): off vs on (noise 52.6 / 53.9 / 58.2) | 46.3 | 43.2 | 40.9 | |
+
+  Old and new, off and on, are within the frame-to-frame noise of one run at every view (full-frame means equal to 0.0006), while the effect
+  is 4–12 dB above it: UE's behaviour is unchanged with the feature off and the engine path reproduces the patch path. With the SSDO on,
+  turning Lumen's short-range AO off changes nothing (noise level), where without the SSDO it changes the `up` view on 1.3 % of the pixels:
+  the SSDO replaces it, no double darkening. The deferred consumer, first exercised here, changes the image as much as the MegaLights one.
+  The debug views (`new_dbgao_ref`, `new_dbgbn_ref`) show the AO dark in crevices and smooth bent normals.
+- **Cost** (`ProfileGPU`, ref view, every light shadowed): the pass is 0.53 ms (`SSDO(Quality=1) 1920x1023`); Lumen's short-range AO
+  (screen space in this hangar, 0.14–0.17 ms on async compute) is skipped while the SSDO replaces it; the composite stays 0.068 ms (0.062
+  off). Frame 6.98 -> 7.18 ms (+0.20). The patch path cost 6.71 -> 7.44 ms: its composite recomputed the SSDO inline (0.53 ms) and Lumen's
+  AO still ran. With the SSDO on, `r.Lumen.ScreenProbeGather.ShortRangeAO 0` leaves the frame at 7.22 ms.
+- **Astra** (`out/e1/E1-7/astra/`, gpt-6.2-astra, high): old vs new (up; long with unshadowed lights): "Differences within frame-to-frame
+  noise" for both, no halo, grain or banding. Off vs on (long, up): "pass" for both: darker under the ledge, in door-frame recesses and
+  ceiling grille frames, "no obvious double darkening, added grain, or visible smearing", no halo at the sign's or the beam's silhouette.
+  Interplay (up): SSDO on with Lumen SR-AO on vs off "look the same ... This view passes the SSDO replacement check", while without the SSDO
+  the SR-AO pair differs (deeper grilles with SR-AO); no halos or spatial noise.
+- **Tests** (`out/e1/E1-7/tests.log`): `Automation RunTests SCBridge` 141/145; the four failures are the known ones
+  (Package.FolderTarImport, Player.KitRigAndWeapons, Materials.FamilyMapping, FirstPerson.SkeletalCollision); `.Lights`, `.ViewerExposure`
+  (with the four new `.SSDO.*`) and `.StarEngine` pass. Engine and project builds clean (`engine-build.log`, `project-build*.log`).
+- **Not covered.** Mobile, forward, the path tracer and LumenPT were compiled, not run; clustered deferred has no consumer (explicit
+  fallback); temporal stability under camera motion was not measured (stills only, as in WP-L2); `r.SSDO.Quality` 0 / 2 and `r.SSDO 2` are
+  covered by the rule tests only; `scripts/verify_star_engine_render.py` was not run in full (no `objdump`): the new hash and the four SSDO
+  hashes were computed with its `Shaders` reader from the installed pak.
+
 ### Later / investigations
 - Lumen World Cache with the adaptive Substrate G-buffer (`LumenWorldCacheTracePaths.usf ReadMaterialData`; D13).
 - Native `ProjectorTexture` on spot lights through the rect-light texture atlas (phase two of E1-3).
@@ -892,4 +970,4 @@ switched by `r.GeneralPurposeTweak`; off in the current look (D15).
 | E1-4 | `3079e8bc3`, review fixes `c1e0610d4`; E1-1..E1-4 cumulative review fixes `9e2a37dd8` | `FSCDisplayCurve` (curve + fidelity baseline on the viewer volume), `sc.Look.Display` switches the method, `M_SC_DisplayMapping` + its script + `KEEP` entry removed, hash guard moved to a test, notes / README; review: `bOverriddenNoneAssetsClear` in the baseline, tests `.BaselineBlend`, `.ToneCurveDomain` | engine + project build, 17/17 tests, LUT vs analytic at 32³ / 64³ / 128³, medfrnt runs material vs engine vs UE Filmic, Astra (Result (E1-4)); review fixes: 21/21 tests, MegaLights overflow run (E1-4 review fixes, Result (E1-5)); cumulative fixes (12 items, incl. probe and per-world A/B): tests first, 135/139 `SCBridge` (the 4 outside these features), medfrnt runs: E1-5 exposures and regions to 0.0001, border when faded, non-power-of-two atlas (E1-1..E1-4 cumulative review fixes) |
 | E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)); review fixes `0d847e519` (Terra T1–T7, Astra A1–A18; `sc.Look.Exposure ue` overrides, scoped cvar priority, fixture provenance): 25/25 tests, medfrnt before / after runs (E1-5 review fixes); review fixes 2 `3808c1160` (LUT task race, snapshot after view extensions, CPU-curve limits, incident weight / FP32 / unfloored, multi-view fallbacks, LUT policy API; trace without pre-exposure, isolated policy test): 137/141 `SCBridge`, E1-5 steady state and steps within 0.0005 stops (E1-5 review fixes 2) |
 | E1-6 | `ad5c402d9`, `05559963d`, `9f382da2b`, `c7a0e82f7` | SCFxBuild: loop guard from the engine constant (`SCFxRules.h`), typed expressions, beam spawn-rate and count expressions, clamp-sum strength curves, owner-scale sprite sizes, `-LoopCapacity`; runtime contract reduced (`SCFxStrength.h`, `SCFxBeam.h`, cargo contacts, `sc.Fx.Spawn`); `bTreatAsEngineModule` kept (boundary); tests `SCBridge.Fx.*`; WP-K4 contract note | engine + project build, FX build errors=0, 25/25 tests, medfrnt overflow runs at 8 / 32, GPU cost, before / after frames, Astra (Result (E1-6)); review fixes `e2ec17572` (effective limit cvar, default 8, 32 in `DefaultEngine.ini`; expression validation; expression-aware filtering; collections; rate residual) and the builder / contract fixes (`SCFxContract.h`, `-VerifyContract`, package check): tests first, 137/141, FX build errors=0, verify stale=0, 0 overflows, PSNR as E1-6 (E1-6 review fixes) |
-| E1-7 | — | — | — |
+| E1-7 | `6f5b30b63` (supersedes `b65d09ad1`, `9cad77abb`) | fixture (+`DeriveSpecularOcclusion`), `FSCStarEngine` SSDO values, `FSCSSDOSettings`, `bStarEngineSSDO` (off, D15), `sc.Look.SSDO`, tests `SCBridge.ViewerExposure.SSDO.*`; `ue/EnginePatches`, `engine_patches.py`, `r.GeneralPurposeTweak` removed (routes, docs, AGENTS, READMEs) | engine + project build, 141/145 `SCBridge` (the 4 known), medfrnt old patch vs new feature off / on, SR-AO interplay, deferred-light run, GPU cost, Astra (Result (E1-7)) |

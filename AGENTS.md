@@ -42,9 +42,9 @@ inherit for all Rust that touches the vendored crates).
   `C:\Users\bojan\UnrealEngine-5.9-src`, branch `scviewer/5.9`, registered as `UE_5.9_src` (the `.uproject`'s
   `EngineAssociation`). Rendering rules that need engine changes are engine features on that branch (WP-E1), with UE's
   behaviour as the default. Scripts take `-Engine` / `$env:UE_ENGINE_ROOT` and default to `%USERPROFILE%\UnrealEngine-5.9-src`.
-  The launcher (binary) engine, the Web / Wasm build and the NVIDIA RTX-fork (UE 5.8) build are gone; `ue/EnginePatches`
-  (D14, written for the binary engine; the fork carries only its SSDO patches, as commits) goes once WP-E1 replaces its
-  patches with engine features. The Lumen World Cache is
+  The launcher (binary) engine, the Web / Wasm build, the NVIDIA RTX-fork (UE 5.8) build and the shader text patches of
+  D14 (`ue/EnginePatches`, `engine_patches.py`) are gone: WP-E1 carries them as engine features (the SSDO is E1-7,
+  `r.SSDO*` and the `SSDO*` post-process settings; `sc.Look.SSDO`). The Lumen World Cache is
   off for now (D13). The deliverable is a standalone game-mode app (plan D2/D3): user-facing code goes in the Runtime
   module; editor-only dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
 - Win64, D3D12 SM6 (`ue/SCViewer/Config/Windows/WindowsEngine.ini`): build with

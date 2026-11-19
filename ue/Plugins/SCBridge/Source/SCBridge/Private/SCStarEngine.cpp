@@ -77,6 +77,13 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Out.TonemappingCurve = int32(Value(TEXT("exe_cvars"), TEXT("r_HDRTonemappingCurve")));
     Out.TonemappingCurveToe = Value(TEXT("exe_cvars"), TEXT("r_HDRTonemappingCurveToe"));
     // The compensation anchors carry their scene EV in the cvar name (r_ExposureCompensationEV<n>).
+    Out.bSSDO = Value(TEXT("exe_cvars"), TEXT("r_ssdo")) != 0;
+    Out.SSDOQuality = int32(Value(TEXT("exe_cvars"), TEXT("r_ssdoQuality")));
+    Out.SSDORadiusM = Value(TEXT("exe_cvars"), TEXT("r_ssdoRadius"));
+    Out.SSDOStrength = Value(TEXT("exe_cvars"), TEXT("r_ssdoStrength"));
+    Out.SSDOAmountDirect = Value(TEXT("exe_cvars"), TEXT("r_ssdoAmountDirect"));
+    Out.SSDOAmountAmbient = Value(TEXT("exe_cvars"), TEXT("r_ssdoAmountAmbient"));
+    Out.SSDOAmountReflection = Value(TEXT("exe_cvars"), TEXT("r_ssdoAmountReflection"));
     static const FString AnchorPrefix(TEXT("r_ExposureCompensationEV"));
     const TSharedPtr<FJsonObject>* Cvars = nullptr;
     if (Root->TryGetObjectField(TEXT("exe_cvars"), Cvars))
@@ -116,6 +123,9 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Require(Out.MeterMaxCompensationPerBlend >= 0 && Out.MeterMinCompensationPerBlend <= 0,
             TEXT("meterMaxCompensationPerBlend >= 0 >= meterMinCompensationPerBlend (a clamp around the reflected meter)"));
     Require(Out.IncidentMiddleGrey > 0, TEXT("incidentMiddleGray > 0"));
+    Require(Out.SSDORadiusM > 0, TEXT("r_ssdoRadius > 0"));
+    Require(Out.SSDOStrength >= 0, TEXT("r_ssdoStrength >= 0"));
+    Require(Out.SSDOAmountDirect >= 0 && Out.SSDOAmountAmbient >= 0 && Out.SSDOAmountReflection >= 0, TEXT("r_ssdoAmount* >= 0"));
     Require(Out.DiscardRatioDark >= 0 && Out.DiscardRatioBright >= 0 && Out.DiscardRatioDark + Out.DiscardRatioBright < 1,
             TEXT("r_ExposureDiscardRatioDark/Bright >= 0 and sum < 1"));
     for (int32 I = 1; I < Out.Compensation.Num(); ++I)

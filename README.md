@@ -125,7 +125,6 @@ crates/scbridge-ffi     C-ABI library the Unreal plugin calls (scbridge.dll / li
 ue/SCViewer             UE 5.9 project: game-mode app, Viewer map, cargo scenarios (Config/Cargo/*.json)
 ue/Plugins/SCBridge     Runtime module (FFI client, importer, vehicles, player, cargo, mobiGlas, RPC, UI),
                         optional Editor module (cooking, keep as assets), ThirdParty/SCBridgeLib
-ue/EnginePatches        shader patches for the obsolete binary engine (removed once WP-E1 carries them)
 ue/scripts              builds, cooks, packaging, material generation, routes/, rpc/ (RPC module, explorer)
 ue/verification         verification records and evidence per work package
 scripts/                FFI and StarBreaker builds, DLSS install, export and verification helpers

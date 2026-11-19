@@ -55,6 +55,13 @@ struct SCBRIDGE_API FSCStarEngine
     // strength until the last `fraction` of the radius. The importer sets it as the light's range fade (engine fork,
     // ULocalLightComponent::RangeFade = SquaredLinearTail with RangeFadeFraction = fraction; UE's is (1 - (d / R)^4)^2).
     double ForcedFadeFraction = 0;
+    // Screen-space directional occlusion (DirOcclusionPS, CalculateSSDO, DeriveSpecularOcclusion; the engine fork's SSDO, WP-E1 E1-7):
+    // r_ssdo on / off, r_ssdoQuality (0 = 3 slices x 6 samples per side, the quality ported), the search radius (m), the AO exponent and
+    // the amounts on direct light (lights that cast no shadow, the sun), ambient light and its reflections.
+    bool bSSDO = false;
+    int32 SSDOQuality = 0;
+    double SSDORadiusM = 0, SSDOStrength = 0;
+    double SSDOAmountDirect = 0, SSDOAmountAmbient = 0, SSDOAmountReflection = 0;
 
     static FString FixturePath();
     static bool Load(const FString& Path, FSCStarEngine& Out, FString& Error);

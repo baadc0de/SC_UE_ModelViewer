@@ -97,6 +97,31 @@ struct SCBRIDGE_API FSCDisplayCurve
     void Apply(FPostProcessSettings& Settings, bool bGame) const;
 };
 
+/**
+ * The game's screen-space directional occlusion (DirOcclusionPS / CalculateSSDO, WP-L2) as the engine's SSDO post-process settings (fork
+ * feature SCVIEWER_ENGINE_SSDO, WP-E1 E1-7): the radius (r_ssdoRadius, m -> cm), the AO exponent and the three amounts. The engine's
+ * default search (r.SSDO.Quality 1, 3 slices x 6 samples per side) is the game's r_ssdoQuality 0, the one ported; any other game quality
+ * is unsupported. The engine replaces Lumen's short-range AO term by term where an ambient / reflection amount is set (never both).
+ * The shipped look (plan D15) keeps it off: USCViewerSettings::bStarEngineSSDO, sc.Look.SSDO for A/B.
+ */
+struct SCBRIDGE_API FSCSSDOSettings
+{
+    bool bSupported = false;     // the game's quality has an engine implementation (r_ssdoQuality 0)
+    float Radius = 0;            // SSDORadius, cm
+    float Strength = 0;          // SSDOStrength
+    float DirectAmount = 0;      // SSDODirectAmount (0 when r_ssdo is 0)
+    float AmbientAmount = 0;     // SSDOAmbientAmount
+    float ReflectionAmount = 0;  // SSDOReflectionAmount
+
+    static FSCSSDOSettings From(const FSCStarEngine& Game);
+
+    /**
+     * The viewer volume's SSDO settings. bGame (and supported): the game's radius, strength and amounts, overridden. Otherwise (the look,
+     * D15): the three amounts overridden to 0, so a lower-priority volume cannot turn it on, and radius / strength not overridden.
+     */
+    void Apply(FPostProcessSettings& Settings, bool bGame) const;
+};
+
 namespace SCViewerExposure
 {
 /** Actor tag of the volume Install spawns (sc.Look.Display finds it by this). */

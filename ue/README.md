@@ -8,9 +8,9 @@ project. Scripts (`ue/scripts/rpc/SCRpc.psm1` `Start-SCViewer`, `package_showcas
 `-Engine` / `UE_ENGINE_ROOT` and default to `%USERPROFILE%\UnrealEngine-5.9-src` (`~/UnrealEngine-5.9-src`). The
 launcher (binary) engine, the Web / Wasm build and the NVIDIA RTX-fork (UE 5.8) build were removed in WP-E1 (E1-0).
 The Lumen World Cache is off for now (plan D13); verification and the World Cache / G-buffer A/B routes:
-[verification/WP-U59.md](verification/WP-U59.md). The shader patches of plan D14 ([EnginePatches](EnginePatches/README.md))
-were written for the binary engine; the fork carries only the SSDO patches (as commits), and WP-E1 replaces them all
-with engine features.
+[verification/WP-U59.md](verification/WP-U59.md). The shader patches of plan D14 (`ue/EnginePatches`, written for the binary
+engine) are gone: WP-E1 replaced them with engine features (light falloff E1-2, projector shape E1-3, the game's SSDO E1-7:
+`SSDO*` post-process settings and `r.SSDO*`, off in the look, `sc.Look.SSDO game|off` for A/B).
 History: the project started on UE 5.8.2 (`++UE5+Release-5.8`, CL 56702186, Linux, WP-U0 2026-11-09), moved to the
 UE 5.9.0 preview-1 binary (CL 60351404) on 2026-11-12 and to the source fork on 2026-11-18.
 WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was

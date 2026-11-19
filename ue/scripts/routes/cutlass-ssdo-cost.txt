@@ -1,7 +1,9 @@
-# SSDO cost check (WP-L2): game SSDO on, with Lumen's short-range AO still computed (1) and skipped (0); the composite
-# uses the SSDO either way. Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
+# SSDO cost check (WP-L2; WP-E1 E1-7): the game SSDO on (sc.Look.SSDO game), Lumen short-range AO enabled (1) and disabled (0).
+# The engine skips Lumen's short-range AO while the SSDO replaces both its terms, so both should cost the same.
+# Host: -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCCamera=first
 20 r.VSync 0
 0.5 t.MaxFPS 0
+0 sc.Look.SSDO game
 0 sc.FP.Spawn Interior:1
 0.5 sc.FP.Look 180 0
 0.3 sc.FP.Move 1 0 2.6

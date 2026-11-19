@@ -50,7 +50,7 @@ Any difference is a non-zero exit naming the value. Run it after every game patc
 and, for a changed function hash, the rule ported from that function must be re-derived — never edit a value to
 make the validator pass.
 
-The checks (87 as of WP-E1 E1-5) are the 86 fixture values plus one completeness check: the fixture must list exactly the
+The checks (88 as of WP-E1 E1-7) are the 87 fixture values plus one completeness check: the fixture must list exactly the
 `r_ExposureCompensationEV<n>` cvars the executable registers (the loader builds the compensation curve from
 whatever anchors the fixture carries, so a dropped or invented anchor would otherwise pass). The shader side of
 the same curve — which anchors are read and where the segments join — is pinned by the `CalculateEVCompensation`
@@ -96,7 +96,10 @@ Method:
 | `glassVertexHeightBias`, `glassVertexHeightScale` | `M_SC_Glass` | `%PER_VERTEX_CURVATURE`: `height ×= saturate((vertex blue − 0.25) × 3)` |
 | `glassHeightClip` | `M_SC_Glass` coverage | `clip(heightMap − 0.01)` under `%HEIGHT_MAP` |
 | `glassTintStrengthDefault`, `glassTilingDefault`, `glassVStretchDefault`, `glassThinFilmThicknessDefault` | `FSCMaterialBuilder` `Glass` | the shader's declared default of a public parameter the material does not author (`GlassTintStrength`, `GlassTiling`, `GlassVStretch`; `ThinFilmThickness` under `%THIN_FILM`) |
-| `forcedFalloffFraction` | `FSCStarEngine::LightRangeFade`; the engine shader patch (WP-L3, `ue/scripts/engine_patches.py`) | a local light's range window: `GetLightForcedDistanceFade` = `saturate((1 − d / R) / 0.2)²`, full strength until the last 20 % of `lightRadius`; replaces UE's `(1 − (d / R)⁴)²`. Read from `lightbeam.cfxb`, which passes `1.0 / 0.2` (`volumetricfog.cfxb` passes the same `1 / 0.2f`) |
+| `forcedFalloffFraction` | `FSCStarEngine::LightRangeFade`; the importer's range fade (engine fork `ELightRangeFade::SquaredLinearTail`, WP-E1 E1-2) | a local light's range window: `GetLightForcedDistanceFade` = `saturate((1 − d / R) / 0.2)²`, full strength until the last 20 % of `lightRadius`; replaces UE's `(1 − (d / R)⁴)²`. Read from `lightbeam.cfxb`, which passes `1.0 / 0.2` (`volumetricfog.cfxb` passes the same `1 / 0.2f`) |
+| `r_ssdo`, `r_ssdoQuality` | `FSCSSDOSettings`: `r_ssdo` 0 leaves every amount at 0; quality 0 (the one ported: 3 slices × 6 samples per side) is the engine's default `r.SSDO.Quality` 1, any other quality is unsupported (the look then keeps UE's) | `DirOcclusionPS` without `%_RT_SAMPLE0` |
+| `r_ssdoRadius`, `r_ssdoStrength` | the engine fork's `SSDORadius` (× 100: cm) and `SSDOStrength` (WP-E1 E1-7) | the search radius in metres (`GetSSDORadius`: projected with `0.5 · P[1][1]`, clamped to 0.1–1 of the screen height) and the AO exponent |
+| `r_ssdoAmountDirect`, `r_ssdoAmountAmbient`, `r_ssdoAmountReflection` | the fork's `SSDODirectAmount`, `SSDOAmbientAmount`, `SSDOReflectionAmount` | `CalculateSSDO` on lights that cast no shadow and the sun (`TiledShading.cfx`), `1 − w × amount` on the ambient (probe) light and `DeriveSpecularOcclusion` on its specular (`MergedTiledShading.cfi`) |
 
 Recorded as evidence only (they justify a documented residual or a path not taken; nothing reads them):
 `r_ExposureThresholdRange` (dynamic-range threshold of the
@@ -115,8 +118,10 @@ Functions and what was taken from each:
 | `PupilAdaptation`, `PigmentAdaptation`, `ExponentialDecay`, `ApplyEyeAdaptation` | **ported** to the fork's two-stage adaptation (`EyeAdaptationCommon`, `TWO_STAGE_ADAPTATION`); `SCBridge.ViewerExposure.Meter` fails when one of these hashes (or the meter's) differs from the one the port was written from |
 | `ParallelReduce_Range` | histogram reduction (discard ratios, threshold range) |
 | `MaterialGlowToLinearGlow`, `CalculateEmissive` | `GlowNits` (material term) and `InstanceGlowNits` (instance term) |
-| `GetPhysicalLightAttenuation` | `PointCandela`: `1 / (tweak · (d − bulb) / bulb + 1)²`; `AttenuationOffset` = `bulb · (1 − tweak) / tweak`, the distance offset of the same curve (WP-L3: `SoftSourceRadius` + engine shader patch) |
-| `GetLightForcedDistanceFade` | the range window `LightRangeFade` and the engine shader patch (WP-L3) |
+| `GetPhysicalLightAttenuation` | `PointCandela`: `1 / (tweak · (d − bulb) / bulb + 1)²`; `AttenuationOffset` = `bulb · (1 − tweak) / tweak`, the distance offset of the same curve (engine fork `ELightDistanceAttenuation::BulbOffset`, WP-E1 E1-2) |
+| `GetLightForcedDistanceFade` | the range window `LightRangeFade` and the importer's range fade (engine fork, WP-E1 E1-2) |
+| `DirOcclusionPS`, `GetSSDORadius`, `CalculateSSDO`, `DeriveSpecularOcclusion` | **ported** to the engine fork's screen-space directional occlusion (`ScreenSpaceDirectionalOcclusion.usf` / `Common.ush`, `UE::SSDO`, WP-E1 E1-7); `SCBridge.ViewerExposure.SSDO.Mapping` fails when one of these hashes differs from the one the port was written from |
+| `SpatialDenoisePS` | the encoding taken (normalised bent normal, w = 1 − AO); its 2 × 2 blur is replaced by the per-frame noise rotation that MegaLights' and TSR's temporal filters average (`r.SSDO.TemporalNoise`) |
 | `PlanarLightDiffuse_LightSpace`, `DiffuseLambert` | `PlanarCandela` and the Lambert π folded into the light colour |
 | `GlassShared` | **ported** to `M_SC_Glass` (`create_materials.py` `glass_master`, which refuses to build when this hash or `ReflectanceToIOR`'s differs from the one its graph was written from): glass UV, clear base layer, absorption, vertex / map modifiers, height clip |
 | `GlassPBR_PS` | call site: what the glass pass hands to `GlassShared` |

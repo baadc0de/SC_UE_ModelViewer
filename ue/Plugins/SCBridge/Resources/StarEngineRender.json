@@ -13,6 +13,12 @@
         "change": 13165946,
         "entries": ["exe_cvars.r_exposureIncidentSmoothingTime", "meterMaxCompensationPerBlend", "meterMinCompensationPerBlend", "incidentMiddleGray", "CalcUpdatedFrameState", "ApplyEyeAdaptation", "ExposureAdaptationCS"],
         "note": "extracted from and validated against change 13165946; the entries above it were extracted from change 12913470 and validated (87/87) against 13165946 too"
+      },
+      {
+        "work_package": "WP-E1 E1-7",
+        "source": "Engine/ShaderCache_Vulkan.pak (2663973822 bytes, crc32 8e895d78) read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
+        "entries": ["DeriveSpecularOcclusion"],
+        "note": "the SSDO's specular occlusion (TiledShading.cfxb); DirOcclusionPS, SpatialDenoisePS, GetSSDORadius and CalculateSSDO were re-hashed from the same pak and match"
       }
     ]
   },
@@ -368,6 +374,10 @@
     "CalculateSSDO": {
       "file": "ShadeLib.cfib",
       "sha256": "588ccce3f95a3918dd43960be6e62ecb6ae0db83065791c6b0712f85f80a2552"
+    },
+    "DeriveSpecularOcclusion": {
+      "file": "TiledShading.cfxb",
+      "sha256": "a382cb5e9e642aa7688017551fba5e9b487db21783c201befc17ba383f63b99c"
     },
     "CalcStencilWearAlpha": {
       "file": "stencilLib.cfib",

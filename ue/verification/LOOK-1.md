@@ -10,7 +10,7 @@ Routes: `ue/scripts/routes/cutlass-look*.txt` (host `-SCDefaults -SCLoad=DRAK_Cu
 | Change | Where | Verdict / measurement |
 |---|---|---|
 | Every ship light casts shadows (MegaLights) | `USCViewerSettings::bShadowAllLights` (default on), applied at import and by `sc.Look.ShadowAll` | Removes light leaking through geometry (the yellow streaks in the cargo bay) and gives the overhead fixtures their cone shadows, as in the path tracer. Cost within noise (−0.2..+0.1 ms). |
-| Game SSDO off; Lumen short-range AO traced with HWRT | `ue/EnginePatches/look.json` (`ssdo: false` → patched amounts 0), `DefaultScalability.ini` `[GlobalIlluminationQuality@3]` | Contact occlusion follows geometry; broad SSDO darkening gone. +1.6..1.9 ms. |
+| Game SSDO off; Lumen short-range AO traced with HWRT | then `ue/EnginePatches/look.json` (`ssdo: false` → patched amounts 0); since WP-E1 E1-7 `USCViewerSettings::bStarEngineSSDO` (default off, `sc.Look.SSDO`), `DefaultScalability.ini` `[GlobalIlluminationQuality@3]` | Contact occlusion follows geometry; broad SSDO darkening gone. +1.6..1.9 ms. |
 | `LumenDiffuseColorBoost` 1.3 (1.15 since LOOK-2) | runtime exposure volume (`SCViewerExposure.cpp`) | Restrained lift of bounce light (cargo +7 % grey mean); no material wash-out. |
 | Glowing surfaces in Lumen | `bEmissiveInLumen` (default on), hidden opaque copies per glowing part (`SCEmissiveLights.cpp`) | Strips light their surroundings through GI; 2.9 s at import, ~0.1 ms. |
 
