@@ -24,6 +24,7 @@
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Serialization/StructuredArchive.h"
+#include "SCLegacyPostProcessForTests.h"
 
 namespace
 {
@@ -847,6 +848,32 @@ bool FSCViewerExposureReviewRules3::RunTest(const FString&)
     return true;
 }
 
+#if SCVIEWER_ENGINE_EXPOSURE >= 7
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureReviewRules4, "SCBridge.ViewerExposure.ReviewRules4",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerExposureReviewRules4::RunTest(const FString&)
+{
+    // Review fixes 4 (Astra fixes-3 review 4): a view in a per-view Reflected fallback reads its own scene colour slice with the scene colour
+    // permutation, never the family union or a shared illuminance texel; every other view keeps UE's choice.
+    using namespace UE::AutoExposure;
+    const FHistogramInputChoice Own{EHistogramInput::ViewSceneColorSlice, true};
+    for (const EMeterFallback F : {EMeterFallback::FamilyRejected, EMeterFallback::CollapsedRect})
+        for (const bool bIgnoreMaterials : {false, true})
+            for (const bool bAllViewPixels : {false, true})
+                TestTrue(FString::Printf(TEXT("fallback %d, ignore-materials %d, all-view-pixels %d: own scene colour, SceneColor permutation"), int32(F), bIgnoreMaterials, bAllViewPixels),
+                         ChooseHistogramInput(F, false, bIgnoreMaterials, true, true, bAllViewPixels) == Own);
+    // UE's choices (no fallback, Reflected).
+    TestTrue(TEXT("UE: scene colour slice"), ChooseHistogramInput(EMeterFallback::None, false, false, false, false, false) == (FHistogramInputChoice{EHistogramInput::ViewSceneColorSlice, false}));
+    TestTrue(TEXT("UE: precalculated illuminance"), ChooseHistogramInput(EMeterFallback::None, false, true, true, true, false) == (FHistogramInputChoice{EHistogramInput::ViewIlluminance, false}));
+    TestTrue(TEXT("UE: ignore-materials without a texture: scene colour, UE's permutation"), ChooseHistogramInput(EMeterFallback::None, false, true, false, false, false) == (FHistogramInputChoice{EHistogramInput::ViewSceneColor, false}));
+    TestTrue(TEXT("UE: all-view-pixels union"), ChooseHistogramInput(EMeterFallback::None, false, false, false, false, true) == (FHistogramInputChoice{EHistogramInput::FamilyUnion, false}));
+    // The fork's cases kept from review fixes 3: a sibling's illuminance texture, an incident meter.
+    TestTrue(TEXT("a sibling's illuminance texture: scene colour with the SceneColor permutation"), ChooseHistogramInput(EMeterFallback::None, false, true, true, false, false) == (FHistogramInputChoice{EHistogramInput::ViewSceneColor, true}));
+    TestTrue(TEXT("an incident meter: the scene colour slice with the SceneColor permutation"), ChooseHistogramInput(EMeterFallback::None, true, true, true, true, false) == (FHistogramInputChoice{EHistogramInput::ViewSceneColorSlice, true}));
+    return true;
+}
+#endif
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureLegacyClear, "SCBridge.ViewerExposure.LegacyClearMigration",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCViewerExposureLegacyClear::RunTest(const FString&)
@@ -859,7 +886,7 @@ bool FSCViewerExposureLegacyClear::RunTest(const FString&)
     FPostProcessSettings Loaded;
     FStringOutputDevice Errors;
     // Text import ports a deprecated property only with PPF_UseDeprecatedProperties (FProperty::ShouldPort); tagged loading takes it as is.
-    Struct->ImportText(TEXT("(bOverriddenNoneAssetsClear=True)"), &Loaded, nullptr, PPF_UseDeprecatedProperties, &Errors, Struct->GetName());
+    Struct->ImportText(TEXT("(bOverriddenNoneAssetsClear=1)"), &Loaded, nullptr, PPF_UseDeprecatedProperties, &Errors, Struct->GetName());
     TArray<uint8> Bytes;
     FMemoryReader Ar(Bytes);
     Ar.SetCustomVersions(FCurrentCustomVersions::GetAll());
@@ -873,23 +900,48 @@ bool FSCViewerExposureLegacyClear::RunTest(const FString&)
     Struct->ImportText(TEXT("(OverriddenNoneAssetsClear=1)"), &Masked, nullptr, PPF_None, &Errors, Struct->GetName());
     Struct->GetCppStructOps()->PostSerialize(Ar, &Masked);
     TestEqual(TEXT("A13: a saved mask is kept"), Masked.OverriddenNoneAssetsClear, int32(EPostProcessOverriddenNoneAsset::ColorGradingLUT));
-#if SCVIEWER_ENGINE_TONE_CURVE >= 4
-    // As an old asset arrives: tagged binary data that holds the bool under its saved name (written here with deprecated properties
-    // included, as the E1-4 review fork saved it), loaded by the current struct (SerializeItem: tagged properties, then PostSerialize).
+#if SCVIEWER_ENGINE_TONE_CURVE >= 5
+    // As old assets arrive: tagged data in the layout the E1-4 review fork saved (FSCLegacyOverriddenNoneClear: the bool, a BoolProperty
+    // tag), loaded by the current struct (SerializeItem: tagged properties, then PostSerialize). Review fixes 4: the migration acts on the
+    // tag's presence, so an instance's saved false over an archetype already migrated to All clears the mask (Astra fixes-3 review 6).
     {
-        FPostProcessSettings Old;
-        Old.bOverriddenNoneAssetsClear_DEPRECATED = 1;
-        TArray<uint8> Tagged;
-        FMemoryWriter Writer(Tagged);
-        FObjectAndNameAsStringProxyArchive WriterProxy(Writer, false);
-        WriterProxy.SetPortFlags(PPF_UseDeprecatedProperties);
-        const_cast<UScriptStruct*>(Struct)->SerializeItem(FStructuredArchiveFromArchive(WriterProxy).GetSlot(), &Old, nullptr);
-        FMemoryReader Reader(Tagged);
-        FObjectAndNameAsStringProxyArchive ReaderProxy(Reader, false);
+        UScriptStruct* Legacy = FSCLegacyOverriddenNoneClear::StaticStruct();
+        UScriptStruct* Current = const_cast<UScriptStruct*>(Struct);
+        const auto Write = [Legacy](bool bValue) {
+            FSCLegacyOverriddenNoneClear Value, Defaults;
+            Value.bOverriddenNoneAssetsClear = bValue;
+            Defaults.bOverriddenNoneAssetsClear = !bValue; // differs, so the tag is written
+            TArray<uint8> Tagged;
+            FMemoryWriter Writer(Tagged);
+            FObjectAndNameAsStringProxyArchive Proxy(Writer, false);
+            Legacy->SerializeItem(FStructuredArchiveFromArchive(Proxy).GetSlot(), &Value, &Defaults);
+            return Tagged;
+        };
+        const auto Load = [Current](const TArray<uint8>& Tagged, FPostProcessSettings& Into, const FPostProcessSettings* Archetype) {
+            FMemoryReader Reader(Tagged);
+            FObjectAndNameAsStringProxyArchive Proxy(Reader, false);
+            Current->SerializeItem(FStructuredArchiveFromArchive(Proxy).GetSlot(), &Into, Archetype);
+        };
         FPostProcessSettings Asset;
-        const_cast<UScriptStruct*>(Struct)->SerializeItem(FStructuredArchiveFromArchive(ReaderProxy).GetSlot(), &Asset, nullptr);
-        TestEqual(TEXT("A13: a tagged old asset loads as a clear of every asset"), Asset.OverriddenNoneAssetsClear, int32(EPostProcessOverriddenNoneAsset::All));
-        TestFalse(TEXT("A13: the deprecated bool is consumed"), bool(Asset.bOverriddenNoneAssetsClear_DEPRECATED));
+        Load(Write(true), Asset, nullptr);
+        TestEqual(TEXT("A13: a saved true loads as a clear of every asset"), Asset.OverriddenNoneAssetsClear, int32(EPostProcessOverriddenNoneAsset::All));
+        TestEqual(TEXT("A13: the legacy tag is consumed"), int32(Asset.bOverriddenNoneAssetsClear_DEPRECATED), int32(FPostProcessSettings::OverriddenNoneAssetsClearLegacyAbsent));
+        // A placed instance's saved false, delta-loaded against its archetype (a Blueprint default saved true, already migrated to All).
+        const FPostProcessSettings Archetype = Asset;
+        FPostProcessSettings Instance = Archetype;
+        Load(Write(false), Instance, &Archetype);
+        TestEqual(TEXT("A13 (review fixes 4): an instance's saved false over a migrated archetype clears the mask"), Instance.OverriddenNoneAssetsClear, 0);
+        // No legacy tag: the instance keeps what it inherits from the archetype.
+        FPostProcessSettings Plain = Archetype;
+        TArray<uint8> Empty;
+        {
+            FPostProcessSettings Same = Archetype;
+            FMemoryWriter Writer(Empty);
+            FObjectAndNameAsStringProxyArchive Proxy(Writer, false);
+            Current->SerializeItem(FStructuredArchiveFromArchive(Proxy).GetSlot(), &Same, &Archetype);
+        }
+        Load(Empty, Plain, &Archetype);
+        TestEqual(TEXT("A13: without the legacy tag the inherited mask stays"), Plain.OverriddenNoneAssetsClear, int32(EPostProcessOverriddenNoneAsset::All));
     }
 #endif
 #endif

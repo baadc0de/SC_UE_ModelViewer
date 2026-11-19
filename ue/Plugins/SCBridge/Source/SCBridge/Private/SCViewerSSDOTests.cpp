@@ -340,7 +340,8 @@ uint32 GameBits(float FrontCos, float BackCos, float AngleNormal, int32 J)
     if (!J) { const float NX = -Y, NY = -X; X = NX; Y = NY; }
     const auto S = [AngleNormal](float A) { const float T = FMath::Clamp((A - AngleNormal) / UE_PI + 0.5f, 0.f, 1.f); return T * T * (3.f - 2.f * T); };
     X = S(X); Y = S(Y);
-    const uint32 Start = uint32(X * 32), Span = uint32(FMath::RoundToFloat(FMath::Clamp(Y - X, 0.f, 1.f) * 32));
+    // HLSL round(): halfway cases to even (review fixes 4).
+    const uint32 Start = uint32(X * 32), Span = uint32(FMath::RoundHalfToEven(FMath::Clamp(Y - X, 0.f, 1.f) * 32));
     return ((1u << (Span & 31u)) - 1u) << (Start & 31u);
 }
 }
@@ -393,6 +394,10 @@ bool FSCViewerSSDOHorizonBits::RunTest(const FString&)
     const uint32 Bits = SampleVisibilityBits(0.34f, 0.0f, 0.0f, 1);
     TestEqual(TEXT("front 0.34, normal 0: the game's mask"), Bits, GameBits(0.34f, 0.0f, 0.0f, 1));
     TestEqual(TEXT("front 0.34, normal 0: start bit 31"), Bits ? int32(FMath::CountTrailingZeros(Bits)) : -1, 31);
+    // Review fixes 4: a span of exactly 2.5 sectors rounds to even (2 bits), as HLSL round() does; 3.5 rounds to 4.
+    TestEqual(TEXT("span 2.5 sectors: 2 bits (ties to even)"), SectorBits(0.0f, 2.5f / 32.0f), 0x3u);
+    TestEqual(TEXT("span 3.5 sectors: 4 bits (ties to even)"), SectorBits(0.0f, 3.5f / 32.0f), 0xFu);
+    TestEqual(TEXT("span 2.5 from bit 4"), SectorBits(4.0f / 32.0f, 6.5f / 32.0f), 0x30u);
     // A sweep over cosines and normal angles, both sides, at and around the sector boundaries (k / 32 after the smoothstep).
     int32 Mismatches = 0, Cases = 0;
     for (int32 F = -100; F <= 100; ++F)
@@ -430,6 +435,30 @@ bool FSCViewerSSDOHorizonBits::RunTest(const FString&)
     for (int32 I = -1000; I <= 1000; ++I)
         WorstEst2 = FMath::Max(WorstEst2, double(FMath::Abs(AcosEst2Game(I / 1000.f) - GameAcosEst2(I / 1000.f))));
     TestTrue(FString::Printf(TEXT("ACosEst2 is the game's (worst %g)"), WorstEst2), WorstEst2 <= 1e-6);
+    return true;
+}
+#endif
+#if SCVIEWER_ENGINE_SSDO >= 3
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerSSDORestrictions, "SCBridge.ViewerExposure.SSDO.Restrictions",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerSSDORestrictions::RunTest(const FString&)
+{
+    // Review fixes 4 (Astra fixes-3 review 7, the HWRT fallback): a restriction that removes the last amount disables the view (it no longer
+    // withholds DFAO); a debug view still runs the pass.
+    using namespace UE::SSDO;
+    FViewSettings Direct; Direct.bEnabled = true; Direct.DirectAmount = 1.f;
+    ApplyRendererRestrictions(Direct, /*bNoDirect*/ true, false);
+    TestFalse(TEXT("direct-only under unified toon: disabled"), Direct.bEnabled);
+    FViewSettings Debug = FViewSettings(); Debug.bEnabled = true; Debug.DirectAmount = 1.f; Debug.Debug = EDebugView::AmbientOcclusion;
+    ApplyRendererRestrictions(Debug, true, false);
+    TestTrue(TEXT("a debug view still runs"), Debug.bEnabled && Debug.DirectAmount == 0.f);
+    FViewSettings All; All.bEnabled = true; All.DirectAmount = All.AmbientAmount = All.ReflectionAmount = 1.f;
+    ApplyRendererRestrictions(All, false, /*bNoIndirect*/ true);
+    TestTrue(TEXT("hardware ray traced AO: no indirect replacement, direct kept"), All.bEnabled && All.AmbientAmount == 0.f && All.ReflectionAmount == 0.f && All.DirectAmount == 1.f);
+    TestFalse(TEXT("hardware ray traced AO: Lumen's AO not replaced"), All.ReplacesAnyLumenOcclusion());
+    FViewSettings Off;
+    ApplyRendererRestrictions(Off, true, true);
+    TestFalse(TEXT("a disabled view stays disabled"), Off.bEnabled);
     return true;
 }
 #endif

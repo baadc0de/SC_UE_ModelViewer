@@ -81,7 +81,7 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     // E1-7 review: narrowed only when integral and in int range (0.5 had become quality 0, the supported one); else -1, refused below.
     const double SSDOQualityValue = Value(TEXT("exe_cvars"), TEXT("r_ssdoQuality"));
     const bool bSSDOQualityIntegral = FMath::IsFinite(SSDOQualityValue) && SSDOQualityValue == FMath::RoundToDouble(SSDOQualityValue) &&
-                                      FMath::Abs(SSDOQualityValue) <= double(MAX_int32);
+                                      SSDOQualityValue >= double(MIN_int32) && SSDOQualityValue <= double(MAX_int32);
     Out.SSDOQuality = bSSDOQualityIntegral ? int32(SSDOQualityValue) : -1;
     Out.SSDORadiusM = Value(TEXT("exe_cvars"), TEXT("r_ssdoRadius"));
     Out.SSDOStrength = Value(TEXT("exe_cvars"), TEXT("r_ssdoStrength"));
