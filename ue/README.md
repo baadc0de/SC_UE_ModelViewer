@@ -577,8 +577,21 @@ ray to it, so a screen covered by other geometry shows up. `sc.FP.Pads` checks t
 visibility hit is the pad itself) and resolves to its door; `sc.FP.Pads negative` repeats it with the pads' collision off
 and must find none (`FP_PADS_NEGATIVE ok=1`). Cooked levels are stamped with `USCCookLibrary::FormatVersion`; an older
 cook is refused by `package_showcase.ps1` and reported STALE by the cook scripts, which also refuse to cook an export whose
-`ui_bindings` lack the screen-role fields; pooled meshes are keyed by their Nanite build and section topology. Known gap: the exporter renders door panels at 16:9,
-and the image is stretched onto square and portrait faces until slice I1-2 (`docs/work-packages/WP-I1-door-and-lift-panels.md`).
+`ui_bindings` lack the screen-role fields; pooled meshes are keyed by their Nanite build and section topology.
+
+**Panel states and aspect (cache format 32, I1-5 / I1-3 / I1-2).** The exporter renders an interior panel at its face's
+texture-space aspect (`ui_texture_aspect_w_over_h`, measured on its `$RenderToTexture` faces), with the panel owner's user
+variables (a C2 door pad hides its lock, sensor and light controls) and state, and writes the owner's other states the
+canvas shows as `ui_bindings[].state_images[]` (door pads: `DoorOpenState` opened / opening / closing, `DoorLockState`
+locked, `PowerState` low / lost, `OverrideableState` can-override). The importer decodes them with the default image and
+makes one instance each per (sidecar, submaterial, image); a face holding state images is an `ASCVehicle::ScreenFaces`
+entry. `RefreshPanelScreens` (from the vehicle tick and when a fragment starts) puts on each door pad's face the state of
+its door (`DoorControls`): opening or closing while the door moves, opened or closed at rest. The viewer does not model
+locks or power, so those states are shown on request: `sc.Screens.States` lists the faces (`SCREEN_STATE`: face, component,
+slot, its states, the state shown, the door and its `sc.FP.Door` index); `sc.Screens.States <face|all> <Type.State>` holds
+a state, `follow` releases it. `SetScreenFaceMaterial` puts any other material on a face (the hook for screen content the
+viewer draws itself). The import logs `SCREEN_STATES faces=<n> state_images=<m> initial_swaps=<k>`; a swap logs
+`PANEL_SCREEN face=<i> state=<Type.State|default>`.
 
 ### Lifts (WP-P5)
 

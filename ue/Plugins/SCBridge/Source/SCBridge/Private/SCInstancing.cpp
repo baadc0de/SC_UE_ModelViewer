@@ -66,7 +66,7 @@ FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle)
     {
         // Exactly a plain component (not an instanced one or a subclass), registered, rigid, and a leaf.
         if (!C || C->GetClass() != UStaticMeshComponent::StaticClass() || !C->IsRegistered() || !C->GetStaticMesh() ||
-            !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || Emissive(C))
+            !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || Emissive(C) || C->ComponentHasTag(FSCInstancing::KeepTag))
             continue;
         ++Stats.Components;
         TArray<TArray<UStaticMeshComponent*>>& Bucket = Groups.FindOrAdd(SetupHash(C));

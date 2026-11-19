@@ -35,7 +35,10 @@ use std::{
 // 31: interiors carry lifts (`interiors[].lifts[]`), geometry-less interactive entities (`interiors[].entities[]`), and
 //     placements their interaction links, parent attachment, door timing and interaction points; a root item port an
 //     entity occupies is no longer placed a second time (WP-P5).
-pub const CACHE_FORMAT_VERSION: u32 = 31;
+// 32: operating-panel UI renders carry their owner's values and states: `ui_bindings[]` gain
+//     `ui_texture_aspect_w_over_h`, `user_variables`, `state_types` and `state_images[]`; door pads render at their
+//     face's texture aspect, with the large button, style-set labels and tag switches (WP-I1 I1-5 / I1-3 / I1-2).
+pub const CACHE_FORMAT_VERSION: u32 = 32;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

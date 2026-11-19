@@ -684,6 +684,81 @@ hangar panel reads ELEVATOR CALLED after a press.
 - the hangar's floor and stop names, which need P5-4's transit line;
 - I1-2 aspect, which composes with this: the render key already includes the aspect.
 
+## Result (I1-5, with I1-3 and I1-2)
+
+Submodule branch `scviewer/panel-screens` (from `scviewer/lifts`), commits `6b00f574` (starbreaker-ui), `1919f186`
+(owner values, state renders, texture aspect), `f6761e08` (review fixes), `df52450e` (operating-panel rule, text
+alignment enumerations). `CACHE_FORMAT_VERSION` 31 → 32; the cook stamp `FormatVersion` 2 → 3.
+
+### Root causes and fixes (each with a failing test first, starbreaker-ui)
+
+1. **Large button.** `ComponentGeneralButtonLarge` is a scene node type, expanded from
+   `ButtonGeneralLargeComponentStandard` in the second expansion band, styled from the brand's `buttonlarge` kit sheet
+   (brand record fallback when the canvas carries no brand styles, only for a known manufacturer). The component's
+   label is instanced (`_LabelInstanced_`) so the host does not draw a second, left-aligned copy; the host-bound
+   `parameter` input is wired through synthetic params. Tests in `bb_resolve/engine_04_tests_expansion.rs`.
+2. **Style-set text.** `FieldModifierLocalization` on `Text` sets the node's text (raw key resolved by the loc fetcher,
+   `,P` keys included); `Horizontal/VerticalAlignment` enumerations map to the text alignment. Tests in
+   `tests_modifiers.rs`.
+3. **Boolean operations.** `BindingsBooleanFromTagSwitch`, `BindingsTagFromTagSwitch` and
+   `BooleanFromLocalizationIsEmpty` are evaluated in bindings and in the state filter (which no longer skips a tag
+   switch as an unset variable). Tests in `tests_state_tags.rs`, `tests_b.rs`.
+4. **Per-instance values.** The exporter reads the owner's `UserVariablesComponentParams` defaults and the `.soc`
+   `EntityComponentUserVariables` overrides (by `__index`) and passes them as a per-binding registry overlay; render
+   identity includes them (`ui_owner_values.rs`, `pipeline/tests.rs`, `socpak_lift_tests.rs`). They attach only to an
+   operating panel: physical, owner resolved, and not a plain `Display` item unless a kiosk.
+
+### I1-3 states and I1-2 aspect
+
+- **States.** The exporter reads the owner's `SInteractionStateMachineParams` state types, renders the default (every
+  type at its default) plus one image per non-default state, drops renders identical to the default, and writes
+  `state_images[]` (`state.<type>.<state>`) into `ui_bindings`. Door pads export `DoorOpenState.DoorOpened`,
+  `DoorLockState.DoorLocked` and `PowerState.PowerLost`; Opening, Closing, PowerLow and CanOverride render identical to
+  the default and are dropped. Kiosks export their `Main.*` states. 69 state images in the C2 + hangar scene.
+- **Viewer.** `FSCScreenFace` per (component, slot); `RefreshPanelScreens` follows the linked door's rig state each tick
+  (open → `DoorOpened`), one MI per (sidecar, submaterial, image); faces carry `SCKeepComponent` so instancing does not
+  merge them. `sc.Screens.States [face] [state|-]` lists and pins.
+- **Aspect.** `$RenderToTexture` faces are measured in texture space (|∂P/∂u| / |∂P/∂v|) and rendered at an
+  area-preserving size bounded at 8192 (cargo-bay pad 1440x1440, habitation pad 1086x1909, light panel 720x1280).
+
+### Verification (C2 + `hangar_xltop_001`, first person, port 8771)
+
+Shots in `out/panels/v3/`. `FP_PADS total=34 resolved=28 hittable=28` (unchanged), 131 screen faces.
+
+- **Cargo-bay pad** (face 41, door 28): reads OPEN closed, CLOSE after the toggle, back to default when closed; the
+  LOCKED and no-power pins swap. Label centred, framed. Astra: PARTIAL — layout CLOSE, label MATCH/CLOSE, colour
+  MISMATCH (pale on screen; the baked image is saturated blue with a dark footer, so the wash is the viewer's screen
+  emissive/exposure), aspect MISMATCH (the reference shows the landscape recessed wall pad, not the square bulkhead pad
+  framed here).
+- **Habitation pad** (face 51, door 30): OPEN → CLOSE → OPEN, centred. Astra: PARTIAL — layout MATCH, label CLOSE,
+  aspect CLOSE, colour MISMATCH (same wash; turquoise in the reference).
+- **Light panel**: header and the On / Auxiliary / Emergency rows resolve, but the rows are laid out off the left edge
+  and the header reads "Door Control:". Astra: FAIL.
+- **Hangar call panel**: CALL ELEVATOR, no red field, but on an amber field and at the top edge. Astra: PARTIAL.
+
+Tests: `ui_check.sh` ALL GREEN (starbreaker-ui lib 632 passed), `starbreaker-3d --lib` 975 passed, CLI `ui::` passed;
+UE `SCBridge` 171 tests, 167 pass, the 4 known failures unchanged; new `SCBridge.Screens.StateImages`.
+
+### Review (Terra + Astra, `out/panels/review3/`)
+
+Fixed: state types in the render key; output path collisions (64-bit stem digest, one namespace); second expansion band
+kept across child-scene merge; empty host-bound strings kept; CLI replay names and sanitising; texture-aspect bound;
+reset and untargeted playback refresh faces; pin release on unlinked faces; instancing keeps faces; brand fallback only
+for a known manufacturer; state discovery follows canvas/value references; aspect gated on operating panels; cook
+stamp. Declined: lift called state (scope), DoorOpenState literals (game vocabulary, not asset names), render-count
+optimisation and sparse overrides (low).
+
+### Open
+
+- Light panel row layout (rows off-canvas) and header text: a layout defect in the list container, not fixed here.
+- Hangar call panel: the pipeline's default brand (`.or(Some("drak"))` in starbreaker-ui `pipeline/mod.rs`) is a hard-coded game value,
+  flagged; the label sits at the top edge.
+- Screen emissive wash in the viewer (colour parity on all pads); the header gear icon renders in the Critical red.
+- LOCKED shows the label plus the lock icon; the reference's lock strip is absent on the pads framed here.
+- ELEVATOR CALLED (needs the transit state); C2 inner ramp buttons are not texture-aspect measured.
+- Frozen Clipper parity (`ui_check.sh --full`) not run: no Clipper export on this machine.
+- `SCBridge.Screens.StateImages` and the socpak override parse test were written with the code, not failing first.
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:

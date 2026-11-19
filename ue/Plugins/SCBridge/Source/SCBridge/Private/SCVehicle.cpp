@@ -204,6 +204,7 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         for (const auto& P : Playback) Record(P);
         for (const auto& P : HeldPlayback) Record(P);
     }
+    if (Found && !ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: the pads of a door that starts moving
     return Found;
 }
 bool ASCVehicle::IsFragmentOpen(FName Fragment, const USCRigComponent* Rig) const
@@ -223,6 +224,7 @@ void ASCVehicle::ResetPose()
     UpdateTickEnabled();
     for (USCRigComponent* Rig : Rigs)
         Rig->ResetPose();
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: every door is back at rest (closed)
 }
 void ASCVehicle::Tick(float DeltaSeconds)
 {
@@ -247,6 +249,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
         }
     }
     EvaluateClips();
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: a door that started or stopped moving
     UpdateTickEnabled();
 }
 void ASCVehicle::UpdateTickEnabled()

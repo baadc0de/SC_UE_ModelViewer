@@ -1049,6 +1049,7 @@ void FSCImportJob::FState::Assemble()
     // image its own binding resolves to (FSCSceneInstance::ScreenSlotImage); every other screen face stays dark glass.
     int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;
     TSet<FString> ScreenImagesBound;
+    TSet<FString> ScreenStateImagesBound; // I1-3 state images bound to faces (beside the default images)
     auto StaticSlotTriangles = [](const UStaticMesh* Mesh, int32 Slot) {
         uint32 N = 0;
         if (const FStaticMeshRenderData* R = Mesh ? Mesh->GetRenderData() : nullptr; R && !R->LODResources.IsEmpty())
@@ -1072,7 +1073,7 @@ void FSCImportJob::FState::Assemble()
         // The screen instance for a slot, or null to keep Find's (a non-screen slot, or a dark face). Owner: the rig node
         // a rigid part variant belongs to (all its triangles do), INDEX_NONE for the whole mesh. Triangles: the slot's
         // triangles in the drawn variant / LOD (an unused slot binds and counts nothing).
-        auto ScreenMaterial = [&](const FSCSubmaterial* Sub, int32 Slot, int32 Owner, uint32 Triangles, bool bSoft) -> UMaterialInterface* {
+        auto ScreenMaterial = [&](const FSCSubmaterial* Sub, int32 Slot, int32 Owner, uint32 Triangles, bool bSoft, UMeshComponent* Target) -> UMaterialInterface* {
             if (!Options.bImportMaterials || !Sub || !E.Mesh || !Triangles || !Materials.IsScreen(I.MaterialSidecar, I.PaletteId, Sub->Index))
                 return nullptr;
             TArray<TArray<FString>> Chains; // per owning node: its name, then its ancestors' (lower case)
@@ -1092,6 +1093,20 @@ void FSCImportJob::FState::Assemble()
             UMaterialInterface* Screen = Image.IsEmpty() ? nullptr : Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, Image);
             if (Screen) { ScreenImagesBound.Add(Image); ++ScreenBoundSlots; bScreenBound = true; }
             else ++ScreenDarkSlots;
+            // I1-3: the panel owner's other states, one instance each; the face swaps them (ASCVehicle::RefreshPanelScreens).
+            if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->PanelStateImages().IsEmpty())
+            {
+                FSCScreenFace& Face = V->ScreenFaces.AddDefaulted_GetRef();
+                Face.Component = Target; Face.Slot = Slot; Face.Panel = E.Anchor; Face.Default = Screen; Face.Image = Image;
+                for (const FSCUiStateImage& State : Binding->PanelStateImages())
+                    if (UMaterialInterface* M = Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, State.ImagePath))
+                    {
+                        Face.States.Add(State.Key(), M);
+                        ScreenStateImagesBound.Add(State.ImagePath);
+                    }
+                // Its slot is swapped per component: never consolidated into a shared instance (FSCInstancing).
+                Target->ComponentTags.AddUnique(FSCInstancing::KeepTag);
+            }
             return Screen;
         };
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
@@ -1144,7 +1159,7 @@ void FSCImportJob::FState::Assemble()
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
                     if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
                     {
-                        UMaterialInterface* Screen = ScreenMaterial(Sub, Slot, INDEX_NONE, SkeletalSlotTriangles(*RigMesh, Slot), true);
+                        UMaterialInterface* Screen = ScreenMaterial(Sub, Slot, INDEX_NONE, SkeletalSlotTriangles(*RigMesh, Slot), true, E.Rig);
                         E.Rig->SetMaterial(Slot, Screen ? Screen : Mat);
                         if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh); // a panel's image does not follow the paint
                     }
@@ -1227,7 +1242,7 @@ void FSCImportJob::FState::Assemble()
                     if (bNanite && Translucent.Contains(Slot)) continue;
                     const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot);
                     UMaterialInterface* Material = Sub ? Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host) : nullptr;
-                    UMaterialInterface* Screen = Material ? ScreenMaterial(Sub, Slot, Node, StaticSlotTriangles(Mesh, Slot), false) : nullptr;
+                    UMaterialInterface* Screen = Material ? ScreenMaterial(Sub, Slot, Node, StaticSlotTriangles(Mesh, Slot), false, C) : nullptr;
                     if (Screen) Material = Screen;
                     // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
@@ -1434,6 +1449,10 @@ void FSCImportJob::FState::Assemble()
            TEXT("SCREEN_BIND instances=%d images=%d panel_images=%d skipped_mfd=%d slots_bound=%d slots_dark=%d ambiguous=%d unclassified=%d"),
            ScreenBoundInstances, ScreenImagesBound.Num(), Materials.PanelImages.Num(), Materials.SkippedVehicleScreens, ScreenBoundSlots,
            ScreenDarkSlots, ScreenAmbiguousSlots, Materials.UnclassifiedBindings);
+    // I1-3: faces whose image follows their panel's state, and the state images they hold; then the faces' initial state.
+    const int32 InitialSwaps = V->RefreshPanelScreens();
+    UE_LOG(LogSCImport, Display, TEXT("SCREEN_STATES faces=%d state_images=%d initial_swaps=%d"), V->ScreenFaces.Num(),
+           ScreenStateImagesBound.Num(), InitialSwaps);
     if (Materials.UnclassifiedBindings)
         Warn(Manifest.ScenePath, FString::Printf(TEXT("%d UI bindings carry no screen role (an export before source_item_type, or an unresolved ")
             TEXT("owner): their screens stay dark; re-export with the current exporter (cache format 30) to show door and lift panel images"),

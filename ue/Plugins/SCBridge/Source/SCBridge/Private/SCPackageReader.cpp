@@ -91,6 +91,19 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
         Binding.SourceItemType = String(B, TEXT("source_item_type"));
         B->TryGetBoolField(TEXT("source_owner_resolved"), Binding.bOwnerResolved);
         B->TryGetBoolField(TEXT("source_kiosk_interaction"), Binding.bOperated);
+        // WP-I1 I1-3: the owner's other states, each with its render.
+        for (const auto& S : ReaderArray(B, TEXT("state_images")))
+        {
+            const FReaderObject SI = S && S->Type == EJson::Object ? S->AsObject() : nullptr;
+            if (!SI) continue;
+            FSCUiStateImage Image;
+            Image.StateType = String(SI, TEXT("state_type"));
+            Image.State = String(SI, TEXT("state"));
+            if (Image.StateType.IsEmpty() || Image.State.IsEmpty() ||
+                !FSCPackageSource::Normalize(String(SI, TEXT("generated_image_path")), Image.ImagePath) || Image.ImagePath.IsEmpty())
+                continue;
+            Binding.StateImages.Add(MoveTemp(Image));
+        }
     }
     const FReaderObject* Port;
     if (O->TryGetObjectField(TEXT("port"), Port))
@@ -305,6 +318,7 @@ void FSCSceneInstance::PanelImages(TSet<FString>& Out, int32* Excluded, int32* U
         if (!B.bClassified || !B.bOwnerResolved) { if (Unclassified) ++*Unclassified; continue; } // unknown owner: dark
         if (!B.IsOperatingPanel()) { if (Excluded) ++*Excluded; continue; }
         if (!B.PanelImage().IsEmpty()) Out.Add(B.PanelImage());
+        for (const FSCUiStateImage& S : B.PanelStateImages()) Out.Add(S.ImagePath);
     }
 }
 FString FSCSceneInstance::ScreenSlotImage(const TSet<FString>& MeshNodes, const TArray<TArray<FString>>& Owners, bool* bAmbiguous) const

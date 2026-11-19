@@ -464,4 +464,40 @@ bool FSCScreensPerFace::RunTest(const FString&)
     FSCImporter::Unload(World); World->DestroyWorld(false);
     return true;
 }
+// SCBridge.Screens.StateImages (WP-I1 I1-3): an operating panel's `state_images[]` are read with the binding (an image
+// outside the package, or an entry without its state, is dropped) and decoded with its default image; a display item's
+// are not. A pad shows its door's DoorOpenState: opening / closing while the door moves, opened / closed at rest.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCScreenStateImages, "SCBridge.Screens.StateImages", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCScreenStateImages::RunTest(const FString&)
+{
+    const TCHAR* States = TEXT(R"(,"state_images":[
+        {"state_type":"DoorOpenState","state":"DoorOpened","generated_image_path":"Data/UI/Generated/ship/synthetic/door__open.png"},
+        {"state_type":"DoorLockState","state":"DoorLocked","generated_image_path":"../outside.png"},
+        {"state_type":"","state":"DoorClosing","generated_image_path":"Data/UI/Generated/ship/synthetic/door__x.png"}]})");
+    auto WithStates = [&](FString B) { B.RemoveFromEnd(TEXT("}")); return B + States; };
+    const FString Scene = FString::Printf(TEXT(R"({"version":2,"export_kind":"Decomposed","root_entity":{"entity_name":"Ship"},
+        "interiors":[{"name":"Deck","placements":[
+          {"cgf_path":"pad.cgf","entity_id":"1","ui_bindings":[%s]},
+          {"cgf_path":"hud.cgf","entity_id":"2","ui_bindings":[%s]}]}]})"),
+        *WithStates(Binding(TEXT("physical"), TEXT("ControlPanel"), TEXT("Pad"), nullptr, TEXT("Data/UI/Generated/ship/synthetic/door.png"))),
+        *WithStates(Binding(TEXT("mfd"), TEXT("Display"), TEXT("Vehicle_Screen_MFD"), nullptr, TEXT("Data/UI/Generated/ship/synthetic/mfd.png"))));
+    FScreenMemorySource Source;
+    Source.Add(TEXT("scene.json"), Scene);
+    FSCSceneManifest M; FString Error;
+    if (!TestTrue(TEXT("reads: ") + Error, FSCPackageReader::Read(Source, M, Error))) return false;
+    const FSCSceneInstance& Pad = M.Interiors[0].Placements[0];
+    const FSCSceneInstance& Hud = M.Interiors[0].Placements[1];
+    if (!TestEqual(TEXT("pad state images (unsafe and nameless dropped)"), Pad.UiBindings[0].StateImages.Num(), 1)) return false;
+    TestEqual(TEXT("key"), Pad.UiBindings[0].StateImages[0].Key(), FString(TEXT("DoorOpenState.DoorOpened")));
+    TestTrue(TEXT("panel binding of the default image"), Pad.PanelBinding(Pad.UiBindings[0].PanelImage()) == &Pad.UiBindings[0]);
+    TSet<FString> Images;
+    Pad.PanelImages(Images);
+    TestTrue(TEXT("the state image is decoded with the panel"), Images.Contains(TEXT("Data/UI/Generated/ship/synthetic/door__open.png")));
+    TestEqual(TEXT("an MFD's state images are not shown"), Hud.UiBindings[0].PanelStateImages().Num(), 0);
+    TestEqual(TEXT("closed"), ASCVehicle::DoorOpenStateKey(false, false), FString(TEXT("DoorOpenState.DoorClosed")));
+    TestEqual(TEXT("opened"), ASCVehicle::DoorOpenStateKey(true, false), FString(TEXT("DoorOpenState.DoorOpened")));
+    TestEqual(TEXT("opening"), ASCVehicle::DoorOpenStateKey(true, true), FString(TEXT("DoorOpenState.DoorOpening")));
+    TestEqual(TEXT("closing"), ASCVehicle::DoorOpenStateKey(false, true), FString(TEXT("DoorOpenState.DoorClosing")));
+    return true;
+}
 #endif

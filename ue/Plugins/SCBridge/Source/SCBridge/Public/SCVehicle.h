@@ -17,12 +17,29 @@ class USCRigComponent;
 class USkeletalMesh;
 class ULightComponent;
 class UPrimitiveComponent;
+class UMeshComponent;
+class UMaterialInterface;
 /** Named helper frames of one placed instance, in its anchor's space (cm, UE axes). "" is the item's source frame. */
 USTRUCT()
 struct SCBRIDGE_API FSCInstanceHelpers
 {
     GENERATED_BODY()
     UPROPERTY() TMap<FString, FTransform> Frames;
+};
+/** WP-I1 I1-3: a screen face (one material slot of one component) showing an operating panel's image, and the exporter's
+ *  renders of the panel owner's other states (`ui_bindings[].state_images[]`), one material instance each. The face swaps
+ *  instances; any other material (a viewer-drawn render target, later) can be put on it with SetScreenFaceMaterial. */
+struct FSCScreenFace
+{
+    TWeakObjectPtr<UMeshComponent> Component;
+    int32 Slot = INDEX_NONE;
+    TWeakObjectPtr<const USceneComponent> Panel; // the panel instance's anchor (the DoorControls key)
+    TWeakObjectPtr<UMaterialInterface> Default;  // the default render (a door pad: closed, unlocked, powered)
+    TMap<FString, TWeakObjectPtr<UMaterialInterface>> States; // FSCUiStateImage::Key() -> instance
+    FString Image;  // the default image (package path), for listings
+    FString Shown;  // the state key shown ("" = the default)
+    FString Pinned; // sc.Screens.States: a state held whatever the door does ("" = follow the door)
+    TWeakObjectPtr<UMaterialInterface> Custom; // SetScreenFaceMaterial: other content, kept until cleared
 };
 struct FSCClipPlayback
 {
@@ -60,6 +77,16 @@ public:
      *  the door whose loadout attached it). FindInteraction resolves a panel under the crosshair to its door. */
     TMap<TWeakObjectPtr<const USceneComponent>, TWeakObjectPtr<USCRigComponent>> DoorControls;
     TArray<FSCDoorSensor> DoorSensors;
+    /** WP-I1 I1-3: operating-panel screen faces with state images (FSCScreenFace). */
+    TArray<FSCScreenFace> ScreenFaces;
+    /** Put each face's state image on it: a door pad follows its door (DoorControls) — moving, opened or closed — unless
+     *  a state is pinned; a face without a state image for the state shows its default. Returns the faces swapped. */
+    int32 RefreshPanelScreens();
+    /** Put Material on face Face (null: back to what its state shows). The general hook for screen content. */
+    bool SetScreenFaceMaterial(int32 Face, UMaterialInterface* Material);
+    /** The game's DoorOpenState (FSCUiStateImage::Key) a pad shows for its door: DoorOpening / DoorClosing while it moves
+     *  towards open / closed, else DoorOpened / DoorClosed. */
+    static FString DoorOpenStateKey(bool bOpen, bool bMoving);
     /** Paints the vehicle can wear (Manifest.Paints) and the mesh slots they touch; SetPaint swaps those slots.
      *  INDEX_NONE = the vehicle's own (default) paint. */
     TArray<FSCPaintSlot> PaintSlots;

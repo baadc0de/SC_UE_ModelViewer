@@ -5,6 +5,15 @@
 #include "SCInteractionRecords.h"
 #include "SCPackageReader.generated.h"
 
+/** `ui_bindings[].state_images[]` (WP-I1 I1-3): the render of the UI owner in one other state of its interaction state
+ *  machine (`StateType` / `State`: the game's names, `DoorOpenState` / `DoorOpened`). */
+struct SCBRIDGE_API FSCUiStateImage
+{
+    FString StateType, State;
+    FString ImagePath; // normalized package path
+    /** "<StateType>.<State>": the key a screen face's state images are held by. */
+    FString Key() const { return StateType + TEXT(".") + State; }
+};
 /** `ui_bindings[]` of a child or placement (decomposed-export-contract "UI bindings"): a UI screen the entity carries,
  *  its game role and the exporter's render of its default state (WP-I1). */
 struct SCBRIDGE_API FSCUiBinding
@@ -21,6 +30,8 @@ struct SCBRIDGE_API FSCUiBinding
     bool bOwnerResolved = false; // source_owner_resolved: the UI owner's record was found (else its item type is unknown)
     bool bOperated = false;    // source_kiosk_interaction: the owner's UI is operated by the player (door, light, transit panels, kiosks)
     bool bPropagated = false;  // on a child: the binding of another (geometry-less) entity carried by this one
+    /** The owner's other states the canvas shows (`state_images[]`; images outside the package dropped). */
+    TArray<FSCUiStateImage> StateImages;
 
     /** WP-I1 rule (owner decision: door and lift panels are the game's, HUDs and MFDs are the viewer's own UI): the UI
      *  of an operating panel. Derived from data only: a `physical` binding of a resolved owner that is not a display
@@ -33,6 +44,12 @@ struct SCBRIDGE_API FSCUiBinding
     }
     /** The image this binding puts on its screen face: an operating panel's render, on by default; "" = dark glass. */
     FString PanelImage() const { return IsOperatingPanel() && !bDefaultStateIsOff ? ImagePath : FString(); }
+    /** The state images a face showing PanelImage() can swap to (none when PanelImage() is ""). */
+    const TArray<FSCUiStateImage>& PanelStateImages() const
+    {
+        static const TArray<FSCUiStateImage> None;
+        return PanelImage().IsEmpty() ? None : StateImages;
+    }
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSceneInstance
@@ -91,6 +108,11 @@ struct SCBRIDGE_API FSCSceneInstance
      *  different outcomes (two images, or an image and a dark screen) cannot be told apart and stays dark, with
      *  bAmbiguous set. */
     FString ScreenSlotImage(const TSet<FString>& MeshNodes, const TArray<TArray<FString>>& Owners, bool* bAmbiguous = nullptr) const;
+    /** The operating-panel binding whose default image is Image (ScreenSlotImage's outcome), or null. */
+    const FSCUiBinding* PanelBinding(const FString& Image) const
+    {
+        return Image.IsEmpty() ? nullptr : UiBindings.FindByPredicate([&](const FSCUiBinding& B) { return B.PanelImage() == Image; });
+    }
 };
 /** `interiors[].proximity_sensors[]`: a door proximity sensor in its container's placement frame (CryEngine metres). */
 USTRUCT(BlueprintType)
