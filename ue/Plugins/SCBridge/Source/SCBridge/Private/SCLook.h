@@ -38,7 +38,7 @@ struct FGlassRefractionProfile
     float Dispersion; // GlassDispersion
 };
 inline constexpr FGlassRefractionProfile GlassProfileCanopy{1.f, 0.25f};
-inline constexpr FGlassRefractionProfile GlassProfileKit{5.f, 1.f};
+inline constexpr FGlassRefractionProfile GlassProfileKit{1.f, 1.f}; // strength 5 broke the optic's sight picture (owner: 1)
 inline constexpr FGlassRefractionProfile GlassProfileDefault{5.f, 0.5f};
 const FGlassRefractionProfile& GlassRefractionProfile(EGlassProfile Profile);
 /** The profile of a glass instance: Kit when it is on a player kit, else Canopy when its F0 (SpecularColor.r, through its

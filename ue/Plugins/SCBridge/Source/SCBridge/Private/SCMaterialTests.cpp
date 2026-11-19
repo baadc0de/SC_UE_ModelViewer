@@ -909,7 +909,7 @@ bool FSCMaterialsGlassRefractionProfiles::RunTest(const FString&)
 
     using namespace SCLook;
     TestTrue(TEXT("canopy profile"), GlassProfileCanopy.Strength == 1.f && GlassProfileCanopy.Dispersion == 0.25f);
-    TestTrue(TEXT("kit profile"), GlassProfileKit.Strength == 5.f && GlassProfileKit.Dispersion == 1.f);
+    TestTrue(TEXT("kit profile"), GlassProfileKit.Strength == 1.f && GlassProfileKit.Dispersion == 1.f);
     TestTrue(TEXT("default profile"), GlassProfileDefault.Strength == 5.f && GlassProfileDefault.Dispersion == 0.5f);
 
     USCViewerSettings* Settings = USCViewerSettings::Get();
