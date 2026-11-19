@@ -50,8 +50,7 @@ enum class ESCFirstPersonAction : uint8
     Fire,                                              // held, player body: the drawn weapon fires while down
     Orbit,                                             // held: third-person camera orbits the player while down;
                                                        // two presses within DoubleTapSeconds put it behind again
-    MobiGlas,                                          // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
-    LookSSDO                                           // pressed: the game's SSDO on / off (sc.Look.SSDO), for look A/B
+    MobiGlas                                           // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),
@@ -131,8 +130,15 @@ public:
     bool IsRunning() const { return bRunning; }
     /** Two Orbit presses closer than this reset the third-person orbit (viewer input constant, s). */
     static constexpr float DoubleTapSeconds = 0.3f;
-    /** Torch beam (viewer-owned light, not game data): candelas (a tactical weapon light; 6000 cd brightened a lit
-     *  hangar floor by only a few levels under the game's exposure), cone angles (degrees), reach (cm). */
+    /** The torch is the game's personal light: the player kit's first flashlight (FSCFlashlight, an item's
+     *  SCItemFlashlightParams) with its cookie's light function (FSCLightImporter::ApplyFlashlight). Null Game: the viewer's
+     *  fallback beam below (no player body, or a loadout without a flashlight). Keeps the on / off state. */
+    void SetTorchLight(const struct FSCFlashlight* Game, class UMaterialInterface* LightFunction);
+    /** Where the torch's light comes from: `game:<item entity>` or `fallback`. */
+    const FString& GetTorchSource() const { return TorchSource; }
+    /** Fallback torch beam, used only while the player kit supplies no flashlight (viewer values, not game data): candelas
+     *  (a tactical weapon light; 6000 cd brightened a lit hangar floor by only a few levels under the game's exposure),
+     *  cone angles (degrees), reach (cm). */
     static constexpr float TorchCandelas = 40000;
     static constexpr float TorchInnerCone = 10;
     static constexpr float TorchOuterCone = 22;
@@ -151,6 +157,7 @@ public:
     bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre) const { bool C; return ResolveSpawn(Hint, CapsuleCentre, C); }
 private:
     FSCCharacterProfile Profile;
+    FString TorchSource;
     TFunction<FVector()> EyeSource;
     FVector Move = FVector::ZeroVector, LastPosition = FVector::ZeroVector, HoldInput = FVector::ZeroVector;
     FTransform LastSpawn;

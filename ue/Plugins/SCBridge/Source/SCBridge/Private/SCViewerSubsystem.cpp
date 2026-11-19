@@ -35,6 +35,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Engine/StaticMeshActor.h"
 #include "SCPlayerKit.h"
+#include "SCLightImporter.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -1247,7 +1248,13 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
         }
         FKitClips Result = KitClipsTask.GetResult();
         KitClipsTask = {};
-        KitSource.Reset(); // the package bytes are no longer needed: meshes, textures and clips are built
+        // The personal lights' cookies (gobos) are built while the package is open; the body's torch takes them at attach.
+        if (Result.Kit && KitSource && KitActor)
+            for (const FSCFlashlight& Light : Result.Kit->Flashlights)
+                if (!FSCLightImporter::LoadGobo(*KitSource, KitActor, Light.ProjectorTexture))
+                    UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_FLASHLIGHT gobo unavailable entity=%s cookie=%s package=%s"), *Light.Entity, *Light.Cookie,
+                           *Light.ProjectorTexture);
+        KitSource.Reset(); // the package bytes are no longer needed: meshes, textures, gobos and clips are built
         if (!Result.Kit)
         {
             FailPlayerKit(Result.Error);

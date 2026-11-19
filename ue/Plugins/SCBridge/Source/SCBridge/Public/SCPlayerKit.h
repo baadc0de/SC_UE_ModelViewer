@@ -127,11 +127,27 @@ struct SCBRIDGE_API FSCBlendSpace
     int32 SelectComponent(TConstArrayView<float> Params) const;
 };
 
+/** The game's personal light (`player.flashlights[]`: a loadout item's SCItemFlashlightParams; the worn helmet in LIVE): the
+ *  split the local player sees (`localPlayerParams`), as authored in native units. FSCLightImporter::FlashlightSettings maps it. */
+struct SCBRIDGE_API FSCFlashlight
+{
+    FString Entity, Port;
+    FColor Color = FColor::White;                    // SRGB8
+    float DiffuseMult = 0;                           // the authored intensity
+    float BulbRadiusM = 0, DistanceM = 0, FovDeg = 0; // attenuationBulbSize, distance, fov (the projector's full angle)
+    FString Cookie;                                  // lightCookie.path (DataCore source)
+    FString ProjectorTexture;                        // the cookie in the package ("" = the exporter could not supply it)
+    /** One `flashlights[]` entry; false (Error says why) when it lacks the local player's split. */
+    static bool Parse(const TSharedPtr<FJsonObject>& Entry, FSCFlashlight& Out, FString& Error);
+};
+
 struct SCBRIDGE_API FSCPlayerKit
 {
     FString Gender, Loadout, Skeleton, CameraBone, RootMotionBone;
     TArray<FSCItemPort> HandPorts;
     TArray<FSCPlayerWeapon> Weapons;
+    /** Personal lights in loadout order; the first is the player's torch. Empty: the loadout has none. */
+    TArray<FSCFlashlight> Flashlights;
     TArray<FSCMotionState> States;
     TMap<FName, FSCBlendSpace> BlendSpaces;
     /** Body clips by name -> sidecar path (export-root relative), from root_entity.animations. */

@@ -3,7 +3,8 @@
 #include "SCVehicle.h"
 #include "SCPlayerBody.h"
 #include "SCLightAreas.h"
-#include "SCLookLighting.h"
+#include "SCLightImporter.h"
+#include "SCPlayerKit.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -17,6 +18,25 @@ namespace
 constexpr float NoclipRefusalSeconds = 3;   // how long the HUD shows a refused noclip exit
 constexpr float BlockedOfferSeconds = 2;    // blocked input this long offers noclip
 constexpr float InteractReach = 300;        // E reaches 3 m (brief)
+// The viewer's own beam (no game flashlight in the kit): a plain cone, UE's distance law and range fade, no light function.
+// Candelas like every imported light: the viewer meters the scene with the game's exposure, under which a unitless 2000
+// was invisible in a lit hangar.
+void ApplyFallbackTorch(USpotLightComponent* Spot)
+{
+    using C = ASCFirstPersonCharacter;
+    Spot->SetIntensityUnits(ELightUnits::Candelas);
+    Spot->SetIntensity(C::TorchCandelas);
+    Spot->SetLightColor(FLinearColor::White);
+    Spot->SetAttenuationRadius(C::TorchReach);
+    Spot->SetSourceRadius(0);
+    Spot->SetDistanceAttenuation(ELightDistanceAttenuation::Default);
+    Spot->SetRangeFade(ELightRangeFade::Default);
+    Spot->SetShape(ESpotLightShape::Cone);
+    Spot->SetLightFunctionAddress(ELightFunctionAddress::Wrap);
+    Spot->SetLightFunctionMaterial(nullptr);
+    Spot->SetInnerConeAngle(C::TorchInnerCone);
+    Spot->SetOuterConeAngle(C::TorchOuterCone);
+}
 }
 
 void USCEyeCameraComponent::GetCameraView(float DeltaTime, FMinimalViewInfo& DesiredView)
@@ -40,13 +60,8 @@ ASCFirstPersonCharacter::ASCFirstPersonCharacter()
     // parent, so the torch stayed where the character spawned.
     Flashlight->SetMobility(EComponentMobility::Movable);
     Flashlight->SetRelativeLocation(FVector(TorchAhead, 0, 0));
-    // Viewer-owned torch, not an imported game light. Candelas like every imported light: the viewer meters the scene
-    // with the game's exposure, under which a unitless 2000 was invisible in a lit hangar.
-    Flashlight->SetIntensityUnits(ELightUnits::Candelas);
-    Flashlight->SetIntensity(TorchCandelas);
-    Flashlight->SetAttenuationRadius(TorchReach);
-    Flashlight->SetInnerConeAngle(TorchInnerCone);
-    Flashlight->SetOuterConeAngle(TorchOuterCone);
+    ApplyFallbackTorch(Flashlight); // until a player kit supplies the game's flashlight (SetTorchLight)
+    TorchSource = TEXT("fallback");
     Flashlight->SetVisibility(false);
     Flashlight->LightingChannels.bChannel1 = true; // not an area light: it reaches every room channel (WP-U3b §12, WP-L1)
     Flashlight->LightingChannels.bChannel2 = true;
@@ -440,8 +455,29 @@ void ASCFirstPersonCharacter::SetMobiGlasOpen(bool bOpen)
 void ASCFirstPersonCharacter::SetTorch(bool bOn)
 {
     Flashlight->SetVisibility(bOn);
-    UE_LOG(LogTemp, Display, TEXT("FP_TORCH on=%d at=%s dir=%s cd=%.0f"), bOn, *Flashlight->GetComponentLocation().ToCompactString(),
-           *Flashlight->GetForwardVector().ToCompactString(), Flashlight->Intensity);
+    UE_LOG(LogTemp, Display, TEXT("FP_TORCH on=%d source=%s at=%s dir=%s cd=%.0f"), bOn, *TorchSource,
+           *Flashlight->GetComponentLocation().ToCompactString(), *Flashlight->GetForwardVector().ToCompactString(), Flashlight->Intensity);
+}
+void ASCFirstPersonCharacter::SetTorchLight(const FSCFlashlight* Game, UMaterialInterface* LightFunction)
+{
+    if (Game)
+    {
+        FSCLightImporter::ApplyFlashlight(Flashlight, *Game, LightFunction);
+        TorchSource = TEXT("game:") + Game->Entity;
+        const FSCLightImporter::FFlashlightSettings S = FSCLightImporter::FlashlightSettings(*Game);
+        UE_LOG(LogTemp, Display,
+               TEXT("FP_TORCH_LIGHT source=%s port=%s cd=%.0f radius_cm=%.0f half_fov=%.1f bulb_cm=%.2f color=%s cookie=%s gobo=%d"),
+               *TorchSource, *Game->Port, S.Candela, S.RadiusCm, S.HalfFovDeg, S.BulbCm, *Game->Color.ToHex(), *Game->Cookie,
+               LightFunction != nullptr);
+        if (!LightFunction)
+            UE_LOG(LogTemp, Warning, TEXT("FP_TORCH_LIGHT %s: cookie %s has no light function (package path '%s'): the projector is unshaped"),
+                   *Game->Entity, *Game->Cookie, *Game->ProjectorTexture);
+        return;
+    }
+    ApplyFallbackTorch(Flashlight);
+    TorchSource = TEXT("fallback");
+    UE_LOG(LogTemp, Display, TEXT("FP_TORCH_LIGHT source=fallback (no game flashlight: no body, a loadout without one, or sc.FP.TorchLight 0) cd=%.0f"),
+           TorchCandelas);
 }
 const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTable()
 {
@@ -453,7 +489,7 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
         {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
         {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
         {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim},
-        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas}, {EKeys::O, A::LookSSDO}};
+        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas}};
     return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
@@ -518,7 +554,6 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     case A::Teleport: bTeleportMenuOpen = !bTeleportMenuOpen; ClearInput(); return true;
     case A::Close: bTeleportMenuOpen = false; SetMobiGlasOpen(false); ClearInput(); return true;
     case A::MobiGlas: SetMobiGlasOpen(!bMobiGlasOpen); return true;
-    case A::LookSSDO: SCLookLighting::ToggleSSDO(GetWorld()); return true;
     case A::Holster: return Body->RequestSlot(INDEX_NONE);
     case A::View: Body->SetThirdPerson(!Body->IsThirdPerson()); return Body->HasBody();
     default:
@@ -550,7 +585,7 @@ FString ASCFirstPersonCharacter::HUDText() const
         : bStuck ? TEXT("Movement blocked — press V for noclip")
         : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");
     const FString Player = Body->HasBody() ? Body->HUDLine() : BodyStatus;
-    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport · C view · Z orbit (double-tap: behind) · LMB fire · RMB aim · F1 mobiGlas · O SSDO"),
+    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport · C view · Z orbit (double-tap: behind) · LMB fire · RMB aim · F1 mobiGlas"),
         bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
         GetVelocity().Size() / 100, Flashlight->IsVisible() ? TEXT("on") : TEXT("off"),
         *GetVehicleRelativeLocation().ToCompactString(), *Prompt, Status, Player.IsEmpty() ? TEXT("") : TEXT("\n"), *Player);

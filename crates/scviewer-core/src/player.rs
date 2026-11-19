@@ -63,9 +63,11 @@ fn player_key_for_exporter(
     request: &PlayerRequest,
     exporter: &str,
 ) -> Result<String> {
+    // Player-kit layout revision: 2 adds `player.flashlights` and their cookies (an uncommitted exporter change does
+    // not move EXPORTER_VERSION once the vendored tree is already dirty).
     let material = serde_json::to_vec(&(
         "player",
-        1u32,
+        2u32,
         crate::CACHE_FORMAT_VERSION,
         exporter,
         build,

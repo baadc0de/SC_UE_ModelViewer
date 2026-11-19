@@ -234,6 +234,14 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Torch"), TEXT("sc.FP.Torch 0|1"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak)) C->SetTorch(Flag(Args, 0, true));
     });
+    Add(TEXT("sc.FP.TorchLight"), TEXT("sc.FP.TorchLight 1|0: the torch is the kit's game flashlight (1) or the viewer's fallback beam (0), for A/B"),
+        [Weak](const TArray<FString>& Args) {
+            if (auto* C = FirstPerson(Weak))
+            {
+                C->Body->ApplyTorchLight(Flag(Args, 0, true));
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD torch_light source=%s"), *C->GetTorchSource());
+            }
+        });
     Add(TEXT("sc.FP.Aim"), TEXT("sc.FP.Aim 0|1: hold / release aim down sights (the right mouse button)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak))
         {

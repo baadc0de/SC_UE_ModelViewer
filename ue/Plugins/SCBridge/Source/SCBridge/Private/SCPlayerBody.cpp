@@ -8,6 +8,7 @@
 #include "SCRigComponent.h"
 #include "SCMeshImporter.h"
 #include "SCVehicle.h"
+#include "SCLightImporter.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -23,12 +24,10 @@ DEFINE_LOG_CATEGORY_STATIC(LogSCPlayer, Log, All);
 // clip places the off hand itself); forcing IK to the grip helper pulls the hand back to the magazine well.
 static TAutoConsoleVariable<int32> CVarOffHandIK(TEXT("sc.Player.OffHandIK"), 0,
     TEXT("1: off-hand two-bone IK to the weapon's off-hand grip helper while armed; 0 (default): the clip's own off hand"));
-// Depth of field (viewer look, not game data): the camera's lens while aiming and in third person.
+// Depth of field (viewer look, not game data): the camera's lens while aiming (third person has none since 2026-11-19).
 static TAutoConsoleVariable<float> CVarAimFarBlur(TEXT("sc.Player.AimFarBlur"), 0.012f,
     TEXT("aim-down-sights depth of field: blur at infinity as a fraction of the image width, focused on what the sight points "
          "at; everything nearer than the focus (weapon, sights) stays sharp (0: off)"));
-static TAutoConsoleVariable<float> CVarThirdPersonFStop(TEXT("sc.Player.ThirdPersonFStop"), 0.5f,
-    TEXT("f-stop of the third-person depth of field, focused on the player character (0: off)"));
 static TAutoConsoleVariable<float> CVarDofSensorWidth(TEXT("sc.Player.DofSensorWidth"), 36.f,
     TEXT("sensor width (mm) of the player camera's depth of field; wider = shallower at the same field of view"));
 
@@ -376,6 +375,7 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
     Kit->SetActorRelativeTransform(FTransform(FRotator(0, -FMath::RadiansToDegrees(FMath::Atan2(F.Y, F.X)), 0),
                                               FVector(0, 0, -C->GetCapsuleComponent()->GetScaledCapsuleHalfHeight())));
     Kit->SetActorHiddenInGame(false);
+    ApplyTorchLight(true);
     C->SetEyeSource([this] { return Eye; });
     if (USCEyeCameraComponent* Camera = Cast<USCEyeCameraComponent>(C->Camera)) Camera->NearClip = NearClip;
     ProfileWeapon = TEXT("<none>");
@@ -392,6 +392,15 @@ bool USCPlayerBodyComponent::Attach(ASCVehicle* InKit, TSharedPtr<const FSCPlaye
            *F.ToCompactString(), *Roots, Sights.Num());
     return true;
 }
+void USCPlayerBodyComponent::ApplyTorchLight(bool bGame)
+{
+    ASCFirstPersonCharacter* C = Character();
+    if (!C || !C->Flashlight) return;
+    // The torch is the game's personal light: the loadout's first flashlight item with its cookie (built by the viewer while
+    // the package was open, FSCLightImporter::LoadGobo); a loadout without one keeps the fallback beam.
+    const FSCFlashlight* Light = bGame && Kit && Data && !Data->Flashlights.IsEmpty() ? &Data->Flashlights[0] : nullptr;
+    C->SetTorchLight(Light, Light ? FSCLightImporter::GoboLightFunction(Kit, Kit->GoboTextures.FindRef(Light->ProjectorTexture)) : nullptr);
+}
 void USCPlayerBodyComponent::Detach()
 {
     if (Fire) Fire->Reset();
@@ -406,6 +415,8 @@ void USCPlayerBodyComponent::Detach()
             C->Camera->SetFirstPersonScale(1.f);
         }
         C->SetEyeSource(nullptr);
+        // The kit owns the cookie's texture and material: without the body the torch is the fallback beam again.
+        if (C->Flashlight && C->GetTorchSource().StartsWith(TEXT("game:"))) C->SetTorchLight(nullptr, nullptr);
         if (USCEyeCameraComponent* Camera = Cast<USCEyeCameraComponent>(C->Camera)) Camera->NearClip = 0;
         if (C->Camera) C->Camera->bUsePawnControlRotation = true;
     }
@@ -687,14 +698,6 @@ float USCPlayerBodyComponent::FadedFStop(float FStop, float Weight)
 {
     return FStop > 0 && Weight > 0 ? FStop / FMath::Min(Weight, 1.f) : 0.f;
 }
-float USCPlayerBodyComponent::SubjectFStop(float FStop, float Focus, float Depth, float SensorWidth, float FovDegrees, float MaxBlur)
-{
-    // Thin lens, millimetres: blur of a point at d in front of focus s is c = f^2 (s - d) / (N d (s - f)).
-    const double F = SensorWidth / (2 * FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(double(FovDegrees), 1.0, 170.0)) / 2));
-    const double S = Focus * 10.0, D = (Focus - Depth) * 10.0, C = MaxBlur * SensorWidth;
-    if (Depth <= 0 || D <= F || S <= F || C <= 0) return FStop;
-    return FMath::Max(FStop, float(F * F * (S - D) / (C * D * (S - F))));
-}
 float USCPlayerBodyComponent::FarBlurFStop(float Focus, float FarBlur, float SensorWidth, float FovDegrees)
 {
     // Thin lens, millimetres: a point at infinity blurs by c = f^2 / (N (s - f)); solve for N with c = FarBlur * width.
@@ -758,9 +761,7 @@ void USCPlayerBodyComponent::UpdateDepthOfField(const FVector& EyeWorld, const F
     const float Sensor = CVarDofSensorWidth.GetValueOnGameThread(), Fov = C->Camera->FieldOfView;
     const bool bAim = !bThirdPerson && AimAlpha > 0 && CVarAimFarBlur.GetValueOnGameThread() > 0;
     float Target = 0;
-    if (bThirdPerson && CVarThirdPersonFStop.GetValueOnGameThread() > 0)
-        Target = FocalDepth(EyeWorld, Forward, HeadWorld); // the character's eye joint (orbit distance unless pulled in)
-    else if (bAim)
+    if (bAim)
     {
         // Aiming: whatever the view axis (= the sight line) hits; the player's own body and kit never block it.
         FHitResult Hit;
@@ -776,27 +777,9 @@ void USCPlayerBodyComponent::UpdateDepthOfField(const FVector& EyeWorld, const F
     }
     // Focus snaps when the depth of field turns on, then follows the target smoothly (no pops along edges).
     FocusDistance = FocusFStop > 0 ? FMath::FInterpTo(FocusDistance, Target, FMath::Max(DeltaSeconds, 0.f), FocusFollowRate) : Target;
-    float FStop;
-    if (bAim)
-        // Far field only: a fixed blur at infinity whatever the focus, faded in with the aim; nothing in front of the
-        // focus blurs (the weapon and its sights stay crisp).
-        FStop = FadedFStop(FarBlurFStop(FocusDistance, CVarAimFarBlur.GetValueOnGameThread(), Sensor, Fov), AimAlpha);
-    else
-    {
-        // Third person: the whole character stays sharp: the f-stop closes until its nearest part (the bounds of every
-        // visible body part and item) blurs at most MaxSubjectBlur (a close orbit keeps the body in focus, a far one
-        // blurs only the surroundings).
-        float Nearest = FocusDistance;
-        for (const TArray<TObjectPtr<UPrimitiveComponent>>* Parts : {&ViewParts, &HeadParts})
-            for (const UPrimitiveComponent* P : *Parts)
-                if (P && P->IsVisible())
-                {
-                    FVector Corners[8];
-                    P->Bounds.GetBox().GetVertices(Corners);
-                    for (const FVector& Corner : Corners) Nearest = FMath::Min(Nearest, FocalDepth(EyeWorld, Forward, Corner));
-                }
-        FStop = SubjectFStop(CVarThirdPersonFStop.GetValueOnGameThread(), FocusDistance, FocusDistance - Nearest, Sensor, Fov, MaxSubjectBlur);
-    }
+    // Far field only: a fixed blur at infinity whatever the focus, faded in with the aim; nothing in front of the focus blurs
+    // (the weapon and its sights stay crisp).
+    const float FStop = FadedFStop(FarBlurFStop(FocusDistance, CVarAimFarBlur.GetValueOnGameThread(), Sensor, Fov), AimAlpha);
     if (FStop <= 0)
     {
         ClearDepthOfField();

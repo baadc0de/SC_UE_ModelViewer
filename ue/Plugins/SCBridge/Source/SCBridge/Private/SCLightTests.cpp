@@ -1,4 +1,5 @@
-// Regression fixtures for instance-local shadow budgets, authored default light states and the game's light model.
+// Regression fixtures for instance-local shadow budgets, authored default light states, the game's light model and the
+// player's torch (the game's personal light).
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "SCLightImporter.h"
@@ -25,6 +26,12 @@
 #include "Serialization/ObjectReader.h"
 #include "Serialization/ObjectWriter.h"
 #include "Misc/Parse.h"
+#include "SCPlayerKit.h"
+#include "SCFirstPersonCharacter.h"
+#include "Engine/Texture2D.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -166,6 +173,36 @@ bool FSCLightAuthoredModel::RunTest(const FString&)
     Vehicle->Destroy();
     World->DestroyWorld(false);
     MegaLights->Set(Previous, ECVF_SetByCode);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightSpecularMultiplier, "SCBridge.Lights.SpecularMultiplier",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightSpecularMultiplier::RunTest(const FString&)
+{
+    // miscParams.specularMultiplier (`specular_multiplier`) is the light's specular scale for every kind; packages without the
+    // field keep UE's 1. Synthetic values.
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    auto* Vehicle = World->SpawnActor<ASCVehicle>();
+    ON_SCOPE_EXIT { Vehicle->Destroy(); World->DestroyWorld(false); };
+    FSCFolderPackageSource Source(TEXT("/tmp"));
+    TArray<FString> Warnings;
+    const auto Helper = [](const FString&) -> USceneComponent* { return nullptr; };
+    FSCSceneInstance Instance;
+    const TCHAR* Common = TEXT(R"("transform_basis":"cryengine_z_up","radius_m":3,"intensity_candela_proxy":25,"outer_angle":40,"inner_angle":30)");
+    for (const TCHAR* Light : {TEXT(R"("name":"PointZero","semantic_light_kind":"point","specular_multiplier":0)"),
+                               TEXT(R"("name":"SpotQuarter","semantic_light_kind":"spot","specular_multiplier":0.25)"),
+                               TEXT(R"("name":"AreaZero","semantic_light_kind":"area","specular_multiplier":0)"),
+                               TEXT(R"("name":"Unauthored","semantic_light_kind":"point")")})
+        Instance.LightJson.Add(FString::Printf(TEXT("{%s,%s}"), Light, Common));
+    FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
+    if (!TestEqual(TEXT("four components"), Vehicle->Lights.Num(), 4)) return false;
+    TestEqual(TEXT("point: specular off"), double(Vehicle->Lights[0]->SpecularScale), 0.0, 1e-6);
+    TestEqual(TEXT("spot: authored scale"), double(Vehicle->Lights[1]->SpecularScale), 0.25, 1e-6);
+    TestEqual(TEXT("area: specular off"), double(Vehicle->Lights[2]->SpecularScale), 0.0, 1e-6);
+    TestEqual(TEXT("older packages: UE's 1"), double(Vehicle->Lights[3]->SpecularScale), 1.0, 1e-6);
+    TestEqual(TEXT("diffuse untouched"), double(Vehicle->Lights[0]->DiffuseScale), 1.0, 1e-6);
+    TestEqual(TEXT("no warnings"), Warnings.Num(), 0);
     return true;
 }
 
@@ -726,6 +763,94 @@ bool FSCLightComparisonRestorePerWorld::RunTest(const FString&)
     TestTrue(TEXT("second world restored: square"), Spots[1]->Shape == ESpotLightShape::SquareFrustum && Spots[1]->LightFunctionAddress == ELightFunctionAddress::Border);
     TestTrue(TEXT("first world restored: tail window"), Points[0]->RangeFade == ELightRangeFade::SquaredLinearTail);
     TestTrue(TEXT("second world restored: tail window"), Points[1]->RangeFade == ELightRangeFade::SquaredLinearTail);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightFlashlightMapping, "SCBridge.Lights.FlashlightMapping",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightFlashlightMapping::RunTest(const FString&)
+{
+    // The player's torch is the game's personal light: a player kit's `flashlights[]` entry (an item's SCItemFlashlightParams,
+    // kept verbatim by the exporter) -> FSCFlashlight (the local player's split) -> the spot light every imported light would be
+    // (FSCStarEngine light model) shaped as the game's projector with the cookie as its light function. Synthetic values.
+    const TCHAR* Entry = TEXT(R"({"entity":"synthetic_item","port":"synthetic_port","params":{"_Type_":"SCItemFlashlightParams",)"
+                              R"("localPlayerParams":{"color":{"r":128,"g":64,"b":255},"diffuseMult":3,"attenuationBulbSize":0.02,"distance":12,"fov":70,)"
+                              R"("lightCookie":{"path":"textures/synthetic_cookie.tif"}},)"
+                              R"("otherParams":{"color":{"r":1,"g":2,"b":3},"diffuseMult":99,"attenuationBulbSize":0.5,"distance":1,"fov":10,)"
+                              R"("lightCookie":{"path":"textures/synthetic_other.tif"}}},)"
+                              R"("projector_textures":{"textures/synthetic_cookie.tif":"Data/Synthetic/synthetic_cookie.exr"}})");
+    const auto Json = [](const FString& Text) { TSharedPtr<FJsonObject> O; FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), O); return O; };
+    FSCFlashlight Light;
+    FString Error;
+    if (!TestTrue(TEXT("entry parses"), FSCFlashlight::Parse(Json(Entry), Light, Error))) return false;
+    TestEqual(TEXT("item"), Light.Entity, FString(TEXT("synthetic_item")));
+    TestEqual(TEXT("local player's split, not other viewers'"), double(Light.DiffuseMult), 3.0, 1e-6);
+    TestEqual(TEXT("cookie source"), Light.Cookie, FString(TEXT("textures/synthetic_cookie.tif")));
+    TestEqual(TEXT("cookie package path from projector_textures"), Light.ProjectorTexture, FString(TEXT("Data/Synthetic/synthetic_cookie.exr")));
+    TestTrue(TEXT("SRGB8 colour as authored"), Light.Color == FColor(128, 64, 255));
+    FSCFlashlight Bare;
+    TestFalse(TEXT("an entry without the local player's split is refused"),
+              FSCFlashlight::Parse(Json(TEXT(R"({"entity":"synthetic_bare","params":{"otherParams":{"color":{"r":1,"g":1,"b":1}}}})")), Bare, Error));
+    TestTrue(TEXT("the refusal names the item"), Error.Contains(TEXT("synthetic_bare")));
+
+    // The kit keeps flashlights in loadout order and reports the ones it cannot use.
+    FSCPlayerKit Kit;
+    const FString Scene = FString::Printf(TEXT(R"({"root_entity":{},"player":{"camera_bone":"synthetic_camera","root_motion_bone":"synthetic_root",)"
+                                               R"("flashlights":[%s,{"entity":"synthetic_bare","params":{}}]}})"), Entry);
+    if (!TestTrue(TEXT("kit parses"), FSCPlayerKit::Parse(Scene, TEXT("Packages/synthetic"), Kit, Error))) return false;
+    TestEqual(TEXT("one usable flashlight"), Kit.Flashlights.Num(), 1);
+    TestTrue(TEXT("the unusable one is a diagnostic"), Kit.Diagnostics.ContainsByPredicate([](const FString& D) { return D.Contains(TEXT("synthetic_bare")); }));
+
+    // Light model: pi * unit * diffuseMult * (1 + bulb)^2 (no attenuation tweak), radius = distance, half-FOV = fov / 2.
+    const double Unit = UE_DOUBLE_PI * FSCStarEngine::Get().SceneUnitNits;
+    const FSCLightImporter::FFlashlightSettings S = FSCLightImporter::FlashlightSettings(Light);
+    TestEqual(TEXT("candela: the game's point model over the attenuation bulb"), S.Candela, Unit * 3.0 * FMath::Square(1.02), Unit * 1e-6);
+    TestEqual(TEXT("radius: distance (cm)"), S.RadiusCm, 1200.0, 1e-3);
+    TestEqual(TEXT("bulb (cm)"), S.BulbCm, 2.0, 1e-4);
+    TestEqual(TEXT("no tweak: no distance offset"), S.OffsetCm, 0.0, 1e-9);
+    TestTrue(TEXT("bulb offset law"), S.bBulbOffset);
+    TestEqual(TEXT("projector half-FOV"), S.HalfFovDeg, 35.0, 1e-6);
+    TestTrue(TEXT("colour decoded from sRGB"), S.Color.Equals(FLinearColor::FromSRGBColor(FColor(128, 64, 255))));
+
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    // One light-function material per cookie texture, shared with ship projectors (GoboLightFunction).
+    auto* Kitless = World->SpawnActor<ASCVehicle>();
+    UTexture2D* Cookie = UTexture2D::CreateTransient(4, 4);
+    UMaterialInterface* Function = FSCLightImporter::GoboLightFunction(Kitless, Cookie);
+    if (!TestNotNull(TEXT("cookie light function"), Function)) return false;
+    TestTrue(TEXT("the cookie's material is shared"), FSCLightImporter::GoboLightFunction(Kitless, Cookie) == Function);
+    TestNull(TEXT("no texture: no light function"), FSCLightImporter::GoboLightFunction(Kitless, nullptr));
+
+    // The character's torch takes it, keeps its on / off state, and falls back to the viewer beam without a game light.
+    auto* Character = World->SpawnActor<ASCFirstPersonCharacter>();
+    if (!TestNotNull(TEXT("character"), Character)) return false;
+    USpotLightComponent* Torch = Character->Flashlight;
+    TestEqual(TEXT("starts on the fallback"), Character->GetTorchSource(), FString(TEXT("fallback")));
+    Character->SetTorch(true);
+    Character->SetTorchLight(&Light, Function);
+    TestEqual(TEXT("source names the item"), Character->GetTorchSource(), FString(TEXT("game:synthetic_item")));
+    TestTrue(TEXT("still on"), Torch->IsVisible());
+    TestTrue(TEXT("candela units"), Torch->IntensityUnits == ELightUnits::Candelas);
+    TestEqual(TEXT("candela"), double(Torch->Intensity), S.Candela, S.Candela * 1e-5);
+    TestEqual(TEXT("attenuation radius"), double(Torch->AttenuationRadius), 1200.0, 1e-3);
+    TestEqual(TEXT("source radius is the bulb"), double(Torch->SourceRadius), 2.0, 1e-4);
+    TestTrue(TEXT("bulb offset law"), Torch->DistanceAttenuation == ELightDistanceAttenuation::BulbOffset);
+    TestTrue(TEXT("forced range fade"), Torch->RangeFade == ELightRangeFade::SquaredLinearTail);
+    TestTrue(TEXT("projector: square frustum"), Torch->Shape == ESpotLightShape::SquareFrustum);
+    TestEqual(TEXT("projector: half-FOV"), double(Torch->OuterConeAngle), 35.0, 1e-4);
+    TestTrue(TEXT("projector: border addressing"), Torch->LightFunctionAddress == ELightFunctionAddress::Border);
+    TestTrue(TEXT("projector: the cookie"), Torch->LightFunctionMaterial.Get() == Function);
+    TestTrue(TEXT("colour"), Torch->GetLightColor().Equals(S.Color, 0.01f));
+    Character->SetTorchLight(nullptr, nullptr);
+    TestEqual(TEXT("fallback source"), Character->GetTorchSource(), FString(TEXT("fallback")));
+    TestTrue(TEXT("fallback: a cone"), Torch->Shape == ESpotLightShape::Cone);
+    TestNull(TEXT("fallback: no light function"), Torch->LightFunctionMaterial.Get());
+    TestEqual(TEXT("fallback: viewer candela"), double(Torch->Intensity), double(ASCFirstPersonCharacter::TorchCandelas), 1e-3);
+    TestEqual(TEXT("fallback: viewer cone"), double(Torch->OuterConeAngle), double(ASCFirstPersonCharacter::TorchOuterCone), 1e-4);
+    TestTrue(TEXT("fallback: UE's distance law"), Torch->DistanceAttenuation == ELightDistanceAttenuation::Default);
+    TestTrue(TEXT("still on after the fallback"), Torch->IsVisible());
+    Character->Destroy();
+    Kitless->Destroy();
     return true;
 }
 #endif

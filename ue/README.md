@@ -10,7 +10,7 @@ launcher (binary) engine, the Web / Wasm build and the NVIDIA RTX-fork (UE 5.8) 
 The Lumen World Cache is off for now (plan D13); verification and the World Cache / G-buffer A/B routes:
 [verification/WP-U59.md](verification/WP-U59.md). The shader patches of plan D14 (`ue/EnginePatches`, written for the binary
 engine) are gone: WP-E1 replaced them with engine features (light falloff E1-2, projector shape E1-3, the game's SSDO E1-7:
-`SSDO*` post-process settings and `r.SSDO*`, off in the look, `sc.Look.SSDO game|off` for A/B).
+`SSDO*` post-process settings and `r.SSDO*`, always on in the look since 2026-11-19; `sc.Look.SSDO game|off` switches it for one session, diagnostics only).
 History: the project started on UE 5.8.2 (`++UE5+Release-5.8`, CL 56702186, Linux, WP-U0 2026-11-09), moved to the
 UE 5.9.0 preview-1 binary (CL 60351404) on 2026-11-12 and to the source fork on 2026-11-18.
 WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was
@@ -46,7 +46,7 @@ Golem, small hightech hangar (2026-11-14, RTX 4090, Shipping): 1.7 GB of content
 The launcher starts the showcase as a player (`-SCShowcase -SCCamera=first`): no viewer top bar, footer or panels; the
 first-person HUD and its teleport menu stay. Keys: WASD/Shift/Space/Ctrl move, `C` first/third person, `Z` held orbits
 the third-person camera around the player (double-tap: behind again), `T` teleport menu, `F` torch, `1`.. draw a weapon,
-right mouse aims down sights, left mouse fires, `O` the game's SSDO on / off (also in orbit view; `sc.Look.SSDO`). The player character is exported from Data.p4k at start (so the build
+right mouse aims down sights, left mouse fires. The player character is exported from Data.p4k at start (so the build
 needs an installed Star Citizen; a cooked player kit is a follow-up): `package_showcase.ps1 -PlayerLoadout <p4k path>
 -PlayerWeapons <entity>[,...]` (launcher `-SCPlayerLoadout`, `-SCPlayerWeapons`; settings `PlayerLoadout`,
 `PlayerWeapons`, `bPlayerSpareAttachments`) picks the game loadout, keeps only the named weapons and carries their spare
@@ -55,8 +55,12 @@ magazines on the armour's storage ports (the exporter's `PlayerRequest.weapons` 
 Firing (`FSCPlayerFire`) uses the weapon's first authored fire action: its rate (810 RPM rapid), the fragments of its
 enslavement ADB on the weapon's own rig (trigger, looping bolt; stop fragment on release) and its launch helper; flash,
 tracer, impact spark and view kick are viewer stand-ins (the game's particles and procedural recoil are not imported; a
-ballistic look is the next iteration). The torch is Movable (a Stationary light does not follow the player) and 40 000 cd
-ahead of the helmet. `ue/scripts/routes/showcase-player.txt` checks torch, firing, aiming, third person and `Z`.
+ballistic look is the next iteration). The torch is the game's personal light: the kit's `player.flashlights[0]` (the worn
+helmet's `SCItemFlashlightParams.localPlayerParams`, its cookie exported as the gobo) mapped by
+`FSCLightImporter::ApplyFlashlight` (game light model, square projector of half-angle fov / 2, cookie as light function;
+LIVE helmets: diffuseMult 20 ≈ 63 500 cd, 40 m, 90°). Without a body or with a loadout that has no flashlight it is the
+viewer's 40 000 cd cone (`FP_TORCH_LIGHT source=fallback`). It is Movable (a Stationary light does not follow the player)
+and sits ahead of the helmet (the game's `helperName` / `helperOffset` on `HeadCam` are not used). `ue/scripts/routes/showcase-player.txt` checks torch, firing, aiming, third person and `Z`.
 
 Cooking the showcase content: export the ship and the hangar into one root (decomposed GLB + DDS, full resolution):
 `starbreaker entity export DRAK_Golem out/showcase/bake --kind decomposed --format glb --dds --lod 0 --mip 0 --skip-existing-assets`
@@ -537,6 +541,7 @@ Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mod
 | `sc.FP.Interact` / `sc.FP.Door <index>` | E on the focused interaction / toggle one by index |
 | `sc.Paint [index\|default\|name part]` | list the loaded vehicle's paints (`PAINT_CHOICE`), or put one on (also the side panel's Paint row; remembered per vehicle) |
 | `sc.FP.Crouch 0\|1`, `sc.FP.Jump`, `sc.FP.Torch 0\|1`, `sc.FP.Noclip 0\|1` | as the keys (a refused noclip exit logs `FIRST_PERSON_NOCLIP refused=1`) |
+| `sc.FP.TorchLight 1\|0` | the torch is the kit's game flashlight (1, default once the body attaches) or the viewer's fallback beam (0), for A/B; logs `FP_CMD torch_light source=...` |
 | `sc.FP.Menu 0\|1` | teleport menu |
 | `sc.FP.Teleport <x y z>` / `sc.FP.Place <x y z>` | vehicle-relative floor hint (checked) / raw capsule placement (noclip tests) |
 | `sc.FP.Embed [cm]` | noclip on, capsule centre pushed this far into the surface under the crosshair (noclip-exit refusal test) |
@@ -667,10 +672,8 @@ blend-space parameters `MoveSpeed`/`TravelAngle`):
   hits (trace ignoring the player) and blurs only the far field — the f-stop is solved so infinity
   blurs by `sc.Player.AimFarBlur` of the image width (default 0.012), and `r.DOF.Kernel.MaxForegroundRadius`
   is 0 while aiming (restored after) so the weapon, sights and anything nearer than the focus stay
-  sharp (UE 5.9's diaphragm DOF has no focal region). Third person always focuses on the character's
-  camera joint at `sc.Player.ThirdPersonFStop` (default 0.5), closed down as needed so the nearest
-  visible part of the character blurs at most 1/750 of the width. `sc.Player.DofSensorWidth` (36 mm).
-  No player override otherwise (the level's own look applies).
+  sharp (UE 5.9's diaphragm DOF has no focal region). `sc.Player.DofSensorWidth` (36 mm). Third person has
+  no depth of field (removed 2026-11-19); no player override outside aiming (the level's own look applies).
 
 Console (first person): `sc.Player.Weapon <slot|none>`, `sc.Player.View fp|tp [yaw] [distance]`,
 `sc.Player.State` (`PLAYER_STATE` log), `sc.Player.Load` (start/retry the kit), `sc.Player.Body 0|1`

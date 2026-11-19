@@ -34,6 +34,25 @@ public:
     // UE's 88.9-degree limit on the half-FOV. The game's near-depth cut (projDepthCutoff) is not set: the CPU mapping of
     // projectorNearPlane is unverified (ProjectorNearClip stays 0).
     static void MakeProjector(class USpotLightComponent* Spot, double HalfFovDeg);
+    // A projector's gobo: the package texture at Path (EXR keeps its HDR values, PNG / DDS decode linear), clamped, loaded once
+    // per vehicle (Vehicle->GoboTextures, the cache key is the package path). Null when the package cannot supply it.
+    static class UTexture2D* LoadGobo(const FSCPackageSource& Source, ASCVehicle* Vehicle, const FString& Path);
+    // The light-function material of a gobo: one M_SC_LightFunction instance per texture on the vehicle (the light function atlas
+    // de-duplicates slots by material; a MID per light exhausts it). Null without a texture or the master material.
+    static class UMaterialInterface* GoboLightFunction(ASCVehicle* Vehicle, class UTexture2D* Texture);
+    // The game's personal light (an item's SCItemFlashlightParams split, FSCFlashlight) as UE spot-light settings: the light
+    // model of every imported light (FSCStarEngine::PointCandela of the authored diffuseMult over the attenuation bulb, no
+    // attenuation tweak; the bulb offset law; the forced range fade), radius = distance, the SRGB8 colour, and a projector
+    // (MakeProjector) of half-angle fov / 2 whose gobo is the light cookie.
+    struct FFlashlightSettings
+    {
+        double Candela = 0, RadiusCm = 0, BulbCm = 0, OffsetCm = 0, HalfFovDeg = 0, RangeFadeFraction = 0;
+        FLinearColor Color = FLinearColor::White;
+        bool bBulbOffset = false; // the bulb offset law applies (ULocalLightComponent::IsValidBulbOffsetAttenuation)
+    };
+    static FFlashlightSettings FlashlightSettings(const struct FSCFlashlight& Light);
+    // Apply FlashlightSettings to a movable spot light; LightFunction is the cookie's (GoboLightFunction), null when unavailable.
+    static void ApplyFlashlight(class USpotLightComponent* Spot, const struct FSCFlashlight& Light, class UMaterialInterface* LightFunction);
     // Container-local CryEngine vector (metres) -> the axes of the component its lights hang from (still metres).
     static FVector ContainerBasis(const FVector& Cry, bool bHelperFrame);
     static void Build(const FSCPackageSource& Source, const FSCSceneInstance& Instance, ASCVehicle* Vehicle, USceneComponent* Parent,

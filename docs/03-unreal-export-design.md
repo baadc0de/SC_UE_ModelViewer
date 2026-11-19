@@ -193,7 +193,7 @@ of the engine DDC; the latter is project-local build scratch in `DerivedDataCach
 | --- | --- | --- | --- |
 | Orbit | camera actor | none | default after load; fit to bounds; double-click component to focus |
 | Fly | `ADefaultPawn`-style | optional (noclip toggle) | WASD + mouse, speed wheel |
-| First person | `ACharacter` (capsule 34 × 88 cm default, crouch 44) | complex collision of every component | gravity along the ship's up axis (ship is spawned level so world −Z); walk/run/crouch/jump; E toggles the nearest receiving joint within 3 m using Mannequin door/canopy/hatch/entrance/ramp fragments and Open/Close tags, or a DataCore Door owner; F toggles flashlight (spot on camera) for unlit interiors; teleport to spawn point list |
+| First person | `ACharacter` (capsule 34 × 88 cm default, crouch 44) | complex collision of every component | gravity along the ship's up axis (ship is spawned level so world −Z); walk/run/crouch/jump; E toggles the nearest receiving joint within 3 m using Mannequin door/canopy/hatch/entrance/ramp fragments and Open/Close tags, or a DataCore Door owner; F toggles the torch (the player kit's flashlight item, a projector with its cookie; a viewer cone without one) for unlit interiors; teleport to spawn point list |
 
 Collision is applied to the components of the loaded actor only; the floor of the
 Viewer map is the only other collider.
