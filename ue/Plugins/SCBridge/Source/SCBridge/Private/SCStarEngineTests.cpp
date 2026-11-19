@@ -15,7 +15,9 @@ const TCHAR* SyntheticFixture = TEXT(R"({"schema":"star_engine_render_v1",
   "glassVertexHeightScale":{"value":2},"glassHeightClip":{"value":0.05},"glassTintStrengthDefault":{"value":0.75},
   "glassTilingDefault":{"value":4},"glassVStretchDefault":{"value":0.5},"glassThinFilmThicknessDefault":{"value":0.25},"detailScale":{"value":3},
   "forcedFalloffFraction":{"value":0.25},"meterMaxCompensationPerBlend":{"value":4},"meterMinCompensationPerBlend":{"value":-1},
-  "incidentMiddleGray":{"value":0.18}},
+  "incidentMiddleGray":{"value":0.18},"dbaMiddleGray":{"value":0.25},"dbaMinAdaptedEV":{"value":2},"dbaMaxAdaptedEV":{"value":12},
+  "monitorViewingAngleDefault":{"value":90},"monitorEmissiveContrastDefault":{"value":0.5},"monitorEmissiveSaturationDefault":{"value":1.5},
+  "monitorViewAngleModeDefault":{"value":1}},
  "shader_textures":{"WearDirtFrostDetailMap":{"value":"Synthetic/detail.dds"}},
  "exe_cvars":{"r_ExposureCompensationEV0":{"value":-1},"r_ExposureCompensationEV10":{"value":1},"r_ExposureCompensationEV20":{"value":1},
   "r_ExposureMultiplierMin":{"value":0.01},"r_ExposureMultiplierMax":{"value":8},
@@ -65,6 +67,11 @@ bool FSCStarEngineFixture::RunTest(const FString&)
              Synthetic.bSSDO && Synthetic.SSDOQuality == 0 && Synthetic.SSDORadiusM == 2.5 && Synthetic.SSDOStrength == 3 &&
              Synthetic.SSDOAmountDirect == 0.25 && Synthetic.SSDOAmountAmbient == 0.5 && Synthetic.SSDOAmountReflection == 0.75);
     TestTrue(TEXT("the game's SSDO: on, quality 0, a positive radius"), S.bSSDO && S.SSDOQuality == 0 && S.SSDORadiusM > 0);
+    TestTrue(TEXT("the DisplayScreen DBA and monitor defaults are read from the fixture (WP-I1 fix pass)"),
+             Synthetic.DBAMiddleGrey == 0.25 && Synthetic.DBAMinAdaptedEV == 2 && Synthetic.DBAMaxAdaptedEV == 12 &&
+             Synthetic.MonitorViewingAngleDefault == 90 && Synthetic.MonitorEmissiveContrastDefault == 0.5 &&
+             Synthetic.MonitorEmissiveSaturationDefault == 1.5 && Synthetic.MonitorViewAngleModeDefault == 1);
+    TestTrue(TEXT("the game's DBA: EV 1..14 around middle grey 0.18"), S.DBAMinAdaptedEV == 1 && S.DBAMaxAdaptedEV == 14 && S.DBAMiddleGrey == 0.18);
     TestTrue(TEXT("the game's meter: clamped blend of the reflected and the incident meter"),
              S.ExposureMeterMode == 3 && S.IncidentBlendAmount == 0.5 && S.MeterMaxCompensationPerBlend == 3 && S.MeterMinCompensationPerBlend == -2);
 

@@ -62,6 +62,14 @@ struct SCBRIDGE_API FSCStarEngine
     int32 SSDOQuality = 0;
     double SSDORadiusM = 0, SSDOStrength = 0;
     double SSDOAmountDirect = 0, SSDOAmountAmbient = 0, SSDOAmountReflection = 0;
+    // The DisplayScreen render-to-texture emission (DisplayScreen.cfxb DisplayScreenPS over glassLib GlassShared's
+    // %EMISSIVE_MAP path; WP-I1 fix pass). %DBA_GLOBAL multiplies it by GetGlobalDBAMultiplier_HDR (OpticsExposure.cfib):
+    // clamp(adapted luminance, luminance at DBAMinAdaptedEV, at DBAMaxAdaptedEV) / DBAMiddleGrey, so a screen keeps its
+    // brightness on the display whatever the scene's exposure. MonitorEffects_ApplyViewingAngle (MonitorEffects.cfib)
+    // grades the image by EmissiveContrast / EmissiveSaturation and the ViewingAngle falloff; these are its defaults.
+    double DBAMiddleGrey = 0, DBAMinAdaptedEV = 0, DBAMaxAdaptedEV = 0;
+    double MonitorViewingAngleDefault = 0, MonitorEmissiveContrastDefault = 0, MonitorEmissiveSaturationDefault = 0;
+    double MonitorViewAngleModeDefault = 0;
 
     static FString FixturePath();
     static bool Load(const FString& Path, FSCStarEngine& Out, FString& Error);

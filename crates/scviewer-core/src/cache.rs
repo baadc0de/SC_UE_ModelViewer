@@ -38,7 +38,10 @@ use std::{
 // 32: operating-panel UI renders carry their owner's values and states: `ui_bindings[]` gain
 //     `ui_texture_aspect_w_over_h`, `user_variables`, `state_types` and `state_images[]`; door pads render at their
 //     face's texture aspect, with the large button, style-set labels and tag switches (WP-I1 I1-5 / I1-3 / I1-2).
-pub const CACHE_FORMAT_VERSION: u32 = 32;
+// 33: panel renders follow non-grow flex items beside a growing one, start-edge items with an unanchored pivot, the
+//     owner's complete user-variable set (an undeclared one at its default) and no invented brand (a hangar's panels
+//     render without one) (WP-I1 fix pass).
+pub const CACHE_FORMAT_VERSION: u32 = 33;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

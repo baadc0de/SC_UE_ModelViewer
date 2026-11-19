@@ -581,6 +581,39 @@ GLASS_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor * step(1e-6, F0)
 # glassLib.cfib under %HEIGHT_MAP: clip(heightMap - 0.01).
 # M_SC_Screen: the same look over every screen face (no F0 > 0 condition: a screen always has its glass cover).
 SCREEN_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor));"
+# MonitorEffects.cfib MonitorEffects_ApplyViewingAngle (StarEngineRender.json pins its token hash; WP-I1 fix pass): the
+# DisplayScreen image graded by the viewing angle (fNdotV = the vertex normal against the view, GlassShared's
+# NdotVVertex), the authored EmissiveContrast and EmissiveSaturation. ViewingAngle 180 (the C2 screens) gives a view
+# factor of 1 at every angle.
+SCREEN_VIEWING_ANGLE = """
+float3 Ng = normalize(Parameters.TangentToWorld[2]);
+float fNdotV = saturate(dot(Ng, Parameters.CameraVector));
+float fViewingAngle = ViewingAngle * (PI / 180.0);
+float fViewFactor = saturate(pow(fNdotV + 1e-9, PI - fViewingAngle));
+float sat = Saturation;
+float3 col = Col;
+if (Mode == 0.0) {
+    float fViewMask = saturate(dot(col.rgb, float3(4.0, 4.0, 4.0)));
+    float3 cInvertColor = saturate(0.125 * fViewMask - col.rgb) + col.rgb * (0.5 - fViewMask);
+    col = max(0.0, lerp(cInvertColor, col, fViewFactor));
+} else {
+    sat *= 1.0 + 0.5 * (1.0 - fViewFactor);
+    col *= fViewFactor;
+}
+col = max(lerp(0.5, col, Contrast), 0.0);
+col = lerp(dot(col, float3(0.33, 0.59, 0.11)), col, sat);
+return col;
+"""
+# OpticsExposure.cfib GetGlobalDBAMultiplier_HDR under %DBA_GLOBAL (pinned likewise): clamp(adapted luminance,
+# luminance at EV 1, at EV 14) / middle grey, in the game's scene units, so the screen keeps its displayed brightness
+# whatever the exposure. The adapted luminance is the exposure's inverse: the game exposes it to middle grey
+# (CalcExposureAndNoise: exposure = middleGray / adaptedLuminance), so here MiddleGrey x 1 / exposure (the viewer's
+# exposure follows the game's, SCViewerExposure), in cd/m2; NitsPerUnit = DBA middle grey x HDR_LUMINANCE_SCALE.
+# UseDBA 0 (no %DBA_GLOBAL) leaves the absolute glow.
+SCREEN_DBA = """
+float adapted = ExposureGrey * InvExposure.x;
+return lerp(1.0, clamp(adapted, MinNits, MaxNits) / NitsPerUnit, UseDBA);
+"""
 GLASS_COVERAGE ="return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
 # Viewer look, not the game's (D15; WP-U3b.md section 14.10): the glass refracts the scene behind it through UE's distortion
 # pass (RefractionMethod 2D offset). The pass moves the scene colour itself under every glass pixel before the translucency is
@@ -844,10 +877,14 @@ def screen_master(translucent=False):
     deferred surface in the game (alpha_config opacity 1), drawn as dark glass. Base colour = ScreenBackColor (the
     authored BackColour), F0 = SpecularColor with the look's glass reflectance (GlassReflectanceScale /
     GlassReflectanceFloor, as M_SC_Glass; here the floor applies to every screen: the face is the display's glass cover),
-    roughness from the authored gloss, and emission = ScreenImage x EmissiveColor x EmissiveStrength (the builder's glow
-    rule). ScreenImage is bound per panel instance (ui_bindings); the black default leaves an unbound screen (MFDs, lift
+    roughness from the authored gloss, and the game's DisplayScreenPS emission (WP-I1 fix pass): ScreenImage graded by
+    MonitorEffects_ApplyViewingAngle (SCREEN_VIEWING_ANGLE) x the image's alpha x EmissiveStrength (the builder's glow
+    rule; GlassShared scales by the scalar glow, not the material's emissive colour)
+    x the %DBA_GLOBAL display-brightness multiplier (SCREEN_DBA, through EyeAdaptationInverse) x ScreenTransmittance.
+    ScreenImage is bound per panel instance (ui_bindings); the black default leaves an unbound screen (MFDs, lift
     buttons) as clean dark glass. The image is sampled at UV0 untiled: the render target covers the face.
-    TODO(WP-I1 Q3): EmissiveSaturation / EmissiveContrast, ViewingAngle falloff and the pixel grid are not decoded.
+    Not ported: the pixel grid (PixelGridMap is not exported; the game fades it to 1 once a cell is under ~2/3 px),
+    interference (InterferenceAmount 0 on the C2) and the %EMISSIVE_REFLECTION front layer.
     With `translucent`: M_SC_Screen_Translucent, the same screen for a face whose data asks for partial coverage
     (authored Opacity < 1 or a blended alpha mode, e.g. a 0.6 `Flash` overlay): lit translucent, coverage = Opacity
     through a Substrate weight (as M_SC_Translucent), non-Nanite (the builder splits it into the conventional mesh)."""
@@ -857,13 +894,27 @@ def screen_master(translucent=False):
     else:
         g = Graph("M_SC_Screen", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
     uv = g.uv(g.const(1.0))
-    image = (g.texture("ScreenImage", g.black, ST.SAMPLERTYPE_COLOR, uv), "RGB")
+    image_sample = g.texture("ScreenImage", g.black, ST.SAMPLERTYPE_COLOR, uv)
+    image = (image_sample, "RGB")
     normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
     f0 = g.custom(SCREEN_REFLECTANCE_LOOK, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
                   F0=g.vector("SpecularColor", (0.04, 0.04, 0.04)), Scale=g.scalar("GlassReflectanceScale", 1.0),
                   Floor=g.scalar("GlassReflectanceFloor", 0.0))
     base = g.vector("ScreenBackColor", (0, 0, 0))
-    emissive = g.mul(g.mul(image, g.vector("EmissiveColor", (0, 0, 0))), g.scalar("EmissiveStrength", 0.0))
+    f1, f3 = unreal.CustomMaterialOutputType.CMOT_FLOAT1, unreal.CustomMaterialOutputType.CMOT_FLOAT3
+    graded = g.custom(SCREEN_VIEWING_ANGLE, f3, Col=image,
+                      ViewingAngle=g.scalar("ViewingAngle", 180.0), Mode=g.scalar("ViewAngleMode", 0.0),
+                      Contrast=g.scalar("EmissiveContrast", 1.0), Saturation=g.scalar("EmissiveSaturation", 1.0))
+    # 1 / the exposure: EyeAdaptationInverse of a unit scalar light value at full alpha.
+    inverse_exposure = g.node(unreal.MaterialExpressionEyeAdaptationInverse)
+    g.link_any(*g.const(1.0), inverse_exposure, ("LightValueInput", "Light Value Input", "LightValue", "Light Value"))
+    g.link_any(*g.const(1.0), inverse_exposure, ("AlphaInput", "Alpha Input", "Alpha"))
+    dba = g.custom(SCREEN_DBA, f1, InvExposure=(inverse_exposure, ""), UseDBA=g.scalar("ScreenDBA", 0.0),
+                   ExposureGrey=g.scalar("DBAExposureGrey", 0.18), MinNits=g.scalar("DBAMinNits", 0.0),
+                   MaxNits=g.scalar("DBAMaxNits", 0.0), NitsPerUnit=g.scalar("DBANitsPerUnit", 1.0))
+    # GlassShared: emissiveBack *= the scalar glow (MatEmissiveColor.a, not its colour) and the render target's alpha.
+    emissive = g.mul(g.mul(g.mul(g.mul(graded, (image_sample, "A")), g.scalar("EmissiveStrength", 0.0)), dba),
+                     g.vector("ScreenTransmittance", (1, 1, 1)))
     slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive, front=not translucent)
     if translucent:
         g.weight(slab, g.saturate(g.scalar("Opacity", 1.0)))

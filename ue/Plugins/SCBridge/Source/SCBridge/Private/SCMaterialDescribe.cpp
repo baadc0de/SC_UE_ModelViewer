@@ -334,8 +334,10 @@ void HardSurfaceStencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A,
  *    gloss = Shininess / 255, or the DDNA when the material has one (SurfaceGloss);
  *    emission = ScreenImage (bound per panel instance from ui_bindings; black = none) x the authored rule (Emission:
  *    EmissiveColor tint, EmissiveStrength = the game's MaterialGlowToLinearGlow of Glow).
- *  TODO(WP-I1 Q3): EmissiveSaturation / EmissiveContrast, the ViewingAngle falloff, the pixel grid, dirt and the
- *  TexSlot6 screen mask are not decoded from the game's DisplayScreen shader; they are not applied. */
+ *  The emission follows DisplayScreenPS (WP-I1 fix pass): the image through MonitorEffects_ApplyViewingAngle (authored
+ *  EmissiveContrast / EmissiveSaturation / ViewingAngle / ViewAngleMode), x the glow, x %DBA_GLOBAL's
+ *  GetGlobalDBAMultiplier_HDR (ScreenDBA and its EV bounds), x the glass transmittance of the authored Diffuse.
+ *  Not applied: the pixel grid (its map is not exported), interference, dirt, cracks and condensation. */
 void Screen(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
 {
     FLinearColor Back = FLinearColor::Black;
@@ -347,6 +349,24 @@ void Screen(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
     if (D.bTwoSided) D.Warnings.Add(TEXT("two-sided DisplayScreen: M_SC_Screen is single-sided"));
     SurfaceGloss(D, Sub, A);
     Emission(D, Sub, A);
+    // DisplayScreenPS (WP-I1 fix pass; ue/verification and WP-I1 "Fix pass"): emission = (front + back emission) x
+    // (1 - glass opacity 0) x transmittance, the back emission = MonitorEffects_ApplyViewingAngle(image, N.V) x the glow
+    // x, under %DBA_GLOBAL, GetGlobalDBAMultiplier_HDR. The master evaluates the viewing-angle grade and the DBA
+    // multiplier per pixel from these constants; the transmittance is the GlassShared absorption of the authored
+    // Diffuse at normal incidence (path 1 x the layer height 1).
+    const FSCStarEngine& Game = FSCStarEngine::Get();
+    D.Scalars.Add(TEXT("ScreenDBA"), HasToken(Sub, TEXT("DBA_GLOBAL")) ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("DBAMinNits"), float(Game.NitsAtEV(Game.DBAMinAdaptedEV)));
+    D.Scalars.Add(TEXT("DBAMaxNits"), float(Game.NitsAtEV(Game.DBAMaxAdaptedEV)));
+    D.Scalars.Add(TEXT("DBANitsPerUnit"), float(Game.DBAMiddleGrey * Game.SceneUnitNits));
+    D.Scalars.Add(TEXT("DBAExposureGrey"), float(Game.MiddleGrey));
+    D.Scalars.Add(TEXT("EmissiveContrast"), A.Param(TEXT("EmissiveContrast"), float(Game.MonitorEmissiveContrastDefault)));
+    D.Scalars.Add(TEXT("EmissiveSaturation"), A.Param(TEXT("EmissiveSaturation"), float(Game.MonitorEmissiveSaturationDefault)));
+    D.Scalars.Add(TEXT("ViewingAngle"), A.Param(TEXT("ViewingAngle"), float(Game.MonitorViewingAngleDefault)));
+    D.Scalars.Add(TEXT("ViewAngleMode"), A.Param(TEXT("ViewAngleMode"), float(Game.MonitorViewAngleModeDefault)));
+    const FLinearColor Diffuse = A.Color(TEXT("Diffuse"), FLinearColor::White);
+    auto Transmit = [&Game](float C) { return float(FMath::Exp(-(1.0 / FMath::Max(double(C), Game.GlassColourFloor) - 1.0) * Game.GlassDensityScale)); };
+    D.Vectors.Add(TEXT("ScreenTransmittance"), FLinearColor(Transmit(Diffuse.R), Transmit(Diffuse.G), Transmit(Diffuse.B)));
     // The emission is the bound image x the glow: an unbound screen (black image) emits nothing, and says so in its
     // strength, which the emitter tools read (sc.Emissive.Lights / Report). FindScreen restores it with the image.
     D.ScreenGlow = D.Scalars.FindRef(TEXT("EmissiveStrength"));

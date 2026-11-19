@@ -25,6 +25,12 @@
         "source": "Engine/ShaderCache_Vulkan.pak (2663973822 bytes, crc32 8e895d78) read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
         "entries": ["ACosFast", "ACosEst2", "ASinEst"],
         "note": "the arc cosines DirOcclusionPS uses for its horizon angles (ACosFast in DeferredShading.cfxb; ACosEst2 / ASinEst in CIGMathLib.cfib), ported as UE::SSDO::AcosFastGame / AcosEst2Game"
+      },
+      {
+        "work_package": "WP-I1 fix pass (I1-5)",
+        "source": "Engine/ShaderCache_Vulkan.pak read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
+        "entries": ["dbaMiddleGray", "dbaMinAdaptedEV", "dbaMaxAdaptedEV", "monitorViewingAngleDefault", "monitorEmissiveContrastDefault", "monitorEmissiveSaturationDefault", "monitorViewAngleModeDefault", "GetGlobalDBAMultiplier_HDR", "MonitorEffects_ApplyViewingAngle", "DisplayScreenPS"],
+        "note": "the DisplayScreen render-to-texture emission (DisplayScreen.cfxb DisplayScreenPS over glassLib GlassShared's %EMISSIVE_MAP path): the image through MonitorEffects_ApplyViewingAngle, x the linear glow, x the %DBA_GLOBAL display-brightness multiplier GetGlobalDBAMultiplier_HDR (OpticsExposure.cfib); ported into M_SC_Screen"
       }
     ]
   },
@@ -255,6 +261,41 @@
       "value": 0.2,
       "file": "lightbeam.cfxb",
       "pattern": "GetLightForcedDistanceFade \\( fLightDist , fInvRadius , \\( 1\\.0 / (\\S+) \\) \\)"
+    },
+    "dbaMiddleGray": {
+      "value": 0.18,
+      "file": "OpticsExposure.cfib",
+      "pattern": "GetGlobalDBAMultiplier_HDR \\( \\) \\{ #if %_RT_TONEMAP_OUTPUT return 1\\.0f ; #endif const float middleGray = (\\S+) ;"
+    },
+    "dbaMinAdaptedEV": {
+      "value": 1.0,
+      "file": "OpticsExposure.cfib",
+      "pattern": "const float minAdaptedEV = (\\S+) ;"
+    },
+    "dbaMaxAdaptedEV": {
+      "value": 14.0,
+      "file": "OpticsExposure.cfib",
+      "pattern": "const float maxAdaptedEV = (\\S+) ;"
+    },
+    "monitorViewingAngleDefault": {
+      "value": 180.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float ViewingAngle < .*? ; > = (\\S+) ;"
+    },
+    "monitorEmissiveContrastDefault": {
+      "value": 1.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float EmissiveContrast < .*? ; > = (\\S+) ;"
+    },
+    "monitorEmissiveSaturationDefault": {
+      "value": 1.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float EmissiveSaturation < .*? ; > = (\\S+) ;"
+    },
+    "monitorViewAngleModeDefault": {
+      "value": 0.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float ViewAngleMode < .*? ; > = (\\S+) ;"
     }
   },
   "shader_textures": {
@@ -416,6 +457,18 @@
     "GetPaletteStencilColors": {
       "file": "paletteLib.cfib",
       "sha256": "54c2f9aaf555e19d45bbeea0435e3dda0888132110b1cafb704af3c9558abbbc"
+    },
+    "GetGlobalDBAMultiplier_HDR": {
+      "file": "OpticsExposure.cfib",
+      "sha256": "7403c1d9b8cb717e3cf8afa77f152123e0431c44897d7d9ecdeb7eb16dd32a8c"
+    },
+    "MonitorEffects_ApplyViewingAngle": {
+      "file": "MonitorEffects.cfib",
+      "sha256": "b8ec8282dc5f3ec704dce6e0ebd19a153fcba7fc3efa0007caa172301e9d01df"
+    },
+    "DisplayScreenPS": {
+      "file": "DisplayScreen.cfxb",
+      "sha256": "36f0eb2fb25b2aef3033d3b81962e8115ae1507692125a0adcc2336c85d368dd"
     }
   }
 }

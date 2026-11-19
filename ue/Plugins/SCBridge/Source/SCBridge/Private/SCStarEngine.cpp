@@ -56,6 +56,13 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Out.GlassThinFilmThicknessDefault = Value(TEXT("shader_constants"), TEXT("glassThinFilmThicknessDefault"));
     Out.DirtDetailScale = Value(TEXT("shader_constants"), TEXT("detailScale"));
     Out.ForcedFadeFraction = Value(TEXT("shader_constants"), TEXT("forcedFalloffFraction"));
+    Out.DBAMiddleGrey = Value(TEXT("shader_constants"), TEXT("dbaMiddleGray"));
+    Out.DBAMinAdaptedEV = Value(TEXT("shader_constants"), TEXT("dbaMinAdaptedEV"));
+    Out.DBAMaxAdaptedEV = Value(TEXT("shader_constants"), TEXT("dbaMaxAdaptedEV"));
+    Out.MonitorViewingAngleDefault = Value(TEXT("shader_constants"), TEXT("monitorViewingAngleDefault"));
+    Out.MonitorEmissiveContrastDefault = Value(TEXT("shader_constants"), TEXT("monitorEmissiveContrastDefault"));
+    Out.MonitorEmissiveSaturationDefault = Value(TEXT("shader_constants"), TEXT("monitorEmissiveSaturationDefault"));
+    Out.MonitorViewAngleModeDefault = Value(TEXT("shader_constants"), TEXT("monitorViewAngleModeDefault"));
     {
         const TSharedPtr<FJsonObject>* Group = nullptr;
         const TSharedPtr<FJsonObject>* Entry = nullptr;

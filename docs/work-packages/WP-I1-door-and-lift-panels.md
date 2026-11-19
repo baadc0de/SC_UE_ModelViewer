@@ -759,6 +759,214 @@ optimisation and sparse overrides (low).
 - Frozen Clipper parity (`ui_check.sh --full`) not run: no Clipper export on this machine.
 - `SCBridge.Screens.StateImages` and the socpak override parse test were written with the code, not failing first.
 
+## Fix pass (I1-5)
+
+Submodule branch `scviewer/panel-screens`, commits `80eb8711`, `b44edbf2`, `47f1858e` (from `df52450e`).
+`CACHE_FORMAT_VERSION` 32 → 33 and the cook stamp `USCCookLibrary::FormatVersion` 3 → 4 (the panel renders and the
+screen master's instance constants change). Owner references in `out/panel-ui-datamine/refs/`; shots and
+Astra verdicts in `out/panels/v4/`.
+
+### 1. Screen wash (M_SC_Screen)
+
+**Cause.** The game's `DisplayScreen` shader (`DisplayScreen.cfxb` `DisplayScreenPS` over glassLib `GlassShared`'s
+`%EMISSIVE_MAP` path, read from the installed shader cache) does not emit a fixed luminance. The C2's `RTT_Screens`
+carries `%DBA_GLOBAL`, and its emission is
+
+    image → MonitorEffects_ApplyViewingAngle(contrast, saturation 1.15, viewing angle)
+          × MatEmissiveColor.a (the linear glow: Glow² × 400 = 2.56 scene units for Glow 0.08)
+          × GetGlobalDBAMultiplier_HDR = clamp(adapted luminance, EV 1, EV 14) / 0.18
+          × (1 − glass opacity 0) × transmittance (white Diffuse: 1)
+
+The DBA term cancels the exposure: the screen is displayed at 2.56 × image after exposure, whatever the room's
+brightness. The viewer emitted a fixed 2,560 cd/m² × image. In a dim corridor the exposure is set for a few cd/m², so the
+face was exposed ~10–30× too high and the display curve's shoulder rolled it to near white (v3: "pale on screen").
+
+**Checked and not the cause.** sRGB: the panel PNGs carry no colour chunk, are decoded as sRGB (`ResolveSRGB`), and
+the sampled field is (0, 124, 208, 255), alpha 1. Tonemapping: the viewer's display curve is the game's
+`HuePreservingShoulder` (fork, WP-E1 E1-4); for the exposed field (0, 0.56, 2.02) it gives sRGB (63, 174, 252), the
+colour now on screen. Bloom and Lumen follow the emission (the screen is no longer a 2,560-nit source in a dim room).
+Glass floor 0.045 (the viewer's glass look, raising the authored F0 0.0097): it adds a reflection of a few percent of the
+room, which lifts a dark footer slightly but cannot whiten a 2.56-exposed field; unchanged, not A/B-measured. The red header gear was not a decode error: it is the
+settings button, which the game hides at rest (item 2), and its red was the large-button kit sheet's alert colour bleeding
+onto every button icon (item 2b).
+
+**Fix (tests first).** `M_SC_Screen` / `M_SC_Screen_Translucent` port the chain: `SCREEN_VIEWING_ANGLE`
+(MonitorEffects_ApplyViewingAngle) and `SCREEN_DBA` (GetGlobalDBAMultiplier_HDR through UE's `EyeAdaptationInverse`:
+adapted luminance = middle grey / exposure, in cd/m², clamped to `NitsAtEV(1)`..`NitsAtEV(14)`, ÷ 0.18 × 1000), and
+`ScreenTransmittance`. `Describe` sets `ScreenDBA` from the `DBA_GLOBAL` token, the bounds, the authored
+`EmissiveContrast` / `EmissiveSaturation` / `ViewingAngle` / `ViewAngleMode` (the shader's declared defaults when
+absent). Every constant is in `StarEngineRender.json` (`dbaMiddleGray`, `dbaMinAdaptedEV`, `dbaMaxAdaptedEV`,
+`monitor*Default`) with the hashes of `GetGlobalDBAMultiplier_HDR`, `MonitorEffects_ApplyViewingAngle` and
+`DisplayScreenPS`; 70/70 shader entries re-checked against the installed pak (the executable cvars were not re-run:
+no `objdump` on this machine). `SCBridge.Materials.ScreenFamily` failed on the old describe (red log in the session
+scratch), passes now; `SCBridge.StarEngine.Fixture` covers the new fixture fields.
+
+**Result.** The field is saturated blue again with a dark footer and white text (v4), but still lighter than every
+owner reference (Astra: colour MISMATCH on all nine pairs; the references read at roughly 0.3 × our exposed value).
+The ported chain reproduces the game's documented maths exactly, so the remainder is a runtime value the data does
+not give. Evidence for the next step:
+
+- `GlassShared` applies `RTT_Tonemap(emission, RTT_CalcExposure(...))` when `RenderToTextureSizeParams[1].y >= 0`
+  (the render target's luminance mip): either a Reinhard to LDR or a rescale of the UI so its average matches the
+  scene. Those parameters are set by the engine per render target; they are not in DataCore, the MTL or the shaders.
+- The executable names a `SRTTTonemapGammeEncodeRes` pass and `DirectRTT_AfterTonemappingParams`,
+  `r_RTT_AR_AfterToneMapping`: UI render targets may be tonemapped / gamma-encoded before the screen samples them.
+
+No constant was tuned to the references. The pixel grid (its map is not exported), interference and dirt are not ported.
+
+### 2. Light panel layout and header; door header gear
+
+**Causes (starbreaker-ui).**
+
+- The header `Label_Container` is `IsActive = !IsEmpty(ui_LocationName)`. The state filter's evaluator did not
+  evaluate `BooleanFromLocalizationIsEmpty`, and an unset variable counts as unknown runtime data, which keeps the node
+  shown; the light panel's owner declares no `ui_LocationName` at all. The door header's `parent_Header`
+  (`ui_showSettingsButton || !IsEmpty(ui_LocationName)`) and its red gear stayed shown the same way.
+- `LightControl_Frame` (anchor 0, pivot 0.5, 100 % wide) in a `ColumnReverse` Start/Start column was placed at
+  `−pivot × width`: half off the left edge.
+- The door column (`parent_middle`: header Auto, DoorButton grow 1, shelf Auto) overlaid its non-grow items on the whole
+  column; the button shelf sat across the middle of the DoorButton.
+
+**Fixes (failing tests first).** The exporter passes the owner's complete user-variable set; the pipeline marks the
+registry (`set_owner_user_variables_known`), and a bare-named variable the owner does not declare reads at its type's
+default. `BooleanFromLocalizationIsEmpty` over a known localized variable becomes a static boolean in the state filter.
+A start-justified item without a cross anchor keeps its pivot inside the column (as the Center branch already did).
+Non-grow items flow beside a growing one at their content extent (`auto_content_main_extent`). Main-axis `Stretch`
+shares a wrapped line's free space (one lock button spans the shelf, two split it). A localized variable holding a `@`
+key reads as its text. Tests: `tests_owner_values.rs` (3), `engine_03.rs` (3 layout), `tests_state_tags.rs` (1).
+
+Light panel: header hidden (the owner has no room name), three full-width rows inside the screen. Door pads: no header
+gear (no reference shows one), shelf under the field.
+
+### 2b. Light panel colours and glyphs (owner follow-up)
+
+Evidence chain, all from the CRUS data (`selected_style_source` `manufacturer:crus`):
+
+| Data | Value | Before | After |
+|---|---|---|---|
+| `sk_crus_env_buttonlargestyles` `RootIconElementInstance` (Tag `icon-element-instance`) | `FillColor` = `Critical` (the alert red) | applied scene-wide: every button's glyph and the door header's settings gear red | the sheet applies inside `ComponentGeneralButtonLarge` hosts only (it is the large-button standard's sheet); the large button's lock icon keeps its red |
+| `sk_crus_env_buttonlargestyles` `RootIconWidgetInstance` | size 0.5 × 0.5, anchor (0.5, 0.3), pivot 0.5, ScaleY 0.81 | the same sheet sized and placed the secondary buttons' icons (large, high, right) | not applied to secondary buttons |
+| `sk_crus_env_buttonsecondarystyles` `RootFilledIconElementInstance` (`icon-element-instance` under `fill-style-filled`, parent not `disabled`) | `FillColor` = `Bright` | overridden by the large sheet | the glyph colour: white |
+| `…buttonsecondarystyles` `RootFilledSelected` / `RootFilled` | the On row's selected blue, the others' teal (α 0.175) | unchanged | unchanged |
+| `buttongeneralsecondarycomponentstandard` embedded `RootPosTop` / `RootIconPosVertical` (gated on the `icon-pos-top` state tag; `ComponentRoot.SecondaryStateTag` ← `IconPosition`) with the kit's `RootIcon` (size 1 × 1, `MaxSize` 35, `MinSize` 18) | column flow, icon height capped at 35 | the state tag resolves (`Tag.299578d0` icon-pos-top), but the template's embedded entries gated on it are not in effect and `EnableMaxHeight` stays off, so the icon fills the row's width at the top | **open** |
+
+The red was therefore not a state (no alert state, power or light value reaches it): it was the large-button kit sheet
+bleeding into other components (test `modular_kit_sheets_include_the_large_button_sheet`, failing on the scene-wide
+application). Re-shoot `out/panels/v4/reshoot/light_panel.png`: white glyphs, On blue, Auxiliary / Emergency teal
+(Astra, `astra-light-panel-reshoot.md`: PARTIAL — rows inside the screen, On blue, others teal, glyphs white; glyphs larger,
+left, straddling each button's top edge). The
+glyphs still sit at the top-left of each row: their size and position come from the template's `icon-pos-*` entries,
+which starbreaker-ui does not apply yet. The host's `iconPosition` now reaches the template's `IconPosition` parameter
+through the template's own tag switch (`template_enum_param_index`); for these rows it is the default 0 (top), so it does
+not change them.
+
+### 3. Brand
+
+`.or(Some("drak"))` and the manifest's, SWF selection's and `load_style`'s `"drak"` defaults are removed: the brand comes
+from the canvas's `style` or the binding's manufacturer, else none (register entry in `ui-fallback-register.md`). The
+hangar transit panel has no data brand: `TransitInteractionUIPanel_Elevator_Ext` is not attachable (no manufacturer),
+its `defaultStyle` is null, and neither `hangar_xltop_001.socpak` nor the gateway container names a UI style. Door pads
+do carry one: their `.soc` instances override `AttachDef.Manufacturer` to `SCItemManufacturer.CRUS` (whose
+`BuildingBlocksStyle` would be the per-entity source; today the binding's `crus` comes from the root entity's code).
+The CLI replay now uses the exporter's manufacturer rule (`ui_pipeline::root_manufacturer_id`; it derived `hangar`).
+
+Hangar call panel: no amber (that was the Drake palette); a neutral black field with CALL ELEVATOR. The label still
+sits at the top: without a brand no modular-kit sheet centres the large button's text field (open).
+
+### 4. LOCKED
+
+The canvas binds the DoorButton's `ParamInput1` (ShowIcon) to `doorlocked` and `ParamInput0` (ShowLabel) to
+`!doorlocked`: locked shows the lock icon only. The binding resolved correctly, but the modular kit's
+`RootTextFieldElementInstance` (`IsActive` true), re-applied after the bindings, revealed the label again. A
+binding-resolved `IsActive` on a widget-standard instance now stands against later style passes
+(`BOUND_IS_ACTIVE_KEY`; test `bound_visibility_wins_over_a_style_is_active`).
+
+### Icons (owner references, Crusader pads)
+
+- **Which buttons.** `IC_DoorButtonShelf`: Lock (`!HideLock && !locked`), Unlock, Light normal / low (`!HideLight`, by
+  `lightslow`), Emergency light (`!HideEmergencyLight`); the shelf shows when any is enabled. C2 `top_deck` instances
+  hide all four (no row: the WC, wide and square references); loadout pads keep the class defaults (light low +
+  emergency: the two-button row of the portrait references). Our pads now show the same rows in the same place.
+- **Glyphs: missing (open).** Each button's glyph is an authored `base_Icon` (`icon_common_light_low.svg`,
+  `…_light_emergency.svg`, `…_lock_action.svg`). The CRUS brand block of the shelf canvas hides `base_Icon`
+  (`Hide_Base_Icon`) and instead sets the component's `ParamInput1` (`ShowSecondaryButtonIcon`, on nodes tagged
+  `general-button-secondary`), i.e. the secondary button standard's `ShowIcon` with its `customIcon`. starbreaker-ui
+  neither tags a component host with its component tag nor routes a style-set `ParamInputN` into the expanded template
+  (brand styles apply after the expansion), so the buttons draw blank.
+- **Corner icon.** `Icon_DoorStatus` (door state SVG) — present; Astra finds ours taller and yellow where the
+  references read compact cyan.
+
+### Square pads
+
+The square bulkhead pads (`Cor_Cyl_Touchpad_Bulkhead_A*`, 1440 × 1440) operate
+`CRUS_Starlifter_Door_Component_4m` (`FP_DOOR_LIST` 28): a component-access door, as the owner suspected.
+
+### Verification (C2 + `hangar_xltop_001`, port 8771, `out/panels/v4/report.txt`)
+
+`FP_PADS total=34 resolved=28 hittable=28` (unchanged), 132 faces. Shots: cargo-bay wall pad (the landscape
+`Ramp_Button_Landscape`, the ACS LV1 pose of the M2 reference) closed / open / locked, square component pad,
+habitation pad, Crusader portrait ring pad, WC pad (each closed / open / locked), light panel, hangar call panel, pilot
+MFD.
+
+| Reference | Ours | Layout | Label | Icons | Colour | Aspect | Verdict |
+|---|---|---|---|---|---|---|---|
+| C2 cargo bay | cargo_bay_wall-open | CLOSE | MATCH | MISMATCH | MISMATCH | CLOSE | PARTIAL |
+| M2 ACS LV1 | cargo_bay_wall-open-context | MATCH | MATCH | MISMATCH | MISMATCH | CLOSE | PARTIAL |
+| M2 wide | cargo_bay_wall-open | CLOSE | CLOSE | MISMATCH | MISMATCH | MISMATCH | PARTIAL |
+| C2 habitation | habitation-closed | CLOSE | MATCH | CLOSE | MISMATCH | CLOSE | PARTIAL |
+| Crusader icons | portrait_ring-closed | CLOSE | MATCH | MISMATCH | MISMATCH | CLOSE | PARTIAL |
+| Crusader icons 2 | portrait_ring-closed | CLOSE | MATCH | MISMATCH | MISMATCH | MISMATCH | PARTIAL |
+| Crusader main deck | portrait_ring-closed | CLOSE | MATCH | MISMATCH | MISMATCH | CLOSE | PARTIAL |
+| Crusader portrait | habitation-closed | CLOSE | MATCH | MISMATCH | MISMATCH | CLOSE | PARTIAL |
+| C2 WC | wc_pad-closed | CLOSE | CLOSE | CLOSE | MISMATCH | MISMATCH | PARTIAL |
+| C2 square | component_square-closed | MATCH | MATCH | CLOSE | MISMATCH | CLOSE | PARTIAL |
+
+No reference: light panel PARTIAL (inside the screen; icons high-right of the labels, blue-on-teal labels), hangar call
+panel PARTIAL (label at the top), pilot MFD PASS (clean dark glass). Against v3 the layout and label columns moved from
+CLOSE/MISMATCH/FAIL to MATCH/CLOSE, the light panel from FAIL to PARTIAL; colour is closer but still MISMATCH.
+
+Tests (after the review fixes): `ui_check.sh` ALL GREEN (747 passed), `starbreaker-3d --lib` 975 passed, CLI `ui::` 2 passed; SCBridge 171 tests,
+167 pass, the 4 known failures (`Package.FolderTarImport`, `Player.KitRigAndWeapons`, `Materials.FamilyMapping`,
+`FirstPerson.SkeletalCollision`). `create_materials.py` printed `WP-U2 MATERIALS_OK`; only `M_SC_Screen` and
+`M_SC_Screen_Translucent` were kept.
+
+### Review (Terra + Astra, `out/panels/review4/`)
+
+Fixed: Auto text beside a growing item collapsing to zero (now measured), `PercentOfY` / `PercentOfX` sizes and the
+cross offset of non-grow items beside a growing one, a held non-boolean registry value defaulted to false (only a miss
+defaults), the large-button sheet's scene-wide application (above), the cook stamp (3 → 4: cooked levels re-cook),
+the screen emission's colour factors (GlassShared multiplies by the scalar glow and the target's alpha; the master no
+longer multiplies by `EmissiveColor` and now by the image alpha).
+
+Not fixed, with the reason:
+
+- **DBA from the clamped exposure (high, both).** The game's DBA uses the unclamped adapted luminance; UE's
+  `EyeAdaptationInverse` gives the clamped exposure, so below the exposure clamp (adapted luminance under
+  ~9 cd/m²) the viewer's screens are brighter than the game's, up to 36× at EV 1. Reading the fork's adaptation state
+  needs an engine feature (WP-E1); recorded in Open.
+- **Owner-set completeness (medium, both).** A bare variable is defaulted only when the binding carries owner user
+  variables; an owner with none, and a bare runtime binding beside owner variables, are not told apart. Needs an
+  explicit completeness flag in `ui_bindings` (contract change).
+- **Lumen card capture (medium, both)** caches the exposure-dependent emission until the card refreshes.
+- **Transmittance at unit path (medium, Astra)**: exact for the white Diffuse of every C2 screen; per-pixel path not ported.
+- **Wrapped Stretch with an Auto item (medium, Astra)**, **visibility precedence across passes (medium, Astra)**:
+  no case in the C2 / hangar data; noted.
+- **Replay manufacturer list (medium, Astra)**: the replay now follows the exporter's code list
+  (`derive_manufacturer_id`, a hard-coded table, flagged: `espe` against DataCore's `ESPR`); the data path is
+  `AttachDef.Manufacturer → SCItemManufacturer.BuildingBlocksStyle` (section 3).
+
+### Open
+
+- Screen colour: the ~0.3 factor to the references (runtime RTT tonemap / exposure, above).
+- Shelf button glyphs: component tag on hosts and style-set `ParamInputN` routing (above).
+- Light-panel and shelf glyph size and position: the button template's `icon-pos-*` embedded entries (above).
+- DBA below the exposure clamp; owner-set completeness flag; Lumen card capture of the screen emission (review).
+- Hangar call panel label position; the hangar's brand at run time (location style) is not in its data.
+- Wide-pad lock bar glyph, M2 side strip (a separate face), the WC field aspect (Astra: 1.8:1 against our 1.1:1 —
+  the toilet button's face is measured square), corner-icon size and colour.
+- DBA uses the host's clamped exposure; the game's DBA reads the unclamped adapted luminance, so screens differ in
+  scenes darker than the exposure clamp (`r_ExposureMultiplierMax`).
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:

@@ -17,8 +17,10 @@ public:
      *  stale: the cook scripts report it with a recook instruction and package_showcase.ps1 refuses to package it.
      *  2: WP-I1 review (screens: M_SC_Screen / _Translucent masters and per-face panel images; pooled meshes keyed by
      *  their section topology, so a changed glass / screen split never reuses an older pooled mesh).
-     *  3: WP-I1 I1-5 (panel renders at their face aspect with owner values; state images swapped per face). */
-    static constexpr int32 FormatVersion = 3;
+     *  3: WP-I1 I1-5 (panel renders at their face aspect with owner values; state images swapped per face).
+     *  4: WP-I1 fix pass (screens: the DisplayScreenPS emission with the DBA multiplier and new instance constants; the
+     *  panel renders' layout, owner defaults and brand). */
+    static constexpr int32 FormatVersion = 4;
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in

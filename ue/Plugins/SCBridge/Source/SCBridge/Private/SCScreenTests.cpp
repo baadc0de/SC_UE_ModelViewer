@@ -117,6 +117,28 @@ bool FSCScreenFamily::RunTest(const FString&)
         TestFalse(Where + TEXT("no image in the description (bound per face)"), D.Textures.Contains(TEXT("ScreenImage")));
         TestFalse(Where + TEXT("no opacity parameter"), D.Scalars.Contains(TEXT("Opacity")));
         TestEqual(Where + TEXT("no warnings"), D.Warnings.Num(), 0);
+        // WP-I1 fix pass: the game's DisplayScreenPS emission (glassLib GlassShared %EMISSIVE_MAP): the image through
+        // MonitorEffects_ApplyViewingAngle (authored contrast / saturation / viewing angle, the shader's defaults when
+        // absent), x the glow, x %DBA_GLOBAL GetGlobalDBAMultiplier_HDR (the scene's adapted luminance / middle grey,
+        // clamped to EV 1..14), x the glass transmittance (white Diffuse: 1).
+        const FSCStarEngine& Game = FSCStarEngine::Get();
+        TestEqual(Where + TEXT("DBA_GLOBAL on"), D.Scalars.FindRef(TEXT("ScreenDBA"), -1.f), 1.f);
+        TestEqual(Where + TEXT("DBA lower bound = NitsAtEV(minAdaptedEV)"), D.Scalars.FindRef(TEXT("DBAMinNits"), -1.f), float(Game.NitsAtEV(Game.DBAMinAdaptedEV)));
+        TestEqual(Where + TEXT("DBA upper bound = NitsAtEV(maxAdaptedEV)"), D.Scalars.FindRef(TEXT("DBAMaxNits"), -1.f), float(Game.NitsAtEV(Game.DBAMaxAdaptedEV)));
+        TestEqual(Where + TEXT("DBA divisor = DBA middle grey x scene unit"), D.Scalars.FindRef(TEXT("DBANitsPerUnit"), -1.f), float(Game.DBAMiddleGrey * Game.SceneUnitNits));
+        TestEqual(Where + TEXT("adapted luminance from the exposure's middle grey"), D.Scalars.FindRef(TEXT("DBAExposureGrey"), -1.f), float(Game.MiddleGrey));
+        TestEqual(Where + TEXT("authored saturation"), D.Scalars.FindRef(TEXT("EmissiveSaturation"), -1.f), 1.f);
+        TestEqual(Where + TEXT("authored contrast"), D.Scalars.FindRef(TEXT("EmissiveContrast"), -1.f), 1.f);
+        TestEqual(Where + TEXT("viewing angle: the shader default"), D.Scalars.FindRef(TEXT("ViewingAngle"), -1.f), float(Game.MonitorViewingAngleDefault));
+        TestEqual(Where + TEXT("view angle mode: the shader default"), D.Scalars.FindRef(TEXT("ViewAngleMode"), -1.f), float(Game.MonitorViewAngleModeDefault));
+        TestTrue(Where + TEXT("white Diffuse transmits fully"), D.Vectors.FindRef(TEXT("ScreenTransmittance")).Equals(FLinearColor::White, 1e-5f));
+    }
+    {
+        // Without %DBA_GLOBAL the glow is absolute (the game's emissive at scene units).
+        FSCSubmaterial Sub = ScreenSub(TEXT("RTT_NoDBA"), TEXT("DisplayScreen"), true);
+        Sub.Json = Sub.Json.Replace(TEXT(R"(["EMISSIVE_MAP","DBA_GLOBAL"])"), TEXT(R"(["EMISSIVE_MAP"])"));
+        const FSCMaterialDesc D = FSCMaterialBuilder::Describe(Sub, nullptr);
+        TestEqual(TEXT("no DBA token: DBA off"), D.Scalars.FindRef(TEXT("ScreenDBA"), -1.f), 0.f);
     }
     // A4: authored partial opacity (the Idris/Ironclad `Flash` overlay, 0.6) or a blended alpha mode is honoured: a lit
     // translucent screen, split into the non-Nanite mesh like every blended surface; the split rule agrees.
@@ -166,13 +188,17 @@ bool FSCScreenFamily::RunTest(const FString&)
         UTexture* Image = nullptr;
         TestTrue(Path + TEXT(" has ScreenImage"), Master->GetTextureParameterDefaultValue(FHashedMaterialParameterInfo(FSCMaterialBuilder::ScreenImageParam), Image));
         TestEqual(Path + TEXT(": unbound screen image is black (dark glass)"), GetNameSafe(Image), FString(TEXT("T_SC_Black")));
-        for (const TCHAR* Name : {TEXT("ScreenBackColor"), TEXT("SpecularColor"), TEXT("EmissiveColor")})
+        // No EmissiveColor: GlassShared scales the image by the scalar glow and the target's alpha (review fix).
+        for (const TCHAR* Name : {TEXT("ScreenBackColor"), TEXT("SpecularColor"), TEXT("ScreenTransmittance")})
         {
             FLinearColor V;
             TestTrue(Path + TEXT(" has ") + Name, Master->GetVectorParameterDefaultValue(FHashedMaterialParameterInfo(FName(Name)), V));
         }
         TArray<FName> Scalars = {FName(TEXT("EmissiveStrength")), FName(TEXT("Smoothness")), FName(TEXT("GlossMult")), FName(TEXT("UseSmoothnessMap")),
-                                 FSCMaterialBuilder::GlassReflectanceScaleParam, FSCMaterialBuilder::GlassReflectanceFloorParam};
+                                 FSCMaterialBuilder::GlassReflectanceScaleParam, FSCMaterialBuilder::GlassReflectanceFloorParam,
+                                 FName(TEXT("ScreenDBA")), FName(TEXT("DBAMinNits")), FName(TEXT("DBAMaxNits")), FName(TEXT("DBANitsPerUnit")),
+                                 FName(TEXT("DBAExposureGrey")), FName(TEXT("EmissiveSaturation")), FName(TEXT("EmissiveContrast")),
+                                 FName(TEXT("ViewingAngle")), FName(TEXT("ViewAngleMode"))};
         if (bTranslucent) Scalars.Add(TEXT("Opacity"));
         for (const FName Name : Scalars)
         {
