@@ -583,31 +583,23 @@ GLASS_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor * step(1e-6, F0)
 SCREEN_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor));"
 GLASS_COVERAGE ="return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
 # Viewer look, not the game's (D15; WP-U3b.md section 14.10): screen-space refraction of the scene behind the glass, on while
-# GlassRefractionLook > 0. GLASS_REFRACTION_OFFSET returns the green tap's viewport-UV offset (xy), the dispersion spread (z: red
-# at 1 - z, blue at 1 + z) and the band streak gain (w). Two terms, as angles seen from the camera (view space, x right, y up):
-# - wedge: the surface tilt (normal map + a soft two-wave ripple along the pane's bitangent, in the mesh's own space so it moves
-#   with the pane, period BandPeriod cm, amplitude Banding; each wave fades out where it would be finer than about four pixels,
-#   so a distant pane does not alias) deviates the ray by (IOR - 1) x tilt x Strength, a thin prism; at the background that is
-#   x (1 - glass depth / background depth), so a surface right behind the pane barely moves;
+# GlassRefractionLook > 0. GLASS_REFRACTION_OFFSET returns the green tap's viewport-UV offset (xy) and the dispersion spread (z:
+# red at 1 - z, blue at 1 + z). Two terms, as angles seen from the camera (view space, x right, y up):
+# - wedge: the surface tilt of the normal map deviates the ray by (IOR - 1) x tilt x Strength, a thin prism; at the background
+#   that is x (1 - glass depth / background depth), so a surface right behind the pane barely moves (the first version also had a
+#   ripple band and a focusing streak; the owner's profiles set both to 0, so they are gone, 2026-11-19);
 # - slab: a pane Thickness cm thick shifts the ray sideways by t sin(i) (1 - cos(i) / sqrt(n^2 - sin^2(i))) (zero head-on, growing
 #   towards grazing incidence), seen at the background's distance.
 # The offset is shrunk so every tap stays on the screen (no clamped-edge smears). Off: zero.
 GLASS_REFRACTION_OFFSET = """
-if (Look <= 0.0) return float4(0.0, 0.0, 0.0, 1.0);
+if (Look <= 0.0) return float3(0.0, 0.0, 0.0);
 float n = clamp(IOR, 1.0001, 3.0);
 float3 Ng = normalize(Parameters.TangentToWorld[2]);
 float3 V = Parameters.CameraVector;
 float NoV = dot(Ng, V);
 if (NoV < 0.0) { Ng = -Ng; NoV = -NoV; }
 NoV = clamp(NoV, 1e-3, 1.0);
-float b = dot(PLocal, normalize(BLocal + 1e-6)) * (6.2831853 / max(BandPeriod, 1e-3));
-float fb = fwidth(b);
-float lod1 = saturate(2.0 - 4.0 * fb), lod2 = saturate(2.0 - 4.0 * 2.71 * fb);
-float ripple = lod1 * sin(b) + lod2 * 0.5 * sin(2.71 * b + 1.3);
-float slope = (lod1 * cos(b) + lod2 * 1.355 * cos(2.71 * b + 1.3)) / 2.355;
-float3 t = NormalTS;
-t.y += Banding * ripple;
-float3 Nw = normalize(mul(normalize(t), (float3x3)Parameters.TangentToWorld));
+float3 Nw = normalize(mul(normalize(NormalTS), (float3x3)Parameters.TangentToWorld));
 if (dot(Nw, Ng) < 0.0) Nw = -Nw;
 float Zg = PixelZ;
 float Zb = max(SceneZ, Zg + 0.01);
@@ -623,7 +615,7 @@ float2 uv = GetViewportUV(Parameters);
 float2 room = max(min(uv, 1.0 - uv) - 0.002, 0.0);
 float2 reach = abs(O) * (1.0 + s) + 1e-6;
 O *= saturate(min(room.x / reach.x, room.y / reach.y));
-return float4(O, s, 1.0 + BandStreak * slope);
+return float3(O, s);
 """
 # One scene-colour tap: the pixel's viewport UV + the offset x (1 + K x spread) (K -1 red, 0 green, +1 blue; Offset 0 = the pixel).
 GLASS_REFRACTION_TAP = "return GetViewportUV(Parameters) + Offset.xy * (1.0 + K * Offset.z);"
@@ -635,7 +627,7 @@ GLASS_REFRACTION_TAP = "return GetViewportUV(Parameters) + Offset.xy * (1.0 + K 
 # Both are exact (zero / one) where nothing moves. T is the slab's
 # transmittance of the background ((1 - Schlick Fresnel) x Beer-Lambert, the slab's normal and F0). A tap whose depth is in front
 # of the glass is not taken (per channel: no foreground dragged into the pane), nor one in the clipped highlights of the 8-bit
-# scene-colour copy (encoded up to 10, pre-exposed). The band streak brightens only refracted taps, fading out below a 2-pixel offset.
+# scene-colour copy (encoded up to 10, pre-exposed).
 GLASS_REFRACTION_COMBINE = """
 if (Look <= 0.0) return Mode > 0.5 ? float3(1.0, 1.0, 1.0) : float3(0.0, 0.0, 0.0);
 float3 V = Parameters.CameraVector;
@@ -649,8 +641,7 @@ float3 tap = float3(TapR.r, TapG.g, TapB.b);
 float3 w = saturate((float3(DepthR, DepthG, DepthB) - PixelZ) / max(0.02 * PixelZ, 1.0));
 float hot = max(max(max(c.r, c.g), c.b), max(max(tap.r, tap.g), tap.b)) * ResolvedView.PreExposure;
 w *= saturate((9.5 - hot) / 1.5);
-float px = length(Offset.xy * ResolvedView.ViewSizeAndInvSize.xy);
-float3 target = lerp(c, tap, w) * (1.0 + (Offset.w - 1.0) * w * saturate(px / 2.0));
+float3 target = lerp(c, tap, w);
 if (Mode > 0.5)
 {
     float3 m = float3(1.0, 1.0, 1.0);
@@ -689,21 +680,12 @@ def glass_refraction(g, normal, transmittance, f0):
     translucency pass's scene-colour copy and the opaque depth), so every pass that cannot read them gets their neutral value.
     GlassRefractionLook (0 = off, the master default) is the live switch the builder sets; the other scalars are the look's
     strengths, adjudicated defaults (WP-U3b.md section 14.10)."""
-    f2, f3, f4 = (unreal.CustomMaterialOutputType.CMOT_FLOAT2, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
-                  unreal.CustomMaterialOutputType.CMOT_FLOAT4)
+    f2, f3 = unreal.CustomMaterialOutputType.CMOT_FLOAT2, unreal.CustomMaterialOutputType.CMOT_FLOAT3
     look = g.scalar("GlassRefractionLook", 0.0, "Look")
     pixel_z = (g.node(unreal.MaterialExpressionPixelDepth), "")
-    # The ripple's coordinate along the pane in the mesh's own space (it moves with a moving pane): local position . local bitangent.
-    bitangent = g.op(unreal.MaterialExpressionCrossProduct, (g.node(unreal.MaterialExpressionVertexNormalWS), ""),
-                     (g.node(unreal.MaterialExpressionVertexTangentWS), ""))
-    b_local = g.op(unreal.MaterialExpressionTransform, bitangent, names=("Input",),
-                   transform_source_type=unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_WORLD,
-                   transform_type=unreal.MaterialVectorCoordTransform.TRANSFORM_LOCAL)
-    offset = g.custom(GLASS_REFRACTION_OFFSET, f4, Look=look, Strength=g.scalar("GlassRefractionStrength", 1.0, "Look"),
+    offset = g.custom(GLASS_REFRACTION_OFFSET, f3, Look=look, Strength=g.scalar("GlassRefractionStrength", 1.0, "Look"),
                       IOR=g.scalar("GlassRefractionIOR", 1.5, "Look"), Thickness=g.scalar("GlassRefractionThickness", 1.5, "Look"),
-                      Dispersion=g.scalar("GlassDispersion", 0.25, "Look"), Banding=g.scalar("GlassBanding", 0.01, "Look"),
-                      BandPeriod=g.scalar("GlassBandPeriod", 9.0, "Look"), BandStreak=g.scalar("GlassBandStreak", 0.02, "Look"),
-                      NormalTS=normal, PLocal=(g.node(unreal.MaterialExpressionLocalPosition), ""), BLocal=b_local,
+                      Dispersion=g.scalar("GlassDispersion", 0.25, "Look"), NormalTS=normal,
                       SceneZ=(g.node(unreal.MaterialExpressionSceneDepth), ""), PixelZ=pixel_z)
 
     def at(uv, cls):

@@ -66,9 +66,10 @@ public:
     // 0.045) clear; a plain scale cannot do both (lift needs ~6, exterior turns milky from 3).
     static constexpr float LookGlassReflectanceScale = 1.f;
     static constexpr float LookGlassReflectanceFloor = 0.045f;
-    /** Look (owner, 2026-11-19; D15, not game data): glass refracts, disperses and bands the scene behind it (M_SC_Glass
+    /** Look (owner, 2026-11-19; D15, not game data): glass refracts and disperses the scene behind it (M_SC_Glass
      *  GlassRefractionLook; ue/verification/WP-U3b.md §14.10). Off by default: off is the game's glass. Runtime only, not saved:
-     *  key G and sc.Look.GlassRefraction switch it for this session (SCLook::SetGlassRefraction). */
+     *  key G and sc.Look.GlassRefraction switch it for this session (SCLook::SetGlassRefraction, with the owner's profiles:
+     *  SCLook::GlassProfile*). */
     bool bGlassRefraction = false;
     // Look (LOOK-6, revised LOOK-8): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard
     // bloom. LOOK-8 (adjudicated across the Galaxy in XL and the Golem in small hangars): the diffraction streaks veiled

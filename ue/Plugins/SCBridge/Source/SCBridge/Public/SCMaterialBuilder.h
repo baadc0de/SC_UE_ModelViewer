@@ -72,7 +72,8 @@ public:
     static const FName GlassReflectanceScaleParam;
     static const FName GlassReflectanceFloorParam;
     /** M_SC_Glass scalar: the refraction look on (1) or off (0, the master default = the game's glass), from
-     *  USCViewerSettings::bGlassRefraction. Its strengths (GlassRefractionStrength, GlassDispersion, ...) are master defaults. */
+     *  USCViewerSettings::bGlassRefraction. Its strengths (GlassRefractionStrength, GlassDispersion) are master defaults until
+     *  SCLook::SetGlassRefraction switches an instance on with its profile (canopy, player kit, default; SCLook.h). */
     static const FName GlassRefractionLookParam;
     /** M_SC_Screen's texture parameter: the panel's image (the exporter's render of its UI, ui_bindings), sRGB colour.
      *  Unset (black) draws the screen as dark glass. */

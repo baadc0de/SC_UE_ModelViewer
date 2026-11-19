@@ -1286,7 +1286,9 @@ void USCViewerSubsystem::AttachPlayerKit()
     {
         UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_BODY attach failed: %s"), *Error);
         FailPlayerKit(Error); // capsule only; the kit actor and data are released
+        return;
     }
+    SCLook::RefreshGlassRefraction(GetViewerWorld()); // the kit's glass (optics, visor) takes the kit profile once it is the body's
 }
 
 // ---------------------------------------------------------------- camera and inspection

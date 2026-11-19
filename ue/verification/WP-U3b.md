@@ -1410,13 +1410,12 @@ without an engine change. The look is therefore in the material (the brief's doc
   while the look is off the two Custom nodes return exactly 0 and 1. `T` for the emission half is `(1 − Schlick(F0)) ×
   Beer-Lambert` with the slab's own normal and film-selected F0 (Substrate's GGX specular transmission differs slightly; the
   error is confined to the brightening half). Lumen front-layer reflections are untouched: they are the slab's specular.
-- **Offset O** (view-space angle → viewport UV): a thin wedge from the glass normal map plus a soft two-wave ripple along the
-  pane's bitangent in the mesh's own space (it moves with a moving pane), `(IOR − 1) × tilt × GlassRefractionStrength × (1 −
-  glass depth / background depth)`; and the slab's sideways shift `t sin i (1 − cos i / √(n² − sin² i))` for
-  `GlassRefractionThickness` cm (zero head-on, strongest at grazing), seen at the background's depth. Dispersion spread `s =
-  GlassDispersion × (2 − N·V)` (wider towards grazing). Banding: ripple amplitude `GlassBanding`, period `GlassBandPeriod` cm,
-  and a focusing brightness streak `GlassBandStreak` on refracted taps only, fading out below a 2-pixel offset; each wave fades
-  out where it would be finer than about four pixels (a distant cockpit window aliased into a sawtooth on the first try).
+- **Offset O** (view-space angle → viewport UV): a thin wedge from the glass normal map, `(IOR − 1) × tilt ×
+  GlassRefractionStrength × (1 − glass depth / background depth)`; and the slab's sideways shift `t sin i (1 − cos i / √(n² −
+  sin² i))` for `GlassRefractionThickness` cm (zero head-on, strongest at grazing), seen at the background's depth. Dispersion
+  spread `s = GlassDispersion × (2 − N·V)` (wider towards grazing). The first version also banded the glass (a two-wave ripple
+  `GlassBanding` / `GlassBandPeriod` along the pane and a focusing streak `GlassBandStreak`); the owner's profiles set both to 0,
+  so they were removed from the master (see *Profiles* below).
 - **Guards.** A tap whose scene depth is in front of the glass is not taken, per channel (no foreground dragged into the
   pane); the offset shrinks so every tap stays inside the viewport (no clamped-edge smears); taps in the clipped highlights of
   the 8-bit scene-colour copy (encoded up to 10, pre-exposed) are not refracted, so bright lights neither ghost nor dim. IOR and
@@ -1452,8 +1451,8 @@ emission-only version chose A too, `astra-sweep-reply.md`):
 | D 1 / 1.5 / 0.45 / 0.01 / 0.02 | close to A, the coloured outlines draw attention |
 | E 1 / 1.5 / 0.25 / 0.02 / 0.04 | more waviness; uneven-looking cockpit uprights |
 
-`GlassRefractionIOR` 1.5 and `GlassBandPeriod` 9 cm are master defaults too; every strength can be tried live with
-`sc.Look.GlassParam <name> <value>`. Artefacts (Astra, A, plus a six-step pan moving the lift glass to the right screen edge,
+`GlassRefractionIOR` 1.5 is a master default too; every strength can be tried live with
+`sc.Look.GlassParam <name> <value>`. (These defaults are now overridden by the owner's profiles, below.) Artefacts (Astra, A, plus a six-step pan moving the lift glass to the right screen edge,
 `grid-f-pan.png`, `grid-f-pan-edge.png`): no screen-edge smear or hard cut-out line, no frame pixels dragged into the glass, no
 halo, broad reflections not displaced, no spatial noise; banding is faint. Not judged: shimmer in continuous motion (7° steps).
 
@@ -1503,3 +1502,45 @@ colour footprint (a sub-pixel foreground edge can lend a fringe); render-level a
 
 Not done: the cooked-glass path (`converted`) is covered by the unit test only, not by a cooked showcase run; no fogged scene
 exists to show the fog limit; shimmer in continuous motion was not judged.
+
+**Profiles (owner, in person in the C2 demo, 2026-11-19).** With the look on, `SCLook::SetGlassRefraction` puts one of three
+profiles on each glass instance as it switches it (`SCLook::GlassProfileCanopy` / `Kit` / `Default`, `SCLook.h`), so a load
+made later (`RefreshGlassRefraction`, also after the player kit attaches) gets them too; IOR and thickness keep the master
+defaults, the master defaults themselves are unchanged (look off = the game's glass):
+
+| Profile | Chosen by (data only) | `GlassRefractionStrength` | `GlassDispersion` |
+|---|---|---|---|
+| Kit | glass on the first-person player kit actor (`USCPlayerBodyComponent::GetKit()`: weapon optics, visor) | 5 | 1 (the shader clamps to 0.95) |
+| Canopy | other glass authored not to reflect: game F0 (`SpecularColor.r`, before the reflectance floor) < 1e-6 | 1 | 0.25 |
+| Default | all other glass | 5 | 0.5 |
+
+The owner's banding and streak were 0 in every profile, so the ripple and streak terms (`GlassBanding`, `GlassBandPeriod`,
+`GlassBandStreak`) were removed from `M_SC_Glass`: `SC_MATERIAL … M_SC_Glass expressions=76 vs=503 ps=5231 samplers=9` (was 84 /
+5339 / 9), `WP-U2 MATERIALS_OK`, `GLASS_PORTED` passes. `sc.Look.GlassParam` now reaches every primitive (skeletal kit parts too).
+Log: `LOOK glass_refraction_actor actor=… canopy=… kit=… default=…` per vehicle and the totals on `LOOK glass_refraction`.
+
+The canopy rule, checked on the package sidecars (`.materials.json` + the glbs' primitive materials, viewer cache; no Cutlass
+package is cached). Glass authored with `Specular` 0 that a primitive draws:
+
+- `CRUS_Starlifter_C2`: only `Starlifter_Int:Glass_Canopy`, on `CRUS_Starlifter_Cockpit_Glow` (the cockpit glass, 1292 tris) and
+  on a 7 × 7 cm two-triangle pane of `CRUS_Starlifter_ModularRoom_Wall_FoodProc_3m`. (Two more F0-0 submaterials,
+  `carrack_interior:glass_interior` and `rsi_medivac_wheel:WindowGlassClear`, are built but drawn by no primitive.) The rule
+  reproduces the owner's `@Canopy` set exactly.
+- `DRAK_Ironclad`: `Glass_A_RTO_NoBlur` (interior and exterior sets): turret canopies, the operations-room nose windows, the owner's
+  room windows, the hull's nacelle glass, **and** the pilot / co-pilot dashboards' alert-panel and annunciator covers and the
+  secure-storage window wall. So F0 0 is "glass authored without a reflection", mostly canopies and outside windows, not only
+  them. One submaterial covers both kinds, so no material-level signal can split them; a part-level one could (the glass's owning
+  item, e.g. a seat dashboard, or whether the pane bounds the vehicle's interior). Not done: the rule stays F0 0.
+- Hangar `hangar_xltop_001` and the player kit: no F0-0 glass (kit optics are F0 0.0012).
+
+C2 run (`hangar_xltop_001`, first person, off-screen, look on): `SCVehicle_0` (hangar) canopy=0 kit=0 default=81, `SCVehicle_1`
+(C2) canopy=70 kit=0 default=479, `SCVehicle_2` (kit) canopy=0 kit=22 default=0; total 652 instances (every built instance,
+including unused paint and submaterial variants; 2 distinct `MID_Glass_Canopy_*` on parts). In the fly camera the body is
+detached, so the kit's glass takes the default profile until first person attaches it again. Shots `out/glass/profiles/`
+`prof-{off,on}-{canopy,lift,lift2,optic}.png` (optic: `sc.Player.Weapon 1` = `behr_sniper_ballistic_01`, `sc.FP.Aim 1`); PSNR
+off → on: canopy 39.5 dB, lift 30.4, lift2 31.3, optic 28.2. The optic at 5 / 1 splits the sight picture into strong colour
+fringes. Off is unchanged by the master edit (old build vs new build, look off, same pose; frame-to-frame noise in brackets):
+`lift` 51.3 dB (50.5), `lift2` 52.4 (51.5), `ext_nose` 55.0 (54.0). `Automation RunTests SCBridge`: 159 of 163 passed, the 4
+known failures; new `SCBridge.Materials.GlassRefractionProfiles` (selection: F0 0 → canopy, the kit actor → kit even at F0 0,
+else default, a constant's F0 through a dynamic instance; values applied on switching on; counts; a refresh after a load),
+`MasterAssets` (the three banding parameters absent).

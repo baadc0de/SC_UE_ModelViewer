@@ -14,6 +14,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "SCVehicle.h"
+#include "SCPlayerBody.h"
 #include "SCViewerPawn.h"
 #include "SCViewerSubsystem.h"
 #include "Components/SpotLightComponent.h"
@@ -559,9 +560,10 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassParam(
         TSet<UMaterialInstanceDynamic*> Done;
         for (TActorIterator<ASCVehicle> It(World); It; ++It)
         {
-            TArray<UStaticMeshComponent*> Components;
+            // Every primitive: static meshes and the skeletal parts of a player kit (weapon optics, visor).
+            TArray<UPrimitiveComponent*> Components;
             It->GetComponents(Components);
-            for (UStaticMeshComponent* C : Components)
+            for (UPrimitiveComponent* C : Components)
                 for (int32 I = 0; I < C->GetNumMaterials(); ++I)
                 {
                     auto* MID = Cast<UMaterialInstanceDynamic>(C->GetMaterial(I));
@@ -612,20 +614,71 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassReflectance(
                Settings->GlassReflectanceFloor, Set, Constant);
     }));
 
+const SCLook::FGlassRefractionProfile& SCLook::GlassRefractionProfile(EGlassProfile Profile)
+{
+    switch (Profile)
+    {
+    case EGlassProfile::Canopy: return GlassProfileCanopy;
+    case EGlassProfile::Kit: return GlassProfileKit;
+    default: return GlassProfileDefault;
+    }
+}
+
+SCLook::EGlassProfile SCLook::SelectGlassProfile(const UMaterialInterface* Glass, bool bOnPlayerKit)
+{
+    if (bOnPlayerKit) return EGlassProfile::Kit;
+    // The game's F0 as authored (the reflectance floor is applied in the material, not on the parameter). An instance
+    // without the parameter has the master's 0.04: not canopy.
+    FLinearColor F0(0.04f, 0.04f, 0.04f);
+    if (Glass) Glass->GetVectorParameterValue(FMaterialParameterInfo(TEXT("SpecularColor")), F0);
+    return F0.R < 1e-6f ? EGlassProfile::Canopy : EGlassProfile::Default;
+}
+
+void SCLook::ApplyGlassProfile(UMaterialInstanceDynamic* MID, EGlassProfile Profile)
+{
+    static const FName Strength(TEXT("GlassRefractionStrength")), Dispersion(TEXT("GlassDispersion"));
+    const FGlassRefractionProfile& P = GlassRefractionProfile(Profile);
+    MID->SetScalarParameterValue(Strength, P.Strength);
+    MID->SetScalarParameterValue(Dispersion, P.Dispersion);
+}
+
+TArray<const AActor*> SCLook::PlayerKits(UWorld* World)
+{
+    TArray<const AActor*> Kits;
+    if (!World) return Kits;
+    for (TObjectIterator<USCPlayerBodyComponent> It; It; ++It)
+        if (It->GetWorld() == World && It->GetKit()) Kits.AddUnique(It->GetKit());
+    return Kits;
+}
+
 int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn)
+{
+    return SetGlassRefraction(World, bOn, PlayerKits(World));
+}
+
+int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const AActor*> Kits, FGlassProfileCounts* OutCounts)
 {
     USCViewerSettings::Get()->bGlassRefraction = bOn;
     int32 Set = 0, Converted = 0;
+    FGlassProfileCounts Total, Actor;
+    bool bKit = false;
     TSet<const UMaterialInterface*> Seen;
     auto Apply = [&](UMaterialInstanceDynamic* MID) {
         if (Seen.Contains(MID)) return;
         Seen.Add(MID);
         MID->SetScalarParameterValue(FSCMaterialBuilder::GlassRefractionLookParam, bOn ? 1.f : 0.f);
         ++Set;
+        if (!bOn) return; // off: the profile values are inert (the look's Custom nodes return 0 and 1)
+        const EGlassProfile Profile = SelectGlassProfile(MID, bKit);
+        ApplyGlassProfile(MID, Profile);
+        int32& N = Profile == EGlassProfile::Canopy ? Actor.Canopy : Profile == EGlassProfile::Kit ? Actor.Kit : Actor.Default;
+        ++N;
     };
     if (World) // a console call without a world only records the setting
     for (TActorIterator<ASCVehicle> It(World); It; ++It)
     {
+        bKit = Kits.Contains(*It);
+        Actor = FGlassProfileCounts();
         for (UMaterialInstanceDynamic* MID : It->Materials)
             if (FSCMaterialBuilder::IsGlassMaster(MID)) Apply(MID);
         // A cooked ship or hangar carries constant copies of its glass instances (master default: off). Switching the look on
@@ -650,8 +703,16 @@ int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn)
                 C->SetMaterial(I, Over);
                 Apply(Over);
             }
+        if (bOn && Actor.Canopy + Actor.Kit + Actor.Default > 0)
+            UE_LOG(LogTemp, Display, TEXT("LOOK glass_refraction_actor actor=%s canopy=%d kit=%d default=%d"), *It->GetName(), Actor.Canopy,
+                   Actor.Kit, Actor.Default);
+        Total.Canopy += Actor.Canopy;
+        Total.Kit += Actor.Kit;
+        Total.Default += Actor.Default;
     }
-    UE_LOG(LogTemp, Display, TEXT("LOOK glass_refraction on=%d instances=%d converted=%d"), bOn, Set, Converted);
+    UE_LOG(LogTemp, Display, TEXT("LOOK glass_refraction on=%d instances=%d converted=%d canopy=%d kit=%d default=%d"), bOn, Set, Converted,
+           Total.Canopy, Total.Kit, Total.Default);
+    if (OutCounts) *OutCounts = Total;
     return Set;
 }
 
