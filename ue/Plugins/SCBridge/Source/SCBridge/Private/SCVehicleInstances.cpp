@@ -646,6 +646,7 @@ void FSCVehicleInstances::Finish(FInstance& I, ASCVehicle* Actor)
     Actor->SetActorHiddenInGame(false);
     PlacedIn = Viewer.GetEnvironment();
     SCLook::UpdateShortRangeAO(Actor->GetWorld());
+    SCLook::RefreshGlassRefraction(Actor->GetWorld());
     I.Info.State = ESCVehicleInstanceState::Ready;
     I.Info.Seconds = FPlatformTime::Seconds() - I.Started;
     const FBox Bounds = FSCEnvironment::SolidBounds(Actor);

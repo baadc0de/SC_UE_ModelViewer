@@ -4,7 +4,9 @@
 #include "SCViewerPawn.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
+#include "SCLook.h"
 #include "Cargo/SCCargoViewSource.h"
+#include "Engine/GameInstance.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
@@ -105,6 +107,11 @@ bool SSCViewportInput::HandleKey(const FKey& Key, bool bDown)
     if (Key == EKeys::F && bDown && Subsystem.IsValid())
     {
         Subsystem->FrameAll(); // restore visibility, clear isolation/selection, frame the whole entity
+        return true;
+    }
+    if (Key == EKeys::G && bDown && Subsystem.IsValid() && Subsystem->GetGameInstance())
+    {
+        SCLook::ToggleGlassRefraction(Subsystem->GetGameInstance()->GetWorld()); // the first person's key table binds G the same
         return true;
     }
     return false;

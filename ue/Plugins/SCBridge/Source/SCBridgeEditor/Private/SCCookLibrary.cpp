@@ -4,6 +4,7 @@
 #include "SCEnvironment.h"
 #include "SCHangarIndex.h"
 #include "SCInstancing.h"
+#include "SCMaterialBuilder.h"
 #include "SCVehicle.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/LightComponent.h"
@@ -122,7 +123,9 @@ struct FCooker
         UPackage* Package = CreatePackage(*(Root / TEXT("Materials") / Name));
         auto* MIC = NewObject<UMaterialInstanceConstant>(Package, *Name, RF_Public | RF_Standalone);
         MIC->SetParentEditorOnly(Constant(MID->Parent));
-        for (const FScalarParameterValue& P : MID->ScalarParameterValues) MIC->SetScalarParameterValueEditorOnly(P.ParameterInfo, P.ParameterValue);
+        // The glass refraction look is a session switch, never baked: a cooked glass keeps the master default (off).
+        for (const FScalarParameterValue& P : MID->ScalarParameterValues)
+            if (P.ParameterInfo.Name != FSCMaterialBuilder::GlassRefractionLookParam) MIC->SetScalarParameterValueEditorOnly(P.ParameterInfo, P.ParameterValue);
         for (const FVectorParameterValue& P : MID->VectorParameterValues) MIC->SetVectorParameterValueEditorOnly(P.ParameterInfo, P.ParameterValue);
         for (const FTextureParameterValue& P : MID->TextureParameterValues)
         {

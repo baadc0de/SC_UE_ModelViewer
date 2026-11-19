@@ -22,4 +22,14 @@ void UpdateShortRangeAO(UWorld* World);
  *  reflections) and hardware ray tracing with hit lighting for GI and reflections and area shadows at hits. Applied
  *  once the game's own settings are (the subsystem's first tick with a world); logs the effective values. */
 void ApplyMaxQuality();
+/** The glass refraction look (USCViewerSettings::bGlassRefraction, M_SC_Glass GlassRefractionLook; ue/verification/WP-U3b.md
+ *  §14.10) for this session: sets the setting and the parameter on every M_SC_Glass instance of the world's vehicles and
+ *  environments (instances built later take it from the setting). A constant glass instance (a cooked ship or hangar) gets a
+ *  dynamic instance over it when the look is switched on (one per actor and constant, shared by its slots). Logs
+ *  `LOOK glass_refraction on=… instances=… converted=…`; returns the instances set. */
+int32 SetGlassRefraction(UWorld* World, bool bOn);
+/** Key G (first person, orbit, fly) and sc.Look.GlassRefraction without an argument: SetGlassRefraction(!current). */
+int32 ToggleGlassRefraction(UWorld* World);
+/** After a load: while the look is on, SetGlassRefraction(World, true) (a cooked ship or hangar loaded later refracts too). */
+void RefreshGlassRefraction(UWorld* World);
 }

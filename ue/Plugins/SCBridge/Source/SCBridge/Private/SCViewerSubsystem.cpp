@@ -600,6 +600,7 @@ void USCViewerSubsystem::PlaceEnvironment()
     SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
     FSCEnvironment::PlaceOnFloor(EnvironmentActor, ViewerFloorZ, Vehicle.Get());
     SCLook::UpdateShortRangeAO(EnvironmentActor->GetWorld());
+    SCLook::RefreshGlassRefraction(EnvironmentActor->GetWorld());
 }
 
 void USCViewerSubsystem::SetEnvironmentState(const FString& State)
@@ -932,7 +933,11 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
                     V->SetPaint(Index);
         FitEnvironmentToShip();
     }
-    if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr) SCLook::UpdateShortRangeAO(World);
+    if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)
+    {
+        SCLook::UpdateShortRangeAO(World);
+        SCLook::RefreshGlassRefraction(World); // cooked glass loaded while the look is on
+    }
     OnLoadFinished.Broadcast(Report);
 }
 

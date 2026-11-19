@@ -15,6 +15,10 @@ Glass reflectance is a look value too (2026-11-19, [verification/WP-U3b.md](veri
 instance reflects `max(F0 × GlassReflectanceScale, GlassReflectanceFloor)` (the floor only where the game's F0 is not 0),
 `USCViewerSettings` defaults, not saved; `sc.Look.GlassReflectance <scale> [<floor>]` sets both for one session
 (`1 0` = the game's `.mtl` Specular).
+Glass refraction is a look switched by key **G** (first person, orbit and fly; `sc.Look.GlassRefraction [0|1]`, no argument
+toggles; off at every start, not saved): glass then refracts, colour-fringes and softly bands what is behind it
+([verification/WP-U3b.md](verification/WP-U3b.md) §14.10; strengths `GlassRefraction*`, `GlassDispersion`, `GlassBand*` are
+`M_SC_Glass` defaults, live with `sc.Look.GlassParam`). Off is the game's glass.
 History: the project started on UE 5.8.2 (`++UE5+Release-5.8`, CL 56702186, Linux, WP-U0 2026-11-09), moved to the
 UE 5.9.0 preview-1 binary (CL 60351404) on 2026-11-12 and to the source fork on 2026-11-18.
 WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was
@@ -49,7 +53,7 @@ Golem, small hightech hangar (2026-11-14, RTX 4090, Shipping): 1.7 GB of content
 
 The launcher starts the showcase as a player (`-SCShowcase -SCCamera=first`): no viewer top bar, footer or panels; the
 first-person HUD and its teleport menu stay. Keys: WASD/Shift/Space/Ctrl move, `C` first/third person, `Z` held orbits
-the third-person camera around the player (double-tap: behind again), `T` teleport menu, `F` torch, `1`.. draw a weapon,
+the third-person camera around the player (double-tap: behind again), `T` teleport menu, `F` torch, `G` glass refraction look, `1`.. draw a weapon,
 right mouse aims down sights, left mouse fires. The player character is exported from Data.p4k at start (so the build
 needs an installed Star Citizen; a cooked player kit is a follow-up): `package_showcase.ps1 -PlayerLoadout <p4k path>
 -PlayerWeapons <entity>[,...]` (launcher `-SCPlayerLoadout`, `-SCPlayerWeapons`; settings `PlayerLoadout`,

@@ -612,6 +612,68 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassReflectance(
                Settings->GlassReflectanceFloor, Set, Constant);
     }));
 
+int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn)
+{
+    USCViewerSettings::Get()->bGlassRefraction = bOn;
+    int32 Set = 0, Converted = 0;
+    TSet<const UMaterialInterface*> Seen;
+    auto Apply = [&](UMaterialInstanceDynamic* MID) {
+        if (Seen.Contains(MID)) return;
+        Seen.Add(MID);
+        MID->SetScalarParameterValue(FSCMaterialBuilder::GlassRefractionLookParam, bOn ? 1.f : 0.f);
+        ++Set;
+    };
+    if (World) // a console call without a world only records the setting
+    for (TActorIterator<ASCVehicle> It(World); It; ++It)
+    {
+        for (UMaterialInstanceDynamic* MID : It->Materials)
+            if (FSCMaterialBuilder::IsGlassMaster(MID)) Apply(MID);
+        // A cooked ship or hangar carries constant copies of its glass instances (master default: off). Switching the look on
+        // puts one dynamic instance over each (shared by every slot of the actor that used it); off leaves the rest as cooked.
+        TMap<UMaterialInterface*, UMaterialInstanceDynamic*> Dynamic;
+        TArray<UPrimitiveComponent*> Components;
+        It->GetComponents(Components);
+        for (UPrimitiveComponent* C : Components)
+            for (int32 I = 0; I < C->GetNumMaterials(); ++I)
+            {
+                UMaterialInterface* M = C->GetMaterial(I);
+                if (!FSCMaterialBuilder::IsGlassMaster(M)) continue;
+                if (auto* MID = Cast<UMaterialInstanceDynamic>(M)) { Apply(MID); continue; }
+                if (!bOn) continue;
+                UMaterialInstanceDynamic*& Over = Dynamic.FindOrAdd(M);
+                if (!Over)
+                {
+                    Over = UMaterialInstanceDynamic::Create(M, *It);
+                    Over->SetFlags(RF_Transient);
+                    ++Converted;
+                }
+                C->SetMaterial(I, Over);
+                Apply(Over);
+            }
+    }
+    UE_LOG(LogTemp, Display, TEXT("LOOK glass_refraction on=%d instances=%d converted=%d"), bOn, Set, Converted);
+    return Set;
+}
+
+void SCLook::RefreshGlassRefraction(UWorld* World)
+{
+    if (USCViewerSettings::Get()->bGlassRefraction) SetGlassRefraction(World, true);
+}
+
+int32 SCLook::ToggleGlassRefraction(UWorld* World)
+{
+    return SetGlassRefraction(World, !USCViewerSettings::Get()->bGlassRefraction);
+}
+
+// sc.Look.GlassRefraction [0|1]: the glass refraction look (refraction, dispersion and banding of the scene behind every
+// M_SC_Glass instance; WP-U3b.md §14.10) for this session; no argument toggles it, like key G.
+static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassRefraction(
+    TEXT("sc.Look.GlassRefraction"), TEXT("sc.Look.GlassRefraction [0|1]: glass refracts, disperses and bands what is behind it (no argument: toggle; key G)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (Args.IsValidIndex(0)) SCLook::SetGlassRefraction(World, FCString::Atoi(*Args[0]) != 0);
+        else SCLook::ToggleGlassRefraction(World);
+    }));
+
 // sc.Screens [index [distance cm]] (WP-I1 verification): every screen face of the loaded vehicles and environments
 // (sections drawn with M_SC_Screen, instanced parts included), logged as SCREEN_FACE with the image it shows ("dark" =
 // none), its mesh, centre and facing; with an index, the current pawn is put `distance` (default 45 cm) in front of

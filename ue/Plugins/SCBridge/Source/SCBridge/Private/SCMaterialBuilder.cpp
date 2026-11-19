@@ -2,19 +2,28 @@
 #include "SCMaterialBuilder.h"
 #include "SCViewerSettings.h"
 #include "Engine/Texture2D.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/UObjectGlobals.h"
 
 const FName FSCMaterialBuilder::GlassReflectanceScaleParam(TEXT("GlassReflectanceScale"));
 const FName FSCMaterialBuilder::GlassReflectanceFloorParam(TEXT("GlassReflectanceFloor"));
+const FName FSCMaterialBuilder::GlassRefractionLookParam(TEXT("GlassRefractionLook"));
 const FName FSCMaterialBuilder::ScreenImageParam(TEXT("ScreenImage"));
+
+bool FSCMaterialBuilder::IsGlassMaster(const UMaterialInterface* Material)
+{
+    const UMaterial* Base = Material ? Material->GetMaterial() : nullptr;
+    return Base && Base->GetPathName() == ParentPath(ESCMaster::Glass, ESCBlend::Translucent, false);
+}
 
 void FSCMaterialBuilder::ApplyGlassLook(UMaterialInstanceDynamic* MID)
 {
     const USCViewerSettings* Settings = USCViewerSettings::Get();
     MID->SetScalarParameterValue(GlassReflectanceScaleParam, Settings->GlassReflectanceScale);
     MID->SetScalarParameterValue(GlassReflectanceFloorParam, Settings->GlassReflectanceFloor);
+    if (IsGlassMaster(MID)) MID->SetScalarParameterValue(GlassRefractionLookParam, Settings->bGlassRefraction ? 1.f : 0.f);
 }
 
 const TCHAR* FSCMaterialBuilder::MasterName(ESCMaster Master)
@@ -73,7 +82,7 @@ UMaterialInstanceDynamic* FSCMaterialBuilder::Create(const FSCMaterialDesc& Desc
     MID->SetFlags(RF_Transient);
     for (const auto& Pair : Desc.Scalars) MID->SetScalarParameterValue(Pair.Key, Pair.Value);
     for (const auto& Pair : Desc.Vectors) MID->SetVectorParameterValue(Pair.Key, Pair.Value);
-    if (Desc.Master == ESCMaster::Glass || Desc.Master == ESCMaster::Screen) ApplyGlassLook(MID); // a screen's face is glass too
+    if (Desc.Master == ESCMaster::Glass || Desc.Master == ESCMaster::Screen) ApplyGlassLook(MID); // a screen's face is glass too (no refraction)
     for (const auto& Pair : Desc.Textures)
     {
         if (UTexture2D* const* Texture = Textures.Find(Pair.Value); Texture && *Texture) MID->SetTextureParameterValue(Pair.Key, *Texture);

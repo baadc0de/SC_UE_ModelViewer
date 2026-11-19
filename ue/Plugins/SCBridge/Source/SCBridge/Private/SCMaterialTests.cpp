@@ -8,6 +8,11 @@
 #include "SCTextureImporter.h"
 #include "SCStarEngine.h"
 #include "SCViewerSettings.h"
+#include "SCLook.h"
+#include "SCVehicle.h"
+#include "Engine/World.h"
+#include "Engine/StaticMesh.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "IImageWrapper.h"
@@ -708,6 +713,22 @@ bool FSCMaterialsMasters::RunTest(const FString&)
                              Parent->GetScalarParameterDefaultValue(FHashedMaterialParameterInfo(FSCMaterialBuilder::GlassReflectanceFloorParam), Floor));
                     TestEqual(Path + TEXT(" reflectance scale default 1 (the game's F0)"), Scale, 1.f);
                     TestEqual(Path + TEXT(" reflectance floor default 0 (the game's F0)"), Floor, 0.f);
+                    // The refraction look (WP-U3b.md §14.10): a live switch whose master default is off (the game's glass), and
+                    // the look's strengths as master defaults (positive, so switching it on refracts).
+                    float Look = -1.f;
+                    TestTrue(Path + TEXT(" has the refraction switch"), Has(FSCMaterialBuilder::GlassRefractionLookParam) &&
+                             Parent->GetScalarParameterDefaultValue(FHashedMaterialParameterInfo(FSCMaterialBuilder::GlassRefractionLookParam), Look));
+                    TestEqual(Path + TEXT(" refraction off by default"), Look, 0.f);
+                    // The adjudicated look defaults (Astra, variant A of WP-U3b.md §14.10).
+                    const TPair<const TCHAR*, float> Defaults[] = {{TEXT("GlassRefractionStrength"), 1.f}, {TEXT("GlassRefractionIOR"), 1.5f},
+                        {TEXT("GlassRefractionThickness"), 1.5f}, {TEXT("GlassDispersion"), 0.25f}, {TEXT("GlassBanding"), 0.01f},
+                        {TEXT("GlassBandPeriod"), 9.f}, {TEXT("GlassBandStreak"), 0.02f}};
+                    for (const auto& [Name, Expected] : Defaults)
+                    {
+                        float V = -1.f;
+                        TestTrue(Path + TEXT(" has ") + Name, Has(Name) && Parent->GetScalarParameterDefaultValue(FHashedMaterialParameterInfo(FName(Name)), V));
+                        TestTrue(Path + TEXT(" ") + Name + TEXT(" is the look default"), FMath::IsNearlyEqual(V, Expected));
+                    }
                 }
 #endif
             }
@@ -764,6 +785,110 @@ bool FSCMaterialsGlassReflectanceLook::RunTest(const FString&)
     }
     Settings->GlassReflectanceScale = SavedScale;
     Settings->GlassReflectanceFloor = SavedFloor;
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsGlassRefractionLook, "SCBridge.Materials.GlassRefractionLook", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCMaterialsGlassRefractionLook::RunTest(const FString&)
+{
+    // The glass refraction look (D15, owner 2026-11-19; WP-U3b.md §14.10): off by default and not saved; a glass instance built
+    // takes the setting, a screen or opaque instance never carries it; SCLook::SetGlassRefraction (key G, sc.Look.GlassRefraction)
+    // sets it on every glass instance of the world's vehicles, and only on glass.
+    FSCSceneManifest M; if (!ReadFixture(*this, M)) return false;
+    const FSCSubmaterial* GlassSub = M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("glass_ext"); });
+    const FSCSubmaterial* OpaqueSub = M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("hard_primary"); });
+    if (!TestNotNull(TEXT("glass_ext submaterial"), GlassSub) || !TestNotNull(TEXT("hard_primary submaterial"), OpaqueSub)) return false;
+    const FSCMaterialDesc Glass = FSCMaterialBuilder::Describe(*GlassSub, &M.Palettes[0]);
+    const FSCMaterialDesc Opaque = FSCMaterialBuilder::Describe(*OpaqueSub, &M.Palettes[0]);
+    FSCMaterialDesc Screen = Opaque;
+    Screen.Master = ESCMaster::Screen;
+    TestFalse(TEXT("the description carries no refraction"), Glass.Scalars.Contains(FSCMaterialBuilder::GlassRefractionLookParam));
+
+    const USCViewerSettings* Fresh = NewObject<USCViewerSettings>(GetTransientPackage(), NAME_None, RF_Transient);
+    TestFalse(TEXT("off by default"), Fresh->bGlassRefraction);
+    TestNull(TEXT("not a saved setting"), USCViewerSettings::StaticClass()->FindPropertyByName(TEXT("bGlassRefraction")));
+
+    USCViewerSettings* Settings = USCViewerSettings::Get();
+    const bool bSaved = Settings->bGlassRefraction;
+    const TMap<FSCTextureKey, UTexture2D*> NoTextures;
+    auto Look = [](const UMaterialInstanceDynamic* MID, float& Out) {
+        return MID && MID->GetScalarParameterValue(FMaterialParameterInfo(FSCMaterialBuilder::GlassRefractionLookParam), Out);
+    };
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ASCVehicle* Vehicle = World->SpawnActor<ASCVehicle>();
+    for (const bool bOn : {false, true})
+    {
+        Settings->bGlassRefraction = bOn;
+        TArray<FString> Warnings;
+        UMaterialInstanceDynamic* GlassMID = FSCMaterialBuilder::Create(Glass, NoTextures, Vehicle, Warnings);
+        UMaterialInstanceDynamic* OpaqueMID = FSCMaterialBuilder::Create(Opaque, NoTextures, Vehicle, Warnings);
+        UMaterialInstanceDynamic* ScreenMID = FSCMaterialBuilder::Create(Screen, NoTextures, Vehicle, Warnings);
+        if (!TestNotNull(TEXT("glass instance"), GlassMID) || !TestNotNull(TEXT("opaque instance"), OpaqueMID) || !TestNotNull(TEXT("screen instance"), ScreenMID)) continue;
+        float V = -1.f;
+        TestTrue(FString::Printf(TEXT("built with the setting %d: the glass instance carries it"), bOn), Look(GlassMID, V) && V == (bOn ? 1.f : 0.f));
+        TestFalse(TEXT("an opaque instance carries no refraction"), Look(OpaqueMID, V));
+        TestFalse(TEXT("a screen instance carries no refraction"), Look(ScreenMID, V));
+        Vehicle->Materials.Add(GlassMID);
+        Vehicle->Materials.Add(OpaqueMID);
+        Vehicle->Materials.Add(ScreenMID);
+    }
+    // The component slots: one shares the first glass instance with the array, one has a glass instance of its own, two share a
+    // constant glass instance (a cooked part), one is opaque.
+    auto* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+    auto Part = [&](UMaterialInterface* Material) {
+        auto* C = NewObject<UStaticMeshComponent>(Vehicle);
+        C->SetupAttachment(Vehicle->GetRootComponent());
+        C->SetStaticMesh(Cube);
+        C->RegisterComponent();
+        C->SetMaterial(0, Material);
+        return C;
+    };
+    TArray<FString> Ignored;
+    UMaterialInstanceDynamic* Shared = Vehicle->Materials[0];
+    UMaterialInstanceDynamic* Own = FSCMaterialBuilder::Create(Glass, NoTextures, Vehicle, Ignored);
+    UStaticMeshComponent* SharedPart = Part(Shared);
+    UStaticMeshComponent* OwnPart = Part(Own);
+    UStaticMeshComponent* OpaquePart = Part(Vehicle->Materials[1]);
+    UStaticMeshComponent* Cooked[2] = {nullptr, nullptr};
+    UMaterialInterface* ConstantGlass = nullptr;
+#if WITH_EDITOR
+    auto* Constant = NewObject<UMaterialInstanceConstant>(GetTransientPackage(), NAME_None, RF_Transient);
+    Constant->SetParentEditorOnly(LoadObject<UMaterialInterface>(nullptr, *FSCMaterialBuilder::ParentPath(ESCMaster::Glass, ESCBlend::Translucent, false)));
+    ConstantGlass = Constant;
+    Cooked[0] = Part(Constant);
+    Cooked[1] = Part(Constant);
+    TestTrue(TEXT("a constant glass instance is glass"), FSCMaterialBuilder::IsGlassMaster(Constant));
+#endif
+    const int32 Expected = 3 + (Cooked[0] ? 1 : 0); // two array instances + the part's own + one over the constant
+    TestEqual(TEXT("on: every glass instance set once"), SCLook::SetGlassRefraction(World, true), Expected);
+    TestTrue(TEXT("on: the setting follows"), Settings->bGlassRefraction);
+    for (const UMaterialInstanceDynamic* MID : Vehicle->Materials)
+    {
+        float V = -1.f;
+        if (FSCMaterialBuilder::IsGlassMaster(MID)) TestTrue(TEXT("on: an array glass instance refracts"), Look(MID, V) && V == 1.f);
+        else TestFalse(TEXT("on: a non-glass instance is not touched"), Look(MID, V));
+    }
+    float V = -1.f;
+    TestTrue(TEXT("on: the shared slot is the array's instance"), SharedPart->GetMaterial(0) == Shared);
+    TestTrue(TEXT("on: a component-only glass instance refracts"), Look(Own, V) && V == 1.f && OwnPart->GetMaterial(0) == Own);
+    TestFalse(TEXT("on: the opaque part is not touched"), Look(Cast<UMaterialInstanceDynamic>(OpaquePart->GetMaterial(0)), V));
+    if (Cooked[0])
+    {
+        auto* Over = Cast<UMaterialInstanceDynamic>(Cooked[0]->GetMaterial(0));
+        TestTrue(TEXT("on: a constant glass slot gets a dynamic instance over the constant"), Over && Over->Parent == ConstantGlass);
+        TestTrue(TEXT("on: the instance over the constant refracts"), Look(Over, V) && V == 1.f);
+        TestTrue(TEXT("on: slots that shared the constant share its dynamic instance"), Over && Cooked[1]->GetMaterial(0) == Over);
+    }
+    TestEqual(TEXT("toggle: every glass instance set once"), SCLook::ToggleGlassRefraction(World), Expected);
+    TestFalse(TEXT("toggle: off again"), Settings->bGlassRefraction);
+    for (const UMaterialInstanceDynamic* MID : Vehicle->Materials)
+        if (FSCMaterialBuilder::IsGlassMaster(MID)) TestTrue(TEXT("off: the switch is 0 on an array glass instance"), Look(MID, V) && V == 0.f);
+    TestTrue(TEXT("off: the switch is 0 on a component-only glass instance"), Look(Own, V) && V == 0.f);
+    if (Cooked[0]) TestTrue(TEXT("off: the switch is 0 over the constant"), Look(Cast<UMaterialInstanceDynamic>(Cooked[0]->GetMaterial(0)), V) && V == 0.f);
+    TestEqual(TEXT("no world: the setting only"), SCLook::SetGlassRefraction(nullptr, false), 0);
+    Settings->bGlassRefraction = bSaved;
+    Vehicle->Destroy();
+    World->DestroyWorld(false);
     return true;
 }
 

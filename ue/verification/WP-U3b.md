@@ -1254,7 +1254,8 @@ have their slot), so those fixes change no pixel there.
   was matched.
 - Glass features of `GlassShared` that are not mapped: dirt layer and wear smoothness, the game's thin-film
   LUT (approximated by `SubstrateThinFilm` under `%THIN_FILM` only, §14.8: the game's `ThinFilmThickness` scales
-  a LUT coordinate, it is not a physical thickness, and `ThinFilmStrength` is not mapped), screen-space refraction offset, curvature
+  a LUT coordinate, it is not a physical thickness, and `ThinFilmStrength` is not mapped), screen-space refraction offset (the
+  viewer's refraction look of §14.10 is a look, not a port of it), curvature
   and glare, light amplification, emissive glass (`EmissiveOpacity`), cracks, frost, condensation and the
   glass decal layer.
 - **Host values still outside the fixture** (cross-review finding 5): F0 0.04 for a glass material without
@@ -1384,3 +1385,121 @@ constants and not saved properties) and `SCBridge.Materials.MasterAssets` (both 
 
 Not done: compared on one ship and one hangar against one video frame under different lighting; cooked hangars and the
 showcase need a re-cook to carry the floor.
+
+### 14.10 Glass refraction look, key G (2026-11-19)
+
+Owner: glass that visibly refracts, distorts, colour-fringes and bands what is behind it, toggled by a key
+(`out/glass/refraction-brief.md`). A viewer look (D15), not game data; **off by default, and off is the game's glass**.
+
+Engine path, and why it is not used. `M_SC_Glass` (`TranslucentColoredTransmittance`, simple-volume slab, After-DOF pass)
+draws with `RM_None` today. UE's refraction (`RM_IndexOfRefractionFromF0` / `RM_PixelNormalOffset` / `RM_2DOffset`) marks the
+material distorted: every frame with glass on screen then runs the distortion pass (forced velocity output, standard
+translucency rendered separate and merged, `ShouldRenderDistortion`), whatever the offset, so the off state would not be
+today's frame; and `DistortAccumulatePS` writes one 2D offset per pixel, so dispersion (per-channel offsets) is impossible
+without an engine change. The look is therefore in the material (the brief's documented approach: three scene-colour taps):
+
+- **Background replacement.** `glass_refraction` in `create_materials.py` (`GLASS_REFRACTION_OFFSET`, `_TAP`, `_COMBINE`)
+  samples the translucency pass's scene-colour copy (UE `SceneColor` expression, coordinates mode) at the pixel and three times
+  along the refracted offset, red / green / blue at `uv + O × (1 − s, 1, 1 + s)`, and replaces the background the blend lays
+  under the slab (`T × background`) by `T × refracted`, per channel. Substrate clamps a slab's emission to ≥ 0
+  (`SubstrateSanitizeBSDF`; the first version added a signed difference as emission and so kept the old image beside the moved
+  one — Astra's code review), so the replacement has two halves: where the refracted colour is brighter, `T × (refracted −
+  unrefracted)` is added as emission; where it is darker, the slab's normal-incidence transmittance is multiplied by
+  `(refracted / unrefracted) ^ cos θt` (Substrate applies Beer-Lambert along the refracted path with the IOR of F0, so the
+  factor lands on the throughput as `refracted / unrefracted`). Where nothing moves both are exact (emission 0, factor 1), and
+  while the look is off the two Custom nodes return exactly 0 and 1. `T` for the emission half is `(1 − Schlick(F0)) ×
+  Beer-Lambert` with the slab's own normal and film-selected F0 (Substrate's GGX specular transmission differs slightly; the
+  error is confined to the brightening half). Lumen front-layer reflections are untouched: they are the slab's specular.
+- **Offset O** (view-space angle → viewport UV): a thin wedge from the glass normal map plus a soft two-wave ripple along the
+  pane's bitangent in the mesh's own space (it moves with a moving pane), `(IOR − 1) × tilt × GlassRefractionStrength × (1 −
+  glass depth / background depth)`; and the slab's sideways shift `t sin i (1 − cos i / √(n² − sin² i))` for
+  `GlassRefractionThickness` cm (zero head-on, strongest at grazing), seen at the background's depth. Dispersion spread `s =
+  GlassDispersion × (2 − N·V)` (wider towards grazing). Banding: ripple amplitude `GlassBanding`, period `GlassBandPeriod` cm,
+  and a focusing brightness streak `GlassBandStreak` on refracted taps only, fading out below a 2-pixel offset; each wave fades
+  out where it would be finer than about four pixels (a distant cockpit window aliased into a sawtooth on the first try).
+- **Guards.** A tap whose scene depth is in front of the glass is not taken, per channel (no foreground dragged into the
+  pane); the offset shrinks so every tap stays inside the viewport (no clamped-edge smears); taps in the clipped highlights of
+  the 8-bit scene-colour copy (encoded up to 10, pre-exposed) are not refracted, so bright lights neither ghost nor dim. IOR and
+  dispersion are clamped in the shader (live `sc.Look.GlassParam` values cannot make NaNs).
+- **Switch.** `GlassRefractionLook` (master default 0) is a live scalar; `FSCMaterialBuilder::ApplyGlassLook` sets it from
+  `USCViewerSettings::bGlassRefraction` (runtime, not saved, default off) on every `M_SC_Glass` instance (`IsGlassMaster`: the
+  base material is `/SCBridge/Materials/M_SC_Glass`; screens are not refracted). `SCLook::SetGlassRefraction` /
+  `ToggleGlassRefraction` set every glass instance of the vehicles and environments, array and component slots; a constant
+  glass instance (a cooked ship or hangar) gets one dynamic instance over it per actor when the look is switched on, and
+  `SCLook::RefreshGlassRefraction` repeats that after every load while it is on. The cook never bakes the switch
+  (`SCCookLibrary` skips it). Log `LOOK glass_refraction on=… instances=… converted=…`. Key **G** in first person (`KeyTable`,
+  `GlassLook`) and in orbit / fly (`SSCViewportInput`), console `sc.Look.GlassRefraction [0|1]` (no argument toggles). HUD hints
+  `G glass` (first person) and `G: glass` (orbit / fly help).
+
+Limits (not fixed): the scene-colour copy holds the opaque scene only, so with glass behind glass the front pane refracts the
+opaque background, not the rear pane's reflection (its brightening half is then slightly too strong); a depth-of-field blur
+under After-DOF glass is not in the copy, so a defocused background would show sharp through refracting glass. A material that reads scene colour is not
+fogged in the translucency base pass (`TRANSLUCENCY_NEEDS_BASEPASS_FOGGING` excludes `MATERIAL_USES_SCENE_COLOR_COPY`), on or
+off; no level, hangar or environment of the viewer has height or volumetric fog (none in `ue/SCViewer/Content`, none spawned),
+so this changes no pixel today, but glass in a fogged scene would lose its own fog. The copy is 8-bit (`pow(x / 10, 1/4)`),
+about 3-4 % steps at mid grey, visible only as faint steps in smooth gradients seen through strongly refracting glass.
+
+Defaults (Astra, `gpt-6.2-astra`, reasoning high; RTX 4090, `CRUS_Starlifter_C2` in `hangar_xltop_001`, fly camera; grids of the
+same crop, off + five variants, on the lift poses `lift` / `lift2` of §14.9 and a close exterior view of the cockpit side window
+`ext_close2` at (40, 4, 14.3) m → (33, −2, 14.5); `out/glass/refraction/grid-s2-*.png`, `astra-final-reply.md`; a first round on the
+emission-only version chose A too, `astra-sweep-reply.md`):
+
+| Variant (strength / thickness cm / dispersion / banding / streak) | Verdict |
+|---|---|
+| **A 1 / 1.5 / 0.25 / 0.01 / 0.02** | **clear bend of the side-room outline through the lift window, the pipe recognisable with a narrow fringe on its collars, no residual copy of the old edge — default** |
+| B 0.6 / 1 / 0.15 / 0.006 / 0.01 | convincing but easy to miss |
+| C 1.5 / 2.5 / 0.35 / 0.015 / 0.03 | metal edges look misregistered; colour-split strips read as a defect |
+| D 1 / 1.5 / 0.45 / 0.01 / 0.02 | close to A, the coloured outlines draw attention |
+| E 1 / 1.5 / 0.25 / 0.02 / 0.04 | more waviness; uneven-looking cockpit uprights |
+
+`GlassRefractionIOR` 1.5 and `GlassBandPeriod` 9 cm are master defaults too; every strength can be tried live with
+`sc.Look.GlassParam <name> <value>`. Artefacts (Astra, A, plus a six-step pan moving the lift glass to the right screen edge,
+`grid-f-pan.png`, `grid-f-pan-edge.png`): no screen-edge smear or hard cut-out line, no frame pixels dragged into the glass, no
+halo, broad reflections not displaced, no spatial noise; banding is faint. Not judged: shimmer in continuous motion (7° steps).
+
+Verification (2026-11-19):
+
+```
+Build.bat SCViewerEditor Win64 Development                         → Result: Succeeded
+create_materials.py (commandlet)                                    → SC_MATERIAL /SCBridge/Materials/M_SC_Glass.M_SC_Glass
+                                                                      expressions=84 vs=503 ps=5339 samplers=9; WP-U2 MATERIALS_OK
+                                                                      (before: expressions=47 ps=5011 samplers=8; GLASS_PORTED passes)
+Automation RunTests SCBridge                                        → 157 of 161 passed; the 4 known failures (FirstPerson.SkeletalCollision,
+                                                                      Materials.FamilyMapping, Package.FolderTarImport, Player.KitRigAndWeapons)
+```
+
+New / extended tests: `SCBridge.Materials.GlassRefractionLook` (off by default, not saved; built glass instances carry the setting,
+opaque and screen instances never; `SetGlassRefraction` sets array, shared and component-only glass instances once each, puts one
+dynamic instance over a constant glass instance shared by two slots, toggles back; a null world only records the setting),
+`SCBridge.Materials.MasterAssets` (the switch, default 0, and the look's seven defaults in `M_SC_Glass`),
+`SCBridge.FirstPerson.KeyTable` (G → `GlassLook`, one action per key).
+
+Off is the game's glass. Shots of the old build (HEAD before the change) and of the new build with the look off, same pose,
+two shots each (`out/glass/refraction/base-*`, `f-*`), PSNR over the frame (ffmpeg, RGB average):
+
+| Pose | old vs old (noise floor) | old vs new off | new off → on → off | old vs new on |
+|---|---|---|---|---|
+| `lift` | 49.8 dB | 52.6 dB | 50.2 dB | 33.4 dB |
+| `lift2` | 50.3 dB | 49.8 dB | 50.3 dB | 34.7 dB |
+| `ext_nose` (cockpit window from outside) | 54.5 dB | 54.9 dB | 54.6 dB | 52.6 dB |
+
+After the last review fixes (final asset) `lift` old vs new off 53.2 dB, `ext_nose` 54.3 dB, and the on frame matches the judged one
+(49.9 dB, noise). The off frames differ from the old build no more than two frames of the old build differ from each other (temporal noise,
+mean |Δ| 0.5-0.9 / 255).
+
+GPU cost (ProfileGPU, one frame per state, 1920 × 1080): the scene-colour copy (`CopySceneColor`, made whenever glass
+is on screen, on or off) 0.01-0.02 ms; the After-DOF translucency pass `lift` 0.325 → 0.340 ms and `lift2` 0.296 → 0.305 ms with
+the look on (+0.01-0.02 ms), exterior views unchanged within 0.005 ms. Frame time (20-sample means) moves within its ±0.3 ms
+noise. 630 glass instances switch per toggle (C2 + hangar), 0 constant ones in this uncooked scene.
+
+Cross-review (Terra `gpt-6.1-terra` xhigh and Astra `gpt-6.2-astra`, read-only, `out/glass/refraction/terra-review*.md`,
+`astra-code-review.md`). Fixed: emission clamped ≥ 0 by Substrate (→ the two-half replacement above), cooked constant glass not
+switchable (→ dynamic instance over it, refresh after loads, cook skips the switch), single blue-tap depth test (→ per channel),
+streak brightening at zero offset or on rejected taps, IOR / dispersion without clamps, ripple phase in world space (→ mesh space),
+a console call without a world, `IsGlassMaster` by short name, tests that did not reach component slots or pin the defaults, a
+black background turning the darker-half factor to 0. Open, recorded in the limits above: the fog / scene-colour-copy path of
+the off state, stacked panes, the estimated throughput of the brightening half, and depth tests at one point of the bilinear
+colour footprint (a sub-pixel foreground edge can lend a fringe); render-level and cooked-load automation tests.
+
+Not done: the cooked-glass path (`converted`) is covered by the unit test only, not by a cooked showcase run; no fogged scene
+exists to show the fog limit; shimmer in continuous motion was not judged.
