@@ -246,6 +246,15 @@ bool FSCViewerExposureInstall::RunTest(const FString&)
         TestTrue(TEXT("ue: UE's adaptation, overridden"), U.bOverride_AutoExposureAdaptation && U.AutoExposureAdaptation == UE.AutoExposureAdaptation);
         TestTrue(TEXT("ue: the pupil speed"), U.bOverride_AutoExposureSpeedUp && U.AutoExposureSpeedUp == E.SpeedUp);
         TestTrue(TEXT("ue: the same curve and bounds"), U.AutoExposureBiasCurve == S.AutoExposureBiasCurve && U.AutoExposureMinBrightness == S.AutoExposureMinBrightness);
+        // Install neutralises a map volume's bias (the compensation is the curve); the look's bias (LOOK-8, SCLookLighting::ApplyDefaults)
+        // is written on top, and an A/B switch keeps it (integration check 2026-11-19: it reset it to 0, 0.1 stop brighter after a switch).
+        TestTrue(TEXT("install: the bias overridden to 0"), S.bOverride_AutoExposureBias && S.AutoExposureBias == 0.f);
+        FPostProcessSettings L = S;
+        L.AutoExposureBias = -0.1f;
+        E.Apply(L, false, false);
+        TestTrue(TEXT("ue: the look's bias kept"), L.bOverride_AutoExposureBias && L.AutoExposureBias == -0.1f);
+        E.Apply(L, true, true);
+        TestTrue(TEXT("game: the look's bias kept"), L.bOverride_AutoExposureBias && L.AutoExposureBias == -0.1f);
     }
     World->DestroyWorld(false);
     return true;

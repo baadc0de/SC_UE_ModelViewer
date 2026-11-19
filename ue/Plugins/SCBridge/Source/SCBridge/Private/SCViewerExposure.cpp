@@ -126,7 +126,8 @@ void FSCExposureSettings::Apply(FPostProcessSettings& S, bool bGameMeter, bool b
     S.bOverride_AutoExposureHighPercent = true; S.AutoExposureHighPercent = HighPercent;
     S.bOverride_HistogramLogMin = true; S.HistogramLogMin = HistogramLogMin;
     S.bOverride_HistogramLogMax = true; S.HistogramLogMax = HistogramLogMax;
-    S.bOverride_AutoExposureBias = true; S.AutoExposureBias = 0.f; // the whole compensation is the curve
+    // AutoExposureBias is not the exposure chain's: Install neutralises it once, and the look's bias (SCLookLighting) sits on top,
+    // so an A/B switch through here keeps it.
     S.bOverride_AutoExposureApplyPhysicalCameraExposure = true; S.AutoExposureApplyPhysicalCameraExposure = false;
     // UE's adaptation speeds (the Default adaptation reads them; the two-stage adaptation does not).
     S.bOverride_AutoExposureSpeedUp = true; S.AutoExposureSpeedUp = SpeedUp;
@@ -234,6 +235,8 @@ APostProcessVolume* SCViewerExposure::Install(UWorld& World)
     FPostProcessSettings& S = Volume->Settings;
     // The game's exposure chain: its meter and its two-stage adaptation (sc.Look.Exposure switches each back to UE's).
     E.Apply(S, true, true);
+    // The whole compensation is the curve: a map volume's bias is overridden to 0 (the look writes its own bias afterwards).
+    S.bOverride_AutoExposureBias = true; S.AutoExposureBias = 0.f;
     UCurveFloat* Curve = NewObject<UCurveFloat>(Volume, NAME_None, RF_Transient);
     for (const FVector2D& K : E.BiasCurve)
         Curve->FloatCurve.SetKeyInterpMode(Curve->FloatCurve.AddKey(float(K.X), float(K.Y)), RCIM_Linear);
