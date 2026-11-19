@@ -18,9 +18,9 @@ instance reflects `max(F0 × GlassReflectanceScale, GlassReflectanceFloor)` (the
 Glass refraction is a look switched by key **G** (first person, orbit and fly; `sc.Look.GlassRefraction [0|1]`, no argument
 toggles; off at every start, not saved): glass then refracts and colour-fringes what is behind it
 ([verification/WP-U3b.md](verification/WP-U3b.md) §14.10). Switching it on puts the owner's profile on each glass instance,
-chosen from data (`SCLook::GlassProfile*`): glass on the first-person player kit (weapon optics, visor) strength 1 /
-dispersion 1; other glass authored with F0 0 (the C2 canopy) 1 / 0.25; all other glass 5 / 0.5. IOR and thickness are
-`M_SC_Glass` defaults; any of them is live with `sc.Look.GlassParam <name> <value> [@<instance name part>]` (static and
+chosen from data (`SCLook::GlassProfile*`): glass on the first-person player kit (weapon optics, visor) strength 0.5 /
+dispersion 0.5; other glass authored with F0 0 (the C2 canopy) 1 / 0.25; all other glass 5 / 0.5. IOR and thickness are
+`M_SC_Glass` defaults; any of them is live with `sc.Look.GlassParam <name> <value> [@<instance name part> | @kit]` (static and
 skeletal parts). Off is the game's glass.
 History: the project started on UE 5.8.2 (`++UE5+Release-5.8`, CL 56702186, Linux, WP-U0 2026-11-09), moved to the
 UE 5.9.0 preview-1 binary (CL 60351404) on 2026-11-12 and to the source fork on 2026-11-18.

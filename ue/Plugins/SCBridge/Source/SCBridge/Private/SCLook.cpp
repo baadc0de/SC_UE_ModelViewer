@@ -552,14 +552,19 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassRay(
 // sc.Look.GlassParam <name> <x> [<y> <z>] [@<instance name part>]: set a scalar (one value) or vector (three) parameter
 // on every glass material instance of the vehicles, or on those whose name contains the part (A/B without a rebuild).
 static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassParam(
-    TEXT("sc.Look.GlassParam"), TEXT("sc.Look.GlassParam <name> <x> [<y> <z>] [@<instance name part>]: set a glass material parameter on glass instances"),
+    TEXT("sc.Look.GlassParam"), TEXT("sc.Look.GlassParam <name> <x> [<y> <z>] [@<instance name part> | @kit]: set a glass material parameter on glass instances (@kit: only the first-person player kit's glass)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& InArgs, UWorld* World) {
         TArray<FString> Args = InArgs;
         const FString Filter = Args.Num() && Args.Last().StartsWith(TEXT("@")) ? Args.Pop().Mid(1) : FString();
         if (Args.Num() < 2) return;
+        // @kit: only the first-person player kit's glass (weapon optics, visor; the Kit refraction profile's actors).
+        const bool bKitOnly = Filter.Equals(TEXT("kit"), ESearchCase::IgnoreCase);
+        const TArray<const AActor*> Kits = bKitOnly ? SCLook::PlayerKits(World) : TArray<const AActor*>();
+        const FString NameFilter = bKitOnly ? FString() : Filter;
         TSet<UMaterialInstanceDynamic*> Done;
         for (TActorIterator<ASCVehicle> It(World); It; ++It)
         {
+            if (bKitOnly && !Kits.Contains(*It)) continue;
             // Every primitive: static meshes and the skeletal parts of a player kit (weapon optics, visor).
             TArray<UPrimitiveComponent*> Components;
             It->GetComponents(Components);
@@ -567,7 +572,7 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassParam(
                 for (int32 I = 0; I < C->GetNumMaterials(); ++I)
                 {
                     auto* MID = Cast<UMaterialInstanceDynamic>(C->GetMaterial(I));
-                    if (!MID || !IsGlassMaterial(MID) || Done.Contains(MID) || !MID->GetName().Contains(Filter)) continue;
+                    if (!MID || !IsGlassMaterial(MID) || Done.Contains(MID) || !MID->GetName().Contains(NameFilter)) continue;
                     Done.Add(MID);
                     if (Args.Num() >= 4)
                         MID->SetVectorParameterValue(FName(*Args[0]), FLinearColor(FCString::Atof(*Args[1]), FCString::Atof(*Args[2]), FCString::Atof(*Args[3])));

@@ -1510,7 +1510,7 @@ defaults, the master defaults themselves are unchanged (look off = the game's gl
 
 | Profile | Chosen by (data only) | `GlassRefractionStrength` | `GlassDispersion` |
 |---|---|---|---|
-| Kit | glass on the first-person player kit actor (`USCPlayerBodyComponent::GetKit()`: weapon optics, visor) | 1 (5 broke the sight picture; owner, 2026-11-19) | 1 (the shader clamps to 0.95) |
+| Kit | glass on the first-person player kit actor (`USCPlayerBodyComponent::GetKit()`: weapon optics, visor) | 0.5 (owner, 2026-11-19: 5 / 1 broke the sight picture, 1 / 1 still too strong) | 0.5 |
 | Canopy | other glass authored not to reflect: game F0 (`SpecularColor.r`, before the reflectance floor) < 1e-6 | 1 | 0.25 |
 | Default | all other glass | 5 | 0.5 |
 
