@@ -4,6 +4,18 @@
 #include "Cargo/SCCargoTypes.h"
 #include "SCPackageReader.generated.h"
 
+/** `ui_bindings[]` of a child or placement (decomposed-export-contract "UI bindings"): a UI screen the entity carries,
+ *  its game role and the exporter's render of its default state (WP-I1). */
+struct SCBRIDGE_API FSCUiBinding
+{
+    FString Kind;              // binding_kind: "physical" (a screen of the entity), "mfd", "radar"
+    FString SourceEntityName;  // the entity whose UI component this is (the item itself, or a screen entity mounted on it)
+    FString HelperName;        // the mesh node of the screen, when named
+    FString CanvasRecordName, ContentCanvasRecordName;
+    bool bDefaultStateIsOff = false;
+    FString ImagePath;         // generated_image_path, normalized package path ("" without a render)
+    float AspectWOverH = 0.f;  // ui_screen_aspect_w_over_h, 0 when not measured
+};
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSceneInstance
 {
@@ -40,6 +52,16 @@ struct SCBRIDGE_API FSCSceneInstance
     FString EntityId;
     TArray<FString> Links;
     FString LoadoutOwnerEntityId;
+    /** `ui_bindings[]`: the UI screens this entity carries (WP-I1). */
+    TArray<FSCUiBinding> UiBindings;
+    /** The image of this entity's own operating panel (door / lift / light panel, terminal), or "" when it has none
+     *  (contract rule, WP-I1): only `physical` bindings with a render and not off by default count; MFD and radar
+     *  bindings are vehicle screens. On a child (`bPlacement` false), a binding whose source entity is not the child
+     *  itself is a screen entity mounted on it (a dashboard's HUD projector or physical vehicle screen) and does not
+     *  count either. An interior placement is the panel entity itself. Every vehicle-screen binding with a render adds
+     *  one to `Skipped`. Bindings with different images (a multi-screen panel) need the helper -> face match, which
+     *  is not implemented: none is returned and `bAmbiguous` is set. */
+    FString PanelImage(bool bPlacement, int32* Skipped = nullptr, bool* bAmbiguous = nullptr) const;
 };
 /** `interiors[].proximity_sensors[]`: a door proximity sensor in its container's placement frame (CryEngine metres). */
 USTRUCT(BlueprintType)

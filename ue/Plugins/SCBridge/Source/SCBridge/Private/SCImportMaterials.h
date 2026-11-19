@@ -21,6 +21,10 @@ public:
     UMaterialInterface* Find(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, const FString& HostChannel = FString());
     /** Dominant host paint channel of a mesh slot set, weighted by triangles (add-on rule; priority order on ties). */
     static FString HostChannel(const FSCMaterialSet* Set, const TArray<FString>& SourceNames, const TArray<int32>& SlotTriangles);
+    /** WP-I1: the instance for a screen slot (M_SC_Screen) of a panel showing `Image` (a package path from the instance's
+     *  ui_bindings, FSCSceneInstance::PanelImage): one instance per (sidecar, submaterial, image), shared by every panel
+     *  with that image. Null when the slot is not a screen or the image did not load (the slot keeps Find's instance). */
+    UMaterialInterface* FindScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, const FString& Image);
     /** Draws nothing (zero-emission additive); for split sections that have no authored instance. */
     UMaterialInterface* Invisible();
     /** Another actor assembled from the same import (FSCImportJob from retained assets): instances created on demand
@@ -35,6 +39,10 @@ public:
     int32 MaterialCount = 0, SetCount = 0, EngineGlowCount = 0;
     double DescribeSeconds = 0, MaterialSeconds = 0;
     TMap<ESCMaster, int32> MasterCounts;
+    /** WP-I1 panel images: the distinct images the scene's operating panels show (decoded with the material textures),
+     *  and the vehicle-screen (MFD / HUD / radar) bindings left unbound by the owner's decision. */
+    TSet<FString> PanelImages;
+    int32 SkippedVehicleScreens = 0, AmbiguousPanels = 0;
 
 private:
     struct FSet
@@ -49,6 +57,7 @@ private:
     ASCVehicle* Owner = nullptr;
     UMaterialInterface* InvisibleMaterial = nullptr;
     TMap<FSCTextureKey, UTexture2D*> Textures;
+    TMap<TTuple<FString, int32, FString>, UMaterialInterface*> ScreenInstances; // (sidecar, submaterial, image)
     TArray<FSet> Sets;
     TArray<FSCTextureKey> Keys;
     TSet<FSCTextureKey> SampledKeys, MeanKeys; // bound to a material / read for its mean colour (may be both)

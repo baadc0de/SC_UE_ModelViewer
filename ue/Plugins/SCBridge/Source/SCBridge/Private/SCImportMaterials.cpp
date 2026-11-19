@@ -5,6 +5,7 @@
 #include "Async/ParallelFor.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Misc/Paths.h"
 
 const FSCSubmaterial* FSCImportMaterials::Resolve(const FSCMaterialSet* Set, const TArray<FString>& SourceNames, int32 Slot)
 {
@@ -48,6 +49,21 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
             Out.Descs.Add(MoveTemp(Desc)); Out.EngineGlow.Add(bGlow);
         }
     }
+    // WP-I1: the operating panels' images (door, lift and light panels, terminals), decoded once each with the material
+    // textures; MFD and HUD bindings stay unbound (owner decision: those screens are the viewer's own UI).
+    auto Panel = [&](const FSCSceneInstance& I, bool bPlacement)
+    {
+        bool bAmbiguous = false;
+        const FString Image = I.PanelImage(bPlacement, &SkippedVehicleScreens, &bAmbiguous);
+        AmbiguousPanels += bAmbiguous;
+        if (Image.IsEmpty() || I.MaterialSidecar.IsEmpty()) return;
+        PanelImages.Add(Image);
+        const FSCTextureKey Key{Image, ESCTextureRole::Color};
+        Unique.Add(Key); SampledKeys.Add(Key);
+    };
+    Panel(Manifest.Root, false);
+    for (const auto& I : Manifest.Children) Panel(I, false);
+    for (const auto& Interior : Manifest.Interiors) for (const auto& P : Interior.Placements) Panel(P, true);
     Keys = Unique.Array();
     Keys.Sort([](const FSCTextureKey& A, const FSCTextureKey& B) { return A.Path == B.Path ? A.Role < B.Role : A.Path < B.Path; });
     SetCount = Sets.Num();
@@ -123,6 +139,28 @@ UMaterialInterface* FSCImportMaterials::Find(const FString& Sidecar, const FStri
     if (MID) { Owner->Materials.Add(MID); ++MaterialCount; }
     Set->HostVariants.Add({Ordinal, HostChannel}, MID);
     return MID ? MID : Set->Instances[Ordinal];
+}
+
+UMaterialInterface* FSCImportMaterials::FindScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, const FString& Image)
+{
+    const TTuple<FString, int32, FString> CacheKey(Sidecar, Ordinal, Image);
+    if (UMaterialInterface** Existing = ScreenInstances.Find(CacheKey)) return *Existing;
+    const FSet* Set = Sets.FindByPredicate([&](const FSet& S) { return S.Sidecar == Sidecar && S.PaletteId == PaletteId; });
+    const FSCTextureKey Key{Image, ESCTextureRole::Color};
+    if (!Set || !Set->Descs.IsValidIndex(Ordinal) || Set->Descs[Ordinal].Master != ESCMaster::Screen || !Owner) return nullptr;
+    UMaterialInstanceDynamic* MID = nullptr;
+    if (Textures.FindRef(Key)) // a panel image that failed to decode leaves the screen dark (reported by Instantiate)
+    {
+        // The description does not depend on the palette (a screen routes no palette channel): one instance per image.
+        FSCMaterialDesc Desc = Set->Descs[Ordinal];
+        Desc.Name += TEXT("__") + FPaths::GetBaseFilename(Image);
+        Desc.Textures.Add(FSCMaterialBuilder::ScreenImageParam, Key);
+        TArray<FString> Ignored; // description warnings were reported for the base instance
+        MID = FSCMaterialBuilder::Create(Desc, Textures, Owner, Ignored);
+        if (MID) { Owner->Materials.Add(MID); ++MaterialCount; }
+    }
+    ScreenInstances.Add(CacheKey, MID);
+    return MID;
 }
 
 UMaterialInterface* FSCImportMaterials::Invisible()

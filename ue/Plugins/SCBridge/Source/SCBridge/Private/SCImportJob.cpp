@@ -1023,9 +1023,21 @@ void FSCImportJob::FState::Assemble()
         }
         if (bAny) V->PaintSlots.Add(MoveTemp(Entry));
     };
-    auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
+    // WP-I1: an operating panel's screen slots (M_SC_Screen) show its exported image; other screens stay dark glass.
+    int32 ScreenBoundInstances = 0;
+    TSet<FString> ScreenImagesBound;
+    auto PanelMaterial = [&](const FSCSceneInstance& I, const FString& Image, const FSCSubmaterial* Sub, UMaterialInterface* Material) {
+        if (!Material || !Sub || Image.IsEmpty()) return (UMaterialInterface*)nullptr;
+        UMaterialInterface* Screen = Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, Image);
+        if (Screen) ScreenImagesBound.Add(Image);
+        return Screen;
+    };
+    auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot, bool bPlacement) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
+        const FString PanelImage = Options.bImportMaterials ? I.PanelImage(bPlacement) : FString();
+        bool bScreenBound = false;
+        ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
                                                               bAtHelper, FSCMeshImporter::InCryFrame(I.SourceTransformBasis, bAtHelper));
         // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
@@ -1076,8 +1088,10 @@ void FSCImportJob::FState::Assemble()
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
                     if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
                     {
-                        E.Rig->SetMaterial(Slot, Mat);
-                        RecordPaint(I, E.Rig, Slot, *E.Mesh);
+                        UMaterialInterface* Screen = PanelMaterial(I, PanelImage, Sub, Mat);
+                        E.Rig->SetMaterial(Slot, Screen ? Screen : Mat);
+                        bScreenBound |= Screen != nullptr;
+                        if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh); // a panel's image does not follow the paint
                     }
             const double RigStart = FPlatformTime::Seconds();
             E.Rig->RegisterComponent();
@@ -1158,10 +1172,14 @@ void FSCImportJob::FState::Assemble()
                     if (bNanite && Translucent.Contains(Slot)) continue;
                     const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot);
                     UMaterialInterface* Material = Sub ? Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host) : nullptr;
+                    UMaterialInterface* Screen = PanelMaterial(I, PanelImage, Sub, Material);
+                    bScreenBound |= Screen != nullptr;
+                    if (Screen) Material = Screen;
                     // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
                     if (Material) C->SetMaterial(Slot, Material);
-                    if (Material && Material != Materials.Invisible()) RecordPaint(I, C, Slot, *E.Mesh);
+                    // A panel's image does not follow the paint.
+                    if (Material && Material != Materials.Invisible() && !Screen) RecordPaint(I, C, Slot, *E.Mesh);
                     if (Material && V->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
                 }
                 const double RegisterStart = FPlatformTime::Seconds();
@@ -1224,7 +1242,7 @@ void FSCImportJob::FState::Assemble()
     V->PhysicsGridBounds.Init();
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
-    if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
+    if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true, false));
     for (const auto& I : Manifest.Children)
     {
         bool bHelper;
@@ -1236,7 +1254,7 @@ void FSCImportJob::FState::Assemble()
             continue;
         }
         // Export order is depth-first; latest matching entity disambiguates repeated loadout instances.
-        FEntity Placed = Place(I, Parent, bHelper, false);
+        FEntity Placed = Place(I, Parent, bHelper, false, false);
         if (!I.Id.IsEmpty()) EntitiesById.Add(I.Id, Placed);
         Entities.Add(I.EntityName, Placed);
         if (!I.PortPath.IsEmpty())
@@ -1288,7 +1306,7 @@ void FSCImportJob::FState::Assemble()
         for (const auto& P : Interior.Placements)
             if (CanPlace(P))
             {
-                FEntity Placed = Place(P, Container, bHelper, false);
+                FEntity Placed = Place(P, Container, bHelper, false, true);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
             }
         // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel.
@@ -1350,6 +1368,8 @@ void FSCImportJob::FState::Assemble()
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d"), V->DoorControls.Num(), V->DoorSensors.Num());
+    UE_LOG(LogSCImport, Display, TEXT("SCREEN_BIND instances=%d images=%d panel_images=%d skipped_mfd=%d ambiguous=%d"), ScreenBoundInstances,
+           ScreenImagesBound.Num(), Materials.PanelImages.Num(), Materials.SkippedVehicleScreens, Materials.AmbiguousPanels);
     UE_LOG(LogSCImport, Display, TEXT("PAINTS variants=%d slots=%d"), Manifest.Paints.Num(), V->PaintSlots.Num());
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());

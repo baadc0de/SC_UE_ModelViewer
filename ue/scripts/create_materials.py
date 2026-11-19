@@ -579,7 +579,9 @@ return exp(-density * height);
 # (a glass authored not to reflect keeps 0), clamped to 1. Scale 1, Floor 0 is the game's F0.
 GLASS_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor * step(1e-6, F0)));"
 # glassLib.cfib under %HEIGHT_MAP: clip(heightMap - 0.01).
-GLASS_COVERAGE = "return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
+# M_SC_Screen: the same look over every screen face (no F0 > 0 condition: a screen always has its glass cover).
+SCREEN_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor));"
+GLASS_COVERAGE ="return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
 # The glass graph is a port of these game functions. StarEngineRender.json pins their token hashes and
 # scripts/verify_star_engine_render.py re-checks them against the installed game; the master is not built from a
 # fixture that no longer carries the hashes the port was written against.
@@ -734,6 +736,28 @@ def translucent_master():
     base = g.mul(base, vertex_albedo)
     slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive, front=False)
     g.weight(slab, g.mul(coverage, vertex_alpha))
+    return g.save()
+
+
+def screen_master():
+    """M_SC_Screen: the game's DisplayScreen face whose image is a render target ($RenderToTexture, WP-I1): an opaque
+    deferred surface in the game (alpha_config opacity 1), drawn as dark glass. Base colour = ScreenBackColor (the
+    authored BackColour), F0 = SpecularColor with the look's glass reflectance (GlassReflectanceScale /
+    GlassReflectanceFloor, as M_SC_Glass; here the floor applies to every screen: the face is the display's glass cover),
+    roughness from the authored gloss, and emission = ScreenImage x EmissiveColor x EmissiveStrength (the builder's glow
+    rule). ScreenImage is bound per panel instance (ui_bindings); the black default leaves an unbound screen (MFDs, lift
+    buttons) as clean dark glass. The image is sampled at UV0 untiled: the render target covers the face.
+    TODO(WP-I1 Q3): EmissiveSaturation / EmissiveContrast, ViewingAngle falloff and the pixel grid are not decoded."""
+    g = Graph("M_SC_Screen", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
+    uv = g.uv(g.const(1.0))
+    image = (g.texture("ScreenImage", g.black, ST.SAMPLERTYPE_COLOR, uv), "RGB")
+    normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
+    f0 = g.custom(SCREEN_REFLECTANCE_LOOK, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
+                  F0=g.vector("SpecularColor", (0.04, 0.04, 0.04)), Scale=g.scalar("GlassReflectanceScale", 1.0),
+                  Floor=g.scalar("GlassReflectanceFloor", 0.0))
+    base = g.vector("ScreenBackColor", (0, 0, 0))
+    emissive = g.mul(g.mul(image, g.vector("EmissiveColor", (0, 0, 0))), g.scalar("EmissiveStrength", 0.0))
+    g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive)
     return g.save()
 
 
@@ -964,10 +988,12 @@ Graph.white = default_texture("T_SC_White", (255, 255, 255, 255), True, unreal.T
 Graph.white_linear = default_texture("T_SC_WhiteLinear", (255, 255, 255, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.black_linear = default_texture("T_SC_BlackLinear", (0, 0, 0, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.flat_normal = default_texture("T_SC_FlatNormal", (128, 128, 255, 255), False, unreal.TextureCompressionSettings.TC_NORMALMAP)
+Graph.black = default_texture("T_SC_Black", (0, 0, 0, 255), True, unreal.TextureCompressionSettings.TC_DEFAULT)
 for opaque in (surface_master("M_SC_Illum"), hardsurface_master(),
                layered_master("M_SC_Layered", LAYERS), surface_master("M_SC_Fallback")):
     variants(opaque)
 glass_master()
+screen_master()
 for sided in (decal_master("M_SC_MeshDecal", True), decal_master("M_SC_MeshDecal_Relief", False), translucent_master()):
     variants(sided, (("_TwoSided", False, True),))  # is_double_sided decals keep reverse-facing triangles
 unlit_master()

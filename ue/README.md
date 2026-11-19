@@ -532,6 +532,22 @@ and exits with `P1_GAME_WALK` / `P1_GAME_LIFECYCLE`. The archive-backed host acc
 `-SCCamera=first` after `-SCLoad=<entity>`. Rebuild/restage the debug FFI library
 with `scripts/build_ffi.sh` after exporter changes.
 
+### Door and lift panel screens (WP-I1)
+
+A panel's display face is the game's `DisplayScreen` material with a virtual `$RenderToTexture` slot. The importer
+draws it with `M_SC_Screen`: an opaque Nanite surface of dark glass (base colour from the authored `BackColour`,
+F0 from `Specular` with the look's glass reflectance, gloss from `Shininess`), whose emission is the panel's image ×
+the authored `Glow` (the game's glow rule). The image is the exporter's render of the panel's default UI state
+(`ui_bindings[].generated_image_path`, already in the package). It is bound to the screen slots of door, lift and light
+panels and terminals (`physical` bindings an entity carries for itself; `FSCSceneInstance::PanelImage`), with one
+material instance per (material, submaterial, image): every C2 door pad shares one. MFD, radar and HUD bindings
+(`mfd` / `radar`, or a screen entity mounted on a dashboard or seat) are left unbound by the owner's decision: those
+screens are the viewer's own UI later, and show as clean dark glass. The HUD projector glass (`UIPlane`) still draws
+nothing. The import logs `SCREEN_BIND instances=<n> images=<m> panel_images=<k> skipped_mfd=<s> ambiguous=<a>`.
+`sc.Screens` lists every screen face with the image it shows; `sc.Screens <index> [cm]` puts the (fly) camera in front of
+one and logs the first surface on the ray to it, so a screen covered by other geometry shows up. Panels stay hittable for the door-pad interaction (`sc.FP.Pads`). Known gap: the exporter renders door panels at 16:9,
+and the image is stretched onto square and portrait faces until slice I1-2 (`docs/work-packages/WP-I1-door-and-lift-panels.md`).
+
 ### Scripted first person (GPU evidence, reused by WP-P2)
 
 Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mode):

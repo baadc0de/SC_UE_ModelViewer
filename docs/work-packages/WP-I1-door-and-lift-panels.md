@@ -269,6 +269,93 @@ WP-P5's to resolve. This WP does not add links.
 - **I1-4 (T4) feedback.** The highlight, prompt text from loc, the interaction radius from data (1.6 m against the
   viewer's 3 m reach), and the button sounds.
 
+## Result (I1-1)
+
+**State (2026-11-19):** done for T0 + T1, viewer-only. No exporter change and no re-export. The package and cache
+formats are unchanged, so no cache key moves.
+
+**Material.** `DisplayScreen` with the virtual `render_to_texture` slot maps to a new master, `ESCMaster::Screen` /
+`M_SC_Screen` (`create_materials.py` `screen_master`). It is opaque and Nanite, and is not split into the non-Nanite
+mesh. The master takes:
+
+- base colour `ScreenBackColor`, the authored `BackColour`;
+- F0 from the authored `Specular`, with the look's glass reflectance (`GlassReflectanceScale` / `GlassReflectanceFloor`,
+  set by `ApplyGlassLook` and `sc.Look.GlassReflectance`). On screens the floor applies even where `Specular` is 0, since
+  the face is the display's glass cover;
+- gloss from `Shininess` (`SurfaceGloss`);
+- emission `ScreenImage × EmissiveColor × EmissiveStrength`, with the strength from `GlowNits(Glow)` (the existing rule).
+  `ScreenImage` defaults to `T_SC_Black`, so an unbound screen is dark glass.
+
+A forward-flagged `DisplayScreen` stays opaque. `UIPlane` / `Monitor` / `UIMesh` / `Hologram*` faces, inactive screens and
+`Invisible()` keep their old path. Q3 is still open: `EmissiveSaturation` / `EmissiveContrast`, the ViewingAngle falloff,
+the pixel grid and the TexSlot6 screen mask are not applied (TODO in `SCMaterialDescribe.cpp` `Screen`).
+
+**Bindings.** `FSCPackageReader` reads `ui_bindings[]` into `FSCSceneInstance::UiBindings`: kind, source entity, helper,
+canvases, `default_state_is_off`, the image path (normalized; a path outside the package is dropped) and the aspect.
+`FSCSceneInstance::PanelImage` is the data rule for "operating panel":
+
+- a `physical` binding with a render that is not off by default;
+- on a child, only when `source_entity_name` is the child itself. A screen entity mounted on a dashboard or seat (the HUD
+  projector, `Vehicle_Screen_Physical`) is a vehicle screen;
+- `mfd` / `radar` bindings never count;
+- different images on one entity return none and are counted as `ambiguous`; the helper-to-face match is not
+  implemented.
+
+`FSCImportMaterials` decodes each panel image once with the material textures. `FindScreen` makes one instance per
+(sidecar, submaterial, image): every C2 door pad shares one. The import logs
+`SCREEN_BIND instances= images= panel_images= skipped_mfd= ambiguous=`. Screen slots do not record paint swaps.
+`sc.Screens [i [cm]]` lists every `M_SC_Screen` face (image, size, resident mips, UV0 range, centre, normal) and views one.
+The view logs the first hit on the ray to the face, so an occluder shows up.
+
+**Tests (tests first).** `SCBridge.Materials.ScreenFamily` failed on the old rule (master `M_SC_Emissive_Unlit`, blend
+2, non-Nanite, strength 0 against 2560). `SCBridge.Package.UiBindings` is new. The `FamilyMapping` pin is kept (the
+fixture's `screen` is a UIPlane) with the message reworded; `MasterAssets` covers the new master.
+
+| | Tests | Pass | Failures |
+|---|---|---|---|
+| before | 159 (158 + ScreenFamily) | 154 | the 4 known + `ScreenFamily` |
+| after | 160 | 156 | the 4 known only (`FolderTarImport`, `KitRigAndWeapons`, `FamilyMapping` on its `scene v3 rejected` line, `SkeletalCollision`) |
+
+`create_materials.py` printed `WP-U2 MATERIALS_OK` (`M_SC_Screen` 30 expressions, ps=465).
+
+**Game run** (C2 in `hangar_xltop_001`, `-SCCamera=first`, then fly; port 8771). Screenshots are in `out/panels/v1`
+and `probe*/`, with the face list in `out/panels/v1/faces.txt`.
+
+| Check | Result |
+|---|---|
+| C2 `SCREEN_BIND` | `instances=78 images=4 skipped_mfd=11 ambiguous=0`. 78 = 51 door pads + 2 ramp buttons (children, own UI) + 4 light panels + 14 extinguisher cabinets + 7 extinguishers. 11 = 7 MFD + 2 radar + the HUD projector + the annunciator |
+| Hangar `SCREEN_BIND` | `instances=22 images=5`: 8 elevator call, 2 + 2 medical drop-off, 2 freight kiosks, 8 ship-selector kiosks |
+| Door routing | `DOOR_LINKS panels=35 sensors=8`, the same as before the change. `FP_PADS total=35 resolved=33 no_door=2`: every pad that has a door resolves, so the pads are still hittable. `FP_DOOR_LIST` has 34 entries |
+| Faces | 133 `M_SC_Screen` faces. 53 show the door UI, 4 the light UI, 7 the extinguisher UI and 23 hangar images; 46 are dark: MFDs, lift buttons, the personal-inventory kiosks |
+
+**Astra** (gpt-6.2-astra, effort high, 12 shots):
+
+- Door pads, wall and bulkhead pads, the engineering pad and the light panel read as in-game controls. Their brightness
+  is right for D15, with no clipping or bloom.
+- The C2 lift call button and the copilot MFD are clean dark glass with no leftover content.
+- The hangar elevator call panel is the brightest screen in the set: "somewhat pale salmon" but not clipped.
+
+It raised three items, all outside I1-1's material and binding scope:
+
+1. **Escape-pod `screen_1x1` faces** are larger than the opening they appear in, overlapping the pod door's bulkhead
+   pad. The mesh is screen-only, so where it sits is placement data. Check it against an in-game capture.
+2. **Medical drop-off exterior panel** (`console_elevator_1_panel_a` in `elev_ht_dropoff`) shows a blank glow instead of
+   "EMERGENCY DROP OFF". This is not the binding: the texture is right (512 × 740, all mips resident, and the decoded
+   pixels hold the box and label), and it is not glass, translucency, Nanite or mips (A/B probes). The `SCREEN_VIEW` ray
+   hits `hosp_elevator_door_frame_a` 6 mm in front of the screen face, so a surface of the door frame covers it. This is a
+   placement or geometry question for a later slice.
+3. **Medical interior panel**: the UI sits low and small in the glass. This is the exporter render's layout on a
+   non-16:9 face; it belongs to I1-2 (aspect) and the §8 render-fidelity risk.
+
+**Not done or open:**
+
+- I1-2 aspect: door images stretched onto portrait and square faces;
+- Q1–Q3;
+- the `decomposed-export-contract.md` consumer note (WP-D1, vendor submodule);
+- the 14 extinguisher cabinets count as bound in `SCREEN_BIND`, but none of their faces appears in the `sc.Screens` list.
+  Not inspected (`sc.Screens` scans only visible static-mesh sections with area);
+- `sc.Emissive.Report` counts unbound screens at their nominal glow, because it does not sample `ScreenImage`.
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:

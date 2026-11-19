@@ -69,6 +69,22 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     { Error = TEXT("Unsupported transform basis: ") + Out.SourceTransformBasis; return false; }
     Out.Id = String(O, TEXT("id"));
     Out.PortPath = SCCargoRecords::PortPath(O);
+    // WP-I1: the UI screens the entity carries. An image path outside the package is dropped (no image), not trusted.
+    for (const auto& V : ReaderArray(O, TEXT("ui_bindings")))
+    {
+        const FReaderObject B = V && V->Type == EJson::Object ? V->AsObject() : nullptr;
+        if (!B) continue;
+        FSCUiBinding& Binding = Out.UiBindings.AddDefaulted_GetRef();
+        Binding.Kind = String(B, TEXT("binding_kind"));
+        Binding.SourceEntityName = String(B, TEXT("source_entity_name"));
+        Binding.HelperName = String(B, TEXT("helper_name"));
+        Binding.CanvasRecordName = String(B, TEXT("canvas_record_name"));
+        Binding.ContentCanvasRecordName = String(B, TEXT("content_canvas_record_name"));
+        B->TryGetBoolField(TEXT("default_state_is_off"), Binding.bDefaultStateIsOff);
+        if (!FSCPackageSource::Normalize(String(B, TEXT("generated_image_path")), Binding.ImagePath)) Binding.ImagePath.Reset();
+        double Aspect = 0;
+        if (B->TryGetNumberField(TEXT("ui_screen_aspect_w_over_h"), Aspect) && FMath::IsFinite(Aspect) && Aspect > 0) Binding.AspectWOverH = float(Aspect);
+    }
     const FReaderObject* Port;
     if (O->TryGetObjectField(TEXT("port"), Port))
     {
@@ -126,6 +142,26 @@ bool FSCSceneManifest::PaintTarget(const FSCSceneInstance& I, int32 Variant, FSt
     OutSidecar = bExterior ? Paint.ExteriorSidecar : I.MaterialSidecar;
     OutPalette = bPalette ? Paint.PaletteId : I.PaletteId;
     return true;
+}
+FString FSCSceneInstance::PanelImage(bool bPlacement, int32* Skipped, bool* bAmbiguous) const
+{
+    FString Image;
+    bool bConflict = false;
+    for (const FSCUiBinding& B : UiBindings)
+    {
+        if (B.ImagePath.IsEmpty()) continue;
+        // A vehicle screen: an MFD or radar binding, or (on a child) a screen entity mounted on this item.
+        if (B.Kind != TEXT("physical") || (!bPlacement && B.SourceEntityName != EntityName))
+        {
+            if (Skipped) ++*Skipped;
+            continue;
+        }
+        if (B.bDefaultStateIsOff) continue; // the panel's screen is off until something switches it on
+        if (Image.IsEmpty()) Image = B.ImagePath;
+        else bConflict |= Image != B.ImagePath;
+    }
+    if (bAmbiguous) *bAmbiguous = bConflict;
+    return bConflict ? FString() : Image;
 }
 TArray<FString> FSCSceneManifest::MeshAssets() const
 {

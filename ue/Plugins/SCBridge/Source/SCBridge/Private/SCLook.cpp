@@ -21,6 +21,8 @@
 #include "Components/LightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Misc/Paths.h"
 #include "Components/SkinnedMeshComponent.h"
 #include "Engine/SkinnedAsset.h"
 #include "Engine/StaticMesh.h"
@@ -474,6 +476,8 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookSky(
     }));
 
 static bool IsGlassMaterial(const UMaterialInterface* M) { return M && GetNameSafe(M->GetMaterial()).Contains(TEXT("Glass")); }
+/** The look's glass reflectance also reaches the screens' glass face (M_SC_Screen, WP-I1). */
+static bool TakesGlassLook(const UMaterialInterface* M) { return IsGlassMaterial(M) || (M && GetNameSafe(M->GetMaterial()) == TEXT("M_SC_Screen")); }
 
 // sc.Look.HideGlass <0|1> [<mesh name part>]: hide the vehicle's components drawn with a glass master material, or only
 // those whose mesh name contains the part (A/B through-glass views).
@@ -587,7 +591,7 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassReflectance(
         for (TActorIterator<ASCVehicle> It(World); It; ++It)
         {
             for (UMaterialInstanceDynamic* MID : It->Materials)
-                if (MID && IsGlassMaterial(MID) && !Seen.Contains(MID))
+                if (MID && TakesGlassLook(MID) && !Seen.Contains(MID))
                 {
                     Seen.Add(MID);
                     FSCMaterialBuilder::ApplyGlassLook(MID);
@@ -599,13 +603,110 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassReflectance(
                 for (int32 I = 0; I < C->GetNumMaterials(); ++I)
                 {
                     const UMaterialInterface* M = C->GetMaterial(I);
-                    if (!IsGlassMaterial(M) || Seen.Contains(M)) continue;
+                    if (!TakesGlassLook(M) || Seen.Contains(M)) continue;
                     Seen.Add(M);
                     if (!Cast<UMaterialInstanceDynamic>(M)) ++Constant;
                 }
         }
         UE_LOG(LogTemp, Display, TEXT("LOOK glass_reflectance scale=%.3f floor=%.4f instances=%d constant=%d"), Settings->GlassReflectanceScale,
                Settings->GlassReflectanceFloor, Set, Constant);
+    }));
+
+// sc.Screens [index [distance cm]] (WP-I1 verification): every screen face of the loaded vehicles and environments
+// (sections drawn with M_SC_Screen, instanced parts included), logged as SCREEN_FACE with the image it shows ("dark" =
+// none), its mesh, centre and facing; with an index, the current pawn is put `distance` (default 45 cm) in front of
+// that face, looking at it (use the fly camera: a first-person capsule is pushed out of geometry).
+static FAutoConsoleCommandWithWorldAndArgs GSCScreens(
+    TEXT("sc.Screens"), TEXT("sc.Screens [index [distance cm]]: list the screen faces (M_SC_Screen), or view one from the front"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        struct FFace { FString Label; FVector Centre, Normal; };
+        TArray<FFace> Faces;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+        {
+            TArray<UStaticMeshComponent*> Components;
+            It->GetComponents(Components);
+            Components.Sort([](const UStaticMeshComponent& A, const UStaticMeshComponent& B) { return A.GetName() < B.GetName(); });
+            for (UStaticMeshComponent* C : Components)
+            {
+                const UStaticMesh* Mesh = C->GetStaticMesh();
+                if (!Mesh || !C->IsVisible() || !Mesh->GetRenderData() || Mesh->GetRenderData()->LODResources.IsEmpty()) continue;
+                const FStaticMeshLODResources& LOD = Mesh->GetRenderData()->LODResources[0];
+                const FPositionVertexBuffer& Positions = LOD.VertexBuffers.PositionVertexBuffer;
+                const FStaticMeshVertexBuffer& Tangents = LOD.VertexBuffers.StaticMeshVertexBuffer;
+                if (!Positions.GetVertexData() || !Tangents.GetTangentData()) continue; // no CPU copy (cooked)
+                const FIndexArrayView Indices = LOD.IndexBuffer.GetArrayView();
+                TArray<FTransform> Instances;
+                if (const auto* ISM = Cast<UInstancedStaticMeshComponent>(C))
+                    for (int32 I = 0; I < ISM->GetInstanceCount(); ++I) ISM->GetInstanceTransform(I, Instances.AddDefaulted_GetRef(), true);
+                else Instances.Add(C->GetComponentTransform());
+                for (const FStaticMeshSection& Section : LOD.Sections)
+                {
+                    const UMaterialInterface* Material = C->GetMaterial(Section.MaterialIndex);
+                    if (!Material || GetNameSafe(Material->GetMaterial()) != TEXT("M_SC_Screen") || !Section.NumTriangles) continue;
+                    UTexture* Image = nullptr;
+                    Material->GetTextureParameterValue(FHashedMaterialParameterInfo(FSCMaterialBuilder::ScreenImageParam), Image);
+                    const FString* Source = Image ? It->SourcePaths.Find(Image) : nullptr;
+                    const UTexture2D* Image2D = Cast<UTexture2D>(Image);
+                    const FString Shown = Source ? FString::Printf(TEXT("%s size=%dx%d mips=%d resident=%d texture=%s"), *FPaths::GetBaseFilename(*Source),
+                        Image2D ? Image2D->GetSizeX() : 0, Image2D ? Image2D->GetSizeY() : 0, Image2D ? Image2D->GetNumMips() : 0,
+                        Image2D ? Image2D->GetNumResidentMips() : 0, *GetNameSafe(Image)) : FString(TEXT("dark"));
+                    FBox2f UV(ForceInit);
+                    for (uint32 K = 0; K < Section.NumTriangles * 3; ++K)
+                        UV += Tangents.GetVertexUV(Indices[Section.FirstIndex + K], 0);
+                    for (int32 I = 0; I < Instances.Num(); ++I)
+                    {
+                        FVector Centre = FVector::ZeroVector, Normal = FVector::ZeroVector;
+                        double Area = 0;
+                        for (uint32 T = 0; T < Section.NumTriangles; ++T)
+                        {
+                            FVector P[3];
+                            for (int32 K = 0; K < 3; ++K)
+                                P[K] = Instances[I].TransformPosition(FVector(Positions.VertexPosition(Indices[Section.FirstIndex + T * 3 + K])));
+                            const FVector N = FVector::CrossProduct(P[1] - P[0], P[2] - P[0]);
+                            const double A = 0.5 * N.Size();
+                            Area += A;
+                            Centre += (P[0] + P[1] + P[2]) / 3 * A;
+                            FVector V = FVector::ZeroVector; // the authored vertex normals give the visible side
+                            for (int32 K = 0; K < 3; ++K)
+                                V += Instances[I].TransformVectorNoScale(FVector(FVector3f(Tangents.VertexTangentZ(Indices[Section.FirstIndex + T * 3 + K]))));
+                            Normal += V.GetSafeNormal() * A;
+                        }
+                        if (Area <= 0 || Normal.IsNearlyZero()) continue;
+                        Faces.Add({FString::Printf(TEXT("image=%s mesh=%s component=%s instance=%d uv0=%.3f,%.3f..%.3f,%.3f"), *Shown, *GetNameSafe(Mesh),
+                                                   *C->GetName(), I, UV.Min.X, UV.Min.Y, UV.Max.X, UV.Max.Y),
+                                   Centre / Area, Normal.GetSafeNormal()});
+                    }
+                }
+            }
+        }
+        if (Args.IsEmpty())
+        {
+            for (int32 I = 0; I < Faces.Num(); ++I)
+                UE_LOG(LogTemp, Display, TEXT("SCREEN_FACE index=%d %s centre=%s normal=%s"), I, *Faces[I].Label, *Faces[I].Centre.ToCompactString(),
+                       *Faces[I].Normal.ToCompactString());
+            UE_LOG(LogTemp, Display, TEXT("SCREEN_FACES count=%d"), Faces.Num());
+            return;
+        }
+        const int32 Index = FCString::Atoi(*Args[0]);
+        APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+        if (!Faces.IsValidIndex(Index) || !PC || !PC->GetPawn()) { UE_LOG(LogTemp, Warning, TEXT("SCREEN_VIEW ok=0 index=%d count=%d"), Index, Faces.Num()); return; }
+        const FFace& F = Faces[Index];
+        const FVector At = F.Centre + F.Normal * (Args.IsValidIndex(1) ? FCString::Atod(*Args[1]) : 45.0);
+        const FRotator View = (-F.Normal).Rotation();
+        if (ASCViewerPawn* Viewer = Cast<ASCViewerPawn>(PC->GetPawn())) Viewer->SetView(At, View);
+        else { PC->GetPawn()->SetActorLocation(At, false, nullptr, ETeleportType::TeleportPhysics); PC->SetControlRotation(View); }
+        // What the view ray meets first on its way to the face (an occluder in front of the screen shows here).
+        FHitResult Hit;
+        FCollisionQueryParams Q(SCENE_QUERY_STAT(SCScreens), true, PC->GetPawn());
+        Q.bReturnFaceIndex = true;
+        const bool bHit = World->LineTraceSingleByChannel(Hit, At, F.Centre - F.Normal * 2.0, ECC_Visibility, Q);
+        const UPrimitiveComponent* P = bHit ? Hit.GetComponent() : nullptr;
+        const auto* SM = Cast<UStaticMeshComponent>(P);
+        int32 HitSection = 0;
+        const UMaterialInterface* HitMaterial = P && Hit.FaceIndex >= 0 ? P->GetMaterialFromCollisionFaceIndex(Hit.FaceIndex, HitSection) : nullptr;
+        UE_LOG(LogTemp, Display, TEXT("SCREEN_VIEW ok=1 index=%d %s at=%s view=%s first_hit=%s mesh=%s dist=%.1f material=%s"), Index, *F.Label,
+               *At.ToCompactString(), *View.ToCompactString(), P ? *P->GetName() : TEXT("-"), SM ? *GetNameSafe(SM->GetStaticMesh()) : TEXT("-"),
+               bHit ? Hit.Distance : -1.0, *GetNameSafe(HitMaterial ? HitMaterial->GetMaterial() : nullptr));
     }));
 
 // sc.Look.Camera <x> <y> <z> <yaw> <pitch>: put the current pawn (the fly camera in fly mode) at a world position and

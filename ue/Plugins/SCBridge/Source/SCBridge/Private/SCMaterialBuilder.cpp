@@ -8,6 +8,7 @@
 
 const FName FSCMaterialBuilder::GlassReflectanceScaleParam(TEXT("GlassReflectanceScale"));
 const FName FSCMaterialBuilder::GlassReflectanceFloorParam(TEXT("GlassReflectanceFloor"));
+const FName FSCMaterialBuilder::ScreenImageParam(TEXT("ScreenImage"));
 
 void FSCMaterialBuilder::ApplyGlassLook(UMaterialInstanceDynamic* MID)
 {
@@ -28,6 +29,7 @@ const TCHAR* FSCMaterialBuilder::MasterName(ESCMaster Master)
     case ESCMaster::MeshDecalRelief: return TEXT("SC_MeshDecal_Relief");
     case ESCMaster::Translucent: return TEXT("SC_Translucent");
     case ESCMaster::EmissiveUnlit: return TEXT("SC_Emissive_Unlit");
+    case ESCMaster::Screen: return TEXT("SC_Screen");
     default: return TEXT("SC_Fallback");
     }
 }
@@ -71,7 +73,7 @@ UMaterialInstanceDynamic* FSCMaterialBuilder::Create(const FSCMaterialDesc& Desc
     MID->SetFlags(RF_Transient);
     for (const auto& Pair : Desc.Scalars) MID->SetScalarParameterValue(Pair.Key, Pair.Value);
     for (const auto& Pair : Desc.Vectors) MID->SetVectorParameterValue(Pair.Key, Pair.Value);
-    if (Desc.Master == ESCMaster::Glass) ApplyGlassLook(MID);
+    if (Desc.Master == ESCMaster::Glass || Desc.Master == ESCMaster::Screen) ApplyGlassLook(MID); // a screen's face is glass too
     for (const auto& Pair : Desc.Textures)
     {
         if (UTexture2D* const* Texture = Textures.Find(Pair.Value); Texture && *Texture) MID->SetTextureParameterValue(Pair.Key, *Texture);

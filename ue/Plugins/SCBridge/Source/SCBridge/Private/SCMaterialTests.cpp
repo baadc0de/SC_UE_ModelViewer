@@ -496,7 +496,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
             TestTrue(Sub.Name + TEXT(": MeshDecal is a decal/hidden, never opaque"), X->Blend == ESCBlend::Translucent && X->bNonNanite);
     }
     if (auto* X = Check(TEXT("screen"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
-        TestEqual(TEXT("RTT screen dark until ui_bindings"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
+        TestEqual(TEXT("UIPlane RTT face (HUD projector glass) draws nothing: HUDs are the viewer's own UI (WP-I1)"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
     if (auto* X = Check(TEXT("monitor"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
         TestEqual(TEXT("screen image without Glow emits nothing"), X->Scalars[TEXT("EmissiveStrength")], 0.f);
     if (auto* X = Check(TEXT("inactive"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, true, true)) TestTrue(TEXT("hidden"), X->bHidden);
@@ -662,7 +662,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsMasters, "SCBridge.Materials.Master
 bool FSCMaterialsMasters::RunTest(const FString&)
 {
     for (ESCMaster Master : {ESCMaster::Illum, ESCMaster::HardSurface, ESCMaster::Layered, ESCMaster::Glass, ESCMaster::MeshDecal,
-        ESCMaster::MeshDecalRelief, ESCMaster::Translucent, ESCMaster::EmissiveUnlit, ESCMaster::Fallback})
+        ESCMaster::MeshDecalRelief, ESCMaster::Translucent, ESCMaster::EmissiveUnlit, ESCMaster::Fallback, ESCMaster::Screen})
         for (ESCBlend Blend : {ESCBlend::Opaque, ESCBlend::Masked})
             for (bool bTwoSided : {false, true})
             {

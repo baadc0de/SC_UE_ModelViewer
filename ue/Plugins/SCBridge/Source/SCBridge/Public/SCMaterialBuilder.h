@@ -9,8 +9,9 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UTexture2D;
 
-/** One master per shader family group; names match ue/scripts/create_materials.py. */
-enum class ESCMaster : uint8 { Illum, HardSurface, Layered, Glass, MeshDecal, MeshDecalRelief, Translucent, EmissiveUnlit, Fallback };
+/** One master per shader family group; names match ue/scripts/create_materials.py. Screen: a DisplayScreen face whose
+ *  image is a render target ($RenderToTexture), drawn as opaque dark glass with the bound panel image as emission. */
+enum class ESCMaster : uint8 { Illum, HardSurface, Layered, Glass, MeshDecal, MeshDecalRelief, Translucent, EmissiveUnlit, Fallback, Screen };
 enum class ESCBlend : uint8 { Opaque, Masked, Translucent };
 
 /** Pure description of one material instance: safe to build on a worker, unit-testable without UObjects. */
@@ -66,6 +67,9 @@ public:
      *  GlassReflectanceFloor; master defaults 1 and 0 = the game's F0). */
     static const FName GlassReflectanceScaleParam;
     static const FName GlassReflectanceFloorParam;
+    /** M_SC_Screen's texture parameter: the panel's image (the exporter's render of its UI, ui_bindings), sRGB colour.
+     *  Unset (black) draws the screen as dark glass. */
+    static const FName ScreenImageParam;
     /** Sets the look's glass reflectance (USCViewerSettings) on a glass instance. */
     static void ApplyGlassLook(UMaterialInstanceDynamic* MID);
     /** Game thread. Missing textures keep the master's neutral default and add a warning. A glass instance also takes the
