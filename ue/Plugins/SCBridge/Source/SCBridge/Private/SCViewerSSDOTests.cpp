@@ -13,6 +13,10 @@
 #include "Serialization/JsonSerializer.h"
 #include "ShowFlags.h"
 #include "ScreenSpaceDirectionalOcclusionSettings.h"
+#include "SCViewerEngineFeatures.h"
+#include <cmath>
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
 #include <limits>
 
 namespace
@@ -116,7 +120,11 @@ bool FSCViewerSSDOMapping::RunTest(const FString&)
             {TEXT("DirOcclusionPS"), TEXT("6d0b80fa581928697ce816a3e809f43d7399f8227ebdecbaef36999a744b2f86")},
             {TEXT("GetSSDORadius"), TEXT("e9f5b1cde58cc2688ae88488e068364a81b2f1076202d211287ab7bc05c8a504")},
             {TEXT("CalculateSSDO"), TEXT("588ccce3f95a3918dd43960be6e62ecb6ae0db83065791c6b0712f85f80a2552")},
-            {TEXT("DeriveSpecularOcclusion"), TEXT("a382cb5e9e642aa7688017551fba5e9b487db21783c201befc17ba383f63b99c")}};
+            {TEXT("DeriveSpecularOcclusion"), TEXT("a382cb5e9e642aa7688017551fba5e9b487db21783c201befc17ba383f63b99c")},
+            // E1-7 review: the horizon angles' arc cosines (UE::SSDO::AcosFastGame / AcosEst2Game).
+            {TEXT("ACosFast"), TEXT("c9d6eed79c45da942e67035d215e77b104ca67a8b9c5ba0cf76cddc83f93daa5")},
+            {TEXT("ACosEst2"), TEXT("311eac5ce581723c7134e16efab450ac28bf3820eccd43e1142edd353674efb7")},
+            {TEXT("ASinEst"), TEXT("040a85b518f97fb87ddd4af89cdf079caccfc51a979eef10fd87b7a084dbf193")}};
         for (const auto& [Name, Hash] : Ported)
         {
             const TSharedPtr<FJsonObject>* Entry = nullptr;
@@ -184,8 +192,26 @@ bool FSCViewerSSDOBlend::RunTest(const FString&)
             World->DestroyWorld(false);
         }
         Settings->bStarEngineSSDO = bSaved;
-        TestFalse(TEXT("the shipped look keeps the game's SSDO off"), GetDefault<USCViewerSettings>()->bStarEngineSSDO);
+        // E1-7 review: the test restores the developer's setting (which their config may turn on); the shipped default is checked on its
+        // own (SCBridge.ViewerExposure.SSDO.ShippedDefault).
+        TestEqual(TEXT("the setting is restored"), Settings->bStarEngineSSDO, bSaved);
     }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerSSDOShippedDefault, "SCBridge.ViewerExposure.SSDO.ShippedDefault",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerSSDOShippedDefault::RunTest(const FString&)
+{
+    // The shipped look keeps the game's SSDO off (D15): the class default, and no shipped config file turns it on. Read in isolation from
+    // the user's saved GameUserSettings (a developer may enable it there; E1-7 review).
+    TestFalse(TEXT("the class default is off"), USCViewerSettings::bStarEngineSSDOShipped);
+    const FString Path = FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("DefaultGameUserSettings.ini"));
+    FConfigFile File;
+    File.Read(Path);
+    bool bShipped = USCViewerSettings::bStarEngineSSDOShipped;
+    File.GetBool(TEXT("/Script/SCBridge.SCViewerSettings"), TEXT("bStarEngineSSDO"), bShipped);
+    TestFalse(TEXT("the shipped DefaultGameUserSettings.ini does not turn it on"), bShipped);
     return true;
 }
 
@@ -281,4 +307,130 @@ bool FSCViewerSSDOLumenInterplay::RunTest(const FString&)
     TestEqual(TEXT("amount 0: unoccluded"), DirectLightFactor(1.f, -1.f, 1e8f, 100.f, 0.f), 1.f);
     return true;
 }
+#if SCVIEWER_ENGINE_SSDO >= 2
+namespace
+{
+// Star Engine's DirOcclusionPS sector bits, transcribed from the game source (DeferredShading.cfxb ACosFast and the visibility-bitmask
+// branch; out/e1/E1-7/review/game-ssdo-functions.txt): the reference the engine's port (UE::SSDO::SampleVisibilityBits) is checked
+// against.
+float GameAcosFast(float X)
+{
+    const float AbsX = FMath::Abs(X);
+    float Res = -0.156583f * AbsX + UE_PI / 2.0f;
+    const float OneMinus = 1.0f - AbsX;
+    uint32 Bits;
+    FMemory::Memcpy(&Bits, &OneMinus, 4);
+    Bits = 0x1FBD1DF5u + (Bits >> 1);
+    float Sqrt;
+    FMemory::Memcpy(&Sqrt, &Bits, 4);
+    Res *= Sqrt;
+    return X >= 0 ? Res : UE_PI - Res;
+}
+float GameAcosEst2(float X) // CIGMathLib.cfib: ACosEst2 = 1.570796327 - ASinEst
+{
+    const float C0 = 1.570796327f, C1 = -0.2125329f, C2 = 0.0747737f, C3 = -0.0188236f;
+    const float AbsX = FMath::Abs(X);
+    const float Sgn = X / (AbsX + 1e-37f);
+    const float Res = (((C3 * AbsX + C2) * AbsX + C1) * AbsX + C0) * FMath::Sqrt(1.0f - AbsX);
+    return 1.570796327f - Sgn * (C0 - Res);
+}
+uint32 GameBits(float FrontCos, float BackCos, float AngleNormal, int32 J)
+{
+    float X = GameAcosFast(FrontCos), Y = GameAcosFast(BackCos);
+    if (!J) { const float NX = -Y, NY = -X; X = NX; Y = NY; }
+    const auto S = [AngleNormal](float A) { const float T = FMath::Clamp((A - AngleNormal) / UE_PI + 0.5f, 0.f, 1.f); return T * T * (3.f - 2.f * T); };
+    X = S(X); Y = S(Y);
+    const uint32 Start = uint32(X * 32), Span = uint32(FMath::RoundToFloat(FMath::Clamp(Y - X, 0.f, 1.f) * 32));
+    return ((1u << (Span & 31u)) - 1u) << (Start & 31u);
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerSSDOLumenTrace, "SCBridge.ViewerExposure.SSDO.LumenTrace",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerSSDOLumenTrace::RunTest(const FString&)
+{
+    // E1-7 review (Terra 1-2 / Astra H1-H2): Lumen's short-range trace is produced wherever Lumen runs it unless the SSDO replaces both AO
+    // terms and no short-range GI (the same trace) is requested; it is applied during integration only where the SSDO owns no AO term
+    // (else the composite applies it to the term the SSDO leaves), so neither term is occluded twice.
+    using namespace UE::SSDO;
+    FViewSettings Off;
+    FViewSettings Ambient; Ambient.bEnabled = true; Ambient.AmbientAmount = 1.f;
+    FViewSettings Reflection; Reflection.bEnabled = true; Reflection.ReflectionAmount = 1.f;
+    FViewSettings Both = Ambient; Both.ReflectionAmount = 1.f;
+    for (const bool bIntegration : {false, true})
+    {
+        const TCHAR* I = bIntegration ? TEXT("integration on") : TEXT("integration off");
+        TestEqual(FString::Printf(TEXT("%s, no SSDO: UE's"), I), AppliesLumenShortRangeAODuringIntegration(Off, bIntegration), bIntegration);
+        TestFalse(FString::Printf(TEXT("%s, ambient only: not during integration"), I), AppliesLumenShortRangeAODuringIntegration(Ambient, bIntegration));
+        TestFalse(FString::Printf(TEXT("%s, reflection only: not during integration"), I), AppliesLumenShortRangeAODuringIntegration(Reflection, bIntegration));
+        TestFalse(FString::Printf(TEXT("%s, both: not during integration"), I), AppliesLumenShortRangeAODuringIntegration(Both, bIntegration));
+    }
+    for (const bool bGI : {false, true})
+    {
+        TestTrue(TEXT("no SSDO: the trace runs where Lumen runs it"), RunsLumenShortRangeTrace(Off, true, bGI));
+        TestFalse(TEXT("Lumen does not run it: nor does the SSDO"), RunsLumenShortRangeTrace(Ambient, false, bGI));
+        TestTrue(TEXT("ambient only: runs (Lumen's reflection AO)"), RunsLumenShortRangeTrace(Ambient, true, bGI));
+        TestTrue(TEXT("reflection only: runs (Lumen's diffuse AO)"), RunsLumenShortRangeTrace(Reflection, true, bGI));
+        TestEqual(FString::Printf(TEXT("both replaced: runs only for short-range GI (GI %d)"), bGI), RunsLumenShortRangeTrace(Both, true, bGI), bGI);
+    }
+    // The composite then takes each term once: the SSDO's where it owns it, Lumen's otherwise (ComposeIndirectOcclusion).
+    const FIndirectOcclusion Lumen{0.6f, 0.7f};
+    const FIndirectOcclusion A = ComposeIndirectOcclusion(Ambient, Lumen, 0.5f, 0.8f, 0.4f);
+    TestTrue(TEXT("ambient only: Lumen's specular, once"), A.Specular == Lumen.Specular && A.Diffuse == 0.5f);
+    const FIndirectOcclusion R = ComposeIndirectOcclusion(Reflection, Lumen, 0.5f, 0.8f, 0.4f);
+    TestTrue(TEXT("reflection only: Lumen's diffuse, once"), R.Diffuse == Lumen.Diffuse);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerSSDOHorizonBits, "SCBridge.ViewerExposure.SSDO.HorizonBits",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerSSDOHorizonBits::RunTest(const FString&)
+{
+    // E1-7 review (Astra, game parity): the engine port's arc cosines and sector bits are the game's. Astra's case: a front horizon
+    // cosine of 0.34 with the projected normal at angle 0 starts at bit 31 (UE's acosFast gave 30).
+    using namespace UE::SSDO;
+    TestEqual(TEXT("ACosFast(0.34) is the game's"), AcosFastGame(0.34f), GameAcosFast(0.34f), 1e-7f);
+    const uint32 Bits = SampleVisibilityBits(0.34f, 0.0f, 0.0f, 1);
+    TestEqual(TEXT("front 0.34, normal 0: the game's mask"), Bits, GameBits(0.34f, 0.0f, 0.0f, 1));
+    TestEqual(TEXT("front 0.34, normal 0: start bit 31"), Bits ? int32(FMath::CountTrailingZeros(Bits)) : -1, 31);
+    // A sweep over cosines and normal angles, both sides, at and around the sector boundaries (k / 32 after the smoothstep).
+    int32 Mismatches = 0, Cases = 0;
+    for (int32 F = -100; F <= 100; ++F)
+        for (int32 B = -100; B <= 100; B += 7)
+            for (const float N : {-1.2f, -0.6f, 0.0f, 0.35f, 0.9f})
+                for (const int32 J : {0, 1})
+                {
+                    const float FC = F / 100.f, BC = B / 100.f;
+                    ++Cases;
+                    const uint32 E = SampleVisibilityBits(FC, BC, N, J), G = GameBits(FC, BC, N, J);
+                    if (E != G && Mismatches++ < 8)
+                        AddInfo(FString::Printf(TEXT("mismatch front %.9g back %.9g normal %g side %d: engine %08x game %08x"), FC, BC, N, J, E, G));
+                }
+    // Exactly at the boundaries: front cosines whose mapped start is k (bisected per k), and their neighbours one ulp away. With the normal
+    // at angle 0 the start runs from 16 (cosine 1) to 32 (cosine -1), so the boundaries inside the domain are k = 17..31.
+    for (int32 K = 17; K < 32; ++K)
+    {
+        float Lo = -1.f, Hi = 1.f; // the mapped start decreases as the cosine grows (j = 1, normal 0)
+        for (int32 It = 0; It < 60; ++It)
+        {
+            const float Mid = 0.5f * (Lo + Hi);
+            if (uint32(32 * ([](float A) { const float T = FMath::Clamp(A / UE_PI + 0.5f, 0.f, 1.f); return T * T * (3.f - 2.f * T); })(GameAcosFast(Mid))) >= uint32(K)) Lo = Mid; else Hi = Mid;
+        }
+        for (const float C : {Lo, Hi, std::nextafter(Lo, -2.f), std::nextafter(Hi, 2.f)})
+        {
+            if (C < -1.f || C > 1.f) continue; // the game's bit trick is defined on [-1, 1] only
+            ++Cases;
+            const uint32 E = SampleVisibilityBits(C, -1.f, 0.f, 1), G = GameBits(C, -1.f, 0.f, 1);
+            if (E != G && Mismatches++ < 16)
+                AddInfo(FString::Printf(TEXT("boundary mismatch front %.9g: engine %08x game %08x"), C, E, G));
+        }
+    }
+    TestEqual(FString::Printf(TEXT("sector bits equal the game's in %d cases"), Cases), Mismatches, 0);
+    double WorstEst2 = 0;
+    for (int32 I = -1000; I <= 1000; ++I)
+        WorstEst2 = FMath::Max(WorstEst2, double(FMath::Abs(AcosEst2Game(I / 1000.f) - GameAcosEst2(I / 1000.f))));
+    TestTrue(FString::Printf(TEXT("ACosEst2 is the game's (worst %g)"), WorstEst2), WorstEst2 <= 1e-6);
+    return true;
+}
+#endif
 #endif

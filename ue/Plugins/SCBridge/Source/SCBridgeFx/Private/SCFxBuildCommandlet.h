@@ -3,7 +3,12 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Commandlets/Commandlet.h"
+#include "StructUtils/InstancedStruct.h"
 #include "SCFxBuildCommandlet.generated.h"
+
+/** The stateless float expression the builder writes for a piecewise-linear strength curve (keys (t, v) sorted by t) of the input X
+ *  (SCFxRules::ClampSum: clamp terms for ramps, comparison terms for steps). For the tests (SCBridge.Fx.ExpressionValidation). */
+FInstancedStruct SCFxPiecewiseLinearExpression(const TArray<FVector2D>& Keys, const FInstancedStruct& X);
 
 UCLASS()
 class USCFxBuildCommandlet : public UCommandlet

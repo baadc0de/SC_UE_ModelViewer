@@ -52,7 +52,9 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bConfineLightsToRooms = false;
     /** WP-L2 / WP-E1 E1-7: the game's screen-space directional occlusion (the engine fork's SSDO, from the fixture) on lights that cast
      *  no shadow, the sun and ambient light, in place of Lumen's short-range AO. Off in the look (D15). Console: sc.Look.SSDO. */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bStarEngineSSDO = false;
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bStarEngineSSDO = bStarEngineSSDOShipped;
+    /** The shipped default of bStarEngineSSDO (the look, D15): what a user's config overrides (SCBridge.ViewerExposure.SSDO.ShippedDefault). */
+    static constexpr bool bStarEngineSSDOShipped = false;
     // Look (LOOK-6, revised LOOK-8): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard
     // bloom. LOOK-8 (adjudicated across the Galaxy in XL and the Golem in small hangars): the diffraction streaks veiled
     // hull edges and cockpits; standard bloom it is. 0.15 still suits stills. Console: sc.Look.BloomStar.

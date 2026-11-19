@@ -19,6 +19,12 @@
         "source": "Engine/ShaderCache_Vulkan.pak (2663973822 bytes, crc32 8e895d78) read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
         "entries": ["DeriveSpecularOcclusion"],
         "note": "the SSDO's specular occlusion (TiledShading.cfxb); DirOcclusionPS, SpatialDenoisePS, GetSSDORadius and CalculateSSDO were re-hashed from the same pak and match"
+      },
+      {
+        "work_package": "WP-E1 E1-7 review",
+        "source": "Engine/ShaderCache_Vulkan.pak (2663973822 bytes, crc32 8e895d78) read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
+        "entries": ["ACosFast", "ACosEst2", "ASinEst"],
+        "note": "the arc cosines DirOcclusionPS uses for its horizon angles (ACosFast in DeferredShading.cfxb; ACosEst2 / ASinEst in CIGMathLib.cfib), ported as UE::SSDO::AcosFastGame / AcosEst2Game"
       }
     ]
   },
@@ -378,6 +384,18 @@
     "DeriveSpecularOcclusion": {
       "file": "TiledShading.cfxb",
       "sha256": "a382cb5e9e642aa7688017551fba5e9b487db21783c201befc17ba383f63b99c"
+    },
+    "ACosFast": {
+      "file": "DeferredShading.cfxb",
+      "sha256": "c9d6eed79c45da942e67035d215e77b104ca67a8b9c5ba0cf76cddc83f93daa5"
+    },
+    "ACosEst2": {
+      "file": "CIGMathLib.cfib",
+      "sha256": "311eac5ce581723c7134e16efab450ac28bf3820eccd43e1142edd353674efb7"
+    },
+    "ASinEst": {
+      "file": "CIGMathLib.cfib",
+      "sha256": "040a85b518f97fb87ddd4af89cdf079caccfc51a979eef10fd87b7a084dbf193"
     },
     "CalcStencilWearAlpha": {
       "file": "stencilLib.cfib",

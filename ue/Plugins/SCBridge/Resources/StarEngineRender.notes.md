@@ -50,7 +50,7 @@ Any difference is a non-zero exit naming the value. Run it after every game patc
 and, for a changed function hash, the rule ported from that function must be re-derived — never edit a value to
 make the validator pass.
 
-The checks (88 as of WP-E1 E1-7) are the 87 fixture values plus one completeness check: the fixture must list exactly the
+The checks (91 as of the WP-E1 E1-7 review) are the 90 fixture values plus one completeness check: the fixture must list exactly the
 `r_ExposureCompensationEV<n>` cvars the executable registers (the loader builds the compensation curve from
 whatever anchors the fixture carries, so a dropped or invented anchor would otherwise pass). The shader side of
 the same curve — which anchors are read and where the segments join — is pinned by the `CalculateEVCompensation`
@@ -121,6 +121,7 @@ Functions and what was taken from each:
 | `GetPhysicalLightAttenuation` | `PointCandela`: `1 / (tweak · (d − bulb) / bulb + 1)²`; `AttenuationOffset` = `bulb · (1 − tweak) / tweak`, the distance offset of the same curve (engine fork `ELightDistanceAttenuation::BulbOffset`, WP-E1 E1-2) |
 | `GetLightForcedDistanceFade` | the range window `LightRangeFade` and the importer's range fade (engine fork, WP-E1 E1-2) |
 | `DirOcclusionPS`, `GetSSDORadius`, `CalculateSSDO`, `DeriveSpecularOcclusion` | **ported** to the engine fork's screen-space directional occlusion (`ScreenSpaceDirectionalOcclusion.usf` / `Common.ush`, `UE::SSDO`, WP-E1 E1-7); `SCBridge.ViewerExposure.SSDO.Mapping` fails when one of these hashes differs from the one the port was written from |
+| `ACosFast` (DeferredShading.cfxb), `ACosEst2`, `ASinEst` (CIGMathLib.cfib) | **ported** as the SSDO's horizon angles (`UE::SSDO::AcosFastGame` for the front / back angles, `AcosEst2Game` for the projected normal; WP-E1 E1-7 review); checked by `SCBridge.ViewerExposure.SSDO.Mapping` and `.HorizonBits` |
 | `SpatialDenoisePS` | the encoding taken (normalised bent normal, w = 1 − AO); its 2 × 2 blur is replaced by the per-frame noise rotation that MegaLights' and TSR's temporal filters average (`r.SSDO.TemporalNoise`) |
 | `PlanarLightDiffuse_LightSpace`, `DiffuseLambert` | `PlanarCandela` and the Lambert π folded into the light colour |
 | `GlassShared` | **ported** to `M_SC_Glass` (`create_materials.py` `glass_master`, which refuses to build when this hash or `ReflectanceToIOR`'s differs from the one its graph was written from): glass UV, clear base layer, absorption, vertex / map modifiers, height clip |

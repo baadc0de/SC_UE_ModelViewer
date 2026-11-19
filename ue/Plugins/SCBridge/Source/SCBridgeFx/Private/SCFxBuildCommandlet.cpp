@@ -235,20 +235,7 @@ FCurve Curve(const FJson& O, const FString& Path)
     return Keys;
 }
 /** Piecewise linear, clamped to the end keys (CryEngine splines hold their ends). Channel 0 is the first value. */
-double Eval(const FCurve& Keys, double T, int32 Channel = 0)
-{
-    if (Keys.IsEmpty()) return 1.0;
-    auto At = [Channel](const TArray<double>& K) { return K.IsValidIndex(Channel + 1) ? K[Channel + 1] : K.Last(); };
-    if (T <= Keys[0][0]) return At(Keys[0]);
-    for (int32 i = 1; i < Keys.Num(); ++i)
-        if (T <= Keys[i][0])
-        {
-            const double Span = Keys[i][0] - Keys[i - 1][0];
-            const double A = Span > 0 ? (T - Keys[i - 1][0]) / Span : 1.0;
-            return FMath::Lerp(At(Keys[i - 1]), At(Keys[i]), A);
-        }
-    return At(Keys.Last());
-}
+double Eval(const FCurve& Keys, double T, int32 Channel = 0) { return SCFxRules::EvalKeys(Keys, T, Channel); } // the tested rule
 FJson Parse(const FString& Text)
 {
     FJson O;
@@ -451,15 +438,26 @@ FInstancedStruct V2Mul(FInstancedStruct A, FInstancedStruct B) { return Op<FNiag
 FInstancedStruct V2Add(FInstancedStruct A, FInstancedStruct B) { return Op<FNiagaraStatelessExpressionVec2Add>(MoveTemp(A), MoveTemp(B)); }
 FInstancedStruct VScale(FInstancedStruct A, double K) { return VMul(MoveTemp(A), VConst(FVector3f(float(K)))); }
 
-/** A piecewise-linear curve of a bound float, held at its end keys: Base + sum Rise x clamp((x - From) x Scale, 0, 1). */
-FInstancedStruct PiecewiseLinear(const TArray<FVector2D>& Keys, FName X)
+FInstancedStruct FGreater(FInstancedStruct A, FInstancedStruct B) { return Op<FNiagaraStatelessExpressionFloatGreaterThan>(MoveTemp(A), MoveTemp(B)); }
+} // namespace
+
+/** A piecewise-linear curve of a bound float, held at its end keys: Base + sum Rise x clamp((x - From) x Scale, 0, 1), a step's term
+ *  the comparison x > From (review fixes 3: strict at every float above the key, 0 included). X is the curve's input leaf. */
+FInstancedStruct SCFxPiecewiseLinearExpression(const TArray<FVector2D>& Keys, const FInstancedStruct& X)
 {
     const SCFxRules::FClampSum Sum = SCFxRules::ClampSum(Keys);
     FInstancedStruct E = FConst(Sum.Base);
     for (const SCFxRules::FClampTerm& T : Sum.Terms)
-        E = FAdd(MoveTemp(E), FMul(FClamp(FMul(FAdd(FBind(X), FConst(-T.From)), FConst(T.Scale)), 0.0, 1.0), FConst(T.Rise)));
+    {
+        FInstancedStruct Term = T.bStep ? FGreater(X, FConst(T.From)) : FClamp(FMul(FAdd(X, FConst(-T.From)), FConst(T.Scale)), 0.0, 1.0);
+        E = FAdd(MoveTemp(E), FMul(MoveTemp(Term), FConst(T.Rise)));
+    }
     return E;
 }
+
+namespace
+{
+FInstancedStruct PiecewiseLinear(const TArray<FVector2D>& Keys, FName X) { return SCFxPiecewiseLinearExpression(Keys, FBind(X)); }
 
 /** A quantity driven by an EmitterStrength curve: its value at strength 1 and, when it changes over the game's
  *  strengths, the curve as an expression in SC.Strength (PiecewiseLinear). */
@@ -639,11 +637,8 @@ struct FBuilder
         FStrength S;
         S.At1 = Eval(Curve, 1.0, Channel) * Scale;
         // Classified over the configured strengths and every authored key in [0, 1] (E1-6 review: a curve peaking between the
-        // knots is neither constant nor invisible).
-        TArray<double> KeyTimes;
-        for (const TArray<double>& K : Curve) KeyTimes.Add(K[0]);
-        TArray<double> Y;
-        for (double K : SCFxRules::ClassificationStrengths(Knots, KeyTimes)) Y.Add(Eval(Curve, K, Channel) * Scale);
+        // knots is neither constant nor invisible), both sides of a step included (review fixes 3: each key's own value).
+        const TArray<double> Y = SCFxRules::ClassificationValues(Curve, Knots, Channel, Scale);
         S.bAllZero = !Y.ContainsByPredicate([](double V) { return V > 0; });
         for (double V : Y) S.bVaries |= !FMath::IsNearlyEqual(V, Y[0], 1e-6);
         if (!F.Strength || Curve.IsEmpty() || !S.bVaries)
@@ -894,6 +889,10 @@ struct FBuilder
             S.Duration = SCFxRules::LoopDuration(Wanted, Life, LoopCapacity);
             if (S.Duration > Wanted)
                 L.Approx.Add(FString::Printf(TEXT("loop %.3gs -> %.3gs (lifetime %.3gs, %d spawn infos)"), Wanted, S.Duration, Life, LoopCapacity));
+            // Review fixes 3 (Astra A8): with one spawn info no loop fits (consecutive intervals overlap while particles live); the
+            // wanted loop is kept and reported (the engine draws the newest that fit).
+            if (!SCFxRules::LoopsFit(Life, S.Duration, LoopCapacity))
+                L.Approx.Add(FString::Printf(TEXT("loop %.3gs: %d live loops > %d spawn info(s), cannot fit (the newest are not drawn)"), S.Duration, SCFxRules::LiveLoops(Life, S.Duration), LoopCapacity));
             L.Mapped.Add(FString::Printf(TEXT("loop=%.3gs(live_loops=%d/%d)"), S.Duration, SCFxRules::LiveLoops(Life, S.Duration), LoopCapacity));
         }
         if (Mode != TEXT("per_distance")) L.Mapped.Add(TEXT("spawn.continuous"));
@@ -1160,24 +1159,24 @@ struct FBuilder
             const FJson Light = Obj(E, TEXT("light"));
             const double IntensityRandom = FMath::Clamp(Num(Light, TEXT("random")), 0.0, 1.0);
             const double Candela = UE_DOUBLE_PI * SceneUnitNits * Num(Light, TEXT("intensity"), 1);
-            // Hue at strength 1; intensity x colour luminance over the strengths -> the light's diffuse/specular scale.
-            FLinearColor Max(Rgb.R * ColorS[0].At1, Rgb.G * ColorS[1].At1, Rgb.B * ColorS[2].At1, 1.f);
-            const double Lum1 = Max.GetLuminance();
-            if (Lum1 > 0) Max *= float(Candela * CandelaToUE);
+            // Hue at the reference strength (1, or where the colour is brightest when it is black at 1: review fixes 3, Terra T4);
+            // intensity x colour luminance relative to it over the strengths -> the light's diffuse/specular scale.
+            const SCFxRules::FLightColourReference Reference = SCFxRules::LightColourReference(ColorStrength, Rgb, Knots);
+            FLinearColor Max = Reference.Rgb;
+            Max.A = 1.f;
+            const double LumRef = Reference.Luminance;
+            if (LumRef > 0) Max *= float(Candela * CandelaToUE);
             Max.A = 1.f;
             FLinearColor Min = Max * float(1 - IntensityRandom);
             Min.A = 1.f;
             SetColorRange(Init->ColorDistribution, Min, Max);
             // E1-6 review: the light's intensity curve and its colour's luminance (relative to strength 1) are two exact piecewise-linear
             // curves in SC.Strength (the colour's at its own keys: a weighted sum of the channels), multiplied; resampling their product
-            // at the knots lost the authored breaks and was wrong between them.
+            // at the knots lost the authored breaks and was wrong between them. Review fixes 3: the luminance keys from each colour key's
+            // own channels (a step stays a step), relative to the reference.
             const FStrength IntensityS = Strength(Curve(Light, TEXT("strength_curve")));
             FCurve ColorLuminance;
-            for (const TArray<double>& K : ColorStrength)
-            {
-                const FLinearColor C(Rgb.R * Eval(ColorStrength, K[0], 0), Rgb.G * Eval(ColorStrength, K[0], 1), Rgb.B * Eval(ColorStrength, K[0], 2));
-                ColorLuminance.Add({K[0], Lum1 > 0 ? C.GetLuminance() / Lum1 : 0.0});
-            }
+            for (const FVector2D& K : SCFxRules::RelativeLuminanceKeys(ColorStrength, Rgb, LumRef)) ColorLuminance.Add({K.X, K.Y});
             const FStrength ColorLumS = Strength(ColorLuminance);
             FStrength LightS;
             LightS.At1 = IntensityS.At1 * ColorLumS.At1;
@@ -1185,7 +1184,7 @@ struct FBuilder
             LightS.bAllZero = IntensityS.bAllZero || ColorLumS.bAllZero;
             if (LightS.bVaries)
                 LightS.Expr = FMul(IntensityS.bVaries ? IntensityS.Expr : FConst(IntensityS.At1), ColorLumS.bVaries ? ColorLumS.Expr : FConst(ColorLumS.At1));
-            bInvisible = Candela <= 0 || Lum1 <= 0 && !LightS.bVaries;
+            bInvisible = Candela <= 0 || LumRef <= 0 && !LightS.bVaries;
             const FCurve AgeCurve = Curve(Light, TEXT("age_curve"));
             if (!AgeCurve.IsEmpty())
             {
@@ -1211,7 +1210,7 @@ struct FBuilder
             Apply(Attr->DiffuseScale, LightS);
             Apply(Attr->SpecularScale, LightS);
             if (LightS.bVaries) L.Mapped.Add(TEXT("light.strength_curve(SC.Strength)"));
-            if (bColorVaries) L.Approx.AddUnique(TEXT("light hue at strength 1"));
+            if (bColorVaries) L.Approx.AddUnique(FString::Printf(TEXT("light hue at strength %g"), Reference.Strength));
             auto* R = NewObject<UNiagaraLightRendererProperties>(Em, NAME_None, RF_Transactional);
             R->bUseInverseSquaredFalloff = true;
             R->bAffectsTranslucency = true;
@@ -1876,13 +1875,19 @@ static int32 VerifyContract()
     Registry.SearchAllAssets(true);
     TArray<FAssetData> Assets;
     Registry.GetAssetsByPath(TEXT("/Game/SC/FX"), Assets, true);
-    int32 Systems = 0, Stale = 0;
+    int32 Systems = 0, Stale = 0, Failed = 0;
     for (const FAssetData& Asset : Assets)
     {
         if (Asset.AssetClassPath != UNiagaraSystem::StaticClass()->GetClassPathName()) continue;
-        const UNiagaraSystem* System = Cast<UNiagaraSystem>(Asset.GetAsset());
-        if (!System) continue;
         ++Systems;
+        const UNiagaraSystem* System = Cast<UNiagaraSystem>(Asset.GetAsset());
+        if (!System)
+        {
+            // Review fixes 3 (Astra A9): a system the registry lists but that does not load is not verified: an error, not a skip.
+            ++Failed;
+            UE_LOG(LogSCFx, Error, TEXT("SC_FX_STALE %s does not load: cannot verify its contract"), *Asset.GetObjectPathString());
+            continue;
+        }
         const int32 Version = SCFxContract::Of(*System);
         if (Version < SCFxRules::FxContractVersion)
         {
@@ -1890,8 +1895,8 @@ static int32 VerifyContract()
             UE_LOG(LogSCFx, Error, TEXT("SC_FX_STALE %s contract=%d (current %d): rebuild with -run=SCFxBuild"), *System->GetPathName(), Version, SCFxRules::FxContractVersion);
         }
     }
-    UE_LOG(LogSCFx, Display, TEXT("SC_FX_CONTRACT systems=%d stale=%d version=%d"), Systems, Stale, SCFxRules::FxContractVersion);
-    return Stale == 0 ? 0 : 1;
+    UE_LOG(LogSCFx, Display, TEXT("SC_FX_CONTRACT systems=%d stale=%d load_failures=%d version=%d"), Systems, Stale, Failed, SCFxRules::FxContractVersion);
+    return Stale == 0 && Failed == 0 ? 0 : 1;
 }
 
 int32 USCFxBuildCommandlet::Main(const FString& Params)
@@ -1925,7 +1930,7 @@ int32 USCFxBuildCommandlet::Main(const FString& Params)
     B.F.Parse(FeatureSpec);
     FParse::Value(*Params, TEXT("RefractionScale="), B.RefractionScale);
     FParse::Value(*Params, TEXT("LoopCapacity="), B.LoopCapacity);
-    B.LoopCapacity = FMath::Max(B.LoopCapacity, 2);
+    B.LoopCapacity = FMath::Max(B.LoopCapacity, 1); // review fixes 3 (A8): the engine accepts 1; a loop that cannot fit is reported
     B.SceneUnitNits = FSCStarEngine::Get().SceneUnitNits;
     B.LitSceneUnits = Num(Config, TEXT("unlit_diffuse_scene_units"), 0.0);
     B.FlareWorldScale = Num(Config, TEXT("flare_world_scale"), 1.0);

@@ -17,6 +17,13 @@
 #include "Engine/Texture2D.h"
 #include "AutoExposureConversion.h"
 #include "Engine/PostProcessUtils.h"
+#include "SCViewerEngineFeatures.h"
+#include "Misc/StringOutputDevice.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/CustomVersion.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/ObjectAndNameAsStringProxyArchive.h"
+#include "Serialization/StructuredArchive.h"
 
 namespace
 {
@@ -723,6 +730,168 @@ bool FSCViewerExposureToneCurveOrder::RunTest(const FString&)
     const FProperty* RefWhiteProperty = Struct->FindPropertyByName(TEXT("HuePreservingShoulderRefWhiteScale"));
     TestEqual(TEXT("toe ClampMin is the domain"), ToeProperty ? FCString::Atof(*ToeProperty->GetMetaData(TEXT("ClampMin"))) : 0.f, MinToe);
     TestEqual(TEXT("reference white ClampMin is the domain"), RefWhiteProperty ? FCString::Atof(*RefWhiteProperty->GetMetaData(TEXT("ClampMin"))) : 0.f, MinRefWhite);
+#endif
+    return true;
+}
+
+namespace
+{
+// The engine's review-3 exposure rules (UE::AutoExposure, SCVIEWER_ENGINE_EXPOSURE 6). On an older fork the test runs the rules that
+// engine applied, transcribed from it (PostProcessEyeAdaptation.cpp / .usf, PostProcessing.cpp), so it shows what failed there.
+#if SCVIEWER_ENGINE_EXPOSURE >= 6
+FVector2f LutScaleBias(const UE::AutoExposure::FCompensationCurveLUTDomain& D) { return UE::AutoExposure::GetCompensationCurveLUTScaleBias(D); }
+FVector2f OutputLimits(float Lower, float CurveAtLower, float Upper, float CurveAtUpper) { return UE::AutoExposure::GetTwoStageOutputScaleLimits(Lower, CurveAtLower, Upper, CurveAtUpper); }
+bool Tiles(TConstArrayView<FIntRect> Rects) { return UE::AutoExposure::DoRectsTileTheirBounds(Rects); }
+bool Collapsed(FIntRect Rect, FIntPoint Extent, int32 Divisor) { return UE::AutoExposure::IsDownscaledViewRectCollapsed(Rect, Extent, FIntPoint(Divisor)); }
+#else
+FVector2f LutScaleBias(const UE::AutoExposure::FCompensationCurveLUTDomain& D) // GetExposureCompensationCurveLUTScaleBias, in float
+{
+    const float Scale = (D.NumSamples - 1) / (D.NumSamples * (D.MaxX - D.MinX));
+    return FVector2f(Scale, (0.5f / D.NumSamples) - (D.MinX * Scale));
+}
+FVector2f OutputLimits(float Lower, float CurveAtLower, float Upper, float CurveAtUpper) // the shader's clamp(AdaptedScale, x, y)
+{
+    const float L = FMath::Max(Lower, 1e-20f), U = FMath::Max(Upper, L);
+    return FVector2f(0.18f * CurveAtUpper / U, 0.18f * CurveAtLower / L);
+}
+bool Tiles(TConstArrayView<FIntRect> Rects) // the all-view check: summed area equals the union's
+{
+    FIntRect Union = Rects[0];
+    int64 Area = 0;
+    for (const FIntRect& R : Rects) { Union.Union(R); Area += int64(R.Width()) * R.Height(); }
+    return Area == int64(Union.Width()) * Union.Height();
+}
+bool Collapsed(FIntRect, FIntPoint, int32) { return false; } // no check: GetDownscaledViewRect expanded a collapsed rect to one texel
+#endif
+
+// The compensation LUT as the shader reads it: CreateCurveLUT's half-float texels of 2^curve, addressed with the scale / bias and
+// sampled with bilinear filtering and clamped addressing (texel centres at (i + 0.5) / N).
+double LutFactor(const UCurveFloat* Curve, const UE::AutoExposure::FCompensationCurveLUTDomain& D, float X)
+{
+    const int32 N = D.NumSamples;
+    const float Delta = (D.MaxX - D.MinX) / (N - 1);
+    const auto Texel = [&](int32 I) { return double(FFloat16(FMath::Pow(2.0f, Curve->GetFloatValue(D.MinX + Delta * I))).GetFloat()); };
+    const FVector2f SB = LutScaleBias(D);
+    const double At = FMath::Clamp(double(X * SB.X + SB.Y) * N - 0.5, 0.0, double(N - 1));
+    const int32 Low = FMath::Min(FMath::FloorToInt32(At), N - 1), High = FMath::Min(Low + 1, N - 1);
+    return FMath::Lerp(Texel(Low), Texel(High), At - Low);
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureReviewRules3, "SCBridge.ViewerExposure.ReviewRules3",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerExposureReviewRules3::RunTest(const FString&)
+{
+    using UE::AutoExposure::FCompensationCurveLUTDomain;
+    using UE::AutoExposure::FCompensationCurveLUTPolicy;
+    // Astra A15: Domain 0 with 16384 samples over a finite width of 3e34: NumSamples x width overflows FP32, so a float scale is 0 and
+    // every exposure samples one texel. In double the scale and bias are usable FP32 coefficients.
+    {
+        FCompensationCurveLUTPolicy P;
+        P.Domain = 0; P.MinX = -1.5e34f; P.MaxX = 1.5e34f; P.NumSamples = 16384; P.MaxTextureSamples = 16384;
+        const FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(static_cast<const FRichCurve*>(nullptr), P);
+        const FVector2f SB = LutScaleBias(D);
+        TestTrue(TEXT("A15: 3e34 wide: a positive, normal FP32 scale"), SB.X >= FLT_MIN && FMath::IsFinite(SB.X));
+        TestTrue(TEXT("A15: 3e34 wide: a finite bias"), FMath::IsFinite(SB.Y));
+        TestEqual(TEXT("A15: 3e34 wide: MaxX at the last texel centre"), double(D.MaxX * SB.X + SB.Y), 1.0 - 0.5 / D.NumSamples, 1e-4);
+        TestEqual(TEXT("A15: 3e34 wide: MinX at the first texel centre"), double(D.MinX * SB.X + SB.Y), 0.5 / D.NumSamples, 1e-4);
+        // Wider still: 2 samples over 1e38, whose FP32 scale (5e-39) is subnormal; the accepted domain has a normal one.
+        P.MinX = -5e37f; P.MaxX = 5e37f; P.NumSamples = 2;
+        const FCompensationCurveLUTDomain W = UE::AutoExposure::GetCompensationCurveLUTDomain(static_cast<const FRichCurve*>(nullptr), P);
+        const FVector2f WSB = LutScaleBias(W);
+        TestTrue(TEXT("A15: an accepted domain's FP32 scale is normal and its bias finite"), WSB.X >= FLT_MIN && FMath::IsFinite(WSB.X) && FMath::IsFinite(WSB.Y));
+    }
+    // Astra A12: luminance bounds 1 and 2 and a curve rising by 2 stops between them: the limits' endpoints cross (the scale at the
+    // upper bound, 0.18 x 4 / 2, is above the lower bound's 0.18 x 1 / 1). The limits are ordered, on the CPU curve and through the LUT
+    // alike (the shader's two paths), and agree.
+    {
+        const float Lower = 1.f, Upper = 2.f;
+        UCurveFloat* Rising = NewObject<UCurveFloat>(GetTransientPackage());
+        const float XLower = UE::AutoExposure::GetCompensationCurveInput(Lower), XUpper = UE::AutoExposure::GetCompensationCurveInput(Upper);
+        Rising->FloatCurve.SetKeyInterpMode(Rising->FloatCurve.AddKey(XLower, 0.f), RCIM_Linear);
+        Rising->FloatCurve.SetKeyInterpMode(Rising->FloatCurve.AddKey(XUpper, 2.f), RCIM_Linear);
+        FCompensationCurveLUTPolicy P;
+        P.Domain = 1; P.MinX = -10.f; P.MaxX = 20.f; P.NumSamples = 64; P.MaxStep = 1.f / 64; P.MaxTextureSamples = 16384;
+        const FCompensationCurveLUTDomain D = UE::AutoExposure::GetCompensationCurveLUTDomain(&Rising->FloatCurve, P);
+        const FVector2f Cpu = OutputLimits(Lower, FMath::Pow(2.f, Rising->GetFloatValue(XLower)), Upper, FMath::Pow(2.f, Rising->GetFloatValue(XUpper)));
+        const FVector2f Lut = OutputLimits(Lower, float(LutFactor(Rising, D, XLower)), Upper, float(LutFactor(Rising, D, XUpper)));
+        TestTrue(FString::Printf(TEXT("A12: CPU curve: ordered limits (%g, %g)"), Cpu.X, Cpu.Y), Cpu.X <= Cpu.Y);
+        TestTrue(FString::Printf(TEXT("A12: LUT: ordered limits (%g, %g)"), Lut.X, Lut.Y), Lut.X <= Lut.Y);
+        TestEqual(TEXT("A12: CPU and LUT lower limits agree"), Lut.X, Cpu.X, Cpu.X * 2e-3f);
+        TestEqual(TEXT("A12: CPU and LUT upper limits agree"), Lut.Y, Cpu.Y, Cpu.Y * 2e-3f);
+        TestTrue(FString::Printf(TEXT("A12: the interval spans both bounds' scales 0.18 and 0.36 (%g, %g)"), Cpu.X, Cpu.Y), FMath::IsNearlyEqual(Cpu.X, 0.18f, 1e-5f) && FMath::IsNearlyEqual(Cpu.Y, 0.36f, 1e-5f));
+        // A curve that holds (no crossing) keeps UE's order: the upper bound's scale is the lower limit.
+        const FVector2f Flat = OutputLimits(Lower, 1.f, Upper, 1.f);
+        TestTrue(FString::Printf(TEXT("A12: a flat curve: UE's limits 0.09, 0.18 (%g, %g)"), Flat.X, Flat.Y), FMath::IsNearlyEqual(Flat.X, 0.09f, 1e-6f) && FMath::IsNearlyEqual(Flat.Y, 0.18f, 1e-6f));
+    }
+    // Terra T2 / Astra A10: an all-view incident reduction needs rects that tile their union: pairwise disjoint and covering it.
+    {
+        const auto Strip = [](int32 X0, int32 X1) { return FIntRect(X0, 0, X1, 1); };
+        TestTrue(TEXT("T2: [0,2) [2,4) tile"), Tiles({Strip(0, 2), Strip(2, 4)}));
+        TestTrue(TEXT("T2: four quadrants tile"), Tiles({FIntRect(0, 0, 2, 2), FIntRect(2, 0, 4, 2), FIntRect(0, 2, 2, 4), FIntRect(2, 2, 4, 4)}));
+        TestFalse(TEXT("A10: [0,2) [1,3) [4,6): an overlap and a gap of equal area do not tile"), Tiles({Strip(0, 2), Strip(1, 3), Strip(4, 6)}));
+        TestFalse(TEXT("T2: [0,2) [1,3) [4,5): overlap and gap cancel in area"), Tiles({Strip(0, 2), Strip(1, 3), Strip(4, 5)}));
+        TestFalse(TEXT("T2: a gap alone"), Tiles({Strip(0, 2), Strip(3, 5)}));
+    }
+    // Astra A14: at downscale 3, a view one texel wide at x 0 shares column 0 with its neighbour [1, 12): GetDownscaledViewRect gives
+    // both column 0 (its minimum of one texel). Such a rect is detected as collapsed (the family falls back to Reflected).
+    {
+        const FIntPoint Extent(12, 12);
+        TestTrue(TEXT("A14: [0,1) at downscale 3 is collapsed"), Collapsed(FIntRect(0, 0, 1, 12), Extent, 3));
+        TestFalse(TEXT("A14: [1,12) is not"), Collapsed(FIntRect(1, 0, 12, 12), Extent, 3));
+        TestFalse(TEXT("A14: [11,12) at the far edge rounds up: not collapsed"), Collapsed(FIntRect(11, 0, 12, 12), Extent, 3));
+        TestTrue(TEXT("A14: [10,11) inside one texel: collapsed"), Collapsed(FIntRect(10, 0, 11, 12), Extent, 3));
+        TestTrue(TEXT("A14: a rect one row high inside one texel row: collapsed"), Collapsed(FIntRect(0, 4, 12, 5), Extent, 3));
+        TestFalse(TEXT("A14: [0,3) is a whole texel"), Collapsed(FIntRect(0, 0, 3, 12), Extent, 3));
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCViewerExposureLegacyClear, "SCBridge.ViewerExposure.LegacyClearMigration",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCViewerExposureLegacyClear::RunTest(const FString&)
+{
+#if WITH_EDITORONLY_DATA
+    // Astra A13: settings saved by the fork's E1-4 review (the bool bOverriddenNoneAssetsClear, before the per-asset mask) load as a
+    // clear of every asset. The saved property arrives by name (text import matches properties by name, as tagged serialization does),
+    // then the struct's PostSerialize runs as after a tagged load.
+    const UScriptStruct* Struct = FPostProcessSettings::StaticStruct();
+    FPostProcessSettings Loaded;
+    FStringOutputDevice Errors;
+    // Text import ports a deprecated property only with PPF_UseDeprecatedProperties (FProperty::ShouldPort); tagged loading takes it as is.
+    Struct->ImportText(TEXT("(bOverriddenNoneAssetsClear=True)"), &Loaded, nullptr, PPF_UseDeprecatedProperties, &Errors, Struct->GetName());
+    TArray<uint8> Bytes;
+    FMemoryReader Ar(Bytes);
+    Ar.SetCustomVersions(FCurrentCustomVersions::GetAll());
+    if (TestTrue(TEXT("FPostProcessSettings has a PostSerialize"), Struct->GetCppStructOps() && Struct->GetCppStructOps()->HasPostSerialize()))
+    {
+        Struct->GetCppStructOps()->PostSerialize(Ar, &Loaded);
+    }
+    TestEqual(TEXT("A13: the old bool clears every asset"), Loaded.OverriddenNoneAssetsClear, int32(EPostProcessOverriddenNoneAsset::All));
+    // Settings saved with the mask keep it.
+    FPostProcessSettings Masked;
+    Struct->ImportText(TEXT("(OverriddenNoneAssetsClear=1)"), &Masked, nullptr, PPF_None, &Errors, Struct->GetName());
+    Struct->GetCppStructOps()->PostSerialize(Ar, &Masked);
+    TestEqual(TEXT("A13: a saved mask is kept"), Masked.OverriddenNoneAssetsClear, int32(EPostProcessOverriddenNoneAsset::ColorGradingLUT));
+#if SCVIEWER_ENGINE_TONE_CURVE >= 4
+    // As an old asset arrives: tagged binary data that holds the bool under its saved name (written here with deprecated properties
+    // included, as the E1-4 review fork saved it), loaded by the current struct (SerializeItem: tagged properties, then PostSerialize).
+    {
+        FPostProcessSettings Old;
+        Old.bOverriddenNoneAssetsClear_DEPRECATED = 1;
+        TArray<uint8> Tagged;
+        FMemoryWriter Writer(Tagged);
+        FObjectAndNameAsStringProxyArchive WriterProxy(Writer, false);
+        WriterProxy.SetPortFlags(PPF_UseDeprecatedProperties);
+        const_cast<UScriptStruct*>(Struct)->SerializeItem(FStructuredArchiveFromArchive(WriterProxy).GetSlot(), &Old, nullptr);
+        FMemoryReader Reader(Tagged);
+        FObjectAndNameAsStringProxyArchive ReaderProxy(Reader, false);
+        FPostProcessSettings Asset;
+        const_cast<UScriptStruct*>(Struct)->SerializeItem(FStructuredArchiveFromArchive(ReaderProxy).GetSlot(), &Asset, nullptr);
+        TestEqual(TEXT("A13: a tagged old asset loads as a clear of every asset"), Asset.OverriddenNoneAssetsClear, int32(EPostProcessOverriddenNoneAsset::All));
+        TestFalse(TEXT("A13: the deprecated bool is consumed"), bool(Asset.bOverriddenNoneAssetsClear_DEPRECATED));
+    }
+#endif
 #endif
     return true;
 }

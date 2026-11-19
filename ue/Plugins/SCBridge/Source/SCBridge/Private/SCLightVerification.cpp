@@ -42,18 +42,23 @@ TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Poin
         }
         else if (Spot)
         {
-            // UE's cone at the clamped angles the renderer uses (GetClampedConeAngles).
+            // UE's cone at the clamped angles the renderer uses (GetClampedConeAngles), with the proxy's denominator
+            // (FSpotLightSceneProxy::InvCosConeDifference, in float, unfloored: the clamp keeps outer >= inner + 0.001 rad). Review fixes 3
+            // (Astra A16): a 1e-4 floor gave a 0.5-degree cone 0.145 on its own axis.
             const FVector2f Angles = Spot->GetClampedConeAngles();
-            const double CosOuter = FMath::Cos(double(Angles.Y)), CosInner = FMath::Cos(double(Angles.X));
+            const float CosOuter = FMath::Cos(Angles.Y), CosInner = FMath::Cos(Angles.X);
+            const float InvCosConeDifference = 1.0f / (CosInner - CosOuter);
             const double CosPoint = FVector::DotProduct(L->GetForwardVector(), (Point - Origin).GetSafeNormal());
-            Cone = FMath::Square(FMath::Clamp((CosPoint - CosOuter) / FMath::Max(1e-4, CosInner - CosOuter), 0., 1.));
+            Cone = FMath::Square(FMath::Clamp((CosPoint - double(CosOuter)) * double(InvCosConeDifference), 0., 1.));
         }
         // The projector near clip, in either shape (GetSpotLightShapeAttenuation): no light in front of the axial depth.
         if (Spot && Spot->ProjectorNearClip > 0 && Local.X < Spot->ProjectorNearClip) Cone = 0;
-        // Lumens spread over the shape's solid angle as the renderer converts them (USpotLightComponent::ComputeLightBrightness):
-        // the square frustum's 4 asin(sin^2 h), else UE's cone of the bounding half angle.
-        const double Candela = Spot && Spot->Shape == ESpotLightShape::SquareFrustum && L->IntensityUnits == ELightUnits::Lumens
-                                   ? L->Intensity / USpotLightComponent::GetSquareFrustumSolidAngle(USpotLightComponent::GetClampedSquareFrustumHalfAngle(Spot->OuterConeAngle))
+        // Lumens spread over the shape's solid angle as the renderer converts them: the component's own conversion
+        // (ComputeLightBrightness, in UE units of candela x 1e4: the square frustum's 4 asin(sin^2 h), else UE's cone of the bounding half
+        // angle, its cosine unclamped). Review fixes 3 (Astra A16): GetUnitsConversionFactor clamps the cosine at 1 - 1e-4, which
+        // understates a narrow cone (0.5 degrees: 2.6x). Other units through the unit conversion as before.
+        const double Candela = L->IntensityUnits == ELightUnits::Lumens && Bulb && Bulb->bUseInverseSquaredFalloff
+                                   ? double(L->ComputeLightBrightness()) / (100.0 * 100.0)
                                    : L->Intensity * ULocalLightComponent::GetUnitsConversionFactor(L->IntensityUnits, ELightUnits::Candelas, Spot ? Spot->GetCosHalfConeAngle() : -1.f);
         // The light's own falloff models (engine fork, WP-E1 E1-2), as the renderer evaluates them (LocalLightFalloff.ush):
         // the bulb offset law candela / (max(d, b) + c)^2 on point and spot lights, else UE's inverse square regularised as the

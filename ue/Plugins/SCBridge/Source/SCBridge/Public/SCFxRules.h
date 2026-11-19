@@ -23,10 +23,12 @@ inline double MinLoopDuration(double MaxLifetime, int32 Capacity)
 }
 
 /** The loop a looping emitter gets: the wanted one, stretched only where its live loops would not fit Capacity (an exact fit
- *  stays: E1-6 review). */
+ *  stays: E1-6 review). With a capacity of one no loop fits (a rate loop's interval overlaps the next one's while its particles
+ *  live): the wanted loop is kept and the builder reports it (review fixes 3, Astra A8; it was stretched to an infinite loop). */
 inline double LoopDuration(double Wanted, double MaxLifetime, int32 Capacity)
 {
-    return LiveLoops(MaxLifetime, Wanted) <= Capacity ? Wanted : FMath::Max(Wanted, MinLoopDuration(MaxLifetime, Capacity));
+    if (Capacity < 2 || LiveLoops(MaxLifetime, Wanted) <= Capacity) return Wanted;
+    return FMath::Max(Wanted, MinLoopDuration(MaxLifetime, Capacity));
 }
 
 /**
@@ -59,32 +61,24 @@ inline TArray<double> ClassificationStrengths(const TArray<double>& Knots, const
 /**
  * The generated FX contract version (E1-6 review): SCFxBuild writes it as the system's user parameter SC.FxContract; the runtime warns
  * about a system without it or with an older one, and the showcase package refuses to cook stale systems. 2: E1-6 (stateless spawn-rate
- * expressions, clamp-sum strength curves, owner-scale sprite sizes; no SC.SV / SC.BR / SC.Scale2 runtime parameters).
+ * expressions, clamp-sum strength curves, owner-scale sprite sizes; no SC.SV / SC.BR / SC.Scale2 runtime parameters). 3: review fixes 3
+ * (strict steps as comparison expressions, strength curves classified on both sides of a step, light colour relative to a non-black
+ * reference); systems built by version 2 lose those curves.
  */
-inline constexpr int32 FxContractVersion = 2;
+inline constexpr int32 FxContractVersion = 3;
 inline const TCHAR* FxContractParameter = TEXT("SC.FxContract");
 
 /**
- * The scale of a step's clamp term (a zero-width key interval at T): the expression evaluates in float, and (x - T) x Scale reaches 1
- * at the next float above T, so every strength above the key gets the later value and the key itself the earlier one (a strict step;
- * E1-6 review). Below 1e-30 (a step at strength 0) the scale stays representable and the step completes by 1e-30.
- */
-inline double StepScale(double T)
-{
-    const float Tf = float(T);
-    const float Next = FMath::Abs(Tf) < 1e-30f ? 1e-30f : std::nextafter(Tf, FLT_MAX);
-    return 1.0 / (double(Next) - double(Tf));
-}
-
-/**
  * A piecewise-linear curve, held constant beyond its end keys (CryEngine's splines), as the sum the builder writes with stateless
- * clamp expressions: f(x) = Base + sum_k Rise_k * clamp((x - From_k) * Scale_k, 0, 1), one term per key interval. An interval of
- * zero width (a step) is a strict step: the earlier value at the key itself (as the builder's Eval), the later one from the next
- * float above it (StepScale).
+ * expressions: f(x) = Base + sum_k Rise_k * term_k(x), one term per key interval. A ramp's term is clamp((x - From) * Scale, 0, 1)
+ * (the fork's clamp expression); a zero-width interval (a step at From) is a strict step, the fork's comparison expression
+ * x > From ? 1 : 0 (review fixes 3, Terra T5 / Astra A7: a clamp with a huge scale completed the step at 0 only by 1e-30, and a
+ * denormal x - From flushes): the earlier value at the key itself (as the builder's Eval), the later one at every float above it.
  */
 struct FClampTerm
 {
     double From = 0, Scale = 1, Rise = 0;
+    bool bStep = false;
 };
 struct FClampSum
 {
@@ -93,17 +87,121 @@ struct FClampSum
     double Eval(double X) const
     {
         double V = Base;
-        for (const FClampTerm& T : Terms) V += T.Rise * FMath::Clamp((X - T.From) * T.Scale, 0.0, 1.0);
+        for (const FClampTerm& T : Terms) V += T.Rise * (T.bStep ? (X > T.From ? 1.0 : 0.0) : FMath::Clamp((X - T.From) * T.Scale, 0.0, 1.0));
         return V;
     }
-    /** As the built stateless expression evaluates it: in float, x + (-From) then x Scale, clamped, x Rise, summed from Base. */
+    /** As the built stateless expression evaluates it: in float; a ramp x + (-From) then x Scale, clamped, x Rise; a step the
+     *  comparison x > From (FNiagaraStatelessExpressionFloatGreaterThan) x Rise; summed from Base. */
     float EvalFloat(float X) const
     {
         float V = float(Base);
-        for (const FClampTerm& T : Terms) V = V + FMath::Clamp((X + float(-T.From)) * float(T.Scale), 0.0f, 1.0f) * float(T.Rise);
+        for (const FClampTerm& T : Terms)
+            V = V + (T.bStep ? (X > float(T.From) ? 1.0f : 0.0f) : FMath::Clamp((X + float(-T.From)) * float(T.Scale), 0.0f, 1.0f)) * float(T.Rise);
         return V;
     }
 };
+/** A strength curve as the builder reads it: keys [t, v0, v1, ...] sorted by t (stable, so coincident keys keep their order). */
+using FKeys = TArray<TArray<double>>;
+
+/** A key's value of a channel; a key with fewer channels repeats its last value. */
+inline double KeyValue(const TArray<double>& Key, int32 Channel)
+{
+    return Key.IsValidIndex(Channel + 1) ? Key[Channel + 1] : Key.Last();
+}
+
+/** Piecewise linear, held at the end keys (CryEngine splines); at a time shared by coincident keys, the earlier key's value. An empty
+ *  curve is the constant 1. */
+inline double EvalKeys(const FKeys& Keys, double T, int32 Channel = 0)
+{
+    if (Keys.IsEmpty()) return 1.0;
+    if (T <= Keys[0][0]) return KeyValue(Keys[0], Channel);
+    for (int32 i = 1; i < Keys.Num(); ++i)
+        if (T <= Keys[i][0])
+        {
+            const double Span = Keys[i][0] - Keys[i - 1][0];
+            const double A = Span > 0 ? (T - Keys[i - 1][0]) / Span : 1.0;
+            return FMath::Lerp(KeyValue(Keys[i - 1], Channel), KeyValue(Keys[i], Channel), A);
+        }
+    return KeyValue(Keys.Last(), Channel);
+}
+
+/**
+ * The values a strength curve's channel (x Scale) is classified by (does it vary, is it zero everywhere): the curve at the
+ * ClassificationStrengths and each key's own value inside [0, 1]. Review fixes 3 (Terra T3 / Astra A6): at a time shared by
+ * coincident keys Eval gives the earlier key, so (0,0) (0.5,0) (0.5,1) (1,0) sampled at times only is 0 everywhere though it is
+ * positive just above 0.5; the keys' own values take both sides of the step.
+ */
+inline TArray<double> ClassificationValues(const FKeys& Keys, const TArray<double>& Knots, int32 Channel = 0, double Scale = 1.0)
+{
+    TArray<double> KeyTimes;
+    for (const TArray<double>& K : Keys) KeyTimes.Add(K[0]);
+    TArray<double> Y;
+    for (double S : ClassificationStrengths(Knots, KeyTimes)) Y.Add(EvalKeys(Keys, S, Channel) * Scale);
+    for (const TArray<double>& K : Keys)
+        if (K[0] >= 0.0 && K[0] <= 1.0) Y.Add(KeyValue(K, Channel) * Scale);
+    return Y;
+}
+
+/** A colour key's own RGB (times the base colour). */
+inline FLinearColor KeyColour(const TArray<double>& Key, const FLinearColor& Base)
+{
+    return FLinearColor(Base.R * float(KeyValue(Key, 0)), Base.G * float(KeyValue(Key, 1)), Base.B * float(KeyValue(Key, 2)), 1.f);
+}
+
+/**
+ * The colour a light's strength curve is relative to: its strength, RGB (the base colour times the curve's channels) and luminance.
+ * Strength 1 where the colour is not black there; else (review fixes 3, Terra T4 / Astra A6: a colour bright at 0.5 and black at 1
+ * made the whole relative luminance curve 0) the brightest of the curve at the classification strengths and the keys' own colours
+ * inside [0, 1]. Black everywhere: luminance 0 (the light is invisible).
+ */
+struct FLightColourReference
+{
+    double Strength = 1;
+    FLinearColor Rgb = FLinearColor::Black;
+    double Luminance = 0;
+};
+inline FLightColourReference LightColourReference(const FKeys& ColourKeys, const FLinearColor& Base, const TArray<double>& Knots)
+{
+    const auto At = [&](double S) {
+        return FLinearColor(Base.R * float(EvalKeys(ColourKeys, S, 0)), Base.G * float(EvalKeys(ColourKeys, S, 1)), Base.B * float(EvalKeys(ColourKeys, S, 2)), 1.f);
+    };
+    FLightColourReference R;
+    R.Rgb = At(1.0);
+    R.Luminance = R.Rgb.GetLuminance();
+    if (R.Luminance > 0) return R;
+    const auto Consider = [&R](double S, const FLinearColor& C) {
+        const double L = C.GetLuminance();
+        if (L > R.Luminance)
+        {
+            R.Strength = S;
+            R.Rgb = C;
+            R.Luminance = L;
+        }
+    };
+    TArray<double> KeyTimes;
+    for (const TArray<double>& K : ColourKeys) KeyTimes.Add(K[0]);
+    for (double S : ClassificationStrengths(Knots, KeyTimes)) Consider(S, At(S));
+    for (const TArray<double>& K : ColourKeys)
+        if (K[0] >= 0.0 && K[0] <= 1.0) Consider(K[0], KeyColour(K, Base));
+    return R;
+}
+
+/** The colour curve's luminance relative to the reference's, one key per colour key, each from that key's own channels (review fixes 3:
+ *  coincident keys keep their step; Eval at the key's time gave both the earlier key's colour). */
+inline TArray<FVector2D> RelativeLuminanceKeys(const FKeys& ColourKeys, const FLinearColor& Base, double ReferenceLuminance)
+{
+    TArray<FVector2D> Out;
+    for (const TArray<double>& K : ColourKeys)
+        Out.Add(FVector2D(K[0], ReferenceLuminance > 0 ? KeyColour(K, Base).GetLuminance() / ReferenceLuminance : 0.0));
+    return Out;
+}
+
+/** Whether a looping spawn info's live loops fit Capacity spawn infos. */
+inline bool LoopsFit(double MaxLifetime, double LoopDuration, int32 Capacity)
+{
+    return LiveLoops(MaxLifetime, LoopDuration) <= Capacity;
+}
+
 /** Keys (t, v) sorted by t; an empty list is the constant 1 (the builder's "no curve"). */
 inline FClampSum ClampSum(const TArray<FVector2D>& Keys)
 {
@@ -118,7 +216,7 @@ inline FClampSum ClampSum(const TArray<FVector2D>& Keys)
     {
         const double Span = Keys[k].X - Keys[k - 1].X, Rise = Keys[k].Y - Keys[k - 1].Y;
         if (Rise == 0) continue;
-        S.Terms.Add(Span > 0 ? FClampTerm{Keys[k - 1].X, 1.0 / Span, Rise} : FClampTerm{double(float(Keys[k].X)), StepScale(Keys[k].X), Rise});
+        S.Terms.Add(Span > 0 ? FClampTerm{Keys[k - 1].X, 1.0 / Span, Rise, false} : FClampTerm{double(float(Keys[k].X)), 0.0, Rise, true});
     }
     return S;
 }

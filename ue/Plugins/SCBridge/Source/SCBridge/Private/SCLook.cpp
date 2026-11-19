@@ -252,12 +252,14 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookSSDO(
         USCViewerSettings::Get()->bStarEngineSSDO = bGame;
         const FSCSSDOSettings S = FSCSSDOSettings::From(FSCStarEngine::Get());
         int32 Changed = 0;
-        for (TActorIterator<APostProcessVolume> It(World); It; ++It)
-            if (It->Tags.Contains(SCViewerExposure::VolumeTag))
-            {
-                S.Apply(It->Settings, bGame);
-                ++Changed;
-            }
+        // E1-7 review: a console dispatch without a world (TActorIterator asserts on null) only changes the setting future volumes take.
+        if (World)
+            for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+                if (It->Tags.Contains(SCViewerExposure::VolumeTag))
+                {
+                    S.Apply(It->Settings, bGame);
+                    ++Changed;
+                }
         UE_LOG(LogTemp, Display, TEXT("LOOK ssdo=%s supported=%d radius=%.1f strength=%.2f direct=%.2f ambient=%.2f reflection=%.2f volumes=%d"),
                bGame && S.bSupported ? TEXT("game") : TEXT("off"), S.bSupported, S.Radius, S.Strength, S.DirectAmount, S.AmbientAmount,
                S.ReflectionAmount, Changed);

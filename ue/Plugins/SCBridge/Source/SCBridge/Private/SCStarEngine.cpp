@@ -78,7 +78,11 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Out.TonemappingCurveToe = Value(TEXT("exe_cvars"), TEXT("r_HDRTonemappingCurveToe"));
     // The compensation anchors carry their scene EV in the cvar name (r_ExposureCompensationEV<n>).
     Out.bSSDO = Value(TEXT("exe_cvars"), TEXT("r_ssdo")) != 0;
-    Out.SSDOQuality = int32(Value(TEXT("exe_cvars"), TEXT("r_ssdoQuality")));
+    // E1-7 review: narrowed only when integral and in int range (0.5 had become quality 0, the supported one); else -1, refused below.
+    const double SSDOQualityValue = Value(TEXT("exe_cvars"), TEXT("r_ssdoQuality"));
+    const bool bSSDOQualityIntegral = FMath::IsFinite(SSDOQualityValue) && SSDOQualityValue == FMath::RoundToDouble(SSDOQualityValue) &&
+                                      FMath::Abs(SSDOQualityValue) <= double(MAX_int32);
+    Out.SSDOQuality = bSSDOQualityIntegral ? int32(SSDOQualityValue) : -1;
     Out.SSDORadiusM = Value(TEXT("exe_cvars"), TEXT("r_ssdoRadius"));
     Out.SSDOStrength = Value(TEXT("exe_cvars"), TEXT("r_ssdoStrength"));
     Out.SSDOAmountDirect = Value(TEXT("exe_cvars"), TEXT("r_ssdoAmountDirect"));
@@ -123,6 +127,7 @@ bool FSCStarEngine::Load(const FString& Path, FSCStarEngine& Out, FString& Error
     Require(Out.MeterMaxCompensationPerBlend >= 0 && Out.MeterMinCompensationPerBlend <= 0,
             TEXT("meterMaxCompensationPerBlend >= 0 >= meterMinCompensationPerBlend (a clamp around the reflected meter)"));
     Require(Out.IncidentMiddleGrey > 0, TEXT("incidentMiddleGray > 0"));
+    Require(bSSDOQualityIntegral, TEXT("r_ssdoQuality is an integer"));
     Require(Out.SSDORadiusM > 0, TEXT("r_ssdoRadius > 0"));
     Require(Out.SSDOStrength >= 0, TEXT("r_ssdoStrength >= 0"));
     Require(Out.SSDOAmountDirect >= 0 && Out.SSDOAmountAmbient >= 0 && Out.SSDOAmountReflection >= 0, TEXT("r_ssdoAmount* >= 0"));

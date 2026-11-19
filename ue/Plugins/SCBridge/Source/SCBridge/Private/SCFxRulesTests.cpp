@@ -141,4 +141,60 @@ bool FSCFxReviewRulesTest::RunTest(const FString&)
     TestFalse(TEXT("keys outside [0, 1] are not strengths"), SCFxRules::ClassificationStrengths({0.5}, {-1.0, 2.0}).Contains(2.0));
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFxReviewRules3Test, "SCBridge.Fx.ReviewRules3",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFxReviewRules3Test::RunTest(const FString&)
+{
+    using SCFxRules::FKeys;
+    // Terra T3 / Astra A6: coincident keys. Evaluated at the key times only, (0,0), (0.5,0), (0.5,1), (1,0) is 0 everywhere it is
+    // sampled (Eval returns the earlier key at 0.5) though it is positive just above 0.5; classification takes both sides of a step.
+    {
+        const FKeys Step = {{0.0, 0.0}, {0.5, 0.0}, {0.5, 1.0}, {1.0, 0.0}};
+        const TArray<double> Y = SCFxRules::ClassificationValues(Step, {0.0, 1.0});
+        TestTrue(TEXT("T3: a step up at 0.5 is seen (not all zero)"), Y.ContainsByPredicate([](double V) { return V > 0; }));
+        const FKeys Alpha = {{0.0, 0.0}, {0.25, 0.0}, {0.25, 1.0}, {0.4, 0.0}, {1.0, 0.0}};
+        const TArray<double> YA = SCFxRules::ClassificationValues(Alpha, {0.0, 0.5, 1.0});
+        TestTrue(TEXT("A6: alpha keys (0,0) (.25,0) (.25,1) (.4,0) (1,0) are seen"), YA.ContainsByPredicate([](double V) { return V > 0; }));
+    }
+    // A6: the light's luminance keys come from each key's own channels: the colour steps from black to white at 0.5.
+    {
+        const FKeys Colour = {{0.0, 0.0, 0.0, 0.0}, {0.5, 0.0, 0.0, 0.0}, {0.5, 1.0, 1.0, 1.0}, {1.0, 1.0, 1.0, 1.0}};
+        const TArray<FVector2D> L = SCFxRules::RelativeLuminanceKeys(Colour, FLinearColor::White, 1.0);
+        TestEqual(TEXT("A6: one luminance key per colour key"), L.Num(), 4);
+        if (L.Num() == 4)
+        {
+            TestEqual(TEXT("A6: the step's lower key keeps its black"), L[1].Y, 0.0, 1e-6);
+            TestEqual(TEXT("A6: the step's upper key keeps its white"), L[2].Y, 1.0, 1e-6);
+        }
+    }
+    // Terra T4 / A6: a colour bright at strength 0.5 and black at 1 still lights: the reference is a non-black colour of the curve.
+    {
+        const FKeys Colour = {{0.0, 0.0, 0.0, 0.0}, {0.5, 1.0, 0.5, 0.25}, {1.0, 0.0, 0.0, 0.0}};
+        const SCFxRules::FLightColourReference R = SCFxRules::LightColourReference(Colour, FLinearColor::White, {0.0, 1.0});
+        TestTrue(TEXT("T4: the reference colour is not black"), R.Luminance > 0);
+        TestEqual(TEXT("T4: the reference is the brightest strength, 0.5"), R.Strength, 0.5, 1e-9);
+        const TArray<FVector2D> L = SCFxRules::RelativeLuminanceKeys(Colour, FLinearColor::White, R.Luminance);
+        double Peak = 0;
+        for (const FVector2D& K : L) Peak = FMath::Max(Peak, K.Y);
+        TestEqual(TEXT("T4: relative luminance 1 at the reference"), Peak, 1.0, 1e-6);
+        const FKeys White = {{0.0, 1.0, 1.0, 1.0}};
+        TestEqual(TEXT("T4: a colour lit at strength 1 keeps strength 1 as its reference"), SCFxRules::LightColourReference(White, FLinearColor::White, {0.0, 1.0}).Strength, 1.0);
+    }
+    // Terra T5 / Astra A7: a step at strength 0 is strict at the next float above 0 (a denormal) and at Astra's 1e-35.
+    for (const float T : {0.0f, 0.25f, 0.5f})
+    {
+        const SCFxRules::FClampSum S = SCFxRules::ClampSum({FVector2D(T, 0.25), FVector2D(T, 0.75), FVector2D(1.0, 0.75)});
+        const float Next = std::nextafter(T, FLT_MAX);
+        TestEqual(FString::Printf(TEXT("T5: step at %g: the earlier value at the key"), T), S.EvalFloat(T), 0.25f, 1e-7f);
+        TestEqual(FString::Printf(TEXT("T5: step at %g: the later value at the next float %g"), T, Next), S.EvalFloat(Next), 0.75f, 1e-7f);
+        TestEqual(FString::Printf(TEXT("T5: step at %g: exact in double at the next float"), T), S.Eval(Next), 0.75, 1e-12);
+        if (T == 0.0f) TestEqual(TEXT("A7: step at 0: the later value at 1e-35"), S.EvalFloat(1e-35f), 0.75f, 1e-7f);
+    }
+    // Astra A8: a capacity of one is honoured (a loop that cannot fit is reported, not stretched to an infinite loop).
+    TestEqual(TEXT("A8: capacity 1 keeps the wanted loop"), SCFxRules::LoopDuration(0.25, 1.0, 1), 0.25);
+    TestFalse(TEXT("A8: capacity 1 cannot hold a rate loop's overlapping intervals"), SCFxRules::LoopsFit(1.0, 0.25, 1));
+    TestTrue(TEXT("A8: capacity 2 still stretches to fit"), SCFxRules::LoopsFit(1.0, SCFxRules::LoopDuration(0.25, 1.0, 2), 2));
+    return true;
+}
 #endif

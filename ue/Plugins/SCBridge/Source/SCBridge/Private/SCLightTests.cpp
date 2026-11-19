@@ -675,8 +675,17 @@ bool FSCLightProbeFollowsRenderer::RunTest(const FString&)
     auto* Square = Cast<USpotLightComponent>(Make(USpotLightComponent::StaticClass(), FVector(10000, 0, 0)));
     Square->Shape = ESpotLightShape::SquareFrustum; Square->OuterConeAngle = 45.f;
     Square->IntensityUnits = ELightUnits::Lumens; Square->Intensity = 1000.f;
-    ON_SCOPE_EXIT { Point->UnregisterComponent(); Cone->UnregisterComponent(); Square->UnregisterComponent(); World->DestroyWorld(false); };
+    // Astra fixes-2 review 16: a narrow cone (inner 0, outer 0.5 degrees) in lumens. On its axis the proxy's cone term is 1 (its
+    // denominator is the clamped angles' cosine difference, unfloored), and its candela are the component's own conversion
+    // (ComputeLightBrightness: lumens over 2 pi (1 - cos), no clamp of the cosine).
+    auto* Narrow = Cast<USpotLightComponent>(Make(USpotLightComponent::StaticClass(), FVector(15000, 0, 0)));
+    Narrow->InnerConeAngle = 0.f; Narrow->OuterConeAngle = 0.5f;
+    Narrow->IntensityUnits = ELightUnits::Lumens; Narrow->Intensity = 1000.f;
+    ON_SCOPE_EXIT { Point->UnregisterComponent(); Cone->UnregisterComponent(); Square->UnregisterComponent(); Narrow->UnregisterComponent(); World->DestroyWorld(false); };
     const auto Window = [](double D) { return FMath::Square(1.0 - FMath::Square(FMath::Square(D / 1000.0))); };
+    const double NarrowCandela = 1000.0 / (2.0 * UE_DOUBLE_PI * (1.0 - double(Narrow->GetCosHalfConeAngle())));
+    TestEqual(TEXT("narrow cone in lumens, on its axis: cone term 1, the component's lumens conversion"), ProbeLux(World, FVector(15100, 0, 0)),
+              NarrowCandela * 1e4 / (1e4 + 1) * Window(100), NarrowCandela * 1e-3);
     TestEqual(TEXT("point at 1 cm: 100 cd x 1e4 / (1 + 1)"), ProbeLux(World, FVector(1, 0, 0)), 100.0 * 1e4 / 2.0 * Window(1), 0.1);
     TestEqual(TEXT("cone in front of its near clip: no light"), ProbeLux(World, FVector(5020, 0, 0)), 0.0, 1e-6);
     TestEqual(TEXT("cone behind its near clip: lit"), ProbeLux(World, FVector(5100, 0, 0)), 100.0 * 1e4 / (1e4 + 1) * Window(100), 0.1);
