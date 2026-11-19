@@ -347,6 +347,10 @@ void Screen(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
     if (D.bTwoSided) D.Warnings.Add(TEXT("two-sided DisplayScreen: M_SC_Screen is single-sided"));
     SurfaceGloss(D, Sub, A);
     Emission(D, Sub, A);
+    // The emission is the bound image x the glow: an unbound screen (black image) emits nothing, and says so in its
+    // strength, which the emitter tools read (sc.Emissive.Lights / Report). FindScreen restores it with the image.
+    D.ScreenGlow = D.Scalars.FindRef(TEXT("EmissiveStrength"));
+    D.Scalars.Add(TEXT("EmissiveStrength"), 0.f);
 }
 bool IsWear(const FObj& Layer) { return Str(Layer, TEXT("name")).StartsWith(TEXT("Wear"), ESearchCase::IgnoreCase); }
 /** GlassPBR, the game's glassLib.cfib GlassShared (ue/verification/WP-U3b.md §14). The glass is a clear dielectric
@@ -644,8 +648,18 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     D.bTwoSided = bDecal; // v1: mtl.rs is_double_sided
     if (AC) AC->TryGetBoolField(TEXT("two_sided"), D.bTwoSided); // v2: authored MtlFlags two-sided
     if (D.Master == ESCMaster::Glass || D.Master == ESCMaster::EmissiveUnlit) D.Blend = ESCBlend::Translucent;
-    // A screen is opaque whatever its forward flag: the forward pass is how CryEngine draws the face, not coverage.
-    if (D.Master == ESCMaster::Screen) D.Blend = ESCBlend::Opaque;
+    // A screen is opaque whatever its forward flag (the forward pass is how CryEngine draws the face, not coverage),
+    // unless its data asks for partial coverage: authored opacity below 1 or a blended alpha mode. Then it is a lit
+    // translucent screen (M_SC_Screen_Translucent, coverage = Opacity) in the non-Nanite split, like any blended surface.
+    if (D.Master == ESCMaster::Screen)
+    {
+        const bool bPartial = In.bBlended || (Opacity < 1.f && AlphaTest <= 0.f);
+        D.Blend = bPartial ? ESCBlend::Translucent : ESCBlend::Opaque;
+        if (bPartial) D.Scalars.Add(TEXT("Opacity"), Opacity);
+        // TODO(WP-I1): an alpha-tested render-to-texture screen has no masked screen master (what the game tests is the
+        // run-time image's alpha); none of the C2, hangar or Ironclad screens is alpha-tested. Drawn opaque, reported.
+        if (AlphaTest > 0.f) D.Warnings.Add(TEXT("alpha-tested DisplayScreen drawn without its mask (no masked screen master)"));
+    }
     const bool bOpaqueFamily = D.Master == ESCMaster::Illum || D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered || D.Master == ESCMaster::Fallback;
     // Decal surfaces (MeshDecal, %DECAL sheets) modify the host through the DBuffer; other blended surfaces of
     // the opaque families (Opacity < 1, alpha_config blend) are lit translucent surfaces.

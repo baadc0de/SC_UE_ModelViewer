@@ -351,10 +351,165 @@ It raised three items, all outside I1-1's material and binding scope:
 
 - I1-2 aspect: door images stretched onto portrait and square faces;
 - Q1–Q3;
-- the `decomposed-export-contract.md` consumer note (WP-D1, vendor submodule);
+- the `decomposed-export-contract.md` consumer note (WP-D1, vendor submodule): written in the review fixes (below);
 - the 14 extinguisher cabinets count as bound in `SCREEN_BIND`, but none of their faces appears in the `sc.Screens` list.
-  Not inspected (`sc.Screens` scans only visible static-mesh sections with area);
-- `sc.Emissive.Report` counts unbound screens at their nominal glow, because it does not sample `ScreenImage`.
+  Resolved in the review fixes: their screen slot has no triangles, and only drawn slots count now;
+- `sc.Emissive.Report` counts unbound screens at their nominal glow, because it does not sample `ScreenImage`. Resolved
+  in the review fixes: an unbound screen's strength is 0.
+
+## Review fixes (I1-1)
+
+Reviews of 3e3b85d: `out/panels/review/terra-review.md` (T1–T4) and `astra-code-review.md` (A1–A8), triaged in
+`out/panels/review/fix-brief.md`. The fix set was reviewed again (`out/panels/review2/`, Terra and Astra); its high and
+medium findings were fixed once (below). Exporter changes are on the submodule branch `scviewer/ui-binding-role`
+(commits `672cb046`, `011f35f3`, `b658c230`, `416f5d6d`); the cache format is 30.
+
+**Classification (T1/A1), from data.** The exporter now writes three facts on every `ui_bindings[]` entry
+(`decomposed-export-contract.md`):
+
+- `source_item_type`: the UI owner's `SAttachableComponentParams.AttachDef.Type`;
+- `source_owner_resolved`: whether that owner's record was found;
+- `source_kiosk_interaction`: whether the owner has `KioskInteractionEntityComponentParams`, i.e. the player operates its UI.
+
+A binding is an operating panel's when it is `physical`, its owner is resolved, and the owner is not a `Display` item or
+is an operated one (`FSCUiBinding::IsOperatingPanel`). Who carries the binding no longer matters.
+
+| Owner (LIVE 4.10.2) | Item type | Kiosk component | Result |
+|---|---|---|---|
+| door and light panels (`ControlPanel_Screen_*`) | `ControlPanel` | yes | image |
+| transit panels (`TransitInteractionUIPanel_*`) | none (not attachable) | yes | image |
+| ship-selector and freight kiosks | `Display` / `UNDEFINED` | yes | image |
+| fire-extinguisher cabinets and extinguishers | `Usable`, … | — | image |
+| `Vehicle_Screen_MFD` / `_Physical`, HUD projector, radar displays | `Display` | no | dark |
+| `SCItemDisplayScreen` (signage, including the Ironclad's Cutlass countermeasures HUD canvas) | `Display` | no | dark |
+| an inline canvas on an entity without a class | unknown (`source_owner_resolved` false) | — | dark |
+
+A geometry-less door-control child's binding carried by its parent stays a panel. A self-owned cockpit screen stays
+dark. An export without these fields cannot be classified: its screens stay dark and the import warns to re-export.
+
+**Per face (T2/A2, T3).** `FSCSceneInstance::ScreenSlotImage` decides each screen material slot:
+
+- The importer records which rig nodes draw each screen slot (`DisplayScreen` submaterial), separately for the skinned
+  part and the rigid parts.
+- A binding whose `helper_name` names a node of the mesh owns that node's subtree (the nearest helper wins).
+- The entity's own other bindings own the faces no helper claims. A binding propagated from another entity whose helper
+  is not on the mesh claims none.
+- One image over all faces of the slot binds it. A face nobody owns, an excluded binding, or faces with different
+  outcomes sharing the slot leave it dark (`ambiguous`).
+
+Two panel images on one entity land on their own faces; a shared slot that cannot be told apart stays dark.
+
+**Other items.**
+
+- **A4.** A `DisplayScreen` with authored opacity below 1 or a blended alpha mode takes the new
+  `M_SC_Screen_Translucent` (lit translucent, coverage = `Opacity`, non-Nanite split); the mesh split agrees.
+  A GLB-only `BLEND` on a screen its sidecar describes as opaque no longer puts it in the split. An alpha-tested RTT
+  screen is drawn opaque with a warning (none exists in the C2, hangar or Ironclad exports).
+- **A5.** Only screen slots with triangles in the drawn static variant or skeletal LOD are bound and counted. New
+  `SCREEN_BIND` fields: `slots_bound`, `slots_dark`, `ambiguous` (per slot), `unclassified`.
+- **A8.** An unbound screen's `EmissiveStrength` is 0; the image-bound instance takes the authored glow
+  (`FSCMaterialDesc::ScreenGlow`). The emitter tools skip sections at 0 nits at any threshold.
+- **T4/A6.** `sc.FP.Pads` passes a pad only when the view ray's first visibility hit is under the pad's anchor and
+  `FindInteraction` from that ray returns its door. `sc.FP.Pads negative` repeats this with the pads' collision off (the
+  full collision state is restored); `FP_PADS_NEGATIVE ok=1` needs no pad to pass and at least one door still in
+  fallback range.
+- **A7.** `sc.Screens` reads a resident LOD held by a reference while it reads it, checks the CPU buffers, the section's
+  index range and indices against the position and UV buffers, and lists `geometry=unavailable` otherwise.
+- **A3.** Cooked levels carry `USCCookLibrary::FormatVersion` (2) in `<level>.cookformat`, written only after a
+  successful cook.
+  - The cook scripts report an older or missing stamp as STALE, and refuse an export whose `ui_bindings` lack the new
+    fields.
+  - `package_showcase.ps1` refuses stale levels; the workspace's `DRAK_Golem` and `hightech_a_hangar_smltop_001` need a
+    recook.
+  - Pooled meshes are keyed by their Nanite build and section topology.
+
+**Tests.** The new `SCBridge.Screens.PerFaceAssembly` imports a synthetic package through assembly. It covers a mixed
+panel/MFD child, a door control propagated to its host, a self-owned cockpit screen, two images on one entity, a
+propagated binding whose helper is missing, a 0.6 overlay in the translucent split, and an unused screen slot.
+
+- With the I1-1 rule (one image on every screen slot) the test failed on 9 checks.
+- `ScreenFamily` covers A4 and A8. `UiBindings` covers the rule cases, including the Ironclad HUD placement, a kiosk, a
+  transit panel, an unresolved owner and an older export.
+- Rust: `ui_binding_json_carries_source_item_type` and the live `ui_bindings_carry_the_source_item_type`. The latter
+  failed before the inline-canvas path set the type, and before the kiosk field existed.
+
+| | SCBridge tests | Pass | Failures |
+|---|---|---|---|
+| before | 161 | 157 | the 4 known |
+| after | 162 | 158 | the 4 known (`FolderTarImport`, `KitRigAndWeapons`, `FamilyMapping`, `SkeletalCollision`) |
+
+`starbreaker-3d --lib`: 949 passed, 4 ignored. `create_materials.py` printed `WP-U2 MATERIALS_OK`; only the new
+`M_SC_Screen_Translucent` asset was kept (every other regenerated asset was restored from git, `M_SC_Glass` included).
+
+**Runs** (C2 in `hangar_xltop_001`, port 8771; `out/panels/v2/report.txt`, first iteration in `v2/iter1/`):
+
+| Check | I1-1 | Now | Why |
+|---|---|---|---|
+| C2 `SCREEN_BIND` | 78 / 4 images / 11 skipped | `instances=64 images=3 panel_images=4 skipped_mfd=11 slots_bound=64 slots_dark=17 ambiguous=0` | the 14 extinguisher cabinets drop out: their `DisplayScreen` slot 3 has no triangles (A5), so the cabinet image is decoded but bound nowhere |
+| Hangar `SCREEN_BIND` | 22 / 5 | `instances=22 images=5 skipped_mfd=0 slots_bound=22 slots_dark=28` | unchanged; the 8 ship-selector kiosks are `Display` items with the kiosk component |
+| `DOOR_LINKS` | 35 / 8 | 35 / 8 | |
+| Faces | 133 | 133 (same per-mesh counts and images) | |
+| `sc.FP.Pads` | 33 / 33 routable resolved (any ray) | `resolved=28 hittable=28 no_door=2 fallback_only=5` | the strict check finds 5 pads that geometry covers (below) |
+| `sc.FP.Pads negative` | — | `resolved=0 hittable=0 fallback_only=28`, `ok=1` | the old check would have passed 28 pads without collision |
+
+The 5 pads that are not hittable resolve their door only through the `NearestDoor` fallback. In each, the first hit
+is another mesh in front of the pad:
+
+- the two escape-pod `screen_1x1` pads: `CRUS_Starlifter_Cor_Cyl_Bulkhead_A`, 21.8 cm in;
+- a wall pad: `Top_Wall_DoorFrame_2m`, 7.4 cm;
+- the other wall pad: `Top_Wall_Addon_Unit_A_2m`, 48 cm;
+- the lift platform's gate: `Hold_Wall_lighed_0_5m001`.
+
+This is placement or geometry, the same class as the I1-1 findings on the escape-pod screen and the medical drop-off
+panel.
+
+**Ironclad** (`-SCLoad=DRAK_Ironclad`, first fix iteration; `out/panels/v2/ironclad/`):
+
+- `SCREEN_BIND instances=172 images=5 skipped_mfd=78 slots_bound=184 slots_dark=130`, `DOOR_LINKS panels=107`;
+- every `ui_screen_RTT_4x3_a` face, including the command-module countermeasures HUD, is dark glass;
+- the 0.6 `Flash` faces (`ui_screen_4x3_a`, `ui_screen_9x16_a`) draw with `M_SC_Screen_Translucent`;
+- the DRAK door pads show `I_Door_Small_DRAK`.
+
+The later fixes do not change these owners' classification: `SCItemDisplayScreen` has no kiosk component, which the
+live Rust test checks.
+
+**Astra** (first iteration's 16 shots, `out/panels/v2/astra-visual.md`):
+
+- 10 pass. Door, wall, bulkhead, hump and engineering pads and the light panel read as lit in-game controls without
+  clipping or bloom; the C2 lift buttons, the copilot MFD and the inventory kiosk are clean dark glass.
+- The 4 fails and 1 partial are the I1-1 open items, unchanged by this fix (the `bridge_button` shot is identical to
+  I1-1's):
+  - the bridge button seen from behind its strut;
+  - the bed-light panel's image sideways on its face (I1-2 layout);
+  - the escape-pod `screen_1x1` overlap;
+  - the medical drop-off exterior panel covered by its door frame;
+  - the medical interior layout (I1-2).
+- The MFD context shot was obscured (unverified).
+
+**Review of the fix set** (`out/panels/review2/terra-review.md`, `astra-code-review.md`). Fixed:
+
+- unresolved owners treated as panels (H; `source_owner_resolved`);
+- a propagated binding with a missing helper painting other faces (H);
+- the 8 ship-selector kiosks going dark under a blanket `Display` rule (H; `source_kiosk_interaction`);
+- a stale export cooking with a current stamp, and a stale stamp beside a failed cook (H);
+- skinned ownership including rigid triangles (M);
+- a GLB-only `BLEND` screen in the split with the opaque master (M);
+- `sc.Screens` reading an LOD without holding it (M), and indices checked against one buffer only;
+- older packages going dark silently (M; the import warns);
+- `sc.FP.Pads negative` leaving a Custom profile and passing with nothing measured (M);
+- `sc.Emissive.Lights` with `MinNits 0` lighting unbound screens (M);
+- the pool key reusing a Nanite mesh for an all-translucent build (M).
+
+**Low or open:**
+
+- No assembly fixture for a hybrid (skinned and rigid) rig, nor for retained-asset reassembly. Skinned screen faces
+  are owned by their GLB mesh node, not by the joints that skin them.
+- Alpha-tested RTT screens have no masked master (warned; no live case).
+- The GLB-only `BLEND` rule is not exercised through a GLB fixture; `ScreenFamily` sets `bBlended` directly.
+- The cook-script stamp and stale-export checks were not run against a real cook (the `package_showcase.ps1` check was
+  dry-run: `DRAK_Golem` is stale).
+- The 5 non-hittable C2 pads (placement or geometry).
+- The I1-1 items above: escape-pod placement, the medical drop-off door frame, I1-2 aspect.
 
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 

@@ -541,15 +541,37 @@ with `scripts/build_ffi.sh` after exporter changes.
 A panel's display face is the game's `DisplayScreen` material with a virtual `$RenderToTexture` slot. The importer
 draws it with `M_SC_Screen`: an opaque Nanite surface of dark glass (base colour from the authored `BackColour`,
 F0 from `Specular` with the look's glass reflectance, gloss from `Shininess`), whose emission is the panel's image ×
-the authored `Glow` (the game's glow rule). The image is the exporter's render of the panel's default UI state
-(`ui_bindings[].generated_image_path`, already in the package). It is bound to the screen slots of door, lift and light
-panels and terminals (`physical` bindings an entity carries for itself; `FSCSceneInstance::PanelImage`), with one
-material instance per (material, submaterial, image): every C2 door pad shares one. MFD, radar and HUD bindings
-(`mfd` / `radar`, or a screen entity mounted on a dashboard or seat) are left unbound by the owner's decision: those
-screens are the viewer's own UI later, and show as clean dark glass. The HUD projector glass (`UIPlane`) still draws
-nothing. The import logs `SCREEN_BIND instances=<n> images=<m> panel_images=<k> skipped_mfd=<s> ambiguous=<a>`.
-`sc.Screens` lists every screen face with the image it shows; `sc.Screens <index> [cm]` puts the (fly) camera in front of
-one and logs the first surface on the ray to it, so a screen covered by other geometry shows up. Panels stay hittable for the door-pad interaction (`sc.FP.Pads`). Known gap: the exporter renders door panels at 16:9,
+the authored `Glow` (the game's glow rule). A face whose data asks for partial coverage (authored opacity below 1 or a
+blended alpha mode) takes `M_SC_Screen_Translucent` (coverage = opacity, in the non-Nanite split). The image is the
+exporter's render of the panel's default UI state (`ui_bindings[].generated_image_path`, in the package).
+
+Which face shows which image is decided per binding and per face, from data only:
+
+- **Role.** A binding is an operating panel's when it is `physical`, its owner was resolved, and the owner is not a
+  display item or is one the player operates. The exporter writes (cache format 30) `source_item_type` (the UI owner's
+  `AttachDef.Type`), `source_owner_resolved` and `source_kiosk_interaction` (the owner has
+  `KioskInteractionEntityComponentParams`). Door and light panels (`ControlPanel`), usables, transit panels (no item
+  type) and kiosks (an operated `Display`) are panels; vehicle MFDs and physical screens, HUD projectors, radar displays
+  and signage screens (a `Display` only shown) are not, whoever carries the binding. Those are left unbound by the owner's
+  decision (the viewer's own UI later) and show as clean dark glass, as do screens off by default, unresolved owners and
+  bindings of an older export (the import then warns to re-export).
+- **Face.** A binding whose `helper_name` names a node of the mesh owns that node's subtree; the entity's other bindings
+  own the faces no helper claims, and a binding propagated from another entity whose helper is not on the mesh claims none
+  (`FSCSceneInstance::ScreenSlotImage`). Per material slot, using the nodes that draw its
+  triangles in the drawn variant or LOD: one image for all of them binds it; a face nobody owns, or faces of different
+  outcomes sharing the slot, leave it dark. An unbound screen emits nothing (its strength is 0, so the emitter tools do not
+  light it either).
+- One material instance per (material, submaterial, image): every C2 door pad shares one.
+
+The import logs `SCREEN_BIND instances=<n> images=<m> panel_images=<k> skipped_mfd=<s> slots_bound=<b> slots_dark=<d>
+ambiguous=<a> unclassified=<u>` (only slots with triangles count). The HUD projector glass (`UIPlane`) still draws nothing.
+`sc.Screens` lists every screen face with the image it shows (a face whose CPU mesh copy a cook dropped is listed as
+`geometry=unavailable`); `sc.Screens <index> [cm]` puts the (fly) camera in front of one and logs the first surface on the
+ray to it, so a screen covered by other geometry shows up. `sc.FP.Pads` checks that each door pad is hittable (the first
+visibility hit is the pad itself) and resolves to its door; `sc.FP.Pads negative` repeats it with the pads' collision off
+and must find none (`FP_PADS_NEGATIVE ok=1`). Cooked levels are stamped with `USCCookLibrary::FormatVersion`; an older
+cook is refused by `package_showcase.ps1` and reported STALE by the cook scripts, which also refuse to cook an export whose
+`ui_bindings` lack the screen-role fields; pooled meshes are keyed by their Nanite build and section topology. Known gap: the exporter renders door panels at 16:9,
 and the image is stretched onto square and portrait faces until slice I1-2 (`docs/work-packages/WP-I1-door-and-lift-panels.md`).
 
 ### Scripted first person (GPU evidence, reused by WP-P2)

@@ -10,7 +10,8 @@ class UMaterialInstanceDynamic;
 class UTexture2D;
 
 /** One master per shader family group; names match ue/scripts/create_materials.py. Screen: a DisplayScreen face whose
- *  image is a render target ($RenderToTexture), drawn as opaque dark glass with the bound panel image as emission. */
+ *  image is a render target ($RenderToTexture), drawn as dark glass with the bound panel image as emission (opaque;
+ *  M_SC_Screen_Translucent when the authored opacity is below 1). */
 enum class ESCMaster : uint8 { Illum, HardSurface, Layered, Glass, MeshDecal, MeshDecalRelief, Translucent, EmissiveUnlit, Fallback, Screen };
 enum class ESCBlend : uint8 { Opaque, Masked, Translucent };
 
@@ -27,6 +28,9 @@ struct SCBRIDGE_API FSCMaterialDesc
     bool bGlowCard = false;
     bool bForward = false;     // CryEngine MTL_FLAG_REQUIRE_FORWARD_RENDERING (MtlFlags & 0x8000)
     bool bV2 = false;          // described from the sidecar v2 `emissive` / `alpha_config` objects    // forward-flag Illum glow card: additive, alpha-weighted, non-Nanite  // POM mesh decal: colour follows the host surface's palette channel (HostTint)
+    /** ESCMaster::Screen: EmissiveStrength once a panel image is bound (the authored Glow by the game's rule, cd/m2).
+     *  The unbound description emits nothing: its image is black and an analytic light must not see a glowing face. */
+    float ScreenGlow = 0.f;
     TMap<FName, float> Scalars;
     TMap<FName, FLinearColor> Vectors;
     TMap<FName, FSCTextureKey> Textures;
@@ -78,6 +82,8 @@ public:
     static void ApplyGlassLook(UMaterialInstanceDynamic* MID);
     /** Whether the instance's master is M_SC_Glass (the one master with the refraction look). */
     static bool IsGlassMaster(const UMaterialInterface* Material);
+    /** Whether the instance's master is a screen master (M_SC_Screen, M_SC_Screen_Translucent; WP-I1). */
+    static bool IsScreenMaster(const UMaterialInterface* Material);
     /** Game thread. Missing textures keep the master's neutral default and add a warning. A glass instance also takes the
      *  look's glass reflectance and refraction (ApplyGlassLook; not part of the pure description). */
     static UMaterialInstanceDynamic* Create(const FSCMaterialDesc& Desc, const TMap<FSCTextureKey, UTexture2D*>& Textures,

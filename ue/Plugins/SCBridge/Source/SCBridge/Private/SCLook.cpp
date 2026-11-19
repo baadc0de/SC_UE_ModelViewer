@@ -477,7 +477,7 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookSky(
 
 static bool IsGlassMaterial(const UMaterialInterface* M) { return M && GetNameSafe(M->GetMaterial()).Contains(TEXT("Glass")); }
 /** The look's glass reflectance also reaches the screens' glass face (M_SC_Screen, WP-I1). */
-static bool TakesGlassLook(const UMaterialInterface* M) { return IsGlassMaterial(M) || (M && GetNameSafe(M->GetMaterial()) == TEXT("M_SC_Screen")); }
+static bool TakesGlassLook(const UMaterialInterface* M) { return IsGlassMaterial(M) || FSCMaterialBuilder::IsScreenMaster(M); }
 
 // sc.Look.HideGlass <0|1> [<mesh name part>]: hide the vehicle's components drawn with a glass master material, or only
 // those whose mesh name contains the part (A/B through-glass views).
@@ -675,13 +675,13 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassRefraction(
     }));
 
 // sc.Screens [index [distance cm]] (WP-I1 verification): every screen face of the loaded vehicles and environments
-// (sections drawn with M_SC_Screen, instanced parts included), logged as SCREEN_FACE with the image it shows ("dark" =
+// (sections drawn with a screen master, instanced parts included; geometry=unavailable when the cook dropped the CPU copy), logged as SCREEN_FACE with the image it shows ("dark" =
 // none), its mesh, centre and facing; with an index, the current pawn is put `distance` (default 45 cm) in front of
 // that face, looking at it (use the fly camera: a first-person capsule is pushed out of geometry).
 static FAutoConsoleCommandWithWorldAndArgs GSCScreens(
     TEXT("sc.Screens"), TEXT("sc.Screens [index [distance cm]]: list the screen faces (M_SC_Screen), or view one from the front"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
-        struct FFace { FString Label; FVector Centre, Normal; };
+        struct FFace { FString Label; FVector Centre = FVector::ZeroVector, Normal = FVector::ZeroVector; bool bGeometry = false; };
         TArray<FFace> Faces;
         for (TActorIterator<ASCVehicle> It(World); It; ++It)
         {
@@ -691,12 +691,35 @@ static FAutoConsoleCommandWithWorldAndArgs GSCScreens(
             for (UStaticMeshComponent* C : Components)
             {
                 const UStaticMesh* Mesh = C->GetStaticMesh();
-                if (!Mesh || !C->IsVisible() || !Mesh->GetRenderData() || Mesh->GetRenderData()->LODResources.IsEmpty()) continue;
-                const FStaticMeshLODResources& LOD = Mesh->GetRenderData()->LODResources[0];
+                const FStaticMeshRenderData* Render = Mesh ? Mesh->GetRenderData() : nullptr;
+                if (!Mesh || !C->IsVisible() || !Render || Render->LODResources.IsEmpty()) continue;
+                // A resident LOD whose CPU copy is still there (a cooked, streamed mesh may have dropped it, or not
+                // streamed the high LODs in): positions, tangents with UV0 and the indices, all checked before use. The
+                // LOD is held by a reference while it is read: stream-out first moves CurrentFirstLODIdx past the LODs it
+                // releases, then discards their CPU data only once no external reference remains (StaticMeshUpdate).
+                int32 LODIndex = INDEX_NONE;
+                TRefCountPtr<const FStaticMeshLODResources> Held;
+                for (int32 L = FMath::Clamp(int32(Render->CurrentFirstLODIdx), 0, Render->LODResources.Num() - 1); L < Render->LODResources.Num(); ++L)
+                {
+                    const FStaticMeshLODResources& R = Render->LODResources[L];
+                    TRefCountPtr<const FStaticMeshLODResources> Ref(&R);
+                    if (L < int32(Render->CurrentFirstLODIdx)) continue; // streamed out before the reference was taken
+                    if (R.VertexBuffers.PositionVertexBuffer.GetVertexData() && R.VertexBuffers.PositionVertexBuffer.GetNumVertices() > 0 &&
+                        R.VertexBuffers.StaticMeshVertexBuffer.GetTangentData() && R.VertexBuffers.StaticMeshVertexBuffer.GetTexCoordData() &&
+                        R.VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords() > 0 && R.IndexBuffer.GetArrayView().Num() > 0)
+                    {
+                        LODIndex = L;
+                        Held = MoveTemp(Ref);
+                        break;
+                    }
+                }
+                const int32 SectionsLOD = LODIndex == INDEX_NONE ? FMath::Clamp(int32(Render->CurrentFirstLODIdx), 0, Render->LODResources.Num() - 1) : LODIndex;
+                const FStaticMeshLODResources& LOD = Render->LODResources[SectionsLOD];
                 const FPositionVertexBuffer& Positions = LOD.VertexBuffers.PositionVertexBuffer;
                 const FStaticMeshVertexBuffer& Tangents = LOD.VertexBuffers.StaticMeshVertexBuffer;
-                if (!Positions.GetVertexData() || !Tangents.GetTangentData()) continue; // no CPU copy (cooked)
-                const FIndexArrayView Indices = LOD.IndexBuffer.GetArrayView();
+                const FIndexArrayView Indices = LODIndex == INDEX_NONE ? FIndexArrayView() : LOD.IndexBuffer.GetArrayView();
+                // Indices must address both the position and the tangent / UV buffers.
+                const uint32 NumVertices = LODIndex == INDEX_NONE ? 0 : FMath::Min(Positions.GetNumVertices(), Tangents.GetNumVertices());
                 TArray<FTransform> Instances;
                 if (const auto* ISM = Cast<UInstancedStaticMeshComponent>(C))
                     for (int32 I = 0; I < ISM->GetInstanceCount(); ++I) ISM->GetInstanceTransform(I, Instances.AddDefaulted_GetRef(), true);
@@ -704,7 +727,7 @@ static FAutoConsoleCommandWithWorldAndArgs GSCScreens(
                 for (const FStaticMeshSection& Section : LOD.Sections)
                 {
                     const UMaterialInterface* Material = C->GetMaterial(Section.MaterialIndex);
-                    if (!Material || GetNameSafe(Material->GetMaterial()) != TEXT("M_SC_Screen") || !Section.NumTriangles) continue;
+                    if (!FSCMaterialBuilder::IsScreenMaster(Material) || !Section.NumTriangles) continue;
                     UTexture* Image = nullptr;
                     Material->GetTextureParameterValue(FHashedMaterialParameterInfo(FSCMaterialBuilder::ScreenImageParam), Image);
                     const FString* Source = Image ? It->SourcePaths.Find(Image) : nullptr;
@@ -712,6 +735,16 @@ static FAutoConsoleCommandWithWorldAndArgs GSCScreens(
                     const FString Shown = Source ? FString::Printf(TEXT("%s size=%dx%d mips=%d resident=%d texture=%s"), *FPaths::GetBaseFilename(*Source),
                         Image2D ? Image2D->GetSizeX() : 0, Image2D ? Image2D->GetSizeY() : 0, Image2D ? Image2D->GetNumMips() : 0,
                         Image2D ? Image2D->GetNumResidentMips() : 0, *GetNameSafe(Image)) : FString(TEXT("dark"));
+                    const FString Where = FString::Printf(TEXT("image=%s mesh=%s component=%s master=%s lod=%d"), *Shown, *GetNameSafe(Mesh), *C->GetName(),
+                                                          *GetNameSafe(Material->GetMaterial()), SectionsLOD);
+                    // The section's index range and every index it holds must lie inside the CPU copy.
+                    bool bValid = LODIndex != INDEX_NONE && uint64(Section.FirstIndex) + uint64(Section.NumTriangles) * 3 <= uint64(Indices.Num());
+                    for (uint32 K = 0; bValid && K < Section.NumTriangles * 3; ++K) bValid = Indices[Section.FirstIndex + K] < NumVertices;
+                    if (!bValid)
+                    {
+                        Faces.Add({Where + TEXT(" geometry=unavailable")});
+                        continue;
+                    }
                     FBox2f UV(ForceInit);
                     for (uint32 K = 0; K < Section.NumTriangles * 3; ++K)
                         UV += Tangents.GetVertexUV(Indices[Section.FirstIndex + K], 0);
@@ -734,9 +767,8 @@ static FAutoConsoleCommandWithWorldAndArgs GSCScreens(
                             Normal += V.GetSafeNormal() * A;
                         }
                         if (Area <= 0 || Normal.IsNearlyZero()) continue;
-                        Faces.Add({FString::Printf(TEXT("image=%s mesh=%s component=%s instance=%d uv0=%.3f,%.3f..%.3f,%.3f"), *Shown, *GetNameSafe(Mesh),
-                                                   *C->GetName(), I, UV.Min.X, UV.Min.Y, UV.Max.X, UV.Max.Y),
-                                   Centre / Area, Normal.GetSafeNormal()});
+                        Faces.Add({FString::Printf(TEXT("%s instance=%d uv0=%.3f,%.3f..%.3f,%.3f"), *Where, I, UV.Min.X, UV.Min.Y, UV.Max.X, UV.Max.Y),
+                                   Centre / Area, Normal.GetSafeNormal(), true});
                     }
                 }
             }
@@ -751,7 +783,7 @@ static FAutoConsoleCommandWithWorldAndArgs GSCScreens(
         }
         const int32 Index = FCString::Atoi(*Args[0]);
         APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
-        if (!Faces.IsValidIndex(Index) || !PC || !PC->GetPawn()) { UE_LOG(LogTemp, Warning, TEXT("SCREEN_VIEW ok=0 index=%d count=%d"), Index, Faces.Num()); return; }
+        if (!Faces.IsValidIndex(Index) || !Faces[Index].bGeometry || !PC || !PC->GetPawn()) { UE_LOG(LogTemp, Warning, TEXT("SCREEN_VIEW ok=0 index=%d count=%d"), Index, Faces.Num()); return; }
         const FFace& F = Faces[Index];
         const FVector At = F.Centre + F.Normal * (Args.IsValidIndex(1) ? FCString::Atod(*Args[1]) : 45.0);
         const FRotator View = (-F.Normal).Rotation();

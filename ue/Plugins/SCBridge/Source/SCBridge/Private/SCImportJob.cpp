@@ -20,6 +20,8 @@
 #include "Cargo/SCCargoRecords.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "StaticMeshResources.h"
 #include "Async/Async.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "IImageWrapperModule.h"
@@ -87,6 +89,7 @@ struct FMeshSlot
     TArray<TPair<FString, FString>> PrepareWarnings; // (path, message), logged on the game thread
     TSet<int32> TranslucentSlots;
     TArray<int32> SlotTriangles;
+    TMap<int32, TArray<int32>> ScreenOwners, SoftScreenOwners; // WP-I1: screen slot -> rig nodes owning its rigid / skinned triangles
     TMap<int32, FSCClipBinding> Bindings;
     bool bAnimated = false;
     FSCDerivedMesh Soft;
@@ -150,6 +153,7 @@ struct FSCImportJob::FState
     TMap<FString, TSet<int32>> GamePhysicsVariants; // per mesh asset: variants holding the game's colliders (WP-P3)
     TSet<FString> GamePhysicsReplacesRender; // mesh assets whose every blocking collider was built: render ignores the pawn
     TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
+    TMap<FString, TMap<int32, TArray<int32>>> MeshScreenOwners, MeshSoftScreenOwners; // WP-I1: per mesh asset, screen slot -> owning rig nodes (rigid / skinned)
 
     void Warn(const FString& Path, const FString& Message)
     {
@@ -608,6 +612,8 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             if (IsTranslucent(Data.MaterialFamilies[Slot2])) TranslucentSlots.Add(Slot2);
         TArray<FString> Paths;
         Sidecars.MultiFind(Path, Paths);
+        TSet<int32> ScreenSlots; // DisplayScreen submaterials in any sidecar of this mesh: the faces ui_bindings may light
+        TSet<int32> DescribedSplit; // slots the material descriptions send to the non-Nanite split
         for (const auto& Sidecar : Paths)
         {
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; });
@@ -615,17 +621,24 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             for (int32 MaterialSlot = 0; MaterialSlot < Data.MaterialNames.Num(); ++MaterialSlot)
                 if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Data.MaterialSourceNames, MaterialSlot))
                 {
+                    if (Sub->ShaderFamily == TEXT("DisplayScreen")) ScreenSlots.Add(MaterialSlot);
                     const bool bGlowTarget = Manifest.EngineGlow.Targets.ContainsByPredicate([&](const FSCEngineGlowTarget& T) {
                         return T.MaterialSidecar == Sidecar && T.SourceMaterialIndex == Sub->SourceIndex;
                     });
-                    if (FSCMaterialBuilder::RequiresNonNanite(*Sub, bGlowTarget)) TranslucentSlots.Add(MaterialSlot); // D6
+                    if (FSCMaterialBuilder::RequiresNonNanite(*Sub, bGlowTarget)) { TranslucentSlots.Add(MaterialSlot); DescribedSplit.Add(MaterialSlot); } // D6
                 }
         }
+        // A screen's coverage is its description's (M_SC_Screen opaque, or _Translucent for authored partial opacity): a
+        // GLB-only BLEND on a screen slot whose sidecar describes it opaque must not put an opaque screen in the split.
+        for (int32 Screen : ScreenSlots)
+            if (Data.BlendedSlots.Contains(Screen) && !DescribedSplit.Contains(Screen)) TranslucentSlots.Remove(Screen);
         Slot.TranslucentSlots = TranslucentSlots;
         Slot.SlotTriangles.SetNumZeroed(Data.MaterialNames.Num());
         for (auto T : Data.Description.Triangles().GetElementIDs())
-            if (Slot.SlotTriangles.IsValidIndex(Data.Description.GetTrianglePolygonGroup(T).GetValue()))
-                ++Slot.SlotTriangles[Data.Description.GetTrianglePolygonGroup(T).GetValue()];
+        {
+            const int32 Group = Data.Description.GetTrianglePolygonGroup(T).GetValue();
+            if (Slot.SlotTriangles.IsValidIndex(Group)) ++Slot.SlotTriangles[Group];
+        }
         // Binding is CPU-only. Static assets with no receiving channels retain the U1/U2 path.
         for (int32 Index = 0; Index < ClipJson.Num(); ++Index)
         {
@@ -644,10 +657,16 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
         for (auto T : Data.Description.Triangles().GetElementIDs())
         {
             const auto V = Data.Description.GetTriangleVertices(T);
-            if (Slot.bAnimated && Data.SkinWeights.Contains(V[0]))
+            const bool bSoft = Slot.bAnimated && Data.SkinWeights.Contains(V[0]);
+            if (bSoft)
                 Soft.Add(T);
             else
                 Rigid.FindOrAdd(Slot.bAnimated ? Data.TriangleNodes.FindRef(T) : INDEX_NONE).Add(T);
+            // WP-I1: which nodes draw each screen slot, per drawn mesh (the skeletal soft part, or the rigid parts), so a
+            // binding's helper can claim its own face.
+            const int32 Group = Data.Description.GetTrianglePolygonGroup(T).GetValue();
+            if (ScreenSlots.Contains(Group))
+                (bSoft ? Slot.SoftScreenOwners : Slot.ScreenOwners).FindOrAdd(Group).AddUnique(Data.TriangleNodes.FindRef(T, INDEX_NONE));
         }
         Slot.SoftTriangles = Soft.Num();
         Slot.RigidGroups = Rigid.Num();
@@ -770,6 +789,8 @@ void FSCImportJob::FState::BeginBuild(FMeshSlot& Slot)
     Slot.bBuildBegun = true;
     const FString& Path = Slot.Path;
     MeshSlotTriangles.Add(Path, MoveTemp(Slot.SlotTriangles));
+    MeshScreenOwners.Add(Path, MoveTemp(Slot.ScreenOwners));
+    MeshSoftScreenOwners.Add(Path, MoveTemp(Slot.SoftScreenOwners));
     Slot.Package = CreatePackage(*AssetPackage(Session, Path));
     Slot.Package->SetFlags(RF_Transient);
     KeepAlive.Add(Slot.Package);
@@ -1023,21 +1044,55 @@ void FSCImportJob::FState::Assemble()
         }
         if (bAny) V->PaintSlots.Add(MoveTemp(Entry));
     };
-    // WP-I1: an operating panel's screen slots (M_SC_Screen) show its exported image; other screens stay dark glass.
-    int32 ScreenBoundInstances = 0;
+    // WP-I1: each screen face (a slot drawn by a screen master with triangles in the drawn variant / LOD) shows the
+    // image its own binding resolves to (FSCSceneInstance::ScreenSlotImage); every other screen face stays dark glass.
+    int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;
     TSet<FString> ScreenImagesBound;
-    auto PanelMaterial = [&](const FSCSceneInstance& I, const FString& Image, const FSCSubmaterial* Sub, UMaterialInterface* Material) {
-        if (!Material || !Sub || Image.IsEmpty()) return (UMaterialInterface*)nullptr;
-        UMaterialInterface* Screen = Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, Image);
-        if (Screen) ScreenImagesBound.Add(Image);
-        return Screen;
+    auto StaticSlotTriangles = [](const UStaticMesh* Mesh, int32 Slot) {
+        uint32 N = 0;
+        if (const FStaticMeshRenderData* R = Mesh ? Mesh->GetRenderData() : nullptr; R && !R->LODResources.IsEmpty())
+            for (const FStaticMeshSection& S : R->LODResources[0].Sections) N += S.MaterialIndex == Slot ? S.NumTriangles : 0;
+        return N;
     };
-    auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot, bool bPlacement) -> FEntity {
+    auto SkeletalSlotTriangles = [](USkeletalMesh* Mesh, int32 Slot) {
+        uint32 N = 0;
+        if (const FSkeletalMeshRenderData* R = Mesh ? Mesh->GetResourceForRendering() : nullptr; R && !R->LODRenderData.IsEmpty())
+            for (const FSkelMeshRenderSection& S : R->LODRenderData[0].RenderSections) N += S.MaterialIndex == Slot ? S.NumTriangles : 0;
+        return N;
+    };
+    auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
-        const FString PanelImage = Options.bImportMaterials ? I.PanelImage(bPlacement) : FString();
         bool bScreenBound = false;
         ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };
+        const TMap<int32, TArray<int32>>* ScreenOwners = MeshScreenOwners.Find(I.MeshAsset);
+        const TMap<int32, TArray<int32>>* SoftScreenOwners = MeshSoftScreenOwners.Find(I.MeshAsset);
+        TSet<FString> MeshNodes;
+        // The screen instance for a slot, or null to keep Find's (a non-screen slot, or a dark face). Owner: the rig node
+        // a rigid part variant belongs to (all its triangles do), INDEX_NONE for the whole mesh. Triangles: the slot's
+        // triangles in the drawn variant / LOD (an unused slot binds and counts nothing).
+        auto ScreenMaterial = [&](const FSCSubmaterial* Sub, int32 Slot, int32 Owner, uint32 Triangles, bool bSoft) -> UMaterialInterface* {
+            if (!Options.bImportMaterials || !Sub || !E.Mesh || !Triangles || !Materials.IsScreen(I.MaterialSidecar, I.PaletteId, Sub->Index))
+                return nullptr;
+            TArray<TArray<FString>> Chains; // per owning node: its name, then its ancestors' (lower case)
+            const TMap<int32, TArray<int32>>* Map = bSoft ? SoftScreenOwners : ScreenOwners;
+            if (const TArray<int32>* Owners = Map ? Map->Find(Slot) : nullptr)
+                for (int32 Node : *Owners)
+                {
+                    if (Owner != INDEX_NONE && Node != Owner) continue;
+                    TArray<FString>& Chain = Chains.AddDefaulted_GetRef();
+                    for (int32 N = Node; E.Mesh->RigNodes.IsValidIndex(N); N = E.Mesh->RigNodes[N].Parent) Chain.Add(E.Mesh->RigNodes[N].SourceName.ToLower());
+                }
+            if (MeshNodes.IsEmpty())
+                for (const FSCRigNode& Node : E.Mesh->RigNodes) MeshNodes.Add(Node.SourceName.ToLower());
+            bool bAmbiguous = false;
+            const FString Image = Chains.IsEmpty() ? FString() : I.ScreenSlotImage(MeshNodes, Chains, &bAmbiguous);
+            ScreenAmbiguousSlots += bAmbiguous;
+            UMaterialInterface* Screen = Image.IsEmpty() ? nullptr : Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, Image);
+            if (Screen) { ScreenImagesBound.Add(Image); ++ScreenBoundSlots; bScreenBound = true; }
+            else ++ScreenDarkSlots;
+            return Screen;
+        };
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
                                                               bAtHelper, FSCMeshImporter::InCryFrame(I.SourceTransformBasis, bAtHelper));
         // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
@@ -1088,9 +1143,8 @@ void FSCImportJob::FState::Assemble()
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
                     if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
                     {
-                        UMaterialInterface* Screen = PanelMaterial(I, PanelImage, Sub, Mat);
+                        UMaterialInterface* Screen = ScreenMaterial(Sub, Slot, INDEX_NONE, SkeletalSlotTriangles(*RigMesh, Slot), true);
                         E.Rig->SetMaterial(Slot, Screen ? Screen : Mat);
-                        bScreenBound |= Screen != nullptr;
                         if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh); // a panel's image does not follow the paint
                     }
             const double RigStart = FPlatformTime::Seconds();
@@ -1172,8 +1226,7 @@ void FSCImportJob::FState::Assemble()
                     if (bNanite && Translucent.Contains(Slot)) continue;
                     const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot);
                     UMaterialInterface* Material = Sub ? Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host) : nullptr;
-                    UMaterialInterface* Screen = PanelMaterial(I, PanelImage, Sub, Material);
-                    bScreenBound |= Screen != nullptr;
+                    UMaterialInterface* Screen = Material ? ScreenMaterial(Sub, Slot, Node, StaticSlotTriangles(Mesh, Slot), false) : nullptr;
                     if (Screen) Material = Screen;
                     // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
@@ -1242,7 +1295,7 @@ void FSCImportJob::FState::Assemble()
     V->PhysicsGridBounds.Init();
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
-    if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true, false));
+    if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
     for (const auto& I : Manifest.Children)
     {
         bool bHelper;
@@ -1254,7 +1307,7 @@ void FSCImportJob::FState::Assemble()
             continue;
         }
         // Export order is depth-first; latest matching entity disambiguates repeated loadout instances.
-        FEntity Placed = Place(I, Parent, bHelper, false, false);
+        FEntity Placed = Place(I, Parent, bHelper, false);
         if (!I.Id.IsEmpty()) EntitiesById.Add(I.Id, Placed);
         Entities.Add(I.EntityName, Placed);
         if (!I.PortPath.IsEmpty())
@@ -1306,7 +1359,7 @@ void FSCImportJob::FState::Assemble()
         for (const auto& P : Interior.Placements)
             if (CanPlace(P))
             {
-                FEntity Placed = Place(P, Container, bHelper, false, true);
+                FEntity Placed = Place(P, Container, bHelper, false);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
             }
         // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel.
@@ -1368,8 +1421,16 @@ void FSCImportJob::FState::Assemble()
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d"), V->DoorControls.Num(), V->DoorSensors.Num());
-    UE_LOG(LogSCImport, Display, TEXT("SCREEN_BIND instances=%d images=%d panel_images=%d skipped_mfd=%d ambiguous=%d"), ScreenBoundInstances,
-           ScreenImagesBound.Num(), Materials.PanelImages.Num(), Materials.SkippedVehicleScreens, Materials.AmbiguousPanels);
+    UE_LOG(LogSCImport, Display,
+           TEXT("SCREEN_BIND instances=%d images=%d panel_images=%d skipped_mfd=%d slots_bound=%d slots_dark=%d ambiguous=%d unclassified=%d"),
+           ScreenBoundInstances, ScreenImagesBound.Num(), Materials.PanelImages.Num(), Materials.SkippedVehicleScreens, ScreenBoundSlots,
+           ScreenDarkSlots, ScreenAmbiguousSlots, Materials.UnclassifiedBindings);
+    if (Materials.UnclassifiedBindings)
+        Warn(Manifest.ScenePath, FString::Printf(TEXT("%d UI bindings carry no screen role (an export before source_item_type, or an unresolved ")
+            TEXT("owner): their screens stay dark; re-export with the current exporter (cache format 30) to show door and lift panel images"),
+            Materials.UnclassifiedBindings));
+    Result.ScreenBoundInstances = ScreenBoundInstances; Result.ScreenBoundSlots = ScreenBoundSlots;
+    Result.ScreenDarkSlots = ScreenDarkSlots; Result.ScreenAmbiguousSlots = ScreenAmbiguousSlots;
     UE_LOG(LogSCImport, Display, TEXT("PAINTS variants=%d slots=%d"), Manifest.Paints.Num(), V->PaintSlots.Num());
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());

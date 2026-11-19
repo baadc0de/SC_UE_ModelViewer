@@ -11,6 +11,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/CollisionProfile.h"
 #include "UObject/UObjectIterator.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/Engine.h"
@@ -333,12 +334,17 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Where"), TEXT("sc.FP.Where: log mode, vehicle-relative position and movement state"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_WHERE %s"), *Where(*Weak.Get()));
     });
-    Add(TEXT("sc.FP.Pads"), TEXT("sc.FP.Pads: aim at every door panel from 80 cm in front (four sides) and log whether E resolves to its door"),
-        [Weak](const TArray<FString>&) {
+    Add(TEXT("sc.FP.Pads"), TEXT("sc.FP.Pads [negative]: aim at every door panel from 80 cm in front (four sides); a pad passes when the view ray's ")
+        TEXT("first hit is the pad itself and E then resolves to its door. negative: the same with each pad's collision off (must all fail)"),
+        [Weak](const TArray<FString>& Args) {
             ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
             if (!V) return;
+            const bool bNegative = !Args.IsEmpty() && Args[0].Equals(TEXT("negative"), ESearchCase::IgnoreCase);
             const AActor* Ignore = Weak->GetFirstPerson();
-            int32 Total = 0, Resolved = 0, NoDoor = 0;
+            // hittable: the first visibility hit is a component under the pad's anchor; resolved: and FindInteraction
+            // from that ray returns the pad's door; fallback_only: the door came back only from a ray that missed the
+            // pad (FindInteraction's NearestDoor fallback or the door itself), which proves nothing about the pad.
+            int32 Total = 0, Resolved = 0, Hittable = 0, NoDoor = 0, FallbackOnly = 0, Unmeasured = 0;
             for (const auto& [Panel, Rig] : V->DoorControls)
             {
                 const USceneComponent* Anchor = Panel.Get();
@@ -349,17 +355,62 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
                 FBox Box(ForceInit);
                 TArray<USceneComponent*> Parts;
                 Anchor->GetChildrenComponents(true, Parts);
-                for (const USceneComponent* Part : Parts)
-                    if (const auto* P = Cast<UPrimitiveComponent>(Part); P && P->IsVisible()) Box += P->Bounds.GetBox();
-                if (!Box.IsValid) continue;
-                bool bOK = false;
+                // The full collision state, restored after the negative fixture (disabling collision turns a named profile
+                // into Custom, which instancing compares).
+                struct FSaved { UPrimitiveComponent* P; FName Profile; ECollisionEnabled::Type Mode; FCollisionResponseContainer Responses; };
+                TArray<FSaved> Collision;
+                for (USceneComponent* Part : Parts)
+                    if (auto* P = Cast<UPrimitiveComponent>(Part); P && P->IsVisible())
+                    {
+                        Box += P->Bounds.GetBox();
+                        Collision.Add({P, P->GetCollisionProfileName(), P->GetCollisionEnabled(), P->GetCollisionResponseToChannels()});
+                    }
+                if (!Box.IsValid) { ++Unmeasured; continue; }
+                // Negative fixture: the pad cannot be hit, while its door stays where the old any-ray check found it.
+                if (bNegative) for (const FSaved& S : Collision) S.P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+                bool bHit = false, bOK = false, bFallback = false;
+                FString FirstHit = TEXT("-");
                 for (const FVector& D : {FVector::ForwardVector, FVector::BackwardVector, FVector::RightVector, FVector::LeftVector})
-                    bOK |= V->FindInteraction(Box.GetCenter() + D * (Box.GetExtent().GetMax() + 80), -D, 300, Ignore) == Expected;
+                {
+                    const FVector Eye = Box.GetCenter() + D * (Box.GetExtent().GetMax() + 80);
+                    FHitResult Hit;
+                    FCollisionQueryParams Q(SCENE_QUERY_STAT(SCPads), true, Ignore);
+                    bool bOwn = false;
+                    if (V->GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye - D * 300, ECC_Visibility, Q))
+                    {
+                        for (const USceneComponent* C = Hit.GetComponent(); C && !bOwn; C = C->GetAttachParent()) bOwn = C == Anchor;
+                        if (FirstHit == TEXT("-") || bOwn)
+                        {
+                            const auto* SM = Cast<UStaticMeshComponent>(Hit.GetComponent());
+                            FirstHit = FString::Printf(TEXT("%s mesh=%s dist=%.1f"), *GetNameSafe(Hit.GetComponent()),
+                                                       SM ? *GetNameSafe(SM->GetStaticMesh()) : TEXT("-"), Hit.Distance);
+                        }
+                    }
+                    const bool bDoor = V->FindInteraction(Eye, -D, 300, Ignore) == Expected;
+                    bHit |= bOwn;
+                    bOK |= bOwn && bDoor;
+                    bFallback |= !bOwn && bDoor;
+                }
+                if (bNegative)
+                    for (const FSaved& S : Collision)
+                    {
+                        if (S.Profile != UCollisionProfile::CustomCollisionProfileName) { S.P->SetCollisionProfileName(S.Profile); continue; }
+                        S.P->SetCollisionEnabled(S.Mode);
+                        S.P->SetCollisionResponseToChannels(S.Responses);
+                    }
+                Hittable += bHit;
                 Resolved += bOK;
-                if (!bOK) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PAD_UNRESOLVED panel=%s door=\"%s\" at=%s"), *Anchor->GetName(),
-                                 *V->Doors[Expected].DisplayName, *Box.GetCenter().ToCompactString());
+                FallbackOnly += !bOK && bFallback;
+                if (!bOK) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PAD_UNRESOLVED panel=%s door=\"%s\" hittable=%d fallback=%d first_hit=%s at=%s"),
+                                 *Anchor->GetName(), *V->Doors[Expected].DisplayName, bHit, bFallback, *FirstHit, *Box.GetCenter().ToCompactString());
             }
-            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS total=%d resolved=%d no_door=%d"), Total, Resolved, NoDoor);
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS%s total=%d resolved=%d hittable=%d no_door=%d fallback_only=%d unmeasured=%d"),
+                   bNegative ? TEXT("_NEGATIVE") : TEXT(""), Total, Resolved, Hittable, NoDoor, FallbackOnly, Unmeasured);
+            // The fixture is meaningful only when the door still comes back through the fallback (it was in range): then the
+            // old any-ray check would have passed those pads, and the strict check must not.
+            if (bNegative)
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS_NEGATIVE ok=%d (no pad passes without its collision; %d doors still in fallback range)"),
+                       Resolved == 0 && Hittable == 0 && FallbackOnly > 0, FallbackOnly);
         });
     Add(TEXT("sc.FP.Probe"), TEXT("sc.FP.Probe [reach cm]: log what the view ray hits (component chain, rig, socket) and the focused interaction"),
         [Weak](const TArray<FString>& Args) {

@@ -41,6 +41,9 @@ struct SCBRIDGE_API FSCImportResult
     TMap<FString, FString> ContentHashes;
     double TotalSeconds = 0, MaterialSeconds = 0;
     int32 MeshCount = 0, InstanceCount = 0, TextureCount = 0, MaterialCount = 0;
+    /** WP-I1 SCREEN_BIND: instances with a bound screen face; screen slots (with triangles) bound / dark / dark because
+     *  faces of different outcomes share them. */
+    int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;
 };
 class SCBRIDGE_API FSCImporter
 {

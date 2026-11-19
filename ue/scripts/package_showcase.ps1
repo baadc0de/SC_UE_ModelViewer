@@ -38,9 +38,19 @@ $Style, $HangarName = $Hangar.Replace('\', '/').Split('/')
 $ShipLevel = '/Game/SC/Ships/Maps/' + ($Ship -replace '[^A-Za-z0-9_]', '_')
 $HangarLevel = "/Game/SC/Hangars/Maps/${Style}_$HangarName"
 $Extra = ' -SCMaxQuality'
+# A cooked level carries the cook format it was written with (<level>.cookformat beside the .umap, USCCookLibrary::FormatVersion):
+# an older cook keeps outdated screens and pooled meshes (WP-I1 review), so it is refused rather than packaged.
+$CookHeader = Join-Path $Root 'ue\Plugins\SCBridge\Source\SCBridgeEditor\Public\SCCookLibrary.h'
+$CookFormat = [int]([regex]::Match((Get-Content -Raw $CookHeader), 'FormatVersion = (\d+);').Groups[1].Value)
+if (-not $CookFormat) { throw "No FormatVersion in $CookHeader" }
 foreach ($Level in @($ShipLevel, $HangarLevel)) {
     $File = Join-Path $Root ('ue\SCViewer\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')
     if (-not (Test-Path $File)) { throw "$Level is not cooked ($File): run cook_ships.py / cook_hangars.py first." }
+    $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
+    $Have = if (Test-Path $Stamp) { [int](Get-Content -Raw $Stamp).Trim() } else { 0 }
+    if ($Have -ne $CookFormat) {
+        throw "$Level is stale (cook format $Have, current $CookFormat): delete $File and its folder under Content/SC, then re-run cook_ships.py / cook_hangars.py."
+    }
 }
 # The environment argument is the hangar's object-container path; only its last two parts name the cooked level.
 $Environment = "Data/ObjectContainers/PU/loc/mod/common/hangar/$Style/$HangarName.socpak"

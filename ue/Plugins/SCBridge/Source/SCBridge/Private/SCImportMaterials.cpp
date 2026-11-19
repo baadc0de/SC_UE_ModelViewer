@@ -49,21 +49,24 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
             Out.Descs.Add(MoveTemp(Desc)); Out.EngineGlow.Add(bGlow);
         }
     }
-    // WP-I1: the operating panels' images (door, lift and light panels, terminals), decoded once each with the material
-    // textures; MFD and HUD bindings stay unbound (owner decision: those screens are the viewer's own UI).
-    auto Panel = [&](const FSCSceneInstance& I, bool bPlacement)
+    // WP-I1: the operating panels' images (door, lift and light panels, kiosks), decoded once each with the material
+    // textures; display-item bindings (MFDs, HUDs, signage) stay unbound (owner decision: the viewer's own UI). Which
+    // face shows which image is decided per slot at assembly (FSCSceneInstance::ScreenSlotImage).
+    auto Panel = [&](const FSCSceneInstance& I)
     {
-        bool bAmbiguous = false;
-        const FString Image = I.PanelImage(bPlacement, &SkippedVehicleScreens, &bAmbiguous);
-        AmbiguousPanels += bAmbiguous;
-        if (Image.IsEmpty() || I.MaterialSidecar.IsEmpty()) return;
-        PanelImages.Add(Image);
-        const FSCTextureKey Key{Image, ESCTextureRole::Color};
-        Unique.Add(Key); SampledKeys.Add(Key);
+        TSet<FString> Images;
+        I.PanelImages(Images, &SkippedVehicleScreens, &UnclassifiedBindings);
+        if (I.MaterialSidecar.IsEmpty()) return;
+        for (const FString& Image : Images)
+        {
+            PanelImages.Add(Image);
+            const FSCTextureKey Key{Image, ESCTextureRole::Color};
+            Unique.Add(Key); SampledKeys.Add(Key);
+        }
     };
-    Panel(Manifest.Root, false);
-    for (const auto& I : Manifest.Children) Panel(I, false);
-    for (const auto& Interior : Manifest.Interiors) for (const auto& P : Interior.Placements) Panel(P, true);
+    Panel(Manifest.Root);
+    for (const auto& I : Manifest.Children) Panel(I);
+    for (const auto& Interior : Manifest.Interiors) for (const auto& P : Interior.Placements) Panel(P);
     Keys = Unique.Array();
     Keys.Sort([](const FSCTextureKey& A, const FSCTextureKey& B) { return A.Path == B.Path ? A.Role < B.Role : A.Path < B.Path; });
     SetCount = Sets.Num();
@@ -155,12 +158,19 @@ UMaterialInterface* FSCImportMaterials::FindScreen(const FString& Sidecar, const
         FSCMaterialDesc Desc = Set->Descs[Ordinal];
         Desc.Name += TEXT("__") + FPaths::GetBaseFilename(Image);
         Desc.Textures.Add(FSCMaterialBuilder::ScreenImageParam, Key);
+        Desc.Scalars.Add(TEXT("EmissiveStrength"), Desc.ScreenGlow); // the authored glow lights the bound image only
         TArray<FString> Ignored; // description warnings were reported for the base instance
         MID = FSCMaterialBuilder::Create(Desc, Textures, Owner, Ignored);
         if (MID) { Owner->Materials.Add(MID); ++MaterialCount; }
     }
     ScreenInstances.Add(CacheKey, MID);
     return MID;
+}
+
+bool FSCImportMaterials::IsScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal) const
+{
+    const FSet* Set = Sets.FindByPredicate([&](const FSet& S) { return S.Sidecar == Sidecar && S.PaletteId == PaletteId; });
+    return Set && Set->Descs.IsValidIndex(Ordinal) && Set->Descs[Ordinal].Master == ESCMaster::Screen;
 }
 
 UMaterialInterface* FSCImportMaterials::Invisible()

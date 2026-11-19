@@ -31,7 +31,8 @@ use std::{
 // 28: in a trimesh collider with both, the triangles without a surface are their own `sc_physics` record, class
 //     `no_surface` (WP-P4; 27 was a development step of the same change).
 // 29: scene lights carry `specular_multiplier` (miscParams.specularMultiplier, class-inherited, default 1).
-pub const CACHE_FORMAT_VERSION: u32 = 29;
+// 30: ui_bindings carry `source_item_type` (the UI owner's AttachDef.Type) and `source_owner_resolved` (WP-I1 review).
+pub const CACHE_FORMAT_VERSION: u32 = 30;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

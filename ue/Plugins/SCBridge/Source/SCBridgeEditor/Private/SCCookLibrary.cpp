@@ -10,6 +10,7 @@
 #include "Components/LightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -156,7 +157,17 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     Cook.Root = Root;
     Cook.SharedRoot = SharedRoot;
     for (const auto& [Object, Key] : Environment->SourcePaths)
-        if (Object) Cook.Pool(Object, Key, Cast<UStaticMesh>(Object) ? TEXT("Meshes") : TEXT("Textures"));
+        if (const auto* Mesh = Cast<UStaticMesh>(Object))
+        {
+            // The pool key carries the mesh's build (Nanite or conventional) and section topology (slot, triangles): a
+            // source asset split or built differently (a screen or glass slot moved between the Nanite and the translucent
+            // variant, a whole mesh turned translucent) is a different pooled mesh.
+            FString Topology = Mesh->IsNaniteEnabled() ? TEXT("nanite;") : TEXT("conventional;");
+            if (const FStaticMeshRenderData* Render = Mesh->GetRenderData(); Render && !Render->LODResources.IsEmpty())
+                for (const FStaticMeshSection& S : Render->LODResources[0].Sections) Topology += FString::Printf(TEXT("%u:%u;"), S.MaterialIndex, S.NumTriangles);
+            Cook.Pool(Object, Key + TEXT("#topology=") + FMD5::HashAnsiString(*Topology).Left(8), TEXT("Meshes"));
+        }
+        else if (Object) Cook.Pool(Object, Key, TEXT("Textures"));
     TArray<UStaticMeshComponent*> MeshComponents;
     Environment->GetComponents(MeshComponents);
     for (UStaticMeshComponent* C : MeshComponents)

@@ -84,6 +84,13 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
         if (!FSCPackageSource::Normalize(String(B, TEXT("generated_image_path")), Binding.ImagePath)) Binding.ImagePath.Reset();
         double Aspect = 0;
         if (B->TryGetNumberField(TEXT("ui_screen_aspect_w_over_h"), Aspect) && FMath::IsFinite(Aspect) && Aspect > 0) Binding.AspectWOverH = float(Aspect);
+        // source_item_type / source_owner_resolved (scviewer WP-I1 review): always written by current exporters; the item
+        // type is null for a resolved owner that is not an attachable item, and unknown when the owner is unresolved.
+        Binding.bClassified = B->HasField(TEXT("source_item_type")) && B->HasField(TEXT("source_owner_resolved")) &&
+                              B->HasField(TEXT("source_kiosk_interaction"));
+        Binding.SourceItemType = String(B, TEXT("source_item_type"));
+        B->TryGetBoolField(TEXT("source_owner_resolved"), Binding.bOwnerResolved);
+        B->TryGetBoolField(TEXT("source_kiosk_interaction"), Binding.bOperated);
     }
     const FReaderObject* Port;
     if (O->TryGetObjectField(TEXT("port"), Port))
@@ -143,25 +150,50 @@ bool FSCSceneManifest::PaintTarget(const FSCSceneInstance& I, int32 Variant, FSt
     OutPalette = bPalette ? Paint.PaletteId : I.PaletteId;
     return true;
 }
-FString FSCSceneInstance::PanelImage(bool bPlacement, int32* Skipped, bool* bAmbiguous) const
+void FSCSceneInstance::PanelImages(TSet<FString>& Out, int32* Excluded, int32* Unclassified) const
 {
-    FString Image;
-    bool bConflict = false;
     for (const FSCUiBinding& B : UiBindings)
     {
         if (B.ImagePath.IsEmpty()) continue;
-        // A vehicle screen: an MFD or radar binding, or (on a child) a screen entity mounted on this item.
-        if (B.Kind != TEXT("physical") || (!bPlacement && B.SourceEntityName != EntityName))
-        {
-            if (Skipped) ++*Skipped;
-            continue;
-        }
-        if (B.bDefaultStateIsOff) continue; // the panel's screen is off until something switches it on
-        if (Image.IsEmpty()) Image = B.ImagePath;
-        else bConflict |= Image != B.ImagePath;
+        if (!B.bClassified || !B.bOwnerResolved) { if (Unclassified) ++*Unclassified; continue; } // unknown owner: dark
+        if (!B.IsOperatingPanel()) { if (Excluded) ++*Excluded; continue; }
+        if (!B.PanelImage().IsEmpty()) Out.Add(B.PanelImage());
     }
-    if (bAmbiguous) *bAmbiguous = bConflict;
-    return bConflict ? FString() : Image;
+}
+FString FSCSceneInstance::ScreenSlotImage(const TSet<FString>& MeshNodes, const TArray<TArray<FString>>& Owners, bool* bAmbiguous) const
+{
+    if (bAmbiguous) *bAmbiguous = false;
+    // Bindings placed on a node of this mesh (helper_name), and the entity's own (no helper, or a helper of another
+    // asset, such as a loadout item's attachment helper on its parent).
+    // A binding propagated from another entity whose helper is not a node here has no face on this mesh: it claims
+    // nothing (it is never spread over the entity's other faces).
+    TMultiMap<FString, const FSCUiBinding*> AtHelper;
+    TArray<const FSCUiBinding*> Own;
+    for (const FSCUiBinding& B : UiBindings)
+    {
+        const FString Helper = B.HelperName.ToLower();
+        if (!Helper.IsEmpty() && MeshNodes.Contains(Helper)) AtHelper.Add(Helper, &B);
+        else if (!B.bPropagated) Own.Add(&B);
+    }
+    TSet<FString> Outcomes; // "" = a dark face
+    for (const TArray<FString>& Chain : Owners)
+    {
+        TArray<const FSCUiBinding*> Claim;
+        for (const FString& Node : Chain)
+        {
+            AtHelper.MultiFind(Node, Claim);
+            if (!Claim.IsEmpty()) break; // the nearest helper owns the face
+        }
+        if (Claim.IsEmpty()) Claim = Own;
+        if (Claim.IsEmpty()) Outcomes.Add(FString()); // a screen face no binding names
+        for (const FSCUiBinding* B : Claim) Outcomes.Add(B->PanelImage());
+    }
+    if (Outcomes.Num() != 1)
+    {
+        if (bAmbiguous) *bAmbiguous = Outcomes.Num() > 1;
+        return FString();
+    }
+    return *Outcomes.CreateConstIterator();
 }
 TArray<FString> FSCSceneManifest::MeshAssets() const
 {
@@ -234,6 +266,8 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
                 FSCSceneInstance I;
                 if (!Instance(Object(V), I, Detail)) I.ImportWarning = Detail;
                 I.ParentId = ParentKey;
+                // A child carries its own UI, and that of geometry-less children propagated onto it (another source).
+                for (FSCUiBinding& B : I.UiBindings) B.bPropagated = B.SourceEntityName != I.EntityName;
                 if (!ParentKey.IsEmpty() && Siblings.Contains(I.ParentEntityName) && I.ParentEntityName != I.EntityName)
                     Warn(I.EntityName, FString::Printf(TEXT("nested parent '%s' is another entry of the '%s' assembly; accessory-to-accessory "
                         "parenting is not supported, attached to the assembly root (known limit)"), *I.ParentEntityName, *ParentEntity));

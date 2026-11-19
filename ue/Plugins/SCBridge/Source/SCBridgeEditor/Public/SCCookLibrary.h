@@ -12,6 +12,14 @@ class SCBRIDGEEDITOR_API USCCookLibrary : public UBlueprintFunctionLibrary
 {
     GENERATED_BODY()
 public:
+    /** Version of what a cook writes: the level, the pooled meshes' section topology and the material constants. The cook
+     *  scripts stamp each cooked level with it (<level>.cookformat beside the .umap); a level with an older or no stamp is
+     *  stale: the cook scripts report it with a recook instruction and package_showcase.ps1 refuses to package it.
+     *  2: WP-I1 review (screens: M_SC_Screen / _Translucent masters and per-face panel images; pooled meshes keyed by
+     *  their section topology, so a changed glass / screen split never reuses an older pooled mesh). */
+    static constexpr int32 FormatVersion = 2;
+    UFUNCTION(BlueprintCallable, Category = "SC|Cook")
+    static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in
      *  SharedRoot (reused when an earlier environment already saved them) and materials as constants under Root, and
      *  makes the actor and its components persistent. The caller saves the level. Returns false on any failed save. */

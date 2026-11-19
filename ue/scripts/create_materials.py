@@ -866,7 +866,7 @@ def translucent_master():
     return g.save()
 
 
-def screen_master():
+def screen_master(translucent=False):
     """M_SC_Screen: the game's DisplayScreen face whose image is a render target ($RenderToTexture, WP-I1): an opaque
     deferred surface in the game (alpha_config opacity 1), drawn as dark glass. Base colour = ScreenBackColor (the
     authored BackColour), F0 = SpecularColor with the look's glass reflectance (GlassReflectanceScale /
@@ -874,8 +874,15 @@ def screen_master():
     roughness from the authored gloss, and emission = ScreenImage x EmissiveColor x EmissiveStrength (the builder's glow
     rule). ScreenImage is bound per panel instance (ui_bindings); the black default leaves an unbound screen (MFDs, lift
     buttons) as clean dark glass. The image is sampled at UV0 untiled: the render target covers the face.
-    TODO(WP-I1 Q3): EmissiveSaturation / EmissiveContrast, ViewingAngle falloff and the pixel grid are not decoded."""
-    g = Graph("M_SC_Screen", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
+    TODO(WP-I1 Q3): EmissiveSaturation / EmissiveContrast, ViewingAngle falloff and the pixel grid are not decoded.
+    With `translucent`: M_SC_Screen_Translucent, the same screen for a face whose data asks for partial coverage
+    (authored Opacity < 1 or a blended alpha mode, e.g. a 0.6 `Flash` overlay): lit translucent, coverage = Opacity
+    through a Substrate weight (as M_SC_Translucent), non-Nanite (the builder splits it into the conventional mesh)."""
+    if translucent:
+        g = Graph("M_SC_Screen_Translucent", unreal.BlendMode.BLEND_TRANSLUCENT,
+                  unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
+    else:
+        g = Graph("M_SC_Screen", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
     uv = g.uv(g.const(1.0))
     image = (g.texture("ScreenImage", g.black, ST.SAMPLERTYPE_COLOR, uv), "RGB")
     normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
@@ -884,7 +891,9 @@ def screen_master():
                   Floor=g.scalar("GlassReflectanceFloor", 0.0))
     base = g.vector("ScreenBackColor", (0, 0, 0))
     emissive = g.mul(g.mul(image, g.vector("EmissiveColor", (0, 0, 0))), g.scalar("EmissiveStrength", 0.0))
-    g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive)
+    slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive, front=not translucent)
+    if translucent:
+        g.weight(slab, g.saturate(g.scalar("Opacity", 1.0)))
     return g.save()
 
 
@@ -1121,6 +1130,7 @@ for opaque in (surface_master("M_SC_Illum"), hardsurface_master(),
     variants(opaque)
 glass_master()
 screen_master()
+screen_master(translucent=True)
 for sided in (decal_master("M_SC_MeshDecal", True), decal_master("M_SC_MeshDecal_Relief", False), translucent_master()):
     variants(sided, (("_TwoSided", False, True),))  # is_double_sided decals keep reverse-facing triangles
 unlit_master()

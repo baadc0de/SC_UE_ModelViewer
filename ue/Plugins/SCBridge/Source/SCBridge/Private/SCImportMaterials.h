@@ -21,10 +21,13 @@ public:
     UMaterialInterface* Find(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, const FString& HostChannel = FString());
     /** Dominant host paint channel of a mesh slot set, weighted by triangles (add-on rule; priority order on ties). */
     static FString HostChannel(const FSCMaterialSet* Set, const TArray<FString>& SourceNames, const TArray<int32>& SlotTriangles);
-    /** WP-I1: the instance for a screen slot (M_SC_Screen) of a panel showing `Image` (a package path from the instance's
-     *  ui_bindings, FSCSceneInstance::PanelImage): one instance per (sidecar, submaterial, image), shared by every panel
-     *  with that image. Null when the slot is not a screen or the image did not load (the slot keeps Find's instance). */
+    /** WP-I1: the instance for a screen slot (M_SC_Screen) showing `Image` (a package path from the instance's
+     *  ui_bindings, FSCSceneInstance::ScreenSlotImage): one instance per (sidecar, submaterial, image), shared by every
+     *  panel with that image, emitting at the authored glow (FSCMaterialDesc::ScreenGlow; Find's unbound instance emits
+     *  nothing). Null when the slot is not a screen or the image did not load (the slot keeps Find's instance). */
     UMaterialInterface* FindScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, const FString& Image);
+    /** Whether a submaterial is drawn by a screen master (M_SC_Screen / _Translucent). */
+    bool IsScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal) const;
     /** Draws nothing (zero-emission additive); for split sections that have no authored instance. */
     UMaterialInterface* Invisible();
     /** Another actor assembled from the same import (FSCImportJob from retained assets): instances created on demand
@@ -39,10 +42,11 @@ public:
     int32 MaterialCount = 0, SetCount = 0, EngineGlowCount = 0;
     double DescribeSeconds = 0, MaterialSeconds = 0;
     TMap<ESCMaster, int32> MasterCounts;
-    /** WP-I1 panel images: the distinct images the scene's operating panels show (decoded with the material textures),
-     *  and the vehicle-screen (MFD / HUD / radar) bindings left unbound by the owner's decision. */
+    /** WP-I1 panel images: the distinct images the scene's operating panels may show (decoded with the material
+     *  textures); the bindings with a render left unbound by the owner's decision (vehicle screens, displays), and those
+     *  of an export without source_item_type (unclassified, left dark). */
     TSet<FString> PanelImages;
-    int32 SkippedVehicleScreens = 0, AmbiguousPanels = 0;
+    int32 SkippedVehicleScreens = 0, UnclassifiedBindings = 0;
 
 private:
     struct FSet

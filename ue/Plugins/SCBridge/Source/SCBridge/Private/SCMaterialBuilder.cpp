@@ -18,6 +18,14 @@ bool FSCMaterialBuilder::IsGlassMaster(const UMaterialInterface* Material)
     return Base && Base->GetPathName() == ParentPath(ESCMaster::Glass, ESCBlend::Translucent, false);
 }
 
+bool FSCMaterialBuilder::IsScreenMaster(const UMaterialInterface* Material)
+{
+    const UMaterial* Base = Material ? Material->GetMaterial() : nullptr;
+    if (!Base) return false;
+    const FString Path = Base->GetPathName();
+    return Path == ParentPath(ESCMaster::Screen, ESCBlend::Opaque, false) || Path == ParentPath(ESCMaster::Screen, ESCBlend::Translucent, false);
+}
+
 void FSCMaterialBuilder::ApplyGlassLook(UMaterialInstanceDynamic* MID)
 {
     const USCViewerSettings* Settings = USCViewerSettings::Get();
@@ -59,7 +67,9 @@ void FSCMaterialBuilder::ApplyTextureMeans(FSCMaterialDesc& Desc, const TMap<FSC
 FString FSCMaterialBuilder::ParentPath(ESCMaster Master, ESCBlend Blend, bool bTwoSided)
 {
     // Opaque families have masked / two-sided constant variants; decal and lit-translucent masters have a
-    // two-sided variant (is_double_sided); glass and screens are single-sided by their data.
+    // two-sided variant (is_double_sided); glass and screens are single-sided by their data. A screen with authored
+    // partial opacity has its own translucent master (WP-I1 review).
+    if (Master == ESCMaster::Screen && Blend == ESCBlend::Translucent) return TEXT("/SCBridge/Materials/M_SC_Screen_Translucent.M_SC_Screen_Translucent");
     const bool bOpaque = Master == ESCMaster::Illum || Master == ESCMaster::HardSurface || Master == ESCMaster::Layered || Master == ESCMaster::Fallback;
     const bool bSided = Master == ESCMaster::MeshDecal || Master == ESCMaster::MeshDecalRelief || Master == ESCMaster::Translucent;
     const bool bMasked = bOpaque && Blend == ESCBlend::Masked, bTwo = (bOpaque || bSided) && bTwoSided;

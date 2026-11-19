@@ -11,7 +11,9 @@ then cook with a renderer (runtime textures and Nanite builds):
 Levels: /Game/SC/Ships/Maps/<entity>; materials: /Game/SC/Ships/<entity>/Materials; meshes and textures:
 /Game/SC/Ships/Shared. All game-derived (gitignored). The ship is cooked as the viewer shows it: landing gear down,
 resting on the viewer floor; rigs are baked static (CookEnvironment). Cooked ships are skipped: delete
-Content/SC/Ships/Maps/<entity>.umap and Content/SC/Ships/<entity>/ to re-cook (the shared pool stays).
+Content/SC/Ships/Maps/<entity>.umap and Content/SC/Ships/<entity>/ to re-cook (the shared pool stays). Each cooked level
+is stamped with USCCookLibrary::FormatVersion (<entity>.umap's .cookformat); a level with an older or no stamp is
+reported STALE with that recook instruction, and package_showcase.ps1 refuses it.
 """
 import json
 import os
@@ -20,6 +22,32 @@ import re
 import unreal
 
 VIEWER_FLOOR_Z = -5.0  # USCViewerSubsystem's floor: the cooked level streams in at the origin
+FORMAT = unreal.SCCookLibrary.cook_format_version()
+CONTENT = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_content_dir())
+
+
+def stamp_path(level):
+    """<level>.cookformat beside the level's .umap (Content/SC/... is game-derived, gitignored)."""
+    return os.path.join(CONTENT, level[len('/Game/'):] + '.cookformat')
+
+
+def stamped(level):
+    try:
+        with open(stamp_path(level), encoding='utf-8') as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def stale_bindings(scene_path):
+    """UI bindings an export wrote before the screen-role fields (source_item_type, source_owner_resolved,
+    source_kiosk_interaction; cache format 30): their panels would cook dark, so the export must be redone first."""
+    with open(scene_path, encoding='utf-8') as f:
+        scene = json.load(f)
+    entries = list(scene.get('children', [])) + [p for i in scene.get('interiors', []) for p in i.get('placements', [])]
+    return sum(1 for e in entries for b in e.get('ui_bindings', []) or []
+               if not all(k in b for k in ('source_item_type', 'source_owner_resolved', 'source_kiosk_interaction')))
+
 
 args = unreal.SystemLibrary.get_command_line()
 root = re.search(r'-SCCookRoot=(\S+)', args).group(1)
@@ -40,9 +68,23 @@ for package in sorted(os.listdir(os.path.join(root, 'Packages'))):
         continue
     level = '/Game/SC/Ships/Maps/' + re.sub(r'[^A-Za-z0-9_]', '_', name)
     if unreal.EditorAssetLibrary.does_asset_exist(level):
-        results.append('%s already cooked (skipped)' % name)
+        if stamped(level) == FORMAT:
+            results.append('%s already cooked (skipped)' % name)
+        else:
+            results.append('%s STALE (cook format %d, current %d): delete Content/SC/Ships/Maps/%s.umap and Content/SC/Ships/%s/ '
+                           'and re-run' % (name, stamped(level), FORMAT, level.rsplit('/', 1)[1], name))
+            unreal.log_warning('COOK_SHIP ' + results[-1])
+            continue
         unreal.log('COOK_SHIP ' + results[-1])
         continue
+    stale = stale_bindings(os.path.join(root, scene))
+    if stale:
+        results.append('%s STALE EXPORT (%d ui_bindings without the screen-role fields): re-export it with the current '
+                       'exporter first' % (name, stale))
+        unreal.log_warning('COOK_SHIP ' + results[-1])
+        continue
+    if os.path.exists(stamp_path(level)):
+        os.remove(stamp_path(level))  # a stamp is published only after this cook saves
     assert levels.new_level(level, False), level
     world = editor.get_editor_world()
     ship = unreal.SCImportLibrary.import_folder(world, root, True, scene)
@@ -53,6 +95,9 @@ for package in sorted(os.listdir(os.path.join(root, 'Packages'))):
     gear = unreal.SCImportLibrary.rest_on_floor(ship, VIEWER_FLOOR_Z)
     ok = unreal.SCCookLibrary.cook_environment(ship, '/Game/SC/Ships/' + name, '/Game/SC/Ships/Shared')
     saved = levels.save_current_level()
-    results.append('%s gear_clips=%d cook=%s level_saved=%s' % (name, gear, ok, saved))
+    if ok and saved:
+        with open(stamp_path(level), 'w', encoding='utf-8') as f:
+            f.write('%d\n' % FORMAT)
+    results.append('%s gear_clips=%d cook=%s level_saved=%s format=%d' % (name, gear, ok, saved, FORMAT))
     unreal.log('COOK_SHIP ' + results[-1])
 unreal.log('COOK_DONE ' + ' | '.join(results))

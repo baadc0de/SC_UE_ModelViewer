@@ -15,6 +15,23 @@ struct SCBRIDGE_API FSCUiBinding
     bool bDefaultStateIsOff = false;
     FString ImagePath;         // generated_image_path, normalized package path ("" without a render)
     float AspectWOverH = 0.f;  // ui_screen_aspect_w_over_h, 0 when not measured
+    FString SourceItemType;    // source_item_type: the UI owner's AttachDef.Type ("Display", "ControlPanel", ...; "" when null)
+    bool bClassified = false;  // the export carries source_item_type and source_owner_resolved; an older export cannot be classified
+    bool bOwnerResolved = false; // source_owner_resolved: the UI owner's record was found (else its item type is unknown)
+    bool bOperated = false;    // source_kiosk_interaction: the owner's UI is operated by the player (door, light, transit panels, kiosks)
+    bool bPropagated = false;  // on a child: the binding of another (geometry-less) entity carried by this one
+
+    /** WP-I1 rule (owner decision: door and lift panels are the game's, HUDs and MFDs are the viewer's own UI): the UI
+     *  of an operating panel. Derived from data only: a `physical` binding of a resolved owner that is not a display
+     *  item (`Display`: vehicle MFDs, physical screens, HUD projectors, radar displays, signage) or is a display the
+     *  player operates (a kiosk), whoever carries it (a door-control child's binding propagated to its parent stays a
+     *  panel; a self-owned cockpit screen does not). */
+    bool IsOperatingPanel() const
+    {
+        return bClassified && bOwnerResolved && Kind == TEXT("physical") && (SourceItemType != TEXT("Display") || bOperated);
+    }
+    /** The image this binding puts on its screen face: an operating panel's render, on by default; "" = dark glass. */
+    FString PanelImage() const { return IsOperatingPanel() && !bDefaultStateIsOff ? ImagePath : FString(); }
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSceneInstance
@@ -54,14 +71,18 @@ struct SCBRIDGE_API FSCSceneInstance
     FString LoadoutOwnerEntityId;
     /** `ui_bindings[]`: the UI screens this entity carries (WP-I1). */
     TArray<FSCUiBinding> UiBindings;
-    /** The image of this entity's own operating panel (door / lift / light panel, terminal), or "" when it has none
-     *  (contract rule, WP-I1): only `physical` bindings with a render and not off by default count; MFD and radar
-     *  bindings are vehicle screens. On a child (`bPlacement` false), a binding whose source entity is not the child
-     *  itself is a screen entity mounted on it (a dashboard's HUD projector or physical vehicle screen) and does not
-     *  count either. An interior placement is the panel entity itself. Every vehicle-screen binding with a render adds
-     *  one to `Skipped`. Bindings with different images (a multi-screen panel) need the helper -> face match, which
-     *  is not implemented: none is returned and `bAmbiguous` is set. */
-    FString PanelImage(bool bPlacement, int32* Skipped = nullptr, bool* bAmbiguous = nullptr) const;
+    /** Every image a screen face of this instance may show (FSCUiBinding::PanelImage), decoded with the material
+     *  textures. `Excluded` counts bindings with a render left unbound by the rule (vehicle screens, displays),
+     *  `Unclassified` those of an export without source_item_type or of an unresolved owner (left dark). */
+    void PanelImages(TSet<FString>& Out, int32* Excluded = nullptr, int32* Unclassified = nullptr) const;
+    /** WP-I1 per-face rule: what one screen material slot of this instance shows; "" = dark glass.
+     *  MeshNodes: the lower-case names of the mesh's nodes. Owners: one entry per node owning the slot's triangles in
+     *  the drawn variant / LOD, that node's lower-case name followed by its ancestors'. A binding whose helper names a
+     *  node of the mesh owns that node's subtree (the nearest such helper on the chain); the entity's own other bindings
+     *  own every face no helper claims, and a propagated binding (bPropagated) whose helper is not on the mesh claims none. A face nobody owns is dark; a slot whose faces resolve to
+     *  different outcomes (two images, or an image and a dark screen) cannot be told apart and stays dark, with
+     *  bAmbiguous set. */
+    FString ScreenSlotImage(const TSet<FString>& MeshNodes, const TArray<TArray<FString>>& Owners, bool* bAmbiguous = nullptr) const;
 };
 /** `interiors[].proximity_sensors[]`: a door proximity sensor in its container's placement frame (CryEngine metres). */
 USTRUCT(BlueprintType)
