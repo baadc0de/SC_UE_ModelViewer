@@ -7,7 +7,9 @@
 #include "SCPackageReader.h"
 #include "SCTextureImporter.h"
 #include "SCStarEngine.h"
+#include "SCViewerSettings.h"
 #include "Engine/Texture2D.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 #include "Interfaces/IPluginManager.h"
@@ -697,9 +699,71 @@ bool FSCMaterialsMasters::RunTest(const FString&)
                     TestTrue(Path + TEXT(" glass UVs: GlassTiling and GlassVStretch, no generic Tiling"),
                              Has(TEXT("GlassTiling")) && Has(TEXT("GlassVStretch")) && !Has(TEXT("Tiling")));
                     TestTrue(Path + TEXT(" thin film behind its %THIN_FILM switch"), Has(TEXT("UseThinFilm")));
+                    // The look's reflectance scale and floor (WP-U3b.md §14.9): their master defaults are the identity, so an
+                    // instance that does not set them keeps the game's F0.
+                    float Scale = -1.f, Floor = -1.f;
+                    TestTrue(Path + TEXT(" has the look's reflectance scale"), Has(FSCMaterialBuilder::GlassReflectanceScaleParam) &&
+                             Parent->GetScalarParameterDefaultValue(FHashedMaterialParameterInfo(FSCMaterialBuilder::GlassReflectanceScaleParam), Scale));
+                    TestTrue(Path + TEXT(" has the look's reflectance floor"), Has(FSCMaterialBuilder::GlassReflectanceFloorParam) &&
+                             Parent->GetScalarParameterDefaultValue(FHashedMaterialParameterInfo(FSCMaterialBuilder::GlassReflectanceFloorParam), Floor));
+                    TestEqual(Path + TEXT(" reflectance scale default 1 (the game's F0)"), Scale, 1.f);
+                    TestEqual(Path + TEXT(" reflectance floor default 0 (the game's F0)"), Floor, 0.f);
                 }
 #endif
             }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsGlassReflectanceLook, "SCBridge.Materials.GlassReflectanceLook", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCMaterialsGlassReflectanceLook::RunTest(const FString&)
+{
+    // The glass reflectance scale and floor are look values (D15, owner 2026-11-19; WP-U3b.md §14.9): the pure description keeps
+    // the game's F0 (Specular.rrr) and carries neither; the builder puts the look's values on every glass instance and on nothing else.
+    FSCSceneManifest M; if (!ReadFixture(*this, M)) return false;
+    const FSCSubmaterial* GlassSub = M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("glass_ext"); });
+    const FSCSubmaterial* OpaqueSub = M.Materials[0].Submaterials.FindByPredicate([](const FSCSubmaterial& S) { return S.Name == TEXT("hard_primary"); });
+    if (!TestNotNull(TEXT("glass_ext submaterial"), GlassSub) || !TestNotNull(TEXT("hard_primary submaterial"), OpaqueSub)) return false;
+    const FSCMaterialDesc Glass = FSCMaterialBuilder::Describe(*GlassSub, &M.Palettes[0]);
+    const FSCMaterialDesc Opaque = FSCMaterialBuilder::Describe(*OpaqueSub, &M.Palettes[0]);
+    TestEqual(TEXT("glass_ext is glass"), int32(Glass.Master), int32(ESCMaster::Glass));
+    TestTrue(TEXT("described F0 is the game's Specular.r"), Near(Glass.Vectors.FindRef(TEXT("SpecularColor")), FLinearColor(0.05f, 0.05f, 0.05f)));
+    TestFalse(TEXT("the description carries no look scale"), Glass.Scalars.Contains(FSCMaterialBuilder::GlassReflectanceScaleParam));
+    TestFalse(TEXT("the description carries no look floor"), Glass.Scalars.Contains(FSCMaterialBuilder::GlassReflectanceFloorParam));
+
+    const USCViewerSettings* Fresh = NewObject<USCViewerSettings>(GetTransientPackage(), NAME_None, RF_Transient);
+    TestEqual(TEXT("the look's scale"), Fresh->GlassReflectanceScale, USCViewerSettings::LookGlassReflectanceScale);
+    TestEqual(TEXT("the look's floor"), Fresh->GlassReflectanceFloor, USCViewerSettings::LookGlassReflectanceFloor);
+    TestNull(TEXT("scale: not a saved setting"), USCViewerSettings::StaticClass()->FindPropertyByName(TEXT("GlassReflectanceScale")));
+    TestNull(TEXT("floor: not a saved setting"), USCViewerSettings::StaticClass()->FindPropertyByName(TEXT("GlassReflectanceFloor")));
+
+    USCViewerSettings* Settings = USCViewerSettings::Get();
+    const float SavedScale = Settings->GlassReflectanceScale, SavedFloor = Settings->GlassReflectanceFloor;
+    const TMap<FSCTextureKey, UTexture2D*> NoTextures;
+    struct FCase { float Scale, Floor; };
+    for (const FCase C : {FCase{1.f, 0.f}, FCase{2.5f, 0.045f}})
+    {
+        Settings->GlassReflectanceScale = C.Scale;
+        Settings->GlassReflectanceFloor = C.Floor;
+        const FString Label = FString::Printf(TEXT("scale %.1f floor %.3f"), C.Scale, C.Floor);
+        TArray<FString> Warnings;
+        UMaterialInstanceDynamic* MID = FSCMaterialBuilder::Create(Glass, NoTextures, GetTransientPackage(), Warnings);
+        if (!TestNotNull(TEXT("glass instance"), MID)) continue;
+        float Scale = -1.f, Floor = -1.f;
+        TestTrue(Label + TEXT(": the scale reaches the glass instance"),
+                 MID->GetScalarParameterValue(FMaterialParameterInfo(FSCMaterialBuilder::GlassReflectanceScaleParam), Scale) && Scale == C.Scale);
+        TestTrue(Label + TEXT(": the floor reaches the glass instance"),
+                 MID->GetScalarParameterValue(FMaterialParameterInfo(FSCMaterialBuilder::GlassReflectanceFloorParam), Floor) && Floor == C.Floor);
+        FLinearColor F0;
+        TestTrue(Label + TEXT(": the instance's F0 parameter stays the game's"),
+                 MID->GetVectorParameterValue(FMaterialParameterInfo(TEXT("SpecularColor")), F0) && Near(F0, FLinearColor(0.05f, 0.05f, 0.05f)));
+        TArray<FString> Ignored;
+        if (UMaterialInstanceDynamic* Other = FSCMaterialBuilder::Create(Opaque, NoTextures, GetTransientPackage(), Ignored))
+            TestFalse(Label + TEXT(": a non-glass instance has no reflectance look"),
+                      Other->GetScalarParameterValue(FMaterialParameterInfo(FSCMaterialBuilder::GlassReflectanceScaleParam), Scale) ||
+                      Other->GetScalarParameterValue(FMaterialParameterInfo(FSCMaterialBuilder::GlassReflectanceFloorParam), Floor));
+    }
+    Settings->GlassReflectanceScale = SavedScale;
+    Settings->GlassReflectanceFloor = SavedFloor;
     return true;
 }
 

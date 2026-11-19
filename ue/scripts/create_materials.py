@@ -575,6 +575,9 @@ float height = lerp(1.0, saturate((Vertex.b - HeightBias) * HeightScale), UseVer
 float3 density = (1.0 / max(colour, Floor) - 1.0) * DensityScale;
 return exp(-density * height);
 """
+# Viewer look (not the game's; WP-U3b.md section 14.9): F0 x Scale, at least Floor where the authored F0 is not zero
+# (a glass authored not to reflect keeps 0), clamped to 1. Scale 1, Floor 0 is the game's F0.
+GLASS_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor * step(1e-6, F0)));"
 # glassLib.cfib under %HEIGHT_MAP: clip(heightMap - 0.01).
 GLASS_COVERAGE = "return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
 # The glass graph is a port of these game functions. StarEngineRender.json pins their token hashes and
@@ -602,7 +605,8 @@ def glass_master():
     transmittance along the refracted path and multiplying by (1 - Fresnel). TransmittanceToMFP converts the
     normal-incidence transmittance into the slab's mean free path. Any other sub-surface type has no transmittance
     in a translucent blend mode and draws the slab opaque. Coverage is 1: the authored Opacity is not read. Every
-    glass map is read at the game's glassUV = baseUV * GlassTiling, v *= GlassVStretch."""
+    glass map is read at the game's glassUV = baseUV * GlassTiling, v *= GlassVStretch. F0 takes the look's
+    GlassReflectanceScale and GlassReflectanceFloor (defaults 1 and 0 = the game's value)."""
     check_ported(GLASS_PORTED)
     g = Graph("M_SC_Glass", unreal.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE,
               unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
@@ -627,7 +631,13 @@ def glass_master():
     # UE's thin-film node instead. The node is not an identity at zero thickness: it always adds the film's own
     # dielectric interface (IOR 1.44) and so raises a clear glass's F0 several-fold, which drew a milky reflection over
     # every canopy (WP-U3b.md section 14.8). It is therefore selected, not fed a zero thickness.
-    f0 = g.vector("SpecularColor", (0.04, 0.04, 0.04))
+    # GlassReflectanceScale / GlassReflectanceFloor are viewer look values, not the game's (WP-U3b.md section 14.9):
+    # F0 x scale, raised to the floor where the material reflects at all, clamped to 1, before the film selection; F90
+    # stays 1. The master defaults (1, 0) are the game's reflectance; the builder sets the look's values
+    # (USCViewerSettings) on every glass instance.
+    f0 = g.custom(GLASS_REFLECTANCE_LOOK, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
+                  F0=g.vector("SpecularColor", (0.04, 0.04, 0.04)), Scale=g.scalar("GlassReflectanceScale", 1.0),
+                  Floor=g.scalar("GlassReflectanceFloor", 0.0))
     f90 = g.const3((1, 1, 1))
     film = g.node(unreal.MaterialExpressionSubstrateThinFilm)
     g.link(*normal, film, "Normal")

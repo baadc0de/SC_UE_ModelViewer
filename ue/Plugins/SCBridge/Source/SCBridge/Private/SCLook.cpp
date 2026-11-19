@@ -27,6 +27,7 @@
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "StaticMeshResources.h"
 #include "SCViewerSettings.h"
+#include "SCMaterialBuilder.h"
 #include "SCViewerExposure.h"
 #include "SCStarEngine.h"
 #include "Materials/MaterialInterface.h"
@@ -569,6 +570,42 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassParam(
                 }
         }
         UE_LOG(LogTemp, Display, TEXT("LOOK glass_param %s filter=%s instances=%d"), *FString::Join(Args, TEXT(" ")), *Filter, Done.Num());
+    }));
+
+// sc.Look.GlassReflectance [<scale> [<floor>]]: the look's glass reflectance (USCViewerSettings::GlassReflectanceScale /
+// GlassReflectanceFloor: max(F0 x scale, floor where F0 > 0), clamped to 1 in M_SC_Glass), for this session: every glass instance
+// the vehicles and environments built takes it, and so does every one built later. Constant copies of a cooked ship or hangar keep
+// the values they were cooked with (counted, not changed). No arguments: logs the current values.
+static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassReflectance(
+    TEXT("sc.Look.GlassReflectance"), TEXT("sc.Look.GlassReflectance [<scale> [<floor>]]: glass F0 = max(F0 x scale, floor) (1 0 = the game's reflectance) on every glass instance"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        USCViewerSettings* Settings = USCViewerSettings::Get();
+        if (Args.IsValidIndex(0)) Settings->GlassReflectanceScale = FMath::Max(0.f, FCString::Atof(*Args[0]));
+        if (Args.IsValidIndex(1)) Settings->GlassReflectanceFloor = FMath::Clamp(FCString::Atof(*Args[1]), 0.f, 1.f);
+        int32 Set = 0, Constant = 0;
+        TSet<const UMaterialInterface*> Seen;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+        {
+            for (UMaterialInstanceDynamic* MID : It->Materials)
+                if (MID && IsGlassMaterial(MID) && !Seen.Contains(MID))
+                {
+                    Seen.Add(MID);
+                    FSCMaterialBuilder::ApplyGlassLook(MID);
+                    ++Set;
+                }
+            TArray<UPrimitiveComponent*> Components;
+            It->GetComponents(Components);
+            for (const UPrimitiveComponent* C : Components)
+                for (int32 I = 0; I < C->GetNumMaterials(); ++I)
+                {
+                    const UMaterialInterface* M = C->GetMaterial(I);
+                    if (!IsGlassMaterial(M) || Seen.Contains(M)) continue;
+                    Seen.Add(M);
+                    if (!Cast<UMaterialInstanceDynamic>(M)) ++Constant;
+                }
+        }
+        UE_LOG(LogTemp, Display, TEXT("LOOK glass_reflectance scale=%.3f floor=%.4f instances=%d constant=%d"), Settings->GlassReflectanceScale,
+               Settings->GlassReflectanceFloor, Set, Constant);
     }));
 
 // sc.Look.Camera <x> <y> <z> <yaw> <pitch>: put the current pawn (the fly camera in fly mode) at a world position and

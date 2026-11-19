@@ -55,6 +55,17 @@ public:
      *  it off): not a saved setting, so no user config can turn it off. sc.Look.SSDO game|off switches it for this session only
      *  (diagnostics, routes). */
     bool bStarEngineSSDO = true;
+    /** Look (owner, 2026-11-19; D15): every glass material instance reflects max(F0 x GlassReflectanceScale, GlassReflectanceFloor),
+     *  the floor only where the authored F0 is not zero, clamped to 1 in M_SC_Glass; 1 and 0 = the game's .mtl Specular. The game's
+     *  glass reflects a biased, bloomed cubemap and reads stronger than a plain capture of the same F0 (ue/verification/WP-U3b.md
+     *  §14.9). Not saved settings, like bStarEngineSSDO; sc.Look.GlassReflectance sets them for this session on every glass instance. */
+    float GlassReflectanceScale = LookGlassReflectanceScale;
+    float GlassReflectanceFloor = LookGlassReflectanceFloor;
+    // The adjudicated look (Astra, C2 lift glass vs the game video and the C2 cockpit window from outside, §14.9): the floor alone
+    // lifts the faint interior glass (F0 0.0075-0.0086 -> 0.045) to the game's apparent strength and leaves exterior glass (0.036 ->
+    // 0.045) clear; a plain scale cannot do both (lift needs ~6, exterior turns milky from 3).
+    static constexpr float LookGlassReflectanceScale = 1.f;
+    static constexpr float LookGlassReflectanceFloor = 0.045f;
     // Look (LOOK-6, revised LOOK-8): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard
     // bloom. LOOK-8 (adjudicated across the Galaxy in XL and the Golem in small hangars): the diffraction streaks veiled
     // hull edges and cockpits; standard bloom it is. 0.15 still suits stills. Console: sc.Look.BloomStar.

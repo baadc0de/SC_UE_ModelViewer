@@ -1325,3 +1325,62 @@ as bright as in the game is a lighting question, not glass.
 Not done: cooked hangars (WP-C1) carry constant copies of the glass instances made before this change; without
 `UseThinFilm` they take the master default 0, which is right for glass without `%THIN_FILM` but drops the film from
 hangar glass that has it until the hangars are re-cooked.
+
+### 14.9 Glass reflectance look value (2026-11-19)
+
+Owner: with Lumen front-layer (hardware RT) reflections on, glass still reads too subtle against a game video of the C2
+lift area (`out/glass/game-ref-c2-lift.webp`); the game's glass reflects a biased, bloomed cubemap, not a plain capture.
+The values stay the game's (`.mtl` `Specular` → F0; C2 lift glass `MID_Glass_Int_63` F0 0.0075, `MID_Glass_Int` 0.0086,
+exterior `MID_Glass` 0.036; Fresnel `lerp(F0, 1, Schlick)`); the viewer adds a look on top (D15 allows invented look values):
+
+```
+F0' = saturate(max(F0 × GlassReflectanceScale, GlassReflectanceFloor × step(1e-6, F0)))     (M_SC_Glass, before the film selection; F90 stays 1)
+```
+
+- `M_SC_Glass` (`create_materials.py` `GLASS_REFLECTANCE_LOOK`): scalars `GlassReflectanceScale` (default 1) and
+  `GlassReflectanceFloor` (default 0), so an instance that does not set them has the game's F0. The floor applies only
+  where the authored F0 is not zero: glass authored not to reflect (C2 `MID_Glass_Canopy_*`, F0 0) keeps 0. Substrate derives
+  the simple volume's IOR from F0, so the look also changes the refracted path length through the slab slightly.
+- `USCViewerSettings::GlassReflectanceScale` / `GlassReflectanceFloor`: not saved (like `bStarEngineSSDO`), defaults
+  `LookGlassReflectanceScale` 1 and `LookGlassReflectanceFloor` 0.045. `FSCMaterialBuilder::Create` sets both on every glass
+  instance (`ApplyGlassLook`); the pure description keeps the game's F0 and carries neither.
+- `sc.Look.GlassReflectance [<scale> [<floor>]]` sets them for the session on every glass instance of the vehicles and
+  environments (log `LOOK glass_reflectance scale=… floor=… instances=… constant=…`; C2 + `hangar_xltop_001`: 630 instances,
+  0 constant). Constant copies of cooked ships / hangars keep the values they were cooked with.
+
+Choice (Astra, `gpt-6.2-astra`, reasoning high; game frame first; RTX 4090, `CRUS_Starlifter_C2` in `hangar_xltop_001`, fly
+camera; lift poses `lift` at (−0.49, −4.252, 15.22) m → (−2.01, −6.74, 14.50), `lift2` at (−0.143, −4.086, 15.227) →
+(−1.87, −6.53, 14.75); exterior `ext_nose` at (48, 12, 14) → (24, 0, 12), the cockpit side window; shots `out/glass/refl/`):
+
+| Sweep | Lift glass vs the game | Exterior cockpit window |
+|---|---|---|
+| scale 1 (the game's F0) | clearly weaker | clear |
+| scale 2 | clearly weaker | clear (Astra's best for exterior) |
+| scale 3 | still weaker | milky veil starts |
+| scale 4 | closer, still weaker | interior loses contrast |
+| scale 6 | about equal | pronounced haze |
+
+No single scale serves both (`out/glass/astra-reflectance.log`). Second round, blind labels
+(`out/glass/astra-reflectance-floor.log`; grids `refl/grid-fl-*.png`):
+
+| Variant (scale, floor) | Lift | Exterior |
+|---|---|---|
+| A (1, 0) | weakest | clear |
+| B (2, 0) | weaker | mild haze, readable |
+| C (6, 0) | about equal | milky |
+| **D (1, 0.045)** | **about equal** | **clear** (nearly as A) |
+| E (2, 0.045) | about equal | mild haze |
+
+Verdict D: the floor lifts the faint interior glass (0.0075-0.0086 → 0.045, ×5-6) to the game's apparent strength and
+moves exterior glass only from 0.036 to 0.045. Shipped as the look default. Hangar glass between 0.027 and 0.045 rises to
+0.045; glass at or above 0.045 (hangar `glass_breakable_a` 0.053, C2 `Fluid_Engineering` 0.068) is unchanged.
+
+Verification: build `Result: Succeeded`; `create_materials.py` → `SC_MATERIAL /SCBridge/Materials/M_SC_Glass.M_SC_Glass
+expressions=47 vs=503 ps=5011 samplers=8`, `WP-U2 MATERIALS_OK` (the `GLASS_PORTED` hash check passes); `Automation RunTests
+SCBridge`: 154 passed, 4 failed (the known `FirstPerson.SkeletalCollision`, `Materials.FamilyMapping`,
+`Package.FolderTarImport`, `Player.KitRigAndWeapons`). New / extended: `SCBridge.Materials.GlassReflectanceLook` (the description
+keeps F0 0.05 and carries no look; scale and floor from the settings reach the glass instance and no other; defaults are the look
+constants and not saved properties) and `SCBridge.Materials.MasterAssets` (both parameters in `M_SC_Glass`, defaults 1 and 0).
+
+Not done: compared on one ship and one hangar against one video frame under different lighting; cooked hangars and the
+showcase need a re-cook to carry the floor.

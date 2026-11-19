@@ -1,9 +1,20 @@
 // FSCMaterialBuilder: master lookup and UMaterialInstanceDynamic creation from an FSCMaterialDesc.
 #include "SCMaterialBuilder.h"
+#include "SCViewerSettings.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/UObjectGlobals.h"
+
+const FName FSCMaterialBuilder::GlassReflectanceScaleParam(TEXT("GlassReflectanceScale"));
+const FName FSCMaterialBuilder::GlassReflectanceFloorParam(TEXT("GlassReflectanceFloor"));
+
+void FSCMaterialBuilder::ApplyGlassLook(UMaterialInstanceDynamic* MID)
+{
+    const USCViewerSettings* Settings = USCViewerSettings::Get();
+    MID->SetScalarParameterValue(GlassReflectanceScaleParam, Settings->GlassReflectanceScale);
+    MID->SetScalarParameterValue(GlassReflectanceFloorParam, Settings->GlassReflectanceFloor);
+}
 
 const TCHAR* FSCMaterialBuilder::MasterName(ESCMaster Master)
 {
@@ -60,6 +71,7 @@ UMaterialInstanceDynamic* FSCMaterialBuilder::Create(const FSCMaterialDesc& Desc
     MID->SetFlags(RF_Transient);
     for (const auto& Pair : Desc.Scalars) MID->SetScalarParameterValue(Pair.Key, Pair.Value);
     for (const auto& Pair : Desc.Vectors) MID->SetVectorParameterValue(Pair.Key, Pair.Value);
+    if (Desc.Master == ESCMaster::Glass) ApplyGlassLook(MID);
     for (const auto& Pair : Desc.Textures)
     {
         if (UTexture2D* const* Texture = Textures.Find(Pair.Value); Texture && *Texture) MID->SetTextureParameterValue(Pair.Key, *Texture);

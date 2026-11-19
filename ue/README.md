@@ -11,6 +11,10 @@ The Lumen World Cache is off for now (plan D13); verification and the World Cach
 [verification/WP-U59.md](verification/WP-U59.md). The shader patches of plan D14 (`ue/EnginePatches`, written for the binary
 engine) are gone: WP-E1 replaced them with engine features (light falloff E1-2, projector shape E1-3, the game's SSDO E1-7:
 `SSDO*` post-process settings and `r.SSDO*`, always on in the look since 2026-11-19; `sc.Look.SSDO game|off` switches it for one session, diagnostics only).
+Glass reflectance is a look value too (2026-11-19, [verification/WP-U3b.md](verification/WP-U3b.md) §14.9): every glass
+instance reflects `max(F0 × GlassReflectanceScale, GlassReflectanceFloor)` (the floor only where the game's F0 is not 0),
+`USCViewerSettings` defaults, not saved; `sc.Look.GlassReflectance <scale> [<floor>]` sets both for one session
+(`1 0` = the game's `.mtl` Specular).
 History: the project started on UE 5.8.2 (`++UE5+Release-5.8`, CL 56702186, Linux, WP-U0 2026-11-09), moved to the
 UE 5.9.0 preview-1 binary (CL 60351404) on 2026-11-12 and to the source fork on 2026-11-18.
 WP-U0 on 5.8.2, `df -h .` on 2026-11-09: **1.6T total, 1.5T used**; available space was

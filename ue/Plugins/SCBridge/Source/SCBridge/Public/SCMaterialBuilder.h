@@ -62,7 +62,14 @@ public:
     static const TCHAR* MasterName(ESCMaster Master);
     /** Object path of the master or its blend/two-sided constant variant. */
     static FString ParentPath(ESCMaster Master, ESCBlend Blend, bool bTwoSided);
-    /** Game thread. Missing textures keep the master's neutral default and add a warning. */
+    /** M_SC_Glass scalars: F0' = max(F0 x scale, floor where F0 > 0) (look values, USCViewerSettings::GlassReflectanceScale /
+     *  GlassReflectanceFloor; master defaults 1 and 0 = the game's F0). */
+    static const FName GlassReflectanceScaleParam;
+    static const FName GlassReflectanceFloorParam;
+    /** Sets the look's glass reflectance (USCViewerSettings) on a glass instance. */
+    static void ApplyGlassLook(UMaterialInstanceDynamic* MID);
+    /** Game thread. Missing textures keep the master's neutral default and add a warning. A glass instance also takes the
+     *  look's glass reflectance (ApplyGlassLook; not part of the pure description). */
     static UMaterialInstanceDynamic* Create(const FSCMaterialDesc& Desc, const TMap<FSCTextureKey, UTexture2D*>& Textures,
         UObject* Outer, TArray<FString>& Warnings);
 };
