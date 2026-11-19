@@ -19,8 +19,9 @@ public:
      *  their section topology, so a changed glass / screen split never reuses an older pooled mesh).
      *  3: WP-I1 I1-5 (panel renders at their face aspect with owner values; state images swapped per face).
      *  4: WP-I1 fix pass (screens: the DisplayScreenPS emission with the DBA multiplier and new instance constants; the
-     *  panel renders' layout, owner defaults and brand). */
-    static constexpr int32 FormatVersion = 4;
+     *  panel renders' layout, owner defaults and brand).
+     *  5: WP-I1 fix pass 2 (panel renders: button glyphs, standard styles, square canvas units, own shape colours). */
+    static constexpr int32 FormatVersion = 5;
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in

@@ -967,6 +967,161 @@ Not fixed, with the reason:
 - DBA uses the host's clamped exposure; the game's DBA reads the unclamped adapted luminance, so screens differ in
   scenes darker than the exposure clamp (`r_ExposureMultiplierMax`).
 
+## Fix pass 2 (I1-5)
+
+Submodule branch `scviewer/panel-screens`, commits `879413c2` (fixes) and `e26c4cc0` (review fixes), from `47f1858e`.
+`CACHE_FORMAT_VERSION` 33 → 34 and the cook stamp `USCCookLibrary::FormatVersion` 4 → 5 (every panel render changes).
+Shots and Astra verdicts in `out/panels/v5/`, reviews in `out/panels/review5/`. The rule for this pass: every fix is a
+datum the renderer missed; the references only located the gaps. No value was tuned to a reference.
+
+### 1. Shelf glyphs, corner icon
+
+| Data | Value | Before | After |
+|---|---|---|---|
+| `IC_DoorButtonShelf` `brandStyles[s_crus_env]` "ShowSecondaryButtonIcon" (`Tag(general-button-secondary)`) | `FieldModifierBoolean ParamInput1 = true` | written to the host's raw `ParamInput1` and read by nothing; the template's `ShowIcon` (Boolean `ParamInput1`) stayed at the authored `show: false` | recorded per modifier family (`_StyledParams_`, `Boolean:ParamInput1`) and routed into the template's Boolean parameter on that slot: the icon instance shows |
+| `buttongeneralsecondarycomponentstandard` `QuarternaryStateTag` ← `TagFromBoolean(ShowIcon)` | `show-icon` / `hide-icon` | `hide-icon` | the slots the canvas's styles set are found on a probe cascade and routed before any selector runs; the tags are rebuilt |
+| the same shelf's embedded "Override Icon Shelf Button Size" (`Type(CustomShape)` inside a secondary button) | `ScaleX/Y 2`, pivot / anchor 0.5 | not applied: `ScaleX` had no handler, and the glyph's custom shape is the nested icon instance, expanded at the parent level after the shelf's styles ran | `ScaleX/Y` write the `scale` the layout applies; a child canvas's runtime entries are re-applied to instances the parent level expands inside it |
+| `iconwidgetstandard` `defaultStyles` "IconElement" (no CRUS container) | `SvgContainPositionX/Y 0.5` | template defaults never applied; `SvgContainPosition*` had no handler: glyph top-left in its box | an expanded standard's runtime look (its container's kit sheet, then its brand container else `defaultStyles`, the canvas rule) applies to its own instance at the lowest tier; the field writes `svgFill.containPosition*` |
+| `sk_crus_env_buttonprimarystyles` `RootIconElementInstance` | `PivotY 0.5`, `HeightBehavior 2` | applied scene-wide: every secondary glyph hung half a box above its row | each standard names its own kit sheet (`defaultStyles.sharedStyles`): the primary / secondary / large sheets now style their own hosts only |
+| `IC_DoorFooter` `Icon_DoorStatus` (a `WidgetCustomShape`) | own fields `color` Bright α 0.7, `enableColorOverlay` true; its `svgFill.color` null | the IR read only the null `svgFill.color` and defaulted to the generic icon colour MissionObjectives (yellow) | the shape's own overlay colour (unless a style sets one): near-white at 70 % on the `Icon_DoorStatus_BG` Base at 50 % (blue) |
+| `Icon_DoorStatus_BG` | Fixed 90 × 90 in `I_Door_Standard` (`coordinateMethod aspectOverridesWidth`, 1920 × 1080) | per-axis units: 48 × 167 px on the 1034 × 2005 ring pad (the "taller" icon) | `aspectOverridesWidth` keeps the authored height and lets the aspect set the width, so one unit is `target_h / 1080` on both axes (`aspectOverridesHeight`: `target_w / 1920`): 167 × 167 px. Text keeps its scale (min of the axes; unchanged) |
+
+The glyphs are the data's: light-low `icon_common_light_low.svg` (a disc over an arc; the references' "eye"),
+emergency `icon_common_light_emergency.svg` (an exclamation in a broken ring), lock `icon_common_lock_action.svg`.
+
+### 2. Glyph position (the button templates' layout)
+
+| Data | Value | Before | After |
+|---|---|---|---|
+| secondary template `embeddedStyles` `RootPosTop` / `RootIconPosVertical` (`icon-pos-top`) | `FlexDirection Column`; `EnableMaxHeight true` | the column applied; size bounds were not implemented at all | authored and styled bounds (`sizing.min/max*` + `enable*`, `MinSize*` / `MaxSize*` / `Enable*` / `Min/Max*Behavior`) clamp every resolved size, flex items included |
+| kit `RootIcon` | `SizeX/Y 1` Percent, `MaxSize 35`, `MinSize 18` | full-row-height icon | door shelf: the icon is capped at 35 units, ×2 by the shelf's scale: about half the button height, centred |
+| `LightControl_Component` `defaultStyles` (its runtime look, no brand container) | `IconWidgetInstance SizeY 0.55`, `EnableMaxHeight false` | — | the light rows show the glyph centred above the label inside each row (Astra: PASS). The kit's `RootIcon SizeY 1` still overrides the canvas's 0.55 (kit sheets apply after the canvas cascade: upstream tier order, ledger 106), so the glyph box is the row minus the label; open |
+
+### 3. Brightness residual: not established from the data
+
+Evidence chain (shader cache `ShaderCache_Vulkan.pak`, executable strings, DataCore):
+
+- `GlassShared` (`glasslib.cfib`) applies `RTT_CalcExposure` + `RTT_Tonemap` to the screen image only when
+  `RTT_RequiresTonemapping()` (`RenderToTextureSizeParams[1].y >= 0`); its two branches are a Reinhard to LDR
+  (`FLAG_TONEMAP_TO_LDR`) or `RTT_CalculateExposureToMatchScene` (image × adapted scene luminance ÷ the render target's
+  mean luminance × an EV-compensation ratio). `RenderToTextureSizeParams` / `RenderToTextureExposureParams` and the flags
+  are set by the engine per render target (`PI_RenderToTexture*` per-instance constants in the executable); nothing in
+  DataCore, the MTL or the shaders says which UI render targets take either branch.
+- The executable's "RTT Tonemap/GammaEncode" pass (`SRTTTonemapGammeEncodeRes`) is `hdrpostprocess.cfxb` `HDRRTTPass` /
+  `HDRRTTScenePS`: `CheapToneMappingCurve` then `ToSRGB`, for HDR render-to-texture content (3D scenes). The door pads'
+  `UIRenderToTextureEntityComponentParams` say `runtimeImageSource: UserInterface`, `directRenderStage: None`: an LDR UI
+  target, so neither that pass nor the `DirectRTT_AfterTonemappingParams` / `r_RTT_AR_AfterToneMapping` path (the
+  AR / direct render stages) is established for them.
+- `GetGlobalDBAMultiplier_HDR` reads `ExposureState.adaptedLuminance`, which `CalcUpdatedFrameState` stores BEFORE the
+  exposure clamp (`curState.exposure = clamp(unclampedExposure, min, max)` is separate). The viewer derives it from the
+  clamped exposure. The v5 readback (`sc.Look.ExposureLog` per shot) shows the clamp in force only at the habitation pose
+  (`exposure=0.0199985`, metered 0.353); the other poses are inside the clamp, so this does not explain the general
+  ~0.3 factor.
+
+So the missing step is the engine's per-render-target RTT exposure state for UI targets (flags and the luminance mip),
+which is runtime-only. No constant was added and nothing was tuned.
+
+**Proposed engine feature (WP-E1, not implemented):** expose the metered, unclamped adapted luminance to materials on
+the fork (a `View` uniform written by the eye-adaptation pass beside the exposure, read by a material expression; UE
+materials that do not use it are unchanged), so `M_SC_Screen`'s `SCREEN_DBA` reads the value `GetGlobalDBAMultiplier_HDR`
+reads. Evidence: the fork's readback already carries it CPU-side (`FEyeAdaptationReadback::AverageSceneLuminance`, the
+`metered` field); the game shader above. It fixes screens in scenes darker than the clamp (habitation pose), not the
+general residual.
+
+### 4. Hangar elevator call panel: the label
+
+`buttongenerallargecomponentstandard` `TextFieldWidgetInstance` authors `verticalTextAlignment: Top`; its
+`defaultStyles.sharedStyles` names `modularkit_default_buttonlargestyles`, whose `RootTextFieldElementInstance` sets
+`HorizontalAlignment` / `VerticalAlignment` Center, padding 50, and whose `RootBackgroundElementInstance` draws
+`Default_button_large_bg.svg` at the Base role, α 0.3. The hangar canvas has no brand, so no brand kit sheet replaced
+it — and the standard's own base sheet was never applied. Applied (§1, standard runtime styles): CALL ELEVATOR is centred
+in the button. The button background is now the default kit's Base at 30 % (light grey in the hangar's palette); Astra
+calls it washed out (PARTIAL). That is the data with no brand: the hangar's runtime UI style (a location style) is not in
+its data (fix pass §3).
+
+### 5. WC face aspect: the wrong face was shot
+
+The v4 "WC pad" was `CRUS_Starlifter_Button_Toilet` (binding `51f206eb…`, texture aspect 0.98, linked to no door). The
+WC door's own pad is `CRUS_Starlifter_Button_ToiletDoor` (binding `ec57f17f…`, measured 1.759, rendered 1910 × 1086).
+v5 shoots it (`wc_door-*`): Astra rates the aspect MATCH. No measurement was wrong.
+
+### 6. M2 side strip
+
+The C2's rear ramp door (`Door_RN_RoomConnector_Breachable_OpenReverse_crus_Starlifter_Rear_Ramp`) carries two
+`ControlPanel_Screen_DoorControl_Starlifter_Interior_Button` children (`IP_Interior`, `IP_Exterior`), each one RTT face on
+`CRUS_Starlifter_Ramp_Button_Landscape`; no other screen face is near it in the C2 + hangar scene (132 faces). The C2
+does not have the strip; the M2 is not exported here, so where its strip comes from is open.
+
+### Tests (failing first)
+
+`starbreaker-ui` (668 lib tests, ui_check ALL GREEN): `tests_modifiers_number.rs` (contain position, scale, styled
+parameter families), `bb_layout/tests_size_bounds.rs` (authored / styled / Percent bounds, a bounded grow item, square
+`aspectOverrides*` units), `ui_ir/tests_custom_shape_colour.rs`, `bb_resolve/standard_styles_tests.rs` (routing, exact
+families, declared parameters, runtime styles, shared kit sheet, kit scoping, child styles on nested instances, a child's
+look kept at the parent level, a styled parameter's state tag before the cascade), `tests_state_tags.rs` (tag rebuild).
+Each failed on the code before its fix (the review-fix tests on a worktree of `879413c2`); one
+(`refresh_state_tags_replaces_the_bound_fields_tag`) passes on both and pins the replacement. `starbreaker-3d --lib` 975,
+CLI `ui::` 2; SCBridge 171, 167 pass, the 4 known failures. The review fixes leave every re-rendered panel (portrait ring,
+habitation, WC, WC door, light panel, hangar call panel, with their states) byte-identical to the v5 renders.
+
+### Verification (C2 + `hangar_xltop_001`, port 8771, `out/panels/v5/report.txt`)
+
+`FP_PADS total=34 resolved=28 hittable=28` (unchanged), 132 faces.
+
+| Reference | Ours | Layout | Label | Icons | Colour | Aspect | Data expectation | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| C2 cargo bay | cargo_bay_wall-open | CLOSE | MATCH | CLOSE | MISMATCH | CLOSE | MATCH | PARTIAL |
+| M2 ACS LV1 | cargo_bay_wall-open-context | MATCH | CLOSE | MATCH | MISMATCH | MATCH | MATCH | PARTIAL |
+| M2 wide | cargo_bay_wall-open | CLOSE | MATCH | CLOSE | MISMATCH | MISMATCH | MATCH | PARTIAL |
+| C2 habitation | habitation-closed | CLOSE | MATCH | CLOSE | MISMATCH | CLOSE | MATCH | PARTIAL |
+| Crusader icons | portrait_ring-closed | CLOSE | MATCH | CLOSE | MISMATCH | CLOSE | MATCH | PARTIAL |
+| Crusader icons 2 | portrait_ring-closed | CLOSE | MATCH | CLOSE | MISMATCH | CLOSE | MATCH | PARTIAL |
+| Crusader main deck | portrait_ring-closed | MATCH | MATCH | CLOSE | MISMATCH | CLOSE | MATCH | PARTIAL |
+| Crusader portrait | habitation-closed | MATCH | MATCH | CLOSE | CLOSE | MATCH | MATCH | PARTIAL |
+| C2 WC | wc_door-closed | MATCH | CLOSE | CLOSE | MISMATCH | MATCH | MATCH | PARTIAL |
+| C2 square | component_square-closed | MATCH | MATCH | CLOSE | MISMATCH | CLOSE | MATCH | PARTIAL |
+
+Against v4: icons MISMATCH → CLOSE / MATCH on every pair (the shelf glyphs, the lock-bar padlock, the square cyan-and-white
+corner icon), WC aspect MISMATCH → MATCH; every render matches the data-derived expectation. Light panel PASS (glyphs
+white, centred above their labels, inside their rows). Hangar call panel PARTIAL (centred label; pale default-kit fill).
+Pilot MFD PASS. The remaining differences are colour (the field brightness / saturation, the footer buttons filled where
+the references look dark and outlined, the label white where they look cyan) and the wide pad's field proportion.
+
+### Review (Terra + Astra, `out/panels/review5/`)
+
+Fixed (`e26c4cc0`): the standards' runtime styles re-applied by a parent level over a child's finished instances (both,
+high); styled parameters routed after the selectors that test their state tags (both, high: probe cascade before the
+selectors); the child-instance replay bypassing pending filtering and entry order (both, high); Integer / Number slot
+collisions and declared parameters without synthetics (both); state-tag refresh dropping tags other fields or the author
+supply (both); flex allocation and stretch bypassing size bounds (both); styled `Min/Max*Behavior` ignored (Astra);
+Fixed bounds not scaled through a child-canvas merge (Astra); a custom shape's own alpha over a styled literal fill, a
+styled overlay switch, solid colours (both); scale ignored for flex-placed items (Terra); the brand container's own kit
+link and the canvas style link not used for standards (Astra); template JSON cloned per host (Astra).
+
+Not fixed, with the reason:
+
+- **Parent / pipeline styles setting a slot on a button a child canvas expanded** (both, high): the host annotations are
+  finalized at the child level. No case in the panel data (the CRUS block lives in the canvas that expands its buttons);
+  it needs host ownership carried through merges. Documented in `ui-cascade-passes.md`.
+- **Child replay for canvases merged by a canvas-reference modifier** (Astra, medium): only `WidgetCanvas.canvas` merges
+  carry it; no case in the panel data.
+- **Text scale under `aspectOverrides*`** (Astra, medium): geometry uses the square unit, text keeps the min-axis scale
+  (the reference door labels match it). The frozen `I_Door_Small_DRAK` (1920 × 1132, `aspectOverridesWidth`) gets Fixed
+  widths ×1.048; `ui_check.sh --full` (the frozen Clipper pixels) was not run — no Clipper export on this machine.
+- **Kit sheet scoping by the kit's family name** (Astra, medium): the sheet path is the existing kit naming
+  (`sk_<kit>_<family>styles`, `modular_kit_style_path`), not an asset name; CRUS's kit is not linked from the standards'
+  data, so a data link is not available for it.
+
+### Open
+
+- Screen colour: the ~0.3 brightness residual (§3, runtime RTT exposure state); the footer buttons' fill and the label's
+  cyan in the references (no data reached: the CRUS secondary kit's `RootFilled` colours are what we draw).
+- DBA below the exposure clamp: the proposed engine feature (§3).
+- Light panel glyph box: the canvas's `SizeY 0.55` under the kit's `SizeY 1` (tier order).
+- Hangar call panel: the pale default-kit fill without a location brand.
+- The wide pad's field proportion (M2 wide reference); the M2 side strip (§6).
+- Owner-set completeness flag; Lumen card capture of the screen emission (fix pass review).
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:

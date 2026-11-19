@@ -41,7 +41,10 @@ use std::{
 // 33: panel renders follow non-grow flex items beside a growing one, start-edge items with an unanchored pivot, the
 //     owner's complete user-variable set (an undeclared one at its default) and no invented brand (a hangar's panels
 //     render without one) (WP-I1 fix pass).
-pub const CACHE_FORMAT_VERSION: u32 = 33;
+// 34: panel renders route style-set component parameters (button glyphs), apply the widget standards' own styles
+//     and size bounds, scope the kit sheets to their standard, keep `aspectOverrides*` canvas units square and take a
+//     custom shape's own colour (WP-I1 fix pass 2).
+pub const CACHE_FORMAT_VERSION: u32 = 34;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");
