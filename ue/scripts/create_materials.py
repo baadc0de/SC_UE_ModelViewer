@@ -582,15 +582,20 @@ GLASS_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor * step(1e-6, F0)
 # M_SC_Screen: the same look over every screen face (no F0 > 0 condition: a screen always has its glass cover).
 SCREEN_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor));"
 GLASS_COVERAGE ="return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
-# Viewer look, not the game's (D15; WP-U3b.md section 14.10): screen-space refraction of the scene behind the glass, on while
-# GlassRefractionLook > 0. GLASS_REFRACTION_OFFSET returns the green tap's viewport-UV offset (xy) and the dispersion spread (z:
-# red at 1 - z, blue at 1 + z). Two terms, as angles seen from the camera (view space, x right, y up):
+# Viewer look, not the game's (D15; WP-U3b.md section 14.10): the glass refracts the scene behind it through UE's distortion
+# pass (RefractionMethod 2D offset). The pass moves the scene colour itself under every glass pixel before the translucency is
+# composited, so whatever is drawn between (glass behind glass, emissive and translucent surfaces) stays itself, unrefracted;
+# the first version replaced the background in the glass's own blend from a scene-colour copy, which embossed every
+# translucent layer behind with a difference image of the opaque scene (section 14.10, the embossing). GLASS_REFRACTION_OFFSET
+# returns the offset in viewport UV (xy, y down) and the dispersion spread (z: red at 1 - z, blue at 1 + z, the fork's distortion
+# pass, WP-E1 E1-8). Two terms, as angles seen from the camera (view space, x right, y up):
 # - wedge: the surface tilt of the normal map deviates the ray by (IOR - 1) x tilt x Strength, a thin prism; at the background
-#   that is x (1 - glass depth / background depth), so a surface right behind the pane barely moves (the first version also had a
-#   ripple band and a focusing streak; the owner's profiles set both to 0, so they are gone, 2026-11-19);
+#   that is x (1 - glass depth / background depth), so a surface right behind the pane barely moves;
 # - slab: a pane Thickness cm thick shifts the ray sideways by t sin(i) (1 - cos(i) / sqrt(n^2 - sin^2(i))) (zero head-on, growing
 #   towards grazing incidence), seen at the background's distance.
-# The offset is shrunk so every tap stays on the screen (no clamped-edge smears). Off: zero.
+# Dispersion spread s = GlassDispersion x (2 - N.V) (wider towards grazing). The offset is shrunk so every channel's sample stays on
+# the screen, by the room towards the edge it moves to (the pass would drop it to zero there: a hard cut). Look 0
+# (sc.Look.GlassRefraction 0, a diagnostic) returns zero.
 GLASS_REFRACTION_OFFSET = """
 if (Look <= 0.0) return float3(0.0, 0.0, 0.0);
 float n = clamp(IOR, 1.0001, 3.0);
@@ -612,47 +617,38 @@ if (lenD > 1e-4) a += TransformWorldVectorToView(D / lenD).xy * (shift / Zb);
 float2 O = a * float2(ResolvedView.ViewToClip[0][0], ResolvedView.ViewToClip[1][1]) * float2(0.5, -0.5);
 float s = clamp(Dispersion, 0.0, 0.95) * (2.0 - NoV);
 float2 uv = GetViewportUV(Parameters);
-float2 room = max(min(uv, 1.0 - uv) - 0.002, 0.0);
+float2 room = max(lerp(uv, 1.0 - uv, step(0.0, O)) - 0.002, 0.0);
 float2 reach = abs(O) * (1.0 + s) + 1e-6;
 O *= saturate(min(room.x / reach.x, room.y / reach.y));
 return float3(O, s);
 """
-# One scene-colour tap: the pixel's viewport UV + the offset x (1 + K x spread) (K -1 red, 0 green, +1 blue; Offset 0 = the pixel).
-GLASS_REFRACTION_TAP = "return GetViewportUV(Parameters) + Offset.xy * (1.0 + K * Offset.z);"
-# The refracted background replaces the one the blend lays under the glass (background x T), per channel (dispersion). Substrate
-# clamps a slab's emission to >= 0, so the replacement has two halves: where the refracted colour is brighter than the unrefracted
-# one the difference is added as emission, T x (refracted - unrefracted) (Mode 0); where it is darker the slab's own transmittance
-# is scaled by refracted / unrefracted (Mode 1: the factor on the normal-incidence transmittance, ^ cos theta_t because Substrate
-# applies Beer-Lambert along the refracted path, IOR from F0; a channel that is not darker, black included, keeps exactly 1).
-# Both are exact (zero / one) where nothing moves. T is the slab's
-# transmittance of the background ((1 - Schlick Fresnel) x Beer-Lambert, the slab's normal and F0). A tap whose depth is in front
-# of the glass is not taken (per channel: no foreground dragged into the pane), nor one in the clipped highlights of the 8-bit
-# scene-colour copy (encoded up to 10, pre-exposed).
-GLASS_REFRACTION_COMBINE = """
-if (Look <= 0.0) return Mode > 0.5 ? float3(1.0, 1.0, 1.0) : float3(0.0, 0.0, 0.0);
-float3 V = Parameters.CameraVector;
-float3 Nw = normalize(mul(normalize(NormalTS), (float3x3)Parameters.TangentToWorld));
-float NoV = clamp(abs(dot(Nw, V)), 1e-3, 1.0);
-float sf = sqrt(saturate(F0.g));
-float n = max((1.0 + sf) / max(1.0 - sf, 1e-3), 1.0001);
-float cosT = sqrt(saturate(1.0 - (1.0 - NoV * NoV) / (n * n)));
-float3 c = Centre.rgb;
-float3 tap = float3(TapR.r, TapG.g, TapB.b);
-float3 w = saturate((float3(DepthR, DepthG, DepthB) - PixelZ) / max(0.02 * PixelZ, 1.0));
-float hot = max(max(max(c.r, c.g), c.b), max(max(tap.r, tap.g), tap.b)) * ResolvedView.PreExposure;
-w *= saturate((9.5 - hot) / 1.5);
-float3 target = lerp(c, tap, w);
-if (Mode > 0.5)
-{
-    float3 m = float3(1.0, 1.0, 1.0);
-    if (target.r < c.r) m.r = target.r / c.r;
-    if (target.g < c.g) m.g = target.g / c.g;
-    if (target.b < c.b) m.b = target.b / c.b;
-    return pow(saturate(m), max(cosT, 1e-3));
-}
-float3 F = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
-float3 T = (1.0 - F) * pow(max(Transmittance, 1e-4), 1.0 / max(cosT, 1e-3));
-return T * max(target - c, 0.0);
+# One depth probe along the offset: the pixel's viewport UV + Offset x K x (1 + spread), i.e. along the farthest (blue) channel.
+GLASS_REFRACTION_PROBE = "return GetViewportUV(Parameters) + Offset.xy * (K * (1.0 + Offset.z));"
+# The moved sample must show what lies behind the pane at about the pixel's own background depth. Where it lands on something much
+# nearer (an object between the glass and the background: a rod inside the engineering cylinder, a door edge), screen-space
+# refraction would draw that object a second time beside itself; the offset is then shortened to the longest of 1, 1/2, 1/4 of it
+# whose sample (taken at the blue channel's reach, offset x (1 + spread)) is still at least ~3/4 of the way from the glass to the
+# pixel's background (soft between 1/2 and 9/10), else 0. The
+# result is converted to the distortion pass's units: DistortionCommon.ush ComputeBufferUVDistortion scales a 2D offset by
+# ViewSize / BufferSize x (unscaled view width, height) x (0.00023, -0.00023) x (ViewToClip[0][0], aspect x ViewToClip[0][0]), i.e.
+# both axes by unscaled width x 0.00023 x ViewToClip[0][0] and y flipped (the unscaled width is the view width / ViewResolutionFraction,
+# right for temporal and spatial upscaling alike); the pass itself also drops the offset where the moved sample is in front of the
+# glass (PostProcessUVDistortion with the material's refraction depth bias, 0). Returns the Refraction input: xy is the 2D offset
+# (the translator takes xy only and appends the material's depth bias; z is unused). The dispersion spread reaches the fork's
+# distortion pass through SCViewerRefractionDispersion (DistortAccumulatePS.usf, WP-E1 E1-8; only that pass defines
+# SCVIEWER_REFRACTION_DISPERSION_PASS, every other pass compiles the node without it).
+GLASS_REFRACTION_GUARD = """
+#ifdef SCVIEWER_REFRACTION_DISPERSION_PASS
+SCViewerRefractionDispersion = Offset.z;
+#endif
+float Zg = PixelZ;
+float span = max(SceneZ - Zg, 1.0);
+float3 d = float3(D1, D2, D4);
+float3 w = saturate(((d - Zg) / span - 0.5) * 2.5);
+float t = max(w.x, max(0.5 * w.y, 0.25 * w.z));
+float2 O = Offset.xy * t;
+float k = ResolvedView.ViewSizeAndInvSize.x / max(ResolvedView.ViewResolutionFraction, 1e-3) * 0.00023 * ResolvedView.ViewToClip[0][0];
+return float3(O.x / k, -O.y / k, 0.0);
 """
 # The glass graph is a port of these game functions. StarEngineRender.json pins their token hashes and
 # scripts/verify_star_engine_render.py re-checks them against the installed game; the master is not built from a
@@ -672,37 +668,27 @@ def check_ported(ported):
             raise RuntimeError(f"{name}: the game shader changed since the port was written; re-derive the graph")
 
 
-def glass_refraction(g, normal, transmittance, f0):
-    """The glass refraction look (viewer, not the game's; WP-U3b.md section 14.10): three scene-colour taps (red, green, blue)
-    along the refracted offset replace the background under the slab (GLASS_REFRACTION_*). Returns (emission, transmittance
-    factor): the brighter half of the replacement as the slab's emission, the darker half as a factor on its normal-incidence
-    transmittance; (0, 1) while the look is off. Scene colour and depth come from UE's SceneColor / SceneDepth expressions (the
-    translucency pass's scene-colour copy and the opaque depth), so every pass that cannot read them gets their neutral value.
-    GlassRefractionLook (0 = off, the master default) is the live switch the builder sets; the other scalars are the look's
-    strengths, adjudicated defaults (WP-U3b.md section 14.10)."""
+def glass_refraction(g, normal):
+    """The glass refraction look (viewer, not the game's; WP-U3b.md section 14.10): the master's Refraction input, a 2D offset
+    for UE's distortion pass (GLASS_REFRACTION_OFFSET, shortened by GLASS_REFRACTION_GUARD from three scene-depth probes along it).
+    GlassRefractionLook (master default 1: on, the shipped look; 0 only through the session diagnostic sc.Look.GlassRefraction 0)
+    switches the offset off; GlassRefractionStrength and GlassDispersion (the colour fringing, through the fork's per-channel
+    distortion, WP-E1 E1-8) are set per instance from the owner's profiles (SCLook.h), IOR and thickness are master defaults
+    (WP-U3b.md section 14.10)."""
     f2, f3 = unreal.CustomMaterialOutputType.CMOT_FLOAT2, unreal.CustomMaterialOutputType.CMOT_FLOAT3
-    look = g.scalar("GlassRefractionLook", 0.0, "Look")
-    pixel_z = (g.node(unreal.MaterialExpressionPixelDepth), "")
-    offset = g.custom(GLASS_REFRACTION_OFFSET, f3, Look=look, Strength=g.scalar("GlassRefractionStrength", 1.0, "Look"),
+    scene_z, pixel_z = (g.node(unreal.MaterialExpressionSceneDepth), ""), (g.node(unreal.MaterialExpressionPixelDepth), "")
+    offset = g.custom(GLASS_REFRACTION_OFFSET, f3,
+                      Look=g.scalar("GlassRefractionLook", 1.0, "Look"), Strength=g.scalar("GlassRefractionStrength", 1.0, "Look"),
                       IOR=g.scalar("GlassRefractionIOR", 1.5, "Look"), Thickness=g.scalar("GlassRefractionThickness", 1.5, "Look"),
-                      Dispersion=g.scalar("GlassDispersion", 0.25, "Look"), NormalTS=normal,
-                      SceneZ=(g.node(unreal.MaterialExpressionSceneDepth), ""), PixelZ=pixel_z)
+                      Dispersion=g.scalar("GlassDispersion", 0.25, "Look"), NormalTS=normal, SceneZ=scene_z, PixelZ=pixel_z)
 
-    def at(uv, cls):
-        e = g.node(cls, input_mode=unreal.MaterialSceneAttributeInputMode.COORDINATES)
-        g.link_any(*uv, e, ("Coordinates", "UV", "Input", ""))
+    def depth_at(k):
+        e = g.node(unreal.MaterialExpressionSceneDepth, input_mode=unreal.MaterialSceneAttributeInputMode.COORDINATES)
+        g.link_any(*g.custom(GLASS_REFRACTION_PROBE, f2, Offset=offset, K=g.const(k)), e, ("Coordinates", "UV", "Input", ""))
         return (e, "")
 
-    taps = [g.custom(GLASS_REFRACTION_TAP, f2, Offset=offset, K=g.const(k)) for k in (-1.0, 0.0, 1.0)]
-    # The unrefracted background through the same UV path as the taps, so a zero offset changes exactly nothing.
-    centre = g.custom(GLASS_REFRACTION_TAP, f2, Offset=g.op(unreal.MaterialExpressionConstant4Vector,
-                                                            names=(), constant=unreal.LinearColor(0, 0, 0, 0)), K=g.const(0.0))
-    sc, sd = unreal.MaterialExpressionSceneColor, unreal.MaterialExpressionSceneDepth
-    pins = dict(Look=look, Offset=offset, Centre=at(centre, sc), TapR=at(taps[0], sc), TapG=at(taps[1], sc), TapB=at(taps[2], sc),
-                DepthR=at(taps[0], sd), DepthG=at(taps[1], sd), DepthB=at(taps[2], sd), PixelZ=pixel_z,
-                Transmittance=transmittance, F0=f0, NormalTS=normal)
-    return (g.custom(GLASS_REFRACTION_COMBINE, f3, Mode=g.const(0.0), **pins),
-            g.custom(GLASS_REFRACTION_COMBINE, f3, Mode=g.const(1.0), **pins))
+    return g.custom(GLASS_REFRACTION_GUARD, f3, Offset=offset, D1=depth_at(1.0), D2=depth_at(0.5), D4=depth_at(0.25),
+                    SceneZ=scene_z, PixelZ=pixel_z)
 
 
 def glass_master():
@@ -714,8 +700,8 @@ def glass_master():
     in a translucent blend mode and draws the slab opaque. Coverage is 1: the authored Opacity is not read. Every
     glass map is read at the game's glassUV = baseUV * GlassTiling, v *= GlassVStretch. F0 takes the look's
     GlassReflectanceScale and GlassReflectanceFloor (defaults 1 and 0 = the game's value). The refraction look
-    (glass_refraction) drives the slab's emission and a factor on its transmittance: 0 and exactly 1 unless
-    GlassRefractionLook is on."""
+    (glass_refraction, always on in the viewer's look) is the Refraction input of UE's distortion pass (2D offset): it moves
+    the scene behind the glass and leaves the slab itself as the game's."""
     check_ported(GLASS_PORTED)
     g = Graph("M_SC_Glass", unreal.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE,
               unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
@@ -752,16 +738,21 @@ def glass_master():
     g.link(*f90, film, "F90")
     g.link(*g.scalar("ThinFilmThickness", 0.0), film, "Thickness")
     use_film = g.scalar("UseThinFilm", 0.0)
-    slab_f0 = g.lerp(f0, (film, "Specular Color"), use_film)
-    # The refraction look (off: emission 0 and a transmittance factor of exactly 1, so the slab is the game's glass).
-    emission, factor = glass_refraction(g, normal, transmittance, slab_f0)
     mfp = g.node(unreal.MaterialExpressionSubstrateTransmittanceToMFP)
-    g.link(*g.mul(transmittance, factor), mfp, "TransmittanceColor")
-    slab = g.slab(g.const3((0, 0, 0)), slab_f0, g.lerp(f90, (film, "Edge Specular Color"), use_film), g.roughness("", uv),
-                  normal, emission, (mfp, "MFP"), front=False)
+    g.link(*transmittance, mfp, "TransmittanceColor")
+    slab = g.slab(g.const3((0, 0, 0)), g.lerp(f0, (film, "Specular Color"), use_film),
+                  g.lerp(f90, (film, "Edge Specular Color"), use_film), g.roughness("", uv), normal, None, (mfp, "MFP"),
+                  front=False)
     slab.set_editor_property("sub_surface_type", unreal.MaterialSubSurfaceType.MSS_SIMPLE_VOLUME)
-    g.weight(slab, g.custom(GLASS_COVERAGE, f1, HeightMap=height_map, UseHeightMap=use_height_map,
-                            Clip=g.scalar("GlassHeightClip", 0.0)))
+    coverage = g.custom(GLASS_COVERAGE, f1, HeightMap=height_map, UseHeightMap=use_height_map, Clip=g.scalar("GlassHeightClip", 0.0))
+    g.weight(slab, coverage)
+    # The refraction look: UE's distortion pass with the material's own 2D offset (GLASS_REFRACTION_OFFSET; WP-U3b.md section
+    # 14.10), x the coverage (the pass writes the offset wherever the mesh is drawn, a clipped hole in the glass too). The glass
+    # surface (After-DOF translucency) is composited after the distortion; a pane UE moves into standard translucency while depth
+    # of field is on (behind the focus distance) is drawn into the scene colour first, so the distortion moves its own surface too
+    # (WP-U3b.md section 14.10, limits).
+    g.m.set_editor_property("refraction_method", unreal.RefractionMode.RM_2D_OFFSET)
+    g.out(*g.mul(glass_refraction(g, normal), coverage), MP.MP_REFRACTION)
     return g.save()
 
 

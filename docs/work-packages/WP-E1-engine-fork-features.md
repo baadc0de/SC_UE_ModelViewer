@@ -1183,6 +1183,39 @@ coordinator's triage): `SCVIEWER_ENGINE_TONE_CURVE` 5, `SCVIEWER_ENGINE_EXPOSURE
   project's Epic scalability default for scenes whose ray-tracing load allows it, `SCLook::UpdateShortRangeAO`), `sc.Look.SSDO game` applies
   only the direct term.
 
+### E1-8 Refraction dispersion
+Today: UE's distortion pass (`DistortAccumulatePS` / `DistortApplyScreenPS`) moves the scene colour by one 2D offset per pixel.
+The viewer's glass refraction look (ue/verification/WP-U3b.md §14.10) moved into that pass to fix an embossing artefact, and the
+owner's colour fringing (dispersion per profile: canopy 0.25, kit 0.25, default 0.5) needs per-channel offsets; taps of a
+scene-colour copy in the glass's own blend would bring the artefact back.
+- `r.Refraction.Dispersion` (read only, default 0 = UE): 1 adds a fourth accumulate target (`PF_G16R16F`, additive) holding each
+  surface's offset × its spread `s`, and an apply permutation (`USE_DISPERSION`) that samples red at `offset − D`, green at the
+  offset and blue at `offset + D` (`D` the sum over the surfaces).
+- The spread comes from the material: `DistortAccumulatePS.usf` declares `static float SCViewerRefractionDispersion` (0) and
+  `SCVIEWER_REFRACTION_DISPERSION_PASS` before the generated material, so a Custom node can set it under that `#ifdef`; every other
+  pass compiles the same node without it. No new material input, translator or shader-key change.
+- Fallbacks: rough refraction (`r.Refraction.Blur 1`), mobile / below SM5 and non-Substrate keep UE's single offset.
+
+#### Result (E1-8)
+Engine `848efefd8` (`DistortionRendering.cpp`, `DistortAccumulatePS.usf`, `DistortApplyScreenPS.usf`, capabilities header).
+- **Contract.** As above; with the cvar on, the offset target is always float (`r.Refraction.OffsetQuality` ignored: an 8-bit green
+  offset beside a float dispersion part would split unevenly), the scene colour is sampled bilinearly (sub-pixel offsets and
+  channel splits move smoothly instead of stepping a pixel), the accumulate pass also binds UE's variance / closest-depth
+  targets (unread), and the blend state adds the fourth target (RG). The merge pass and mobile / below-SM5 platforms compile no
+  dispersion permutation; the PSO precache lists the four single-sample targets (UE's rough and MSAA descriptions unchanged).
+  Every desktop Substrate accumulate shader declares the fourth output; with the cvar at 0 it is unbound and the image is UE's.
+- **Project.** `DefaultEngine.ini` `r.Refraction.Dispersion=1` (with `r.Refraction.Blur=0`, `r.Refraction.OffsetQuality=1`);
+  `M_SC_Glass`'s guard node sets the spread `GlassDispersion × (2 − N·V)`; the owner's profiles carry the dispersion again
+  (ue/verification/WP-U3b.md §14.10).
+- **Verified** (WP-U3b.md §14.10): engine + project build; 159 / 163 `SCBridge` (the 4 known); C2 runs: fringing visible at the
+  owner's values on the pod, cylinder, lift, lift2, canopy and optic, Astra "similar in strength and character" to the first
+  version on the pod and lift and wider on stacked panes (cylinder, optic); `r.Refraction.Dispersion 0` (ini override) with the
+  glass's spread 0 matches the pre-E1-8 engine at the frame-to-frame noise (44.9-55.0 dB vs 44.5-54.4); cost 0.03-0.09 ms for the
+  whole pass (was 0.03-0.05 ms with one offset).
+- **Review** (Terra / Astra, `out/glass/emboss/review2/`): fixed the mobile / PSO feature-level gate, float offsets with
+  dispersion, bilinear sampling, scoped permutations, the material's depth probes at the blue channel's reach; not done: an
+  apply-pass depth check of the summed channel positions (stacked panes), a shader variant without the fourth output.
+
 ### Later / investigations
 - Lumen World Cache with the adaptive Substrate G-buffer (`LumenWorldCacheTracePaths.usf ReadMaterialData`; D13).
 - Native `ProjectorTexture` on spot lights through the rect-light texture atlas (phase two of E1-3).
@@ -1204,3 +1237,4 @@ coordinator's triage): `SCVIEWER_ENGINE_TONE_CURVE` 5, `SCVIEWER_ENGINE_EXPOSURE
 | E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb`; review fixes 3 `9303fe332`; review fixes 4 `0fa9c692a` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)); review fixes `0d847e519` (Terra T1–T7, Astra A1–A18; `sc.Look.Exposure ue` overrides, scoped cvar priority, fixture provenance): 25/25 tests, medfrnt before / after runs (E1-5 review fixes); review fixes 2 `3808c1160` (LUT task race, snapshot after view extensions, CPU-curve limits, incident weight / FP32 / unfloored, multi-view fallbacks, LUT policy API; trace without pre-exposure, isolated policy test): 137/141 `SCBridge`, E1-5 steady state and steps within 0.0005 stops (E1-5 review fixes 2); review fixes 3 (T2 / A10 incident producers and exact tiling, A14 collapsed rects, T6 UE rects, A11 histogram source, A12 ordered limits, A15 double LUT scale): tests first (`.ReviewRules3`), 148/152, steady state and steps within 0.0004 stops of `rv2` (E1-5 review fixes 3); review fixes 4 (per-view Reflected fallback input): rule test, 150/154, within 0.0002 stops of `rv3` (Review fixes 4) |
 | E1-6 | `ad5c402d9`, `05559963d`, `9f382da2b`, `c7a0e82f7`; review fixes 3 `41df91ebe`; review fixes 4 `0fa9c692a` | SCFxBuild: loop guard from the engine constant (`SCFxRules.h`), typed expressions, beam spawn-rate and count expressions, clamp-sum strength curves, owner-scale sprite sizes, `-LoopCapacity`; runtime contract reduced (`SCFxStrength.h`, `SCFxBeam.h`, cargo contacts, `sc.Fx.Spawn`); `bTreatAsEngineModule` kept (boundary); tests `SCBridge.Fx.*`; WP-K4 contract note | engine + project build, FX build errors=0, 25/25 tests, medfrnt overflow runs at 8 / 32, GPU cost, before / after frames, Astra (Result (E1-6)); review fixes `e2ec17572` (effective limit cvar, default 8, 32 in `DefaultEngine.ini`; expression validation; expression-aware filtering; collections; rate residual) and the builder / contract fixes (`SCFxContract.h`, `-VerifyContract`, package check): tests first, 137/141, FX build errors=0, verify stale=0, 0 overflows, PSNR as E1-6 (E1-6 review fixes); review fixes 3 (A1 captured limit, A2 runtime validation, A3 burst predicate, A4 UE timing, A5 collections, A8 counter, GreaterThan; builder T3-T5, A8, A9, contract 3): tests first, 148/152, FX build errors=0, verify stale=0 load_failures=0, 0 overflows, PSNR as before (E1-6 review fixes 3); review fixes 4 (collection lookup subclasses / discovery): 150/154, verify stale=0 (Review fixes 4) |
 | E1-7 | `6f5b30b63` (supersedes `b65d09ad1`, `9cad77abb`); review fixes `500fca6c0`; review fixes 4 `0fa9c692a` | fixture (+`DeriveSpecularOcclusion`), `FSCStarEngine` SSDO values, `FSCSSDOSettings`, `bStarEngineSSDO` (off, D15), `sc.Look.SSDO`, tests `SCBridge.ViewerExposure.SSDO.*`; `ue/EnginePatches`, `engine_patches.py`, `r.GeneralPurposeTweak` removed (routes, docs, AGENTS, READMEs) | engine + project build, 141/145 `SCBridge` (the 4 known), medfrnt old patch vs new feature off / on, SR-AO interplay, deferred-light run, GPU cost, Astra (Result (E1-7)); review fixes (partial replacement, short-range GI, deferred SSAO, DFAO, orthographic, game arc cosines, toon fallback; project null world, integral quality, shipped-default test): 148/152, pre / post interplay and GI runs, old vs new at noise, Astra pass (E1-7 review fixes); review fixes 4 (GI only where written, HWRT fallback, per-view AO downsample, GI resolution, bEnabled, ties-to-even): 150/154, post pairs unchanged, downsample-2 / irradiance-field / HWRT + RDG validation runs (Review fixes 4) |
+| E1-8 | `848efefd8` | `DefaultEngine.ini` (`r.Refraction.Dispersion=1`, `r.Refraction.Blur=0`, `r.Refraction.OffsetQuality=1`), `M_SC_Glass` on the distortion pass with the spread (`create_materials.py`), profiles with dispersion (`SCLook.h`), tests `SCBridge.Materials.*` | engine + project build, 159/163 `SCBridge` (the 4 known), C2 runs with fringing at the owner's values, cvar 0 vs pre-E1-8 at noise, GPU cost, Astra, Terra / Astra review (Result (E1-8); ue/verification/WP-U3b.md §14.10) |

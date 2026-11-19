@@ -673,7 +673,7 @@ int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const 
         Seen.Add(MID);
         MID->SetScalarParameterValue(FSCMaterialBuilder::GlassRefractionLookParam, bOn ? 1.f : 0.f);
         ++Set;
-        if (!bOn) return; // off: the profile values are inert (the look's Custom nodes return 0 and 1)
+        if (!bOn) return; // off: the profile values are inert (the offset is zero)
         const EGlassProfile Profile = SelectGlassProfile(MID, bKit);
         ApplyGlassProfile(MID, Profile);
         int32& N = Profile == EGlassProfile::Canopy ? Actor.Canopy : Profile == EGlassProfile::Kit ? Actor.Kit : Actor.Default;
@@ -686,8 +686,9 @@ int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const 
         Actor = FGlassProfileCounts();
         for (UMaterialInstanceDynamic* MID : It->Materials)
             if (FSCMaterialBuilder::IsGlassMaster(MID)) Apply(MID);
-        // A cooked ship or hangar carries constant copies of its glass instances (master default: off). Switching the look on
-        // puts one dynamic instance over each (shared by every slot of the actor that used it); off leaves the rest as cooked.
+        // A cooked ship or hangar carries constant copies of its glass instances (the master default: on, strength 1). Each gets one
+        // dynamic instance over it (shared by every slot of the actor that used it), on or off: on, so it takes its profile; off (the
+        // diagnostic), so it does not keep refracting at the master default.
         TMap<UMaterialInterface*, UMaterialInstanceDynamic*> Dynamic;
         TArray<UPrimitiveComponent*> Components;
         It->GetComponents(Components);
@@ -697,7 +698,6 @@ int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const 
                 UMaterialInterface* M = C->GetMaterial(I);
                 if (!FSCMaterialBuilder::IsGlassMaster(M)) continue;
                 if (auto* MID = Cast<UMaterialInstanceDynamic>(M)) { Apply(MID); continue; }
-                if (!bOn) continue;
                 UMaterialInstanceDynamic*& Over = Dynamic.FindOrAdd(M);
                 if (!Over)
                 {
@@ -723,21 +723,16 @@ int32 SCLook::SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const 
 
 void SCLook::RefreshGlassRefraction(UWorld* World)
 {
-    if (USCViewerSettings::Get()->bGlassRefraction) SetGlassRefraction(World, true);
+    SetGlassRefraction(World, USCViewerSettings::Get()->bGlassRefraction);
 }
 
-int32 SCLook::ToggleGlassRefraction(UWorld* World)
-{
-    return SetGlassRefraction(World, !USCViewerSettings::Get()->bGlassRefraction);
-}
-
-// sc.Look.GlassRefraction [0|1]: the glass refraction look (refraction, dispersion and banding of the scene behind every
-// M_SC_Glass instance; WP-U3b.md §14.10) for this session; no argument toggles it, like key G.
+// sc.Look.GlassRefraction [0|1]: the glass refraction look (UE's distortion pass moves the scene behind every M_SC_Glass instance;
+// WP-U3b.md §14.10), on in the viewer's look; 0 switches it off for this session (diagnostics). No argument: logs the state.
 static FAutoConsoleCommandWithWorldAndArgs GSCLookGlassRefraction(
-    TEXT("sc.Look.GlassRefraction"), TEXT("sc.Look.GlassRefraction [0|1]: glass refracts, disperses and bands what is behind it (no argument: toggle; key G)"),
+    TEXT("sc.Look.GlassRefraction"), TEXT("sc.Look.GlassRefraction [0|1]: glass refracts what is behind it (on in the look; 0: off for this session, diagnostics; no argument: log the state)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
         if (Args.IsValidIndex(0)) SCLook::SetGlassRefraction(World, FCString::Atoi(*Args[0]) != 0);
-        else SCLook::ToggleGlassRefraction(World);
+        else UE_LOG(LogTemp, Display, TEXT("LOOK glass_refraction on=%d"), USCViewerSettings::Get()->bGlassRefraction);
     }));
 
 // sc.Screens [index [distance cm]] (WP-I1 verification): every screen face of the loaded vehicles and environments

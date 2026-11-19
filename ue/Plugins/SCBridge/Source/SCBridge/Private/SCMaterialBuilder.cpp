@@ -1,6 +1,7 @@
 // FSCMaterialBuilder: master lookup and UMaterialInstanceDynamic creation from an FSCMaterialDesc.
 #include "SCMaterialBuilder.h"
 #include "SCViewerSettings.h"
+#include "SCLook.h"
 #include "Engine/Texture2D.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -93,6 +94,10 @@ UMaterialInstanceDynamic* FSCMaterialBuilder::Create(const FSCMaterialDesc& Desc
     for (const auto& Pair : Desc.Scalars) MID->SetScalarParameterValue(Pair.Key, Pair.Value);
     for (const auto& Pair : Desc.Vectors) MID->SetVectorParameterValue(Pair.Key, Pair.Value);
     if (Desc.Master == ESCMaster::Glass || Desc.Master == ESCMaster::Screen) ApplyGlassLook(MID); // a screen's face is glass too (no refraction)
+    // The refraction profile from the instance's own data (canopy or default; SCLook.h), so glass built outside a viewer load
+    // (sc.Import, the editor's folder import) refracts with it too. A player kit's glass becomes Kit when the kit attaches
+    // (SCLook::RefreshGlassRefraction).
+    if (IsGlassMaster(MID)) SCLook::ApplyGlassProfile(MID, SCLook::SelectGlassProfile(MID, false));
     for (const auto& Pair : Desc.Textures)
     {
         if (UTexture2D* const* Texture = Textures.Find(Pair.Value); Texture && *Texture) MID->SetTextureParameterValue(Pair.Key, *Texture);

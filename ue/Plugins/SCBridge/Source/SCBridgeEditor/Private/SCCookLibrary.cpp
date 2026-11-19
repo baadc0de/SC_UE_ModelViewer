@@ -124,7 +124,8 @@ struct FCooker
         UPackage* Package = CreatePackage(*(Root / TEXT("Materials") / Name));
         auto* MIC = NewObject<UMaterialInstanceConstant>(Package, *Name, RF_Public | RF_Standalone);
         MIC->SetParentEditorOnly(Constant(MID->Parent));
-        // The glass refraction look is a session switch, never baked: a cooked glass keeps the master default (off).
+        // The glass refraction switch is never baked: a cooked glass keeps the master default (on, the viewer's look since
+        // 2026-11-19; the session diagnostic sc.Look.GlassRefraction 0 reaches it through a dynamic instance at load).
         for (const FScalarParameterValue& P : MID->ScalarParameterValues)
             if (P.ParameterInfo.Name != FSCMaterialBuilder::GlassRefractionLookParam) MIC->SetScalarParameterValueEditorOnly(P.ParameterInfo, P.ParameterValue);
         for (const FVectorParameterValue& P : MID->VectorParameterValues) MIC->SetVectorParameterValueEditorOnly(P.ParameterInfo, P.ParameterValue);

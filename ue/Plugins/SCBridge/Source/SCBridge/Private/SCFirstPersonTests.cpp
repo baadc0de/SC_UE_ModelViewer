@@ -504,9 +504,6 @@ bool FSCFirstPersonKeyTable::RunTest(const FString&)
         TestFalse(*FString::Printf(TEXT("%s bound once"), *Entry.Key.ToString()), Keys.Contains(Entry.Key));
         Keys.Add(Entry.Key);
     }
-    // G: the glass refraction look (WP-U3b.md §14.10), the same key as in orbit / fly (SSCViewportInput).
-    const auto* Glass = ASCFirstPersonCharacter::KeyTable().FindByPredicate([](const auto& E) { return E.Key == EKeys::G; });
-    TestTrue(TEXT("G toggles the glass look"), Glass && Glass->Value == ESCFirstPersonAction::GlassLook);
     return true;
 }
 #endif

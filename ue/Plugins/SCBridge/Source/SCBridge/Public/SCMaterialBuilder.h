@@ -71,9 +71,10 @@ public:
      *  GlassReflectanceFloor; master defaults 1 and 0 = the game's F0). */
     static const FName GlassReflectanceScaleParam;
     static const FName GlassReflectanceFloorParam;
-    /** M_SC_Glass scalar: the refraction look on (1) or off (0, the master default = the game's glass), from
-     *  USCViewerSettings::bGlassRefraction. Its strengths (GlassRefractionStrength, GlassDispersion) are master defaults until
-     *  SCLook::SetGlassRefraction switches an instance on with its profile (canopy, player kit, default; SCLook.h). */
+    /** M_SC_Glass scalar: the refraction look (UE's distortion pass) on (1, the master default and the viewer's look) or off
+     *  (0, the session diagnostic), from USCViewerSettings::bGlassRefraction. Its strengths (GlassRefractionStrength,
+     *  GlassDispersion) come from the instance's profile (canopy, player kit, default; SCLook.h): set when it is built and by
+     *  SCLook::SetGlassRefraction. */
     static const FName GlassRefractionLookParam;
     /** M_SC_Screen's texture parameter: the panel's image (the exporter's render of its UI, ui_bindings), sRGB colour.
      *  Unset (black) draws the screen as dark glass. */
@@ -86,7 +87,8 @@ public:
     /** Whether the instance's master is a screen master (M_SC_Screen, M_SC_Screen_Translucent; WP-I1). */
     static bool IsScreenMaster(const UMaterialInterface* Material);
     /** Game thread. Missing textures keep the master's neutral default and add a warning. A glass instance also takes the
-     *  look's glass reflectance and refraction (ApplyGlassLook; not part of the pure description). */
+     *  look's glass reflectance and refraction (ApplyGlassLook) and its non-kit refraction profile (SCLook::SelectGlassProfile);
+     *  neither is part of the pure description. */
     static UMaterialInstanceDynamic* Create(const FSCMaterialDesc& Desc, const TMap<FSCTextureKey, UTexture2D*>& Textures,
         UObject* Outer, TArray<FString>& Warnings);
 };
