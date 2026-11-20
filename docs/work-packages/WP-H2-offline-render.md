@@ -244,3 +244,15 @@ the test, with no physical display changes or imported assets. Run in `-game -Ag
 `-ExecCmds="Automation Now; RunTests SCBridge.RenderGpu.FrozenOutputDevice"` and
 `-TestExit="Automation Test Queue Empty"`. This isolates the renderer's output-device selection from
 scene history. The real Cutlass HDR result above remains the integration measurement.
+
+After registering the capture with TSR, the 1920×1080 Cutlass test repeated the first 12 samples of the same
+authored orbit in one viewer with Windows display mode unchanged. Both sidecars recorded `AAM_TSR`, zero
+holds, maximum step error 0.001624° per 0.6° step and maximum radius/height error 0.492 mm. Capture took
+6.860 s and 6.911 s. Across all decoding-matched RGB16 samples, normalized absolute repeat error averaged
+0.001090499 and peaked at 0.392919814 (25,750/65,535). Both image-evenness tests failed. The first
+offline frame against the UI-free viewport at the same recorded camera pose had mean absolute error
+0.056784791 and peak 0.861951629, expanding each viewport RGB8 code to RGB16 by multiplication by 257.
+Visual review found matching ship silhouette and hangar framing, with stronger grouped wing lamps in the
+viewport, different floor shadows and more colourful cockpit highlights in the offline frame.
+The 0.0001 peak repeatability requirement and viewport appearance gate remain open. The comparison
+files, camera sidecars and per-frame metrics are in `out/h2/tsr1080`.
