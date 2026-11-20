@@ -355,9 +355,26 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& G
         Request->SetArrayField(TEXT("weapons"), Names);
     }
     Request->SetBoolField(TEXT("spare_attachments"), bSpareAttachments);
+    return ExportPlayerJson(Request, &scbridge_export_player_request, Progress);
+}
+
+UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayerClips(const FString& Gender, const TArray<FString>& Clips,
+    TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
+{
+    TSharedRef<FJsonObject> Request = MakeShared<FJsonObject>();
+    Request->SetStringField(TEXT("gender"), Gender);
+    TArray<TSharedPtr<FJsonValue>> Names;
+    for (const FString& Clip : Clips) Names.Add(MakeShared<FJsonValueString>(Clip));
+    Request->SetArrayField(TEXT("clips"), Names);
+    return ExportPlayerJson(Request, &scbridge_export_player_clips, Progress);
+}
+
+UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayerJson(const TSharedRef<FJsonObject>& Request, FPlayerExport Export,
+    TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
+{
     FString RequestJson;
     FJsonSerializer::Serialize(Request, TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&RequestJson));
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), RequestJson, Progress] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), RequestJson, Progress, Export] {
         FSCExportResult Result;
         const double Start = FPlatformTime::Seconds();
         FScopeLock Guard(&Self->HandleLock);
@@ -368,7 +385,7 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& G
         }
         sc_blob Blob{nullptr, 0};
         const FTCHARToUTF8 RequestUtf8(*RequestJson);
-        const sc_status Status = scbridge_export_player_request(Self->Handle, RequestUtf8.Get(), &FSCExportProgress::Callback, &Progress.Get(), &Blob);
+        const sc_status Status = Export(Self->Handle, RequestUtf8.Get(), &FSCExportProgress::Callback, &Progress.Get(), &Blob);
         Result.Seconds = FPlatformTime::Seconds() - Start;
         const uint64 BlobBytes = Status == SC_STATUS_OK ? uint64(Blob.len) : 0;
         if (Status == SC_STATUS_OK)

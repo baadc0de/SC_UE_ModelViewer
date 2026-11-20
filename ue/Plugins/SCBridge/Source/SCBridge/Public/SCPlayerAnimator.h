@@ -27,6 +27,7 @@ struct SCBRIDGE_API FSCPlayerClip
     static bool Parse(const FString& Json, TFunctionRef<int32(const FString&)> BoneIndex, FSCPlayerClip& Out, FString& Error);
     /** Absolute clip: overwrite the tracked channels at Seconds (clamped to the clip). */
     void Sample(float Seconds, TArray<FTransform>& Pose) const;
+    FTransform SampleBone(int32 Bone, float Seconds, const FTransform& Base) const;
     /** Override the tracked channels with weight Alpha (sparse layer). */
     void Overlay(float Seconds, float Alpha, TArray<FTransform>& Pose) const;
     /** Additive clip: local = delta (parent space) composed with the base; translation adds. */
@@ -131,6 +132,11 @@ public:
     bool Init(const FSCPlayerKit& Kit, const FReferenceSkeleton& Ref, FSCPlayerClipMap Clips, FString& Error);
     bool IsReady() const { return !Pose.IsEmpty(); }
     void Tick(const FSCAnimatorInput& Input);
+    /** Replace locomotion with an authored body action, keeping the root pinned as in locomotion. */
+    void SampleAction(const FSCPlayerClip& Clip, float Seconds, float Blend, float PitchDegrees);
+    void BeginActionBlend() { ActionBlendPose = Pose; }
+    /** World-joint motion in leader component space, with the action's first sample as the origin. */
+    FTransform ActionRootDelta(const FSCPlayerClip& Clip, float Seconds) const;
     const TArray<FTransform>& GetPose() const { return Pose; }
     /** Component-space transform of Bone in the current pose. */
     FTransform ComponentSpace(int32 Bone) const;
@@ -181,7 +187,7 @@ private:
 
     const FSCPlayerKit* Kit = nullptr;
     FSCPlayerClipMap Clips;
-    TArray<FTransform> RefPose, Pose, Scratch, Scratch2;
+    TArray<FTransform> RefPose, Pose, Scratch, Scratch2, ActionBlendPose;
     TArray<int32> Parents, SpineChain;
     TMap<FString, int32> BoneIndex;
     int32 RootMotion = INDEX_NONE;

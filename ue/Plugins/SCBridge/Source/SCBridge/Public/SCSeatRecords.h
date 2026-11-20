@@ -41,4 +41,5 @@ struct FSCSeatEntrance
     TArray<FString> SeatPortPath;
     FString DashboardPort;
     FSCSeatTransition Enter, Exit;
+    bool bRequiresWorldState = false, bHasGateways = false;
 };

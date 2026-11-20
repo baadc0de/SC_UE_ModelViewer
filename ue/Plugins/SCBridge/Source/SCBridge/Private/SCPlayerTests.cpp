@@ -27,6 +27,7 @@
 #include "Misc/ScopeExit.h"
 #include "SCAnimImporter.h"
 #include "SCMeshImporter.h"
+#include "SCSkeletonBuilder.h"
 
 namespace
 {
@@ -248,6 +249,49 @@ bool FSCPlayerAdditive::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCSeatActionRootMotion, "SCBridge.Seat.ActionRootMotion",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FSCSeatActionRootMotion::RunTest(const FString&)
+{
+    FSCDerivedMesh Data;
+    FSCRigNode Wrapper, World, Head;
+    Wrapper.SourceName = TEXT("Wrapper");
+    Wrapper.Local = FTransform(FRotator(0, 90, 0));
+    World.SourceName = TEXT("World");
+    World.Parent = 0;
+    Head.SourceName = TEXT("HeadCam");
+    Head.Parent = 1;
+    Data.RigNodes = {Wrapper, World, Head};
+    USkeleton* Skeleton = nullptr;
+    USkeletalMesh* Mesh = FSCSkeletonBuilder::Build(Data, GetTransientPackage(), Skeleton);
+    FSCPlayerKit Kit;
+    Kit.RootMotionBone = World.SourceName;
+    Kit.CameraBone = Head.SourceName;
+    FSCPlayerAnimator Animator;
+    FString Error;
+    if (!TestTrue(TEXT("Animator initializes on a wrapped skeleton"), Animator.Init(Kit, Mesh->GetRefSkeleton(), {}, Error))) return false;
+    const int32 RootBone = Animator.Bone(World.SourceName);
+    const int32 HeadBone = Animator.Bone(Head.SourceName);
+    FSCPlayerClip Clip;
+    Clip.Fps = 1.f;
+    Clip.Duration = Clip.Frames = 1.f;
+    FSCPlayerClip::FTrack& RootTrack = Clip.Tracks.AddDefaulted_GetRef();
+    RootTrack.Bone = RootBone;
+    RootTrack.PosTimes = {0.f, 1.f};
+    RootTrack.Pos = {FVector3f(10, 0, 0), FVector3f(110, 0, 0)};
+    FSCPlayerClip::FTrack& HeadTrack = Clip.Tracks.AddDefaulted_GetRef();
+    HeadTrack.Bone = HeadBone;
+    HeadTrack.PosTimes = {0.f, 1.f};
+    HeadTrack.Pos = {FVector3f::ZeroVector, FVector3f(0, 0, 60)};
+    TestTrue(TEXT("First sample is the motion origin"), Animator.ActionRootDelta(Clip, 0.f).Equals(FTransform::Identity));
+    TestTrue(TEXT("Root motion follows the leader's wrapped axes"),
+        Animator.ActionRootDelta(Clip, 1.f).GetLocation().Equals(FVector(0, 100, 0), .01));
+    Animator.BeginActionBlend();
+    Animator.SampleAction(Clip, 1.f, .5f, 0.f);
+    TestTrue(TEXT("Body pose keeps World pinned while the actor moves"), Animator.GetPose()[RootBone].Equals(FTransform::Identity));
+    TestTrue(TEXT("Seat action blends from the previous body pose"), Animator.GetPose()[HeadBone].GetLocation().Equals(FVector(0, 0, 30)));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPlayerWeaponStates, "SCBridge.Player.WeaponStateMachine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCPlayerWeaponStates::RunTest(const FString&)
 {

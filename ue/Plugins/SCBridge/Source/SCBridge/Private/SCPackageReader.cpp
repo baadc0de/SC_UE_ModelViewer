@@ -317,6 +317,11 @@ void ReadSeatRecords(const FReaderObject& Object, FSCSceneInstance& Instance)
         Entrance.DashboardPort = String(O, TEXT("dashboard_port"));
         Transition(O, TEXT("enter"), Entrance.Enter);
         Transition(O, TEXT("exit"), Entrance.Exit);
+        Entrance.bHasGateways = !ReaderArray(O, TEXT("linked_gateways")).IsEmpty();
+        if (const FReaderObject* Conditions; O->TryGetObjectField(TEXT("conditions"), Conditions))
+            for (const auto& Field : (*Conditions)->Values)
+                Entrance.bRequiresWorldState |= Field.Value && Field.Value->Type == EJson::String &&
+                    !Field.Value->AsString().Equals(TEXT("Either"), ESearchCase::IgnoreCase);
         Instance.SeatEntrances.Add(MoveTemp(Entrance));
     }
 }

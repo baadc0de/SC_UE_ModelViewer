@@ -404,6 +404,7 @@ void USCPlayerBodyComponent::ApplyTorchLight(bool bGame)
 }
 void USCPlayerBodyComponent::Detach()
 {
+    SeatClip = nullptr;
     if (Fire) Fire->Reset();
     SetComponentTickEnabled(false);
     SetFirstPersonPrimitives(false);
@@ -562,6 +563,18 @@ void USCPlayerBodyComponent::TickComponent(float DeltaTime, ELevelTick TickType,
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
     Step(DeltaTime);
 }
+void USCPlayerBodyComponent::SetSeatAction(const FSCPlayerClip* Clip, float Seconds, float Blend, float PitchDegrees)
+{
+    if (Clip != SeatClip || (Clip && Seconds == 0.f && SeatSeconds != 0.f)) Animator.BeginActionBlend();
+    SeatClip = Clip;
+    SeatSeconds = Seconds;
+    SeatBlend = Blend;
+    SeatPitch = PitchDegrees;
+}
+FTransform USCPlayerBodyComponent::BodyFrame() const
+{
+    return Leader->GetComponentTransform();
+}
 void USCPlayerBodyComponent::Step(float DeltaSeconds)
 {
     ASCFirstPersonCharacter* C = Character();
@@ -590,7 +603,8 @@ void USCPlayerBodyComponent::Step(float DeltaSeconds)
     }
     const FSCAnimatorInput Input = MakeInput(DeltaSeconds);
     LastTravelAngle = FMath::UnwindRadians(Input.TravelAngle);
-    Animator.Tick(Input);
+    if (SeatClip) Animator.SampleAction(*SeatClip, SeatSeconds, SeatBlend, SeatPitch);
+    else Animator.Tick(Input);
     // Capsule speed follows the same run decision as the animation (no sprint speed while strafing on the slow space).
     if (!C->bNoclip && C->GetProfile().RunSpeed > 0)
         C->GetCharacterMovement()->MaxWalkSpeed = Input.bFast ? C->GetProfile().RunSpeed : C->GetProfile().WalkSpeed;
@@ -641,7 +655,7 @@ void USCPlayerBodyComponent::ApplyView()
         FHitResult Hit;
         FCollisionQueryParams Params(SCENE_QUERY_STAT(SCEyeClamp), false, C);
         Params.AddIgnoredActor(Kit);
-        const bool bBlocked = GetWorld() && GetWorld()->SweepSingleByChannel(Hit, Axis, HeadWorld, FQuat::Identity, ECC_Camera,
+        const bool bBlocked = !SeatClip && GetWorld() && GetWorld()->SweepSingleByChannel(Hit, Axis, HeadWorld, FQuat::Identity, ECC_Camera,
                                                                              FCollisionShape::MakeSphere(NearClip * 2), Params);
         Eye = Capsule.InverseTransformPosition(bBlocked ? Hit.Location : HeadWorld);
         C->Camera->bUsePawnControlRotation = true;

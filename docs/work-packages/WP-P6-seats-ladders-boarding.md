@@ -24,8 +24,18 @@ resolved “Enter Pilot Seat” and “Enter Copilot Seat” from the shared int
 The clip-only archive exported all eleven body clips for each gender with zero missing, using 3.30 MiB for male
 and 3.33 MiB for female. The requests took 9.31 s and 9.86 s on cache misses. A separate request classified both
 authored look clips as unsupported aim poses, with zero missing. The UE reader exposes seat metadata through
-`sc.Seat.List`. Live seat entry, exit and occupancy, character root-motion warp and door or lift
-regression tests remain open. A2 needs the live occupancy event before it can set driver and crew audio contexts.
+`sc.Seat.List`.
+
+The runtime cockpit path resolves each access helper, seat attachment and dashboard rig from the imported ports. It
+requests the seven authored actions asynchronously and polls clip readiness, body motion completion and the two
+vehicle rigs. The player follows the seat socket through Retract, enters Driver or Crew after Select, and returns to
+walking after Deploy and Exit. A blocking overlap at the authored exit endpoint sends the seat back to its selected
+state. `sc.Seat.State` reports the active role for A2 integration and automated checks.
+
+This implementation covers cockpit routes with SkipDeploy, SkipRetract, no gateways, no flight-state requirements and
+a loaded player kit. It uses the authored yaw and pitch limits and the P2 spine-pitch implementation pending aim poses.
+The UE automation suite and live C2 proof are pending. The capsule-only camera path, weapon and door/lift regressions,
+and the three requested screenshots still need verification.
 
 The Rust checks used `cargo test --manifest-path vendor/StarBreaker/Cargo.toml --locked -p starbreaker-3d --lib seat_`
 (3 passed), the same command with `interaction_points_keep_their_interactions_in_order` (1 passed), and

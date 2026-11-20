@@ -166,6 +166,12 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         Commands.Add(MakeUnique<FAutoConsoleCommand>(Name, Help,
             FConsoleCommandWithArgsDelegate::CreateLambda([Body](const TArray<FString>& Args) { Body(Args); })));
     };
+    Add(TEXT("sc.Seat.State"), TEXT("sc.Seat.State: log the currently occupied cockpit role"), [Weak](const TArray<FString>&) {
+        const ASCFirstPersonCharacter* Character = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr;
+        const ESCSeatRole Role = Character ? Character->GetOccupiedSeatRole() : ESCSeatRole::Unknown;
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SEAT_OCCUPANCY role=%s"),
+            Role == ESCSeatRole::Driver ? TEXT("driver") : Role == ESCSeatRole::Crew ? TEXT("crew") : TEXT("none"));
+    });
     Add(TEXT("sc.Seat.List"), TEXT("sc.Seat.List: inspect authored seat roles, access paths and action clips in the active vehicle"),
         [Weak](const TArray<FString>&)
         {

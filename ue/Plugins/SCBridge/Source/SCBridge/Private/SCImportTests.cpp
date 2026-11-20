@@ -105,6 +105,7 @@ bool FSCReaderSeats::RunTest(const FString&)
            "interaction_points":[{"helper_name":"access","radius":1.2,"angle_range":180,"view_angle_limit":90,
                                   "interactions":[{"name":"press","display_name":"Use chair"}]}],
            "seat_access":{"entrances":[{"name":"boarding","seat_port_path":["owner","seat"],
+             "conditions":{"zero_g":"Either","landed":"Yes"},"linked_gateways":["gate"],
              "enter":{"interaction":"press","fragment_tags":"Back","skip_state":"SkipDeploy"}}]}},
           {"entity_name":"Unknown","source_transform_basis":"gltf_y_up","seat":{"attachment":{"bone":"unknown"}}}
         ]})"));
@@ -127,6 +128,8 @@ bool FSCReaderSeats::RunTest(const FString&)
     {
         TestEqual(TEXT("Nested path preserved"), FString::Join(Access.SeatEntrances[0].SeatPortPath, TEXT("/")), FString(TEXT("owner/seat")));
         TestEqual(TEXT("Resolved interaction"), Access.SeatEntrances[0].Enter.Interaction, FName(TEXT("press")));
+        TestTrue(TEXT("An authored flight-state filter is required"), Access.SeatEntrances[0].bRequiresWorldState);
+        TestTrue(TEXT("Gateway is required"), Access.SeatEntrances[0].bHasGateways);
     }
     if (TestEqual(TEXT("One child interaction prompt"), Access.InteractionPoints.Num(), 1))
         TestEqual(TEXT("View angle"), Access.InteractionPoints[0].ViewAngleLimit.Get(0.f), 90.f);
