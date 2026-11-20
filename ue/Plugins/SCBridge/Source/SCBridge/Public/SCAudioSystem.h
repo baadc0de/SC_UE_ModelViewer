@@ -1,5 +1,7 @@
 // WP-A1: the viewer's audio player. Plays the game's sounds from a package's audio manifest (SCAudio.h) through UE audio:
-// - USCAudioWave: a procedural sound wave that decodes a package's Ogg media on the audio thread (scbridge sc_audio_*);
+// - USCAudioWave: a procedural sound wave that decodes a package's Ogg media on the audio render thread as the mixer
+//   pulls it (scbridge sc_audio_*: pull-driven, so a game-thread hitch cannot starve it), looping over the media's loop
+//   region as Wwise does, and reporting its own end and render health (FSCAudioWaveHealth);
 // - FSCAudioScene: one imported vehicle or environment's audio — manifest, media bytes, impulse responses, the placed
 //   spots and areas, and the entities whose class has sound effects;
 // - USCAudioSubsystem: posts triggers (the game's container logic over time: random / sequence, step / continuous with
@@ -7,9 +9,11 @@
 //   curves at the listener-relative and area values, the attenuation curves at the emitter distance), runs the areas and
 //   spots, mirrors the game's bus hierarchy as submixes and each room environment's Convolution Reverb as a submix effect
 //   over the game's impulse response. Console: sc.Audio.List, sc.Audio.Play, sc.Audio.Stop, sc.Audio.Mute, sc.Audio.Log,
-//   sc.Audio.Rooms, sc.Audio.Record, sc.Audio.Sends, sc.Audio.Meter. Logs: AUDIO_SCENE, AUDIO_EMITTERS, AUDIO_PLAY,
-//   AUDIO_ROOM, AUDIO_REVERB, AUDIO_LIMITER, AUDIO_METER.
+//   sc.Audio.Rooms, sc.Audio.Record, sc.Audio.Sends, sc.Audio.Meter, sc.Audio.Health, sc.Audio.Hitch. Logs: AUDIO_SCENE,
+//   AUDIO_EMITTERS, AUDIO_PLAY, AUDIO_ROOM, AUDIO_REVERB, AUDIO_LIMITER, AUDIO_METER, AUDIO_HEALTH, AUDIO_VOICE_GAP,
+//   AUDIO_VOICE_RESOURCED, AUDIO_VOICE_CUT.
 #pragma once
+#include <atomic>
 #include "CoreMinimal.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -23,27 +27,55 @@ class USoundSubmix;
 class USCRigComponent;
 class FSCPackageSource;
 class FSCBusMeter;
+class FSCLimiterTrace;
+class USubmixEffectDynamicsProcessorPreset;
 struct sc_audio_stream;
+
+/** A voice's render-side health, written on the audio render thread as the mixer pulls the wave and read on the game
+ *  thread (AUDIO_HEALTH): a gap is a pull later than the audio it was last given lasts (the voice starved or paused);
+ *  a source start after the first is the voice losing its mixer source and getting a new one (stolen, culled when
+ *  silent, restarted). */
+struct FSCAudioWaveHealth
+{
+    std::atomic<int32> Calls{0}, Sources{0}, Gaps{0}, MaxGapUs{0}, MaxDecodeUs{0};
+    std::atomic<int32> MaxResourceGapUs{0}; // longest silence a source change left (old source dry -> new source start)
+    std::atomic<int64> Frames{0}, DecodeNs{0};
+    std::atomic<uint64> FirstCycles{0}, LastCycles{0}; // FPlatformTime::Cycles64 of the first / latest pull
+    std::atomic<int32> LastFrames{0};                    // frames the latest pull returned
+    std::atomic<bool> bFinished{false};                  // every pass played and the mixer has consumed the last of it
+};
 
 UCLASS()
 class SCBRIDGE_API USCAudioWave : public USoundWaveProcedural
 {
     GENERATED_BODY()
 public:
-    /** Stream Ogg (shared, not copied per voice beyond the decoder's own copy) `Loops` times (0 = forever). */
-    bool Init(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, int32 Loops);
+    /** Stream Ogg (shared, not copied per voice beyond the decoder's own copy) for `Loops` passes (0 = forever) over its
+     *  loop region. `bWholeFileLoops` replays the whole media from its start instead (the pre-fix behaviour, kept for
+     *  A/B measurement: sc.Audio.Legacy). */
+    bool Init(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, int32 Loops, bool bWholeFileLoops = false);
     virtual int32 OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples) override;
     virtual Audio::EAudioMixerStreamDataFormat::Type GetGeneratedPCMDataFormat() const override
     {
         return Audio::EAudioMixerStreamDataFormat::Float;
     }
+    virtual void OnBeginGenerate() override;
     virtual void BeginDestroy() override;
     int32 Channels = 0, Rate = 0;
+    /** The media's frames and loop region [LoopStart, LoopEnd). */
+    uint64 MediaFrames = 0, LoopStart = 0, LoopEnd = 0;
+    /** Seconds all passes last at the media rate (< 0: forever). */
+    double PlaySeconds = -1;
+    /** The voice's pitch ratio (set before it plays): how fast the mixer consumes the wave. */
+    float Pitch = 1.f;
+    FSCAudioWaveHealth Health;
 
 private:
     FCriticalSection Lock;
     sc_audio_stream* Stream = nullptr;
-    int32 LoopsLeft = 0; // remaining plays after the current one; INDEX_NONE = forever
+    TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Bytes; // reopened per pass in the whole-file mode
+    int32 LoopsLeft = 0;        // whole-file mode: remaining plays after the current one; INDEX_NONE = forever
+    bool bWholeFile = false;
     bool bEnded = false;
 };
 
@@ -154,6 +186,15 @@ public:
     bool bLog = true;
     bool bSends = true; // aux (reverb) sends on; sc.Audio.Sends 0 isolates the dry path for measurements
     bool bAmbience = true; // placed spots and areas run (sc.Audio.Ambience 0 stops them, for isolated measurements)
+    /** Scenes whose voices are silenced (sc.Audio.MuteScene, A/B measurements): a substring of the scene name. */
+    TArray<FString> MutedScenes;
+    /** The master output trace (sc.Audio.LimiterTrace): the master bus's output (after its limiter) and the engine's
+     *  main output per 10 ms block, peaks over the limiter threshold and samples over full scale (clipped at the
+     *  device); Stop logs AUDIO_LIMITER_TRACE and writes the blocks as CSV. */
+    void StartLimiterTrace();
+    void StopLimiterTrace(const FString& CsvPath);
+    /** Every bus limiter bypassed (0), on (1), or on with a fast attack (2) (sc.Audio.Limiter, A/B measurements). */
+    void SetLimiterMode(int32 Mode);
     /** Listener this frame (world cm, forward / right unit vectors). */
     FVector ListenerPos = FVector::ZeroVector, ListenerFwd = FVector::ForwardVector, ListenerRight = FVector::RightVector;
     FString ListenerRoom, ListenerEnvironment;
@@ -167,6 +208,9 @@ public:
 
 private:
     TArray<TPair<uint32, TSharedRef<FSCBusMeter, ESPMode::ThreadSafe>>> Meters;
+    TSharedPtr<FSCLimiterTrace, ESPMode::ThreadSafe> LimiterTrace;
+    TArray<TPair<TWeakObjectPtr<USoundSubmix>, TSharedRef<class FSCLimiterTap, ESPMode::ThreadSafe>>> LimiterTaps;
+    UPROPERTY() TMap<uint32, TObjectPtr<USubmixEffectDynamicsProcessorPreset>> Limiters; // bus -> its limiter
     struct FVoice
     {
         TObjectPtr<UAudioComponent> Component;
@@ -182,6 +226,11 @@ private:
         TObjectPtr<USoundSubmix> DrySubmix; // the voice's bus (a send: the base submix output is off)
         uint32 Bus = 0;
         float LastGain = 0, LastDistance = 0, LastSend = 0;
+        bool bStopped = false;      // Stop() set End: the voice ends there (after its fade), not at its media's end
+        int32 Plays = 0;            // Play() calls (more than one: the engine stopped the component and it restarted)
+        double PlayWall = 0;        // FPlatformTime::Seconds of the first Play()
+        int32 LoggedGaps = 0, LoggedSources = 1;
+        float MinLinear = 1e9f, LastLinear = 0.f; // the voice volume set (lowest since the last source change; latest)
     };
     struct FRun // a continuous random / sequence container
     {
@@ -223,6 +272,31 @@ private:
     USoundSubmix* BusSubmix(FSCAudioScene& S, uint32 Bus);
     USoundSubmix* EnvironmentSubmix(FSCAudioScene& S, const FString& Environment);
     void LogScene(const FSCAudioScene& S) const;
+    /** Fold an ending voice's render health into the totals; logs AUDIO_VOICE_CUT for audio it did not play out. */
+    void RetireVoice(const FInstance& I, FVoice& V, double Now);
+    /** A voice's AUDIO_VOICE_GAP / AUDIO_VOICE_RESOURCED lines when its health counters moved. */
+    void CheckVoice(const FInstance& I, FVoice& V);
+
+public:
+    /** Render-health totals since the last sc.Audio.Health reset (AUDIO_HEALTH). */
+    struct FHealthTotals
+    {
+        int64 Voices = 0, Calls = 0, Frames = 0, DecodeNs = 0;
+        int32 Gaps = 0, MaxGapUs = 0, MaxDecodeUs = 0, Resourced = 0, Restarted = 0, Cut = 0, CutAudible = 0, Unrendered = 0;
+        double CutSeconds = 0, MaxStartLatency = 0, SumStartLatency = 0;
+        int32 StartLatencies = 0;
+        double Since = 0; // FPlatformTime::Seconds of the reset
+    };
+    FHealthTotals Totals;
+    /** Log AUDIO_HEALTH (the totals plus the voices playing now); Reset starts a new window. */
+    void LogHealth(bool bReset);
+    /** Game-thread stalls for measurements (sc.Audio.Hitch): Count stalls of Ms each, one every EveryS seconds. */
+    void ScheduleHitches(float Ms, int32 Count, float EveryS);
+
+private:
+    float HitchMs = 0, HitchEveryS = 0;
+    int32 HitchesLeft = 0;
+    double NextHitch = 0;
 
     TArray<TSharedRef<FSCAudioScene>> Scenes;
     TMap<int32, FInstance> Instances;

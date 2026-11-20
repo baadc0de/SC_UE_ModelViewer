@@ -43,6 +43,12 @@ typedef enum sc_material_mode {
 } sc_material_mode;
 
 /*
+ One decoding stream. The Ogg bytes are shared between the stream and its reader, so a wrap (a seek, or a new
+ reader over the same bytes) copies nothing.
+ */
+typedef struct sc_audio_stream sc_audio_stream;
+
+/*
  Opaque single-owner session. Close once; never use after close.
  */
 typedef struct sc_handle sc_handle;
@@ -325,6 +331,40 @@ enum sc_status sc_texels_decode_bgra8(const uint8_t *data,
                                       uint32_t height,
                                       uint8_t *out,
                                       size_t out_len);
+
+/*
+ Open a stream over a copy of `len` Ogg Vorbis bytes that plays `loops` passes (0 = forever; see the module notes
+ for the loop region). On success `*out` owns the stream (close it with `sc_audio_close`) and `*channels` / `*rate`
+ describe it; on failure `*out` is NULL.
+ */
+enum sc_status sc_audio_open(const uint8_t *data,
+                             size_t len,
+                             uint32_t loops,
+                             struct sc_audio_stream **out,
+                             uint32_t *channels,
+                             uint32_t *rate);
+
+/*
+ The stream's loop region `[*loop_start, *loop_end)` and the media's length `*frames` (frames). A media without loop
+ points reports `0..frames`.
+ */
+enum sc_status sc_audio_loop_region(const struct sc_audio_stream *stream,
+                                    uint64_t *loop_start,
+                                    uint64_t *loop_end,
+                                    uint64_t *frames);
+
+/*
+ Decode up to `max_frames` interleaved `f32` frames into `out` (room for `max_frames × channels` floats). Returns the
+ frames written (0: every pass has played), or −1 on a decoding error or bad argument.
+ */
+int64_t sc_audio_read(struct sc_audio_stream *stream,
+                      float *out,
+                      size_t max_frames);
+
+/*
+ Free a stream once; NULL is a no-op.
+ */
+void sc_audio_close(struct sc_audio_stream *stream);
 
 /*
  Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses

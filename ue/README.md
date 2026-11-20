@@ -745,8 +745,21 @@ world subsystem) plays it:
 - **Trees.** Random (weights, avoid-repeat, shuffle; history per emitter unless `global`) and sequence containers, step
   or continuous with crossfade / delay / trigger-rate transitions and their random ranges (finite runs scheduled whole,
   infinite ones item by item), blends at their layers' RTPC gains, the default switch branch, initial delays, loops
-  (`USCAudioWave` streams the Ogg on the audio thread through `sc_audio_*` and rewinds for each loop). A post returns
-  one handle for all its play actions; stop actions honour their object scope, delay and fade.
+  (`USCAudioWave` decodes the Ogg on the audio render thread as the mixer pulls it, through `sc_audio_*`: a game-thread
+  hitch cannot starve it; loops follow the media's loop region as Wwise does: the intro once, `LoopStart..LoopEnd`
+  repeated sample for sample, the tail after the last pass; a media without loop points loops whole). A finite voice
+  ends when its audio has played out (the wave reports it), not at a game-clock time. A post returns one handle for all
+  its play actions; stop actions honour their object scope, delay and fade. `sc.Audio.Health [reset]` logs
+  `AUDIO_HEALTH` (render-side gaps, source changes, restarts, cut voices, start latency, decode load; per voice
+  `AUDIO_VOICE_GAP` / `AUDIO_VOICE_RESOURCED` / `AUDIO_VOICE_RESTART` / `AUDIO_VOICE_CUT`); `sc.Audio.Hitch <ms>
+  [count] [every_s]` stalls the game thread for measurements; `sc.Audio.Legacy 7` restores the pre-fix whole-file loops,
+  clock ends and unfaded stops for A/B runs only (with `au.SetAudioChannelCount 32`, the pre-fix voice limit). The voice
+  limit is the audio quality level's `MaxChannels` (`DefaultEngine.ini` `[/Script/Engine.AudioSettings]`, 256, the
+  platform's source pool): at UE's default of 32 the ~100 audible voices near the C2's top deck took each other's
+  sources, cutting steady beds in and out ~20 times a minute. Measurement switches: `sc.Audio.LimiterTrace start | stop
+  [csv]` (the master bus output after its limiter and the main output per 10 ms: peaks over the threshold, samples over
+  0 dBFS), `sc.Audio.Limiter 0|1|2` (limiters bypassed / on / on with a fast attack), `sc.Audio.MuteScene <name part>
+  0|1` (silence one scene's voices, e.g. the hangar's).
 - **Gains.** Every node's own volume / make-up / output-bus gain and random draws, the action context, RTPC curves at the
   RTPCs' defaults, the listener-relative `Azimuth` and `Listener_Cone` and the area fade per frame, the bus chain's
   voice volumes and pitch. Dry and wet are two sends of each voice (UE's base submix output is off): the bus gets the

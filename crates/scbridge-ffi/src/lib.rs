@@ -5,7 +5,7 @@
 #![allow(clippy::missing_safety_doc)]
 mod dds;
 mod audio;
-pub use audio::{sc_audio_close, sc_audio_open, sc_audio_read, sc_audio_rewind, sc_audio_stream};
+pub use audio::{sc_audio_close, sc_audio_loop_region, sc_audio_open, sc_audio_read, sc_audio_stream};
 pub use dds::{sc_dds_prepare, sc_dds_mean_rgb};
 mod boundary;
 mod cache;

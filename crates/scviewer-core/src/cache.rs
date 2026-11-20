@@ -49,7 +49,9 @@ use std::{
 //     attenuations, buses, rooms and their reverb environments, entity sound effects) with `Audio/<media>.ogg` and
 //     `Audio/ir/<media>.f32`; interiors carry `audio_spots[]` / `audio_areas[]`, room volumes their `room_class`, and
 //     clip sources their `audio_events[]`.
-pub const CACHE_FORMAT_VERSION: u32 = 36;
+// 37: a Wwise 2012+ media converts with the aoTuV codebooks its layout determines; a loud media that peaks above full
+//     scale is no longer rejected as a wrong codebook and dropped from `audio.json` (WP-A1 playback fix).
+pub const CACHE_FORMAT_VERSION: u32 = 37;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");
