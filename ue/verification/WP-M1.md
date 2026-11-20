@@ -81,3 +81,21 @@ the material selected `DoorLockState.DoorLocked` with no pinned override.
 Astra approved `ship-link-locked.png`, `ship-link-opening.png` and `locked-pad.png` under
 `out/M2-XLretest-20261120-225717/` in the Garage worktree. The Rear ramp leader and access row agree as the
 header changes from one locked to one moving. The physical pad shows a red closed padlock.
+
+## Retained-box regression
+
+The sampled movement-collider guard at `1bb7b96` built successfully (96 actions, 37.43 seconds in UBA).
+The grouped Ship Link, Doors and Cargo NullRHI run passed all 80 tests in 11.15 seconds. The new test
+checks both open and closed endpoints, an obstruction between translating endpoints, a box in a rotating
+path, the conservative fallback for missing path information, and a cooked complex-as-simple triangle.
+
+```powershell
+& ../SC_UE_ModelViewer-wp-Q1/ue/scripts/rpc/automation.ps1 -Build -Project $project -Filter SCBridge.ShipLink,SCBridge.Doors,SCBridge.Cargo
+```
+
+The extracted XL folder and C2 were ready 76.19 seconds from launch. The driver opened the main hold,
+spawned one 16 SCU box directly onto the same adjacent grid slot, then called Secure Ship. It polled
+the real rear ramp until closed and locked, and verified that the box remained stored on grid 3 with
+zero slot error. The case passed in 109.98 seconds from launch and the viewer exited with code 0.
+This targets the shared door obstruction predicate without replaying the earlier drone job.
+`box.json`, `secure.json` and `Viewer.log` are in `out/M1-doorway-20261120-232316/`.
