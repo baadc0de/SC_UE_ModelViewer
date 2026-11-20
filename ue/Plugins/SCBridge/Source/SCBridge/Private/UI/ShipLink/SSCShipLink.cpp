@@ -194,7 +194,13 @@ TSharedRef<SWidget> SSCShipLink::Build()
     Other->AddSlot()[DisabledRow(TEXT("Crew access"), TEXT("Grant or revoke crew and guest access."))];
     Other->AddSlot()[DisabledRow(TEXT("Event log"), TEXT("See who opened, locked or flew the ship."))];
     Other->AddSlot().Padding(0, 12, 0, 8)[Txt(LabelText(TEXT("LOADOUT")), Section(), Ink())];
-    Other->AddSlot()[DisabledRow(TEXT("Configure"), TEXT("Change the loadout in the Garage."))];
+    Other->AddSlot().Padding(0, 4)
+    [
+        Action(LabelText(TEXT("CONFIGURE IN GARAGE")), [Master = Model, Entity = Ship->Manifest.Root.EntityName] {
+            Master->SetGarageEntity(Entity);
+            Master->SetApp(ESCMobiGlasApp::Garage);
+        })
+    ];
     for (const FSCSceneInstance& Child : Ship->Manifest.Children)
         if (!Child.PortPath.IsEmpty() && !Child.EntityName.IsEmpty())
             Other->AddSlot().Padding(0, 4)

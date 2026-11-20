@@ -41,6 +41,12 @@ public:
     ESCMobiGlasApp GetApp() const { return App; }
     void SetApp(ESCMobiGlasApp InApp) { App = InApp; }
     FSCShipLinkModel& GetShipLink() { return ShipLink; }
+    const FString& GetGarageEntity() const { return GarageEntity; }
+    void SetGarageEntity(FString Entity)
+    {
+        Entity.RemoveFromStart(TEXT("EntityClassDefinition."), ESearchCase::IgnoreCase);
+        GarageEntity = MoveTemp(Entity);
+    }
     /** Bumps when lists must be rebuilt (revision, nearby grid set, source). */
     int32 GetStamp() const { return Stamp; }
 
@@ -153,4 +159,5 @@ private:
     TOptional<FSlateRect> ClearArea;
     ESCMobiGlasApp App = ESCMobiGlasApp::Cargo;
     FSCShipLinkModel ShipLink;
+    FString GarageEntity;
 };

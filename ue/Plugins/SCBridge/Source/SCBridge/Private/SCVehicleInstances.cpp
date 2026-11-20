@@ -12,6 +12,9 @@
 #include "SCViewerSubsystem.h"
 #include "Cargo/SCCargoTypes.h"
 #include "Engine/World.h"
+#include "Engine/StaticMeshActor.h"
+#include "Components/StaticMeshComponent.h"
+#include "EngineUtils.h"
 #include "Engine/GameInstance.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
@@ -34,6 +37,24 @@ constexpr double FloorProbeCm = 500.0;
 TAutoConsoleVariable<int32> CVarShareAssets(TEXT("sc.Vehicle.ShareAssets"), 1,
     TEXT("1: extra vehicle instances of an imported entity are assembled from its retained assets (shared meshes, rigs, "
          "textures, materials); 0: every instance is a fresh import (export cache, full build). Read at load / spawn."));
+
+// The authored Viewer floor bounds the fallback search when no imported hangar is loaded. Derive the rectangle
+// from collision-backed flat supports at the reference height, leaving the actual floor and obstruction tests intact.
+FBox MapFloorArea(UWorld* World, double Height, double Tolerance)
+{
+    FBox Out(ForceInit);
+    for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+        if (const UStaticMeshComponent* Mesh = It->GetStaticMeshComponent();
+            It->GetLevel() == World->PersistentLevel && Mesh && Mesh->IsCollisionEnabled() &&
+            Mesh->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Block)
+        {
+            const FBox Bounds = Mesh->Bounds.GetBox();
+            if (Bounds.IsValid && FMath::Abs(Bounds.Max.Z - Height) <= Tolerance &&
+                FMath::Min(Bounds.GetSize().X, Bounds.GetSize().Y) > Bounds.GetSize().Z)
+                Out += FBox(FVector(Bounds.Min.X, Bounds.Min.Y, 0), FVector(Bounds.Max.X, Bounds.Max.Y, 0));
+        }
+    return Out;
+}
 
 FString Metres(const FVector& Cm) { return FString::Printf(TEXT("%.2f,%.2f,%.2f"), Cm.X / 100, Cm.Y / 100, Cm.Z / 100); }
 
@@ -143,7 +164,17 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
     // The geometry test box: the envelope plus clearance on every side, from FloorLiftCm above the floor to the top.
     const FVector Half(Extent.X + Q.ClearanceCm, Extent.Y + Q.ClearanceCm, (Height - FloorLiftCm) / 2 + Q.ClearanceCm / 2);
     const FCollisionShape Shape = FCollisionShape::MakeBox(Half);
-    int32 KeptOut = 0, Unsupported = 0, Blocked = 0;
+    int32 KeptOut = 0, Unsupported = 0, Blocked = 0, MissedProbes = 0, ContactProbes = 0;
+    double ContactMin = TNumericLimits<double>::Max(), ContactMax = -TNumericLimits<double>::Max();
+    auto Refusal = [&](const TCHAR* Why) {
+        R.Reason = FString::Printf(TEXT("%s: %d candidates (%d in keep-out boxes, %d without flat floor at %.0f cm, %d blocked)"),
+            Why, R.Tested, KeptOut, Unsupported, Q.FloorZ, Blocked);
+        const FString ContactRange = ContactProbes > 0
+            ? FString::Printf(TEXT("%.1f..%.1f"), ContactMin, ContactMax) : FString(TEXT("-"));
+        UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_FLOOR_SEARCH area_xy_cm=(%.0f,%.0f)..(%.0f,%.0f) datum_cm=%.1f tolerance_cm=%.1f contact_probes=%d missed_probes=%d contact_z_cm=%s"),
+               Area.Min.X, Area.Min.Y, Area.Max.X, Area.Max.Y, Q.FloorZ, Q.FloorToleranceCm, ContactProbes, MissedProbes, *ContactRange);
+        return Done();
+    };
     for (double Yaw : Q.Yaws)
     {
         const FQuat Rot(FRotator(0, Yaw, 0));
@@ -151,10 +182,7 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
         for (const FVector2D& P : Points)
         {
             if (R.Tested >= Q.MaxCandidates)
-            {
-                R.Reason = FString::Printf(TEXT("candidate limit %d reached"), Q.MaxCandidates);
-                return Done();
-            }
+                return Refusal(TEXT("candidate limit reached"));
             ++R.Tested;
             const FTransform Actor(Rot, FVector(P.X - CentreOffset.X, P.Y - CentreOffset.Y, Q.FloorZ - Q.LocalEnvelope.Min.Z));
             const FBox Footprint = WorldBox(Padded, Actor);
@@ -163,7 +191,7 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
                 ++KeptOut;
                 continue;
             }
-            // Floor: flat and at the reference height under the whole footprint (centre, corners, edge middles).
+            // Probe around the reference floor. The clearance-volume test below handles overhead geometry separately.
             double Lowest = TNumericLimits<double>::Max(), Highest = -TNumericLimits<double>::Max();
             bool bSupported = true;
             for (int32 I = -1; I <= 1 && bSupported; ++I)
@@ -172,9 +200,17 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
                     const FVector Local(Centre.X + I * Extent.X * 0.9, Centre.Y + J * Extent.Y * 0.9, 0);
                     const FVector XY = Actor.TransformPosition(Local);
                     FHitResult Hit;
-                    bSupported = World->LineTraceSingleByChannel(Hit, FVector(XY.X, XY.Y, Q.FloorZ + Height), FVector(XY.X, XY.Y, Q.FloorZ - FloorProbeCm),
-                                                                 ECC_Visibility, Params) &&
-                                 FMath::Abs(Hit.ImpactPoint.Z - Q.FloorZ) <= Q.FloorToleranceCm;
+                    const bool bHit = World->LineTraceSingleByChannel(Hit,
+                        FVector(XY.X, XY.Y, Q.FloorZ + Q.FloorToleranceCm + 1.0),
+                        FVector(XY.X, XY.Y, Q.FloorZ - FloorProbeCm), ECC_Visibility, Params);
+                    ContactProbes += bHit;
+                    MissedProbes += !bHit;
+                    if (bHit)
+                    {
+                        ContactMin = FMath::Min(ContactMin, Hit.ImpactPoint.Z);
+                        ContactMax = FMath::Max(ContactMax, Hit.ImpactPoint.Z);
+                    }
+                    bSupported = bHit && FMath::Abs(Hit.ImpactPoint.Z - Q.FloorZ) <= Q.FloorToleranceCm && Hit.ImpactNormal.Z > 0.9;
                     if (bSupported)
                     {
                         Lowest = FMath::Min(Lowest, Hit.ImpactPoint.Z);
@@ -199,9 +235,7 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
             return Done();
         }
     }
-    R.Reason = FString::Printf(TEXT("no free floor: %d candidates (%d in keep-out boxes, %d without flat floor at %.0f cm, %d blocked)"), R.Tested,
-                               KeptOut, Unsupported, Q.FloorZ, Blocked);
-    return Done();
+    return Refusal(TEXT("no free floor"));
 }
 
 // ---------------------------------------------------------------- instances
@@ -231,7 +265,7 @@ double FSCVehicleInstances::FloorZ() const
     return 0;
 }
 
-int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest)
+int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest, bool bGarageFloor)
 {
     FInstance& I = Instances.AddDefaulted_GetRef();
     I.Info.Id = NextId++;
@@ -240,6 +274,7 @@ int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTrans
     I.Info.bAutoPlaced = bAuto;
     I.Requested = World;
     I.bRest = bRest;
+    I.bGarageFloor = bGarageFloor;
     UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_QUEUE idx=%d entity=%s placement=%s"), I.Info.Id, I.Info.Entity.IsEmpty() ? TEXT("<loaded>") : *I.Info.Entity,
            bAuto ? TEXT("auto") : *FString::Printf(TEXT("at=%s yaw=%.0f rest=%d"), *Metres(World.GetLocation()), World.Rotator().Yaw, bRest));
     return I.Info.Id;
@@ -272,9 +307,20 @@ TArray<FSCVehicleInstanceInfo> FSCVehicleInstances::GetInstances() const
         Info.Id = 0;
         Info.Entity = Viewer.GetLoadedEntity();
         Info.State = ESCVehicleInstanceState::Ready;
+        Info.Progress = 1.f;
         Info.Actor = P;
     }
-    for (const FInstance& I : Instances) Out.Add(I.Info);
+    for (const FInstance& I : Instances)
+    {
+        FSCVehicleInstanceInfo& Info = Out.Add_GetRef(I.Info);
+        if (Info.State == ESCVehicleInstanceState::Ready) Info.Progress = 1.f;
+        else if (Info.Id == Running)
+        {
+            if (Info.State == ESCVehicleInstanceState::Exporting)
+                Info.Progress = Parse.IsValid() ? 0.5f : Progress ? 0.5f * Progress->GetFraction() : 0.f;
+            if (Info.State == ESCVehicleInstanceState::Importing && Job) Info.Progress = 0.5f + 0.5f * Job->GetFraction();
+        }
+    }
     return Out;
 }
 int32 FSCVehicleInstances::GetId(const ASCVehicle* Vehicle) const
@@ -298,6 +344,11 @@ void FSCVehicleInstances::Changed()
 void FSCVehicleInstances::SetPrimary(ASCVehicle* InPrimary, const TSharedPtr<FSCImportedAssets>& Assets, const FString& Key)
 {
     const bool bChanged = Primary.Get() != InPrimary;
+    if (!PrimaryKey.IsEmpty() && PrimaryKey != Key && !Instances.ContainsByPredicate([&](const FInstance& I) { return I.Key == PrimaryKey; }))
+    {
+        AssetSets.Remove(PrimaryKey);
+        SetSessions.Remove(PrimaryKey);
+    }
     Primary = InPrimary;
     PrimaryKey = Key;
     if (Assets)
@@ -306,6 +357,11 @@ void FSCVehicleInstances::SetPrimary(ASCVehicle* InPrimary, const TSharedPtr<FSC
         if (InPrimary) SetSessions.Add(Key, InPrimary->SessionPath);
     }
     if (bChanged) Changed();
+}
+
+bool FSCVehicleInstances::RetainsSession(const FString& Session) const
+{
+    return SetSessions.FindKey(Session) != nullptr;
 }
 
 void FSCVehicleInstances::Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive)
@@ -436,8 +492,10 @@ void FSCVehicleInstances::Tick()
         StepRunning();
         return;
     }
-    if (!Primary.IsValid() || Viewer.IsBusy()) return; // instances extend a loaded scene; loads and environments go first
-    if (FInstance* Next = Instances.FindByPredicate([](const FInstance& I) { return I.Info.State == ESCVehicleInstanceState::Queued; }))
+    if (Viewer.IsBusy()) return;
+    if (FInstance* Next = Instances.FindByPredicate([&](const FInstance& I) {
+        return I.Info.State == ESCVehicleInstanceState::Queued && (Primary.IsValid() || (I.bGarageFloor && !I.Info.Entity.IsEmpty()));
+    }))
         Start(*Next);
 }
 
@@ -595,7 +653,16 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
         const FBox Bounds = Environment->GetComponentsBoundingBox(true);
         Q.SearchArea = FBox(FVector(Bounds.Min.X, Bounds.Min.Y, 0), FVector(Bounds.Max.X, Bounds.Max.Y, 0));
     }
+    else
+        Q.SearchArea = MapFloorArea(V->GetWorld(), Q.FloorZ, Q.FloorToleranceCm);
     Q.KeepOut = FSCVehiclePlacement::AccessLanes(Environment);
+    FBox Bay(ForceInit);
+    if (I.bGarageFloor && FSCEnvironment::FindShipBay(Environment, Bay))
+    {
+        // A primary ship can lower a ramp or change its landing gear. Use the authored pad to locate the surrounding floor.
+        Q.FloorZ = Bay.Max.Z;
+        Q.KeepOut.Add(Bay);
+    }
     const int32 Lanes = Q.KeepOut.Num();
     // Every other vehicle that stays where it is: its envelope (cached for its entity), else its current solid bounds.
     auto KeepOutOf = [&](const ASCVehicle* Other, const FString& Key) {
@@ -614,7 +681,8 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
            R.bFound ? TEXT("") : *FString::Printf(TEXT(" reason=\"%s\""), *R.Reason));
     if (!R.bFound)
     {
-        OutError = R.Reason;
+        OutError = I.bGarageFloor && R.Reason.StartsWith(TEXT("no free floor"))
+            ? TEXT("No clear floor spot. Try a smaller ship or retrieve to the bay.") : R.Reason;
         return false;
     }
     V->SetActorTransform(R.Transform, false, nullptr, ETeleportType::TeleportPhysics);

@@ -106,6 +106,7 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString ParentNodeName;
     UPROPERTY(BlueprintReadOnly) FString ItemType;
     UPROPERTY(BlueprintReadOnly) FString ItemSubType;
+    UPROPERTY(BlueprintReadOnly) FString ItemSize;
     UPROPERTY(BlueprintReadOnly) FString PortFlags;
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;

@@ -38,6 +38,7 @@ public:
     /** Active jobs first, then the most recent finished ones. */
     TArray<FSCCargoJobView> GetJobs() const;
     bool IsAccessDoorBusy(const class ASCVehicle* Ship, int32 Door) const;
+    bool IsVehicleTransferActive(const class ASCVehicle* Ship) const;
 
     // Freestyle cargo beacons (WP-K2, SCCargoBeacons.cpp): loose boxes at rest, grouped; a beacon's id is a location id
     // (like a grid's, never equal to one) that transfers take as a source.

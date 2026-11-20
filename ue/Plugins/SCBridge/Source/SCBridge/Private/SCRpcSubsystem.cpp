@@ -7,6 +7,7 @@
 #include "SCRpcJson.h"
 #include "SCRpcVideo.h"
 #include "SCShipLinkRpc.h"
+#include "SCGarageRpc.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
 #include "SCVehicle.h"
@@ -393,6 +394,7 @@ private:
         }
         if (const USCCargoSubsystem* C = Cargo()) O->SetObjectField(TEXT("cargo"), C->StateJson());
         O->SetObjectField(TEXT("ship"), SCShipLinkRpc::Snapshot(World()));
+        O->SetObjectField(TEXT("garage"), SCGarageRpc::Snapshot(World()));
         if (const TSharedPtr<FJsonValue> Lifts = LiftsJson(); Lifts->AsArray().Num() > 0) O->SetField(TEXT("lifts"), Lifts);
         return O;
     }
@@ -671,6 +673,13 @@ private:
             const FString Path = FString(TEXT("/ship/")) + ShipRoute;
             Bind(*Path, [this, Route = FString(ShipRoute)](auto& Body, auto& Done) {
                 Respond(Done, SCShipLinkRpc::Command(World(), Route, Body));
+            });
+        }
+        for (const TCHAR* GarageRoute : {TEXT("fleet"), TEXT("retrieve"), TEXT("store"), TEXT("paint")})
+        {
+            const FString Path = FString(TEXT("/garage/")) + GarageRoute;
+            Bind(*Path, [this, Route = FString(GarageRoute)](auto& Body, auto& Done) {
+                Respond(Done, SCGarageRpc::Command(World(), Route, Body));
             });
         }
         Bind(TEXT("/ship/spawn"), [this](auto& B, auto& Done) { SpawnShip(B, Done); });

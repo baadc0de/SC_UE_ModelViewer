@@ -3,6 +3,7 @@
 #include "SSCMobiGlas.h"
 #include "SSCMobiGlasPanels.h"
 #include "../ShipLink/SSCShipLink.h"
+#include "../Garage/SSCGarage.h"
 #include "Widgets/Input/SButton.h"
 #include "SCMobiGlasModel.h"
 #include "SCMobiGlasStyle.h"
@@ -84,6 +85,12 @@ void SSCMobiGlas::Construct(const FArguments& Args)
                                     return Model->GetApp() == ESCMobiGlasApp::ShipLink ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
                                 })
                             ]
+                            + SOverlay::Slot()
+                            [
+                                SNew(SSCGarage).Model(Model).Visibility_Lambda([this] {
+                                    return Model->GetApp() == ESCMobiGlasApp::Garage ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
+                                })
+                            ]
                         ]
                     ]
                 ]
@@ -104,11 +111,13 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
         [
             SNew(SVerticalBox)
             + SVerticalBox::Slot().AutoHeight()[Txt(TAttribute<FText>::CreateLambda([this] {
+                if (Model->GetApp() == ESCMobiGlasApp::Garage) return LOCTEXT("Fleet", "PERSONAL FLEET");
                 if (Model->GetApp() == ESCMobiGlasApp::ShipLink)
                     return Model->GetShipLink().GetShip() ? LOCTEXT("PairedOwner", "SHIP LINK  ·  PAIRED  ·  OWNER") : LOCTEXT("Unpaired", "SHIP LINK");
                 return LOCTEXT("Network", "LOGISTICS / LOCAL NETWORK");
             }), Label(), OnScrim().CopyWithNewOpacity(0.72f))]
             + SVerticalBox::Slot().AutoHeight()[Txt(TAttribute<FText>::CreateLambda([this] {
+                if (Model->GetApp() == ESCMobiGlasApp::Garage) return LOCTEXT("GarageApp", "GARAGE");
                 return Model->GetApp() == ESCMobiGlasApp::ShipLink
                     ? FText::FromString(Caps(FSCShipLinkModel::ShipLabel(Model->GetShipLink().GetShip()))) : LOCTEXT("CargoApp", "CARGO OPERATIONS");
             }), Title(), OnScrim())]
@@ -144,6 +153,7 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
                  const int32 Bearing = (FMath::RoundToInt(FMath::RadiansToDegrees(FMath::Atan2(Offset.Y, Offset.X))) + 360) % 360;
                  return FText::FromString(FString::Printf(TEXT("%.0f m  ·  %03d°  ·  %d OPEN  ·  %d LOCKED  ·  %d MOVING"), Offset.Size() / 100, Bearing, Open, Locked, Moving));
              }
+             if (Model->GetApp() == ESCMobiGlasApp::Garage) return FText::GetEmpty();
              if (!Model->HasSource()) return LOCTEXT("NoCargo", "NO CARGO SYSTEM");
              return FText::Format(LOCTEXT("Status", "{0} GRIDS · {1} DRONES"), Model->GetGrids().Num(), Model->GetDrones().Num());
          }), Label(), OnScrim())]
@@ -153,7 +163,7 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
 
 void SSCMobiGlas::SelectApp(ESCMobiGlasApp App)
 {
-    if (Model->GetApp() == App || App == ESCMobiGlasApp::Garage) return;
+    if (Model->GetApp() == App) return;
     Model->SetApp(App);
     bRefocusApp = true;
 }
@@ -181,16 +191,7 @@ TSharedRef<SWidget> SSCMobiGlas::MakeRail()
                 + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 14)[Txt(LOCTEXT("Apps", "APPS"), Label(), OnScrim())]
                 + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::Cargo, LOCTEXT("Cargo", "CARGO"))]
                 + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::ShipLink, LOCTEXT("ShipLink", "SHIP\nLINK"))]
-                + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 12)
-                [
-                    SNew(SVerticalBox)
-                    + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[Txt(LOCTEXT("Garage", "GARAGE"), Label(), OnScrim().CopyWithNewOpacity(0.65f))]
-                    + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-                    [
-                        SNew(STextBlock).Font(Label()).ColorAndOpacity(OnScrim().CopyWithNewOpacity(0.65f))
-                        .Text(LOCTEXT("GaragePending", "NOT\nINSTALLED")).Justification(ETextJustify::Center)
-                    ]
-                ]
+                + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::Garage, LOCTEXT("Garage", "GARAGE"))]
             ]
         ]
     ];
@@ -254,8 +255,15 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
     {
         if (Requests.App.GetValue().Equals(TEXT("shiplink"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::ShipLink);
         if (Requests.App.GetValue().Equals(TEXT("cargo"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::Cargo);
+        if (Requests.App.GetValue().Equals(TEXT("garage"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::Garage);
         Requests.App.Reset();
     }
+    if (Requests.GarageEntity.IsSet())
+    {
+        Model->SetGarageEntity(Requests.GarageEntity.GetValue());
+        Requests.GarageEntity.Reset();
+    }
+    if (LastApp != Model->GetApp()) { LastApp = Model->GetApp(); bRefocusApp = true; }
     FitScale = FMath::Clamp(float(Geometry.GetLocalSize().X) / MinLayoutWidth, 0.5f, 1.f);
     const bool bOpen = Model->IsOpen();
     if (Clear && Geometry.GetAbsoluteSize().Y > 1)
@@ -314,8 +322,9 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
         R.ZoomNotches = 0;
     }
     Openness = bOpen ? FMath::Min(1.f, Openness + Delta / PanelIn) : FMath::Max(0.f, Openness - Delta / PanelOut);
-    Requests.bShipLinkReady = bOpen && Openness >= 1 && Model->GetApp() == ESCMobiGlasApp::ShipLink &&
-        Clear && Clear->GetTickSpaceGeometry().GetLocalSize().Y > 0;
+    const bool bPresented = bOpen && Openness >= 1 && Clear && Clear->GetTickSpaceGeometry().GetLocalSize().Y > 0;
+    Requests.bShipLinkReady = bPresented && Model->GetApp() == ESCMobiGlasApp::ShipLink;
+    Requests.bGarageReady = bPresented && Model->GetApp() == ESCMobiGlasApp::Garage;
     const float Shown = bOpen ? EaseOutCubic(Openness) : 1 - EaseInQuad(1 - Openness);
     SetRenderOpacity(Shown);
     SetRenderTransform(FSlateRenderTransform(FVector2f(0, PanelSlide * (1 - Shown))));
