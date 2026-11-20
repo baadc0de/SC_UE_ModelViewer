@@ -7,6 +7,8 @@
 #include <atomic>
 #include "SCBridgeClient.generated.h"
 
+class FJsonObject;
+
 /** One sc_search_entities hit (core EntityHit JSON). */
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCEntityHit
@@ -114,6 +116,9 @@ public:
     UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments,
                                                   TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** Blocking; waits for a running export (host lock). */
+    /** Clip-only player actions, including seat transitions. */
+    UE::Tasks::TTask<FSCExportResult> ExportPlayerClips(const FString& Gender, const TArray<FString>& Clips,
+        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     FSCCacheStats CacheStats();
     bool IsOpen() const;
     /** True once after any call hit SC_STATUS_PANIC (the handle is already closed); the host must reopen. */
@@ -125,6 +130,9 @@ private:
     FText LastError(sc_status Status) const; // caller holds HandleLock
     /** Caller holds HandleLock: error text for a failed call; on PANIC closes the poisoned handle and flags it. */
     FText FailLocked(sc_status Status, bool& bOutPanicked);
+    using FPlayerExport = decltype(&scbridge_export_player_request);
+    UE::Tasks::TTask<FSCExportResult> ExportPlayerJson(const TSharedRef<FJsonObject>& Request, FPlayerExport Export,
+        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     FSCCacheStats CacheStatsLocked();
     /** A text-returning call (Call(handle, Argument, &out)) off the game thread; OnDone on the game thread. */
     void TextCall(const FString& Argument, sc_status (*Call)(sc_handle*, const char*, char**), TFunction<void(const FSCTextResult&)> OnDone);

@@ -166,6 +166,33 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         Commands.Add(MakeUnique<FAutoConsoleCommand>(Name, Help,
             FConsoleCommandWithArgsDelegate::CreateLambda([Body](const TArray<FString>& Args) { Body(Args); })));
     };
+    Add(TEXT("sc.Seat.State"), TEXT("sc.Seat.State: log the currently occupied cockpit role"), [Weak](const TArray<FString>&) {
+        const ASCFirstPersonCharacter* Character = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr;
+        const ESCSeatRole Role = Character ? Character->GetOccupiedSeatRole() : ESCSeatRole::Unknown;
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("SEAT_OCCUPANCY role=%s"),
+            Role == ESCSeatRole::Driver ? TEXT("driver") : Role == ESCSeatRole::Crew ? TEXT("crew") : TEXT("none"));
+    });
+    Add(TEXT("sc.Seat.List"), TEXT("sc.Seat.List: inspect authored seat roles, access paths and action clips in the active vehicle"),
+        [Weak](const TArray<FString>&)
+        {
+            const ASCVehicle* Vehicle = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+            if (!Vehicle) return;
+            for (const FSCSceneInstance& Child : Vehicle->Manifest.Children)
+            {
+                if (const FSCSeatDefinition* Seat = Child.Seat.GetPtrOrNull())
+                {
+                    const TCHAR* Role = Seat->Role == ESCSeatRole::Driver ? TEXT("driver") : Seat->Role == ESCSeatRole::Crew ? TEXT("crew") : TEXT("unknown");
+                    UE_LOG(LogSCViewerAutomation, Display, TEXT("SEAT_LIST child=%s port=%s role=%s class_tag=%s trans=%s ctrl=%s bone=%s dashboard=%s fragments=%d"),
+                        *Child.EntityName, *FString::Join(Child.PortPath, TEXT("/")), Role, *Seat->ClassTag, *Seat->TransitionTemplate,
+                        *Seat->ControlTemplate, *Seat->Attachment.ToString(), *Seat->DashboardPort, Seat->Actions.Num());
+                }
+                for (const FSCSeatEntrance& Entrance : Child.SeatEntrances)
+                    UE_LOG(LogSCViewerAutomation, Display, TEXT("SEAT_ENTRANCE child=%s name=%s seat=%s enter=%s path=%s skip=%s exit=%s"),
+                        *Child.EntityName, *Entrance.Name, *FString::Join(Entrance.SeatPortPath, TEXT("/")),
+                        *Entrance.Enter.Interaction.ToString(), *Entrance.Enter.FragmentTags, *Entrance.Enter.SkipState.ToString(),
+                        *Entrance.Exit.Interaction.ToString());
+            }
+        });
     Add(TEXT("sc.FP.Spawns"), TEXT("sc.FP.Spawns: log the spawn list (index, kind, label, vehicle-relative location; then the hangar's places, kind Hangar)"),
         [Weak](const TArray<FString>&) {
         ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;

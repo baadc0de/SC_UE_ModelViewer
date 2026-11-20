@@ -1,6 +1,6 @@
 # WP-P6 — Seats, ladders and boarding: the player's body sits, climbs and boards like the game's
 
-Branch `wp/P6-seats-ladders-boarding`. Exporter changes go on a submodule branch `scviewer/seats-ladders`.
+The cockpit slice uses branch `wp/p6-cockpit-seats`. Exporter changes go on submodule branch `scviewer/seats-ladders`.
 
 **Depends on:** WP-P1 (first person, interactions, spawn kinds `Seat` / `SeatAccess`, `FSCSeatBox`), WP-P2 (player kit,
 `USCPlayerBodyComponent`, `FSCPlayerAnimator`, clip sidecars with root motion), WP-P5 (`ASCVehicle::SendInteraction`,
@@ -8,6 +8,62 @@ interaction points, several interactions on one point picked with the mouse whee
 sensors, `ASCVehicle::PlayDoor`), WP-P3 / WP-P4 (game collision, grid rule, rig collision that follows the pose).
 **Works with:** WP-I1 (prompts and selection on a point with several interactions).
 **Build locks:** cargo lock (exporter, `scviewer-core`, FFI), UE lock (plugin).
+
+## P6-1 implementation record
+
+The first export confirmed two cockpit seats and two access children in the C2 without loading a hangar or the
+player kit. The pilot's authored vehicle item port offers a FlightController priority group. The co-pilot's user
+definition omits it. The same XML ties each seat's usable priorities to its dashboard port by target tags. Both
+seat attachments, 1.6 m access points, helper transforms and usable exit-validation flags were present.
+
+The live geometry-only C2 export at LOD 2 took 47.75 s. Both cockpit seats resolved seven body and seven look
+fragments. The pilot entry has the Right path and PositionAdjust, and the co-pilot entry has the Left path,
+ColliderMode and PositionAdjust. The two dashboard clips carry `SeatState` Retract and Deploy. The access points
+resolved “Enter Pilot Seat” and “Enter Copilot Seat” from the shared interaction localization.
+
+The clip-only archive exported all eleven body clips for each gender with zero missing, using 3.30 MiB for male
+and 3.33 MiB for female. The requests took 9.31 s and 9.86 s on cache misses. A separate request classified both
+authored look clips as unsupported aim poses, with zero missing. The UE reader exposes seat metadata through
+`sc.Seat.List`.
+
+The runtime cockpit path resolves each access helper, seat attachment and dashboard rig from the imported ports. It
+requests the seven authored actions asynchronously and polls clip readiness, body motion completion and the two
+vehicle rigs. The player follows the seat socket through Retract, enters Driver or Crew after Select, and returns to
+walking after Deploy and Exit. A blocking overlap at the authored exit endpoint sends the seat back to its selected
+state. `sc.Seat.State` reports the active role for A2 integration and automated checks.
+
+This implementation covers cockpit routes with SkipDeploy, SkipRetract, no gateways, no flight-state requirements and
+a loaded player kit. It uses the authored yaw and pitch limits and the P2 spine-pitch implementation pending aim poses.
+The UE 5.9 Win64 Editor build succeeded. Q1's grouped NullRHI runner passed `SCBridge.Mesh.BasisAndAttributes` and
+`SCBridge.Seat` (3 tests in **9.66 s**, including launch and exit). These cover helper-only GLBs, wrapped skeletal
+root motion, action pose blending and seat package metadata.
+
+The live archive C2 at LOD 2/mip 4 with all interiors took **237.114 s** cold (145.191 s export, 91.824 s import).
+It exposed a reader error that skipped both JSON-only access-helper assets. The fixed reader accepted both helpers
+during the next C2 run. The pre-extracted geometry-only fixture took **25.897 s** to import and resolved both
+authored access prompts plus both seat and dashboard rig pairs. This fixture omitted the bridge floor, so it could
+verify route resolution but could not place a standing pawn near the seats.
+
+The follow-up fixture retained the authored `bridge_c2` interior in the extracted LOD 2/mip 4 C2 package. With
+a warm shared DDC, it reached scene-ready in **15.34 s** including editor launch. The C2 import itself took **8.084 s**
+for 71 assets and 152 placements, and the pre-exported player kit loaded in **1.209 s**. Both original seat and dashboard
+rig pairs played Deploy and Retract. The co-pilot and pilot reached Crew and Driver respectively after Select. Both
+entries logged zero attachment position error, and both exits restored standing floor contact without crouch,
+noclip, a movement blockage or a fall recovery. The process exited successfully after both cycles.
+
+To repeat the smoke, extract the C2 LOD 2/mip 4 export and keep `bridge_c2` in the manifest's `interiors` array.
+Launch with `-SCDefaults -SCPackage=<fixture> -SCExplore -SCPlayerPackage=<kit tar>` and
+`-SCSeatClipsPackage=<clips tar>`. This bypasses archive export of the ship and body clips. Poll `sc.Seat.State`
+for the occupied role after E and `sc.FP.Where` for standing floor contact after the second E.
+
+The blocked-exit case, the capsule-only camera path, weapon and door/lift regressions and the three requested
+screenshots remain open.
+
+The Rust checks used `cargo test --manifest-path vendor/StarBreaker/Cargo.toml --locked -p starbreaker-3d --lib seat_`
+(3 passed), the same command with `interaction_points_keep_their_interactions_in_order` (1 passed), and
+`cargo test --locked -p scviewer-core -p scbridge-ffi --lib player_clip` (1 core and 1 FFI passed).
+The live checks used `scviewer-cli decomposed-tar CRUS_Starlifter_C2 out/p6-research/c2-seats-lod2.tar --lod 2 --materials none --no-interior --no-lights`
+followed by `scviewer-cli player clips` for the unique body layers of the exported seat fragments.
 
 ## Goal
 

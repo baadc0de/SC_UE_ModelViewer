@@ -3,6 +3,7 @@
 #include "SCPackageSource.h"
 #include "Cargo/SCCargoTypes.h"
 #include "SCInteractionRecords.h"
+#include "SCSeatRecords.h"
 #include "SCPackageReader.generated.h"
 
 /** `ui_bindings[].state_images[]` (WP-I1 I1-3): the render of the UI owner in one other state of its interaction state
@@ -134,6 +135,8 @@ struct SCBRIDGE_API FSCSceneInstance
     FSCParentAttachment Parent;
     FSCDoorTiming Door; // placements and (cache format 39) loadout children
     TArray<FSCInteractionPoint> InteractionPoints;
+    TOptional<FSCSeatDefinition> Seat;
+    TArray<FSCSeatEntrance> SeatEntrances;
     /** Cache format 39: interactions forwarded to the items of vehicle ports, and the Sendable interactions with tags. */
     TArray<FSCItemPortLink> ItemPortLinks;
     TArray<FSCSendableInteraction> SendableInteractions;

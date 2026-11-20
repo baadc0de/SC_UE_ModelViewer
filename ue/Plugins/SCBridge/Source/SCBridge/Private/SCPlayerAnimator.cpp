@@ -214,6 +214,16 @@ void FSCPlayerClip::Sample(float Seconds, TArray<FTransform>& Pose) const
         if (!T.Pos.IsEmpty()) Pose[T.Bone].SetTranslation(SamplePos(T, Frame));
     }
 }
+FTransform FSCPlayerClip::SampleBone(int32 Bone, float Seconds, const FTransform& Base) const
+{
+    FTransform Result = Base;
+    const FTrack* Track = Tracks.FindByPredicate([Bone](const FTrack& T) { return T.Bone == Bone; });
+    if (!Track) return Result;
+    const float Frame = FMath::Clamp(Seconds * Fps, 0.f, Frames);
+    if (!Track->Pos.IsEmpty()) Result.SetTranslation(SamplePos(*Track, Frame));
+    if (!Track->Rot.IsEmpty()) Result.SetRotation(SampleRot(*Track, Frame));
+    return Result;
+}
 void FSCPlayerClip::Overlay(float Seconds, float Alpha, TArray<FTransform>& Pose) const
 {
     if (Alpha <= 0) return;
@@ -688,6 +698,29 @@ void FSCPlayerAnimator::Tick(const FSCAnimatorInput& Input)
         State ? *State->WeaponChildId : TEXT("-"), State ? *State->Stance : TEXT("-"), State ? *State->MoveSpeedTag : TEXT("-"),
         State && State->bFirstPerson ? TEXT("fp") : TEXT("tp"), Fragment ? *Fragment->Fragment.ToString() : TEXT("-"), *Key.ToString(),
         Sources.Num(), bFast, OneShot.Fragment ? *OneShot.Fragment->Fragment.ToString() : TEXT("-"));
+}
+void FSCPlayerAnimator::SampleAction(const FSCPlayerClip& Clip, float Seconds, float Blend, float PitchDegrees)
+{
+    Pose = RefPose;
+    Clip.Sample(Seconds, Pose);
+    Pose[RootMotion] = RefPose[RootMotion];
+    ApplyPitch(PitchDegrees);
+    if (ActionBlendPose.Num() == Pose.Num() && Blend < 1.f)
+    {
+        Scratch = ActionBlendPose;
+        BlendInto(Scratch, Pose, Blend);
+        Swap(Pose, Scratch);
+    }
+}
+FTransform FSCPlayerAnimator::ActionRootDelta(const FSCPlayerClip& Clip, float Seconds) const
+{
+    if (!RefPose.IsValidIndex(RootMotion)) return FTransform::Identity;
+    const FTransform Start = Clip.SampleBone(RootMotion, 0.f, RefPose[RootMotion]);
+    const FTransform End = Clip.SampleBone(RootMotion, Seconds, RefPose[RootMotion]);
+    FTransform ParentSpace = FTransform::Identity;
+    for (int32 Parent = Parents[RootMotion]; Parent != INDEX_NONE; Parent = Parents[Parent])
+        ParentSpace *= RefPose[Parent];
+    return (Start * ParentSpace).Inverse() * (End * ParentSpace);
 }
 void FSCPlayerAnimator::ApplyPitch(float Degrees)
 {

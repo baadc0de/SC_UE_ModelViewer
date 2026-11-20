@@ -5,10 +5,13 @@
 #include "GameFramework/Character.h"
 #include "Camera/CameraComponent.h"
 #include "SCExploration.h"
+#include "SCSeatRecords.h"
+#include "Templates/PimplPtr.h"
 #include "SCFirstPersonCharacter.generated.h"
 class ASCVehicle;
 class USpotLightComponent;
 class USCPlayerBodyComponent;
+class FSCSeatRuntime;
 
 /** The exploration camera; NearClip > 0 overrides the global near plane (arms and weapon at the eye, WP-P2). */
 UCLASS()
@@ -139,6 +142,8 @@ public:
      *  must touch it, so a clear pocket beside the seat (behind its back, past a bulkhead) is refused. */
     bool TeleportToSeat(FVector Floor, const FBox& Seat, const FTransform& Frame = FTransform::Identity);
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Interact();
+    /** Role of the occupied cockpit seat, once its controls have been selected. */
+    ESCSeatRole GetOccupiedSeatRole() const;
     /** WP-P5: E on a lift panel under the crosshair sends an interaction through ASCVehicle::SendInteraction: on a floor
      *  panel (its stops drawn on its face) the option under the crosshair, nothing off the rows; on another lift panel
      *  (a call button) its primary interaction. The focused lift panel's entity id and that interaction (None: a floor
@@ -254,6 +259,8 @@ private:
     double LastOrbitPress = -1;
     void SetRunning(bool bRun);
     void ApplyHeldInput();
+    friend class FSCSeatRuntime;
+    TPimplPtr<FSCSeatRuntime> Seats;
     bool FindCapsuleSpot(FVector Hint, double HalfHeight, FVector& Centre, const FSCSeatBox* Seat = nullptr) const;
     bool Place(FVector Floor, const FSCSeatBox* Seat);
     UFUNCTION() void CapsuleHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp,

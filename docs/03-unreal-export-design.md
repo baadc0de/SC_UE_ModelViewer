@@ -527,3 +527,14 @@ select diagnostic remains the only missing-clip diagnostic. Before/after compari
 confirms all 16 unarmed states, 15 referenced blend spaces and 67 clip payloads are
 unchanged in each package. Player tests: 22 passed; workspace tests: 38 passed.
 No FFI staging or UE files were touched for this follow-up.
+## Cockpit seat preparation (WP-P6)
+
+The importer reads authored seat definitions and access routes from loadout children. Seat role comes from the
+vehicle's FlightController priority groups. Access routes bind through the full loadout port path and carry the
+localized shared interaction and its helper frame. `sc.Seat.List` shows the role, attachment, dashboard, and action
+count for each seat in the loaded manifest.
+
+The optional body action archive is keyed by archive build, skeleton gender, and the set of named clips. The CLI
+`scviewer-cli player clips <out.tar> --gender <gender> <names...>` and FFI `scbridge_export_player_clips` use the same
+cache and cancellation rules as a player kit. The archive's index reports unsupported animation types and missing
+clips and points to ordinary body sidecars, including their root-motion tracks.
