@@ -58,18 +58,20 @@ public:
 private:
     struct FSet
     {
-        FString Sidecar, PaletteId;
+        FString Sidecar;
         TArray<FSCMaterialDesc> Descs;
         TArray<bool> EngineGlow;
         TArray<UMaterialInterface*> Instances;
         const FSCPalette* Palette = nullptr; // manifest-owned; valid for the import call
         TMap<TPair<int32, FString>, UMaterialInterface*> HostVariants;
     };
+    int32 SetIndex(const FString& Sidecar, const FString& PaletteId) const;
     ASCVehicle* Owner = nullptr;
     UMaterialInterface* InvisibleMaterial = nullptr;
     TMap<FSCTextureKey, UTexture2D*> Textures;
     TMap<TTuple<FString, int32, FString>, UMaterialInterface*> ScreenInstances; // (sidecar, submaterial, image)
     TArray<FSet> Sets;
+    TMap<FString, TMap<FString, int32>> SetBySidecarAndPalette;
     TArray<FSCTextureKey> Keys;
     TSet<FSCTextureKey> SampledKeys, MeanKeys; // bound to a material / read for its mean colour (may be both)
     TArray<FSCDecodedTexture> Decoded;

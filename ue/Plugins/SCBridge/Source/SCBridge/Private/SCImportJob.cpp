@@ -1095,38 +1095,45 @@ void FSCImportJob::FState::Assemble()
     double RegisterSeconds = 0, LightSeconds = 0, RigSeconds = 0;
     // Host paint channel depends only on (sidecar, mesh asset); HostChannel parses submaterial JSON, so compute once.
     TMap<TPair<FString, FString>, FString> HostChannels;
-    auto HostFor = [&](const FSCSceneInstance& I, const FSCMaterialSet* Set, const FSCDerivedMesh& Mesh) -> const FString& {
-        const TPair<FString, FString> Key(I.MaterialSidecar, I.MeshAsset);
+    auto HostFor = [&](const FString& Sidecar, const FString& Asset, const FSCMaterialSet* Set, const FSCDerivedMesh& Mesh) -> const FString& {
+        const TPair<FString, FString> Key(Sidecar, Asset);
         if (const FString* Found = HostChannels.Find(Key)) return *Found;
-        return HostChannels.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
+        return HostChannels.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(Asset)));
     };
-    // Paints: each slot a paint touches keeps that paint's instance (built by the material phase) beside the one bound now.
-    TMap<TPair<FString, FString>, FString> PaintHosts;
-    auto RecordPaint = [&](const FSCSceneInstance& I, UMeshComponent* C, int32 Slot, const FSCDerivedMesh& Mesh)
+    // A split mesh can bind the same slot on many components. Compute its paint material list once for each
+    // (mesh, sidecar, palette, slot) and use it for both the soft rig and rigid companions.
+    using FPaintMaterials = TArray<TWeakObjectPtr<UMaterialInterface>>;
+    using FPaintsBySlot = TMap<int32, FPaintMaterials>;
+    TMap<TTuple<FString, FString, FString>, FPaintsBySlot> PaintVariants;
+    auto RecordPaint = [&](const FSCSceneInstance& I, UMeshComponent* C, int32 Slot, const FSCDerivedMesh& Mesh, FPaintsBySlot* Slots)
     {
-        if (Manifest.Paints.IsEmpty() || !C) return;
-        FSCPaintSlot Entry;
+        if (!Slots) return;
+        const FPaintMaterials* Variants = Slots->Find(Slot);
+        if (!Variants)
+        {
+            FPaintMaterials& MaterialsForSlot = Slots->Add(Slot);
+            bool bAny = false;
+            MaterialsForSlot.Reserve(Manifest.Paints.Num());
+            FString Sidecar, Palette;
+            for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
+            {
+                UMaterialInterface* Material = nullptr;
+                if (Manifest.PaintTarget(I, Paint, Sidecar, Palette))
+                    if (const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
+                        if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
+                            Material = Materials.Find(Sidecar, Palette, Sub->Index, HostFor(Sidecar, I.MeshAsset, Set, Mesh));
+                MaterialsForSlot.Add(Material);
+                bAny |= Material != nullptr;
+            }
+            if (!bAny) MaterialsForSlot.Reset();
+            Variants = &MaterialsForSlot;
+        }
+        if (Variants->IsEmpty()) return;
+        FSCPaintSlot& Entry = V->PaintSlots.AddDefaulted_GetRef();
         Entry.Component = C;
         Entry.Slot = Slot;
         Entry.Default = C->GetMaterial(Slot);
-        bool bAny = false;
-        for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
-        {
-            FString Sidecar, Palette;
-            UMaterialInterface* Material = nullptr;
-            if (Manifest.PaintTarget(I, Paint, Sidecar, Palette))
-                if (const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
-                    if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
-                    {
-                        const TPair<FString, FString> Key(Sidecar, I.MeshAsset);
-                        const FString* Host = PaintHosts.Find(Key);
-                        if (!Host) Host = &PaintHosts.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
-                        Material = Materials.Find(Sidecar, Palette, Sub->Index, *Host);
-                    }
-            Entry.Paints.Add(Material);
-            bAny |= Material != nullptr;
-        }
-        if (bAny) V->PaintSlots.Add(MoveTemp(Entry));
+        Entry.Paints = *Variants;
     };
     // WP-I1: each screen face (a slot drawn by a screen master with triangles in the drawn variant / LOD) shows the
     // image its own binding resolves to (FSCSceneInstance::ScreenSlotImage); every other screen face stays dark glass.
@@ -1152,6 +1159,8 @@ void FSCImportJob::FState::Assemble()
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
+        FPaintsBySlot* Paints = Manifest.Paints.IsEmpty() || !E.Mesh ? nullptr
+            : &PaintVariants.FindOrAdd(TTuple<FString, FString, FString>(I.MeshAsset, I.MaterialSidecar, I.PaletteId));
         bool bScreenBound = false;
         ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };
         const TMap<int32, TArray<int32>>* ScreenOwners = MeshScreenOwners.Find(I.MeshAsset);
@@ -1279,14 +1288,14 @@ void FSCImportJob::FState::Assemble()
             E.Rig->SetVisibility(!I.bInvisible);
             E.Rig->SetHiddenInGame(I.bInvisible);
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
-            const FString& Host = HostFor(I, Set, *E.Mesh);
+            const FString& Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh);
             for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
                     if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
                     {
                         UMaterialInterface* Screen = ScreenMaterial(Sub, Slot, INDEX_NONE, SkeletalSlotTriangles(*RigMesh, Slot), true, E.Rig);
                         E.Rig->SetMaterial(Slot, Screen ? Screen : Mat);
-                        if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh); // a panel's image does not follow the paint
+                        if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh, Paints); // a panel's image does not follow the paint
                     }
             const double RigStart = FPlatformTime::Seconds();
             E.Rig->RegisterComponent();
@@ -1359,7 +1368,7 @@ void FSCImportJob::FState::Assemble()
                 ON_SCOPE_EXIT { BindSeconds += FPlatformTime::Seconds() - BindStart; };
                 const FSCMaterialSet* Set =
                     Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
-                const FString& Host = HostFor(I, Set, *E.Mesh);
+                const FString& Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh);
                 TArray<int32> GlowSlots;
                 for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 {
@@ -1373,7 +1382,7 @@ void FSCImportJob::FState::Assemble()
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
                     if (Material) C->SetMaterial(Slot, Material);
                     // A panel's image does not follow the paint.
-                    if (Material && Material != Materials.Invisible() && !Screen) RecordPaint(I, C, Slot, *E.Mesh);
+                    if (Material && Material != Materials.Invisible() && !Screen) RecordPaint(I, C, Slot, *E.Mesh, Paints);
                     if (Material && V->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
                 }
                 const double RegisterStart = FPlatformTime::Seconds();
