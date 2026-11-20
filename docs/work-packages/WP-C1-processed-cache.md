@@ -17,7 +17,8 @@ role. DDS textures enter the importer with their authored mip chains.
 The model browser's **Cache options** lets the user set the cap, choose the next launch's folder, clear the processed
 cache, or rebuild the loaded model with the same options. The footer reports layer-1 export hits and layer-2 mesh
 counts. The manifest publishes atomically while an OS mutex guards the root. Loaded assets keep their bulk files
-until Unreal purges them. Retired files still count toward the disk budget during that period.
+until Unreal purges them. Retired files still count toward the disk budget during that period. A package whose
+files pass disk checksums but cannot restore is retired by generation, leaving a concurrent replacement intact.
 
 The synthetic production-path restart probe on the Win64 fork built a 100,352-triangle mesh in **1.820 s** and
 persisted 24.73 MiB in **0.070 s**. A separate process loaded it in **0.031 s**. It restored 3,260 Nanite clusters
@@ -34,11 +35,17 @@ The Gladius load used LOD 0, mip 2 and the procedural Viewer map under NullRHI.
 | Fresh process | Load | Export | Static mesh cache hits | Static mesh builds | Collision builds |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Empty archive and processed caches | 46.161 s | 10.016 s | 0 | 467 | 320 |
-| Same archive and processed caches | 5.142 s | 0.083 s | 467 | 0 | 0 |
+| Same archive and processed caches, before indexed material binding | 5.142 s | 0.083 s | 467 | 0 | 0 |
+| Same caches, indexed material and paint bindings | 4.640 s | 0.081 s | 467 | 0 | 0 |
 
-Both passes produced 47 assets and 65 placements, with the same 43 warnings. Warm time includes GLB derivation,
-rig and clip construction, and actor assembly. The entity index, persistent skeletal data, the under-three-second
-gate, and GPU/Cutlass acceptance remain open.
+All passes produced 47 assets, 65 placements and 43 warnings. Warm actor assembly went from **1.805 s** to
+**1.384 s**, and material binding went from **1.120 s** to **0.864 s**. The final warm run reported four PNG cache hits
+and took **10.43 s** including editor launch and exit. The grouped NullRHI regressions passed seven tests in
+**9.03 s**, including semantic cache retirement, split materials, the paint target and floor-panel paint behavior.
+
+Warm time includes GLB derivation, rig and clip construction and actor assembly. The remaining gap to the
+under-three-second gate is **1.640 s**. The entity index, persistent skeletal data, packaged Shipping validation
+and GPU/Cutlass acceptance remain open.
 
 ### Commands
 

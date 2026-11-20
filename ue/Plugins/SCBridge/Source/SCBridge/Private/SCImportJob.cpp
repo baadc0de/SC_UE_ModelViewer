@@ -1288,7 +1288,7 @@ void FSCImportJob::FState::Assemble()
             E.Rig->SetVisibility(!I.bInvisible);
             E.Rig->SetHiddenInGame(I.bInvisible);
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
-            const FString& Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh);
+            const FString Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh); // paint lookup can grow HostChannels
             for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
                     if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
@@ -1368,7 +1368,7 @@ void FSCImportJob::FState::Assemble()
                 ON_SCOPE_EXIT { BindSeconds += FPlatformTime::Seconds() - BindStart; };
                 const FSCMaterialSet* Set =
                     Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
-                const FString& Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh);
+                const FString Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh); // paint lookup can grow HostChannels
                 TArray<int32> GlowSlots;
                 for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 {
