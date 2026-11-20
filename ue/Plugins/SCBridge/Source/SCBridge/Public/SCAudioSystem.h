@@ -321,6 +321,7 @@ private:
         FVector2f RayTargets = FVector2f::ZeroVector; // occlusion / obstruction, normalized
         double NextRaySample = 0., RayDistanceM = 0.;
         uint64 RayFrame = 0;
+        bool bCanSampleRays = false;
     };
     double Start(FInstance& I, FSCAudioScene& S, const TArray<int32>& Path, double T0, float FadeIn, float CrossfadeOut);
     double StartVoice(FInstance& I, FSCAudioScene& S, const TArray<int32>& Path, double T0, float FadeIn);
@@ -369,7 +370,6 @@ private:
     TMap<int32, FInstance> Instances;
     int32 NextId = 1;
     double Clock = 0;
-    int32 RayBatchesLeft = 0;
     UPROPERTY() TMap<uint32, TObjectPtr<USoundSubmix>> BusSubmixes;
     UPROPERTY() TMap<FString, TObjectPtr<USoundSubmix>> EnvSubmixes;
     UPROPERTY() TArray<TObjectPtr<UObject>> Keep; // waves and presets alive past their voices (audio-thread users)

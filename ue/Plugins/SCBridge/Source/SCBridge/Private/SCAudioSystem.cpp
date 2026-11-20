@@ -46,6 +46,12 @@ TAutoConsoleVariable<float> GAudioOcclusionMin(TEXT("sc.Audio.OcclusionMinM"), 0
 TAutoConsoleVariable<float> GAudioOcclusionMax(TEXT("sc.Audio.OcclusionMaxM"), 0.f, TEXT("Maximum configured emitter ray distance in metres. Zero disables ray evaluation."));
 TAutoConsoleVariable<float> GAudioObstructionFull(TEXT("sc.Audio.ObstructionFullM"), 0.f, TEXT("Configured distance for full centre-ray obstruction in metres."));
 TAutoConsoleVariable<int32> GAudioOcclusionDebug(TEXT("sc.Audio.OcclusionDebug"), 0, TEXT("Log sampled audio occlusion rays and draw their segments."));
+
+FSCAudioRayProfile CurrentRayProfile()
+{
+    return {GAudioOcclusionMin.GetValueOnGameThread(), GAudioOcclusionMax.GetValueOnGameThread(),
+        GAudioObstructionFull.GetValueOnGameThread()};
+}
 constexpr double kForever = 1e18;
 
 /** A/B switch for measuring the playback fix against the behaviour before it (bit 1: a looping media replays the
@@ -1236,7 +1242,7 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     FSCAudioGain Gain;
     const FVector Here = PlacePosition(I);
     auto IsDynamic = [&](const FString& R) {
-        if ((I.Place.Spot != INDEX_NONE || I.Place.Attach.IsValid()) && !I.Place.bListener)
+        if (V.bSpatial && (I.Place.Spot != INDEX_NONE || I.Place.Attach.IsValid()))
             if (const uint32* Id = S.Manifest.RtpcIds.Find(R))
                 if (const FSCAudioRamp* Ramp = S.Manifest.GameParameters.Find(*Id); Ramp && Ramp->IsRayParameter())
                 {
@@ -1408,8 +1414,7 @@ void USCAudioSubsystem::UpdateOcclusion(FInstance& I, const FSCAudioScene& S, do
     if (I.RayParameters.IsEmpty()) return;
     UWorld* World = GetWorld();
     const float* DefaultSurface = S.Manifest.SurfaceObstruction.Find(FName(TEXT("mat_default")));
-    const FSCAudioRayProfile Profile{GAudioOcclusionMin.GetValueOnGameThread(),
-        GAudioOcclusionMax.GetValueOnGameThread(), GAudioObstructionFull.GetValueOnGameThread()};
+    const FSCAudioRayProfile Profile = CurrentRayProfile();
     const FVector Delta = I.Position - ListenerPos;
     const double DistanceM = Delta.Length() / 100.0;
     const bool bProfileReady = World && DefaultSurface && Profile.IsConfigured();
@@ -1453,9 +1458,9 @@ void USCAudioSubsystem::UpdateOcclusion(FInstance& I, const FSCAudioScene& S, do
         }
         I.PendingRays.Reset(); // a handle is only readable on the next world frame
     }
-    if (bTrace && I.PendingRays.IsEmpty() && Now >= I.NextRaySample && RayBatchesLeft > 0)
+    if (bTrace && I.bCanSampleRays && I.PendingRays.IsEmpty())
     {
-        --RayBatchesLeft;
+        I.bCanSampleRays = false;
         I.NextRaySample = Now + 0.10; // viewer sampling budget, independent of the authored RTPC attack/release
         I.RayDistanceM = DistanceM;
         I.RayFrame = GFrameCounter;
@@ -2164,7 +2169,19 @@ void USCAudioSubsystem::Tick(float DeltaTime)
     }
     for (const TSharedRef<FSCAudioScene>& S : TArray<TSharedRef<FSCAudioScene>>(Scenes))
         if (S->Vehicle.IsValid()) UpdateAreasAndSpots(*S, Clock);
-    RayBatchesLeft = 8; // amortize asynchronous batches across active emitters
+    const FSCAudioRayProfile RayProfile = CurrentRayProfile();
+    TArray<FInstance*, TInlineAllocator<32>> RayCandidates;
+    for (auto& [Id, I] : Instances)
+    {
+        I.bCanSampleRays = false;
+        if (I.RayParameters.IsEmpty() || !I.PendingRays.IsEmpty() || I.Voices.IsEmpty() || Clock < I.NextRaySample ||
+            !RayProfile.Includes(FVector::Dist(ListenerPos, PlacePosition(I)) / 100.)) continue;
+        const TSharedPtr<FSCAudioScene> Scene = I.Scene.Pin();
+        if (Scene && Scene->Manifest.SurfaceObstruction.Contains(FName(TEXT("mat_default")))) RayCandidates.Add(&I);
+    }
+    RayCandidates.Sort([](const FInstance& A, const FInstance& B) { return A.NextRaySample < B.NextRaySample; });
+    // Oldest due emitter wins so a long frame cannot let the same eight emitters monopolize the budget.
+    for (int32 Index = 0; Index < FMath::Min(8, RayCandidates.Num()); ++Index) RayCandidates[Index]->bCanSampleRays = true;
     for (auto It = Instances.CreateIterator(); It; ++It)
     {
         UpdateInstance(It->Value, Clock, DeltaTime);
