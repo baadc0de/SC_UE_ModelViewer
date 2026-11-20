@@ -1,7 +1,7 @@
 //! Cached player-kit export. Player identity is isolated from entity cache keys.
 use crate::{CacheStatus, CancelToken, Session, cache, package};
 use anyhow::{Result, ensure};
-pub use starbreaker_3d::character::player::{PlayerLoadout, PlayerRequest};
+pub use starbreaker_3d::character::player::{PlayerClipsRequest, PlayerLoadout, PlayerRequest};
 
 impl Session {
     pub fn player_loadouts(&self, gender: &str) -> Result<Vec<PlayerLoadout>> {
@@ -28,15 +28,8 @@ impl Session {
             "gender must be male or female"
         );
         let key = player_key(&self.build_id, request)?;
-        if let Some(cache) = &self.cache {
-            if let Some(bytes) = cache.read(&key)? {
-                if package::validate_tar(&bytes).is_ok() {
-                    self.checkpoint(cancel, 1.0, "Player cache hit")?;
-                    self.status.set(CacheStatus::Hit);
-                    return Ok(bytes);
-                }
-                cache.remove(&key)?;
-            }
+        if let Some(bytes) = self.cached_player_tar(&key, cancel)? {
+            return Ok(bytes);
         }
         self.checkpoint(cancel, 0.1, "Assembling player")?;
         let loaded = self.loaded()?;
@@ -54,6 +47,48 @@ impl Session {
         self.status.set(CacheStatus::Miss);
         Ok(bytes)
     }
+
+    pub fn export_player_clips(&self, request: &PlayerClipsRequest, cancel: Option<&CancelToken>) -> Result<Vec<u8>> {
+        self.checkpoint(cancel, 0.0, "Preparing player action clips")?;
+        ensure!(!request.names().is_empty(), "no player action clips requested");
+        let key = player_clips_key(&self.build_id, request)?;
+        if let Some(bytes) = self.cached_player_tar(&key, cancel)? {
+            return Ok(bytes);
+        }
+        let loaded = self.loaded()?;
+        self.checkpoint(cancel, 0.1, "Reading player skeleton and clips")?;
+        let export = loaded.index.with_dependent(|_, idx| {
+            starbreaker_3d::character::player::export_player_clips(&loaded.p4k, idx.db, request)
+        })?;
+        self.checkpoint(cancel, 0.95, "Building player clip tar")?;
+        let bytes = package::to_tar(&export)?;
+        self.checkpoint(cancel, 1.0, "Publishing player clips")?;
+        if let Some(cache) = &self.cache {
+            cache.write(&key, &bytes)?;
+        }
+        self.status.set(CacheStatus::Miss);
+        Ok(bytes)
+    }
+
+    fn cached_player_tar(&self, key: &str, cancel: Option<&CancelToken>) -> Result<Option<Vec<u8>>> {
+        let Some(cache) = &self.cache else { return Ok(None) };
+        let Some(bytes) = cache.read(key)? else { return Ok(None) };
+        if package::validate_tar(&bytes).is_err() {
+            cache.remove(key)?;
+            return Ok(None);
+        }
+        self.checkpoint(cancel, 1.0, "Player cache hit")?;
+        self.status.set(CacheStatus::Hit);
+        Ok(Some(bytes))
+    }
+}
+
+fn player_clips_key(build: &str, request: &PlayerClipsRequest) -> Result<String> {
+    let material = serde_json::to_vec(&(
+        "player-clips", 1u32, crate::CACHE_FORMAT_VERSION, cache::EXPORTER_VERSION,
+        build, request.gender.to_ascii_lowercase(), request.names(),
+    ))?;
+    Ok(format!("player-clips-{}.tar", cache::digest(&material)))
 }
 fn player_key(build: &str, request: &PlayerRequest) -> Result<String> {
     player_key_for_exporter(build, request, cache::EXPORTER_VERSION)
@@ -78,6 +113,15 @@ fn player_key_for_exporter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn player_clip_cache_key_is_stable_for_a_set_of_names() {
+        let original = PlayerClipsRequest { gender: "male".into(), clips: vec!["one".into(), "two".into()] };
+        let reversed = PlayerClipsRequest { gender: "MALE".into(), clips: vec!["two".into(), " One ".into(), "one".into()] };
+        let key = player_clips_key("fixture", &original).unwrap();
+        assert_eq!(key, player_clips_key("fixture", &reversed).unwrap());
+        assert_ne!(key, player_clips_key("other-fixture", &original).unwrap());
+        assert_ne!(key, player_clips_key("fixture", &PlayerClipsRequest { gender: "female".into(), ..original }).unwrap());
+    }
     #[test]
     fn player_cache_separates_gender_loadout_and_archive() {
         let a = PlayerRequest::default();

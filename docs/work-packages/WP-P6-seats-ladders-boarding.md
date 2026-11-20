@@ -9,6 +9,30 @@ sensors, `ASCVehicle::PlayDoor`), WP-P3 / WP-P4 (game collision, grid rule, rig 
 **Works with:** WP-I1 (prompts and selection on a point with several interactions).
 **Build locks:** cargo lock (exporter, `scviewer-core`, FFI), UE lock (plugin).
 
+## P6-1 implementation record
+
+The first export confirmed two cockpit seats and two access children in the C2 without loading a hangar or the
+player kit. The pilot's authored vehicle item port offers a FlightController priority group. The co-pilot's user
+definition omits it. The same XML ties each seat's usable priorities to its dashboard port by target tags. Both
+seat attachments, 1.6 m access points, helper transforms and usable exit-validation flags were present.
+
+The live geometry-only C2 export at LOD 2 took 47.75 s. Both cockpit seats resolved seven body and seven look
+fragments. The pilot entry has the Right path and PositionAdjust, and the co-pilot entry has the Left path,
+ColliderMode and PositionAdjust. The two dashboard clips carry `SeatState` Retract and Deploy. The access points
+resolved “Enter Pilot Seat” and “Enter Copilot Seat” from the shared interaction localization.
+
+The clip-only archive exported all eleven body clips for each gender with zero missing, using 3.30 MiB for male
+and 3.33 MiB for female. The requests took 9.31 s and 9.86 s on cache misses. A separate request classified both
+authored look clips as unsupported aim poses, with zero missing. The UE reader exposes seat metadata through
+`sc.Seat.List`. Live seat entry, exit and occupancy, character root-motion warp and door or lift
+regression tests remain open. A2 needs the live occupancy event before it can set driver and crew audio contexts.
+
+The Rust checks used `cargo test --manifest-path vendor/StarBreaker/Cargo.toml --locked -p starbreaker-3d --lib seat_`
+(3 passed), the same command with `interaction_points_keep_their_interactions_in_order` (1 passed), and
+`cargo test --locked -p scviewer-core -p scbridge-ffi --lib player_clip` (1 core and 1 FFI passed).
+The live checks used `scviewer-cli decomposed-tar CRUS_Starlifter_C2 out/p6-research/c2-seats-lod2.tar --lod 2 --materials none --no-interior --no-lights`
+followed by `scviewer-cli player clips` for the unique body layers of the exported seat fragments.
+
 ## Goal
 
 In first person, with the real player body (WP-P2), the player can:

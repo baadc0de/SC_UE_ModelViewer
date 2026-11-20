@@ -88,6 +88,52 @@ FString PaxPath(const FString& Path)
 }
 
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderSeats, "SCBridge.Seat.PackageMetadata",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FSCReaderSeats::RunTest(const FString&)
+{
+    FMemorySource Source;
+    Source.Add(TEXT("scene.json"), TEXT(R"({"version":1,"export_kind":"Decomposed","root_entity":{"entity_name":"Fixture"},
+        "children":[
+          {"entity_name":"FixtureSeat","source_transform_basis":"gltf_y_up","port_path":["owner","seat"],
+           "seat":{"attachment":{"bone":"sitting"},"can_drive":false,"min_yaw":-30.0,
+                   "dashboard":{"port":"panel"},"usable":{"validate_exit":true},
+                   "user_fragments":[{"state":"Select","look_layer":false,"query_frag_tags":["control","Select"],
+                     "layers":[{"layer":0,"animation":"fixture_clip","speed":1.0}],
+                     "procedurals":[{"type":"PositionAdjust","blend":0.4}]}]}},
+          {"entity_name":"FixtureAccess","source_transform_basis":"gltf_y_up",
+           "interaction_points":[{"helper_name":"access","radius":1.2,"angle_range":180,"view_angle_limit":90,
+                                  "interactions":[{"name":"press","display_name":"Use chair"}]}],
+           "seat_access":{"entrances":[{"name":"boarding","seat_port_path":["owner","seat"],
+             "enter":{"interaction":"press","fragment_tags":"Back","skip_state":"SkipDeploy"}}]}},
+          {"entity_name":"Unknown","source_transform_basis":"gltf_y_up","seat":{"attachment":{"bone":"unknown"}}}
+        ]})"));
+    FSCSceneManifest Scene;
+    FString Error;
+    if (!TestTrue(TEXT("Read seat manifest"), FSCPackageReader::Read(Source, Scene, Error)) ||
+        !TestEqual(TEXT("All fixtures are kept"), Scene.Children.Num(), 3)) return false;
+    const auto& Seat = Scene.Children[0].Seat;
+    if (!TestTrue(TEXT("Seat metadata is present"), Seat.IsSet())) return false;
+    TestEqual(TEXT("A flight-observer seat is Crew"), int32(Seat->Role), int32(ESCSeatRole::Crew));
+    TestEqual(TEXT("Attachment"), Seat->Attachment, FName(TEXT("sitting")));
+    TestTrue(TEXT("Exit validation preserved"), Seat->ValidateExit.Get(false));
+    if (TestEqual(TEXT("One authored action"), Seat->Actions.Num(), 1))
+    {
+        TestEqual(TEXT("Action clip"), Seat->Actions[0].Animation, FName(TEXT("fixture_clip")));
+        TestEqual(TEXT("PositionAdjust blend"), Seat->Actions[0].PositionAdjust, 0.4f);
+    }
+    const auto& Access = Scene.Children[1];
+    if (TestEqual(TEXT("One seat access path"), Access.SeatEntrances.Num(), 1))
+    {
+        TestEqual(TEXT("Nested path preserved"), FString::Join(Access.SeatEntrances[0].SeatPortPath, TEXT("/")), FString(TEXT("owner/seat")));
+        TestEqual(TEXT("Resolved interaction"), Access.SeatEntrances[0].Enter.Interaction, FName(TEXT("press")));
+    }
+    if (TestEqual(TEXT("One child interaction prompt"), Access.InteractionPoints.Num(), 1))
+        TestEqual(TEXT("View angle"), Access.InteractionPoints[0].ViewAngleLimit.Get(0.f), 90.f);
+    if (TestTrue(TEXT("Unknown seat definition is kept"), Scene.Children[2].Seat.IsSet()))
+        TestEqual(TEXT("Missing pilot capability leaves role unknown"), int32(Scene.Children[2].Seat->Role), int32(ESCSeatRole::Unknown));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderSparse, "SCBridge.Package.SparseAuthoredMaterialIndices", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCReaderSparse::RunTest(const FString&)
 {
