@@ -31,12 +31,15 @@ public:
     public:
         ~FReadPin();
         const FString Directory;
+        /** Retire this generation if application-level validation fails after checksum validation. */
+        void Invalidate() const;
         FReadPin(const FReadPin&) = delete;
         FReadPin& operator=(const FReadPin&) = delete;
     private:
         friend class FSCProcessedCache;
-        FReadPin(FSCProcessedCache& InCache, FString InDirectory);
+        FReadPin(FSCProcessedCache& InCache, const FString& InKey, FString InDirectory);
         FSCProcessedCache& Cache;
+        const FString Key;
     };
     TUniquePtr<FReadPin> PinEntry(const FString& Key);
     /** Keep the files for a loaded asset's bulk-data readers until its UObject is purged. */
@@ -83,7 +86,7 @@ private:
 
     static bool FileDigest(const FString& Path, int64 ExpectedSize, FString& Out);
     TUniquePtr<FReadPin> PinForRead(const FString& Key, FEntry& Snapshot);
-    void FinishRead(const FString& Key, const FEntry& Snapshot, bool bValid);
+    void FinishRead(const FString& Key, const FString& Generation, bool bValid);
     bool IsPinned(const FString& Generation) const;
     void Unpin(const FString& Directory);
     void Reclaim(const FString& Generation);

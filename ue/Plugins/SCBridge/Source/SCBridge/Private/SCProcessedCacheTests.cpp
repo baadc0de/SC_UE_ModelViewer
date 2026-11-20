@@ -1,6 +1,8 @@
 // Processed cache tests use synthetic bytes and never open the game archive.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "SCProcessedCache.h"
+#include "SCProcessedMeshCache.h"
+#include "SCMeshImporter.h"
 #include "SCProcessedTextureCache.h"
 #include "SCTextureImporter.h"
 #include "Engine/Texture2D.h"
@@ -102,6 +104,34 @@ bool FSCProcessedCachePinTest::RunTest(const FString&)
     CollectGarbage(RF_NoFlags, true);
     TestFalse(TEXT("Unloading returns its old generation's space"), IFileManager::Get().DirectoryExists(*SecondDirectory));
     TestEqual(TEXT("Clear and purge return all bytes"), Cache.Stats().Bytes, int64(0));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCProcessedCacheSemanticTest, "SCBridge.Import.ProcessedCache.SemanticFailure",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FSCProcessedCacheSemanticTest::RunTest(const FString&)
+{
+    const FString Root = FPaths::ConvertRelativePathToFull(FPaths::ProjectIntermediateDir() / TEXT("Tests") /
+        FString::Printf(TEXT("ProcessedCache-%s"), *FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+    ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*Root, false, true); };
+    FSCProcessedCache Cache(Root, 32);
+    const FString Key = FSCProcessedCache::Key(TEXT("invalid-package"), TEXT("mesh"));
+    const TArray<uint8> Blob{1, 2, 3, 4};
+    TestTrue(TEXT("Publish valid data bytes without a mesh package"), Cache.WriteBlob(Key, Blob));
+    auto Failed = Cache.PinEntry(Key);
+    if (!TestTrue(TEXT("The invalid package passes disk checksums"), Failed.IsValid())) return false;
+    FSCMeshBuildStats Stats;
+    TestNull(TEXT("Missing package assets fail to restore"), SCProcessedMeshCache::Load(Cache, *Failed, Stats));
+    TestEqual(TEXT("The semantic failure is no longer indexed"), Cache.Stats().Entries, 0);
+    TestTrue(TEXT("The reader still holds the files"), IFileManager::Get().DirectoryExists(*Failed->Directory));
+    TestTrue(TEXT("A replacement can be written"), Cache.WriteBlob(Key, Blob));
+    Failed->Invalidate();
+    TArray<uint8> Read;
+    TestTrue(TEXT("A stale read cannot retire its replacement"), Cache.ReadBlob(Key, Read));
+    const FString FailedDirectory = Failed->Directory;
+    Failed.Reset();
+    TestFalse(TEXT("The old files are reclaimed after the reader releases them"), IFileManager::Get().DirectoryExists(*FailedDirectory));
     return true;
 }
 

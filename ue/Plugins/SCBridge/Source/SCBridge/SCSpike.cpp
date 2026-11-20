@@ -340,7 +340,7 @@ static void LoadPackage(UWorld* World)
         const FString Key = ProductionKey();
         FSCMeshBuildStats Stats;
         if (auto Pin = ProductionCache->PinEntry(Key))
-            Mesh = SCProcessedMeshCache::Load(*ProductionCache, Pin->Directory, Stats);
+            Mesh = SCProcessedMeshCache::Load(*ProductionCache, *Pin, Stats);
     }
     else
         Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/SCCache/SpikeMesh.SpikeMesh"));

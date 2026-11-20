@@ -268,10 +268,10 @@ bool FSCProcessedCache::ReadBlob(const FString& Key, TArray<uint8>& Out)
         Digest(TConstArrayView64<uint8>(Out.GetData(), Out.Num())) != File->Hash)
     {
         Out.Reset();
-        FinishRead(Key, Entry, false);
+        FinishRead(Key, Entry.Generation, false);
         return false;
     }
-    FinishRead(Key, Entry, true);
+    FinishRead(Key, Entry.Generation, true);
     return true;
 }
 
@@ -295,13 +295,18 @@ bool FSCProcessedCache::Find(const FString& Key, FString& Directory)
     return Pin.IsValid();
 }
 
-FSCProcessedCache::FReadPin::FReadPin(FSCProcessedCache& InCache, FString InDirectory)
-    : Directory(MoveTemp(InDirectory)), Cache(InCache)
+FSCProcessedCache::FReadPin::FReadPin(FSCProcessedCache& InCache, const FString& InKey, FString InDirectory)
+    : Directory(MoveTemp(InDirectory)), Cache(InCache), Key(InKey)
 {}
 
 FSCProcessedCache::FReadPin::~FReadPin()
 {
     Cache.Unpin(Directory);
+}
+
+void FSCProcessedCache::FReadPin::Invalidate() const
+{
+    Cache.FinishRead(Key, FPaths::GetCleanFilename(Directory), false);
 }
 
 TUniquePtr<FSCProcessedCache::FReadPin> FSCProcessedCache::PinEntry(const FString& Key)
@@ -314,11 +319,11 @@ TUniquePtr<FSCProcessedCache::FReadPin> FSCProcessedCache::PinEntry(const FStrin
         FString Digest;
         if (!FileDigest(Pin->Directory / Pair.Key, Pair.Value.Bytes, Digest) || Digest != Pair.Value.Hash)
         {
-            FinishRead(Key, Entry, false);
+            FinishRead(Key, Entry.Generation, false);
             return nullptr;
         }
     }
-    FinishRead(Key, Entry, true);
+    FinishRead(Key, Entry.Generation, true);
     return Pin;
 }
 
@@ -329,14 +334,14 @@ TUniquePtr<FSCProcessedCache::FReadPin> FSCProcessedCache::PinForRead(const FStr
     if (!Entry) return nullptr;
     Snapshot = *Entry;
     ++Pins.FindOrAdd(Entry->Generation);
-    return TUniquePtr<FReadPin>(new FReadPin(*this, Root / Entry->Generation));
+    return TUniquePtr<FReadPin>(new FReadPin(*this, Key, Root / Entry->Generation));
 }
 
-void FSCProcessedCache::FinishRead(const FString& Key, const FEntry& Snapshot, bool bValid)
+void FSCProcessedCache::FinishRead(const FString& Key, const FString& Generation, bool bValid)
 {
     FScopeLock Guard(&Mutex);
     FEntry* Entry = Entries.Find(Key);
-    if (!Entry || Entry->Generation != Snapshot.Generation) return;
+    if (!Entry || Entry->Generation != Generation) return;
     if (!bValid)
         Remove(Key);
     else

@@ -145,9 +145,11 @@ bool SCProcessedMeshCache::Store(FSCProcessedCache& Cache, const FString& Key, U
 #endif
 }
 
-UStaticMesh* SCProcessedMeshCache::Load(FSCProcessedCache& Cache, const FString& Directory, FSCMeshBuildStats& Stats)
+UStaticMesh* SCProcessedMeshCache::Load(FSCProcessedCache& Cache, const FSCProcessedCache::FReadPin& Pin, FSCMeshBuildStats& Stats)
 {
-    if (Directory.IsEmpty()) return nullptr;
+    const FString& Directory = Pin.Directory;
+    bool bUsable = false;
+    ON_SCOPE_EXIT { if (!bUsable) Pin.Invalidate(); };
     TArray<uint8> Bytes;
     if (!FFileHelper::LoadFileToArray(Bytes, *(Directory / DataName))) return nullptr;
     FMemoryReader Ar(Bytes, true);
@@ -156,14 +158,16 @@ UStaticMesh* SCProcessedMeshCache::Load(FSCProcessedCache& Cache, const FString&
     if (UStaticMesh* Resident = Cast<UStaticMesh>(Cache.GetLoaded(Directory)))
     {
         Stats = MoveTemp(Record.Stats);
+        bUsable = true;
         return Resident;
     }
 
     const FString Path = Cache.PackageName(Directory, AssetName) + TEXT(".") + AssetName;
     auto* Mesh = LoadObject<UStaticMesh>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
-    if (!Mesh || !Mesh->GetPackage()->HasAnyPackageFlags(PKG_Cooked)) return nullptr;
+    if (!Mesh) return nullptr;
     Mesh->ClearFlags(RF_Standalone); // GC when the last vehicle releases it.
     Cache.KeepLoaded(Directory, Mesh, false); // failed validation still lets UE finish its reads
+    if (!Mesh->GetPackage()->HasAnyPackageFlags(PKG_Cooked)) return nullptr;
     const FStaticMeshRenderData* Render = Mesh->GetRenderData();
     if (!Render || Render->LODResources.IsEmpty()) return nullptr;
     const auto& Lod = Render->LODResources[0];
@@ -185,5 +189,6 @@ UStaticMesh* SCProcessedMeshCache::Load(FSCProcessedCache& Cache, const FString&
     }
     Stats = MoveTemp(Record.Stats);
     Cache.KeepLoaded(Directory, Mesh);
+    bUsable = true;
     return Mesh;
 }

@@ -2,8 +2,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SCProcessedCache.h"
 
-class FSCProcessedCache;
 class UStaticMesh;
 struct FSCDerivedMesh;
 struct FSCMeshBuildStats;
@@ -11,7 +11,7 @@ struct FSCMeshBuildStats;
 namespace SCProcessedMeshCache
 {
 FString RenderFormat();
-UStaticMesh* Load(FSCProcessedCache& Cache, const FString& Directory, FSCMeshBuildStats& Stats);
+UStaticMesh* Load(FSCProcessedCache& Cache, const FSCProcessedCache::FReadPin& Pin, FSCMeshBuildStats& Stats);
 bool Store(FSCProcessedCache& Cache, const FString& Key, UStaticMesh& Mesh, const FSCDerivedMesh& Data,
     const FSCMeshBuildStats& Stats);
 }

@@ -880,7 +880,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
     const bool bNeedsCollision = !bTranslucent && Options.bBuildCollision;
     FSCMeshBuildStats Stats;
     FString AssetError;
-    UStaticMesh* Mesh = Cached.Pin ? SCProcessedMeshCache::Load(*Options.ProcessedCache, Cached.Pin->Directory, Stats) : nullptr;
+    UStaticMesh* Mesh = Cached.Pin ? SCProcessedMeshCache::Load(*Options.ProcessedCache, *Cached.Pin, Stats) : nullptr;
     Cached.Pin.Reset();
     if (Mesh)
         ++Result.CachedMeshes;
