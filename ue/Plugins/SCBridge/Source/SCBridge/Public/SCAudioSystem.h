@@ -140,6 +140,16 @@ struct SCBRIDGE_API FSCAudioEntity
     TMap<FString, TArray<int32>> TagInstances; // state tag -> the posts playing for it (one per effect)
 };
 
+struct SCBRIDGE_API FSCAudioRoomKey
+{
+    int32 Interior = INDEX_NONE;
+    FString Guid;
+    bool IsKnown() const { return Interior != INDEX_NONE && !Guid.IsEmpty(); }
+    bool operator==(const FSCAudioRoomKey& Other) const { return Matches(Other); }
+    friend uint32 GetTypeHash(const FSCAudioRoomKey& Key) { return HashCombine(GetTypeHash(Key.Interior), GetTypeHash(Key.Guid)); }
+    bool Matches(const FSCAudioRoomKey& Other) const { return Interior == Other.Interior && Guid == Other.Guid; }
+};
+
 struct SCBRIDGE_API FSCAudioScene
 {
     TWeakObjectPtr<ASCVehicle> Vehicle;
@@ -152,6 +162,27 @@ struct SCBRIDGE_API FSCAudioScene
     TArray<FSCAudioPlaced> Spots, Areas;
     TMap<FString, FSCAudioEntity> Entities; // "<interior>/<entity id>"
     TMap<uint64, FSCAudioContainerState> Containers; // by node index (high word) and emitter (low word; 0 = global)
+    struct FConnector
+    {
+        int32 Interior = INDEX_NONE;
+        FString Entity, Door;
+        TOptional<float> ClosedOcclusion;
+        FMatrix Transform = FMatrix::Identity;
+        FVector Bounds = FVector::ZeroVector, Offset = FVector::ZeroVector;
+        FSCAudioRoomKey A, B;
+        TWeakObjectPtr<USCRigComponent> DoorRig;
+    };
+    TArray<FConnector> Connectors;
+    TArray<FTransform> GraphAnchorTransforms;
+    void RefreshRoomGraph();
+    void BuildRoomGraph();
+    TOptional<float> RoomOcclusion(const FSCAudioRoomKey& Emitter) const;
+    void AddConnectors(int32 Interior, const TArray<FString>& Json);
+    FSCAudioRoomKey ListenerRoomKey;
+    bool bListenerInOtherSceneRoom = false;
+    TMap<FSCAudioRoomKey, TOptional<float>> FrameOcclusion;
+    TOptional<float> FrameRoomOcclusion(const FSCAudioRoomKey& Emitter);
+    FSCAudioRoomKey RoomAt(const FVector& World, int32 InteriorHint = INDEX_NONE) const;
     int32 MediaMissing = 0;
     /** The audio-clock time the scene's placed loops began (all at once, as the game posts a zone's spots on entering
      *  it); < 0 until the subsystem sets it. */
@@ -310,6 +341,8 @@ private:
         double PostTime = 0;       // the subsystem clock at the post
         double PostAudioClock = 0; // the audio clock its voices are scheduled against (the post's, plus a render lead)
         FString Environment;
+        FSCAudioRoomKey EmitterRoom;
+        TOptional<float> RoomOcclusion;
         FVector Position = FVector::ZeroVector;
         struct FRayValue
         {

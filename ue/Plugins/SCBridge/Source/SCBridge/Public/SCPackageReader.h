@@ -180,7 +180,7 @@ struct SCBRIDGE_API FSCInterior
     /** `room_volumes[]` objects verbatim (container-local CryEngine metres); parsed by FSCRoomVolume. */
     UPROPERTY(BlueprintReadOnly) TArray<FString> RoomVolumeJson;
     /** WP-A1: `audio_spots[]` / `audio_areas[]` objects verbatim (container-local CryEngine metres); read by FSCAudioScene. */
-    TArray<FString> AudioSpotJson, AudioAreaJson;
+    TArray<FString> AudioSpotJson, AudioAreaJson, RoomConnectorJson;
     UPROPERTY(BlueprintReadOnly) TArray<FSCSceneInstance> Placements;
     TArray<FSCProximitySensor> ProximitySensors;
     /** WP-P5: geometry-less interactive entities (`entities[]`) and lift carriages (`lifts[]`). */

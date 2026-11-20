@@ -68,17 +68,16 @@ bool Vectors(const TSharedPtr<FJsonObject>& J, const TCHAR* Key, TArray<FVector>
 }
 }
 
-bool FSCRoomVolume::Parse(const FString& Json, FSCRoomVolume& Out, FString& Error)
+bool FSCRoomVolume::ReadVector(const TSharedPtr<FJsonObject>& J, const TCHAR* Key, FVector& Out)
 {
-    Out = FSCRoomVolume();
-    TSharedPtr<FJsonObject> J;
-    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), J) || !J) { Error = TEXT("room volume is not a JSON object"); return false; }
-    J->TryGetStringField(TEXT("room"), Out.Room);
-    J->TryGetStringField(TEXT("room_name"), Out.RoomName);
-    J->TryGetStringField(TEXT("source"), Out.Source);
+    return J && Vector3(J->TryGetField(Key), Out);
+}
+
+bool FSCRoomVolume::ReadTransform(const TSharedPtr<FJsonObject>& J, FMatrix& ToContainer, FString& Error)
+{
     // Column-major 4x4 (segment -> container). UE matrices use row vectors, so column C is row C.
     const TArray<TSharedPtr<FJsonValue>>* Columns;
-    FMatrix ToContainer = FMatrix::Identity;
+
     if (!J->TryGetArrayField(TEXT("transform"), Columns) || Columns->Num() != 4) { Error = TEXT("room volume transform is not 4x4"); return false; }
     for (int32 C = 0; C < 4; ++C)
     {
@@ -92,6 +91,19 @@ bool FSCRoomVolume::Parse(const FString& Json, FSCRoomVolume& Out, FString& Erro
         }
     }
     if (FMath::IsNearlyZero(ToContainer.Determinant(), 1e-12)) { Error = TEXT("room volume transform is singular"); return false; }
+    return true;
+}
+
+bool FSCRoomVolume::Parse(const FString& Json, FSCRoomVolume& Out, FString& Error)
+{
+    Out = FSCRoomVolume();
+    TSharedPtr<FJsonObject> J;
+    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), J) || !J) { Error = TEXT("room volume is not a JSON object"); return false; }
+    J->TryGetStringField(TEXT("room"), Out.Room);
+    J->TryGetStringField(TEXT("room_name"), Out.RoomName);
+    J->TryGetStringField(TEXT("source"), Out.Source);
+    FMatrix ToContainer;
+    if (!ReadTransform(J, ToContainer, Error)) return false;
     Out.FromContainer = ToContainer.Inverse();
     FString Kind;
     J->TryGetStringField(TEXT("kind"), Kind);

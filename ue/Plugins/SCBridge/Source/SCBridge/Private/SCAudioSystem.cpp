@@ -41,6 +41,8 @@ namespace
  *  on them are the data; these two names are the binding the engine itself uses). */
 const FString kAzimuth = TEXT("Azimuth");
 const FString kListenerCone = TEXT("Listener_Cone");
+const FString kSameRoom = TEXT("propagation_listenerInSameRoom");
+const FString kRoomOcclusion = TEXT("propagation_occlusion");
 const FString kInteriority = TEXT("Interiority");
 const FString kFreeViewContext = TEXT("DefaultGlobalState");
 const FString kActorContext = TEXT("ActorDefault");
@@ -421,12 +423,154 @@ void FSCAudioScene::LoadCooked(ASCVehicle* V)
                 return Out;
             };
             const bool bHelper = V->InteriorHelperFrames.IsValidIndex(K) && V->InteriorHelperFrames[K];
+            Scene->AddConnectors(I, Texts(TEXT("room_connectors")));
             Scene->AddInterior(I, V->InteriorAnchors[K], bHelper, Texts(TEXT("audio_spots")), Texts(TEXT("audio_areas")), Warnings);
             if (bRooms) FSCLightAreas::Register(V, V->InteriorAnchors[K], Texts(TEXT("room_volumes")), bHelper, Warnings);
         }
     for (const FString& W : Warnings) UE_LOG(LogSCAudio, Warning, TEXT("AUDIO_COOKED %s"), *W);
     UE_LOG(LogSCAudio, Display, TEXT("AUDIO_COOKED %s scene=%s media=%d rooms_registered=%d"), *Dir, *V->CookedAudioScene, Scene->MediaBytes.Num(), bRooms);
     if (USCAudioSubsystem* A = USCAudioSubsystem::Get(V)) A->AddScene(Scene.ToSharedRef());
+}
+
+void FSCAudioScene::AddConnectors(int32 Interior, const TArray<FString>& Json)
+{
+    for (const FString& Text : Json)
+    {
+        FObj O;
+        if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), O) || !O) continue;
+        FConnector C;
+        C.Interior = Interior;
+        C.Entity = Str(O, TEXT("entity_id")).ToLower();
+        if (C.Entity.IsEmpty()) continue;
+        C.Door = Str(O, TEXT("door_entity_id")).ToLower();
+        double Weight;
+        if (O->TryGetNumberField(TEXT("physical_occlusion_when_closed"), Weight) && FMath::IsFinite(Weight) && Weight >= 0 && Weight <= 1)
+            C.ClosedOcclusion = float(Weight);
+        FString Error;
+        FVector Bounds;
+        if (FSCRoomVolume::ReadVector(O, TEXT("bounds"), Bounds) && Bounds.GetMin() > 0 &&
+            FSCRoomVolume::ReadVector(O, TEXT("offset"), C.Offset) && FSCRoomVolume::ReadTransform(O, C.Transform, Error))
+            C.Bounds = Bounds;
+        Connectors.Add(MoveTemp(C));
+    }
+}
+
+void FSCAudioScene::RefreshRoomGraph()
+{
+    const ASCVehicle* V = Vehicle.Get();
+    if (!V || Connectors.IsEmpty()) return;
+    bool bMoved = GraphAnchorTransforms.Num() != InteriorAnchors.Num();
+    GraphAnchorTransforms.SetNum(InteriorAnchors.Num());
+    for (int32 I = 0; I < InteriorAnchors.Num(); ++I)
+    {
+        const USceneComponent* Anchor = InteriorAnchors[I].Get();
+        const FTransform Now = Anchor ? Anchor->GetComponentTransform().GetRelativeTransform(V->GetActorTransform())
+                                      : FTransform(FQuat::Identity, FVector::ZeroVector, FVector::ZeroVector);
+        if (bMoved || !Now.Equals(GraphAnchorTransforms[I]))
+        {
+            bMoved = true;
+            GraphAnchorTransforms[I] = Now;
+        }
+    }
+    if (bMoved) BuildRoomGraph();
+}
+
+void FSCAudioScene::BuildRoomGraph()
+{
+    for (FConnector& C : Connectors)
+    {
+        C.A = {}; C.B = {};
+        if (C.Bounds.GetMin() <= 0 || !InteriorAnchors.IsValidIndex(C.Interior) || !InteriorAnchors[C.Interior].IsValid()) continue;
+        // Require exactly one room pair on opposite faces of this authored box. Never bridge a gap to a nearby room.
+        for (int32 Axis = 0; Axis < 3; ++Axis)
+        {
+            FVector Half = FVector::ZeroVector;
+            Half[Axis] = C.Bounds[Axis] * 0.5;
+            const FSCAudioRoomKey A = RoomAt(ContainerToWorld(C.Interior, C.Transform.TransformPosition(C.Offset - Half)));
+            const FSCAudioRoomKey B = RoomAt(ContainerToWorld(C.Interior, C.Transform.TransformPosition(C.Offset + Half)));
+            if (!A.IsKnown() || !B.IsKnown() || A == B) continue;
+            if (C.A.IsKnown() && !((A == C.A && B == C.B) || (A == C.B && B == C.A)))
+            {
+                C.A = {}; C.B = {};
+                break;
+            }
+            C.A = A; C.B = B;
+        }
+    }
+}
+
+TOptional<float> FSCAudioScene::FrameRoomOcclusion(const FSCAudioRoomKey& Emitter)
+{
+    if (!Emitter.IsKnown() || !ListenerRoomKey.IsKnown()) return {};
+    if (Emitter == ListenerRoomKey) return 0.f;
+    if (const auto* Existing = FrameOcclusion.Find(Emitter)) return *Existing;
+    return FrameOcclusion.Add(Emitter, RoomOcclusion(Emitter));
+}
+
+TOptional<float> FSCAudioScene::RoomOcclusion(const FSCAudioRoomKey& Emitter) const
+{
+    if (!Emitter.IsKnown() || !ListenerRoomKey.IsKnown()) return {};
+    if (Emitter == ListenerRoomKey) return 0.f;
+    const ASCVehicle* V = Vehicle.Get();
+    struct FPath { FSCAudioRoomKey Room; TOptional<float> Sum; };
+    TArray<FPath> Layer{{Emitter, 0.f}};
+    TSet<FSCAudioRoomKey> Seen{Emitter};
+    while (!Layer.IsEmpty())
+    {
+        TArray<FPath> Next;
+        for (const FPath& Path : Layer)
+            for (const FConnector& C : Connectors)
+            {
+                const FSCAudioRoomKey Other = C.A == Path.Room ? C.B : C.B == Path.Room ? C.A : FSCAudioRoomKey{};
+                if (!Other.IsKnown() || Seen.Contains(Other)) continue;
+                TOptional<float> Sum;
+                if (Path.Sum.IsSet() && C.ClosedOcclusion.IsSet() && V && C.DoorRig.IsValid())
+                {
+                    const int32 Door = V->DoorForRig(C.DoorRig.Get());
+                    if (Door != INDEX_NONE && !V->IsDoorPlaying(Door) &&
+                        !V->Doors.ContainsByPredicate([&](const FSCDoorInteraction& D) {
+                            return &D != &V->Doors[Door] && D.Rig.Get() == C.DoorRig.Get();
+                        }))
+                        Sum = Path.Sum.GetValue() + (V->IsDoorOpen(Door) ? 0.f : C.ClosedOcclusion.GetValue());
+                }
+                if (FPath* Prev = Next.FindByPredicate([&](const FPath& P) { return P.Room == Other; }))
+                {
+                    if (!Prev->Sum.IsSet() || !Sum.IsSet() || !FMath::IsNearlyEqual(Prev->Sum.GetValue(), Sum.GetValue()))
+                        Prev->Sum.Reset(); // equally short paths disagree
+                }
+                else Next.Add({Other, Sum});
+            }
+        for (const FPath& Path : Next)
+        {
+            if (Path.Room == ListenerRoomKey)
+                return Path.Sum.IsSet() ? TOptional<float>(FMath::Clamp(Path.Sum.GetValue() / 3.f, 0.f, 1.f)) : TOptional<float>{};
+            Seen.Add(Path.Room);
+        }
+        Layer = MoveTemp(Next);
+    }
+    return {};
+}
+
+FSCAudioRoomKey FSCAudioScene::RoomAt(const FVector& World, int32 InteriorHint) const
+{
+    FSCAudioRoomKey Found;
+    const ASCVehicle* V = Vehicle.Get();
+    if (!V) return Found;
+    for (const FSCLightArea& Area : V->LightAreas)
+    {
+        if (!Area.Anchor.IsValid()) continue;
+        const int32 Interior = InteriorAnchors.IndexOfByKey(Area.Anchor);
+        if (Interior == INDEX_NONE || (InteriorHint != INDEX_NONE && Interior != InteriorHint)) continue;
+        const FVector Point = Area.AnchorToContainer.TransformPosition(Area.Anchor->GetComponentTransform().InverseTransformPosition(World));
+        for (const FSCRoomVolume& Volume : Area.Volumes)
+        {
+            if (Volume.Room.IsEmpty() || !Volume.Contains(Point)) continue;
+            FSCAudioRoomKey Key{Interior, Volume.Room.ToLower()};
+            if (Found.IsKnown() && !Found.Matches(Key)) return {};
+            Found = MoveTemp(Key);
+        }
+    }
+    return Found;
 }
 
 void FSCAudioScene::AddInterior(int32 Interior, USceneComponent* Anchor, bool bHelperFrame, const TArray<FString>& SpotJson,
@@ -827,6 +971,14 @@ void USCAudioSubsystem::AddScene(const TSharedRef<FSCAudioScene>& Scene)
                 const float* D = Scene->Manifest.RtpcDefaults.Find(Fx.Meter.GameParameter);
                 RtpcBank->MarkDriven(Fx.Meter.GameParameter, D ? *D : Fx.Meter.MinDb);
             }
+    Scene->RefreshRoomGraph();
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_ROOM_GRAPH scene=%s room_records=%d placed_connectors=%d"),
+           *Scene->Name, Scene->Manifest.Rooms.Num(), Scene->Connectors.Num());
+    for (const FSCAudioScene::FConnector& C : Scene->Connectors)
+        UE_LOG(LogSCAudio, Display, TEXT("AUDIO_ROOM_CONNECTOR interior=%d entity=%s door=%s closed=%s a=%d/%s b=%d/%s"),
+               C.Interior, *C.Entity, C.Door.IsEmpty() ? TEXT("-") : *C.Door,
+               C.ClosedOcclusion.IsSet() ? *FString::SanitizeFloat(C.ClosedOcclusion.GetValue()) : TEXT("missing"),
+               C.A.Interior, *C.A.Guid, C.B.Interior, *C.B.Guid);
     Scenes.Add(Scene);
     LogScene(*Scene);
 }
@@ -1009,6 +1161,13 @@ FString USCAudioSubsystem::EnvironmentAt(const FSCAudioScene& S, const FInstance
 float USCAudioSubsystem::RtpcValue(const FSCAudioScene& S, const FInstance& I, const FString& Name, const FVector& Emitter) const
 {
     if (const FInstance::FRayValue* Ray = I.RayParameters.Find(Name)) return Ray->Value;
+    if (Name == kSameRoom && S.bListenerInOtherSceneRoom && I.EmitterRoom.IsKnown()) return 0.f;
+    if ((Name == kSameRoom || Name == kRoomOcclusion) && S.ListenerRoomKey.IsKnown() && I.EmitterRoom.IsKnown())
+    {
+        const bool bSame = S.ListenerRoomKey.Matches(I.EmitterRoom);
+        if (Name == kSameRoom) return bSame ? 1.f : 0.f;
+        if (I.RoomOcclusion.IsSet()) return I.RoomOcclusion.GetValue();
+    }
     if (!I.Place.AreaFadeRtpc.IsEmpty() && Name == I.Place.AreaFadeRtpc)
     {
         if (S.Areas.IsValidIndex(I.Place.Area)) return S.Areas[I.Place.Area].Fade;
@@ -1080,6 +1239,9 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
         I.Action = &A;
         I.Random.Initialize(int32(GetTypeHash(Trigger) ^ uint32(Id * 2654435761u)));
         I.Position = PlacePosition(I);
+        I.EmitterRoom = I.Place.Interior != INDEX_NONE && !I.Place.Room.IsEmpty()
+            ? FSCAudioRoomKey{I.Place.Interior, I.Place.Room.ToLower()} : S.RoomAt(I.Position, I.Place.Interior);
+        I.RoomOcclusion = S.FrameRoomOcclusion(I.EmitterRoom);
         I.Environment = EnvironmentAt(S, I, I.Position);
         Start(I, S, {A.Root}, Clock + A.DelayS + A.Context.InitialDelayS, A.FadeInS, 0.f);
         UpdateInstance(I, Clock, 0.f);
@@ -1257,7 +1419,8 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
                     }
                     return true;
                 }
-        return R == kAzimuth || R == kListenerCone || (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc) || (RtpcBank && RtpcBank->Driven().Contains(R));
+        return R == kAzimuth || R == kListenerCone || R == kSameRoom || R == kRoomOcclusion ||
+            (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc) || (RtpcBank && RtpcBank->Driven().Contains(R));
     };
     auto BindVoiceStates = [&](const TArray<FSCAudioStateValue>& States) {
         if (RtpcBank)
@@ -1498,6 +1661,10 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now, float Seconds)
     const TSharedPtr<FSCAudioScene> SP = I.Scene.Pin();
     if (!SP) { I.Voices.Reset(); I.Runs.Reset(); return; }
     FSCAudioScene& S = *SP;
+    I.Position = PlacePosition(I);
+    I.EmitterRoom = I.Place.Interior != INDEX_NONE && !I.Place.Room.IsEmpty()
+            ? FSCAudioRoomKey{I.Place.Interior, I.Place.Room.ToLower()} : S.RoomAt(I.Position, I.Place.Interior);
+    I.RoomOcclusion = S.FrameRoomOcclusion(I.EmitterRoom);
     // Continuous containers: start the next item when its time comes.
     for (int32 R = 0; R < I.Runs.Num(); ++R)
     {
@@ -1526,7 +1693,6 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now, float Seconds)
         if (I.Runs.IsValidIndex(R)) I.Runs[R].NextAt = Next;
     }
     I.Runs.RemoveAll([](const FRun& R) { return R.ItemsLeft == 0 || R.NextAt >= kForever; });
-    I.Position = PlacePosition(I);
     UpdateOcclusion(I, S, Now, Seconds);
     if (const FString Env = EnvironmentAt(S, I, I.Position); Env != I.Environment)
     {
@@ -2162,6 +2328,14 @@ void USCAudioSubsystem::Tick(float DeltaTime)
             ContainingScene = &S.Get();
             RoomId = MoveTemp(Room);
         }
+    }
+    const FSCAudioRoomKey ScopedListener = ContainingScene ? ContainingScene->RoomAt(ListenerPos) : FSCAudioRoomKey{};
+    for (const TSharedRef<FSCAudioScene>& S : Scenes)
+    {
+        S->RefreshRoomGraph();
+        S->FrameOcclusion.Reset();
+        S->ListenerRoomKey = &S.Get() == ContainingScene ? ScopedListener : FSCAudioRoomKey{};
+        S->bListenerInOtherSceneRoom = ScopedListener.IsKnown() && &S.Get() != ContainingScene;
     }
     ListenerRoom = MoveTemp(RoomId);
     ListenerEnvironment = ContainingScene ? ContainingScene->Manifest.RoomEnvironment(ListenerRoom) : FString();

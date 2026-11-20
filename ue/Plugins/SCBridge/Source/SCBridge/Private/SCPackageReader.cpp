@@ -655,6 +655,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         I.Container.SourceTransformBasis = TEXT("cryengine_z_up");
         for (const auto& R : ReaderArray(O, TEXT("room_volumes"))) if (R->Type == EJson::Object) I.RoomVolumeJson.Add(Json(R->AsObject()));
         for (const auto& R : ReaderArray(O, TEXT("audio_spots"))) if (R->Type == EJson::Object) I.AudioSpotJson.Add(Json(R->AsObject()));
+        for (const auto& R : ReaderArray(O, TEXT("room_connectors"))) if (R->Type == EJson::Object) I.RoomConnectorJson.Add(Json(R->AsObject()));
         for (const auto& R : ReaderArray(O, TEXT("audio_areas"))) if (R->Type == EJson::Object) I.AudioAreaJson.Add(Json(R->AsObject()));
         for (const auto& P : ReaderArray(O, TEXT("placements")))
         {
