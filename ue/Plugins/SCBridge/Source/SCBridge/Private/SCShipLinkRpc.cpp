@@ -7,6 +7,7 @@
 #include "SCRigComponent.h"
 #include "SCViewerSubsystem.h"
 #include "Engine/World.h"
+#include "UI/Cargo/SCCargoViewSource.h"
 
 using namespace SCRpcJson;
 
@@ -97,6 +98,14 @@ FObj SCShipLinkRpc::Snapshot(UWorld* World)
     Out->SetArrayField(TEXT("pairings"), Pairings);
     Out->SetArrayField(TEXT("doors"), Doors);
     Out->SetArrayField(TEXT("lights"), Lights);
+    if (World == SCCargoUI::ViewerWorld())
+    {
+        const FSCMobiGlasRequests& Ui = FSCMobiGlasRequests::Get();
+        const FObj State = MakeShared<FJsonObject>();
+        State->SetBoolField(TEXT("ready"), Ui.bShipLinkReady);
+        State->SetNumberField(TEXT("door_labels"), Ui.ShipLinkLabels);
+        Out->SetObjectField(TEXT("ui"), State);
+    }
     return Out;
 }
 

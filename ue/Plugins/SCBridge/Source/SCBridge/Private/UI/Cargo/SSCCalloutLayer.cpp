@@ -263,12 +263,14 @@ void SSCCalloutLayer::Solve(const FGeometry& Geometry)
     const TArray<FSCCalloutPlacement> Out = FSCCalloutSolver::Solve(Targets, Screen, P);
     TMap<int32, FBox2D>& Hits = Model->GetShipLink().CalloutHits;
     Hits.Reset();
+    int32 Labels = 0;
     for (int32 N = 0; N < Out.Num(); ++N)
     {
         FItem& I = Items[Keys[N]];
         I.bLabel = Out[N].bLabel;
         if (I.Kind == EKind::Door)
         {
+            Labels += I.bLabel;
             const FBox2D Rect = I.bLabel ? Out[N].Label : FBox2D(I.Anchor - FVector2D(6), I.Anchor + FVector2D(6));
             Hits.Add(Keys[N] - DoorKey, FBox2D(Geometry.LocalToAbsolute(Rect.Min), Geometry.LocalToAbsolute(Rect.Max)));
         }
@@ -276,6 +278,7 @@ void SSCCalloutLayer::Solve(const FGeometry& Geometry)
         I.Side = Out[N].Side;
         I.TargetOffset = Out[N].Label.Min - I.Anchor;
     }
+    FSCMobiGlasRequests::Get().ShipLinkLabels = Labels;
 }
 
 TArray<FVector2f> SSCCalloutLayer::Leader(const FVector2D& A, const FBox2D& Label, ESCCalloutSide Side)

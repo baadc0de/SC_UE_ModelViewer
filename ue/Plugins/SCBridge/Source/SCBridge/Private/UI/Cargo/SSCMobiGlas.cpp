@@ -125,9 +125,15 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
              {
                  const ASCVehicle* Ship = Model->GetShipLink().GetShip();
                  if (!Ship) return FText::GetEmpty();
-                 int32 Open = 0, Locked = 0;
+                 int32 Open = 0, Locked = 0, Moving = 0;
                  for (int32 I = 0; I < Ship->Doors.Num(); ++I)
-                     if (FSCShipLinkModel::Listed(Ship, I)) { Open += Ship->IsDoorOpen(I); Locked += Ship->IsDoorLocked(I); }
+                     if (FSCShipLinkModel::Listed(Ship, I))
+                     {
+                         const bool bMoving = Ship->IsDoorPlaying(I);
+                         Open += !bMoving && Ship->IsDoorOpen(I);
+                         Locked += Ship->IsDoorLocked(I);
+                         Moving += bMoving;
+                     }
                  const USCViewerSubsystem* Viewer = Model->GetViewer();
                  const ASCFirstPersonCharacter* First = Viewer ? Viewer->GetFirstPerson() : nullptr;
                  FVector Position;
@@ -136,7 +142,7 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
                  else if (!SCCargoUI::ViewerLocation(SCCargoUI::ViewerWorld(), Position)) Position = Ship->GetActorLocation();
                  const FVector Offset = Ship->GetActorLocation() - Position;
                  const int32 Bearing = (FMath::RoundToInt(FMath::RadiansToDegrees(FMath::Atan2(Offset.Y, Offset.X))) + 360) % 360;
-                 return FText::FromString(FString::Printf(TEXT("%.0f m  ·  %03d°  ·  %d OPEN  ·  %d LOCKED"), Offset.Size() / 100, Bearing, Open, Locked));
+                 return FText::FromString(FString::Printf(TEXT("%.0f m  ·  %03d°  ·  %d OPEN  ·  %d LOCKED  ·  %d MOVING"), Offset.Size() / 100, Bearing, Open, Locked, Moving));
              }
              if (!Model->HasSource()) return LOCTEXT("NoCargo", "NO CARGO SYSTEM");
              return FText::Format(LOCTEXT("Status", "{0} GRIDS · {1} DRONES"), Model->GetGrids().Num(), Model->GetDrones().Num());
@@ -308,6 +314,8 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
         R.ZoomNotches = 0;
     }
     Openness = bOpen ? FMath::Min(1.f, Openness + Delta / PanelIn) : FMath::Max(0.f, Openness - Delta / PanelOut);
+    Requests.bShipLinkReady = bOpen && Openness >= 1 && Model->GetApp() == ESCMobiGlasApp::ShipLink &&
+        Clear && Clear->GetTickSpaceGeometry().GetLocalSize().Y > 0;
     const float Shown = bOpen ? EaseOutCubic(Openness) : 1 - EaseInQuad(1 - Openness);
     SetRenderOpacity(Shown);
     SetRenderTransform(FSlateRenderTransform(FVector2f(0, PanelSlide * (1 - Shown))));

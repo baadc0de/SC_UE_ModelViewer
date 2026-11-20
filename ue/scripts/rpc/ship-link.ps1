@@ -58,6 +58,8 @@ if ($refusal.ok -or $refusal.error -ne 'Locked') { throw "Expected access denial
 if ($Screenshots) {
     Call '/console' @{ cmd = 'sc.MobiGlas 1' } | Out-Null
     Call '/console' @{ cmd = 'sc.MobiGlas.App ShipLink' } | Out-Null
+    Wait-State { param($s) $s.ui.ready -and $s.ui.door_labels -gt 0 } 'presented Ship Link layout' | Out-Null
+    Call '/wait' @{ until = 'settled'; timeout_s = $TimeoutSeconds } | Out-Null
     Call '/screenshot' @{ name = 'ship-link-locked'; ui = $true } | Select-Object path
 }
 Call '/ship/door' @{ ship = $Ship; door = $id; action = 'unlock'; as = $owner } | Out-Null
