@@ -167,6 +167,18 @@ fn cancellation_is_a_distinct_nonpanic_status() {
 }
 
 #[test]
+fn archive_build_id_clears_output_on_error() {
+    let mut value = ptr::dangling_mut();
+    unsafe {
+        assert_eq!(
+            sc_archive_build_id(ptr::null_mut(), &mut value),
+            sc_status::SC_STATUS_INVALID_ARGUMENT
+        );
+    }
+    assert!(value.is_null());
+}
+
+#[test]
 fn live_cache_stats_recovers_broken_manifest_and_handles_missing_manifest() {
     let Ok(found) = starbreaker_common::discover::find_p4k() else {
         eprintln!("skip: no Data.p4k installed");
@@ -181,6 +193,13 @@ fn live_cache_stats_recovers_broken_manifest_and_handles_missing_manifest() {
             sc_open(path.as_ptr(), cache_path.as_ptr(), &mut h),
             sc_status::SC_STATUS_OK
         );
+        let mut build_id = ptr::null_mut();
+        assert_eq!(sc_archive_build_id(h, &mut build_id), sc_status::SC_STATUS_OK);
+        assert_eq!(
+            CStr::from_ptr(build_id).to_str().unwrap(),
+            (*h).session.build_id()
+        );
+        sc_free_string(build_id);
         let mut stats = sc_cache_info::default();
         assert_eq!(sc_cache_stats(h, &mut stats), sc_status::SC_STATUS_OK);
         let bytes = stats.bytes;

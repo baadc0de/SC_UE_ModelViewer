@@ -112,6 +112,12 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
         }
         Result.bOK = true;
         Result.bIndexCacheHit = Self->CacheStatsLocked().bLastHit;
+        char* BuildId = nullptr;
+        if (sc_archive_build_id(Handle, &BuildId) == SC_STATUS_OK)
+        {
+            Result.ArchiveBuildId = UTF8_TO_TCHAR(BuildId);
+            sc_free_string(BuildId);
+        }
         return Result;
     }, UE::Tasks::ETaskPriority::BackgroundNormal);
 }
