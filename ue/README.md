@@ -1031,3 +1031,10 @@ ue/scripts/capture_route.sh p2-cutlass ue/scripts/routes/cutlass-armed-walkthrou
 
 Null-RHI tests: `-run=pythonscript -script=ue/scripts/test_player.py -SCPlayerTests
 [-SCPlayerPackage=<kit tar>]` (see [WP-P2 verification](verification/WP-P2.md)).
+
+### Offline render RPC (WP-H2)
+
+With the viewer running under the RPC harness, run `ue/scripts/rpc/render_check.ps1` for a short camera-path test.
+`-Acceptance` runs the five-second path around the primary vehicle. Output goes to `out/h2/<tag>`.
+`Invoke-SCRender` accepts the request in [the H2 brief](../docs/work-packages/WP-H2-offline-render.md).
+Use `/record` for real-time 8-bit previews.

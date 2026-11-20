@@ -42,7 +42,7 @@ private:
     FString Path, FrameDir, Error, Format;
     double Fps = 30, MaxSeconds = 300, Started = 0, NextAt = 0, StoppedAt = 0;
     int32 Width = 0;
-    bool bKeepFrames = false;
+    bool bKeepFrames = false, bSawHDR = false;
     TArray<double> Times; // capture time of every frame written (index = file number)
     int32 Dropped = 0;
     TSharedRef<std::atomic<int32>> InFlight = MakeShared<std::atomic<int32>>(0);
