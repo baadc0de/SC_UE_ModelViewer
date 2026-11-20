@@ -127,10 +127,14 @@ void USCCargoSubsystem::TryScenario()
     if (!State->bScenarioLoadRequested && !S.Ship.IsEmpty() && Viewer->GetLoadedEntity().IsEmpty() && Viewer->GetPendingEntity().IsEmpty() &&
         !FParse::Value(FCommandLine::Get(), TEXT("SCLoad="), Ignored) && !Viewer->IsBusy() && Viewer->CanLoad(S.Ship))
     {
+        if (!S.Environment.IsEmpty() && Viewer->GetEnvironmentRequest().IsEmpty())
+        {
+            Viewer->SetEnvironment(S.Environment);
+            return; // the environment marks the viewer busy; queue the ship on a subsequent idle tick
+        }
         State->bScenarioLoadRequested = true;
-        if (!S.Environment.IsEmpty() && Viewer->GetEnvironmentRequest().IsEmpty()) Viewer->SetEnvironment(S.Environment);
-        Viewer->LoadEntity(S.Ship, Viewer->GetOptions());
-        UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loading ship=%s environment=%s"), *S.Ship, *S.Environment);
+        if (Viewer->LoadEntity(S.Ship, Viewer->GetOptions()))
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loading ship=%s environment=%s"), *S.Ship, *S.Environment);
     }
     // Loose stock (WP-K2): put down once the rest is placed, at its poses or at free reachable spots from the scenario's seed.
     if (State->bScenarioPlaced && !State->bLoosePlaced && !Viewer->IsSpawningVehicles())

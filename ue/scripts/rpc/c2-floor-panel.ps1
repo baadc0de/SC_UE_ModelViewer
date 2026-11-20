@@ -3,30 +3,52 @@
 #   Import-Module ue/scripts/rpc/SCRpc.psm1
 #   $p = Start-SCViewer -Port 8771 -ShotDir <dir> -Extra '-SCLoad=CRUS_Starlifter_C2 -SCEnvironment=<hangar socpak> -SCCamera=first'
 #   Invoke-SC /wait @{ until = 'idle'; timeout_s = 1500 }
-#   ue/scripts/rpc/c2-floor-panel.ps1 -Port 8771 [-From <step>]
+#   ue/scripts/rpc/c2-floor-panel.ps1 -Port 8771 [-From <step>] [-Through <step>] [-NoShots]
 # The view is turned with sc.Lift.PanelAim (an option's centre, or a content point of the face) and E is sc.FP.Interact,
 # the same press path as the key. Positions are vehicle-relative cm (as c2-lift.ps1). Screenshots go to -SCShotDir.
-param([int]$Port = 8771, [int]$From = 1)
+param([int]$Port = 8771, [ValidateRange(1, 10)][int]$From = 1,
+      [ValidateRange(1, 10)][int]$Through = 10, [switch]$NoShots)
+if ($Through -lt $From) { throw '-Through must be at or after -From' }
 Import-Module "$PSScriptRoot\SCRpc.psm1" -Force
 Set-SCRpcPort $Port
 function C([string]$Cmd) { (Invoke-SC /console @{ cmd = $Cmd }).lines }
-function Shot([string]$Name, [switch]$Ui) { [void](Invoke-SC /screenshot @{ name = $Name; ui = [bool]$Ui }) }
+function Shot([string]$Name, [switch]$Ui) {
+    if (!$NoShots) { [void](Invoke-SC /screenshot @{ name = $Name; ui = [bool]$Ui }) }
+}
 $script:N = 0
-function Step([string]$Text) { $script:N++; $run = $script:N -ge $From; if ($run) { Write-Host "== $($script:N) $Text" }; $run }
+function Step([string]$Text) { $script:N++; $run = $script:N -ge $From -and $script:N -le $Through; if ($run) { Write-Host "== $($script:N) $Text" }; $run }
 function WaitLift([int]$Timeout = 90) {
     $w = Invoke-SC /wait @{ until = 'lift_idle'; timeout_s = $Timeout } -TimeoutSec ($Timeout + 30)
     "lift_idle ok=$($w.ok) waited=$($w.waited_s) state=$($w.lifts[0].state) at=$($w.lifts[0].at)"
 }
 function Probe { (C 'sc.FP.Probe' | Select-Object -First 1) -replace ' chain=.*', '' }
+function WaitRow([string]$Target, [string]$Interaction) {
+    $aim = C "sc.Lift.PanelAim 0 $Target" | Select-String 'panel_aim'
+    if ("$aim" -notmatch 'panel_aim panel=0 ') { throw "cannot aim at floor panel: $aim" }
+    Write-Host $aim
+    $wantedChoice = "choice=$([regex]::Escape($Interaction))(?= )"
+    try {
+        $reply = Wait-SCRpc -Path /console -Body @{ cmd = 'sc.FP.Probe' } -TimeoutSec 1 -IntervalMs 50 -Condition {
+            param($state)
+            [bool]($state.lines | Select-String $wantedChoice -Quiet)
+        }
+        return ($reply.lines | Select-String 'FP_PROBE' | Select-Object -First 1) -replace ' chain=.*', ''
+    } catch [TimeoutException] {
+        # The held view can settle off the option. AimRow will try nearby points.
+    }
+}
 function AimRow([int]$Row, [string]$Interaction) {
-    # A row's centre, then nudged up and down while the crosshair is not on the row yet (the eye swings with the view when
-    # looking steeply down at the panel, so a held aim can settle a few centimetres off).
-    foreach ($dy in 0, -0.05, 0.05, -0.09, 0.09) {
-        $r = (C 'sc.Lift.Panels' | Select-String "FLOOR_PANEL_ROW panel=0 option=$Row ") -replace '.* rect=', ''
-        $m = [regex]::Match($r, '([\d.]+),([\d.]+)\.\.([\d.]+),([\d.]+)')
-        $y = ([double]$m.Groups[2].Value + [double]$m.Groups[4].Value) / 2 + $dy
-        $p = Aim "0.5 $y"
-        if ($p -match "choice=$Interaction") { return $p }
+    # Ask the game to use the authored row centre. Read the rectangles for nudges only if head movement settles off target.
+    $probe = WaitRow "$Row" $Interaction
+    if ($probe) { return $probe }
+    if (!$script:PanelRows) { $script:PanelRows = C 'sc.Lift.Panels' | Select-String 'FLOOR_PANEL_ROW panel=0 ' }
+    $rect = ($script:PanelRows | Select-String "option=$Row ") -replace '.* rect=', ''
+    $bounds = [regex]::Match($rect, '([\d.]+),([\d.]+)\.\.([\d.]+),([\d.]+)')
+    if (!$bounds.Success) { throw "floor panel row $Row has no rectangle" }
+    $centreY = ([double]$bounds.Groups[2].Value + [double]$bounds.Groups[4].Value) / 2
+    foreach ($dy in -0.05, 0.05, -0.09, 0.09) {
+        $probe = WaitRow "0.5 $($centreY + $dy)" $Interaction
+        if ($probe) { return $probe }
     }
     throw "row $Row not under the crosshair"
 }
@@ -51,7 +73,13 @@ function Watch([string]$Tag, [int]$Stop, [double[]]$ShotAtS) {
 function OnCarriage {
     # The middle of the carriage, wherever it is (floor hint 40 cm under its node), as c2-lift.ps1.
     $z = [double](((C 'sc.Lift.Where' | Select-String 'LIFT_WHERE lift=0' | Select-Object -First 1) -replace '.* z_cm=(\S+) .*', '$1'))
-    [void](C "sc.FP.Teleport -300 -784 $($z - 40)"); Start-Sleep 1; C 'sc.Lift.Where' | Select-String 'player base'
+    $teleport = C "sc.FP.Teleport -300 -784 $($z - 40)"
+    if (!($teleport | Select-String 'FP_CMD teleport ok=1' -Quiet)) { throw "teleport onto the carriage failed: $teleport" }
+    $rider = Wait-SCRpc -Path /console -Body @{ cmd = 'sc.Lift.Where' } -TimeoutSec 5 -Condition {
+        param($reply)
+        [bool]($reply.lines | Select-String 'LIFT_WHERE player base=\S+ lift=0 ' -Quiet)
+    }
+    $rider.lines | Select-String 'LIFT_WHERE player'
 }
 $Rows = @('RequestFloor1', 'RequestFloor0', 'RequestSurface') # the rows' interactions (sc.Lift.Panels): Top Deck, Lower Deck, Exit Ship
 function Press([int]$Row, [string]$Tag) {
@@ -62,7 +90,15 @@ function Press([int]$Row, [string]$Tag) {
 }
 
 if (Step 'lifts, panels, rows') { C 'sc.Lift.List' | Select-String 'LIFT_LIST|LIFT_STOP|LIFT_PANEL'; C 'sc.Lift.Panels' }
-if (Step 'onto the carriage at the hold') { OnCarriage; WaitLift }
+if (Step 'onto the carriage at the hold') {
+    $camera = (Invoke-SC /state).camera.mode
+    if ($camera -ne 'FirstPerson') {
+        $first = Invoke-SC /camera @{ mode = 'first' }
+        if (!$first.ok) { throw "cannot enter first person: $($first.error)" }
+    }
+    OnCarriage
+    WaitLift
+}
 if (Step 'aim at each row: the highlight follows the crosshair') {
     foreach ($r in 0, 1, 2) { AimRow $r $Rows[$r]; Shot "a$r-aim-row-$r"; Shot "a$r-aim-row-$r-ui" -Ui }
 }
