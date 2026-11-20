@@ -66,6 +66,14 @@ request, because global idle alone can also mean that the request failed or was
 never accepted. Use fixed delays when elapsed time is part of the behavior the
 test is measuring.
 
+Start a folder-based first-person fixture with `-SCPackage=<export root>
+-SCExplore -SCEnvironment=<export root>` to reuse prior exports. The harness
+waits for the environment load before entering first person. A cargo scenario
+started without `-SCLoad` waits after requesting its environment and then
+queues its own ship. Once the C2 is idle, use
+`ue/scripts/rpc/c2-floor-panel.ps1 -Port <port> -Through 3 -NoShots` for
+the floor selection probe in a session already open for another feature.
+
 Both drivers hold the same per-user Unreal lease across worktrees. Keep a build
 or a viewer's full lifetime inside a single lease, including shutdown. For
 manual runs, use `Invoke-SCUELease` from `SCRpc.psm1` or coordinate the slot
@@ -87,9 +95,12 @@ size.
 | Procedural Viewer, warm shaders | 13.12 s | 13.20 s | `fixture-smoke.ps1 -Fixture Viewer`; graceful exit. |
 | Cutlass in procedural Viewer, warm engine and first ship import | 12.42 s | 100.14 s | `fixture-smoke.ps1 -Fixture Cutlass`; state confirmed the named ship and graceful exit. |
 | Cutlass repeat with Ship Link tests | 10.73 s | 42.68 s | One process, then 20.54 s for the state-polled feature route. |
+| Cutlass repeat with Garage tests | — | 29.62 s | A further warm run, followed by a 45.59 s lifecycle route. |
 
 The H2 NullRHI runner found five named tests across two requested filters. Its
 log measured 0.80 s from queueing to test session start, down from 5.81 s when
 the commands were issued separately. M1 ran 88 focused cases in a single
-15.46 s NullRHI process. Fixture logs write JSON under `out`; the feature
+15.46 s NullRHI process. The same driver ran 93 Ship Link/Garage cases in
+14.30 s, 12 audio cases in 9.71 s, and three processed-cache cases in 15.60 s,
+including launch and exit. Fixture logs write JSON under `out`; the feature
 branches carry their own commands and results.

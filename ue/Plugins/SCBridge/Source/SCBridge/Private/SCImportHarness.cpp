@@ -27,6 +27,11 @@ void FSCImportHarness::Start()
         }
         else
         {
+            const bool bExplore = FParse::Param(FCommandLine::Get(), TEXT("SCExplore"));
+            auto* Viewer = bExplore ? USCViewerSubsystem::Get(World) : nullptr;
+            // A folder environment loads through the viewer job. First-person possession is refused while it runs.
+            // Let that job finish before performing the synchronous fixture import or attempting possession.
+            if (Viewer && Viewer->IsBusy()) return true;
             ASCVehicle* Vehicle = USCImportLibrary::ImportFolder(World, Folder);
             if (Vehicle)
             {
@@ -57,9 +62,8 @@ void FSCImportHarness::Start()
                 auto* Camera = World->SpawnActor<ACameraActor>(Center + Offset, FRotator::ZeroRotator);
                 Camera->SetActorRotation((Center - Camera->GetActorLocation()).Rotation());
                 if (auto* PC = World->GetFirstPlayerController()) PC->SetViewTarget(Camera);
-                if (FParse::Param(FCommandLine::Get(), TEXT("SCExplore")))
+                if (bExplore)
                 {
-                    auto* Viewer = USCViewerSubsystem::Get(World);
                     if (!Viewer) { FPlatformMisc::RequestExitWithStatus(false,1); return false; }
                     Viewer->AdoptPackageVehicle(Vehicle);
                     float WalkSeconds = 0;
@@ -110,7 +114,7 @@ void FSCImportHarness::Start()
                 float Glow;
                 if (FParse::Value(FCommandLine::Get(), TEXT("SCEngineGlow="), Glow)) Vehicle->SetEngineGlow(Glow); // review aid
             }
-            if (!FParse::Param(FCommandLine::Get(), TEXT("SCStay")) && !FParse::Param(FCommandLine::Get(), TEXT("SCExplore"))) FPlatformMisc::RequestExitWithStatus(false, Vehicle ? 0 : 1);
+            if (!FParse::Param(FCommandLine::Get(), TEXT("SCStay")) && !bExplore) FPlatformMisc::RequestExitWithStatus(false, Vehicle ? 0 : 1);
         }
         return false;
     }), 0.5f);
