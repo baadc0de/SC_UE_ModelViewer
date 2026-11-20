@@ -220,3 +220,9 @@ flags. The capture now sets the viewport's temporal AA, motion blur and separate
 after registration. A four-frame 320×180 H.264 encode was decoded successfully. Local output is under
 `out/h2/focused1`. Use `render_check.ps1 -Acceptance -FrameLimit 20` to reproduce only the first 20
 samples at the same speed as the full orbit.
+
+The next Win64 build succeeded in 9.96 s of executor time. Two short 320×180 procedural-hangar captures
+at the same pose then reported `AAM_TSR` and `HuePreservingShoulder` for both frames and wrote EXR
+and PNG8. Their mean RGB errors were 0.027 and 0.062 of 255, with individual channel peaks of 19 and 6.
+There was no display-mode change in this control. Output is in `out/h2/aa1` and `out/h2/aa1-repeat`.
+The full-precision Cutlass HDR, repeatability, viewport appearance and image-evenness gates remain open.
