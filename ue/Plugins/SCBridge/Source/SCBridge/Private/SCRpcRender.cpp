@@ -5,6 +5,7 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
@@ -36,7 +37,11 @@ class FSCRenderMainLook final : public FSceneViewExtensionBase
 public:
     FSCRenderMainLook(const FAutoRegister& Register, const FRenderTarget* Viewport)
         : FSceneViewExtensionBase(Register), MainTarget(Viewport) {}
-    virtual void SetupViewFamily(FSceneViewFamily&) override {}
+    virtual void SetupViewFamily(FSceneViewFamily& Family) override
+    {
+        if (Family.RenderTarget == SdrTarget || Family.RenderTarget == LinearTarget)
+            Family.Time = FGameTime::CreateUndilated(ShotTime, FrameDelta);
+    }
     virtual void BeginRenderViewFamily(FSceneViewFamily&) override {}
     virtual void SetupView(FSceneViewFamily& Family, FSceneView& View) override
     {
@@ -45,10 +50,14 @@ public:
             GI = View.FinalPostProcessSettings.DynamicGlobalIlluminationMethod;
             Reflections = View.FinalPostProcessSettings.ReflectionMethod;
             Resolution = View.FinalPostProcessSettings.LumenSurfaceCacheResolution;
+            if (View.State) MainExposure = View.State->GetLastAutoExposureReadback().Exposure;
             bReady = true;
         }
         else if (bReady && (Family.RenderTarget == SdrTarget || Family.RenderTarget == LinearTarget))
         {
+            View.OverrideFrameIndexValue = SampleIndex;
+            View.OverrideOutputFrameIndexValue = OutputIndex;
+            CaptureAAMethod = View.AntiAliasingMethod;
             View.FinalPostProcessSettings.DynamicGlobalIlluminationMethod = GI;
             View.FinalPostProcessSettings.ReflectionMethod = Reflections;
             View.FinalPostProcessSettings.LumenSurfaceCacheResolution = Resolution;
@@ -60,6 +69,12 @@ public:
     }
     const FRenderTarget* SdrTarget = nullptr;
     const FRenderTarget* LinearTarget = nullptr;
+    uint32 SampleIndex = 0;
+    uint32 OutputIndex = 0;
+    double ShotTime = 0;
+    float FrameDelta = 0;
+    float MainExposure = 0;
+    EAntiAliasingMethod CaptureAAMethod = AAM_None;
     bool bReady = false;
     ETonemappingMethod DisplayMethod{};
     float SSDODirect = 0, SSDOAmbient = 0, SSDOReflections = 0;
@@ -164,6 +179,11 @@ USceneCaptureComponent2D* CreateCapture(UWorld* World, int32 Width, int32 Height
     Target->InitCustomFormat(Width, Height, PF_FloatRGBA, true);
     Capture->TextureTarget = Target;
     Capture->RegisterComponentWithWorld(World);
+    // OnRegister rebuilds ShowFlags from the archetype, disabling temporal AA and translucency.
+    const auto& Flags = GEngine->GameViewport->EngineShowFlags;
+    Capture->ShowFlags.SetTemporalAA(Flags.TemporalAA);
+    Capture->ShowFlags.SetMotionBlur(Flags.MotionBlur);
+    Capture->ShowFlags.SetSeparateTranslucency(Flags.SeparateTranslucency);
     return Capture;
 }
 // The readback already has a finite set of half-float bit patterns. Compute the transfer once
@@ -379,7 +399,7 @@ bool FSCRpcRender::Apply(const TSharedPtr<FJsonObject>& A, double Elapsed, bool 
 bool FSCRpcRender::CaptureFrame(bool bWrite, FString& Error)
 {
     auto* PC = World.IsValid() ? World->GetFirstPlayerController() : nullptr;
-    if (!PC || !PC->PlayerCameraManager) { Error = TEXT("render world or player camera disappeared"); return false; }
+    if (!PC || !PC->PlayerCameraManager || !PC->GetLocalPlayer()) { Error = TEXT("render world or player camera disappeared"); return false; }
     FMinimalViewInfo View = PC->PlayerCameraManager->GetCameraCacheView();
     auto* Viewer = World->GetGameInstance()->GetSubsystem<USCViewerSubsystem>();
     if (Viewer && Viewer->GetCameraMode() != ESCCameraMode::FirstPerson)
@@ -396,10 +416,29 @@ bool FSCRpcRender::CaptureFrame(bool bWrite, FString& Error)
     Frame->SetField(TEXT("rot"), Rotation(View.Rotation));
     Frame->SetNumberField(TEXT("fov"), View.FOV);
     Frame->SetNumberField(TEXT("holds"), Holds);
+    Frame->SetNumberField(TEXT("viewport_exposure"), MainLook->MainExposure);
+    // Match Movie Pipeline's per-view temporal seed and material clock. Streaming holds repeat
+    // the current sample. Both targets see the same time even when the readbacks take seconds.
+    MainLook->OutputIndex = Index;
+    MainLook->SampleIndex = Warmup - Remaining + Index;
+    MainLook->ShotTime = Index / Fps;
+    MainLook->FrameDelta = 1.0 / Fps;
+    FSceneViewProjectionData Projection;
+    Projection.SetViewRectangle(FIntRect(0, 0, Width, Height));
+    FMinimalViewInfo::CalculateProjectionMatrixGivenView(View, PC->GetLocalPlayer()->AspectRatioAxisConstraint,
+        GEngine->GameViewport->Viewport, Projection);
+    const FIntRect Rect = Projection.GetConstrainedViewRect();
+    // Embed the player's constrained rectangle in the requested full-size texture. This keeps
+    // the same horizontal/vertical FOV rules even if the requested aspect differs from the window.
+    const FScaleMatrix ClipScale(FVector(double(Rect.Width()) / Width, double(Rect.Height()) / Height, 1));
+    const FTranslationMatrix ClipOffset(FVector(double(Rect.Min.X + Rect.Max.X) / Width - 1,
+        1 - double(Rect.Min.Y + Rect.Max.Y) / Height, 0));
     for (auto* Capture : {Sdr.Get(), Linear.Get()})
     {
         if (!Capture) continue;
         Capture->SetCameraView(View);
+        Capture->bUseCustomProjectionMatrix = true;
+        Capture->CustomProjectionMatrix = Projection.ProjectionMatrix * ClipScale * ClipOffset;
         Capture->PostProcessSettings = View.PostProcessSettings;
         Capture->PostProcessBlendWeight = View.PostProcessBlendWeight;
         Capture->CaptureScene();
@@ -408,7 +447,20 @@ bool FSCRpcRender::CaptureFrame(bool bWrite, FString& Error)
         auto* Resource = Capture->TextureTarget->GameThread_GetRenderTargetResource();
         if (!Resource || !Resource->ReadFloat16Pixels(Pixels, FReadSurfaceDataFlags(RCM_MinMax)) || Pixels.Num() != Width * Height)
         { Error = TEXT("incomplete floating-point scene readback"); return false; }
-        if (auto* State = Capture->GetViewState(0)) Frame->SetNumberField(TEXT("exposure"), State->GetLastEyeAdaptationExposure());
+        if (Rect != FIntRect(0, 0, Width, Height))
+        {
+            const FFloat16Color Black(FLinearColor::Black);
+            for (int32 Y = 0; Y < Height; ++Y)
+            {
+                const bool bBorder = Y < Rect.Min.Y || Y >= Rect.Max.Y;
+                auto* Row = Pixels.GetData() + Y * Width;
+                for (int32 X = 0; X < (bBorder ? Width : Rect.Min.X); ++X) Row[X] = Black;
+                if (!bBorder)
+                    for (int32 X = Rect.Max.X; X < Width; ++X) Row[X] = Black;
+            }
+        }
+        if (auto* State = Capture->GetViewState(0); State && (Capture == Sdr.Get() || !Sdr))
+            Frame->SetNumberField(TEXT("exposure"), State->GetLastAutoExposureReadback().Exposure);
         for (const auto& Format : Outputs)
         {
             if ((Format == TEXT("exr")) != (Capture == Linear.Get())) continue;
@@ -419,6 +471,7 @@ bool FSCRpcRender::CaptureFrame(bool bWrite, FString& Error)
     if (bWrite)
     {
         Frame->SetStringField(TEXT("display_method"), StaticEnum<ETonemappingMethod>()->GetNameStringByValue(int64(MainLook->DisplayMethod)));
+        Frame->SetStringField(TEXT("anti_aliasing_method"), StaticEnum<EAntiAliasingMethod>()->GetNameStringByValue(int64(MainLook->CaptureAAMethod)));
         Frame->SetNumberField(TEXT("ssdo_direct"), MainLook->SSDODirect);
         Frame->SetNumberField(TEXT("ssdo_ambient"), MainLook->SSDOAmbient);
         Frame->SetNumberField(TEXT("ssdo_reflections"), MainLook->SSDOReflections);

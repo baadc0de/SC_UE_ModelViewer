@@ -1,18 +1,23 @@
 # Run against one already-running viewer. Quick mode needs only the game world.
-param([int]$Port = 8770, [switch]$Acceptance, [string]$CompareWith = '', [string]$Tag = (Get-Date -Format 'yyyyMMdd-HHmmss'))
+param([int]$Port = 8770, [switch]$Acceptance, [int]$FrameLimit = 0, [string]$CompareWith = '', [string]$Tag = (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $ErrorActionPreference = 'Stop'
 Import-Module "$PSScriptRoot/SCRpc.psm1" -Force
 Set-SCRpcPort $Port
 $root = (Resolve-Path "$PSScriptRoot/../../..").Path
 $dir = Join-Path $root "out/h2/$Tag"
 $count = if ($Acceptance) { 150 } else { 8 }
+$orbitFrames = $count
+if ($FrameLimit) {
+    if ($FrameLimit -lt 2 -or $FrameLimit -gt $count) { throw "FrameLimit must be between 2 and $count" }
+    $count = $FrameLimit
+}
 $fps = 30
 $center = if ($Acceptance) { 'vehicle' } else { @(0, 0, 1) }
 $width = if ($Acceptance) { 1920 } else { 320 }
 $height = if ($Acceptance) { 1080 } else { 180 }
-$orbit = @{ center = $center; radius = 25; height = 5; fromDeg = 0; toDeg = 90; seconds = ($count / $fps) }
+$orbit = @{ center = $center; radius = 25; height = 5; fromDeg = 0; toDeg = 90; seconds = ($orbitFrames / $fps) }
 $req = @{ path = $dir; frames = $count; fps = $fps; width = $width; height = $height
-          warmup_frames = $(if ($Acceptance) { 32 } else { 2 }); outputs = @('png16','exr','png8')
+          warmup_frames = $(if ($Acceptance) { 32 } else { 2 }); outputs = $(if ($Acceptance) { @('png16','exr') } else { @('png16','exr','png8') })
           setup = @(@{ orbit = $orbit }); steps = @(@{ at = 0; orbit = $orbit }) }
 if ($Acceptance) {
     $ready = Invoke-SC /wait @{ until = 'settled'; timeout_s = 600 }
@@ -35,7 +40,7 @@ for ($i = 0; $i -lt $count; $i++) {
     if ($f.index -ne $i -or [math]::Abs($f.t - $i / $fps) -gt 0.000001) { throw "bad time or index at $i" }
     if ($i -gt 0) {
         $delta = ($f.rot[1] - $sidecar.frames[$i-1].rot[1] + 540) % 360 - 180
-        if ([math]::Abs($delta - 90 / $count) -gt 0.05 * 90 / $count) { throw "bad camera step at $i" }
+        if ([math]::Abs($delta - 90 / $orbitFrames) -gt 0.05 * 90 / $orbitFrames) { throw "bad camera step at $i" }
     }
 }
 foreach ($format in $req.outputs) {

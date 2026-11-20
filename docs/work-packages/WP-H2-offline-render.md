@@ -195,3 +195,28 @@ and PNG16 / PNG8 high-byte agreement. Offscreen `render_check.ps1` on the proced
 frames each of PNG16, PNG8 and EXR at 320×180 in 1.092 seconds. Pose steps and frame times matched, with
 zero streaming holds and zero identical neighbouring images. Mean absolute image differences varied by
 about 9% across this short orbit. The numeric 5% image-difference gate remains open.
+
+The full offscreen Cutlass run at 1920×1080 on commit `43f77b9` produced 150 PNG16 and 150 EXR files
+in each of three passes. The 149 angular steps were 0.6° each and times were n/30. HDR-on took 0.641 s
+per output frame, repeated HDR-on took 0.704 s, and HDR-off took 0.639 s, including warmup. All three
+had zero streaming holds. First-pass consecutive-image mean differences ranged from 1324.83 to 1893.17
+of 65535 (37% of the mean), so the image-evenness check failed despite the uniform motion.
+
+The Windows display target was verified at 10 bpc with HDR on and 8 bpc with HDR off, then rechecked
+at its initial HDR-on, 10 bpc setting. Cross-mode mean absolute error across all RGB channels and all
+150 images was 0.000285 full scale. Repeating with HDR still on yielded 0.000317. Both comparisons had
+the same peak, 0.516075, in the blue channel of frame 17 at (799,413). Its 16-bit values were 48736,
+14915, and 14915 respectively. This exceeds the 1/1023 peak gate. The two later runs differed by
+0.000318 on average, with a peak of 0.358068. Astra found their cockpit rendering and lighting visually
+consistent across display modes, while the SDR viewport had different framing and darker cockpit and
+floor reflections than the capture. SSDO's three recorded weights changed from 1 to 0 when disabled.
+The five focused automation tests completed in 8.89 s. Local output is under `out/h2/full1`.
+
+A 20-frame repeat control with `-SCShowcase` removed the viewer chrome from the reference. Both
+images then framed the ship identically. The viewport still showed a darker cockpit and underbody and
+different lamp reflections. With fixed material time and per-view temporal indices the peak RGB error
+was 0.508324. The offline view reported FXAA; component registration had reapplied its legacy show
+flags. The capture now sets the viewport's temporal AA, motion blur and separate translucency flags
+after registration. A four-frame 320×180 H.264 encode was decoded successfully. Local output is under
+`out/h2/focused1`. Use `render_check.ps1 -Acceptance -FrameLimit 20` to reproduce only the first 20
+samples at the same speed as the full orbit.
