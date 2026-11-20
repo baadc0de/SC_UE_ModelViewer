@@ -91,6 +91,7 @@ struct FMeshSlot
     TSet<int32> TranslucentSlots;
     TArray<int32> SlotTriangles;
     TMap<int32, TArray<int32>> ScreenOwners, SoftScreenOwners; // WP-I1: screen slot -> rig nodes owning its rigid / skinned triangles
+    TMap<int32, FSCScreenFaceGeometry> ScreenGeometry; // WP-P5 floor panel: screen slot -> its triangles (the build drops the description)
     TMap<int32, FSCClipBinding> Bindings;
     bool bAnimated = false;
     FSCDerivedMesh Soft;
@@ -154,6 +155,7 @@ struct FSCImportJob::FState
     TMap<FString, TSet<int32>> GamePhysicsVariants; // per mesh asset: variants holding the game's colliders (WP-P3)
     TSet<FString> GamePhysicsReplacesRender; // mesh assets whose every blocking collider was built: render ignores the pawn
     TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
+    TMap<FString, TMap<int32, FSCScreenFaceGeometry>> MeshScreenGeometry; // WP-P5 floor panel: per mesh asset, screen slot -> triangles
     TMap<FString, TMap<int32, TArray<int32>>> MeshScreenOwners, MeshSoftScreenOwners; // WP-I1: per mesh asset, screen slot -> owning rig nodes (rigid / skinned)
 
     void Warn(const FString& Path, const FString& Message)
@@ -669,6 +671,11 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             if (ScreenSlots.Contains(Group))
                 (bSoft ? Slot.SoftScreenOwners : Slot.ScreenOwners).FindOrAdd(Group).AddUnique(Data.TriangleNodes.FindRef(T, INDEX_NONE));
         }
+        for (int32 Screen : ScreenSlots)
+            if (FSCScreenFaceGeometry G; FSCScreenFaceGeometry::FromDescription(Data.Description, Screen,
+                    [&](FTriangleID T) { return Data.TriangleNodes.FindRef(T, INDEX_NONE); },
+                    [&](FTriangleID T) { return Slot.bAnimated && Data.SkinWeights.Contains(Data.Description.GetTriangleVertices(T)[0]); }, G))
+                Slot.ScreenGeometry.Add(Screen, MoveTemp(G));
         Slot.SoftTriangles = Soft.Num();
         Slot.RigidGroups = Rigid.Num();
         if (Slot.bAnimated)
@@ -791,6 +798,7 @@ void FSCImportJob::FState::BeginBuild(FMeshSlot& Slot)
     const FString& Path = Slot.Path;
     MeshSlotTriangles.Add(Path, MoveTemp(Slot.SlotTriangles));
     MeshScreenOwners.Add(Path, MoveTemp(Slot.ScreenOwners));
+    MeshScreenGeometry.Add(Path, MoveTemp(Slot.ScreenGeometry));
     MeshSoftScreenOwners.Add(Path, MoveTemp(Slot.SoftScreenOwners));
     Slot.Package = CreatePackage(*AssetPackage(Session, Path));
     Slot.Package->SetFlags(RF_Transient);
@@ -1050,6 +1058,8 @@ void FSCImportJob::FState::Assemble()
     int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;
     TSet<FString> ScreenImagesBound;
     TSet<FString> ScreenStateImagesBound; // I1-3 state images bound to faces (beside the default images)
+    // WP-P5 floor panel: blank faces of placements that send interaction links (a lift panel may draw its list there).
+    TArray<FSCBlankScreenFace> BlankFaces;
     auto StaticSlotTriangles = [](const UStaticMesh* Mesh, int32 Slot) {
         uint32 N = 0;
         if (const FStaticMeshRenderData* R = Mesh ? Mesh->GetRenderData() : nullptr; R && !R->LODResources.IsEmpty())
@@ -1092,7 +1102,21 @@ void FSCImportJob::FState::Assemble()
             ScreenAmbiguousSlots += bAmbiguous;
             UMaterialInterface* Screen = Image.IsEmpty() ? nullptr : Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, Image);
             if (Screen) { ScreenImagesBound.Add(Image); ++ScreenBoundSlots; bScreenBound = true; }
-            else ++ScreenDarkSlots;
+            else
+            {
+                ++ScreenDarkSlots;
+                FSCBlankScreenFace Blank;
+                const TMap<int32, FSCScreenFaceGeometry>* MeshFaces = I.InteractionLinks.IsEmpty() ? nullptr : MeshScreenGeometry.Find(I.MeshAsset);
+                const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr;
+                if (Captured && !(Blank.Geometry = Captured->Select(Owner, bSoft)).Positions.IsEmpty())
+                {
+                    Blank.Component = Target; Blank.Slot = Slot; Blank.Panel = E.Anchor;
+                    Blank.MakeMaterial = [Mats = &Materials, Sidecar = I.MaterialSidecar, Palette = I.PaletteId, Ordinal = Sub->Index](UTexture* Image) -> UMaterialInterface* {
+                        return Mats->CreateScreen(Sidecar, Palette, Ordinal, Image);
+                    };
+                    BlankFaces.Add(MoveTemp(Blank));
+                }
+            }
             // I1-3: the panel owner's other states, one instance each; the face swaps them (ASCVehicle::RefreshPanelScreens).
             if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->PanelStateImages().IsEmpty())
             {
@@ -1453,6 +1477,8 @@ void FSCImportJob::FState::Assemble()
     const int32 InitialSwaps = V->RefreshPanelScreens();
     UE_LOG(LogSCImport, Display, TEXT("SCREEN_STATES faces=%d state_images=%d initial_swaps=%d"), V->ScreenFaces.Num(),
            ScreenStateImagesBound.Num(), InitialSwaps);
+    // WP-P5 floor panel: lift panels draw their stops on a blank face (appended to ScreenFaces after the counts above).
+    V->BuildFloorPanels(BlankFaces, [&](const FString& Path) { return Materials.Texture(Path); });
     if (Materials.UnclassifiedBindings)
         Warn(Manifest.ScenePath, FString::Printf(TEXT("%d UI bindings carry no screen role (an export before source_item_type, or an unresolved ")
             TEXT("owner): their screens stay dark; re-export with the current exporter (cache format 30) to show door and lift panel images"),

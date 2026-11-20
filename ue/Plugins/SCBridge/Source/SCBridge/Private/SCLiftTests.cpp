@@ -1,5 +1,7 @@
 // SCBridge.Lift.* (WP-P5): the C2 Hercules lift's motion profile under the constant-acceleration reading, its request queue
 // and door handshake against stub doors, the stop order read from a package, and the link dispatcher on the C2's links.
+// SCBridge.FloorPanel.* (WP-P5 floor panel): the options from the panel's links and the stops, the layout, the aim (a ray
+// on the face -> UV -> row; nothing off the face), E dispatching the option's request, the view and the colour roles.
 // Values are the C2's (LIVE 4.10.2: MaxSpeed 3.5, EasingDistance 5.1, OpenWaitTime 4, QueueWaitTime 5; stops z -14.65,
 // -7.875, -0.5; gate 0.5 s, hold door 2.67 s, top door 1.67 s, belly hatch 6.67 s).
 #if WITH_DEV_AUTOMATION_TESTS
@@ -10,6 +12,10 @@
 #include "SCRigComponent.h"
 #include "UObject/Package.h"
 #include "Misc/ScopeExit.h"
+#include "SCVehicle.h"
+#include "Components/StaticMeshComponent.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
 
 namespace
 {
@@ -402,6 +408,305 @@ bool FSCLiftDispatchTest::RunTest(const FString&)
     TestTrue(TEXT("handled"), Lift.ReceiveNode(0, TEXT("DoorOpen"), TEXT("floor-003"), TEXT("DoorOpen")));
     TestEqual(TEXT("no doors at another stop"), Lift.State, ESCLiftState::Idle);
     TestFalse(TEXT("GatewayOpen is not a lift input"), Lift.ReceiveNode(0, TEXT("GatewayOpen"), TEXT("x"), NAME_None));
+    return true;
+}
+namespace
+{
+/** A vehicle (no world) holding the C2 lift, its links (top_deck_c2.soc, ids shortened) and its two panels. The stop names
+ *  are the floor panel's display names (BuildInteriorLifts routes them in an import). */
+ASCVehicle* MakeC2Vehicle(const FSCSceneManifest& M)
+{
+    ASCVehicle* V = NewObject<ASCVehicle>(GetTransientPackage());
+    V->AddToRoot();
+    TSharedPtr<FSCLift> Lift = MakeShared<FSCLift>();
+    Lift->Init(M.Interiors[0].Lifts[0], [](const FVector& X) { return StopCm(X); });
+    Lift->Id = 0;
+    Lift->Interior = 0;
+    const TCHAR* Names[] = {TEXT("Exit Ship"), TEXT("Lower Deck"), TEXT("Top Deck")};
+    for (int32 S = 0; S < 3; ++S) Lift->Stops[S].Name = Names[S];
+    V->Lifts.Add(Lift);
+    auto Link = [](const TCHAR* From, const TCHAR* To, const TCHAR* Slot) { return FSCInteractionLink{FName(From), To, FName(Slot)}; };
+    V->Interactions.At(0, TEXT("panel")).Links = {Link(TEXT("RequestSurface"), TEXT("platform"), TEXT("From Elevator call 0")),
+                                                  Link(TEXT("RequestFloor0"), TEXT("platform"), TEXT("From Elevator call 1")),
+                                                  Link(TEXT("RequestFloor1"), TEXT("platform"), TEXT("From Elevator call 2")),
+                                                  Link(TEXT("RequestSurface"), TEXT("hatch"), TEXT("Open"))};
+    V->Interactions.At(0, TEXT("call-hold")).Links = {Link(TEXT("Descend"), TEXT("floor-001"), TEXT("DescentRequest"))};
+    V->Interactions.At(0, TEXT("platform")).Lift = 0;
+    for (int32 S = 0; S < 3; ++S)
+    {
+        FSCInteractionNetwork::FEndpoint& E = V->Interactions.At(0, Lift->Stops[S].NodeId);
+        E.LiftOfNode = 0;
+        E.Stop = S;
+    }
+    return V;
+}
+FSCPointInteraction Choice(const TCHAR* Name, const TCHAR* Display, bool bPrimary)
+{
+    FSCPointInteraction C;
+    C.Name = Name;
+    C.DisplayName = Display;
+    C.bPrimary = bPrimary;
+    return C;
+}
+ASCVehicle::FLiftPanel FloorPanelRecord()
+{
+    // The point's interactions in authored order: Top Deck (primary), Lower Deck, Exit Ship.
+    ASCVehicle::FLiftPanel P;
+    P.Interior = 0;
+    P.EntityId = TEXT("panel");
+    P.Choices = {Choice(TEXT("RequestFloor1"), TEXT("Top Deck"), true), Choice(TEXT("RequestFloor0"), TEXT("Lower Deck"), false),
+                 Choice(TEXT("RequestSurface"), TEXT("Exit Ship"), false)};
+    return P;
+}
+/** A flat face in the component's YZ plane facing +X (a wall panel seen from +X), 27 x 23 cm, its UVs a window of a
+ *  larger texture like the C2's floor panel (u 2.387..2.504, v 0.640..0.738) with v growing downwards. */
+FSCScreenFaceGeometry WallFace()
+{
+    FSCScreenFaceGeometry G;
+    const FVector3f TL(0, 13.5f, 11.5f), TR(0, -13.5f, 11.5f), BL(0, 13.5f, -11.5f), BR(0, -13.5f, -11.5f); // seen from +X, right is -Y
+    const FVector2f UTL(2.387f, 0.640f), UTR(2.504f, 0.640f), UBL(2.387f, 0.738f), UBR(2.504f, 0.738f);
+    G.Positions = {TL, BL, TR, TR, BL, BR};
+    G.UVs = {UTL, UBL, UTR, UTR, UBL, UBR};
+    G.Fronts = {FVector3f(1, 0, 0), FVector3f(1, 0, 0)};
+    G.Nodes = {INDEX_NONE, INDEX_NONE};
+    return G;
+}
+FSCFloorPanelOption Option(int32 Stop, const TCHAR* Interaction, const TCHAR* Label)
+{
+    FSCFloorPanelOption O;
+    O.Stop = Stop;
+    O.Interaction = Interaction;
+    O.Label = Label;
+    return O;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFloorPanelOptionsTest, "SCBridge.FloorPanel.OptionsAndLayout", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFloorPanelOptionsTest::RunTest(const FString&)
+{
+    FSCSceneManifest M;
+    if (!ReadC2(*this, M)) return false;
+    ASCVehicle* V = MakeC2Vehicle(M);
+    ON_SCOPE_EXIT { V->RemoveFromRoot(); };
+    int32 Lift = INDEX_NONE;
+    const TArray<FSCFloorPanelOption> Options = V->FloorPanelOptions(FloorPanelRecord(), Lift);
+    TestEqual(TEXT("the lift"), Lift, 0);
+    TArray<FString> Rows;
+    for (const FSCFloorPanelOption& O : Options) Rows.Add(FString::Printf(TEXT("%d %s %s"), O.Stop, *O.Label, *O.Interaction.ToString()));
+    TestEqual(TEXT("rows from the highest stop down, labelled with the stops' names, each the panel's own interaction"), Rows,
+              TArray<FString>{TEXT("2 Top Deck RequestFloor1"), TEXT("1 Lower Deck RequestFloor0"), TEXT("0 Exit Ship RequestSurface")});
+    ASCVehicle::FLiftPanel Call;
+    Call.Interior = 0;
+    Call.EntityId = TEXT("call-hold");
+    Call.Choices = {Choice(TEXT("Descend"), TEXT("Call Elevator"), true)};
+    TestTrue(TEXT("a call button picks no floor"), V->FloorPanelOptions(Call, Lift).IsEmpty());
+    // E without a drawn row: a call button sends its primary interaction; a floor-select panel nothing, drawn or not (it
+    // is not in FloorPanels here: no face was built for it).
+    TestEqual(TEXT("call button: its primary"), V->LiftPanelPressInteraction(Call), FName(TEXT("Descend")));
+    TestTrue(TEXT("floor-select panel without a drawn face: nothing"), V->LiftPanelPressInteraction(FloorPanelRecord()).IsNone());
+    // A row is labelled with its own interaction's display name (two panels may name one stop differently).
+    ASCVehicle::FLiftPanel Renamed = FloorPanelRecord();
+    Renamed.Choices[1].DisplayName = TEXT("Cargo Hold");
+    const TArray<FSCFloorPanelOption> RenamedRows = V->FloorPanelOptions(Renamed, Lift);
+    TestTrue(TEXT("the choice's own name"), RenamedRows.Num() == 3 && RenamedRows[1].Label == TEXT("Cargo Hold") && RenamedRows[1].Stop == 1);
+
+    // The layout over the C2 face's aspect (27 x 23 cm).
+    const FSCFloorPanelLayout L = FSCFloorPanelLayout::Make(Options, 27.0 / 23.0);
+    TestEqual(TEXT("three rows"), L.Options.Num(), 3);
+    for (int32 I = 0; I < L.Options.Num(); ++I)
+    {
+        const FBox2D& R = L.Options[I].Rect;
+        TestTrue(TEXT("inside the face"), R.Min.X > 0 && R.Min.Y > 0 && R.Max.X < 1 && R.Max.Y < 1);
+        TestEqual(TEXT("the row's centre selects it"), L.OptionAt(R.GetCenter()), I);
+        if (I > 0) TestTrue(TEXT("top to bottom, apart"), R.Min.Y > L.Options[I - 1].Rect.Max.Y);
+        TestTrue(TEXT("equal rows"), FMath::IsNearlyEqual(R.GetSize().Y, L.Options[0].Rect.GetSize().Y, 1e-9));
+    }
+    if (L.Options.Num() != 3) return false;
+    TestTrue(TEXT("the status bar under the rows"), L.Status.Min.Y > L.Options[2].Rect.Max.Y && L.Status.Max.Y < 1);
+    TestTrue(TEXT("square margins"), FMath::IsNearlyEqual(L.Options[0].Rect.Min.X * 27.0, L.Options[0].Rect.Min.Y * 23.0, 1e-6));
+    TestEqual(TEXT("between rows: none"), L.OptionAt(FVector2D(0.5, (L.Options[0].Rect.Max.Y + L.Options[1].Rect.Min.Y) / 2)), INDEX_NONE);
+    TestEqual(TEXT("the status bar: none"), L.OptionAt(L.Status.GetCenter()), INDEX_NONE);
+    TestEqual(TEXT("the margin: none"), L.OptionAt(FVector2D(0.01, L.Options[0].Rect.GetCenter().Y)), INDEX_NONE);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFloorPanelAimTest, "SCBridge.FloorPanel.AimToOption", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFloorPanelAimTest::RunTest(const FString&)
+{
+    FSCScreenFaceGeometry G = WallFace();
+    if (!TestTrue(TEXT("builds"), G.Build(FVector::UpVector))) return false;
+    TestTrue(TEXT("front +X"), G.Normal.Equals(FVector(1, 0, 0), 1e-6));
+    TestTrue(TEXT("right is -Y seen from the front"), G.Right.Equals(FVector(0, -1, 0), 1e-6));
+    TestTrue(TEXT("size"), FMath::IsNearlyEqual(G.Width, 27.0, 1e-4) && FMath::IsNearlyEqual(G.Height, 23.0, 1e-4));
+    TestTrue(TEXT("an affine unwrap fits exactly"), G.FitError < 1e-4);
+    // The UV window maps onto the whole image, upright and unmirrored (M_SC_Screen samples through this map).
+    TestTrue(TEXT("top-left"), G.ContentFromUV(FVector2f(2.387f, 0.640f)).Equals(FVector2D(0, 0), 1e-4));
+    TestTrue(TEXT("top-right"), G.ContentFromUV(FVector2f(2.504f, 0.640f)).Equals(FVector2D(1, 0), 1e-4));
+    TestTrue(TEXT("bottom-left"), G.ContentFromUV(FVector2f(2.387f, 0.738f)).Equals(FVector2D(0, 1), 1e-4));
+    // A reflected, stretched placement (scale -1 across, 2 along): the image stays upright and unmirrored as seen, so the
+    // UV corner that is now on the viewer's right maps to the image's right, and the aspect is the placed face's.
+    FSCScreenFaceGeometry Mirrored = WallFace().Scaled(FVector(1, -1, 2));
+    if (TestTrue(TEXT("reflected builds"), Mirrored.Build(FVector::UpVector)))
+    {
+        TestTrue(TEXT("still faces +X"), Mirrored.Normal.Equals(FVector(1, 0, 0), 1e-6));
+        TestTrue(TEXT("the authored top-left is now top-right"), Mirrored.ContentFromUV(FVector2f(2.387f, 0.640f)).Equals(FVector2D(1, 0), 1e-4));
+        TestTrue(TEXT("the placed aspect"), FMath::IsNearlyEqual(Mirrored.Aspect(), 27.0 / 46.0, 1e-4));
+    }
+
+    // Rays from 40 cm in front: each option's centre, through the UV, back to its row.
+    const FSCFloorPanelLayout L = FSCFloorPanelLayout::Make(
+        {Option(2, TEXT("RequestFloor1"), TEXT("Top Deck")), Option(1, TEXT("RequestFloor0"), TEXT("Lower Deck")), Option(0, TEXT("RequestSurface"), TEXT("Exit Ship"))},
+        G.Aspect());
+    const FVector Eye(40, 0, 0);
+    for (int32 I = 0; I < 3; ++I)
+    {
+        const FVector Point = G.PointAt(L.Options[I].Rect.GetCenter());
+        double Distance;
+        FVector2f UV;
+        TestTrue(TEXT("hits the face"), G.Raycast(Eye, (Point - Eye).GetSafeNormal(), 100, Distance, UV));
+        TestEqual(TEXT("UV -> the option's row"), L.OptionAt(G.ContentFromUV(UV)), I);
+    }
+    double Distance;
+    FVector2f UV;
+    TestFalse(TEXT("beside the face: no hit"), G.Raycast(Eye, (FVector(0, 20, 0) - Eye).GetSafeNormal(), 100, Distance, UV));
+    TestFalse(TEXT("from behind: no hit"), G.Raycast(FVector(-40, 0, 0), FVector(1, 0, 0), 100, Distance, UV));
+    TestFalse(TEXT("beyond reach: no hit"), G.Raycast(Eye, FVector(-1, 0, 0), 30, Distance, UV));
+
+    // The vehicle's aim: the panel and option under the crosshair; off the face nothing is highlighted.
+    FSCSceneManifest M;
+    if (!ReadC2(*this, M)) return false;
+    ASCVehicle* V = MakeC2Vehicle(M);
+    ON_SCOPE_EXIT { V->RemoveFromRoot(); };
+    UStaticMeshComponent* Face = NewObject<UStaticMeshComponent>(V);
+    FSCFloorPanel& P = V->FloorPanels.AddDefaulted_GetRef();
+    P.Lift = 0;
+    P.Interior = 0;
+    P.EntityId = TEXT("panel");
+    P.Component = Face;
+    P.Geometry = G;
+    P.Layout = L;
+    int32 Panel, Opt;
+    TestTrue(TEXT("aim at Lower Deck"), V->AimFloorPanel(Eye, G.PointAt(L.Options[1].Rect.GetCenter()) - Eye, 200, nullptr, Panel, Opt));
+    TestEqual(TEXT("panel"), Panel, 0);
+    TestEqual(TEXT("option"), Opt, 1);
+    V->SetFloorPanelHighlight(Panel, Opt);
+    TestEqual(TEXT("highlighted"), V->FloorPanels[0].Highlight, 1);
+    TestTrue(TEXT("on the face, in the status bar"), V->AimFloorPanel(Eye, G.PointAt(L.Status.GetCenter()) - Eye, 200, nullptr, Panel, Opt));
+    TestEqual(TEXT("no row"), Opt, INDEX_NONE);
+    TestFalse(TEXT("off the face"), V->AimFloorPanel(Eye, FVector(0, 25, 0) - Eye, 200, nullptr, Panel, Opt));
+    TestEqual(TEXT("no panel"), Panel, INDEX_NONE);
+    V->SetFloorPanelHighlight(Panel, Opt);
+    TestEqual(TEXT("nothing highlighted off the face"), V->FloorPanels[0].Highlight, INDEX_NONE);
+    TestFalse(TEXT("out of reach"), V->AimFloorPanel(Eye, G.PointAt(L.Options[0].Rect.GetCenter()) - Eye, 30, nullptr, Panel, Opt));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFloorPanelPressTest, "SCBridge.FloorPanel.PressDispatches", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFloorPanelPressTest::RunTest(const FString&)
+{
+    FSCSceneManifest M;
+    if (!ReadC2(*this, M)) return false;
+    ASCVehicle* V = MakeC2Vehicle(M);
+    ON_SCOPE_EXIT { V->RemoveFromRoot(); };
+    FSCLift& Lift = *V->Lifts[0];
+    FStubDoors Stub;
+    ON_SCOPE_EXIT { Stub.Release(); };
+    Stub.Bind(Lift);
+    int32 LiftIndex;
+    FSCFloorPanel& P = V->FloorPanels.AddDefaulted_GetRef();
+    P.Lift = 0;
+    P.Interior = 0;
+    P.EntityId = TEXT("panel");
+    P.Layout = FSCFloorPanelLayout::Make(V->FloorPanelOptions(FloorPanelRecord(), LiftIndex), 1.2);
+    // The rest view: at the hold, nothing called.
+    FSCFloorPanelView View = FSCFloorPanelView::Of(Lift, INDEX_NONE, 0);
+    TestEqual(TEXT("current: the hold"), View.Current, 1);
+    TestTrue(TEXT("nothing called"), View.Target == INDEX_NONE && View.Requested.IsEmpty() && View.Direction == 0);
+
+    // E on "Exit Ship" (row 2): the panel's RequestSurface through the dispatcher; the carriage is asked for stop 0 (the
+    // hatch's Open goes to no door rig here).
+    V->PressFloorPanel(0, 2);
+    TestEqual(TEXT("one request"), Lift.Queue.Num(), 1);
+    if (Lift.Queue.Num() == 1)
+    {
+        TestEqual(TEXT("stop 0"), Lift.Queue[0].Stop, 0);
+        TestEqual(TEXT("from the panel"), Lift.Queue[0].Source, FString(TEXT("panel")));
+        TestEqual(TEXT("its interaction"), Lift.Queue[0].Interaction, FName(TEXT("RequestSurface")));
+    }
+    View = FSCFloorPanelView::Of(Lift, 2, 0);
+    TestEqual(TEXT("called: Exit Ship"), View.Requested, TArray<int32>{0});
+    // E on "Top Deck" (row 0) asks for stop 2; an invalid row sends nothing.
+    Lift.Queue.Reset();
+    V->PressFloorPanel(0, 0);
+    TestTrue(TEXT("stop 2 from RequestFloor1"), Lift.Queue.Num() == 1 && Lift.Queue[0].Stop == 2 && Lift.Queue[0].Interaction == TEXT("RequestFloor1"));
+    TestEqual(TEXT("no row: nothing"), V->PressFloorPanel(0, 5), 0);
+    TestEqual(TEXT("still one request"), Lift.Queue.Num(), 1);
+
+    // The view follows the lift: travelling up to the top (no current floor, target 2, up), then at the top.
+    bool bSawMoving = false;
+    for (double T = 0; T < 40 && !(Lift.State == ESCLiftState::Open && Lift.CurrentStop == 2); T += 1.0 / 30)
+    {
+        Lift.Tick(1.0 / 30);
+        if (Lift.State == ESCLiftState::Moving && !bSawMoving)
+        {
+            bSawMoving = true;
+            View = FSCFloorPanelView::Of(Lift, INDEX_NONE, Lift.Clock);
+            TestTrue(TEXT("moving: no current floor, target the top, up"), View.Current == INDEX_NONE && View.Target == 2 && View.Direction == 1);
+        }
+    }
+    TestTrue(TEXT("moved"), bSawMoving);
+    View = FSCFloorPanelView::Of(Lift, INDEX_NONE, Lift.Clock);
+    TestTrue(TEXT("arrived: current the top, nothing called"), View.Current == 2 && View.Target == INDEX_NONE && View.Requested.IsEmpty() && View.Direction == 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFloorPanelColoursTest, "SCBridge.FloorPanel.Colours", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFloorPanelColoursTest::RunTest(const FString&)
+{
+    // Visibly synthetic palette values: the roles decide, not the colours.
+    FSCLiftPanelStyle Style;
+    const TCHAR* Roles[] = {TEXT("Base"), TEXT("Moderate"), TEXT("Accent1"), TEXT("Accent2"), TEXT("Bright"), TEXT("Selected"), TEXT("Background")};
+    for (int32 I = 0; I < UE_ARRAY_COUNT(Roles); ++I) Style.Palette.Add(Roles[I], FColor(uint8(10 * (I + 1)), 0, 0, 255));
+    Style.LabelColourRole = TEXT("Selected");
+    const FSCFloorPanelColours C = FSCFloorPanelColours::From(Style);
+    auto Is = [&](const FLinearColor& L, const TCHAR* Role) { return L.Equals(FLinearColor::FromSRGBColor(Style.Palette[Role])); };
+    TestTrue(TEXT("from data"), C.bFromData);
+    TestTrue(TEXT("rows: the pads' button role"), Is(C.Row, TEXT("Base")));
+    TestTrue(TEXT("field"), Is(C.Field, TEXT("Accent2")));
+    TestTrue(TEXT("label: the pad label's own role"), Is(C.Label, TEXT("Selected")));
+    TestTrue(TEXT("current floor"), Is(C.Current, TEXT("Accent1")));
+    TestTrue(TEXT("called floor"), Is(C.Requested, TEXT("Moderate")));
+    TestTrue(TEXT("status bar"), Is(C.Status, TEXT("Background")));
+    const FSCFloorPanelColours None = FSCFloorPanelColours::From(FSCLiftPanelStyle());
+    TestFalse(TEXT("no palette"), None.bFromData);
+    TestTrue(TEXT("white on black"), None.Label == FLinearColor::White && None.Field == FLinearColor::Black && None.Row == FLinearColor::Black);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFloorPanelPaintTest, "SCBridge.FloorPanel.FaceKeepsItsImageOverPaint", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFloorPanelPaintTest::RunTest(const FString&)
+{
+    // A blank screen face records a paint slot at import (its authored instance); the viewer then puts its own image on
+    // the face. A paint applied afterwards (the remembered paint at load) must not put the authored instance back.
+    ASCVehicle* V = NewObject<ASCVehicle>(GetTransientPackage());
+    V->AddToRoot();
+    ON_SCOPE_EXIT { V->RemoveFromRoot(); };
+    UStaticMeshComponent* C = NewObject<UStaticMeshComponent>(V);
+    UMaterialInterface* Authored = UMaterialInstanceDynamic::Create(UMaterial::GetDefaultMaterial(MD_Surface), V);
+    UMaterialInterface* Drawn = UMaterialInstanceDynamic::Create(UMaterial::GetDefaultMaterial(MD_Surface), V);
+    V->Materials.Add(Cast<UMaterialInstanceDynamic>(Authored));
+    V->Materials.Add(Cast<UMaterialInstanceDynamic>(Drawn));
+    C->SetMaterial(0, Authored);
+    FSCPaintSlot& Paint = V->PaintSlots.AddDefaulted_GetRef();
+    Paint.Component = C;
+    Paint.Slot = 0;
+    Paint.Default = Authored;
+    FSCScreenFace& Face = V->ScreenFaces.AddDefaulted_GetRef();
+    Face.Component = C;
+    Face.Slot = 0;
+    Face.Default = Authored;
+    TestTrue(TEXT("set"), V->SetScreenFaceMaterial(0, Drawn));
+    V->SetPaint(INDEX_NONE);
+    TestEqual(TEXT("the face keeps the drawn image after a paint"), C->GetMaterial(0), Drawn);
     return true;
 }
 #endif

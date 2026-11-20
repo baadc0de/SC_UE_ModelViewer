@@ -73,6 +73,9 @@ bool ASCVehicle::SetScreenFaceMaterial(int32 Face, UMaterialInterface* Material)
         return true;
     }
     C->SetMaterial(F.Slot, Material);
+    // A face's content does not follow the paint (as a bound panel image): a paint change must not put the face's
+    // authored instance back over it (a blank screen face records a paint slot at import).
+    PaintSlots.RemoveAll([&](const FSCPaintSlot& P) { return P.Component.Get() == C && P.Slot == F.Slot; });
     return true;
 }
 

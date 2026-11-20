@@ -112,9 +112,27 @@ void ASCFirstPersonCharacter::ClearInput()
     Body->SetAiming(false);
 }
 void ASCFirstPersonCharacter::CapsuleHit(UPrimitiveComponent*, AActor*, UPrimitiveComponent*, FVector, const FHitResult&) { ++CapsuleHits; }
+void ASCFirstPersonCharacter::HoldViewOn(const USceneComponent* Frame, const FVector& Local)
+{
+    ViewHoldFrame = Frame;
+    ViewHoldLocal = Local;
+    ApplyViewHold();
+}
+void ASCFirstPersonCharacter::ApplyViewHold()
+{
+    const USceneComponent* Frame = ViewHoldFrame.Get();
+    if (!Frame || !Vehicle) return;
+    const FVector Target = Frame->GetComponentTransform().TransformPosition(ViewHoldLocal);
+    const FRotator Want = Vehicle->GetActorTransform().InverseTransformVectorNoScale(Target - InteractionOrigin()).Rotation();
+    // A quarter of the way each tick: the eye swings with the view (the head bends and the camera, ahead of the capsule's
+    // axis, turns with its yaw), so looking steeply down at a close panel a full turn overshoots; the damped turn settles.
+    const FRotator Now = GetVehicleRelativeView();
+    SetVehicleRelativeView(Now.Yaw + 0.25f * FRotator::NormalizeAxis(Want.Yaw - Now.Yaw), Now.Pitch + 0.25f * FRotator::NormalizeAxis(Want.Pitch - Now.Pitch));
+}
 void ASCFirstPersonCharacter::Look(FVector2D Pixels)
 {
     if (bMobiGlasOpen) return; // the cursor drives the mobiGlas; the view holds still
+    if (!Pixels.IsNearlyZero()) ClearViewHold();
     if (bOrbiting && Body->IsThirdPerson())
     {
         Body->AddOrbit(Pixels.X * .2f, -Pixels.Y * .2f);
@@ -164,6 +182,7 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
     if (!Vehicle || Vehicle->IsActorBeingDestroyed()) { ClearInput(); return; }
     Vehicle->UpdateDoorSensors(GetActorLocation(), GetWorld()->GetTimeSeconds()); // the game's door proximity sensors
+    ApplyViewHold();
     UpdateLiftFocusAndRide();
     // The body and its kit are lit like the surfaces around them: by the lights of the room the player stands in.
     ASCVehicle* Kit = Body->GetKit();
@@ -411,54 +430,93 @@ FVector ASCFirstPersonCharacter::InteractionOrigin() const
 bool ASCFirstPersonCharacter::Interact()
 {
     if (!Vehicle) return false;
-    // A lift panel under the crosshair sends the chosen interaction along its exported links (WP-P5; WP-I1's press path
-    // replaces this); anything else is the door interaction.
+    // WP-P5: a floor panel under the crosshair sends the option there (nothing off its rows); another lift panel (a call
+    // button) its primary interaction, along its exported links; anything else is the door interaction. The aim is taken
+    // now, not from the last tick: the view may have turned since.
+    UpdateFloorPanelAim();
+    if (Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
+    {
+        if (AimedFloorOption == INDEX_NONE)
+        {
+            UE_LOG(LogTemp, Display, TEXT("FP_PANEL_PRESS panel=%s option=none handled=0 (the crosshair is on the panel, off its rows)"),
+                   *Vehicle->FloorPanels[AimedFloorPanel].EntityId);
+            return false;
+        }
+        return Vehicle->PressFloorPanel(AimedFloorPanel, AimedFloorOption) > 0;
+    }
     if (const ASCVehicle::FLiftPanel* Panel = Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this))
     {
-        const FSCPointInteraction& Choice = Panel->Choices[FMath::Clamp(PanelChoice, 0, Panel->Choices.Num() - 1)];
-        const int32 Handled = Vehicle->SendInteractionIn(Panel->Interior, Panel->EntityId, Choice.Name);
-        UE_LOG(LogTemp, Display, TEXT("FP_PANEL_PRESS panel=%s label=\"%s\" interaction=\"%s\" display=\"%s\" handled=%d"), *Panel->EntityId, *Panel->Label,
-               *Choice.Name.ToString(), *Choice.DisplayName, Handled);
+        const FName Interaction = Vehicle->LiftPanelPressInteraction(*Panel);
+        if (Interaction.IsNone())
+        {
+            UE_LOG(LogTemp, Display, TEXT("FP_PANEL_PRESS panel=%s option=none handled=0 (a floor-select panel: the crosshair is off its face's rows)"),
+                   *Panel->EntityId);
+            return false;
+        }
+        const int32 Handled = Vehicle->SendInteractionIn(Panel->Interior, Panel->EntityId, Interaction);
+        UE_LOG(LogTemp, Display, TEXT("FP_PANEL_PRESS panel=%s label=\"%s\" interaction=\"%s\" handled=%d"), *Panel->EntityId, *Panel->Label,
+               *Interaction.ToString(), Handled);
         return Handled > 0;
     }
     return Vehicle->ToggleDoor(FocusedInteraction());
 }
-int32 ASCFirstPersonCharacter::FocusedPanelChoice() const
-{
-    const ASCVehicle::FLiftPanel* Panel = Vehicle ? Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this) : nullptr;
-    return Panel ? FMath::Clamp(PanelChoice, 0, Panel->Choices.Num() - 1) : INDEX_NONE;
-}
 bool ASCFirstPersonCharacter::FocusedPanel(FString& EntityId, FName& Choice) const
 {
-    const ASCVehicle::FLiftPanel* Panel = Vehicle ? Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this) : nullptr;
+    if (!Vehicle) return false;
+    if (Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
+    {
+        const FSCFloorPanel& P = Vehicle->FloorPanels[AimedFloorPanel];
+        EntityId = P.EntityId;
+        Choice = P.Layout.Options.IsValidIndex(AimedFloorOption) ? P.Layout.Options[AimedFloorOption].Interaction : NAME_None;
+        return true;
+    }
+    const ASCVehicle::FLiftPanel* Panel = Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this);
     if (!Panel || Panel->Choices.IsEmpty()) return false;
     EntityId = Panel->EntityId;
-    Choice = Panel->Choices[FMath::Clamp(PanelChoice, 0, Panel->Choices.Num() - 1)].Name;
+    Choice = Vehicle->LiftPanelPressInteraction(*Panel);
     return true;
 }
-void ASCFirstPersonCharacter::CycleInteraction(int32 Step)
+void ASCFirstPersonCharacter::EndPlay(const EEndPlayReason::Type Reason)
 {
-    const ASCVehicle::FLiftPanel* Panel = Vehicle ? Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this) : nullptr;
-    if (!Panel || Panel->Choices.IsEmpty()) return;
-    const int32 N = Panel->Choices.Num();
-    PanelChoice = ((FMath::Clamp(PanelChoice, 0, N - 1) + Step) % N + N) % N;
-    UE_LOG(LogTemp, Display, TEXT("FP_PANEL_CHOICE panel=%s index=%d interaction=\"%s\" display=\"%s\""), *Panel->EntityId, PanelChoice,
-           *Panel->Choices[PanelChoice].Name.ToString(), *Panel->Choices[PanelChoice].DisplayName);
+    // The highlight lives on the vehicle: leaving first person must not leave a row lit with no crosshair on it.
+    if (Vehicle && Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
+    {
+        Vehicle->SetFloorPanelHighlight(INDEX_NONE, INDEX_NONE);
+        Vehicle->RefreshFloorPanels();
+    }
+    AimedFloorPanel = AimedFloorOption = INDEX_NONE;
+    Super::EndPlay(Reason);
 }
 void ASCFirstPersonCharacter::UpdateLiftFocusAndRide()
 {
     if (!Vehicle || Vehicle->Lifts.IsEmpty()) return;
-    // The wheel's pick belongs to one point: a new focus starts at its primary interaction (the game's default).
-    const ASCVehicle::FLiftPanel* Panel = Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this);
-    const FString Focus = Panel ? Panel->EntityId : FString();
-    if (Focus != PanelFocusId)
-    {
-        PanelFocusId = Focus;
-        PanelChoice = 0;
-        for (int32 I = 0; Panel && I < Panel->Choices.Num(); ++I)
-            if (Panel->Choices[I].bPrimary) { PanelChoice = I; break; }
-    }
+    UpdateFloorPanelAim();
     // Riding: the movement base is a part the carriage carries. Logged on change and once a second while riding.
+    UpdateRideLog();
+}
+void ASCFirstPersonCharacter::UpdateFloorPanelAim()
+{
+    // WP-P5 floor panel: the option under the crosshair is highlighted (nothing off the panel's face or its rows).
+    if (Vehicle && !Vehicle->FloorPanels.IsEmpty())
+    {
+        int32 Panel = INDEX_NONE, Option = INDEX_NONE;
+        FVector2D Content(-1, -1);
+        Vehicle->AimFloorPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this, Panel, Option, &Content);
+        if (Panel != AimedFloorPanel || Option != AimedFloorOption)
+        {
+            AimedFloorPanel = Panel;
+            AimedFloorOption = Option;
+            const FSCFloorPanelOption* O = Vehicle->FloorPanels.IsValidIndex(Panel) && Vehicle->FloorPanels[Panel].Layout.Options.IsValidIndex(Option)
+                                               ? &Vehicle->FloorPanels[Panel].Layout.Options[Option] : nullptr;
+            UE_LOG(LogTemp, Display, TEXT("FP_PANEL_AIM panel=%d option=%d stop=%d label=\"%s\" content=%.3f,%.3f"), Panel, Option, O ? O->Stop : INDEX_NONE,
+                   O ? *O->Label : TEXT(""), Content.X, Content.Y);
+        }
+        Vehicle->SetFloorPanelHighlight(AimedFloorPanel, AimedFloorOption);
+        Vehicle->RefreshFloorPanels();
+    }
+}
+void ASCFirstPersonCharacter::UpdateRideLog()
+{
     const UPrimitiveComponent* Base = Cast<UPrimitiveComponent>(GetMovementBaseObject());
     const int32 Lift = Base ? Vehicle->LiftCarrying(Base) : INDEX_NONE;
     const double Now = GetWorld()->GetTimeSeconds();
@@ -556,8 +614,7 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
         {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
         {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
         {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim},
-        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas},
-        {EKeys::MouseScrollDown, A::InteractNext}, {EKeys::MouseScrollUp, A::InteractPrev}};
+        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas}};
     return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
@@ -622,8 +679,6 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     case A::Teleport: bTeleportMenuOpen = !bTeleportMenuOpen; ClearInput(); return true;
     case A::Close: bTeleportMenuOpen = false; SetMobiGlasOpen(false); ClearInput(); return true;
     case A::MobiGlas: SetMobiGlasOpen(!bMobiGlasOpen); return true;
-    case A::InteractNext: CycleInteraction(1); return true;
-    case A::InteractPrev: CycleInteraction(-1); return true;
     case A::Holster: return Body->RequestSlot(INDEX_NONE);
     case A::View: Body->SetThirdPerson(!Body->IsThirdPerson()); return Body->HasBody();
     default:
@@ -651,18 +706,17 @@ FString ASCFirstPersonCharacter::HUDText() const
     const int32 Door = FocusedInteraction();
     FString Prompt = Door == INDEX_NONE ? FString()
         : FString::Printf(TEXT("E: %s %s"), Vehicle->IsDoorOpen(Door) ? TEXT("Close") : TEXT("Open"), *Vehicle->Doors[Door].DisplayName);
-    // A lift panel lists its point's interactions; the wheel picks one, E presses it (the game's multi-interaction prompt).
-    if (const ASCVehicle::FLiftPanel* Panel = Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this))
+    // WP-P5: a floor panel's highlighted option (its face shows the rest); another lift panel's primary interaction.
+    if (Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
     {
-        const int32 Chosen = FMath::Clamp(PanelChoice, 0, Panel->Choices.Num() - 1);
-        TArray<FString> Items;
-        for (int32 I = 0; I < Panel->Choices.Num(); ++I)
-        {
-            const FSCPointInteraction& C = Panel->Choices[I];
-            const FString Label = C.DisplayName.IsEmpty() ? C.Name.ToString() : C.DisplayName;
-            Items.Add(I == Chosen ? FString::Printf(TEXT("[%s]"), *Label) : Label);
-        }
-        Prompt = FString::Printf(TEXT("E: %s%s"), *FString::Join(Items, TEXT("  ")), Panel->Choices.Num() > 1 ? TEXT("  (wheel: choose)") : TEXT(""));
+        const FSCFloorPanel& P = Vehicle->FloorPanels[AimedFloorPanel];
+        Prompt = P.Layout.Options.IsValidIndex(AimedFloorOption) ? FString::Printf(TEXT("E: %s"), *P.Layout.Options[AimedFloorOption].Label) : FString();
+    }
+    else if (const ASCVehicle::FLiftPanel* Panel = Vehicle->FindLiftPanel(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this))
+    {
+        const FName Interaction = Vehicle->LiftPanelPressInteraction(*Panel);
+        const FSCPointInteraction* C = Panel->Choices.FindByPredicate([&](const FSCPointInteraction& X) { return X.Name == Interaction; });
+        Prompt = !C ? FString() : FString::Printf(TEXT("E: %s"), C->DisplayName.IsEmpty() ? *C->Name.ToString() : *C->DisplayName);
     }
     const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: the capsule overlaps geometry")
         : bStuck ? TEXT("Movement blocked — press V for noclip")

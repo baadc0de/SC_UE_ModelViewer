@@ -232,6 +232,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
     if (DeltaSeconds <= 0) return;
     // Lifts first (pre-physics, before the riders' movement: FSCLift moves the carriage anchor, doors start here).
     for (const TSharedPtr<FSCLift>& Lift : Lifts) Lift->Tick(DeltaSeconds);
+    if (!FloorPanels.IsEmpty()) RefreshFloorPanels(); // WP-P5 floor panel: the lift's state on its panels
     if (!ClipCatalog || Playback.IsEmpty()) { UpdateTickEnabled(); return; }
     for (int32 I = Playback.Num() - 1; I >= 0; --I)
     {

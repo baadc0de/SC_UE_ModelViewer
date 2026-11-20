@@ -623,7 +623,7 @@ top deck and down through the belly hatch to the ground and back. Exporter on su
   than before: carriage → gate). `SCExploration.cpp`: doors a lift drives are not toggled by E (in the first run E on the
   top landing door opened it onto the empty shaft). `SCInstancing.*`: parts under a lift anchor are not instanced.
 - `SCFirstPersonCharacter.*`, `UI/SSCViewportInput.cpp`: E on a lift panel sends its chosen interaction; the HUD lists
-  the point's interactions and the mouse wheel picks one; `LIFT_RIDE`; the character ticks after the vehicle.
+  the point's interactions and the mouse wheel picks one (replaced by the floor panel: "Result (floor panel)"); `LIFT_RIDE`; the character ticks after the vehicle.
 - `SCLiftCommands.cpp` (`sc.Lift.*`), `SCRpcSubsystem.cpp` (`/wait until=lift_idle`, `lifts[]` in `/state`),
   `SCViewerAutomation.cpp` (`FP_PROBE … panel= choice=`), `ue/scripts/rpc/c2-lift.ps1` (the scripted run below). The
   route runner has no "wait for the lift", so the run is an RPC driver rather than `ue/scripts/routes/c2-lift.txt`, and
@@ -855,3 +855,179 @@ Lows (open):
 - A request made during a leg is served after the leg: the carriage does not stop at a requested stop it passes.
 - Cooked builds (R7): the ship cook bakes rigs and clears the clip catalogue, and the lift is runtime state, so a cooked
   C2 has a static lift (review, not fixed).
+
+## Result (floor panel)
+
+**State (2026-11-20):** the C2's inner lift panel shows its stops on its screen face, drawn by the viewer: the row under
+the crosshair is highlighted, E sends that row's own interaction, the current floor, the called floor and the direction of
+travel are marked. The game draws no UI on this panel (WP-I1 "Lift panels: where the UI really is"); the design is ours,
+approved by the owner, in the look of the C2's door pads. Exporter on submodule branch `scviewer/panel-screens`
+(`8282072b`, review fixes `966be180`), cache format 35. The P5-1 mouse-wheel pick is gone. Nothing committed in this repo.
+
+### What is data, what is ours
+
+| | Source |
+|---|---|
+| The options | the panel's interactions whose exported links ask a carriage for a stop (`From Elevator call <N>`), one row each; a panel whose links reach no stop (a call button) or two lifts draws nothing |
+| Row order | the stops' heights, highest first (on the C2: Top Deck, Lower Deck, Exit Ship) |
+| Labels | each row's own panel interaction's display name (on the C2 the stops' names), rendered by the exporter as white glyph masks in the door pads' label font: the pad canvas's large-button label compiled to IR (`BuildingBlocks_FontStyle.BarlowCondensed-Bold`, export symbol `$Billboard` in the shared font library), its letter spacing scaled to the mask's em, cased as the pad's label (capitals) |
+| Colours | the pads' brand palette (`BuildingBlocks_Style.S_CRUS_HUD`, the style the chosen pad's canvas rendered with: its IR's `selected_style_source`) by `BB_ColorStyle` role; the label colour is the pad label's own role (`Bright`) |
+| State | the lift: `CurrentStop` (none while travelling), `TargetStop`, the request queue, the leg's direction |
+| The request E sends | the row's own panel interaction through `ASCVehicle::SendInteraction` (Exit Ship's `RequestSurface` also opens the belly hatch, as its links say) |
+| Brightness | the face keeps its `M_SC_Screen` instance (authored glow, viewing angle, `%DBA_GLOBAL`), the image a render target instead of a panel render |
+| **Ours** | the layout (rows over the face above a thin bottom bar, square margins 7 % of the shorter side, gaps 3 %, bottom bar 9 %), the role assignment (field `Accent2`, rows `Base`, row under the crosshair `Selected` with its label in `Background`, current floor `Accent1` bar, called floor `Moderate` bar, blinking at 1.5 Hz for the leg in progress, bottom bar `Background` with a `Bright` chevron for the direction), the label size (em 45 % of the row, at most 80 % of its width), the render-target resolution (448 px high), the mask raster em (128 px) |
+
+Without `panel_style` (a package before cache format 35) the panel draws in the engine font, white on black (absence of
+data, logged as `style=none(white-on-black)`); no colour is invented. A name the pads' font cannot spell gets no mask and
+its row the engine font, cased as the pads' label.
+
+### Exporter (`vendor/StarBreaker`, contract "lifts[].panel_style")
+
+- `starbreaker-3d/src/lift_panel_style.rs`: `stop_display_names` (every (stop, name) the panel links to `From Elevator
+  call <N>` offer), `is_door_pad` (a binding whose owner has a `DoorOpenState` state type), `label_style_from_ir` (the
+  first active, resolved label inside an active large button of the pad canvas's IR), `style_manufacturer` (the style
+  the canvas rendered with), `build` (palette by role, label style, label masks; each part alone), `attach_masks`.
+  `decomposed.rs` `lift_panel_styles` compiles the door pads (the lift's own container first) until one has a label and
+  writes the masks beside the panel renders (`Data/UI/Generated/<type>/<manufacturer>/<ship>/
+  lift_label_<symbol>_<text>.png`).
+- `ui_pipeline`: `manufacturer_colour_styles` (the matched `BuildingBlocks_Style` record's `colorStyles` by index, an
+  unauthored slot `None`), `shared_ui_fonts`.
+- `starbreaker-ui`: `text::render_label_mask` (one line in an imported SWF font, white, alpha = coverage, centred with a
+  quarter-em margin; drawn by `draw_swf_font`), `pipeline::load_shared_fonts` (the shared font library the canvas hosts
+  merge; its path is now one constant), `style::colour_roles::BB_COLOUR_STYLE_ROLES` (the enum's names in order).
+- Tests: `lift_panel_style::tests` (stop names from links, two panels naming one stop, the door-pad rule, the IR label and
+  style-source rules, the palette alone, an unspellable name, masks keeping their own paths, and
+  `c2_lift_panel_style_from_game_data` on LIVE 4.10.2), `text::label_mask::tests` (3),
+  `colour_roles::tests::role_names_are_the_enum_in_order`.
+
+### Viewer (`ue/Plugins/SCBridge`)
+
+- `SCFloorPanel.h/.cpp`:
+  - `FSCScreenFaceGeometry`: the face's triangles and UV0 (captured from the mesh description while the importer still
+    has it: the build drops it; per triangle its node and part, skinned or rigid), under the component's scale (the
+    face is handled in the component's frame without scale, so a reflected placement stays unmirrored), the frame an upright, unmirrored image uses (the normal from the
+    vertex normals, up from the vehicle's up), and the least-squares affine map UV -> image (`FitError` 0.0068 on the
+    C2's rounded plate); the C2 face samples a window of UV space (u 2.387-2.504, v 0.640-0.738), which the map stretches
+    over the whole image.
+  - `FSCFloorPanelLayout` (rows, `OptionAt`), `FSCFloorPanelView` (what is shown; drawn again on change),
+    `FSCFloorPanelColours` (the role assignment above).
+  - `ASCVehicle::BuildFloorPanels` (at import, after the screen faces: the panel's largest blank face joins
+    `ScreenFaces` and takes a new `M_SC_Screen` instance, the actor's own (`FloorPanelMaterials`), showing a float render
+    target (at most 2048 a side), through `SetScreenFaceMaterial`),
+    `FloorPanelOptions`, `LiftPanelPressInteraction` (a call button's primary; nothing for a floor-select panel),
+    `AimFloorPanel` (the ray against the face's front within reach, nothing that answers a trace in front of it, the
+    panel's own housing included; UV -> image -> row), `SetFloorPanelHighlight`, `RefreshFloorPanels` (vehicle tick and character tick),
+    `PressFloorPanel`, drawing with `FCanvas` (linear `RTF_RGBA16f`, alpha 1 everywhere: the screen multiplies by it).
+- `M_SC_Screen` / `_Translucent` (`create_materials.py`): the image is sampled through `ScreenUVTransformX` / `Y`
+  (identity by default; every existing instance unchanged).
+- `SetScreenFaceMaterial` drops the face's paint slot: the remembered paint applied at load (`PAINT index=4`) put the
+  face's authored instance back over the drawn image (test `SCBridge.FloorPanel.FaceKeepsItsImageOverPaint`, failing
+  first).
+- `SCFirstPersonCharacter`: each tick the aim sets the highlight (`FP_PANEL_AIM`); E takes the aim again and sends the
+  row under the crosshair (`FLOOR_PANEL_PRESS`), off its rows or off its face E does nothing on it (`FP_PANEL_PRESS …
+  option=none`), nor on a floor-select panel whose face was not drawn; call buttons send their primary interaction;
+  leaving first person clears the highlight. The HUD shows "E: <floor>". The wheel actions
+  (`InteractNext` / `InteractPrev`, `CycleInteraction`, `PanelChoice`) are removed.
+- `sc.Lift.Panels` (rows with their image rects, the face's material and render-target pixels), `sc.Lift.PanelAim`
+  (holds the view on a row or a point of the face, re-aimed each tick a quarter of the way: the body's camera joint
+  swings with the view when looking steeply down at the panel); `c2-floor-panel.ps1`; `c2-lift.ps1` uses the rows
+  instead of the wheel.
+- Logs: `FLOOR_PANEL_BUILD`, `FLOOR_PANEL_VIEW` (on every change but the blink), `FLOOR_PANEL_PRESS`, `FP_PANEL_AIM`.
+
+### Tests
+
+| Suite | Result |
+|---|---|
+| `cargo test -p starbreaker-ui --lib` | 672 passed, 1 ignored (new: `text::label_mask::tests` 3, `colour_roles::tests::role_names_are_the_enum_in_order`) |
+| `cargo test -p starbreaker-3d --lib` | 984 passed, 4 ignored (new: `lift_panel_style::tests` 9, the LIVE one included: on LIVE 4.10.2 the C2's style resolves to `BarlowCondensed-Bold` / `$Billboard`, size 90, letter spacing 3, capitals, colour role `Bright`, palette `S_CRUS_HUD`; masks EXIT SHIP, LOWER DECK, TOP DECK) |
+| `cargo test -p scviewer-core` | 52 passed, 2 ignored |
+| `Automation RunTests SCBridge` (`out/lifts/floor-panel/fp_tests3.log`) | 172 of 176 pass; the 4 failures are the known `Package.FolderTarImport`, `Player.KitRigAndWeapons`, `Materials.FamilyMapping`, `FirstPerson.SkeletalCollision`. New: `SCBridge.FloorPanel.OptionsAndLayout` (options from the panel's links and the stops, row order, rects, `OptionAt` on rows, gaps, bar and margin), `.AimToOption` (the C2-like UV window mapped upright onto the image; rays at each row's centre -> UV -> that row; beside the face, from behind, beyond reach: no hit; the vehicle's aim highlights the row and nothing off the face), `.PressDispatches` (E on a row queues its stop with the panel's own interaction; an invalid row sends nothing; the view through a leg: no current floor, target, direction, then the new current floor), `.Colours` (the role assignment; white on black without a palette), `.FaceKeepsItsImageOverPaint` (failed before its fix); the review added E on a floor-select panel without a drawn face sending nothing, a row's own display name, and a reflected, stretched face |
+
+### First-person run (C2 in `hangar_xltop_001`, off-screen, port 8771; `ue/scripts/rpc/c2-floor-panel.ps1`)
+
+Run 7, on the final build (`out/lifts/floor-panel/run7`: shots, `driver.txt`, `FP_run7.log`; run 6 before the review fixes gave the same sequence):
+
+- `FLOOR_PANEL_BUILD panel=4e867e5a… lift=0 face=57 size_cm=27.3x22.9 fit_error=0.0068 target=534x448
+  style=BuildingBlocks_Style.S_CRUS_HUD font=BuildingBlocks_FontStyle.BarlowCondensed-Bold rows=2:Top Deck(RequestFloor1)
+  1:Lower Deck(RequestFloor0) 0:Exit Ship(RequestSurface)`. The call buttons draw nothing (no stop options).
+- **Aim:** with the view held on each row's centre, `sc.FP.Probe` reads `choice=RequestFloor1`, `RequestFloor0`,
+  `RequestSurface` and the face shows that row highlighted (`a0…a2-aim-row-*`); above the face and beside it
+  `panel=- choice=-` and nothing is highlighted (`b2`, `b3`); E there sends nothing (`FP_CMD interact door=-1 ok=0`; the
+  script checks `highlight=-1` and `queue=[]`).
+- **E:** each press is `FLOOR_PANEL_PRESS … option=<row> stop=<stop> interaction=<the row's>` and the lift goes there:
+
+  | Row | Request | `LIFT_ARRIVED` |
+  |---|---|---|
+  | TOP DECK (from the hold) | `RequestFloor1` -> `From Elevator call 2` | stop 2, `t_leg` 4.962 s (predicted 4.956) |
+  | LOWER DECK (from the top) | `RequestFloor0` -> `From Elevator call 1` | stop 1, 4.958 s |
+  | EXIT SHIP (from the hold) | `RequestSurface` -> `From Elevator call 0` + hatch `Open` (`handled=2`; `WaitingForGateway` 0.1 s) | stop 0 on the pad (`contact=1`), 4.466 s (4.458) |
+  | LOWER DECK (from the ground) | `RequestFloor0` | stop 1, 4.461 s |
+
+- **State marks** (`FLOOR_PANEL_VIEW`): on each press `requested=<stop>`, then `target=<stop> dir=±1` with
+  `current=-1` while moving, and `current=<stop>` on arrival (cyan bar moved: `c3-top-arrived`, `d3`, `e3`, `f3`); the
+  chevron points the way during travel (`c2-top-travel-*`); a call made at a stop shows a steady yellow bar until its leg
+  starts (`d1-lower-called`).
+- **Legibility:** `g1-arms-length` / `g2` from where the rider stands (the face 33-50 cm from the eye): all three labels
+  read.
+- Aiming in a script: the body's camera joint swings with the view when looking steeply down at the panel (it is
+  pedestal height, about 45 cm in front of the carriage's middle), so a single turn misses; `sc.Lift.PanelAim` re-aims
+  each tick a quarter of the way and the script nudges the target up or down until the probe names the row
+  (`AimRow`). A held aim at the 9 % status bar settled on the EXIT SHIP row; the bar's "no row" is covered by the test.
+
+**Astra** (gpt-6.2-astra, high; the cargo-bay and habitation references, our habitation pad, rows aimed, off the face,
+travel, arrival, arm's length; `out/lifts/floor-panel/run6/astra-floor-panel.md`): style consistency **MATCH** (the
+blue field of our door pad, centred condensed capitals, thin dark bottom bar), highlight **MATCH**, state marks
+**CLOSE** (the chevron and the cyan current-floor bar clear; the yellow called-floor bar not in the frame given: the
+blink's off phase), legibility at arm's length **MATCH**, orientation **MATCH**; no defect; verdict PARTIAL for the
+unverified yellow bar. On run 7, with a call shown before its leg (`d1-lower-called`): style **CLOSE** (the face's
+brighter blue surround, `Accent2`, against the pads' dark margins), highlight, state marks, legibility and orientation
+**MATCH**; verdict **PASS** (`out/lifts/floor-panel/run7/astra-floor-panel-2.md`).
+
+### Review
+
+Terra (gpt-6.1-terra, xhigh) and Astra (gpt-6.2-astra, high) on `out/lifts/floor-panel/review/{repo,submodule}.diff`
+(answers in `terra-review.md`, `astra-code-review.md`). Fixed once (exporter `966be180`):
+
+- **A floor-select panel that failed to build pressed its primary interaction** (both, high): a panel whose
+  interactions ask a carriage for stops is a floor-select panel whether or not its face was drawn
+  (`ASCVehicle::LiftPanelPressInteraction`); without a drawn row under the crosshair E sends nothing on it.
+- **E used the last tick's aim** (Astra, high): the aim is taken again at the key press.
+- **Colliding label paths** (both, medium): each mask's written path goes to its own label (`attach_masks`, test).
+- **Names keyed by stop** (Terra, medium): labels are exported per (stop, name), and a row takes its own interaction's
+  display name (tests on both sides).
+- **One unusable pad or a missing font discarded the rest** (both, medium): door pads are compiled in order (own
+  container first) until one has a large-button label; palette, label style and masks stand alone (tests).
+- **Palette from another style than the pad's** (Astra, medium): the palette is the style the chosen pad's canvas
+  rendered with (its IR's `selected_style_source`); a canvas-linked style gives none.
+- **A name the font cannot spell** (Astra, medium): no mask for it (logged); the row falls back to the engine font,
+  cased as the pads' label.
+- **Highlight left on when leaving first person** (both): cleared in the character's `EndPlay`.
+- **Own housing could not occlude the face** (Astra, medium): any blocking hit in front of the face occludes.
+- **Reflected or stretched placements** (Astra, medium): the face is handled in the component's frame without scale,
+  its geometry scaled (`FSCScreenFaceGeometry::Scaled`, test with a mirrored, stretched face).
+- **A skinned screen took rigid triangles** (Astra, medium): the capture keeps each triangle's part (skinned / rigid)
+  and a face selects its own.
+- **Render targets held by the shared import** (Astra, medium): the panel's screen instance is the actor's own
+  (`FloorPanelMaterials`), not in `Materials`.
+- **Unbounded render-target width** (Astra, medium): both sides at most 2048, aspect kept.
+- **A skipped draw recorded as drawn** (Astra, low): only a submitted draw updates the view shown.
+- The off-face step of `c2-floor-panel.ps1` now fails the run on a highlight or a queued request (Astra).
+
+Not fixed, with the reason:
+
+- **Third-person orbit** (Astra, medium): the floor panel aims from the same origin and view as every E interaction
+  (doors, lift panels: `InteractionOrigin`, control rotation); changing it for one is a separate change of the press
+  path.
+- **Cooked showcase** (Astra, medium): a cooked C2 has no lift logic (R7, the P5-1 review), and the floor panel is
+  runtime state drawn from it. The cook copies the face's instance with its transient render target, so a cooked C2's
+  face should load without an image (dark glass, as before this change); not verified (no cook run). With R7.
+- Deforming skinned screen faces are captured in their bind pose (none on the C2).
+
+### Open
+
+- The face's surround (`Accent2`) is brighter than the pads' dark margins (Astra, minor): a role choice of ours, kept.
+- Blinking is not visible in stills; the call before a leg shows steady.
+- A scripted aim at a pedestal-height panel close to the rider needs the held, damped turn and a nudge (`AimRow`): the
+  body's camera joint swings with the view. A player at the mouse is not affected.
+- The cooked C2 (R7) and third-person aiming (above).
+- Nothing committed in this repo.

@@ -260,6 +260,44 @@ void ReadLiftRecords(const FReaderObject& O, FSCInterior& I, FWarn&& Warn)
             Lift.Stops.Add(MoveTemp(Stop));
         }
         for (const auto& R : ReaderArray(L, TEXT("riders"))) if (R->Type == EJson::String) Lift.Riders.Add(R->AsString());
+        const FReaderObject* Style;
+        if (L->TryGetObjectField(TEXT("panel_style"), Style))
+        {
+            FSCLiftPanelStyle& PS = Lift.PanelStyle;
+            const FReaderObject* Source;
+            if ((*Style)->TryGetObjectField(TEXT("source"), Source))
+            {
+                PS.SourceEntityId = String(*Source, TEXT("entity_id"));
+                PS.SourceCanvas = String(*Source, TEXT("canvas"));
+                PS.StyleRecord = String(*Source, TEXT("style_record"));
+            }
+            for (const auto& CV : ReaderArray(*Style, TEXT("palette")))
+                if (const FReaderObject C = CV && CV->Type == EJson::Object ? CV->AsObject() : nullptr)
+                    if (const auto& Rgba = ReaderArray(C, TEXT("srgba")); Rgba.Num() == 4)
+                        PS.Palette.Add(String(C, TEXT("role")), FColor(uint8(Rgba[0]->AsNumber()), uint8(Rgba[1]->AsNumber()), uint8(Rgba[2]->AsNumber()),
+                                                                       uint8(Rgba[3]->AsNumber())));
+            const FReaderObject* Label;
+            if ((*Style)->TryGetObjectField(TEXT("label"), Label))
+            {
+                PS.FontStyle = String(*Label, TEXT("font_style"));
+                PS.FontSymbol = String(*Label, TEXT("font_symbol"));
+                PS.LabelColourRole = String(*Label, TEXT("colour_token"));
+                PS.FontSize = float(Number(*Label, TEXT("font_size"), 0));
+                PS.LetterSpacing = float(Number(*Label, TEXT("letter_spacing"), 0));
+                (*Label)->TryGetBoolField(TEXT("upper_case"), PS.bUpperCase);
+            }
+            for (const auto& LV : ReaderArray(*Style, TEXT("labels")))
+                if (const FReaderObject E = LV && LV->Type == EJson::Object ? LV->AsObject() : nullptr)
+                {
+                    FSCLiftStopLabel& Out = PS.Labels.AddDefaulted_GetRef();
+                    Out.Stop = int32(Number(E, TEXT("stop"), INDEX_NONE));
+                    Out.Text = String(E, TEXT("text"));
+                    Out.Image = String(E, TEXT("image"));
+                    Out.Width = int32(Number(E, TEXT("width"), 0));
+                    Out.Height = int32(Number(E, TEXT("height"), 0));
+                    Out.EmPx = float(Number(E, TEXT("em_px"), 0));
+                }
+        }
         // The motion profile needs both speeds (a lift without them cannot move: reported, not invented).
         if (Lift.Stops.Num() < 2 || Lift.MaxSpeed <= 0 || Lift.EasingDistance < 0)
         {

@@ -44,7 +44,8 @@ use std::{
 // 34: panel renders route style-set component parameters (button glyphs), apply the widget standards' own styles
 //     and size bounds, scope the kit sheets to their standard, keep `aspectOverrides*` canvas units square and take a
 //     custom shape's own colour (WP-I1 fix pass 2).
-pub const CACHE_FORMAT_VERSION: u32 = 34;
+// 35: lifts carry `panel_style` (the door pads' palette and label style, a label mask per named stop; WP-P5 floor panel).
+pub const CACHE_FORMAT_VERSION: u32 = 35;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

@@ -26,6 +26,12 @@ public:
      *  panel with that image, emitting at the authored glow (FSCMaterialDesc::ScreenGlow; Find's unbound instance emits
      *  nothing). Null when the slot is not a screen or the image did not load (the slot keeps Find's instance). */
     UMaterialInterface* FindScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, const FString& Image);
+    /** WP-P5 floor panel: a new instance of a screen slot's material that shows Image (any texture, a viewer-drawn render
+     *  target) and emits at the authored glow, like FindScreen's; null when the slot is not a screen. Owned by the caller
+     *  (outer: the owning vehicle; not added to its Materials). */
+    UMaterialInstanceDynamic* CreateScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, UTexture* Image);
+    /** A decoded texture of this import by package path and role (null when it was not requested or failed). */
+    UTexture2D* Texture(const FString& Path, ESCTextureRole Role = ESCTextureRole::Color) const { return Textures.FindRef(FSCTextureKey{Path, Role}); }
     /** Whether a submaterial is drawn by a screen master (M_SC_Screen / _Translucent). */
     bool IsScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal) const;
     /** Draws nothing (zero-emission additive); for split sections that have no authored instance. */

@@ -124,6 +124,7 @@ void FSCLift::Init(const FSCLiftRecord& Record, TFunctionRef<FVector(const FVect
     EntityId = Record.EntityId;
     EntityName = Record.EntityName;
     ClassName = Record.EntityClass;
+    PanelStyle = Record.PanelStyle;
     MaxSpeed = Record.MaxSpeed;
     EasingDistance = FMath::Max(0.f, Record.EasingDistance);
     OpenWaitTime = FMath::Max(0.f, Record.OpenWaitTime);

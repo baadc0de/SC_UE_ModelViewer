@@ -28,7 +28,11 @@ function Aim([double]$Yaw, [double[]]$Pitches, [string]$Panel) {
     }
     throw "panel $Panel not found at yaw $Yaw"
 }
-function Choose([int]$Index) { for ($i = 0; $i -lt $Index; $i++) { C 'sc.FP.Key MouseScrollDown 1' | Select-String 'FP_PANEL_CHOICE' } }
+function Row([int]$Index) {
+    # The floor panel's rows (WP-P5 floor panel): the view turns to the row's centre; the highlight follows the crosshair.
+    C "sc.Lift.PanelAim 0 $Index" | Select-String 'panel_aim'; Start-Sleep -Milliseconds 2500 # held until sc.FP.Look
+    (C 'sc.FP.Probe' | Select-Object -First 1) -replace ' chain=.*', ''
+}
 function Watch([string]$Tag, [int]$Stop, [double[]]$ShotAtS) {
     # Follow the lift until it stands open at Stop; screenshots when the carriage passes the given path positions (m).
     $deadline = (Get-Date).AddSeconds(90); $last = ''; $i = 0
@@ -50,8 +54,7 @@ function OnCarriage {
 $CallHold = '4d52b73d-3b67-9a88-213d-f4c8017747a4'; $CallTop = '49b375f1-d5fb-1ee4-5f46-9a8fcffce2b2'
 $Panel = '4e867e5a-7436-4974-761c-883613ff8998'; $Ground = '49bd738e-4318-f2b7-487a-8fee884c3a93'
 $Sweep = @(-6, -8.5, -10, -12, -14, -16)
-$PanelSweep = @(-30, -35, -40, -45, -50, -55, -60, -65, -70, -75, -80, -85)
-# Floor panel choices in authored order: 0 Top Deck (primary), 1 Lower Deck, 2 Exit Ship.
+# Floor panel rows (sc.Lift.Panels), from the highest stop down: 0 Top Deck, 1 Lower Deck, 2 Exit Ship.
 
 if (Step 'stops') { C 'sc.Lift.List' | Select-String 'LIFT_LIST|LIFT_STOP' }
 if (Step 'hold: the real call button (the carriage is already there: only its doors open)') {
@@ -61,9 +64,9 @@ if (Step 'hold: the real call button (the carriage is already there: only its do
     [void](C 'sc.FP.Look -90 0'); Start-Sleep 0.5; Shot 'a2-hold-doors-open'
 }
 if (Step 'walk in') { [void](C 'sc.FP.Look -90 0'); [void](C 'sc.FP.Move 1 0 1.2'); Start-Sleep 2.5; C 'sc.Lift.Where' | Select-Object -Last 1 }
-if (Step 'floor panel: Top Deck (the primary interaction)') {
-    Aim -90 $PanelSweep $Panel; Shot 'b1-floor-panel-prompt' -Ui
-    C 'sc.FP.Interact' | Select-String 'FP_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0')
+if (Step 'floor panel: Top Deck') {
+    Row 0; Shot 'b1-floor-panel-prompt' -Ui
+    C 'sc.FP.Interact' | Select-String 'FLOOR_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0')
     Watch 'b2-mid-travel' 2 @(8.5, 10.5, 12.5); Start-Sleep 0.5; Shot 'b3-top-open-from-inside'
 }
 if (Step 'walk out onto the top deck') { [void](C 'sc.FP.Look 90 0'); [void](C 'sc.FP.Move 1 0 1.3'); Start-Sleep 2.5; C 'sc.Lift.Where' | Select-Object -Last 1 }
@@ -74,13 +77,13 @@ if (Step 'top: the real call button brings it back up') {
 }
 if (Step 'walk in, ride down to Lower Deck') {
     [void](C 'sc.FP.Look -90 0'); [void](C 'sc.FP.Move 1 0 1.25'); Start-Sleep 2.5
-    Aim -90 $PanelSweep $Panel | Out-Null; Choose 1
-    C 'sc.FP.Interact' | Select-String 'FP_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0'); Watch 'c5-descending' 1 @(11.5)
+    Row 1 | Out-Null
+    C 'sc.FP.Interact' | Select-String 'FLOOR_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0'); Watch 'c5-descending' 1 @(11.5)
 }
 if (Step 'Exit Ship: the belly hatch opens, the carriage descends to the ground') {
     OnCarriage
-    Aim -90 $PanelSweep $Panel | Out-Null; Choose 2
-    Shot 'd1-exit-ship-chosen' -Ui; C 'sc.FP.Interact' | Select-String 'FP_PANEL_PRESS'; [void](C 'sc.FP.Look 90 -30')
+    Row 2 | Out-Null
+    Shot 'd1-exit-ship-chosen' -Ui; C 'sc.FP.Interact' | Select-String 'FLOOR_PANEL_PRESS'; [void](C 'sc.FP.Look 90 -30')
     Watch 'd2-through-hatch' 0 @(4.5, 2.2); C 'sc.FP.Where'
     # The ground stop: the carriage rests on the first surface under it (LIFT_GROUND_CONTACT), the player on the carriage.
     Start-Sleep 0.5; C 'sc.Lift.Where'; [void](C 'sc.FP.Look 90 -45'); Start-Sleep 0.5; Shot 'd2-ground-stop-edge'
@@ -102,8 +105,8 @@ if (Step 'carriage up (Arrived at 1 closes the hatch), doors closed, then the gr
 }
 if (Step 'over the carriage, ride up to Lower Deck') {
     OnCarriage; C 'sc.FP.Where' # the carriage stands on the pad, short of the authored stop
-    Aim -90 $PanelSweep $Panel | Out-Null; Choose 1
-    C 'sc.FP.Interact' | Select-String 'FP_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0'); Watch 'e2-ride-up' 1 @(3.4); C 'sc.FP.Where'
+    Row 1 | Out-Null
+    C 'sc.FP.Interact' | Select-String 'FLOOR_PANEL_PRESS'; [void](C 'sc.FP.Look 90 0'); Watch 'e2-ride-up' 1 @(3.4); C 'sc.FP.Where'
 }
 if (Step 'done') { C 'sc.Lift.Where' }
 

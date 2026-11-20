@@ -9,9 +9,11 @@
 #include "UObject/ObjectKey.h"
 #include "SCExploration.h"
 #include "SCLift.h"
+#include "SCFloorPanel.h"
 #include "SCVehicle.generated.h"
 class UTexture2D;
 class UMaterialInstanceDynamic;
+class UTextureRenderTarget2D;
 
 class USCRigComponent;
 class USkeletalMesh;
@@ -136,6 +138,36 @@ public:
     bool PlayDoorRig(USCRigComponent* Rig, bool bOpen, float Speed);
     bool IsRigOpen(const USCRigComponent* Rig) const;
     bool IsRigPlaying(const USCRigComponent* Rig) const;
+    // ------------------------------------------------------------------------- WP-P5 floor panel (SCFloorPanel.h)
+    /** Lift panels whose options are drawn on their screen face (the viewer's own floor-select UI). */
+    TArray<FSCFloorPanel> FloorPanels;
+    /** The panels' render targets and screen instances: this actor's own (not in Materials, which an import shares). */
+    UPROPERTY() TArray<TObjectPtr<UTextureRenderTarget2D>> FloorPanelTargets;
+    UPROPERTY() TArray<TObjectPtr<UMaterialInterface>> FloorPanelMaterials;
+    /** At import, after the lifts: a lift panel whose interactions ask one carriage for its stops and that has a blank
+     *  screen face gets a drawn floor list there (the face joins ScreenFaces, its material set by SetScreenFaceMaterial).
+     *  Texture: a decoded package image by path (the label masks). */
+    void BuildFloorPanels(TArray<FSCBlankScreenFace>& Blank, TFunctionRef<UTexture2D*(const FString&)> Texture);
+    /** A lift panel's floor options: its interactions whose links ask one carriage for a stop (`From Elevator call <N>`),
+     *  labelled with the stop's name, from the highest stop down; empty for a call button or a panel reaching two lifts. */
+    TArray<FSCFloorPanelOption> FloorPanelOptions(const FLiftPanel& Panel, int32& OutLift, bool* bOutSeveralLifts = nullptr) const;
+    /** What E on a lift panel sends without aiming at a drawn row: a call button its primary interaction (its first when
+     *  none is marked); a floor-select panel (FloorPanelOptions) nothing, drawn or not: a floor is chosen on its face. */
+    FName LiftPanelPressInteraction(const FLiftPanel& Panel) const;
+    /** The floor panel face under the view ray within Reach (its front, nothing that collides in front of it) and the
+     *  option under the crosshair there (INDEX_NONE off every row). False: no panel face under the ray. */
+    bool AimFloorPanel(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32& OutPanel, int32& OutOption,
+                       FVector2D* OutContent = nullptr) const;
+    /** Highlight Option on Panel and nothing on the other panels (INDEX_NONE panel: none anywhere). */
+    void SetFloorPanelHighlight(int32 Panel, int32 Option);
+    /** Draw the panels whose view changed; returns the panels drawn. */
+    int32 RefreshFloorPanels();
+    /** E on an option: its interaction through the dispatcher. Returns the deliveries handled. */
+    int32 PressFloorPanel(int32 Panel, int32 Option);
+    int32 FloorPanelOf(const FString& EntityId) const;
+    /** World point of an option's centre on its face (scripted aim). */
+    bool FloorPanelWorldPoint(int32 Panel, int32 Option, FVector& Out) const;
+
     /** Tick while clips play or a lift has work. */
     void UpdateTickEnabled();
 

@@ -73,6 +73,28 @@ struct FSCLiftStopRecord
     FString AccessibilityKind;           // AccessibilityExteriorZoneParams, ... ("" without)
     float AccessibleTimingInTransit = -1.f;
 };
+/** `lifts[].panel_style.labels[]`: a stop's name as a white glyph mask in the door pads' label font. */
+struct FSCLiftStopLabel
+{
+    int32 Stop = INDEX_NONE;
+    FString Text, Image; // Image: package path of the PNG (alpha = coverage)
+    int32 Width = 0, Height = 0;
+    float EmPx = 0.f;
+};
+/** `lifts[].panel_style` (cache format 35): the door pads' look for a floor-select list the viewer draws itself (WP-P5
+ *  floor panel). Empty (no labels, no palette) when the export has none. */
+struct FSCLiftPanelStyle
+{
+    FString SourceEntityId, SourceCanvas, StyleRecord;
+    /** The pads' brand palette by BB_ColorStyle role name (sRGB). */
+    TMap<FString, FColor> Palette;
+    FString FontStyle, FontSymbol, LabelColourRole;
+    float FontSize = 0.f, LetterSpacing = 0.f;
+    bool bUpperCase = false;
+    TArray<FSCLiftStopLabel> Labels;
+    bool IsValid() const { return !Labels.IsEmpty() && !Palette.IsEmpty(); }
+    const FSCLiftStopLabel* LabelOf(int32 Stop) const { return Labels.FindByPredicate([Stop](const FSCLiftStopLabel& L) { return L.Stop == Stop; }); }
+};
 /** `lifts[]`: one carriage (SCItemElevatorParams). Values are -1 / false when the data omits them. */
 struct FSCLiftRecord
 {
@@ -83,4 +105,5 @@ struct FSCLiftRecord
     FString GridGeometry, RestNodeId;
     TArray<FSCLiftStopRecord> Stops;
     TArray<FString> Riders;
+    FSCLiftPanelStyle PanelStyle;
 };

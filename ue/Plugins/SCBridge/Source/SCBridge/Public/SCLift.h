@@ -110,6 +110,8 @@ public:
     TArray<FSCLiftDoor> GatewayDoors; // doors a link opens for the lift (the belly hatch)
     TArray<FString> Riders;
     int32 RestStop = 0;
+    /** The door pads' look for a floor panel the viewer draws (`lifts[].panel_style`; empty before cache format 35). */
+    FSCLiftPanelStyle PanelStyle;
     /** Moves with the carriage: everything riding it is attached below. Container-local base at RestStop. */
     TWeakObjectPtr<USceneComponent> Anchor;
     FVector AnchorBase = FVector::ZeroVector;

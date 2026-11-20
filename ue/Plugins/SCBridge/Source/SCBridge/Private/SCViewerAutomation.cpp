@@ -200,7 +200,11 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn arg=%s index=%d ok=%d"), *Args[0], Index, OK);
     });
     Add(TEXT("sc.FP.Look"), TEXT("sc.FP.Look <yaw> <pitch>: absolute view relative to the vehicle (degrees)"), [Weak](const TArray<FString>& Args) {
-        if (auto* C = FirstPerson(Weak); C && Args.Num() >= 2) C->SetVehicleRelativeView(FCString::Atof(*Args[0]), FCString::Atof(*Args[1]));
+        if (auto* C = FirstPerson(Weak); C && Args.Num() >= 2)
+        {
+            C->ClearViewHold(); // a held aim (sc.Lift.PanelAim) ends
+            C->SetVehicleRelativeView(FCString::Atof(*Args[0]), FCString::Atof(*Args[1]));
+        }
     });
     Add(TEXT("sc.FP.Move"), TEXT("sc.FP.Move <forward> <right> <seconds> [run 0|1] [up]: hold movement input (-1..1) for a duration"),
         [Weak](const TArray<FString>& Args) {

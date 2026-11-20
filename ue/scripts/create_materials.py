@@ -610,6 +610,13 @@ return col;
 # (CalcExposureAndNoise: exposure = middleGray / adaptedLuminance), so here MiddleGrey x 1 / exposure (the viewer's
 # exposure follows the game's, SCViewerExposure), in cd/m2; NitsPerUnit = DBA middle grey x HDR_LUMINANCE_SCALE.
 # UseDBA 0 (no %DBA_GLOBAL) leaves the absolute glow.
+# The screen image's texture coordinates: an affine map of the face's UV0 (ScreenUVTransformX / Y rows: u' = X.x u + X.y v
+# + X.z). Identity by default (an exported panel render covers the face's UVs); a viewer-drawn render target maps the
+# face's own UV window onto itself (WP-P5 floor panel, FSCScreenFaceGeometry::ContentFromUV).
+SCREEN_IMAGE_UV = """
+return float2(dot(TX.xyz, float3(UV, 1.0)), dot(TY.xyz, float3(UV, 1.0)));
+"""
+
 SCREEN_DBA = """
 float adapted = ExposureGrey * InvExposure.x;
 return lerp(1.0, clamp(adapted, MinNits, MaxNits) / NitsPerUnit, UseDBA);
@@ -882,7 +889,8 @@ def screen_master(translucent=False):
     rule; GlassShared scales by the scalar glow, not the material's emissive colour)
     x the %DBA_GLOBAL display-brightness multiplier (SCREEN_DBA, through EyeAdaptationInverse) x ScreenTransmittance.
     ScreenImage is bound per panel instance (ui_bindings); the black default leaves an unbound screen (MFDs, lift
-    buttons) as clean dark glass. The image is sampled at UV0 untiled: the render target covers the face.
+    buttons) as clean dark glass. The image is sampled at UV0 untiled through ScreenUVTransformX / Y (identity: the
+    render target covers the face; a viewer-drawn target maps the face's UV window onto itself).
     Not ported: the pixel grid (PixelGridMap is not exported; the game fades it to 1 once a cell is under ~2/3 px),
     interference (InterferenceAmount 0 on the C2) and the %EMISSIVE_REFLECTION front layer.
     With `translucent`: M_SC_Screen_Translucent, the same screen for a face whose data asks for partial coverage
@@ -894,7 +902,9 @@ def screen_master(translucent=False):
     else:
         g = Graph("M_SC_Screen", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
     uv = g.uv(g.const(1.0))
-    image_sample = g.texture("ScreenImage", g.black, ST.SAMPLERTYPE_COLOR, uv)
+    image_uv = g.custom(SCREEN_IMAGE_UV, unreal.CustomMaterialOutputType.CMOT_FLOAT2, UV=uv,
+                        TX=g.vector("ScreenUVTransformX", (1, 0, 0)), TY=g.vector("ScreenUVTransformY", (0, 1, 0)))
+    image_sample = g.texture("ScreenImage", g.black, ST.SAMPLERTYPE_COLOR, image_uv)
     image = (image_sample, "RGB")
     normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
     f0 = g.custom(SCREEN_REFLECTANCE_LOOK, unreal.CustomMaterialOutputType.CMOT_FLOAT3,

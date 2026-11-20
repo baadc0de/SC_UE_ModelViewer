@@ -67,6 +67,14 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
     Panel(Manifest.Root);
     for (const auto& I : Manifest.Children) Panel(I);
     for (const auto& Interior : Manifest.Interiors) for (const auto& P : Interior.Placements) Panel(P);
+    // WP-P5 floor panel: the lifts' stop label masks (white glyphs in the door pads' font), drawn by the viewer.
+    for (const auto& Interior : Manifest.Interiors)
+        for (const FSCLiftRecord& Lift : Interior.Lifts)
+            for (const FSCLiftStopLabel& Label : Lift.PanelStyle.Labels)
+            {
+                const FSCTextureKey Key{Label.Image, ESCTextureRole::Color};
+                Unique.Add(Key); SampledKeys.Add(Key);
+            }
     Keys = Unique.Array();
     Keys.Sort([](const FSCTextureKey& A, const FSCTextureKey& B) { return A.Path == B.Path ? A.Role < B.Role : A.Path < B.Path; });
     SetCount = Sets.Num();
@@ -165,6 +173,21 @@ UMaterialInterface* FSCImportMaterials::FindScreen(const FString& Sidecar, const
     }
     ScreenInstances.Add(CacheKey, MID);
     return MID;
+}
+
+UMaterialInstanceDynamic* FSCImportMaterials::CreateScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, UTexture* Image)
+{
+    const FSet* Set = Sets.FindByPredicate([&](const FSet& S) { return S.Sidecar == Sidecar && S.PaletteId == PaletteId; });
+    if (!Set || !Set->Descs.IsValidIndex(Ordinal) || Set->Descs[Ordinal].Master != ESCMaster::Screen || !Owner) return nullptr;
+    FSCMaterialDesc Desc = Set->Descs[Ordinal];
+    Desc.Name += TEXT("__viewer");
+    Desc.Scalars.Add(TEXT("EmissiveStrength"), Desc.ScreenGlow); // the authored glow lights the image (FindScreen's rule)
+    TArray<FString> Ignored; // description warnings were reported for the base instance
+    UMaterialInstanceDynamic* MID = FSCMaterialBuilder::Create(Desc, Textures, Owner, Ignored);
+    if (!MID) return nullptr;
+    MID->SetTextureParameterValue(FSCMaterialBuilder::ScreenImageParam, Image);
+    ++MaterialCount;
+    return MID; // the caller owns it (an actor's own image: not in Owner->Materials, which retained imports share)
 }
 
 bool FSCImportMaterials::IsScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal) const

@@ -611,7 +611,8 @@ so no CLOSE or LOCKED render was made here.
     v 0.640–0.738. That is a window of about 12 % × 10 % of a texture, with the plate's aspect (1.19 against 1.18), not a
     full canvas. What the game shows there is not in the data: Q2, which needs a capture.
   - **Owner decision.** There is no game data for a floor list drawn on the C2's panel. Drawing one would be our own UI,
-    not an inherited one.
+    not an inherited one. Done as our own UI in WP-P5 "Result (floor panel)", drawn on this face through
+    `SetScreenFaceMaterial` (the face's UV window mapped by `M_SC_Screen`'s `ScreenUVTransformX` / `Y`).
 - **C2 call buttons.** They show no screen UI. Their feedback is the geometry tags `WaitingForAscend` /
   `WaitingForDescend` (Q2) and the button sound (I1-4).
 - **Hangar elevator call panel (`I_Trn_Elevator_Exterior`).** It has a "YOUR LOCATION" floor name

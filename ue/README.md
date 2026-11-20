@@ -518,7 +518,7 @@ Load a package, then choose **First person** or **Spawn where I look** in Orbit.
 Collision readiness includes the soft skin's animated triangle body. Click the
 viewport for mouse look; Esc releases capture. WASD walks, Shift runs, Space jumps,
 Ctrl crouches, E toggles the interaction under the crosshair (else the nearest
-driven joint) within 3 m or presses a lift panel (the mouse wheel picks among its interactions, WP-P5), F toggles the camera torch, V toggles noclip (Space/Q
+driven joint) within 3 m or presses a lift panel (on a floor panel, the floor under the crosshair, WP-P5), F toggles the camera torch, V toggles noclip (Space/Q
 vertical), T opens the teleport list. One key table (`ASCFirstPersonCharacter::KeyTable`)
 drives both Slate and native input.
 
@@ -549,7 +549,9 @@ draws it with `M_SC_Screen`: an opaque Nanite surface of dark glass (base colour
 F0 from `Specular` with the look's glass reflectance, gloss from `Shininess`), whose emission is the panel's image ×
 the authored `Glow` (the game's glow rule). A face whose data asks for partial coverage (authored opacity below 1 or a
 blended alpha mode) takes `M_SC_Screen_Translucent` (coverage = opacity, in the non-Nanite split). The image is the
-exporter's render of the panel's default UI state (`ui_bindings[].generated_image_path`, in the package).
+exporter's render of the panel's default UI state (`ui_bindings[].generated_image_path`, in the package). It is sampled
+at UV0 through `ScreenUVTransformX` / `ScreenUVTransformY` (an affine map, identity by default); a viewer-drawn image
+(the lift floor panel, `SetScreenFaceMaterial`) maps the face's own UV window onto itself.
 
 Which face shows which image is decided per binding and per face, from data only:
 
@@ -636,11 +638,21 @@ instancing), keeping their world transforms. The carriage stands at its rest nod
   movement base belongs to a carriage the character logs `LIFT_RIDE lift= base= asset= rel_z_cm= floor_dist_cm=` once a
   second (and on every change).
 - **Press path** (until WP-I1 has its own): a placed entity whose `interaction_links` reach the carriage or one of its
-  stops is a lift panel. E on it (the crosshair on its collision, else on its parts' bounds) sends the chosen interaction
-  of its interaction point through `ASCVehicle::SendInteraction`, which follows the exported links (`LINK_DELIVER`,
-  `LINK_SEND`). The HUD lists the point's interactions ("E: [Top Deck]  Lower Deck  Exit Ship"); the **mouse wheel**
-  picks one (`FP_PANEL_CHOICE`), a new focus starts at the point's primary interaction. `sc.FP.Probe` names the focused
-  `panel=` and `choice=`.
+  stops is a lift panel. E on it (the crosshair on its collision, else on its parts' bounds) sends an interaction of its
+  interaction point through `ASCVehicle::SendInteraction`, which follows the exported links (`LINK_DELIVER`,
+  `LINK_SEND`): a call button its primary interaction (HUD "E: Call Elevator").
+- **Floor panel** (WP-P5 "Result (floor panel)"; our own UI, the game draws none on the C2's): a lift panel whose
+  interactions ask one carriage for its stops (`From Elevator call <N>`) and that has a blank screen face shows the stops
+  there, one row each from the highest down, drawn into a render target on the face (`SCFloorPanel.h`, through
+  `SetScreenFaceMaterial` and `M_SC_Screen`'s brightness model). Labels are the stops' names as glyph masks in the door
+  pads' label font, colours the pads' palette roles (`lifts[].panel_style`, cache format 35). The row under the
+  **crosshair** is highlighted (nothing off the face or between rows, `FP_PANEL_AIM`); **E** sends that row's own
+  interaction (`FLOOR_PANEL_PRESS`, the aim taken at the key press), off the rows E does nothing, nor on a floor-select
+  panel whose face could not be drawn (`FLOOR_PANEL_BUILD … not drawn, E sends nothing`). A row is labelled with its
+  own interaction's display name. A cyan bar marks the current floor, a yellow one a
+  called floor (blinking for the leg in progress), a chevron in the bottom bar the direction of travel
+  (`FLOOR_PANEL_VIEW`). The HUD shows "E: <floor>" for the highlighted row; the mouse wheel has no action in first
+  person. `sc.FP.Probe` names the focused `panel=` and `choice=` (`None` off the rows).
 
 | Command | Effect |
 | --- | --- |
@@ -650,12 +662,14 @@ instancing), keeping their world transforms. The carriage stands at its rest nod
 | `sc.Lift.Doors <lift> open\|close` | `OpenInnerDoor` + the stop's `DoorOpen` / `CloseAllDoors` + `DoorClose` |
 | `sc.Lift.Send <entity_id> <interaction>` | fire an entity's interaction along its exported links (the press path without a crosshair; the C2's helper-only ground buttons) |
 | `sc.Lift.Where` | `LIFT_WHERE lift s_m z_cm v state phase at target queue`, and the player's movement base |
+| `sc.Lift.Panels` | `FLOOR_PANEL index entity lift face size_cm colours` with the view shown, one `FLOOR_PANEL_ROW panel option stop label interaction rect` per row (content coordinates) |
+| `sc.Lift.PanelAim <panel> <row>` / `<panel> <x> <y>` | turn the first-person view to a row's centre, or to a content point of the face (0..1, y down; outside is off the face) |
 
 Logs: `LIFT_BUILD`, `LIFT_REQUESTED`, `LIFT_STATE`, `LIFT_DEPARTED` (predicted leg time), `LIFT_PHASE`
 (`Start`/`RampUp`/`FullSpeed`/`RampDown`/`Stop`/`PowerUp`/`PowerDown`), `LIFT_PASSED`, `LIFT_ARRIVED lift stop t_leg
 predicted_s dist_m z_cm contact`, `LIFT_GROUND_CONTACT`, `LIFT_DOOR`, `LIFT_BLOCKED`, `LIFT_GATEWAY`, `LIFT_IGNORED`, `LIFT_TRAVERSAL`. RPC: `/wait until=lift_idle [lift=<id>]` (no request
 queued, not moving, no door of the lift in motion, its gateway doors included) and `lifts[]` in `/state` and `SCState.ndjson`. The scripted C2 run is
-`ue/scripts/rpc/c2-lift.ps1` (WP-P5 "Result (P5-1)").
+`ue/scripts/rpc/c2-lift.ps1` (WP-P5 "Result (P5-1)"); the floor panel's is `ue/scripts/rpc/c2-floor-panel.ps1`.
 
 ### Scripted first person (GPU evidence, reused by WP-P2)
 
