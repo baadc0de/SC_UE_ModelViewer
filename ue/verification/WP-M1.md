@@ -28,8 +28,7 @@ before starting the feature driver.
 - Screenshots were written to `out/M1-cutlass/ship-link-locked.png` and `out/M1-cutlass/ship-link-opening.png`.
   Viewer exited with code 0.
 
-Cutlass covered placement, state, remote door access, room groups, secure completion and real light modes. Full C2/XL
-acceptance is still pending for a door with a linked operating pad, local owner egress, and cargo access through a locked hold.
+Cutlass covered placement, state, remote door access, room groups, secure completion and real light modes.
 
 ## Review and follow-up
 
@@ -39,8 +38,7 @@ capture shows Opening in both places and zero fully open with one moving. The th
 1280 × 720 and the shader banner was absent. The corrected Cutlass run passed in 3.99 seconds after asset readiness.
 
 The stacked build compiled the pad-control follow-up and passed all 92 selected tests, including the 88
-Ship Link and existing regression tests. The C2/XL pad, local egress, cargo lock and first-person pad image
-checks remain queued. The state-polled route accepts `-RequireExterior -RequirePad -C2Cargo` for that fixture.
+Ship Link and existing regression tests.
 
 ## Physical lights and aperture follow-up
 
@@ -48,3 +46,26 @@ The combined worktree built successfully and passed 93 focused tests in 14.30 se
 Ship Link route passed in 3.44 seconds and shut down normally. The selected rear light group had 70 authored lights;
 the Off order changed all 70 and set the sum to zero. Default restored all 70 and 46,808.4 cd total. The route
 selected a group that actually has lights, and the RPC journal now also includes actor-lock and pad-state checks.
+
+## C2 in the authored XL hangar
+
+The combined Garage build at `ba56d13` carries Ship Link runtime `fa6a939`. The same D3D12 process exercised the C2 XL
+cargo scenario, Ship Link and Garage. The cargo scenario initially issued its ship request while the hangar was
+loading. The full run waited for the published environment and issued C2 load again in the same process.
+
+```powershell
+& ue/scripts/rpc/ship-link.ps1 -Port 8789 -TimeoutSeconds 250 -RequireExterior -RequirePad -C2Cargo -Screenshots
+```
+
+- The C2 paired to `you` and exposed 31 doors, including four exterior and 22 interior. The rear ramp's linked pad
+  selected `DoorLockState.DoorLocked`. The locked external physical open was refused, then the owner opened it
+  locally from inside with the lock retained. Secure Ship returned it to closed and locked. The light route passed.
+- The owner's 16 SCU transfer opened two locked exterior doors. Job 1 ended Done in 93.0 seconds with zero overlaps.
+  The front-left door closed and relocked automatically. The stored rear-grid box still overlapped the rear doorway
+  query. Removing that one fixture box started rear closure on the next frame, then the locked pad state returned.
+  The route passed in 263.21 seconds with this intervention. Whether the stored slot intersects the ramp collision
+  or the current query is conservative remains open.
+- The available captures are `ship-link-locked.png` and `ship-link-opening.png` in
+  `out/M2-C2XL-20261120-222506/` of the Garage worktree. Astra confirmed both state rows and header counts. The orbit
+  framing hid the selected rear ramp and an engine ray-tracing budget overlay was visible. The first-person
+  locked-pad capture and a C2 framing retake remain.
