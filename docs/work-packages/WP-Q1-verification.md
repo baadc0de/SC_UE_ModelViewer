@@ -104,3 +104,11 @@ the commands were issued separately. M1 ran 88 focused cases in a single
 14.30 s, 12 audio cases in 9.71 s, and three processed-cache cases in 15.60 s,
 including launch and exit. Fixture logs write JSON under `out`; the feature
 branches carry their own commands and results.
+
+A shared Garage/Ship Link retest used the same XL package after extracting it
+once. Its environment import took 21.2 s, compared with 43.9 s in the previous
+archive-backed run with the same 357 meshes, 5,012 placements, and 1,691 lights.
+The retest reached XL readiness at 33.70 s and C2/XL readiness at 77.27 s. In that
+same session, the first-person floor probe took 0.84 s to find all three authored
+targets at 51–52 cm. It replaced the old 2.5 s delay per aim attempt with an
+assertion on the actual interaction under the crosshair.
