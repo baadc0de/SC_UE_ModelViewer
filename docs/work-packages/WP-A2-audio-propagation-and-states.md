@@ -473,6 +473,8 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
   and processes one-pole filters on the voice and output submix. It reads the authored parameters for the actor
   and free viewer contexts and switches effect-slot bypass state when the context changes. The area priority rule
   applies only to positive groups.
-- Ray evaluation, room traversal, multi-position panning and interpolated state properties are pending. Vehicle
-  contexts require WP-P6 to publish stable seat occupancy. The controlled C2/XL A/B and walk acceptance still
-  need the recorded checks in §9.
+- State chunks supply typed volume, pitch, LPF, HPF, and bus-level offsets. The viewer interpolates numeric values
+  over the authored STMG duration for the specific state pair, or over the group default. An interrupted transition
+  continues from the current mix. Effect-slot bypass remains a discrete state.
+- Ray evaluation, room traversal and multi-position panning are pending. Vehicle contexts require WP-P6 to publish
+  stable seat occupancy. The controlled C2/XL A/B and walk acceptance still need the recorded checks in §9.

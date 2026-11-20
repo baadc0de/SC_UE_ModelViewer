@@ -65,6 +65,18 @@ FSCAudioRtpcCurve RtpcCurve(const FObj& CO)
     R.Curve = Curve(CO);
     return R;
 }
+
+void ReadStateValues(const FObj& O, TArray<FSCAudioStateValue>& Out)
+{
+    for (const auto& Entry : Arr(O, TEXT("state_values")))
+    {
+        const FObj S = Entry->AsObject();
+        const uint32 Group = IdField(S, TEXT("group")), State = IdField(S, TEXT("state"));
+        if (!Group || !State) continue;
+        Out.Add({Group, State, float(Num(S, TEXT("volume_db"))), float(Num(S, TEXT("bus_volume_db"))),
+                 float(Num(S, TEXT("pitch_cents"))), {float(Num(S, TEXT("lpf"))), float(Num(S, TEXT("hpf")))}});
+    }
+}
 } // namespace
 
 bool FSCAudioBus::IsVoiceGain(const FString& P) { return P == TEXT("volume"); }
@@ -198,6 +210,7 @@ void FSCAudioProps::Parse(const FObj& O)
         if (A.Num() >= 3) Random.Add({A[0]->AsString(), float(A[1]->AsNumber()), float(A[2]->AsNumber())});
     }
     for (const auto& C : Arr(O, TEXT("rtpc"))) Rtpc.Add(RtpcCurve(C->AsObject()));
+    ReadStateValues(O, States);
 }
 
 TArray<const FSCAudioEffect*> FSCAudioClass::EffectsFor(const FString& Tag, const FString& On) const
@@ -346,6 +359,7 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
             const FString K(*Key);
             const FObj O = V->AsObject();
             FSCAudioBus Bus;
+            ReadStateValues(O, Bus.States);
             Bus.Id = Id(K);
             Bus.Parent = IdField(O, TEXT("parent"));
             Bus.Name = Str(O, TEXT("name"));
@@ -476,6 +490,19 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
             if (const FObj States = Obj(C, TEXT("states")))
                 for (const auto& [Group, State] : States->Values)
                     Context.States.Add(FString(*Group), State->AsString());
+        }
+    if (const FObj Timings = Obj(Root, TEXT("state_groups")))
+        for (const auto& [Key, Value] : Timings->Values)
+        {
+            const FObj Group = Value->AsObject();
+            FSCAudioStateTiming& Timing = Out.StateTimings.Add(Id(FString(*Key)));
+            Timing.DefaultSeconds = float(Num(Group, TEXT("default_transition_ms"))) / 1000.f;
+            for (const auto& Entry : Arr(Group, TEXT("transitions")))
+            {
+                const FObj T = Entry->AsObject();
+                Timing.Between.Add(FSCAudioStateTiming::Key(IdField(T, TEXT("from")), IdField(T, TEXT("to"))),
+                    float(Num(T, TEXT("duration_ms"))) / 1000.f);
+            }
         }
     if (const FObj E = Obj(Root, TEXT("environments")))
         for (const auto& [Key, V] : E->Values)

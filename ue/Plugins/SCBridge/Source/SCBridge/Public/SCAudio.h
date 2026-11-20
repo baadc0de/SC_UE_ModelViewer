@@ -9,6 +9,7 @@
 //   FSCAudioBus::RtpcGainDeltaDb: a bus's level change from RTPCs that move away from their defaults (side-chains).
 // Nothing here names a trigger, media or asset: every value comes from the manifest.
 #pragma once
+#include <atomic>
 #include "CoreMinimal.h"
 #include "SCAudioFilters.h"
 
@@ -44,6 +45,28 @@ struct SCBRIDGE_API FSCAudioRtpcCurve
     bool IsSupported() const { return (Curve.Scaling == 0 || (Curve.Scaling >= 2 && Curve.Scaling <= 4)) && Accum <= 5; }
 };
 
+struct FSCAudioStateValue
+{
+    uint32 Group = 0, State = 0;
+    float VoiceDb = 0.f, BusDb = 0.f, PitchCents = 0.f;
+    FSCAudioFilterLevels Filters;
+};
+
+using FSCAudioStateWeight = TSharedRef<std::atomic<float>, ESPMode::ThreadSafe>;
+
+struct FSCAudioWeightedState
+{
+    FSCAudioStateValue Props;
+    FSCAudioStateWeight Weight;
+};
+
+struct FSCAudioStateTiming
+{
+    float DefaultSeconds = 0.f;
+    TMap<uint64, float> Between;
+    static uint64 Key(uint32 From, uint32 To) { return (uint64(From) << 32) | uint64(To); }
+};
+
 /** A node's own properties (Wwise sums them down the tree). */
 struct SCBRIDGE_API FSCAudioProps
 {
@@ -51,6 +74,7 @@ struct SCBRIDGE_API FSCAudioProps
     struct FRange { FString Param; float Min = 0, Max = 0; };
     TArray<FRange> Random;
     TArray<FSCAudioRtpcCurve> Rtpc;
+    TArray<FSCAudioStateValue> States;
     void Parse(const TSharedPtr<class FJsonObject>& O);
 };
 
@@ -172,6 +196,7 @@ struct SCBRIDGE_API FSCAudioBus
     TArray<FSCAudioBusEffect> Effects;
     /** The bus's own RTPC curves (gains, filters). */
     TArray<FSCAudioRtpcCurve> Rtpc;
+    TArray<FSCAudioStateValue> States;
     /** The bus's own level on its mix (bus volume, make-up, output-stage gain curves at their RTPC defaults), dB. */
     float MixDb() const { return BusDb + MakeUpDb + CurveDefaultDb; }
     /** Is P a gain property of the voice stage (`volume`) or of the output stage (bus volume, output-bus volume,
@@ -245,6 +270,7 @@ struct SCBRIDGE_API FSCAudioManifest
     TMap<uint32, FSCAudioBus> Buses;
     TMap<uint32, FSCAudioMedia> Media;
     TMap<uint32, FSCAudioRamp> GameParameters;
+    TMap<uint32, FSCAudioStateTiming> StateTimings;
     TMap<FString, FSCAudioGameContext> GameContexts;
     TMap<FString, uint32> RtpcIds;
     TMap<FString, float> RtpcDefaults; // ATL default, else the Wwise game-parameter default (Init.bnk STMG)

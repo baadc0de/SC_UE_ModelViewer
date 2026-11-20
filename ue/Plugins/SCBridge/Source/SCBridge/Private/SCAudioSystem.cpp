@@ -210,7 +210,7 @@ void USCAudioWave::OnBeginGenerate()
     if (Health.Sources.fetch_add(1, std::memory_order_relaxed) > 0 && Rate > 0)
         if (const uint64 Last = Health.LastCycles.load(std::memory_order_relaxed))
         {
-            const double Gap = CyclesToSeconds(FPlatformTime::Cycles64() - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch);
+            const double Gap = CyclesToSeconds(FPlatformTime::Cycles64() - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch.load(std::memory_order_relaxed));
             AtomicMax(Health.MaxResourceGapUs, int32(FMath::Clamp(Gap * 1e6, 0.0, 2e9)));
         }
     Health.LastCycles.store(0, std::memory_order_relaxed);
@@ -225,7 +225,7 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     // Health: was this pull later than the audio the last one returned lasts?
     if (const uint64 Last = Health.LastCycles.load(std::memory_order_relaxed); Last && Rate > 0)
     {
-        const double Late = CyclesToSeconds(Now - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch);
+        const double Late = CyclesToSeconds(Now - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch.load(std::memory_order_relaxed));
         if (Late > kGapSlackS)
         {
             Health.Gaps.fetch_add(1, std::memory_order_relaxed);
@@ -241,7 +241,7 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
         bAligned = true;
         if (ClockDevice && ScheduledClock >= 0.0 && Rate > 0 && Stream && (GLegacy & 8) == 0)
         {
-            const double Late = (ClockDevice->GetAudioTime() - ScheduledClock) * Rate * Pitch;
+            const double Late = (ClockDevice->GetAudioTime() - ScheduledClock) * Rate * Pitch.load(std::memory_order_relaxed);
             if (Late < 0.0) LeadSilence = FMath::Min(int64(-Late + 0.5), int64(Rate) * 30);
             else if (bSeek && Late >= 1.0 && sc_audio_seek(Stream, uint64(Late + 0.5)) == SC_STATUS_OK) PlayFrame = int64(Late + 0.5);
             PlayFrame -= LeadSilence;
@@ -282,7 +282,7 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     }
     // A pull that finds the stream already ended means the mixer has consumed all of its audio: the voice is done.
     if (bWasEnded) Health.bFinished.store(true, std::memory_order_relaxed);
-    Filter.Process(Out, Frames, Rate * Pitch, {Lpf.load(std::memory_order_relaxed), Hpf.load(std::memory_order_relaxed)});
+    Filter.Process(Out, Frames, Rate * Pitch.load(std::memory_order_relaxed), {Lpf.load(std::memory_order_relaxed), Hpf.load(std::memory_order_relaxed)});
     const uint64 After = FPlatformTime::Cycles64();
     const int64 Ns = int64(CyclesToSeconds(After - Now) * 1e9);
     Health.DecodeNs.fetch_add(Ns, std::memory_order_relaxed);
@@ -765,6 +765,8 @@ void USCAudioSubsystem::AddScene(const TSharedRef<FSCAudioScene>& Scene)
     if (FAudioDeviceHandle Device = GetWorld() ? GetWorld()->GetAudioDevice() : FAudioDeviceHandle()) Scene->EpochClock = Device->GetAudioTime();
     // The game parameters this scene's meters drive, known before its voices start (a voice's curves on them stay live).
     if (!RtpcBank) RtpcBank = MakeShared<FSCRtpcBank>();
+    for (const auto& [Group, Timing] : Scene->Manifest.StateTimings)
+        RtpcBank->ConfigureState(Group, Timing);
     for (const auto& [Name, Id] : Scene->Manifest.RtpcIds)
         if (const FSCAudioRamp* Ramp = Scene->Manifest.GameParameters.Find(Id))
             if (const float* Default = Scene->Manifest.RtpcDefaults.Find(Name))
@@ -1201,12 +1203,19 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     auto IsDynamic = [&](const FString& R) {
         return R == kAzimuth || R == kListenerCone || (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc) || (RtpcBank && RtpcBank->Driven().Contains(R));
     };
+    auto BindVoiceStates = [&](const TArray<FSCAudioStateValue>& States) {
+        if (RtpcBank)
+            for (const FSCAudioStateValue& State : States)
+                if (State.VoiceDb != 0.f || State.PitchCents != 0.f || State.Filters.Lpf != 0.f || State.Filters.Hpf != 0.f)
+                    V.States.Add(RtpcBank->BindState(State));
+    };
     auto AddProps = [&](const FSCAudioProps& P) {
         FSCAudioProps Static = P;
         Static.Rtpc.RemoveAll([&](const FSCAudioRtpcCurve& C) { return IsDynamic(C.Rtpc); });
         Gain.Add(Static, [&](const FString& R) { return RtpcValue(S, I, R, Here); }, &I.Random);
         for (const FSCAudioRtpcCurve& C : P.Rtpc)
             if (IsDynamic(C.Rtpc) && C.Type == 0) V.Dynamic.Add(&C);
+        BindVoiceStates(P.States);
     };
     AddProps(I.Action->Context);
     for (int32 Node : Path) AddProps(S.Manifest.Nodes[Node].Props);
@@ -1215,18 +1224,28 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     const TArray<const FSCAudioBus*> Chain = S.Manifest.BusChain(Leaf.Bus);
     Gain.AddBusVoice(Chain, IsDynamic, S.Manifest.RtpcDefaults);
     for (const FSCAudioBus* B : Chain)
+    {
         for (const FSCAudioRtpcCurve& C : B->Rtpc)
             if (C.Type == 0 && FSCAudioBus::IsVoiceGain(C.Param) && IsDynamic(C.Rtpc) && S.Manifest.RtpcDefaults.Contains(C.Rtpc)) V.Dynamic.Add(&C);
+        BindVoiceStates(B->States);
+    }
     float BlendDb = 0.f; // the blend layers' gains on the path (RTPCs at their values when the voice starts)
     for (int32 K = 0; K + 1 < Path.Num(); ++K)
         if (const FSCAudioNode& P = S.Manifest.Nodes[Path[K]]; P.Kind == ESCAudioNodeKind::Blend)
             BlendDb += BlendGainDb(S, I, P, P.Children.IndexOfByKey(Path[K + 1]), Here);
     float BusCents = 0.f;
-    for (const FSCAudioBus* B : S.Manifest.BusChain(Leaf.Bus)) BusCents += B->PitchCents;
+    for (const FSCAudioBus* B : Chain) BusCents += B->PitchCents;
     V.StaticDb = Gain.VolumeDb + I.Place.VolumeDb + BlendDb;
     V.StaticAux = Gain.GameAuxDb;
     V.StaticFilters = Gain.Filters;
-    const float PitchRatio = FMath::Pow(2.f, (Gain.PitchCents + BusCents + I.Place.PitchCents) / 1200.f);
+    V.StaticPitchCents = Gain.PitchCents + BusCents + I.Place.PitchCents;
+    float InitialPitchCents = V.StaticPitchCents;
+    for (const FSCAudioRtpcCurve* C : V.Dynamic)
+        if (C->Param == TEXT("pitch")) InitialPitchCents += C->Curve.Eval(RtpcValue(S, I, C->Rtpc, Here));
+    for (const FSCAudioWeightedState& State : V.States)
+        InitialPitchCents += State.Props.PitchCents * State.Weight->load(std::memory_order_relaxed);
+    const float PitchRatio = FMath::Pow(2.f, InitialPitchCents / 1200.f);
+    V.LastPitchCents = InitialPitchCents;
     USCAudioWave* Wave = NewObject<USCAudioWave>(this);
     if (!Wave->Init(*Bytes, Leaf.LoopCount, (GLegacy & 1) != 0)) return T0;
     Wave->Pitch = PitchRatio;
@@ -1413,13 +1432,30 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
         const FVector Emitter = V.Component ? V.Component->GetComponentLocation() : I.Position;
         float Db = V.StaticDb + AreaOffsetDb;
         float AuxDb = V.StaticAux;
+        float PitchCents = V.StaticPitchCents;
         FSCAudioFilterLevels Filters = V.StaticFilters;
+        for (const FSCAudioWeightedState& State : V.States)
+        {
+            const float Weight = State.Weight->load(std::memory_order_relaxed);
+            Db += State.Props.VoiceDb * Weight;
+            PitchCents += State.Props.PitchCents * Weight;
+            Filters.Lpf += State.Props.Filters.Lpf * Weight;
+            Filters.Hpf += State.Props.Filters.Hpf * Weight;
+        }
         for (const FSCAudioRtpcCurve* C : V.Dynamic)
         {
             const float X = RtpcValue(S, I, C->Rtpc, Emitter);
             if (FSCAudioFilterLevels::IsVoiceFilter(C->Param) && C->IsSupported()) Filters.Add(C->Param, C->ValueAt(X));
             else if (C->Param == TEXT("game_aux_send_volume")) AuxDb += C->Curve.EvalDb(X);
+            else if (C->Param == TEXT("pitch")) PitchCents += C->Curve.Eval(X);
             else if (C->Param == TEXT("volume") || C->Param == TEXT("make_up_gain") || C->Param == TEXT("output_bus_volume")) Db += C->Curve.EvalDb(X);
+        }
+        if (!FMath::IsNearlyEqual(PitchCents, V.LastPitchCents, 0.01f))
+        {
+            const float PitchRatio = FMath::Pow(2.f, PitchCents / 1200.f);
+            if (V.Component) V.Component->SetPitchMultiplier(PitchRatio);
+            if (V.Wave) V.Wave->Pitch.store(PitchRatio, std::memory_order_relaxed);
+            V.LastPitchCents = PitchCents;
         }
         // Distance attenuation applies whenever the node has an attenuation (panned or not), except to a listener bed.
         const bool bDistance = V.Attenuation && !I.Place.bListener;
@@ -1811,7 +1847,7 @@ void USCAudioSubsystem::LogHealth(bool bReset)
             if (!W || !S || Db <= -60.f || W->Rate <= 0) continue;
             const double Clock0 = W->Health.PullClock.load(std::memory_order_relaxed);
             if (Clock0 < 0.0) continue;
-            double Pos = double(W->Health.PullFrame.load(std::memory_order_relaxed)) + (Now - Clock0) * W->Rate * W->Pitch;
+            double Pos = double(W->Health.PullFrame.load(std::memory_order_relaxed)) + (Now - Clock0) * W->Rate * W->Pitch.load(std::memory_order_relaxed);
             const double Region = double(W->LoopEnd) - double(W->LoopStart);
             if (Pos >= double(W->LoopEnd) && Region > 0) Pos = double(W->LoopStart) + FMath::Fmod(Pos - double(W->LoopEnd), Region);
             PerMedia.FindOrAdd(S->Manifest.Nodes[V.Leaf].Media).Add({S->Manifest.Nodes[V.Leaf].Media, Pos * 1000.0 / W->Rate, Db});

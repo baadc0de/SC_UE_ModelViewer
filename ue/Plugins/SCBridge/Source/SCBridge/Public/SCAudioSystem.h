@@ -74,8 +74,8 @@ public:
     uint64 MediaFrames = 0, LoopStart = 0, LoopEnd = 0;
     /** Seconds all passes last at the media rate (< 0: forever). */
     double PlaySeconds = -1;
-    /** The voice's pitch ratio (set before it plays): how fast the mixer consumes the wave. */
-    float Pitch = 1.f;
+    /** The render-side pitch ratio follows the audio component's current playback rate. */
+    std::atomic<float> Pitch{1.f};
     /** Sample-aligned timing (set before it plays): the audio-clock time (s, the mixer's render clock) at which the
      *  voice's play time 0 falls. The first pull starts the audio there: silence until then, and, when bSeek, a seek
      *  past whatever the voice is late (a looping voice resumed "from elapsed time", as Wwise's virtual voices do), so
@@ -264,6 +264,8 @@ private:
         bool bPower = false;       // crossfade_power curves
         float StaticDb = 0, StaticAux = 0;
         FSCAudioFilterLevels StaticFilters, LastFilters;
+        TArray<FSCAudioWeightedState> States;
+        float StaticPitchCents = 0.f, LastPitchCents = 0.f;
         TArray<const FSCAudioRtpcCurve*> Dynamic; // curves on RTPCs that change while playing
         const FSCAudioAttenuation* Attenuation = nullptr;
         bool bSpatial = false, bAux = false, bSent = false;

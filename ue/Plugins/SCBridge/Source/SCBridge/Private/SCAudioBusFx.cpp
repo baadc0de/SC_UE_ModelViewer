@@ -55,18 +55,49 @@ void FSCRtpcBank::Advance(float Seconds)
         const float Target = R->Value.load(std::memory_order_relaxed);
         R->Smoothed.store(R->Ramp.Advance(Current, Target, Seconds), std::memory_order_relaxed);
     }
+    for (auto& [Group, Timeline] : StateGroups)
+    {
+        if (Timeline.Time >= Timeline.Duration) continue;
+        Timeline.Time = FMath::Min(Timeline.Time + Seconds, Timeline.Duration);
+        const float Alpha = Timeline.Time / Timeline.Duration;
+        const uint32 To = Timeline.Selected->load(std::memory_order_relaxed);
+        for (auto& [Id, W] : Timeline.Weights)
+            W.Value->store(FMath::Lerp(W.Start, Id == To ? 1.f : 0.f, Alpha), std::memory_order_relaxed);
+    }
 }
 
 FSCAudioStateRef FSCRtpcBank::State(uint32 Group)
 {
-    if (const FSCAudioStateRef* Found = StateGroups.Find(Group))
-        return *Found;
-    return StateGroups.Add(Group, MakeShared<std::atomic<uint32>, ESPMode::ThreadSafe>(0u));
+    return StateGroups.FindOrAdd(Group).Selected;
+}
+
+FSCAudioWeightedState FSCRtpcBank::BindState(const FSCAudioStateValue& Props)
+{
+    FStateGroup& Timeline = StateGroups.FindOrAdd(Props.Group);
+    return {Props, Timeline.Weights.FindOrAdd(Props.State).Value};
+}
+
+void FSCRtpcBank::ConfigureState(uint32 Group, const FSCAudioStateTiming& Timing)
+{
+    if (!StateTimings.Contains(Group)) StateTimings.Add(Group, Timing);
 }
 
 void FSCRtpcBank::SetState(uint32 Group, uint32 Value)
 {
-    State(Group)->store(Value, std::memory_order_relaxed);
+    FStateGroup& Timeline = StateGroups.FindOrAdd(Group);
+    const uint32 From = Timeline.Selected->load(std::memory_order_relaxed);
+    if (From == Value) return;
+    Timeline.Selected->store(Value, std::memory_order_relaxed);
+    if (Value != 0) Timeline.Weights.FindOrAdd(Value);
+    const FSCAudioStateTiming* Timing = StateTimings.Find(Group);
+    const float* Explicit = Timing ? Timing->Between.Find(FSCAudioStateTiming::Key(From, Value)) : nullptr;
+    Timeline.Duration = Explicit ? *Explicit : Timing ? Timing->DefaultSeconds : 0.f;
+    Timeline.Time = 0.f;
+    for (auto& [Id, W] : Timeline.Weights)
+    {
+        W.Start = W.Value->load(std::memory_order_relaxed);
+        if (Timeline.Duration <= 0.f) W.Value->store(Id == Value ? 1.f : 0.f, std::memory_order_relaxed);
+    }
 }
 
 bool FSCBusDsp::FSlot::IsActive() const
@@ -144,6 +175,8 @@ FSCBusDsp::FSCBusDsp(uint32 InBus, const FSCAudioBus& B, const TMap<FString, flo
         if (Fx.Kind == TEXT("peak_limiter") && !Limiter.bOn) Limiter = Fx.Limiter;
     }
     bOutputFilters = B.OutputFilters.Lpf != 0.f || B.OutputFilters.Hpf != 0.f;
+    for (const FSCAudioStateValue& State : B.States)
+        if (State.BusDb != 0.f) OutputStates.Add(Bank.BindState(State));
     for (const FSCAudioRtpcCurve& C : B.Rtpc)
         if (C.Type == 0 && Defaults.Contains(C.Rtpc) && (FSCAudioBus::IsOutputGain(C.Param) || FSCAudioFilterLevels::IsOutputFilter(C.Param)))
         {
@@ -170,6 +203,14 @@ FSCAudioFilterLevels FSCBusDsp::FilterLevels() const
     return Levels;
 }
 
+float FSCBusDsp::StateGainDb() const
+{
+    float Db = 0.f;
+    for (const FSCAudioWeightedState& State : OutputStates)
+        Db += State.Props.BusDb * State.Weight->load(std::memory_order_relaxed);
+    return Db;
+}
+
 float FSCBusDsp::LimiterCeilingOf(float InPeak) const
 {
     const float Thr = Lin(Limiter.ThresholdDb), Out = Lin(Limiter.OutputDb);
@@ -185,7 +226,7 @@ TUniquePtr<FSCBusDspState> FSCBusDsp::MakeState(float InRate, int32 InChannels) 
     const int32 Lfe = LfeChannel(InChannels);
     auto V = [this](const FString& N) { return Value(N); };
     // Gains start at their current values (a new instance does not ramp in from unity).
-    St->LastPost = bSideChain ? Lin(BusData.OutputCurveDeltaDb(V, Defaults)) : 1.f;
+    St->LastPost = Lin((bSideChain ? BusData.OutputCurveDeltaDb(V, Defaults) : 0.f) + StateGainDb());
     St->Kernels.SetNum(Slots.Num());
     for (int32 I = 0; I < Slots.Num(); ++I)
     {
@@ -339,7 +380,7 @@ void FSCBusDsp::Process(FSCBusDspState& St, float* Data, int32 Frames)
     }
     // Side-chain: the output-stage gain curves on meter-driven parameters, relative to their values at the defaults
     // (those are in the submix's static level).
-    const float PostDb = bSideChain ? BusData.OutputCurveDeltaDb(V, Defaults) : 0.f;
+    const float PostDb = (bSideChain ? BusData.OutputCurveDeltaDb(V, Defaults) : 0.f) + StateGainDb();
     Ramp(St.LastPost, Lin(PostDb));
     if (bOutputFilters) St.Filter.Process(Data, Frames, St.Rate, FilterLevels());
     if (bTracing)

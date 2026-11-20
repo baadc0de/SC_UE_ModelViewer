@@ -55,12 +55,26 @@ public:
     void Set(const FString& Name, float Target);
     void Advance(float Seconds);
     FSCAudioStateRef State(uint32 Group);
+    FSCAudioWeightedState BindState(const FSCAudioStateValue& Props);
+    void ConfigureState(uint32 Group, const FSCAudioStateTiming& Timing);
     void SetState(uint32 Group, uint32 Value);
 
 private:
     TMap<FString, FSCLiveRtpcRef> Values;
     TSet<FString> DrivenNames;
-    TMap<uint32, FSCAudioStateRef> StateGroups;
+    struct FStateWeight
+    {
+        FSCAudioStateWeight Value = MakeShared<std::atomic<float>, ESPMode::ThreadSafe>(0.f);
+        float Start = 0.f;
+    };
+    struct FStateGroup
+    {
+        FSCAudioStateRef Selected = MakeShared<std::atomic<uint32>, ESPMode::ThreadSafe>(0u);
+        TMap<uint32, FStateWeight> Weights;
+        float Time = 0.f, Duration = 0.f;
+    };
+    TMap<uint32, FStateGroup> StateGroups;
+    TMap<uint32, FSCAudioStateTiming> StateTimings;
 };
 
 /** One effect instance's kernels and running values. */
@@ -97,7 +111,7 @@ public:
     void Process(FSCBusDspState& State, float* Data, int32 Frames);
     /** A one-line description of what runs and what does not (AUDIO_BUSFX). */
     FString Describe() const;
-    bool HasWork() const { return !Slots.IsEmpty() || bSideChain || bOutputFilters; }
+    bool HasWork() const { return !Slots.IsEmpty() || bSideChain || bOutputFilters || !OutputStates.IsEmpty(); }
     int32 LowestSlot() const { return Slots.IsEmpty() ? 0 : Slots[0].Fx.Slot; }
     int32 HighestSlot() const { return Slots.IsEmpty() ? 0 : Slots.Last().Fx.Slot; }
 
@@ -138,10 +152,12 @@ private:
     FSCAudioLimiter Limiter;
     TMap<FString, float> Defaults;
     TMap<FString, FSCLiveRtpcRef> Rtpc; // every parameter this chain reads
+    TArray<FSCAudioWeightedState> OutputStates;
     float DownstreamDb = 0;
     bool bSideChain = false, bOutputFilters = false;
     float Value(const FString& Name) const;
     FSCAudioFilterLevels FilterLevels() const;
+    float StateGainDb() const;
 
     std::atomic<bool> bTrace{false};
     double TraceStart = 0;

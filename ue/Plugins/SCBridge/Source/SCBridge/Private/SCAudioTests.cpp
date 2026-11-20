@@ -472,6 +472,41 @@ bool FSCWwiseBusStateTest::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseStateTransitionTest, "SCBridge.Audio.GameSync.StateTransition",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseStateTransitionTest::RunTest(const FString&)
+{
+    const FString Json = TEXT(R"({
+        "version":1,
+        "buses":{"101":{"state_values":[{"group":71,"state":11,"bus_volume_db":-12.0}]}},
+        "state_groups":{"71":{"default_transition_ms":1000,"transitions":[{"from":11,"to":12,"duration_ms":200}]}}
+    })");
+    FSCAudioManifest M;
+    FString Error;
+    if (!TestTrue(TEXT("fixture parses"), FSCAudioManifest::Parse(Json, M, Error))) return false;
+    if (!TestTrue(TEXT("authored group and bus are parsed"), M.StateTimings.Contains(71) && M.Buses.Contains(101))) return false;
+    if (!TestEqual(TEXT("authored bus state is parsed"), M.Buses[101].States.Num(), 1)) return false;
+    FSCRtpcBank Bank;
+    Bank.ConfigureState(71, M.StateTimings[71]);
+    FSCBusDsp Dsp(101, M.Buses[101], {}, Bank, 0.f);
+    TestTrue(TEXT("state gain alone creates a submix effect"), Dsp.HasWork());
+    const FSCAudioWeightedState State = Bank.BindState(M.Buses[101].States[0]);
+    Bank.SetState(71, 11);
+    Bank.Advance(0.5f);
+    TestEqual(TEXT("default transition halfway"), State.Weight->load(), 0.5f);
+    TUniquePtr<FSCBusDspState> Stream = Dsp.MakeState(48000.f, 1);
+    float Sample = 1.f;
+    Dsp.Process(*Stream, &Sample, 1);
+    TestTrue(TEXT("the bus applies half of the authored -12 dB offset"), FMath::IsNearlyEqual(Sample, 0.501187f, 1.e-5f));
+    Bank.SetState(71, 12);
+    TestEqual(TEXT("interruption preserves the mix at the transition boundary"), State.Weight->load(), 0.5f);
+    Bank.Advance(0.1f);
+    TestEqual(TEXT("the authored pair takes precedence over the default duration"), State.Weight->load(), 0.25f);
+    Bank.Advance(0.1f);
+    TestEqual(TEXT("state without values fades previous offsets to zero"), State.Weight->load(), 0.f);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseAreaOverlapTest, "SCBridge.Audio.Rooms.ExclusiveArea",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCWwiseAreaOverlapTest::RunTest(const FString&)

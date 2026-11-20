@@ -62,7 +62,9 @@ use std::{
 //     combined two-state `state_images` (C2 fixes).
 // 40: UI bindings carry `interaction_distance` (the owner's render-to-texture `interactionDistance`, metres): how far
 //     from its screen a panel is operated (hangar waypoints: the C2's exterior door pads).
-pub const CACHE_FORMAT_VERSION: u32 = 41;
+// 41: authored audio contexts, STMG/ENVS, room connectors, surfaces, and positive-group area membership.
+// 42: per-state voice and bus property offsets.
+pub const CACHE_FORMAT_VERSION: u32 = 42;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");
