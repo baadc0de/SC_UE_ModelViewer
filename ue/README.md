@@ -758,15 +758,40 @@ world subsystem) plays it:
   platform's source pool): at UE's default of 32 the ~100 audible voices near the C2's top deck took each other's
   sources, cutting steady beds in and out ~20 times a minute. Measurement switches: `sc.Audio.LimiterTrace start | stop
   [csv]` (the master bus output after its limiter and the main output per 10 ms: peaks over the threshold, samples over
-  0 dBFS), `sc.Audio.Limiter 0|1|2` (limiters bypassed / on / on with a fast attack), `sc.Audio.MuteScene <name part>
-  0|1` (silence one scene's voices, e.g. the hangar's).
+  0 dBFS), `sc.Audio.Limiter 0|1` (limiters bypassed / on), `sc.Audio.MuteScene <name part> 0|1` (silence one scene's
+  voices, e.g. the hangar's), `sc.Audio.MixTrace start | stop [csv]` (every bus effect chain per render buffer:
+  input / output peaks, the limiter's gain, the meters' values, the side-chain gains, the EQ bands in force;
+  `AUDIO_MIX_TRACE` per bus), `sc.Audio.Rtpc` (the meter-written game parameters now, `AUDIO_RTPC`).
 - **Gains.** Every node's own volume / make-up / output-bus gain and random draws, the action context, RTPC curves at the
   RTPCs' defaults, the listener-relative `Azimuth` and `Listener_Cone` and the area fade per frame, the bus chain's
   voice volumes and pitch. Dry and wet are two sends of each voice (UE's base submix output is off): the bus gets the
   attenuation's dry curve at the emitter distance, the room's environment the aux gain plus the aux curve. Each Wwise
   bus is a submix (`SCBus_<id|name>`) under its parent at its bus volume + make-up + RTPC defaults + Gain effects
-  (auto-disable off: UE never wakes a bus created under an idle parent); the master bus runs the game's Peak Limiter as
-  UE's dynamics processor in limiter mode (threshold, look-ahead, release, output, channel link as authored).
+  (auto-disable off: UE never wakes a bus created under an idle parent).
+- **Bus effects (A1-2).** Each bus submix runs its own Wwise effect slots in slot order (`SCAudioBusFx.h`, the DSP in
+  scbridge `sc_limiter` / `sc_meter` / `sc_eq`, unit-tested in Rust; `AUDIO_BUSFX` lists each bus's chain and what it
+  does not run): **Gain** at its slot; **Parametric EQ** bands as RBJ biquads with their parameters at the RTPC values
+  (frequency curves log-scaled, gain curves additive); **Meters** (peak / RMS in 10 ms blocks, attack, hold, release,
+  range; a meter that applies the downstream volume measures after the bus's and its parents' static levels) that write
+  their game parameter (the last write stands); the **Peak Limiter** with the look-ahead as its attack (the gain is held
+  at the lowest target over the look-ahead, released with the release time, averaged over the look-ahead, and has
+  reached each peak's gain when the peak leaves the delay line), so its output stays within
+  `threshold * (peak / threshold)^(1 / ratio)`. A meter-written parameter moves every curve on it: the target buses'
+  output-stage gain curves (bus / output-bus volume, make-up) after the chain, relative to their values at the
+  parameter's default (the static level carries those) — the game's side-chain ducking — and voices' curves, including
+  the buses' voice-stage `volume` curves, which apply per voice before the dry / wet split. Each effect instance has its
+  own kernels, built at its Init. A slot that a state group switches is left off (no game state is modelled); bus LPF /
+  HPF amounts have no cut-off mapping and are not applied. The LFE of a 5.1 / 7.1 output is left out where a slot does
+  not process LFE.
+- **Sample-aligned voices (A1-2).** Every voice is scheduled on the mixer's audio clock (its post time plus two render
+  buffers): its first pull waits in silence for that time, so voices posted together start sample for sample together
+  instead of one render buffer (21.3 ms at 1,024 frames) apart, which combs identical copies. A placed loop keeps its
+  scene's timeline: the game posts a zone's spots together and its virtual voices resume from elapsed time
+  (`virtual_queue_behavior` 1 in the banks), so a loop that comes into reach seeks (`sc_audio_seek`) to where it would
+  be. `sc.Audio.Legacy 8` starts voices at their first pull (A/B); `sc.Audio.Health` lists the triggers audible from
+  several posts (`AUDIO_HEALTH_TRIGGER`) and the media audible in several voices with their play positions at one
+  audio clock (`AUDIO_HEALTH_MEDIA`). Multi-position spots play one voice at the nearest position (`multiPositionType`
+  0 is unset: the engine's `s_DefaultMultiPositionType` 2, MultiDirections, never copies the signal per position).
 - **Reverb.** Each room's environment (`rooms[]`) is the aux bus of an `AudioEnvironment` record; its submix runs UE's
   convolution reverb over the game's own impulse response (the bank's Convolution Reverb, wet / dry as authored, the IR
   at its stored level after the authored pre-delay; UE's own reverb send is off). A voice whose node uses game-defined aux sends sends to the environment of its room (a spot's
@@ -778,7 +803,7 @@ world subsystem) plays it:
   `Light_On_SFX` / `Light_Off_SFX`. Weapon: its `fireAudioTrigger` per shot.
 - **Cooked levels.** `ue/scripts/cook_audio.py` (called by `cook_ships.py` / `cook_hangars.py`) copies the package's
   audio beside the cooked level (`Content/SCAudio/<level>`, gitignored, staged as non-UFS files; a missing `audio.json`
-  or payload stops that level's cook, cook format 6); `ASCVehicle::BeginPlay` loads it (`CookedAudio`). Cooked levels
+  or payload stops that level's cook, cook format 7: levels staged before A1-2's bus effects are stale); `ASCVehicle::BeginPlay` loads it (`CookedAudio`). Cooked levels
   bake their rigs, so they carry the placed audio and the reverb; door, lift and panel sounds need a live import.
 
 Console: `sc.Audio.List` (voices: trigger, emitter, distance, gain, reverb send, environment, bus), `sc.Audio.Rooms`
@@ -792,7 +817,7 @@ Logs: `AUDIO_SCENE` (triggers, media, buses, environments, rooms per scene), `AU
 areas per interior), `AUDIO_ENVIRONMENT`, `AUDIO_BUS` (each submix's level and its parts), `AUDIO_REVERB` (each
 convolution: IR, wet, dry), `AUDIO_PLAY` (trigger, media, emitter, position, distance, gain, bus, environment, send),
 `AUDIO_SKIP` (an unresolvable trigger and why), `AUDIO_AREA` (area fades), `AUDIO_ROOM` (the listener's room, its
-environment and reverb parameters), `AUDIO_LIMITER`, `AUDIO_METER`, `AUDIO_SENDS`, `AUDIO_RECORD`, `AUDIO_COOKED`. `WindowsEngine.ini` raises UE's voice limit to 256
+environment and reverb parameters), `AUDIO_LIMITER`, `AUDIO_BUSFX`, `AUDIO_MIX_TRACE`, `AUDIO_RTPC`, `AUDIO_METER`, `AUDIO_SENDS`, `AUDIO_RECORD`, `AUDIO_COOKED`. `WindowsEngine.ini` raises UE's voice limit to 256
 (`AudioMaxChannels`). The scripted C2 run is `ue/scripts/rpc/c2-audio.ps1` (WP-A1 "Result (A1-1)").
 
 ## Armed first person: the real player body (WP-P2)

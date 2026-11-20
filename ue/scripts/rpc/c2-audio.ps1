@@ -8,9 +8,11 @@
 #    again with the aux sends off to reverb-<room>-dry.wav (the dry path alone; the difference is the room's reverb).
 # 2. The walk: from the top deck into the lift (call button, door), down to the lower deck, out into the hold, recorded
 #    to c2-walk.wav; marks.json gives each segment's start (s from the recording start) for the level analysis.
+# -Trace (A1-2): the walk also writes limiter-trace.csv (master and main output per 10 ms), mix-trace.csv (every bus
+# effect chain per render buffer: limiter gain, meters, side-chain gains, EQ bands) and logs AUDIO_HEALTH for it.
 # Positions, views and stop numbers are c2-lift.ps1's (LIVE 4.10.2 C2). The trigger named below is only the probe's
 # test sound; the viewer's code names none.
-param([int]$Port = 8771, [Parameter(Mandatory)][string]$Out)
+param([int]$Port = 8771, [Parameter(Mandatory)][string]$Out, [switch]$Trace)
 Import-Module "$PSScriptRoot\SCRpc.psm1" -Force
 Set-SCRpcPort $Port
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -86,6 +88,8 @@ Row 0; C 'sc.FP.Interact' | Select-String 'FLOOR_PANEL_PRESS'; [void](C 'sc.FP.L
 [void](C 'sc.FP.Move 1 0 2.0'); Start-Sleep 3 # further out onto the top deck
 C 'sc.Lift.Doors 0 close' | Select-String 'LIFT_CMD'; WaitLift 60 # the carriage waits at the top deck, doors closed
 $marks = [ordered]@{}
+[void](C 'sc.Audio.Health reset')
+if ($Trace) { C 'sc.Audio.LimiterTrace start' | Select-String 'AUDIO_LIMITER_TRACE'; C 'sc.Audio.MixTrace start' | Select-String 'AUDIO_MIX_TRACE' }
 $t0 = Get-Date
 [void](C 'sc.Audio.Record start 150')
 function Mark([string]$Name) { $marks[$Name] = [math]::Round(((Get-Date) - $t0).TotalSeconds, 2); "mark $Name $($marks[$Name])" }
@@ -111,6 +115,12 @@ try {
     Mark 'end'
 } finally {
     C "sc.Audio.Record stop $Out\c2-walk.wav" | Select-String 'AUDIO_RECORD'
+    if ($Trace) {
+        C "sc.Audio.LimiterTrace stop $Out\limiter-trace.csv" | Select-String 'AUDIO_LIMITER_TRACE'
+        C "sc.Audio.MixTrace stop $Out\mix-trace.csv" | Select-String 'AUDIO_MIX_TRACE'
+        C 'sc.Audio.Rtpc' | Select-String 'AUDIO_RTPC'
+    }
+    C 'sc.Audio.Health' | Select-String 'AUDIO_HEALTH'
     $marks | ConvertTo-Json | Set-Content -Encoding utf8 "$Out\marks.json"
     $marks
 }

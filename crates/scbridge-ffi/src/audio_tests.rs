@@ -129,3 +129,39 @@ fn a_media_without_loop_points_loops_whole() {
         assert!(out[pass * n * 2..(pass + 1) * n * 2] == r[..], "pass {pass}");
     }
 }
+
+/// Seeking to a play time lands where reading straight through would be, across loop passes (Wwise's virtual voices
+/// resume "from elapsed time": a voice posted with others plays in step with them however late it becomes audible).
+#[test]
+fn a_seek_to_a_play_time_matches_reading_through() {
+    let Some(ogg) = game_media("142743790") else { return };
+    let (start, end) = (100_988u64, 616_911u64);
+    // Within the intro, in later loop passes, across the last pass into the tail, in a single pass.
+    for (loops, at) in [(0u32, 5_000u64), (0, end + 1_234), (0, end + 3 * (end - start) + 77), (2, end + (end - start) - 1_000), (1, 50_000)] {
+        let (through, _, _) = play(&ogg, loops, (at + 4_000) as usize);
+        let want = (through.len() / 2 - at as usize).min(4_000);
+        let (mut stream, mut channels, mut rate) = (std::ptr::null_mut(), 0u32, 0u32);
+        unsafe {
+            assert!(matches!(sc_audio_open(ogg.as_ptr(), ogg.len(), loops, &mut stream, &mut channels, &mut rate), sc_status::SC_STATUS_OK));
+            assert!(matches!(sc_audio_seek(stream, at), sc_status::SC_STATUS_OK));
+            let mut buf = vec![0f32; 4_000 * 2];
+            let mut got = 0usize;
+            while got < want {
+                let n = sc_audio_read(stream, buf[got * 2..].as_mut_ptr(), want - got);
+                assert!(n > 0, "loops {loops} at {at}: ended after {got}");
+                got += n as usize;
+            }
+            assert!(buf[..want * 2] == through[at as usize * 2..(at as usize + want) * 2], "loops {loops} at {at}");
+            sc_audio_close(stream);
+        }
+    }
+    // Past the end of a finite play there is nothing left.
+    let (mut stream, mut channels, mut rate) = (std::ptr::null_mut(), 0u32, 0u32);
+    unsafe {
+        sc_audio_open(ogg.as_ptr(), ogg.len(), 1, &mut stream, &mut channels, &mut rate);
+        assert!(matches!(sc_audio_seek(stream, 10_000_000), sc_status::SC_STATUS_OK));
+        let mut buf = vec![0f32; 64];
+        assert_eq!(sc_audio_read(stream, buf.as_mut_ptr(), 32), 0);
+        sc_audio_close(stream);
+    }
+}

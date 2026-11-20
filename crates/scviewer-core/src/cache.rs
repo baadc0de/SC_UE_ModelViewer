@@ -51,7 +51,10 @@ use std::{
 //     clip sources their `audio_events[]`.
 // 37: a Wwise 2012+ media converts with the aoTuV codebooks its layout determines; a loud media that peaks above full
 //     scale is no longer rejected as a wrong codebook and dropped from `audio.json` (WP-A1 playback fix).
-pub const CACHE_FORMAT_VERSION: u32 = 37;
+// 38: `audio.json` bus effect slots carry a Meter's ballistics and written game parameter, the RTPC curves on the
+//     effect's own parameters (`fx_param_<id>`, with their accumulation) and the state groups that bypass the slot
+//     (WP-A1 A1-2 mix: limiter, side-chains, bus EQ).
+pub const CACHE_FORMAT_VERSION: u32 = 38;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

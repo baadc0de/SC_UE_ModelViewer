@@ -8,8 +8,10 @@
 //   crossfades, blends, loops), drives each voice's gain, pitch and reverb send every frame (props, random draws, RTPC
 //   curves at the listener-relative and area values, the attenuation curves at the emitter distance), runs the areas and
 //   spots, mirrors the game's bus hierarchy as submixes and each room environment's Convolution Reverb as a submix effect
-//   over the game's impulse response. Console: sc.Audio.List, sc.Audio.Play, sc.Audio.Stop, sc.Audio.Mute, sc.Audio.Log,
-//   sc.Audio.Rooms, sc.Audio.Record, sc.Audio.Sends, sc.Audio.Meter, sc.Audio.Health, sc.Audio.Hitch. Logs: AUDIO_SCENE,
+//   over the game's impulse response, and each bus's own effects (EQ, meters writing game parameters, the Peak Limiter,
+//   side-chain gains: SCAudioBusFx.h). Console: sc.Audio.List, sc.Audio.Play, sc.Audio.Stop, sc.Audio.Mute, sc.Audio.Log,
+//   sc.Audio.Rooms, sc.Audio.Record, sc.Audio.Sends, sc.Audio.Meter, sc.Audio.Health, sc.Audio.Hitch, sc.Audio.MixTrace,
+//   sc.Audio.Rtpc. Logs: AUDIO_SCENE, AUDIO_BUSFX, AUDIO_MIX_TRACE, AUDIO_RTPC,
 //   AUDIO_EMITTERS, AUDIO_PLAY, AUDIO_ROOM, AUDIO_REVERB, AUDIO_LIMITER, AUDIO_METER, AUDIO_HEALTH, AUDIO_VOICE_GAP,
 //   AUDIO_VOICE_RESOURCED, AUDIO_VOICE_CUT.
 #pragma once
@@ -28,7 +30,9 @@ class USCRigComponent;
 class FSCPackageSource;
 class FSCBusMeter;
 class FSCLimiterTrace;
-class USubmixEffectDynamicsProcessorPreset;
+class FSCRtpcBank;
+class FAudioDevice;
+class FSCBusDsp;
 struct sc_audio_stream;
 
 /** A voice's render-side health, written on the audio render thread as the mixer pulls the wave and read on the game
@@ -43,6 +47,10 @@ struct FSCAudioWaveHealth
     std::atomic<uint64> FirstCycles{0}, LastCycles{0}; // FPlatformTime::Cycles64 of the first / latest pull
     std::atomic<int32> LastFrames{0};                    // frames the latest pull returned
     std::atomic<bool> bFinished{false};                  // every pass played and the mixer has consumed the last of it
+    // Where the voice is in its play time: at audio clock PullClock (s) its next frame is PullFrame (negative while a
+    // scheduled start is still ahead). Two voices of one media compare their positions at a common clock.
+    std::atomic<double> PullClock{-1.0};
+    std::atomic<int64> PullFrame{0};
 };
 
 UCLASS()
@@ -68,6 +76,13 @@ public:
     double PlaySeconds = -1;
     /** The voice's pitch ratio (set before it plays): how fast the mixer consumes the wave. */
     float Pitch = 1.f;
+    /** Sample-aligned timing (set before it plays): the audio-clock time (s, the mixer's render clock) at which the
+     *  voice's play time 0 falls. The first pull starts the audio there: silence until then, and, when bSeek, a seek
+     *  past whatever the voice is late (a looping voice resumed "from elapsed time", as Wwise's virtual voices do), so
+     *  voices of one media posted together play sample for sample in step. < 0: start at the first pull. */
+    double ScheduledClock = -1.0;
+    bool bSeek = false;
+    FAudioDevice* ClockDevice = nullptr;
     FSCAudioWaveHealth Health;
 
 private:
@@ -77,6 +92,9 @@ private:
     int32 LoopsLeft = 0;        // whole-file mode: remaining plays after the current one; INDEX_NONE = forever
     bool bWholeFile = false;
     bool bEnded = false;
+    bool bAligned = false;     // the first pull placed the stream on the audio clock
+    int64 LeadSilence = 0;     // frames of silence before the audio (a start scheduled after the first pull)
+    int64 PlayFrame = 0;       // the play-time frame of the next frame pulled
 };
 
 /** A placed spot or area (scene `interiors[].audio_spots[]` / `audio_areas[]`), positions container-local metres. */
@@ -120,6 +138,9 @@ struct SCBRIDGE_API FSCAudioScene
     TMap<FString, FSCAudioEntity> Entities; // "<interior>/<entity id>"
     TMap<uint64, FSCAudioContainerState> Containers; // by node index (high word) and emitter (low word; 0 = global)
     int32 MediaMissing = 0;
+    /** The audio-clock time the scene's placed loops began (all at once, as the game posts a zone's spots on entering
+     *  it); < 0 until the subsystem sets it. */
+    double EpochClock = -1.0;
     /** Read audio.json beside ScenePath and every media file and impulse response it lists. */
     static TSharedPtr<FSCAudioScene> Load(const FSCPackageSource& Source, const FString& ScenePath, FString& Error);
     /** A cooked level's audio (ASCVehicle::CookedAudio): load it from its loose files and register the scene. */
@@ -146,6 +167,7 @@ struct SCBRIDGE_API FSCAudioPlace
     int32 Spot = INDEX_NONE, Area = INDEX_NONE; // area-fade RTPC source
     FString AreaFadeRtpc;                   // the RTPC the emitter drives with its area's fade
     bool bListener = false;                 // an area bed at the listener
+    double EpochClock = -1.0;               // a placed loop: its looping voices keep the scene's timeline
     FString Label;                          // for logs: who played it
 };
 
@@ -193,8 +215,16 @@ public:
      *  device); Stop logs AUDIO_LIMITER_TRACE and writes the blocks as CSV. */
     void StartLimiterTrace();
     void StopLimiterTrace(const FString& CsvPath);
-    /** Every bus limiter bypassed (0), on (1), or on with a fast attack (2) (sc.Audio.Limiter, A/B measurements). */
+    /** Every bus limiter bypassed (0) or on (1) (sc.Audio.Limiter, A/B measurements). */
     void SetLimiterMode(int32 Mode);
+    /** Trace every bus effect chain per render buffer (limiter gain and peaks, meter values, side-chain gains, EQ bands
+     *  in force); Stop logs AUDIO_MIX_TRACE per bus and writes the rows as CSV. */
+    void StartMixTrace();
+    void StopMixTrace(const FString& CsvPath);
+    /** The live game parameters (meter-written) and their values (sc.Audio.Rtpc). */
+    FString DescribeRtpc() const;
+    /** A bus of any scene's manifest. */
+    const FSCAudioBus* BusOf(uint32 Bus) const;
     /** Listener this frame (world cm, forward / right unit vectors). */
     FVector ListenerPos = FVector::ZeroVector, ListenerFwd = FVector::ForwardVector, ListenerRight = FVector::RightVector;
     FString ListenerRoom, ListenerEnvironment;
@@ -210,7 +240,10 @@ private:
     TArray<TPair<uint32, TSharedRef<FSCBusMeter, ESPMode::ThreadSafe>>> Meters;
     TSharedPtr<FSCLimiterTrace, ESPMode::ThreadSafe> LimiterTrace;
     TArray<TPair<TWeakObjectPtr<USoundSubmix>, TSharedRef<class FSCLimiterTap, ESPMode::ThreadSafe>>> LimiterTaps;
-    UPROPERTY() TMap<uint32, TObjectPtr<USubmixEffectDynamicsProcessorPreset>> Limiters; // bus -> its limiter
+    TMap<uint32, TSharedPtr<FSCBusDsp, ESPMode::ThreadSafe>> BusDsps; // bus -> its effect chain (render thread)
+    TSharedPtr<FSCRtpcBank> RtpcBank;                                // the game parameters meters write
+    bool bMixTracing = false;                                        // sc.Audio.MixTrace running
+    double MixTraceStart = 0;
     struct FVoice
     {
         TObjectPtr<UAudioComponent> Component;
@@ -253,6 +286,8 @@ private:
         FRandomStream Random;
         bool bStopping = false;
         double StopAt = 0;
+        double PostTime = 0;       // the subsystem clock at the post
+        double PostAudioClock = 0; // the audio clock its voices are scheduled against (the post's, plus a render lead)
         FString Environment;
         FVector Position = FVector::ZeroVector;
     };

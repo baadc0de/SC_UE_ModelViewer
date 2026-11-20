@@ -54,7 +54,90 @@ FSCAudioCurve Curve(const FObj& O)
     }
     return C;
 }
+FSCAudioRtpcCurve RtpcCurve(const FObj& CO)
+{
+    FSCAudioRtpcCurve R;
+    R.Rtpc = Str(CO, TEXT("rtpc"));
+    R.Type = uint8(Num(CO, TEXT("rtpc_type")));
+    R.Param = Str(CO, TEXT("param"));
+    R.Accum = uint8(Num(CO, TEXT("accum")));
+    if (R.Param.StartsWith(TEXT("fx_param_"))) R.FxParam = FCString::Atoi(*R.Param.RightChop(9));
+    R.Curve = Curve(CO);
+    return R;
+}
 } // namespace
+
+bool FSCAudioBus::IsVoiceGain(const FString& P) { return P == TEXT("volume"); }
+bool FSCAudioBus::IsOutputGain(const FString& P) { return P == TEXT("bus_volume") || P == TEXT("output_bus_volume") || P == TEXT("make_up_gain"); }
+
+float FSCAudioRtpcCurve::ValueAt(float X) const
+{
+    const float Y = Curve.Eval(X);
+    switch (Curve.Scaling)
+    {
+    case 2: return FSCAudioCurve::ToDb(2, Y);
+    case 3: return FMath::Pow(10.f, Y);
+    case 4: return FMath::Pow(10.f, Y / 20.f);
+    default: return Y;
+    }
+}
+
+float FSCAudioRtpcCurve::Apply(float Base, float X) const
+{
+    const float V = ValueAt(X);
+    switch (Accum)
+    {
+    case 2: return Base + V;
+    case 3: return Base * V;
+    case 4: return V >= 0.5f ? 1.f : 0.f;
+    case 5: return FMath::Max(Base, V);
+    default: return V; // none / exclusive: the curve replaces the value
+    }
+}
+
+FSCAudioBusEffect::FBand FSCAudioBusEffect::BandAt(int32 B, const TFunctionRef<float(const FString&)>& Value) const
+{
+    FBand Out = Bands[FMath::Clamp(B, 0, 2)];
+    for (const FSCAudioRtpcCurve& C : Rtpc)
+    {
+        if (C.Type != 0 || !C.IsSupported() || C.FxParam < 5 * B || C.FxParam >= 5 * B + 5) continue;
+        const float X = Value(C.Rtpc);
+        switch (C.FxParam - 5 * B)
+        {
+        case 1: Out.GainDb = C.Apply(Out.GainDb, X); break;
+        case 2: Out.FrequencyHz = C.Apply(Out.FrequencyHz, X); break;
+        case 3: Out.Q = C.Apply(Out.Q, X); break;
+        case 4: Out.bOn = C.Apply(Out.bOn ? 1.f : 0.f, X) >= 0.5f; break;
+        default: break; // the filter type is not driven
+        }
+    }
+    return Out;
+}
+
+float FSCAudioBusEffect::OutputAt(const TFunctionRef<float(const FString&)>& Value) const
+{
+    float Db = OutputDb;
+    for (const FSCAudioRtpcCurve& C : Rtpc)
+        if (C.Type == 0 && C.IsSupported() && C.FxParam == 15) Db = C.Apply(Db, Value(C.Rtpc));
+    return Db;
+}
+
+float FSCAudioBusEffect::GainAt(const TFunctionRef<float(const FString&)>& Value) const
+{
+    float Db = GainDb;
+    for (const FSCAudioRtpcCurve& C : Rtpc)
+        if (C.Type == 0 && C.IsSupported() && C.FxParam == 0) Db = C.Apply(Db, Value(C.Rtpc));
+    return Db;
+}
+
+float FSCAudioBus::OutputCurveDeltaDb(const TFunctionRef<float(const FString&)>& Value, const TMap<FString, float>& Defaults) const
+{
+    float Db = 0.f;
+    for (const FSCAudioRtpcCurve& C : Rtpc)
+        if (const float* D = Defaults.Find(C.Rtpc); D && C.Type == 0 && IsOutputGain(C.Param))
+            Db += C.Curve.EvalDb(Value(C.Rtpc)) - C.Curve.EvalDb(*D);
+    return Db;
+}
 
 float FSCAudioCurve::ShapeAt(int32 Interp, float T)
 {
@@ -114,16 +197,7 @@ void FSCAudioProps::Parse(const FObj& O)
         const auto& A = R->AsArray();
         if (A.Num() >= 3) Random.Add({A[0]->AsString(), float(A[1]->AsNumber()), float(A[2]->AsNumber())});
     }
-    for (const auto& C : Arr(O, TEXT("rtpc")))
-    {
-        const FObj CO = C->AsObject();
-        FSCAudioRtpcCurve R;
-        R.Rtpc = Str(CO, TEXT("rtpc"));
-        R.Type = uint8(Num(CO, TEXT("rtpc_type")));
-        R.Param = Str(CO, TEXT("param"));
-        R.Curve = Curve(CO);
-        Rtpc.Add(MoveTemp(R));
-    }
+    for (const auto& C : Arr(O, TEXT("rtpc"))) Rtpc.Add(RtpcCurve(C->AsObject()));
 }
 
 TArray<const FSCAudioEffect*> FSCAudioClass::EffectsFor(const FString& Tag, const FString& On) const
@@ -252,12 +326,70 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
             Bus.BusDb = Num(O, TEXT("bus_volume_db"));
             Bus.MakeUpDb = Num(O, TEXT("make_up_gain_db"));
             Bus.PitchCents = Num(O, TEXT("pitch_cents"));
-            Bus.RtpcDefaultDb = Num(O, TEXT("rtpc_default_db"));
+            for (const auto& C : Arr(O, TEXT("rtpc"))) Bus.Rtpc.Add(RtpcCurve(C->AsObject()));
             for (const auto& E : Arr(O, TEXT("effects")))
             {
                 const FObj EO = E->AsObject();
                 if (Bool(EO, TEXT("bypass"))) continue; // a bypassed slot is not applied
-                Bus.GainFxDb += Num(EO, TEXT("gain_db"));
+                FSCAudioBusEffect Fx;
+                Fx.Kind = Str(EO, TEXT("kind"));
+                Fx.Slot = int32(Num(EO, TEXT("slot")));
+                Fx.Id = IdField(EO, TEXT("id"));
+                for (const auto& G : Arr(EO, TEXT("state_bypass")))
+                {
+                    const uint32 Group = IdField(G->AsObject(), TEXT("group"));
+                    Fx.StateGroups.Add(Group);
+                    for (const auto& St : Arr(G->AsObject(), TEXT("states"))) Fx.StateBypass.FindOrAdd(Group).Add(uint32(St->AsNumber()));
+                }
+                for (const auto& C : Arr(EO, TEXT("rtpc"))) Fx.Rtpc.Add(RtpcCurve(C->AsObject()));
+                Fx.GainDb = Num(EO, TEXT("gain_db"));
+                if (const FObj Eq = Obj(EO, TEXT("eq")))
+                {
+                    static const TCHAR* Types[] = {TEXT("lowpass"), TEXT("highpass"), TEXT("bandpass"), TEXT("notch"), TEXT("lowshelf"), TEXT("highshelf"), TEXT("peaking")};
+                    const auto& Bands = Arr(Eq, TEXT("bands"));
+                    for (int32 Bi = 0; Bi < FMath::Min(3, Bands.Num()); ++Bi)
+                    {
+                        const FObj BO = Bands[Bi]->AsObject();
+                        FSCAudioBusEffect::FBand& Band = Fx.Bands[Bi];
+                        const FString Type = Str(BO, TEXT("filter"));
+                        Band.Type = INDEX_NONE;
+                        for (int32 T = 0; T < UE_ARRAY_COUNT(Types); ++T)
+                            if (Type == Types[T]) Band.Type = T;
+                        Band.GainDb = Num(BO, TEXT("gain_db"));
+                        Band.FrequencyHz = Num(BO, TEXT("frequency_hz"));
+                        Band.Q = Num(BO, TEXT("q"), 1);
+                        Band.bOn = Bool(BO, TEXT("on")) && Band.Type != INDEX_NONE;
+                    }
+                    Fx.OutputDb = Num(Eq, TEXT("output_level_db"));
+                    bool bLfe = true;
+                    Fx.bEqProcessLfe = !Eq->TryGetBoolField(TEXT("process_lfe"), bLfe) || bLfe;
+                }
+                if (const FObj Mt = Obj(EO, TEXT("meter")))
+                {
+                    Fx.Meter.AttackS = Num(Mt, TEXT("attack_s"));
+                    Fx.Meter.ReleaseS = Num(Mt, TEXT("release_s"));
+                    Fx.Meter.HoldS = Num(Mt, TEXT("hold_s"));
+                    Fx.Meter.MinDb = Num(Mt, TEXT("min_db"), -60);
+                    Fx.Meter.MaxDb = Num(Mt, TEXT("max_db"));
+                    Fx.Meter.bRms = Str(Mt, TEXT("mode")) == TEXT("rms");
+                    Fx.Meter.bDownstream = Bool(Mt, TEXT("apply_downstream_volume"));
+                    Fx.Meter.bInfiniteHold = Bool(Mt, TEXT("infinite_hold"));
+                    Fx.Meter.bGlobal = Str(Mt, TEXT("scope")) != TEXT("game_object");
+                    Fx.Meter.GameParameter = Str(Mt, TEXT("game_parameter"));
+                }
+                if (const FObj L = Obj(EO, TEXT("limiter")))
+                {
+                    Fx.Limiter.bOn = true;
+                    Fx.Limiter.ThresholdDb = Num(L, TEXT("threshold_db"));
+                    Fx.Limiter.Ratio = Num(L, TEXT("ratio"));
+                    Fx.Limiter.LookAheadS = Num(L, TEXT("look_ahead_s"));
+                    Fx.Limiter.ReleaseS = Num(L, TEXT("release_s"));
+                    Fx.Limiter.OutputDb = Num(L, TEXT("output_level_db"));
+                    Fx.Limiter.bChannelLink = Bool(L, TEXT("channel_link"));
+                    Fx.Limiter.bProcessLfe = Bool(L, TEXT("process_lfe"));
+                    if (!Bus.Limiter.bOn) Bus.Limiter = Fx.Limiter;
+                }
+                Bus.Effects.Add(MoveTemp(Fx));
                 if (const FObj Conv = Obj(EO, TEXT("convolution")))
                 {
                     Bus.bConvolution = true;
@@ -266,17 +398,8 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
                     Bus.DryDb = Num(Conv, TEXT("dry_level_db"));
                     Bus.PreDelayMs = Num(Conv, TEXT("pre_delay_ms"));
                 }
-                if (const FObj L = Obj(EO, TEXT("limiter")))
-                {
-                    Bus.Limiter.bOn = true;
-                    Bus.Limiter.ThresholdDb = Num(L, TEXT("threshold_db"));
-                    Bus.Limiter.Ratio = Num(L, TEXT("ratio"));
-                    Bus.Limiter.LookAheadS = Num(L, TEXT("look_ahead_s"));
-                    Bus.Limiter.ReleaseS = Num(L, TEXT("release_s"));
-                    Bus.Limiter.OutputDb = Num(L, TEXT("output_level_db"));
-                    Bus.Limiter.bChannelLink = Bool(L, TEXT("channel_link"));
-                }
             }
+            Bus.Effects.Sort([](const FSCAudioBusEffect& A, const FSCAudioBusEffect& B) { return A.Slot < B.Slot; });
             Out.Buses.Add(Bus.Id, MoveTemp(Bus));
         }
     if (const FObj M = Obj(Root, TEXT("media")))
@@ -377,6 +500,10 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
         Out.SpotCount = int32(Num(E, TEXT("spots")));
         Out.AreaCount = int32(Num(E, TEXT("areas")));
     }
+    // Each bus's output-stage gain curves at their RTPC defaults (one default per RTPC: the manifest's `rtpcs`).
+    for (auto& [Id, Bus] : Out.Buses)
+        for (const FSCAudioRtpcCurve& C : Bus.Rtpc)
+            if (const float* D = Out.RtpcDefaults.Find(C.Rtpc); D && C.Type == 0 && FSCAudioBus::IsOutputGain(C.Param)) Bus.CurveDefaultDb += C.Curve.EvalDb(*D);
     return true;
 }
 
@@ -468,7 +595,12 @@ void FSCAudioGain::Add(const FSCAudioProps& P, const TFunctionRef<float(const FS
     }
 }
 
-void FSCAudioGain::AddBusVoice(const TArray<const FSCAudioBus*>& Chain)
+void FSCAudioGain::AddBusVoice(const TArray<const FSCAudioBus*>& Chain, const TFunctionRef<bool(const FString&)>& Skip, const TMap<FString, float>& Defaults)
 {
-    for (const FSCAudioBus* B : Chain) VolumeDb += B->VoiceDb;
+    for (const FSCAudioBus* B : Chain)
+    {
+        VolumeDb += B->VoiceDb;
+        for (const FSCAudioRtpcCurve& C : B->Rtpc)
+            if (const float* D = Defaults.Find(C.Rtpc); D && C.Type == 0 && FSCAudioBus::IsVoiceGain(C.Param) && !Skip(C.Rtpc)) VolumeDb += C.Curve.EvalDb(*D);
+    }
 }

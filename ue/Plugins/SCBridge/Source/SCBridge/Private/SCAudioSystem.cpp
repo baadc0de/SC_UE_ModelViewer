@@ -14,7 +14,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "EffectConvolutionReverb.h"
-#include "SubmixEffects/AudioMixerSubmixEffectDynamicsProcessor.h"
+#include "SCAudioBusFx.h"
 #include "ISubmixBufferListener.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
@@ -41,7 +41,7 @@ constexpr double kForever = 1e18;
  *  audio has played out; bit 4: a stopped voice is cut, not faded). 0 in normal use. */
 int32 GLegacy = 0;
 FAutoConsoleVariableRef CVarLegacy(TEXT("sc.Audio.Legacy"), GLegacy,
-    TEXT("A/B measurement only (bits): 1 = whole-file loops, 2 = game-clock voice ends, 4 = stops without a fade; 7 = the pre-fix behaviour. 0 = normal."));
+    TEXT("A/B measurement only (bits): 1 = whole-file loops, 2 = game-clock voice ends, 4 = stops without a fade, 8 = voices start at their first pull (no sample-aligned timing); 7 = the pre-fix behaviour. 0 = normal."));
 
 /** A pull later than the audio last handed out lasts by more than this is a gap (two render periods of slack). */
 constexpr double kGapSlackS = 0.05;
@@ -189,8 +189,33 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     }
     OutAudio.SetNumZeroed(Frames * Ch * int32(sizeof(float)));
     float* Out = reinterpret_cast<float*>(OutAudio.GetData());
+    if (!bAligned)
+    {
+        // Place the stream on the audio clock: its play time 0 falls at ScheduledClock. Every procedural voice is pulled
+        // the same way, so voices scheduled together come out sample for sample together.
+        bAligned = true;
+        if (ClockDevice && ScheduledClock >= 0.0 && Rate > 0 && Stream && (GLegacy & 8) == 0)
+        {
+            const double Late = (ClockDevice->GetAudioTime() - ScheduledClock) * Rate * Pitch;
+            if (Late < 0.0) LeadSilence = FMath::Min(int64(-Late + 0.5), int64(Rate) * 30);
+            else if (bSeek && Late >= 1.0 && sc_audio_seek(Stream, uint64(Late + 0.5)) == SC_STATUS_OK) PlayFrame = int64(Late + 0.5);
+            PlayFrame -= LeadSilence;
+        }
+    }
+    if (ClockDevice)
+    {
+        Health.PullClock.store(ClockDevice->GetAudioTime(), std::memory_order_relaxed);
+        Health.PullFrame.store(PlayFrame, std::memory_order_relaxed);
+    }
+    PlayFrame += Frames;
     const bool bWasEnded = bEnded;
     int32 Done = 0;
+    if (LeadSilence > 0)
+    {
+        const int32 N = int32(FMath::Min<int64>(LeadSilence, Frames));
+        Done = N; // already zero
+        LeadSilence -= N;
+    }
     bool bReopened = false; // whole-file mode: a stream that yields nothing right after reopening has no audio
     while (Stream && !bEnded && Done < Frames)
     {
@@ -426,48 +451,37 @@ public:
 };
 
 // The master output trace: taps on the master bus (the game mix after its limiter) and on the engine's main submix
-// (what reaches the device, where anything over full scale clips), per 10 ms block. The main submix renders after
-// the master bus in the same render callback, so its buffer belongs to the blocks the master tap just closed.
+// (what reaches the device, where anything over full scale clips), each in 10 ms blocks carried across callbacks (a
+// callback's frames need not divide into blocks), paired by block index at the end.
 class FSCLimiterTrace
 {
 public:
-    struct FBlock { float PostRms = 0, PostPeak = 0, MainPeak = 0; int32 MainOver = 0; };
+    struct FAcc { int32 Filled = 0; double SumSq = 0; float Peak = 0; int32 Over = 0; };
+    struct FBlock { float Rms = 0, Peak = 0; int32 Over = 0; };
     FCriticalSection Lock;
-    TArray<FBlock> Blocks;
+    TArray<FBlock> Post, Main;
+    FAcc PostAcc, MainAcc;
     int32 BlockFrames = 480;
-    void AddPost(const float* Data, int32 NumSamples, int32 InChannels, int32 Rate)
+    void Add(const float* Data, int32 NumSamples, int32 InChannels, int32 Rate, bool bMain)
     {
         FScopeLock G(&Lock);
         BlockFrames = FMath::Max(1, Rate / 100);
         const int32 Ch = FMath::Max(1, InChannels);
-        for (int32 F0 = 0; F0 < NumSamples / Ch; F0 += BlockFrames)
+        FAcc& A = bMain ? MainAcc : PostAcc;
+        TArray<FBlock>& Out = bMain ? Main : Post;
+        for (int32 F = 0; F < NumSamples / Ch; ++F)
         {
-            FBlock B;
-            double S = 0;
-            const int32 F1 = FMath::Min(NumSamples / Ch, F0 + BlockFrames);
-            for (int32 I = F0 * Ch; I < F1 * Ch; ++I)
+            for (int32 C = 0; C < Ch; ++C)
             {
-                S += double(Data[I]) * Data[I];
-                B.PostPeak = FMath::Max(B.PostPeak, FMath::Abs(Data[I]));
+                const float X = Data[F * Ch + C];
+                A.SumSq += double(X) * X;
+                A.Peak = FMath::Max(A.Peak, FMath::Abs(X));
+                A.Over += FMath::Abs(X) > 1.f;
             }
-            B.PostRms = float(FMath::Sqrt(S / FMath::Max(1, (F1 - F0) * Ch)));
-            Blocks.Add(B);
-        }
-    }
-    void AddMain(const float* Data, int32 NumSamples, int32 InChannels)
-    {
-        FScopeLock G(&Lock);
-        const int32 Ch = FMath::Max(1, InChannels);
-        const int32 PerCallback = FMath::Max(1, NumSamples / Ch / BlockFrames);
-        for (int32 K = 0; K < PerCallback; ++K)
-        {
-            const int32 Bi = Blocks.Num() - PerCallback + K;
-            if (!Blocks.IsValidIndex(Bi)) continue;
-            for (int32 I = K * BlockFrames * Ch; I < FMath::Min(NumSamples, (K + 1) * BlockFrames * Ch); ++I)
+            if (++A.Filled == BlockFrames)
             {
-                const float A = FMath::Abs(Data[I]);
-                Blocks[Bi].MainPeak = FMath::Max(Blocks[Bi].MainPeak, A);
-                Blocks[Bi].MainOver += A > 1.f;
+                Out.Add({float(FMath::Sqrt(A.SumSq / (BlockFrames * Ch))), A.Peak, A.Over});
+                A = FAcc();
             }
         }
     }
@@ -481,8 +495,7 @@ public:
     bool bMain;
     virtual void OnNewSubmixBuffer(const USoundSubmix*, float* Data, int32 NumSamples, int32 NumChannels, const int32 SampleRate, double) override
     {
-        if (bMain) Trace->AddMain(Data, NumSamples, NumChannels);
-        else Trace->AddPost(Data, NumSamples, NumChannels, SampleRate);
+        Trace->Add(Data, NumSamples, NumChannels, SampleRate, bMain);
     }
     virtual const FString& GetListenerName() const override
     {
@@ -503,10 +516,10 @@ void USCAudioSubsystem::StartLimiterTrace()
         Device->RegisterSubmixBufferListener(L, *Submix);
         LimiterTaps.Add({Submix, L});
     };
-    for (const auto& [Bus, Preset] : Limiters)
-        if (TObjectPtr<USoundSubmix>* Master = BusSubmixes.Find(Bus); Master && *Master)
+    for (const auto& [Bus, Submix] : BusSubmixes)
+        if (const FSCAudioBus* B = BusOf(Bus); Submix && B && B->Limiter.bOn)
         {
-            Tap(*Master, false);
+            Tap(Submix, false);
             break; // one master
         }
     Tap(&Device->GetMainSubmixObject(), true);
@@ -520,46 +533,127 @@ void USCAudioSubsystem::StopLimiterTrace(const FString& CsvPath)
             if (USoundSubmix* S = Submix.Get()) Device->UnregisterSubmixBufferListener(L, *S);
     LimiterTaps.Reset();
     if (!LimiterTrace) return;
-    TArray<FSCLimiterTrace::FBlock> Blocks;
-    { FScopeLock G(&LimiterTrace->Lock); Blocks = LimiterTrace->Blocks; }
+    TArray<FSCLimiterTrace::FBlock> Post, Main;
+    {
+        FScopeLock G(&LimiterTrace->Lock);
+        Post = LimiterTrace->Post;
+        Main = LimiterTrace->Main;
+    }
     LimiterTrace.Reset();
     auto Db = [](float X) { return X > 1e-9f ? 20.f * FMath::LogX(10.f, X) : -180.f; };
-    float PostPeakMax = 0, MainPeakMax = 0, Threshold = 1.f;
-    int32 MainOver = 0, MainOverBlocks = 0, PostOverThreshold = 0;
-    for (const auto& [Bus, Preset] : Limiters)
-        if (Preset) Threshold = FMath::Pow(10.f, Preset->Settings.ThresholdDb / 20.f);
-    FString Csv = TEXT("t_s,master_rms_db,master_peak_db,main_peak_db,main_samples_over_0dbfs\n");
-    for (int32 I = 0; I < Blocks.Num(); ++I)
+    float PostPeakMax = 0, MainPeakMax = 0;
+    int32 MainOver = 0, MainOverBlocks = 0;
+    for (const FSCLimiterTrace::FBlock& B : Post) PostPeakMax = FMath::Max(PostPeakMax, B.Peak);
+    for (const FSCLimiterTrace::FBlock& B : Main)
     {
-        const FSCLimiterTrace::FBlock& B = Blocks[I];
-        PostPeakMax = FMath::Max(PostPeakMax, B.PostPeak);
-        MainPeakMax = FMath::Max(MainPeakMax, B.MainPeak);
-        PostOverThreshold += B.PostPeak > Threshold * 1.01f;
-        MainOver += B.MainOver;
-        MainOverBlocks += B.MainOver > 0;
-        Csv += FString::Printf(TEXT("%.2f,%.2f,%.2f,%.2f,%d\n"), I * 0.01, Db(B.PostRms), Db(B.PostPeak), Db(B.MainPeak), B.MainOver);
+        MainPeakMax = FMath::Max(MainPeakMax, B.Peak);
+        MainOver += B.Over;
+        MainOverBlocks += B.Over > 0;
     }
-    // The limiter holds its ceiling when no block of its output peaks over the threshold; anything over 0 dBFS at the
-    // main output is clipped by the device.
-    UE_LOG(LogSCAudio, Display,
-           TEXT("AUDIO_LIMITER_TRACE blocks=%d master_peak_db=%.1f master_blocks_over_threshold=%d main_peak_db=%.1f main_samples_over_0dbfs=%d main_blocks_over_0dbfs=%d"),
-           Blocks.Num(), Db(PostPeakMax), PostOverThreshold, Db(MainPeakMax), MainOver, MainOverBlocks);
+    FString Csv = TEXT("t_s,master_rms_db,master_peak_db,main_peak_db,main_samples_over_0dbfs\n");
+    for (int32 I = 0; I < FMath::Max(Post.Num(), Main.Num()); ++I)
+        Csv += FString::Printf(TEXT("%.2f,%.2f,%.2f,%.2f,%d\n"), I * 0.01, Post.IsValidIndex(I) ? Db(Post[I].Rms) : -180.f, Post.IsValidIndex(I) ? Db(Post[I].Peak) : -180.f,
+                               Main.IsValidIndex(I) ? Db(Main[I].Peak) : -180.f, Main.IsValidIndex(I) ? Main[I].Over : 0);
+    // Every sample of both taps is in a block (partial blocks carry over); anything over 0 dBFS at the main output is
+    // clipped by the device. The limiter's own bound is checked per buffer in the mix trace.
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_LIMITER_TRACE master_blocks=%d main_blocks=%d master_peak_db=%.1f main_peak_db=%.1f main_samples_over_0dbfs=%d main_blocks_over_0dbfs=%d"),
+           Post.Num(), Main.Num(), Db(PostPeakMax), Db(MainPeakMax), MainOver, MainOverBlocks);
     if (!CsvPath.IsEmpty()) FFileHelper::SaveStringToFile(Csv, *CsvPath);
 }
 
 void USCAudioSubsystem::SetLimiterMode(int32 Mode)
 {
-    for (const auto& [Bus, Preset] : Limiters)
-        if (Preset)
+    int32 N = 0;
+    for (const auto& [Bus, Dsp] : BusDsps)
+        if (Dsp && Dsp->HasLimiter())
         {
-            FSubmixEffectDynamicsProcessorSettings S = Preset->Settings;
-            S.bBypass = Mode == 0;
-            // 2: a fast attack (a fifth of the look-ahead, digital), for A/B measurements of the port's overshoot.
-            S.AttackTimeMsec = Mode == 2 ? FMath::Max(1.f, S.LookAheadMsec / 5.f) : S.LookAheadMsec;
-            S.bAnalogMode = Mode != 2;
-            Preset->SetSettings(S);
+            Dsp->bLimiterOn = Mode != 0;
+            ++N;
         }
-    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_LIMITER mode=%d limiters=%d"), Mode, Limiters.Num());
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_LIMITER mode=%d limiters=%d"), Mode, N);
+}
+
+const FSCAudioBus* USCAudioSubsystem::BusOf(uint32 Bus) const
+{
+    for (const TSharedRef<FSCAudioScene>& S : Scenes)
+        if (const FSCAudioBus* B = S->Manifest.Buses.Find(Bus)) return B;
+    return nullptr;
+}
+
+void USCAudioSubsystem::StartMixTrace()
+{
+    // One clock for every chain, chains created while the trace runs included (BusSubmix).
+    bMixTracing = true;
+    MixTraceStart = FPlatformTime::Seconds();
+    for (const auto& [Bus, Dsp] : BusDsps)
+        if (Dsp) Dsp->BeginTrace(MixTraceStart);
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_MIX_TRACE start chains=%d"), BusDsps.Num());
+}
+
+void USCAudioSubsystem::StopMixTrace(const FString& CsvPath)
+{
+    bMixTracing = false;
+    auto Db = [](float X) { return X > 1e-9f ? 20.f * FMath::LogX(10.f, X) : -180.f; };
+    FString Csv = TEXT("bus,t_s,in_peak_db,out_peak_db,limiter_in_peak_db,limiter_out_peak_db,limiter_gain_db,limiter_bound_db,side_chain_db,meters,eq\n");
+    for (const auto& [Bus, Dsp] : BusDsps)
+    {
+        if (!Dsp) continue;
+        int32 Dropped = 0;
+        const TArray<FSCBusDsp::FTraceRow> Rows = Dsp->EndTrace(Dropped);
+        if (Rows.IsEmpty()) continue;
+        float InPeak = 0, OutPeak = 0, GrMin = 0, PostMin = 0, PostMax = -200.f, LimPeak = 0;
+        TArray<float> MeterMin, MeterMax;
+        int32 Violations = 0, Changes = 0;
+        for (const FSCBusDsp::FTraceRow& R : Rows)
+        {
+            InPeak = FMath::Max(InPeak, R.InPeak);
+            OutPeak = FMath::Max(OutPeak, R.OutPeak);
+            GrMin = FMath::Min(GrMin, R.LimiterGainDb);
+            PostMin = FMath::Min(PostMin, R.PostDb);
+            PostMax = FMath::Max(PostMax, R.PostDb);
+            LimPeak = FMath::Max(LimPeak, R.LimiterOutPeak);
+            Violations += Dsp->HasLimiter() && R.LimiterOutPeak > R.LimiterBound * 1.0001f + 1e-7f;
+            Changes += R.NumEq > 0;
+            FString MeterText, EqText;
+            for (int32 M = 0; M < R.NumMeters; ++M)
+            {
+                if (MeterMin.Num() <= M)
+                {
+                    MeterMin.Add(R.Meters[M]);
+                    MeterMax.Add(R.Meters[M]);
+                }
+                MeterMin[M] = FMath::Min(MeterMin[M], R.Meters[M]);
+                MeterMax[M] = FMath::Max(MeterMax[M], R.Meters[M]);
+                MeterText += FString::Printf(TEXT("%s%s=%.1f"), M ? TEXT(";") : TEXT(""), Dsp->MeterNames.IsValidIndex(M) ? *Dsp->MeterNames[M] : TEXT("?"), R.Meters[M]);
+            }
+            for (int32 E = 0; E < R.NumEq; ++E)
+                for (int32 Bi = 0; Bi < 3; ++Bi)
+                    if (const FSCAudioBusEffect::FBand& Band = R.Eq[E].Bands[Bi]; Band.bOn)
+                        EqText += FString::Printf(TEXT("%sslot%d.b%d:type%d/%.0fHz/q%.2f/%+.1fdB"), EqText.IsEmpty() ? TEXT("") : TEXT(" "), R.Eq[E].Slot, Bi, Band.Type, Band.FrequencyHz,
+                                                  Band.Q, Band.GainDb);
+            Csv += FString::Printf(TEXT("%u,%.4f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%s,%s\n"), Bus, R.Time, Db(R.InPeak), Db(R.OutPeak), Db(R.LimiterInPeak), Db(R.LimiterOutPeak),
+                                   R.LimiterGainDb, Db(R.LimiterBound), R.PostDb, *MeterText, *EqText);
+        }
+        FString MeterText;
+        for (int32 M = 0; M < MeterMin.Num(); ++M)
+            MeterText += FString::Printf(TEXT(" meter_%s=%.1f..%.1f"), Dsp->MeterNames.IsValidIndex(M) ? *Dsp->MeterNames[M] : TEXT("?"), MeterMin[M], MeterMax[M]);
+        UE_LOG(LogSCAudio, Display,
+               TEXT("AUDIO_MIX_TRACE bus=%u buffers=%d dropped=%d in_peak_db=%.1f out_peak_db=%.1f%s side_chain_db=%.1f..%.1f eq_changes=%d%s"), Bus, Rows.Num(), Dropped,
+               Db(InPeak), Db(OutPeak),
+               Dsp->HasLimiter() ? *FString::Printf(TEXT(" limiter_out_peak_db=%.2f limiter_gain_min_db=%.1f limiter_bound_violations=%d"), Db(LimPeak), GrMin, Violations) : TEXT(""),
+               PostMin, FMath::Max(PostMin, PostMax), Changes, *MeterText);
+    }
+    if (!CsvPath.IsEmpty()) FFileHelper::SaveStringToFile(Csv, *CsvPath);
+}
+
+FString USCAudioSubsystem::DescribeRtpc() const
+{
+    FString Out;
+    if (!RtpcBank) return Out;
+    for (const FString& Name : RtpcBank->Driven())
+        if (const FSCLiveRtpc* R = RtpcBank->Find(Name))
+            Out += FString::Printf(TEXT(" %s=%.1f(default %.1f, writers %d)"), *Name, R->Read(), R->Default, R->Writers.load());
+    return Out;
 }
 
 void USCAudioSubsystem::StartMeter()
@@ -619,6 +713,17 @@ void USCAudioSubsystem::Deinitialize()
 
 void USCAudioSubsystem::AddScene(const TSharedRef<FSCAudioScene>& Scene)
 {
+    // The scene's placed loops share one timeline from its load (the game posts a zone's spots together).
+    if (FAudioDeviceHandle Device = GetWorld() ? GetWorld()->GetAudioDevice() : FAudioDeviceHandle()) Scene->EpochClock = Device->GetAudioTime();
+    // The game parameters this scene's meters drive, known before its voices start (a voice's curves on them stay live).
+    if (!RtpcBank) RtpcBank = MakeShared<FSCRtpcBank>();
+    for (const auto& [Id, B] : Scene->Manifest.Buses)
+        for (const FSCAudioBusEffect& Fx : B.Effects)
+            if (FSCBusDsp::RunsMeter(Fx))
+            {
+                const float* D = Scene->Manifest.RtpcDefaults.Find(Fx.Meter.GameParameter);
+                RtpcBank->MarkDriven(Fx.Meter.GameParameter, D ? *D : Fx.Meter.MinDb);
+            }
     Scenes.Add(Scene);
     LogScene(*Scene);
 }
@@ -730,30 +835,34 @@ USoundSubmix* USCAudioSubsystem::BusSubmix(FSCAudioScene& S, uint32 Bus)
             break;
         }
     }
-    if (B->Limiter.bOn)
     {
-        // The bus's Wwise Peak Limiter as UE's dynamics processor in limiter mode: the authored threshold, look-ahead
-        // (also the attack: the look-ahead is the time the Wwise limiter has to reach its gain), release and output level,
-        // peak detection, channels linked as authored, hard knee. UE's limiter has an infinite ratio; the authored ratio is
-        // logged (40:1 on the C2's master: above the -0.1 dB threshold the two differ by under 0.1 dB per 4 dB over).
-        USubmixEffectDynamicsProcessorPreset* Preset = NewObject<USubmixEffectDynamicsProcessorPreset>(this);
-        FSubmixEffectDynamicsProcessorSettings Settings = Preset->Settings;
-        Settings.DynamicsProcessorType = ESubmixEffectDynamicsProcessorType::Limiter;
-        Settings.PeakMode = ESubmixEffectDynamicsPeakMode::Peak;
-        Settings.LinkMode = B->Limiter.bChannelLink ? ESubmixEffectDynamicsChannelLinkMode::Peak : ESubmixEffectDynamicsChannelLinkMode::Disabled;
-        Settings.ThresholdDb = B->Limiter.ThresholdDb;
-        Settings.KneeBandwidthDb = 0.f;
-        Settings.LookAheadMsec = B->Limiter.LookAheadS * 1000.f;
-        Settings.AttackTimeMsec = B->Limiter.LookAheadS * 1000.f;
-        Settings.ReleaseTimeMsec = B->Limiter.ReleaseS * 1000.f;
-        Settings.OutputGainDb = B->Limiter.OutputDb;
-        Preset->SetSettings(Settings);
-        Submix->SubmixEffectChain.Add(Preset);
-        Keep.Add(Preset);
-        Limiters.Add(Bus, Preset);
-        UE_LOG(LogSCAudio, Display, TEXT("AUDIO_LIMITER bus=%u threshold_db=%.2f ratio=%.1f look_ahead_ms=%.1f release_ms=%.1f output_db=%.2f channel_link=%d"),
-               Bus, B->Limiter.ThresholdDb, B->Limiter.Ratio, B->Limiter.LookAheadS * 1000.f, B->Limiter.ReleaseS * 1000.f, B->Limiter.OutputDb,
-               B->Limiter.bChannelLink);
+        // The bus's own effects in slot order (Gain, EQ, meters, the Peak Limiter) and its side-chain gains, from the data
+        // (SCAudioBusFx.h). The Peak Limiter is the game's: its look-ahead is the attack, its ratio is applied as
+        // authored, and its output holds threshold * (peak / threshold)^(1 / ratio) (scbridge sc_limiter). A meter that
+        // applies the downstream volume measures after this bus's and its parents' static levels.
+        if (!RtpcBank) RtpcBank = MakeShared<FSCRtpcBank>();
+        float DownstreamDb = 0.f;
+        for (const FSCAudioBus* C : S.Manifest.BusChain(Bus)) DownstreamDb += C->MixDb();
+        TSharedPtr<FSCBusDsp, ESPMode::ThreadSafe> Dsp = MakeShared<FSCBusDsp, ESPMode::ThreadSafe>(Bus, *B, S.Manifest.RtpcDefaults, *RtpcBank, DownstreamDb);
+        if (Dsp->HasWork())
+        {
+            USCBusFxPreset* Preset = NewObject<USCBusFxPreset>(this);
+            Preset->SetDsp(Dsp);
+            // The chain runs at the convolution reverb's side its slots are on (UE's reverb is a separate effect).
+            const FSCAudioBusEffect* Conv = B->Effects.FindByPredicate([](const FSCAudioBusEffect& E) { return E.Kind == TEXT("convolution_reverb"); });
+            if (Conv && Dsp->HighestSlot() < Conv->Slot) Submix->SubmixEffectChain.Insert(Preset, 0);
+            else Submix->SubmixEffectChain.Add(Preset);
+            if (Conv && Dsp->LowestSlot() < Conv->Slot && Dsp->HighestSlot() > Conv->Slot)
+                UE_LOG(LogSCAudio, Warning, TEXT("AUDIO_BUSFX bus=%u slots on both sides of the convolution reverb (slot %d): the chain runs after it"), Bus, Conv->Slot);
+            Keep.Add(Preset);
+            BusDsps.Add(Bus, Dsp);
+            if (bMixTracing) Dsp->BeginTrace(MixTraceStart);
+            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_BUSFX bus=%u%s"), Bus, *Dsp->Describe());
+        }
+        if (B->Limiter.bOn)
+            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_LIMITER bus=%u threshold_db=%.2f ratio=%.1f look_ahead_ms=%.1f release_ms=%.1f output_db=%.2f channel_link=%d port=sc_limiter"),
+                   Bus, B->Limiter.ThresholdDb, B->Limiter.Ratio, B->Limiter.LookAheadS * 1000.f, B->Limiter.ReleaseS * 1000.f, B->Limiter.OutputDb,
+                   B->Limiter.bChannelLink);
     }
     if (UWorld* World = GetWorld())
         if (FAudioDeviceHandle Device = World->GetAudioDevice())
@@ -761,8 +870,8 @@ USoundSubmix* USCAudioSubsystem::BusSubmix(FSCAudioScene& S, uint32 Bus)
             Device->RegisterSoundSubmix(Submix, true);
         }
     BusSubmixes.Add(Bus, Submix);
-    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_BUS bus=%u name=%s parent=%u aux=%d submix_db=%.2f (bus_volume=%.2f make_up=%.2f rtpc_defaults=%.2f gain_fx=%.2f) voice_db=%.2f"),
-           Bus, B->Name.IsEmpty() ? TEXT("-") : *B->Name, B->Parent, B->bAux, B->MixDb(), B->BusDb, B->MakeUpDb, B->RtpcDefaultDb, B->GainFxDb, B->VoiceDb);
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_BUS bus=%u name=%s parent=%u aux=%d submix_db=%.2f (bus_volume=%.2f make_up=%.2f curves_at_defaults=%.2f) voice_db=%.2f"),
+           Bus, B->Name.IsEmpty() ? TEXT("-") : *B->Name, B->Parent, B->bAux, B->MixDb(), B->BusDb, B->MakeUpDb, B->CurveDefaultDb, B->VoiceDb);
     return Submix;
 }
 
@@ -811,6 +920,9 @@ float USCAudioSubsystem::RtpcValue(const FSCAudioScene& S, const FInstance& I, c
         // Azimuth: the signed angle around the listener's up axis (its forward / right plane).
         return float(FMath::RadiansToDegrees(FMath::Atan2(FVector::DotProduct(D, R), FVector::DotProduct(D, F))));
     }
+    // A game parameter a meter writes (a side-chain) is read live.
+    if (RtpcBank && RtpcBank->Driven().Contains(Name))
+        if (const FSCLiveRtpc* L = RtpcBank->Find(Name)) return L->Read();
     const float* D = S.Manifest.RtpcDefaults.Find(Name);
     return D ? *D : 0.f;
 }
@@ -853,6 +965,14 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
             if (&X.Get() == &S) I.Scene = X;
         I.Trigger = Trigger;
         I.Place = Where;
+        // Voices are scheduled on the audio clock: the post's time plus two render buffers (the lead every voice gets,
+        // so voices posted together start together whatever buffer each is first pulled in).
+        I.PostTime = Clock;
+        if (FAudioDeviceHandle Device = GetWorld() ? GetWorld()->GetAudioDevice() : FAudioDeviceHandle())
+        {
+            const double Buffer = Device->GetBufferLength() > 0 && Device->GetSampleRate() > 0 ? double(Device->GetBufferLength()) / Device->GetSampleRate() : 0.0;
+            I.PostAudioClock = Device->GetAudioTime() + 2.0 * Buffer;
+        }
         I.Action = &A;
         I.Random.Initialize(int32(GetTypeHash(Trigger) ^ uint32(Id * 2654435761u)));
         I.Position = PlacePosition(I);
@@ -1021,7 +1141,9 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     // curves on the area-fade and listener-relative RTPCs change while playing.
     FSCAudioGain Gain;
     const FVector Here = PlacePosition(I);
-    auto IsDynamic = [&](const FString& R) { return R == kAzimuth || R == kListenerCone || (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc); };
+    auto IsDynamic = [&](const FString& R) {
+        return R == kAzimuth || R == kListenerCone || (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc) || (RtpcBank && RtpcBank->Driven().Contains(R));
+    };
     auto AddProps = [&](const FSCAudioProps& P) {
         FSCAudioProps Static = P;
         Static.Rtpc.RemoveAll([&](const FSCAudioRtpcCurve& C) { return IsDynamic(C.Rtpc); });
@@ -1031,7 +1153,13 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     };
     AddProps(I.Action->Context);
     for (int32 Node : Path) AddProps(S.Manifest.Nodes[Node].Props);
-    Gain.AddBusVoice(S.Manifest.BusChain(Leaf.Bus));
+    // The buses' voice volumes and voice-stage curves (applied to the voice, before its dry / wet split); curves on a
+    // meter-driven parameter stay live.
+    const TArray<const FSCAudioBus*> Chain = S.Manifest.BusChain(Leaf.Bus);
+    Gain.AddBusVoice(Chain, IsDynamic, S.Manifest.RtpcDefaults);
+    for (const FSCAudioBus* B : Chain)
+        for (const FSCAudioRtpcCurve& C : B->Rtpc)
+            if (C.Type == 0 && FSCAudioBus::IsVoiceGain(C.Param) && IsDynamic(C.Rtpc) && S.Manifest.RtpcDefaults.Contains(C.Rtpc)) V.Dynamic.Add(&C);
     float BlendDb = 0.f; // the blend layers' gains on the path (RTPCs at their values when the voice starts)
     for (int32 K = 0; K + 1 < Path.Num(); ++K)
         if (const FSCAudioNode& P = S.Manifest.Nodes[Path[K]]; P.Kind == ESCAudioNodeKind::Blend)
@@ -1044,6 +1172,16 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     USCAudioWave* Wave = NewObject<USCAudioWave>(this);
     if (!Wave->Init(*Bytes, Leaf.LoopCount, (GLegacy & 1) != 0)) return T0;
     Wave->Pitch = PitchRatio;
+    // Sample-aligned timing: a voice that loops forever in a placed loop keeps the scene's timeline (the game posts a
+    // zone's spots together and its virtual voices resume from elapsed time: `virtual_queue_behavior` 1 in the banks);
+    // every other voice starts at its scheduled time on the audio clock.
+    if (FAudioDeviceHandle Device = GetWorld()->GetAudioDevice())
+    {
+        Wave->ClockDevice = Device.GetAudioDevice();
+        const bool bEpoch = Leaf.LoopCount == 0 && I.Place.EpochClock >= 0.0;
+        Wave->ScheduledClock = (bEpoch ? I.Place.EpochClock : I.PostAudioClock) + (T0 - I.PostTime);
+        Wave->bSeek = bEpoch;
+    }
     // The scheduled end (container timing, fades): all passes over the loop region at the voice's pitch. The voice
     // itself plays until its audio has (UpdateInstance).
     const double Seconds = Wave->PlaySeconds >= 0 ? Wave->PlaySeconds : Media->Seconds * Leaf.LoopCount;
@@ -1356,6 +1494,7 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
             P.VolumeDb = float(Num(Spot.Params, TEXT("volume"))) + (VR > 0 ? FMath::FRandRange(-VR, VR) : 0.f);
             P.PitchCents = float(Num(Spot.Params, TEXT("pitch"))) + (PR > 0 ? FMath::FRandRange(-PR, PR) : 0.f);
             P.AttenuationScale = Scale;
+            P.EpochClock = bRandom ? -1.0 : S.EpochClock; // loops keep the scene's timeline; random one-shots start when posted
             P.Spot = Si;
             P.Area = Spot.Area;
             P.AreaFadeRtpc = Str(Spot.Params, TEXT("audioRTPCAreaFadeRtpc.rtpc"));
@@ -1497,6 +1636,68 @@ void USCAudioSubsystem::LogHealth(bool bReset)
            Window, GLegacy, T.Voices, Live, T.Calls, T.Frames, T.Gaps, T.MaxGapUs / 1000.0, T.Resourced, T.Restarted, T.Cut, T.CutAudible, T.CutSeconds, T.Unrendered,
            T.StartLatencies ? T.SumStartLatency / T.StartLatencies * 1000.0 : 0.0, T.MaxStartLatency * 1000.0, T.DecodeNs / 1e6 / Window, T.MaxDecodeUs, MaxChannels,
            T.Frames / 48000.0 / Window);
+    // Voices per trigger now: a trigger audible from several posts at once (each a separate emitter in the data) is
+    // listed with its instance count and their levels; the same media from several in-step posts sums coherently.
+    TMap<FString, TArray<float>> PerTrigger;
+    for (const auto& [Id, I] : Instances)
+    {
+        float Loudest = -200.f;
+        for (const FVoice& V : I.Voices) Loudest = FMath::Max(Loudest, V.LastLinear > 1e-10f ? 20.f * FMath::LogX(10.f, V.LastLinear) : -200.f);
+        if (Loudest > -60.f) PerTrigger.FindOrAdd(I.Trigger).Add(Loudest);
+    }
+    // Same-media voices of different posts: their play positions compared at one audio clock (in step: 0 ms apart; a
+    // fixed offset combs, a drifting one phases).
+    struct FPos { uint32 Media; double Ms; float Db; };
+    TMap<uint32, TArray<FPos>> PerMedia;
+    double Now = -1.0;
+    for (const auto& [Id, I] : Instances)
+        for (const FVoice& V : I.Voices)
+            if (const USCAudioWave* W = V.Wave.Get()) Now = FMath::Max(Now, W->Health.PullClock.load(std::memory_order_relaxed));
+    for (const auto& [Id, I] : Instances)
+    {
+        const TSharedPtr<FSCAudioScene> S = I.Scene.Pin();
+        for (const FVoice& V : I.Voices)
+        {
+            const USCAudioWave* W = V.Wave.Get();
+            const float Db = V.LastLinear > 1e-10f ? 20.f * FMath::LogX(10.f, V.LastLinear) : -200.f;
+            if (!W || !S || Db <= -60.f || W->Rate <= 0) continue;
+            const double Clock0 = W->Health.PullClock.load(std::memory_order_relaxed);
+            if (Clock0 < 0.0) continue;
+            double Pos = double(W->Health.PullFrame.load(std::memory_order_relaxed)) + (Now - Clock0) * W->Rate * W->Pitch;
+            const double Region = double(W->LoopEnd) - double(W->LoopStart);
+            if (Pos >= double(W->LoopEnd) && Region > 0) Pos = double(W->LoopStart) + FMath::Fmod(Pos - double(W->LoopEnd), Region);
+            PerMedia.FindOrAdd(S->Manifest.Nodes[V.Leaf].Media).Add({S->Manifest.Nodes[V.Leaf].Media, Pos * 1000.0 / W->Rate, Db});
+        }
+    }
+    int32 MediaMulti = 0;
+    double WorstMs = 0.0;
+    for (const auto& [Media, Ps] : PerMedia)
+        if (Ps.Num() > 1)
+        {
+            ++MediaMulti;
+            double Lo = Ps[0].Ms, Hi = Ps[0].Ms;
+            FString L;
+            for (const FPos& P : Ps)
+            {
+                Lo = FMath::Min(Lo, P.Ms);
+                Hi = FMath::Max(Hi, P.Ms);
+                L += FString::Printf(TEXT("%s%.1fms@%.1fdB"), L.IsEmpty() ? TEXT("") : TEXT(","), P.Ms, P.Db);
+            }
+            WorstMs = FMath::Max(WorstMs, Hi - Lo);
+            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_HEALTH_MEDIA media=%u audible_voices=%d spread_ms=%.2f positions=%s"), Media, Ps.Num(), Hi - Lo, *L);
+        }
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_HEALTH_MEDIAS audible_media=%d with_several_voices=%d worst_spread_ms=%.2f"), PerMedia.Num(), MediaMulti, WorstMs);
+    int32 Multi = 0;
+    for (auto& [Trigger, Levels] : PerTrigger)
+        if (Levels.Num() > 1)
+        {
+            ++Multi;
+            Levels.Sort([](float A, float B) { return A > B; });
+            FString L;
+            for (float Db : Levels) L += FString::Printf(TEXT("%s%.1f"), L.IsEmpty() ? TEXT("") : TEXT(","), Db);
+            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_HEALTH_TRIGGER trigger=%s audible_instances=%d volume_db=%s"), *Trigger, Levels.Num(), *L);
+        }
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_HEALTH_TRIGGERS audible_triggers=%d with_several_instances=%d"), PerTrigger.Num(), Multi);
     if (bReset)
     {
         Totals = FHealthTotals();
@@ -1785,7 +1986,20 @@ FAutoConsoleCommandWithWorldAndArgs GAudioLimiterTrace(TEXT("sc.Audio.LimiterTra
             else A->StartLimiterTrace();
         }
     }));
-FAutoConsoleCommandWithWorldAndArgs GAudioLimiter(TEXT("sc.Audio.Limiter"), TEXT("sc.Audio.Limiter 0|1|2: the bus limiters off (bypassed), on, or on with a fast attack (A/B measurements)."),
+FAutoConsoleCommandWithWorldAndArgs GAudioMixTrace(TEXT("sc.Audio.MixTrace"),
+    TEXT("sc.Audio.MixTrace start | stop [csv path]: trace every bus effect chain per render buffer (limiter gain, peaks, meter values, side-chain gains, EQ bands); stop logs AUDIO_MIX_TRACE per bus."),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCAudioSubsystem* A = ConsoleTarget(World))
+        {
+            if (!Args.IsEmpty() && Args[0] == TEXT("stop")) A->StopMixTrace(Args.Num() > 1 ? Args[1] : FString());
+            else A->StartMixTrace();
+        }
+    }));
+FAutoConsoleCommandWithWorldAndArgs GAudioRtpc(TEXT("sc.Audio.Rtpc"), TEXT("sc.Audio.Rtpc: log the meter-written game parameters and their values (AUDIO_RTPC)."),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>&, UWorld* World) {
+        if (USCAudioSubsystem* A = ConsoleTarget(World)) UE_LOG(LogSCAudio, Display, TEXT("AUDIO_RTPC%s"), *A->DescribeRtpc());
+    }));
+FAutoConsoleCommandWithWorldAndArgs GAudioLimiter(TEXT("sc.Audio.Limiter"), TEXT("sc.Audio.Limiter 0|1: the bus limiters off (bypassed) or on (A/B measurements)."),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
         if (USCAudioSubsystem* A = ConsoleTarget(World)) A->SetLimiterMode(Args.IsEmpty() ? 1 : FCString::Atoi(*Args[0]));
     }));

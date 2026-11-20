@@ -5,7 +5,12 @@
 #![allow(clippy::missing_safety_doc)]
 mod dds;
 mod audio;
-pub use audio::{sc_audio_close, sc_audio_loop_region, sc_audio_open, sc_audio_read, sc_audio_stream};
+mod audio_dsp;
+pub use audio::{sc_audio_close, sc_audio_loop_region, sc_audio_open, sc_audio_read, sc_audio_seek, sc_audio_stream};
+pub use audio_dsp::{
+    sc_eq, sc_eq_free, sc_eq_new, sc_eq_process, sc_eq_set_band, sc_eq_set_output, sc_limiter, sc_limiter_free, sc_limiter_latency, sc_limiter_new,
+    sc_limiter_process, sc_limiter_stats, sc_meter, sc_meter_free, sc_meter_new, sc_meter_process, sc_meter_set_offset,
+};
 pub use dds::{sc_dds_prepare, sc_dds_mean_rgb};
 mod boundary;
 mod cache;

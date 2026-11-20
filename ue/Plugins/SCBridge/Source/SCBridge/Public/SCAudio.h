@@ -4,7 +4,9 @@
 // - FSCAudioManifest: triggers, the shared play-node table, attenuations, buses, media, RTPC defaults, environments
 //   (convolution impulse responses), rooms and entity-class sound effects, parsed from the JSON;
 // - FSCAudioContainerState / SCAudioPick: random (weights, avoid-repeat, shuffle) and sequence selection;
-// - FSCAudioGain: the gain, pitch and aux-send composition of one voice (props, random draws, RTPC curves, bus chain).
+// - FSCAudioGain: the gain, pitch and aux-send composition of one voice (props, random draws, RTPC curves, bus chain);
+// - FSCAudioBusEffect: a bus effect slot (Parametric EQ, Meter, Peak Limiter, Gain) and its parameters at RTPC values;
+//   FSCAudioBus::RtpcGainDeltaDb: a bus's level change from RTPCs that move away from their defaults (side-chains).
 // Nothing here names a trigger, media or asset: every value comes from the manifest.
 #pragma once
 #include "CoreMinimal.h"
@@ -28,8 +30,17 @@ struct SCBRIDGE_API FSCAudioRtpcCurve
 {
     FString Rtpc;  // ATL name
     uint8 Type = 0; // 0 game parameter (the only kind a player drives)
-    FString Param; // volume, pitch, lpf, hpf, make_up_gain, game_aux_send_volume, output_bus_volume, ...
+    FString Param; // volume, pitch, lpf, hpf, make_up_gain, game_aux_send_volume, output_bus_volume, ...; fx_param_<id>
+    uint8 Accum = 0; // AkRtpcAccum: 0 none / 1 exclusive (replaces), 2 additive, 3 multiply, 4 boolean, 5 maximum
+    int32 FxParam = INDEX_NONE; // an effect's own parameter id (Param "fx_param_<id>")
     FSCAudioCurve Curve;
+    /** The curve's value at X in the parameter's units: dB-scaled (2) as dB, log-scaled (3) as 10^y, dB-to-linear (4)
+     *  as 10^(y/20), unscaled (0) as y. */
+    float ValueAt(float X) const;
+    /** The parameter at X combined with its authored value Base by the curve's accumulation. */
+    float Apply(float Base, float X) const;
+    /** Scaling and accumulation this player implements (others are reported, not applied). */
+    bool IsSupported() const { return (Curve.Scaling == 0 || (Curve.Scaling >= 2 && Curve.Scaling <= 4)) && Accum <= 5; }
 };
 
 /** A node's own properties (Wwise sums them down the tree). */
@@ -97,24 +108,77 @@ struct SCBRIDGE_API FSCAudioAttenuation
     FSCAudioCurve VolumeDry, VolumeAuxGame;
 };
 
+/** A Wwise Peak Limiter's parameters (`CAkPeakLimiterFXParams`). */
+struct SCBRIDGE_API FSCAudioLimiter
+{
+    bool bOn = false, bChannelLink = false, bProcessLfe = true;
+    float ThresholdDb = 0, Ratio = 0, LookAheadS = 0, ReleaseS = 0, OutputDb = 0;
+};
+
+/** A bus effect slot (not bypassed). Kind: parametric_eq, meter, peak_limiter, gain, convolution_reverb, others. */
+struct SCBRIDGE_API FSCAudioBusEffect
+{
+    FString Kind;
+    int32 Slot = 0;
+    uint32 Id = 0;
+    /** State groups that bypass this slot in some of their states (group -> those states): on or off by the game's
+     *  state, which is not modelled. */
+    TArray<uint32> StateGroups;
+    TMap<uint32, TArray<uint32>> StateBypass;
+    bool bEqProcessLfe = true;
+    FSCAudioLimiter Limiter;
+    /** Wwise Parametric EQ band (AkFilterType 0 low pass .. 6 peaking). */
+    struct FBand { int32 Type = 0; float GainDb = 0, FrequencyHz = 1000, Q = 1; bool bOn = false; };
+    FBand Bands[3];
+    float OutputDb = 0;
+    /** Wwise Meter: ballistics and the game parameter it writes. */
+    struct FMeter
+    {
+        float AttackS = 0, ReleaseS = 0, HoldS = 0, MinDb = -60, MaxDb = 0;
+        bool bRms = false, bDownstream = false, bInfiniteHold = false, bGlobal = true;
+        FString GameParameter;
+    } Meter;
+    float GainDb = 0; // Wwise Gain (full band)
+    TArray<FSCAudioRtpcCurve> Rtpc; // curves on the effect's own parameters
+    bool IsStateDependent() const { return !StateGroups.IsEmpty(); }
+    /** EQ band B at the RTPC values. Wwise Parametric EQ parameter ids (from the C2 / hangar banks: log-scaled curves of
+     *  frequencies on 5b+2, on/off steps on 5b+4, dB curves on 5b+1 and 15): band b's type 5b, gain 5b+1, frequency
+     *  5b+2, Q 5b+3, on 5b+4; the output level 15. */
+    FBand BandAt(int32 B, const TFunctionRef<float(const FString&)>& Rtpc) const;
+    float OutputAt(const TFunctionRef<float(const FString&)>& Rtpc) const;
+    /** A Gain effect's full-band gain (parameter 0) at the RTPC values. */
+    float GainAt(const TFunctionRef<float(const FString&)>& Rtpc) const;
+};
+
 struct SCBRIDGE_API FSCAudioBus
 {
     uint32 Id = 0, Parent = 0;
     FString Name;
     bool bAux = false;
-    float VoiceDb = 0, BusDb = 0, MakeUpDb = 0, RtpcDefaultDb = 0, GainFxDb = 0, PitchCents = 0;
+    float VoiceDb = 0, BusDb = 0, MakeUpDb = 0, PitchCents = 0;
+    /** The bus's output-stage gain curves (bus volume, output-bus volume, make-up) at their RTPCs' defaults (the
+     *  manifest's `rtpcs`); curves whose RTPC has no default are left out (inactive). */
+    float CurveDefaultDb = 0;
     // A Convolution Reverb slot (an environment's aux bus).
     bool bConvolution = false;
     uint32 IrMedia = 0;
     float WetDb = 0, DryDb = 0, PreDelayMs = 0;
-    // A Wwise Peak Limiter slot (the master bus's): threshold dB, ratio, look-ahead s, release s, output level dB.
-    struct FLimiter
-    {
-        bool bOn = false, bChannelLink = false;
-        float ThresholdDb = 0, Ratio = 0, LookAheadS = 0, ReleaseS = 0, OutputDb = 0;
-    } Limiter;
-    /** The bus's own level on its mix (bus volume, make-up, RTPCs at their defaults, Gain effects), dB. */
-    float MixDb() const { return BusDb + MakeUpDb + RtpcDefaultDb + GainFxDb; }
+    /** The bus's first Peak Limiter (for logs; each slot keeps its own parameters). */
+    using FLimiter = FSCAudioLimiter;
+    FSCAudioLimiter Limiter;
+    /** Applied effect slots in slot order (bypassed slots are left out). Gain slots run in the bus's chain. */
+    TArray<FSCAudioBusEffect> Effects;
+    /** The bus's own RTPC curves (gains, filters). */
+    TArray<FSCAudioRtpcCurve> Rtpc;
+    /** The bus's own level on its mix (bus volume, make-up, output-stage gain curves at their RTPC defaults), dB. */
+    float MixDb() const { return BusDb + MakeUpDb + CurveDefaultDb; }
+    /** Is P a gain property of the voice stage (`volume`) or of the output stage (bus volume, output-bus volume,
+     *  make-up)? */
+    static bool IsVoiceGain(const FString& P);
+    static bool IsOutputGain(const FString& P);
+    /** The output-stage gain curves at Value relative to their values at Defaults (dB): the side-chain change. Curves
+     *  whose RTPC has no default are inactive. */
+    float OutputCurveDeltaDb(const TFunctionRef<float(const FString&)>& Value, const TMap<FString, float>& Defaults) const;
 };
 
 struct SCBRIDGE_API FSCAudioMedia
@@ -194,7 +258,8 @@ struct SCBRIDGE_API FSCAudioGain
     float VolumeDb = 0, PitchCents = 0, GameAuxDb = 0;
     /** Add one props block: its own values, one draw of its random ranges and its gain/pitch RTPC curves at Rtpc. */
     void Add(const FSCAudioProps& Props, const TFunctionRef<float(const FString&)>& Rtpc, FRandomStream* Random);
-    /** Add a bus chain's voice volumes (the bus mix levels go to the submixes). */
-    void AddBusVoice(const TArray<const FSCAudioBus*>& Chain);
+    /** Add a bus chain's voice volumes and voice-stage curves at their RTPC defaults (the bus mix levels go to the
+     *  submixes); curves on an RTPC that Skip names are left to the caller (they change while playing). */
+    void AddBusVoice(const TArray<const FSCAudioBus*>& Chain, const TFunctionRef<bool(const FString&)>& Skip, const TMap<FString, float>& Defaults);
     static float Linear(float Db) { return Db <= -199.f ? 0.f : FMath::Pow(10.f, Db / 20.f); }
 };

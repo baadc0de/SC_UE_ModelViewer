@@ -583,6 +583,151 @@ reproduced from data: buses, RTPC defaults, listener-relative RTPCs, the master 
 are open. (4) Reverb is in scope (decision 3): the bank's convolution IRs per room. (5) Not yet: propagation is the
 largest open item (above). (6) D18 is in the plan.
 
+## Result (A1-2)
+
+Goal: game-accurate levels inside the C2 with the hangar ambience playing — door and action sounds clean — from game
+data only (evidence chain: bank / object / field → value → what the viewer does → measured result). Superproject
+uncommitted (the owner commits); submodule `scviewer/audio` `e211880d`, `f39c62a4` on `238b53b5`. Cache format 38
+(`audio.json` bus effects); cook format 7. Diagnostics: `vendor/StarBreaker/crates/starbreaker-wwise/examples/`
+`mix_report.rs` (`out/audio/a12/mix_report.txt`: the buses of the C2 / hangar chains with props, ducks, state groups,
+effect slots and their RTPCs, and every Meter in `Init.bnk` with the buses reading its parameter) and `limits_report.rs`
+(playback limits along trigger trees). Recordings and traces: `out/audio/run10`.
+
+**1. The Peak Limiter holds its authored ceiling.** `Init.bnk` master bus 2773930110 slot 1, FxShareSet 2288984002,
+`CAkPeakLimiterFXParams`: threshold −0.1 dB, ratio 40, look-ahead 0.01 s, release 0.05 s, output 0 dB, channel link on,
+process LFE on. The block has no attack field: the look-ahead is the time the limiter has to reach a peak's gain. UE's
+dynamics processor (an attack-smoothed envelope) let transients through (72 % of its output blocks over the
+threshold, `out/audio/limiter3`). Now scbridge `sc_limiter` (`crates/scbridge-ffi/src/audio_dsp.rs`): each frame's
+target gain (the ratio above the threshold) held at its minimum over the look-ahead, released with the release time
+constant, averaged over the look-ahead, the audio delayed by look-ahead − 1 frames — the gain has reached each peak's
+target when the peak leaves the delay, so the output never exceeds `threshold · (peak / threshold)^(1/ratio)`, whatever
+the buffer size. It runs at its slot in the bus's own chain (`SCAudioBusFx`). Tests: Rust (a +20 dB step, one-sample
+click trains over a loud bed at 64 / 480 / 1024-frame blocks, unchanged passage below the threshold, release, linked /
+unlinked channels, an LFE channel left out, invalid parameters refused); UE `Audio.BusEffects`, `Audio.BusFxInstance`.
+In the game mix it no longer engages: the walk's master input peaks at −11.4 dBFS (limiter gain 0 dB, 0 ratio-bound
+violations in 2,104 buffers).
+
+**2. Meter-driven side-chains.** Exported per slot (`buses[].effects[].meter`: v154 `CAkMeterFXParams`, 28 bytes —
+attack, release, min, max, hold, infinite hold, mode, scope, apply-downstream-volume, the written game parameter by ATL
+name). The viewer runs every meter the data enables (not bypassed, not state-dependent, global scope) at its slot
+(`sc_meter`: peak / RMS in 10 ms blocks carried across buffers, attack, hold or infinite hold, release, range; a meter
+applying the downstream volume measures after the bus's and its parents' static levels) and writes its game parameter
+(`FSCRtpcBank`: global, the last write stands; the parameters a scene's meters drive are known before its voices start).
+Every curve on it moves: bus output-stage gains after the chain (relative to the curve at the parameter's default, which
+the static level carries), effect parameters, and voices' curves including the buses' voice-stage `volume`. The chain
+that matters here: bus 976807957 (parent of the C2 `SSAM` buses) slot 1 Meter 795329498 — peak, attack 0.02 s, release
+0.15 s, hold 0.16 s, −60..0 dB → `DM_Ship_Ambience` (default −60) → bus 2496768650 (parent of the hangar `ENVA` / `ENVP`
+buses 4091642180, 4190084554) `bus_volume`: 0 dB at −60, sine to −10 dB at −30 and above (and `output_bus_lpf` 0 → 58,
+not applied). Walk (`run10/mix-trace.csv`): the meter reads −34.2..−15.5 dB; bus 2496768650 runs at −10.0..−9.5 dB.
+Other meters in these chains write `DM_ENV_Master_Mix`, `DM_HDR_Mix`, `DM_ENV_Ambient`, `DM_Ship_Ambience_AAA`,
+`SC_Music_Gamemix_Sidechain` (`AUDIO_RTPC`); no bus or effect in the two packages reads them. `DM_SCEV_EnvDucker` (a
+−3 dB curve on 2633160988) is written by no meter in `Init.bnk`: it stays at its default (0 dB).
+
+**3. Bus EQs and effect-parameter RTPCs.** Exported per slot: `eq` (three bands, output level, process LFE), the RTPC
+curves on the effect's own parameters (`fx_param_<id>`, scaling, accumulation) and `state_bypass` (state groups that
+switch the slot: `BypassFX` 0x30 with the slot in the high byte). Parametric EQ parameter ids, read off the banks'
+curves: band b's gain `5b+1` (dB-scaled, additive), frequency `5b+2` (log-scaled — 3.0 = 1 kHz, 4.30103 = 20 kHz —
+exclusive), on `5b+4`, output 15; Q `5b+3` by the layout. Bands run as RBJ biquads (`sc_eq`) with their parameters at
+the RTPC values. In force (`AUDIO_BUSFX`, `mix-trace.csv` first rows): 2633160988 high-pass 90 Hz (hangar ambience
+parent), 4091642180 low shelf 390 Hz −5 dB + peak 500 Hz −3 dB Q 6.8 (`ENVP`), 4239495202 high-pass 70 Hz, 2920869659
+high-pass 200 Hz (reverb return), 1952793459 high-pass 20 Hz; the rest at 0 dB. Gain slots now run at their slots
+(with their RTPCs), not in the static level. On the hangar chain (door A/B, hangar on): 2496768650 +2.4 → −7.6 dBFS
+peak (side-chain), 2633160988 −7.6 → −14.2 (the 90 Hz high-pass on the drones' low end).
+The elevator door (`…_Elevator_Door_Top_Open`, bus 3551685127): slot 0 EQ 1300102976, band 3 low pass 400 Hz; its RTPC
+`Listener_Atmospheric_Pressure` (default 1.0; the executable sets it by name) moves band 3's frequency (exclusive) 1 kHz
+at 0 → 20 kHz at 1 and the band gains (additive) to 0 dB at 1: in normal pressure the low pass is open — modelled
+(`slot0.b2:type0/20000Hz`). Its sibling bus 2527695131 carries the same EQ plus EQ 2410147139
+(`pressure_playerActorContained` → 20 kHz at 0, 3 kHz at 1), and its state group `SC_AudioGameContext_Master`
+(4073011484) bypasses slot 0 in `Player_VehicleDriver` / `Player_Remote_Turret` and slot 1 in `Player_Default` / `EVA` /
+`Dead` / `VehicleCrew` / `InCutscene`. Which context applies is chosen by code (`AudioGameContextSetup` lists the
+contexts only): both slots stay off (reported). No door in the walk plays on 2527695131.
+
+**4. The hangar's level inside the ship.** Established and implemented: the `DM_Ship_Ambience` side-chain (−10 dB on the
+environment ambience while the ship's own ambience peaks at −30 dB or more) and the bus EQs. Not established by data:
+- area membership — the hangar AAA (`volume` +10, `atsVolumeOffset` +10, 424 m prism) and the C2 AAAs carry the same
+  fields (`isManagedAudioObject`, `audioSignature` 0, no environment, equal group / priority); precedence when inside
+  both is engine code (`CEntityAudioProxy::GetAreaFadeInfo`, `CAudioTriggerSpot::Play` on zone enter/leave events);
+- interior game parameters set by code — the executable names `Interiority` (volume curves on 12 C2 nodes: −9 / −18 dB
+  at 1, default 0; none on the hangar), `Listener_Atmospheric_Pressure`, `AudioGameContext*`, `InVehicle - OnFoot`;
+  `pressure_*` / `propagation_*` names are composed at run time; their values inside the C2 are not data;
+- `Occlusion_Amount` (0..100, engine-computed): hangar contexts −6 dB / LPF 30 at 100, C2 −12 dB / LPF 40; default 0;
+- no bus duck targets these buses; no HDR bus; bus state groups (2633160988 −3 dB, 3775940196 −12 dB, 1943164433
+  −96 dB) apply in states the game sets.
+
+**5. Occlusion (design, not implemented).** The data has per-emitter curves on `Occlusion_Amount` (above) and
+`propagation_occlusion` (LPF 28 / 33 / 38 at ⅓ / ⅔ / 1) and the rooms' `AudioPropagationComponent` (`staticApcRoom`,
+`RoomConnector`), not how the engine computes the amount. Design: the amount from the room graph (0 in the listener's
+room; else from the connectors on the shortest path and the open / closed state of the doors they name), applied
+through the curves as voice gain and, once the Wwise LPF value → cut-off mapping is known, LPF; a line-of-sight ray
+only where no room covers the emitter. Missing: the engine's amount per connector / wall, the LPF mapping.
+
+**Phasing (owner's report, during this slice).** Measured: the comb in the A1-2 limiter stress run (twelve posts of the
+same door sound, `out/audio/a12/run10-pre-phase-fix/limiter-stress.wav`) has a cepstral peak at exactly 21.33 ms
+(×368 over the median; notches to 12.6 dB) — one render buffer (1,024 frames): voices posted together started in
+different render buffers, so identical copies summed one buffer apart. Not the cause: multi-position spots play one voice
+each (78 top-deck spots with extra positions; `multiPositionType` 0 = unset → the engine's `s_DefaultMultiPositionType`
+2, MultiDirections, per the executable: one voice, no per-position copies); no playback limits in the banks
+(`max_num_instance` 0 along the spot triggers' trees); the convolution IRs (onset 45–55 ms, dry −96 dB) add no
+un-delayed copy; UE's panner adds no inter-channel delay; no post starts one media twice. Fix: every voice is scheduled
+on the mixer's audio clock (post time + two render buffers; the first pull waits in silence until then), and a placed
+loop keeps its scene's timeline — the game posts a zone's spots together and its virtual voices resume from elapsed time
+(`virtual_queue_behavior` 1 on every spot trigger tree) — seeking (`sc_audio_seek`, Rust-tested) to where it would be
+when it comes into reach. The stress test is gone from the run script (twelve posts in twelve ticks comb in any engine).
+Fixed listener on the top deck (`phase-unaligned.wav` with `sc.Audio.Legacy 8` / `phase-aligned.wav`, 20 s each): no comb
+in either (strongest cepstral peak ×18 / ×13 at 22.5 ms, a 44.5 Hz drone fundamental; median notch depth 0.7 dB);
+walk and door A/B the same (≤ ×39 at 5.69 ms, a 176 Hz hum; notches ≤ 3.1 dB). Several posts of one trigger are audible
+at once only where the data places several spots with it (`AUDIO_HEALTH_TRIGGER`: 21 triggers on the top deck, e.g.
+`Pipe_Tone_07` × 4, `Engine_Drone_07` × 2); their voices of one media differ in pitch where the spots' `pitch` /
+`pitchRandomRange` differ, as in the game.
+
+**Review** (Terra, Astra: `out/audio/review2/{terra-review,astra-code-review}.md`; fixed once):
+- meter ballistics depended on the buffer size → 10 ms blocks carried across calls (test: identical results at 1 / 64 /
+  333 / 1,024-frame buffers);
+- one DSP state shared by every effect instance → per-instance kernels built at the instance's Init, never in its
+  callback (test: two instances keep separate delay lines);
+- a meter wrote through a raw pointer into the bank → it owns its parameter;
+- several meters per parameter took the highest (an invented rule, eight writers max) → the last write stands;
+- voices started before a meter existed missed it → a scene's meter parameters are registered when it is added;
+- Gain slots folded into the static level, convolution and limiter order → one ordered chain with per-slot parameters;
+  the chain sits before or after UE's convolution effect by slot;
+- defaults: one resolver (ATL, else Init.bnk STMG) for the static level and the `rtpcs` list, which now names
+  ATL-less parameters by id; a curve whose RTPC has no default is inactive;
+- bus voice-stage `volume` curves apply per voice (before the dry / wet split), not on the bus input;
+- meter infinite hold, downstream volume and game-object scope (not run, reported); EQ / limiter process-LFE;
+- render-thread allocation and locks → kernels at Init, a preallocated trace ring, try-lock; FFI parameters validated;
+- the limiter trace dropped partial blocks → blocks carried across callbacks; the mix trace checks each limiter buffer
+  against its ratio bound, shares one clock and enlists chains created while tracing;
+- the cook format did not change with the staged audio → cook format 7;
+- curve scaling 4 (dB → linear) and accumulations 4 / 5 implemented, others reported.
+Kept, with the reason: state-dependent slots stay off (the game context is chosen by code; Astra proposes the bank's base
+state).
+
+**Measures** (main output; before = run9 walk and `limiter3` door A/B with the UE limiter port; after = run10):
+
+| | before | after |
+|---|---|---|
+| Walk peak / 10 ms blocks clipped (16-bit file) | 0.0 dBFS / 46.6 % (run9) | −11.4 dBFS / 0 % |
+| Walk main output (float trace): peak / blocks over 0 dBFS | — | −11.4 dBFS / 0 of 4,486 |
+| Door A/B, hangar on: peak / blocks over 0 dBFS | +6.2 dBFS / 20.1 % | −9.6 dBFS / 0 % |
+| Door A/B, hangar muted: peak | −12.6 dBFS | −12.5 dBFS |
+| Door band (1–6 kHz) rise, hangar on: median / min | 14.0 / 12.9 dB, 7 of 8 doors found, 1 dropout | 20.3 / 16.8 dB, 8 of 8, 0 dropouts |
+| Door band rise, hangar muted: median / min | 23.1 / 21.3 dB | 23.4 / 22.0 dB |
+| Door attack (10→90 %), hangar on / muted | 110 / 120 ms | 120 / 120 ms |
+| Walk RMS top deck / ride down / hold | −6.2 / −5.3 / −7.0 dBFS | −26.3 / −26.2 / −29.3 dBFS |
+
+`sc.Audio.Health`: door A/B and phasing windows 0 gaps, 0 sources lost, 0 audible cuts; the 45 s walk 0 gaps, 0 audible
+cuts, 28 voices re-sourced, every one at −76 dB or lower when UE culled it as silent (run9: 40 re-sourced, 19 cut).
+
+**Tests.** Rust: `starbreaker-wwise` 47 (meter slot, effect RTPCs, state-dependent slot, manifest RTPC list, STMG
+default, EQ LFE flag — each failing first), `starbreaker-3d` 991, `scbridge-ffi` lib 27 (11 DSP, play-time seek;
+`tests/shell.rs` fails here as before: it runs `python3`, the Windows Store alias). UE: SCBridge 179 of 183 (new
+`Audio.BusEffects`, `Audio.BusFxInstance`; the 4 known failures).
+
+**Open.** Wwise LPF / HPF amounts (0..100) → cut-off (the `DM_Ship_Ambience` `output_bus_lpf` 58 on the hangar ambience;
+`hpf` curves on 2633160988 / 1943164433); game states and the game context; who writes `DM_SCEV_EnvDucker`; occlusion
+amounts; nested-area precedence; multi-position panning (one voice at the nearest position; MultiDirections blends the
+directions); compressor, RoomVerb, delay and third-party slots; the Gain effect's LFE gain (not exported).
+
 ## Proof decode (research)
 
 The prebuilt CLI decodes with `starbreaker wwise extract <bank>.bnk -o out/audio-datamine/decoded/<bank> --decode`.

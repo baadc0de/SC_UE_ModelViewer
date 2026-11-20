@@ -48,10 +48,16 @@ typedef enum sc_material_mode {
  */
 typedef struct sc_audio_stream sc_audio_stream;
 
+typedef struct sc_eq sc_eq;
+
 /*
  Opaque single-owner session. Close once; never use after close.
  */
 typedef struct sc_handle sc_handle;
+
+typedef struct sc_limiter sc_limiter;
+
+typedef struct sc_meter sc_meter;
 
 /*
  Use sc_default_options rather than zero initialization. Boolean fields accept 0 or 1.
@@ -115,6 +121,18 @@ typedef struct sc_dds_info {
   uint64_t data_offset;
   uint64_t data_size;
 } sc_dds_info;
+
+/*
+ One buffer's limiter statistics (dB; -240 for silence).
+ */
+typedef struct sc_limiter_stats {
+  /*
+   The lowest gain applied in the buffer (0 when nothing was reduced).
+   */
+  float gain_min_db;
+  float input_peak_db;
+  float output_peak_db;
+} sc_limiter_stats;
 
 #ifdef __cplusplus
 extern "C" {
@@ -333,6 +351,13 @@ enum sc_status sc_texels_decode_bgra8(const uint8_t *data,
                                       size_t out_len);
 
 /*
+ Move `stream` to play time `frame` (frames since the start of its first pass, counting loop passes): the next
+ read continues from there; past the end of a finite play nothing is left.
+ */
+enum sc_status sc_audio_seek(struct sc_audio_stream *stream,
+                             uint64_t frame);
+
+/*
  Open a stream over a copy of `len` Ogg Vorbis bytes that plays `loops` passes (0 = forever; see the module notes
  for the loop region). On success `*out` owns the stream (close it with `sc_audio_close`) and `*channels` / `*rate`
  describe it; on failure `*out` is NULL.
@@ -365,6 +390,97 @@ int64_t sc_audio_read(struct sc_audio_stream *stream,
  Free a stream once; NULL is a no-op.
  */
 void sc_audio_close(struct sc_audio_stream *stream);
+
+/*
+ A limiter for `channels` interleaved channels at `rate`; `lfe_channel` (or -1) is an LFE channel the limiter does
+ not process. NULL for invalid parameters. Free with [`sc_limiter_free`].
+ */
+struct sc_limiter *sc_limiter_new(uint32_t rate,
+                                  uint32_t channels,
+                                  float threshold_db,
+                                  float ratio,
+                                  float look_ahead_s,
+                                  float release_s,
+                                  float output_db,
+                                  bool channel_link,
+                                  int32_t lfe_channel);
+
+/*
+ The limiter's latency in frames (its look-ahead less one: the gain ramp spans the look-ahead and ends on the peak).
+ */
+uint32_t sc_limiter_latency(const struct sc_limiter *limiter);
+
+/*
+ Limit `frames` interleaved frames in place; `stats` (may be NULL) receives the buffer's statistics.
+ */
+void sc_limiter_process(struct sc_limiter *limiter,
+                        float *data,
+                        size_t frames,
+                        struct sc_limiter_stats *stats);
+
+void sc_limiter_free(struct sc_limiter *limiter);
+
+/*
+ A meter at `rate` over `channels` interleaved channels: attack, release and hold in seconds, the range in dB,
+ `mode` 0 peak, 1 RMS, `infinite_hold` (the value never falls). It measures in 10 ms blocks carried across calls, so
+ its value does not depend on the host's buffer size; it starts at `min_db`.
+ */
+struct sc_meter *sc_meter_new(uint32_t rate,
+                              uint32_t channels,
+                              float attack_s,
+                              float release_s,
+                              float hold_s,
+                              float min_db,
+                              float max_db,
+                              uint32_t mode,
+                              bool infinite_hold);
+
+/*
+ Measure `frames` interleaved frames (not modified) and return the meter's value (dB) after the last complete block.
+ */
+float sc_meter_process(struct sc_meter *meter,
+                       const float *data,
+                       size_t frames);
+
+/*
+ A gain (dB) added to every measured level from now on: the downstream volume of a meter that applies it.
+ */
+void sc_meter_set_offset(struct sc_meter *meter,
+                         float offset_db);
+
+void sc_meter_free(struct sc_meter *meter);
+
+/*
+ A three-band parametric EQ (all bands off, output 0 dB) over `channels` interleaved channels; `lfe_channel` (or
+ -1) is an LFE channel the EQ does not process. NULL for an invalid format.
+ */
+struct sc_eq *sc_eq_new(uint32_t rate,
+                        uint32_t channels,
+                        int32_t lfe_channel);
+
+/*
+ Set band `band` (0–2): Wwise filter type, frequency (Hz), Q, gain (dB, shelves and peaking), on. A band keeps
+ its filter state across changes.
+ */
+void sc_eq_set_band(struct sc_eq *eq,
+                    uint32_t band,
+                    uint32_t kind,
+                    float frequency_hz,
+                    float q,
+                    float gain_db,
+                    bool on);
+
+/*
+ The EQ's output level (dB).
+ */
+void sc_eq_set_output(struct sc_eq *eq, float output_db);
+
+/*
+ Filter `frames` interleaved frames in place.
+ */
+void sc_eq_process(struct sc_eq *eq, float *data, size_t frames);
+
+void sc_eq_free(struct sc_eq *eq);
 
 /*
  Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses

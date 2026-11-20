@@ -1,6 +1,8 @@
 // WP-A1: unit tests of the audio rules (SCAudio.h) on synthetic manifests: container logic, falloff evaluation, manifest
-// parsing, bus gain composition and the room -> environment -> convolution reverb mapping. No game data.
+// parsing, bus gain composition, the room -> environment -> convolution reverb mapping, and the bus effect chain (EQ at
+// RTPC values, meters writing game parameters, side-chain ducking, the Peak Limiter ceiling). No game data.
 #include "SCAudio.h"
+#include "SCAudioBusFx.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -28,7 +30,10 @@ const TCHAR* Manifest = TEXT(R"json({
   "attenuations": { "9": { "max_distance": 10, "volume_dry": { "scaling": 2, "points": [[0, 0, 9], [1, 0, 4], [10, -1, 4]] },
                           "volume_aux_game": { "scaling": 2, "points": [[0, -0.2920542, 4], [10, -1, 4]] } } },
   "buses": {
-    "7": { "parent": 8, "aux": false, "voice_volume_db": -1, "bus_volume_db": 0, "rtpc_default_db": -2,
+    "7": { "parent": 8, "aux": false, "voice_volume_db": -1, "bus_volume_db": 0,
+           "rtpc": [ { "rtpc": "Listener_Volume", "rtpc_type": 0, "param": "bus_volume", "scaling": 0, "points": [[0, 0, 4], [1, -2, 4]] },
+                     { "rtpc": "Listener_Volume", "rtpc_type": 0, "param": "volume", "scaling": 0, "points": [[0, 0, 4], [1, -4, 4]] },
+                     { "rtpc": "Unset_Synthetic", "rtpc_type": 0, "param": "bus_volume", "scaling": 0, "points": [[0, -50, 4], [1, -50, 4]] } ],
            "effects": [ { "slot": 0, "id": 1, "plugin": "0x008b0003", "kind": "gain", "gain_db": 1.5 } ] },
     "8": { "aux": false, "voice_volume_db": -0.5, "bus_volume_db": -3,
            "effects": [ { "slot": 1, "id": 3, "plugin": "0x006e0003", "kind": "peak_limiter",
@@ -185,10 +190,13 @@ bool FSCAudioGainTest::RunTest(const FString&)
     G.Add(M.Nodes[1].Props, Rtpc, nullptr);    // -3 dB
     const TArray<const FSCAudioBus*> Chain = M.BusChain(M.Nodes[1].Bus);
     TestEqual(TEXT("bus chain"), Chain.Num(), 2);
-    G.AddBusVoice(Chain);                      // -1 - 0.5 dB voice volumes
-    TestTrue(TEXT("voice gain"), FMath::IsNearlyEqual(G.VolumeDb, -8.f + 2.f - 3.f - 1.f - 0.5f, 1e-4f));
+    G.AddBusVoice(Chain, [](const FString&) { return false; }, M.RtpcDefaults); // -1 - 0.5 dB voice volumes, -4 dB voice curve
+    TestTrue(TEXT("voice gain"), FMath::IsNearlyEqual(G.VolumeDb, -8.f + 2.f - 3.f - 1.f - 0.5f - 4.f, 1e-4f));
     TestEqual(TEXT("aux send summed like volume"), G.GameAuxDb, -6.f);
-    TestTrue(TEXT("bus 7 mix: bus volume + RTPC default + Gain effect"), FMath::IsNearlyEqual(Chain[0]->MixDb(), 0.f - 2.f + 1.5f));
+    // The output-stage curve at its RTPC default; a curve whose RTPC has no default is inactive; the Gain slot runs in
+    // the bus's chain, not in its static level.
+    TestTrue(TEXT("bus 7 mix: bus volume + output curve at its default"), FMath::IsNearlyEqual(Chain[0]->MixDb(), 0.f - 2.f));
+    TestTrue(TEXT("bus 7 gain slot"), Chain[0]->Effects.Num() == 1 && Chain[0]->Effects[0].Kind == TEXT("gain") && Chain[0]->Effects[0].GainDb == 1.5f);
     TestEqual(TEXT("bus 8 mix"), Chain[1]->MixDb(), -3.f);
     // With the listener-volume RTPC at 0 the dB-scaled curve silences the voice.
     FSCAudioGain Silent;
@@ -225,5 +233,154 @@ bool FSCAudioReverbMappingTest::RunTest(const FString&)
     TestEqual(TEXT("IR frames"), E.IrFrames, 4800);
     TestEqual(TEXT("T30"), E.T30, 2.f);
     TestEqual(TEXT("an unknown room has none"), M.RoomEnvironment(TEXT("nowhere")), FString());
+    return true;
+}
+
+namespace
+{
+/** Bus effects as A1-2 exports them (synthetic values): a source bus with a Meter writing DM_Synthetic; a target bus
+ *  ducked by DM_Synthetic (-10 dB at -30 dB and above, as a dB-scaled curve) with a Parametric EQ whose low pass the
+ *  RTPC FX_Synthetic opens (log-scaled frequency, exclusive) and whose gain it raises (additive); a slot a state group
+ *  bypasses; a master with a Peak Limiter. */
+const TCHAR* BusFxManifest = TEXT(R"json({
+  "version": 1, "triggers": {}, "nodes": [], "attenuations": {}, "media": {},
+  "rtpcs": { "DM_Synthetic": { "wwise_name": "DM_Synthetic", "default": -60 }, "FX_Synthetic": { "wwise_name": "FX_Synthetic", "default": 1 } },
+  "buses": {
+    "1": { "parent": 3, "aux": false, "voice_volume_db": 0, "bus_volume_db": 0, "effects": [
+      { "slot": 1, "id": 11, "plugin": "0x00810003", "kind": "meter", "meter": { "attack_s": 0.0, "release_s": 0.15, "min_db": -60, "max_db": 0, "hold_s": 0.16,
+        "infinite_hold": false, "mode": "peak", "scope": "global", "apply_downstream_volume": false, "game_parameter": "DM_Synthetic", "game_parameter_id": 5 } } ] },
+    "2": { "parent": 3, "aux": false, "voice_volume_db": 0, "bus_volume_db": 0,
+      "rtpc": [ { "rtpc": "DM_Synthetic", "rtpc_type": 0, "param": "bus_volume", "scaling": 2, "points": [[-60, 0, 1], [-30, -0.6837722, 4]] } ],
+      "effects": [
+        { "slot": 0, "id": 21, "plugin": "0x00690003", "kind": "parametric_eq",
+          "eq": { "bands": [ { "filter": "lowshelf", "gain_db": 0, "frequency_hz": 150, "q": 1, "on": true },
+                             { "filter": "peaking", "gain_db": 0, "frequency_hz": 350, "q": 1, "on": false },
+                             { "filter": "lowpass", "gain_db": 0, "frequency_hz": 400, "q": 1, "on": true } ], "output_level_db": 0 },
+          "rtpc": [ { "rtpc": "FX_Synthetic", "rtpc_type": 0, "accum": 1, "param": "fx_param_12", "scaling": 3, "points": [[0, 3, 4], [1, 4.30103, 4]] },
+                    { "rtpc": "FX_Synthetic", "rtpc_type": 0, "accum": 2, "param": "fx_param_1", "scaling": 2, "points": [[0, 0, 4], [1, 0.4125375, 4]] } ] },
+        { "slot": 1, "id": 22, "plugin": "0x00690003", "kind": "parametric_eq", "state_bypass": [ { "group": 77, "states": [6] } ],
+          "eq": { "bands": [ { "filter": "lowpass", "gain_db": 0, "frequency_hz": 400, "q": 1, "on": true } ], "output_level_db": 0 } } ] },
+    "3": { "aux": false, "voice_volume_db": 0, "bus_volume_db": 0, "effects": [
+      { "slot": 1, "id": 31, "plugin": "0x006e0003", "kind": "peak_limiter",
+        "limiter": { "threshold_db": -6, "ratio": 40, "look_ahead_s": 0.01, "release_s": 0.05, "output_level_db": 0, "process_lfe": true, "channel_link": true } } ] }
+  }
+})json");
+} // namespace
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioBusEffectsTest, "SCBridge.Audio.BusEffects", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioBusEffectsTest::RunTest(const FString&)
+{
+    FSCAudioManifest M;
+    FString Error;
+    TestTrue(TEXT("parses"), FSCAudioManifest::Parse(BusFxManifest, M, Error));
+    const FSCAudioBus& Source = M.Buses[1];
+    const FSCAudioBus& Target = M.Buses[2];
+    TestEqual(TEXT("meter slot"), Source.Effects.Num(), 1);
+    TestEqual(TEXT("meter writes"), Source.Effects[0].Meter.GameParameter, FString(TEXT("DM_Synthetic")));
+    TestTrue(TEXT("meter ballistics"), Source.Effects[0].Meter.HoldS == 0.16f && Source.Effects[0].Meter.ReleaseS == 0.15f && !Source.Effects[0].Meter.bRms);
+    TestEqual(TEXT("two EQ slots in slot order"), Target.Effects.Num(), 2);
+    TestTrue(TEXT("the second depends on a game state"), Target.Effects[1].IsStateDependent() && !Target.Effects[0].IsStateDependent());
+    // The RTPC at its default opens the low pass to 20 kHz (exclusive, log-scaled) and raises the shelf by 3 dB (additive).
+    auto AtDefault = [&](const FString& N) { const float* D = M.RtpcDefaults.Find(N); return D ? *D : 0.f; };
+    const FSCAudioBusEffect::FBand Lp = Target.Effects[0].BandAt(2, AtDefault);
+    TestTrue(TEXT("low pass opened"), FMath::IsNearlyEqual(Lp.FrequencyHz, 20000.f, 1.f) && Lp.Type == 0 && Lp.bOn);
+    const FSCAudioBusEffect::FBand Shelf = Target.Effects[0].BandAt(0, AtDefault);
+    TestTrue(TEXT("shelf gain added"), FMath::IsNearlyEqual(Shelf.GainDb, 3.f, 0.01f) && Shelf.Type == 4);
+    const FSCAudioBusEffect::FBand Closed = Target.Effects[0].BandAt(2, [](const FString&) { return 0.f; });
+    TestTrue(TEXT("at 0 the low pass sits at 1 kHz"), FMath::IsNearlyEqual(Closed.FrequencyHz, 1000.f, 0.5f));
+    // Side-chain: the ducking curve moves the bus level only away from the default.
+    TestTrue(TEXT("no duck at the default"), FMath::IsNearlyZero(Target.OutputCurveDeltaDb(AtDefault, M.RtpcDefaults)));
+    TestTrue(TEXT("-10 dB at -30 dB"), FMath::IsNearlyEqual(Target.OutputCurveDeltaDb([](const FString&) { return -30.f; }, M.RtpcDefaults), -10.f, 0.01f));
+
+    // The chains on real buffers: the meter writes the shared game parameter, the target ducks by its curve, the
+    // master's limiter holds threshold * (peak / threshold)^(1 / ratio).
+    FSCRtpcBank Bank;
+    FSCBusDsp SourceDsp(1, Source, M.RtpcDefaults, Bank, 0.f), TargetDsp(2, Target, M.RtpcDefaults, Bank, 0.f), Master(3, M.Buses[3], M.RtpcDefaults, Bank, 0.f);
+    TestTrue(TEXT("the meter's parameter is driven"), Bank.Driven().Contains(TEXT("DM_Synthetic")));
+    TUniquePtr<FSCBusDspState> SourceState = SourceDsp.MakeState(48000.f, 2), TargetState = TargetDsp.MakeState(48000.f, 2), MasterState = Master.MakeState(48000.f, 2);
+    TArray<float> Loud;
+    Loud.Init(0.5f, 960 * 2); // -6 dBFS, two 10 ms meter blocks
+    SourceDsp.Process(*SourceState, Loud.GetData(), 960);
+    TestTrue(TEXT("meter -> game parameter"), FMath::IsNearlyEqual(Bank.Find(TEXT("DM_Synthetic"))->Read(), -6.02f, 0.05f));
+    TArray<float> Bed;
+    for (int32 K = 0; K < 4; ++K)
+    {
+        Bed.Init(0.1f, 1024 * 2);
+        TargetDsp.Process(*TargetState, Bed.GetData(), 1024); // the gain ramps to its target over the first buffer
+    }
+    // A constant bed: the low shelf adds its +3 dB at DC, the side-chain takes 10 dB.
+    TestTrue(FString::Printf(TEXT("ducked by 10 dB (%.5f)"), Bed.Last()), FMath::IsNearlyEqual(Bed.Last(), 0.1f * FMath::Pow(10.f, (3.f - 10.f) / 20.f), 1e-3f));
+    TArray<float> Hot;
+    Hot.SetNumUninitialized(4800 * 2);
+    for (int32 F = 0; F < 4800; ++F) Hot[2 * F] = Hot[2 * F + 1] = 4.f * FMath::Sin(F * 0.13f);
+    float Peak = 0;
+    for (int32 B = 0; B < 4800; B += 480)
+    {
+        Master.Process(*MasterState, Hot.GetData() + B * 2, 480);
+        for (int32 I = 0; I < 480 * 2; ++I) Peak = FMath::Max(Peak, FMath::Abs(Hot[B * 2 + I]));
+    }
+    const float Thr = FMath::Pow(10.f, -6.f / 20.f);
+    TestTrue(FString::Printf(TEXT("limiter ceiling (peak %.4f)"), Peak), Peak <= Thr * FMath::Pow(4.f / Thr, 1.f / 40.f) * 1.0001f);
+
+    // A Gain slot before a meter changes what the meter measures (the chain runs in slot order).
+    FSCAudioBus Gained = Source;
+    FSCAudioBusEffect G;
+    G.Kind = TEXT("gain");
+    G.Slot = 0;
+    G.GainDb = -12.f;
+    Gained.Effects.Insert(G, 0);
+    FSCRtpcBank Bank2;
+    FSCBusDsp GainedDsp(1, Gained, M.RtpcDefaults, Bank2, 0.f);
+    TUniquePtr<FSCBusDspState> GainedState = GainedDsp.MakeState(48000.f, 2);
+    for (int32 K = 0; K < 3; ++K)
+    {
+        Loud.Init(0.5f, 960 * 2);
+        GainedDsp.Process(*GainedState, Loud.GetData(), 960);
+    }
+    TestTrue(FString::Printf(TEXT("meter after a -12 dB gain (%.2f)"), Bank2.Find(TEXT("DM_Synthetic"))->Read()), FMath::IsNearlyEqual(Bank2.Find(TEXT("DM_Synthetic"))->Read(), -18.06f, 0.1f));
+    // Two instances of one chain keep their own state: the second starts from silence, not from the first's history.
+    TUniquePtr<FSCBusDspState> Second = Master.MakeState(48000.f, 2);
+    TArray<float> Quiet;
+    Quiet.Init(0.f, 480 * 2);
+    Master.Process(*Second, Quiet.GetData(), 480);
+    TestTrue(TEXT("independent delay lines"), Quiet.ContainsByPredicate([](float X) { return X != 0.f; }) == false);
+    return true;
+}
+
+/** The submix effect a bus submix creates from its preset runs the preset's chain from its first buffer (a submix
+ *  creates effect instances without preset data and without a preset change: the first run had no chain at all). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioBusFxInstanceTest, "SCBridge.Audio.BusFxInstance", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioBusFxInstanceTest::RunTest(const FString&)
+{
+    FSCAudioManifest M;
+    FString Error;
+    TestTrue(TEXT("parses"), FSCAudioManifest::Parse(BusFxManifest, M, Error));
+    FSCRtpcBank Bank;
+    USCBusFxPreset* Preset = NewObject<USCBusFxPreset>();
+    TSharedPtr<FSCBusDsp, ESPMode::ThreadSafe> Dsp = MakeShared<FSCBusDsp, ESPMode::ThreadSafe>(3, M.Buses[3], M.RtpcDefaults, Bank, 0.f);
+    Preset->SetDsp(Dsp);
+    FSoundEffectSubmixInitData Init; // as FMixerSubmix creates its chain: no preset data, the preset's unique id
+    Init.SampleRate = 48000.f;
+    Init.PresetSettings = nullptr;
+    Init.ParentPresetUniqueId = Preset->GetUniqueID();
+    TSharedPtr<FSoundEffectSubmix, ESPMode::ThreadSafe> Fx = USoundEffectPreset::CreateInstance<FSoundEffectSubmixInitData, FSoundEffectSubmix>(Init, *Preset);
+    Fx->SetEnabled(true);
+    Audio::FAlignedFloatBuffer In, Out;
+    In.Init(0.f, 4800 * 2);
+    for (int32 F = 0; F < 4800; ++F) In[2 * F] = In[2 * F + 1] = 4.f * FMath::Sin(F * 0.13f);
+    Out.SetNumZeroed(In.Num());
+    FSoundEffectSubmixInputData InData;
+    InData.NumFrames = 4800;
+    InData.NumChannels = 2;
+    InData.AudioBuffer = &In;
+    FSoundEffectSubmixOutputData OutData;
+    OutData.AudioBuffer = &Out;
+    OutData.NumChannels = 2;
+    Fx->ProcessAudio(InData, OutData);
+    float Peak = 0;
+    for (float S : Out) Peak = FMath::Max(Peak, FMath::Abs(S));
+    const float Thr = FMath::Pow(10.f, -6.f / 20.f);
+    TestTrue(FString::Printf(TEXT("the instance limits (peak %.3f)"), Peak), Peak > 0.f && Peak <= Thr * FMath::Pow(4.f / Thr, 1.f / 40.f) * 1.0001f);
+    USoundEffectPreset::UnregisterInstance(Fx);
     return true;
 }

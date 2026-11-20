@@ -2,7 +2,9 @@
 //!
 //! `sc_audio_open` copies the Ogg bytes into a stream for a number of passes and reports channels and rate;
 //! `sc_audio_read` decodes the next interleaved `f32` frames (lewton's float output, no 16-bit step) on demand, looping as Wwise does;
-//! `sc_audio_loop_region` reports the loop region; `sc_audio_close` frees the stream. Streams are independent of
+//! `sc_audio_loop_region` reports the loop region; `sc_audio_seek` moves to a play time (frames since the start of the
+//! first pass, counting the passes over the loop region), as a Wwise voice resumed "from elapsed time" does;
+//! `sc_audio_close` frees the stream. Streams are independent of
 //! sessions and may be used from any one thread at a time.
 //!
 //! Looping follows the media's loop points, which the WEM → Ogg conversion carries as the `LoopStart` / `LoopEnd`
@@ -36,6 +38,8 @@ pub struct sc_audio_stream {
     loop_end: u64,
     /// Passes after the current one; None = forever.
     passes_left: Option<u32>,
+    /// The passes the stream was opened for (None = forever).
+    passes: Option<u32>,
     ended: bool,
     /// Wraps that had to decode from the start because the seek could not place `LoopStart` (tests expect none).
     restarts: u32,
@@ -81,6 +85,7 @@ impl sc_audio_stream {
             loop_start,
             loop_end,
             passes_left: if loops == 0 { None } else { Some(loops - 1) },
+            passes: if loops == 0 { None } else { Some(loops) },
             ended: false,
             restarts: 0,
         })
@@ -104,54 +109,86 @@ impl sc_audio_stream {
         }
     }
 
-    /// Continue the next pass at `loop_start`: seek to the page before it and decode up to it (or decode from the
-    /// start when the seek cannot place it).
+    /// Continue the next pass at `loop_start`.
     fn wrap(&mut self) -> Result<(), String> {
         if let Some(p) = self.passes_left.as_mut() {
             *p -= 1;
         }
+        self.seek_media(self.loop_start)
+    }
+
+    /// Place the decoder at media frame `target`: seek to the page before it and decode up to it (or decode from the
+    /// start when the seek cannot place it).
+    fn seek_media(&mut self, target: u64) -> Result<(), String> {
         self.pending.clear();
         self.pending_at = 0;
-        if self.loop_start > 0 {
-            if self.reader.seek_absgp_pg(self.loop_start.saturating_sub(SEEK_LEAD)).is_ok() {
+        if target > 0 {
+            if self.reader.seek_absgp_pg(target.saturating_sub(SEEK_LEAD)).is_ok() {
                 // After a seek each packet's start is its page's granule (one packet per page) less its length.
                 while self.decode()? {
                     let len = (self.pending.len() / self.channels.max(1)) as u64;
                     let Some(end) = self.reader.get_last_absgp() else { break };
                     let start = end.saturating_sub(len);
-                    if len == 0 || end <= self.loop_start {
+                    if len == 0 || end <= target {
                         continue;
                     }
-                    if start > self.loop_start {
-                        break; // the seek landed past the loop start: decode from the beginning instead
+                    if start > target {
+                        break; // the seek landed past the target: decode from the beginning instead
                     }
-                    self.pending_at = (self.loop_start - start) as usize * self.channels;
-                    self.pending_pos = self.loop_start;
+                    self.pending_at = (target - start) as usize * self.channels;
+                    self.pending_pos = target;
                     return Ok(());
                 }
             }
-        }
-        if self.loop_start > 0 {
             self.restarts += 1;
         }
         self.reader = OggStreamReader::new(Cursor::new(Arc::clone(&self.bytes))).map_err(|e| format!("ogg: {e}"))?;
         self.pending.clear();
         self.pending_at = 0;
         self.pending_pos = 0;
-        while self.pending_pos < self.loop_start {
+        while self.pending_pos < target {
             if !self.decode()? {
-                return Err("ogg: the loop start lies past the end of the media".into());
+                return Err("ogg: the seek target lies past the end of the media".into());
             }
             let len = (self.pending.len() / self.channels.max(1)) as u64;
-            if self.pending_pos + len > self.loop_start {
-                self.pending_at = (self.loop_start - self.pending_pos) as usize * self.channels;
-                self.pending_pos = self.loop_start;
+            if self.pending_pos + len > target {
+                self.pending_at = (target - self.pending_pos) as usize * self.channels;
+                self.pending_pos = target;
                 return Ok(());
             }
             self.pending_pos += len;
             self.pending.clear();
         }
         Ok(())
+    }
+
+    /// Move to play time `t` (frames since the first pass began): the passes before it are consumed, the decoder is
+    /// placed at the media frame it plays then; past the end of a finite play the stream has ended.
+    fn seek_play(&mut self, t: u64) -> Result<(), String> {
+        self.passes_left = self.passes.map(|p| p - 1);
+        self.ended = false;
+        let region = self.loop_end - self.loop_start;
+        let mut media = t;
+        if self.more_passes() && media >= self.loop_end && region > 0 {
+            // Whole passes over the loop region after the first.
+            let over = media - self.loop_end;
+            let whole = over / region;
+            let skipped = match self.passes_left {
+                None => whole,
+                Some(left) => whole.min(u64::from(left) - 1),
+            };
+            if let Some(left) = self.passes_left.as_mut() {
+                *left -= skipped as u32 + 1;
+            }
+            media = self.loop_start + (over - skipped * region);
+        }
+        if !self.more_passes() && media >= self.frames {
+            self.ended = true;
+            self.pending.clear();
+            self.pending_at = 0;
+            return Ok(());
+        }
+        self.seek_media(media)
     }
 
     /// Fill `out` (interleaved, whole frames) and return the frames written; 0 once every pass has played.
@@ -187,6 +224,20 @@ impl sc_audio_stream {
         }
         Ok(written / ch)
     }
+}
+
+/// Move `stream` to play time `frame` (frames since the start of its first pass, counting loop passes): the next
+/// read continues from there; past the end of a finite play nothing is left.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_audio_seek(stream: *mut sc_audio_stream, frame: u64) -> sc_status {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let Some(s) = stream.as_mut() else { return sc_status::SC_STATUS_INVALID_ARGUMENT };
+        match s.seek_play(frame) {
+            Ok(()) => sc_status::SC_STATUS_OK,
+            Err(_) => sc_status::SC_STATUS_ERROR,
+        }
+    }))
+    .unwrap_or(sc_status::SC_STATUS_ERROR)
 }
 
 /// Open a stream over a copy of `len` Ogg Vorbis bytes that plays `loops` passes (0 = forever; see the module notes
