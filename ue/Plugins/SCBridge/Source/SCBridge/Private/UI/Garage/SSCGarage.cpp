@@ -112,7 +112,11 @@ void SSCGarage::Construct(const FArguments& Args)
                 FString Status = FSCGaragePolicy::StatusName(Item->Status);
                 if (Item->Status == ESCGarageStatus::InHangar) Status += FString::Printf(TEXT(" · %.0f m"), Item->DistanceM);
                 if (Item->Status == ESCGarageStatus::Retrieving && Item->Progress > 0) Status += FString::Printf(TEXT(" · %.0f%%"), 100 * Item->Progress);
+                FString Metadata = DetailsLine(*Item);
+                if (const FString* Hint = EntityHints.Find(FName(*Item->Entity)))
+                    Metadata = Metadata.IsEmpty() ? *Hint : *Hint + TEXT("  ·  ") + Metadata;
                 return SNew(STableRow<TSharedPtr<FSCGarageRow>>, Table).Style(&FleetRowStyle()).Padding(FMargin(8, 6))
+                    .ToolTipText(FText::FromString(Item->Entity))
                     [
                         SNew(SVerticalBox)
                         + SVerticalBox::Slot().AutoHeight()[HRule()]
@@ -126,8 +130,9 @@ void SSCGarage::Construct(const FArguments& Args)
                             [SNew(STextBlock).Font(Body()).Text(FText::FromString(Item->DisplayName)).OverflowPolicy(ETextOverflowPolicy::Ellipsis)]
                             + SVerticalBox::Slot().AutoHeight()
                             [
-                                SNew(STextBlock).Font(Label()).ColorAndOpacity(Ink2()).Text(FText::FromString(DetailsLine(*Item)))
-                                .Visibility(DetailsLine(*Item).IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+                                SNew(STextBlock).Font(Label()).ColorAndOpacity(Ink2()).Text(FText::FromString(Metadata))
+                                .Visibility(Metadata.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+                                .OverflowPolicy(ETextOverflowPolicy::Ellipsis)
                             ]
                         ]
                         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0)
@@ -208,6 +213,28 @@ void SSCGarage::Refresh()
         bool bSame = true;
         for (int32 I = 0; I < Rows.Num() && bSame; ++I) bSame = Same(*Visible[I], Rows[I]);
         if (bSame) { SyncSelection(false); return; }
+    }
+    struct FDisplayGroup
+    {
+        const FString* Shortest = nullptr;
+        int32 Count = 0;
+    };
+    TMap<FString, FDisplayGroup> Groups;
+    for (const FSCGarageRow& Row : Rows)
+    {
+        FDisplayGroup& Group = Groups.FindOrAdd(Row.DisplayName);
+        if (!Group.Shortest || Row.Entity.Len() < Group.Shortest->Len()) Group.Shortest = &Row.Entity;
+        ++Group.Count;
+    }
+    EntityHints.Reset();
+    for (const FSCGarageRow& Row : Rows)
+    {
+        const FDisplayGroup& Group = Groups.FindChecked(Row.DisplayName);
+        if (Group.Count < 2) continue;
+        // Several authored classes share a localized title. Keep each class addressable and show its identifier.
+        const FString Prefix = *Group.Shortest + TEXT("_");
+        const FString Identifier = Row.Entity.StartsWith(Prefix) ? Row.Entity.RightChop(Prefix.Len()) : Row.Entity;
+        EntityHints.Add(FName(*Row.Entity), Identifier.Replace(TEXT("_"), TEXT(" ")));
     }
     Visible.Reset();
     for (FSCGarageRow& Row : Rows) Visible.Add(MakeShared<FSCGarageRow>(MoveTemp(Row)));

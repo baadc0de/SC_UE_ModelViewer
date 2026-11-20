@@ -32,6 +32,7 @@ private:
     TSharedPtr<SListView<TSharedPtr<FSCGarageRow>>> List;
     TSharedPtr<SBox> DetailBody;
     TArray<FSCGarageRow> Fleet;
+    TMap<FName, FString> EntityHints;
     FString Search;
     FString LastSelectedEntity;
     FString DetailKey = TEXT("<uninitialized>");
