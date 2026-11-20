@@ -192,6 +192,13 @@ double FSCStarEngine::LightRangeFade(double Distance, double Radius) const
     return FMath::Square(FMath::Clamp((1.0 - Distance / Radius) / ForcedFadeFraction, 0.0, 1.0));
 }
 
+double FSCStarEngine::ScreenDBA(double UnclampedExposure) const
+{
+    // A non-positive scale (eye adaptation disabled, or a half-precision input flushed to zero) is a luminance beyond the ceiling.
+    const double Adapted = UnclampedExposure > 0 ? MiddleGrey / UnclampedExposure : NitsAtEV(DBAMaxAdaptedEV);
+    return FMath::Clamp(Adapted, NitsAtEV(DBAMinAdaptedEV), NitsAtEV(DBAMaxAdaptedEV)) / (DBAMiddleGrey * SceneUnitNits);
+}
+
 double FSCStarEngine::CompensationAt(double MeteredEV) const
 {
     int32 Segment = 0; // the segment [Segment, Segment + 1] holding MeteredEV; the end segments extend outwards

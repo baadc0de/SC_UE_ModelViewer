@@ -1117,11 +1117,23 @@ Not fixed, with the reason:
 
 - Screen colour: the ~0.3 brightness residual (§3, runtime RTT exposure state); the footer buttons' fill and the label's
   cyan in the references (no data reached: the CRUS secondary kit's `RootFilled` colours are what we draw).
-- DBA below the exposure clamp: the proposed engine feature (§3).
+- ~~DBA below the exposure clamp: the proposed engine feature (§3).~~ Done: WP-E1 E1-9 (below).
 - Light panel glyph box: the canvas's `SizeY 0.55` under the kit's `SizeY 1` (tier order).
 - Hangar call panel: the pale default-kit fill without a location brand.
 - The wide pad's field proportion (M2 wide reference); the M2 side strip (§6).
 - Owner-set completeness flag; Lumen card capture of the screen emission (fix pass review).
+
+### Note (2026-11-20): the DBA below the exposure clamp (WP-E1 E1-9)
+
+The proposed engine feature is built (owner decision 2026-11-20; WP-E1 E1-9, engine `01596d9c0`, `43b8d033b`). `SCREEN_DBA` now
+reads the engine fork's `EyeAdaptationUnclamped`, the exposure scale before the brightness bounds: the game's `unclampedExposure`,
+whose inverse × middle grey is the `adaptedLuminance` `GetGlobalDBAMultiplier_HDR` reads (`CalcExposureAndNoise` stores it before the
+clamp, after the EV compensation and the pigment / pupil adaptation). The exposure compensation curve now covers the meter's reach,
+so that luminance is compensated as the game's beyond the clamp ends too. Measured (C2, `out/screen-exposure/final`): inside the clamp
+every door pad keeps its field level (56 pads, ratio 1.000); below it the pads dim by exposure / unclamped exposure (pad 56 0.49,
+habitation pads 0.51–0.88, each within one 8-bit step or 0.034 of the expected ratio); the habitation shot of fix pass 2 §3 dims by
+5 % (it is just below the clamp). Astra: the two dark-room habitation pads move CLOSER to the reference. This does not touch the
+general ~0.3 residual in lit rooms (§3, the runtime RTT exposure state), which stays open.
 
 ## Result (C2 fixes: doors and light panels, 2026-11-20)
 

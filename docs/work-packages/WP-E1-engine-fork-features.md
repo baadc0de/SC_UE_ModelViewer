@@ -1216,6 +1216,91 @@ Engine `848efefd8` (`DistortionRendering.cpp`, `DistortAccumulatePS.usf`, `Disto
   dispersion, bilinear sampling, scoped permutations, the material's depth probes at the blue channel's reach; not done: an
   apply-pass depth check of the summed channel positions (stacked panes), a shader variant without the fourth output.
 
+### E1-9 Unclamped exposure for materials (screen brightness)
+Today: `M_SC_Screen` ports the game's `%DBA_GLOBAL` term (`GetGlobalDBAMultiplier_HDR`, WP-I1 fix pass) through UE's
+`EyeAdaptationInverse`, i.e. from the clamped exposure. The game's term reads `ExposureState.adaptedLuminance`, which
+`CalcExposureAndNoise` stores before the exposure clamp, so in rooms darker than the clamp (adapted luminance under
+middle grey / `r_ExposureMultiplierMax` = 9 cd/m²) the viewer's screens were brighter than the game's (WP-I1 fix pass review,
+high; owner decision 2026-11-20: build it).
+- **The quantity** (evidence chain, `out/e1/E1-5/game-exposure-shaders.txt`, the fixture's hashes of `GetGlobalDBAMultiplier_HDR`,
+  `CalcUpdatedFrameState`, `ApplyEyeAdaptation`): `GetGlobalDBAMultiplier_HDR` = clamp(`ExposureState[0].adaptedLuminance`, EV 1,
+  EV 14) / 0.18; `CalcUpdatedFrameState` sets `logLumTarget` = metered − EV compensation, adapts it (`ApplyEyeAdaptation`: pigment +
+  pupil) and calls `CalcExposureAndNoise`: `linearAdapted = exp2(pigment + pupil)`, `unclampedExposure = middleGray / linearAdapted`,
+  `adaptedLuminance = linearAdapted`, `exposure = clamp(unclampedExposure, min, max)`. So the term needs the **adapted, compensated,
+  unclamped** luminance = middle grey / the unclamped exposure: not the metered luminance (`FEyeAdaptationReadback::
+  AverageSceneLuminance`, before compensation and adaptation; with it the screen would drift against the exposure while adapting
+  and be off by the compensation), and not the clamped exposure. In the fork's terms that is UE's exposure scale before the
+  brightness bounds (the two-stage adaptation's `0.18 / 2^(slow + fast)` before its output limits).
+- `UMaterialExpressionEyeAdaptationUnclamped` (Utility; an external-code expression, `EyeAdaptationUnclampedLookup()`), in
+  EyeAdaptation's units. The eye adaptation buffer's second float4 `.y` carries it (UE wrote 0 there): two-stage adaptation, the
+  adapted scale before the limits; UE's adaptation, UE's rule (`ComputeEyeAdaptation`, same speeds and camera-cut reset) on the
+  unclamped target from its own history in that lane; a degenerate range (manual / fixed exposure, eye adaptation off) the exposure.
+- Fallbacks to EyeAdaptation's value: mobile (its lookup is the previous frame's pre-exposure), ray / path tracing hit shaders
+  (`EYE_ADAPTATION_PREV_FRAME_EXPOSURE`), a buffer with fewer than two elements or an invalid lane. Deferred, forward, translucency,
+  decals, Nanite compute shading and heterogeneous volumes read the view's buffer; Lumen card capture reads the first view's at
+  capture time; the material cache passes bind none (as for EyeAdaptation).
+
+#### Result (E1-9)
+Engine `01596d9c0` (`SCViewer: unclamped exposure for materials`) and review fixes `43b8d033b`; `SCVIEWER_ENGINE_SCREEN_EXPOSURE` 2
+(`PostProcessEyeAdaptation.usf`, `EyeAdaptationCommon.ush`, `MaterialExpressionEyeAdaptationUnclamped.h`, `MaterialExpressions.cpp`,
+`BaseMaterialExpressions.ini`, `AutoExposureConversion.h`, `PostProcessEyeAdaptation.cpp`, capabilities header).
+- **Project.** `M_SC_Screen` / `M_SC_Screen_Translucent` (`create_materials.py` `SCREEN_DBA`): adapted luminance = `DBAExposureGrey` /
+  `EyeAdaptationUnclamped` (was × `EyeAdaptationInverse`), clamped to `NitsAtEV(1..14)`, / (0.18 × `SceneUnitNits`); the masters
+  regenerated (`WP-U2 MATERIALS_OK`), only the two screen assets kept. `FSCStarEngine::ScreenDBA` is the rule in C++;
+  `FSCExposureSettings::From` keys the compensation curve over the meter's reach (review fix); `sc.Look.ExposureLog` logs
+  `unclamped=` (the GPU lane); the plugin requires `SCVIEWER_ENGINE_SCREEN_EXPOSURE` 2. Fixture constants and hashes unchanged.
+- **Tests.** `SCBridge.Materials.ScreenDBA` (the term against the game's chain with the fixture: below the DBA floor, below / at /
+  inside the exposure clamp, above the DBA ceiling, above the clamp; the clamped rule shows a dark room at full brightness);
+  `SCBridge.Materials.ScreenExposureNode` (the masters read the node and not `EyeAdaptationInverse`; translated HLSL: the screen
+  masters call `EyeAdaptationUnclampedLookup()`, eight other masters and an `EyeAdaptation` material do not, a material with the node
+  does). Tests first: `ScreenExposureNode` failed on the old masters (10 assertions, `out/screen-exposure/tests-first.log`).
+  `SCBridge.ViewerExposure.Settings` rewritten for the curve. SCBridge 198/202 (the 4 known failures; `out/screen-exposure/tests.log`).
+- **Runs** (C2 + `hangar_xltop_001`, first person, port 8771; `out/screen-exposure/{base,new,final}`: base = before any change, new =
+  `01596d9c0`, final = with the review fixes; `final/field-levels.txt`, `final/psnr.txt`). 61 door-pad faces at 30 cm. The field
+  level s is the pre-tonemap level of the pads' blue field (green channel through the inverse of the display curve; one 8-bit step
+  ≈ 2.5 %); expected = exposure / unclamped from the readback.
+  - **GPU lane** = 0.18 / 2^(slow + fast) of the two-stage state to within 5e-5 at every pose.
+  - **Inside the clamp** (56 pads, exposure 0.00115–0.0141, metered 0.9–120 cd/m²): s 2.60–2.67 before and after (glow 2.56 × the
+    field plus the glass reflection), ratio 1.000 at every pad: constant display brightness.
+  - **Below the clamp** (exposure held at 0.0200): bridge component pad 56 metered 0.21 cd/m² s 2.42 → 1.19 (ratio 0.492, expected
+    0.498); habitation pads 110 0.524 / 0.513, 113 0.703 / 0.682, 117 0.670 / 0.658, 101 0.885 / 0.851; habitation 30 cm 0.951 /
+    0.927 (G/B 174/251 → 172/250). Base: 1.00 at all of them (the clamped rule).
+  - **UE's adaptation** (`sc.Look.Exposure game ue`, the one-stage lane): pad 56 0.381 / 0.394, 110 0.394 / 0.387, 101 0.907 / 0.855,
+    wc 1.000 / 1.000 (lane = exposure inside the clamp).
+  - **Non-screen content** (PSNR base vs final): hangar exterior 55.3 / 55.1 dB (noise floor, same pose twice: 55.8 base, 55.6 final),
+    the rooms behind four pads 50.6–55.4 dB, exposures within 0.003 stops. The habitation room behind its pad: 33.3 dB, the dimmer
+    screen's own light on the facing wall (metered 0.37 → 0.28 cd/m²).
+  - **Astra** (`out/screen-exposure/astra/astra-verdict.md`; the habitation reference against two dark-room pads before / after):
+    CLOSER on both pairs ("loses some of its pale glow and looks more saturated against the dark wall"), plausible as a lit display;
+    the lit cargo-bay pad stays MISMATCH (brighter, more sky-blue than the reference: the general ~0.3 residual, WP-I1 fix pass 2 §3).
+- **Not covered.** Mobile, ray / path tracing, split screen, scene captures and the Basic method were not run (by reading and
+  compiling); the first-frame mix on a camera cut was not measured.
+
+#### E1-9 review fixes
+Terra / Astra (`out/screen-exposure/review/terra-review.md`, `astra-code-review.md`). Engine `43b8d033b`
+(`SCVIEWER_ENGINE_SCREEN_EXPOSURE` 2); project as listed.
+- **Compensation held beyond the clamp ends (Astra, high).** `FSCExposureSettings::From` keyed the curve between the clamp ends only;
+  that was exact for the clamped exposure but not for the adapted luminance below the clamp, which the game compensates with its end
+  segments extended (metered 0.125 cd/m²: −4.5 stops, adapted 2.83 cd/m², where the held curve gave −4.08 and 2.12). The curve now
+  covers the meter's reach (the histogram's `LOG_MIN..LOG_MAX` widened by the clamped blend's offsets) with keys still at the clamp
+  ends, so the two-stage output limits, and the final exposure, are unchanged. UE's one-stage adaptation (the `ue` A/B) applies the
+  compensation at the metered EV beyond the bounds, so there it no longer equals the game's clamp (a comparison mode; documented).
+  Test `SCBridge.ViewerExposure.Settings` rewritten (the game's compensation at every reachable EV, end segments included).
+- **Out-of-bounds load (Astra, medium):** the lookup selects the element before loading it.
+- **UE adaptation floor (Astra, medium):** the lane uses UE's reciprocal floor, so only the bounds are removed; its independent history
+  (after a clamped period it converges to EyeAdaptation inside the bounds rather than equalling it at once) is in the contract.
+- **Half-precision input (Astra, medium):** a vanishing scale (a half `MaterialFloat` input flushed to zero, or eye adaptation disabled)
+  now reads as the DBA ceiling in `SCREEN_DBA` / `FSCStarEngine::ScreenDBA`, not as scale 1 (which gave the floor).
+- **The GPU lane is not tested (both, medium):** the readback carries it (`FEyeAdaptationReadback::UnclampedExposure`, logged by
+  `sc.Look.ExposureLog` as `unclamped=`), and the C2 runs compare it with the two-stage state and the screens' pixels (Result).
+  Automation tests run under `-nullrhi`, so the GPU checks are the runs'.
+- **Not fixed, documented as the contract:** one frame behind the tonemapper's exposure (both, medium; as UE's EyeAdaptation nodes:
+  the base pass runs before eye adaptation; the game's screens shade before its `ExposureAdaptationCS` too, which needs the frame's
+  histogram — inferred from the pass order, not established); Lumen card capture with the first view's value at capture time, kept until
+  recapture (both, medium; UE's card capture binds `Views[0]`); the material cache binds no eye adaptation buffer (Astra; UE's nodes do
+  not compile there either). **Not fixed:** an empty reflected histogram measures `MinAverageLuminance / 0.18` (Astra, medium): UE's
+  reduction, which the game's bucket-zero counting would change for every scene's exposure (E1-5's meter; open).
+
 ### Later / investigations
 - Lumen World Cache with the adaptive Substrate G-buffer (`LumenWorldCacheTracePaths.usf ReadMaterialData`; D13).
 - Native `ProjectorTexture` on spot lights through the rect-light texture atlas (phase two of E1-3).
@@ -1238,6 +1323,7 @@ Engine `848efefd8` (`DistortionRendering.cpp`, `DistortAccumulatePS.usf`, `Disto
 | E1-6 | `ad5c402d9`, `05559963d`, `9f382da2b`, `c7a0e82f7`; review fixes 3 `41df91ebe`; review fixes 4 `0fa9c692a` | SCFxBuild: loop guard from the engine constant (`SCFxRules.h`), typed expressions, beam spawn-rate and count expressions, clamp-sum strength curves, owner-scale sprite sizes, `-LoopCapacity`; runtime contract reduced (`SCFxStrength.h`, `SCFxBeam.h`, cargo contacts, `sc.Fx.Spawn`); `bTreatAsEngineModule` kept (boundary); tests `SCBridge.Fx.*`; WP-K4 contract note | engine + project build, FX build errors=0, 25/25 tests, medfrnt overflow runs at 8 / 32, GPU cost, before / after frames, Astra (Result (E1-6)); review fixes `e2ec17572` (effective limit cvar, default 8, 32 in `DefaultEngine.ini`; expression validation; expression-aware filtering; collections; rate residual) and the builder / contract fixes (`SCFxContract.h`, `-VerifyContract`, package check): tests first, 137/141, FX build errors=0, verify stale=0, 0 overflows, PSNR as E1-6 (E1-6 review fixes); review fixes 3 (A1 captured limit, A2 runtime validation, A3 burst predicate, A4 UE timing, A5 collections, A8 counter, GreaterThan; builder T3-T5, A8, A9, contract 3): tests first, 148/152, FX build errors=0, verify stale=0 load_failures=0, 0 overflows, PSNR as before (E1-6 review fixes 3); review fixes 4 (collection lookup subclasses / discovery): 150/154, verify stale=0 (Review fixes 4) |
 | E1-7 | `6f5b30b63` (supersedes `b65d09ad1`, `9cad77abb`); review fixes `500fca6c0`; review fixes 4 `0fa9c692a` | fixture (+`DeriveSpecularOcclusion`), `FSCStarEngine` SSDO values, `FSCSSDOSettings`, `bStarEngineSSDO` (off, D15), `sc.Look.SSDO`, tests `SCBridge.ViewerExposure.SSDO.*`; `ue/EnginePatches`, `engine_patches.py`, `r.GeneralPurposeTweak` removed (routes, docs, AGENTS, READMEs) | engine + project build, 141/145 `SCBridge` (the 4 known), medfrnt old patch vs new feature off / on, SR-AO interplay, deferred-light run, GPU cost, Astra (Result (E1-7)); review fixes (partial replacement, short-range GI, deferred SSAO, DFAO, orthographic, game arc cosines, toon fallback; project null world, integral quality, shipped-default test): 148/152, pre / post interplay and GI runs, old vs new at noise, Astra pass (E1-7 review fixes); review fixes 4 (GI only where written, HWRT fallback, per-view AO downsample, GI resolution, bEnabled, ties-to-even): 150/154, post pairs unchanged, downsample-2 / irradiance-field / HWRT + RDG validation runs (Review fixes 4) |
 | E1-8 | `848efefd8` | `DefaultEngine.ini` (`r.Refraction.Dispersion=1`, `r.Refraction.Blur=0`, `r.Refraction.OffsetQuality=1`), `M_SC_Glass` on the distortion pass with the spread (`create_materials.py`), profiles with dispersion (`SCLook.h`), tests `SCBridge.Materials.*` | engine + project build, 159/163 `SCBridge` (the 4 known), C2 runs with fringing at the owner's values, cvar 0 vs pre-E1-8 at noise, GPU cost, Astra, Terra / Astra review (Result (E1-8); ue/verification/WP-U3b.md §14.10) |
+| E1-9 | `01596d9c0`, review fixes `43b8d033b` | `M_SC_Screen` / `_Translucent` DBA from `EyeAdaptationUnclamped` (`create_materials.py`, regenerated), `FSCStarEngine::ScreenDBA`, compensation curve over the meter's reach (`FSCExposureSettings`), `sc.Look.ExposureLog unclamped=`, tests `SCBridge.Materials.ScreenDBA`, `.ScreenExposureNode`, `.ViewerExposure.Settings` | engine + project build, tests first, 198/202 `SCBridge` (the 4 known), C2 runs: lane = two-stage state, 56 pads constant, 6 pads below the clamp at the game's ratio, PSNR at noise, Astra CLOSER; Terra / Astra review (Result (E1-9), E1-9 review fixes) |
 
 ## Owner decisions (2026-11-20)
 

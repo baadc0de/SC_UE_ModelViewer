@@ -13,6 +13,9 @@
 #if !defined(SCVIEWER_ENGINE_EXPOSURE) || SCVIEWER_ENGINE_EXPOSURE < 4
 #error "SCBridge needs the SCViewer fork of UE 5.9 with the exposure features and their review fixes (WP-E1 E1-5, SCVIEWER_ENGINE_EXPOSURE 4)"
 #endif
+#if !defined(SCVIEWER_ENGINE_SCREEN_EXPOSURE) || SCVIEWER_ENGINE_SCREEN_EXPOSURE < 2
+#error "SCBridge needs the SCViewer fork of UE 5.9 with the unclamped exposure for materials and its readback (WP-E1 E1-9, SCVIEWER_ENGINE_SCREEN_EXPOSURE 2)"
+#endif
 #if !defined(SCVIEWER_ENGINE_SSDO) || SCVIEWER_ENGINE_SSDO < 1
 #error "SCBridge needs the SCViewer fork of UE 5.9 with screen-space directional occlusion (WP-E1 E1-7, SCVIEWER_ENGINE_SSDO 1)"
 #endif
@@ -76,13 +79,28 @@ FSCExposureSettings FSCExposureSettings::From(const FSCStarEngine& Game, const F
     Out.FastRange = float(Game.AdaptRangePupil);
     Out.HistogramLogMin = float(Game.MeterLogMin + HistogramShift);
     Out.HistogramLogMax = float(Game.MeterLogMax + HistogramShift);
-    // The compensation curve between the clamp ends; UE holds the end keys outside, which with the brightness
-    // bounds pins the exposure exactly as the multiplier clamp does.
+    // The compensation curve over every metered EV the meter can reach (WP-E1 E1-9 review): the game compensates the metered luminance
+    // with its end segments extended (CalculateEVCompensation) before it adapts and clamps the exposure, and its screens read that
+    // adapted, unclamped luminance (GetGlobalDBAMultiplier_HDR; the fork's EyeAdaptationUnclamped). The reachable range is the
+    // histogram's (LOG_MIN..LOG_MAX), widened by the clamped blend's offsets around the reflected meter (an Incident or unclamped blend
+    // meter can leave it; the curve then holds its end key). Keys at the clamp ends stay: the two-stage output limits read the curve at
+    // the bounds, so the final exposure is still the multiplier clamp's beyond them. UE's one-stage adaptation (the `ue` A/B) applies the
+    // compensation at the metered EV even beyond the bounds, so outside them it no longer equals the game's clamp there.
+    const double LogLumToEV = Game.LuminanceToEV + FMath::Log2(Game.SceneUnitNits);
+    const bool bClampedBlend = Out.Meter == EAutoExposureMeter::ClampedBlend && Out.IncidentClampDown < UnclampedBlendStops;
+    const double EVMin = FMath::Min(EVLow, Game.MeterLogMin + LogLumToEV - (bClampedBlend ? Out.IncidentClampDown : 0.0));
+    const double EVMax = FMath::Max(EVHigh, Game.MeterLogMax + LogLumToEV + (bClampedBlend ? Out.IncidentClampUp : 0.0));
     const auto Key = [&](double EV) { Out.BiasCurve.Add(FVector2D(EV - AxisOffset, Game.CompensationAt(EV) + GreyStops)); };
+    if (EVMin < EVLow) Key(EVMin);
+    for (const FVector2D& Anchor : Game.Compensation)
+        if (Anchor.X > EVMin && Anchor.X < EVLow) Key(Anchor.X);
     Key(EVLow);
     for (const FVector2D& Anchor : Game.Compensation)
         if (Anchor.X > EVLow && Anchor.X < EVHigh) Key(Anchor.X);
     Key(EVHigh);
+    for (const FVector2D& Anchor : Game.Compensation)
+        if (Anchor.X > EVHigh && Anchor.X < EVMax) Key(Anchor.X);
+    if (EVMax > EVHigh) Key(EVMax);
     return Out;
 }
 

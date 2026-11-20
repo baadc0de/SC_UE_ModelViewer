@@ -30,7 +30,8 @@ struct SCBRIDGE_API FSCExposureSettings
     float LowPercent = 0, HighPercent = 0;          // AutoExposureLow/HighPercent
     float HistogramLogMin = 0, HistogramLogMax = 0;
     /**
-     * Linear keys (curve input EV100, stops), constant outside. The renderer bakes the curve over its key range
+     * Linear keys (curve input EV100, stops) over the meter's reach (the game's end segments extended past the clamp ends, which keep
+     * keys; WP-E1 E1-9 review), constant outside. The renderer bakes the curve over its key range
      * (r.EyeAdaptation.ExposureCompensationCurveLUT.Domain 1 and MaxStep in DefaultEngine.ini), so the clamp ends are sample points.
      */
     TArray<FVector2D> BiasCurve;

@@ -100,6 +100,13 @@ struct SCBRIDGE_API FSCStarEngine
     /** Scene EV of a luminance in cd/m2 (LogLumToEV). */
     double SceneEV(double Nits) const { return FMath::Log2(Nits) + LuminanceToEV; }
     double NitsAtEV(double EV) const { return FMath::Pow(2.0, EV - LuminanceToEV); }
+    /**
+     * GetGlobalDBAMultiplier_HDR as M_SC_Screen evaluates it (SCREEN_DBA in create_materials.py; WP-E1 E1-9): the adapted luminance
+     * MiddleGrey / UnclampedExposure (cd/m2) clamped to NitsAtEV(DBAMinAdaptedEV)..NitsAtEV(DBAMaxAdaptedEV), / (DBAMiddleGrey x
+     * SceneUnitNits). UnclampedExposure is UE's exposure scale (per cd/m2) before the brightness bounds: the engine fork's
+     * EyeAdaptationUnclamped, the game's unclampedExposure / SceneUnitNits. A non-positive scale reads as the ceiling (as the material).
+     */
+    double ScreenDBA(double UnclampedExposure) const;
     /** CalculateEVCompensation: piecewise linear through the anchors, end segments extended. */
     double CompensationAt(double MeteredEV) const;
     /** log2 of the unclamped exposure multiplier (per scene unit) the game settles on at a metered scene EV. */
