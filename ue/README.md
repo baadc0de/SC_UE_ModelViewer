@@ -535,12 +535,22 @@ on that rig instance.
 decides how it moves and makes it a door even without a Mannequin Open/Close pair: it spawns in its authored state
 (`is_opened`; the C2's doors are all closed) at that state's end pose (the open fragment's end, the close fragment's end,
 or a single-procedural door's transition start), an open/close door (`open_tag` / `close_tag`) plays those fragments, a single-procedural door (`transition_tag`, the C2's rear ramp) is its
-one transition's time and closes by playing it backwards. Every press (E, a pad, a lift, `sc.FP.Door`, the cargo access
-rule) goes through `ASCVehicle::PlayDoor`: each clip starts at the frame nearest the rig's current pose, so a door turned
-around mid-stroke never snaps, and the door's `item_port_links` are delivered (the C2's front hatch opens the front doors
+one transition's time and closes by playing it backwards. Every press (E, a pad, a proximity sensor, a lift, `sc.FP.Door`,
+the cargo access rule) goes through `ASCVehicle::PlayDoor`: each clip starts at the frame nearest the rig's current pose,
+so a door turned around mid-stroke never snaps (the same clip continues from its exact playhead only while that playhead,
+sampled in the new direction, is the pose the rig shows: a held clip a later one covers, such as an open/close door's Open
+under its Close, is not resumed); the new direction's start sound (an event within a clip frame of its start of play)
+plays even when it starts mid-stroke. A raw clip on a door's channels (`sc.Vehicle.Clip`, a snap) records the door's state
+when it is the door's own fragment, else leaves it unknown (read closed), and `ResetPose` clears pending sensor exits and
+re-opens the doors of a lift that was opening. And the
+door's `item_port_links` are delivered (the C2's front hatch opens the front doors
 and the front ramp). A panel in a door's loadout operates that door and its face follows it. Without door data a door is
 the Mannequin Open/Close pair at its bind pose, as before. `sc.Doors.Pose [index]` logs a door's joint, a point on its
-frame, its state and the clip playing (`DOOR_POSE`). A ship's cargo hold is opened (its doors through `PlayDoor`) by each
+frame, its state and the clip playing (`DOOR_POSE`); every door start logs its clip and start frame (`DOOR_CLIP_START …
+start=nearest_pose|playhead`); `sc.Doors.Trace <index|-1>` logs one door every tick while it moves (`DOOR_TICK`: state,
+clip, playhead, joint) and the audio events its clips cross (`DOOR_AUDIO_EVENT`); `sc.Doors.Sensors` lists the proximity
+sensors (`DOOR_SENSOR`: box in the vehicle frame, exit delay, doors). `ue/scripts/rpc/c2-doors-reopen.ps1` cycles a C2
+sensor door and a pad door. A ship's cargo hold is opened (its doors through `PlayDoor`) by each
 transfer that needs it, not at load; the transfer waits for those doors' playback, and a hold whose door was closed since
 reads closed again.
 

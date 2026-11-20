@@ -2,6 +2,11 @@
 // - SCBridge.Doors.RestStateAndToggle: a door spawns in its data state (closed: a single-procedural door holds its transition's
 //   start; opened: an open/close door holds its open end), toggling plays from the current pose (no snap, also mid-stroke),
 //   a single-procedural door closes by its transition backwards, item-port links move the port's door, ResetPose restores.
+// - SCBridge.Doors.ReopenPlaysClip: a sensor door, a pad door and a single-procedural ramp, three cycles each: every stroke
+//   plays its clip from the start of play with no jump, crosses its sound exactly once and ends with state and pose agreeing
+//   (an open/close door used to resume the other fragment's stale held playhead: a snap, no sound); a door turned around
+//   mid-stroke plays the new direction's start sound once; a raw clip records or forgets the door's state; ResetPose drops
+//   the sensors' pending exits; a targeted layer whose rig is gone poses nothing.
 // - SCBridge.Panels.ButtonPanel: the shared operable-panel mechanism on a game panel (light control): the crosshair on a
 //   node of the render picks it (nothing between nodes, nothing from behind), E switches the panel's light groups to the
 //   state the group's own interaction names, the panel's state machine takes the press and follows the group, and the face
@@ -198,6 +203,162 @@ bool FSCDoorRestStateTest::RunTest(const FString&)
     TestNearlyEqual(TEXT("A closed again"), BoneX(A), 0.0, 1e-6);
     TestTrue(TEXT("B open again"), V->IsDoorOpen(DB) && FMath::IsNearlyEqual(BoneX(B), 50.0, 1e-6));
     TestFalse(TEXT("C closed again"), V->IsDoorOpen(DC));
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCDoorReopenTest, "SCBridge.Doors.ReopenPlaysClip", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCDoorReopenTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    auto* V = World->SpawnActor<ASCVehicle>();
+    V->ClipCatalog = NewObject<USCClipCatalog>(V);
+    // Each clip's source carries the game's door sounds: an open/close door's at the start of its clip (t = 0.0001), a
+    // single-procedural door's deploy forwards at its start and retract backwards at its end (t = 0.9999).
+    auto Sound = [&](const TCHAR* Trigger, double Frame, int8 Direction) {
+        FSCClipAudioEvent E;
+        E.Frame = Frame;
+        E.Direction = Direction;
+        E.Trigger = Trigger;
+        V->ClipCatalog->Clips.Last().Bindings[0].AudioEvents.Add(E);
+    };
+    auto OpenClose = [&](const TCHAR* Owner) {
+        USCRigComponent* Rig = AddRig(V, Owner);
+        AddClip(V, Rig, *FString::Printf(TEXT("%s_open"), Owner), TEXT("Open"), {0, 10, 20, 30, 40, 50});
+        Sound(TEXT("Play_Door_Open"), 0.0005, 1);
+        AddClip(V, Rig, *FString::Printf(TEXT("%s_close"), Owner), TEXT("Close"), {50, 40, 30, 20, 10, 0});
+        Sound(TEXT("Play_Door_Close"), 0.0005, 1);
+        FSCDoorRecord R;
+        R.Door.bValid = true;
+        R.Door.OpenTag = TEXT("Open");
+        R.Door.CloseTag = TEXT("Close");
+        R.Door.bIsOpened = false; // closed in the data: it spawns holding its close fragment's end
+        V->DoorRecords.Add(Rig, R);
+        return Rig;
+    };
+    USCRigComponent* S = OpenClose(TEXT("SensorDoor")); // the C2's circle doors: a proximity sensor opens and closes it
+    USCRigComponent* P = OpenClose(TEXT("PadDoor"));    // the C2's side doors: a press (E, a pad) toggles it
+    USCRigComponent* R = AddRig(V, TEXT("Ramp"));       // the C2's rear ramp: one transition, closed by playing it backwards
+    AddClip(V, R, TEXT("ramp_transition"), TEXT("Open"), {0, 10, 20, 30, 40, 50});
+    Sound(TEXT("Play_Ramp_Deploy"), 0.0005, 1);
+    Sound(TEXT("Play_Ramp_Retract"), 4.9995, -1);
+    FSCDoorRecord RR;
+    RR.Door.bValid = true;
+    RR.Door.TransitionTag = TEXT("Open");
+    RR.Door.bIsOpened = false;
+    V->DoorRecords.Add(R, RR);
+    V->BuildExploration();
+    const int32 DS = V->DoorForRig(S), DP = V->DoorForRig(P), DR = V->DoorForRig(R);
+    if (!TestTrue(TEXT("three doors"), DS != INDEX_NONE && DP != INDEX_NONE && DR != INDEX_NONE)) return false;
+    FSCDoorSensor Sensor;
+    Sensor.Anchor = V->GetRootComponent();
+    Sensor.Box = FBox(FVector(-100), FVector(100));
+    Sensor.ExitDelay = 0.5f;
+    Sensor.Doors.Add(S);
+    V->DoorSensors.Add(Sensor);
+
+    // One stroke: Act starts it; the door's clip must start at the start of play from the pose the door shows (frame 0 forward,
+    // the last frame backwards), advance, cross its sound, and end at the state's pose, with the recorded state agreeing.
+    auto Stroke = [&](const FString& What, USCRigComponent* Rig, int32 Door, bool bOpen, const TCHAR* Trigger, TFunctionRef<void()> Act) {
+        const double Before = BoneX(Rig);
+        TestNearlyEqual(*(What + TEXT(": at rest at the other state's pose")), Before, bOpen ? 0.0 : 50.0, 1e-3);
+        const uint64 Events = V->ClipAudioEvents;
+        Act();
+        TestEqual(*(What + TEXT(": recorded state")), V->IsDoorOpen(Door), bOpen);
+        const FSCClipPlayback* Clip = Playing(V, Rig);
+        if (!TestNotNull(*(What + TEXT(": a clip plays")), Clip)) return;
+        const double Start = Clip->Speed < 0 ? V->ClipCatalog->Clips[Clip->Clip].LastFrame : 0.0;
+        TestTrue(*FString::Printf(TEXT("%s: from the start pose (frame %.2f, start of play %.0f)"), *What, Clip->Frame, Start), FMath::IsNearlyEqual(Clip->Frame, Start, 1e-3));
+        TestNearlyEqual(*(What + TEXT(": no snap at the start")), BoneX(Rig), Before, 1e-3);
+        V->Tick(0.25f);
+        const double Mid = BoneX(Rig);
+        TestTrue(*FString::Printf(TEXT("%s: the playhead advances (x %.2f mid-stroke)"), *What, Mid), Mid > 1.0 && Mid < 49.0);
+        TestTrue(*FString::Printf(TEXT("%s: its sound fires (%llu events, last %s)"), *What, V->ClipAudioEvents - Events, *V->LastClipAudioTrigger),
+                 V->ClipAudioEvents > Events && V->LastClipAudioTrigger == Trigger);
+        V->Tick(1.f);
+        TestEqual(*(What + TEXT(": one sound per stroke")), int64(V->ClipAudioEvents - Events), int64(1));
+        TestNull(*(What + TEXT(": finished")), Playing(V, Rig));
+        TestNearlyEqual(*(What + TEXT(": at the state's pose")), BoneX(Rig), bOpen ? 50.0 : 0.0, 1e-3);
+        TestEqual(*(What + TEXT(": the state agrees")), V->IsDoorOpen(Door), bOpen);
+    };
+    const FVector Inside(0, 0, 0), Outside(1000, 0, 0);
+    double Now = 10;
+    for (int32 Cycle = 1; Cycle <= 3; ++Cycle)
+    {
+        // The sensor: walking in opens it; walking out closes it after the sensor's exit delay (not before).
+        Stroke(FString::Printf(TEXT("sensor open %d"), Cycle), S, DS, true, TEXT("Play_Door_Open"), [&] { V->UpdateDoorSensors(Inside, Now); });
+        V->UpdateDoorSensors(Inside, Now += 1.5);
+        V->UpdateDoorSensors(Outside, Now += 0.3);
+        TestTrue(*FString::Printf(TEXT("sensor %d: still open within the exit delay"), Cycle), V->IsDoorOpen(DS) && !Playing(V, S));
+        Stroke(FString::Printf(TEXT("sensor close %d"), Cycle), S, DS, false, TEXT("Play_Door_Close"), [&] { V->UpdateDoorSensors(Outside, Now += 0.3); });
+        Now += 2;
+        // The pad door and the ramp: presses.
+        Stroke(FString::Printf(TEXT("pad open %d"), Cycle), P, DP, true, TEXT("Play_Door_Open"), [&] { V->ToggleDoor(DP); });
+        Stroke(FString::Printf(TEXT("pad close %d"), Cycle), P, DP, false, TEXT("Play_Door_Close"), [&] { V->ToggleDoor(DP); });
+        Stroke(FString::Printf(TEXT("ramp open %d"), Cycle), R, DR, true, TEXT("Play_Ramp_Deploy"), [&] { V->ToggleDoor(DR); });
+        Stroke(FString::Printf(TEXT("ramp close %d"), Cycle), R, DR, false, TEXT("Play_Ramp_Retract"), [&] { V->ToggleDoor(DR); });
+    }
+    // Turned around mid-stroke (the open/close door): the other clip from the frame nearest the pose, no snap, and the new
+    // direction's start sound (authored at the start of play) plays once.
+    TestTrue(TEXT("pad opens"), V->ToggleDoor(DP));
+    V->Tick(0.25f);
+    const double Mid = BoneX(P);
+    uint64 Events = V->ClipAudioEvents;
+    TestTrue(TEXT("pad turned around"), V->ToggleDoor(DP));
+    const FSCClipPlayback* Turn = Playing(V, P);
+    TestTrue(TEXT("its close clip from the frame showing the pose"), Turn && V->ClipCatalog->Clips[Turn->Clip].Id == FName(TEXT("PadDoor_close")) &&
+                                                                     FMath::IsNearlyEqual(Turn->Frame, (50.0 - Mid) / 10.0, 0.06));
+    TestNearlyEqual(TEXT("no snap at the turn"), BoneX(P), Mid, 0.6);
+    V->Tick(1.f);
+    TestTrue(TEXT("the close sound plays once at the turn"), V->ClipAudioEvents - Events == 1 && V->LastClipAudioTrigger == TEXT("Play_Door_Close"));
+    TestNearlyEqual(TEXT("closed"), BoneX(P), 0.0, 1e-3);
+    // The ramp turned around: its transition backwards from its exact playhead, its retract sound once.
+    TestTrue(TEXT("ramp opens"), V->ToggleDoor(DR));
+    V->Tick(0.25f);
+    const double RampMid = BoneX(R);
+    Events = V->ClipAudioEvents;
+    TestTrue(TEXT("ramp turned around"), V->ToggleDoor(DR));
+    TestNearlyEqual(TEXT("ramp: no snap at the turn"), BoneX(R), RampMid, 1e-3);
+    V->Tick(1.f);
+    TestTrue(TEXT("the retract sound plays once at the turn"), V->ClipAudioEvents - Events == 1 && V->LastClipAudioTrigger == TEXT("Play_Ramp_Retract"));
+
+    // A clip outside the door interaction: the door's own open clip snapped to its end records the door open (a press then
+    // closes it, from its close clip's start); another clip on the door's channels leaves the state unknown (read closed).
+    const int32 PadOpenClip = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("PadDoor_open")); });
+    TestTrue(TEXT("raw snap of the open clip"), V->SnapClipAt(PadOpenClip, P, true));
+    TestTrue(TEXT("recorded open with the open pose"), V->IsDoorOpen(DP) && FMath::IsNearlyEqual(BoneX(P), 50.0, 1e-3));
+    Stroke(TEXT("pad close after a raw open"), P, DP, false, TEXT("Play_Door_Close"), [&] { V->ToggleDoor(DP); });
+    AddClip(V, P, TEXT("pad_other"), TEXT("Wiggle"), {0, 30});
+    V->ClipCatalog->Clips.Last().Fragments[0].Fragment = TEXT("Other");
+    TestTrue(TEXT("raw clip on the door's channels"), V->SnapClipAt(V->ClipCatalog->Clips.Num() - 1, P, true));
+    TestFalse(TEXT("its state unknown: read closed"), V->IsDoorOpen(DP));
+    TestTrue(TEXT("a press opens it from the pose it shows"), V->ToggleDoor(DP) && V->IsDoorOpen(DP) && Playing(V, P) != nullptr);
+    V->Tick(2.f);
+    TestNearlyEqual(TEXT("open"), BoneX(P), 50.0, 1e-3);
+
+    // ResetPose clears the sensors' pending exits: a door the sensor opened, reset, then opened by a press stays open.
+    V->UpdateDoorSensors(Inside, Now += 1);
+    V->Tick(2.f);
+    V->ResetPose();
+    TestTrue(TEXT("sensor door closed by the reset"), !V->IsDoorOpen(DS) && FMath::IsNearlyEqual(BoneX(S), 0.0, 1e-3));
+    TestTrue(TEXT("pressed open"), V->ToggleDoor(DS));
+    V->Tick(2.f);
+    V->UpdateDoorSensors(Outside, Now += 5);
+    TestTrue(TEXT("no stale sensor exit closes it"), V->IsDoorOpen(DS) && !Playing(V, S));
+
+    // A targeted layer whose rig is gone poses nothing: not the sensor door that shares its mesh.
+    auto* Twin = NewObject<USCRigComponent>(V);
+    V->AddInstanceComponent(Twin);
+    Twin->SetSkeletalMesh(S->GetSkeletalMeshAsset());
+    Twin->RegisterComponent();
+    Twin->ResetPose();
+    V->Rigs.Add(Twin);
+    const int32 SensorClose = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("SensorDoor_close")); });
+    TestTrue(TEXT("the twin plays the close clip"), V->PlayClipAt(SensorClose, Twin, 1.f));
+    V->Rigs.Remove(Twin);
+    Twin->DestroyComponent();
+    V->Tick(0.25f);
+    TestNearlyEqual(TEXT("the sensor door keeps its open pose"), BoneX(S), 50.0, 1e-3);
     return !HasAnyErrors();
 }
 

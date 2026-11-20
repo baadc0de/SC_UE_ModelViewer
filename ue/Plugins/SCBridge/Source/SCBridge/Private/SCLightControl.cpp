@@ -138,10 +138,45 @@ static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPose(
                 // A point 3 m out along every axis of the joint's frame: it moves when the joint only turns (a hinge).
                 const FVector Tip = V->GetActorTransform().InverseTransformPosition(Door.Rig->GetSocketTransform(Door.Joint).TransformPosition(FVector(300)));
                 const FSCClipPlayback* P = V->Playback.FindByPredicate([&](const FSCClipPlayback& X) { return X.TargetRig.Get() == Door.Rig; });
-                UE_LOG(LogSCLightControl, Display, TEXT("DOOR_POSE index=%d owner=%s joint=%s pos=%.2f,%.2f,%.2f tip=%.2f,%.2f,%.2f open=%d starts_open=%d reverse_close=%d clip=%s frame=%.2f speed=%.2f t=%.3f"),
-                       D, *Door.Rig->OwnerEntity, *Door.Joint.ToString(), Joint.X, Joint.Y, Joint.Z, Tip.X, Tip.Y, Tip.Z, V->IsDoorOpen(D), Door.bStartsOpen, Door.bReverseClose,
+                UE_LOG(LogSCLightControl, Display, TEXT("DOOR_POSE index=%d owner=%s rig=%s joint=%s pos=%.2f,%.2f,%.2f tip=%.2f,%.2f,%.2f open=%d starts_open=%d reverse_close=%d clip=%s frame=%.2f speed=%.2f t=%.3f"),
+                       D, *Door.Rig->OwnerEntity, *Door.Rig->GetName(), *Door.Joint.ToString(), Joint.X, Joint.Y, Joint.Z, Tip.X, Tip.Y, Tip.Z, V->IsDoorOpen(D), Door.bStartsOpen, Door.bReverseClose,
                        P && V->ClipCatalog ? *V->ClipCatalog->Clips[P->Clip].Id.ToString() : TEXT("-"), P ? P->Frame : -1.0, P ? P->Speed : 0.f,
                        World->GetTimeSeconds());
+            }
+        }
+    }));
+
+// sc.Doors.Trace <door index|-1>: log that door every vehicle tick while a clip plays on its rig (DOOR_TICK: recorded state,
+// clip, playhead before and after, joint tip) and each audio event its clips cross (DOOR_AUDIO_EVENT); -1 stops.
+static FAutoConsoleCommandWithWorldAndArgs GSCDoorsTrace(
+    TEXT("sc.Doors.Trace"), TEXT("sc.Doors.Trace <door index|-1>: log a door every tick while it moves (DOOR_TICK, DOOR_AUDIO_EVENT)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+        {
+            It->TraceDoor = Args.Num() >= 1 && It->Doors.IsValidIndex(FCString::Atoi(*Args[0])) ? FCString::Atoi(*Args[0]) : INDEX_NONE;
+            UE_LOG(LogSCLightControl, Display, TEXT("DOOR_TRACE vehicle=%s door=%d"), *It->GetName(), It->TraceDoor);
+        }
+    }));
+
+// sc.Doors.Sensors: each proximity sensor (DOOR_SENSOR index centre half exit_delay doors), its box in the vehicle frame (cm).
+static FAutoConsoleCommandWithWorldAndArgs GSCDoorsSensors(
+    TEXT("sc.Doors.Sensors"), TEXT("sc.Doors.Sensors: log the door proximity sensors (DOOR_SENSOR: box in the vehicle frame, exit delay, doors)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>&, UWorld* World) {
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+        {
+            ASCVehicle* V = *It;
+            for (int32 S = 0; S < V->DoorSensors.Num(); ++S)
+            {
+                const FSCDoorSensor& Sensor = V->DoorSensors[S];
+                const USceneComponent* Anchor = Sensor.Anchor.Get();
+                if (!Anchor) continue;
+                const FTransform ToVehicle = Anchor->GetComponentTransform().GetRelativeTransform(V->GetActorTransform());
+                const FBox Box = Sensor.Box.TransformBy(ToVehicle);
+                TArray<FString> Doors;
+                for (const auto& Rig : Sensor.Doors) Doors.Add(FString::FromInt(V->DoorForRig(Rig.Get())));
+                UE_LOG(LogSCLightControl, Display, TEXT("DOOR_SENSOR index=%d centre=%.1f,%.1f,%.1f half=%.1f,%.1f,%.1f exit_delay=%.2f doors=%s"), S,
+                       Box.GetCenter().X, Box.GetCenter().Y, Box.GetCenter().Z, Box.GetExtent().X, Box.GetExtent().Y, Box.GetExtent().Z, Sensor.ExitDelay,
+                       *FString::Join(Doors, TEXT(",")));
             }
         }
     }));

@@ -231,11 +231,11 @@ void USCCargoSubsystem::UpdateAccess(USCCargoGridComponent* Grid, double Now)
     {
         const ASCVehicle* Vehicle = Grid->OwnerVehicle.Get();
         bool bPlaying = false, bShut = false;
-        for (const TWeakObjectPtr<USCRigComponent>& Door : Grid->AccessDoors)
-            if (Vehicle && Door.IsValid())
+        for (const int32 Door : Grid->AccessDoors)
+            if (Vehicle && Vehicle->Doors.IsValidIndex(Door))
             {
-                if (Vehicle->IsRigPlaying(Door.Get())) bPlaying = true;
-                else if (!Vehicle->IsRigOpen(Door.Get())) bShut = true;
+                if (Vehicle->IsDoorPlaying(Door)) bPlaying = true;
+                else if (!Vehicle->IsDoorOpen(Door)) bShut = true;
             }
         if (bShut) Grid->bAccessOpened = false; // the next request opens it again
         if (!Grid->bAccessOpened) Access = ESCCargoGridAccess::Closed;
@@ -258,7 +258,7 @@ bool USCCargoSubsystem::RequestAccess(USCCargoGridComponent* Grid, bool bOpen, d
         Grid->ReadyAt = Now;
         Grid->AccessDoors.Reset();
         for (const FSCAccessMove& Move : Opened.Moves)
-            if (Move.bDoor) Grid->AccessDoors.Add(Move.Rig);
+            if (Move.bDoor) Grid->AccessDoors.AddUnique(Move.Door);
             else Grid->ReadyAt = FMath::Max(Grid->ReadyAt, Now + Move.Seconds);
         Grid->bAccessOpened = true;
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRID_ENV_ACCESS id=%d rigs_tested=%d rigs_moved=%d doors=%d on_request=1"), Grid->GridId, Opened.RigsTested,

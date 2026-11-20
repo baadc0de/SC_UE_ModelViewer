@@ -311,6 +311,16 @@ bool ASCVehicle::IsDoorOpen(int32 Index) const
 {
     return Doors.IsValidIndex(Index) && FragmentTargets.FindRef({Doors[Index].Rig.Get(), Doors[Index].Fragment}) == Doors[Index].OpenTag;
 }
+bool ASCVehicle::IsDoorPlaying(int32 Index) const
+{
+    if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig || !ClipCatalog) return false;
+    const FSCDoorInteraction& D = Doors[Index];
+    return Playback.ContainsByPredicate([&](const FSCClipPlayback& P) {
+        return AppliesTo(P, D.Rig) && ClipCatalog->Clips.IsValidIndex(P.Clip) &&
+               ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == D.Rig->GetSkeletalMeshAsset(); }) &&
+               ClipCatalog->Clips[P.Clip].Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment; });
+    });
+}
 bool ASCVehicle::ToggleDoor(int32 Index)
 {
     if (!Doors.IsValidIndex(Index)) return false;

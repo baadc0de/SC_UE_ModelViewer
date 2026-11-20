@@ -38,7 +38,7 @@ int32 ASCVehicle::RefreshPanelScreens()
             {
                 // Moving: a clip plays on the rig, targeted at it or untargeted (PlayFragment) and binding its mesh.
                 const bool bMoving = IsRigPlaying(Rig) || (ClipCatalog && Playback.ContainsByPredicate([&](const FSCClipPlayback& P) {
-                    return !P.TargetRig.IsValid() && ClipCatalog->Clips.IsValidIndex(P.Clip) &&
+                    return !P.bTargeted && ClipCatalog->Clips.IsValidIndex(P.Clip) &&
                            ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); });
                 }));
                 Key = DoorOpenStateKey(IsRigOpen(Rig), bMoving);

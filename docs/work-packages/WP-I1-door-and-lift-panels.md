@@ -1276,6 +1276,101 @@ Not fixed, with the reason:
 - A rider walking on the carriage during a leg can pass into a collider the leg passes (review, above).
 - `sc.Screens.States` pins do not apply to light panels (their face is drawn).
 
+## Result (C2 fixes: doors opened again, 2026-11-20)
+
+Owner report on the C2 in `hangar_xltop_001`: "going through a door once, the animation plays and the sound triggers;
+coming back, the doors appear closed, but near enough they instantly open: no animation, no sound." Runs in
+`out/doors-reopen/{before,after}` (`ue/scripts/rpc/c2-doors-reopen.ps1`, port 8771, off screen). Nothing committed.
+
+**Reproduced** (`before/run.txt`, the a934c5b build). Each candidate door was first opened by its sensor once (the probe:
+`AUDIO_PLAY …Large_Door_Open` / `…Small_Door_Open`, the clip played); its close left no sound and finished at once. Every
+later stroke, by sensor or by `sc.FP.Door` (the pads' path): `PHASE … playing_samples=0 sounds=0 PHASE_FAIL`, 12 of 12;
+the circle door's joint jumps from y −249.83 to −343.77 between two 50 ms samples, the one sample that catches a clip shows
+`clip=…__door_open frame=45.00` (its last frame) before it is gone. The owner's own demo log (`demo-c2-17.log`) shows the
+same: a circle door's first `FIRST_PERSON_DOOR open=1` has its `AUDIO_PLAY`, the later ones none. The proximity sensor
+(`UpdateDoorSensors`) records the state through `ToggleDoor` like a press, and the state and the pose agree at rest; the
+recorded state was never the fault.
+
+**Root cause.** `PlayFragmentAt(…, CurrentPose)` (every door start: press, pad, sensor, lift, cargo access) continued "the
+same clip already on the rig" from its stored playhead. A finished clip stays in `HeldPlayback` under the clips played
+after it (layered by `Order`), so an open/close door found a stale entry of the other fragment: at spawn the rest pose
+holds the Close clip at its last frame, so the first close resumed it there (a snap: no frame crossed, no sound); after
+that every open resumed the held Open at its last frame and every close the held Close. The single-procedural rear ramp
+(one clip both ways, always the newest layer) was unaffected, which is why the C2 fixes' ramp traces passed.
+
+**Fix.** The stored playhead is used only while it is what the rig shows (sampled in the new direction it reproduces the
+rig's pose, `ClipPoseCost`; review fix below, first `IsCoveredOnRig`); otherwise the clip starts at the frame nearest the
+rig's current pose (`NearestClipFrame`), so an open/close door's open and close always start at their first frame from rest and turn around
+mid-stroke without a snap; the ramp's turn keeps its exact playhead. The sensor behaviour is unchanged and from data
+(`ExitDelay` 0.5 s on all 8 C2 sensors; the door's own fragments). Diagnostics: `DOOR_CLIP_START` on every door start
+(`start=nearest_pose|playhead`), `sc.Doors.Trace` (`DOOR_TICK`, `DOOR_AUDIO_EVENT`), `sc.Doors.Sensors` (`DOOR_SENSOR`);
+`FireClipAudio` counts crossed events (`ClipAudioEvents`) with or without an audio scene.
+
+**Test first.** `SCBridge.Doors.ReopenPlaysClip`: a sensor door, a pad door (open/close, closed in the data) and a
+single-procedural ramp, each with clip sounds; three cycles each, every stroke asserting the clip starts at the start of
+play with no jump, the playhead advances, its sound event fires, and the end pose and recorded state agree; then an
+open/close door turned around mid-stroke. On the old rule (`out/doors-reopen/testfirst-fail.txt`): 42 failed
+assertions, from the first close (`sensor close 1: from the start pose (frame 5.00, start of play 0)`, `its sound fires (0
+events)`) on; the ramp's strokes pass. With the fix SCBridge 184/188 (the 4 known failures).
+
+**Verified** (`after/run.txt`, the fixed build; `sc.Doors.Sensors`: 8 sensors, every `exit_delay=0.50`). Three full cycles
+on circle door 14 by its sensor (the player put in its box, then 15 m above it) and on component door 26 (no sensor) by
+`sc.FP.Door`, the pads' path (the listener at its joint): 12 of 12 `PHASE_OK`, `FAILED_PHASES 0` (after the review fixes;
+the criteria are the driver's: exactly one `DOOR_CLIP_START` on the door's rig at the start of play, the ticks run it to
+`ended=1`, a `DOOR_AUDIO_EVENT` whose trigger then has an `AUDIO_PLAY`, the recorded state ends as the stroke's). Every
+stroke starts `from=0.00 start=nearest_pose` (door_open / door_close, last frame 45; Door_Open / Door_Close, last 50);
+the close sounds play for the first time. The voices 0.5 s in: `…Large_Door_Open` at 0.3–1.4 m, −10.2 to −16.5 dB (the
+player in the sensor's box); `…Systems_Corridor_Component_Door_Open` / `_Close` at 2.1–2.5 m, −12.2 / −12.5 dB; the circle
+door's close is heard from 15.8 m above the hull (−216 dB, beyond its attenuation: the player was put outside the sensor
+there). Screenshots of the circle door's second opening: `after/sensor-c2-open-{0.1,0.3,0.6,1.0,1.6,2.4}s.png` (closed,
+the leaves parting, open).
+
+| Door | Cycle | Open: start / ticks / sound | Close: start / ticks / sound |
+|---|---|---|---|
+| 14 circle (sensor) | 1 | 0.00 / 105 / Large_Door_Open | 0.00 / 158 / Large_Door_Close |
+| | 2 | 0.00 / 49 / Large_Door_Open | 0.00 / 162 / Large_Door_Close |
+| | 3 | 0.00 / 154 / Large_Door_Open | 0.00 / 161 / Large_Door_Close |
+| 26 component (pad) | 1 | 0.00 / 184 / Component_Door_Open | 0.00 / 189 / Component_Door_Close |
+| | 2 | 0.00 / 188 / Component_Door_Open | 0.00 / 188 / Component_Door_Close |
+| | 3 | 0.00 / 189 / Component_Door_Open | 0.00 / 176 / Component_Door_Close |
+
+### Review (Terra + Astra, `out/doors-reopen/review/`)
+
+Both confirm the root cause and that the test fails on the old rule for it (`terra-review.md`, `astra-code-review.md`;
+the fixes in `repo-after-fixes.diff`). Fixed once:
+- **The playhead rule** (both, high / medium): "the same clip continues from its playhead" now holds only when that
+  playhead, sampled in the direction it will play, reproduces the rig's pose (`ClipPoseCost` under 1e-4); otherwise the
+  nearest frame in that direction. A partly covered layer whose visible channels still match keeps its exact phase; a
+  multi-source clip reversed (sources aligned at the start forwards, the end backwards) falls back to the nearest frame;
+  untargeted entries of the clip count.
+- **Raw clips and door state** (both, high): `PlayClip` / `SnapClip` / `PlayClipAt` / `SnapClipAt` on a door's channels
+  record the door's state from what the clip ends in when it is the door's own open or close fragment, else leave it
+  unknown (read closed: a press, a pad or a sensor opens it from the pose it shows) (`DOOR_STATE_RAW_CLIP`).
+- **ResetPose** (Astra, high): the sensors' pending exits are cleared; a lift whose doors were opening or open drives them
+  open again (`FSCLift::ReopenDoorsAfterReset`, `LIFT_DOORS_AFTER_RESET`) instead of waiting in Opening for ever.
+- **Cargo access doors** (Astra, high): a hold's access doors are door interactions, not rigs (`AccessDoors` indices,
+  `IsDoorPlaying`), and a door already open when the transfer asks is scored from its closed pose, so the hold depends on it
+  and reads Closed once it is closed.
+- **A turned-around door's sound** (Terra, medium): on the first advance, an event within one clip frame of the start of
+  play in that direction (where the C2 doors' `audio_trigger` t 0.0001 / `audio_trigger_reverse` t 0.9999 sit) plays also
+  when the clip starts past it; the old "the start frame counts" rule (which could fire a mid-clip event twice at a turn)
+  is gone. A clip fully covered on a rig plays no events there.
+- **Expired targets** (both, medium): an entry started for one rig (`bTargeted`) poses nothing once that rig is gone, and
+  is dropped; it no longer acts as an untargeted layer on the rigs sharing its mesh.
+- **The driver** (both, medium): see its criteria above; it exits 1 when a phase fails and logs the voices' gains.
+
+Not fixed, with the reason:
+- **A mixed pose** (Terra, high): when a later layer drives some of a door clip's channels with other values, no frame of
+  the clip reproduces the pose and the restarted clip takes all its channels. Blending per channel across a transition is
+  a playback feature of its own; no C2 door has another layer on its channels (the K1 raw clips no longer touch doors).
+- **Two doors on one rig sharing a scope** (Astra, medium): starting one holds the other mid-stroke (the authored Mannequin
+  scope rule); marking the held one unsettled would let its sensor restart it and interrupt the first in turn. No C2 rig
+  carries two doors.
+
+New tests: `SCBridge.Doors.ReopenPlaysClip` grew exact sound counts per stroke, the turn sounds (open/close door and ramp),
+a raw open snap then a press, an unknown state after another clip, ResetPose and a sensor's pending exit, and a twin rig
+sharing the mesh whose targeted layer outlives it. SCBridge 184/188 (the 4 known failures).
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:

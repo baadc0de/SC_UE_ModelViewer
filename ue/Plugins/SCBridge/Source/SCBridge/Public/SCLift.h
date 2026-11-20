@@ -151,6 +151,9 @@ public:
     bool OpenDoors();
     bool CloseDoors();
     bool CancelStop(int32 Stop);
+    /** After the vehicle's ResetPose put every door at its rest state: a lift whose doors were opening or open at its stop
+     *  drives the gate and the stop's landing doors open again (its Opening state waits for them to settle open). */
+    void ReopenDoorsAfterReset();
     /** A target slot delivered to the carriage entity, or to path node Stop. False: not an input of the lift. */
     bool ReceiveCarriage(FName Slot, const FString& Source, FName SourceSlot);
     bool ReceiveNode(int32 Stop, FName Slot, const FString& Source, FName SourceSlot);

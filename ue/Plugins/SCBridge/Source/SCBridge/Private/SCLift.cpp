@@ -297,6 +297,12 @@ bool FSCLift::OpenDoors()
     }
     return true;
 }
+void FSCLift::ReopenDoorsAfterReset()
+{
+    if ((State != ESCLiftState::Opening && State != ESCLiftState::Open) || !Stops.IsValidIndex(CurrentStop)) return;
+    const bool bAny = DoorsAt(CurrentStop, true); // the doors at rest closed are started; open ones are left
+    UE_LOG(LogSCLift, Display, TEXT("LIFT_DOORS_AFTER_RESET lift=%d stop=%d state=%s started=%d"), Id, CurrentStop, LexToString(State), bAny);
+}
 bool FSCLift::CloseDoors()
 {
     if (!Stops.IsValidIndex(CurrentStop) || (State != ESCLiftState::Open && State != ESCLiftState::Opening)) return false;

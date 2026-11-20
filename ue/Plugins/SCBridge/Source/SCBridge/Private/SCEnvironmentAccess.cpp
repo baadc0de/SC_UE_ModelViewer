@@ -128,9 +128,9 @@ FString Layers(const ASCVehicle* Vehicle, const USCRigComponent* Rig)
     FString Out;
     for (const TArray<FSCClipPlayback>* List : {&Vehicle->HeldPlayback, &Vehicle->Playback})
         for (const FSCClipPlayback& P : *List)
-            if ((!P.TargetRig.IsValid() || P.TargetRig.Get() == Rig) &&
+            if (ASCVehicle::AppliesTo(P, Rig) &&
                 Vehicle->ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); }))
-                Out += FString::Printf(TEXT("%s%d:%.0f:%llu%s"), Out.IsEmpty() ? TEXT("") : TEXT(","), P.Clip, P.Frame, P.Order, P.TargetRig.IsValid() ? TEXT("t") : TEXT(""));
+                Out += FString::Printf(TEXT("%s%d:%.0f:%llu%s"), Out.IsEmpty() ? TEXT("") : TEXT(","), P.Clip, P.Frame, P.Order, P.bTargeted ? TEXT("t") : TEXT(""));
     return Out.IsEmpty() ? TEXT("-") : Out;
 }
 
@@ -146,7 +146,30 @@ FSCAccessResult Apply(ASCVehicle* Vehicle, FName Key, const FRequest& R)
         USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr;
         if (!Mesh) continue;
         const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
-        const TArray<FTransform> Current = Rig->LocalPose.Num() == Ref.GetNum() ? Rig->LocalPose : Ref.GetRefBonePose();
+        TArray<FTransform> Current = Rig->LocalPose.Num() == Ref.GetNum() ? Rig->LocalPose : Ref.GetRefBonePose();
+        // A door already open (its pad, a sensor) clears the corridors only while it stays open: it is scored from its closed
+        // pose (a single-procedural door's transition start, an open/close door's close fragment end), so the request depends
+        // on it as on a door it opens, and the hold reads Closed once it is closed again.
+        for (int32 D = 0; D < Vehicle->Doors.Num(); ++D)
+        {
+            const FSCDoorInteraction& Door = Vehicle->Doors[D];
+            if (Door.Rig != Rig || !Vehicle->IsDoorOpen(D)) continue;
+            const FName Tag = Door.bReverseClose ? Door.OpenTag : Door.CloseTag;
+            const int32 Closing = Clips.IndexOfByPredicate([&](const FSCImportedClip& C) {
+                return C.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Mesh; }) &&
+                       C.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == Door.Fragment && (F.FragmentTags.Contains(Tag) || F.Tags.Contains(Tag)); });
+            });
+            if (Closing == INDEX_NONE) continue;
+            const FSCImportedClip& C = Clips[Closing];
+            const double ClosedFrame = Door.bReverseClose ? 0.0 : double(C.LastFrame);
+            for (const FSCBoneTrack& T : C.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; })->Tracks)
+            {
+                if (!Current.IsValidIndex(T.Bone)) continue;
+                const FTransform Sample = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(C, T, ClosedFrame, false));
+                if (T.bRotation) Current[T.Bone].SetRotation(Sample.GetRotation());
+                if (T.bPosition) Current[T.Bone].SetTranslation(Sample.GetTranslation());
+            }
+        }
         // A door moves only through its own interaction (C2 fixes): its candidate poses are its door interactions' open ends
         // (each fragment driving the rig: a root rig may carry several hatches), and it is opened as a press would
         // (ASCVehicle::PlayDoor), so its recorded state, its pads and its port links follow.
@@ -213,6 +236,7 @@ FSCAccessResult Apply(ASCVehicle* Vehicle, FName Key, const FRequest& R)
         Move.BlockedBefore = Before.Blocked;
         Move.BlockedAfter = Best.Blocked;
         Move.bDoor = bDoorRig;
+        Move.Door = Door;
         Move.Seconds = Clips[BestClip].Fps > 0 ? Clips[BestClip].LastFrame / Clips[BestClip].Fps : 0.f;
         Result.Seconds = FMath::Max(Result.Seconds, Move.Seconds);
     }

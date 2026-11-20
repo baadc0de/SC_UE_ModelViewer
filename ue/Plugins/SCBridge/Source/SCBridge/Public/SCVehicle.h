@@ -76,7 +76,8 @@ struct FSCClipPlayback
     bool bPlaying = true;
     uint64 Order = 0;
     TArray<FName> Scopes;
-    bool bAudioFresh = true; // WP-A1: the first advance includes the start frame (events sit at t = 0.0001 / 0.9999)
+    bool bAudioFresh = true; // WP-A1: the first advance plays the start-of-play events (they sit at t = 0.0001 / 0.9999)
+    bool bTargeted = false;  // started for one rig (TargetRig): once that rig is gone the entry poses nothing
 };
 UCLASS(BlueprintType)
 class SCBRIDGE_API ASCVehicle : public AActor
@@ -100,6 +101,8 @@ public:
     int32 FindInteraction(FVector Eye, FVector Direction, float Reach = 300, const AActor* Ignore = nullptr) const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool ToggleDoor(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") bool IsDoorOpen(int32 Index) const;
+    /** A clip of door Index's own fragment plays on its rig (another door on the same rig moving does not count). */
+    bool IsDoorPlaying(int32 Index) const;
     /** Door control panels (the game's pads): a panel's anchor -> the rig of the door it operates (scene `links`, or
      *  the door whose loadout attached it). FindInteraction resolves a panel under the crosshair to its door. */
     TMap<TWeakObjectPtr<const USceneComponent>, TWeakObjectPtr<USCRigComponent>> DoorControls;
@@ -132,6 +135,11 @@ public:
      *  metres, summed over the clip's tracks); searched from the start of play (frame 0 forward, the last frame backward),
      *  so a tie keeps the start. */
     static double NearestClipFrame(const FSCImportedClip& Clip, const FSCClipBinding& Binding, const TArray<FTransform>& Local, bool bBackward);
+    /** How far Local is from Clip's pose at Frame sampled in that direction (rotation radians plus translation metres, summed
+     *  over the binding's tracks). */
+    static double ClipPoseCost(const FSCImportedClip& Clip, const FSCClipBinding& Binding, const TArray<FTransform>& Local, double Frame, bool bBackward);
+    /** Whether playback entry P poses Rig (its own rig when targeted, none once that rig is gone; every rig when untargeted). */
+    static bool AppliesTo(const FSCClipPlayback& P, const USCRigComponent* Rig);
     // ------------------------------------------------------------------------------------- doors (data state, C2 fixes)
     /** Door data by rig (`door`, `item_port_links` of the instance that carries the rig), filled at import. */
     TMap<TWeakObjectPtr<const USCRigComponent>, FSCDoorRecord> DoorRecords;
@@ -312,9 +320,21 @@ public:
     TArray<FSCClipPlayback> Playback;     // active entries only
     TArray<FSCClipPlayback> HeldPlayback; // bounded by catalogue size; no idle evaluation
     uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
+    /** WP-A1 diagnostics: clip audio events crossed by playback (posted to the audio scene when there is one), and the
+     *  last one's trigger. */
+    uint64 ClipAudioEvents = 0;
+    FString LastClipAudioTrigger;
+    /** sc.Doors.Trace: the door logged every tick while a clip plays on its rig (DOOR_TICK, DOOR_AUDIO_EVENT); INDEX_NONE off. */
+    int32 TraceDoor = INDEX_NONE;
 private:
     bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {}, USCRigComponent* Target = nullptr,
                    double StartFrame = -1);
+    /** Whether later layers on Rig (Playback or HeldPlayback, targeted at Rig or untargeted) drive every channel Entry drives
+     *  there, so Entry shows nothing on Rig (its audio events are not Rig's). */
+    bool IsCoveredOnRig(const FSCClipPlayback& Entry, const USCRigComponent* Rig) const;
+    /** A clip started outside a door interaction (PlayClip / SnapClip / PlayClipAt / SnapClipAt) on a door's channels: the
+     *  door's recorded state becomes what the clip ends in when it is the door's own open or close fragment, else unknown. */
+    void ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast);
     /** WP-A1: play the audio events of P's clip bindings crossed between Previous and P.Frame. */
     void FireClipAudio(FSCClipPlayback& P, double Previous);
     void MarkDirty(int32 ClipIndex);
