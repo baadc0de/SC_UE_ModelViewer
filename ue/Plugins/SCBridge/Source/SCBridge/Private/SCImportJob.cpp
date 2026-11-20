@@ -8,6 +8,9 @@
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
+#include "SCProcessedCache.h"
+#include "SCProcessedMeshCache.h"
+#include "SCProcessedTextureCache.h"
 #include "SCSkeletonBuilder.h"
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
@@ -75,8 +78,11 @@ struct FEntity
 };
 struct FPart
 {
+    struct FCacheVariant { FString Key; TUniquePtr<FSCProcessedCache::FReadPin> Pin; };
     int32 Owner = INDEX_NONE;
     FSCDerivedMesh Mesh, Translucent;
+    FCacheVariant OpaqueCache, TranslucentCache;
+    TArray<FTriangleID> CollisionTriangles; // cold fallback if the validated package fails to load
     bool bGamePhysics = false; // WP-P3: the game's colliders of Owner; hidden, blocks the pawn only
 };
 /** One unique mesh asset moving through derive -> prepare -> build. */
@@ -143,6 +149,7 @@ struct FSCImportJob::FState
     TWeakObjectPtr<ASCVehicle> Spawned; // never cleared: lets hosts account for a destroyed partial actor
     TArray<TObjectPtr<UObject>> KeepAlive; // session packages between build steps
     FString Session;
+    FString MeshCacheNamespace;
     FSCImportMaterials Materials;
     TFuture<void> MaterialPrep;
     double MaterialStart = 0;
@@ -193,6 +200,7 @@ struct FSCImportJob::FState
     void LaunchDerives();
     bool StepMesh(bool bBlocking);
     void LaunchPrepare(FMeshSlot& Slot);
+    void ProbeMeshCache(FPart::FCacheVariant& Variant, const FString& Key);
     void BeginBuild(FMeshSlot& Slot);
     void BuildNextVariant(FMeshSlot& Slot);
     void FinishBuild(FMeshSlot& Slot);
@@ -426,8 +434,12 @@ FString FSCImportJob::GetPhase() const
         if (!S->Slots.IsValidIndex(S->Current)) return TEXT("Building meshes");
         const FMeshSlot& Slot = S->Slots[S->Current];
         if (Slot.bBuildBegun)
-            return FString::Printf(TEXT("Building mesh %d/%d (part %d/%d)"), S->Current + 1, N, FMath::Min(Slot.NextPart + 1, Slot.Parts.Num()),
-                                   Slot.Parts.Num());
+        {
+            const FPart* Part = Slot.Parts.IsValidIndex(Slot.NextPart) ? &Slot.Parts[Slot.NextPart] : nullptr;
+            const bool bCached = Part && (Slot.bTranslucentNext ? Part->TranslucentCache : Part->OpaqueCache).Pin;
+            return FString::Printf(TEXT("%s mesh %d/%d (part %d/%d)"), bCached ? TEXT("Loading cached") : TEXT("Building"),
+                S->Current + 1, N, FMath::Min(Slot.NextPart + 1, Slot.Parts.Num()), Slot.Parts.Num());
+        }
         const TCHAR* Step = !Slot.bPrepareLaunched ? TEXT("Deriving mesh")
                             : S->Options.bBuildCollision ? TEXT("Deriving collision") : TEXT("Preparing mesh");
         return FString::Printf(TEXT("%s %d/%d"), Step, S->Current + 1, N);
@@ -542,6 +554,8 @@ bool FSCImportJob::FState::StepRead(bool bBlocking)
 void FSCImportJob::FState::Begin()
 {
     Session = TEXT("/Temp/SC/") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    if (Options.ProcessedCache && Options.ProcessedCache->IsEnabled() && !Options.CacheArchiveBuild.IsEmpty())
+        MeshCacheNamespace = FSCProcessedCache::Key(Options.CacheArchiveBuild, SCProcessedMeshCache::RenderFormat());
     FActorSpawnParameters Spawn;
     Spawn.ObjectFlags |= RF_Transient;
     Vehicle = Options.World->SpawnActor<ASCVehicle>(ASCVehicle::StaticClass(), Options.ActorTransform, Spawn);
@@ -570,7 +584,8 @@ void FSCImportJob::FState::Begin()
         FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
         MaterialPrep = Async(EAsyncExecution::ThreadPool, [this] {
             Materials.Describe(Manifest);
-            Materials.Decode(*Source);
+            const FSCTextureCacheRequest Cache{Options.ProcessedCache.Get(), Options.CacheArchiveBuild, Options.bRebuildProcessed};
+            Materials.Decode(*Source, &Cache);
         });
     }
     auto CollectSidecar = [&](const FSCSceneInstance& I) { Sidecars.AddUnique(I.MeshAsset, I.MaterialSidecar); };
@@ -601,6 +616,12 @@ void FSCImportJob::FState::LaunchDerives()
             return bOK;
         });
     }
+}
+
+void FSCImportJob::FState::ProbeMeshCache(FPart::FCacheVariant& Variant, const FString& Key)
+{
+    Variant.Key = FSCProcessedCache::Key(MeshCacheNamespace, Key);
+    if (!Options.bRebuildProcessed) Variant.Pin = Options.ProcessedCache->PinEntry(Variant.Key);
 }
 
 void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
@@ -695,21 +716,39 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
         TArray<int32> Owners;
         Rigid.GetKeys(Owners);
         Owners.Sort();
+        FString SplitKey;
+        if (!MeshCacheNamespace.IsEmpty())
+        {
+            TArray<int32> SortedSlots = TranslucentSlots.Array();
+            SortedSlots.Sort();
+            for (int32 MaterialSlot : SortedSlots) SplitKey += FString::Printf(TEXT(",%d"), MaterialSlot);
+        }
         for (int32 Owner : Owners)
         {
             FPart Part;
             Part.Owner = Owner;
             Part.Mesh = FSCMeshImporter::Select(Data, Rigid[Owner]);
             Part.Mesh.SocketNode = Owner;
+            FString BaseKey;
+            if (!MeshCacheNamespace.IsEmpty() && !Data.ContentHash.IsEmpty())
+            {
+                BaseKey = FSCProcessedCache::Key(Path,
+                    FString::Printf(TEXT("%s|owner=%d|animated=%d|split=%s"), *Data.ContentHash, Owner, Slot.bAnimated, *SplitKey));
+                ProbeMeshCache(Part.OpaqueCache, BaseKey + (Options.bBuildCollision ? TEXT("|visual+collision") : TEXT("|visual")));
+            }
             // Collision includes all triangles of this owner, including glass/decal split, as in U1.
             FString Error;
-            if (Options.bBuildCollision && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
+            if (Options.bBuildCollision && !Part.OpaqueCache.Pin && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
             {
                 Slot.PrepareWarnings.Emplace(Path, Error);
                 continue;
             }
+            if (Options.bBuildCollision && Part.OpaqueCache.Pin)
+                Part.CollisionTriangles = MoveTemp(Rigid[Owner]);
             Slot.CollisionSeconds += Part.Mesh.CollisionDeriveSeconds;
             FSCMeshImporter::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
+            if (Part.Translucent.bHasGeometry && !BaseKey.IsEmpty())
+                ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
             Slot.Parts.Add(MoveTemp(Part));
         }
         // WP-P3: the game's colliders, one collision-only part per owner (the rig node they move with).
@@ -729,8 +768,11 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                 Part.bGamePhysics = true;
                 Part.Mesh = FSCMeshImporter::SelectPhysics(Data, Owner);
                 if (!Part.Mesh.bHasGeometry) continue;
+                if (!MeshCacheNamespace.IsEmpty() && !Data.ContentHash.IsEmpty())
+                    ProbeMeshCache(Part.OpaqueCache, FSCProcessedCache::Key(Path,
+                        FString::Printf(TEXT("%s|physics=%d|animated=%d"), *Data.ContentHash, Owner, Slot.bAnimated)));
                 FString Error;
-                if (!FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
+                if (!Part.OpaqueCache.Pin && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
                 {
                     Slot.PrepareWarnings.Emplace(Path, Error);
                     Slot.bGamePhysicsFailed = true;
@@ -834,11 +876,41 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
                                          : Slot.Variants.IsEmpty() ? TEXT("") : FString::Printf(TEXT("_Node%d"), Part.Owner);
     const FString Suffix = Slot.PartSuffix + (bTranslucent ? TEXT("_Translucent") : TEXT(""));
     FSCDerivedMesh& Variant = bTranslucent ? Part.Translucent : Part.Mesh;
+    auto& Cached = bTranslucent ? Part.TranslucentCache : Part.OpaqueCache;
+    const bool bNeedsCollision = !bTranslucent && Options.bBuildCollision;
     FSCMeshBuildStats Stats;
     FString AssetError;
-    UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)),
-                                                     !bTranslucent && Options.bBuildCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats,
-                                                     AssetError);
+    UStaticMesh* Mesh = Cached.Pin ? SCProcessedMeshCache::Load(*Options.ProcessedCache, Cached.Pin->Directory, Stats) : nullptr;
+    Cached.Pin.Reset();
+    if (Mesh)
+        ++Result.CachedMeshes;
+    else
+    {
+        if (bNeedsCollision && Variant.CollisionBytes.IsEmpty())
+        {
+            // The package failed to load despite valid disk checksums. Re-create
+            // collision from the same unsplit triangles used on a regular miss.
+            if (Part.bGamePhysics)
+                FSCMeshImporter::DeriveCollision(Variant, AssetError);
+            else
+            {
+                FSCDerivedMesh Unsplit = FSCMeshImporter::Select(*Slot.Data, Part.CollisionTriangles);
+                if (FSCMeshImporter::DeriveCollision(Unsplit, AssetError))
+                {
+                    Variant.CollisionBytes = MoveTemp(Unsplit.CollisionBytes);
+                    Variant.CollisionVersions = MoveTemp(Unsplit.CollisionVersions);
+                    Variant.CollisionDeriveSeconds = Unsplit.CollisionDeriveSeconds;
+                }
+            }
+            Timings.Collision += Variant.CollisionDeriveSeconds;
+        }
+        Result.MeshBuilds += Variant.bHasGeometry;
+        Result.CollisionBuilds += bNeedsCollision && Variant.bHasGeometry;
+        Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)),
+            bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
+        if (Mesh && !Cached.Key.IsEmpty())
+            SCProcessedMeshCache::Store(*Options.ProcessedCache, Cached.Key, *Mesh, Variant, Stats);
+    }
     if (!Mesh)
     {
         Warn(Path + Suffix, AssetError);
@@ -927,8 +999,8 @@ bool FSCImportJob::FState::StepMaterials(bool bBlocking)
         Result.MaterialSeconds = FPlatformTime::Seconds() - MaterialStart;
         Result.TextureCount = T.Created;
         Result.MaterialCount = Materials.MaterialCount;
-        UE_LOG(LogSCImport, Display, TEXT("TEXTURES requested=%d created=%d failed=%d bytes=%lld decode_s=%.4f create_s=%.4f"), T.Requested,
-               T.Created, T.Failed, T.Bytes, T.DecodeSeconds, T.CreateSeconds);
+        UE_LOG(LogSCImport, Display, TEXT("TEXTURES requested=%d created=%d failed=%d bytes=%lld decode_s=%.4f create_s=%.4f png_cache_hits=%d"),
+               T.Requested, T.Created, T.Failed, T.Bytes, T.DecodeSeconds, T.CreateSeconds, T.Cached);
         FString Masters;
         for (const auto& Pair : Materials.MasterCounts)
             Masters += FString::Printf(TEXT(" %s=%d"), FSCMaterialBuilder::MasterName(Pair.Key), Pair.Value);
@@ -1628,6 +1700,12 @@ void FSCImportJob::FState::Assemble()
     Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;
     Timings.Assemble = FPlatformTime::Seconds() - AssembleStart;
+    if (!MeshCacheNamespace.IsEmpty())
+    {
+        const bool bCommitted = Options.ProcessedCache->Flush();
+        UE_LOG(LogSCImport, Display, TEXT("PROCESSED_CACHE meshes_hit=%d mesh_builds=%d collision_builds=%d manifest_written=%d"),
+            Result.CachedMeshes, Result.MeshBuilds, Result.CollisionBuilds, bCommitted);
+    }
     Stage = ESCImportStage::Succeeded;
     UE_LOG(LogSCImport, Display,
            TEXT("IMPORT_OK seconds=%.4f assets=%d instances=%d children=%d interiors=%d materials=%d palettes=%d clips=%d game_world=%d "

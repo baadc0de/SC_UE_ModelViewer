@@ -81,10 +81,11 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
     DescribeSeconds = FPlatformTime::Seconds() - Start;
 }
 
-void FSCImportMaterials::Decode(const FSCPackageSource& Source)
+void FSCImportMaterials::Decode(const FSCPackageSource& Source, const FSCTextureCacheRequest* Cache)
 {
     const double Start = FPlatformTime::Seconds();
-    Decoded = FSCTextureImporter::DecodeAll(Source, Keys);
+    Decoded = FSCTextureImporter::DecodeAll(Source, Keys, FSCTextureLimits::FromHost(), Cache);
+    for (const FSCDecodedTexture& Texture : Decoded) TextureStats.Cached += Texture.bFromCache;
     TextureStats.Requested = Keys.Num();
     TArray<FLinearColor> Mean; Mean.SetNum(Decoded.Num());
     TArray<bool> HasMean; HasMean.Init(false, Decoded.Num());

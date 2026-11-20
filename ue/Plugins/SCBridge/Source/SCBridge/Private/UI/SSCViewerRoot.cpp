@@ -352,8 +352,10 @@ FText SSCViewerRoot::FooterLoadText() const
     if (R.Entity.IsEmpty() || Subsystem->IsBusy()) return LOCTEXT("NoLoad", "—");
     if (R.bReused) return FText::FromString(FString::Printf(TEXT("%s · reused loaded objects (same entity and options)"), *R.Entity));
     FString Text = FString::Printf(TEXT("%s · export %.2f s (%s) · parse %.2f s · mesh build %.2f s · collision %.2f s · materials %.2f s · total %.2f s"),
-                                   *R.Entity, R.ExportSeconds, R.bExportCacheHit ? TEXT("cache hit") : TEXT("cache miss"), R.ParseSeconds,
+                                   *R.Entity, R.ExportSeconds, R.bExportCacheHit ? TEXT("L1 hit") : TEXT("L1 miss"), R.ParseSeconds,
                                    R.BuildSeconds, R.CollisionSeconds, R.MaterialSeconds, R.TotalSeconds);
+    if (Subsystem->GetProcessedCacheStats().bEnabled && R.CachedMeshes + R.MeshBuilds > 0)
+        Text += FString::Printf(TEXT(" · L2 %d mesh hits, %d built"), R.CachedMeshes, R.MeshBuilds);
     if (Subsystem->GetVehicle() && Subsystem->GetVehicle()->bCollisionReady) Text += TEXT(" · collision ready");
     if (R.Result == ESCLoadPhase::Failed) Text = FString::Printf(TEXT("%s · failed: %s"), *R.Entity, *R.Error);
     if (R.Result == ESCLoadPhase::Cancelled) Text = FString::Printf(TEXT("%s · cancelled"), *R.Entity);
@@ -364,7 +366,8 @@ FText SSCViewerRoot::FooterSystemText() const
 {
     if (!Subsystem.IsValid()) return FText();
     const FSCCacheStats& Cache = Subsystem->GetCacheStats();
-    const FString CacheText = Cache.bEnabled ? FString::Printf(TEXT("cache %s / %llu entries"), *Bytes(Cache.Bytes), Cache.Entries) : TEXT("cache off");
+    const FSCCacheStats Processed = Subsystem->GetProcessedCacheStats();
+    const FString CacheText = Cache.bEnabled ? FString::Printf(TEXT("L1 %s · L2 %s"), *Bytes(Cache.Bytes), *Bytes(Processed.Bytes)) : TEXT("cache off");
     return FText::FromString(FString::Printf(TEXT("%s · memory %s used, %s free · disk %s free of %s"), *CacheText, *Bytes(UsedMemory),
                                              *Bytes(FreeMemory), *Bytes(DiskFree), *Bytes(DiskTotal)));
 }

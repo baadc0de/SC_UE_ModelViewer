@@ -4,6 +4,58 @@
 (derive/instantiate split, mesh hashes); extends to animation data after WP-U3.
 **Build lock:** UE lock.
 
+## Win64 implementation and verification
+
+The Editor target running in game mode stores each imported static mesh variant as a cooked loose package under the
+launch-relative `cache/processed` directory. The package has the engine's Nanite, Lumen card, distance-field, and
+ray-tracing data. A checksummed companion record carries the variant's imported Chaos collision, including triangles
+that were split off for translucent rendering. The key combines the archive build, GLB bytes and source path,
+render/collision partition, host shader platform, and the engine's static-mesh format. Source paths preserve each
+asset's identity for materials and import diagnostics. PNG mips are cached by bytes and sampling
+role. DDS textures enter the importer with their authored mip chains.
+
+The model browser's **Cache options** lets the user set the cap, choose the next launch's folder, clear the processed
+cache, or rebuild the loaded model with the same options. The footer reports layer-1 export hits and layer-2 mesh
+counts. The manifest publishes atomically while an OS mutex guards the root. Loaded assets keep their bulk files
+until Unreal purges them. Retired files still count toward the disk budget during that period.
+
+The synthetic production-path restart probe on the Win64 fork built a 100,352-triangle mesh in **1.820 s** and
+persisted 24.73 MiB in **0.070 s**. A separate process loaded it in **0.031 s**. It restored 3,260 Nanite clusters
+and read the streaming bulk data. Cards, distance field, and RT geometry were present on both runs. The same hull
+ray hit Z=151.527 cm both times, with zero build/cook calls on restart. A same-process cycle verified shared
+collision across two actors, retention during Clear, and reclamation after garbage collection.
+
+The Gladius load used LOD 0, mip 2 and the procedural Viewer map under NullRHI.
+
+| Fresh process | Load | Export | Static mesh cache hits | Static mesh builds | Collision builds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Empty archive and processed caches | 46.161 s | 10.016 s | 0 | 467 | 320 |
+| Same archive and processed caches | 5.142 s | 0.083 s | 467 | 0 | 0 |
+
+Both passes produced 47 assets and 65 placements, with the same 43 warnings. Warm time includes GLB derivation,
+rig and clip construction, and actor assembly. The entity index, persistent skeletal data, the under-three-second
+gate, and GPU/Cutlass acceptance remain open.
+
+### Commands
+
+From the repository root, build once initially and use a fresh scratch cache for each independent comparison.
+
+```powershell
+$env:SC_SPIKE = '1'
+$engine = Join-Path $env:USERPROFILE 'UnrealEngine-5.9-src'
+$project = (Resolve-Path 'ue/SCViewer/SCViewer.uproject').Path
+& "$engine/Engine/Build/BatchFiles/Build.bat" SCViewerEditor Win64 Development "-Project=$project" -WaitMutex
+$editor = "$engine/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
+$scratch = Join-Path (Get-Location) 'out/c1-probe'
+foreach ($phase in 'save', 'load', 'cycle') {
+    & $editor $project '/Game/Maps/Viewer' -game -NullRHI -NoSound -unattended -nop4 -nosplash -SCDefaults -SCCacheDir=none -SCSpikeProductionMesh "-SCSpike=$phase" "-SCSpikeCacheDir=$scratch"
+}
+1..2 | ForEach-Object {
+    & $editor $project '/Game/Maps/Viewer' -game -NullRHI -NoSound -unattended -nop4 -nosplash -SCDefaults -SCLoad=AEGS_Gladius -SCMip=2 -SCQuitAfterLoad "-SCCacheDir=$scratch/gladius"
+}
+& $editor $project '/Game/Maps/Viewer' -game -NullRHI -NoSound -unattended -nop4 -nosplash -SCDefaults -SCCacheDir=none '-ExecCmds=Automation RunTests SCBridge.Import.ProcessedCache' '-TestExit=Automation Test Queue Empty'
+```
+
 ## Goal
 Loading a model the second time performs no processing: no StarBreaker export
 (layer 1, Rust — WP-R1), no Nanite build, no collision cook, no texture build. The

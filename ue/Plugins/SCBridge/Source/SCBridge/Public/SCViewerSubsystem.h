@@ -16,6 +16,7 @@ class ASCViewerPawn;
 class ASCFirstPersonCharacter;
 class USCViewOptions;
 class FSCImportJob;
+class FSCProcessedCache;
 class FSCFolderPackageSource;
 class FSCPackageSource;
 class FSCTarPackageSource;
@@ -73,6 +74,9 @@ struct SCBRIDGE_API FSCLoadReport
     UPROPERTY(BlueprintReadOnly, Category = "SC") int64 TarBytes = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int64 CacheBytes = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int64 CacheEntries = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 CachedMeshes = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 MeshBuilds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 CollisionBuilds = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Assets = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Instances = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Warnings = 0;
@@ -135,6 +139,11 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveError() const { return ArchiveError.ToString(); }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveLabel() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetCacheDir() const { return CacheDir; }
+    FSCCacheStats GetProcessedCacheStats() const;
+    void ClearProcessedCache();
+    void SetProcessedCacheCap(int32 MiB);
+    bool CanRebuildLoadedEntity() const;
+    bool RebuildLoadedEntity();
     /** Incremented by every OpenArchive: reuse keys and search results are scoped to one archive session. */
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") int32 GetArchiveGeneration() const { return int32(ArchiveGeneration); }
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForArchive(float TimeoutSeconds = 300.f);
@@ -309,9 +318,11 @@ private:
     uint32 ArchiveGeneration = 0;
     FText ArchiveError;
     FString ArchivePath, CacheDir;
+    FString ArchiveBuildId;
     UE::Tasks::TTask<FSCOpenResult> OpenTask;
     double OpenSeconds = 0;
     FSCCacheStats CacheStats;
+    TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
 
     struct FPendingSearch
     {
@@ -327,6 +338,7 @@ private:
     ESCLoadPhase Phase = ESCLoadPhase::Idle;
     FSCLoadReport Report;
     FString PendingEntity, PendingKey, LoadedEntity, LoadedKey;
+    bool bRebuildProcessed = false;
     double LoadStart = 0, ParseStart = 0, ImportStart = 0;
     FString LastPhaseKey;
     TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> ExportProgress;

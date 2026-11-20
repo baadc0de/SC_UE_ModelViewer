@@ -8,6 +8,7 @@
 #include "SCPackageSource.h"
 
 class UTexture2D;
+struct FSCTextureCacheRequest;
 
 /** How a texture slot is sampled. Normal is a DDNA tangent-space map (always linear). For Color / Linear the
  *  role only decides the encoding of a PNG that does not state one (Color: sRGB, Linear: linear).
@@ -37,6 +38,7 @@ struct SCBRIDGE_API FSCDecodedTexture
     int32 MipCount = 0;     // mips in Dds
     int64 DataOffset = 0;   // first mip in Dds
     FString Error;
+    bool bFromCache = false;
     bool IsBlocks() const { return !Dds.IsEmpty(); }
     /** Bytes uploaded to the GPU: the DDS mip data, or the BGRA8 mips. */
     int64 UploadBytes() const;
@@ -45,6 +47,7 @@ struct SCBRIDGE_API FSCDecodedTexture
 struct SCBRIDGE_API FSCTextureStats
 {
     int32 Requested = 0, Created = 0, Failed = 0;
+    int32 Cached = 0;
     int64 Bytes = 0;
     double DecodeSeconds = 0, CreateSeconds = 0;
 };
@@ -70,7 +73,7 @@ public:
     /** Header pass (parallel) -> per-texture and aggregate budget in key order -> parallel decode of the
      *  accepted keys. Rejected keys carry an Error and are never decompressed. */
     static TArray<FSCDecodedTexture> DecodeAll(const FSCPackageSource& Source, const TArray<FSCTextureKey>& Keys,
-        const FSCTextureLimits& Limits = FSCTextureLimits::FromHost());
+        const FSCTextureLimits& Limits = FSCTextureLimits::FromHost(), const FSCTextureCacheRequest* Cache = nullptr);
     /** Encoding of a PNG's RGB channels: an `sRGB` chunk means sRGB, `gAMA` 1.0 means linear (both written by
      *  the exporter from the DDS header); a PNG without either falls back to the role. Normal is always linear. */
     static bool ResolveSRGB(TConstArrayView<uint8> Png, ESCTextureRole Role);

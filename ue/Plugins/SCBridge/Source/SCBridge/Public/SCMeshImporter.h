@@ -6,6 +6,7 @@
 
 class UStaticMesh;
 class UMaterialInterface;
+class UBodySetup;
 struct SCBRIDGE_API FSCRigNode
 {
     FString SourceName;
@@ -86,6 +87,9 @@ public:
     /** Worker-thread Chaos BVH. bVertexIndexMap stores the identity external->particle map that
      *  FTriangleMeshImplicitObject::UpdateVertices requires (refittable skinned collision only). */
     static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap = false);
+    /** Restore the exact collision derived for this variant, including translucent sections deliberately omitted from its render mesh. */
+    static bool InstallCollision(UBodySetup* Body, const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions,
+        int32& TriangleCount, FString& Error);
     static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
         bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error);
     /** Instantiate for many meshes without collision or material (slots get the default material): every mesh is

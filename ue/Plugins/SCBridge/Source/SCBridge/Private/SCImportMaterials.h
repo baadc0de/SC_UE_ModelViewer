@@ -6,6 +6,7 @@
 
 class ASCVehicle;
 class UMaterialInterface;
+struct FSCTextureCacheRequest;
 
 class FSCImportMaterials
 {
@@ -13,7 +14,7 @@ public:
     /** Pure: build descriptions for every instance's sidecar/palette pair (engine-glow targets applied). */
     void Describe(const FSCSceneManifest& Manifest);
     /** Worker: decode the deduplicated texture set and resolve the descriptions' texture means. */
-    void Decode(const FSCPackageSource& Source);
+    void Decode(const FSCPackageSource& Source, const FSCTextureCacheRequest* Cache = nullptr);
     /** Game thread: textures and material instances, retained by the vehicle. */
     void Instantiate(ASCVehicle* Vehicle, TArray<FString>& Warnings);
     /** Material for a mesh slot of an instance, or null to keep the mesh's placeholder. Host-tinted decals

@@ -14,6 +14,8 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString ArchivePath;
     /** Cache directory; empty = <launch dir>/cache, relative paths resolve against the launch dir, "none" disables. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString CacheDir;
+    /** Byte budget for processed UE assets, in MiB. Zero disables the second layer. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") int32 ProcessedCacheMiB = 20 * 1024;
     /** Most recent first, exact entity class names. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") TArray<FString> RecentEntities;
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") int32 MaxRecents = 12;
