@@ -44,13 +44,20 @@ during the next C2 run. The pre-extracted geometry-only fixture took **25.897 s*
 authored access prompts plus both seat and dashboard rig pairs. This fixture omitted the bridge floor, so it could
 verify route resolution but could not place a standing pawn near the seats.
 
-For the next occupancy run, retain the authored `bridge_c2` interior in an extracted LOD 2/mip 4 C2 package.
-Launch with `-SCDefaults -SCPackage=<fixture> -SCExplore -SCPlayerPackage=<kit tar>` and
-`-SCSeatClipsPackage=<clips tar>`. This bypasses archive export of the ship and body clips. Use `sc.Seat.State` to
-poll the occupied role and `sc.FP.Where` to verify standing floor contact after exit.
+The follow-up fixture retained the authored `bridge_c2` interior in the extracted LOD 2/mip 4 C2 package. With
+a warm shared DDC, it reached scene-ready in **15.34 s** including editor launch. The C2 import itself took **8.084 s**
+for 71 assets and 152 placements, and the pre-exported player kit loaded in **1.209 s**. Both original seat and dashboard
+rig pairs played Deploy and Retract. The co-pilot and pilot reached Crew and Driver respectively after Select. Both
+entries logged zero attachment position error, and both exits restored standing floor contact without crouch,
+noclip, a movement blockage or a fall recovery. The process exited successfully after both cycles.
 
-Both complete occupancy cycles, the blocked-exit case, the capsule-only camera path, weapon and door/lift
-regressions and the three requested screenshots remain open.
+To repeat the smoke, extract the C2 LOD 2/mip 4 export and keep `bridge_c2` in the manifest's `interiors` array.
+Launch with `-SCDefaults -SCPackage=<fixture> -SCExplore -SCPlayerPackage=<kit tar>` and
+`-SCSeatClipsPackage=<clips tar>`. This bypasses archive export of the ship and body clips. Poll `sc.Seat.State`
+for the occupied role after E and `sc.FP.Where` for standing floor contact after the second E.
+
+The blocked-exit case, the capsule-only camera path, weapon and door/lift regressions and the three requested
+screenshots remain open.
 
 The Rust checks used `cargo test --manifest-path vendor/StarBreaker/Cargo.toml --locked -p starbreaker-3d --lib seat_`
 (3 passed), the same command with `interaction_points_keep_their_interactions_in_order` (1 passed), and
