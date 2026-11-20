@@ -63,8 +63,10 @@ loading. The full run waited for the published environment and issued C2 load ag
 - The owner's 16 SCU transfer opened two locked exterior doors. Job 1 ended Done in 93.0 seconds with zero overlaps.
   The front-left door closed and relocked automatically. The stored rear-grid box still overlapped the rear doorway
   query. Removing that one fixture box started rear closure on the next frame, then the locked pad state returned.
-  The route passed in 263.21 seconds with this intervention. Whether the stored slot intersects the ramp collision
-  or the current query is conservative remains open.
+  The route passed in 263.21 seconds with this intervention. An offline replay aligned the exported rear ramp to
+  live joint and tip samples, then checked the authored movement collider triangles against the recorded box and
+  the actual 5 × 2.5 × 2.5 m dimensions. Their closest separation along the ship axis was 0.807 m over all 501
+  sampled poses. This supports a conservative false positive from the broader runtime query.
 - The first captures were `ship-link-locked.png` and `ship-link-opening.png` in
   `out/M2-C2XL-20261120-222506/` of the Garage worktree. Astra confirmed both state rows and header counts. The orbit
   framing hid the selected rear ramp and an engine ray-tracing budget overlay was visible.
