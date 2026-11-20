@@ -202,9 +202,10 @@ FString SCExposureFields(const FSceneViewStateInterface& State)
     const UE::AutoExposure::FEyeAdaptationReadback R = State.GetLastAutoExposureReadback();
     const FVector4f& Meter = R.MeterState;
     const auto Lane = [](float V) { return UE::AutoExposure::IsMeterStateValid(V) ? FString::Printf(TEXT("%.4f"), V) : FString(TEXT("none")); };
-    return FString::Printf(TEXT("exposure=%.6g log2_exposure=%.4f metered=%.6g log2_reflected=%s log2_incident=%s slow=%s fast=%s"), R.Exposure,
+    // WP-E1 E1-9: the unclamped exposure scale the screens' DBA term reads (EyeAdaptationUnclamped), from the same readback.
+    return FString::Printf(TEXT("exposure=%.6g log2_exposure=%.4f metered=%.6g log2_reflected=%s log2_incident=%s slow=%s fast=%s unclamped=%.6g"), R.Exposure,
                            R.Exposure > 0 ? FMath::Log2(R.Exposure) : 0.f, R.AverageSceneLuminance,
-                           *Lane(Meter.X), *Lane(Meter.Y), *Lane(Meter.Z), *Lane(Meter.W));
+                           *Lane(Meter.X), *Lane(Meter.Y), *Lane(Meter.Z), *Lane(Meter.W), R.UnclampedExposure);
 }
 }
 static FAutoConsoleCommandWithWorldAndArgs GSCLookExposureLog(

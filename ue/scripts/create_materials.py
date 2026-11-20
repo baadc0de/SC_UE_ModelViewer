@@ -606,10 +606,13 @@ return col;
 """
 # OpticsExposure.cfib GetGlobalDBAMultiplier_HDR under %DBA_GLOBAL (pinned likewise): clamp(adapted luminance,
 # luminance at EV 1, at EV 14) / middle grey, in the game's scene units, so the screen keeps its displayed brightness
-# whatever the exposure. The adapted luminance is the exposure's inverse: the game exposes it to middle grey
-# (CalcExposureAndNoise: exposure = middleGray / adaptedLuminance), so here MiddleGrey x 1 / exposure (the viewer's
-# exposure follows the game's, SCViewerExposure), in cd/m2; NitsPerUnit = DBA middle grey x HDR_LUMINANCE_SCALE.
-# UseDBA 0 (no %DBA_GLOBAL) leaves the absolute glow.
+# whatever the exposure. The adapted luminance is ExposureState.adaptedLuminance, which CalcExposureAndNoise stores before
+# it clamps the exposure (unclampedExposure = middleGray / adaptedLuminance; exposure = clamp(unclampedExposure, min,
+# max)), so here MiddleGrey / the engine fork's unclamped exposure scale (EyeAdaptationUnclamped, WP-E1 E1-9; the viewer's
+# exposure follows the game's, SCViewerExposure), in cd/m2; NitsPerUnit = DBA middle grey x HDR_LUMINANCE_SCALE. Below
+# the exposure clamp the screen therefore dims with the room, as the game's does. A non-positive value (eye adaptation
+# disabled in debug view modes, or a tiny scale flushed to zero by a half-precision MaterialFloat input) reads as the
+# DBA ceiling: a vanishing scale is an adapted luminance beyond it. UseDBA 0 (no %DBA_GLOBAL) leaves the absolute glow. FSCStarEngine::ScreenDBA is this rule in C++ (SCBridge.Materials.ScreenDBA).
 # The screen image's texture coordinates: an affine map of the face's UV0 (ScreenUVTransformX / Y rows: u' = X.x u + X.y v
 # + X.z). Identity by default (an exported panel render covers the face's UVs); a viewer-drawn render target maps the
 # face's own UV window onto itself (WP-P5 floor panel, FSCScreenFaceGeometry::ContentFromUV).
@@ -618,7 +621,7 @@ return float2(dot(TX.xyz, float3(UV, 1.0)), dot(TY.xyz, float3(UV, 1.0)));
 """
 
 SCREEN_DBA = """
-float adapted = ExposureGrey * InvExposure.x;
+float adapted = Unclamped > 0.0 ? ExposureGrey / Unclamped : MaxNits;
 return lerp(1.0, clamp(adapted, MinNits, MaxNits) / NitsPerUnit, UseDBA);
 """
 GLASS_COVERAGE ="return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
@@ -887,7 +890,8 @@ def screen_master(translucent=False):
     roughness from the authored gloss, and the game's DisplayScreenPS emission (WP-I1 fix pass): ScreenImage graded by
     MonitorEffects_ApplyViewingAngle (SCREEN_VIEWING_ANGLE) x the image's alpha x EmissiveStrength (the builder's glow
     rule; GlassShared scales by the scalar glow, not the material's emissive colour)
-    x the %DBA_GLOBAL display-brightness multiplier (SCREEN_DBA, through EyeAdaptationInverse) x ScreenTransmittance.
+    x the %DBA_GLOBAL display-brightness multiplier (SCREEN_DBA, from the fork's unclamped exposure,
+    EyeAdaptationUnclamped) x ScreenTransmittance.
     ScreenImage is bound per panel instance (ui_bindings); the black default leaves an unbound screen (MFDs, lift
     buttons) as clean dark glass. The image is sampled at UV0 untiled through ScreenUVTransformX / Y (identity: the
     render target covers the face; a viewer-drawn target maps the face's UV window onto itself).
@@ -915,11 +919,9 @@ def screen_master(translucent=False):
     graded = g.custom(SCREEN_VIEWING_ANGLE, f3, Col=image,
                       ViewingAngle=g.scalar("ViewingAngle", 180.0), Mode=g.scalar("ViewAngleMode", 0.0),
                       Contrast=g.scalar("EmissiveContrast", 1.0), Saturation=g.scalar("EmissiveSaturation", 1.0))
-    # 1 / the exposure: EyeAdaptationInverse of a unit scalar light value at full alpha.
-    inverse_exposure = g.node(unreal.MaterialExpressionEyeAdaptationInverse)
-    g.link_any(*g.const(1.0), inverse_exposure, ("LightValueInput", "Light Value Input", "LightValue", "Light Value"))
-    g.link_any(*g.const(1.0), inverse_exposure, ("AlphaInput", "Alpha Input", "Alpha"))
-    dba = g.custom(SCREEN_DBA, f1, InvExposure=(inverse_exposure, ""), UseDBA=g.scalar("ScreenDBA", 0.0),
+    # The exposure scale before the brightness bounds clamp it (engine fork, WP-E1 E1-9): the game's unclampedExposure.
+    unclamped = g.node(unreal.MaterialExpressionEyeAdaptationUnclamped)
+    dba = g.custom(SCREEN_DBA, f1, Unclamped=(unclamped, ""), UseDBA=g.scalar("ScreenDBA", 0.0),
                    ExposureGrey=g.scalar("DBAExposureGrey", 0.18), MinNits=g.scalar("DBAMinNits", 0.0),
                    MaxNits=g.scalar("DBAMaxNits", 0.0), NitsPerUnit=g.scalar("DBANitsPerUnit", 1.0))
     # GlassShared: emissiveBack *= the scalar glow (MatEmissiveColor.a, not its colour) and the render target's alpha.

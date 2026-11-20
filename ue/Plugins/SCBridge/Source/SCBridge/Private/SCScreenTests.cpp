@@ -19,7 +19,12 @@
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialExpressionCustom.h"
+#include "Materials/MaterialExpressionEyeAdaptation.h"
+#include "Materials/MaterialExpressionEyeAdaptationInverse.h"
+#include "Materials/MaterialExpressionEyeAdaptationUnclamped.h"
 #include "Materials/MaterialInterface.h"
+#include "MaterialShared.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "StaticMeshResources.h"
@@ -210,6 +215,144 @@ bool FSCScreenFamily::RunTest(const FString&)
         LoadObject<UMaterialInterface>(nullptr, *FSCMaterialBuilder::ParentPath(ESCMaster::Glass, ESCBlend::Translucent, false))));
     return true;
 }
+
+// SCBridge.Materials.ScreenDBA (WP-E1 E1-9): the screen's %DBA_GLOBAL term against the game's chain over the adapted luminance,
+// with the fixture's constants. The game (OpticsExposure.cfxb CalcExposureAndNoise, OpticsExposure.cfib GetGlobalDBAMultiplier_HDR):
+// adaptedLuminance = 2^(pigment + pupil) is stored before the exposure clamp, unclampedExposure = middleGray / adaptedLuminance,
+// exposure = clamp(unclampedExposure, r_ExposureMultiplierMin, r_ExposureMultiplierMax), DBA = clamp(adaptedLuminance, EV 1, EV 14) /
+// 0.18; the screen shows glow x image x DBA x exposure. The viewer: EmissiveStrength = the glow in cd/m2, x ScreenDBA(the engine's
+// unclamped scale), exposed by the clamped scale (the brightness bounds are the game's multiplier clamp / SceneUnitNits). The
+// display brightness must agree in every regime: below the DBA floor, below the exposure clamp (the dark room), inside it (constant
+// display brightness), above the DBA ceiling, above the exposure clamp.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCScreenDBA, "SCBridge.Materials.ScreenDBA", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCScreenDBA::RunTest(const FString&)
+{
+    const FSCStarEngine& G = FSCStarEngine::Get();
+    // Scene units (the game's) and cd/m2 (UE's): one scene unit is SceneUnitNits cd/m2.
+    const double DBAFloorSU = G.NitsAtEV(G.DBAMinAdaptedEV) / G.SceneUnitNits;
+    const double DBACeilingSU = G.NitsAtEV(G.DBAMaxAdaptedEV) / G.SceneUnitNits;
+    const double ClampDarkSU = G.MiddleGrey / G.MultiplierMax;   // darker than this: the exposure is held at its maximum
+    const double ClampBrightSU = G.MiddleGrey / G.MultiplierMin; // brighter than this: held at its minimum
+    // The fixture's order of the four bounds, which the regimes below assume (the game's: 0.25 < 9 < 2048 < 1.8e6 cd/m2).
+    if (!TestTrue(TEXT("DBA floor < exposure clamp (dark) < DBA ceiling < exposure clamp (bright)"),
+                  DBAFloorSU < ClampDarkSU && ClampDarkSU < DBACeilingSU && DBACeilingSU < ClampBrightSU))
+        return false;
+
+    // Displayed (pre-tonemap) value per unit of glow x image.
+    auto Game = [&](double AdaptedSU) {
+        const double DBA = FMath::Clamp(AdaptedSU, DBAFloorSU, DBACeilingSU) / G.DBAMiddleGrey;
+        return DBA * FMath::Clamp(G.MiddleGrey / AdaptedSU, G.MultiplierMin, G.MultiplierMax);
+    };
+    auto Viewer = [&](double AdaptedSU, bool bClampedRule) {
+        const double Unclamped = G.MiddleGrey / (AdaptedSU * G.SceneUnitNits); // UE's scale, per cd/m2
+        const double Clamped = FMath::Clamp(Unclamped, G.MultiplierMin / G.SceneUnitNits, G.MultiplierMax / G.SceneUnitNits);
+        // glow x image in cd/m2 (EmissiveStrength = SceneUnitNits x the linear glow) x DBA, exposed by the clamped scale
+        return G.SceneUnitNits * G.ScreenDBA(bClampedRule ? Clamped : Unclamped) * Clamped;
+    };
+    struct FCase { const TCHAR* Name; double AdaptedSU; };
+    const FCase Cases[] = {
+        {TEXT("below the DBA floor"), DBAFloorSU * 0.25},
+        {TEXT("below the exposure clamp (dark room)"), FMath::Sqrt(DBAFloorSU * ClampDarkSU)},
+        {TEXT("just below the exposure clamp"), ClampDarkSU * 0.9},
+        {TEXT("at the exposure clamp"), ClampDarkSU},
+        {TEXT("inside the exposure clamp"), FMath::Sqrt(ClampDarkSU * DBACeilingSU)},
+        {TEXT("above the DBA ceiling"), FMath::Sqrt(DBACeilingSU * ClampBrightSU)},
+        {TEXT("above the exposure clamp"), ClampBrightSU * 4.0}};
+    for (const FCase& C : Cases)
+    {
+        const double Expected = Game(C.AdaptedSU), Got = Viewer(C.AdaptedSU, false);
+        TestTrue(FString::Printf(TEXT("%s (%.4g cd/m2): viewer %.6g = game %.6g"), C.Name, C.AdaptedSU * G.SceneUnitNits, Got, Expected),
+                 FMath::IsNearlyEqual(Got, Expected, 1e-9 * Expected));
+    }
+    // The rule itself: constant display brightness (glow x image) inside the clamps; below the exposure clamp the screen dims with
+    // the adapted luminance (adapted / clamp luminance), which the clamped exposure (the WP-I1 rule, EyeAdaptationInverse) misses.
+    const double Inside = FMath::Sqrt(ClampDarkSU * DBACeilingSU), Dark = FMath::Sqrt(DBAFloorSU * ClampDarkSU);
+    TestTrue(TEXT("inside: displayed = glow x image"), FMath::IsNearlyEqual(Game(Inside), 1.0, 1e-12));
+    TestTrue(TEXT("dark room: displayed = adapted / clamp luminance"), FMath::IsNearlyEqual(Game(Dark), Dark / ClampDarkSU, 1e-12));
+    TestTrue(TEXT("dark room: the clamped exposure would show it at full brightness"), FMath::IsNearlyEqual(Viewer(Dark, true), 1.0, 1e-9));
+    TestTrue(TEXT("inside and above the exposure clamp both rules agree"),
+             FMath::IsNearlyEqual(Viewer(Inside, true), Viewer(Inside, false), 1e-12) &&
+             FMath::IsNearlyEqual(Viewer(ClampBrightSU * 4.0, true), Viewer(ClampBrightSU * 4.0, false), 1e-12));
+    TestEqual(TEXT("a non-positive scale (disabled, or flushed by half precision) reads as the DBA ceiling"), G.ScreenDBA(0.0),
+              G.ScreenDBA(G.MiddleGrey / G.NitsAtEV(G.DBAMaxAdaptedEV) * 1e-3));
+    return true;
+}
+
+#if WITH_EDITOR
+namespace
+{
+/** The material's generated HLSL (Material.ush) for the running shader platform: translation only, nothing is compiled. */
+FString TranslatedMaterialSource(UMaterial* Material)
+{
+    FMaterialResource* Resource = Material->AllocateResource();
+    Resource->SetMaterial(Material, nullptr, GMaxRHIShaderPlatform);
+    FString Source;
+    if (!Resource->GetMaterialExpressionSource(Source)) Source.Reset();
+    delete Resource;
+    return Source;
+}
+/** A transient surface material whose emissive is one expression of class Class. */
+UMaterial* EmissiveOf(UClass* Class)
+{
+    UMaterial* M = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient);
+    UMaterialExpression* E = NewObject<UMaterialExpression>(M, Class, NAME_None, RF_Transient);
+    E->Material = M;
+    M->GetExpressionCollection().AddExpression(E);
+    M->GetEditorOnlyData()->EmissiveColor.Connect(0, E);
+    M->PostEditChange();
+    return M;
+}
+} // namespace
+
+// SCBridge.Materials.ScreenExposureNode (WP-E1 E1-9): the screen masters read the engine's unclamped exposure (EyeAdaptationUnclamped)
+// in their DBA term and not the clamped one; materials without the node translate without the unclamped lookup (the engine change
+// adds nothing to them), the EyeAdaptation node still emits UE's lookup, and the node emits the fork's.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCScreenExposureNode, "SCBridge.Materials.ScreenExposureNode", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCScreenExposureNode::RunTest(const FString&)
+{
+    const TCHAR* Unclamped = TEXT("EyeAdaptationUnclampedLookup()");
+    for (const FString& Path : {ScreenMaster, TranslucentScreenMaster})
+    {
+        UMaterial* Master = LoadObject<UMaterial>(nullptr, *Path);
+        if (!TestNotNull(Path, Master)) continue;
+        int32 Nodes = 0, Inverse = 0;
+        const UMaterialExpressionCustom* DBA = nullptr;
+        for (UMaterialExpression* E : Master->GetExpressions())
+        {
+            Nodes += E && E->IsA<UMaterialExpressionEyeAdaptationUnclamped>();
+            Inverse += E && E->IsA<UMaterialExpressionEyeAdaptationInverse>();
+            if (const UMaterialExpressionCustom* C = Cast<UMaterialExpressionCustom>(E))
+                if (C->Inputs.ContainsByPredicate([](const FCustomInput& I) { return I.InputName == TEXT("UseDBA"); })) DBA = C;
+        }
+        TestEqual(Path + TEXT(": one EyeAdaptationUnclamped node"), Nodes, 1);
+        TestEqual(Path + TEXT(": no EyeAdaptationInverse (the clamped exposure)"), Inverse, 0);
+        if (TestNotNull(Path + TEXT(": the DBA term"), DBA))
+        {
+            const FCustomInput* In = DBA->Inputs.FindByPredicate([](const FCustomInput& I) { return I.InputName == TEXT("Unclamped"); });
+            TestTrue(Path + TEXT(": the DBA term reads the unclamped exposure"),
+                     In && In->Input.Expression && In->Input.Expression->IsA<UMaterialExpressionEyeAdaptationUnclamped>());
+            TestTrue(Path + TEXT(": adapted luminance = middle grey / the unclamped scale"), DBA->Code.Contains(TEXT("Unclamped > 0.0 ? ExposureGrey / Unclamped : MaxNits")));
+        }
+        TestTrue(Path + TEXT(": the generated HLSL reads the unclamped lookup"), TranslatedMaterialSource(Master).Contains(Unclamped));
+    }
+    for (ESCMaster Family : {ESCMaster::Illum, ESCMaster::HardSurface, ESCMaster::Layered, ESCMaster::Glass, ESCMaster::MeshDecal,
+                             ESCMaster::Translucent, ESCMaster::EmissiveUnlit, ESCMaster::Fallback})
+    {
+        UMaterialInterface* Parent = LoadObject<UMaterialInterface>(nullptr, *FSCMaterialBuilder::ParentPath(Family, ESCBlend::Opaque, false));
+        UMaterial* Base = Parent ? Parent->GetMaterial() : nullptr;
+        if (!TestNotNull(TEXT("master"), Base)) continue;
+        const FString Source = TranslatedMaterialSource(Base);
+        TestFalse(Base->GetName() + TEXT(": translates"), Source.IsEmpty());
+        TestFalse(Base->GetName() + TEXT(": no unclamped lookup"), Source.Contains(Unclamped));
+    }
+    const FString WithEyeAdaptation = TranslatedMaterialSource(EmissiveOf(UMaterialExpressionEyeAdaptation::StaticClass()));
+    TestTrue(TEXT("EyeAdaptation: UE's lookup"), WithEyeAdaptation.Contains(TEXT("EyeAdaptationLookup()")));
+    TestFalse(TEXT("EyeAdaptation: no unclamped lookup"), WithEyeAdaptation.Contains(Unclamped));
+    const FString WithNode = TranslatedMaterialSource(EmissiveOf(UMaterialExpressionEyeAdaptationUnclamped::StaticClass()));
+    TestTrue(TEXT("EyeAdaptationUnclamped: the fork's lookup"), WithNode.Contains(Unclamped));
+    return true;
+}
+#endif // WITH_EDITOR
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCUiBindings, "SCBridge.Package.UiBindings", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCUiBindings::RunTest(const FString&)

@@ -282,20 +282,40 @@ bool FSCViewerExposureSettings::RunTest(const FString&)
     TestEqual(TEXT("histogram min: the meter's log2 range in cd/m2, as EV100"), double(E.HistogramLogMin), -6 + FMath::Log2(100.0) - 1, 1e-4);
     TestEqual(TEXT("histogram max"), double(E.HistogramLogMax), 10 + FMath::Log2(100.0) - 1, 1e-4);
 
-    // Bias keys: the clamp ends plus the anchors between them; stops over UE's 0.18 target.
+    // Bias keys (WP-E1 E1-9 review): the game's compensation (CalculateEVCompensation, end segments extended) over every metered EV
+    // the meter reaches, the histogram's LOG_MIN..LOG_MAX widened by the clamped blend's offsets (1 stop down, 0.25 up), with keys at
+    // the clamp ends; stops over UE's 0.18 target. The screens' unclamped exposure needs it beyond the clamp ends.
     const double GreyStops = FMath::Log2(0.5 / 0.18);
-    if (!TestEqual(TEXT("three bias keys (anchors outside the clamp are unreachable)"), E.BiasCurve.Num(), 3)) return false;
-    TestEqual(TEXT("key 0 at the low clamp"), E.BiasCurve[0].X, EVLow - Offset, 1e-4);
-    TestEqual(TEXT("key 0: compensation at the low clamp"), E.BiasCurve[0].Y, (-1 + 0.2 * EVLow) + GreyStops, 1e-4);
-    TestEqual(TEXT("key 1 at the interior anchor"), E.BiasCurve[1].X, 10 - Offset, 1e-9);
-    TestEqual(TEXT("key 1: the anchor's compensation"), E.BiasCurve[1].Y, 1 + GreyStops, 1e-9);
-    TestEqual(TEXT("key 2 at the high clamp"), E.BiasCurve[2].X, EVHigh - Offset, 1e-4);
-    TestEqual(TEXT("key 2: compensation at the high clamp"), E.BiasCurve[2].Y, 1 + GreyStops, 1e-4);
+    const double LogLumToEV = G.LuminanceToEV + FMath::Log2(G.SceneUnitNits);
+    const double EVMin = G.MeterLogMin + LogLumToEV - 1.0, EVMax = G.MeterLogMax + LogLumToEV + 0.25;
+    const TArray<FVector2D>& K = E.BiasCurve;
+    if (!TestTrue(TEXT("at least the reach ends and the clamp ends"), K.Num() >= 4)) return false;
+    TestEqual(TEXT("first key: the darkest reachable meter"), K[0].X, EVMin - Offset, 1e-4);
+    TestEqual(TEXT("last key: the brightest reachable meter"), K.Last().X, EVMax - Offset, 1e-4);
+    const int32 Low = K.IndexOfByPredicate([&](const FVector2D& P) { return FMath::IsNearlyEqual(P.X, EVLow - Offset, 1e-4); });
+    const int32 High = K.IndexOfByPredicate([&](const FVector2D& P) { return FMath::IsNearlyEqual(P.X, EVHigh - Offset, 1e-4); });
+    if (!TestTrue(TEXT("keys at both clamp ends"), Low != INDEX_NONE && High != INDEX_NONE)) return false;
+    for (int32 i = 1; i < K.Num(); ++i) TestTrue(FString::Printf(TEXT("keys ascend (%d)"), i), K[i].X > K[i - 1].X);
+    // Linear between the keys = the game's piecewise-linear compensation everywhere in reach, its extended end segments included.
+    for (double EV = EVMin; EV <= EVMax; EV += 0.05)
+    {
+        const double X = EV - Offset;
+        const int32 Seg = FMath::Clamp(K.IndexOfByPredicate([X](const FVector2D& P) { return P.X >= X; }), 1, K.Num() - 1);
+        const double T = (X - K[Seg - 1].X) / (K[Seg].X - K[Seg - 1].X);
+        const double Y = FMath::Lerp(K[Seg - 1].Y, K[Seg].Y, T);
+        if (!FMath::IsNearlyEqual(Y, G.CompensationAt(EV) + GreyStops, 1e-6))
+        {
+            AddError(FString::Printf(TEXT("compensation at EV %.2f: curve %.6f, game %.6f"), EV, Y - GreyStops, G.CompensationAt(EV)));
+            break;
+        }
+    }
+    TestTrue(TEXT("below the low clamp the game's end segment continues (not held)"),
+             K[0].Y < K[Low].Y - 1e-3 && FMath::IsNearlyEqual(K[0].Y, (-1 + 0.2 * EVMin) + GreyStops, 1e-4));
     // UE's exposure scale at the low clamp, 2^bias * 0.18 / metered cd/m2, is the game's maximum multiplier per scene unit.
     TestEqual(TEXT("the low clamp reproduces MultiplierMax"),
-              FMath::Pow(2.0, E.BiasCurve[0].Y) * 0.18 / G.NitsAtEV(EVLow) * G.SceneUnitNits, 8.0, 1e-3);
+              FMath::Pow(2.0, K[Low].Y) * 0.18 / G.NitsAtEV(EVLow) * G.SceneUnitNits, 8.0, 1e-3);
     TestEqual(TEXT("the high clamp reproduces MultiplierMin"),
-              FMath::Pow(2.0, E.BiasCurve[2].Y) * 0.18 / G.NitsAtEV(EVHigh) * G.SceneUnitNits, 0.01, 1e-5);
+              FMath::Pow(2.0, K[High].Y) * 0.18 / G.NitsAtEV(EVHigh) * G.SceneUnitNits, 0.01, 1e-5);
 
     // The meter (mode 3, clamped blend): blend 0.25, at most 4 * 0.25 = 1 stop below and 1 * 0.25 above the reflected meter, the
     // incident meter smoothed with its half-life.
@@ -325,7 +345,8 @@ bool FSCViewerExposureSettings::RunTest(const FString&)
     TestEqual(TEXT("legacy min brightness: metered cd/m2 / 0.18"), double(L.MinBrightness), G.NitsAtEV(EVLow) / 0.18, 1e-2);
     TestEqual(TEXT("legacy max brightness"), double(L.MaxBrightness) / (G.NitsAtEV(EVHigh) / 0.18), 1.0, 1e-5);
     TestEqual(TEXT("legacy histogram min: log2 cd/m2"), double(L.HistogramLogMin), -6 + FMath::Log2(100.0), 1e-4);
-    TestEqual(TEXT("legacy bias keys keep the EV100 axis"), L.BiasCurve[1].X, 10 - 2 - FMath::Log2(0.18), 1e-9);
+    TestTrue(TEXT("legacy bias keys keep the EV100 axis (the anchor at EV 10)"),
+             L.BiasCurve.ContainsByPredicate([](const FVector2D& P) { return FMath::IsNearlyEqual(P.X, 10 - 2 - FMath::Log2(0.18), 1e-9); }));
     return true;
 }
 
