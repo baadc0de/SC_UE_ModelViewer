@@ -5,6 +5,7 @@
 #include "SCMeshImporter.h"
 #include "SCRigComponent.h"
 #include "SCLightImporter.h"
+#include "SCAudioSystem.h"
 #include "Components/LightComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -55,6 +56,10 @@ int32 ASCVehicle::SendInteraction(const FString& SourceEntityId, FName Interacti
 }
 int32 ASCVehicle::SendInteractionIn(int32 Interior, const FString& SourceEntityId, FName Interaction)
 {
+    // WP-A1: a top-level send is a press of the source entity: its class's Activate trigger effects play (the game's
+    // EntityEffectSystem fires that tag on an interaction; nested deliveries are the lift's own, not presses).
+    if (SendDepth == 0)
+        if (USCAudioSubsystem* Audio = USCAudioSubsystem::Get(this)) Audio->FireEntityTag(this, Interior, SourceEntityId, TEXT("Activate"));
     const int32 Depth = SendDepth++;
     ON_SCOPE_EXIT { --SendDepth; };
     if (Depth > MaxLinkDepth)
@@ -478,6 +483,16 @@ void SCVehicleLifts::BuildInteriorLifts(ASCVehicle* V, int32 InteriorIndex, cons
             return Weak.IsValid() && SCVehicleLifts::GroundContact(Weak.Get(), LiftId, To, Travel, By);
         };
         Lift->CarriageAnchor = Carriage->Anchor;
+        // WP-A1: the carriage class's sound effects follow the lift's events: each phase fires the trigger effects of the
+        // same tag name (Start, RampUp, FullSpeed, RampDown, Stop, PowerUp, PowerDown), and the state tag InTransit is
+        // held from Start to Stop (the brief's mapping of FSCLift's events onto the game's elevator tags).
+        Lift->OnPhase.AddLambda([Weak, LinkInterior, Carriage = Record.EntityId](FName Phase) {
+            USCAudioSubsystem* Audio = Weak.IsValid() ? USCAudioSubsystem::Get(Weak.Get()) : nullptr;
+            if (!Audio) return;
+            Audio->FireEntityTag(Weak.Get(), LinkInterior, Carriage, Phase.ToString());
+            if (Phase == TEXT("Start")) Audio->SetEntityTag(Weak.Get(), LinkInterior, Carriage, TEXT("InTransit"), true);
+            else if (Phase == TEXT("Stop")) Audio->SetEntityTag(Weak.Get(), LinkInterior, Carriage, TEXT("InTransit"), false);
+        });
         UE_LOG(LogSCLiftLinks, Display,
                TEXT("LIFT_BUILD lift=%d entity=%s class=%s stops=%d rest=%d riders=%d moved=%d lights=%d gate=%d gateways=%d panels=%d"), Lift->Id,
                *Record.EntityId, *Record.EntityClass, Lift->Stops.Num(), Lift->RestStop, Record.Riders.Num(), Moved, LightsMoved, Lift->Gate.Num(),

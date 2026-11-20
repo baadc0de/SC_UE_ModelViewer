@@ -15,6 +15,7 @@ scviewer-core = { path = "../scviewer-core" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+lewton = "0.10"
 
 [dev-dependencies]
 starbreaker-common.workspace = true

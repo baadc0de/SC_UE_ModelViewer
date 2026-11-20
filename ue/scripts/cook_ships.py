@@ -19,7 +19,12 @@ import json
 import os
 import re
 
+import sys
+
 import unreal
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cook_audio  # noqa: E402  (WP-A1: the package's audio beside the cooked level)
 
 VIEWER_FLOOR_Z = -5.0  # USCViewerSubsystem's floor: the cooked level streams in at the origin
 FORMAT = unreal.SCCookLibrary.cook_format_version()
@@ -93,6 +98,14 @@ for package in sorted(os.listdir(os.path.join(root, 'Packages'))):
         continue
     ship.set_actor_label('Ship ' + name)
     gear = unreal.SCImportLibrary.rest_on_floor(ship, VIEWER_FLOOR_Z)
+    try:
+        audio = cook_audio.stage(root, scene, level.rsplit('/', 1)[1])
+    except cook_audio.CookAudioError as e:
+        results.append('%s STALE EXPORT (%s)' % (name, e))
+        unreal.log_warning('COOK_SHIP ' + results[-1])
+        continue
+    ship.set_editor_property('cooked_audio', audio[0])
+    ship.set_editor_property('cooked_audio_scene', audio[1])
     ok = unreal.SCCookLibrary.cook_environment(ship, '/Game/SC/Ships/' + name, '/Game/SC/Ships/Shared')
     saved = levels.save_current_level()
     if ok and saved:

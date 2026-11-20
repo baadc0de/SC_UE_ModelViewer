@@ -490,6 +490,99 @@ random, sequence, blend and loop; RTPCs at their defaults).
    or occlude sounds between rooms, or is UE occlusion tracing enough for the first slices?
 6. **Decision record.** A D18 entry in the plan for "audio derived from game data, played through UE audio, no Wwise".
 
+## Result (A1-1)
+
+Done on `wp/E1-engine-fork-features` (uncommitted in the superproject; the owner commits) and submodule branch
+`scviewer/audio` (`eb25922f`, `f4ce6788`, `4abf5b4f`, `0120566f` on `966be180`). Owner decisions: D18 (no Wwise; the
+mix, the reverb and the cooked showcase from game data). Contract: `vendor/StarBreaker/docs/decomposed-export-contract.md`
+§Audio; viewer: `ue/README.md` §Audio.
+
+**Exporter (Phase 1).** v154 Attenuation (leading height-spread byte) and Bus layouts, checked against every HIRC object
+of the 2,410 banks (524,276 objects parse exactly; 21,495 attenuations, 1,383 buses, 671 aux buses); the v154 prop-id
+table; cross-bank media lookup; honest trigger trees (containers stay containers, own props per node, the action's
+ancestors as context, bus / positioning / attenuation / aux by override, dropped children take their weights); curves
+with Wwise's `AkInterpolation` shapes; bus chains with gains, RTPC defaults (ATL, else Init.bnk STMG), Gain / EQ / Peak
+Limiter slots and bypass; the Convolution Reverb impulse responses decoded from the plugin's partitioned bfloat16
+spectra (Tiny / Small / Medium / Large T30 0.34 / 0.31 / 1.99 / 2.54 s); DataCore sound effects (tag paths), audio
+strings, `AudioEnvironment` records and room propagation; `.soc` spots and areas with linked extra positions and area
+shapes; `$AnimEventDatabase` audio events on clip sources; the package post-pass writing `audio.json`, `Audio/*.ogg` and
+`Audio/ir/*.f32` (cache format 36). Coverage: of the 288 C2 triggers, 263 resolve playable, 23 `no_media` (silence
+plugins, e.g. the hatch's `Play_Silence`) and 2 `not_in_atl`; the C2 package carries 184 triggers (177 playable), 581
+media, 37 buses, 3 environments, 9 rooms and 14 entity classes with effects.
+
+**Player (Phase 2).** `USCAudioWave` (Ogg streamed through `sc_audio_*`, lewton), `USCAudioSubsystem` (containers,
+curves, RTPCs, spots, areas, rooms, hooks). Run `out/audio/run7` (`ue/scripts/rpc/c2-audio.ps1`, C2 in
+`hangar_xltop_001`, first person, port 8771; log `ue/SCViewer/Saved/Logs/a1-run7.log`):
+- `AUDIO_EMITTERS`: `top_deck_c2` 246 spots + 318 extra positions, 1 area; the C2 has 610 spots and 8 areas in the
+  loaded interiors (the 9th `.soc` area is in `armoury`, a layer the C2 does not load); the hangar 224 spots, 3 areas.
+- Top deck → hold (`AUDIO_AREA`): riding down, `AAA_Top_Deck_C2-001` falls 1.00 → 0.00 over its 5 m `fadeDistance`
+  while the carriage's `AAA_Hold_C2_LiftBox-001` is inside (1.00); at the lower deck `AAA_Hold_C2-001` is inside
+  (1.00) and the lift box fades out over 5 m as the player walks out.
+- Doors: `…_Elevator_Door_Top_Open` / `_Close` at bone `CRUS_Starlifter_Lift_Doors_Top` (lift-driven, twice each); the
+  hold doors' clip plays `…_Door_Bottom_Open` / `_Close` at `Door_Lift_Top` (the authored swap is kept).
+- Lift: `RampUp` → `…_Move_Start`, `InTransit` → `…_Move_Loop` from `Start` to `Stop`, `Stop` → `…_Move_Stop`, once
+  per ride (two rides). Buttons: one `Play_UI_Levski_Elevator_Button` per press (2 call, 2 floor panel).
+- The player package (re-exported after the review fix) carries its items' audio: 3 triggers, 1 class (flashlight,
+  weapon fire). The scripted walk does not exercise them.
+
+**Mix (Phase 3).** Each Wwise bus is a submix under its parent at bus volume + make-up + RTPC defaults + Gain effects
+(`AUDIO_BUS`); on the C2 / hangar chains every bus is 0 dB except the reverb return `2920869659` at −10 dB, applied once
+(meter: Large aux bus −16.9 dBFS peak → return −26.9). The master's Peak Limiter (−0.1 dB, 40:1, 10 ms look-ahead,
+50 ms release, linked) runs as UE's limiter (`AUDIO_LIMITER`); the walk recording has no clipped sample (max 32763).
+Dry and wet are two sends per voice (the voice gain once, the dry curve on the bus send, the aux gain and aux curve on
+the environment send). Bus levels over the top-deck segment (`AUDIO_METER`): C2 interior buses −31.7 dBFS RMS (beds
+−32.3, spots −46.1, area beds −42.6), reverb return −47.5, hangar drones bus −4.6 (peak +7.4 before the limiter); in
+the hold: C2 −40.2, hangar −4.8. Walk RMS per segment (dBFS): top_deck −6.8, walk_to_lift −6.4, call_button −5.0,
+doors_open −5.4, walk_in −6.1, floor_panel −6.8, ride_down −5.7, hold_doors_open −7.3, walk_out −7.3, hold −7.4. The
+total is the hangar's drones (see open items), so the bed crossfade shows in the bus meters and `AUDIO_AREA`, not in
+the total.
+
+**Reverb (Phase 4).** Rooms → environment (`AUDIO_ROOM`): Bridge 152 m³ → `VERB_SYS_INT_Metal_Small`; Top deck 2,671 m³
+and Hold 6,867 m³ → `…_Large`; Systems 428 m³ → `…_Medium`. Each environment's submix runs UE's convolution reverb
+over the bank's IR (wet 0 dB, dry −96 dB, pre-delay 0 ms as authored). Probes (`reverb-<room>.wav` with sends,
+`-dry.wav` without; the top lift door's open sound 2 m in front of the listener, ambience off): the same dry level in
+every room (−32.6 dBFS RMS); wet tails after the sound ends, to the 16-bit floor: Large 3.98 s, Medium 2.06 s, Small
+0.03 s, dry 0 s; the wet return sits 11 dB (Large), 14 dB (Medium) and 33 dB (Small) below the dry peak.
+
+**Cook (Phase 5).** `ue/scripts/cook_audio.py` stages `audio.json`, `audio_interiors.json` (spots, areas, room volumes
+per interior) and every payload under `Content/SCAudio/<level>` (gitignored, non-UFS staging); a missing manifest or
+payload stops that level (cook format 6, so earlier cooked levels report stale); `ASCVehicle::BeginPlay` loads it,
+mapping anchors to interiors by their recorded scene index. Verified: the staging step against the C2 export outside UE
+(582 files, 8 interiors, 610 spots, 8 areas, 12 room volumes). Not verified: a C2 cook and a packaged showcase run
+(cooking the C2 into `Content/SC/Ships/Maps` replaces the level the owner's demo loads; left to the owner's next
+`cook_ships.py` / `package_showcase.ps1`). Cooked levels bake their rigs, so they carry ambience and reverb; door, lift
+and panel sounds need a live import.
+
+**Tests.** `starbreaker-wwise` 39, `starbreaker-3d` lib 991 (4 ignored; data tests include the C2 lift effects and "no
+`AudioTriggerSpotParams` class authors a default trigger"), `scbridge-ffi` audio 2; UE automation 177 of 181 (5 new
+`SCBridge.Audio.*` pass; the 4 known failures are Package.FolderTarImport, Player.KitRigAndWeapons,
+Materials.FamilyMapping and FirstPerson.SkeletalCollision).
+
+**Review** (Terra and Astra, `out/audio/review/`). Fixed: bus gain applied twice; the submix auto-disable deadlock
+(found with the meters: a bus created under an idle parent was never processed, so the dry path was silent); dry / wet
+attenuation and the squared fade; attenuation and panning from one positioning override; blend layers; continuous runs
+(no fade-out without a successor, finite runs scheduled whole, trigger rate, transition random range); initial delays;
+bus pitch; post handles and object-scoped, delayed stops; per-emitter container state unless `global`; Listener_Cone in
+3D; area beds switching spatialisation; one-shot spots once per approach; invented fallbacks removed; effect bypass;
+convolution pre-delay; reverse clip events on end-aligned sources; the zero-length first step; the zero-PCM rewind spin
+and rewind copies; Ogg duration by page walk; bounded IR allocation; player audio after its items attach; cook format
+and incomplete staging; interior index mapping; submix teardown. Kept, with a label: the room → environment rule (below).
+
+**Open items** (not derivable from the data; not guessed): room propagation and occlusion — the hangar's drones (spot
+`volume` up to +9 dB, area `atsVolumeOffset` +10 dB) are heard inside the C2 unoccluded and dominate the mix, while the
+game occludes them through its propagation (`Occlusion_Amount` stays at its default 0); the engine's room-size metric
+(rooms carry `selection: inferred_*` and their `candidates`; the bridge's 5.33 m falls between Small 3–5 and Medium
+6–10 and takes the nearest); state groups, ducking, LFOs; EQ / compressor / meter / RoomVerb / delay slots; LPF / HPF
+amounts, spread and focus; switch values other than the default; listener-driven pitch curves; the STMG built-in
+parameter bindings (`Azimuth` / `Listener_Cone` are named in the player); stop actions aimed at an ancestor or a
+descendant of the playing root; frame-granular scheduling (not sample-accurate).
+
+**Answers to §9.** (1) The cooked showcase carries decoded audio as loose Ogg / IR files beside each level (owner
+decision 4). (2) Ogg in the package, decoded per voice at run time by the FFI (lewton). (3) The game's mix is
+reproduced from data: buses, RTPC defaults, listener-relative RTPCs, the master limiter (decision 2); states and ducking
+are open. (4) Reverb is in scope (decision 3): the bank's convolution IRs per room. (5) Not yet: propagation is the
+largest open item (above). (6) D18 is in the plan.
+
 ## Proof decode (research)
 
 The prebuilt CLI decodes with `starbreaker wwise extract <bank>.bnk -o out/audio-datamine/decoded/<bank> --decode`.

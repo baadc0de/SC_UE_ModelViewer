@@ -20,8 +20,9 @@ public:
      *  3: WP-I1 I1-5 (panel renders at their face aspect with owner values; state images swapped per face).
      *  4: WP-I1 fix pass (screens: the DisplayScreenPS emission with the DBA multiplier and new instance constants; the
      *  panel renders' layout, owner defaults and brand).
-     *  5: WP-I1 fix pass 2 (panel renders: button glyphs, standard styles, square canvas units, own shape colours). */
-    static constexpr int32 FormatVersion = 5;
+     *  5: WP-I1 fix pass 2 (panel renders: button glyphs, standard styles, square canvas units, own shape colours).
+     *  6: WP-A1 (the level's package audio staged beside it: Content/SCAudio/<level>, ASCVehicle::CookedAudio). */
+    static constexpr int32 FormatVersion = 6;
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in

@@ -84,6 +84,7 @@ struct SCBRIDGE_API FSCSceneInstance
     FMatrix LocalMatrix = FMatrix::Identity;
     /** Interior placements: the object-container entity id (unique within its container), the ids its EntityLinks
      *  name (a door panel names its door), and the entity whose inline loadout attached it (a door's own panels). */
+    FString EntityClassGuid; // WP-A1: the entity class (audio effects by class); empty for geometry without one
     FString EntityId;
     TArray<FString> Links;
     FString LoadoutOwnerEntityId;
@@ -133,6 +134,8 @@ struct SCBRIDGE_API FSCInterior
     UPROPERTY(BlueprintReadOnly) FSCSceneInstance Container;
     /** `room_volumes[]` objects verbatim (container-local CryEngine metres); parsed by FSCRoomVolume. */
     UPROPERTY(BlueprintReadOnly) TArray<FString> RoomVolumeJson;
+    /** WP-A1: `audio_spots[]` / `audio_areas[]` objects verbatim (container-local CryEngine metres); read by FSCAudioScene. */
+    TArray<FString> AudioSpotJson, AudioAreaJson;
     UPROPERTY(BlueprintReadOnly) TArray<FSCSceneInstance> Placements;
     TArray<FSCProximitySensor> ProximitySensors;
     /** WP-P5: geometry-less interactive entities (`entities[]`) and lift carriages (`lifts[]`). */

@@ -12,6 +12,7 @@
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCLightAreas.h"
+#include "SCAudioSystem.h"
 #include "SCDirt.h"
 #include "SCEmissiveLights.h"
 #include "Dom/JsonObject.h"
@@ -1380,6 +1381,11 @@ void FSCImportJob::FState::Assemble()
         V->InventoryAnchors[C] = NewAnchor(TEXT("Inventory_") + R.EntityName, Parent, ContainerFrame(R.LocalMatrix, bHelper));
         V->InventoryOwnerRigs[C] = Owner->Rig;
     }
+    // WP-A1: the package's audio (audio.json, its media and impulse responses), placed per interior below.
+    FString AudioError;
+    TSharedPtr<FSCAudioScene> Audio = FSCAudioScene::Load(*Source, Manifest.ScenePath, AudioError);
+    if (Audio) Audio->Vehicle = V;
+    else UE_LOG(LogSCImport, Display, TEXT("AUDIO_NONE %s: %s"), *Manifest.ScenePath, *AudioError);
     for (int32 InteriorIndex = 0; InteriorIndex < Manifest.Interiors.Num(); ++InteriorIndex)
     {
         const FSCInterior& Interior = Manifest.Interiors[InteriorIndex];
@@ -1391,6 +1397,8 @@ void FSCImportJob::FState::Assemble()
             Interior.Container.EntityName, Parent,
             FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
         V->InteriorAnchors.Add(Container);
+        V->InteriorHelperFrames.Add(bHelper);
+        V->InteriorSceneIndex.Add(InteriorIndex);
         FSCLightImporter::Build(
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
         const int32 AreasBefore = V->LightAreas.Num();
@@ -1402,6 +1410,14 @@ void FSCImportJob::FState::Assemble()
                 FEntity Placed = Place(P, Container, bHelper, false);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
             }
+        if (Audio)
+        {
+            Audio->AddInterior(InteriorIndex, Container, bHelper, Interior.AudioSpotJson, Interior.AudioAreaJson, Result.Warnings);
+            for (const auto& P : Interior.Placements)
+                if (const FEntity* Placed = ById.Find(P.EntityId); Placed && Audio->Manifest.Classes.Contains(P.EntityClassGuid))
+                    Audio->Entities.Add(FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower()),
+                                        {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
+        }
         // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel. A lift carriage links
         // its gate (a door) but operates it itself: an entity that is a lift is not a pad (WP-P5).
         const TSet<FString> Carriages = SCVehicleLifts::CarriageIds(Interior);
@@ -1499,6 +1515,8 @@ void FSCImportJob::FState::Assemble()
     }
     if (!V->Lights.IsEmpty()) FSCEmissive::SetLumen(V, USCViewerSettings::Get()->bEmissiveInLumen); // ships and environments, not the player kit
     if (EffectOnlySkipped) UE_LOG(LogSCImport, Display, TEXT("EFFECT_ONLY_PLACEMENTS skipped=%d"), EffectOnlySkipped);
+    if (Audio && Options.World->IsGameWorld())
+        if (USCAudioSubsystem* AudioSystem = USCAudioSubsystem::Get(V)) AudioSystem->AddScene(Audio.ToSharedRef());
     if (Options.bPublish)
     {
         V->BuildExploration();

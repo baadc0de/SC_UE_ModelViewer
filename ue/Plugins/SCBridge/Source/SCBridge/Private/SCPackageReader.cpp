@@ -201,6 +201,7 @@ void ReadLiftRecords(const FReaderObject& O, FSCInterior& I, FWarn&& Warn)
         Entity.EntityId = String(E, TEXT("entity_id"));
         Entity.EntityName = String(E, TEXT("entity_name"));
         Entity.EntityClass = String(E, TEXT("entity_class"));
+        Entity.EntityClassGuid = String(E, TEXT("entity_class_guid")).ToLower();
         Entity.Kind = String(E, TEXT("kind"));
         for (const auto& L : ReaderArray(E, TEXT("links"))) if (L->Type == EJson::String) Entity.Links.Add(L->AsString());
         Entity.InteractionLinks = InteractionLinks(E);
@@ -496,6 +497,8 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         I.Container.EntityName = String(O, TEXT("name"));
         I.Container.SourceTransformBasis = TEXT("cryengine_z_up");
         for (const auto& R : ReaderArray(O, TEXT("room_volumes"))) if (R->Type == EJson::Object) I.RoomVolumeJson.Add(Json(R->AsObject()));
+        for (const auto& R : ReaderArray(O, TEXT("audio_spots"))) if (R->Type == EJson::Object) I.AudioSpotJson.Add(Json(R->AsObject()));
+        for (const auto& R : ReaderArray(O, TEXT("audio_areas"))) if (R->Type == EJson::Object) I.AudioAreaJson.Add(Json(R->AsObject()));
         for (const auto& P : ReaderArray(O, TEXT("placements")))
         {
             FSCSceneInstance Placement;
@@ -503,6 +506,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             Placement.EntityName = String(P->AsObject(), TEXT("cgf_path"));
             Placement.SourceTransformBasis = TEXT("cryengine_z_up");
             Placement.EntityId = String(P->AsObject(), TEXT("entity_id"));
+            Placement.EntityClassGuid = String(P->AsObject(), TEXT("entity_class_guid")).ToLower();
             Placement.LoadoutOwnerEntityId = String(P->AsObject(), TEXT("loadout_owner_entity_id"));
             for (const auto& L : ReaderArray(P->AsObject(), TEXT("links"))) if (L->Type == EJson::String) Placement.Links.Add(L->AsString());
             ReadInteractions(P->AsObject(), Placement);

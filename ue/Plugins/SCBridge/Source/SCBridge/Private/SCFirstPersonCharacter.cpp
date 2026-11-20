@@ -1,5 +1,6 @@
 // ACharacter owns gravity, step-up, crouch and capsule sweeps; no ship-specific navigation rules.
 #include "SCFirstPersonCharacter.h"
+#include "SCAudioSystem.h"
 #include "SCVehicle.h"
 #include "SCPlayerBody.h"
 #include "SCLightAreas.h"
@@ -577,8 +578,16 @@ void ASCFirstPersonCharacter::SetMobiGlasOpen(bool bOpen)
     }
     UE_LOG(LogTemp, Display, TEXT("FP_MOBIGLAS open=%d"), bOpen);
 }
+void ASCFirstPersonCharacter::SetTorchAudio(ASCVehicle* Kit, const FString& ItemEntity)
+{
+    TorchKit = Kit;
+    TorchItem = ItemEntity;
+}
 void ASCFirstPersonCharacter::SetTorch(bool bOn)
 {
+    if (bOn != Flashlight->IsVisible())
+        if (USCAudioSubsystem* Audio = USCAudioSubsystem::Get(this))
+            Audio->PlayItemAction(TorchKit.Get(), TorchItem, bOn ? TEXT("Light_On_SFX") : TEXT("Light_Off_SFX"), Flashlight); // WP-A1
     Flashlight->SetVisibility(bOn);
     UE_LOG(LogTemp, Display, TEXT("FP_TORCH on=%d source=%s at=%s dir=%s cd=%.0f"), bOn, *TorchSource,
            *Flashlight->GetComponentLocation().ToCompactString(), *Flashlight->GetForwardVector().ToCompactString(), Flashlight->Intensity);

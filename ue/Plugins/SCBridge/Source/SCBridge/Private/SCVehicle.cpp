@@ -1,5 +1,6 @@
 // Vehicle parameters and on-demand evaluation of sparse, ordered animation layers.
 #include "SCVehicle.h"
+#include "SCAudioSystem.h"
 #include "Components/SceneComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SCMaterialBuilder.h"
@@ -241,6 +242,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
         const double Previous = P.Frame;
         P.Frame = FMath::Clamp(P.Frame + DeltaSeconds * C.Fps * P.Speed, 0., double(C.LastFrame));
         if (P.Frame != Previous) MarkDirty(P.Clip);
+        FireClipAudio(P, Previous); // WP-A1: route C, the clip's animation events crossed this frame
         // A forward clip at frame zero has not finished; reverse playback ends at zero.
         if ((P.Speed > 0 && P.Frame >= C.LastFrame) || (P.Speed < 0 && P.Frame <= 0))
         {
@@ -253,6 +255,41 @@ void ASCVehicle::Tick(float DeltaSeconds)
     if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: a door that started or stopped moving
     UpdateTickEnabled();
 }
+void ASCVehicle::BeginPlay()
+{
+    Super::BeginPlay();
+    if (!CookedAudio.IsEmpty()) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
+}
+
+void ASCVehicle::FireClipAudio(FSCClipPlayback& P, double Previous)
+{
+    USCAudioSubsystem* Audio = USCAudioSubsystem::Get(this);
+    if (!Audio || !ClipCatalog || !ClipCatalog->Clips.IsValidIndex(P.Clip)) return;
+    const double Lo = FMath::Min(Previous, P.Frame), Hi = FMath::Max(Previous, P.Frame);
+    if (Lo == Hi) return; // a zero-length step keeps the start frame for the first real advance
+    const bool bFresh = P.bAudioFresh;
+    P.bAudioFresh = false;
+    const int8 Dir = P.Speed >= 0 ? 1 : -1;
+    for (const FSCClipBinding& B : ClipCatalog->Clips[P.Clip].Bindings)
+    {
+        if (B.AudioEvents.IsEmpty()) continue;
+        for (USCRigComponent* Rig : Rigs)
+        {
+            if (!Rig || Rig->GetSkeletalMeshAsset() != B.Mesh || (P.TargetRig.IsValid() && P.TargetRig.Get() != Rig)) continue;
+            for (const FSCClipAudioEvent& E : B.AudioEvents)
+            {
+                if (E.Direction != 0 && E.Direction != Dir) continue;
+                // The event's clip frame in this direction (reverse playback aligns a source with the clip's end).
+                const double F = Dir < 0 && E.FrameReverse >= 0 ? E.FrameReverse : E.Frame;
+                // Crossed this frame: (Lo, Hi] forward, [Lo, Hi) backward; the start frame counts on the first advance.
+                const bool bCrossed = Dir > 0 ? (F > Lo || (bFresh && F >= Lo)) && F <= Hi
+                                              : (F < Hi || (bFresh && F <= Hi)) && F >= Lo;
+                if (bCrossed) Audio->PlayClipEvent(this, Rig, E.Trigger, E.Bone, E.Offset);
+            }
+        }
+    }
+}
+
 void ASCVehicle::UpdateTickEnabled()
 {
     bool bLifts = false;

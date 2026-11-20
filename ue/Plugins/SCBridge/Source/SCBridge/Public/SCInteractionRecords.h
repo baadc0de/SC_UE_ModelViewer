@@ -53,6 +53,7 @@ struct FSCTraversalLink
 struct FSCInteriorEntity
 {
     FString EntityId, EntityName, EntityClass, Kind;
+    FString EntityClassGuid; // WP-A1 (lower case)
     FMatrix LocalMatrix = FMatrix::Identity;
     TArray<FString> Links;
     TArray<FSCInteractionLink> InteractionLinks;

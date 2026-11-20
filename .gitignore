@@ -42,6 +42,8 @@ __pycache__/
 
 # Cooked environments and kept assets are game-derived (WP-C1, Keep as assets)
 ue/SCViewer/Content/SC/
+# WP-A1: cooked levels' audio (game-derived, ue/scripts/cook_audio.py)
+ue/SCViewer/Content/SCAudio/
 
 # NVIDIA DLSS plugin (downloaded from NVIDIA; its license does not allow redistribution)
 /ue/Plugins/NVIDIA/

@@ -400,6 +400,7 @@ void USCPlayerBodyComponent::ApplyTorchLight(bool bGame)
     // the package was open, FSCLightImporter::LoadGobo); a loadout without one keeps the fallback beam.
     const FSCFlashlight* Light = bGame && Kit && Data && !Data->Flashlights.IsEmpty() ? &Data->Flashlights[0] : nullptr;
     C->SetTorchLight(Light, Light ? FSCLightImporter::GoboLightFunction(Kit, Kit->GoboTextures.FindRef(Light->ProjectorTexture)) : nullptr);
+    C->SetTorchAudio(Kit, Light ? Light->Entity : FString()); // WP-A1: its Light_On_SFX / Light_Off_SFX
 }
 void USCPlayerBodyComponent::Detach()
 {

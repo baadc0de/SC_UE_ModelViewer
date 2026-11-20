@@ -797,6 +797,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
+name = "lewton"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "777b48df9aaab155475a83a7df3070395ea1ac6902f5cd062b8f2b028075c030"
+dependencies = [
+ "byteorder",
+ "ogg",
+ "tinyvec",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -949,6 +960,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "ogg"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6951b4e8bf21c8193da321bcce9c9dd2e13c858fe078bf9054a288b419ae5d6e"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]
@@ -1190,6 +1210,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cbindgen",
+ "lewton",
  "scviewer-core",
  "serde",
  "serde_json",
@@ -1396,6 +1417,7 @@ dependencies = [
  "starbreaker-gfx",
  "starbreaker-p4k",
  "starbreaker-ui",
+ "starbreaker-wwise",
  "thiserror",
  "zerocopy",
 ]
@@ -1530,6 +1552,32 @@ dependencies = [
  "thiserror",
  "tiny-skia",
  "usvg",
+]
+
+[[package]]
+name = "starbreaker-wem"
+version = "0.3.2"
+dependencies = [
+ "starbreaker-common",
+ "thiserror",
+ "ww2ogg",
+]
+
+[[package]]
+name = "starbreaker-wwise"
+version = "0.3.2"
+dependencies = [
+ "log",
+ "quick-xml",
+ "rayon",
+ "serde",
+ "starbreaker-common",
+ "starbreaker-cryxml",
+ "starbreaker-datacore",
+ "starbreaker-p4k",
+ "starbreaker-wem",
+ "thiserror",
+ "zerocopy",
 ]
 
 [[package]]
@@ -1728,6 +1776,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyvec"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
 name = "toml"
 version = "0.9.12+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1859,6 +1913,17 @@ name = "winnow"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
+
+[[package]]
+name = "ww2ogg"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a16960726d0260e04dabd2b0036fbdacecefec9d115dc4b953086c3809685a23"
+dependencies = [
+ "byteorder",
+ "lewton",
+ "thiserror",
+]
 
 [[package]]
 name = "xattr"

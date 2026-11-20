@@ -52,6 +52,7 @@ struct FSCClipPlayback
     bool bPlaying = true;
     uint64 Order = 0;
     TArray<FName> Scopes;
+    bool bAudioFresh = true; // WP-A1: the first advance includes the start frame (events sit at t = 0.0001 / 0.9999)
 };
 UCLASS(BlueprintType)
 class SCBRIDGE_API ASCVehicle : public AActor
@@ -189,6 +190,15 @@ public:
     TArray<FSCLightArea> LightAreas;
     /** One anchor per interior object container (scene `interiors[]`, in order): the unit of interior streaming. */
     UPROPERTY() TArray<TObjectPtr<USceneComponent>> InteriorAnchors;
+    /** WP-A1: per interior anchor, whether it hangs from a helper frame (the container -> anchor mapping of its audio). */
+    UPROPERTY() TArray<bool> InteriorHelperFrames;
+    /** WP-A1: per interior anchor, its index in the scene's `interiors[]` (an interior without a parent has no anchor). */
+    UPROPERTY() TArray<int32> InteriorSceneIndex;
+    /** WP-A1: a cooked level's audio (ue/scripts/cook_audio.py): its folder under the content directory and the package
+     *  scene path inside it; BeginPlay loads it. Empty for a live import (its audio comes from the package). */
+    UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudio;
+    UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudioScene;
+    virtual void BeginPlay() override;
     /** Vertex samples per imported mesh asset (mesh-local cm): the input of the inside/outside vote. */
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
     /** World point inside any room volume of this vehicle (the game's "not the root clip volume"). */
@@ -229,6 +239,8 @@ public:
     uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
 private:
     bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {}, USCRigComponent* Target = nullptr);
+    /** WP-A1: play the audio events of P's clip bindings crossed between Previous and P.Frame. */
+    void FireClipAudio(FSCClipPlayback& P, double Previous);
     void MarkDirty(int32 ClipIndex);
     TSet<USkeletalMesh*> DirtyMeshes;
     // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle.

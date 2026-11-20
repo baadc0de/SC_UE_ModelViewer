@@ -727,6 +727,61 @@ of those had to share a channel. See [WP-U3b verification §12](verification/WP-
 See [WP-P1 verification](verification/WP-P1.md) for exact null-RHI commands,
 results, collision comparison, limitations, and the orchestrator's GPU checklist.
 
+## Audio (WP-A1)
+
+The viewer plays Star Citizen's own sounds from the package's `audio.json` (D18; contract:
+`vendor/StarBreaker/docs/decomposed-export-contract.md` §Audio) through UE audio — no Wwise, no invented sounds, no
+trigger name in the code. `FSCAudioScene` holds one imported vehicle's or environment's audio (manifest, Ogg media,
+convolution impulse responses, placed spots and areas, entities with sound effects); `USCAudioSubsystem` (a tickable
+world subsystem) plays it:
+
+- **Placed audio.** Spots (`interiors[].audio_spots[]`) are voiced while the listener is within their attenuation's
+  reach (× `attenuationScalingFactor`); multi-position spots sound at the position nearest the listener; `playRandom`
+  spots re-trigger after `minDelay`..`maxDelay` (from the end with `delayIsFromEnd`) within `radiusRandom`; other
+  one-shot spots play once each time the listener comes within reach, looping ones while in reach. Areas
+  (`audio_areas[]`) play their bed at the listener inside their shape, and outside at the nearest point of the shape
+  with the area-fade RTPC falling from 1 to 0 over `fadeDistance`; the spots an area links take that fade and its
+  `atsVolumeOffset` while the listener is inside; a spot no area governs is faded by none.
+- **Trees.** Random (weights, avoid-repeat, shuffle; history per emitter unless `global`) and sequence containers, step
+  or continuous with crossfade / delay / trigger-rate transitions and their random ranges (finite runs scheduled whole,
+  infinite ones item by item), blends at their layers' RTPC gains, the default switch branch, initial delays, loops
+  (`USCAudioWave` streams the Ogg on the audio thread through `sc_audio_*` and rewinds for each loop). A post returns
+  one handle for all its play actions; stop actions honour their object scope, delay and fade.
+- **Gains.** Every node's own volume / make-up / output-bus gain and random draws, the action context, RTPC curves at the
+  RTPCs' defaults, the listener-relative `Azimuth` and `Listener_Cone` and the area fade per frame, the bus chain's
+  voice volumes and pitch. Dry and wet are two sends of each voice (UE's base submix output is off): the bus gets the
+  attenuation's dry curve at the emitter distance, the room's environment the aux gain plus the aux curve. Each Wwise
+  bus is a submix (`SCBus_<id|name>`) under its parent at its bus volume + make-up + RTPC defaults + Gain effects
+  (auto-disable off: UE never wakes a bus created under an idle parent); the master bus runs the game's Peak Limiter as
+  UE's dynamics processor in limiter mode (threshold, look-ahead, release, output, channel link as authored).
+- **Reverb.** Each room's environment (`rooms[]`) is the aux bus of an `AudioEnvironment` record; its submix runs UE's
+  convolution reverb over the game's own impulse response (the bank's Convolution Reverb, wet / dry as authored, the IR
+  at its stored level after the authored pre-delay; UE's own reverb send is off). A voice whose node uses game-defined aux sends sends to the environment of its room (a spot's
+  `staticApcRoom`, else the room volume it stands in) at its summed aux-send gain plus the attenuation's aux curve.
+- **Events.** Doors and every animated part: the clip sources' `audio_events[]` crossed while a clip plays (forward,
+  reverse, both; lift-driven doors included). Lifts: each `FSCLift` phase fires the carriage class's trigger effects of
+  the same tag name, the `InTransit` tag effect plays from `Start` to `Stop`. Panels: a top-level
+  `ASCVehicle::SendInteraction` (a press) fires the source entity's `Activate` effects. Flashlight: the kit item's
+  `Light_On_SFX` / `Light_Off_SFX`. Weapon: its `fireAudioTrigger` per shot.
+- **Cooked levels.** `ue/scripts/cook_audio.py` (called by `cook_ships.py` / `cook_hangars.py`) copies the package's
+  audio beside the cooked level (`Content/SCAudio/<level>`, gitignored, staged as non-UFS files; a missing `audio.json`
+  or payload stops that level's cook, cook format 6); `ASCVehicle::BeginPlay` loads it (`CookedAudio`). Cooked levels
+  bake their rigs, so they carry the placed audio and the reverb; door, lift and panel sounds need a live import.
+
+Console: `sc.Audio.List` (voices: trigger, emitter, distance, gain, reverb send, environment, bus), `sc.Audio.Rooms`
+(every room's environment and reverb parameters), `sc.Audio.Play <trigger>` (in front of the listener),
+`sc.Audio.Stop`, `sc.Audio.Mute 0|1`, `sc.Audio.Ambience 0|1` (placed spots and areas off for isolated measurements),
+`sc.Audio.Log 0|1`, `sc.Audio.Unfocused <0..1>` (UE mutes an unfocused window; off-screen runs need 1),
+`sc.Audio.Record start [s]` / `stop <abs path.wav>` (the main submix to a WAV), `sc.Audio.Sends 0|1` (reverb sends off
+for dry measurements), `sc.Audio.Meter start` / `stop` (every bus submix's peak and RMS over the window).
+
+Logs: `AUDIO_SCENE` (triggers, media, buses, environments, rooms per scene), `AUDIO_EMITTERS` (spots, extra positions,
+areas per interior), `AUDIO_ENVIRONMENT`, `AUDIO_BUS` (each submix's level and its parts), `AUDIO_REVERB` (each
+convolution: IR, wet, dry), `AUDIO_PLAY` (trigger, media, emitter, position, distance, gain, bus, environment, send),
+`AUDIO_SKIP` (an unresolvable trigger and why), `AUDIO_AREA` (area fades), `AUDIO_ROOM` (the listener's room, its
+environment and reverb parameters), `AUDIO_LIMITER`, `AUDIO_METER`, `AUDIO_SENDS`, `AUDIO_RECORD`, `AUDIO_COOKED`. `WindowsEngine.ini` raises UE's voice limit to 256
+(`AudioMaxChannels`). The scripted C2 run is `ue/scripts/rpc/c2-audio.ps1` (WP-A1 "Result (A1-1)").
+
 ## Armed first person: the real player body (WP-P2)
 
 Entering first person the first time starts the **player kit** in the background:

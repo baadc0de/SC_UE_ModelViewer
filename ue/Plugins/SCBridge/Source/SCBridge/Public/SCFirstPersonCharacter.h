@@ -146,6 +146,8 @@ public:
      *  SCItemFlashlightParams) with its cookie's light function (FSCLightImporter::ApplyFlashlight). Null Game: the viewer's
      *  fallback beam below (no player body, or a loadout without a flashlight). Keeps the on / off state. */
     void SetTorchLight(const struct FSCFlashlight* Game, class UMaterialInterface* LightFunction);
+    /** WP-A1: the kit and the item whose Light_On_SFX / Light_Off_SFX the torch plays (empty item: none). */
+    void SetTorchAudio(ASCVehicle* Kit, const FString& ItemEntity);
     /** Where the torch's light comes from: `game:<item entity>` or `fallback`. */
     const FString& GetTorchSource() const { return TorchSource; }
     /** Fallback torch beam, used only while the player kit supplies no flashlight (viewer values, not game data): candelas
@@ -170,6 +172,8 @@ public:
 private:
     FSCCharacterProfile Profile;
     FString TorchSource;
+    TWeakObjectPtr<ASCVehicle> TorchKit;
+    FString TorchItem;
     TFunction<FVector()> EyeSource;
     FVector Move = FVector::ZeroVector, LastPosition = FVector::ZeroVector, HoldInput = FVector::ZeroVector;
     FTransform LastSpawn;

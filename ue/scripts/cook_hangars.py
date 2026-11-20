@@ -14,7 +14,12 @@ Each cook records the hangar's ship capacity (elevator footprint, clear height) 
 import json
 import os
 import re
+import sys
+
 import unreal
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cook_audio  # noqa: E402  (WP-A1: the package's audio beside the cooked level)
 
 args = unreal.SystemLibrary.get_command_line()
 root = re.search(r'-SCCookRoot=(\S+)', args).group(1)
@@ -100,6 +105,14 @@ for package in packages:
     env.set_actor_label('Environment ' + name)
     offset = unreal.SCImportLibrary.present_environment(env, 'open', -5.0)
     unreal.SCCookLibrary.record_hangar_capacity(env, style, base)
+    try:
+        audio = cook_audio.stage(root, 'Packages/%s/scene.json' % package, name)
+    except cook_audio.CookAudioError as e:
+        results.append('%s STALE EXPORT (%s)' % (name, e))
+        unreal.log_warning('COOK_HANGAR ' + results[-1])
+        continue
+    env.set_editor_property('cooked_audio', audio[0])
+    env.set_editor_property('cooked_audio_scene', audio[1])
     ok = unreal.SCCookLibrary.cook_environment(env, '/Game/SC/Hangars/' + name)
     saved = levels.save_current_level()
     if ok and saved:

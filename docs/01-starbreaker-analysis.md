@@ -23,8 +23,10 @@ is irrelevant for us. The Rust tree is vendored at `vendor/StarBreaker`.
 | Export | `starbreaker-3d::gltf`, `decomposed.rs`, `starbreaker-blend` | Bundled GLB (textures embedded as PNG) **or** decomposed package: `Packages/<name>/scene.json` + `animations/*.json` + shared `Data/**/*.glb|.blend`, `*.materials.json`, `*.png`. Contract: `vendor/StarBreaker/docs/decomposed-export-contract.md`. |
 | Apps | `cli/` (`starbreaker`), `app/` (Tauri 2 + React 19 + three.js 0.186), `mcp/` (MCP server), `blender_addon/` | The Tauri app already has a P4k browser, DataCore browser, a three.js `GeometryPreview` (GLB via `skin_to_glb`), export dialogs, and a character builder. |
 
-Not relevant to us: `starbreaker-ui` (ship MFD screen compositing), `-wwise`/`-wem`
-(audio), `-gfx` (SWF).
+Not relevant to us: `starbreaker-ui` (ship MFD screen compositing), `-gfx` (SWF).
+
+Audio (`-wwise`, `-wem`) is relevant since WP-A1 (D18): banks, ATL triggers, playable trees, the mix and the
+reverb impulse responses come from them, and the decomposed package carries `audio.json` with Ogg media.
 
 ## Verified on this machine
 

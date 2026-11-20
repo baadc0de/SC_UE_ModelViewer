@@ -100,4 +100,5 @@ private:
     float ShotClock = 0;
     FVector2D Recoil = FVector2D::ZeroVector; // kick not yet recovered
     int32 Shots = 0;
+    TWeakObjectPtr<ASCVehicle> Kit; // WP-A1: whose audio manifest holds the weapons' fire sounds
 };
