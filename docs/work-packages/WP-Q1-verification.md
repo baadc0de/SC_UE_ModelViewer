@@ -112,3 +112,10 @@ The retest reached XL readiness at 33.70 s and C2/XL readiness at 77.27 s. In th
 same session, the first-person floor probe took 0.84 s to find all three authored
 targets at 51–52 cm. It replaced the old 2.5 s delay per aim attempt with an
 assertion on the actual interaction under the crosshair.
+
+The joint A2/P6 target also exercised folder-based first-person startup with
+both C2 and XL packages. It reached the same ship, hangar and on-foot state in
+36.60 s with NullRHI and the WASAPI mixer. The rendered run took 193.0 s on
+that worktree. NullRHI is suitable for live sound and context checks when no
+frame inspection is required. The two authored cockpit routes used a
+bridge-only package and reached readiness in 13.15 s.
