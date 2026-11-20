@@ -98,6 +98,19 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
         Binding.bInteractionDistanceExported = B->HasField(TEXT("interaction_distance"));
         if (B->TryGetNumberField(TEXT("interaction_distance"), Distance) && FMath::IsFinite(Distance) && Distance > 0)
             Binding.InteractionDistance = float(Distance);
+        for (const auto& Variable : ReaderArray(B, TEXT("user_variables")))
+        {
+            const FReaderObject Entry = Variable && Variable->Type == EJson::Object ? Variable->AsObject() : nullptr;
+            const FReaderObject* Value = nullptr;
+            if (!Entry || !Entry->TryGetObjectField(TEXT("value"), Value) || !Value || !*Value) continue;
+            if (String(Entry, TEXT("name")) == TEXT("ui_HideLockControls"))
+                (*Value)->TryGetBoolField(TEXT("value"), Binding.bHideDoorLockControl);
+            else if (String(Entry, TEXT("name")) == TEXT("ui_LocationName"))
+            {
+                const FString Literal = String(*Value, TEXT("value")).TrimStartAndEnd();
+                if (!Literal.StartsWith(TEXT("@"))) Binding.DoorLabel = Literal;
+            }
+        }
         // WP-I1 I1-3: the owner's other states, each with its render; cache format 39 adds `states[]` (one pin for a
         // single-state render, two for a combined one: a combined render has no state_type / state of its own).
         for (const auto& S : ReaderArray(B, TEXT("state_images")))

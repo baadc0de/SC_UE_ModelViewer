@@ -52,6 +52,11 @@ bool PawnInDoor(const ASCVehicle& Ship, const FBox& Aperture)
 }
 }
 
+void ASCVehicle::RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding)
+{
+    if (Rig && !Binding.DoorLabel.IsEmpty() && !DoorPanelLabels.Contains(Rig)) DoorPanelLabels.Add(Rig, Binding.DoorLabel);
+}
+
 void ASCVehicle::BuildShipDoors()
 {
     ShipDoors.Reset(Doors.Num());
@@ -103,6 +108,7 @@ void ASCVehicle::BuildShipDoors()
                     }
                 }
             }
+            if (const FString* PanelLabel = DoorPanelLabels.Find(Door.Rig.Get())) Label = *PanelLabel;
         }
         Labels.Add(MoveTemp(Label));
     }
@@ -239,7 +245,13 @@ bool ASCVehicle::AimDoorPanelLock(const USceneComponent* Panel, const FVector& E
         if (Face.Layout.Options.IsValidIndex(Option))
         {
             const FName Correct = bLocked ? TEXT("UnlockDoor") : TEXT("LockDoor");
-            if (Face.Layout.Options[Option].Interaction == Correct) return true;
+            const FName Hit = Face.Layout.Options[Option].Interaction;
+            if (Hit == Correct) return true;
+            // The package has clickable rectangles for the default render. In the locked image the other
+            // state-machine action occupies the same lock control when the panel authors UnlockDoor.
+            if (bLocked && Hit == FName(TEXT("LockDoor")) && Face.StateTypes.ContainsByPredicate([](const FSCUiStateType& Type) {
+                return Type.Name == TEXT("DoorLockState") && Type.Next(TEXT("UnlockDoor"), TEXT("DoorLocked")) != nullptr;
+            })) return true;
         }
     }
     return false;

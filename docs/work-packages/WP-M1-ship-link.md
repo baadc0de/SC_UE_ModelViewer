@@ -184,8 +184,8 @@ loadout changes (WP-M2).
 - Group evidence comes from room volumes sampled on both sides of the door's installed collision. An unresolved side
   pair leaves a door in Other. The ramp action requires an exported item type or subtype that identifies a ramp.
   The C2 package examined during implementation marks both ramps as Door.
-- The package exposes the ship display name. Door labels use available item display names and port labels. The
-  operating-panel bindings in the inspected package lack localized `ui_LocationName` and `ui_CustomLabel`.
+- Door labels use a literal label from the operating panel when available, then the item's display name or port
+  label. The inspected panel's location value was a locale key with no localized label in the package.
 - For a quick game-mode check, load a door-capable ship such as Cutlass Black in the default Viewer map, then run
   `ue/scripts/rpc/ship-link.ps1 -Port 8770`. It polls pairing, door playback and lock state. Add
   `-Screenshots` for Slate evidence or `-RequireExterior` for an exterior-door acceptance fixture.

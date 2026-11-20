@@ -111,6 +111,8 @@ public:
     void FinishSecureOrders();
     void RestoreCargoDoorLocks();
     TArray<FSCFloorPanel> DoorPanelLocks;
+    TMap<TWeakObjectPtr<const USCRigComponent>, FString> DoorPanelLabels;
+    void RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding);
     bool AimDoorPanelLock(const USceneComponent* Panel, const FVector& Eye, const FVector& Direction, double Reach, bool bLocked) const;
     /** Hangar waypoints (environments only; SCHangarWaypoints.h): kind Hangar, actor-relative standing hints. Built by
      *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */

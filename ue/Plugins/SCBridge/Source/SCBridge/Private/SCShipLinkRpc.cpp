@@ -73,6 +73,7 @@ FObj SCShipLinkRpc::Snapshot(UWorld* World)
                 D->SetBoolField(TEXT("moving"), Ship->IsDoorPlaying(I));
                 D->SetBoolField(TEXT("locked"), Ship->IsDoorLocked(I));
                 D->SetBoolField(TEXT("securing"), Info && Info->bSecurePending);
+                D->SetBoolField(TEXT("cargo_access"), Info && Info->bCargoRelock);
                 TArray<FString> PadStates;
                 for (const FSCScreenFace& Face : Ship->ScreenFaces)
                     if (const auto* Rig = Ship->DoorControls.Find(Face.Panel); Rig && Rig->Get() == Door.Rig.Get())

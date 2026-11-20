@@ -676,9 +676,11 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
         if (!Component || F.ImageSizePx.X <= 0 || F.ImageSizePx.Y <= 0 || F.Buttons.IsEmpty()) continue;
         if (DoorControls.Contains(F.Panel))
         {
+            if (F.bHideDoorLockControl) continue;
             FSCFloorPanel LockFace;
             LockFace.Anchor = F.Panel;
             LockFace.Component = Component;
+            LockFace.StateTypes = F.StateTypes;
             LockFace.Geometry = F.Geometry.Scaled(Component->GetComponentScale());
             if (!LockFace.Geometry.Build(LockFace.Frame().InverseTransformVectorNoScale(GetActorUpVector()))) continue;
             FVector2D Mean = FVector2D::ZeroVector;

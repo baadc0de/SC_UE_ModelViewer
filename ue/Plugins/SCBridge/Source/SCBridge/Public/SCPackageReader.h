@@ -63,6 +63,8 @@ struct SCBRIDGE_API FSCUiBinding
     /** Cache format 40 (`interaction_distance`): how far from its screen the player operates the owner's UI, metres
      *  (UIRenderToTextureEntityComponentParams.interactionDistance); 0 when not exported. */
     float InteractionDistance = 0.f;
+    FString DoorLabel; // a literal authored label; locale keys have no resolved string in the package
+    bool bHideDoorLockControl = false;
     bool bInteractionDistanceExported = false; // the key is present (null included): an export before format 40 has none
     /** The owner's other states the canvas shows (`state_images[]`; images outside the package dropped). */
     TArray<FSCUiStateImage> StateImages;
