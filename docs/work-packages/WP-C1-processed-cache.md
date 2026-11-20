@@ -25,6 +25,10 @@ and read the streaming bulk data. Cards, distance field, and RT geometry were pr
 ray hit Z=151.527 cm both times, with zero build/cook calls on restart. A same-process cycle verified shared
 collision across two actors, retention during Clear, and reclamation after garbage collection.
 
+The Q1 grouped NullRHI runner passed all three `SCBridge.Import.ProcessedCache` tests (Disk, Pin, Texture) in
+**15.60 s** including editor launch and exit. The texture test loaded the persisted mips and handled a corrupt
+cache entry. This run was separate from the real restart and live Gladius probes.
+
 The Gladius load used LOD 0, mip 2 and the procedural Viewer map under NullRHI.
 
 | Fresh process | Load | Export | Static mesh cache hits | Static mesh builds | Collision builds |
