@@ -1,6 +1,8 @@
 // WP-M1: door runtime state, access, and the data-derived room classification.
 #include "SCVehicle.h"
 #include "Cargo/SCCargoSubsystem.h"
+#include "Cargo/SCCargoContainer.h"
+#include "Engine/OverlapResult.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCRigComponent.h"
 #include "SCViewerSubsystem.h"
@@ -49,6 +51,23 @@ bool PawnInDoor(const ASCVehicle& Ship, const FBox& Aperture)
     const double Radius = Capsule->GetScaledCapsuleRadius();
     const double HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
     return Aperture.ExpandBy(FVector(Radius, Radius, HalfHeight)).IsInsideOrOn(Position);
+}
+
+bool DoorwayOccupied(const ASCVehicle& Ship, const FBox& Aperture)
+{
+    if (PawnInDoor(Ship, Aperture)) return true;
+    const UWorld* World = Ship.GetWorld();
+    if (!World || !Aperture.IsValid) return false;
+    const FTransform& ShipFrame = Ship.GetActorTransform();
+    const FVector Half = Aperture.GetExtent() * ShipFrame.GetScale3D().GetAbs();
+    FCollisionObjectQueryParams Objects;
+    Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+    Objects.AddObjectTypesToQuery(ECC_PhysicsBody);
+    const FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSecureDoorway), false, &Ship);
+    TArray<FOverlapResult> Hits;
+    World->OverlapMultiByObjectType(Hits, ShipFrame.TransformPosition(Aperture.GetCenter()), ShipFrame.GetRotation(),
+        Objects, FCollisionShape::MakeBox(Half), Params);
+    return Hits.ContainsByPredicate([](const FOverlapResult& Hit) { return Cast<ASCCargoContainer>(Hit.GetActor()) != nullptr; });
 }
 }
 
@@ -189,7 +208,7 @@ TArray<FSCShipDoorResult> ASCVehicle::SecureShip(FName Actor)
         Result.Door = Id;
         Result.Refusal = DoorOrderRefusal(Id, ESCShipDoorAction::Lock, Actor);
         if (!Result.Refusal.IsEmpty()) continue;
-        if (IsDoorOpen(Id) && PawnInDoor(*this, Door.Aperture))
+        if (IsDoorOpen(Id) && DoorwayOccupied(*this, Door.Aperture))
         {
             Result.Refusal = TEXT("Doorway occupied");
             continue;
@@ -221,7 +240,7 @@ void ASCVehicle::RestoreCargoDoorLocks()
         if (!Door.bCargoRelock || (Cargo && Cargo->IsAccessDoorBusy(this, Id))) continue;
         if (IsDoorOpen(Id))
         {
-            if (!PawnInDoor(*this, Door.Aperture)) PlayDoor(Id, false);
+            if (!DoorwayOccupied(*this, Door.Aperture)) PlayDoor(Id, false);
             continue;
         }
         if (IsDoorPlaying(Id)) continue;

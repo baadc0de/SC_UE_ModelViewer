@@ -97,6 +97,7 @@ public:
         bool bLocked = false;
         bool bSecurePending = false;
         bool bCargoRelock = false;
+        bool bActorOpenedWithoutAccess = false; // checked by the RPC state journal
         bool bRamp = false;
     };
     TArray<FShipDoor> ShipDoors;

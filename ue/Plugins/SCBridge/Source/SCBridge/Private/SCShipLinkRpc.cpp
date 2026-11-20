@@ -89,6 +89,10 @@ FObj SCShipLinkRpc::Snapshot(UWorld* World)
                 L->SetNumberField(TEXT("id"), I);
                 L->SetStringField(TEXT("label"), Group.Name);
                 L->SetStringField(TEXT("state"), Group.LightState);
+                int32 Members = 0;
+                for (const FSCImportedLightState& State : Ship->LightStates)
+                    if (State.GroupEntityId == Group.EntityId && State.Interior == Group.Interior) ++Members;
+                L->SetNumberField(TEXT("light_count"), Members);
                 TArray<FString> Modes;
                 for (const FSCLightGroupInteraction& Mode : Group.Interactions)
                     if (!Mode.LightState.IsEmpty() && !Mode.LinkingTag.IsEmpty()) Modes.AddUnique(Mode.LightState);
@@ -198,6 +202,10 @@ void SCShipLinkRpc::Scan(UWorld* World, TSet<FString>& Found)
     const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World);
     if (!Viewer) return;
     for (const ASCVehicle* Ship : Viewer->GetVehicles())
+    {
+        for (int32 Door = 0; Door < Ship->ShipDoors.Num(); ++Door)
+            if (Ship->ShipDoors[Door].bActorOpenedWithoutAccess)
+                Found.Add(FString::Printf(TEXT("door_open_while_locked_by_actor:%d:%d"), Viewer->GetVehicleInstanceId(Ship), Door));
         for (const FSCScreenFace& Face : Ship->ScreenFaces)
         {
             if (!Face.Pinned.IsEmpty() || Face.Custom.IsValid() || !Face.Component.IsValid()) continue;
@@ -208,5 +216,6 @@ void SCShipLinkRpc::Scan(UWorld* World, TSet<FString>& Found)
             if (Face.States.Contains(Locked) && Face.Shown.Contains(Locked) != Ship->IsDoorLocked(Door))
                 Found.Add(FString::Printf(TEXT("pad_lock_mismatch:%d:%d"), Viewer->GetVehicleInstanceId(Ship), Door));
         }
+    }
 }
 #endif

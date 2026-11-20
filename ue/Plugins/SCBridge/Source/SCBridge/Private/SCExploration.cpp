@@ -234,6 +234,13 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
     if (!PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose)) return false;
+    if (ShipDoors.IsValidIndex(Index))
+    {
+        FShipDoor& State = ShipDoors[Index];
+        const bool bOwnerEgress = Link && Link->RoleOf(AsActor, this) == ESCShipRole::Owner &&
+            State.Group == ESCShipDoorGroup::Exterior && LocalUse.IsSet() && IsInsideLightArea(LocalUse.GetValue());
+        State.bActorOpenedWithoutAccess = bOpen && !AsActor.IsNone() && IsDoorLocked(Index) && !bOwnerCargoOpen && !bOwnerEgress;
+    }
     if (bOwnerCargoOpen && IsDoorLocked(Index))
     {
         SetDoorLocked(Index, false);

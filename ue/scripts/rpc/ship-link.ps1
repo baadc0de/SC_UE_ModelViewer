@@ -84,7 +84,8 @@ if ($door.group -eq 'Exterior') {
     Call '/ship/door' @{ ship = $Ship; door = $id; action = 'close'; as = $owner } | Out-Null
     Wait-State { param($s) $d = Get-Door $s $id; $d -and -not $d.open -and -not $d.moving } 'reclosed door' | Out-Null
 }
-$light = $start.lights | Where-Object { $_.ship -eq $Ship -and $_.modes -contains 'Off' -and $_.modes.Count -gt 1 } | Select-Object -First 1
+$light = $start.lights | Where-Object { $_.ship -eq $Ship -and $_.modes -contains 'Off' -and $_.modes.Count -gt 1 } |
+    Sort-Object light_count -Descending | Select-Object -First 1
 if ($light) {
     $on = $light.modes | Where-Object { $_ -ne 'Off' } | Select-Object -First 1
     foreach ($mode in @('Off', $on)) {
