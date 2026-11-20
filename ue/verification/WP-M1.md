@@ -63,9 +63,39 @@ loading. The full run waited for the published environment and issued C2 load ag
 - The owner's 16 SCU transfer opened two locked exterior doors. Job 1 ended Done in 93.0 seconds with zero overlaps.
   The front-left door closed and relocked automatically. The stored rear-grid box still overlapped the rear doorway
   query. Removing that one fixture box started rear closure on the next frame, then the locked pad state returned.
-  The route passed in 263.21 seconds with this intervention. Whether the stored slot intersects the ramp collision
-  or the current query is conservative remains open.
-- The available captures are `ship-link-locked.png` and `ship-link-opening.png` in
+  The route passed in 263.21 seconds with this intervention. An offline replay aligned the exported rear ramp to
+  live joint and tip samples, then checked the authored movement collider triangles against the recorded box and
+  the actual 5 × 2.5 × 2.5 m dimensions. Their closest separation along the ship axis was 0.807 m over all 501
+  sampled poses. This supports a conservative false positive from the broader runtime query.
+- The first captures were `ship-link-locked.png` and `ship-link-opening.png` in
   `out/M2-C2XL-20261120-222506/` of the Garage worktree. Astra confirmed both state rows and header counts. The orbit
-  framing hid the selected rear ramp and an engine ray-tracing budget overlay was visible. The first-person
-  locked-pad capture and a C2 framing retake remain.
+  framing hid the selected rear ramp and an engine ray-tracing budget overlay was visible.
+
+## C2 physical pad and framing retest
+
+The warmed viewer reached XL plus C2 readiness in 77.27 seconds. The same route without the transfer replay passed
+in 34.77 seconds, including denial, secure closure, and light modes. It captured the rear ramp from behind and
+then aimed the first-person view at its linked physical pad from 85 cm. The viewer reported focus on door 0 and
+the material selected `DoorLockState.DoorLocked` with no pinned override.
+
+Astra approved `ship-link-locked.png`, `ship-link-opening.png` and `locked-pad.png` under
+`out/M2-XLretest-20261120-225717/` in the Garage worktree. The Rear ramp leader and access row agree as the
+header changes from one locked to one moving. The physical pad shows a red closed padlock.
+
+## Retained-box regression
+
+The sampled movement-collider guard at `1bb7b96` built successfully (96 actions, 37.43 seconds in UBA).
+The grouped Ship Link, Doors and Cargo NullRHI run passed all 80 tests in 11.15 seconds. The new test
+checks both open and closed endpoints, an obstruction between translating endpoints, a box in a rotating
+path, the conservative fallback for missing path information, and a cooked complex-as-simple triangle.
+
+```powershell
+& ../SC_UE_ModelViewer-wp-Q1/ue/scripts/rpc/automation.ps1 -Build -Project $project -Filter SCBridge.ShipLink,SCBridge.Doors,SCBridge.Cargo
+```
+
+The extracted XL folder and C2 were ready 76.19 seconds from launch. The driver opened the main hold,
+spawned one 16 SCU box directly onto the same adjacent grid slot, then called Secure Ship. It polled
+the real rear ramp until closed and locked, and verified that the box remained stored on grid 3 with
+zero slot error. The case passed in 109.98 seconds from launch and the viewer exited with code 0.
+This targets the shared door obstruction predicate without replaying the earlier drone job.
+`box.json`, `secure.json` and `Viewer.log` are in `out/M1-doorway-20261120-232316/`.

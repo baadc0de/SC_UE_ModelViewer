@@ -90,10 +90,24 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
     struct FShipDoor
     {
+        struct FMovementCollider
+        {
+            struct FSample
+            {
+                FTransform Pose; // relative to the ship
+                double TravelCm = 0; // maximum point travel before the next sample
+            };
+            TWeakObjectPtr<UPrimitiveComponent> Component;
+            FName Socket;
+            FTransform ClosedPose; // relative to the ship
+            TArray<FSample> Sweep;
+        };
         ESCShipDoorGroup Group = ESCShipDoorGroup::Other;
         FName GroupSource;
         FString Label;
         FBox Aperture = FBox(ForceInit); // vehicle-local, at the authored closed pose when available
+        FBox MovementBounds = FBox(ForceInit);
+        TArray<FMovementCollider> MovementColliders;
         bool bLocked = false;
         bool bSecurePending = false;
         bool bCargoRelock = false;
@@ -105,6 +119,7 @@ public:
     FString ShipDoorLabel(int32 Index) const;
     bool IsDoorLocked(int32 Index) const;
     bool SetDoorLocked(int32 Index, bool bLocked);
+    bool DoorwayOccupied(int32 Index) const;
     FName ShipLinkPlayer() const;
     FString DoorOrderRefusal(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {}) const;
     FString OrderShipDoor(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {});
