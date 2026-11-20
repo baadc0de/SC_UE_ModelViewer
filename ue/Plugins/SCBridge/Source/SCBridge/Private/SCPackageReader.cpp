@@ -277,8 +277,8 @@ void ReadSeatRecords(const FReaderObject& Object, FSCSceneInstance& Instance)
             Action.State = Name(Fragment, TEXT("state"));
             for (const auto& Tag : ReaderArray(Fragment, TEXT("query_frag_tags")))
                 if (Tag && Tag->Type == EJson::String) Action.QueryTags.Add(FName(*Tag->AsString()));
-            for (const auto& Value : ReaderArray(Fragment, TEXT("layers")))
-                if (const FReaderObject Layer = Value && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+            for (const auto& LayerValue : ReaderArray(Fragment, TEXT("layers")))
+                if (const FReaderObject Layer = LayerValue && LayerValue->Type == EJson::Object ? LayerValue->AsObject() : nullptr;
                     Layer && Number(Layer, TEXT("layer"), -1) == 0)
                 {
                     Action.Animation = Name(Layer, TEXT("animation"));
@@ -287,8 +287,8 @@ void ReadSeatRecords(const FReaderObject& Object, FSCSceneInstance& Instance)
                     Layer->TryGetBoolField(TEXT("loop"), Action.bLoop);
                     break;
                 }
-            for (const auto& Value : ReaderArray(Fragment, TEXT("procedurals")))
-                if (const FReaderObject Procedure = Value && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+            for (const auto& ProcedureValue : ReaderArray(Fragment, TEXT("procedurals")))
+                if (const FReaderObject Procedure = ProcedureValue && ProcedureValue->Type == EJson::Object ? ProcedureValue->AsObject() : nullptr;
                     Procedure && String(Procedure, TEXT("type")).Equals(TEXT("PositionAdjust"), ESearchCase::IgnoreCase))
                     Action.PositionAdjust = float(Number(Procedure, TEXT("blend"), 0.0));
             if (!Action.State.IsNone() && !Action.Animation.IsNone()) Seat.Actions.Add(MoveTemp(Action));

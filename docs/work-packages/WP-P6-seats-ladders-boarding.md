@@ -1,6 +1,6 @@
 # WP-P6 — Seats, ladders and boarding: the player's body sits, climbs and boards like the game's
 
-Branch `wp/P6-seats-ladders-boarding`. Exporter changes go on a submodule branch `scviewer/seats-ladders`.
+The cockpit slice uses branch `wp/p6-cockpit-seats`. Exporter changes go on submodule branch `scviewer/seats-ladders`.
 
 **Depends on:** WP-P1 (first person, interactions, spawn kinds `Seat` / `SeatAccess`, `FSCSeatBox`), WP-P2 (player kit,
 `USCPlayerBodyComponent`, `FSCPlayerAnimator`, clip sidecars with root motion), WP-P5 (`ASCVehicle::SendInteraction`,
@@ -34,8 +34,23 @@ state. `sc.Seat.State` reports the active role for A2 integration and automated 
 
 This implementation covers cockpit routes with SkipDeploy, SkipRetract, no gateways, no flight-state requirements and
 a loaded player kit. It uses the authored yaw and pitch limits and the P2 spine-pitch implementation pending aim poses.
-The UE automation suite and live C2 proof are pending. The capsule-only camera path, weapon and door/lift regressions,
-and the three requested screenshots still need verification.
+The UE 5.9 Win64 Editor build succeeded. Q1's grouped NullRHI runner passed `SCBridge.Mesh.BasisAndAttributes` and
+`SCBridge.Seat` (3 tests in **9.66 s**, including launch and exit). These cover helper-only GLBs, wrapped skeletal
+root motion, action pose blending and seat package metadata.
+
+The live archive C2 at LOD 2/mip 4 with all interiors took **237.114 s** cold (145.191 s export, 91.824 s import).
+It exposed a reader error that skipped both JSON-only access-helper assets. The fixed reader accepted both helpers
+during the next C2 run. The pre-extracted geometry-only fixture took **25.897 s** to import and resolved both
+authored access prompts plus both seat and dashboard rig pairs. This fixture omitted the bridge floor, so it could
+verify route resolution but could not place a standing pawn near the seats.
+
+For the next occupancy run, retain the authored `bridge_c2` interior in an extracted LOD 2/mip 4 C2 package.
+Launch with `-SCDefaults -SCPackage=<fixture> -SCExplore -SCPlayerPackage=<kit tar>` and
+`-SCSeatClipsPackage=<clips tar>`. This bypasses archive export of the ship and body clips. Use `sc.Seat.State` to
+poll the occupied role and `sc.FP.Where` to verify standing floor contact after exit.
+
+Both complete occupancy cycles, the blocked-exit case, the capsule-only camera path, weapon and door/lift
+regressions and the three requested screenshots remain open.
 
 The Rust checks used `cargo test --manifest-path vendor/StarBreaker/Cargo.toml --locked -p starbreaker-3d --lib seat_`
 (3 passed), the same command with `interaction_points_keep_their_interactions_in_order` (1 passed), and

@@ -12,6 +12,9 @@
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -53,7 +56,11 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
     {
         if (Access.SeatEntrances.IsEmpty()) continue;
         USceneComponent* Anchor = Vehicle.PortAnchors.FindRef(SCCargoRecords::PortKey(Access.PortPath));
-        if (!Anchor) continue;
+        if (!Anchor)
+        {
+            UE_LOG(LogSCSeat, Warning, TEXT("SEAT_ROUTE_UNAVAILABLE owner=%s reason=missing_access_anchor"), *Access.EntityName);
+            continue;
+        }
         for (const FSCSeatEntrance& Entrance : Access.SeatEntrances)
         {
             // This slice supports cockpit entrances without gateways or a dependency on simulated ship state.
@@ -83,7 +90,11 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
                 DashPath.Last() = Route.Definition.DashboardPort;
                 Route.DashRig = Vehicle.PortRigs.FindRef(SCCargoRecords::PortKey(DashPath));
             }
-            if (!Route.IsValid() || Route.Definition.Role == ESCSeatRole::Unknown) continue;
+            if (!Route.IsValid() || Route.Definition.Role == ESCSeatRole::Unknown)
+            {
+                UE_LOG(LogSCSeat, Warning, TEXT("SEAT_ROUTE_UNAVAILABLE route=%s reason=missing_rig_or_role"), *Entrance.Name);
+                continue;
+            }
             for (const FSCSeatAction& Action : Route.Definition.Actions)
             {
                 const FString* Path = Action.State == Enter ? &Entrance.Enter.FragmentTags : Action.State == Exit ? &Entrance.Exit.FragmentTags : nullptr;
@@ -102,7 +113,11 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
                 Route.Press = *Press;
                 const FSCInstanceHelpers* Helpers = Vehicle.AttachmentHelpers.Find(Anchor);
                 const FTransform* Resolved = Helpers ? Helpers->Frames.Find(Point.HelperName) : nullptr;
-                if (!Resolved) continue;
+                if (!Resolved)
+                {
+                    UE_LOG(LogSCSeat, Warning, TEXT("SEAT_ROUTE_UNAVAILABLE route=%s reason=missing_helper helper=%s"), *Entrance.Name, *Point.HelperName);
+                    continue;
+                }
                 Route.PointFrame = *Resolved;
                 if (PlayRigs(Route, Vehicle, Deploy, true))
                 {
@@ -200,21 +215,44 @@ bool FSCSeatRuntime::Interact(ASCFirstPersonCharacter& Character)
 
 bool FSCSeatRuntime::RequestClips(ASCFirstPersonCharacter& Character)
 {
-    UGameInstance* Game = Character.GetGameInstance();
-    const USCViewerSubsystem* Viewer = Game ? Game->GetSubsystem<USCViewerSubsystem>() : nullptr;
-    const auto Client = Viewer ? Viewer->GetClient() : nullptr;
-    if (!Client) return false;
+    const FString Gender = Character.Body->Gender();
+    TArray<FString> Names;
+    for (const auto& Pair : Routes[Active].Actions) Names.AddUnique(Pair.Value.Animation.ToString());
+    Names.Sort();
+    TMap<FString, int32> Bones;
+    const auto& Ref = Character.Body->GetLeader()->GetSkeletalMeshAsset()->GetRefSkeleton();
+    for (int32 Index = 0; Index < Ref.GetNum(); ++Index) Bones.Add(Ref.GetBoneName(Index).ToString(), Index);
+
+    FString File;
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCSeatClipsPackage="), File))
+    {
+        Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [File, Gender, Names = MoveTemp(Names), Bones = MoveTemp(Bones)] {
+            TArray64<uint8> Tar;
+            if (!FFileHelper::LoadFileToArray(Tar, *File)) return FClipResult{{}, TEXT("Cannot read seat clips: ") + File};
+            return ReadClips(MoveTemp(Tar), Gender, Names, Bones);
+        }, UE::Tasks::ETaskPriority::BackgroundNormal);
+    }
+    else
+    {
+        UGameInstance* Game = Character.GetGameInstance();
+        const USCViewerSubsystem* Viewer = Game ? Game->GetSubsystem<USCViewerSubsystem>() : nullptr;
+        const auto Client = Viewer ? Viewer->GetClient() : nullptr;
+        if (!Client) return false;
+        Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
+        auto Export = Client->ExportPlayerClips(Gender, Names, Progress.ToSharedRef());
+        Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Export, Gender, Names = MoveTemp(Names), Bones = MoveTemp(Bones)]() mutable {
+            FSCExportResult& Result = Export.GetResult();
+            if (!Result.bOK) return FClipResult{{}, Result.Error.ToString()};
+            return ReadClips(MoveTemp(Result.Tar), Gender, Names, Bones);
+        }, UE::Tasks::Prerequisites(Export), UE::Tasks::ETaskPriority::BackgroundNormal);
+    }
     PlayerKit = Character.Body->GetKit();
-    Requested.Reset();
-    for (const auto& Pair : Routes[Active].Actions) Requested.AddUnique(Pair.Value.Animation.ToString());
-    Requested.Sort();
-    Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
-    Export = Client->ExportPlayerClips(Character.Body->Gender(), Requested, Progress.ToSharedRef());
     Phase = EPhase::LoadClips;
     return true;
 }
 
-FSCSeatRuntime::FClipResult FSCSeatRuntime::ReadClips(TArray64<uint8>&& Tar, const TArray<FString>& Names, const TMap<FString, int32>& Bones)
+FSCSeatRuntime::FClipResult FSCSeatRuntime::ReadClips(TArray64<uint8>&& Tar, const FString& Gender, const TArray<FString>& Names,
+    const TMap<FString, int32>& Bones)
 {
     FSCTarPackageSource Source(MoveTemp(Tar));
     FClipResult Result;
@@ -232,10 +270,14 @@ FSCSeatRuntime::FClipResult FSCSeatRuntime::ReadClips(TArray64<uint8>&& Tar, con
     FString Json;
     TSharedPtr<FJsonObject> Scene;
     const TSharedPtr<FJsonObject>* Root = nullptr;
+    const TSharedPtr<FJsonObject>* ClipSet = nullptr;
     const TArray<TSharedPtr<FJsonValue>>* Records = nullptr;
+    FString PackageGender;
     if (!ReadText(TEXT("Packages/player_clips/scene.json"), Json) ||
         !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Scene) || !Scene ||
-        !Scene->TryGetObjectField(TEXT("root_entity"), Root) || !(*Root)->TryGetArrayField(TEXT("animations"), Records))
+        !Scene->TryGetObjectField(TEXT("root_entity"), Root) || !(*Root)->TryGetArrayField(TEXT("animations"), Records) ||
+        !Scene->TryGetObjectField(TEXT("player_clips"), ClipSet) || !(*ClipSet)->TryGetStringField(TEXT("gender"), PackageGender) ||
+        !PackageGender.Equals(Gender, ESearchCase::IgnoreCase))
     {
         if (Result.Error.IsEmpty()) Result.Error = TEXT("Invalid seat clip manifest");
         return Result;
@@ -287,7 +329,7 @@ void FSCSeatRuntime::Begin(ASCFirstPersonCharacter& Character)
     }
     Character.ClearViewHold();
     Character.ClearInput();
-    Character.SetBase(static_cast<UPrimitiveComponent*>(nullptr));
+    Character.SetBase(static_cast<FMovementBaseInterfaceData*>(nullptr));
     Character.GetCharacterMovement()->StopMovementImmediately();
     Character.GetCharacterMovement()->DisableMovement();
     SavedCollision = Character.GetCapsuleComponent()->GetCollisionEnabled();
@@ -332,9 +374,8 @@ FTransform FSCSeatRuntime::Motion(const ASCFirstPersonCharacter& Character, floa
 FTransform FSCSeatRuntime::SeatedTransform(const FRoute& Route) const
 {
     const FTransform Socket = Route.Socket();
-    // +Y is authored forward in the seat helper. Its raw local basis is converted to UE +Z by the mesh importer.
-    const FVector Forward = Socket.GetUnitAxis(EAxis::Z).GetSafeNormal2D();
-    const FQuat Heading = Forward.IsNearlyZero() ? Host->GetActorQuat() : Forward.ToOrientationQuat();
+    // The raw seat bone uses Cry +Y forward and +Z up. In the imported node's local basis these are +Z and -X.
+    const FQuat Heading = FRotationMatrix::MakeFromXZ(Socket.GetUnitAxis(EAxis::Z), -Socket.GetUnitAxis(EAxis::X)).ToQuat();
     return FTransform(Heading, Socket.GetLocation() - Heading.RotateVector(BodyInActor.GetLocation()));
 }
 
@@ -351,6 +392,27 @@ bool FSCSeatRuntime::ApplyLook(ASCFirstPersonCharacter& Character, FVector2D Pix
     return true;
 }
 
+bool FSCSeatRuntime::StandingClear(const ASCFirstPersonCharacter& Character, FVector Centre)
+{
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSeatExit), false, &Character);
+    Character.AddGridIgnores(Params, Centre, Character.GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+    return Character.GetWorld() && !Character.GetWorld()->OverlapBlockingTestByChannel(
+        Centre, FQuat::Identity, ECC_Pawn, Character.GetCapsuleComponent()->GetCollisionShape(), Params);
+}
+
+bool FSCSeatRuntime::ReturnToSeat(ASCFirstPersonCharacter& Character, const FRoute& Route)
+{
+    UE_LOG(LogSCSeat, Display, TEXT("SEAT_EXIT_BLOCKED route=%s"), *Route.Entrance.Name);
+    if (!PlayRigs(Route, *Host, Retract))
+    {
+        Stop(Character);
+        return false;
+    }
+    Character.SetActorTransform(SeatedTransform(Route), false, nullptr, ETeleportType::TeleportPhysics);
+    StartAction(EPhase::Retract, Retract);
+    return true;
+}
+
 void FSCSeatRuntime::Restore(ASCFirstPersonCharacter& Character)
 {
     Character.Body->SetSeatAction(nullptr, 0.f, 1.f, 0.f);
@@ -364,17 +426,27 @@ void FSCSeatRuntime::Stop(ASCFirstPersonCharacter& Character)
 {
     if (Progress) Progress->RequestCancel();
     Progress.Reset();
-    Export = {};
     Parse = {};
     if (OwnsMovement())
     {
+        FTransform Spawn = Character.LastSpawn;
         if (Host.IsValid() && !Host->IsActorBeingDestroyed())
         {
-            Character.SetActorTransform(StartInShip * Host->GetActorTransform(), false, nullptr, ETeleportType::TeleportPhysics);
+            Spawn = StartInShip * Host->GetActorTransform();
             if (Routes.IsValidIndex(Active) && Routes[Active].IsValid()) PlayRigs(Routes[Active], *Host, Deploy, true);
         }
-        else Character.SetActorTransform(Character.LastSpawn, false, nullptr, ETeleportType::TeleportPhysics);
+        bool bClear = StandingClear(Character, Spawn.GetLocation());
+        if (!bClear && StandingClear(Character, Character.LastSpawn.GetLocation()))
+        {
+            Spawn = Character.LastSpawn;
+            bClear = true;
+        }
+        Spawn.SetRotation(FRotator(0, Spawn.Rotator().Yaw, 0).Quaternion());
+        Character.SetActorTransform(Spawn, false, nullptr, ETeleportType::TeleportPhysics);
+        Phase = EPhase::Walk;
+        if (!bClear) Character.SetActorEnableCollision(false);
         Restore(Character);
+        if (!bClear && !Character.IsActorBeingDestroyed()) Character.ToggleNoclip();
     }
     Phase = EPhase::Walk;
     Active = INDEX_NONE;
@@ -393,27 +465,10 @@ void FSCSeatRuntime::Tick(ASCFirstPersonCharacter& Character, float DeltaSeconds
     if (Phase == EPhase::LoadClips)
     {
         if (Focus(Character) != Active) { Stop(Character); return; }
-        if (Export.IsValid() && Export.IsCompleted())
-        {
-            FSCExportResult Result = MoveTemp(Export.GetResult());
-            Export = {};
-            if (!Result.bOK)
-            {
-                UE_LOG(LogSCSeat, Warning, TEXT("SEAT_CLIPS %s"), *Result.Error.ToString());
-                Stop(Character);
-                return;
-            }
-            TMap<FString, int32> Bones;
-            const auto& Ref = Character.Body->GetLeader()->GetSkeletalMeshAsset()->GetRefSkeleton();
-            for (int32 Index = 0; Index < Ref.GetNum(); ++Index)
-                Bones.Add(Ref.GetBoneName(Index).ToString().ToLower(), Index);
-            Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Tar = MoveTemp(Result.Tar), Names = Requested, Bones = MoveTemp(Bones)]() mutable {
-                return ReadClips(MoveTemp(Tar), Names, Bones);
-            }, UE::Tasks::ETaskPriority::BackgroundNormal);
-        }
-        if (!Parse.IsValid() || !Parse.IsCompleted()) return;
+        if (!Parse.IsCompleted()) return;
         FClipResult Result = MoveTemp(Parse.GetResult());
         Parse = {};
+        Progress.Reset();
         if (!Result.Error.IsEmpty())
         {
             UE_LOG(LogSCSeat, Warning, TEXT("SEAT_CLIPS %s"), *Result.Error);
@@ -486,21 +541,19 @@ void FSCSeatRuntime::Tick(ASCFirstPersonCharacter& Character, float DeltaSeconds
             ExitInShip = Frame.GetRelativeTransform(Host->GetActorTransform());
             const FSCPlayerClip& ExitClip = *Clips.FindChecked(Route.Actions.FindChecked(Exit).Animation);
             const FVector End = (Motion(Character, ExitClip.Duration) * Frame).GetLocation();
-            const float Half = Character.GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-            FCollisionQueryParams Params(SCENE_QUERY_STAT(SCSeatExit), false, &Character);
-            Character.AddGridIgnores(Params, End, Half);
-            if (Character.GetWorld()->OverlapBlockingTestByChannel(End + FVector(0, 0, 1), FQuat::Identity, ECC_Pawn,
-                FCollisionShape::MakeCapsule(Character.GetCapsuleComponent()->GetScaledCapsuleRadius(), Half), Params))
-            {
-                UE_LOG(LogSCSeat, Display, TEXT("SEAT_EXIT_BLOCKED route=%s"), *Route.Entrance.Name);
-                if (PlayRigs(Route, *Host, Retract)) StartAction(EPhase::Retract, Retract);
-                else Stop(Character);
-            }
+            if (!StandingClear(Character, End)) ReturnToSeat(Character, Route);
         }
         break;
     case EPhase::Exit:
         if (bBodyDone)
         {
+            // A cab or loose cargo may have arrived since the preflight. Check the actual standing point again.
+            if (!StandingClear(Character, Frame.GetLocation()))
+            {
+                ReturnToSeat(Character, Route);
+                break;
+            }
+            Character.SetActorRotation(FRotator(0, Frame.Rotator().Yaw, 0));
             Restore(Character);
             Phase = EPhase::Walk;
             Active = INDEX_NONE;

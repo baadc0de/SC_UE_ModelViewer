@@ -52,15 +52,16 @@ private:
     bool PlayRigs(const FRoute& Route, ASCVehicle& Vehicle, FName Tag, bool bHold = false);
     FTransform Motion(const ASCFirstPersonCharacter& Character, float Seconds) const;
     FTransform SeatedTransform(const FRoute& Route) const;
+    bool ReturnToSeat(ASCFirstPersonCharacter& Character, const FRoute& Route);
+    static bool StandingClear(const ASCFirstPersonCharacter& Character, FVector Centre);
     void Restore(ASCFirstPersonCharacter& Character);
-    static FClipResult ReadClips(TArray64<uint8>&& Tar, const TArray<FString>& Names, const TMap<FString, int32>& Bones);
+    static FClipResult ReadClips(TArray64<uint8>&& Tar, const FString& Gender, const TArray<FString>& Names,
+        const TMap<FString, int32>& Bones);
 
     TArray<FRoute> Routes;
     TWeakObjectPtr<ASCVehicle> Host, PlayerKit;
     TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> Progress;
-    UE::Tasks::TTask<FSCExportResult> Export;
     UE::Tasks::TTask<FClipResult> Parse;
-    TArray<FString> Requested;
     FSCPlayerClipMap Clips;
     FTransform BodyInActor = FTransform::Identity;
     FTransform StartInShip = FTransform::Identity, ExitInShip = FTransform::Identity;
