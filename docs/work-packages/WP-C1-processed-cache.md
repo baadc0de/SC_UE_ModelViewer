@@ -51,8 +51,16 @@ dropped from **1.9325 s** to **0.5766 s**. GLB derive worker time stayed at appr
 import cursor waiting **0.3697 s** as it caught up with the workers. Whole-process time went from **10.29 s** to
 **9.59 s**. The grouped NullRHI suite passed eight tests, including the exact lighting-sample comparison.
 
-The recorded Gladius result is **0.778 s** above the under-three-second gate. The entity index,
+The recorded LOD 0 Gladius result is **0.778 s** above the under-three-second gate. The entity index,
 persistent skeletal data and packaged Shipping validation remain open.
+
+For faster local feedback, the same procedural NullRHI route at LOD 2, mip 4 measured **14.398 s**
+with an empty processed cache and **2.653 s** on the warm restart. Whole-process time was **20.330 s**
+and **8.434 s**, including launch and exit. Both processes reused the same 49,078,784-byte layer-1 archive,
+prepared in **10.704 s** offline through the staged FFI. The cold load built 308 meshes and cooked 229
+collision shapes. The warm load hit all 308 processed meshes with zero builds or cooks. Both placed
+65 instances from 47 assets and reported 43 warnings. Use `-SCLod=2 -SCMip=4` for this quick fixture and
+`-SCQuitAfterLoad` to exit as soon as the load completes. The LOD 0 benchmark above remains the acceptance gate.
 
 ### Cutlass GPU cold and warm comparison
 
