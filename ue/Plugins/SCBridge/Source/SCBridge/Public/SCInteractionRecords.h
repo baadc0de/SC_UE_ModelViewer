@@ -17,7 +17,8 @@ struct FSCParentAttachment
     FString ParentEntityId;
     FString AttachmentType, AttachmentTarget;
 };
-/** `door`: SCItemDoorParams timing (class value with instance overrides). */
+/** `door`: SCItemDoorParams timing and state (class value with instance overrides; on placements and, cache format 39,
+ *  on loadout children). */
 struct FSCDoorTiming
 {
     bool bValid = false;
@@ -25,6 +26,37 @@ struct FSCDoorTiming
     float AnimationSpeed = 1.f;
     bool bUseAutoCloseDelay = false;
     float AutoCloseDelay = 0.f;
+    /** `is_opened` (IsOpened): the door's authored state at spawn; unset when the export has none. */
+    TOptional<bool> bIsOpened;
+    /** `animation_params`: the AnimationParams struct (SCItemDoorSimpleOpenCloseParams, SCItemDoorSingleProceduralParams). */
+    FString AnimationParams;
+    /** `transition_tag`: a single-procedural door's one transition (its fragment tag, "Open"): the door's state is that
+     *  transition's time, closed at its start, open at its end, so it closes by playing it backwards. None otherwise. */
+    FName TransitionTag;
+    /** `open_tag` / `close_tag`: an open/close door's two fragment tags. None when not authored. */
+    FName OpenTag, CloseTag;
+};
+/** `item_port_links[]` (cache format 39): when the entity's interaction SourceSlot fires, TargetSlot is delivered to the
+ *  item in the vehicle's port TargetPort (`SInteractionLinkParams.vehicleItemPortInteractionLinks`). */
+struct FSCItemPortLink
+{
+    FName SourceSlot;
+    FString TargetPort;
+    FName TargetSlot;
+};
+/** `sendable_interactions[]` (cache format 39): a Sendable shared interaction and its `LinkingTag` (tag path). */
+struct FSCSendableInteraction
+{
+    FName Name;
+    FString LinkingTag;
+};
+/** `light_group.interactions[]` of a light-group entity: the interaction it receives, its linking tag, and the light
+ *  state the group ends in (Default, Auxiliary, Emergency, Off, ...). */
+struct FSCLightGroupInteraction
+{
+    FName Name;
+    FString LinkingTag;
+    FString LightState;
 };
 /** One interaction offered at an interaction point. */
 struct FSCPointInteraction
@@ -60,6 +92,9 @@ struct FSCInteriorEntity
     FSCParentAttachment Parent;
     TArray<FSCInteractionPoint> InteractionPoints;
     TArray<FSCTraversalLink> TraversalLinks;
+    /** Cache format 39: `kind == "light_group"` entities carry what they receive; `logic` entities what they send. */
+    TArray<FSCLightGroupInteraction> LightGroupInteractions;
+    TArray<FSCSendableInteraction> SendableInteractions;
 };
 /** `lifts[].stops[]`. */
 struct FSCLiftStopRecord

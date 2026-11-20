@@ -393,6 +393,9 @@ void USCCargoSubsystem::TickJobs(float DeltaSeconds)
                     RequestAccess(G, true, Now);
                     J.OpenedGrids.Add(Id);
                 }
+            // A ship's hold is opened for each transfer as its doors stand now (one closed since the last transfer reopens).
+            for (const int32 Id : Involved(J))
+                if (USCCargoGridComponent* G = FindGrid(Id); G && G->bAccessRule && G->Kind == ESCCargoGridKind::Vehicle) G->bAccessOpened = false;
             SetJobState(J, ESCCargoJobState::OpeningGrids);
         }
         if (J.State == ESCCargoJobState::OpeningGrids)

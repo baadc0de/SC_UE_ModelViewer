@@ -11,6 +11,9 @@ public:
     /** Component tag prefix naming the entity an attached light rides (`parent_entity_id`, WP-P5). */
     static constexpr const TCHAR* RidesTagPrefix = TEXT("SCRides:");
     static void RefreshShadows(ASCVehicle* Vehicle);
+    /** Put the light's authored state StateKey (`defaultState`, `auxiliaryState`, `emergencyState`, ...) on light Index of
+     *  Vehicle->LightStates: intensity (StateCandela) and colour. False when the light authors no such state. */
+    static bool ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey);
     // UE candela for one light state. Packages with the authored light fields (bulb_radius_m, …) use the game
     // renderer's model (FSCStarEngine::PointCandela / PlanarCandela; ue/verification/WP-U3b.md §13); older packages
     // keep the x1500 proxy.

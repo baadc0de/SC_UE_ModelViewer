@@ -1061,6 +1061,8 @@ void FSCImportJob::FState::Assemble()
     TSet<FString> ScreenStateImagesBound; // I1-3 state images bound to faces (beside the default images)
     // WP-P5 floor panel: blank faces of placements that send interaction links (a lift panel may draw its list there).
     TArray<FSCBlankScreenFace> BlankFaces;
+    TArray<FSCButtonFace> ButtonFaces; // C2 fixes: faces of the game's panel UIs with clickable nodes (light panels)
+    int32 PlacingInterior = INDEX_NONE; // the interior whose placements Place() is placing (INDEX_NONE: children, the root)
     auto StaticSlotTriangles = [](const UStaticMesh* Mesh, int32 Slot) {
         uint32 N = 0;
         if (const FStaticMeshRenderData* R = Mesh ? Mesh->GetRenderData() : nullptr; R && !R->LODResources.IsEmpty())
@@ -1132,6 +1134,28 @@ void FSCImportJob::FState::Assemble()
                 // Its slot is swapped per component: never consolidated into a shared instance (FSCInstancing).
                 Target->ComponentTags.AddUnique(FSCInstancing::KeepTag);
             }
+            // C2 fixes: a render with clickable nodes (a light panel) is operated on its face (ASCVehicle::BuildButtonPanels),
+            // whether or not the owner has other state renders.
+            if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->Buttons.IsEmpty())
+            {
+                const TMap<int32, FSCScreenFaceGeometry>* MeshFaces = Binding->Buttons.IsEmpty() ? nullptr : MeshScreenGeometry.Find(I.MeshAsset);
+                if (const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr; Captured && !I.EntityId.IsEmpty())
+                {
+                    FSCButtonFace Operable;
+                    Operable.Geometry = Captured->Select(Owner, bSoft);
+                    if (!Operable.Geometry.Positions.IsEmpty())
+                    {
+                        Operable.Component = Target; Operable.Slot = Slot; Operable.Panel = E.Anchor;
+                        Operable.Interior = PlacingInterior; Operable.EntityId = I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
+                        Operable.Buttons = Binding->Buttons; Operable.ImageSizePx = Binding->ImageSizePx;
+                        Operable.StateTypes = Binding->StateTypes; Operable.StateImages = Binding->PanelStateImages(); Operable.DefaultImage = Image;
+                        Operable.MakeMaterial = [Mats = &Materials, Sidecar = I.MaterialSidecar, Palette = I.PaletteId, Ordinal = Sub->Index](UTexture* Img) -> UMaterialInterface* {
+                            return Mats->CreateScreen(Sidecar, Palette, Ordinal, Img);
+                        };
+                        ButtonFaces.Add(MoveTemp(Operable));
+                    }
+                }
+            }
             return Screen;
         };
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
@@ -1166,6 +1190,8 @@ void FSCImportJob::FState::Assemble()
             E.Rig->SetSkeletalMesh(*RigMesh);
             E.Rig->MeshAsset = I.MeshAsset;
             E.Rig->OwnerEntity = I.EntityName;
+            // C2 fixes: the door data of the instance that carries the rig (its spawn state, fragment tags, port links).
+            if (I.Door.bValid || !I.ItemPortLinks.IsEmpty()) V->DoorRecords.Add(E.Rig, {I.Door, I.ItemPortLinks});
             E.Rig->SetCollisionProfileName(TEXT("NoCollision"));
             if (Options.bBuildCollision)
                 for (const FMeshSlot& Slot : Slots)
@@ -1355,7 +1381,16 @@ void FSCImportJob::FState::Assemble()
         {
             EntitiesByPort.Add(SCCargoRecords::PortKey(I.PortPath), Placed);
             V->PortAnchors.Add(SCCargoRecords::PortKey(I.PortPath), Placed.Anchor);
+            if (Placed.Rig) V->PortRigs.Add(SCCargoRecords::PortKey(I.PortPath), Placed.Rig); // item_port_links deliver here
         }
+        // A panel in a door's loadout operates that door (the rear ramp's pads, the front hatch's): its face follows the door.
+        if (Placed.Anchor && I.UiBindings.ContainsByPredicate([](const FSCUiBinding& B) { return B.IsOperatingPanel(); }))
+            for (USceneComponent* C = Placed.Anchor->GetAttachParent(); C; C = C->GetAttachParent())
+                if (auto* Rig = Cast<USCRigComponent>(C))
+                {
+                    if (V->DoorRecords.Contains(Rig) && V->DoorRecords[Rig].Door.bValid) V->DoorControls.Add(Placed.Anchor, Rig);
+                    break;
+                }
     }
     // WP-K1: one anchor per inventory container in the container entity's frame, axes X = SC y, Y = SC x, Z = SC z
     // (the frame placed items use: SC (x, y, z) m -> (y, x, z) cm). A loadout grid hangs on its parent item's helper
@@ -1399,8 +1434,12 @@ void FSCImportJob::FState::Assemble()
         V->InteriorAnchors.Add(Container);
         V->InteriorHelperFrames.Add(bHelper);
         V->InteriorSceneIndex.Add(InteriorIndex);
+        const int32 LightsBefore = V->LightStates.Num();
         FSCLightImporter::Build(
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
+        for (int32 L = LightsBefore; L < V->LightStates.Num(); ++L) V->LightStates[L].Interior = InteriorIndex; // group ids are per container
+        PlacingInterior = InteriorIndex; // the interior Place() runs for (button panels keep it)
+        ON_SCOPE_EXIT { PlacingInterior = INDEX_NONE; };
         const int32 AreasBefore = V->LightAreas.Num();
         FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
         TMap<FString, FEntity> ById; // entity ids are unique within one container
@@ -1440,6 +1479,10 @@ void FSCImportJob::FState::Assemble()
             for (const auto& [Id, Placed] : ById) Parts.Add(Id, {Placed.Anchor, Placed.Rig});
             SCVehicleLifts::BuildInteriorLifts(V, InteriorIndex, Interior, Container, bHelper, Parts);
         }
+        // C2 fixes: the interior's light groups (what each receives; its lights carry its id).
+        for (const FSCInteriorEntity& Entity : Interior.Entities)
+            if (Entity.Kind == TEXT("light_group"))
+                V->LightGroups.Add({InteriorIndex, Entity.EntityId, Entity.EntityName, Entity.Links, Entity.LightGroupInteractions, FString()});
         // WP-K1: the interior's inventory containers in its placement frame; the owner rig is the first linked entity's.
         for (int32 C = 0; C < Manifest.InventoryContainers.Num(); ++C)
         {
@@ -1495,6 +1538,7 @@ void FSCImportJob::FState::Assemble()
            ScreenStateImagesBound.Num(), InitialSwaps);
     // WP-P5 floor panel: lift panels draw their stops on a blank face (appended to ScreenFaces after the counts above).
     V->BuildFloorPanels(BlankFaces, [&](const FString& Path) { return Materials.Texture(Path); });
+    V->BuildButtonPanels(ButtonFaces, [&](const FString& Path) { return Materials.Texture(Path); });
     if (Materials.UnclassifiedBindings)
         Warn(Manifest.ScenePath, FString::Printf(TEXT("%d UI bindings carry no screen role (an export before source_item_type, or an unresolved ")
             TEXT("owner): their screens stay dark; re-export with the current exporter (cache format 30) to show door and lift panel images"),

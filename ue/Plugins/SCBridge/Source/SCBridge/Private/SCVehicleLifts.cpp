@@ -11,8 +11,10 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
+#include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCLiftLinks, Log, All);
@@ -110,7 +112,8 @@ bool ASCVehicle::PlayDoorRig(USCRigComponent* Rig, bool bOpen, float Speed)
 {
     const int32 Door = DoorForRig(Rig);
     if (Door == INDEX_NONE) return false;
-    const bool bPlayed = PlayFragmentAt(Doors[Door].Fragment, bOpen ? TEXT("Open") : TEXT("Close"), Rig, Speed > 0 ? Speed : 1.f);
+    // The door's own fragments from its current pose (ASCVehicle::PlayDoor); Speed <= 0 is the door's DoorAnimationSpeed.
+    const bool bPlayed = PlayDoor(Door, bOpen, Speed);
     UpdateTickEnabled();
     return bPlayed;
 }
@@ -230,6 +233,81 @@ int32 ASCVehicle::LiftCarrying(const USceneComponent* C) const
             for (int32 I = 0; I < Lifts.Num(); ++I)
                 if (Lifts[I]->Anchor.Get() == C) return I;
     return INDEX_NONE;
+}
+int32 ASCVehicle::LiftRiddenBy(const FVector& Bottom, const UPrimitiveComponent* Base, double FootReach) const
+{
+    // The carriage's members are carried with it (its own physics grid, `grid_geometry`, which the viewer does not load). A
+    // rider stands on the carriage: its movement base is part of the carriage, or one of the carriage's own colliders lies
+    // under its feet within FootReach (a capsule on a ledge 1 cm above the carriage's floor, the C2 hold's slab, is on it;
+    // one on a landing beside the shaft, or anywhere the carriage only passes under, is not).
+    const FTransform Frame = GetActorTransform();
+    const FVector A = Frame.InverseTransformPosition(Bottom);
+    for (int32 I = 0; I < Lifts.Num(); ++I)
+    {
+        const FSCLift& Lift = *Lifts[I];
+        const USceneComponent* Carriage = Lift.CarriageAnchor.Get();
+        if (Lift.State != ESCLiftState::Moving || !Carriage) continue;
+        if (Base && LiftCarrying(Base) == I) return I;
+        const FBox Box = CarriageBox(Frame, Carriage);
+        if (!Box.IsValid || A.X < Box.Min.X || A.X > Box.Max.X || A.Y < Box.Min.Y || A.Y > Box.Max.Y) continue;
+        TArray<USceneComponent*> Parts;
+        Carriage->GetChildrenComponents(true, Parts);
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(SCLiftRider), true);
+        for (const USceneComponent* Part : Parts)
+        {
+            FHitResult Hit;
+            auto* P = const_cast<UPrimitiveComponent*>(Cast<UPrimitiveComponent>(Part));
+            if (P && P->IsCollisionEnabled() && P->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block &&
+                P->LineTraceComponent(Hit, Bottom + FVector(0, 0, 5), Bottom - FVector(0, 0, FootReach), Params))
+                return I;
+        }
+    }
+    return INDEX_NONE;
+}
+const TArray<TWeakObjectPtr<UPrimitiveComponent>>& ASCVehicle::LiftPathObstacles(int32 LiftIndex)
+{
+    static const TArray<TWeakObjectPtr<UPrimitiveComponent>> None;
+    const FSCLift* Lift = Lifts.IsValidIndex(LiftIndex) ? Lifts[LiftIndex].Get() : nullptr;
+    const USceneComponent* Carriage = Lift ? Lift->CarriageAnchor.Get() : nullptr;
+    const USceneComponent* Anchor = Lift ? Lift->Anchor.Get() : nullptr;
+    const USceneComponent* Container = Anchor ? Anchor->GetAttachParent() : nullptr;
+    if (!Carriage || !Container || !GetWorld() || Lift->State != ESCLiftState::Moving) return None;
+    FLiftPath& Path = LiftPaths.FindOrAdd(LiftIndex);
+    if (Path.Clock == Lift->LegStartedAt && Path.To == Lift->TargetStop) return Path.Obstacles;
+    Path = FLiftPath();
+    Path.From = Lift->FromStop;
+    Path.To = Lift->TargetStop;
+    Path.Clock = Lift->LegStartedAt;
+    // The leg's swept box: the carriage's colliders where it stands and where the leg ends (vehicle frame), less a skin of
+    // a centimetre so the surface a leg ends on (the ground it rests on) is not "passed through".
+    const FTransform Frame = GetActorTransform();
+    const FBox Here = CarriageBox(Frame, Carriage);
+    if (!Here.IsValid) return Path.Obstacles;
+    const FVector Leg = Frame.InverseTransformVector(Container->GetComponentTransform().TransformVector(Lift->LocalAt(Lift->LegEndPosition()) - Lift->LocalAt(Lift->S)));
+    const FBox Swept = (Here + Here.ShiftBy(Leg)).ExpandBy(-1.0);
+    TArray<FOverlapResult> Overlaps;
+    FCollisionObjectQueryParams Objects;
+    Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+    Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+    GetWorld()->OverlapMultiByObjectType(Overlaps, Frame.TransformPosition(Swept.GetCenter()), Frame.GetRotation(), Objects,
+                                         FCollisionShape::MakeBox(FVector3f(Swept.GetExtent() * Frame.GetScale3D().GetAbs())),
+                                         FCollisionQueryParams(SCENE_QUERY_STAT(SCLiftPath), false));
+    TArray<FString> Names;
+    for (const FOverlapResult& O : Overlaps)
+    {
+        UPrimitiveComponent* C = O.GetComponent();
+        const AActor* Holder = C ? C->GetOwner() : nullptr;
+        if (!C || (Holder && Holder->IsA<APawn>()) || C->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block || LiftCarrying(C) == LiftIndex) continue;
+        bool bDoor = false; // doors stay what they are: the leg check waits for them or is blocked by them
+        for (const USceneComponent* P = C; P && !bDoor; P = P->GetAttachParent())
+            if (const auto* Rig = Cast<USCRigComponent>(P)) bDoor = DoorForRig(Rig) != INDEX_NONE || LiftDrivenRigs.Contains(Rig);
+        if (bDoor || Path.Obstacles.Contains(C)) continue;
+        Path.Obstacles.Add(C);
+        Names.Add(C->ComponentTags.IsEmpty() ? C->GetName() : FPaths::GetBaseFilename(C->ComponentTags[0].ToString()));
+    }
+    UE_LOG(LogSCLiftLinks, Display, TEXT("LIFT_PATH lift=%d from=%d to=%d obstacles=%d passed=%s"), LiftIndex, Path.From, Path.To, Path.Obstacles.Num(),
+           Names.IsEmpty() ? TEXT("-") : *FString::Join(Names, TEXT(",")));
+    return Path.Obstacles;
 }
 bool SCVehicleLifts::GroundContact(const ASCVehicle* V, int32 LiftIndex, int32 To, double& OutTravel, FString& OutBy)
 {

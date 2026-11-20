@@ -54,7 +54,13 @@ use std::{
 // 38: `audio.json` bus effect slots carry a Meter's ballistics and written game parameter, the RTPC curves on the
 //     effect's own parameters (`fx_param_<id>`, with their accumulation) and the state groups that bypass the slot
 //     (WP-A1 A1-2 mix: limiter, side-chains, bus EQ).
-pub const CACHE_FORMAT_VERSION: u32 = 38;
+// 39: doors carry their rest state and animation struct (`door.is_opened` / `is_locked` / `animation_params` / tags),
+//     also on loadout children; children and placements carry `item_port_links[]`, placements `sendable_interactions[]`;
+//     loadouts given by an XML file attach their items (the C2's front door panels); light groups and linked
+//     chipsets are `entities[]` (`light_group` / `logic`), lights name their group (`attachment.group_entity_id` /
+//     `group_links`); UI bindings carry `buttons[]`, `image_size_px`, state-type `transitions` / `linked`, and
+//     combined two-state `state_images` (C2 fixes).
+pub const CACHE_FORMAT_VERSION: u32 = 39;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

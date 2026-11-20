@@ -9,6 +9,7 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Materials/MaterialInterface.h"
 #include "TextureResource.h"
+#include "Misc/Paths.h"
 #include "Components/SceneComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCLiftCmd, Log, All);
@@ -106,8 +107,14 @@ void FSCViewerAutomation::RegisterLiftCommands()
             for (int32 I = 0; V && I < V->FloorPanels.Num(); ++I)
             {
                 const FSCFloorPanel& P = V->FloorPanels[I];
-                UE_LOG(LogSCLiftCmd, Display, TEXT("FLOOR_PANEL index=%d entity=%s lift=%d face=%d size_cm=%.1fx%.1f colours=%s %s"), I, *P.EntityId, P.Lift, P.Face,
-                       P.Geometry.Width, P.Geometry.Height, P.Colours.bFromData ? TEXT("data") : TEXT("white-on-black"), *P.Shown.Describe());
+                // Where the face is (vehicle frame, cm) and where it faces: a scripted view stands in front of it.
+                const FVector Centre = V->GetActorTransform().InverseTransformPosition(P.Frame().TransformPosition(P.Geometry.PointAt(FVector2D(0.5, 0.5))));
+                const FVector Facing = V->GetActorTransform().InverseTransformVectorNoScale(P.Frame().TransformVectorNoScale(P.Geometry.Normal));
+                UE_LOG(LogSCLiftCmd, Display, TEXT("FLOOR_PANEL_AT index=%d centre=%.1f,%.1f,%.1f normal=%.3f,%.3f,%.3f"), I, Centre.X, Centre.Y, Centre.Z, Facing.X,
+                       Facing.Y, Facing.Z);
+                UE_LOG(LogSCLiftCmd, Display, TEXT("FLOOR_PANEL index=%d kind=%s entity=%s lift=%d face=%d size_cm=%.1fx%.1f colours=%s %s image=%s"), I,
+                       P.Kind == ESCPanelKind::Buttons ? TEXT("buttons") : TEXT("floor_select"), *P.EntityId, P.Lift, P.Face, P.Geometry.Width, P.Geometry.Height,
+                       P.Colours.bFromData ? TEXT("data") : TEXT("white-on-black"), *P.Shown.Describe(), P.Shown.Image.IsEmpty() ? TEXT("-") : *FPaths::GetBaseFilename(P.Shown.Image));
                 // What the face draws: its material and the render target's pixels at each row's centre and the status bar
                 // (linear), to tell a drawing fault from a material one.
                 const UMeshComponent* Face = P.Component.Get();
@@ -153,7 +160,7 @@ void FSCViewerAutomation::RegisterLiftCommands()
             const FSCFloorPanel& P = V->FloorPanels[Panel];
             FVector2D Content;
             if (Args.Num() >= 3) Content = FVector2D(FCString::Atod(*Args[1]), FCString::Atod(*Args[2]));
-            else if (P.Layout.Options.IsValidIndex(FCString::Atoi(*Args[1]))) Content = P.Layout.Options[FCString::Atoi(*Args[1])].Rect.GetCenter();
+            else if (P.Layout.Options.IsValidIndex(FCString::Atoi(*Args[1]))) Content = P.ContentOf(P.Layout.Options[FCString::Atoi(*Args[1])].Rect.GetCenter());
             else return;
             const UMeshComponent* Face = P.Component.Get();
             if (!Face) return;

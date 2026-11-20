@@ -128,6 +128,9 @@ public:
     bool bAtContact = false;
     TArray<FSCLiftRequest> Queue;
     double Clock = 0;
+    /** The clock when the current (or last) leg started, and where it ends (metres along the path): the leg of a rider. */
+    double LegStartedAt = -1;
+    double LegEndPosition() const { return LegEndS; }
 
     // Events (WP-I1 subscribes).
     DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnRequested, int32 /*Stop*/, const FString& /*Source*/, FName /*Interaction*/);

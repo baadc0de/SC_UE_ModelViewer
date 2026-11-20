@@ -1031,3 +1031,55 @@ Not fixed, with the reason:
   body's camera joint swings with the view. A player at the mouse is not affected.
 - The cooked C2 (R7) and third-person aiming (above).
 - Nothing committed in this repo.
+
+## Result (C2 fixes: the rider caught at the lower deck, 2026-11-20)
+
+**Owner report.** Riding to "Exit Ship" from any floor, the player was caught at the lower deck and fell through only
+after wiggling.
+
+**Reproduction** (`out/c2-fixes/repro`, the build before the fix, `sc.Lift.Send <panel> RequestSurface` with the player
+teleported onto the carriage at the top deck): from the carriage's centre (Y −784, vehicle cm) the ride reached the ground;
+from Y −700 (84 cm toward the landing doors) and from X −204 / Y −764 the player stayed at the hold, feet at Z −796.2, on
+`Mesh_3632` = `CRUS_Starlifter_Hold_Shoulder_Ceiling` while the carriage went on to the ground. The catch zone is the half
+of the carriage toward the landing doors (Y > about −765).
+
+**Cause (data).** `CRUS_Starlifter_Hold_Shoulder_Ceiling.cgf` (hold_c2, placed at (0, 2, −1.5) m) carries a game box
+collider of half-extent 7.5 × 0.3 × 14.25 m whose edge runs along the shaft's centre line (SC x −7.5, the carriage's own
+x): it reaches half way into the lift shaft under the hold floor, its top about 1 cm above the carriage's floor at the hold
+stop. The carriage passes through it (it is moved, not swept), but the rider was moved by UE's based movement, which sweeps
+the capsule: a capsule over that half landed on the slab when the carriage dropped past it, and at the hold stop it stood
+on the slab (1 cm higher) rather than on the carriage. In the game the carriage has its own physics grid
+(`LocalGrid_Lift_Platform.cgf`, `gridType Small`; §1) whose members it carries.
+
+**Rule implemented** (a reading of that grid membership; the grid geometry is exported as `grid_geometry` but not loaded):
+- `ASCVehicle::LiftRiddenBy`: a capsule rides a moving carriage when its movement base is part of the carriage or one of
+  the carriage's colliders lies under its feet within the step height + 5 cm (the capsule on the slab 1 cm above the
+  carriage floor at the hold is on it; one on a landing beside the shaft is not).
+- `ASCVehicle::LiftPathObstacles`: what the leg passes through, once per leg (`LIFT_PATH`): the colliders that block the
+  player in the box of the carriage's colliders swept from where it stands to the leg's end, less a 1 cm skin (the surface
+  a leg ends on is not passed through), not the carriage and its riders, not door rigs (the leg check decides on doors),
+  not pawns. On the C2: top → ground 11 (the hull, the top floor and walls around the shaft, the hold shoulder ceiling …),
+  hold → ground 5 (`CRUS_Starlifter_LOD0`, `Hold_Lift_4m`, `Lift_Shaft_Bottom`, `Lift_Wall_Rear_4m`,
+  `Hold_Shoulder_Ceiling`).
+- The rider's capsule ignores them while it rides (`IgnoreComponentWhenMoving`, rebuilt with the WP-P3 hull ignores in
+  `RefreshMoveIgnores`); `sc.Lift.CarryRiders 0` turns the rule off for A/B.
+- Tick order: the character's movement now ticks after the character (`PrimaryComponentTick.AddPrerequisite`, with
+  `bTickBeforeOwner` off so the pair is not a cycle: no `would form a cycle` warning in `c2fix-run3.log`), which
+  already ticks after the vehicle: this frame's move-ignore list and input reach this frame's move (the engine ran the
+  movement first; the per-tick trace showed a one-frame lag of `v · dt`).
+- Trace: `LIFT_RIDE_TICK` each tick while riding (feet over the carriage anchor, floor distance, base) and `LIFT_RIDE_LEG
+  samples rel_z_min_cm rel_z_max_cm spread_cm off_carriage` at the leg's end.
+
+**Result** (`out/c2-fixes/run3`, the final build, `ue/scripts/rpc/c2-fixes.ps1` steps 7–8, `c2fix-run3.log`; `run2` before the review fixes gave the same): nine legs, top → Exit Ship and
+lower deck → Exit Ship from Y −700, X −204 / Y −764 and the centre, and back up: every one arrived with the player on the
+carriage (`LIFT_WHERE player base=Mesh_3193 lift=0 … Z=-1393.82` at the ground) and `LIFT_RIDE_LEG … rel_z −785.20 …
+−785.20 spread_cm=0.00 off_carriage=0` (452–681 samples per leg). Run 1, before the tick-order change, rode all legs too but
+its trace spread 15–74 cm (the lag × frame time, screenshot hitches included).
+
+**Test** `SCBridge.Lift.RiderPassesPath` (synthetic): with the rule off the rider over a slab reaching half way into the shaft
+is caught (spread > 1 m, left on the slab — failing first); on, the capsule rides the leg down and back up with the feet's
+height over the carriage steady (spread 0.00 cm); `LiftRiddenBy` only while moving and over the carriage; `LiftPathObstacles`
+lists the slab, not the ground the leg ends on, a wall outside the path or the carriage's own platform.
+
+Open: the carriage's physics grid volume itself is not loaded (the box of its colliders stands in); walking on the carriage
+during a leg near an ignored collider can put the capsule into it (it is pushed out when the leg ends).

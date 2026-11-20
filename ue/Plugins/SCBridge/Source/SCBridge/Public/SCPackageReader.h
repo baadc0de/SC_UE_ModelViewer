@@ -9,10 +9,40 @@
  *  machine (`StateType` / `State`: the game's names, `DoorOpenState` / `DoorOpened`). */
 struct SCBRIDGE_API FSCUiStateImage
 {
-    FString StateType, State;
+    FString StateType, State; // a single-state render; empty for a combined one
+    /** Every pinned state of the render, "<StateType>.<State>" (cache format 39 `states[]`: one for a single-state render,
+     *  two for a combined one), sorted. */
+    TArray<FString> States;
     FString ImagePath; // normalized package path
-    /** "<StateType>.<State>": the key a screen face's state images are held by. */
-    FString Key() const { return StateType + TEXT(".") + State; }
+    /** "<StateType>.<State>" for a single-state render (the key a screen face's state images are held by); the sorted
+     *  states joined with "+" for a combined one. */
+    FString Key() const { return States.Num() > 1 ? FString::Join(States, TEXT("+")) : StateType + TEXT(".") + State; }
+};
+/** `ui_bindings[].buttons[]` (cache format 39): a clickable node of the default render, the owner interaction its
+ *  left click sends, and its rectangle in the generated image's pixels. */
+struct FSCUiButton
+{
+    FString Node;
+    FName Interaction;
+    FBox2D RectPx = FBox2D(ForceInit);
+};
+/** `ui_bindings[].state_types[]`: one state type of the UI owner's state machine, its default, the owner's own
+ *  interactions that set a state (`transitions`) and the linked entities' state tags that set one (`linked`). */
+struct FSCUiStateType
+{
+    FString Name, DefaultState;
+    TArray<FString> States;
+    /** The owner's own interaction -> the state it sets, from state From ("" = from any state). */
+    struct FTransition { FString From; FName Interaction; FString State; };
+    TArray<FTransition> Transitions;
+    /** The state Interaction sets from Current (a transition from Current first, else one from any state); null without. */
+    const FString* Next(FName Interaction, const FString& Current) const
+    {
+        const FTransition* T = Transitions.FindByPredicate([&](const FTransition& X) { return X.Interaction == Interaction && X.From == Current; });
+        if (!T) T = Transitions.FindByPredicate([&](const FTransition& X) { return X.Interaction == Interaction && X.From.IsEmpty(); });
+        return T ? &T->State : nullptr;
+    }
+    TArray<TPair<FString, FString>> Linked; // tag path -> state
 };
 /** `ui_bindings[]` of a child or placement (decomposed-export-contract "UI bindings"): a UI screen the entity carries,
  *  its game role and the exporter's render of its default state (WP-I1). */
@@ -32,6 +62,11 @@ struct SCBRIDGE_API FSCUiBinding
     bool bPropagated = false;  // on a child: the binding of another (geometry-less) entity carried by this one
     /** The owner's other states the canvas shows (`state_images[]`; images outside the package dropped). */
     TArray<FSCUiStateImage> StateImages;
+    /** Cache format 39: the clickable nodes of the default render (`buttons[]`) in an image of ImageSizePx pixels, and
+     *  the owner's state types (`state_types[]`). */
+    TArray<FSCUiButton> Buttons;
+    FVector2D ImageSizePx = FVector2D::ZeroVector;
+    TArray<FSCUiStateType> StateTypes;
 
     /** WP-I1 rule (owner decision: door and lift panels are the game's, HUDs and MFDs are the viewer's own UI): the UI
      *  of an operating panel. Derived from data only: a `physical` binding of a resolved owner that is not a display
@@ -93,8 +128,11 @@ struct SCBRIDGE_API FSCSceneInstance
     FString SocEntityName;
     TArray<FSCInteractionLink> InteractionLinks;
     FSCParentAttachment Parent;
-    FSCDoorTiming Door;
+    FSCDoorTiming Door; // placements and (cache format 39) loadout children
     TArray<FSCInteractionPoint> InteractionPoints;
+    /** Cache format 39: interactions forwarded to the items of vehicle ports, and the Sendable interactions with tags. */
+    TArray<FSCItemPortLink> ItemPortLinks;
+    TArray<FSCSendableInteraction> SendableInteractions;
     /** `ui_bindings[]`: the UI screens this entity carries (WP-I1). */
     TArray<FSCUiBinding> UiBindings;
     /** Every image a screen face of this instance may show (FSCUiBinding::PanelImage), decoded with the material

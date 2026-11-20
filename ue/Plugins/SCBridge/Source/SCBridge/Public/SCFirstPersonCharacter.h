@@ -187,6 +187,20 @@ private:
     TWeakObjectPtr<ASCVehicle> GridVehicle;
     /** WP-P5: the riding log. */
     int32 RideLift = INDEX_NONE;
+    /** C2 fixes (rider retention): the lift whose moving carriage carries the capsule (ASCVehicle::LiftRiddenBy) and its
+     *  leg (the lift's LegStartedAt): what the leg passes through does not block the capsule then. */
+    int32 RiddenLift = INDEX_NONE;
+    double RiddenLeg = -1;
+    /** The per-tick ride trace: the carriage anchor's height the last CMC update moved the capsule against, and the leg's
+     *  feet-to-anchor statistics (LIFT_RIDE_TICK / LIFT_RIDE_LEG). */
+    double TraceAnchorZ = 0;
+    bool bTraceAnchor = false;
+    int32 TraceSamples = 0, TraceOtherBase = 0;
+    double TraceMin = 0, TraceMax = 0;
+    /** Rebuild the capsule's move-ignore list: the hull colliders inside the physics grid (WP-P3) and what a ridden leg
+     *  passes through (C2 fixes). */
+    void RefreshMoveIgnores(bool bInGrid, int32 Lift);
+    void UpdateRideTrace(int32 Lift);
     TWeakObjectPtr<const USceneComponent> ViewHoldFrame;
     FVector ViewHoldLocal = FVector::ZeroVector;
     void ApplyViewHold();

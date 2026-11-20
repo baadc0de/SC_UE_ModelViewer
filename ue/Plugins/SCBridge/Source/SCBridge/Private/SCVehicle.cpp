@@ -50,7 +50,49 @@ void ASCVehicle::MarkDirty(int32 ClipIndex)
     for (const auto& Binding : ClipCatalog->Clips[ClipIndex].Bindings)
         DirtyMeshes.Add(Binding.Mesh);
 }
-bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes, USCRigComponent* Target)
+double ASCVehicle::NearestClipFrame(const FSCImportedClip& Clip, const FSCClipBinding& Binding, const TArray<FTransform>& Local, bool bBackward)
+{
+    double Best = bBackward ? Clip.LastFrame : 0, BestCost = TNumericLimits<double>::Max();
+    for (int32 Step = 0; Step <= Clip.LastFrame; ++Step)
+    {
+        const int32 Frame = bBackward ? Clip.LastFrame - Step : Step;
+        double Cost = 0;
+        for (const FSCBoneTrack& T : Binding.Tracks)
+        {
+            if (!Local.IsValidIndex(T.Bone)) continue;
+            const FTransform S = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(Clip, T, Frame, bBackward));
+            if (T.bRotation) Cost += Local[T.Bone].GetRotation().AngularDistance(S.GetRotation());
+            if (T.bPosition) Cost += FVector::Dist(Local[T.Bone].GetTranslation(), S.GetTranslation()) / 100.0;
+        }
+        if (Cost < BestCost - 1e-9)
+        {
+            BestCost = Cost;
+            Best = Frame;
+        }
+    }
+    // Between samples: the playhead is fractional (a door stopped mid-key), so refine around the best key frame in tenths.
+    const double Centre = Best;
+    for (int32 Step = -9; Step <= 9; ++Step)
+    {
+        const double Frame = Centre + Step * 0.1;
+        if (Step == 0 || Frame < 0 || Frame > Clip.LastFrame) continue;
+        double Cost = 0;
+        for (const FSCBoneTrack& T : Binding.Tracks)
+        {
+            if (!Local.IsValidIndex(T.Bone)) continue;
+            const FTransform S = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(Clip, T, Frame, bBackward));
+            if (T.bRotation) Cost += Local[T.Bone].GetRotation().AngularDistance(S.GetRotation());
+            if (T.bPosition) Cost += FVector::Dist(Local[T.Bone].GetTranslation(), S.GetTranslation()) / 100.0;
+        }
+        if (Cost < BestCost - 1e-9)
+        {
+            BestCost = Cost;
+            Best = Frame;
+        }
+    }
+    return Best;
+}
+bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes, USCRigComponent* Target, double StartFrame)
 {
     if (!ClipCatalog || !ClipCatalog->Clips.IsValidIndex(Index) || !FMath::IsFinite(Speed)) return false;
     const auto& Clip = ClipCatalog->Clips[Index];
@@ -61,7 +103,7 @@ bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, con
     P.Clip = Index;
     P.TargetRig = Target;
     P.Speed = Speed;
-    P.Frame = (bSnap ? bLast : Speed < 0) ? Clip.LastFrame : 0;
+    P.Frame = StartFrame >= 0 && !bSnap ? FMath::Clamp(StartFrame, 0.0, double(Clip.LastFrame)) : (bSnap ? bLast : Speed < 0) ? Clip.LastFrame : 0;
     P.bPlaying = !bSnap && Speed != 0 && Clip.LastFrame > 0;
     P.Order = ++NextOrder;
     P.Scopes = Scopes;
@@ -93,7 +135,7 @@ bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
 {
     return PlayFragmentAt(Fragment, Tag, nullptr);
 }
-bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target, float SpeedScale)
+bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target, float SpeedScale, ESCFragmentStart Start)
 {
     if (!ClipCatalog) return false;
     struct FOption
@@ -187,7 +229,23 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         Selected.Clips.GetKeys(Indices);
         Indices.Sort();
         for (int32 Index : Indices)
-            Found |= StartClip(Index, Selected.Clips[Index], false, false, Selected.Scopes, Target);
+        {
+            const float Speed = Selected.Clips[Index];
+            double From = -1;
+            // From the rig's current pose: the frame of this clip nearest to what the rig shows now (a door turned around
+            // mid-stroke, or one whose rest pose is not its clip's first frame), so nothing snaps.
+            // The same clip already on the rig (a transition turned around) continues from its exact playhead.
+            const FSCClipPlayback* Same = Playback.FindByPredicate([&](const FSCClipPlayback& P) { return P.Clip == Index && P.TargetRig.Get() == Target; });
+            if (!Same) Same = HeldPlayback.FindByPredicate([&](const FSCClipPlayback& P) { return P.Clip == Index && P.TargetRig.Get() == Target; });
+            if (Start == ESCFragmentStart::CurrentPose && Target && Same) From = Same->Frame;
+            else if (Start == ESCFragmentStart::CurrentPose && Target && Target->GetSkeletalMeshAsset())
+                if (const FSCClipBinding* B = ClipCatalog->Clips[Index].Bindings.FindByPredicate(
+                        [&](const FSCClipBinding& X) { return X.Mesh == Target->GetSkeletalMeshAsset(); }))
+                    From = NearestClipFrame(ClipCatalog->Clips[Index], *B, Target->LocalPose, Speed < 0);
+            const bool bHold = Start == ESCFragmentStart::HoldFirst || Start == ESCFragmentStart::HoldLast;
+            // Held at the start or the end of play: a fragment that plays its clip backwards (speed < 0) ends at frame 0.
+            Found |= StartClip(Index, Speed, bHold, (Start == ESCFragmentStart::HoldLast) == (Speed >= 0), Selected.Scopes, Target, From);
+        }
         Options.RemoveAll([&](const FOption& O) { return Conflicts(Selected.Scopes, O.Scopes); });
     }
     if (Found)
@@ -225,7 +283,8 @@ void ASCVehicle::ResetPose()
     UpdateTickEnabled();
     for (USCRigComponent* Rig : Rigs)
         Rig->ResetPose();
-    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: every door is back at rest (closed)
+    ApplyDoorRestPoses(); // every door back at its authored spawn state (C2 fixes)
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: every door is back at rest
 }
 void ASCVehicle::Tick(float DeltaSeconds)
 {

@@ -187,20 +187,24 @@ void USCCargoSubsystem::DiscoverOn(ASCVehicle* Actor, ESCCargoGridKind Kind)
         // and in a ship's interior hold (a ramp, cargo doors: whatever poses clear the grid's access corridors to the
         // outside). External grids carry themselves out (their mechanism, above) or are always open.
         G->bAccessRule = Kind == ESCCargoGridKind::Environment || (!R.Container.bExternalContainer && G->Movers.IsEmpty());
-        if (G->bAccessRule)
+        // The environment's way in is opened now (its state is the environment's); a ship's hold stays as its doors stand
+        // in the data (SCItemDoorParams.IsOpened: closed on the C2) until a transfer asks for it (RequestAccess).
+        if (G->bAccessRule && Kind == ESCCargoGridKind::Environment)
         {
             const FSCAccessResult Opened = FSCEnvironmentAccess::OpenGrid(G);
             G->ReadyAt = GetWorld()->GetTimeSeconds() + Opened.Seconds;
+            G->bAccessOpened = true;
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRID_ENV_ACCESS id=%d rigs_tested=%d rigs_moved=%d seconds=%.1f"), G->GridId, Opened.RigsTested,
                    Opened.Moves.Num(), Opened.Seconds);
         }
+        else if (G->bAccessRule) G->Access = ESCCargoGridAccess::Closed;
         const FTransform W = G->LatticeToWorld();
         UE_LOG(LogSCCargo, Display,
                TEXT("CARGO_GRID id=%d kind=%s group=\"%s\" label=\"%s\" entity=%s port=%s parent_node=%s cells=%s cell_m=%s max_item_m=%s interior_m=%s "
                     "offset_m=%s access=%s movers=%d external=%d access_rule=%d entity_world=%s lattice_min_world=%s"),
                G->GridId, Kind == ESCCargoGridKind::Vehicle ? TEXT("vehicle") : TEXT("environment"), *G->GroupLabel.ToString(), *G->GridLabel.ToString(), *Name,
                *SCCargoRecords::PortKey(R.PortPath), *R.ParentNodeName, *Lattice.Cells.ToString(), *Lattice.CellM.ToString(), *Lattice.MaxItemM.ToString(),
-               *Lattice.InteriorM.ToString(), *R.Container.GridPosOffset.ToString(), bOpen ? TEXT("open") : TEXT("closed"), G->Movers.Num(), R.Container.bExternalContainer, G->bAccessRule,
+               *Lattice.InteriorM.ToString(), *R.Container.GridPosOffset.ToString(), G->Access == ESCCargoGridAccess::Closed ? TEXT("closed") : TEXT("open"), G->Movers.Num(), R.Container.bExternalContainer, G->bAccessRule,
                *G->GetComponentLocation().ToString(), *W.GetLocation().ToString());
     }
     UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRIDS kind=%s actor=%s containers=%d grids=%d"), Kind == ESCCargoGridKind::Vehicle ? TEXT("vehicle") : TEXT("environment"),
@@ -221,6 +225,22 @@ void USCCargoSubsystem::UpdateAccess(USCCargoGridComponent* Grid, double Now)
     if (Grid->Movers.IsEmpty() && Now < Grid->ReadyAt) Access = ESCCargoGridAccess::Opening;
     if (!Grid->Movers.IsEmpty())
         Access = bMoving ? (bTargetOpen ? ESCCargoGridAccess::Opening : ESCCargoGridAccess::Closing) : bAllOpen ? ESCCargoGridAccess::Open : ESCCargoGridAccess::Closed;
+    // The access rule's part (C2 fixes): not asked for yet, or a door it opened closed again (its pad, a reset): Closed; a door
+    // it opened still playing: Opening. Its own mechanism (Movers) decides only once the way is open.
+    if (Grid->bAccessRule)
+    {
+        const ASCVehicle* Vehicle = Grid->OwnerVehicle.Get();
+        bool bPlaying = false, bShut = false;
+        for (const TWeakObjectPtr<USCRigComponent>& Door : Grid->AccessDoors)
+            if (Vehicle && Door.IsValid())
+            {
+                if (Vehicle->IsRigPlaying(Door.Get())) bPlaying = true;
+                else if (!Vehicle->IsRigOpen(Door.Get())) bShut = true;
+            }
+        if (bShut) Grid->bAccessOpened = false; // the next request opens it again
+        if (!Grid->bAccessOpened) Access = ESCCargoGridAccess::Closed;
+        else if (bPlaying) Access = ESCCargoGridAccess::Opening;
+    }
     if (Access == Grid->Access) return;
     Grid->Access = Access;
     UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRID_ACCESS id=%d access=%s"), Grid->GridId, *StaticEnum<ESCCargoGridAccess>()->GetNameStringByValue(int64(Access)));
@@ -229,6 +249,21 @@ void USCCargoSubsystem::UpdateAccess(USCCargoGridComponent* Grid, double Now)
 
 bool USCCargoSubsystem::RequestAccess(USCCargoGridComponent* Grid, bool bOpen, double Now)
 {
+    // A grid of the access rule is opened on request: whatever poses clear its corridors (a ship's doors through their own
+    // interaction, FSCEnvironmentAccess), again whenever a door it opened was closed since (UpdateAccess). It does not close
+    // (the rule has no closing pose); a mechanism of its own (Movers) is driven below either way.
+    if (Grid->bAccessRule && bOpen && !Grid->bAccessOpened)
+    {
+        const FSCAccessResult Opened = FSCEnvironmentAccess::OpenGrid(Grid);
+        Grid->ReadyAt = Now;
+        Grid->AccessDoors.Reset();
+        for (const FSCAccessMove& Move : Opened.Moves)
+            if (Move.bDoor) Grid->AccessDoors.Add(Move.Rig);
+            else Grid->ReadyAt = FMath::Max(Grid->ReadyAt, Now + Move.Seconds);
+        Grid->bAccessOpened = true;
+        UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRID_ENV_ACCESS id=%d rigs_tested=%d rigs_moved=%d doors=%d on_request=1"), Grid->GridId, Opened.RigsTested,
+               Opened.Moves.Num(), Grid->AccessDoors.Num());
+    }
     ASCVehicle* Vehicle = Grid->OwnerVehicle.Get();
     int32 Played = 0;
     float Seconds = 0;
@@ -286,6 +321,12 @@ bool USCCargoSubsystem::RequestGridAccess(int32 GridId, bool bOpen, FText& OutEr
     {
         OutError = NSLOCTEXT("SCCargo", "NoGrid", "No such grid");
         return false;
+    }
+    if (Grid->bAccessRule && bOpen)
+    {
+        // The way in is opened (a ship's hold: its doors), with the grid's own mechanism if it has one.
+        RequestAccess(Grid, true, GetWorld()->GetTimeSeconds());
+        return true;
     }
     if (Grid->Movers.IsEmpty())
     {

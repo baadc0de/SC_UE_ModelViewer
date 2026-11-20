@@ -91,7 +91,8 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
         Binding.SourceItemType = String(B, TEXT("source_item_type"));
         B->TryGetBoolField(TEXT("source_owner_resolved"), Binding.bOwnerResolved);
         B->TryGetBoolField(TEXT("source_kiosk_interaction"), Binding.bOperated);
-        // WP-I1 I1-3: the owner's other states, each with its render.
+        // WP-I1 I1-3: the owner's other states, each with its render; cache format 39 adds `states[]` (one pin for a
+        // single-state render, two for a combined one: a combined render has no state_type / state of its own).
         for (const auto& S : ReaderArray(B, TEXT("state_images")))
         {
             const FReaderObject SI = S && S->Type == EJson::Object ? S->AsObject() : nullptr;
@@ -99,12 +100,73 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
             FSCUiStateImage Image;
             Image.StateType = String(SI, TEXT("state_type"));
             Image.State = String(SI, TEXT("state"));
-            if (Image.StateType.IsEmpty() || Image.State.IsEmpty() ||
+            for (const auto& P : ReaderArray(SI, TEXT("states")))
+                if (const FReaderObject Pin = P && P->Type == EJson::Object ? P->AsObject() : nullptr)
+                    if (const FString T = String(Pin, TEXT("state_type")), St = String(Pin, TEXT("state")); !T.IsEmpty() && !St.IsEmpty())
+                        Image.States.AddUnique(T + TEXT(".") + St);
+            if (Image.States.IsEmpty() && !Image.StateType.IsEmpty() && !Image.State.IsEmpty()) Image.States.Add(Image.StateType + TEXT(".") + Image.State);
+            Image.States.Sort();
+            if (Image.States.IsEmpty() || (Image.States.Num() == 1 && (Image.StateType.IsEmpty() || Image.State.IsEmpty())) ||
                 !FSCPackageSource::Normalize(String(SI, TEXT("generated_image_path")), Image.ImagePath) || Image.ImagePath.IsEmpty())
                 continue;
             Binding.StateImages.Add(MoveTemp(Image));
         }
+        // Cache format 39: the render's clickable nodes and the owner's state machine.
+        const TArray<TSharedPtr<FJsonValue>>& Size = ReaderArray(B, TEXT("image_size_px"));
+        if (Size.Num() == 2) Binding.ImageSizePx = FVector2D(Size[0]->AsNumber(), Size[1]->AsNumber());
+        for (const auto& BV : ReaderArray(B, TEXT("buttons")))
+        {
+            const FReaderObject BO = BV && BV->Type == EJson::Object ? BV->AsObject() : nullptr;
+            const TArray<TSharedPtr<FJsonValue>>& R = ReaderArray(BO, TEXT("rect_px"));
+            if (!BO || R.Num() != 4) continue;
+            FSCUiButton Button;
+            Button.Node = String(BO, TEXT("node"));
+            Button.Interaction = FName(*String(BO, TEXT("interaction")));
+            const FVector2D Min(R[0]->AsNumber(), R[1]->AsNumber());
+            Button.RectPx = FBox2D(Min, Min + FVector2D(R[2]->AsNumber(), R[3]->AsNumber()));
+            if (!Button.Interaction.IsNone() && Button.RectPx.GetArea() > 0) Binding.Buttons.Add(MoveTemp(Button));
+        }
+        for (const auto& TV : ReaderArray(B, TEXT("state_types")))
+        {
+            const FReaderObject TO = TV && TV->Type == EJson::Object ? TV->AsObject() : nullptr;
+            if (!TO) continue;
+            FSCUiStateType& Type = Binding.StateTypes.AddDefaulted_GetRef();
+            Type.Name = String(TO, TEXT("name"));
+            Type.DefaultState = String(TO, TEXT("default_state"));
+            for (const auto& SV : ReaderArray(TO, TEXT("states"))) if (SV->Type == EJson::String) Type.States.Add(SV->AsString());
+            for (const auto& XV : ReaderArray(TO, TEXT("transitions")))
+                if (const FReaderObject X = XV && XV->Type == EJson::Object ? XV->AsObject() : nullptr)
+                    Type.Transitions.Add({String(X, TEXT("from")), FName(*String(X, TEXT("interaction"))), String(X, TEXT("state"))});
+            for (const auto& LV : ReaderArray(TO, TEXT("linked")))
+                if (const FReaderObject L = LV && LV->Type == EJson::Object ? LV->AsObject() : nullptr)
+                    Type.Linked.Add({String(L, TEXT("tag")), String(L, TEXT("state"))});
+        }
     }
+    // Door state (placements, and loadout children from cache format 39) and the links an item forwards to vehicle ports.
+    const FReaderObject* Door;
+    if (O->TryGetObjectField(TEXT("door"), Door))
+    {
+        Out.Door.bValid = true;
+        double Speed = 0;
+        Out.Door.bSpeedKnown = (*Door)->TryGetNumberField(TEXT("animation_speed"), Speed) && FMath::IsFinite(Speed);
+        Out.Door.AnimationSpeed = Out.Door.bSpeedKnown ? float(Speed) : 1.f;
+        (*Door)->TryGetBoolField(TEXT("use_auto_close_delay"), Out.Door.bUseAutoCloseDelay);
+        double Delay = 0;
+        Out.Door.AutoCloseDelay = (*Door)->TryGetNumberField(TEXT("auto_close_delay"), Delay) && FMath::IsFinite(Delay) ? float(Delay) : 0.f;
+        bool bOpened = false;
+        if ((*Door)->TryGetBoolField(TEXT("is_opened"), bOpened)) Out.Door.bIsOpened = bOpened;
+        Out.Door.AnimationParams = String(*Door, TEXT("animation_params"));
+        auto Tag = [&](const TCHAR* Key) { const FString S = String(*Door, Key); return S.IsEmpty() ? FName() : FName(*S); };
+        Out.Door.TransitionTag = Tag(TEXT("transition_tag"));
+        Out.Door.OpenTag = Tag(TEXT("open_tag"));
+        Out.Door.CloseTag = Tag(TEXT("close_tag"));
+    }
+    for (const auto& V : ReaderArray(O, TEXT("item_port_links")))
+        if (const FReaderObject L = V && V->Type == EJson::Object ? V->AsObject() : nullptr)
+            Out.ItemPortLinks.Add({FName(*String(L, TEXT("source_slot"))), String(L, TEXT("target_port")), FName(*String(L, TEXT("target_slot")))});
+    for (const auto& V : ReaderArray(O, TEXT("sendable_interactions")))
+        if (const FReaderObject S = V && V->Type == EJson::Object ? V->AsObject() : nullptr)
+            Out.SendableInteractions.Add({FName(*String(S, TEXT("name"))), String(S, TEXT("linking_tag"))});
     const FReaderObject* Port;
     if (O->TryGetObjectField(TEXT("port"), Port))
     {
@@ -177,16 +239,7 @@ void ReadInteractions(const FReaderObject& O, FSCSceneInstance& Out)
     Out.InteractionLinks = InteractionLinks(O);
     Out.Parent = ParentAttachment(O);
     Out.InteractionPoints = InteractionPoints(O);
-    const FReaderObject* Door;
-    if (O && O->TryGetObjectField(TEXT("door"), Door))
-    {
-        Out.Door.bValid = true;
-        double Speed = 0;
-        Out.Door.bSpeedKnown = (*Door)->TryGetNumberField(TEXT("animation_speed"), Speed) && FMath::IsFinite(Speed);
-        Out.Door.AnimationSpeed = Out.Door.bSpeedKnown ? float(Speed) : 1.f;
-        (*Door)->TryGetBoolField(TEXT("use_auto_close_delay"), Out.Door.bUseAutoCloseDelay);
-        Out.Door.AutoCloseDelay = float(Number(*Door, TEXT("auto_close_delay"), 0));
-    }
+    // `door`, `item_port_links` and `sendable_interactions` are read by Instance (every instance carries them).
 }
 template <typename FWarn>
 void ReadLiftRecords(const FReaderObject& O, FSCInterior& I, FWarn&& Warn)
@@ -211,6 +264,15 @@ void ReadLiftRecords(const FReaderObject& O, FSCInterior& I, FWarn&& Warn)
             if (const FReaderObject T = TV && TV->Type == EJson::Object ? TV->AsObject() : nullptr)
                 Entity.TraversalLinks.Add({FName(*String(T, TEXT("local_interaction"))), String(T, TEXT("item_port_name")),
                                            FName(*String(T, TEXT("linked_interaction_name")))});
+        // Cache format 39: what a light group receives (and the light state each ends in), what a logic entity sends.
+        const FReaderObject* Group;
+        if (E->TryGetObjectField(TEXT("light_group"), Group))
+            for (const auto& GV : ReaderArray(*Group, TEXT("interactions")))
+                if (const FReaderObject G = GV && GV->Type == EJson::Object ? GV->AsObject() : nullptr)
+                    Entity.LightGroupInteractions.Add({FName(*String(G, TEXT("name"))), String(G, TEXT("linking_tag")), String(G, TEXT("light_state"))});
+        for (const auto& SV : ReaderArray(E, TEXT("sendable_interactions")))
+            if (const FReaderObject S = SV && SV->Type == EJson::Object ? SV->AsObject() : nullptr)
+                Entity.SendableInteractions.Add({FName(*String(S, TEXT("name"))), String(S, TEXT("linking_tag"))});
         I.Entities.Add(MoveTemp(Entity));
     }
     for (const auto& V : ReaderArray(O, TEXT("lifts")))

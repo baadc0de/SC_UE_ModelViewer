@@ -16,6 +16,7 @@
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/App.h"
+#include "Misc/Paths.h"
 #include "StaticMeshAttributes.h"
 #include "TextureResource.h"
 
@@ -276,6 +277,9 @@ namespace
  *  resolution choice. */
 constexpr int32 PanelPixelsHigh = 448;
 constexpr int32 PanelPixelsMax = 2048;
+/** A Buttons panel's highlight: a frame around the node under the crosshair, this fraction of the render's shorter side
+ *  wide (ours: the game draws its own hover state, which the exporter does not render). */
+constexpr double ButtonFrameWidth = 0.012;
 
 /** False when nothing could be drawn (no render target resource, no world, a host that never renders). */
 bool DrawPanel(FSCFloorPanel& P, const FSCFloorPanelView& V, UWorld* World)
@@ -287,6 +291,32 @@ bool DrawPanel(FSCFloorPanel& P, const FSCFloorPanelView& V, UWorld* World)
     const FVector2D Size(RT->SizeX, RT->SizeY);
     const FSCFloorPanelColours& C = P.Colours;
     FCanvas Canvas(Resource, nullptr, World, World->GetFeatureLevel());
+    if (P.Kind == ESCPanelKind::Buttons)
+    {
+        // The game's render of the owner's current state over the whole target (the target is the render's own image
+        // space), and our frame around the node under the crosshair.
+        Canvas.Clear(FLinearColor::Black);
+        if (UTexture2D* T = P.Images.FindRef(V.Image).Get(); T && T->GetResource())
+        {
+            FCanvasTileItem Tile(FVector2D::ZeroVector, T->GetResource(), Size, FLinearColor::White);
+            Tile.BlendMode = SE_BLEND_Opaque;
+            Canvas.DrawItem(Tile);
+        }
+        if (P.Layout.Options.IsValidIndex(V.Highlight))
+        {
+            const FBox2D R(P.Layout.Options[V.Highlight].Rect.Min * Size, P.Layout.Options[V.Highlight].Rect.Max * Size);
+            const double W = FMath::Max(2.0, FMath::Min(Size.X, Size.Y) * ButtonFrameWidth);
+            for (const FBox2D& Edge : {FBox2D(R.Min, FVector2D(R.Max.X, R.Min.Y + W)), FBox2D(FVector2D(R.Min.X, R.Max.Y - W), R.Max),
+                                       FBox2D(R.Min, FVector2D(R.Min.X + W, R.Max.Y)), FBox2D(FVector2D(R.Max.X - W, R.Min.Y), R.Max)})
+            {
+                FCanvasTileItem Tile(Edge.Min, Edge.GetSize(), P.HighlightColour);
+                Tile.BlendMode = SE_BLEND_Opaque;
+                Canvas.DrawItem(Tile);
+            }
+        }
+        Canvas.Flush_GameThread(true);
+        return true;
+    }
     Canvas.Clear(C.Field);
     auto Fill = [&](const FBox2D& R, const FLinearColor& Colour) {
         FCanvasTileItem Tile(R.Min * Size, (R.Max - R.Min) * Size, Colour);
@@ -510,6 +540,7 @@ bool ASCVehicle::AimFloorPanel(FVector Eye, FVector Direction, float Reach, cons
     double Best = Reach;
     FVector BestPoint;
     FVector2D BestContent;
+    FVector2f BestUV;
     for (int32 I = 0; I < FloorPanels.Num(); ++I)
     {
         const FSCFloorPanel& P = FloorPanels[I];
@@ -528,6 +559,7 @@ bool ASCVehicle::AimFloorPanel(FVector Eye, FVector Direction, float Reach, cons
         Best = World;
         BestPoint = Point;
         BestContent = P.Geometry.ContentFromUV(UV);
+        BestUV = UV;
         OutPanel = I;
     }
     if (OutPanel == INDEX_NONE) return false;
@@ -543,7 +575,9 @@ bool ASCVehicle::AimFloorPanel(FVector Eye, FVector Direction, float Reach, cons
             return false;
         }
     }
-    OutOption = FloorPanels[OutPanel].Layout.OptionAt(BestContent);
+    // Options are in the panel's own space: content (our floor list) or the render's image (a game panel's nodes).
+    const FSCFloorPanel& Hit = FloorPanels[OutPanel];
+    OutOption = Hit.Layout.OptionAt(Hit.OptionPoint(BestContent, BestUV));
     if (OutContent) *OutContent = BestContent;
     return true;
 }
@@ -560,15 +594,22 @@ int32 ASCVehicle::RefreshFloorPanels()
     for (int32 I = 0; I < FloorPanels.Num(); ++I)
     {
         FSCFloorPanel& P = FloorPanels[I];
-        if (!Lifts.IsValidIndex(P.Lift)) continue;
-        const FSCLift& Lift = *Lifts[P.Lift];
-        const FSCFloorPanelView V = FSCFloorPanelView::Of(Lift, P.Highlight, Now);
+        FSCFloorPanelView V;
+        if (P.Kind == ESCPanelKind::Buttons)
+        {
+            V.Highlight = P.Highlight;
+            V.Image = P.ImageForState();
+        }
+        else if (Lifts.IsValidIndex(P.Lift)) V = FSCFloorPanelView::Of(*Lifts[P.Lift], P.Highlight, Now);
+        else continue;
         if (P.bDrawn && V == P.Shown) continue;
         if (!DrawPanel(P, V, GetWorld())) continue; // tried again on the next refresh
         FSCFloorPanelView Steady = V, Before = P.Shown;
         Steady.bBlink = Before.bBlink = false;
         if (!P.bDrawn || !(Steady == Before)) // the blink alone is not logged
-            UE_LOG(LogSCFloorPanel, Display, TEXT("FLOOR_PANEL_VIEW panel=%d %s lift_state=%s t=%.3f"), I, *V.Describe(), LexToString(Lift.State), Now);
+            UE_LOG(LogSCFloorPanel, Display, TEXT("FLOOR_PANEL_VIEW panel=%d %s%s lift_state=%s t=%.3f"), I, *V.Describe(),
+                   V.Image.IsEmpty() ? TEXT("") : *(TEXT(" image=") + FPaths::GetBaseFilename(V.Image)),
+                   Lifts.IsValidIndex(P.Lift) ? LexToString(Lifts[P.Lift]->State) : TEXT("-"), Now);
         P.Shown = V;
         P.bDrawn = true;
         ++Drawn;
@@ -579,6 +620,7 @@ int32 ASCVehicle::RefreshFloorPanels()
 int32 ASCVehicle::PressFloorPanel(int32 Panel, int32 Option)
 {
     if (!FloorPanels.IsValidIndex(Panel) || !FloorPanels[Panel].Layout.Options.IsValidIndex(Option)) return 0;
+    if (FloorPanels[Panel].Kind == ESCPanelKind::Buttons) return PressButtonPanel(Panel, Option); // a game panel (SCLightControl.cpp)
     const FSCFloorPanel& P = FloorPanels[Panel];
     const FSCFloorPanelOption& O = P.Layout.Options[Option];
     const int32 Handled = SendInteractionIn(P.Interior, P.EntityId, O.Interaction);
@@ -599,6 +641,125 @@ bool ASCVehicle::FloorPanelWorldPoint(int32 Panel, int32 Option, FVector& Out) c
     const FSCFloorPanel& P = FloorPanels[Panel];
     const UMeshComponent* C = P.Component.Get();
     if (!C) return false;
-    Out = P.Frame().TransformPosition(P.Geometry.PointAt(P.Layout.Options[Option].Rect.GetCenter()));
+    Out = P.Frame().TransformPosition(P.Geometry.PointAt(P.ContentOf(P.Layout.Options[Option].Rect.GetCenter())));
     return true;
+}
+
+FString FSCFloorPanel::ImageForState() const
+{
+    // The owner's current non-default states, and the render that pins the most of them without pinning another.
+    TArray<FString> Current;
+    for (const FSCUiStateType& T : StateTypes)
+        if (const FString* S = UiState.Find(T.Name); S && *S != T.DefaultState) Current.Add(T.Name + TEXT(".") + *S);
+    FString Best = DefaultImage;
+    int32 BestPins = 0;
+    for (const FSCUiStateImage& I : StateImages)
+        if (I.States.Num() > BestPins && !I.States.ContainsByPredicate([&](const FString& S) { return !Current.Contains(S); }))
+        {
+            Best = I.ImagePath;
+            BestPins = I.States.Num();
+        }
+    return Best;
+}
+
+void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UTexture2D*(const FString&)> Texture)
+{
+    // The highlight frame takes the pads' Selected role (the vehicle's door-pad palette, `lifts[].panel_style`: the brand
+    // style the panel renders with too) when the export has one; white otherwise.
+    FLinearColor Frame = FLinearColor::White;
+    for (const TSharedPtr<FSCLift>& Lift : Lifts)
+        if (Lift->PanelStyle.Palette.Contains(TEXT("Selected"))) { Frame = FSCFloorPanelColours::From(Lift->PanelStyle).RowHighlight; break; }
+    int32 NotModelled = 0;
+    for (FSCButtonFace& F : Faces)
+    {
+        UMeshComponent* Component = F.Component.Get();
+        if (!Component || F.ImageSizePx.X <= 0 || F.ImageSizePx.Y <= 0 || F.Buttons.IsEmpty()) continue;
+        // Operated only where every node's press does what the game does: it sends a tag a light group the owner drives
+        // receives (a light panel). A door pad (its door button is the door interaction, FindInteraction, and its face
+        // follows the door), kiosks and the rest stay the exporter's render.
+        const int32 Interior = F.Interior != INDEX_NONE ? F.Interior : Interactions.InteriorOf(F.EntityId);
+        const TArray<int32> Driven = LightGroupsLinkedBy(Interior, F.Links);
+        const bool bLightPanel = !Driven.IsEmpty() && !F.Buttons.ContainsByPredicate([&](const FSCUiButton& B) {
+            const FSCSendableInteraction* S = F.Sendables.FindByPredicate([&](const FSCSendableInteraction& X) { return X.Name == B.Interaction; });
+            return !S || !Driven.ContainsByPredicate([&](int32 G) {
+                return LightGroups[G].Interactions.ContainsByPredicate([&](const FSCLightGroupInteraction& I) { return I.LinkingTag == S->LinkingTag; });
+            });
+        });
+        if (!bLightPanel)
+        {
+            ++NotModelled;
+            continue;
+        }
+        FSCFloorPanel P;
+        P.Kind = ESCPanelKind::Buttons;
+        P.EntityId = F.EntityId;
+        P.Interior = Interior;
+        P.Anchor = F.Panel;
+        P.Component = Component;
+        P.Slot = F.Slot;
+        P.Geometry = F.Geometry.Scaled(Component->GetComponentScale());
+        if (!P.Geometry.Build(P.Frame().InverseTransformVectorNoScale(GetActorUpVector())))
+        {
+            UE_LOG(LogSCFloorPanel, Warning, TEXT("LIGHT_PANEL_BUILD panel=%s: the screen face is degenerate; not operable"), *F.EntityId);
+            continue;
+        }
+        // The render covers one UV cell of the face (the face samples it at UV0, wrapping): the cell its UVs lie in.
+        FVector2D Mean = FVector2D::ZeroVector;
+        for (const FVector2f& UV : P.Geometry.UVs) Mean += FVector2D(UV.X, UV.Y) / P.Geometry.UVs.Num();
+        P.UVBase = FVector2D(FMath::FloorToDouble(Mean.X), FMath::FloorToDouble(Mean.Y));
+        for (const FSCUiButton& B : F.Buttons)
+            P.Layout.Options.Add({INDEX_NONE, B.Interaction, B.Interaction.ToString(), FBox2D(B.RectPx.Min / F.ImageSizePx, B.RectPx.Max / F.ImageSizePx)});
+        P.StateTypes = F.StateTypes;
+        P.StateImages = F.StateImages;
+        P.DefaultImage = F.DefaultImage;
+        for (const FSCUiStateType& T : P.StateTypes) P.UiState.Add(T.Name, T.DefaultState);
+        P.Sendables = F.Sendables;
+        P.Links = F.Links;
+        P.HighlightColour = Frame;
+        P.Images.Add(P.DefaultImage, Texture(P.DefaultImage));
+        for (const FSCUiStateImage& I : P.StateImages) P.Images.Add(I.ImagePath, Texture(I.ImagePath));
+        UTextureRenderTarget2D* RT = NewObject<UTextureRenderTarget2D>(this, NAME_None, RF_Transient);
+        RT->RenderTargetFormat = RTF_RGBA16f;
+        RT->ClearColor = FLinearColor::Black;
+        RT->AddressX = RT->AddressY = TA_Wrap; // as the face samples the render
+        const double Fit = FMath::Min(1.0, PanelPixelsMax / FMath::Max(F.ImageSizePx.X, F.ImageSizePx.Y));
+        RT->InitAutoFormat(FMath::Clamp(FMath::RoundToInt(F.ImageSizePx.X * Fit), 16, PanelPixelsMax),
+                           FMath::Clamp(FMath::RoundToInt(F.ImageSizePx.Y * Fit), 16, PanelPixelsMax));
+        RT->UpdateResourceImmediate(true);
+        FloorPanelTargets.Add(RT);
+        P.Target = RT;
+        UMaterialInterface* Material = F.MakeMaterial ? F.MakeMaterial(RT) : nullptr;
+        if (!Material)
+        {
+            UE_LOG(LogSCFloorPanel, Warning, TEXT("LIGHT_PANEL_BUILD panel=%s: no screen instance for the face; not operable"), *F.EntityId);
+            continue;
+        }
+        FloorPanelMaterials.Add(Material);
+        // The face is already a screen face (its state images): the drawn render replaces them there.
+        P.Face = ScreenFaces.IndexOfByPredicate([&](const FSCScreenFace& S) { return S.Component.Get() == Component && S.Slot == F.Slot; });
+        if (P.Face == INDEX_NONE)
+        {
+            FSCScreenFace& Screen = ScreenFaces.AddDefaulted_GetRef();
+            Screen.Component = Component;
+            Screen.Slot = F.Slot;
+            Screen.Panel = F.Panel;
+            Screen.Default = Component->GetMaterial(F.Slot);
+            Screen.Image = F.DefaultImage;
+            P.Face = ScreenFaces.Num() - 1;
+        }
+        SetScreenFaceMaterial(P.Face, Material);
+        Component->ComponentTags.AddUnique(FSCInstancing::KeepTag);
+        TArray<FString> Groups, Rows;
+        for (const int32 G : LightGroupsLinkedBy(P.Interior, P.Links)) Groups.Add(LightGroups[G].Name);
+        for (const FSCFloorPanelOption& O : P.Layout.Options)
+            Rows.Add(FString::Printf(TEXT("%s[%.3f,%.3f..%.3f,%.3f]"), *O.Interaction.ToString(), O.Rect.Min.X, O.Rect.Min.Y, O.Rect.Max.X, O.Rect.Max.Y));
+        UE_LOG(LogSCFloorPanel, Display, TEXT("LIGHT_PANEL_BUILD panel=%s index=%d interior=%d face=%d component=%s slot=%d size_cm=%.1fx%.1f uv_base=%s target=%dx%d groups=%s options=%s"),
+               *P.EntityId, FloorPanels.Num(), P.Interior, P.Face, *Component->GetName(), P.Slot, P.Geometry.Width, P.Geometry.Height,
+               *P.UVBase.ToString(), RT->SizeX, RT->SizeY, Groups.IsEmpty() ? TEXT("-") : *FString::Join(Groups, TEXT(",")), *FString::Join(Rows, TEXT(" ")));
+        FloorPanels.Add(MoveTemp(P));
+    }
+    if (!Faces.IsEmpty())
+        UE_LOG(LogSCFloorPanel, Display, TEXT("LIGHT_PANELS faces=%d operable=%d not_modelled=%d (a node whose press reaches none of the light groups the owner drives)"), Faces.Num(),
+               FloorPanels.FilterByPredicate([](const FSCFloorPanel& P) { return P.Kind == ESCPanelKind::Buttons; }).Num(), NotModelled);
+    RefreshFloorPanels();
 }

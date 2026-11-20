@@ -344,6 +344,7 @@ void FSCLift::BeginLeg(int32 To)
     bAtContact = false;
     LegTime = 0;
     NextPass = FromStop + Direction;
+    LegStartedAt = Clock;
     const double Distance = Plan.Distance;
     UE_LOG(LogSCLift, Display, TEXT("LIFT_DEPARTED lift=%d from=%d to=%d dist_m=%.3f predicted_s=%.3f peak_v=%.3f t=%.3f"), Id, FromStop, To, Distance,
            Leg.Duration(), Leg.PeakSpeed, Clock);

@@ -17,6 +17,7 @@
 #include "CoreMinimal.h"
 #include "MeshDescription.h"
 #include "SCInteractionRecords.h"
+#include "SCPackageReader.h"
 
 class FSCLift;
 class UMeshComponent;
@@ -93,6 +94,7 @@ struct SCBRIDGE_API FSCFloorPanelLayout
 struct SCBRIDGE_API FSCFloorPanelView
 {
     int32 Highlight = INDEX_NONE; // option under the crosshair
+    FString Image;                // a button panel: the state image under the highlight (package path)
     int32 Current = INDEX_NONE;   // the stop the carriage stands at; INDEX_NONE while it travels
     int32 Target = INDEX_NONE;    // the stop of the leg chosen or in progress
     TArray<int32> Requested;      // stops queued (sorted)
@@ -103,8 +105,8 @@ struct SCBRIDGE_API FSCFloorPanelView
     static FSCFloorPanelView Of(const FSCLift& Lift, int32 Highlight, double Time);
     bool operator==(const FSCFloorPanelView& O) const
     {
-        return Highlight == O.Highlight && Current == O.Current && Target == O.Target && Requested == O.Requested && Direction == O.Direction &&
-               bBlink == O.bBlink;
+        return Highlight == O.Highlight && Image == O.Image && Current == O.Current && Target == O.Target && Requested == O.Requested &&
+               Direction == O.Direction && bBlink == O.bBlink;
     }
     FString Describe() const;
 };
@@ -118,9 +120,17 @@ struct SCBRIDGE_API FSCFloorPanelColours
     static FSCFloorPanelColours From(const FSCLiftPanelStyle& Style);
 };
 
-/** One drawn floor panel (ASCVehicle::FloorPanels). */
+/** What an operable panel is (C2 fixes: one mechanism for both).
+ *  - FloorSelect: our own floor list on a lift panel's blank face (options in content coordinates).
+ *  - Buttons: the game's own panel UI (a light panel, `ui_bindings[].buttons[]`): the exporter's render of the owner's
+ *    current state drawn on the face, its clickable nodes the options (in image coordinates: 0..1 over the render). */
+enum class ESCPanelKind : uint8 { FloorSelect, Buttons };
+
+/** One drawn operable panel (ASCVehicle::FloorPanels): the crosshair highlights the option under it, E sends that
+ *  option's interaction. */
 struct FSCFloorPanel
 {
+    ESCPanelKind Kind = ESCPanelKind::FloorSelect;
     int32 Lift = INDEX_NONE, Interior = INDEX_NONE, Face = INDEX_NONE;
     FString EntityId;
     TWeakObjectPtr<const USceneComponent> Anchor;
@@ -140,6 +150,54 @@ struct FSCFloorPanel
     bool bDrawn = false;
     /** The face's frame: the component's rotation and location (its scale is in Geometry, FSCScreenFaceGeometry::Scaled). */
     FTransform Frame() const;
+
+    // Buttons panels (Kind == Buttons).
+    /** The integer UV cell the face samples the render in (the render is 0..1 over it). */
+    FVector2D UVBase = FVector2D::ZeroVector;
+    /** The owner's state types (defaults, transitions, linked tags) and its state images, from its UI binding. */
+    TArray<FSCUiStateType> StateTypes;
+    TArray<FSCUiStateImage> StateImages;
+    FString DefaultImage;
+    /** The owner's current state per state type (its default until something sets it). */
+    TMap<FString, FString> UiState;
+    /** Decoded renders by package path (the default and every state image). */
+    TMap<FString, TWeakObjectPtr<UTexture2D>> Images;
+    /** The owner's Sendable interactions with their linking tags, and its EntityLinks. */
+    TArray<FSCSendableInteraction> Sendables;
+    TArray<FString> Links;
+    FLinearColor HighlightColour = FLinearColor::White;
+    /** Options live in content coordinates (FloorSelect) or image coordinates (Buttons): the point of each from a hit on
+     *  the face (its content point and UV), and the content point of an option point. */
+    FVector2D OptionPoint(const FVector2D& Content, const FVector2f& UV) const
+    {
+        return Kind == ESCPanelKind::Buttons ? FVector2D(UV.X, UV.Y) - UVBase : Content;
+    }
+    FVector2D ContentOf(const FVector2D& Option) const
+    {
+        return Kind == ESCPanelKind::Buttons ? Geometry.ContentFromUV(FVector2f(float(UVBase.X + Option.X), float(UVBase.Y + Option.Y))) : Option;
+    }
+    /** The render for the current UiState: the state image whose pinned states are all current and that pins the most of
+     *  them (exactly the current non-default states when one does), else the default render. */
+    FString ImageForState() const;
+};
+/** A screen face showing an operating panel's render whose binding has clickable nodes (SCImportJob collects them):
+ *  the face's geometry and what a drawn panel needs. */
+struct FSCButtonFace
+{
+    TWeakObjectPtr<UMeshComponent> Component;
+    int32 Slot = INDEX_NONE;
+    TWeakObjectPtr<const USceneComponent> Panel; // the placement's anchor
+    FSCScreenFaceGeometry Geometry;
+    int32 Interior = INDEX_NONE; // the interior it was placed in (entity ids are unique within one container)
+    FString EntityId;
+    TArray<FString> Links;
+    TArray<FSCSendableInteraction> Sendables;
+    TArray<FSCUiButton> Buttons;
+    FVector2D ImageSizePx = FVector2D::ZeroVector;
+    TArray<FSCUiStateType> StateTypes;
+    TArray<FSCUiStateImage> StateImages;
+    FString DefaultImage;
+    TFunction<UMaterialInterface*(UTexture* Image)> MakeMaterial;
 };
 
 /** A screen face no panel image binds (dark glass), with what a viewer-drawn image needs (SCImportJob collects them). */

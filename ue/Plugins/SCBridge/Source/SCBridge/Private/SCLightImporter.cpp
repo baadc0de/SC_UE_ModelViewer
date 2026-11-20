@@ -274,6 +274,9 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         State.Component = Light;
         State.Name = Name;
         State.OwnerEntity = Instance.EntityName;
+        State.Json = J; // the record ApplyState reads another state from
+        if (const FLightJson* Attachment; J->TryGetObjectField(TEXT("attachment"), Attachment))
+            State.GroupEntityId = LightString(*Attachment, TEXT("group_entity_id"));
         J->TryGetBoolField(TEXT("affects_this_area_only"), State.bAreaOnly);
         const FString ExportState = LightString(J, TEXT("active_state"));
         State.ExportActiveState = FName(*ExportState);
@@ -393,6 +396,27 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
     }
 }
 
+bool FSCLightImporter::ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey)
+{
+    // Another of the light's authored states (`states.<key>`): its intensity by the same model as at import (StateCandela)
+    // and its colour; a state the light does not author leaves it as it is (nothing invented). Light styles (waveforms)
+    // are not modelled, as at import.
+    if (!Vehicle || !Vehicle->LightStates.IsValidIndex(Index)) return false;
+    FSCImportedLightState& S = Vehicle->LightStates[Index];
+    ULightComponent* Light = S.Component;
+    const FLightJson* States = nullptr;
+    const FLightJson* Selected = nullptr;
+    if (!Light || !S.Json || !S.Json->TryGetObjectField(TEXT("states"), States) || !(*States)->TryGetObjectField(StateKey.ToString(), Selected))
+        return false;
+    const double Intensity = StateCandela(S.Json, *Selected);
+    S.ActiveState = StateKey;
+    S.bEnabled = StateKey != FName(TEXT("offState")) && Intensity > 0; // as at import: an explicit offState stays off
+    const FVector Color = LightVector(*Selected, TEXT("color"), LightVector(S.Json, TEXT("color"), FVector(1)));
+    Light->SetLightColor(FLinearColor(Color.X, Color.Y, Color.Z));
+    Light->SetIntensity(S.bEnabled ? Intensity : 0.);
+    Light->SetVisibility(S.bEnabled);
+    return true;
+}
 void FSCLightImporter::RefreshShadows(ASCVehicle* Vehicle)
 {
     Vehicle->bMegaLightsActive = MegaLightsActive();

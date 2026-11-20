@@ -529,7 +529,26 @@ replaced on each use, never ranked). The first-person start ranks
 `Entrance` (only when the data marks a hull entrance — not exported yet) > `SeatAccess`
 > `Seat` > `Interior` > `Door` > `Hull`. Interactions are Mannequin fragments with an
 Open/Close tag pair on a rig the clip binds; their open state is the tag last played
-on that rig instance. Unsafe teleport/noclip-exit locations are rejected (the refusal
+on that rig instance.
+
+**Doors (C2 fixes, cache format 39).** A door's own data (`door` on placements and loadout children: `SCItemDoorParams`)
+decides how it moves and makes it a door even without a Mannequin Open/Close pair: it spawns in its authored state
+(`is_opened`; the C2's doors are all closed) at that state's end pose (the open fragment's end, the close fragment's end,
+or a single-procedural door's transition start), an open/close door (`open_tag` / `close_tag`) plays those fragments, a single-procedural door (`transition_tag`, the C2's rear ramp) is its
+one transition's time and closes by playing it backwards. Every press (E, a pad, a lift, `sc.FP.Door`, the cargo access
+rule) goes through `ASCVehicle::PlayDoor`: each clip starts at the frame nearest the rig's current pose, so a door turned
+around mid-stroke never snaps, and the door's `item_port_links` are delivered (the C2's front hatch opens the front doors
+and the front ramp). A panel in a door's loadout operates that door and its face follows it. Without door data a door is
+the Mannequin Open/Close pair at its bind pose, as before. `sc.Doors.Pose [index]` logs a door's joint, a point on its
+frame, its state and the clip playing (`DOOR_POSE`). A ship's cargo hold is opened (its doors through `PlayDoor`) by each
+transfer that needs it, not at load; the transfer waits for those doors' playback, and a hold whose door was closed since
+reads closed again.
+
+**Light panels (C2 fixes).** A panel whose render's clickable nodes (`ui_bindings[].buttons[]`) all send a tag a light
+group it drives receives (the C2's `ControlPanel_Screen_LightControl`) is operated like the lift floor panel (the same
+`FloorPanels` mechanism, `ESCPanelKind::Buttons`): the node under the crosshair is framed, E sends it; the group's lights
+take the state its own interaction names (`LIGHT_GROUP_STATE`), and the face shows the exporter's render of the panel's
+new state (`LIGHT_PANEL_PRESS`). `sc.Lights.Groups [group state]` lists the light groups or sets one. Unsafe teleport/noclip-exit locations are rejected (the refusal
 stays on the HUD for 3 s); falling recovers to the last spawn and blocked movement
 offers noclip after two seconds. Soft-skinned collision is CPU-skinned and refit by
 `USCRigComponent::RefitCollision` whenever a weighting bone moves (same path with and
@@ -634,9 +653,16 @@ instancing), keeping their world transforms. The carriage stands at its rest nod
   not toggled by E nor by proximity sensors; `sc.FP.Door` still does. Riders hang on their own parent (the carriage or
   another rider, at its socket when the parent is a rig), and lights whose entity rides the carriage
   (`parent_entity_id`) move with it.
-- **Riding** is UE based movement on the carriage's own colliders; the character ticks after the vehicle. While the
-  movement base belongs to a carriage the character logs `LIFT_RIDE lift= base= asset= rel_z_cm= floor_dist_cm=` once a
-  second (and on every change).
+- **Riding** is UE based movement on the carriage's own colliders; the character ticks after the vehicle and its
+  movement after the character. While the movement base belongs to a carriage the character logs `LIFT_RIDE lift= base=
+  asset= rel_z_cm= floor_dist_cm=` once a second (and on every change). A capsule standing on a moving carriage (its
+  movement base is part of the carriage, or a carriage collider lies under its feet within the step height: the stand-in for
+  the carriage's own physics grid) is its rider: what the leg passes through
+  (`LIFT_PATH`: the colliders in the carriage's swept box, not its own parts, doors or pawns) does not block it, so it is
+  carried the whole leg (C2 fixes: the hold's shoulder slab reaches into the shaft and caught riders at the lower deck).
+  Per tick while riding `LIFT_RIDE_TICK` (feet over the carriage anchor, floor distance, base) and at the leg's end
+  `LIFT_RIDE_LEG samples rel_z_min_cm rel_z_max_cm spread_cm off_carriage`. `sc.Lift.CarryRiders 0` turns the rule off
+  (A/B).
 - **Press path** (until WP-I1 has its own): a placed entity whose `interaction_links` reach the carriage or one of its
   stops is a lift panel. E on it (the crosshair on its collision, else on its parts' bounds) sends an interaction of its
   interaction point through `ASCVehicle::SendInteraction`, which follows the exported links (`LINK_DELIVER`,
@@ -662,7 +688,7 @@ instancing), keeping their world transforms. The carriage stands at its rest nod
 | `sc.Lift.Doors <lift> open\|close` | `OpenInnerDoor` + the stop's `DoorOpen` / `CloseAllDoors` + `DoorClose` |
 | `sc.Lift.Send <entity_id> <interaction>` | fire an entity's interaction along its exported links (the press path without a crosshair; the C2's helper-only ground buttons) |
 | `sc.Lift.Where` | `LIFT_WHERE lift s_m z_cm v state phase at target queue`, and the player's movement base |
-| `sc.Lift.Panels` | `FLOOR_PANEL index entity lift face size_cm colours` with the view shown, one `FLOOR_PANEL_ROW panel option stop label interaction rect` per row (content coordinates) |
+| `sc.Lift.Panels` | `FLOOR_PANEL index kind entity lift face size_cm colours` with the view shown (kind `floor_select`, or `buttons` for a light panel, its rows in the render's image coordinates), `FLOOR_PANEL_AT index centre normal` (vehicle frame), one `FLOOR_PANEL_ROW panel option stop label interaction rect` per row |
 | `sc.Lift.PanelAim <panel> <row>` / `<panel> <x> <y>` | turn the first-person view to a row's centre, or to a content point of the face (0..1, y down; outside is off the face) |
 
 Logs: `LIFT_BUILD`, `LIFT_REQUESTED`, `LIFT_STATE`, `LIFT_DEPARTED` (predicted leg time), `LIFT_PHASE`

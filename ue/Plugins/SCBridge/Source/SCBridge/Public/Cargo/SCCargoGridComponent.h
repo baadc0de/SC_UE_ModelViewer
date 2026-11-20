@@ -64,6 +64,12 @@ public:
     /** Opened by the access rule (FSCEnvironmentAccess): an environment grid, or a ship's interior hold (a grid that is
      *  not an external container and has no mechanism of its own: the ramp or doors between it and the outside). */
     bool bAccessRule = false;
+    /** The access rule has been applied (FSCEnvironmentAccess::OpenGrid): at discovery for an environment grid, on the first
+     *  request for a ship's interior hold, whose doors start in their authored state (C2 fixes). Closed until then. */
+    bool bAccessOpened = false;
+    /** The doors the last access request opened or found opening: the grid is Opening while one plays, Closed once one of
+     *  them is closed again (by its pad, a reset). */
+    TArray<TWeakObjectPtr<class USCRigComponent>> AccessDoors;
     /** Whose grid it is (its vehicle's owner); None = shared (the hangar's: anyone may load and unload it). */
     FName Owner;
     /** An open interior hold's entrance side (lattice X = 1, Y = 2, none = 0; -1 not probed yet): see EntranceAxis. */

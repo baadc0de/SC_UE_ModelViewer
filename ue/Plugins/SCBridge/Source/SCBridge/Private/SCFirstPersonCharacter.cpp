@@ -14,6 +14,11 @@
 #include "GameFramework/PlayerController.h"
 #include "Engine/World.h"
 #include "Misc/Paths.h"
+#include "HAL/IConsoleManager.h"
+
+// C2 fixes: riders of a moving lift carriage are carried through what its leg passes (1); 0 turns the rule off (A/B, tests).
+static TAutoConsoleVariable<int32> CVarSCLiftCarryRiders(TEXT("sc.Lift.CarryRiders"), 1,
+    TEXT("1: a capsule on a moving lift carriage is carried through what the leg passes (C2 fixes); 0: swept like any based move"));
 
 namespace
 {
@@ -52,6 +57,9 @@ ASCFirstPersonCharacter::ASCFirstPersonCharacter()
     auto* Movement = GetCharacterMovement();
     Movement->GetNavAgentPropertiesRef().bCanCrouch = true;
     Movement->bRunPhysicsWithNoController = true; // scripted commandlet walks use the same movement component
+    // The movement ticks after the character (Explore adds that edge): UE's default (tick before the owner) would make the
+    // pair a cycle and the engine would drop one direction (C2 fixes review).
+    Movement->bTickBeforeOwner = false;
     Camera = CreateDefaultSubobject<USCEyeCameraComponent>(TEXT("FirstPersonCamera"));
     Body = CreateDefaultSubobject<USCPlayerBodyComponent>(TEXT("PlayerBody"));
     Camera->SetupAttachment(GetCapsuleComponent());
@@ -199,19 +207,22 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
         }
     }
     // WP-P3: inside the physics grid the vehicle's own (hull) colliders do not block; the grid's contents do.
+    // C2 fixes: on a moving lift carriage, what the leg passes through does not block either (the carriage carries its riders).
     const FVector Axis(0, 0, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
-    if (const bool bInGrid = Vehicle->IsInPhysicsGrid(GetActorLocation() - Axis, GetActorLocation() + Axis);
-        GridState != int8(bInGrid) || GridVehicle.Get() != Vehicle)
+    const bool bInGrid = Vehicle->IsInPhysicsGrid(GetActorLocation() - Axis, GetActorLocation() + Axis);
+    const int32 Ridden = bNoclip || CVarSCLiftCarryRiders.GetValueOnGameThread() == 0 ? INDEX_NONE : Vehicle->LiftRiddenBy(GetActorLocation() - Axis, Cast<UPrimitiveComponent>(GetMovementBaseObject()), GetCharacterMovement()->MaxStepHeight + 5);
+    const double Leg = Vehicle->Lifts.IsValidIndex(Ridden) ? Vehicle->Lifts[Ridden]->LegStartedAt : -1;
+    if (GridState != int8(bInGrid) || GridVehicle.Get() != Vehicle || Ridden != RiddenLift || Leg != RiddenLeg)
     {
+        const bool bGridChanged = GridState != int8(bInGrid) || GridVehicle.Get() != Vehicle;
         GridState = int8(bInGrid);
         GridVehicle = Vehicle;
-        UCapsuleComponent* Capsule = GetCapsuleComponent();
-        Capsule->ClearMoveIgnoreComponents();
-        if (bInGrid)
-            for (UPrimitiveComponent* Hull : Vehicle->HullColliders) Capsule->IgnoreComponentWhenMoving(Hull, true);
-        UE_LOG(LogTemp, Display, TEXT("FP_GRID inside=%d hull_colliders=%d relative=%s"), int32(bInGrid), Vehicle->HullColliders.Num(),
-               *GetVehicleRelativeLocation().ToCompactString());
+        RefreshMoveIgnores(bInGrid, Ridden);
+        if (bGridChanged)
+            UE_LOG(LogTemp, Display, TEXT("FP_GRID inside=%d hull_colliders=%d relative=%s"), int32(bInGrid), Vehicle->HullColliders.Num(),
+                   *GetVehicleRelativeLocation().ToCompactString());
     }
+    UpdateRideTrace(Ridden);
     // Single eye anchor; a camera re-attached to another driver (e.g. a head joint) is left alone.
     if (Camera->GetAttachParent() == GetCapsuleComponent()) Camera->SetRelativeLocation(EyeOffset());
     if (HoldSeconds > 0)
@@ -401,8 +412,11 @@ bool ASCFirstPersonCharacter::Explore(ASCVehicle* InVehicle)
 {
     Vehicle = InVehicle;
     if (!Vehicle || !Vehicle->bCollisionReady) return false;
-    // A moving carriage (WP-P5) moves before the character follows its movement base in the same frame.
+    // A moving carriage (WP-P5) moves before the character follows its movement base in the same frame, and the movement
+    // runs after the character's own tick (C2 fixes: this frame's input and move-ignore list, e.g. what a ridden leg
+    // passes, apply to this frame's move; without the prerequisite the engine may run the movement first).
     AddTickPrerequisiteActor(Vehicle);
+    GetCharacterMovement()->PrimaryComponentTick.AddPrerequisite(this, PrimaryActorTick);
     // Below everything that collides (and the world origin floor) by four capsule half-heights:
     // computed once, the per-tick check must not walk every component.
     const FBox Bounds = Vehicle->ExplorationBounds();
@@ -533,6 +547,54 @@ void ASCFirstPersonCharacter::UpdateRideLog()
         RideLift = Lift;
         LastRideLog = Now;
     }
+}
+void ASCFirstPersonCharacter::RefreshMoveIgnores(bool bInGrid, int32 Lift)
+{
+    UCapsuleComponent* Capsule = GetCapsuleComponent();
+    Capsule->ClearMoveIgnoreComponents();
+    if (bInGrid)
+        for (UPrimitiveComponent* Hull : Vehicle->HullColliders) Capsule->IgnoreComponentWhenMoving(Hull, true);
+    // The rider is carried through what the carriage's leg passes (the C2's hold shoulder slab reaches into the shaft under
+    // the hold floor; swept with the carriage, the capsule's edge caught on it and stayed at the lower deck).
+    int32 Passed = 0;
+    if (Vehicle->Lifts.IsValidIndex(Lift))
+        for (const TWeakObjectPtr<UPrimitiveComponent>& C : Vehicle->LiftPathObstacles(Lift))
+            if (UPrimitiveComponent* P = C.Get()) { Capsule->IgnoreComponentWhenMoving(P, true); ++Passed; }
+    if (Lift != RiddenLift || (Vehicle->Lifts.IsValidIndex(Lift) && Vehicle->Lifts[Lift]->LegStartedAt != RiddenLeg))
+        UE_LOG(LogTemp, Display, TEXT("LIFT_RIDER lift=%d leg_t=%.3f passed=%d relative=%s"), Lift,
+               Vehicle->Lifts.IsValidIndex(Lift) ? Vehicle->Lifts[Lift]->LegStartedAt : -1.0, Passed, *GetVehicleRelativeLocation().ToCompactString());
+    RiddenLift = Lift;
+    RiddenLeg = Vehicle->Lifts.IsValidIndex(Lift) ? Vehicle->Lifts[Lift]->LegStartedAt : -1;
+}
+void ASCFirstPersonCharacter::UpdateRideTrace(int32 Lift)
+{
+    // Per tick while a carriage carries the capsule: the feet against the carriage anchor the last movement update moved the
+    // capsule with (the vehicle moves the anchor before this tick, the capsule follows after it), the floor distance and the
+    // base. At the leg's end, LIFT_RIDE_LEG: the spread of that distance (steady for a rider kept on the carriage).
+    const USceneComponent* Anchor = Vehicle->Lifts.IsValidIndex(Lift) ? Vehicle->Lifts[Lift]->Anchor.Get() : nullptr;
+    const double Feet = GetActorLocation().Z - GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+    if (Anchor && bTraceAnchor)
+    {
+        const double Rel = Feet - TraceAnchorZ;
+        const UPrimitiveComponent* Base = Cast<UPrimitiveComponent>(GetMovementBaseObject());
+        const bool bOnCarriage = Base && Vehicle->LiftCarrying(Base) == Lift;
+        TraceMin = TraceSamples ? FMath::Min(TraceMin, Rel) : Rel;
+        TraceMax = TraceSamples ? FMath::Max(TraceMax, Rel) : Rel;
+        ++TraceSamples;
+        TraceOtherBase += !bOnCarriage;
+        const auto& Floor = GetCharacterMovement()->CurrentFloor;
+        UE_LOG(LogTemp, Display, TEXT("LIFT_RIDE_TICK lift=%d t=%.3f s_m=%.3f anchor_z=%.2f rel_z_cm=%.2f floor_dist_cm=%.2f base=%s"), Lift,
+               GetWorld()->GetTimeSeconds(), Vehicle->Lifts[Lift]->S, TraceAnchorZ, Rel, Floor.bBlockingHit ? Floor.FloorDist : -1.0,
+               Base ? *Base->GetName() : TEXT("-"));
+    }
+    else if (!Anchor && TraceSamples > 0)
+    {
+        UE_LOG(LogTemp, Display, TEXT("LIFT_RIDE_LEG samples=%d rel_z_min_cm=%.2f rel_z_max_cm=%.2f spread_cm=%.2f off_carriage=%d relative=%s"), TraceSamples,
+               TraceMin, TraceMax, TraceMax - TraceMin, TraceOtherBase, *GetVehicleRelativeLocation().ToCompactString());
+        TraceSamples = TraceOtherBase = 0;
+    }
+    bTraceAnchor = Anchor != nullptr;
+    if (Anchor) TraceAnchorZ = Anchor->GetComponentLocation().Z;
 }
 void ASCFirstPersonCharacter::ToggleNoclip()
 {

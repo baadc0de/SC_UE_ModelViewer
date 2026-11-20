@@ -197,12 +197,13 @@ void USCCargoSubsystem::ApplyScenario()
         // applying (activity cargo_scenario) until they are out.
         bool bExtended = true;
         for (const FSCCargoStock& St : S.Stock)
-            if (USCCargoGridComponent* G = St.Grid.Kind == Kind ? SelectGrid(St.Grid) : nullptr; G && !G->Movers.IsEmpty())
+            if (USCCargoGridComponent* G = St.Grid.Kind == Kind ? SelectGrid(St.Grid) : nullptr; G && (!G->Movers.IsEmpty() || G->bAccessRule))
                 bExtended &= RequestAccess(G, true, GetWorld()->GetTimeSeconds());
-        // A dock grid with nothing to extend is usable once it is ready (Opening until then): waited for as well.
+        // A dock grid with nothing to extend is usable once it is ready (Opening until then; a ship's hold is opened first):
+        // waited for as well.
         for (const FSCCargoDockSpec& D : S.Docks)
             if (USCCargoGridComponent* G = D.Grid.Kind == Kind ? SelectGrid(D.Grid) : nullptr)
-                bExtended &= G->Movers.IsEmpty() ? G->Access == ESCCargoGridAccess::Open : RequestAccess(G, true, GetWorld()->GetTimeSeconds());
+                bExtended &= G->Movers.IsEmpty() && !G->bAccessRule ? G->Access == ESCCargoGridAccess::Open : RequestAccess(G, true, GetWorld()->GetTimeSeconds());
         if (!bExtended) continue;
         State->AppliedKinds |= Bit;
         int32 Boxes = 0, Docks = 0;

@@ -1123,6 +1123,159 @@ Not fixed, with the reason:
 - The wide pad's field proportion (M2 wide reference); the M2 side strip (§6).
 - Owner-set completeness flag; Lumen card capture of the screen emission (fix pass review).
 
+## Result (C2 fixes: doors and light panels, 2026-11-20)
+
+Owner reports on the C2 in `hangar_xltop_001`: (1) the rear doors stand open at spawn and their panel's toggle snaps them
+closed before playing them open; (2) the front doors stand open too, with no ramp to the outside and no door panel beside
+the three light switches; (3) the light switches do not switch lights. Exporter on submodule branch `scviewer/c2-fixes`
+(`8b93175a` from `f39c62a4`; review fixes `f782be30`, `7e856af6`, `b1c338d7`, `c238e73c`), cache format 39. Datamine in `out/c2-fixes/datamine/{doors,lights}`, runs in
+`out/c2-fixes/run3` (final build; `run2` before the review fixes, same results) (`ue/scripts/rpc/c2-fixes.ps1`). Nothing committed in this repo.
+
+### 1. The rear ramp open at spawn, the toggle snapping
+
+**What the data says.** All five C2 exterior doors (rear ramp
+`Door_RN_RoomConnector_Breachable_OpenReverse_crus_Starlifter_Rear_Ramp`, front `…Front_Door_Left` / `_Right` /
+`_Door_Bottom` / `_Front_Ramp`): `SCItemDoorParams.IsOpened = false`, `SInteractionStateMachineParams
+DoorOpenState.DefaultState = DoorClosed`, no loadout or `.soc` override. Each door GLB's bind pose equals its Open clip's
+first frame and its Close clip's last frame (0.0° / 0.0 cm on every bone, `datamine/doors/bind_vs_clips.txt`). The rear
+ramp's `AnimationParams` is `SCItemDoorSingleProceduralParams {TransitionTag: Open}` (78 of 79 "OpenReverse" classes): one
+transition whose time is the door's state, closed at its start; the others are `SCItemDoorSimpleOpenCloseParams {OpenTag
+Open, CloseTag Close}`.
+
+**Why it stood open.** Not the bind pose: the cargo access rule (WP-K1, `FSCEnvironmentAccess::OpenGrid`) opened the hold
+grids' way out at load (`ENV_ACCESS_RIG key=grid:3 rig=…Rear_Ramp blocked_m3=2863.86->1285.41
+clip=…/crus_starlifter_rear_ramp_open.caf`; grid:4 the front left and right doors) by playing raw clips on the rigs. The
+door's recorded state stayed "closed", so the pad's toggle played the Open fragment from frame 0: the snap.
+
+**Fix.**
+- A ship's hold grid is opened by each transfer that needs it (`USCCargoSubsystem::RequestAccess` /
+  `EnvironmentAccess`, `bAccessOpened`, `AccessDoors`; `CARGO_GRID … access=closed` at load): the doors the access rule
+  opens (or finds opening) are waited for by their playback, and a hold one of whose doors was closed since reads Closed
+  and is opened again; the environment's grids are opened at load as before; a grid's own mechanism (Movers) is driven too.
+- A door rig moves only through its door interaction (`ASCVehicle::PlayDoor`), the access rule's included: its state,
+  its pads and its port links follow.
+- Exporter: `door` on loadout children too, with `is_opened`, `is_locked`, `animation_params`, `transition_tag`,
+  `open_tag`, `close_tag`. Viewer: a rig with door data is a door by its own tags; doors spawn in that state (`ApplyDoorRestPoses`, also after
+  `ResetPose`): a single-procedural door holds its transition's start (or end when opened), an open/close door its open
+  fragment's end when opened and its close fragment's end when closed (end of play, a backwards clip's frame 0); a single-procedural door closes by its transition backwards; every press starts each clip at the frame nearest the
+  rig's current pose (`ESCFragmentStart::CurrentPose`, `NearestClipFrame`).
+
+**Result.** `EXPLORATION … door_rest_poses=34` (4 before the review fixes, when only single-procedural and opened doors were posed); at spawn the rear ramp is shut (`a0-rear-spawn`, `DOOR_POSE … open=0`). Its
+press (`sc.FP.Door 0`, the pads' ToggleDoor) plays the transition from frame 0.75 with a point on the joint's frame where it
+stood (tip Z −605.68 before and at the first sample); closing starts at frame 499.6 backwards; turned around mid-stroke it
+continues from the frame it shows (318.4 forward after closing, 409.6 backward after opening; the tip continuous). Traces
+`TRACE a1…a4` in `driver.txt`: per-sample steps 3–10 cm at ~0.12 s (no jump; the ramp's end travels 8.7 m in 16.7 s).
+
+### 2. The front: no ramp, no panel
+
+- **The ramp is exported and placed** (child `Door_Ship_Exterior_CRUS_Starlifter_Front_Ramp` on `hardpoint_front_ramp`);
+  at its bind pose it is stowed: on Open `Rear_ramp001` slides 9.27 m and pitches 18.4°. The cargo rule had opened only the
+  left and right doors (the ramp's pose cleared nothing for the hold), hence doors open and no ramp.
+- **The hatch drives the doors and the ramp** in the data: `Door_Ship_Exterior_CRUS_Starlifter_Door_Bottom`'s
+  `SInteractionLinkParams.vehicleItemPortInteractionLinks` send its `Open` / `Close` to `hardpoint_front_door_right`,
+  `_left` and `hardpoint_front_ramp`. Exported as `item_port_links`; `PlayDoor` delivers them (`DOOR_PORT_LINK … handled=1`).
+- **The panels were dropped by the exporter.** `Door_Bottom`'s default loadout is `SItemPortLoadoutXMLParams.loadoutPath =
+  Scripts/Loadouts/Objects/Doors/DoorExteriorLoadoutCRUSStarlifterDoorBottom.xml` (`IP_Interior` →
+  `ControlPanel_Screen_DoorControl_Starlifter_Interior_Button`, `IP_Exterior` → `…_Exterior_Button`), which nothing read,
+  and a loadout entry named by class never walked that class's own default loadout. Both fixed (`pipeline/xml_loadouts.rs`,
+  `loadout.rs` Path A); the M2 and A2 use the same front classes. A panel in a door's loadout operates that door and its
+  face follows it (door controls for children: `DOOR_LINKS panels=41`, was 34).
+- **Default state:** closed (IsOpened false), as the rear.
+
+Result: `b0-front-spawn` (closed, ramp stowed), `b1-front-opening-*` (the hatch press opens the doors and lowers the ramp
+to the pad), `b2-front-ramp-from-ground`, `b4` / `b5-hold-front-panels-*` (the interior panel beside the light panel reads
+OPEN, then CLOSE). Side effects of the loadout walk (the data's, new to the export): 21 more children (3 locker panels, 15
+relay fuses, 2 life-support filters); 7 magazine placements in the fire-extinguisher cabinets it also brought (a geometry
+variant the exporter picked by a fallback) are gone again after the review (`f782be30`: the magazine's root geometry is
+empty and its port selects neither of its variants).
+
+### 3. The light panels
+
+**Data chain** (`datamine/lights`): a row of `Screen_LightControl` (`LightControl_Component`: `OnLightsButton`,
+`AuxLightsButton`, `EmergencyLightsButton`; `onLeftClick` TriggerURL → the panel interaction `LightsOn` / `LightsLow` /
+`LightsAlarm`) → the panel's Sendable interaction and its `LinkingTag` (`/Interaction/LightGroup/SetDefault`,
+`SetAuxiliary`, `SetEmergency`) → the light groups the panel drives (its EntityLinks name the group, the hold's `LG_Hold`,
+or a chipset the group links too: `ChipSet_LightControl-014` ← `LG_TopDeck_C2`) → the group's interaction with that tag and
+the light state it ends in (`Emergency Override` → `SLightGroupComponentParams.lightStateOverrides` → Emergency) → that
+state block of every light of the group (`emergencyState`). The panel's own state machine sets `LightSwitchState` from the
+press (`LightsAlarm` → `LightSwitchAlarm`) and `LightState` from the group's state tag (`/State/LightGroup/Emergency` →
+`LightsAlarm`); the canvas selects On by `lightswitchon`, Auxiliary by `lightswitchlow`, Emergency by `lightstate.lightsalarm`.
+
+**Export** (cache format 39): light groups as `interiors[].entities[]` (`kind: light_group`, the interactions they receive
+with `linking_tag` and `light_state`) and logic entities (the chipsets; a class-name skip removed), lights'
+`attachment.group_entity_id` / `group_links`, placements' `sendable_interactions`, `ui_bindings[].buttons[]` (node,
+interaction, `rect_px`) with `image_size_px`, `state_types[].transitions` / `linked`, and combined renders (two pinned
+states of different types whose own renders differ from the default; the light panel's `LightsAlarm + LightSwitchAlarm`
+shows only Emergency selected). C2 renders 305 → 390.
+
+**Viewer.** The floor panel's mechanism, not a copy: `FSCFloorPanel` has a kind (`FloorSelect`, our list; `Buttons`, the
+game's render), options in content or image coordinates, the same aim (ray → face UV → option), highlight (a frame around
+the node, our drawing, in the pads' `Selected` role), E (`PressFloorPanel`), HUD prompt and `sc.Lift.PanelAim`. A Buttons
+panel draws the exporter's render of its current state into its face's render target. It is built for a face whose every
+node sends a tag a light group it drives receives: the C2's four light panels (`LIGHT_PANELS faces=49 operable=4`); door
+pads (their door button is the door interaction) and kiosks stay as they were. `PressButtonPanel` (SCLightControl.cpp)
+applies the chain above; `FSCLightImporter::ApplyState` puts a light's state block on (intensity by the import's model,
+colour); a light without that state keeps what it shows.
+
+**Result** (the hold panel, 4.6 × 8.1 cm beside the front door's interior panel; shots `c-*`, enlarged in `c-*-crop`):
+
+| Row | `LIGHT_GROUP_STATE LG_Hold` | candela sum (64 lights) | hold shot mean luminance (all / upper / lower) | panel render |
+|---|---|---|---|---|
+| before | as imported (defaultState) | 1,142,894 | 45.9 / 60.8 / 30.9 | default (On selected) |
+| Emergency | emergencyState, 64 changed | 416,529 | 32.8 / 44.5 / 20.9 (red) | `…lightsalarm__…lightswitchalarm` (Emergency selected) |
+| Auxiliary | auxiliaryState, 64 changed | 449,708 | 38.8 / 49.9 / 27.5 | `…lightswitchlow` (Auxiliary selected) |
+| On | defaultState, 64 changed | 1,142,894 | 45.9 / 60.6 / 31.0 | default |
+
+The crosshair frame shows on the aimed row (`c-*-1-aimed-crop`), the selected row on the pressed one (`c-*-2-pressed-crop`).
+On the owner's note "the alert red appears only in the alert state": in the data the hold's `defaultState` has five deep-red
+lights too (`LG_Hold-007`, `-040`, `-041`, `-052`, `-065`, red in every state); most of the red is `emergencyState` (hold
+31 red lights, top deck 47). The panel's own render shows no red in any state.
+
+**Tests.** `SCBridge.Doors.RestStateAndToggle`, `SCBridge.Panels.ButtonPanel`, `SCBridge.Reader.C2FixesFields`
+(synthetic); exporter tests on LIVE 4.10.2 (door state, port links, XML loadout panels, light groups and panels).
+
+### Review (Terra + Astra, `out/c2-fixes/review/`)
+
+Terra (gpt-6.1-terra, xhigh) and Astra (gpt-6.2-astra, high) on `repo.diff` / `submodule.diff` (answers `terra-review.md`,
+`astra-code-review.md`); the fixes are in `repo-after-fixes.diff` / `submodule-fixes.diff` (exporter `7e856af6`,
+`b1c338d7`, `c238e73c`; the magazine `f782be30`). Fixed once:
+- **A tick cycle** (Astra, high): `UMovementComponent::bTickBeforeOwner` (default true) made the new "movement after the
+  character" edge a cycle the engine resolved by dropping one direction; the movement no longer ticks before its owner.
+- **Riders** (both, high): a rider is now one whose movement base is the carriage or that stands on a carriage collider
+  (a trace against the carriage's own colliders within the step height), not any capsule in the carriage's box.
+- **Cargo access** (both, high): a ship's hold is opened for each transfer as its doors stand; the doors the rule opens or
+  finds opening are waited for by their playback (not a clip-length estimate); a door closed since (its pad, a reset)
+  makes the hold Closed again; a grid's own mechanism is driven alongside; the public grid request opens an access-rule
+  grid; on a rig carrying several doors the door whose open fragment clears the hold is the one opened.
+- **Doors** (Astra): a rig with door data is a door by its own tags (a single-procedural door without a Close clip
+  included); a closed door with data holds its close fragment's end (end of play, so a backwards clip's frame 0) rather than
+  trusting the bind pose, and a state no fragment poses is not recorded; a door turned around keeps its exact fractional
+  playhead, and a switch to the other clip refines the nearest frame to a tenth.
+- **Light panels** (both): lights and panels are matched by (interior, group id); every panel of a group follows the
+  group whatever changed it; Off keeps a light off (as at import); a light panel is operable without other state renders.
+- **Exporter** (both): the root's own XML loadout and nested XML loadouts are read, a nested loadout overrides its item's
+  class default port by port; transitions keep their source state (`from`) and the viewer evaluates them from the current
+  state; light-group interactions are evaluated from the group at rest; every pair of two bound state types is rendered
+  (C2 1364 renders, `prerender_ui` 167 s; 60 combined images written, the pads' PowerLost + CanOverride among them); the
+  extinguisher's magazine takes no geometry (a lone item whose port selects none of its variants: the data's empty root).
+
+Not fixed, with the reason:
+- **Ignores per component, not per region** (both, high, partly): the rider rule ignores whole colliders the leg passes
+  (the C2's hull, the shaft walls, the hold slab) while a capsule stands on the moving carriage; a rider walking on the
+  carriage during a leg could pass into one. Scoping the exemption to the carried displacement needs a movement component
+  of our own (the based move and the floor check apart from walking); recorded as open.
+- **Environment state snaps** (Terra, medium): `FSCEnvironment::SetState` poses environments, which have no door
+  interactions (exploration is built for the published vehicle only), so there is no door bookkeeping to disagree.
+
+### Open
+
+- Door pads' light shelves (`LightsLow` / `LightsAlarm` on loadout pads) are not operated: the pad's E is its door.
+- Light styles (`light_style`, the emergency waveform) and emissive surfaces do not follow the light state.
+- The hold panel's `LightState` follows the group by a reading of the tag tree (`/State/<family>/<state>`); the group's
+  own state tags are not exported.
+- A rider walking on the carriage during a leg can pass into a collider the leg passes (review, above).
+- `sc.Screens.States` pins do not apply to light panels (their face is drawn).
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:

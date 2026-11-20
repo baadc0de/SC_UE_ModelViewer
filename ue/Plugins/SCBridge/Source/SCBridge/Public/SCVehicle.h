@@ -43,6 +43,30 @@ struct FSCScreenFace
     FString Pinned; // sc.Screens.States: a state held whatever the door does ("" = follow the door)
     TWeakObjectPtr<UMaterialInterface> Custom; // SetScreenFaceMaterial: other content, kept until cleared
 };
+/** Where a fragment's clips start (ASCVehicle::PlayFragmentAt). */
+enum class ESCFragmentStart : uint8
+{
+    Begin,       // at the clip's start in its direction of play (frame 0 forward, the last frame backward)
+    CurrentPose, // at the frame whose pose is nearest the rig's current pose (a door turned around mid-stroke)
+    HoldFirst,   // held at the start of play (frame 0 forward, the last frame for a clip played backwards)
+    HoldLast,    // held at the end of play (the last frame forward, frame 0 backwards)
+};
+/** A door's data (`door`, `item_port_links`) by its rig, collected at import (ASCVehicle::DoorRecords). */
+struct FSCDoorRecord
+{
+    FSCDoorTiming Door;
+    TArray<FSCItemPortLink> PortLinks;
+};
+/** A light group of an interior (`interiors[].entities[]`, kind `light_group`): what it receives and the lights it holds
+ *  (FSCImportedLightState::GroupEntityId). */
+struct FSCLightGroup
+{
+    int32 Interior = INDEX_NONE;
+    FString EntityId, Name;
+    TArray<FString> Links;
+    TArray<FSCLightGroupInteraction> Interactions;
+    FString LightState; // the light state the group was last set to ("" = as imported)
+};
 struct FSCClipPlayback
 {
     TWeakObjectPtr<USCRigComponent> TargetRig;
@@ -102,8 +126,35 @@ public:
     int32 DoorForRig(const USCRigComponent* Rig) const;
     /** Whether the last tag played for Fragment on Rig (nullptr: the untargeted orbit-UI toggle) is Open. */
     bool IsFragmentOpen(FName Fragment, const USCRigComponent* Rig = nullptr) const;
-    /** SpeedScale multiplies the fragment's own clip speed (a door's DoorAnimationSpeed). */
-    bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target, float SpeedScale = 1.f);
+    /** SpeedScale multiplies the fragment's own clip speed (a door's DoorAnimationSpeed; negative plays it backwards). */
+    bool PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target, float SpeedScale = 1.f, ESCFragmentStart Start = ESCFragmentStart::Begin);
+    /** The frame of Clip (bound to Binding) whose pose is nearest Local (rotation angle in radians plus translation in
+     *  metres, summed over the clip's tracks); searched from the start of play (frame 0 forward, the last frame backward),
+     *  so a tie keeps the start. */
+    static double NearestClipFrame(const FSCImportedClip& Clip, const FSCClipBinding& Binding, const TArray<FTransform>& Local, bool bBackward);
+    // ------------------------------------------------------------------------------------- doors (data state, C2 fixes)
+    /** Door data by rig (`door`, `item_port_links` of the instance that carries the rig), filled at import. */
+    TMap<TWeakObjectPtr<const USCRigComponent>, FSCDoorRecord> DoorRecords;
+    /** Rigs of loadout items by port path (SCCargoRecords::PortKey): where `item_port_links` deliver. */
+    TMap<FString, TWeakObjectPtr<USCRigComponent>> PortRigs;
+    /** Open (true) or close door Index through its own fragments, from the rig's current pose (never a snap): an open/close
+     *  door plays its open or close tag; a single-procedural door plays its transition forwards to open and backwards to
+     *  close. SpeedScale <= 0: the door's DoorAnimationSpeed. Then the door's `item_port_links` for that verb are delivered
+     *  (Depth bounds a link cycle). Records the door's state for IsDoorOpen and its pads. */
+    bool PlayDoor(int32 Index, bool bOpen, float SpeedScale = 0.f, int32 Depth = 0);
+    /** Every door at its authored spawn state (`is_opened`, closed without data): a single-procedural door holds its
+     *  transition at the start (closed) or the end (open); an open/close door opened in the data holds its open fragment's
+     *  end; a closed one keeps the bind pose (the start of its open fragment). Also after ResetPose. Returns the doors posed. */
+    int32 ApplyDoorRestPoses();
+    // -------------------------------------------------------------------------------------- light groups (C2 fixes)
+    TArray<FSCLightGroup> LightGroups;
+    /** The light groups an entity of Interior with these EntityLinks drives: a group it links, or one that links an entity
+     *  it links too (the chipset both a panel and its group name). */
+    TArray<int32> LightGroupsLinkedBy(int32 Interior, const TArray<FString>& Links) const;
+    /** Deliver a linking tag to a group: the interaction it receives with that tag, and its light state on every light of
+     *  the group (FSCLightImporter::ApplyState). Returns the lights changed; OutState the group's light state ("" when the
+     *  group receives no such tag). */
+    int32 DeliverLightGroupTag(int32 Group, const FString& LinkingTag, FString* OutState = nullptr);
 
     // ------------------------------------------------------------------------------------------ WP-P5 lifts and links
     /** One lift per package `lifts[]` record, ticked by the vehicle. */
@@ -135,6 +186,22 @@ public:
     int32 RedeliverDoorLinks(int32 Interior, const FString& SourceEntityId, FName Interaction);
     /** The lift whose carriage carries component C (C or an ancestor is its anchor), INDEX_NONE otherwise. */
     int32 LiftCarrying(const USceneComponent* C) const;
+    /** C2 fixes (rider retention): the lift whose moving carriage carries a capsule whose feet are at Bottom: its movement
+     *  base is part of the carriage, or one of the carriage's colliders lies under the feet within FootReach (cm); INDEX_NONE
+     *  without. The stand-in for membership of the carriage's own physics grid. */
+    int32 LiftRiddenBy(const FVector& Bottom, const UPrimitiveComponent* Base = nullptr, double FootReach = 50.0) const;
+    /** What lift Lift's current leg passes through: the colliders that block the player inside the box of the carriage's
+     *  colliders swept from where it stands to the leg's stop, other than the carriage and its riders, door rigs (the leg
+     *  check decides on doors) and pawns. Its riders are carried through them (the game carries the members of the
+     *  carriage's grid). Computed once per leg. */
+    const TArray<TWeakObjectPtr<UPrimitiveComponent>>& LiftPathObstacles(int32 Lift);
+    struct FLiftPath
+    {
+        int32 From = INDEX_NONE, To = INDEX_NONE;
+        double Clock = -1;
+        TArray<TWeakObjectPtr<UPrimitiveComponent>> Obstacles;
+    };
+    TMap<int32, FLiftPath> LiftPaths;
     /** Door helpers by rig (the rig's door interaction, BuildExploration). */
     bool PlayDoorRig(USCRigComponent* Rig, bool bOpen, float Speed);
     bool IsRigOpen(const USCRigComponent* Rig) const;
@@ -149,6 +216,14 @@ public:
      *  screen face gets a drawn floor list there (the face joins ScreenFaces, its material set by SetScreenFaceMaterial).
      *  Texture: a decoded package image by path (the label masks). */
     void BuildFloorPanels(TArray<FSCBlankScreenFace>& Blank, TFunctionRef<UTexture2D*(const FString&)> Texture);
+    /** C2 fixes, the same mechanism for the game's own panel UIs: a face showing an operating panel's render whose binding
+     *  has clickable nodes (a light panel) becomes a Buttons panel of FloorPanels: the render of the owner's current state
+     *  drawn into a render target on the face, the node under the crosshair framed, E sends its interaction. */
+    void BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UTexture2D*(const FString&)> Texture);
+    /** E on a Buttons panel's option: the owner's own state machine takes the interaction (`transitions`), its linking tag
+     *  goes to the light groups the panel drives (DeliverLightGroupTag), and the panel's linked state follows the group
+     *  (`linked`). Returns the lights changed (or 1 when only the panel's state changed). */
+    int32 PressButtonPanel(int32 Panel, int32 Option);
     /** A lift panel's floor options: its interactions whose links ask one carriage for a stop (`From Elevator call <N>`),
      *  labelled with the stop's name, from the highest stop down; empty for a call button or a panel reaching two lifts. */
     TArray<FSCFloorPanelOption> FloorPanelOptions(const FLiftPanel& Panel, int32& OutLift, bool* bOutSeveralLifts = nullptr) const;
@@ -238,7 +313,8 @@ public:
     TArray<FSCClipPlayback> HeldPlayback; // bounded by catalogue size; no idle evaluation
     uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
 private:
-    bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {}, USCRigComponent* Target = nullptr);
+    bool StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes = {}, USCRigComponent* Target = nullptr,
+                   double StartFrame = -1);
     /** WP-A1: play the audio events of P's clip bindings crossed between Previous and P.Frame. */
     void FireClipAudio(FSCClipPlayback& P, double Previous);
     void MarkDirty(int32 ClipIndex);
