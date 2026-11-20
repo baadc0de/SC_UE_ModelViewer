@@ -146,18 +146,18 @@ FString ASCVehicle::DoorOrderRefusal(int32 Index, ESCShipDoorAction Action, FNam
     const FShipDoor* Info = ShipDoors.IsValidIndex(Index) ? &ShipDoors[Index] : nullptr;
     if (LiftDrivenRigs.Contains(Doors[Index].Rig.Get())) return TEXT("Lift-controlled door");
     const USCShipLinkSubsystem* ShipLink = USCShipLinkSubsystem::Get(this);
-    const ESCShipRole Role = ShipLink ? ShipLink->RoleOf(Actor, this) : ESCShipRole::None;
+    const ESCShipRole ActorRole = ShipLink ? ShipLink->RoleOf(Actor, this) : ESCShipRole::None;
     const bool bLocalInside = LocalUse.IsSet() && IsInsideLightArea(LocalUse.GetValue());
     if (Info && Info->bCargoRelock)
     {
-        if (Action == ESCShipDoorAction::Open && Role != ESCShipRole::Owner) return TEXT("Locked");
+        if (Action == ESCShipDoorAction::Open && ActorRole != ESCShipRole::Owner) return TEXT("Locked");
         if (Action == ESCShipDoorAction::Lock || Action == ESCShipDoorAction::Unlock) return TEXT("Door in use by cargo");
     }
     if (Action == ESCShipDoorAction::Close)
         if (const auto* Cargo = USCCargoSubsystem::Get(this); Cargo && Cargo->IsAccessDoorBusy(this, Index))
             return TEXT("Door in use by cargo");
     if (Info && Info->bSecurePending && Action == ESCShipDoorAction::Open) return TEXT("Securing");
-    return FSCShipDoorPolicy::Refusal(Role, Action, IsDoorLocked(Index),
+    return FSCShipDoorPolicy::Refusal(ActorRole, Action, IsDoorLocked(Index),
         Info ? Info->Group : ESCShipDoorGroup::Other, bLocalInside);
 }
 

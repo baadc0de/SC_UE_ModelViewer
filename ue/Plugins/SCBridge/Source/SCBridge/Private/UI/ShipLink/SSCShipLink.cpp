@@ -110,7 +110,7 @@ TSharedRef<SWidget> SSCShipLink::Build()
                 Members.Add(Id);
         if (Members.IsEmpty()) continue;
         TSharedRef<SHorizontalBox> Heading = SNew(SHorizontalBox);
-        Heading->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Txt(Caps(FSCShipDoorPolicy::GroupName(Group)), Section(), Ink())];
+        Heading->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Txt(FText::FromString(Caps(FSCShipDoorPolicy::GroupName(Group))), Section(), Ink())];
         Heading->AddSlot().AutoWidth().Padding(4, 0)[Action(LabelText(TEXT("OPEN ALL")), [M, Group] { M->OrderGroup(Group, ESCShipDoorAction::Open); })];
         Heading->AddSlot().AutoWidth().Padding(4, 0)[Action(LabelText(TEXT("CLOSE ALL")), [M, Group] { M->OrderGroup(Group, ESCShipDoorAction::Close); })];
         Heading->AddSlot().AutoWidth().Padding(4, 0)[Action(LabelText(TEXT("LOCK ALL")), [M, Group] { M->OrderGroup(Group, ESCShipDoorAction::Lock); })];

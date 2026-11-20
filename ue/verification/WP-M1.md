@@ -1,0 +1,32 @@
+# WP-M1 verification
+
+## Win64 development build and synthetic tests
+
+```powershell
+$project = (Resolve-Path 'ue/SCViewer/SCViewer.uproject').Path
+& "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Build/BatchFiles/Build.bat" SCViewerEditor Win64 Development "-Project=$project" -WaitMutex
+& ../SC_UE_ModelViewer-wp-Q1/ue/scripts/rpc/automation.ps1 -Project $project -Filter SCBridge.ShipLink,SCBridge.Cargo,SCBridge.Doors,SCBridge.Panels,SCBridge.Lift,SCBridge.Reader.C2FixesFields
+```
+
+Build succeeded. The first cold build surfaced two compile fixes. The incremental rebuild finished eight actions
+in 6.29 seconds. All 88 selected tests passed in one NullRHI process, which exited normally after 15.46 seconds.
+
+## Live state and UI
+
+One Win64 D3D12 game-mode process, 1280 × 720, with `-SCDefaults` and the existing export cache. Waited on
+`/state` for a ready archive in the procedural Viewer map, then issued
+`/load {"entity":"DRAK_Cutlass_Black","wait":false}` in the same process. Waited on the loaded entity and phase
+before starting the feature driver.
+
+```powershell
+& ue/scripts/rpc/ship-link.ps1 -Port 8787 -TimeoutSeconds 60 -Screenshots
+```
+
+- Procedural Viewer ready in 10.73 s. Cutlass, one owner pairing and 12 door rows ready in 42.68 s from launch.
+- Door 0 classified Exterior with room-volume evidence. Its lock held it stationary. An unpaired open was refused.
+  Owner unlock/open, playback completion, Secure Ship and authored light Off/on all passed in 20.54 s.
+- Screenshots were written to `out/M1-cutlass/ship-link-locked.png` and `out/M1-cutlass/ship-link-opening.png`.
+  Viewer exited with code 0.
+
+Cutlass covered placement, state, remote door access, room groups, secure completion and real light modes. Full C2/XL
+acceptance is still pending for a door with a linked operating pad, local owner egress, and cargo access through a locked hold.
