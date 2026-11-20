@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Camera/CameraComponent.h"
+#include "SCExploration.h"
 #include "SCFirstPersonCharacter.generated.h"
 class ASCVehicle;
 class USpotLightComponent;
@@ -50,7 +51,8 @@ enum class ESCFirstPersonAction : uint8
     Fire,                                              // held, player body: the drawn weapon fires while down
     Orbit,                                             // held: third-person camera orbits the player while down;
                                                        // two presses within DoubleTapSeconds put it behind again
-    MobiGlas                                           // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    MobiGlas,                                          // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    MenuUp, MenuDown, MenuSelect                       // pressed, teleport menu open: move the selection / teleport there
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),
@@ -86,6 +88,37 @@ public:
     UPROPERTY(BlueprintReadOnly) int32 CapsuleHits = 0;
     /** Spawn index used by the last successful teleport (INDEX_NONE before the first). */
     UPROPERTY(BlueprintReadOnly) int32 CurrentSpawn = INDEX_NONE;
+
+    /** Hangar waypoints (SCHangarWaypoints.h): the environment the character explores beside its vehicle. Null: the
+     *  viewer's current environment (USCViewerSubsystem::GetEnvironment). Tests set it. */
+    TWeakObjectPtr<ASCVehicle> HangarOverride;
+    ASCVehicle* GetHangar() const;
+    /** The hangar's waypoints where a standing capsule fits on a floor (ResolveSpawn), re-checked whenever the hangar or
+     *  its waypoints change; transforms relative to the hangar. Rejected ones are logged (HANGAR_WAYPOINT_REJECT). */
+    const TArray<FSCSpawnPoint>& GetHangarSpots();
+    /** Check the standing places again on the next GetHangarSpots (the menu opening, sc.FP.Spawns). */
+    void InvalidateHangarSpots() { HangarListedRevision = INDEX_NONE - 1; }
+    /** Incremented on each check of the standing places (the HUD rebuilds its rows on a change). */
+    int32 HangarSpotsRevision = 0;
+    bool TeleportToHangar(int32 Index);
+    /** The teleport menu: ship spawns, then hangar places, each section under its heading (SCTeleportMenu::Rows). */
+    TArray<FSCTeleportRow> TeleportRows();
+    bool TeleportToRow(int32 Row);
+    /** The label of the destination Row names now (with the row, a destination's identity: the rows renumber when a
+     *  list changes while the menu is open). */
+    FString DestinationLabel(const FSCTeleportRow& Row);
+    /** The row of a destination picked as (Row, Label): the same section and index with the same label, else the row of
+     *  that section with that label; INDEX_NONE when it is gone. */
+    int32 FindDestination(const FSCTeleportRow& Row, const FString& Label);
+    /** A clicked row (the HUD keeps what it showed): teleports there if it is still listed. */
+    bool TeleportToDestination(const FSCTeleportRow& Row, const FString& Label);
+    /** The highlighted destination (Up / Down or W / S move it across both sections, Enter teleports there) and its
+     *  current row (INDEX_NONE when none). */
+    FSCTeleportRow TeleportSelection;
+    FString TeleportSelectionLabel;
+    int32 TeleportSelectionRow();
+    void SetTeleportMenuOpen(bool bOpen);
+    void MoveTeleportSelection(int32 Delta);
 
     /** The single setter for body/locomotion dimensions; nothing else writes these values. */
     void SetProfile(const FSCCharacterProfile& InProfile);
@@ -171,6 +204,10 @@ public:
     bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre) const { bool C; return ResolveSpawn(Hint, CapsuleCentre, C); }
 private:
     FSCCharacterProfile Profile;
+    TArray<FSCSpawnPoint> HangarSpots;
+    TWeakObjectPtr<ASCVehicle> HangarListed;
+    int32 HangarListedRevision = INDEX_NONE;
+    TWeakObjectPtr<ASCVehicle> HangarRecoveryFor; // the hangar whose floors RecoveryZ already lies below
     FString TorchSource;
     TWeakObjectPtr<ASCVehicle> TorchKit;
     FString TorchItem;

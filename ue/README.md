@@ -563,6 +563,35 @@ replaced on each use, never ranked). The first-person start ranks
 Open/Close tag pair on a rig the clip binds; their open state is the tag last played
 on that rig instance.
 
+**Teleport menu (T).** Two sections, each a heading over its own scrolling list (both headings stay in view): **Ship**
+(the vehicle's spawns above) and **Hangar** (the loaded environment's places, kind `Hangar`). Up / Down (or W / S) move the
+highlight across both sections (headings skipped, wrapping), Enter teleports there, a click teleports to the clicked row; T
+or Esc closes. Movement keys pressed while the menu is open are ignored (nothing walks after it closes). The highlight and a
+clicked row name their destination (section, index, label), so a list that changes while the menu is open does not send
+the player elsewhere. Rows carry the `sc.FP.Spawns` numbers (ship spawns first, then the hangar's places).
+
+**Hangar waypoints** (`SCHangarWaypoints.h`; chosen at the environment's import, `FSCImportOptions::bEnvironment`, placed by
+`ASCVehicle::BuildWaypoints` in the presented pose). The hangars carry no player spawn, nav or landing-point entities the
+export keeps (the `.soc` of `hangar_xltop_001` / `hangar_medfrnt_001` has no SpawnPoint / NavPoint / PlayerSpawn entity; its
+`LandingArea` is a geometry-less entity the export drops), so the waypoints are the places a player walks to, chosen by
+their DataCore components, never by names:
+
+| Source (`source=`) | Record | Why it is a place |
+| --- | --- | --- |
+| `transit_gateway` | `interiors[].entities[]` kind `transit_gateway` (`TransitGatewayParams`) | where the personnel elevator lets the player into the hangar (the arrival); it stands for its container's call panel (a transit panel: an operated UI whose owner is not an attachable item); other panels there stay places |
+| `panel` | a placement with an operating panel's UI (`FSCUiBinding::IsOperatingPanel`: ship-selector and freight-elevator kiosks, transit panels) | a screen the player walks up to and operates |
+| `inventory` | an interior `inventory_containers[]` entry (`InventoryContainer`) | the item banks and the freight elevator's cargo grid (at its floor centre) |
+| `ship_pad` | the ship elevator (`FSCEnvironment::FindShipBay`) | the pad the ship stands on, at its top centre |
+
+Labels are the entity names (an inventory container's: its entity class; the pad's: its mesh) with underscores as spaces,
+without the editor's instance counter (`-029`) or a mesh LOD suffix; repeated labels are numbered `#1`, `#2`... A waypoint
+is listed only where a standing capsule fits on a walkable floor around it (the teleport's own spawn search,
+`HANGAR_WAYPOINT_REJECT` otherwise; checked again whenever the menu opens and on `sc.FP.Spawns`, since the ship and cargo
+move); the waypoints are rebuilt when the environment's state changes (`sc.Environment.State`); doors are not places of their own here (no hangar placement carries `door` data). A cooked
+environment keeps the waypoints its cook saved (`Waypoints` is saved with the actor; `present_environment` builds them
+before `cook_environment` bakes the rigs); cook format 8 marks levels cooked before as STALE (re-cook). An export without
+`ui_bindings[].interaction_distance` (before cache format 40) warns at import and is refused by the cook scripts.
+
 **Doors (C2 fixes, cache format 39).** A door's own data (`door` on placements and loadout children: `SCItemDoorParams`)
 decides how it moves and makes it a door even without a Mannequin Open/Close pair: it spawns in its authored state
 (`is_opened`; the C2's doors are all closed) at that state's end pose (the open fragment's end, the close fragment's end,
@@ -576,7 +605,12 @@ plays even when it starts mid-stroke. A raw clip on a door's channels (`sc.Vehic
 when it is the door's own fragment, else leaves it unknown (read closed), and `ResetPose` clears pending sensor exits and
 re-opens the doors of a lift that was opening. And the
 door's `item_port_links` are delivered (the C2's front hatch opens the front doors
-and the front ramp). A panel in a door's loadout operates that door and its face follows it. Without door data a door is
+and the front ramp). A panel in a door's loadout operates that door and its face follows it. A door panel is operated from as far as its own UI
+allows: `ui_bindings[].interaction_distance` (cache format 40, the owner's `UIRenderToTextureEntityComponentParams.interactionDistance`,
+metres; most door pads 2, the C2's ramp and front-hatch pads 15), never less than the 3 m reach: the C2's exterior pads sit
+on the outside of the closed ramp and hatch, 3.3-4.1 m from a standing player's eye, out of the 3 m reach (the ray was cut
+short: nothing happened). The view ray's first hit must be the pad (`ASCVehicle::PanelReach`); every E press logs
+`FP_INTERACT door via=panel|rig|nearest|none hit dist reach toggled label`. Without door data a door is
 the Mannequin Open/Close pair at its bind pose, as before. `sc.Doors.Pose [index]` logs a door's joint, a point on its
 frame, its state and the clip playing (`DOOR_POSE`); every door start logs its clip and start frame (`DOOR_CLIP_START …
 start=nearest_pose|playhead`); `sc.Doors.Trace <index|-1>` logs one door every tick while it moves (`DOOR_TICK`: state,
@@ -745,8 +779,8 @@ Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mod
 
 | Command | Effect |
 | --- | --- |
-| `sc.FP.Spawns` | log spawn list (`FP_SPAWN_LIST index kind pos label`) and interactions (`FP_DOOR_LIST`) |
-| `sc.FP.Spawn <index\|kind[:n]>` | enter first person if needed, teleport to spawn `index` or the n-th spawn of `kind` |
+| `sc.FP.Spawns` | log spawn list (`FP_SPAWN_LIST index kind pos label`; then the hangar's places, `kind=Hangar hangar=<n> source= pos=` (hangar-relative) `world=`) and interactions (`FP_DOOR_LIST`) |
+| `sc.FP.Spawn <index\|kind[:n]\|hangar:n>` | enter first person if needed, teleport to spawn `index` (an index past the ship's spawns is a hangar place), the n-th spawn of `kind`, or the n-th hangar place |
 | `sc.FP.Look <yaw> <pitch>` | absolute view, degrees, relative to the vehicle |
 | `sc.FP.Move <fwd> <right> <seconds> [run 0\|1] [up]` | hold movement input (-1..1) for a duration |
 | `sc.FP.Interact` / `sc.FP.Door <index>` | E on the focused interaction / toggle one by index |
@@ -754,6 +788,8 @@ Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mod
 | `sc.FP.Crouch 0\|1`, `sc.FP.Jump`, `sc.FP.Torch 0\|1`, `sc.FP.Noclip 0\|1` | as the keys (a refused noclip exit logs `FIRST_PERSON_NOCLIP refused=1`) |
 | `sc.FP.TorchLight 1\|0` | the torch is the kit's game flashlight (1, default once the body attaches) or the viewer's fallback beam (0), for A/B; logs `FP_CMD torch_light source=...` |
 | `sc.FP.Menu 0\|1` | teleport menu |
+| `sc.FP.Tap <key>` | press and release a key of the key table (`Up`, `Down`, `Enter`, `T`...); logs `FP_KEY handled menu selection row` |
+| `sc.FP.AimAt <x y z>` | keep the view on a vehicle-relative point (cm) until mouse look |
 | `sc.FP.Teleport <x y z>` / `sc.FP.Place <x y z>` | vehicle-relative floor hint (checked) / raw capsule placement (noclip tests) |
 | `sc.FP.Embed [cm]` | noclip on, capsule centre pushed this far into the surface under the crosshair (noclip-exit refusal test) |
 | `sc.FP.Where`, `sc.FP.Probe [cm]` | log state (`FP_WHERE`) / what the view ray hits and the focused interaction (`FP_PROBE`) |

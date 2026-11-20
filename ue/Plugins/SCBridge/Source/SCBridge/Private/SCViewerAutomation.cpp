@@ -166,16 +166,33 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         Commands.Add(MakeUnique<FAutoConsoleCommand>(Name, Help,
             FConsoleCommandWithArgsDelegate::CreateLambda([Body](const TArray<FString>& Args) { Body(Args); })));
     };
-    Add(TEXT("sc.FP.Spawns"), TEXT("sc.FP.Spawns: log the spawn list (index, kind, label, vehicle-relative location)"), [Weak](const TArray<FString>&) {
+    Add(TEXT("sc.FP.Spawns"), TEXT("sc.FP.Spawns: log the spawn list (index, kind, label, vehicle-relative location; then the hangar's places, kind Hangar)"),
+        [Weak](const TArray<FString>&) {
         ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
         for (int32 I = 0; V && I < V->SpawnPoints.Num(); ++I)
             UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_SPAWN_LIST index=%d kind=%s pos=%s label=\"%s\""), I,
                    *V->SpawnPoints[I].Kind.ToString(), *V->SpawnPoints[I].Transform.GetLocation().ToCompactString(), *V->SpawnPoints[I].DisplayName);
+        // The hangar's standing places (first person: those a capsule fits on), numbered after the ship's spawns; pos is
+        // relative to the hangar, world= where it is.
+        if (ASCFirstPersonCharacter* C = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr; V && C && C->GetHangar())
+        {
+            C->InvalidateHangarSpots(); // checked now, where the ship and cargo stand
+            const TArray<FSCSpawnPoint>& Spots = C->GetHangarSpots();
+            for (int32 I = 0; I < Spots.Num(); ++I)
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_SPAWN_LIST index=%d kind=%s hangar=%d source=%s pos=%s world=%s label=\"%s\""),
+                       V->SpawnPoints.Num() + I, *Spots[I].Kind.ToString(), I, *Spots[I].Source.ToString(), *Spots[I].Transform.GetLocation().ToCompactString(),
+                       *C->GetHangar()->GetActorTransform().TransformPosition(Spots[I].Transform.GetLocation()).ToCompactString(), *Spots[I].DisplayName);
+        }
+        else if (const ASCVehicle* Env = Weak.IsValid() ? Weak->GetEnvironment() : nullptr)
+            for (int32 I = 0; I < Env->Waypoints.Num(); ++I) // not in first person: the hangar's waypoints, unchecked
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_HANGAR_WAYPOINT index=%d source=%s pos=%s label=\"%s\""), I,
+                       *Env->Waypoints[I].Source.ToString(), *Env->Waypoints[I].Transform.GetLocation().ToCompactString(), *Env->Waypoints[I].DisplayName);
         for (int32 I = 0; V && I < V->Doors.Num(); ++I)
             UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_DOOR_LIST index=%d fragment=%s open=%d label=\"%s\""), I,
                    *V->Doors[I].Fragment.ToString(), V->IsDoorOpen(I), *V->Doors[I].DisplayName);
     });
-    Add(TEXT("sc.FP.Spawn"), TEXT("sc.FP.Spawn <index|kind[:n]>: enter first person if needed and teleport to a spawn"), [Weak](const TArray<FString>& Args) {
+    Add(TEXT("sc.FP.Spawn"), TEXT("sc.FP.Spawn <index|kind[:n]|hangar:n>: enter first person if needed and teleport to a spawn or a hangar place"),
+        [Weak](const TArray<FString>& Args) {
         USCViewerSubsystem* S = Weak.Get();
         ASCVehicle* V = S ? S->GetVehicle() : nullptr;
         if (!V || Args.IsEmpty()) return;
@@ -184,20 +201,28 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
             UE_LOG(LogSCViewerAutomation, Warning, TEXT("FP_CMD spawn ok=0 reason=first_person_refused"));
             return;
         }
-        int32 Index = INDEX_NONE;
+        ASCFirstPersonCharacter* C = S->GetFirstPerson();
+        int32 Index = INDEX_NONE, Hangar = INDEX_NONE;
+        FString Kind = Args[0], Nth = TEXT("0");
+        Args[0].Split(TEXT(":"), &Kind, &Nth);
         if (Args[0].IsNumeric())
+        {
+            // One numbering: the ship's spawns, then the hangar's places (as sc.FP.Spawns lists them).
             Index = FCString::Atoi(*Args[0]);
+            if (Index >= V->SpawnPoints.Num()) { Hangar = Index - V->SpawnPoints.Num(); Index = INDEX_NONE; }
+        }
+        else if (Kind.Equals(FSCSpawnKind::Hangar.ToString(), ESearchCase::IgnoreCase))
+            Hangar = FCString::Atoi(*Nth);
         else
         {
-            FString Kind = Args[0], Nth = TEXT("0");
-            Args[0].Split(TEXT(":"), &Kind, &Nth);
             TArray<int32> Matches;
             for (int32 I = 0; I < V->SpawnPoints.Num(); ++I)
                 if (V->SpawnPoints[I].Kind.ToString().Equals(Kind, ESearchCase::IgnoreCase)) Matches.Add(I);
             if (Matches.IsValidIndex(FCString::Atoi(*Nth))) Index = Matches[FCString::Atoi(*Nth)];
         }
-        const bool OK = S->GetFirstPerson()->TeleportToSpawn(Index);
-        UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn arg=%s index=%d ok=%d"), *Args[0], Index, OK);
+        const bool OK = Hangar != INDEX_NONE ? C->TeleportToHangar(Hangar) : C->TeleportToSpawn(Index);
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn arg=%s index=%d hangar=%d ok=%d pos=%s"), *Args[0], Index, Hangar, OK,
+               *C->GetVehicleRelativeLocation().ToCompactString());
     });
     Add(TEXT("sc.FP.Look"), TEXT("sc.FP.Look <yaw> <pitch>: absolute view relative to the vehicle (degrees)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak); C && Args.Num() >= 2)
@@ -270,8 +295,26 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         }
     });
     Add(TEXT("sc.FP.Menu"), TEXT("sc.FP.Menu 0|1: show the teleport menu"), [Weak](const TArray<FString>& Args) {
-        if (auto* C = FirstPerson(Weak)) C->bTeleportMenuOpen = Flag(Args, 0, true);
+        if (auto* C = FirstPerson(Weak)) C->SetTeleportMenuOpen(Flag(Args, 0, true));
     });
+    Add(TEXT("sc.FP.Tap"), TEXT("sc.FP.Tap <key name>: press and release a key of the first-person key table (Up, Down, Enter, T, ...) and log the menu"),
+        [Weak](const TArray<FString>& Args) {
+            auto* C = FirstPerson(Weak);
+            if (!C || Args.IsEmpty()) return;
+            const FKey Key{FName(*Args[0])};
+            const bool bHandled = C->HandleKey(Key, true);
+            C->HandleKey(Key, false);
+            const TArray<FSCTeleportRow> Rows = C->TeleportRows();
+            const int32 Sel = C->TeleportSelectionRow();
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_KEY key=%s handled=%d menu=%d selection=%d row=%s:%d"), *Key.ToString(), bHandled,
+                   C->bTeleportMenuOpen, Sel, Rows.IsValidIndex(Sel) ? (Rows[Sel].Type == FSCTeleportRow::EType::Ship ? TEXT("ship") : Rows[Sel].Type ==
+                   FSCTeleportRow::EType::Hangar ? TEXT("hangar") : TEXT("heading")) : TEXT("-"), Rows.IsValidIndex(Sel) ? Rows[Sel].Index : -1);
+        });
+    Add(TEXT("sc.FP.AimAt"), TEXT("sc.FP.AimAt <x> <y> <z>: keep the first-person view on a vehicle-relative point (cm; mouse look ends it)"),
+        [Weak](const TArray<FString>& Args) {
+            if (auto* C = FirstPerson(Weak); C && C->Vehicle && Args.Num() >= 3)
+                C->HoldViewOn(C->Vehicle->GetRootComponent(), FVector(FCString::Atod(*Args[0]), FCString::Atod(*Args[1]), FCString::Atod(*Args[2])));
+        });
     Add(TEXT("sc.FP.Teleport"), TEXT("sc.FP.Teleport <x> <y> <z>: vehicle-relative floor hint (cm)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak); C && C->Vehicle && Args.Num() >= 3)
         {

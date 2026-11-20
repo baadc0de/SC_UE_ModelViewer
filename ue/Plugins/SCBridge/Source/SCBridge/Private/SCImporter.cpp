@@ -84,6 +84,7 @@ ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FSt
     Options.bHideEffectOnlyPlacements = true;
     Options.bInstanceRepeatedParts = true;
     Options.bPublish = false; // not the world's current vehicle
+    Options.bEnvironment = true;
     FSCImportResult Result;
     if (!FSCImporter::Import(Source, Options, Result)) UE_LOG(LogSCImport, Error, TEXT("IMPORT_FAILED %s"), *Result.Error);
     return Result.Vehicle.Get();
@@ -91,7 +92,9 @@ ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FSt
 FVector USCImportLibrary::PresentEnvironment(ASCVehicle* Environment, const FString& State, double FloorZ)
 {
     FSCEnvironment::SetState(Environment, State);
-    return FSCEnvironment::PlaceOnFloor(Environment, FloorZ, nullptr);
+    const FVector Offset = FSCEnvironment::PlaceOnFloor(Environment, FloorZ, nullptr);
+    if (Environment) Environment->BuildWaypoints(); // in the presented pose, while the rigs are alive (a cook saves them)
+    return Offset;
 }
 bool USCImportLibrary::VerifyPackage(UObject* Context, const FString& Folder, const FString& Tar)
 {

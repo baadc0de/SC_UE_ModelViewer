@@ -20,6 +20,8 @@
 #include "SCViewerSettings.h"
 #include "SCRigComponent.h"
 #include "Cargo/SCCargoRecords.h"
+#include "Cargo/SCCargoPlanner.h"
+#include "SCHangarWaypoints.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
 #include "Rendering/SkeletalMeshRenderData.h"
@@ -1362,6 +1364,7 @@ void FSCImportJob::FState::Assemble()
     V->PhysicsGridBounds.Init();
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
+    int32 PanelsWithoutReachField = 0;     // door panels of an export before cache format 40 (no interaction_distance)
     if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
     for (const auto& I : Manifest.Children)
     {
@@ -1388,7 +1391,16 @@ void FSCImportJob::FState::Assemble()
             for (USceneComponent* C = Placed.Anchor->GetAttachParent(); C; C = C->GetAttachParent())
                 if (auto* Rig = Cast<USCRigComponent>(C))
                 {
-                    if (V->DoorRecords.Contains(Rig) && V->DoorRecords[Rig].Door.bValid) V->DoorControls.Add(Placed.Anchor, Rig);
+                    if (V->DoorRecords.Contains(Rig) && V->DoorRecords[Rig].Door.bValid)
+                    {
+                        V->DoorControls.Add(Placed.Anchor, Rig);
+                        for (const FSCUiBinding& B : I.UiBindings)
+                            if (B.IsOperatingPanel() && !B.bPropagated) // the panel's own screen, not one it carries for another entity
+                            {
+                                V->SetPanelReach(Placed.Anchor, B.InteractionDistance);
+                                PanelsWithoutReachField += !B.bInteractionDistanceExported;
+                            }
+                    }
                     break;
                 }
     }
@@ -1421,6 +1433,10 @@ void FSCImportJob::FState::Assemble()
     TSharedPtr<FSCAudioScene> Audio = FSCAudioScene::Load(*Source, Manifest.ScenePath, AudioError);
     if (Audio) Audio->Vehicle = V;
     else UE_LOG(LogSCImport, Display, TEXT("AUDIO_NONE %s: %s"), *Manifest.ScenePath, *AudioError);
+    // Hangar waypoints (environments): the records the rule chooses, anchored per interior below, in the rule's order.
+    const TArray<FSCWaypointCandidate> WaypointCandidates = Options.bEnvironment ? SCHangarWaypoints::Select(Manifest) : TArray<FSCWaypointCandidate>();
+    TArray<FSCWaypointSource> WaypointSources;
+    WaypointSources.SetNum(WaypointCandidates.Num());
     for (int32 InteriorIndex = 0; InteriorIndex < Manifest.Interiors.Num(); ++InteriorIndex)
     {
         const FSCInterior& Interior = Manifest.Interiors[InteriorIndex];
@@ -1443,12 +1459,28 @@ void FSCImportJob::FState::Assemble()
         const int32 AreasBefore = V->LightAreas.Num();
         FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
         TMap<FString, FEntity> ById; // entity ids are unique within one container
-        for (const auto& P : Interior.Placements)
-            if (CanPlace(P))
+        TMap<int32, FEntity> ByPlacement;
+        for (int32 PlacementIndex = 0; PlacementIndex < Interior.Placements.Num(); ++PlacementIndex)
+            if (const auto& P = Interior.Placements[PlacementIndex]; CanPlace(P))
             {
                 FEntity Placed = Place(P, Container, bHelper, false);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
+                ByPlacement.Add(PlacementIndex, Placed);
             }
+        // Waypoints of this interior: a transit gateway at its entity frame (an anchor of its own: the entity has no
+        // geometry), a panel at its placement's anchor.
+        for (int32 WaypointIndex = 0; WaypointIndex < WaypointCandidates.Num(); ++WaypointIndex)
+        {
+            const FSCWaypointCandidate& Candidate = WaypointCandidates[WaypointIndex];
+            if (Candidate.Interior != InteriorIndex) continue;
+            WaypointSources[WaypointIndex].Source = Candidate.Source;
+            WaypointSources[WaypointIndex].Label = Candidate.Label;
+            if (Candidate.Source == ESCWaypointSource::TransitGateway && Interior.Entities.IsValidIndex(Candidate.Index))
+                WaypointSources[WaypointIndex].Anchor = NewAnchor(TEXT("Waypoint_") + Interior.Entities[Candidate.Index].EntityName, Container,
+                                                      ContainerFrame(Interior.Entities[Candidate.Index].LocalMatrix, bHelper));
+            else if (const FEntity* Placed = ByPlacement.Find(Candidate.Index); Placed && Candidate.Source == ESCWaypointSource::Panel)
+                WaypointSources[WaypointIndex].Anchor = Placed->Anchor;
+        }
         if (Audio)
         {
             Audio->AddInterior(InteriorIndex, Container, bHelper, Interior.AudioSpotJson, Interior.AudioAreaJson, Result.Warnings);
@@ -1470,6 +1502,12 @@ void FSCImportJob::FState::Assemble()
                 if (const FEntity* Door = ById.Find(Target); Door && Door->Rig && Door->Anchor != Panel->Anchor)
                 {
                     V->DoorControls.Add(Panel->Anchor, Door->Rig);
+                    for (const FSCUiBinding& B : P.UiBindings)
+                        if (B.IsOperatingPanel() && !B.bPropagated)
+                        {
+                            V->SetPanelReach(Panel->Anchor, B.InteractionDistance);
+                            PanelsWithoutReachField += !B.bInteractionDistanceExported;
+                        }
                     break;
                 }
         }
@@ -1527,7 +1565,23 @@ void FSCImportJob::FState::Assemble()
             V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName,
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
-    UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d"), V->DoorControls.Num(), V->DoorSensors.Num());
+    // Inventory waypoints stand on the container's floor centre: the container entity sits at the centre of its lattice
+    // floor, grid_pos_offset adds to it (USCCargoGridComponent::LatticeToWorld).
+    for (int32 WaypointIndex = 0; WaypointIndex < WaypointCandidates.Num(); ++WaypointIndex)
+        if (const FSCWaypointCandidate& Candidate = WaypointCandidates[WaypointIndex];
+            Candidate.Source == ESCWaypointSource::Inventory && V->InventoryAnchors.IsValidIndex(Candidate.Index) && V->InventoryAnchors[Candidate.Index])
+        {
+            WaypointSources[WaypointIndex].Source = Candidate.Source;
+            WaypointSources[WaypointIndex].Label = Candidate.Label;
+            WaypointSources[WaypointIndex].Anchor = V->InventoryAnchors[Candidate.Index].Get();
+            WaypointSources[WaypointIndex].Local = FSCCargoLattice::FromSC(Manifest.InventoryContainers[Candidate.Index].Container.GridPosOffset) * 100.0;
+        }
+    for (FSCWaypointSource& WaypointSource : WaypointSources)
+        if (WaypointSource.Anchor.IsValid()) V->WaypointSources.Add(MoveTemp(WaypointSource));
+    if (Options.bEnvironment)
+        UE_LOG(LogSCImport, Display, TEXT("HANGAR_WAYPOINT_SOURCES chosen=%d anchored=%d"), WaypointCandidates.Num(), V->WaypointSources.Num());
+    UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d panel_reach=%d max_reach_cm=%.0f"), V->DoorControls.Num(), V->DoorSensors.Num(),
+           V->PanelReach.Num(), V->MaxPanelReach);
     UE_LOG(LogSCImport, Display,
            TEXT("SCREEN_BIND instances=%d images=%d panel_images=%d skipped_mfd=%d slots_bound=%d slots_dark=%d ambiguous=%d unclassified=%d"),
            ScreenBoundInstances, ScreenImagesBound.Num(), Materials.PanelImages.Num(), Materials.SkippedVehicleScreens, ScreenBoundSlots,
@@ -1539,6 +1593,10 @@ void FSCImportJob::FState::Assemble()
     // WP-P5 floor panel: lift panels draw their stops on a blank face (appended to ScreenFaces after the counts above).
     V->BuildFloorPanels(BlankFaces, [&](const FString& Path) { return Materials.Texture(Path); });
     V->BuildButtonPanels(ButtonFaces, [&](const FString& Path) { return Materials.Texture(Path); });
+    if (PanelsWithoutReachField)
+        Warn(Manifest.ScenePath, FString::Printf(TEXT("%d door-panel UI bindings carry no interaction_distance (an export before cache format 40): ")
+            TEXT("those panels are operated from 3 m only (the C2's exterior pads are out of reach); re-export with the current exporter"),
+            PanelsWithoutReachField));
     if (Materials.UnclassifiedBindings)
         Warn(Manifest.ScenePath, FString::Printf(TEXT("%d UI bindings carry no screen role (an export before source_item_type, or an unresolved ")
             TEXT("owner): their screens stay dark; re-export with the current exporter (cache format 30) to show door and lift panel images"),

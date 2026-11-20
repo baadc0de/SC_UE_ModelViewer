@@ -45,12 +45,14 @@ def stamped(level):
 
 def stale_bindings(scene_path):
     """UI bindings an export wrote before the screen-role fields (source_item_type, source_owner_resolved,
-    source_kiosk_interaction; cache format 30): their panels would cook dark, so the export must be redone first."""
+    source_kiosk_interaction; cache format 30): their panels would cook dark; or before interaction_distance (cache format
+    40): door panels would be operated from 3 m only. The export must be redone first."""
     with open(scene_path, encoding='utf-8') as f:
         scene = json.load(f)
     entries = list(scene.get('children', [])) + [p for i in scene.get('interiors', []) for p in i.get('placements', [])]
     return sum(1 for e in entries for b in e.get('ui_bindings', []) or []
-               if not all(k in b for k in ('source_item_type', 'source_owner_resolved', 'source_kiosk_interaction')))
+               if not all(k in b for k in ('source_item_type', 'source_owner_resolved', 'source_kiosk_interaction',
+                                           'interaction_distance')))
 
 
 levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)

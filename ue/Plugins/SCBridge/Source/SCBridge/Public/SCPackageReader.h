@@ -60,6 +60,10 @@ struct SCBRIDGE_API FSCUiBinding
     bool bOwnerResolved = false; // source_owner_resolved: the UI owner's record was found (else its item type is unknown)
     bool bOperated = false;    // source_kiosk_interaction: the owner's UI is operated by the player (door, light, transit panels, kiosks)
     bool bPropagated = false;  // on a child: the binding of another (geometry-less) entity carried by this one
+    /** Cache format 40 (`interaction_distance`): how far from its screen the player operates the owner's UI, metres
+     *  (UIRenderToTextureEntityComponentParams.interactionDistance); 0 when not exported. */
+    float InteractionDistance = 0.f;
+    bool bInteractionDistanceExported = false; // the key is present (null included): an export before format 40 has none
     /** The owner's other states the canvas shows (`state_images[]`; images outside the package dropped). */
     TArray<FSCUiStateImage> StateImages;
     /** Cache format 39: the clickable nodes of the default render (`buttons[]`) in an image of ImageSizePx pixels, and

@@ -23,8 +23,10 @@ public:
      *  5: WP-I1 fix pass 2 (panel renders: button glyphs, standard styles, square canvas units, own shape colours).
      *  6: WP-A1 (the level's package audio staged beside it: Content/SCAudio/<level>, ASCVehicle::CookedAudio).
      *  7: WP-A1 A1-2 (the staged audio.json carries the bus effects: meters and side-chains, EQs, effect RTPCs; a level
-     *  staged before plays the A1-1 mix). */
-    static constexpr int32 FormatVersion = 7;
+     *  staged before plays the A1-1 mix).
+     *  8: hangar waypoints (ASCVehicle::Waypoints, built by present_environment before the rigs are baked; a hangar cooked
+     *  before has none: the first-person teleport menu's Hangar section would be empty). */
+    static constexpr int32 FormatVersion = 8;
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in

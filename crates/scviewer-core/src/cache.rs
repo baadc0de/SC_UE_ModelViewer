@@ -60,7 +60,9 @@ use std::{
 //     chipsets are `entities[]` (`light_group` / `logic`), lights name their group (`attachment.group_entity_id` /
 //     `group_links`); UI bindings carry `buttons[]`, `image_size_px`, state-type `transitions` / `linked`, and
 //     combined two-state `state_images` (C2 fixes).
-pub const CACHE_FORMAT_VERSION: u32 = 39;
+// 40: UI bindings carry `interaction_distance` (the owner's render-to-texture `interactionDistance`, metres): how far
+//     from its screen a panel is operated (hangar waypoints: the C2's exterior door pads).
+pub const CACHE_FORMAT_VERSION: u32 = 40;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

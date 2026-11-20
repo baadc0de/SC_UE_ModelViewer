@@ -15,6 +15,9 @@ struct SCBRIDGE_API FSCImportOptions
     /** false: the actor is neither registered as the world's current import nor given exploration data
      *  (player kits are owned by the viewer subsystem, not the vehicle slot). */
     bool bPublish = true;
+    /** true: the package is an environment (a hangar): its waypoints are chosen (SCHangarWaypoints::Select) and anchored
+     *  for ASCVehicle::BuildWaypoints. */
+    bool bEnvironment = false;
     /** true: every mesh with skin weights becomes a rig even without a binding clip (player kits are posed by
      *  USCPlayerBodyComponent, not by the clip catalogue). */
     bool bRigSkinnedMeshes = false;

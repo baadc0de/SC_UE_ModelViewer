@@ -87,6 +87,15 @@ public:
     ASCVehicle();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
+    /** Hangar waypoints (environments only; SCHangarWaypoints.h): kind Hangar, actor-relative standing hints. Built by
+     *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> Waypoints;
+    int32 WaypointRevision = 0;
+    /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; transient. */
+    TArray<FSCWaypointSource> WaypointSources;
+    /** Waypoints from WaypointSources and the ship pad in the current pose; a cooked environment (no sources, no rigs)
+     *  keeps the waypoints it was saved with. Returns the waypoints. */
+    int32 BuildWaypoints();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") bool bCollisionReady = false;
     /** Incremented whenever SpawnPoints changes (UI lists rebuild on change). */
     int32 SpawnRevision = 0;
@@ -97,8 +106,10 @@ public:
     void BuildExploration();
     FBox ExplorationBounds() const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") int32 NearestDoor(FVector Position, float Reach = 300) const;
-    /** Interaction under the view ray within Reach (rig hit -> its nearest driven joint), else NearestDoor. */
-    int32 FindInteraction(FVector Eye, FVector Direction, float Reach = 300, const AActor* Ignore = nullptr) const;
+    /** Interaction under the view ray within Reach (rig hit -> its nearest driven joint), else NearestDoor. A door panel
+     *  (DoorControls) the ray meets first is reached from as far as its own UI is operated (PanelReach) when that is
+     *  farther than Reach. Pick (optional) says how the interaction was found. */
+    int32 FindInteraction(FVector Eye, FVector Direction, float Reach = 300, const AActor* Ignore = nullptr, FSCInteractionPick* Pick = nullptr) const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool ToggleDoor(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") bool IsDoorOpen(int32 Index) const;
     /** A clip of door Index's own fragment plays on its rig (another door on the same rig moving does not count). */
@@ -106,6 +117,12 @@ public:
     /** Door control panels (the game's pads): a panel's anchor -> the rig of the door it operates (scene `links`, or
      *  the door whose loadout attached it). FindInteraction resolves a panel under the crosshair to its door. */
     TMap<TWeakObjectPtr<const USceneComponent>, TWeakObjectPtr<USCRigComponent>> DoorControls;
+    /** How far (cm) the player operates a door panel from: its UI's `interaction_distance` (the game's render-to-texture
+     *  interactionDistance; the C2's ramp and hatch pads 15 m, high on the closed door). Panels without one are not here. */
+    TMap<TWeakObjectPtr<const USceneComponent>, float> PanelReach;
+    float MaxPanelReach = 0;
+    /** Record a panel's operating distance (metres, from its operating bindings; <= 0: none). */
+    void SetPanelReach(const USceneComponent* Panel, float Metres);
     TArray<FSCDoorSensor> DoorSensors;
     /** WP-I1 I1-3: operating-panel screen faces with state images (FSCScreenFace). */
     TArray<FSCScreenFace> ScreenFaces;

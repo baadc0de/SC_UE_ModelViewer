@@ -17,6 +17,7 @@ const FName FSCSpawnKind::Interior(TEXT("Interior"));
 const FName FSCSpawnKind::Door(TEXT("Door"));
 const FName FSCSpawnKind::Hull(TEXT("Hull"));
 const FName FSCSpawnKind::Selected(TEXT("Selected"));
+const FName FSCSpawnKind::Hangar(TEXT("Hangar"));
 const TArray<FName>& FSCSpawnKind::StartOrder()
 {
     // Entrance only when the data identifies a hull entrance (see WP-P1 follow-ups: no exported
@@ -262,20 +263,56 @@ int32 ASCVehicle::NearestDoor(FVector Position, float Reach) const
     }
     return Best;
 }
-int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, const AActor* Ignore) const
+void ASCVehicle::SetPanelReach(const USceneComponent* Panel, float Metres)
+{
+    if (!Panel || !(Metres > 0)) return;
+    float& Reach = PanelReach.FindOrAdd(Panel);
+    Reach = FMath::Max(Reach, Metres * 100.f);
+    MaxPanelReach = FMath::Max(MaxPanelReach, Reach);
+}
+int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, FSCInteractionPick* Pick) const
 {
     // What the crosshair is on (the ray itself bounds the reach): the nearest rig owning the hit part.
     // Doors are large and their driven joints (hinges, hydraulics) can sit metres from the surface the
-    // player faces, so joint distance alone misses them.
+    // player faces, so joint distance alone misses them. The ray runs as far as the farthest-operated door panel: a panel
+    // is used from as far as its own UI allows (PanelReach; the C2's exterior pads sit 3.5-4 m above a standing player's
+    // eye), anything else only within Reach.
+    FSCInteractionPick Local;
+    FSCInteractionPick& Out = Pick ? *Pick : Local;
+    Out = FSCInteractionPick();
+    Out.Reach = Reach;
     FHitResult Hit;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCInteract), true, Ignore);
-    if (GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Direction.GetSafeNormal() * Reach, ECC_Visibility, Params) &&
-        Hit.GetActor() == this)
+    const float Longest = FMath::Max(Reach, MaxPanelReach);
+    const bool bHit = GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Direction.GetSafeNormal() * Longest, ECC_Visibility, Params);
+    if (bHit)
     {
-        // A door panel (pad) operates its door, wherever the panel stands.
+        Out.Hit = GetNameSafe(Hit.GetComponent());
+        Out.Distance = Hit.Distance;
+    }
+    if (bHit && Hit.GetActor() == this)
+    {
+        // A door panel (pad) operates its door, wherever the panel stands, within the panel's own reach: the panel's own
+        // parts only (a rig mounted under the panel is another item: it keeps Reach).
+        bool bCrossedRig = false;
         for (const USceneComponent* C = Hit.GetComponent(); C; C = C->GetAttachParent())
+        {
             if (const TWeakObjectPtr<USCRigComponent>* Door = DoorControls.Find(C))
-                if (const int32 Index = DoorForRig(Door->Get()); Index != INDEX_NONE) return Index;
+            {
+                const float PadReach = bCrossedRig ? Reach : FMath::Max(Reach, PanelReach.FindRef(C));
+                const int32 Index = DoorForRig(Door->Get());
+                if (Index != INDEX_NONE && Hit.Distance <= PadReach)
+                {
+                    Out.Via = TEXT("panel");
+                    Out.Reach = PadReach;
+                    return Index;
+                }
+            }
+            bCrossedRig |= C->IsA<USCRigComponent>();
+        }
+    }
+    if (bHit && Hit.GetActor() == this && Hit.Distance <= Reach)
+    {
         FName Socket = NAME_None;
         const USCRigComponent* Rig = nullptr;
         for (const USceneComponent* C = Hit.GetComponent(); C && !Rig; C = C->GetAttachParent())
@@ -286,7 +323,7 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
         TArray<int32> OnRig;
         for (int32 I = 0; Rig && !LiftDrivenRigs.Contains(Rig) && I < Doors.Num(); ++I)
             if (Doors[I].Rig == Rig) OnRig.AddUnique(I);
-        if (OnRig.Num() == 1) return OnRig[0]; // the entity is the interaction (a door, a seat)
+        if (OnRig.Num() == 1) { Out.Via = TEXT("rig"); return OnRig[0]; } // the entity is the interaction (a door, a seat)
         if (OnRig.Num() > 1)
         {
             // Several fragments drive one rig (root-entity panels): the one whose driven joint carries
@@ -294,7 +331,7 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
             const auto& Ref = Rig->GetSkeletalMeshAsset()->GetRefSkeleton();
             for (int32 Bone = Ref.FindBoneIndex(Socket); Bone != INDEX_NONE; Bone = Ref.GetParentIndex(Bone))
                 for (int32 I : OnRig)
-                    if (Ref.GetBoneName(Bone) == Doors[I].Joint) return I;
+                    if (Ref.GetBoneName(Bone) == Doors[I].Joint) { Out.Via = TEXT("rig"); return I; }
             int32 Best = INDEX_NONE;
             double Distance = FMath::Square(Reach);
             for (int32 I : OnRig)
@@ -302,10 +339,12 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
                 const double Candidate = FVector::DistSquared(Hit.ImpactPoint, Rig->GetSocketLocation(Doors[I].Joint));
                 if (Candidate <= Distance) { Distance = Candidate; Best = I; }
             }
-            if (Best != INDEX_NONE) return Best;
+            if (Best != INDEX_NONE) { Out.Via = TEXT("rig"); return Best; }
         }
     }
-    return NearestDoor(Eye, Reach);
+    const int32 Nearest = NearestDoor(Eye, Reach);
+    if (Nearest != INDEX_NONE) Out.Via = TEXT("nearest");
+    return Nearest;
 }
 bool ASCVehicle::IsDoorOpen(int32 Index) const
 {

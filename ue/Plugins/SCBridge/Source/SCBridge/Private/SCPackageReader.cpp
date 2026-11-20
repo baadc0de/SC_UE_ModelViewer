@@ -91,6 +91,11 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
         Binding.SourceItemType = String(B, TEXT("source_item_type"));
         B->TryGetBoolField(TEXT("source_owner_resolved"), Binding.bOwnerResolved);
         B->TryGetBoolField(TEXT("source_kiosk_interaction"), Binding.bOperated);
+        // Cache format 40: how far from its screen the owner's UI is operated (metres; absent / null: not known).
+        double Distance = 0;
+        Binding.bInteractionDistanceExported = B->HasField(TEXT("interaction_distance"));
+        if (B->TryGetNumberField(TEXT("interaction_distance"), Distance) && FMath::IsFinite(Distance) && Distance > 0)
+            Binding.InteractionDistance = float(Distance);
         // WP-I1 I1-3: the owner's other states, each with its render; cache format 39 adds `states[]` (one pin for a
         // single-state render, two for a combined one: a combined render has no state_type / state of its own).
         for (const auto& S : ReaderArray(B, TEXT("state_images")))

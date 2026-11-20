@@ -6,6 +6,7 @@
 #include "SCLightAreas.h"
 #include "SCLightImporter.h"
 #include "SCPlayerKit.h"
+#include "SCViewerSubsystem.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -408,6 +409,132 @@ bool ASCFirstPersonCharacter::TeleportToSpawn(int32 Index)
     UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_AT index=%d kind=%s label=\"%s\""), Index, *Point.Kind.ToString(), *Point.DisplayName);
     return true;
 }
+ASCVehicle* ASCFirstPersonCharacter::GetHangar() const
+{
+    if (HangarOverride.IsValid()) return HangarOverride.Get();
+    const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this);
+    return Viewer ? Viewer->GetEnvironment() : nullptr;
+}
+const TArray<FSCSpawnPoint>& ASCFirstPersonCharacter::GetHangarSpots()
+{
+    ASCVehicle* Hangar = GetHangar();
+    const int32 Revision = Hangar ? Hangar->WaypointRevision : INDEX_NONE;
+    if (Hangar == HangarListed.Get() && Revision == HangarListedRevision) return HangarSpots;
+    HangarListed = Hangar;
+    HangarListedRevision = Revision;
+    ++HangarSpotsRevision;
+    HangarSpots.Reset();
+    if (!Hangar || !GetWorld()) return HangarSpots;
+    // A waypoint is a safe standing place when a standing capsule fits on a walkable floor around it (the spawn search
+    // every teleport runs; crouched-only spots are not offered: a place to walk from).
+    int32 Rejected = 0;
+    for (const FSCSpawnPoint& W : Hangar->Waypoints)
+    {
+        FVector Centre;
+        bool bCrouched = false;
+        const FVector Hint = Hangar->GetActorTransform().TransformPosition(W.Transform.GetLocation());
+        if (ResolveSpawn(Hint, Centre, bCrouched) && !bCrouched)
+        {
+            HangarSpots.Add(W);
+            continue;
+        }
+        ++Rejected;
+        UE_LOG(LogTemp, Display, TEXT("HANGAR_WAYPOINT_REJECT source=%s pos=%s label=\"%s\" reason=%s"), *W.Source.ToString(),
+               *W.Transform.GetLocation().ToCompactString(), *W.DisplayName, bCrouched ? TEXT("crouched_only") : TEXT("no_clear_capsule"));
+    }
+    UE_LOG(LogTemp, Display, TEXT("HANGAR_SPOTS hangar=%s waypoints=%d standing=%d rejected=%d"), *Hangar->GetName(), Hangar->Waypoints.Num(),
+           HangarSpots.Num(), Rejected);
+    return HangarSpots;
+}
+bool ASCFirstPersonCharacter::TeleportToHangar(int32 Index)
+{
+    ASCVehicle* Hangar = GetHangar();
+    const TArray<FSCSpawnPoint>& Spots = GetHangarSpots();
+    if (!Hangar || !Spots.IsValidIndex(Index)) return false;
+    const FSCSpawnPoint Point = Spots[Index];
+    const FVector Hint = Hangar->GetActorTransform().TransformPosition(Point.Transform.GetLocation());
+    // A hangar place is a place to stand: one where only a crouched capsule fits now (cargo set down there since the
+    // list was checked) is refused, like one where nothing fits.
+    FVector Centre;
+    bool bCrouched = false;
+    if (!ResolveSpawn(Hint, Centre, bCrouched) || bCrouched || !TeleportToFloor(Hint))
+    {
+        UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_SPAWN_REJECT hangar=%d source=%s label=\"%s\" reason=%s"), Index,
+               *Point.Source.ToString(), *Point.DisplayName, bCrouched ? TEXT("crouched_only") : TEXT("no_clear_capsule"));
+        return false;
+    }
+    // Falling recovers below everything that collides: the hangar's floors too (a lower deck must not count as a fall).
+    if (HangarRecoveryFor.Get() != Hangar)
+    {
+        HangarRecoveryFor = Hangar;
+        const FBox Bounds = Hangar->ExplorationBounds();
+        if (Bounds.IsValid) RecoveryZ = FMath::Min(RecoveryZ, Bounds.Min.Z - Profile.StandingHalfHeight * 4);
+    }
+    UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_AT hangar=%d kind=%s source=%s label=\"%s\""), Index, *Point.Kind.ToString(), *Point.Source.ToString(),
+           *Point.DisplayName);
+    return true;
+}
+TArray<FSCTeleportRow> ASCFirstPersonCharacter::TeleportRows()
+{
+    return SCTeleportMenu::Rows(Vehicle ? Vehicle->SpawnPoints.Num() : 0, GetHangarSpots().Num());
+}
+bool ASCFirstPersonCharacter::TeleportToRow(int32 Row)
+{
+    const TArray<FSCTeleportRow> Rows = TeleportRows();
+    if (!Rows.IsValidIndex(Row) || !Rows[Row].IsDestination()) return false;
+    TeleportSelection = Rows[Row];
+    TeleportSelectionLabel = DestinationLabel(Rows[Row]);
+    return Rows[Row].Type == FSCTeleportRow::EType::Ship ? TeleportToSpawn(Rows[Row].Index) : TeleportToHangar(Rows[Row].Index);
+}
+FString ASCFirstPersonCharacter::DestinationLabel(const FSCTeleportRow& Row)
+{
+    if (Row.Type == FSCTeleportRow::EType::Ship) return Vehicle && Vehicle->SpawnPoints.IsValidIndex(Row.Index) ? Vehicle->SpawnPoints[Row.Index].DisplayName : FString();
+    const TArray<FSCSpawnPoint>& Spots = GetHangarSpots();
+    return Row.Type == FSCTeleportRow::EType::Hangar && Spots.IsValidIndex(Row.Index) ? Spots[Row.Index].DisplayName : FString();
+}
+int32 ASCFirstPersonCharacter::FindDestination(const FSCTeleportRow& Row, const FString& Label)
+{
+    if (!Row.IsDestination()) return INDEX_NONE;
+    const TArray<FSCTeleportRow> Rows = TeleportRows();
+    const int32 Same = Rows.IndexOfByPredicate([&](const FSCTeleportRow& R) { return R.Type == Row.Type && R.Index == Row.Index; });
+    if (Same != INDEX_NONE && DestinationLabel(Rows[Same]) == Label) return Same;
+    return Rows.IndexOfByPredicate([&](const FSCTeleportRow& R) { return R.Type == Row.Type && DestinationLabel(R) == Label; });
+}
+bool ASCFirstPersonCharacter::TeleportToDestination(const FSCTeleportRow& Row, const FString& Label)
+{
+    const int32 At = FindDestination(Row, Label);
+    if (At == INDEX_NONE)
+    {
+        UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_SPAWN_REJECT label=\"%s\" reason=no_longer_listed"), *Label);
+        return false;
+    }
+    return TeleportToRow(At);
+}
+int32 ASCFirstPersonCharacter::TeleportSelectionRow()
+{
+    return FindDestination(TeleportSelection, TeleportSelectionLabel);
+}
+void ASCFirstPersonCharacter::SetTeleportMenuOpen(bool bOpen)
+{
+    bTeleportMenuOpen = bOpen;
+    if (!bOpen) return;
+    // Ships, cargo and doors move: the hangar's standing places are checked again whenever the menu opens.
+    InvalidateHangarSpots();
+    // Opening highlights the last destination (else the current spawn, else the first): the keys move from there.
+    if (TeleportSelectionRow() != INDEX_NONE) return;
+    const TArray<FSCTeleportRow> Rows = TeleportRows();
+    const int32 Current = Rows.IndexOfByPredicate([&](const FSCTeleportRow& R) { return R.Type == FSCTeleportRow::EType::Ship && R.Index == CurrentSpawn; });
+    const int32 Row = SCTeleportMenu::Step(Rows, Current, 0);
+    TeleportSelection = Rows.IsValidIndex(Row) ? Rows[Row] : FSCTeleportRow();
+    TeleportSelectionLabel = Rows.IsValidIndex(Row) ? DestinationLabel(Rows[Row]) : FString();
+}
+void ASCFirstPersonCharacter::MoveTeleportSelection(int32 Delta)
+{
+    const TArray<FSCTeleportRow> Rows = TeleportRows();
+    const int32 Row = SCTeleportMenu::Step(Rows, TeleportSelectionRow(), Delta);
+    TeleportSelection = Rows.IsValidIndex(Row) ? Rows[Row] : FSCTeleportRow();
+    TeleportSelectionLabel = Rows.IsValidIndex(Row) ? DestinationLabel(Rows[Row]) : FString();
+}
 bool ASCFirstPersonCharacter::Explore(ASCVehicle* InVehicle)
 {
     Vehicle = InVehicle;
@@ -421,6 +548,7 @@ bool ASCFirstPersonCharacter::Explore(ASCVehicle* InVehicle)
     // computed once, the per-tick check must not walk every component.
     const FBox Bounds = Vehicle->ExplorationBounds();
     RecoveryZ = (Bounds.IsValid ? FMath::Min(0.0, Bounds.Min.Z) : 0.0) - Profile.StandingHalfHeight * 4;
+    HangarRecoveryFor.Reset(); // the hangar's floors are added on the first teleport to one of its places
     TArray<int32> Candidates;
     for (int32 I = 0; I < Vehicle->SpawnPoints.Num(); ++I) Candidates.Add(I);
     Candidates.StableSort([&](int32 A, int32 B) { return Vehicle->SpawnPoints[A].Transform.GetLocation().Z < Vehicle->SpawnPoints[B].Transform.GetLocation().Z; });
@@ -473,7 +601,13 @@ bool ASCFirstPersonCharacter::Interact()
                *Interaction.ToString(), Handled);
         return Handled > 0;
     }
-    return Vehicle->ToggleDoor(FocusedInteraction());
+    // The door interaction (a pad, the rig under the crosshair, or the nearest driven joint), logged with how it was found.
+    FSCInteractionPick Pick;
+    const int32 Door = Vehicle->FindInteraction(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this, &Pick);
+    const bool bToggled = Vehicle->ToggleDoor(Door);
+    UE_LOG(LogTemp, Display, TEXT("FP_INTERACT door=%d via=%s hit=%s dist=%.0f reach=%.0f toggled=%d label=\"%s\""), Door, *Pick.Via, *Pick.Hit,
+           Pick.Distance, Pick.Reach, bToggled, Vehicle->Doors.IsValidIndex(Door) ? *Vehicle->Doors[Door].DisplayName : TEXT(""));
+    return bToggled;
 }
 bool ASCFirstPersonCharacter::FocusedPanel(FString& EntityId, FName& Choice) const
 {
@@ -685,7 +819,8 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
         {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
         {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
         {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim},
-        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas}};
+        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas},
+        {EKeys::Up, A::MenuUp}, {EKeys::Down, A::MenuDown}, {EKeys::Enter, A::MenuSelect}};
     return Table;
 }
 bool ASCFirstPersonCharacter::HandleKey(FKey Key, bool bDown)
@@ -704,9 +839,21 @@ void ASCFirstPersonCharacter::ApplyHeldInput()
 bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDown)
 {
     using A = ESCFirstPersonAction;
+    // The open teleport menu takes W / S as Up / Down (a press moves the selection; nothing is held, so closing the menu
+    // does not start a walk).
+    if (bTeleportMenuOpen && bDown && (Action == A::Forward || Action == A::Back)) Action = Action == A::Forward ? A::MenuUp : A::MenuDown;
+    if (Action == A::MenuUp || Action == A::MenuDown || Action == A::MenuSelect)
+    {
+        if (!bTeleportMenuOpen) return false;
+        if (bDown && Action == A::MenuSelect) TeleportToRow(TeleportSelectionRow());
+        else if (bDown) MoveTeleportSelection(Action == A::MenuUp ? -1 : 1);
+        return true;
+    }
     if (Action <= A::Crouch) // held actions
     {
-        if (bDown && bMobiGlasOpen) return true; // standing still while the mobiGlas is up (releases still pass)
+        // Standing still while the mobiGlas or the teleport menu is up (releases still pass): nothing starts that the
+        // menu's closing (a teleport, a click) would leave running.
+        if (bDown && (bMobiGlasOpen || bTeleportMenuOpen)) return true;
         if (bDown) Held.Add(Action); else Held.Remove(Action);
         if (HoldSeconds <= 0) ApplyHeldInput();
         if (Action == A::Up && !bNoclip) { if (bDown) Jump(); else StopJumping(); }
@@ -747,8 +894,8 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     case A::Interact: Interact(); return true;
     case A::Torch: SetTorch(!Flashlight->IsVisible()); return true;
     case A::Noclip: ToggleNoclip(); return true;
-    case A::Teleport: bTeleportMenuOpen = !bTeleportMenuOpen; ClearInput(); return true;
-    case A::Close: bTeleportMenuOpen = false; SetMobiGlasOpen(false); ClearInput(); return true;
+    case A::Teleport: SetTeleportMenuOpen(!bTeleportMenuOpen); ClearInput(); return true;
+    case A::Close: SetTeleportMenuOpen(false); SetMobiGlasOpen(false); ClearInput(); return true;
     case A::MobiGlas: SetMobiGlasOpen(!bMobiGlasOpen); return true;
     case A::Holster: return Body->RequestSlot(INDEX_NONE);
     case A::View: Body->SetThirdPerson(!Body->IsThirdPerson()); return Body->HasBody();

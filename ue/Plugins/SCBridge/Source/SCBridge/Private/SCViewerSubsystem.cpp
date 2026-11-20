@@ -474,6 +474,7 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
     EnvOptions.ScenePath = Scene;
     EnvOptions.bBuildCollision = true;
     EnvOptions.bPublish = false;        // not the vehicle: routes, first person and light pairing keep the ship
+    EnvOptions.bEnvironment = true;     // its waypoints (the first-person teleport menu's Hangar section)
     EnvOptions.bReplacePrevious = false;
     EnvOptions.bHideEffectOnlyPlacements = true;
     EnvOptions.bInstanceRepeatedParts = true;
@@ -599,6 +600,7 @@ void USCViewerSubsystem::PlaceEnvironment()
     if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(EnvironmentActor);
     SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
     FSCEnvironment::PlaceOnFloor(EnvironmentActor, ViewerFloorZ, Vehicle.Get());
+    EnvironmentActor->BuildWaypoints(); // the presented pose (the ship elevator raised); a cooked one keeps its own
     SCLook::UpdateShortRangeAO(EnvironmentActor->GetWorld());
     SCLook::RefreshGlassRefraction(EnvironmentActor->GetWorld());
 }
@@ -607,6 +609,7 @@ void USCViewerSubsystem::SetEnvironmentState(const FString& State)
 {
     EnvironmentState = State.ToLower();
     FSCEnvironment::SetState(Environment.Get(), EnvironmentState);
+    if (Environment.IsValid()) Environment->BuildWaypoints(); // the new pose moves pads and kiosks riding a mechanism
 }
 FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
 {

@@ -14,7 +14,11 @@
 // - SCBridge.Lift.RiderPassesPath: a moving carriage carries the capsule on it (LiftRiddenBy), the leg's path obstacles are
 //   what it passes through (not the carriage, not a door, not the surface the leg ends on), and a character standing over
 //   a slab that reaches into the shaft rides the whole leg at a steady height on the carriage.
-// - SCBridge.Reader.C2FixesFields: the cache-format-39 fields reach the records.
+// - SCBridge.Reader.C2FixesFields: the cache-format-39 fields reach the records (and format 40's interaction_distance).
+// - SCBridge.Doors.ExteriorPanelReach: a door panel high on the outside of a closed door (the C2's ramp and hatch pads,
+//   3.5-4 m from a standing player's eye) resolves to its door from as far as its own UI is operated (PanelReach, the
+//   game's render-to-texture interactionDistance), not beyond, not through an occluder; anything that is not a panel keeps
+//   the 3 m reach; E on it plays the door like the interior pad.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
@@ -644,7 +648,7 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
       "interiors":[{"name":"hold","container_transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
         "placements":[{"cgf_path":"screen.cgf","entity_id":"p","transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"links":["lg"],
           "sendable_interactions":[{"name":"LightsAlarm","linking_tag":"/Interaction/LightGroup/SetEmergency"}],
-          "ui_bindings":[{"binding_kind":"physical","generated_image_path":"Data/UI/a.png","image_size_px":[720,1280],
+          "ui_bindings":[{"binding_kind":"physical","generated_image_path":"Data/UI/a.png","image_size_px":[720,1280],"interaction_distance":15.0,
             "buttons":[{"node":"EmergencyLightsButton","interaction":"LightsAlarm","rect_px":[89,850,541,313]}],
             "state_types":[{"name":"LightSwitchState","default_state":"LightSwitchOn","states":["LightSwitchOn","LightSwitchAlarm"],
               "transitions":[{"interaction":"LightsAlarm","state":"LightSwitchAlarm"},{"from":"LightSwitchAlarm","interaction":"Toggle","state":"LightSwitchOn"},{"from":"LightSwitchOn","interaction":"Toggle","state":"LightSwitchAlarm"}],"linked":[{"tag":"/State/LightSwitch/Emergency","state":"LightSwitchAlarm"}]}],
@@ -673,6 +677,7 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
                                                                *B.StateTypes[0].Next(TEXT("Toggle"), TEXT("LightSwitchOn")) == TEXT("LightSwitchAlarm") &&
                                                                *B.StateTypes[0].Next(TEXT("Toggle"), TEXT("LightSwitchAlarm")) == TEXT("LightSwitchOn"));
         TestEqual(TEXT("single and combined images"), B.StateImages.Num(), 2);
+        TestEqual(TEXT("cache format 40: the screen's operating distance (m)"), B.InteractionDistance, 15.f);
         if (B.StateImages.Num() == 2)
         {
             TestEqual(TEXT("single key"), B.StateImages[0].Key(), FString(TEXT("LightState.LightsAlarm")));
@@ -683,4 +688,70 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
     TestTrue(TEXT("light group"), G && G->LightGroupInteractions.Num() == 1 && G->LightGroupInteractions[0].LightState == TEXT("Emergency") && G->Links.Num() == 1);
     return !HasAnyErrors();
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCExteriorPanelReachTest, "SCBridge.Doors.ExteriorPanelReach", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCExteriorPanelReachTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    auto* V = World->SpawnActor<ASCVehicle>();
+    V->ClipCatalog = NewObject<USCClipCatalog>(V);
+    // A closed open/close door (its joint at the vehicle origin) and its exterior pad 4 m up on it: the pad's anchor rides
+    // the door's rig (a loadout child on the door's IP_Exterior), its collidable face a small box.
+    USCRigComponent* Rig = AddRig(V, TEXT("Hatch"));
+    AddClip(V, Rig, TEXT("hatch_open"), TEXT("Open"), {0, 25, 50});
+    AddClip(V, Rig, TEXT("hatch_close"), TEXT("Close"), {50, 25, 0});
+    FSCDoorRecord R;
+    R.Door.bValid = true;
+    R.Door.OpenTag = TEXT("Open");
+    R.Door.CloseTag = TEXT("Close");
+    R.Door.bIsOpened = false;
+    V->DoorRecords.Add(Rig, R);
+    auto* Pad = NewObject<USceneComponent>(V);
+    V->AddInstanceComponent(Pad);
+    Pad->SetupAttachment(Rig);
+    Pad->SetRelativeLocation(FVector(0, 0, 400));
+    Pad->RegisterComponent();
+    auto AddBox = [&](USceneComponent* Parent, const FVector& At, const FVector& Extent) {
+        auto* Box = NewObject<UBoxComponent>(V);
+        V->AddInstanceComponent(Box);
+        Box->SetBoxExtent(Extent);
+        Box->SetCollisionProfileName(TEXT("BlockAll"));
+        Box->SetupAttachment(Parent);
+        Box->SetRelativeLocation(At);
+        Box->RegisterComponent();
+        return Box;
+    };
+    AddBox(Pad, FVector::ZeroVector, FVector(2, 10, 10));
+    // A part of the door that is not a panel, at the same height beside it.
+    AddBox(Rig, FVector(0, 300, 400), FVector(2, 10, 10));
+    V->DoorControls.Add(Pad, Rig);
+    V->BuildExploration();
+    const int32 Door = V->DoorForRig(Rig);
+    if (!TestTrue(TEXT("the door"), Door != INDEX_NONE)) return false;
+    const FVector Eye(-360, 0, 400), Along = FVector::ForwardVector;
+    FSCInteractionPick Pick;
+    TestEqual(TEXT("without its operating distance the pad is out of the 3 m reach"), V->FindInteraction(Eye, Along, 300, nullptr, &Pick), int32(INDEX_NONE));
+    V->SetPanelReach(Pad, 15.f); // its UI's interactionDistance (m)
+    TestEqual(TEXT("a pad is operated from as far as its UI allows"), V->FindInteraction(Eye, Along, 300, nullptr, &Pick), Door);
+    TestTrue(TEXT("found as the panel, its own reach"), Pick.Via == TEXT("panel") && FMath::IsNearlyEqual(Pick.Reach, 1500.0) && Pick.Distance > 300);
+    TestEqual(TEXT("from inside the 3 m reach as before"), V->FindInteraction(FVector(-100, 0, 400), Along, 300), Door);
+    TestEqual(TEXT("not beyond its operating distance"), V->FindInteraction(FVector(-1600, 0, 400), Along, 300), int32(INDEX_NONE));
+    TestEqual(TEXT("a part that is not a panel keeps the 3 m reach"), V->FindInteraction(FVector(-360, 300, 400), Along, 300), int32(INDEX_NONE));
+    AActor* Wall = World->SpawnActor<AActor>();
+    auto* WallBox = NewObject<UBoxComponent>(Wall);
+    Wall->SetRootComponent(WallBox);
+    WallBox->SetBoxExtent(FVector(5, 50, 50));
+    WallBox->SetCollisionProfileName(TEXT("BlockAll"));
+    WallBox->SetWorldLocation(FVector(-200, 0, 400));
+    WallBox->RegisterComponent();
+    TestEqual(TEXT("not through an occluder"), V->FindInteraction(Eye, Along, 300), int32(INDEX_NONE));
+    Wall->Destroy();
+    // E on the exterior pad plays the door's own press (its clip from the current pose, its state), like the interior pad.
+    TestTrue(TEXT("the press opens the door"), V->ToggleDoor(V->FindInteraction(Eye, Along, 300)) && V->IsDoorOpen(Door) && Playing(V, Rig));
+    V->Tick(1.f);
+    TestNearlyEqual(TEXT("open at its open fragment's end"), BoneX(Rig), 50.0, 1e-3);
+    TestTrue(TEXT("and closes again"), V->ToggleDoor(V->FindInteraction(Eye, Along, 300)) && !V->IsDoorOpen(Door));
+    return !HasAnyErrors();
+}
+
 #endif
