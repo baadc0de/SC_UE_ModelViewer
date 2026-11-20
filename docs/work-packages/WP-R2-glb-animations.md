@@ -45,3 +45,28 @@ the decomposed path serialises the same clips to `animations/*.json`.
 - `cargo test -p starbreaker-3d` green; new tests follow upstream's TDD rule
   (failing test first). `//!` headers updated. No `Co-Authored-By` trailers on
   commits inside `vendor/StarBreaker` (upstream rule).
+
+## Implementation and verification
+
+Bundled entity exports decode the same rig sources as the decomposed exporter.
+They keep CryEngine-native local key samples, write the source, frame count,
+frame rate and Mannequin fragment metadata, and bind channels within each
+instantiated rig. Repeated instances of the same rig share one named clip with
+a separate channel for each affected node. Child skeleton hierarchy and skin
+inverse binds remain local to each instance. `entity export` enables animation
+by default, with `--animations=false` available for static exports.
+
+`cargo test --locked -p starbreaker-3d --lib` passed 1,013 tests, with four ignored.
+The full package run before the review fixes passed its executed suites until
+the existing line-count guard rejected the unchanged `src/ui_pipeline.rs`
+(475 lines, limit 400). `cargo build --locked -p starbreaker` succeeded after the
+CLI learned to preserve the pinned exporter’s newer `interaction_distance`
+field when reading an existing UI binding.
+
+Live `starbreaker entity export <entity> <file> --materials none --lod 0` on
+Win64 produced 64 Gladius and 59 Scorpius animations. Reading both GLB JSON and
+binary chunks confirmed unique animation names and node/property channels,
+strictly increasing times, TRS on animated nodes, and changed final samples in
+95 Gladius and 43 Scorpius gear channels. Scorpius also contained wing and canopy
+clips. A separate Gladius export with `--animations=false` had 335 meshes,
+1,096 nodes and zero animations.
