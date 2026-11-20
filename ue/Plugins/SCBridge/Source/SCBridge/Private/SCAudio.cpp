@@ -208,6 +208,32 @@ TArray<const FSCAudioEffect*> FSCAudioClass::EffectsFor(const FString& Tag, cons
     return Out;
 }
 
+float FSCAudioRamp::Advance(float Current, float Target, float Seconds) const
+{
+    const float Magnitude = Target >= Current ? Up : Down;
+    if (Magnitude <= 0.f || Type == 0)
+        return Target;
+    if (Seconds <= 0.f)
+        return Current;
+    if (Type == 1)
+        return FMath::FInterpConstantTo(Current, Target, Seconds, Magnitude);
+    if (Type == 2)
+        return FMath::Lerp(Current, Target, 1.f - FMath::Exp(-FMath::Loge(200.f) * Seconds / Magnitude));
+    return Target;
+}
+
+uint32 SCAudioWwiseId(const FString& Name)
+{
+    const FTCHARToUTF8 Bytes(*Name);
+    uint32 Hash = 2166136261u;
+    for (int32 I = 0; I < Bytes.Length(); ++I)
+    {
+        const uint8 Byte = uint8(Bytes.Get()[I]);
+        Hash = (Hash * 16777619u) ^ uint32(Byte >= 'A' && Byte <= 'Z' ? Byte + ('a' - 'A') : Byte);
+    }
+    return Hash;
+}
+
 bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString& Error)
 {
     FObj Root;
@@ -310,6 +336,8 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
             At.MaxDistance = Num(O, TEXT("max_distance"));
             At.VolumeDry = Curve(Obj(O, TEXT("volume_dry")));
             At.VolumeAuxGame = Curve(Obj(O, TEXT("volume_aux_game")));
+            At.Lpf = Curve(Obj(O, TEXT("lpf")));
+            At.Hpf = Curve(Obj(O, TEXT("hpf")));
             Out.Attenuations.Add(Id(K), MoveTemp(At));
         }
     if (const FObj B = Obj(Root, TEXT("buses")))
@@ -326,6 +354,8 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
             Bus.BusDb = Num(O, TEXT("bus_volume_db"));
             Bus.MakeUpDb = Num(O, TEXT("make_up_gain_db"));
             Bus.PitchCents = Num(O, TEXT("pitch_cents"));
+            Bus.OutputFilters.Lpf = Num(O, TEXT("output_bus_lpf"));
+            Bus.OutputFilters.Hpf = Num(O, TEXT("output_bus_hpf"));
             for (const auto& C : Arr(O, TEXT("rtpc"))) Bus.Rtpc.Add(RtpcCurve(C->AsObject()));
             for (const auto& E : Arr(O, TEXT("effects")))
             {
@@ -420,9 +450,32 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
         for (const auto& [Key, V] : R->Values)
         {
             const FString K(*Key);
+            const FString WwiseName = Str(V->AsObject(), TEXT("wwise_name"));
+            const uint32 ParameterId = WwiseName.StartsWith(TEXT("0x")) ? uint32(FCString::Strtoui64(*WwiseName + 2, nullptr, 16)) : SCAudioWwiseId(WwiseName.IsEmpty() ? K : WwiseName);
+            Out.RtpcIds.Add(K, ParameterId);
             double D;
             if (V->AsObject()->TryGetNumberField(TEXT("default"), D) || V->AsObject()->TryGetNumberField(TEXT("wwise_default"), D))
                 Out.RtpcDefaults.Add(K, D);
+        }
+    if (const FObj Params = Obj(Root, TEXT("game_parameters")))
+        for (const auto& [Key, Value] : Params->Values)
+        {
+            const FObj P = Value->AsObject();
+            Out.GameParameters.Add(Id(FString(*Key)), FSCAudioRamp{
+                float(Num(P, TEXT("ramp_up"))), float(Num(P, TEXT("ramp_down"))), uint8(Num(P, TEXT("ramp_type")))
+            });
+        }
+    if (const FObj Contexts = Obj(Root, TEXT("game_contexts")))
+        for (const auto& [Key, Value] : Contexts->Values)
+        {
+            FSCAudioGameContext& Context = Out.GameContexts.Add(FString(*Key));
+            const FObj C = Value->AsObject();
+            if (const FObj Params = Obj(C, TEXT("rtpcs")))
+                for (const auto& [Rtpc, Param] : Params->Values)
+                    Context.Rtpcs.Add(FString(*Rtpc), float(Param->AsNumber()));
+            if (const FObj States = Obj(C, TEXT("states")))
+                for (const auto& [Group, State] : States->Values)
+                    Context.States.Add(FString(*Group), State->AsString());
         }
     if (const FObj E = Obj(Root, TEXT("environments")))
         for (const auto& [Key, V] : E->Values)
@@ -570,17 +623,38 @@ int32 SCAudioPick(const FSCAudioNode& Node, FSCAudioContainerState& State, FRand
     return Pick;
 }
 
+TOptional<float> FSCAudioAreaOverlap::ExclusiveFade() const
+{
+    if (bLowerInside && !bHigherInside)
+        return {};
+    if (!bLowerInside && !bHigherInside)
+    {
+        if (LowerDistance >= HigherDistance && (bHigherHullInLower || bLowerHullInHigher))
+            return 0.f;
+        return {};
+    }
+
+    if (!(bLowerInside && bHigherHullInLower) && HullSeparation > 0.01)
+        return 0.f;
+    return HigherFadeDistance > 0.
+        ? float(FMath::Clamp(1. - HigherDistance / HigherFadeDistance, 0., 1.))
+        : 0.f;
+}
+
 void FSCAudioGain::Add(const FSCAudioProps& P, const TFunctionRef<float(const FString&)>& Rtpc, FRandomStream* Random)
 {
     VolumeDb += P.VolumeDb + P.MakeUpDb + P.OutputBusDb;
     PitchCents += P.PitchCents;
     GameAuxDb += P.GameAuxDb;
+    Filters.Lpf += P.Lpf;
+    Filters.Hpf += P.Hpf;
     if (Random)
         for (const auto& R : P.Random)
         {
             const float Draw = FMath::Lerp(R.Min, R.Max, Random->FRand());
             if (R.Param == TEXT("volume") || R.Param == TEXT("make_up_gain")) VolumeDb += Draw;
             else if (R.Param == TEXT("pitch")) PitchCents += Draw;
+            else if (FSCAudioFilterLevels::IsVoiceFilter(R.Param)) Filters.Add(R.Param, Draw);
         }
     for (const FSCAudioRtpcCurve& C : P.Rtpc)
     {
@@ -592,6 +666,8 @@ void FSCAudioGain::Add(const FSCAudioProps& P, const TFunctionRef<float(const FS
             PitchCents += C.Curve.Eval(X);
         else if (C.Param == TEXT("game_aux_send_volume"))
             GameAuxDb += C.Curve.EvalDb(X);
+        else if (FSCAudioFilterLevels::IsVoiceFilter(C.Param) && C.IsSupported())
+            Filters.Add(C.Param, C.ValueAt(X));
     }
 }
 

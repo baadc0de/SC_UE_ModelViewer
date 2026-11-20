@@ -384,3 +384,145 @@ bool FSCAudioBusFxInstanceTest::RunTest(const FString&)
     USoundEffectPreset::UnregisterInstance(Fx);
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseFilterScaleTest, "SCBridge.Audio.Filter.ScaleAndSum",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseFilterScaleTest::RunTest(const FString&)
+{
+    FSCAudioFilterLevels Filter;
+    Filter.Add(TEXT("lpf"), 15.f);
+    Filter.Add(TEXT("lpf"), 30.f);
+    TestEqual(TEXT("additive source parameters"), Filter.Lpf, 45.f);
+    const auto Check = [this](const TCHAR* Name, float Actual, float Expected)
+    {
+        TestTrue(Name, FMath::Abs(Actual - Expected) <= Expected * 0.03f);
+    };
+    Check(TEXT("low-pass 0"), FSCAudioFilterLevels::LowPassHz(0.f), 20000.f);
+    Check(TEXT("low-pass 30"), FSCAudioFilterLevels::LowPassHz(30.f), 7000.f);
+    Check(TEXT("low-pass 45"), FSCAudioFilterLevels::LowPassHz(Filter.Lpf), 1922.f);
+    Check(TEXT("low-pass 58"), FSCAudioFilterLevels::LowPassHz(58.f), 627.f);
+    Check(TEXT("low-pass 100"), FSCAudioFilterLevels::LowPassHz(100.f), 17.f);
+    Check(TEXT("high-pass 20"), FSCAudioFilterLevels::HighPassHz(20.f), 94.f);
+
+    FSCAudioProps Context, Node;
+    FSCAudioRtpcCurve& ContextCurve = Context.Rtpc.AddDefaulted_GetRef();
+    ContextCurve.Param = TEXT("lpf");
+    ContextCurve.Curve.Points = {{0.f, 50.f, 4.f}, {1.f, 0.f, 4.f}};
+    Node.Rtpc.Add(ContextCurve);
+    Node.Rtpc[0].Curve.Points[0].Y = -50.f;
+    FSCAudioGain Gain;
+    const auto AtVacuum = [](const FString&) { return 0.f; };
+    Gain.Add(Context, AtVacuum, nullptr);
+    TestEqual(TEXT("the context's positive curve closes the filter"), Gain.Filters.Lpf, 50.f);
+    Gain.Add(Node, AtVacuum, nullptr);
+    TestEqual(TEXT("the node's signed correction cancels the context before clamping"), Gain.Filters.Lpf, 0.f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseRampTest, "SCBridge.Audio.GameSync.Ramps",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseRampTest::RunTest(const FString&)
+{
+    const FSCAudioRamp Filtering{2.f, 1.f, 2};
+    TestTrue(TEXT("filter is within 0.5 percent of a rising target at the authored time"),
+        FMath::IsNearlyEqual(Filtering.Advance(0.f, 1.f, 2.f), 0.995f, 1e-5f));
+    TestTrue(TEXT("fall follows its own authored time"),
+        FMath::IsNearlyEqual(Filtering.Advance(1.f, 0.f, 1.f), 0.005f, 1e-5f));
+    const FSCAudioRamp Slew{4.f, 6.f, 1};
+    TestEqual(TEXT("slew moves at the authored rate"), Slew.Advance(0.f, 2.f, 0.25f), 1.f);
+    TestEqual(TEXT("falling slew stops at target"), Slew.Advance(1.f, 0.f, 1.f), 0.f);
+
+    FSCRtpcBank Bank;
+    const FSCLiveRtpcRef Value = Bank.Get(TEXT("synthetic"), 0.f);
+    Bank.ConfigureRamp(TEXT("synthetic"), 0.f, Filtering);
+    Bank.Set(TEXT("synthetic"), 1.f);
+    TestEqual(TEXT("callback sees the old smoothed value before a tick"), Value->Read(), 0.f);
+    Bank.Advance(2.f);
+    TestTrue(TEXT("callback reads the advanced value"), FMath::IsNearlyEqual(Value->Read(), 0.995f, 1e-5f));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseBusStateTest, "SCBridge.Audio.GameSync.BusSlotState",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseBusStateTest::RunTest(const FString&)
+{
+    // Synthetic group and state ids. The gain slot becomes active only in the enabled state.
+    const uint32 Group = 71, Bypassed = 81, Enabled = 83;
+    FSCAudioBus Bus;
+    FSCAudioBusEffect& Fx = Bus.Effects.AddDefaulted_GetRef();
+    Fx.Kind = TEXT("gain");
+    Fx.GainDb = -6.f;
+    Fx.StateGroups.Add(Group);
+    Fx.StateBypass.Add(Group, TArray<uint32>{Bypassed});
+
+    FSCRtpcBank Bank;
+    FSCBusDsp Dsp(101, Bus, {}, Bank, 0.f);
+    TUniquePtr<FSCBusDspState> State = Dsp.MakeState(48000.f, 1);
+    float Sample = 1.f;
+    Dsp.Process(*State, &Sample, 1);
+    TestEqual(TEXT("unknown state leaves the stateful slot bypassed"), Sample, 1.f);
+    Bank.SetState(Group, Enabled);
+    Sample = 1.f;
+    Dsp.Process(*State, &Sample, 1);
+    TestTrue(TEXT("enabled state applies the gain slot"), FMath::IsNearlyEqual(Sample, 0.501187f, 1e-5f));
+    Bank.SetState(Group, Bypassed);
+    Sample = 1.f;
+    Dsp.Process(*State, &Sample, 1);
+    TestEqual(TEXT("authored bypass state skips the slot"), Sample, 1.f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseAreaOverlapTest, "SCBridge.Audio.Rooms.ExclusiveArea",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseAreaOverlapTest::RunTest(const FString&)
+{
+    FSCAudioAreaOverlap Overlap;
+    Overlap.LowerDistance = 3.;
+    Overlap.HigherDistance = 2.;
+    Overlap.HigherFadeDistance = 8.;
+    Overlap.bHigherHullInLower = true;
+    TestEqual(TEXT("outside both, the closer overlapping area wins"), Overlap.ExclusiveFade().Get(1.f), 0.f);
+    Overlap.bLowerInside = true;
+    TestFalse(TEXT("inside lower only, the lower still owns the listener"), Overlap.ExclusiveFade().IsSet());
+    Overlap.bLowerInside = false;
+    Overlap.bHigherInside = true;
+    Overlap.HullSeparation = 0.5;
+    TestEqual(TEXT("higher only, different hulls do not play lower"), Overlap.ExclusiveFade().Get(1.f), 0.f);
+    Overlap.HullSeparation = 0.0;
+    TestEqual(TEXT("higher only, touching hulls can cross-fade"), Overlap.ExclusiveFade().Get(0.f), 0.75f);
+    Overlap.bLowerInside = true;
+    TestEqual(TEXT("inside both, depth into the higher area controls fade"), Overlap.ExclusiveFade().Get(0.f), 0.75f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseFilterBusTest, "SCBridge.Audio.Filter.OutputBusSpectrum",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseFilterBusTest::RunTest(const FString&)
+{
+    constexpr int32 Rate = 48000;
+    FSCAudioBus Bus;
+    Bus.OutputFilters.Lpf = 58.f;
+    FSCRtpcBank Bank;
+    FSCBusDsp Dsp(19, Bus, {}, Bank, 0.f);
+    TestTrue(TEXT("an output filter alone requires a submix effect"), Dsp.HasWork());
+    TUniquePtr<FSCBusDspState> State = Dsp.MakeState(Rate, 2);
+    TArray<float> Frame;
+    Frame.SetNumZeroed(Rate * 2);
+    for (int32 I = 0; I < Rate; ++I)
+        Frame[I * 2] = FMath::Sin(2. * UE_PI * 627. * I / Rate);
+
+    Dsp.Process(*State, Frame.GetData(), Rate);
+
+    double DryEnergy = 0., WetEnergy = 0., SilentChannelEnergy = 0.;
+    for (int32 I = Rate / 4; I < Rate; ++I)
+    {
+        const double Input = FMath::Sin(2. * UE_PI * 627. * I / Rate);
+        DryEnergy += FMath::Square(Input);
+        WetEnergy += FMath::Square(double(Frame[I * 2]));
+        SilentChannelEnergy += FMath::Square(double(Frame[I * 2 + 1]));
+    }
+    const double Attenuation = 10. * FMath::LogX(10., WetEnergy / DryEnergy);
+    TestTrue(TEXT("the authored cutoff is about minus three decibels"), FMath::Abs(Attenuation + 3.) <= 0.25);
+    TestEqual(TEXT("independent filter history per channel"), SilentChannelEnergy, 0.);
+    return true;
+}

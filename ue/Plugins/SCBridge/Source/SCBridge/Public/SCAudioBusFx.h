@@ -31,9 +31,16 @@ struct FSCLiveRtpc
     float Default = 0.f;
     std::atomic<float> Value{0.f};
     std::atomic<int32> Writers{0}; // meters registered to write it (information only)
-    float Read() const { return Value.load(std::memory_order_relaxed); }
+    float Read() const
+    {
+        return bRamp.load(std::memory_order_acquire) ? Smoothed.load(std::memory_order_relaxed) : Value.load(std::memory_order_relaxed);
+    }
+    FSCAudioRamp Ramp; // authored setup and advancement are on the game thread
+    std::atomic<float> Smoothed{0.f};
+    std::atomic<bool> bRamp{false};
 };
 using FSCLiveRtpcRef = TSharedRef<FSCLiveRtpc, ESPMode::ThreadSafe>;
+using FSCAudioStateRef = TSharedRef<std::atomic<uint32>, ESPMode::ThreadSafe>;
 
 class SCBRIDGE_API FSCRtpcBank
 {
@@ -44,10 +51,16 @@ public:
     void MarkDriven(const FString& Name, float Default);
     const TSet<FString>& Driven() const { return DrivenNames; }
     const FSCLiveRtpc* Find(const FString& Name) const;
+    void ConfigureRamp(const FString& Name, float Default, const FSCAudioRamp& Ramp);
+    void Set(const FString& Name, float Target);
+    void Advance(float Seconds);
+    FSCAudioStateRef State(uint32 Group);
+    void SetState(uint32 Group, uint32 Value);
 
 private:
     TMap<FString, FSCLiveRtpcRef> Values;
     TSet<FString> DrivenNames;
+    TMap<uint32, FSCAudioStateRef> StateGroups;
 };
 
 /** One effect instance's kernels and running values. */
@@ -67,6 +80,7 @@ struct SCBRIDGE_API FSCBusDspState
     };
     TArray<FKernel> Kernels; // per slot of the chain
     float LastPost = 1.f;
+    FSCAudioFilter Filter;
     bool bWasTracing = false;
 };
 
@@ -83,7 +97,7 @@ public:
     void Process(FSCBusDspState& State, float* Data, int32 Frames);
     /** A one-line description of what runs and what does not (AUDIO_BUSFX). */
     FString Describe() const;
-    bool HasWork() const { return !Slots.IsEmpty() || bSideChain; }
+    bool HasWork() const { return !Slots.IsEmpty() || bSideChain || bOutputFilters; }
     int32 LowestSlot() const { return Slots.IsEmpty() ? 0 : Slots[0].Fx.Slot; }
     int32 HighestSlot() const { return Slots.IsEmpty() ? 0 : Slots.Last().Fx.Slot; }
 
@@ -114,6 +128,8 @@ private:
     struct FSlot
     {
         FSCAudioBusEffect Fx;
+        TArray<TPair<FSCAudioStateRef, TArray<uint32>>> StateBypass;
+        bool IsActive() const;
         TSharedPtr<FSCLiveRtpc, ESPMode::ThreadSafe> MeterOut; // owned: an instance may outlive the bank
     };
     TArray<FSlot> Slots;
@@ -123,8 +139,9 @@ private:
     TMap<FString, float> Defaults;
     TMap<FString, FSCLiveRtpcRef> Rtpc; // every parameter this chain reads
     float DownstreamDb = 0;
-    bool bSideChain = false;
+    bool bSideChain = false, bOutputFilters = false;
     float Value(const FString& Name) const;
+    FSCAudioFilterLevels FilterLevels() const;
 
     std::atomic<bool> bTrace{false};
     double TraceStart = 0;

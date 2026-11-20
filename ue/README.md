@@ -865,13 +865,19 @@ world subsystem) plays it:
   0 dBFS), `sc.Audio.Limiter 0|1` (limiters bypassed / on), `sc.Audio.MuteScene <name part> 0|1` (silence one scene's
   voices, e.g. the hangar's), `sc.Audio.MixTrace start | stop [csv]` (every bus effect chain per render buffer:
   input / output peaks, the limiter's gain, the meters' values, the side-chain gains, the EQ bands in force;
-  `AUDIO_MIX_TRACE` per bus), `sc.Audio.Rtpc` (the meter-written game parameters now, `AUDIO_RTPC`).
+  `AUDIO_MIX_TRACE` per bus), `sc.Audio.Rtpc` (the live game parameters, `AUDIO_RTPC`), and
+  `sc.Audio.Filters 0|1` (bypass or apply the authored voice and output submix filters for A/B measurements).
 - **Gains.** Every node's own volume / make-up / output-bus gain and random draws, the action context, RTPC curves at the
   RTPCs' defaults, the listener-relative `Azimuth` and `Listener_Cone` and the area fade per frame, the bus chain's
   voice volumes and pitch. Dry and wet are two sends of each voice (UE's base submix output is off): the bus gets the
   attenuation's dry curve at the emitter distance, the room's environment the aux gain plus the aux curve. Each Wwise
   bus is a submix (`SCBus_<id|name>`) under its parent at its bus volume + make-up + RTPC defaults + Gain effects
   (auto-disable off: UE never wakes a bus created under an idle parent).
+- **Filters and game contexts (A2).** The player sums signed source and attenuation LPF/HPF contributions and maps
+  the final 0–100 value to the Wwise cutoff scale. Voices and the output submix run one-pole filters with coefficients
+  smoothed across each buffer. STMG attack and release settings drive the game parameter ramps. The on-foot and free
+  viewer modes select the package's ActorDefault and DefaultGlobalState contexts, which set RTPCs and bus effect-slot
+  state. The room connector geometry, project ENVS curves and surface table are exported for the propagation work.
 - **Bus effects (A1-2).** Each bus submix runs its own Wwise effect slots in slot order (`SCAudioBusFx.h`, the DSP in
   scbridge `sc_limiter` / `sc_meter` / `sc_eq`, unit-tested in Rust; `AUDIO_BUSFX` lists each bus's chain and what it
   does not run): **Gain** at its slot; **Parametric EQ** bands as RBJ biquads with their parameters at the RTPC values

@@ -10,6 +10,7 @@
 // Nothing here names a trigger, media or asset: every value comes from the manifest.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCAudioFilters.h"
 
 /** A Wwise curve: (x, y, interpolation) points; `Scaling` 2 (dB) stores 10^(dB/20) - 1. */
 struct SCBRIDGE_API FSCAudioCurve
@@ -105,7 +106,7 @@ struct SCBRIDGE_API FSCAudioTrigger
 struct SCBRIDGE_API FSCAudioAttenuation
 {
     float MaxDistance = 0;
-    FSCAudioCurve VolumeDry, VolumeAuxGame;
+    FSCAudioCurve VolumeDry, VolumeAuxGame, Lpf, Hpf;
 };
 
 /** A Wwise Peak Limiter's parameters (`CAkPeakLimiterFXParams`). */
@@ -156,6 +157,7 @@ struct SCBRIDGE_API FSCAudioBus
     FString Name;
     bool bAux = false;
     float VoiceDb = 0, BusDb = 0, MakeUpDb = 0, PitchCents = 0;
+    FSCAudioFilterLevels OutputFilters;
     /** The bus's output-stage gain curves (bus volume, output-bus volume, make-up) at their RTPCs' defaults (the
      *  manifest's `rtpcs`); curves whose RTPC has no default are left out (inactive). */
     float CurveDefaultDb = 0;
@@ -219,6 +221,22 @@ struct SCBRIDGE_API FSCAudioClass
     TArray<const FSCAudioEffect*> EffectsFor(const FString& Tag, const FString& On = FString()) const;
 };
 
+/** An Init.bnk game parameter's authored ramp from its current to target value. */
+struct SCBRIDGE_API FSCAudioRamp
+{
+    float Up = 0.f, Down = 0.f;
+    uint8 Type = 0;
+    float Advance(float Current, float Target, float Seconds) const;
+};
+
+struct FSCAudioGameContext
+{
+    TMap<FString, float> Rtpcs;
+    TMap<FString, FString> States;
+};
+
+SCBRIDGE_API uint32 SCAudioWwiseId(const FString& Name);
+
 struct SCBRIDGE_API FSCAudioManifest
 {
     TMap<FString, FSCAudioTrigger> Triggers;
@@ -226,6 +244,9 @@ struct SCBRIDGE_API FSCAudioManifest
     TMap<uint32, FSCAudioAttenuation> Attenuations;
     TMap<uint32, FSCAudioBus> Buses;
     TMap<uint32, FSCAudioMedia> Media;
+    TMap<uint32, FSCAudioRamp> GameParameters;
+    TMap<FString, FSCAudioGameContext> GameContexts;
+    TMap<FString, uint32> RtpcIds;
     TMap<FString, float> RtpcDefaults; // ATL default, else the Wwise game-parameter default (Init.bnk STMG)
     TMap<FString, FSCAudioEnvironment> Environments;
     TMap<FString, FSCAudioRoom> Rooms;
@@ -252,10 +273,20 @@ struct SCBRIDGE_API FSCAudioContainerState
  *  shuffle draws without replacement. Sequence: the next child, wrapping. Returns a child index (not a node index). */
 SCBRIDGE_API int32 SCAudioPick(const FSCAudioNode& Node, FSCAudioContainerState& State, FRandomStream& Random);
 
+/** Same-group area priority from the CryEngine area-manager lineage, as documented in WP-A2. */
+struct SCBRIDGE_API FSCAudioAreaOverlap
+{
+    bool bLowerInside = false, bHigherInside = false;
+    bool bHigherHullInLower = false, bLowerHullInHigher = false;
+    double LowerDistance = 0., HigherDistance = 0., HullSeparation = 0., HigherFadeDistance = 0.;
+    TOptional<float> ExclusiveFade() const;
+};
+
 /** The gain, pitch and aux-send composition of one voice at fixed RTPC values (dB / cents). */
 struct SCBRIDGE_API FSCAudioGain
 {
     float VolumeDb = 0, PitchCents = 0, GameAuxDb = 0;
+    FSCAudioFilterLevels Filters;
     /** Add one props block: its own values, one draw of its random ranges and its gain/pitch RTPC curves at Rtpc. */
     void Add(const FSCAudioProps& Props, const TFunctionRef<float(const FString&)>& Rtpc, FRandomStream* Random);
     /** Add a bus chain's voice volumes and voice-stage curves at their RTPC defaults (the bus mix levels go to the

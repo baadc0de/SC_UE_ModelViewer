@@ -461,3 +461,18 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
    visible).
 6. Meaning of the `AudioAreaAmbience` `positionFadeDistance` / `environmentFadeDistance` beyond the lineage's
    `fRtpcDistance` / environment fade (A1 uses `fadeDistance`).
+
+## 13. Export and runtime checkpoint
+
+- The C2 and XL hangar packages contain eight DataCore game contexts, STMG ramps and state transition definitions,
+  12 disabled ENVS curves, and 72 surface obstruction entries. The C2 has eight audio areas and the hangar has three.
+  All export group and priority 0. The C2 has twelve room connectors with bounds, including three standalone connectors
+  on the lift. The loaded C2 layers supplied no closed-occlusion override on those connectors. Absent fields stay
+  null in the export.
+- The viewer evaluates signed source and attenuation LPF/HPF contributions, clamps their sum at the DSP boundary,
+  and processes one-pole filters on the voice and output submix. It reads the authored parameters for the actor
+  and free viewer contexts and switches effect-slot bypass state when the context changes. The area priority rule
+  applies only to positive groups.
+- Ray evaluation, room traversal, multi-position panning and interpolated state properties are pending. Vehicle
+  contexts require WP-P6 to publish stable seat occupancy. The controlled C2/XL A/B and walk acceptance still
+  need the recorded checks in §9.

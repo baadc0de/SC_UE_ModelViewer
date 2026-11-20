@@ -84,10 +84,17 @@ public:
     bool bSeek = false;
     FAudioDevice* ClockDevice = nullptr;
     FSCAudioWaveHealth Health;
+    void SetFilterLevels(FSCAudioFilterLevels Levels)
+    {
+        Lpf.store(Levels.Lpf, std::memory_order_relaxed);
+        Hpf.store(Levels.Hpf, std::memory_order_relaxed);
+    }
 
 private:
     FCriticalSection Lock;
     sc_audio_stream* Stream = nullptr;
+    FSCAudioFilter Filter;
+    std::atomic<float> Lpf{0.f}, Hpf{0.f};
     TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Bytes; // reopened per pass in the whole-file mode
     int32 LoopsLeft = 0;        // whole-file mode: remaining plays after the current one; INDEX_NONE = forever
     bool bWholeFile = false;
@@ -106,6 +113,7 @@ struct SCBRIDGE_API FSCAudioPlaced
     TArray<FString> Links;
     TArray<FSCRoomVolume> Shapes; // areas
     int32 Interior = INDEX_NONE;
+    int32 Group = 0, Priority = 0;
     int32 Area = INDEX_NONE;      // spots: the governing area (index into Areas)
     double NextPlay = 0;          // playRandom spots
     bool bFired = false;          // a one-shot spot played since the listener came within reach
@@ -241,6 +249,8 @@ private:
     TSharedPtr<FSCLimiterTrace, ESPMode::ThreadSafe> LimiterTrace;
     TArray<TPair<TWeakObjectPtr<USoundSubmix>, TSharedRef<class FSCLimiterTap, ESPMode::ThreadSafe>>> LimiterTaps;
     TMap<uint32, TSharedPtr<FSCBusDsp, ESPMode::ThreadSafe>> BusDsps; // bus -> its effect chain (render thread)
+    FString ActiveGameContext;
+    void UpdateGameContext(bool bFirstPerson);
     TSharedPtr<FSCRtpcBank> RtpcBank;                                // the game parameters meters write
     bool bMixTracing = false;                                        // sc.Audio.MixTrace running
     double MixTraceStart = 0;
@@ -253,6 +263,7 @@ private:
         double FadeInEnd = 0, FadeOutStart = 0, FadeOutEnd = 0;
         bool bPower = false;       // crossfade_power curves
         float StaticDb = 0, StaticAux = 0;
+        FSCAudioFilterLevels StaticFilters, LastFilters;
         TArray<const FSCAudioRtpcCurve*> Dynamic; // curves on RTPCs that change while playing
         const FSCAudioAttenuation* Attenuation = nullptr;
         bool bSpatial = false, bAux = false, bSent = false;
