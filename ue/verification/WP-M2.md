@@ -39,8 +39,7 @@ the viewer exited normally.
 - Astra's first Garage screenshot review found placeholder strings in the catalog, an offscreen selected row and
   Cargo callouts over the Garage. The follow-up excludes the game's placeholder localization markers, shows live
   ships first, scrolls the selected ship into view, uses the mobiGlas paper list and hides Cargo callouts in Garage.
-  Its incremental build succeeded and all five Garage tests passed. The corrected rendered capture is part of the
-  C2/XL follow-up.
+  Its incremental build succeeded and all five Garage tests passed.
 
 ## Authored XL hangar
 
@@ -55,6 +54,35 @@ height of -5 cm. The output distinguishes that geometry result from the verified
 ```
 
 Astra confirmed the C2 in-hangar row pinned at the top of the readable list with no leaked Cargo overlay in
-`out/M2-C2XL-20261120-222506/garage-fleet.png`. Several remaining catalog variants share a display label. The
-camera faced the side wall. Live kiosk interaction, a showcase retake and a secondary ship on authored XL floor
-remain to verify.
+`out/M2-C2XL-20261120-222506/garage-fleet.png`. Several catalog variants shared a display label. The
+camera faced the side wall. The retest below covers the real kiosk, fleet framing and a second ship on authored floor.
+
+## Authored XL follow-up
+
+Win64 built 118 actions successfully, with 45.86 seconds in UBA execution. All 93 selected NullRHI tests passed,
+including the regression that distinguishes missing floor from an overhead obstruction. This run uses the bay's
+measured surface as its authored floor datum. The floor support rays search near that level, and a separate
+envelope test checks overhead clearance.
+
+The exact previously tested hangar tar was unpacked before the engine slot in 1.36 seconds. Its folder imported
+in 21.2 seconds with 357 meshes, 5,012 placements and 1,691 lights. The preceding warm archive-backed run took
+43.9 seconds for the environment job. Cache state differed across the runs. From process launch, the folder environment was ready in 33.70 seconds
+and C2 plus XL were ready in 77.27 seconds. The process reused that state for the three first-person lift row
+probes, Ship Link imagery, the real vehicle retrieval kiosk and Garage floor placement. The process ran
+187.95 seconds through completion of the last assertion and exited with code 0.
+
+- The authored bay continued to request confirmation before replacing the C2. The Buccaneer reached the 60,000-candidate cap.
+  Of those candidates, 46,714 hit a keep-out, 11,234 lacked flat support and 2,052 hit other geometry.
+  The support diagnostic recorded 35,970 contacts and 8,783 missed probes.
+- A Mirai Fury (7.2 × 5.5 × 3.4 m envelope) found legal authored floor at yaw 0 after 31,825 candidates
+  and paired as instance 2 at (-28.386, 98.123, 1.541) m. The C2 remained paired in the authored bay as instance 0.
+  The bounded Buccaneer plus Fury requests took 71.02 seconds. The Fury export took 19.20 seconds on a cache miss.
+- The first-person ray hit the authored vehicle-retrieval kiosk from 1 m, and E opened Garage. Astra passed the
+  resulting `garage-kiosk.png` and the corrected `garage-fleet.png` for the readable variant labels, visible C2
+  selection, active paint and absence of Cargo callouts. Images and probe logs are in
+  `out/M2-XLretest-20261120-225717/`.
+
+Use the procedural Cutlass plus Buccaneer case for routine fleet changes. Use the Fury as the secondary
+ship in the authored XL run. The Cutlass envelope with 3 m on either side needs at least 32.1 m of width.
+The XL platform is 304 × 184 m and the exported walls leave up to about 28 m around it before railings and
+reserved access lanes.
