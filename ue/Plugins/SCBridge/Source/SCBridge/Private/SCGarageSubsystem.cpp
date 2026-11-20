@@ -210,7 +210,7 @@ bool USCGarageSubsystem::AddToFleet(const FString& Name)
     return true;
 }
 
-FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacement At, bool bConfirmStore)
+FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacement At, bool bConfirmStore, int32 ConfirmedOccupant)
 {
     USCViewerSubsystem* V = Viewer();
     USCShipLinkSubsystem* Link = USCShipLinkSubsystem::Get(this);
@@ -239,7 +239,8 @@ FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacem
             if (!bOccupies) continue;
             Result.Occupant = V->GetVehicleInstanceId(Occupant);
             const bool bOwned = Link->RoleOf(Link->GetPlayer(), Occupant) == ESCShipRole::Owner;
-            const FString BlockingReason = FSCGaragePolicy::BayRefusal(bOwned, bConfirmStore, Result.bConfirmStore);
+            const bool bConfirmedThisShip = bConfirmStore && (ConfirmedOccupant == INDEX_NONE || ConfirmedOccupant == Result.Occupant);
+            const FString BlockingReason = FSCGaragePolicy::BayRefusal(bOwned, bConfirmedThisShip, Result.bConfirmStore);
             if (!BlockingReason.IsEmpty()) return Refuse(BlockingReason);
             const FString Stored = Store(Result.Occupant);
             if (!Stored.IsEmpty()) return Refuse(Stored);

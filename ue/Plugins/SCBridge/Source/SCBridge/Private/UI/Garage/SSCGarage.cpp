@@ -257,9 +257,10 @@ void SSCGarage::Retrieve(ESCGaragePlacement At)
     if (USCGarageSubsystem* G = Garage())
     {
         const FString Entity = Model->GetGarageEntity();
-        const FSCGarageOrder Result = G->Retrieve(Entity, At, ConfirmEntity == Entity);
+        const FSCGarageOrder Result = G->Retrieve(Entity, At, ConfirmEntity == Entity, ConfirmOccupant);
         Error = Result.Refusal;
         ConfirmEntity = Result.bConfirmStore ? Entity : FString();
+        ConfirmOccupant = Result.bConfirmStore ? Result.Occupant : INDEX_NONE;
         Refresh();
     }
 }

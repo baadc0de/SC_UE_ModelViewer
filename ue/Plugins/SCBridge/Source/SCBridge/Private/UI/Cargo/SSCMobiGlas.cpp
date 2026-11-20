@@ -258,6 +258,11 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
         if (Requests.App.GetValue().Equals(TEXT("garage"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::Garage);
         Requests.App.Reset();
     }
+    if (Requests.GarageEntity.IsSet())
+    {
+        Model->SetGarageEntity(Requests.GarageEntity.GetValue());
+        Requests.GarageEntity.Reset();
+    }
     if (LastApp != Model->GetApp()) { LastApp = Model->GetApp(); bRefocusApp = true; }
     FitScale = FMath::Clamp(float(Geometry.GetLocalSize().X) / MinLayoutWidth, 0.5f, 1.f);
     const bool bOpen = Model->IsOpen();

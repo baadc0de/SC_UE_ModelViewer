@@ -84,8 +84,12 @@ FObj SCGarageRpc::Command(UWorld* World, const FString& Route, const TSharedPtr<
             return Reply(TEXT("at must be bay or floor"));
         bool bConfirmed = false;
         if (Body) Body->TryGetBoolField(TEXT("confirm_store"), bConfirmed);
+        double Occupant = INDEX_NONE;
+        if (Body) Body->TryGetNumberField(TEXT("occupant"), Occupant);
+        if (!FMath::IsFinite(Occupant) || Occupant < INDEX_NONE || Occupant > MAX_int32 || FMath::TruncToDouble(Occupant) != Occupant)
+            return Reply(TEXT("occupant must be an instance id"));
         const FSCGarageOrder R = Garage->Retrieve(Text(Body, TEXT("entity")),
-            Position == TEXT("floor") ? ESCGaragePlacement::Floor : ESCGaragePlacement::Bay, bConfirmed);
+            Position == TEXT("floor") ? ESCGaragePlacement::Floor : ESCGaragePlacement::Bay, bConfirmed, int32(Occupant));
         FObj Out = Reply(R.Refusal);
         if (R.Ship != INDEX_NONE) Out->SetNumberField(TEXT("ship"), R.Ship);
         if (R.Occupant != INDEX_NONE) Out->SetNumberField(TEXT("occupant"), R.Occupant);

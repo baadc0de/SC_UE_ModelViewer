@@ -58,6 +58,7 @@ Test-Pairing $floorRow.ship $true
 if ($Screenshots) {
     $null = Call /console @{ cmd = 'sc.MobiGlas 1' }
     $null = Call /console @{ cmd = 'sc.MobiGlas.App Garage' }
+    $null = Call /console @{ cmd = "sc.MobiGlas.GarageSelect $BayEntity" }
     $present = [Diagnostics.Stopwatch]::StartNew()
     do {
         $state = (Call /garage/fleet @{ entity = $BayEntity }).garage

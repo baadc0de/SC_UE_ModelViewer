@@ -35,6 +35,7 @@ private:
     FString DetailKey = TEXT("<uninitialized>");
     FString Error;
     FString ConfirmEntity;
+    int32 ConfirmOccupant = INDEX_NONE;
     bool bBrowse = false;
     float Age = 1.f;
 };

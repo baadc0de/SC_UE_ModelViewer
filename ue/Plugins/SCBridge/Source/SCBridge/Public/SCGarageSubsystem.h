@@ -56,7 +56,7 @@ public:
     TArray<FSCGarageRow> Rows(const FString& EntityFilter = {}, bool bIncludeDefaultStored = true) const;
     bool AddToFleet(const FString& Entity);
     const TArray<FSCEntityHit>& GetCatalog() const { return Catalog; }
-    FSCGarageOrder Retrieve(const FString& Entity, ESCGaragePlacement At, bool bConfirmStore);
+    FSCGarageOrder Retrieve(const FString& Entity, ESCGaragePlacement At, bool bConfirmStore, int32 ConfirmedOccupant = INDEX_NONE);
     FString Store(int32 Ship);
     FString Paint(int32 Ship, const FString& Palette);
     FString PaintEntity(const FString& Entity, const FString& Palette);
