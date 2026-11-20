@@ -17,7 +17,7 @@ The stacked Ship Link verification passed in the same process.
 
 The follow-up bounds the procedural-map search to the collision floor and reports candidate rejection counts.
 The state-polling driver now checks primary store, retrieval, aboard refusal and remembered paint before optional
-extra-vehicle placement. The follow-up floor test and the remaining live checks await the next Unreal slot.
+extra-vehicle placement. The bounded-floor and lifecycle retest below exercised those checks.
 
 ```powershell
 & ue/scripts/rpc/garage.ps1 -Port 8789 -BayEntity DRAK_Cutlass_Black -CheckAboard -Screenshots
@@ -41,3 +41,20 @@ the viewer exited normally.
   ships first, scrolls the selected ship into view, uses the mobiGlas paper list and hides Cargo callouts in Garage.
   Its incremental build succeeded and all five Garage tests passed. The corrected rendered capture is part of the
   C2/XL follow-up.
+
+## Authored XL hangar
+
+The combined C2/XL game-mode run reused the process previously used for Ship Link and exited with code 0. The
+authored bay route passed with the C2, including the aboard refusal, paint persistence, storing, retrieval and
+both pairing transitions. On the separate floor route, the Cutlass envelope measured 35.7 × 26.1 × 15.5 m. The
+solver rejected 29,780 candidates in keep-outs and the remaining 5,612 for missing flat floor at the reference
+height of -5 cm. The output distinguishes that geometry result from the verified procedural floor placement.
+
+```powershell
+& ue/scripts/rpc/garage.ps1 -Port 8789 -BayEntity CRUS_Starlifter_C2 -FloorEntity DRAK_Cutlass_Black -CheckAboard -Screenshots
+```
+
+Astra confirmed the C2 in-hangar row pinned at the top of the readable list with no leaked Cargo overlay in
+`out/M2-C2XL-20261120-222506/garage-fleet.png`. Several remaining catalog variants share a display label. The
+camera faced the side wall. Live kiosk interaction, a showcase retake and a secondary ship on authored XL floor
+remain to verify.
