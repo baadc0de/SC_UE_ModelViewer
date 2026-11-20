@@ -10,7 +10,8 @@ The Editor target running in game mode stores each imported static mesh variant 
 launch-relative `cache/processed` directory. The package has the engine's Nanite, Lumen card, distance-field, and
 ray-tracing data. A checksummed companion record carries the variant's imported Chaos collision, including triangles
 that were split off for translucent rendering. The key combines the archive build, GLB bytes and source path,
-render/collision partition, host shader platform, and the engine's static-mesh format. Source paths preserve each
+render/collision partition, host shader platform, and the engine's static-mesh format. Full rigid-part hits keep the original lighting samples and socket association without copying CPU mesh descriptions.
+Source paths preserve each
 asset's identity for materials and import diagnostics. PNG mips are cached by bytes and sampling
 role. DDS textures enter the importer with their authored mip chains.
 
@@ -43,9 +44,18 @@ All passes produced 47 assets, 65 placements and 43 warnings. Warm actor assembl
 and took **10.43 s** including editor launch and exit. The grouped NullRHI regressions passed seven tests in
 **9.03 s**, including semantic cache retirement, split materials, the paint target and floor-panel paint behavior.
 
-Warm time includes GLB derivation, rig and clip construction and actor assembly. The remaining gap to the
-under-three-second gate is **1.640 s**. The entity index, persistent skeletal data, packaged Shipping validation
-and GPU/Cutlass acceptance remain open.
+A same-binary A/B on the same warm cache measured **4.698 s** with full CPU descriptions and **3.778 s** with
+deferred descriptions. All 467 cached variants restored with zero mesh builds or collision cooks. The new path
+deferred 252 rigid parts. Preparation worker time dropped from **1.9245 s** to **0.5633 s**, and preparation wait
+dropped from **1.9325 s** to **0.5766 s**. GLB derive worker time stayed at approximately **1.94 s**, with the
+import cursor waiting **0.3697 s** as it caught up with the workers. Whole-process time went from **10.29 s** to
+**9.59 s**. The grouped NullRHI suite passed eight tests, including the exact lighting-sample comparison.
+
+The remaining gap to the under-three-second gate is **0.778 s**. The entity index, persistent skeletal data,
+packaged Shipping validation and GPU/Cutlass acceptance remain open.
+
+For the warm control, add `-SCDisableDeferredRigidGeometry` to the Gladius command in a development build.
+Both passes use the same cache directory. `IMPORT_PREPARE` reports worker and cursor-wait durations.
 
 ### Commands
 
