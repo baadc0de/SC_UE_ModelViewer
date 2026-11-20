@@ -30,3 +30,14 @@ before starting the feature driver.
 
 Cutlass covered placement, state, remote door access, room groups, secure completion and real light modes. Full C2/XL
 acceptance is still pending for a door with a linked operating pad, local owner egress, and cargo access through a locked hold.
+
+## Review and follow-up
+
+Astra approved the retakes from the stacked Garage build at `out/M2-Cutlass-20261120-221057/`. The locked
+capture shows the same Locked door in the callout and access row, with one locked and zero moving. The opening
+capture shows Opening in both places and zero fully open with one moving. The three panes were readable at
+1280 × 720 and the shader banner was absent. The corrected Cutlass run passed in 3.99 seconds after asset readiness.
+
+The stacked build compiled the pad-control follow-up and passed all 92 selected tests, including the 88
+Ship Link and existing regression tests. The C2/XL pad, local egress, cargo lock and first-person pad image
+checks remain queued. The state-polled route accepts `-RequireExterior -RequirePad -C2Cargo` for that fixture.
