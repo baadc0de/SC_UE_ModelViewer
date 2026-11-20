@@ -51,11 +51,43 @@ dropped from **1.9325 s** to **0.5766 s**. GLB derive worker time stayed at appr
 import cursor waiting **0.3697 s** as it caught up with the workers. Whole-process time went from **10.29 s** to
 **9.59 s**. The grouped NullRHI suite passed eight tests, including the exact lighting-sample comparison.
 
-The remaining gap to the under-three-second gate is **0.778 s**. The entity index, persistent skeletal data,
-packaged Shipping validation and GPU/Cutlass acceptance remain open.
+The recorded Gladius result is **0.778 s** above the under-three-second gate. The entity index,
+persistent skeletal data and packaged Shipping validation remain open.
+
+### Cutlass GPU cold and warm comparison
+
+Two serialized Win64 Development game-mode processes on the source UE 5.9 fork ran D3D12 SM6 with the
+procedural Viewer map. Both used LOD 0, mip 0 and the exact same 1,550,427,648-byte layer-1 archive.
+The cold process started with an empty processed cache. The warm process reused it.
+
+| Fresh process | Load | Layer-1 lookup | Static mesh cache hits | Static mesh builds | Collision cooks |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Cold processed cache | 17.529 s | 1.016 s | 0 | 886 | 560 |
+| Warm processed cache | 8.805 s | 1.025 s | 886 | 0 | 0 |
+
+Both runs restored 225 authored lights across the same eight volumes and three rooms. The ship root was at
+Z=5.427 m on the same front gear toe. The first-person pawn found a floor and hit the closed rear ramp
+at 363.3 cm with world Z=219.07 cm and normal (0.69, 0.00, 0.73). The same authored ramp clip played and
+produced matching closed and open endpoints. Astra passed all three cold/warm screenshot pairs, covering
+the overview and the cargo bay with the rear ramp closed and open, at fixed camera poses and EV100 6.7.
+
+The first comparison exposed a warm root displacement of 160.86 cm. Cooked cache packages retain their
+Nanite render resources and strip editor settings. Scene assembly and the hierarchy panel now read Nanite
+availability from the actual render resources. This restores the same shadow participation and keeps the
+gear toe eligible for floor placement. The comparison now asserts the root pose, the exact rest support
+and the pawn impact alongside the lighting and ramp checks.
 
 For the warm control, add `-SCDisableDeferredRigidGeometry` to the Gladius command in a development build.
 Both passes use the same cache directory. `IMPORT_PREPARE` reports worker and cursor-wait durations.
+That Gladius benchmark predates the Cutlass Nanite classification fix.
+
+For the GPU comparison, seed a fresh cache directory with the layer-1 Cutlass tar and its index, then launch
+twice with the same directory using `-game -d3d12 -NoSound -SCDefaults -SCLoad=DRAK_Cutlass_Black -SCLod=0 -SCMip=0`,
+`-SCCacheDir=<scratch-cache>` and `-SCPlayerPackage=<player-package>`. Use the Q1 RPC runner to wait for load
+and settled look. Clamp exposure to EV100 6.7 with both `AutoExposureMinBrightness` and
+`AutoExposureMaxBrightness`, set `AutoExposureBias 0` and clear `AutoExposureBiasCurve`. The cargo route is
+`sc.FP.Spawn Interior:1`, `sc.FP.Look 180 -5` and the authored rear ramp from `sc.Doors.Pose`. Capture after
+the closed and open states settle, copying the cold Fly camera poses to the warm process.
 
 ### Commands
 
