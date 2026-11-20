@@ -41,3 +41,10 @@ capture shows Opening in both places and zero fully open with one moving. The th
 The stacked build compiled the pad-control follow-up and passed all 92 selected tests, including the 88
 Ship Link and existing regression tests. The C2/XL pad, local egress, cargo lock and first-person pad image
 checks remain queued. The state-polled route accepts `-RequireExterior -RequirePad -C2Cargo` for that fixture.
+
+## Physical lights and aperture follow-up
+
+The combined worktree built successfully and passed 93 focused tests in 14.30 seconds. The Cutlass state-polled
+Ship Link route passed in 3.44 seconds and shut down normally. The selected rear light group had 70 authored lights;
+the Off order changed all 70 and set the sum to zero. Default restored all 70 and 46,808.4 cd total. The route
+selected a group that actually has lights, and the RPC journal now also includes actor-lock and pad-state checks.
