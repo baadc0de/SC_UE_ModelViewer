@@ -497,4 +497,10 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
   respectively, all missing a closed weight. These exports cannot demonstrate the D5 closed-door LPF effect.
   `AUDIO_ROOM_CONNECTOR` records the scoped endpoints, door and authored weight of each connector.
 - The joint P6 integration drives VehicleDriver and VehicleCrew. The top-deck filter captures cover the stereo master.
-  The isolated hangar-bus and moving listener acceptance still needs the checks in §9.
+  The isolated hangar bus and moving listener still need the checks in §9.
+
+The joint Win64 target passed 18 audio and seat tests. The prepared C2/XL sound fixture was ready in 36.15 s with
+NullRHI and WASAPI. It logged 23 connectors, eight uniquely resolved scoped room pairs, and 112 async trace batches.
+One hangar emitter's four clamped outer rays averaged 0.9375, which the viewer reported as 93.8 on the RTPC's
+0–100 scale. A separate bridge fixture verified that entering and leaving each seat changes the corresponding
+authored game context.
