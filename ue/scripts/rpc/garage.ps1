@@ -3,7 +3,7 @@
 param(
     [int]$Port = 8770,
     [Parameter(Mandatory)][string]$BayEntity,
-    [Parameter(Mandatory)][string]$FloorEntity,
+    [string]$FloorEntity,
     [int]$TimeoutSeconds = 240,
     [switch]$Screenshots,
     [switch]$CheckAboard
@@ -41,19 +41,11 @@ function Test-Pairing([int]$Id, [bool]$Paired) {
 
 $timer = [Diagnostics.Stopwatch]::StartNew()
 $bayRow = Wait-ForRow $BayEntity ''
-$null = Wait-ForRow $FloorEntity 'Stored'
 if ($bayRow.state -ne 'In hangar') {
     $null = Call /garage/retrieve @{ entity = $BayEntity; at = 'bay' }
     $bayRow = Wait-ForRow $BayEntity 'In hangar'
 }
 Test-Pairing $bayRow.ship $true
-$occupied = Invoke-SC /garage/retrieve @{ entity = $FloorEntity; at = 'bay' }
-if ($occupied.ok -or !$occupied.confirm_store -or $occupied.occupant -ne $bayRow.ship) {
-    throw "An occupied bay should ask for confirmation: $($occupied | ConvertTo-Json -Compress)"
-}
-$null = Call /garage/retrieve @{ entity = $FloorEntity; at = 'floor' }
-$floorRow = Wait-ForRow $FloorEntity 'In hangar'
-Test-Pairing $floorRow.ship $true
 
 if ($Screenshots) {
     $null = Call /console @{ cmd = 'sc.MobiGlas 1' }
@@ -88,11 +80,32 @@ $null = Call /camera @{ mode = 'orbit' }
 $null = Call /garage/store @{ ship = $bayRow.ship }
 $null = Wait-ForRow $BayEntity 'Stored'
 Test-Pairing $bayRow.ship $false
-Test-Pairing $floorRow.ship $true
+
 $null = Call /garage/retrieve @{ entity = $BayEntity; at = 'bay' }
 $replacement = Wait-ForRow $BayEntity 'In hangar'
 Test-Pairing $replacement.ship $true
 if ($paint -and $replacement.paint -ne $paint) { throw "Paint did not survive retrieve: $($replacement.paint)." }
+
+"Primary lifecycle passed: pairing, store, retrieve, paint_tested=$([bool]$paint), aboard_tested=$([bool]$CheckAboard)"
+$floorRow = $null
+if ($FloorEntity) {
+    $null = Wait-ForRow $FloorEntity 'Stored'
+    $occupied = Invoke-SC /garage/retrieve @{ entity = $FloorEntity; at = 'bay' }
+    if ($occupied.ok -or !$occupied.confirm_store -or $occupied.occupant -ne $replacement.ship) {
+        throw "An occupied bay should ask for confirmation: $($occupied | ConvertTo-Json -Compress)"
+    }
+    $null = Call /garage/retrieve @{ entity = $FloorEntity; at = 'floor' }
+    $floorRow = Wait-ForRow $FloorEntity 'In hangar'
+    Test-Pairing $floorRow.ship $true
+    $null = Call /garage/store @{ ship = $replacement.ship }
+    $null = Wait-ForRow $BayEntity 'Stored'
+    Test-Pairing $replacement.ship $false
+    Test-Pairing $floorRow.ship $true
+    $null = Call /garage/retrieve @{ entity = $BayEntity; at = 'bay' }
+    $replacement = Wait-ForRow $BayEntity 'In hangar'
+    Test-Pairing $replacement.ship $true
+    Test-Pairing $floorRow.ship $true
+}
 
 [pscustomobject]@{
     bay = $replacement; floor = $floorRow; paint_tested = [bool]$paint

@@ -2,6 +2,11 @@
 #include "SCGarageSubsystem.h"
 #include "SCPackageReader.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "SCVehicleInstances.h"
+#include "Components/BoxComponent.h"
+#include "Engine/World.h"
+#include "GameFramework/Actor.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCGarageStorePolicyTest, "SCBridge.Garage.StorePolicy",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -57,5 +62,32 @@ bool FSCGarageFleetCatalogTest::RunTest(const FString&)
     Entry.Category = TEXT("Other");
     TestFalse(TEXT("props are not offered by the garage"), FSCGaragePolicy::IsFleetCandidate(Entry));
     return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCGarageFloorSearchTest, "SCBridge.Garage.FloorSearch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCGarageFloorSearchTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    AActor* Floor = World->SpawnActor<AActor>();
+    UBoxComponent* Slab = NewObject<UBoxComponent>(Floor);
+    Floor->SetRootComponent(Slab);
+    Slab->SetBoxExtent(FVector(4000, 4000, 50));
+    Slab->SetRelativeLocation(FVector(0, 0, -50));
+    Slab->SetCollisionProfileName(TEXT("BlockAll"));
+    Slab->RegisterComponent();
+    FSCVehiclePlacementQuery Query;
+    Query.LocalEnvelope = FBox(FVector(-730, -800, -230), FVector(730, 800, 292));
+    Query.SearchArea = FBox(FVector(-4000, -4000, 0), FVector(4000, 4000, 0));
+    Query.KeepOut.Add(FBox(FVector(-2400, -1600, 0), FVector(1800, 1600, 1100)));
+    const FSCVehiclePlacementResult Result = FSCVehiclePlacement::FindFreeFloor(World, Query);
+    TestTrue(TEXT("a supported floor placement beside a larger vessel: ") + Result.Reason, Result.bFound);
+    if (Result.bFound)
+    {
+        TestTrue(TEXT("does not occupy the larger ship's keep-out"),
+            !Query.KeepOut[0].Intersect(FSCVehiclePlacement::WorldBox(Query.LocalEnvelope, Result.Transform)));
+        TestTrue(TEXT("bounded search"), Result.Tested < 10000);
+    }
+    return !HasAnyErrors();
 }
 #endif

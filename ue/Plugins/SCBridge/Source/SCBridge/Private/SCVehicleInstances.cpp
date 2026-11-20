@@ -12,6 +12,9 @@
 #include "SCViewerSubsystem.h"
 #include "Cargo/SCCargoTypes.h"
 #include "Engine/World.h"
+#include "Engine/StaticMeshActor.h"
+#include "Components/StaticMeshComponent.h"
+#include "EngineUtils.h"
 #include "Engine/GameInstance.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
@@ -34,6 +37,24 @@ constexpr double FloorProbeCm = 500.0;
 TAutoConsoleVariable<int32> CVarShareAssets(TEXT("sc.Vehicle.ShareAssets"), 1,
     TEXT("1: extra vehicle instances of an imported entity are assembled from its retained assets (shared meshes, rigs, "
          "textures, materials); 0: every instance is a fresh import (export cache, full build). Read at load / spawn."));
+
+// The authored Viewer floor bounds the fallback search when no imported hangar is loaded. Derive the rectangle
+// from collision-backed flat supports at the reference height, leaving the actual floor and obstruction tests intact.
+FBox MapFloorArea(UWorld* World, double Height, double Tolerance)
+{
+    FBox Out(ForceInit);
+    for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+        if (const UStaticMeshComponent* Mesh = It->GetStaticMeshComponent();
+            It->GetLevel() == World->PersistentLevel && Mesh && Mesh->IsCollisionEnabled() &&
+            Mesh->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Block)
+        {
+            const FBox Bounds = Mesh->Bounds.GetBox();
+            if (Bounds.IsValid && FMath::Abs(Bounds.Max.Z - Height) <= Tolerance &&
+                FMath::Min(Bounds.GetSize().X, Bounds.GetSize().Y) > Bounds.GetSize().Z)
+                Out += FBox(FVector(Bounds.Min.X, Bounds.Min.Y, 0), FVector(Bounds.Max.X, Bounds.Max.Y, 0));
+        }
+    return Out;
+}
 
 FString Metres(const FVector& Cm) { return FString::Printf(TEXT("%.2f,%.2f,%.2f"), Cm.X / 100, Cm.Y / 100, Cm.Z / 100); }
 
@@ -144,6 +165,11 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
     const FVector Half(Extent.X + Q.ClearanceCm, Extent.Y + Q.ClearanceCm, (Height - FloorLiftCm) / 2 + Q.ClearanceCm / 2);
     const FCollisionShape Shape = FCollisionShape::MakeBox(Half);
     int32 KeptOut = 0, Unsupported = 0, Blocked = 0;
+    auto Refusal = [&](const TCHAR* Why) {
+        R.Reason = FString::Printf(TEXT("%s: %d candidates (%d in keep-out boxes, %d without flat floor at %.0f cm, %d blocked)"),
+            Why, R.Tested, KeptOut, Unsupported, Q.FloorZ, Blocked);
+        return Done();
+    };
     for (double Yaw : Q.Yaws)
     {
         const FQuat Rot(FRotator(0, Yaw, 0));
@@ -151,10 +177,7 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
         for (const FVector2D& P : Points)
         {
             if (R.Tested >= Q.MaxCandidates)
-            {
-                R.Reason = FString::Printf(TEXT("candidate limit %d reached"), Q.MaxCandidates);
-                return Done();
-            }
+                return Refusal(TEXT("candidate limit reached"));
             ++R.Tested;
             const FTransform Actor(Rot, FVector(P.X - CentreOffset.X, P.Y - CentreOffset.Y, Q.FloorZ - Q.LocalEnvelope.Min.Z));
             const FBox Footprint = WorldBox(Padded, Actor);
@@ -199,9 +222,7 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
             return Done();
         }
     }
-    R.Reason = FString::Printf(TEXT("no free floor: %d candidates (%d in keep-out boxes, %d without flat floor at %.0f cm, %d blocked)"), R.Tested,
-                               KeptOut, Unsupported, Q.FloorZ, Blocked);
-    return Done();
+    return Refusal(TEXT("no free floor"));
 }
 
 // ---------------------------------------------------------------- instances
@@ -619,6 +640,8 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
         const FBox Bounds = Environment->GetComponentsBoundingBox(true);
         Q.SearchArea = FBox(FVector(Bounds.Min.X, Bounds.Min.Y, 0), FVector(Bounds.Max.X, Bounds.Max.Y, 0));
     }
+    else
+        Q.SearchArea = MapFloorArea(V->GetWorld(), Q.FloorZ, Q.FloorToleranceCm);
     Q.KeepOut = FSCVehiclePlacement::AccessLanes(Environment);
     FBox Bay(ForceInit);
     if (I.bGarageFloor && FSCEnvironment::FindShipBay(Environment, Bay)) Q.KeepOut.Add(Bay);
