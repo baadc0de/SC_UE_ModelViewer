@@ -1,25 +1,32 @@
 // WP-A1: the audio player of SCAudioSystem.h. Every value comes from the package's audio manifest; the only names here
 // are the engine-driven listener-relative RTPCs (kAzimuth, kListenerCone), which the game's engine sets by name too.
 #include "SCAudioSystem.h"
+#include "SCFirstPersonCharacter.h"
 #include "SCPackageSource.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
+#include "SCViewerSubsystem.h"
 #include "SCLightImporter.h"
 #include "SCImporter.h"
 #include "scbridge.h"
 #include "AudioDevice.h"
 #include "AudioMixerBlueprintLibrary.h"
+#include "AudioMixerDevice.h"
 #include "Components/AudioComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "EffectConvolutionReverb.h"
 #include "SCAudioBusFx.h"
+#include "SCAudioRayOcclusion.h"
+#include "SCAudioStereoDirections.h"
+#include "DrawDebugHelpers.h"
 #include "ISubmixBufferListener.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -34,6 +41,19 @@ namespace
  *  on them are the data; these two names are the binding the engine itself uses). */
 const FString kAzimuth = TEXT("Azimuth");
 const FString kListenerCone = TEXT("Listener_Cone");
+const FString kSameRoom = TEXT("propagation_listenerInSameRoom");
+const FString kRoomOcclusion = TEXT("propagation_occlusion");
+const FString kInteriority = TEXT("Interiority");
+TAutoConsoleVariable<float> GAudioOcclusionMin(TEXT("sc.Audio.OcclusionMinM"), 0.f, TEXT("Minimum configured emitter ray distance in metres."));
+TAutoConsoleVariable<float> GAudioOcclusionMax(TEXT("sc.Audio.OcclusionMaxM"), 0.f, TEXT("Maximum configured emitter ray distance in metres. Zero disables ray evaluation."));
+TAutoConsoleVariable<float> GAudioObstructionFull(TEXT("sc.Audio.ObstructionFullM"), 0.f, TEXT("Configured distance for full centre-ray obstruction in metres."));
+TAutoConsoleVariable<int32> GAudioOcclusionDebug(TEXT("sc.Audio.OcclusionDebug"), 0, TEXT("Log sampled audio occlusion rays and draw their segments."));
+
+FSCAudioRayProfile CurrentRayProfile()
+{
+    return {GAudioOcclusionMin.GetValueOnGameThread(), GAudioOcclusionMax.GetValueOnGameThread(),
+        GAudioObstructionFull.GetValueOnGameThread()};
+}
 constexpr double kForever = 1e18;
 
 /** A/B switch for measuring the playback fix against the behaviour before it (bit 1: a looping media replays the
@@ -128,6 +148,47 @@ double ShapeDistance(const FSCRoomVolume& V, const FVector& P, FVector& Nearest)
     Nearest = V.FromContainer.Inverse().TransformPosition(N);
     return FVector::Dist(S, N);
 }
+
+double ShapeHullDistance(const FSCRoomVolume& V, const FVector& P, FVector& Nearest)
+{
+    if (!V.Contains(P))
+        return ShapeDistance(V, P, Nearest);
+
+    const FVector Local = V.FromContainer.TransformPosition(P);
+    double Best = TNumericLimits<double>::Max();
+    auto Consider = [&](const FVector& Candidate)
+    {
+        const FVector Point = V.FromContainer.Inverse().TransformPosition(Candidate);
+        const double Distance = FVector::DistSquared(P, Point);
+        if (Distance < Best) { Best = Distance; Nearest = Point; }
+    };
+    if (V.Shape == FSCRoomVolume::EShape::Prism && V.Points.Num() >= 3)
+    {
+        double Bottom = TNumericLimits<double>::Max();
+        for (const FVector& Point : V.Points) Bottom = FMath::Min(Bottom, Point.Z);
+        Consider(FVector(Local.X, Local.Y, Bottom));
+        Consider(FVector(Local.X, Local.Y, Bottom + V.Height));
+        for (int32 I = 0, J = V.Points.Num() - 1; I < V.Points.Num(); J = I++)
+        {
+            const FVector A(V.Points[J].X, V.Points[J].Y, Local.Z);
+            const FVector B(V.Points[I].X, V.Points[I].Y, Local.Z);
+            Consider(FMath::ClosestPointOnSegment(Local, A, B));
+        }
+    }
+    else
+    {
+        const FBox Bounds = V.SegmentBounds();
+        for (int32 Axis = 0; Axis < 3; ++Axis)
+        {
+            FVector Face = Local;
+            Face[Axis] = Bounds.Min[Axis];
+            Consider(Face);
+            Face[Axis] = Bounds.Max[Axis];
+            Consider(Face);
+        }
+    }
+    return FMath::Sqrt(Best);
+}
 } // namespace
 
 // ============================================================================================================ wave
@@ -145,6 +206,7 @@ bool USCAudioWave::Init(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSaf
     Channels = int32(Ch);
     Rate = int32(R);
     NumChannels = Channels;
+    Filter.Init(Channels);
     SetSampleRate(Rate);
     Duration = INDEFINITELY_LOOPING_DURATION;
     bLooping = false;
@@ -157,6 +219,22 @@ bool USCAudioWave::Init(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSaf
     return true;
 }
 
+bool USCAudioWave::EnableStereoDirections()
+{
+    if (Channels < 1 || Channels > 2) return false;
+    bStereoDirections = true;
+    NumChannels = 2;
+    return true;
+}
+
+void USCAudioWave::SetStereoDirectionGains(FVector2f Gains)
+{
+    static_assert(sizeof(Gains) == sizeof(uint64));
+    uint64 WireValue = 0;
+    FMemory::Memcpy(&WireValue, &Gains, sizeof(WireValue));
+    StereoDirectionGains.store(WireValue, std::memory_order_relaxed);
+}
+
 void USCAudioWave::OnBeginGenerate()
 {
     Super::OnBeginGenerate();
@@ -165,7 +243,7 @@ void USCAudioWave::OnBeginGenerate()
     if (Health.Sources.fetch_add(1, std::memory_order_relaxed) > 0 && Rate > 0)
         if (const uint64 Last = Health.LastCycles.load(std::memory_order_relaxed))
         {
-            const double Gap = CyclesToSeconds(FPlatformTime::Cycles64() - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch);
+            const double Gap = CyclesToSeconds(FPlatformTime::Cycles64() - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch.load(std::memory_order_relaxed));
             AtomicMax(Health.MaxResourceGapUs, int32(FMath::Clamp(Gap * 1e6, 0.0, 2e9)));
         }
     Health.LastCycles.store(0, std::memory_order_relaxed);
@@ -176,18 +254,19 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     const uint64 Now = FPlatformTime::Cycles64();
     FScopeLock Guard(&Lock);
     const int32 Ch = FMath::Max(1, Channels);
-    const int32 Frames = NumSamples / Ch;
+    const int32 OutputChannels = bStereoDirections ? 2 : Ch;
+    const int32 Frames = NumSamples / OutputChannels;
     // Health: was this pull later than the audio the last one returned lasts?
     if (const uint64 Last = Health.LastCycles.load(std::memory_order_relaxed); Last && Rate > 0)
     {
-        const double Late = CyclesToSeconds(Now - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch);
+        const double Late = CyclesToSeconds(Now - Last) - double(Health.LastFrames.load(std::memory_order_relaxed)) / Rate / FMath::Max(0.01f, Pitch.load(std::memory_order_relaxed));
         if (Late > kGapSlackS)
         {
             Health.Gaps.fetch_add(1, std::memory_order_relaxed);
             AtomicMax(Health.MaxGapUs, int32(FMath::Min(Late * 1e6, 2e9)));
         }
     }
-    OutAudio.SetNumZeroed(Frames * Ch * int32(sizeof(float)));
+    OutAudio.SetNumZeroed(Frames * OutputChannels * int32(sizeof(float)));
     float* Out = reinterpret_cast<float*>(OutAudio.GetData());
     if (!bAligned)
     {
@@ -196,7 +275,7 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
         bAligned = true;
         if (ClockDevice && ScheduledClock >= 0.0 && Rate > 0 && Stream && (GLegacy & 8) == 0)
         {
-            const double Late = (ClockDevice->GetAudioTime() - ScheduledClock) * Rate * Pitch;
+            const double Late = (ClockDevice->GetAudioTime() - ScheduledClock) * Rate * Pitch.load(std::memory_order_relaxed);
             if (Late < 0.0) LeadSilence = FMath::Min(int64(-Late + 0.5), int64(Rate) * 30);
             else if (bSeek && Late >= 1.0 && sc_audio_seek(Stream, uint64(Late + 0.5)) == SC_STATUS_OK) PlayFrame = int64(Late + 0.5);
             PlayFrame -= LeadSilence;
@@ -237,6 +316,15 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     }
     // A pull that finds the stream already ended means the mixer has consumed all of its audio: the voice is done.
     if (bWasEnded) Health.bFinished.store(true, std::memory_order_relaxed);
+    Filter.Process(Out, Frames, Rate * Pitch.load(std::memory_order_relaxed), {Lpf.load(std::memory_order_relaxed), Hpf.load(std::memory_order_relaxed)});
+    if (bStereoDirections && Frames > 0)
+    {
+        const uint64 WireValue = StereoDirectionGains.load(std::memory_order_relaxed);
+        FVector2f Target;
+        FMemory::Memcpy(&Target, &WireValue, sizeof(Target));
+        FSCAudioStereoDirections::Render(Out, Frames, Ch, PreviousDirectionGains, Target);
+        PreviousDirectionGains = Target;
+    }
     const uint64 After = FPlatformTime::Cycles64();
     const int64 Ns = int64(CyclesToSeconds(After - Now) * 1e9);
     Health.DecodeNs.fetch_add(Ns, std::memory_order_relaxed);
@@ -247,7 +335,7 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     uint64 Zero = 0;
     Health.FirstCycles.compare_exchange_strong(Zero, Now, std::memory_order_relaxed);
     Health.LastCycles.store(Now, std::memory_order_relaxed);
-    return Frames * Ch; // silence past the end
+    return Frames * OutputChannels; // silence past the end
 }
 
 void USCAudioWave::BeginDestroy()
@@ -331,12 +419,154 @@ void FSCAudioScene::LoadCooked(ASCVehicle* V)
                 return Out;
             };
             const bool bHelper = V->InteriorHelperFrames.IsValidIndex(K) && V->InteriorHelperFrames[K];
+            Scene->AddConnectors(I, Texts(TEXT("room_connectors")));
             Scene->AddInterior(I, V->InteriorAnchors[K], bHelper, Texts(TEXT("audio_spots")), Texts(TEXT("audio_areas")), Warnings);
             if (bRooms) FSCLightAreas::Register(V, V->InteriorAnchors[K], Texts(TEXT("room_volumes")), bHelper, Warnings);
         }
     for (const FString& W : Warnings) UE_LOG(LogSCAudio, Warning, TEXT("AUDIO_COOKED %s"), *W);
     UE_LOG(LogSCAudio, Display, TEXT("AUDIO_COOKED %s scene=%s media=%d rooms_registered=%d"), *Dir, *V->CookedAudioScene, Scene->MediaBytes.Num(), bRooms);
     if (USCAudioSubsystem* A = USCAudioSubsystem::Get(V)) A->AddScene(Scene.ToSharedRef());
+}
+
+void FSCAudioScene::AddConnectors(int32 Interior, const TArray<FString>& Json)
+{
+    for (const FString& Text : Json)
+    {
+        FObj O;
+        if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), O) || !O) continue;
+        FConnector C;
+        C.Interior = Interior;
+        C.Entity = Str(O, TEXT("entity_id")).ToLower();
+        if (C.Entity.IsEmpty()) continue;
+        C.Door = Str(O, TEXT("door_entity_id")).ToLower();
+        double Weight;
+        if (O->TryGetNumberField(TEXT("physical_occlusion_when_closed"), Weight) && FMath::IsFinite(Weight) && Weight >= 0 && Weight <= 1)
+            C.ClosedOcclusion = float(Weight);
+        FString Error;
+        FVector Bounds;
+        if (FSCRoomVolume::ReadVector(O, TEXT("bounds"), Bounds) && Bounds.GetMin() > 0 &&
+            FSCRoomVolume::ReadVector(O, TEXT("offset"), C.Offset) && FSCRoomVolume::ReadTransform(O, C.Transform, Error))
+            C.Bounds = Bounds;
+        Connectors.Add(MoveTemp(C));
+    }
+}
+
+void FSCAudioScene::RefreshRoomGraph()
+{
+    const ASCVehicle* V = Vehicle.Get();
+    if (!V || Connectors.IsEmpty()) return;
+    bool bMoved = GraphAnchorTransforms.Num() != InteriorAnchors.Num();
+    GraphAnchorTransforms.SetNum(InteriorAnchors.Num());
+    for (int32 I = 0; I < InteriorAnchors.Num(); ++I)
+    {
+        const USceneComponent* Anchor = InteriorAnchors[I].Get();
+        const FTransform Now = Anchor ? Anchor->GetComponentTransform().GetRelativeTransform(V->GetActorTransform())
+                                      : FTransform(FQuat::Identity, FVector::ZeroVector, FVector::ZeroVector);
+        if (bMoved || !Now.Equals(GraphAnchorTransforms[I]))
+        {
+            bMoved = true;
+            GraphAnchorTransforms[I] = Now;
+        }
+    }
+    if (bMoved) BuildRoomGraph();
+}
+
+void FSCAudioScene::BuildRoomGraph()
+{
+    for (FConnector& C : Connectors)
+    {
+        C.A = {}; C.B = {};
+        if (C.Bounds.GetMin() <= 0 || !InteriorAnchors.IsValidIndex(C.Interior) || !InteriorAnchors[C.Interior].IsValid()) continue;
+        // Require exactly one room pair on opposite faces of this authored box. Never bridge a gap to a nearby room.
+        for (int32 Axis = 0; Axis < 3; ++Axis)
+        {
+            FVector Half = FVector::ZeroVector;
+            Half[Axis] = C.Bounds[Axis] * 0.5;
+            const FSCAudioRoomKey A = RoomAt(ContainerToWorld(C.Interior, C.Transform.TransformPosition(C.Offset - Half)));
+            const FSCAudioRoomKey B = RoomAt(ContainerToWorld(C.Interior, C.Transform.TransformPosition(C.Offset + Half)));
+            if (!A.IsKnown() || !B.IsKnown() || A == B) continue;
+            if (C.A.IsKnown() && !((A == C.A && B == C.B) || (A == C.B && B == C.A)))
+            {
+                C.A = {}; C.B = {};
+                break;
+            }
+            C.A = A; C.B = B;
+        }
+    }
+}
+
+TOptional<float> FSCAudioScene::FrameRoomOcclusion(const FSCAudioRoomKey& Emitter)
+{
+    if (!Emitter.IsKnown() || !ListenerRoomKey.IsKnown()) return {};
+    if (Emitter == ListenerRoomKey) return 0.f;
+    if (const auto* Existing = FrameOcclusion.Find(Emitter)) return *Existing;
+    return FrameOcclusion.Add(Emitter, RoomOcclusion(Emitter));
+}
+
+TOptional<float> FSCAudioScene::RoomOcclusion(const FSCAudioRoomKey& Emitter) const
+{
+    if (!Emitter.IsKnown() || !ListenerRoomKey.IsKnown()) return {};
+    if (Emitter == ListenerRoomKey) return 0.f;
+    const ASCVehicle* V = Vehicle.Get();
+    struct FPath { FSCAudioRoomKey Room; TOptional<float> Sum; };
+    TArray<FPath> Layer{{Emitter, 0.f}};
+    TSet<FSCAudioRoomKey> Seen{Emitter};
+    while (!Layer.IsEmpty())
+    {
+        TArray<FPath> Next;
+        for (const FPath& Path : Layer)
+            for (const FConnector& C : Connectors)
+            {
+                const FSCAudioRoomKey Other = C.A == Path.Room ? C.B : C.B == Path.Room ? C.A : FSCAudioRoomKey{};
+                if (!Other.IsKnown() || Seen.Contains(Other)) continue;
+                TOptional<float> Sum;
+                if (Path.Sum.IsSet() && C.ClosedOcclusion.IsSet() && V && C.DoorRig.IsValid())
+                {
+                    const int32 Door = V->DoorForRig(C.DoorRig.Get());
+                    if (Door != INDEX_NONE && !V->IsDoorPlaying(Door) &&
+                        !V->Doors.ContainsByPredicate([&](const FSCDoorInteraction& D) {
+                            return &D != &V->Doors[Door] && D.Rig.Get() == C.DoorRig.Get();
+                        }))
+                        Sum = Path.Sum.GetValue() + (V->IsDoorOpen(Door) ? 0.f : C.ClosedOcclusion.GetValue());
+                }
+                if (FPath* Prev = Next.FindByPredicate([&](const FPath& P) { return P.Room == Other; }))
+                {
+                    if (!Prev->Sum.IsSet() || !Sum.IsSet() || !FMath::IsNearlyEqual(Prev->Sum.GetValue(), Sum.GetValue()))
+                        Prev->Sum.Reset(); // equally short paths disagree
+                }
+                else Next.Add({Other, Sum});
+            }
+        for (const FPath& Path : Next)
+        {
+            if (Path.Room == ListenerRoomKey)
+                return Path.Sum.IsSet() ? TOptional<float>(FMath::Clamp(Path.Sum.GetValue() / 3.f, 0.f, 1.f)) : TOptional<float>{};
+            Seen.Add(Path.Room);
+        }
+        Layer = MoveTemp(Next);
+    }
+    return {};
+}
+
+FSCAudioRoomKey FSCAudioScene::RoomAt(const FVector& World, int32 InteriorHint) const
+{
+    FSCAudioRoomKey Found;
+    const ASCVehicle* V = Vehicle.Get();
+    if (!V) return Found;
+    for (const FSCLightArea& Area : V->LightAreas)
+    {
+        if (!Area.Anchor.IsValid()) continue;
+        const int32 Interior = InteriorAnchors.IndexOfByKey(Area.Anchor);
+        if (Interior == INDEX_NONE || (InteriorHint != INDEX_NONE && Interior != InteriorHint)) continue;
+        const FVector Point = Area.AnchorToContainer.TransformPosition(Area.Anchor->GetComponentTransform().InverseTransformPosition(World));
+        for (const FSCRoomVolume& Volume : Area.Volumes)
+        {
+            if (Volume.Room.IsEmpty() || !Volume.Contains(Point)) continue;
+            FSCAudioRoomKey Key{Interior, Volume.Room.ToLower()};
+            if (Found.IsKnown() && !Found.Matches(Key)) return {};
+            Found = MoveTemp(Key);
+        }
+    }
+    return Found;
 }
 
 void FSCAudioScene::AddInterior(int32 Interior, USceneComponent* Anchor, bool bHelperFrame, const TArray<FString>& SpotJson,
@@ -362,6 +592,8 @@ void FSCAudioScene::AddInterior(int32 Interior, USceneComponent* Anchor, bool bH
         P.StopTrigger = Str(O, TEXT("stop_trigger"));
         P.Room = Str(O, TEXT("room")).ToLower();
         P.Interior = Interior;
+        P.Group = int32(Num(O, TEXT("group")));
+        P.Priority = int32(Num(O, TEXT("priority")));
         P.Positions.Add(Vec(O->TryGetField(TEXT("position"))));
         const TArray<TSharedPtr<FJsonValue>>* A;
         if (O->TryGetArrayField(TEXT("extra_positions"), A))
@@ -717,6 +949,17 @@ void USCAudioSubsystem::AddScene(const TSharedRef<FSCAudioScene>& Scene)
     if (FAudioDeviceHandle Device = GetWorld() ? GetWorld()->GetAudioDevice() : FAudioDeviceHandle()) Scene->EpochClock = Device->GetAudioTime();
     // The game parameters this scene's meters drive, known before its voices start (a voice's curves on them stay live).
     if (!RtpcBank) RtpcBank = MakeShared<FSCRtpcBank>();
+    for (const auto& [Group, Timing] : Scene->Manifest.StateTimings)
+        RtpcBank->ConfigureState(Group, Timing);
+    for (const auto& [Name, Id] : Scene->Manifest.RtpcIds)
+        if (const FSCAudioRamp* Ramp = Scene->Manifest.GameParameters.Find(Id))
+            if (const float* Default = Scene->Manifest.RtpcDefaults.Find(Name))
+                RtpcBank->ConfigureRamp(Name, *Default, *Ramp);
+    if (const float* Default = Scene->Manifest.RtpcDefaults.Find(kInteriority))
+        RtpcBank->MarkDriven(kInteriority, *Default);
+    for (const auto& [ContextName, Context] : Scene->Manifest.GameContexts)
+        for (const auto& [Name, Value] : Context.Rtpcs)
+            RtpcBank->MarkDriven(Name, Scene->Manifest.RtpcDefaults.FindRef(Name));
     for (const auto& [Id, B] : Scene->Manifest.Buses)
         for (const FSCAudioBusEffect& Fx : B.Effects)
             if (FSCBusDsp::RunsMeter(Fx))
@@ -724,6 +967,14 @@ void USCAudioSubsystem::AddScene(const TSharedRef<FSCAudioScene>& Scene)
                 const float* D = Scene->Manifest.RtpcDefaults.Find(Fx.Meter.GameParameter);
                 RtpcBank->MarkDriven(Fx.Meter.GameParameter, D ? *D : Fx.Meter.MinDb);
             }
+    Scene->RefreshRoomGraph();
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_ROOM_GRAPH scene=%s room_records=%d placed_connectors=%d"),
+           *Scene->Name, Scene->Manifest.Rooms.Num(), Scene->Connectors.Num());
+    for (const FSCAudioScene::FConnector& C : Scene->Connectors)
+        UE_LOG(LogSCAudio, Display, TEXT("AUDIO_ROOM_CONNECTOR interior=%d entity=%s door=%s closed=%s a=%d/%s b=%d/%s"),
+               C.Interior, *C.Entity, C.Door.IsEmpty() ? TEXT("-") : *C.Door,
+               C.ClosedOcclusion.IsSet() ? *FString::SanitizeFloat(C.ClosedOcclusion.GetValue()) : TEXT("missing"),
+               C.A.Interior, *C.A.Guid, C.B.Interior, *C.B.Guid);
     Scenes.Add(Scene);
     LogScene(*Scene);
 }
@@ -905,6 +1156,14 @@ FString USCAudioSubsystem::EnvironmentAt(const FSCAudioScene& S, const FInstance
 
 float USCAudioSubsystem::RtpcValue(const FSCAudioScene& S, const FInstance& I, const FString& Name, const FVector& Emitter) const
 {
+    if (const FInstance::FRayValue* Ray = I.RayParameters.Find(Name)) return Ray->Value;
+    if (Name == kSameRoom && S.bListenerInOtherSceneRoom && I.EmitterRoom.IsKnown()) return 0.f;
+    if ((Name == kSameRoom || Name == kRoomOcclusion) && S.ListenerRoomKey.IsKnown() && I.EmitterRoom.IsKnown())
+    {
+        const bool bSame = S.ListenerRoomKey.Matches(I.EmitterRoom);
+        if (Name == kSameRoom) return bSame ? 1.f : 0.f;
+        if (I.RoomOcclusion.IsSet()) return I.RoomOcclusion.GetValue();
+    }
     if (!I.Place.AreaFadeRtpc.IsEmpty() && Name == I.Place.AreaFadeRtpc)
     {
         if (S.Areas.IsValidIndex(I.Place.Area)) return S.Areas[I.Place.Area].Fade;
@@ -976,9 +1235,12 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
         I.Action = &A;
         I.Random.Initialize(int32(GetTypeHash(Trigger) ^ uint32(Id * 2654435761u)));
         I.Position = PlacePosition(I);
+        I.EmitterRoom = I.Place.Interior != INDEX_NONE && !I.Place.Room.IsEmpty()
+            ? FSCAudioRoomKey{I.Place.Interior, I.Place.Room.ToLower()} : S.RoomAt(I.Position, I.Place.Interior);
+        I.RoomOcclusion = S.FrameRoomOcclusion(I.EmitterRoom);
         I.Environment = EnvironmentAt(S, I, I.Position);
         Start(I, S, {A.Root}, Clock + A.DelayS + A.Context.InitialDelayS, A.FadeInS, 0.f);
-        UpdateInstance(I, Clock);
+        UpdateInstance(I, Clock, 0.f);
         if (bLog)
             for (const FVoice& V : I.Voices)
             {
@@ -1142,7 +1404,25 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     FSCAudioGain Gain;
     const FVector Here = PlacePosition(I);
     auto IsDynamic = [&](const FString& R) {
-        return R == kAzimuth || R == kListenerCone || (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc) || (RtpcBank && RtpcBank->Driven().Contains(R));
+        if (V.bSpatial && (I.Place.Spot != INDEX_NONE || I.Place.Attach.IsValid()))
+            if (const uint32* Id = S.Manifest.RtpcIds.Find(R))
+                if (const FSCAudioRamp* Ramp = S.Manifest.GameParameters.Find(*Id); Ramp && Ramp->IsRayParameter())
+                {
+                    if (!I.RayParameters.Contains(R))
+                    {
+                        const float Default = S.Manifest.RtpcDefaults.FindRef(R);
+                        I.RayParameters.Add(R, {Default, Default, *Ramp});
+                    }
+                    return true;
+                }
+        return R == kAzimuth || R == kListenerCone || R == kSameRoom || R == kRoomOcclusion ||
+            (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc) || (RtpcBank && RtpcBank->Driven().Contains(R));
+    };
+    auto BindVoiceStates = [&](const TArray<FSCAudioStateValue>& States) {
+        if (RtpcBank)
+            for (const FSCAudioStateValue& State : States)
+                if (State.VoiceDb != 0.f || State.PitchCents != 0.f || State.Filters.Lpf != 0.f || State.Filters.Hpf != 0.f)
+                    V.States.Add(RtpcBank->BindState(State));
     };
     auto AddProps = [&](const FSCAudioProps& P) {
         FSCAudioProps Static = P;
@@ -1150,6 +1430,7 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
         Gain.Add(Static, [&](const FString& R) { return RtpcValue(S, I, R, Here); }, &I.Random);
         for (const FSCAudioRtpcCurve& C : P.Rtpc)
             if (IsDynamic(C.Rtpc) && C.Type == 0) V.Dynamic.Add(&C);
+        BindVoiceStates(P.States);
     };
     AddProps(I.Action->Context);
     for (int32 Node : Path) AddProps(S.Manifest.Nodes[Node].Props);
@@ -1158,26 +1439,52 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     const TArray<const FSCAudioBus*> Chain = S.Manifest.BusChain(Leaf.Bus);
     Gain.AddBusVoice(Chain, IsDynamic, S.Manifest.RtpcDefaults);
     for (const FSCAudioBus* B : Chain)
+    {
         for (const FSCAudioRtpcCurve& C : B->Rtpc)
             if (C.Type == 0 && FSCAudioBus::IsVoiceGain(C.Param) && IsDynamic(C.Rtpc) && S.Manifest.RtpcDefaults.Contains(C.Rtpc)) V.Dynamic.Add(&C);
+        BindVoiceStates(B->States);
+    }
     float BlendDb = 0.f; // the blend layers' gains on the path (RTPCs at their values when the voice starts)
     for (int32 K = 0; K + 1 < Path.Num(); ++K)
         if (const FSCAudioNode& P = S.Manifest.Nodes[Path[K]]; P.Kind == ESCAudioNodeKind::Blend)
             BlendDb += BlendGainDb(S, I, P, P.Children.IndexOfByKey(Path[K + 1]), Here);
     float BusCents = 0.f;
-    for (const FSCAudioBus* B : S.Manifest.BusChain(Leaf.Bus)) BusCents += B->PitchCents;
+    for (const FSCAudioBus* B : Chain) BusCents += B->PitchCents;
     V.StaticDb = Gain.VolumeDb + I.Place.VolumeDb + BlendDb;
     V.StaticAux = Gain.GameAuxDb;
-    const float PitchRatio = FMath::Pow(2.f, (Gain.PitchCents + BusCents + I.Place.PitchCents) / 1200.f);
+    V.StaticFilters = Gain.Filters;
+    V.StaticPitchCents = Gain.PitchCents + BusCents + I.Place.PitchCents;
+    float InitialPitchCents = V.StaticPitchCents;
+    for (const FSCAudioRtpcCurve* C : V.Dynamic)
+        if (C->Param == TEXT("pitch")) InitialPitchCents += C->Curve.Eval(RtpcValue(S, I, C->Rtpc, Here));
+    for (const FSCAudioWeightedState& State : V.States)
+        InitialPitchCents += State.Props.PitchCents * State.Weight->load(std::memory_order_relaxed);
+    const float PitchRatio = FMath::Pow(2.f, InitialPitchCents / 1200.f);
+    V.LastPitchCents = InitialPitchCents;
     USCAudioWave* Wave = NewObject<USCAudioWave>(this);
     if (!Wave->Init(*Bytes, Leaf.LoopCount, (GLegacy & 1) != 0)) return T0;
     Wave->Pitch = PitchRatio;
+    Wave->SetFilterLevels(V.StaticFilters);
     // Sample-aligned timing: a voice that loops forever in a placed loop keeps the scene's timeline (the game posts a
     // zone's spots together and its virtual voices resume from elapsed time: `virtual_queue_behavior` 1 in the banks);
     // every other voice starts at its scheduled time on the audio clock.
     if (FAudioDeviceHandle Device = GetWorld()->GetAudioDevice())
     {
         Wave->ClockDevice = Device.GetAudioDevice();
+        if (V.bSpatial && S.Spots.IsValidIndex(I.Place.Spot) && S.Spots[I.Place.Spot].Positions.Num() > 1)
+        {
+            const Audio::FMixerDevice* Mixer = static_cast<const Audio::FMixerDevice*>(Wave->ClockDevice);
+            const bool bStereoLayout = [Mixer] {
+                const Audio::FScopedDeviceSwapLock Lock(Mixer->GetAudioMixerPlatform());
+                const auto& Channels = Mixer->GetChannelArray();
+                return Channels.Num() == 2 && Channels[0] == EAudioMixerChannel::FrontLeft && Channels[1] == EAudioMixerChannel::FrontRight;
+            }();
+            if (bStereoLayout)
+            {
+                V.bStereoDirections = Wave->EnableStereoDirections();
+                if (V.bStereoDirections) V.bSpatial = false;
+            }
+        }
         const bool bEpoch = Leaf.LoopCount == 0 && I.Place.EpochClock >= 0.0;
         Wave->ScheduledClock = (bEpoch ? I.Place.EpochClock : I.PostAudioClock) + (T0 - I.PostTime);
         Wave->bSeek = bEpoch;
@@ -1265,11 +1572,95 @@ int32 USCAudioSubsystem::VoiceCount() const
     return N;
 }
 
-void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
+void USCAudioSubsystem::UpdateOcclusion(FInstance& I, const FSCAudioScene& S, double Now, float Seconds)
+{
+    if (I.RayParameters.IsEmpty()) return;
+    UWorld* World = GetWorld();
+    const float* DefaultSurface = S.Manifest.SurfaceObstruction.Find(FName(TEXT("mat_default")));
+    const FSCAudioRayProfile Profile = CurrentRayProfile();
+    const FVector Delta = I.Position - ListenerPos;
+    const double DistanceM = Delta.Length() / 100.0;
+    const bool bProfileReady = World && DefaultSurface && Profile.IsConfigured();
+    const bool bTrace = bProfileReady && Profile.Includes(DistanceM) && !I.Voices.IsEmpty();
+    if (!bTrace)
+    {
+        I.PendingRays.Reset();
+        I.RayTargets = FVector2f::ZeroVector;
+        I.NextRaySample = Now;
+    }
+    else if (!I.PendingRays.IsEmpty() && I.RayFrame != GFrameCounter)
+    {
+        float RayAmounts[5] = {};
+        bool bComplete = true;
+        const bool bDebug = GAudioOcclusionDebug.GetValueOnGameThread() > 0;
+        for (int32 Index = 0; Index < I.PendingRays.Num(); ++Index)
+        {
+            FTraceDatum Result;
+            if (!World->QueryTraceData(I.PendingRays[Index], Result)) { bComplete = false; break; }
+            int32 Count = 0;
+            for (const FHitResult& Hit : Result.OutHits)
+            {
+                const UPrimitiveComponent* HitComponent = Hit.GetComponent();
+                if (!HitComponent || HitComponent->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block) continue;
+                const UPhysicalMaterial* Physical = Hit.PhysMaterial.Get();
+                const float* Surface = Physical ? S.Manifest.SurfaceObstruction.Find(Physical->GetFName()) : nullptr;
+                RayAmounts[Index] += Surface ? *Surface : *DefaultSurface;
+                if (++Count == 5) break;
+            }
+            if (bDebug)
+                DrawDebugLine(World, Result.Start, Result.End, Count > 0 ? FColor::Red : FColor::Green, false, 0.12f);
+        }
+        if (bComplete)
+        {
+            const FSCAudioRayLevels Levels = FSCAudioRayLevels::Reduce(Profile, I.RayDistanceM, RayAmounts);
+            I.RayTargets = FVector2f(Levels.Occlusion, Levels.Obstruction);
+            if (bDebug)
+                UE_LOG(LogSCAudio, Display, TEXT("AUDIO_OCCL emitter=\"%s\" rays=%.2f,%.2f,%.2f,%.2f,%.2f occlusion=%.3f obstruction=%.3f amount=%.1f"),
+                    *I.Place.Label, RayAmounts[0], RayAmounts[1], RayAmounts[2], RayAmounts[3], RayAmounts[4],
+                    Levels.Occlusion, Levels.Obstruction, 100.f * Levels.Occlusion);
+        }
+        I.PendingRays.Reset(); // a handle is only readable on the next world frame
+    }
+    if (bTrace && I.bCanSampleRays && I.PendingRays.IsEmpty())
+    {
+        I.bCanSampleRays = false;
+        I.NextRaySample = Now + 0.10; // viewer sampling budget, independent of the authored RTPC attack/release
+        I.RayDistanceM = DistanceM;
+        I.RayFrame = GFrameCounter;
+        const FVector Along = Delta.GetSafeNormal();
+        FVector Side = FVector::CrossProduct(Along, FVector::UpVector).GetSafeNormal();
+        if (Side.IsNearlyZero()) Side = ListenerRight.GetSafeNormal();
+        const FVector Up = FVector::CrossProduct(Side, Along).GetSafeNormal();
+        // Lineage sampling footprint in cm. The game does not expose its random jitter in the package.
+        const double RadiusCm = FMath::GetMappedRangeValueClamped(FVector2D(1.0, 20.0), FVector2D(30.0, 100.0), DistanceM);
+        const FVector Offsets[] = {FVector::ZeroVector, Up * RadiusCm, -Up * RadiusCm, Side * RadiusCm, -Side * RadiusCm};
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(SCAudioOcclusion), true);
+        Params.bReturnPhysicalMaterial = true;
+        if (const APlayerController* PC = World->GetFirstPlayerController()) Params.AddIgnoredActor(PC->GetPawn());
+        if (const UPrimitiveComponent* Source = Cast<UPrimitiveComponent>(I.Place.Attach.Get())) Params.AddIgnoredComponent(Source);
+        FCollisionObjectQueryParams Objects;
+        Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+        Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+        Objects.AddObjectTypesToQuery(ECC_PhysicsBody);
+        for (const FVector& Offset : Offsets)
+            I.PendingRays.Add(World->AsyncLineTraceByObjectType(EAsyncTraceType::Multi, ListenerPos + Offset, I.Position, Objects, Params));
+    }
+    for (auto& [Name, Ray] : I.RayParameters)
+    {
+        const float Factor = Ray.Ramp.BuiltIn == FSCAudioRamp::BuiltInOcclusion ? I.RayTargets.X : I.RayTargets.Y;
+        Ray.Value = Ray.Ramp.Advance(Ray.Value, bProfileReady ? 100.f * Factor : Ray.Default, Seconds);
+    }
+}
+
+void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now, float Seconds)
 {
     const TSharedPtr<FSCAudioScene> SP = I.Scene.Pin();
     if (!SP) { I.Voices.Reset(); I.Runs.Reset(); return; }
     FSCAudioScene& S = *SP;
+    I.Position = PlacePosition(I);
+    I.EmitterRoom = I.Place.Interior != INDEX_NONE && !I.Place.Room.IsEmpty()
+            ? FSCAudioRoomKey{I.Place.Interior, I.Place.Room.ToLower()} : S.RoomAt(I.Position, I.Place.Interior);
+    I.RoomOcclusion = S.FrameRoomOcclusion(I.EmitterRoom);
     // Continuous containers: start the next item when its time comes.
     for (int32 R = 0; R < I.Runs.Num(); ++R)
     {
@@ -1298,7 +1689,7 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
         if (I.Runs.IsValidIndex(R)) I.Runs[R].NextAt = Next;
     }
     I.Runs.RemoveAll([](const FRun& R) { return R.ItemsLeft == 0 || R.NextAt >= kForever; });
-    I.Position = PlacePosition(I);
+    UpdateOcclusion(I, S, Now, Seconds);
     if (const FString Env = EnvironmentAt(S, I, I.Position); Env != I.Environment)
     {
         for (FVoice& V : I.Voices)
@@ -1354,11 +1745,30 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
         const FVector Emitter = V.Component ? V.Component->GetComponentLocation() : I.Position;
         float Db = V.StaticDb + AreaOffsetDb;
         float AuxDb = V.StaticAux;
+        float PitchCents = V.StaticPitchCents;
+        FSCAudioFilterLevels Filters = V.StaticFilters;
+        for (const FSCAudioWeightedState& State : V.States)
+        {
+            const float Weight = State.Weight->load(std::memory_order_relaxed);
+            Db += State.Props.VoiceDb * Weight;
+            PitchCents += State.Props.PitchCents * Weight;
+            Filters.Lpf += State.Props.Filters.Lpf * Weight;
+            Filters.Hpf += State.Props.Filters.Hpf * Weight;
+        }
         for (const FSCAudioRtpcCurve* C : V.Dynamic)
         {
             const float X = RtpcValue(S, I, C->Rtpc, Emitter);
-            if (C->Param == TEXT("game_aux_send_volume")) AuxDb += C->Curve.EvalDb(X);
+            if (FSCAudioFilterLevels::IsVoiceFilter(C->Param) && C->IsSupported()) Filters.Add(C->Param, C->ValueAt(X));
+            else if (C->Param == TEXT("game_aux_send_volume")) AuxDb += C->Curve.EvalDb(X);
+            else if (C->Param == TEXT("pitch")) PitchCents += C->Curve.Eval(X);
             else if (C->Param == TEXT("volume") || C->Param == TEXT("make_up_gain") || C->Param == TEXT("output_bus_volume")) Db += C->Curve.EvalDb(X);
+        }
+        if (!FMath::IsNearlyEqual(PitchCents, V.LastPitchCents, 0.01f))
+        {
+            const float PitchRatio = FMath::Pow(2.f, PitchCents / 1200.f);
+            if (V.Component) V.Component->SetPitchMultiplier(PitchRatio);
+            if (V.Wave) V.Wave->Pitch.store(PitchRatio, std::memory_order_relaxed);
+            V.LastPitchCents = PitchCents;
         }
         // Distance attenuation applies whenever the node has an attenuation (panned or not), except to a listener bed.
         const bool bDistance = V.Attenuation && !I.Place.bListener;
@@ -1368,7 +1778,41 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
         if (bDistance)
         {
             if (!V.Attenuation->VolumeDry.IsEmpty()) DryDb += V.Attenuation->VolumeDry.EvalDb(Scaled);
+            if (!V.Attenuation->Lpf.IsEmpty()) Filters.Lpf += V.Attenuation->Lpf.Eval(Scaled);
+            if (!V.Attenuation->Hpf.IsEmpty()) Filters.Hpf += V.Attenuation->Hpf.Eval(Scaled);
             if (!V.Attenuation->VolumeAuxGame.IsEmpty()) AuxDb += V.Attenuation->VolumeAuxGame.EvalDb(Scaled);
+        }
+        if (V.bStereoDirections && V.Wave && S.Spots.IsValidIndex(I.Place.Spot))
+        {
+            const FSCAudioPlaced& Spot = S.Spots[I.Place.Spot];
+            const FVector Forward = ListenerFwd.GetSafeNormal();
+            const FVector Right = ListenerRight.GetSafeNormal();
+            const FSCAudioTrigger* Trigger = S.Manifest.Triggers.Find(I.Trigger);
+            const double Reach = V.Attenuation && V.Attenuation->MaxDistance > 0.f ? V.Attenuation->MaxDistance
+                : Trigger ? Trigger->RadiusMax : 0.0;
+            FSCAudioStereoDirections Directions;
+            for (const FVector& At : Spot.Positions)
+            {
+                const FVector Offset = S.ContainerToWorld(Spot.Interior, At + I.Place.DirectionalOffset) - ListenerPos;
+                const double Metres = Offset.Length() / (100.0 * FMath::Max(0.01f, I.Place.AttenuationScale));
+                if (Reach > 0.0 && Metres > Reach) continue;
+                const double Front = FVector::DotProduct(Offset, Forward), Side = FVector::DotProduct(Offset, Right);
+                const double PlanarLength = FMath::Sqrt(FMath::Square(Front) + FMath::Square(Side));
+                const float Gain = !V.Attenuation || V.Attenuation->VolumeDry.IsEmpty()
+                    ? 1.f : FSCAudioGain::Linear(V.Attenuation->VolumeDry.EvalDb(Metres));
+                Directions.Add(PlanarLength > UE_SMALL_NUMBER ? float(Side / PlanarLength) : 0.f, Gain);
+            }
+            V.Wave->SetStereoDirectionGains(Directions.RelativeGains());
+            DryDb = Directions.Reference > 0.f ? 20.f * FMath::LogX(10.f, Directions.Reference) : -200.f;
+        }
+        if (V.Wave && (FMath::Abs(Filters.Lpf - V.LastFilters.Lpf) >= 0.01f || FMath::Abs(Filters.Hpf - V.LastFilters.Hpf) >= 0.01f))
+        {
+            V.Wave->SetFilterLevels(Filters);
+            if (bLog && (FMath::Abs(Filters.Lpf - V.LastFilters.Lpf) >= 1.f || FMath::Abs(Filters.Hpf - V.LastFilters.Hpf) >= 1.f))
+                UE_LOG(LogSCAudio, Display, TEXT("AUDIO_FILTER trigger=%s emitter=%s lpf=%.1f hz=%.0f hpf=%.1f hp_hz=%.0f"), *I.Trigger,
+                       *I.Place.Label, Filters.Lpf, FSCAudioFilterLevels::LowPassHz(Filters.Lpf),
+                       Filters.Hpf, FSCAudioFilterLevels::HighPassHz(Filters.Hpf));
+            V.LastFilters = Filters;
         }
         float Fade = 1.f;
         if (V.FadeInEnd > V.Start && Now < V.FadeInEnd)
@@ -1412,28 +1856,104 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
     // Areas: inside -> fade 1, the bed at the listener; outside within fadeDistance -> fade falls to 0 and the bed sits
     // at the nearest point of the area (the CryEngine area-ambience behaviour the brief describes; the bank's curve on
     // the area-fade RTPC shapes the level).
+    struct FAreaSample
+    {
+        FVector Nearest = FVector::ZeroVector, Hull = FVector::ZeroVector;
+        double Distance = TNumericLimits<double>::Max(), HullDistance = TNumericLimits<double>::Max(), FadeDistance = 0;
+    };
+    TArray<FAreaSample, TInlineAllocator<16>> Samples;
+    Samples.SetNum(S.Areas.Num());
     for (int32 A = 0; A < S.Areas.Num(); ++A)
     {
         FSCAudioPlaced& Area = S.Areas[A];
-        const FVector L = S.WorldToContainer(Area.Interior, ListenerPos);
-        double Best = TNumericLimits<double>::Max();
-        FVector Nearest = L;
-        bool bInside = false;
+        FAreaSample& Sample = Samples[A];
+        const FVector Listener = S.WorldToContainer(Area.Interior, ListenerPos);
+        Sample.Nearest = Listener;
+        Area.bInside = false;
         for (const FSCRoomVolume& Shape : Area.Shapes)
         {
-            if (Shape.Contains(L)) { bInside = true; Best = 0; Nearest = L; break; }
-            FVector N;
-            if (const double D = ShapeDistance(Shape, L, N); D < Best) { Best = D; Nearest = N; }
+            Area.bInside |= Shape.Contains(Listener);
+            FVector Point;
+            if (Area.Group > 0)
+                if (const double Distance = ShapeHullDistance(Shape, Listener, Point); Distance < Sample.HullDistance)
+                {
+                    Sample.HullDistance = Distance;
+                    Sample.Hull = Point;
+                }
+            if (!Area.bInside)
+                if (const double Distance = ShapeDistance(Shape, Listener, Point); Distance < Sample.Distance)
+                {
+                    Sample.Distance = Distance;
+                    Sample.Nearest = Point;
+                }
         }
-        const double FadeDistance = Num(Area.Params, TEXT("fadeDistance")); // the class default when the instance has none
-        Area.bInside = bInside;
-        Area.Fade = bInside ? 1.f : FadeDistance > 0 ? float(FMath::Clamp(1.0 - Best / FadeDistance, 0.0, 1.0)) : 0.f;
+        if (Area.bInside)
+        {
+            Sample.Distance = 0;
+            Sample.Nearest = Listener;
+        }
+        Sample.FadeDistance = Num(Area.Params, TEXT("fadeDistance"));
+        Area.Fade = Area.bInside ? 1.f
+            : Sample.FadeDistance > 0. ? float(FMath::Clamp(1. - Sample.Distance / Sample.FadeDistance, 0., 1.)) : 0.f;
+    }
+
+    for (int32 A = 0; A < S.Areas.Num(); ++A)
+    {
+        FSCAudioPlaced& Area = S.Areas[A];
+        const FAreaSample& Sample = Samples[A];
+        const bool bInside = Area.bInside;
+        int32 ExclusiveBy = INDEX_NONE;
+        if (Area.Group > 0 && Area.Fade > 0.f)
+        {
+            int32 Candidate = INDEX_NONE;
+            for (int32 B = 0; B < S.Areas.Num(); ++B)
+            {
+                const FSCAudioPlaced& Higher = S.Areas[B];
+                const FAreaSample& H = Samples[B];
+                if (Higher.Group != Area.Group || Higher.Priority <= Area.Priority ||
+                    (!Higher.bInside && H.Distance >= H.FadeDistance))
+                    continue;
+                if (!S.Areas.IsValidIndex(Candidate))
+                {
+                    Candidate = B;
+                    continue;
+                }
+                const bool bBestInside = S.Areas[Candidate].bInside;
+                const double BestDistance = Samples[Candidate].HullDistance;
+                if (Higher.bInside != bBestInside ? Higher.bInside :
+                    bInside ? H.HullDistance > BestDistance : H.HullDistance < BestDistance)
+                    Candidate = B;
+            }
+
+            if (S.Areas.IsValidIndex(Candidate))
+            {
+                const FSCAudioPlaced& Higher = S.Areas[Candidate];
+                const FAreaSample& H = Samples[Candidate];
+                const FVector HigherHull = S.ContainerToWorld(Higher.Interior, H.Hull);
+                const FVector LowerHull = S.ContainerToWorld(Area.Interior, Sample.Nearest);
+                const FVector HigherInLower = S.WorldToContainer(Area.Interior, HigherHull);
+                const FVector LowerInHigher = S.WorldToContainer(Higher.Interior, LowerHull);
+                const FSCAudioAreaOverlap Overlap{
+                    bInside, Higher.bInside,
+                    Area.Shapes.ContainsByPredicate([&](const FSCRoomVolume& S0) { return S0.Contains(HigherInLower); }),
+                    Higher.Shapes.ContainsByPredicate([&](const FSCRoomVolume& S0) { return S0.Contains(LowerInHigher); }),
+                    Sample.Distance, H.HullDistance, FVector::Dist(HigherHull, LowerHull) / 100., H.FadeDistance,
+                };
+                if (const TOptional<float> Fade = Overlap.ExclusiveFade(); Fade.IsSet())
+                {
+                    Area.Fade = Fade.GetValue();
+                    ExclusiveBy = Candidate;
+                }
+            }
+        }
+        const FVector Nearest = Sample.Nearest;
         if (bLog && (FMath::Abs(Area.Fade - Area.LoggedFade) >= 0.1f || (Area.Fade == 0.f) != (Area.LoggedFade == 0.f) ||
                      (Area.Fade == 1.f) != (Area.LoggedFade == 1.f)))
         {
             Area.LoggedFade = Area.Fade;
-            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_AREA name=%s trigger=%s fade=%.2f inside=%d dist_m=%.2f fade_distance_m=%.1f t=%.2f"), *Area.Name,
-                   *Area.PlayTrigger, Area.Fade, bInside, bInside ? 0.0 : Best, FadeDistance, Now);
+            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_AREA name=%s trigger=%s fade=%.2f inside=%d dist_m=%.2f fade_distance_m=%.1f group=%d priority=%d exclusive_by=%s t=%.2f"), *Area.Name,
+                   *Area.PlayTrigger, Area.Fade, bInside, Sample.Distance, Sample.FadeDistance, Area.Group, Area.Priority,
+                   S.Areas.IsValidIndex(ExclusiveBy) ? *S.Areas[ExclusiveBy].Name : TEXT("-"), Now);
         }
         const bool bWant = bAmbience && Area.Fade > 0.f && !Area.PlayTrigger.IsEmpty();
         if (bWant && !IsPlaying(Area.Instance))
@@ -1484,11 +2004,12 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
             {
                 // playRandom spots play each time within radiusRandom along the enabled axes.
                 const float R = float(Num(Spot.Params, TEXT("radiusRandom")));
-                At += FVector(Flag(Spot.Params, TEXT("playOnX")) ? FMath::FRandRange(-R, R) : 0.f, Flag(Spot.Params, TEXT("playOnY")) ? FMath::FRandRange(-R, R) : 0.f,
-                              Flag(Spot.Params, TEXT("playOnZ")) ? FMath::FRandRange(-R, R) : 0.f);
+                P.DirectionalOffset = FVector(Flag(Spot.Params, TEXT("playOnX")) ? FMath::FRandRange(-R, R) : 0.f,
+                    Flag(Spot.Params, TEXT("playOnY")) ? FMath::FRandRange(-R, R) : 0.f,
+                    Flag(Spot.Params, TEXT("playOnZ")) ? FMath::FRandRange(-R, R) : 0.f);
             }
             P.Interior = Spot.Interior;
-            P.ContainerPos = At;
+            P.ContainerPos = At + P.DirectionalOffset;
             P.Room = Spot.Room;
             const float VR = float(Num(Spot.Params, TEXT("volumeRandomRange"))), PR = float(Num(Spot.Params, TEXT("pitchRandomRange")));
             P.VolumeDb = float(Num(Spot.Params, TEXT("volume"))) + (VR > 0 ? FMath::FRandRange(-VR, VR) : 0.f);
@@ -1663,7 +2184,7 @@ void USCAudioSubsystem::LogHealth(bool bReset)
             if (!W || !S || Db <= -60.f || W->Rate <= 0) continue;
             const double Clock0 = W->Health.PullClock.load(std::memory_order_relaxed);
             if (Clock0 < 0.0) continue;
-            double Pos = double(W->Health.PullFrame.load(std::memory_order_relaxed)) + (Now - Clock0) * W->Rate * W->Pitch;
+            double Pos = double(W->Health.PullFrame.load(std::memory_order_relaxed)) + (Now - Clock0) * W->Rate * W->Pitch.load(std::memory_order_relaxed);
             const double Region = double(W->LoopEnd) - double(W->LoopStart);
             if (Pos >= double(W->LoopEnd) && Region > 0) Pos = double(W->LoopStart) + FMath::Fmod(Pos - double(W->LoopEnd), Region);
             PerMedia.FindOrAdd(S->Manifest.Nodes[V.Leaf].Media).Add({S->Manifest.Nodes[V.Leaf].Media, Pos * 1000.0 / W->Rate, Db});
@@ -1730,6 +2251,36 @@ void USCAudioSubsystem::ScheduleHitches(float Ms, int32 Count, float EveryS)
     UE_LOG(LogSCAudio, Display, TEXT("AUDIO_HITCH scheduled ms=%.0f count=%d every_s=%.2f"), HitchMs, HitchesLeft, HitchEveryS);
 }
 
+void USCAudioSubsystem::UpdateGameContext(bool bFirstPerson)
+{
+    if (!RtpcBank) return;
+    const FString Desired = bFirstPerson ? TEXT("ActorDefault") : TEXT("DefaultGlobalState");
+    if (Desired == ActiveGameContext) return;
+    for (const TSharedRef<FSCAudioScene>& Scene : Scenes)
+    {
+        const FSCAudioGameContext* Context = Scene->Manifest.GameContexts.Find(Desired);
+        if (!Context) continue;
+        if (const FSCAudioGameContext* Previous = Scene->Manifest.GameContexts.Find(ActiveGameContext))
+        {
+            for (const auto& [Name, Value] : Previous->Rtpcs)
+                if (!Context->Rtpcs.Contains(Name))
+                    if (const FSCLiveRtpc* R = RtpcBank->Find(Name))
+                        RtpcBank->Set(Name, R->Default);
+            for (const auto& [Group, State] : Previous->States)
+                if (!Context->States.Contains(Group))
+                    RtpcBank->SetState(SCAudioWwiseId(Group), 0);
+        }
+        for (const auto& [Name, Value] : Context->Rtpcs) RtpcBank->Set(Name, Value);
+        for (const auto& [Group, State] : Context->States)
+        {
+            RtpcBank->SetState(SCAudioWwiseId(Group), SCAudioWwiseId(State));
+            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_STATE %s=%s context=%s"), *Group, *State, *Desired);
+        }
+        ActiveGameContext = Desired;
+        break;
+    }
+}
+
 void USCAudioSubsystem::Tick(float DeltaTime)
 {
     if (HitchesLeft > 0 && WallNow() >= NextHitch)
@@ -1745,30 +2296,69 @@ void USCAudioSubsystem::Tick(float DeltaTime)
     if (!World || Scenes.IsEmpty()) return;
     if (Scenes.ContainsByPredicate([](const TSharedRef<FSCAudioScene>& S) { return !S->Vehicle.IsValid(); })) RemoveScene(nullptr);
     if (APlayerController* PC = World->GetFirstPlayerController())
-        PC->GetAudioListenerPosition(ListenerPos, ListenerFwd, ListenerRight);
-    for (const TSharedRef<FSCAudioScene>& S : TArray<TSharedRef<FSCAudioScene>>(Scenes))
     {
-        if (!S->Vehicle.IsValid()) continue;
-        UpdateAreasAndSpots(*S, Clock);
-        if (const ASCVehicle* V = S->Vehicle.Get(); V && V->IsInsideLightArea(ListenerPos))
+        PC->GetAudioListenerPosition(ListenerPos, ListenerFwd, ListenerRight);
+        UpdateGameContext(Cast<ASCFirstPersonCharacter>(PC->GetPawn()) != nullptr);
+    }
+    const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World);
+    const ASCVehicle* Primary = Viewer ? Viewer->GetVehicle() : nullptr;
+    const FSCAudioScene* ContainingScene = nullptr;
+    FString RoomId;
+    for (const TSharedRef<FSCAudioScene>& S : Scenes)
+    {
+        const ASCVehicle* V = S->Vehicle.Get();
+        if (!V || (ContainingScene && V != Primary)) continue;
+        FString Room = V->LightRoomAt(ListenerPos).ToLower();
+        if (!Room.IsEmpty())
         {
-            ListenerRoom = V->LightRoomAt(ListenerPos).ToLower();
-            ListenerEnvironment = S->Manifest.RoomEnvironment(ListenerRoom);
-            if (ListenerRoom != LastLoggedRoom)
-            {
-                LastLoggedRoom = ListenerRoom;
-                const FSCAudioRoom* R = S->Manifest.Rooms.Find(ListenerRoom);
-                const FSCAudioEnvironment* E = S->Manifest.Environments.Find(ListenerEnvironment);
-                const FSCAudioBus* B = E ? S->Manifest.Buses.Find(E->AuxBus) : nullptr;
-                UE_LOG(LogSCAudio, Display, TEXT("AUDIO_ROOM room=%s name=%s volume_m3=%.0f size_m=%.2f env=%s ir_t20=%.3f ir_t30=%.3f ir_peak_db=%.1f wet_db=%.1f dry_db=%.1f aux_bus_mix_db=%.1f rule=\"%s\""),
-                       *ListenerRoom, R ? *R->Name : TEXT("-"), R ? R->VolumeM3 : 0.f, R ? R->SizeM : 0.f, ListenerEnvironment.IsEmpty() ? TEXT("-") : *ListenerEnvironment,
-                       E ? E->T20 : 0.f, E ? E->T30 : 0.f, E ? E->IrPeakDb : 0.f, B ? B->WetDb : 0.f, B ? B->DryDb : 0.f, B ? B->MixDb() : 0.f, R ? *R->Rule : TEXT(""));
-            }
+            ContainingScene = &S.Get();
+            RoomId = MoveTemp(Room);
         }
     }
+    const FSCAudioRoomKey ScopedListener = ContainingScene ? ContainingScene->RoomAt(ListenerPos) : FSCAudioRoomKey{};
+    for (const TSharedRef<FSCAudioScene>& S : Scenes)
+    {
+        S->RefreshRoomGraph();
+        S->FrameOcclusion.Reset();
+        S->ListenerRoomKey = &S.Get() == ContainingScene ? ScopedListener : FSCAudioRoomKey{};
+        S->bListenerInOtherSceneRoom = ScopedListener.IsKnown() && &S.Get() != ContainingScene;
+    }
+    ListenerRoom = MoveTemp(RoomId);
+    ListenerEnvironment = ContainingScene ? ContainingScene->Manifest.RoomEnvironment(ListenerRoom) : FString();
+    const FSCAudioRoom* R = ContainingScene ? ContainingScene->Manifest.Rooms.Find(ListenerRoom) : nullptr;
+    if (RtpcBank)
+    {
+        if (RtpcBank->Driven().Contains(kInteriority))
+            RtpcBank->Set(kInteriority, R ? R->Interiority : 0.f);
+        RtpcBank->Advance(DeltaTime);
+    }
+    if (ListenerRoom != LastLoggedRoom)
+    {
+        LastLoggedRoom = ListenerRoom;
+        const FSCAudioEnvironment* E = ContainingScene ? ContainingScene->Manifest.Environments.Find(ListenerEnvironment) : nullptr;
+        const FSCAudioBus* B = E ? ContainingScene->Manifest.Buses.Find(E->AuxBus) : nullptr;
+        UE_LOG(LogSCAudio, Display, TEXT("AUDIO_ROOM room=%s name=%s volume_m3=%.0f size_m=%.2f env=%s ir_t20=%.3f ir_t30=%.3f ir_peak_db=%.1f wet_db=%.1f dry_db=%.1f aux_bus_mix_db=%.1f rule=\"%s\""),
+               *ListenerRoom, R ? *R->Name : TEXT("-"), R ? R->VolumeM3 : 0.f, R ? R->SizeM : 0.f, ListenerEnvironment.IsEmpty() ? TEXT("-") : *ListenerEnvironment,
+               E ? E->T20 : 0.f, E ? E->T30 : 0.f, E ? E->IrPeakDb : 0.f, B ? B->WetDb : 0.f, B ? B->DryDb : 0.f, B ? B->MixDb() : 0.f, R ? *R->Rule : TEXT(""));
+    }
+    for (const TSharedRef<FSCAudioScene>& S : TArray<TSharedRef<FSCAudioScene>>(Scenes))
+        if (S->Vehicle.IsValid()) UpdateAreasAndSpots(*S, Clock);
+    const FSCAudioRayProfile RayProfile = CurrentRayProfile();
+    TArray<FInstance*, TInlineAllocator<32>> RayCandidates;
+    for (auto& [Id, I] : Instances)
+    {
+        I.bCanSampleRays = false;
+        if (I.RayParameters.IsEmpty() || !I.PendingRays.IsEmpty() || I.Voices.IsEmpty() || Clock < I.NextRaySample ||
+            !RayProfile.Includes(FVector::Dist(ListenerPos, PlacePosition(I)) / 100.)) continue;
+        const TSharedPtr<FSCAudioScene> Scene = I.Scene.Pin();
+        if (Scene && Scene->Manifest.SurfaceObstruction.Contains(FName(TEXT("mat_default")))) RayCandidates.Add(&I);
+    }
+    RayCandidates.Sort([](const FInstance& A, const FInstance& B) { return A.NextRaySample < B.NextRaySample; });
+    // Oldest due emitter wins so a long frame cannot let the same eight emitters monopolize the budget.
+    for (int32 Index = 0; Index < FMath::Min(8, RayCandidates.Num()); ++Index) RayCandidates[Index]->bCanSampleRays = true;
     for (auto It = Instances.CreateIterator(); It; ++It)
     {
-        UpdateInstance(It->Value, Clock);
+        UpdateInstance(It->Value, Clock, DeltaTime);
         if (It->Value.Voices.IsEmpty() && It->Value.Runs.IsEmpty() && (It->Value.bStopping || Clock > It->Value.StopAt)) It.RemoveCurrent();
     }
 }
@@ -1881,8 +2471,9 @@ FString USCAudioSubsystem::Describe() const
                                   *ListenerRoom, *ListenerEnvironment);
     for (const auto& [Id, I] : Instances)
         for (const FVoice& V : I.Voices)
-            Out += FString::Printf(TEXT("  #%d %s \"%s\" dist_m=%.1f gain_db=%.1f send_db=%.1f env=%s bus=%u\n"), Id, *I.Trigger, *I.Place.Label, V.LastDistance, V.LastGain,
-                                   V.LastSend, *I.Environment, V.Bus);
+            Out += FString::Printf(TEXT("  #%d %s \"%s\" dist_m=%.1f gain_db=%.1f send_db=%.1f env=%s bus=%u stereo_directions=%d\n"),
+                                   Id, *I.Trigger, *I.Place.Label, V.LastDistance, V.LastGain, V.LastSend, *I.Environment, V.Bus,
+                                   V.bStereoDirections);
     return Out;
 }
 

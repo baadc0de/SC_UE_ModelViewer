@@ -461,3 +461,46 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
    visible).
 6. Meaning of the `AudioAreaAmbience` `positionFadeDistance` / `environmentFadeDistance` beyond the lineage's
    `fRtpcDistance` / environment fade (A1 uses `fadeDistance`).
+
+## 13. Export and runtime checkpoint
+
+- The C2 and XL hangar packages contain eight DataCore game contexts, STMG ramps and state transition definitions,
+  12 disabled ENVS curves, and 72 surface obstruction entries. The C2 has eight audio areas and the hangar has three.
+  All export group and priority 0. The C2 has twelve room connectors with bounds, including three standalone connectors
+  on the lift. The loaded C2 layers supplied no closed-occlusion override on those connectors. Absent fields stay
+  null in the export.
+- The viewer evaluates signed source and attenuation LPF/HPF contributions, clamps their sum at the DSP boundary,
+  and processes one-pole filters on the voice and output submix. It reads the authored parameters for the actor
+  and free viewer contexts and switches effect-slot bypass state when the context changes. The area priority rule
+  applies only to positive groups.
+- State chunks supply typed volume, pitch, LPF, HPF, and bus-level offsets. The viewer interpolates numeric values
+  over the authored STMG duration for the specific state pair, or over the group default. An interrupted transition
+  continues from the current mix. Effect-slot bypass remains a discrete state.
+- On stereo outputs, a spatial multi-position spot decodes each voice once and applies the maximum
+  attenuation-weighted gain for each speaker. The equal-power panner keeps centered stereo material in its
+  original channels and folds it down for hard pans. The wet send keeps the existing nearest-position level.
+  Other output layouts continue using the viewer's existing spatialization.
+- When given an explicit distance profile, the viewer evaluates occlusion for spatial spots and attached emitters
+  with STMG ray bindings. It queues five asynchronous traces, uses the archive's obstruction table and
+  `mat_default` for unclassified collision, and advances each bound parameter with its own authored ramp.
+  `sc.Audio.OcclusionMinM`, `sc.Audio.OcclusionMaxM`, and `sc.Audio.ObstructionFullM` supply the measured
+  profile for a test. Unconfigured sessions use the parameters' authored defaults. `sc.Audio.OcclusionDebug 1`
+  enables trace and reduction logging. The layout follows the lineage geometry with deterministic offsets.
+- Room membership uses the vehicle instance, interior placement and room GUID. A point inside two distinct rooms is
+  unresolved. Placed audio keeps its authored room. A listener and emitter in the same known room read 1 / 0 for
+  `propagation_listenerInSameRoom` / `propagation_occlusion`. Known rooms in different vehicles read 0 for same-room.
+- The graph checks the opposite face centers of each transformed connector box against the placed room volumes.
+  A unique pair identifies an edge. The graph refreshes when an interior moves relative to the vehicle. D5 uses
+  minimum-hop paths only when their costs agree. Missing closed weights, missing or ambiguous door rigs, moving
+  doors and unresolved paths defer to the bank default. Cooked packages retain connector data in the audio sidecar
+  but lack a serialized per-placement rig binding. The live C2 and XL inputs have 12 and 11 bounded connectors
+  respectively, all missing a closed weight. These exports cannot demonstrate the D5 closed-door LPF effect.
+  `AUDIO_ROOM_CONNECTOR` records the scoped endpoints, door and authored weight of each connector.
+- The joint P6 integration drives VehicleDriver and VehicleCrew. The top-deck filter captures cover the stereo master.
+  The isolated hangar bus and moving listener still need the checks in §9.
+
+The joint Win64 target passed 18 audio and seat tests. The prepared C2/XL sound fixture was ready in 36.15 s with
+NullRHI and WASAPI. It logged 23 connectors, eight uniquely resolved scoped room pairs, and 112 async trace batches.
+One hangar emitter's four clamped outer rays averaged 0.9375, which the viewer reported as 93.8 on the RTPC's
+0–100 scale. A separate bridge fixture verified that entering and leaving each seat changes the corresponding
+authored game context.

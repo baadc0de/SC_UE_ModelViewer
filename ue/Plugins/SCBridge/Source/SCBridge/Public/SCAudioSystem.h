@@ -20,6 +20,7 @@
 #include "Sound/SoundWaveProcedural.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SCAudio.h"
+#include "WorldCollision.h"
 #include "SCLightAreas.h"
 #include "SCAudioSystem.generated.h"
 
@@ -74,8 +75,8 @@ public:
     uint64 MediaFrames = 0, LoopStart = 0, LoopEnd = 0;
     /** Seconds all passes last at the media rate (< 0: forever). */
     double PlaySeconds = -1;
-    /** The voice's pitch ratio (set before it plays): how fast the mixer consumes the wave. */
-    float Pitch = 1.f;
+    /** The render-side pitch ratio follows the audio component's current playback rate. */
+    std::atomic<float> Pitch{1.f};
     /** Sample-aligned timing (set before it plays): the audio-clock time (s, the mixer's render clock) at which the
      *  voice's play time 0 falls. The first pull starts the audio there: silence until then, and, when bSeek, a seek
      *  past whatever the voice is late (a looping voice resumed "from elapsed time", as Wwise's virtual voices do), so
@@ -84,10 +85,23 @@ public:
     bool bSeek = false;
     FAudioDevice* ClockDevice = nullptr;
     FSCAudioWaveHealth Health;
+    void SetFilterLevels(FSCAudioFilterLevels Levels)
+    {
+        Lpf.store(Levels.Lpf, std::memory_order_relaxed);
+        Hpf.store(Levels.Hpf, std::memory_order_relaxed);
+    }
+    /** Use the stereo output layout before posting this wave. The Ogg decoder keeps its own channel count. */
+    bool EnableStereoDirections();
+    void SetStereoDirectionGains(FVector2f Gains);
 
 private:
     FCriticalSection Lock;
     sc_audio_stream* Stream = nullptr;
+    FSCAudioFilter Filter;
+    std::atomic<float> Lpf{0.f}, Hpf{0.f};
+    bool bStereoDirections = false;
+    FVector2f PreviousDirectionGains = FVector2f::ZeroVector;
+    std::atomic<uint64> StereoDirectionGains{0};
     TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Bytes; // reopened per pass in the whole-file mode
     int32 LoopsLeft = 0;        // whole-file mode: remaining plays after the current one; INDEX_NONE = forever
     bool bWholeFile = false;
@@ -106,6 +120,7 @@ struct SCBRIDGE_API FSCAudioPlaced
     TArray<FString> Links;
     TArray<FSCRoomVolume> Shapes; // areas
     int32 Interior = INDEX_NONE;
+    int32 Group = 0, Priority = 0;
     int32 Area = INDEX_NONE;      // spots: the governing area (index into Areas)
     double NextPlay = 0;          // playRandom spots
     bool bFired = false;          // a one-shot spot played since the listener came within reach
@@ -125,6 +140,16 @@ struct SCBRIDGE_API FSCAudioEntity
     TMap<FString, TArray<int32>> TagInstances; // state tag -> the posts playing for it (one per effect)
 };
 
+struct SCBRIDGE_API FSCAudioRoomKey
+{
+    int32 Interior = INDEX_NONE;
+    FString Guid;
+    bool IsKnown() const { return Interior != INDEX_NONE && !Guid.IsEmpty(); }
+    bool operator==(const FSCAudioRoomKey& Other) const { return Matches(Other); }
+    friend uint32 GetTypeHash(const FSCAudioRoomKey& Key) { return HashCombine(GetTypeHash(Key.Interior), GetTypeHash(Key.Guid)); }
+    bool Matches(const FSCAudioRoomKey& Other) const { return Interior == Other.Interior && Guid == Other.Guid; }
+};
+
 struct SCBRIDGE_API FSCAudioScene
 {
     TWeakObjectPtr<ASCVehicle> Vehicle;
@@ -137,6 +162,27 @@ struct SCBRIDGE_API FSCAudioScene
     TArray<FSCAudioPlaced> Spots, Areas;
     TMap<FString, FSCAudioEntity> Entities; // "<interior>/<entity id>"
     TMap<uint64, FSCAudioContainerState> Containers; // by node index (high word) and emitter (low word; 0 = global)
+    struct FConnector
+    {
+        int32 Interior = INDEX_NONE;
+        FString Entity, Door;
+        TOptional<float> ClosedOcclusion;
+        FMatrix Transform = FMatrix::Identity;
+        FVector Bounds = FVector::ZeroVector, Offset = FVector::ZeroVector;
+        FSCAudioRoomKey A, B;
+        TWeakObjectPtr<USCRigComponent> DoorRig;
+    };
+    TArray<FConnector> Connectors;
+    TArray<FTransform> GraphAnchorTransforms;
+    void RefreshRoomGraph();
+    void BuildRoomGraph();
+    TOptional<float> RoomOcclusion(const FSCAudioRoomKey& Emitter) const;
+    void AddConnectors(int32 Interior, const TArray<FString>& Json);
+    FSCAudioRoomKey ListenerRoomKey;
+    bool bListenerInOtherSceneRoom = false;
+    TMap<FSCAudioRoomKey, TOptional<float>> FrameOcclusion;
+    TOptional<float> FrameRoomOcclusion(const FSCAudioRoomKey& Emitter);
+    FSCAudioRoomKey RoomAt(const FVector& World, int32 InteriorHint = INDEX_NONE) const;
     int32 MediaMissing = 0;
     /** The audio-clock time the scene's placed loops began (all at once, as the game posts a zone's spots on entering
      *  it); < 0 until the subsystem sets it. */
@@ -161,6 +207,7 @@ struct SCBRIDGE_API FSCAudioPlace
     FVector World = FVector::ZeroVector;    // when not attached and not in an interior
     int32 Interior = INDEX_NONE;            // placed audio: follows its interior's anchor at ContainerPos (metres)
     FVector ContainerPos = FVector::ZeroVector;
+    FVector DirectionalOffset = FVector::ZeroVector; // the same random displacement for each position in a spot
     FString Room;                           // room GUID for the reverb send ("" = from the position)
     float VolumeDb = 0, PitchCents = 0;     // the emitter's own (a spot's volume and pitch, with their random draws)
     float AttenuationScale = 1;
@@ -241,6 +288,8 @@ private:
     TSharedPtr<FSCLimiterTrace, ESPMode::ThreadSafe> LimiterTrace;
     TArray<TPair<TWeakObjectPtr<USoundSubmix>, TSharedRef<class FSCLimiterTap, ESPMode::ThreadSafe>>> LimiterTaps;
     TMap<uint32, TSharedPtr<FSCBusDsp, ESPMode::ThreadSafe>> BusDsps; // bus -> its effect chain (render thread)
+    FString ActiveGameContext;
+    void UpdateGameContext(bool bFirstPerson);
     TSharedPtr<FSCRtpcBank> RtpcBank;                                // the game parameters meters write
     bool bMixTracing = false;                                        // sc.Audio.MixTrace running
     double MixTraceStart = 0;
@@ -253,9 +302,12 @@ private:
         double FadeInEnd = 0, FadeOutStart = 0, FadeOutEnd = 0;
         bool bPower = false;       // crossfade_power curves
         float StaticDb = 0, StaticAux = 0;
+        FSCAudioFilterLevels StaticFilters, LastFilters;
+        TArray<FSCAudioWeightedState> States;
+        float StaticPitchCents = 0.f, LastPitchCents = 0.f;
         TArray<const FSCAudioRtpcCurve*> Dynamic; // curves on RTPCs that change while playing
         const FSCAudioAttenuation* Attenuation = nullptr;
-        bool bSpatial = false, bAux = false, bSent = false;
+        bool bSpatial = false, bStereoDirections = false, bAux = false, bSent = false;
         TObjectPtr<USoundSubmix> DrySubmix; // the voice's bus (a send: the base submix output is off)
         uint32 Bus = 0;
         float LastGain = 0, LastDistance = 0, LastSend = 0;
@@ -289,7 +341,20 @@ private:
         double PostTime = 0;       // the subsystem clock at the post
         double PostAudioClock = 0; // the audio clock its voices are scheduled against (the post's, plus a render lead)
         FString Environment;
+        FSCAudioRoomKey EmitterRoom;
+        TOptional<float> RoomOcclusion;
         FVector Position = FVector::ZeroVector;
+        struct FRayValue
+        {
+            float Default = 0.f, Value = 0.f;
+            FSCAudioRamp Ramp;
+        };
+        TMap<FString, FRayValue> RayParameters;
+        TArray<FTraceHandle, TInlineAllocator<5>> PendingRays;
+        FVector2f RayTargets = FVector2f::ZeroVector; // occlusion / obstruction, normalized
+        double NextRaySample = 0., RayDistanceM = 0.;
+        uint64 RayFrame = 0;
+        bool bCanSampleRays = false;
     };
     double Start(FInstance& I, FSCAudioScene& S, const TArray<int32>& Path, double T0, float FadeIn, float CrossfadeOut);
     double StartVoice(FInstance& I, FSCAudioScene& S, const TArray<int32>& Path, double T0, float FadeIn);
@@ -299,7 +364,8 @@ private:
     float BlendGainDb(const FSCAudioScene& S, const FInstance& I, const FSCAudioNode& Blend, int32 ChildPos, const FVector& Emitter) const;
     FSCAudioContainerState& ContainerState(FSCAudioScene& S, int32 Node, const FInstance& I);
     void SetSpatial(FInstance& I, bool bListener);
-    void UpdateInstance(FInstance& I, double Now);
+    void UpdateInstance(FInstance& I, double Now, float Seconds);
+    void UpdateOcclusion(FInstance& I, const FSCAudioScene& S, double Now, float Seconds);
     void UpdateAreasAndSpots(FSCAudioScene& S, double Now);
     float RtpcValue(const FSCAudioScene& S, const FInstance& I, const FString& Name, const FVector& Emitter) const;
     FVector PlacePosition(const FInstance& I) const;

@@ -29,6 +29,88 @@ const FSCLiveRtpc* FSCRtpcBank::Find(const FString& Name) const
     return R ? &R->Get() : nullptr;
 }
 
+void FSCRtpcBank::ConfigureRamp(const FString& Name, float Default, const FSCAudioRamp& Ramp)
+{
+    const FSCLiveRtpcRef R = Get(Name, Default);
+    if (Ramp.Type == 0 || R->bRamp.load(std::memory_order_relaxed))
+        return;
+    R->Ramp = Ramp;
+    R->Smoothed.store(R->Value.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    R->bRamp.store(true, std::memory_order_release);
+}
+
+void FSCRtpcBank::Set(const FString& Name, float Target)
+{
+    MarkDriven(Name, Target);
+    Get(Name, Target)->Value.store(Target, std::memory_order_relaxed);
+}
+
+void FSCRtpcBank::Advance(float Seconds)
+{
+    for (const auto& [Name, R] : Values)
+    {
+        if (!R->bRamp.load(std::memory_order_relaxed))
+            continue;
+        const float Current = R->Smoothed.load(std::memory_order_relaxed);
+        const float Target = R->Value.load(std::memory_order_relaxed);
+        R->Smoothed.store(R->Ramp.Advance(Current, Target, Seconds), std::memory_order_relaxed);
+    }
+    for (auto& [Group, Timeline] : StateGroups)
+    {
+        if (Timeline.Time >= Timeline.Duration) continue;
+        Timeline.Time = FMath::Min(Timeline.Time + Seconds, Timeline.Duration);
+        const float Alpha = Timeline.Time / Timeline.Duration;
+        const uint32 To = Timeline.Selected->load(std::memory_order_relaxed);
+        for (auto& [Id, W] : Timeline.Weights)
+            W.Value->store(FMath::Lerp(W.Start, Id == To ? 1.f : 0.f, Alpha), std::memory_order_relaxed);
+    }
+}
+
+FSCAudioStateRef FSCRtpcBank::State(uint32 Group)
+{
+    return StateGroups.FindOrAdd(Group).Selected;
+}
+
+FSCAudioWeightedState FSCRtpcBank::BindState(const FSCAudioStateValue& Props)
+{
+    FStateGroup& Timeline = StateGroups.FindOrAdd(Props.Group);
+    return {Props, Timeline.Weights.FindOrAdd(Props.State).Value};
+}
+
+void FSCRtpcBank::ConfigureState(uint32 Group, const FSCAudioStateTiming& Timing)
+{
+    if (!StateTimings.Contains(Group)) StateTimings.Add(Group, Timing);
+}
+
+void FSCRtpcBank::SetState(uint32 Group, uint32 Value)
+{
+    FStateGroup& Timeline = StateGroups.FindOrAdd(Group);
+    const uint32 From = Timeline.Selected->load(std::memory_order_relaxed);
+    if (From == Value) return;
+    Timeline.Selected->store(Value, std::memory_order_relaxed);
+    if (Value != 0) Timeline.Weights.FindOrAdd(Value);
+    const FSCAudioStateTiming* Timing = StateTimings.Find(Group);
+    const float* Explicit = Timing ? Timing->Between.Find(FSCAudioStateTiming::Key(From, Value)) : nullptr;
+    Timeline.Duration = Explicit ? *Explicit : Timing ? Timing->DefaultSeconds : 0.f;
+    Timeline.Time = 0.f;
+    for (auto& [Id, W] : Timeline.Weights)
+    {
+        W.Start = W.Value->load(std::memory_order_relaxed);
+        if (Timeline.Duration <= 0.f) W.Value->store(Id == Value ? 1.f : 0.f, std::memory_order_relaxed);
+    }
+}
+
+bool FSCBusDsp::FSlot::IsActive() const
+{
+    for (const auto& [State, Bypass] : StateBypass)
+    {
+        const uint32 Value = State->load(std::memory_order_relaxed);
+        if (Value == 0 || Bypass.Contains(Value))
+            return false;
+    }
+    return true;
+}
+
 // ------------------------------------------------------------------------------------------------ the chain
 namespace
 {
@@ -49,7 +131,7 @@ FSCBusDspState::~FSCBusDspState()
 
 bool FSCBusDsp::RunsMeter(const FSCAudioBusEffect& Fx)
 {
-    return Fx.Kind == TEXT("meter") && !Fx.IsStateDependent() && Fx.Meter.bGlobal && !Fx.Meter.GameParameter.IsEmpty();
+    return Fx.Kind == TEXT("meter") && Fx.Meter.bGlobal && !Fx.Meter.GameParameter.IsEmpty();
 }
 
 FSCBusDsp::FSCBusDsp(uint32 InBus, const FSCAudioBus& B, const TMap<FString, float>& InDefaults, FSCRtpcBank& Bank, float InDownstreamDb)
@@ -64,11 +146,7 @@ FSCBusDsp::FSCBusDsp(uint32 InBus, const FSCAudioBus& B, const TMap<FString, flo
     };
     for (const FSCAudioBusEffect& Fx : B.Effects)
     {
-        if (Fx.IsStateDependent())
-        {
-            NotRun.Add(FString::Printf(TEXT("slot%d=%s(state-dependent)"), Fx.Slot, *Fx.Kind));
-            continue;
-        }
+
         const bool bRun = Fx.Kind == TEXT("parametric_eq") || Fx.Kind == TEXT("gain") || RunsMeter(Fx) || (Fx.Kind == TEXT("peak_limiter") && Fx.Limiter.bOn);
         if (!bRun)
         {
@@ -78,6 +156,8 @@ FSCBusDsp::FSCBusDsp(uint32 InBus, const FSCAudioBus& B, const TMap<FString, flo
         }
         FSlot& S = Slots.AddDefaulted_GetRef();
         S.Fx = Fx;
+        for (const auto& [Group, Bypass] : Fx.StateBypass)
+            S.StateBypass.Emplace(Bank.State(Group), Bypass);
         for (const FSCAudioRtpcCurve& C : Fx.Rtpc)
         {
             if (!C.IsSupported()) NotRun.Add(FString::Printf(TEXT("slot%d.%s(%s scaling %d accum %d)"), Fx.Slot, *C.Param, *C.Rtpc, C.Curve.Scaling, C.Accum));
@@ -94,12 +174,16 @@ FSCBusDsp::FSCBusDsp(uint32 InBus, const FSCAudioBus& B, const TMap<FString, flo
         }
         if (Fx.Kind == TEXT("peak_limiter") && !Limiter.bOn) Limiter = Fx.Limiter;
     }
+    bOutputFilters = B.OutputFilters.Lpf != 0.f || B.OutputFilters.Hpf != 0.f;
+    for (const FSCAudioStateValue& State : B.States)
+        if (State.BusDb != 0.f) OutputStates.Add(Bank.BindState(State));
     for (const FSCAudioRtpcCurve& C : B.Rtpc)
-        if (C.Type == 0 && FSCAudioBus::IsOutputGain(C.Param) && Defaults.Contains(C.Rtpc))
+        if (C.Type == 0 && Defaults.Contains(C.Rtpc) && (FSCAudioBus::IsOutputGain(C.Param) || FSCAudioFilterLevels::IsOutputFilter(C.Param)))
         {
             // Live from the start: a scene loaded later may bring the meter that drives it.
             Need(C.Rtpc);
-            bSideChain = true;
+            bSideChain |= FSCAudioBus::IsOutputGain(C.Param);
+            bOutputFilters |= FSCAudioFilterLevels::IsOutputFilter(C.Param);
         }
 }
 
@@ -108,6 +192,23 @@ float FSCBusDsp::Value(const FString& Name) const
     if (const FSCLiveRtpcRef* R = Rtpc.Find(Name)) return (*R)->Read();
     const float* D = Defaults.Find(Name);
     return D ? *D : 0.f;
+}
+
+FSCAudioFilterLevels FSCBusDsp::FilterLevels() const
+{
+    FSCAudioFilterLevels Levels = BusData.OutputFilters;
+    for (const FSCAudioRtpcCurve& C : BusData.Rtpc)
+        if (C.Type == 0 && C.IsSupported() && FSCAudioFilterLevels::IsOutputFilter(C.Param) && Defaults.Contains(C.Rtpc))
+            Levels.Add(C.Param, C.ValueAt(Value(C.Rtpc)));
+    return Levels;
+}
+
+float FSCBusDsp::StateGainDb() const
+{
+    float Db = 0.f;
+    for (const FSCAudioWeightedState& State : OutputStates)
+        Db += State.Props.BusDb * State.Weight->load(std::memory_order_relaxed);
+    return Db;
 }
 
 float FSCBusDsp::LimiterCeilingOf(float InPeak) const
@@ -121,10 +222,11 @@ TUniquePtr<FSCBusDspState> FSCBusDsp::MakeState(float InRate, int32 InChannels) 
     TUniquePtr<FSCBusDspState> St = MakeUnique<FSCBusDspState>();
     St->Rate = InRate;
     St->Channels = InChannels;
+    if (bOutputFilters) St->Filter.Init(InChannels);
     const int32 Lfe = LfeChannel(InChannels);
     auto V = [this](const FString& N) { return Value(N); };
     // Gains start at their current values (a new instance does not ramp in from unity).
-    St->LastPost = bSideChain ? Lin(BusData.OutputCurveDeltaDb(V, Defaults)) : 1.f;
+    St->LastPost = Lin((bSideChain ? BusData.OutputCurveDeltaDb(V, Defaults) : 0.f) + StateGainDb());
     St->Kernels.SetNum(Slots.Num());
     for (int32 I = 0; I < Slots.Num(); ++I)
     {
@@ -151,6 +253,12 @@ FString FSCBusDsp::Describe() const
 {
     FString Out;
     auto V = [this](const FString& N) { return Value(N); };
+    if (bOutputFilters)
+    {
+        const FSCAudioFilterLevels Levels = FilterLevels();
+        Out += FString::Printf(TEXT(" lpf=%.1f lpf_hz=%.0f hpf=%.1f hpf_hz=%.0f"),
+            Levels.Lpf, FSCAudioFilterLevels::LowPassHz(Levels.Lpf), Levels.Hpf, FSCAudioFilterLevels::HighPassHz(Levels.Hpf));
+    }
     for (const FSlot& S : Slots)
     {
         Out += FString::Printf(TEXT(" slot%d=%s"), S.Fx.Slot, *S.Fx.Kind);
@@ -218,6 +326,7 @@ void FSCBusDsp::Process(FSCBusDspState& St, float* Data, int32 Frames)
     for (int32 I = 0; I < Slots.Num() && I < St.Kernels.Num(); ++I)
     {
         const FSlot& S = Slots[I];
+        if (!S.IsActive()) continue;
         FSCBusDspState::FKernel& K = St.Kernels[I];
         if (S.Fx.Kind == TEXT("gain"))
             Ramp(K.LastGain, Lin(S.Fx.GainAt(V))); // the full-band gain at its slot (the LFE gain parameter is not exported)
@@ -271,8 +380,9 @@ void FSCBusDsp::Process(FSCBusDspState& St, float* Data, int32 Frames)
     }
     // Side-chain: the output-stage gain curves on meter-driven parameters, relative to their values at the defaults
     // (those are in the submix's static level).
-    const float PostDb = bSideChain ? BusData.OutputCurveDeltaDb(V, Defaults) : 0.f;
+    const float PostDb = (bSideChain ? BusData.OutputCurveDeltaDb(V, Defaults) : 0.f) + StateGainDb();
     Ramp(St.LastPost, Lin(PostDb));
+    if (bOutputFilters) St.Filter.Process(Data, Frames, St.Rate, FilterLevels());
     if (bTracing)
     {
         for (int32 I = 0; I < N; ++I) Row.OutPeak = FMath::Max(Row.OutPeak, FMath::Abs(Data[I]));

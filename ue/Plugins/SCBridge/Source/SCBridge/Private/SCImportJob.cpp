@@ -1483,7 +1483,11 @@ void FSCImportJob::FState::Assemble()
         }
         if (Audio)
         {
+            Audio->AddConnectors(InteriorIndex, Interior.RoomConnectorJson);
             Audio->AddInterior(InteriorIndex, Container, bHelper, Interior.AudioSpotJson, Interior.AudioAreaJson, Result.Warnings);
+            for (FSCAudioScene::FConnector& Connector : Audio->Connectors)
+                if (Connector.Interior == InteriorIndex && !Connector.Door.IsEmpty())
+                    if (const FEntity* Door = ById.Find(Connector.Door)) Connector.DoorRig = Door->Rig;
             for (const auto& P : Interior.Placements)
                 if (const FEntity* Placed = ById.Find(P.EntityId); Placed && Audio->Manifest.Classes.Contains(P.EntityClassGuid))
                     Audio->Entities.Add(FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower()),

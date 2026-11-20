@@ -2,7 +2,13 @@
 // parsing, bus gain composition, the room -> environment -> convolution reverb mapping, and the bus effect chain (EQ at
 // RTPC values, meters writing game parameters, side-chain ducking, the Peak Limiter ceiling). No game data.
 #include "SCAudio.h"
+#include "SCAudioSystem.h"
+#include "SCVehicle.h"
+#include "SCRigComponent.h"
+#include "Engine/World.h"
 #include "SCAudioBusFx.h"
+#include "SCAudioRayOcclusion.h"
+#include "SCAudioStereoDirections.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -382,5 +388,295 @@ bool FSCAudioBusFxInstanceTest::RunTest(const FString&)
     const float Thr = FMath::Pow(10.f, -6.f / 20.f);
     TestTrue(FString::Printf(TEXT("the instance limits (peak %.3f)"), Peak), Peak > 0.f && Peak <= Thr * FMath::Pow(4.f / Thr, 1.f / 40.f) * 1.0001f);
     USoundEffectPreset::UnregisterInstance(Fx);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseFilterScaleTest, "SCBridge.Audio.Filter.ScaleAndSum",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseFilterScaleTest::RunTest(const FString&)
+{
+    FSCAudioFilterLevels Filter;
+    Filter.Add(TEXT("lpf"), 15.f);
+    Filter.Add(TEXT("lpf"), 30.f);
+    TestEqual(TEXT("additive source parameters"), Filter.Lpf, 45.f);
+    const auto Check = [this](const TCHAR* Name, float Actual, float Expected)
+    {
+        TestTrue(Name, FMath::Abs(Actual - Expected) <= Expected * 0.03f);
+    };
+    Check(TEXT("low-pass 0"), FSCAudioFilterLevels::LowPassHz(0.f), 20000.f);
+    Check(TEXT("low-pass 30"), FSCAudioFilterLevels::LowPassHz(30.f), 7000.f);
+    Check(TEXT("low-pass 45"), FSCAudioFilterLevels::LowPassHz(Filter.Lpf), 1922.f);
+    Check(TEXT("low-pass 58"), FSCAudioFilterLevels::LowPassHz(58.f), 627.f);
+    Check(TEXT("low-pass 100"), FSCAudioFilterLevels::LowPassHz(100.f), 17.f);
+    Check(TEXT("high-pass 20"), FSCAudioFilterLevels::HighPassHz(20.f), 94.f);
+
+    FSCAudioProps Context, Node;
+    FSCAudioRtpcCurve& ContextCurve = Context.Rtpc.AddDefaulted_GetRef();
+    ContextCurve.Param = TEXT("lpf");
+    ContextCurve.Curve.Points = {{0.f, 50.f, 4.f}, {1.f, 0.f, 4.f}};
+    Node.Rtpc.Add(ContextCurve);
+    Node.Rtpc[0].Curve.Points[0].Y = -50.f;
+    FSCAudioGain Gain;
+    const auto AtVacuum = [](const FString&) { return 0.f; };
+    Gain.Add(Context, AtVacuum, nullptr);
+    TestEqual(TEXT("the context's positive curve closes the filter"), Gain.Filters.Lpf, 50.f);
+    Gain.Add(Node, AtVacuum, nullptr);
+    TestEqual(TEXT("the node's signed correction cancels the context before clamping"), Gain.Filters.Lpf, 0.f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseRampTest, "SCBridge.Audio.GameSync.Ramps",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseRampTest::RunTest(const FString&)
+{
+    const FSCAudioRamp Filtering{2.f, 1.f, 2};
+    TestTrue(TEXT("filter is within 0.5 percent of a rising target at the authored time"),
+        FMath::IsNearlyEqual(Filtering.Advance(0.f, 1.f, 2.f), 0.995f, 1e-5f));
+    TestTrue(TEXT("fall follows its own authored time"),
+        FMath::IsNearlyEqual(Filtering.Advance(1.f, 0.f, 1.f), 0.005f, 1e-5f));
+    const FSCAudioRamp Slew{4.f, 6.f, 1};
+    TestEqual(TEXT("slew moves at the authored rate"), Slew.Advance(0.f, 2.f, 0.25f), 1.f);
+    TestEqual(TEXT("falling slew stops at target"), Slew.Advance(1.f, 0.f, 1.f), 0.f);
+
+    FSCRtpcBank Bank;
+    const FSCLiveRtpcRef Value = Bank.Get(TEXT("synthetic"), 0.f);
+    Bank.ConfigureRamp(TEXT("synthetic"), 0.f, Filtering);
+    Bank.Set(TEXT("synthetic"), 1.f);
+    TestEqual(TEXT("callback sees the old smoothed value before a tick"), Value->Read(), 0.f);
+    Bank.Advance(2.f);
+    TestTrue(TEXT("callback reads the advanced value"), FMath::IsNearlyEqual(Value->Read(), 0.995f, 1e-5f));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseBusStateTest, "SCBridge.Audio.GameSync.BusSlotState",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseBusStateTest::RunTest(const FString&)
+{
+    // Synthetic group and state ids. The gain slot becomes active only in the enabled state.
+    const uint32 Group = 71, Bypassed = 81, Enabled = 83;
+    FSCAudioBus Bus;
+    FSCAudioBusEffect& Fx = Bus.Effects.AddDefaulted_GetRef();
+    Fx.Kind = TEXT("gain");
+    Fx.GainDb = -6.f;
+    Fx.StateGroups.Add(Group);
+    Fx.StateBypass.Add(Group, TArray<uint32>{Bypassed});
+
+    FSCRtpcBank Bank;
+    FSCBusDsp Dsp(101, Bus, {}, Bank, 0.f);
+    TUniquePtr<FSCBusDspState> State = Dsp.MakeState(48000.f, 1);
+    float Sample = 1.f;
+    Dsp.Process(*State, &Sample, 1);
+    TestEqual(TEXT("unknown state leaves the stateful slot bypassed"), Sample, 1.f);
+    Bank.SetState(Group, Enabled);
+    Sample = 1.f;
+    Dsp.Process(*State, &Sample, 1);
+    TestTrue(TEXT("enabled state applies the gain slot"), FMath::IsNearlyEqual(Sample, 0.501187f, 1e-5f));
+    Bank.SetState(Group, Bypassed);
+    Sample = 1.f;
+    Dsp.Process(*State, &Sample, 1);
+    TestEqual(TEXT("authored bypass state skips the slot"), Sample, 1.f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseStateTransitionTest, "SCBridge.Audio.GameSync.StateTransition",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseStateTransitionTest::RunTest(const FString&)
+{
+    const FString Json = TEXT(R"({
+        "version":1,
+        "buses":{"101":{"state_values":[{"group":71,"state":11,"bus_volume_db":-12.0}]}},
+        "state_groups":{"71":{"default_transition_ms":1000,"transitions":[{"from":11,"to":12,"duration_ms":200}]}}
+    })");
+    FSCAudioManifest M;
+    FString Error;
+    if (!TestTrue(TEXT("fixture parses"), FSCAudioManifest::Parse(Json, M, Error))) return false;
+    if (!TestTrue(TEXT("authored group and bus are parsed"), M.StateTimings.Contains(71) && M.Buses.Contains(101))) return false;
+    if (!TestEqual(TEXT("authored bus state is parsed"), M.Buses[101].States.Num(), 1)) return false;
+    FSCRtpcBank Bank;
+    Bank.ConfigureState(71, M.StateTimings[71]);
+    FSCBusDsp Dsp(101, M.Buses[101], {}, Bank, 0.f);
+    TestTrue(TEXT("state gain alone creates a submix effect"), Dsp.HasWork());
+    const FSCAudioWeightedState State = Bank.BindState(M.Buses[101].States[0]);
+    Bank.SetState(71, 11);
+    Bank.Advance(0.5f);
+    TestEqual(TEXT("default transition halfway"), State.Weight->load(), 0.5f);
+    TUniquePtr<FSCBusDspState> Stream = Dsp.MakeState(48000.f, 1);
+    float Sample = 1.f;
+    Dsp.Process(*Stream, &Sample, 1);
+    TestTrue(TEXT("the bus applies half of the authored -12 dB offset"), FMath::IsNearlyEqual(Sample, 0.501187f, 1.e-5f));
+    Bank.SetState(71, 12);
+    TestEqual(TEXT("interruption preserves the mix at the transition boundary"), State.Weight->load(), 0.5f);
+    Bank.Advance(0.1f);
+    TestEqual(TEXT("the authored pair takes precedence over the default duration"), State.Weight->load(), 0.25f);
+    Bank.Advance(0.1f);
+    TestEqual(TEXT("state without values fades previous offsets to zero"), State.Weight->load(), 0.f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseRoomPropagationTest, "SCBridge.Audio.Rooms.ConnectorPropagation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseRoomPropagationTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ASCVehicle* Vehicle = World->SpawnActor<ASCVehicle>();
+    FSCAudioScene S;
+    S.Vehicle = Vehicle;
+    TArray<FString> Warnings;
+    S.AddInterior(0, Vehicle->GetRootComponent(), false, {}, {}, Warnings);
+    const FString Transform = TEXT(R"("transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])");
+    const FString Left = FString::Printf(TEXT(R"({"room":"a","kind":"box",%s,"box_min":[-2,-2,-2],"box_max":[-0.1,2,2]})"), *Transform);
+    const FString Right = FString::Printf(TEXT(R"({"room":"b","kind":"box",%s,"box_min":[0.1,-2,-2],"box_max":[2,2,2]})"), *Transform);
+    FSCLightAreas::Register(Vehicle, Vehicle->GetRootComponent(), {Left, Right}, false, Warnings);
+    S.AddConnectors(0, {FString::Printf(TEXT(R"({"entity_id":"connector","door_entity_id":"Door","bounds":[1,2,2],"offset":[0,0,0],%s,"physical_occlusion_when_closed":0.75})"), *Transform )});
+    S.BuildRoomGraph();
+    const FSCAudioRoomKey A{0,TEXT("a")}, B{0,TEXT("b")};
+    TestTrue(TEXT("opposite faces resolve two distinct room volumes"), S.Connectors.Num() == 1 && S.Connectors[0].A == A && S.Connectors[0].B == B);
+    S.ListenerRoomKey = B;
+    TestEqual(TEXT("same scoped room has no physical occlusion"), S.RoomOcclusion(B).Get(-1.f), 0.f);
+    TestFalse(TEXT("reused GUID in another placement is distinct"), S.RoomOcclusion({1,TEXT("b")}).IsSet());
+    if (S.Connectors.Num() == 1)
+    {
+        auto* Rig = NewObject<USCRigComponent>(Vehicle);
+        FSCDoorInteraction Door;
+        Door.Rig = Rig;
+        Door.Fragment = TEXT("door");
+        Vehicle->Doors.Add(Door);
+        S.Connectors[0].DoorRig = Rig;
+        TestEqual(TEXT("closed authored weight / 3"), S.RoomOcclusion(A).Get(-1.f), 0.25f);
+        auto Second = S.Connectors[0];
+        Second.ClosedOcclusion.Reset();
+        S.Connectors.Add(Second);
+        TestFalse(TEXT("unknown equally short path remains unknown"), S.RoomOcclusion(A).IsSet());
+        S.Connectors.Pop();
+        S.Connectors[0].ClosedOcclusion = 0.f;
+        TestEqual(TEXT("authored zero remains zero"), S.RoomOcclusion(A).Get(-1.f), 0.f);
+        S.Connectors[0].ClosedOcclusion.Reset();
+        TestFalse(TEXT("missing authored weight remains unknown"), S.RoomOcclusion(A).IsSet());
+    }
+    World->DestroyWorld(false);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseAreaOverlapTest, "SCBridge.Audio.Rooms.ExclusiveArea",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseAreaOverlapTest::RunTest(const FString&)
+{
+    FSCAudioAreaOverlap Overlap;
+    Overlap.LowerDistance = 3.;
+    Overlap.HigherDistance = 2.;
+    Overlap.HigherFadeDistance = 8.;
+    Overlap.bHigherHullInLower = true;
+    TestEqual(TEXT("outside both, the closer overlapping area wins"), Overlap.ExclusiveFade().Get(1.f), 0.f);
+    Overlap.bLowerInside = true;
+    TestFalse(TEXT("inside lower only, the lower still owns the listener"), Overlap.ExclusiveFade().IsSet());
+    Overlap.bLowerInside = false;
+    Overlap.bHigherInside = true;
+    Overlap.HullSeparation = 0.5;
+    TestEqual(TEXT("higher only, different hulls do not play lower"), Overlap.ExclusiveFade().Get(1.f), 0.f);
+    Overlap.HullSeparation = 0.0;
+    TestEqual(TEXT("higher only, touching hulls can cross-fade"), Overlap.ExclusiveFade().Get(0.f), 0.75f);
+    Overlap.bLowerInside = true;
+    TestEqual(TEXT("inside both, depth into the higher area controls fade"), Overlap.ExclusiveFade().Get(0.f), 0.75f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseFilterBusTest, "SCBridge.Audio.Filter.OutputBusSpectrum",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseFilterBusTest::RunTest(const FString&)
+{
+    constexpr int32 Rate = 48000;
+    FSCAudioBus Bus;
+    Bus.OutputFilters.Lpf = 58.f;
+    FSCRtpcBank Bank;
+    FSCBusDsp Dsp(19, Bus, {}, Bank, 0.f);
+    TestTrue(TEXT("an output filter alone requires a submix effect"), Dsp.HasWork());
+    TUniquePtr<FSCBusDspState> State = Dsp.MakeState(Rate, 2);
+    TArray<float> Frame;
+    Frame.SetNumZeroed(Rate * 2);
+    for (int32 I = 0; I < Rate; ++I)
+        Frame[I * 2] = FMath::Sin(2. * UE_PI * 627. * I / Rate);
+
+    Dsp.Process(*State, Frame.GetData(), Rate);
+
+    double DryEnergy = 0., WetEnergy = 0., SilentChannelEnergy = 0.;
+    for (int32 I = Rate / 4; I < Rate; ++I)
+    {
+        const double Input = FMath::Sin(2. * UE_PI * 627. * I / Rate);
+        DryEnergy += FMath::Square(Input);
+        WetEnergy += FMath::Square(double(Frame[I * 2]));
+        SilentChannelEnergy += FMath::Square(double(Frame[I * 2 + 1]));
+    }
+    const double Attenuation = 10. * FMath::LogX(10., WetEnergy / DryEnergy);
+    TestTrue(TEXT("the authored cutoff is about minus three decibels"), FMath::Abs(Attenuation + 3.) <= 0.25);
+    TestEqual(TEXT("independent filter history per channel"), SilentChannelEnergy, 0.);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioStereoDirectionsTest, "SCBridge.Audio.StereoDirections",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioStereoDirectionsTest::RunTest(const FString&)
+{
+    FSCAudioStereoDirections MonoLeft, StereoPair;
+    MonoLeft.Add(-1.f, 0.25f);
+    StereoPair.Add(-1.f, 0.25f);
+    StereoPair.Add(1.f, 0.25f);
+    StereoPair.Add(-1.f, 0.25f);
+    TestTrue(TEXT("the left channel matches one position and does not sum duplicate positions"),
+        FMath::IsNearlyEqual(StereoPair.PerSpeaker.X, MonoLeft.PerSpeaker.X));
+    TestEqual(TEXT("the right channel matches one position"), StereoPair.PerSpeaker.Y, 0.25f);
+    MonoLeft.Add(1.f, 0.f);
+    TestTrue(TEXT("an inaudible direction does not affect either channel"),
+        MonoLeft.RelativeGains().Equals(FVector2f(1.f, 0.f), 1.e-6f));
+    FSCAudioStereoDirections Silent;
+    TestTrue(TEXT("no audible position gives a silent matrix"), Silent.RelativeGains().IsZero());
+
+    float Pcm[] = {0.25f, 0.5f, 0.75f, 0.f, 0.f, 0.f};
+    const FVector2f Equal = StereoPair.RelativeGains();
+    FSCAudioStereoDirections::Render(Pcm, 3, 1, FVector2f::ZeroVector, Equal);
+    TestTrue(TEXT("expands a single mono block backwards and smooths from silence"),
+        FMath::IsNearlyEqual(Pcm[0], 0.25f / 3.f) && FMath::IsNearlyEqual(Pcm[1], 0.25f / 3.f) &&
+        FMath::IsNearlyEqual(Pcm[2], 1.f / 3.f) && FMath::IsNearlyEqual(Pcm[3], 1.f / 3.f) &&
+        Pcm[4] == 0.75f && Pcm[5] == 0.75f);
+    float DistinctStereo[] = {0.25f, 0.75f};
+    FSCAudioStereoDirections::Render(DistinctStereo, 1, 2, Equal, Equal);
+    TestEqual(TEXT("preserves the source's left signal"), DistinctStereo[0], 0.25f);
+    TestEqual(TEXT("preserves the source's right signal"), DistinctStereo[1], 0.75f);
+    float LeftImpulse[] = {1.f, 0.f};
+    const FVector2f HardRight(0.f, 1.f);
+    FSCAudioStereoDirections::Render(LeftImpulse, 1, 2, HardRight, HardRight);
+    TestEqual(TEXT("the left source reaches the right output at a hard pan"), LeftImpulse[1], 0.5f);
+    TestEqual(TEXT("the opposite output is silent at a hard pan"), LeftImpulse[0], 0.f);
+    float RightImpulse[] = {0.f, 1.f};
+    const FVector2f HardLeft(1.f, 0.f);
+    FSCAudioStereoDirections::Render(RightImpulse, 1, 2, HardLeft, HardLeft);
+    TestEqual(TEXT("the right source reaches the left output at a hard pan"), RightImpulse[0], 0.5f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioRayOcclusionTest, "SCBridge.Audio.RayOcclusion",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioRayOcclusionTest::RunTest(const FString&)
+{
+    const FSCAudioRayProfile Profile{0.3f, 500.f, 5.f};
+    const float Wall[] = {0.4f, 0.4f, 0.4f, 0.4f, 0.4f};
+    const FSCAudioRayLevels Covered = FSCAudioRayLevels::Reduce(Profile, 2.0, Wall);
+    TestTrue(TEXT("equal rays behind a wall give its obstruction coefficient as occlusion"),
+        FMath::IsNearlyEqual(Covered.Occlusion, 0.4f));
+    TestEqual(TEXT("equal rays at close range give zero separate obstruction"), Covered.Obstruction, 0.f);
+    const float Centre[] = {0.8f, 0.f, 0.f, 0.f, 0.f};
+    TestTrue(TEXT("the central ray's obstruction falls off beyond the full distance"),
+        FMath::IsNearlyEqual(FSCAudioRayLevels::Reduce(Profile, 10.0, Centre).Obstruction, 0.4f));
+    TestEqual(TEXT("very near ray target is neutral"), FSCAudioRayLevels::Reduce(Profile, 0.25, Wall).Occlusion, 0.f);
+    TestEqual(TEXT("out of range ray target is neutral"), FSCAudioRayLevels::Reduce(Profile, 501.0, Wall).Occlusion, 0.f);
+    TestEqual(TEXT("absent configuration does not invent a distance profile"),
+        FSCAudioRayLevels::Reduce({}, 2.0, Wall).Occlusion, 0.f);
+
+    const FString Json = TEXT(R"({"version":1,"game_parameters":{"71":{"ramp_type":2,"ramp_up":0.3,"ramp_down":0.3,"builtin":6}},
+        "surface_obstruction":{"mat_default":0.25,"mat_hollow":0.35}})");
+    FSCAudioManifest Data;
+    FString Error;
+    TestTrue(TEXT("ray fixture manifest parses"), FSCAudioManifest::Parse(Json, Data, Error));
+    TestTrue(TEXT("the STMG binding selects per-emitter occlusion"), Data.GameParameters.FindRef(71).IsRayParameter());
+    TestEqual(TEXT("the fallback retains the archive coefficient"), Data.SurfaceObstruction.FindRef(FName(TEXT("mat_default"))), 0.25f);
     return true;
 }

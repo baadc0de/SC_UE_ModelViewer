@@ -3,7 +3,7 @@
 A cooked level has no package at run time, so its audio travels beside it as loose files the viewer reads the same way
 it reads a package: Content/SCAudio/<level>/Packages/<package>/audio.json, the media (Audio/<id>.ogg) and impulse
 responses (Audio/ir/<id>.f32) it lists, and Packages/<package>/audio_interiors.json — per interior the scene's
-audio_spots, audio_areas and room_volumes (the cooked actor keeps its interior anchors). The packaging settings stage
+audio_spots, audio_areas, room_volumes and room_connectors (the cooked actor keeps its interior anchors). The packaging settings stage
 Content/SCAudio as non-UFS files (DefaultGame.ini); ASCVehicle::BeginPlay loads them (ASCVehicle::CookedAudio). The files
 are game-derived: Content/SCAudio is gitignored.
 """
@@ -54,7 +54,7 @@ def stage(root, scene, level_name):
     with open(os.path.join(root, scene), encoding='utf-8') as f:
         interiors = json.load(f).get('interiors', [])
     sidecar = [{'name': i.get('name', ''), 'audio_spots': i.get('audio_spots', []), 'audio_areas': i.get('audio_areas', []),
-                'room_volumes': i.get('room_volumes', [])} for i in interiors]
+                'room_volumes': i.get('room_volumes', []), 'room_connectors': i.get('room_connectors', [])} for i in interiors]
     with open(os.path.join(target, package_dir, 'audio_interiors.json'), 'w', encoding='utf-8') as f:
         json.dump({'version': 1, 'interiors': sidecar}, f)
     unreal.log('COOK_AUDIO %s -> %s files=%d interiors=%d' % (scene, folder, copied, len(sidecar)))
