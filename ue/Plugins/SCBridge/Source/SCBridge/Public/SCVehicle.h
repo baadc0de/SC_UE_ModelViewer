@@ -119,6 +119,9 @@ public:
      *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> Waypoints;
     int32 WaypointRevision = 0;
+    /** Authored vehicle-retrieval interfaces on hangar operating panels, and their reach in cm. */
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, float> GarageKiosks;
+    bool AimGarageKiosk(const FVector& Eye, const FVector& Direction, float Reach, const AActor* Ignore) const;
     /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; transient. */
     TArray<FSCWaypointSource> WaypointSources;
     /** Waypoints from WaypointSources and the ship pad in the current pose; a cooked environment (no sources, no rigs)

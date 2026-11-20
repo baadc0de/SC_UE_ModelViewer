@@ -1,0 +1,40 @@
+// mobiGlas Garage. The fleet list is virtualized and the configuration pane tracks the selected vehicle.
+#pragma once
+
+#include "CoreMinimal.h"
+#include "SCGarageSubsystem.h"
+#include "Widgets/SCompoundWidget.h"
+
+class FSCMobiGlasModel;
+class SBox;
+template<typename ItemType> class SListView;
+
+class SSCGarage : public SCompoundWidget
+{
+public:
+    SLATE_BEGIN_ARGS(SSCGarage) {}
+    SLATE_ARGUMENT(TSharedPtr<FSCMobiGlasModel>, Model)
+    SLATE_END_ARGS()
+    void Construct(const FArguments& Args);
+    virtual void Tick(const FGeometry& Geometry, double Time, float Delta) override;
+
+private:
+    USCGarageSubsystem* Garage() const;
+    const FSCGarageRow* Selected() const;
+    void Refresh();
+    TSharedRef<SWidget> Details();
+    void Retrieve(ESCGaragePlacement At);
+    void Store();
+    void AddToFleet();
+    TSharedPtr<FSCMobiGlasModel> Model;
+    TArray<TSharedPtr<FSCGarageRow>> Visible;
+    TSharedPtr<SListView<TSharedPtr<FSCGarageRow>>> List;
+    TSharedPtr<SBox> DetailBody;
+    TArray<FSCGarageRow> Fleet;
+    FString Search;
+    FString DetailKey = TEXT("<uninitialized>");
+    FString Error;
+    FString ConfirmEntity;
+    bool bBrowse = false;
+    float Age = 1.f;
+};

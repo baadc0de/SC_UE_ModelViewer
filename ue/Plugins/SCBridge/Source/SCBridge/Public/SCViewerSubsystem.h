@@ -151,6 +151,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool LoadEntity(const FString& Entity, USCViewOptions* Options);
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void CancelLoad();
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void Unload();
+    /** Garage lifecycle for the primary slot. Extra vehicle instances stay where they are. */
+    bool LoadGarageVehicle(const FString& Entity);
+    bool StoreGaragePrimary();
+    int32 SpawnGarageFloorVehicle(const FString& Entity);
     /** Pumps the pipeline on the calling (game) thread until the load finishes; for commandlets and tests. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForLoad(float TimeoutSeconds = 600.f);
     /** Pumps until the pipeline reaches Phase (or finishes); lets tests cancel inside a given phase. */
@@ -289,7 +293,8 @@ private:
     void StepLoad(bool bBlocking);
     void StartImport();
     void FinishLoad(ESCLoadPhase Result, const FString& Error);
-    void UnloadInternal(bool bCollect);
+    void UnloadInternal(bool bCollect, bool bKeepExtras = false);
+    bool bGarageLoad = false;
     void CompleteSearches(bool bBlocking);
     void LogPhaseChange();
     /** Archive lost to an FFI panic: leave Ready so the overlay offers Choose/Retry. */

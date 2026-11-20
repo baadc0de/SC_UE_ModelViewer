@@ -58,6 +58,10 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     Out.ParentNodeName = String(O, TEXT("parent_node_name"));
     Out.ItemType = String(O, TEXT("item_type"));
     Out.ItemSubType = String(O, TEXT("item_sub_type"));
+    Out.ItemSize = String(O, TEXT("item_size"));
+    double ItemSize = 0;
+    if (Out.ItemSize.IsEmpty() && O->TryGetNumberField(TEXT("item_size"), ItemSize) && ItemSize > 0)
+        Out.ItemSize = FString::FromInt(int32(ItemSize));
     Out.PortFlags = String(O, TEXT("port_flags"));
     Out.SourceTransformBasis = String(O, TEXT("source_transform_basis"));
     Out.PaletteId = String(O, TEXT("palette_id"));

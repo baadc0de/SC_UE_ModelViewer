@@ -231,7 +231,7 @@ double FSCVehicleInstances::FloorZ() const
     return 0;
 }
 
-int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest)
+int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest, bool bGarageFloor)
 {
     FInstance& I = Instances.AddDefaulted_GetRef();
     I.Info.Id = NextId++;
@@ -240,6 +240,7 @@ int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTrans
     I.Info.bAutoPlaced = bAuto;
     I.Requested = World;
     I.bRest = bRest;
+    I.bGarageFloor = bGarageFloor;
     UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_QUEUE idx=%d entity=%s placement=%s"), I.Info.Id, I.Info.Entity.IsEmpty() ? TEXT("<loaded>") : *I.Info.Entity,
            bAuto ? TEXT("auto") : *FString::Printf(TEXT("at=%s yaw=%.0f rest=%d"), *Metres(World.GetLocation()), World.Rotator().Yaw, bRest));
     return I.Info.Id;
@@ -272,9 +273,20 @@ TArray<FSCVehicleInstanceInfo> FSCVehicleInstances::GetInstances() const
         Info.Id = 0;
         Info.Entity = Viewer.GetLoadedEntity();
         Info.State = ESCVehicleInstanceState::Ready;
+        Info.Progress = 1.f;
         Info.Actor = P;
     }
-    for (const FInstance& I : Instances) Out.Add(I.Info);
+    for (const FInstance& I : Instances)
+    {
+        FSCVehicleInstanceInfo& Info = Out.Add_GetRef(I.Info);
+        if (Info.State == ESCVehicleInstanceState::Ready) Info.Progress = 1.f;
+        else if (Info.Id == Running)
+        {
+            if (Info.State == ESCVehicleInstanceState::Exporting && Progress) Info.Progress = 0.5f * Progress->GetFraction();
+            if (Info.State == ESCVehicleInstanceState::Parsing) Info.Progress = 0.5f;
+            if (Info.State == ESCVehicleInstanceState::Importing && Job) Info.Progress = 0.5f + 0.5f * Job->GetFraction();
+        }
+    }
     return Out;
 }
 int32 FSCVehicleInstances::GetId(const ASCVehicle* Vehicle) const
@@ -298,6 +310,11 @@ void FSCVehicleInstances::Changed()
 void FSCVehicleInstances::SetPrimary(ASCVehicle* InPrimary, const TSharedPtr<FSCImportedAssets>& Assets, const FString& Key)
 {
     const bool bChanged = Primary.Get() != InPrimary;
+    if (!PrimaryKey.IsEmpty() && PrimaryKey != Key && !Instances.ContainsByPredicate([&](const FInstance& I) { return I.Key == PrimaryKey; }))
+    {
+        AssetSets.Remove(PrimaryKey);
+        SetSessions.Remove(PrimaryKey);
+    }
     Primary = InPrimary;
     PrimaryKey = Key;
     if (Assets)
@@ -306,6 +323,11 @@ void FSCVehicleInstances::SetPrimary(ASCVehicle* InPrimary, const TSharedPtr<FSC
         if (InPrimary) SetSessions.Add(Key, InPrimary->SessionPath);
     }
     if (bChanged) Changed();
+}
+
+bool FSCVehicleInstances::RetainsSession(const FString& Session) const
+{
+    return SetSessions.FindKey(Session) != nullptr;
 }
 
 void FSCVehicleInstances::Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive)
@@ -436,8 +458,10 @@ void FSCVehicleInstances::Tick()
         StepRunning();
         return;
     }
-    if (!Primary.IsValid() || Viewer.IsBusy()) return; // instances extend a loaded scene; loads and environments go first
-    if (FInstance* Next = Instances.FindByPredicate([](const FInstance& I) { return I.Info.State == ESCVehicleInstanceState::Queued; }))
+    if (Viewer.IsBusy()) return;
+    if (FInstance* Next = Instances.FindByPredicate([&](const FInstance& I) {
+        return I.Info.State == ESCVehicleInstanceState::Queued && (Primary.IsValid() || (I.bGarageFloor && !I.Info.Entity.IsEmpty()));
+    }))
         Start(*Next);
 }
 
@@ -596,6 +620,8 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
         Q.SearchArea = FBox(FVector(Bounds.Min.X, Bounds.Min.Y, 0), FVector(Bounds.Max.X, Bounds.Max.Y, 0));
     }
     Q.KeepOut = FSCVehiclePlacement::AccessLanes(Environment);
+    FBox Bay(ForceInit);
+    if (I.bGarageFloor && FSCEnvironment::FindShipBay(Environment, Bay)) Q.KeepOut.Add(Bay);
     const int32 Lanes = Q.KeepOut.Num();
     // Every other vehicle that stays where it is: its envelope (cached for its entity), else its current solid bounds.
     auto KeepOutOf = [&](const ASCVehicle* Other, const FString& Key) {

@@ -51,6 +51,7 @@ private:
     FName FocusGroup;
     TWeakObjectPtr<class ASCVehicle> FocusShip;
     bool bRefocusApp = false;
+    ESCMobiGlasApp LastApp = ESCMobiGlasApp(0);
     int32 FocusJobs = 0; // our active transfers when last framed: a new one widens the framing to its work area
     float Openness = 0; // 0 closed .. 1 open (fade + slide)
     float FitScale = 1;

@@ -7,6 +7,7 @@
 #include "SCLightImporter.h"
 #include "SCPlayerKit.h"
 #include "SCViewerSubsystem.h"
+#include "UI/Cargo/SCCargoViewSource.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -572,6 +573,14 @@ FVector ASCFirstPersonCharacter::InteractionOrigin() const
 }
 bool ASCFirstPersonCharacter::Interact()
 {
+    USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this);
+    const ASCVehicle* Environment = Viewer ? Viewer->GetEnvironment() : nullptr;
+    if (Environment && Environment->AimGarageKiosk(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this))
+    {
+        FSCMobiGlasRequests::Get().App = TEXT("Garage");
+        SetMobiGlasOpen(true);
+        return true;
+    }
     if (!Vehicle) return false;
     // WP-P5: a floor panel under the crosshair sends the option there (nothing off its rows); another lift panel (a call
     // button) its primary interaction, along its exported links; anything else is the door interaction. The aim is taken
@@ -953,6 +962,10 @@ FString ASCFirstPersonCharacter::HUDText() const
         const FSCPointInteraction* C = Panel->Choices.FindByPredicate([&](const FSCPointInteraction& X) { return X.Name == Interaction; });
         Prompt = !C ? FString() : FString::Printf(TEXT("E: %s"), C->DisplayName.IsEmpty() ? *C->Name.ToString() : *C->DisplayName);
     }
+    if (const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this))
+        if (const ASCVehicle* Environment = Viewer->GetEnvironment();
+            Environment && Environment->AimGarageKiosk(Eye, GetViewRotation().Vector(), InteractReach, this))
+            Prompt = TEXT("E: Open Garage");
     const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: the capsule overlaps geometry")
         : bStuck ? TEXT("Movement blocked — press V for noclip")
         : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");

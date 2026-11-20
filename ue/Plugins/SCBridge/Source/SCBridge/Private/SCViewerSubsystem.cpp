@@ -651,7 +651,7 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
     }
     if (!Cooked.IsEmpty())
     {
-        UnloadInternal(true);
+        UnloadInternal(true, bGarageLoad);
         bool bOK = false;
         ShipLevel = ULevelStreamingDynamic::LoadLevelInstance(GetViewerWorld(), Cooked, FVector::ZeroVector, FRotator::ZeroRotator, bOK);
         if (!bOK || !ShipLevel)
@@ -672,6 +672,27 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
     Phase = ESCLoadPhase::Exporting;
     return true;
 }
+bool USCViewerSubsystem::LoadGarageVehicle(const FString& Entity)
+{
+    if (Vehicle.IsValid() || !CanLoad(Entity)) return false;
+    bGarageLoad = true;
+    if (LoadEntity(Entity, GetOptions())) return true;
+    bGarageLoad = false;
+    return false;
+}
+
+int32 USCViewerSubsystem::SpawnGarageFloorVehicle(const FString& Entity)
+{
+    return VehicleInstances ? VehicleInstances->Spawn(Entity, true, FTransform::Identity, true, true) : INDEX_NONE;
+}
+
+bool USCViewerSubsystem::StoreGaragePrimary()
+{
+    if (!Vehicle.IsValid() || IsBusy()) return false;
+    UnloadInternal(true, true);
+    return true;
+}
+
 void USCViewerSubsystem::CancelLoad()
 {
     if (!IsBusy()) return;
@@ -845,7 +866,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
             return;
         }
         // Free the previous ship before building the next one so peak memory holds one ship.
-        UnloadInternal(true);
+        UnloadInternal(true, bGarageLoad);
         FSCImportOptions ImportOptions;
         ImportOptions.World = GetViewerWorld();
         ImportOptions.bBuildCollision = LoadOptions->bCollision;
@@ -899,6 +920,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
 
 void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
 {
+    bGarageLoad = false;
     Phase = Result;
     Report.Result = Result;
     Report.Error = Error;
@@ -978,7 +1000,7 @@ void USCViewerSubsystem::UnloadShipLevel()
     ShipLevel = nullptr;
 }
 
-void USCViewerSubsystem::UnloadInternal(bool bCollect)
+void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
 {
     UWorld* ViewerWorld = GetViewerWorld();
     if (!ViewerWorld || ViewerWorld->bIsTearingDown || IsEngineExitRequested())
@@ -996,7 +1018,10 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect)
     TArray<TWeakObjectPtr<UObject>> Tracked;
     // Extra vehicle instances and their retained assets go with the loaded vehicle (counted in the same accounting).
     if (VehicleInstances)
-        VehicleInstances->Reset(bCollect ? &Tracked : nullptr, ViewerWorld && !ViewerWorld->bIsTearingDown && !IsEngineExitRequested());
+    {
+        if (bKeepExtras) VehicleInstances->SetPrimary(nullptr, nullptr, FString());
+        else VehicleInstances->Reset(bCollect ? &Tracked : nullptr, ViewerWorld && !ViewerWorld->bIsTearingDown && !IsEngineExitRequested());
+    }
     if (ShipLevel)
     {
         // A cooked ship leaves with its level (its assets are packages, not an import session).
@@ -1005,7 +1030,9 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect)
     }
     if (Previous)
     {
-        TrackSession(Previous, Previous->SessionPath, Tracked);
+        const FString Session = bKeepExtras && VehicleInstances && VehicleInstances->RetainsSession(Previous->SessionPath)
+            ? FString() : Previous->SessionPath;
+        TrackSession(Previous, Session, Tracked);
         UWorld* World = Previous->GetWorld();
         if (World) FSCImporter::Unload(World);
         // During engine exit the world tears its actors down itself.

@@ -320,6 +320,18 @@ bool USCCargoSubsystem::IsAccessDoorBusy(const ASCVehicle* Ship, int32 Door) con
     return false;
 }
 
+bool USCCargoSubsystem::IsVehicleTransferActive(const ASCVehicle* Ship) const
+{
+    if (!State || !Ship) return false;
+    return State->Jobs.ContainsByPredicate([&](const FSCCargoJob& Job) {
+        return Job.IsActive() && Job.Moves.ContainsByPredicate([&](const FSCCargoMove& Move) {
+            for (const int32 GridId : {Move.Plan.FromGrid, Move.Plan.ToGrid})
+                if (const auto* Grid = FindGrid(GridId); Grid && Grid->OwnerVehicle.Get() == Ship) return true;
+            return false;
+        });
+    });
+}
+
 bool USCCargoSubsystem::CanClose(const USCCargoGridComponent* Grid, FText* OutWhy, int32 IgnoreJob) const
 {
     auto Why = [&](const FText& T) { if (OutWhy) *OutWhy = T; return false; };
