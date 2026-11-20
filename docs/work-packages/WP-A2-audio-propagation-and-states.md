@@ -476,5 +476,9 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
 - State chunks supply typed volume, pitch, LPF, HPF, and bus-level offsets. The viewer interpolates numeric values
   over the authored STMG duration for the specific state pair, or over the group default. An interrupted transition
   continues from the current mix. Effect-slot bypass remains a discrete state.
-- Ray evaluation, room traversal and multi-position panning are pending. Vehicle contexts require WP-P6 to publish
-  stable seat occupancy. The controlled C2/XL A/B and walk acceptance still need the recorded checks in §9.
+- On stereo outputs, a spatial multi-position spot decodes each voice once and applies the maximum
+  attenuation-weighted gain for each speaker. The equal-power panner keeps centered stereo material in its
+  original channels and folds it down for hard pans. The wet send keeps the existing nearest-position level.
+  Other output layouts continue using the viewer's existing spatialization.
+- Ray evaluation and room traversal are pending. Vehicle contexts require WP-P6 to publish stable seat occupancy.
+  The stereo direction and controlled C2/XL A/B and walk acceptance still need the recorded live checks in §9.
