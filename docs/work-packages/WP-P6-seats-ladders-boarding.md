@@ -606,6 +606,8 @@ RPC (WP-H1): `/wait until=seated|walking|climbing`; `seat` and `ladder` records 
    distance) or rungs (0.875 m/s, 4 rungs = the clip's 1.0 m)? The rung reading is consistent with the clips (run and
    sprint loops both play at ≈0.63× their authored rate); the metre reading plays the walk loop 3.5× too fast. A
    stopwatch on the C2 ladder decides: ≈ 8.3 s bottom to top-deck exit (rungs) or ≈ 4.3 s (metres).
+   **Working assumption (owner, 2026-11-20): rungs** (0.875 m/s up, ≈ 8.3 s on the C2), consistent with the clips; the
+   implementation logs the assumption and a stopwatch on the game can still overturn it.
 2. **Ladder side and frame.** Which local axis of the `Ladder` entity faces the climber? Settle it with the geometry (the
    cage's open side) and the top exit (`right` relative to the climber).
 3. **V1 or V2.** The Player has both `ladderConfig` and `ladderConfigV2`, and the ADB has both fragment sets. We assume V2
