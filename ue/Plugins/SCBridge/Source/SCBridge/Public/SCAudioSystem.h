@@ -20,6 +20,7 @@
 #include "Sound/SoundWaveProcedural.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SCAudio.h"
+#include "WorldCollision.h"
 #include "SCLightAreas.h"
 #include "SCAudioSystem.generated.h"
 
@@ -310,6 +311,16 @@ private:
         double PostAudioClock = 0; // the audio clock its voices are scheduled against (the post's, plus a render lead)
         FString Environment;
         FVector Position = FVector::ZeroVector;
+        struct FRayValue
+        {
+            float Default = 0.f, Value = 0.f;
+            FSCAudioRamp Ramp;
+        };
+        TMap<FString, FRayValue> RayParameters;
+        TArray<FTraceHandle, TInlineAllocator<5>> PendingRays;
+        FVector2f RayTargets = FVector2f::ZeroVector; // occlusion / obstruction, normalized
+        double NextRaySample = 0., RayDistanceM = 0.;
+        uint64 RayFrame = 0;
     };
     double Start(FInstance& I, FSCAudioScene& S, const TArray<int32>& Path, double T0, float FadeIn, float CrossfadeOut);
     double StartVoice(FInstance& I, FSCAudioScene& S, const TArray<int32>& Path, double T0, float FadeIn);
@@ -319,7 +330,8 @@ private:
     float BlendGainDb(const FSCAudioScene& S, const FInstance& I, const FSCAudioNode& Blend, int32 ChildPos, const FVector& Emitter) const;
     FSCAudioContainerState& ContainerState(FSCAudioScene& S, int32 Node, const FInstance& I);
     void SetSpatial(FInstance& I, bool bListener);
-    void UpdateInstance(FInstance& I, double Now);
+    void UpdateInstance(FInstance& I, double Now, float Seconds);
+    void UpdateOcclusion(FInstance& I, const FSCAudioScene& S, double Now, float Seconds);
     void UpdateAreasAndSpots(FSCAudioScene& S, double Now);
     float RtpcValue(const FSCAudioScene& S, const FInstance& I, const FString& Name, const FVector& Emitter) const;
     FVector PlacePosition(const FInstance& I) const;
@@ -357,6 +369,7 @@ private:
     TMap<int32, FInstance> Instances;
     int32 NextId = 1;
     double Clock = 0;
+    int32 RayBatchesLeft = 0;
     UPROPERTY() TMap<uint32, TObjectPtr<USoundSubmix>> BusSubmixes;
     UPROPERTY() TMap<FString, TObjectPtr<USoundSubmix>> EnvSubmixes;
     UPROPERTY() TArray<TObjectPtr<UObject>> Keep; // waves and presets alive past their voices (audio-thread users)

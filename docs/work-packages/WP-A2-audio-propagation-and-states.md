@@ -480,5 +480,11 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
   attenuation-weighted gain for each speaker. The equal-power panner keeps centered stereo material in its
   original channels and folds it down for hard pans. The wet send keeps the existing nearest-position level.
   Other output layouts continue using the viewer's existing spatialization.
-- Ray evaluation and room traversal are pending. Vehicle contexts require WP-P6 to publish stable seat occupancy.
+- When given an explicit distance profile, the viewer evaluates occlusion for spatial spots and attached emitters
+  with STMG ray bindings. It queues five asynchronous traces, uses the archive's obstruction table and
+  `mat_default` for unclassified collision, and advances each bound parameter with its own authored ramp.
+  `sc.Audio.OcclusionMinM`, `sc.Audio.OcclusionMaxM`, and `sc.Audio.ObstructionFullM` supply the measured
+  profile for a test. Unconfigured sessions use the parameters' authored defaults. `sc.Audio.OcclusionDebug 1`
+  enables trace and reduction logging. The layout follows the lineage geometry with deterministic offsets.
+- Room traversal is pending. Vehicle contexts require WP-P6 to publish stable seat occupancy.
   The stereo direction and controlled C2/XL A/B and walk acceptance still need the recorded live checks in §9.
