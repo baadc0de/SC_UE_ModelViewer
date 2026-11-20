@@ -107,6 +107,27 @@ public:
     /** A job's state (any job of the session, finished ones too); false when there is no such job. */
     bool FindJobState(int32 JobId, ESCCargoJobState& OutState, FText& OutReason) const;
 
+    // Live spawning (SCCargoSpawnLive.cpp; developer console only: sc.Cargo.Spawn / Clear / Catalog): boxes of the game's
+    // box records put on grids while the viewer runs, placed like scenario stock.
+    /** Starts reading the game's box records (once per session, only when asked: the entity search CargoBoxSearch,
+     *  each hit's DataCore record) and says how far that is; OutNote: progress or the error. */
+    ESCCargoCatalogState RequestSpawnCatalog(FText* OutNote = nullptr);
+    /** The commodities the box records offer (empty until read). */
+    TArray<FSCCargoSpawnCommodity> GetSpawnCommodities() const;
+    /** Logs the commodities whose key or label contains Text (CARGO_CATALOG_COMMODITY); asked before the records are
+     *  read, once they are. */
+    void ListSpawnCatalog(const FString& Text);
+    /** Where Request's boxes would go now, or why not (refused: grid, retracted, full, size, amount, commodity, catalog). */
+    FSCCargoSpawnPreview PreviewSpawn(const FSCCargoSpawnRequest& Request) const;
+    /** Plans Request and queues its boxes: they are put down once their packages are exported (and, without a scenario,
+     *  once the default drone fleet is in place), re-planned then (CARGO_SPAWN). The spawn's id, or INDEX_NONE when
+     *  refused now (OutPreview says why; CARGO_SPAWN refused=). Box records still being read: it waits for them. */
+    int32 Spawn(const FSCCargoSpawnRequest& Request, FSCCargoSpawnPreview& OutPreview);
+    bool GetSpawnStatus(int32 SpawnId, FSCCargoSpawnStatus& Out) const;
+    /** Removes the boxes on a grid (or a beacon) that no transfer holds, except those beneath a box or a slot that
+     *  stays (CARGO_CLEAR). The ids removed; OutKept: the boxes left. False with OutError for an unknown location. */
+    bool ClearLocation(int32 LocationId, TArray<int32>& OutRemoved, int32& OutKept, FString& OutError);
+
 protected:
     int32 Revision = 0;
 
@@ -142,6 +163,12 @@ private:
     FName RequesterOf(const FSCCargoTransferRequest& Request) const;
     void TryScenario();
     void ApplyScenario();
+    /** Without a scenario, live spawns bring the default drone fleet (CargoFleet: a drone definition and docks). */
+    void RequestFleet();
+    void LoadFleet();
+    /** Every frame: the box records being read, and queued spawns put down once ready. */
+    void TickCatalog();
+    void TickSpawns();
     class USCCargoGridComponent* FindGrid(int32 GridId) const;
     class USCCargoGridComponent* SelectGrid(const struct FSCCargoGridSelector& Selector) const;
     struct FSCCargoPlanInput PlanInput(const FSCCargoTransferRequest& Request, bool bIgnoreOtherJobs = false) const;
@@ -149,7 +176,14 @@ private:
     void OwnerRefusals(const FSCCargoTransferRequest& Request, FSCCargoTransferPreview& Preview) const;
     /** Moves, reservations and labels of a job from its plan (Submit, or a queued job whose turn came). */
     void Materialize(struct FSCCargoJob& Job, const FSCCargoTransferPreview& Plan);
-    int32 SpawnBox(class USCCargoGridComponent* Grid, const FString& Entity, FName Commodity, const FText& Label, const TOptional<FIntVector>& Origin = {}, bool bRotated = false);
+    /** NoSupport: items on the grid that bear nothing (a live spawn: reserved incoming slots, boxes about to leave). */
+    int32 SpawnBox(class USCCargoGridComponent* Grid, const FString& Entity, FName Commodity, const FText& Label, const TOptional<FIntVector>& Origin = {}, bool bRotated = false,
+                   const TSet<int32>* NoSupport = nullptr);
+    /** A grid as a live spawn plans on it: its lattice model (holds lengthwise to their entrance), with the return slots of
+     *  boxes held aside by a dig-out; OutNoSupport gains what occupies cells but bears nothing. */
+    struct FSCCargoGridModel SpawnModel(const class USCCargoGridComponent* Grid, TSet<int32>& OutNoSupport) const;
+    /** A spawn waits for the default fleet: asked for and not loaded, or a dock of it on a grid that is here not yet placed. */
+    bool FleetPending() const;
     void SpawnDock(class USCCargoGridComponent* Grid, int32 Drones);
     void UpdateAccess(class USCCargoGridComponent* Grid, double Now);
     bool RequestAccess(class USCCargoGridComponent* Grid, bool bOpen, double Now);

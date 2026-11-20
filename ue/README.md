@@ -411,6 +411,38 @@ Console: `sc.Cargo.List`, `sc.Cargo.Preview|Transfer <from> <to> <commodity> <sc
 `sc.MobiGlas.*` (route stand-ins for clicks), `sc.Env.OpenAccess`. Logs: `CARGO_JOB`, `CARGO_PATH` (found, hits,
 clearance, frame time), `CARGO_TEAM`, `CARGO_PICK`, `CARGO_TUG`, `CARGO_GUARD`, `ENV_ACCESS`.
 
+**Live cargo spawning** (a developer feature: console and RPC `/console` only; `Cargo/SCCargoSpawn.h`, `SCCargoSpawnLive.cpp`;
+tests `SCBridge.Cargo.Spawn*`): stock without a scenario, while the viewer runs.
+- `sc.Cargo.Spawn <grids> <commodity|entity> [<scu>|x<count>] [--size=<scu>] [--owner=<id>]`: grids as for
+  `sc.Cargo.Transfer` (id, `ship` / `elevator` (the player's ships, every lift grid), label text; `+` joins); `--owner`
+  names whose the new boxes are (else the grid's owner, else the player). `<scu>` is a total in whole boxes (`--size`
+  boxes, or from the largest sizes that fit down, then other exact mixes); `x<count>` is a box count (of `--size`, or
+  the largest size that fits); neither is one box. Amounts and sizes are whole numbers from 1 (`0`, `x0`, `2.5`,
+  `8junk` are refused, never read as one box); at most 256 boxes a spawn.
+  Boxes come from the game's box records: the entity-index search `CargoBoxSearch` (setting, default `Carryable_TBO_`;
+  a name filter for speed, empty = every entity) and each hit's DataCore record, kept when it is a whole-SCU box
+  (`AttachDef.inventoryOccupancyVolume`, `inventoryOccupancyDimensions`) holding a resource (`ResourceContainer`: its
+  default composition's `ResourceType`, else its `ResourceTypeGroup`: a mixed box such as the scenarios' `Organic`).
+  The commodity is that record's name (`CarinitePure`, `Organic`), matched by key, label (the localised name its boxes
+  share; one that several commodities' boxes carry, a placeholder, is no label) or text unique to one; an exact box
+  entity name picks that box. Read once per archive, off the game thread, on the first `sc.Cargo.Spawn` /
+  `sc.Cargo.Catalog` (1328 records in about 5 s on LIVE 4.10.2; `CARGO_CATALOG`).
+  Placement is the planner's packing (largest first, best fit, upright at yaw 0/90, on the floor or on boxes, a hold
+  lengthwise to its entrance). Slots reserved for incoming boxes, boxes about to leave and the return slots of boxes held
+  aside by a dig-out occupy their cells but bear nothing. The boxes go down once their packages are exported (`SpawnBox`,
+  as scenario stock), planned again then, all or none.
+  Logs: `CARGO_SPAWN refused=<grid|retracted|full|size|amount|commodity|catalog|package> grid= what= reason="…" [id=]`,
+  `CARGO_SPAWN_QUEUED id=`, `CARGO_SPAWN grid= commodity= boxes= scu= owner= id= ids=`.
+- `sc.Cargo.Clear <grids>`: removes the boxes on grids (or beacons) that no transfer holds, except those beneath a box of
+  a transfer, a reserved incoming slot or a dock, and (off the lattice, by bounds) beneath a held loose box (`CARGO_CLEAR`).
+- `sc.Cargo.Catalog [text]`: the commodities and box sizes the records offer, listed once read (`CARGO_CATALOG_COMMODITY`).
+- A session without a scenario takes on the default drone fleet with its first valid spawn (`Config/Cargo/fleet.json`,
+  setting `CargoFleet`, `-SCCargoFleet=<file|none>`; `CARGO_FLEET`): the scenarios' drone definition and two docks of two
+  drones on the environment's first grid (the freight elevator; put down when that grid is there, before the spawn's
+  boxes), so spawned cargo can be transferred by the hangar's shared pool.
+- Scripts: RPC `/console` (`Invoke-SC /console @{ cmd = 'sc.Cargo.Spawn elevator Organic 96' }`), then `/wait`
+  `until = 'idle'` (activities `cargo_catalog`, `cargo_spawns`).
+
 **Loose cargo** (WP-K2, [brief](../docs/work-packages/WP-K2-cargo-beacons.md)): a load let go of in flight is set down on
 the nearest free slot it can still reach, else let down where it is. A loose box at rest belongs to a freestyle cargo
 beacon: a virtual location with a random name ("Loose cargo Kestrel-86") that remembers where its boxes came from.

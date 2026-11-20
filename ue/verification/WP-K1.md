@@ -900,3 +900,69 @@ to pass: move 2's team attaches 9 s later); the transits are as fast or faster (
   run here was stopped by its process id.
 - K1g's own open points (beam stiffness a viewer reading, `volumeForceCoefficient` not applied, the search four
   times slower than before WP-P4, three `turn_room` replans on Hull A job 1) stand.
+
+## Live cargo spawning (developer console; Win64, UE 5.9 fork, 2026-11-20, not committed)
+
+Cargo could only be stocked at launch through a scenario. Now `sc.Cargo.Spawn <grids> <commodity|entity>
+[<scu>|x<count>] [--size=<scu>] [--owner=<id>]`, `sc.Cargo.Clear <grids>` and `sc.Cargo.Catalog [text]` stock and
+empty grids while the viewer runs (`Cargo/SCCargoSpawn.h`, `SCCargoSpawn.cpp`, `SCCargoSpawnLive.cpp`; usage in
+[ue/README.md](../README.md), "Live cargo spawning"). It is a developer feature (console, RPC `/console`); the mobiGlas
+is unchanged (owner, 2026-11-20).
+
+- **Box records from the game data.** The entity-index search `CargoBoxSearch` (`Carryable_TBO_`, a name filter for
+  speed) gives candidates; each is kept by its DataCore record alone: a whole-SCU occupancy
+  (`AttachDef.inventoryOccupancyVolume.standardCargoUnits`, `inventoryOccupancyDimensions`) and a `ResourceContainer`
+  whose default composition names a `ResourceType` (else its first `ResourceTypeGroup`: the mixed `Organic` boxes the
+  scenarios use). The commodity key is that record's name, its label the localised name its boxes share (a name boxes
+  of several commodities carry, the `<= PLACEHOLDER =>` text, is none). LIVE 4.10.2: 1369 hits, 1328 records, 193
+  commodities, 41 skipped (eighth-SCU and empty containers), 4.9 s on a worker, read once per archive on demand.
+- **Placement** is the planner's packing (largest first, best fit, yaw 0/90, gravity support, hold entrance axis);
+  reserved incoming slots, boxes about to leave and dig-out return slots occupy cells but bear nothing. Boxes go down
+  through `SpawnBox` (as scenario stock) once their packages are exported, re-planned then, all or none.
+- **Default fleet.** A session without a scenario takes on `Config/Cargo/fleet.json` (the scenarios' drone definition,
+  two docks of two drones on the environment's first grid) with its first valid spawn, so spawned cargo can be moved.
+
+### Tests (`SCBridge.Cargo.Spawn*`, 9 new)
+
+`UnrealEditor-Cmd.exe … -ExecCmds="Automation RunTests SCBridge; Quit" … -log=cargo-spawn-tests.log` → 193 of 197
+`Result={Success}`; the 4 failures are the known ones (`Package.FolderTarImport`, `Player.KitRigAndWeapons`,
+`Materials.FamilyMapping`, `FirstPerson.SkeletalCollision`).
+- `SpawnRecord`: the FFI and CLI record shapes; resource vs group; eighth-SCU, fractional and resource-less records refused.
+- `SpawnCatalog`: labels (shared names dropped), lookup by key / label / unique text, ambiguity, records per commodity.
+- `SpawnEmptyGrid`: x3 of the largest size that fits (16, not 32: 8 m is longer than the grid takes) = 48 SCU; 40 SCU =
+  16 + 16 + 8; ten 8 SCU boxes stacked on a second layer; beside existing stock; every slot free and supported in order.
+- `SpawnRefusals`: unknown size, a box too long (the planner's reason), full (`only 4 of 5`), amount not whole, 7 SCU of
+  8/16 boxes, 257 boxes, no records, an excluded sub type.
+- `SpawnNoSupport`, `SpawnExactMix` (128 SCU = 32 + 4 × 24 where 4 × 32 does not fit; a size variant a grid excludes
+  gives way), `SpawnWords` (`0`, `x0`, `2.5`, `-3`, `8junk` refused), `SpawnClear` (whatever a transfer's box, an
+  incoming slot or a dock rests on stays, however deep), `SpawnThenTransfer` (spawned boxes plan a transfer of all 40 SCU).
+
+### Run (`cargo-spawn-run2.log`, C2 + `hangar_xltop_001`, no scenario, off screen on port 8771; shots `out/cargo-spawn/`)
+
+- Refused: `commodity` (NoSuchCommodity), `retracted` (C2 hold closed: "is closed: open it first"), `size` (3 SCU),
+  `amount` (7 SCU of 4/8/16/32; x300; `x0`, `2.5`), `size` (`--size=8junk`), `full` ("only 14 of 200 32 SCU boxes").
+- `sc.Cargo.Spawn elevator Organic 96` → `CARGO_SPAWN grid=1 commodity=Organic boxes=3 scu=96`; `CarinitePure 28` →
+  24 + 4. The default fleet went down first: `CARGO_FLEET … docks=2 drones=4`, `CARGO_TRACTOR source=datacore`.
+- `sc.Cargo.Access ship open`, `sc.Cargo.Spawn ship Organic x2 --size=16` → two 16 SCU boxes end to end on grid 3.
+- `/cargo/transfer elevator → ship, Organic, 32` → job 1 Done in 122 s, `overlaps=0`; the 32 SCU box sits beside the two
+  16s (`slot_err_cm` 0). `sc.Cargo.Clear elevator` → `removed=4 scu=92`.
+- Shots: `elevator-spawned-225.png`, `transfer-in-flight.png`, `transfer-in-flight-2.png` (two drones carrying the 32),
+  `c2-spawned.png`, `c2-after-transfer.png`, `elevator-cleared.png`.
+- Astra (`gpt-6.2-astra`, `out/cargo-spawn/astra-visual.md`): boxes flat on the floor, square with the grid and the cross
+  marks, no overlap with each other, walls or docks; verdict OK (hidden faces' clearance not provable from shots).
+
+### Review (Codex Terra xhigh + Astra, `out/cargo-spawn/review/`)
+
+Fixed once: spawns resting on incoming reservations / leaving boxes, dig-out return slots, clears under a held loose box,
+fleet docks dropped when their grid came later (kept; `FleetPending`), the fleet installed by a refused spawn, the 60 s
+fleet bypass, `--owner` changing which ship `ship` means, `0` / `x0` / `2.5` / `8junk` read as one box, partial spawns
+reported done (now all or none), cancellation only between entity records, hold structure probed after the model copy,
+exact-mix amounts, size variants, a closed archive waiting forever and a changed archive's stale records, GUID-named
+commodities from failed lookups, re-planning every frame while packages export, `fleet.json` not staged, the refusal
+marker of deferred refusals, the first `sc.Cargo.Catalog [text]` not listing.
+
+### Known issues (TODO(WP-K1))
+
+- The fleet's tractor values in `fleet.json` are the scenarios' documented fallback, used only when the record cannot
+  be read (as for every scenario); the box search term is a name filter (empty searches every entity, slowly).
+- A dig-out's return slot is still not reserved on its grid by `Materialize` (transfers); spawns keep it free.

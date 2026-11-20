@@ -34,7 +34,14 @@ void USCCargoSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USCCargoSubsystem::Deinitialize()
 {
-    if (State) State->Library.Reset();
+    if (State)
+    {
+        // The box records being read hold the FFI client: told to stop first (it stops between two records), waited for
+        // after the package library let go of its export.
+        if (State->CatalogProgress) State->CatalogProgress->bCancel = true;
+        State->Library.Reset();
+        if (State->CatalogTask.IsValid()) State->CatalogTask.Wait();
+    }
     State.Reset();
     Super::Deinitialize();
 }
@@ -52,6 +59,8 @@ void USCCargoSubsystem::Tick(float DeltaSeconds)
     Discover();
     if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld())) State->Library.Tick(Viewer, GetWorld());
     TryScenario();
+    TickCatalog(); // live spawning: the box records, then queued spawns once their packages are ready
+    TickSpawns();
     const double Now = GetWorld()->GetTimeSeconds();
     for (const auto& Pair : State->Grids)
         if (USCCargoGridComponent* Grid = Pair.Value.Get()) UpdateAccess(Grid, Now);
@@ -64,8 +73,8 @@ float USCCargoSubsystem::GetNearbyRadiusM() const { return USCViewerSettings::Ge
 
 bool USCCargoSubsystem::InAtmosphere() const
 {
-    // The scenario's say (no data signal); without a scenario, an environment (a hangar) has air.
-    if (State->Scenario.IsSet()) return State->Scenario.bAtmosphere;
+    // The scenario's say (no data signal); without a scenario (the default fleet included), an environment (a hangar) has air.
+    if (State->Scenario.IsSet() && !State->bDefaultFleet) return State->Scenario.bAtmosphere;
     const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld());
     return Viewer && Viewer->GetEnvironment();
 }

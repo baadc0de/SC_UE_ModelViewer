@@ -279,3 +279,81 @@ struct SCBRIDGE_API FSCCargoDroneView
     /** Owner (multi-owner hangars): its dock's owner ("Shared" for the hangar's docks). Declared by K1c, filled by K1b. */
     UPROPERTY(BlueprintReadOnly) FText OwnerLabel;
 };
+
+// ---- Live cargo spawning (developer console: sc.Cargo.Spawn / Clear / Catalog, RPC /console) -------------------------
+
+/** The game's box records a live spawn chooses from (DataCore entity records, read once per session on demand). */
+UENUM(BlueprintType)
+enum class ESCCargoCatalogState : uint8 { None, Loading, Ready, Failed };
+
+/** One commodity live spawns offer: its key (the resource its boxes hold), label and the box sizes the game data has. */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCCargoSpawnCommodity
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) FName Commodity;
+    UPROPERTY(BlueprintReadOnly) FText Label;
+    UPROPERTY(BlueprintReadOnly) TArray<int32> SizesSCU;  // ascending
+    UPROPERTY(BlueprintReadOnly) TArray<FVector> SizesM;  // per SizesSCU: occupancy dimensions (m, SC axes)
+};
+
+/** Boxes of one commodity (or one box entity) to put on grids. Amount: AmountSCU in whole boxes (SizeSCU each, or the
+ *  largest sizes that fit); else Count boxes (of SizeSCU, or the largest size that fits); neither: one box. */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCCargoSpawnRequest
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadWrite) TArray<int32> Grids;
+    UPROPERTY(BlueprintReadWrite) FString What; // commodity key or label, or a box entity's record name
+    UPROPERTY(BlueprintReadWrite) int32 AmountSCU = 0;
+    UPROPERTY(BlueprintReadWrite) int32 Count = 0;
+    UPROPERTY(BlueprintReadWrite) int32 SizeSCU = 0;
+    /** Whose boxes: None = the grid's owner, the player on shared grids (as scenario stock). */
+    UPROPERTY(BlueprintReadWrite) FName Owner;
+};
+
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCCargoSpawnBoxPlan
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) FString Entity;
+    UPROPERTY(BlueprintReadOnly) int32 SCU = 0;
+    UPROPERTY(BlueprintReadOnly) int32 GridId = INDEX_NONE;
+    UPROPERTY(BlueprintReadOnly) FIntVector Origin = FIntVector::ZeroValue;
+    UPROPERTY(BlueprintReadOnly) FIntVector Cells = FIntVector::ZeroValue;
+    UPROPERTY(BlueprintReadOnly) bool bRotated = false;
+};
+
+/** Where a spawn's boxes go, or why it is refused. Refused: a short key for logs and scripts (grid, retracted, full,
+ *  size, amount, commodity, catalog, package) with the human Reason. */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCCargoSpawnPreview
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) bool bValid = false;
+    UPROPERTY(BlueprintReadOnly) FName Refused;
+    UPROPERTY(BlueprintReadOnly) FText Reason;
+    UPROPERTY(BlueprintReadOnly) FName Commodity;
+    UPROPERTY(BlueprintReadOnly) FText CommodityLabel;
+    UPROPERTY(BlueprintReadOnly) int32 TotalSCU = 0;
+    UPROPERTY(BlueprintReadOnly) TArray<FSCCargoSpawnBoxPlan> Boxes;
+    /** Refused as full: how many boxes of the size tried do fit (0: none). */
+    UPROPERTY(BlueprintReadOnly) int32 FitCount = 0;
+};
+
+UENUM(BlueprintType)
+enum class ESCCargoSpawnState : uint8 { Waiting, Done, Refused };
+
+/** A spawn after its request: waiting (for the box records, the drone fleet or the box packages), done, or refused when
+ *  its boxes were to be placed (the grid changed meanwhile). */
+USTRUCT(BlueprintType)
+struct SCBRIDGE_API FSCCargoSpawnStatus
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) int32 SpawnId = INDEX_NONE;
+    UPROPERTY(BlueprintReadOnly) ESCCargoSpawnState State = ESCCargoSpawnState::Waiting;
+    UPROPERTY(BlueprintReadOnly) FText Text;
+    UPROPERTY(BlueprintReadOnly) TArray<int32> Grids;
+    UPROPERTY(BlueprintReadOnly) TArray<int32> BoxIds;
+    UPROPERTY(BlueprintReadOnly) int32 SCU = 0;
+};

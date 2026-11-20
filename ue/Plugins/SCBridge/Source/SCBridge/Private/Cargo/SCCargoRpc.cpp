@@ -31,8 +31,13 @@ TArray<FString> USCCargoSubsystem::ActivityReasons() const
     TArray<FString> Out;
     if (!State) return Out;
     if (!State->Library.IsSettled()) Out.Add(TEXT("cargo_packages"));
-    if (State->Scenario.IsSet() && (!State->bScenarioPlaced || (!State->Scenario.Loose.IsEmpty() && !State->bLoosePlaced))) Out.Add(TEXT("cargo_scenario"));
+    // The default fleet (live spawning) is busy only while a dock of it waits on a grid that is here.
+    if (State->bDefaultFleet ? FleetPending() : State->Scenario.IsSet() && (!State->bScenarioPlaced || (!State->Scenario.Loose.IsEmpty() && !State->bLoosePlaced)))
+        Out.Add(TEXT("cargo_scenario"));
     if (State->Jobs.ContainsByPredicate([](const FSCCargoJob& J) { return J.IsActive(); })) Out.Add(TEXT("cargo_jobs"));
+    // Live spawning: box records being read, spawns waiting to be put down.
+    if (State->CatalogState == ESCCargoCatalogState::Loading) Out.Add(TEXT("cargo_catalog"));
+    if (State->Spawns.ContainsByPredicate([](const FSCCargoPendingSpawn& S) { return S.Status.State == ESCCargoSpawnState::Waiting; })) Out.Add(TEXT("cargo_spawns"));
     for (const auto& Pair : State->Grids)
         if (const USCCargoGridComponent* G = Pair.Value.Get();
             G && (G->Access == ESCCargoGridAccess::Opening || G->Access == ESCCargoGridAccess::Closing))

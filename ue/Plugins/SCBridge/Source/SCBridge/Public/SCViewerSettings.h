@@ -112,6 +112,15 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") int32 CargoPickAttempts = 3;
     /** Absolute path of the scenario file, empty when none is set. */
     FString ResolveCargoScenario() const;
+    /** Live cargo spawning without a scenario: the drone fleet (a scenario file's drone definition and docks; its ship,
+     *  environment and stock are ignored) a session takes on with its first spawn. Resolved like CargoScenario;
+     *  -SCCargoFleet=<file> overrides it, empty or "none" = no drones for spawned cargo. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoFleet = TEXT("fleet");
+    /** The entity-index search that finds the candidate box records for live spawning (a name substring); each hit is
+     *  kept only when its DataCore record is a whole-SCU box holding a resource (empty: every entity, one record read
+     *  each: slow). A name filter for speed only: what is a box is decided by the record. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoBoxSearch = TEXT("Carryable_TBO_");
+    FString ResolveCargoFleet() const;
 
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static USCViewerSettings* Get();
     /** -SCPlayerGender=<g> / -SCPlayerLoadout=<p4k path> override the settings for one run. */
