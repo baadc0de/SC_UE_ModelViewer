@@ -21,12 +21,22 @@ function Probe { (C 'sc.FP.Probe' | Select-Object -First 1) -replace ' chain=.*'
 function AimRow([int]$Row, [string]$Interaction) {
     # A row's centre, then nudged up and down while the crosshair is not on the row yet (the eye swings with the view when
     # looking steeply down at the panel, so a held aim can settle a few centimetres off).
+    $rect = (C 'sc.Lift.Panels' | Select-String "FLOOR_PANEL_ROW panel=0 option=$Row ") -replace '.* rect=', ''
+    $bounds = [regex]::Match($rect, '([\d.]+),([\d.]+)\.\.([\d.]+),([\d.]+)')
+    if (!$bounds.Success) { throw "floor panel row $Row has no rectangle" }
+    $centreY = ([double]$bounds.Groups[2].Value + [double]$bounds.Groups[4].Value) / 2
+    $wantedChoice = "choice=$([regex]::Escape($Interaction))(?= )"
     foreach ($dy in 0, -0.05, 0.05, -0.09, 0.09) {
-        $r = (C 'sc.Lift.Panels' | Select-String "FLOOR_PANEL_ROW panel=0 option=$Row ") -replace '.* rect=', ''
-        $m = [regex]::Match($r, '([\d.]+),([\d.]+)\.\.([\d.]+),([\d.]+)')
-        $y = ([double]$m.Groups[2].Value + [double]$m.Groups[4].Value) / 2 + $dy
-        $p = Aim "0.5 $y"
-        if ($p -match "choice=$Interaction") { return $p }
+        C "sc.Lift.PanelAim 0 0.5 $($centreY + $dy)" | Select-String 'panel_aim'
+        try {
+            $reply = Wait-SCRpc -Path /console -Body @{ cmd = 'sc.FP.Probe' } -TimeoutSec 1 -IntervalMs 50 -Condition {
+                param($state)
+                [bool]($state.lines | Select-String $wantedChoice -Quiet)
+            }
+            return ($reply.lines | Select-String 'FP_PROBE' | Select-Object -First 1) -replace ' chain=.*', ''
+        } catch [TimeoutException] {
+            # The held view can settle off the option. Try the next point on the same row.
+        }
     }
     throw "row $Row not under the crosshair"
 }

@@ -3,7 +3,7 @@
 # retracted), some waited on until the scene settles and some fired back to back, with the viewer's anomalies, its
 # liveness and its log checked after every step. Writes <OutDir>/steps.ndjson, report.json and screenshots.
 #   powershell -File ue/scripts/rpc/explore.ps1 -Scenario c2_hangar -Steps 40 -Seed 1
-# Holds out/locks/ue.lock (one UE build or game at a time) for the run.
+# Holds the shared Unreal lease for the run.
 param(
     [string]$Scenario = 'c2_hangar',
     [int]$Steps = 40,
@@ -39,11 +39,10 @@ function Dest($scu, $notGrid) {
 }
 function Note($o) { ($o | ConvertTo-Json -Depth 8 -Compress) | Add-Content -Path $stepsFile -Encoding utf8 }
 
-while ($true) { try { New-Item -ItemType Directory "$root\out\locks\ue.lock" -ErrorAction Stop | Out-Null; break } catch { Start-Sleep 20 } }
-"explore.ps1 $Scenario seed $Seed (pid $PID)" | Out-File "$root\out\locks\ue.lock\owner" -Encoding ascii
 $log = "H1_explore_$Scenario`_s$Seed.log"
 $report = [ordered]@{ scenario = $Scenario; seed = $Seed; steps = 0; failures = @(); anomalies = @(); actions = @{}; errors = @{} }
 $p = $null
+$lease = Enter-SCUELease
 try {
     $t0 = Get-Date
     $noFloor = $false
@@ -187,8 +186,7 @@ try {
 } catch {
     $report.failures += "driver: $($_.Exception.Message)"
 } finally {
-    if ($p -and -not $p.HasExited) { $p.Kill(); $report.stop = 'killed' }
-    Remove-Item -Recurse -Force "$root\out\locks\ue.lock" -ErrorAction SilentlyContinue
+    try { if ($p) { $report.stop = Stop-SCViewer $p } } finally { $lease.Dispose() }
     $gameLog = "$root\ue\SCViewer\Saved\Logs\$log"
     if (Test-Path $gameLog) {
         $report.crash = [bool](Select-String -Path $gameLog -Pattern 'Assertion failed|Fatal error|Unhandled Exception' -Quiet)
