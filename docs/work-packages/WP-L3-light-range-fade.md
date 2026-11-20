@@ -231,3 +231,8 @@ Measured in the viewer: Lumen GI off lowers the left wall base 0.0197 → 0.0138
 starved of lights. No GI change was made: there is no game value to move it to. The game's probe ambient is spatially
 uniform within a box (darkened only by SSDO, which the look D15 replaced with Lumen's AO), while Lumen is locally
 occluded. That is the likely reason for the deeper recesses Astra notes.
+
+## Owner decision (2026-11-20)
+
+The square projector frustum (WP-E1 E1-3) stays as it is: with the gobos back in the atlas it reads correctly. Fog
+(volumetric) will be brought in later and may revisit how projector beams read.

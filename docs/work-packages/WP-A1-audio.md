@@ -739,3 +739,10 @@ Files are local and gitignored:
 | `out/audio-datamine/decoded/ENVA_RoomTone/728282112.ogg` | `Play_ENVA_Hangar_Room_Tone_Tonal_Dark_01` (`hangar_xltop_001` ambience loop) | 2 ch, 48 kHz, 64.99 s |
 | `out/audio-datamine/decoded/SSMP_CRUS_StarLifter/52843347.ogg` | `Play_SSMP_CRUS_StarLifter_Elevator_Move_Loop` | 2 ch, 48 kHz, 3.42 s |
 | `out/audio-datamine/decoded/UI_MCCS_Lift_Controls/977801969.ogg` | `Play_UI_Levski_Elevator_Button` | 2 ch, 44.1 kHz, 0.11 s |
+
+## Owner decisions (2026-11-20)
+
+- Room reverb chosen by room size (rooms labelled `inferred_*`, nearest class when between classes, e.g. the C2 bridge)
+  is accepted: "reverb sounds good".
+- Occlusion / obstruction, nested-area priority and the code-chosen interior and game states get a follow-up work
+  package to investigate (from documented engine behaviour where the data is silent) and apply.
