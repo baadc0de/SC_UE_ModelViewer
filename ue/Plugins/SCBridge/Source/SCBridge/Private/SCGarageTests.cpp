@@ -91,6 +91,20 @@ bool FSCGarageFloorSearchTest::RunTest(const FString&)
             !Query.KeepOut[0].Intersect(FSCVehiclePlacement::WorldBox(Query.LocalEnvelope, Result.Transform)));
         TestTrue(TEXT("bounded search"), Result.Tested < 10000);
     }
+    AActor* Obstruction = World->SpawnActor<AActor>();
+    UBoxComponent* Overhead = NewObject<UBoxComponent>(Obstruction);
+    Obstruction->SetRootComponent(Overhead);
+    Overhead->SetBoxExtent(FVector(100, 100, 20));
+    Overhead->SetRelativeLocation(FVector(0, 0, 180));
+    Overhead->SetCollisionProfileName(TEXT("BlockAll"));
+    Overhead->RegisterComponent();
+    Query.SearchArea = FBox(FVector::ZeroVector, FVector::ZeroVector);
+    Query.KeepOut.Reset();
+    Query.Yaws = {0};
+    const FSCVehiclePlacementResult Blocked = FSCVehiclePlacement::FindFreeFloor(World, Query);
+    TestFalse(TEXT("the ship may not occupy the overhead obstruction"), Blocked.bFound);
+    TestTrue(TEXT("an obstruction is distinguished from missing floor"), Blocked.Reason.Contains(TEXT("0 without flat floor")));
+    TestTrue(TEXT("the clearance check reports the blocked spot"), Blocked.Reason.Contains(TEXT("1 blocked")));
     return !HasAnyErrors();
 }
 #endif

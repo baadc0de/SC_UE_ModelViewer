@@ -164,10 +164,15 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
     // The geometry test box: the envelope plus clearance on every side, from FloorLiftCm above the floor to the top.
     const FVector Half(Extent.X + Q.ClearanceCm, Extent.Y + Q.ClearanceCm, (Height - FloorLiftCm) / 2 + Q.ClearanceCm / 2);
     const FCollisionShape Shape = FCollisionShape::MakeBox(Half);
-    int32 KeptOut = 0, Unsupported = 0, Blocked = 0;
+    int32 KeptOut = 0, Unsupported = 0, Blocked = 0, MissedProbes = 0, ContactProbes = 0;
+    double ContactMin = TNumericLimits<double>::Max(), ContactMax = -TNumericLimits<double>::Max();
     auto Refusal = [&](const TCHAR* Why) {
         R.Reason = FString::Printf(TEXT("%s: %d candidates (%d in keep-out boxes, %d without flat floor at %.0f cm, %d blocked)"),
             Why, R.Tested, KeptOut, Unsupported, Q.FloorZ, Blocked);
+        const FString ContactRange = ContactProbes > 0
+            ? FString::Printf(TEXT("%.1f..%.1f"), ContactMin, ContactMax) : FString(TEXT("-"));
+        UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_FLOOR_SEARCH area_xy_cm=(%.0f,%.0f)..(%.0f,%.0f) datum_cm=%.1f tolerance_cm=%.1f contact_probes=%d missed_probes=%d contact_z_cm=%s"),
+               Area.Min.X, Area.Min.Y, Area.Max.X, Area.Max.Y, Q.FloorZ, Q.FloorToleranceCm, ContactProbes, MissedProbes, *ContactRange);
         return Done();
     };
     for (double Yaw : Q.Yaws)
@@ -186,7 +191,7 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
                 ++KeptOut;
                 continue;
             }
-            // Floor: flat and at the reference height under the whole footprint (centre, corners, edge middles).
+            // Probe around the reference floor. The clearance-volume test below handles overhead geometry separately.
             double Lowest = TNumericLimits<double>::Max(), Highest = -TNumericLimits<double>::Max();
             bool bSupported = true;
             for (int32 I = -1; I <= 1 && bSupported; ++I)
@@ -195,9 +200,17 @@ FSCVehiclePlacementResult FSCVehiclePlacement::FindFreeFloor(UWorld* World, cons
                     const FVector Local(Centre.X + I * Extent.X * 0.9, Centre.Y + J * Extent.Y * 0.9, 0);
                     const FVector XY = Actor.TransformPosition(Local);
                     FHitResult Hit;
-                    bSupported = World->LineTraceSingleByChannel(Hit, FVector(XY.X, XY.Y, Q.FloorZ + Height), FVector(XY.X, XY.Y, Q.FloorZ - FloorProbeCm),
-                                                                 ECC_Visibility, Params) &&
-                                 FMath::Abs(Hit.ImpactPoint.Z - Q.FloorZ) <= Q.FloorToleranceCm;
+                    const bool bHit = World->LineTraceSingleByChannel(Hit,
+                        FVector(XY.X, XY.Y, Q.FloorZ + Q.FloorToleranceCm + 1.0),
+                        FVector(XY.X, XY.Y, Q.FloorZ - FloorProbeCm), ECC_Visibility, Params);
+                    ContactProbes += bHit;
+                    MissedProbes += !bHit;
+                    if (bHit)
+                    {
+                        ContactMin = FMath::Min(ContactMin, Hit.ImpactPoint.Z);
+                        ContactMax = FMath::Max(ContactMax, Hit.ImpactPoint.Z);
+                    }
+                    bSupported = bHit && FMath::Abs(Hit.ImpactPoint.Z - Q.FloorZ) <= Q.FloorToleranceCm && Hit.ImpactNormal.Z > 0.9;
                     if (bSupported)
                     {
                         Lowest = FMath::Min(Lowest, Hit.ImpactPoint.Z);
@@ -644,7 +657,12 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
         Q.SearchArea = MapFloorArea(V->GetWorld(), Q.FloorZ, Q.FloorToleranceCm);
     Q.KeepOut = FSCVehiclePlacement::AccessLanes(Environment);
     FBox Bay(ForceInit);
-    if (I.bGarageFloor && FSCEnvironment::FindShipBay(Environment, Bay)) Q.KeepOut.Add(Bay);
+    if (I.bGarageFloor && FSCEnvironment::FindShipBay(Environment, Bay))
+    {
+        // A primary ship can lower a ramp or change its landing gear. Use the authored pad to locate the surrounding floor.
+        Q.FloorZ = Bay.Max.Z;
+        Q.KeepOut.Add(Bay);
+    }
     const int32 Lanes = Q.KeepOut.Num();
     // Every other vehicle that stays where it is: its envelope (cached for its entity), else its current solid bounds.
     auto KeepOutOf = [&](const ASCVehicle* Other, const FString& Key) {
@@ -663,7 +681,8 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
            R.bFound ? TEXT("") : *FString::Printf(TEXT(" reason=\"%s\""), *R.Reason));
     if (!R.bFound)
     {
-        OutError = R.Reason;
+        OutError = I.bGarageFloor && R.Reason.StartsWith(TEXT("no free floor"))
+            ? TEXT("No clear floor spot. Try a smaller ship or retrieve to the bay.") : R.Reason;
         return false;
     }
     V->SetActorTransform(R.Transform, false, nullptr, ETeleportType::TeleportPhysics);
