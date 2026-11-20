@@ -59,6 +59,7 @@ struct FSCMobiGlasRequests
 {
     TOptional<FString> SelectGrid, From, To; // grid selectors: an id, "ship" / "vehicle", "elevator" / "environment", or label text
     TOptional<int32> Layer, Amount;
+    TOptional<FString> App; // consumed by the app rail
     bool bConfirm = false;
     TOptional<int32> CancelJob;
     TOptional<bool> AccessSelectedGroup; // extend (true) / retract the selected grid's group

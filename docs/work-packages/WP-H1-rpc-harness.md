@@ -55,6 +55,11 @@ world metres, rotations `[pitch, yaw, roll]` degrees, forces newtons.
 | `/load`, `/unload` | `entity` | Loads / unloads the main vehicle (instance 0) |
 | `/environment` | `folder` | Sets the hangar (object container path) |
 | `/ship/spawn` | `entity` (`loaded`), `x_m`, `y_m`, [`z_m`], [`yaw`]; or none of them: free floor beside the ship; `wait` | `id`; with `wait`, answers when the instance is ready |
+| `/ship/state` | — | `ship.pairings`, `ship.doors`, `ship.lights`; also present in `/state` and the state log |
+| `/ship/door` | `ship` (instance id, default 0), `door` id or `group` name, `action` (open/close/lock/unlock), optional `as` actor and `local` | Per-door `pending` / refusal. `local: true` uses the actual first-person location for owner egress. |
+| `/ship/secure` | `ship`, optional `as` actor | Close exterior doors and lock after playback. Per-door outcomes. |
+| `/ship/lights` | `ship`, `group` id or `all: true`, `mode` (authored state or `toggle` for all), optional `as` actor | Apply through each group's interaction. All-group orders report skipped ids. |
+| `/ship/locate` | `ship` | Toggles the paired ship's world marker and returns `locating`. |
 | `/ship/despawn` | `id` | Removes an extra instance (its grids, boxes, docks and drones go; jobs touching them fail) |
 | `/cargo/package` | `entity` | Answers when the box entity's package is exported and imported |
 | `/cargo/spawn` | `grid` (id or selector: `ship`, `elevator`, label text), `entity`, `count`, `commodity`, `label`, `owner`; or loose (WP-K2): `at` ([x, y, z] m, `yaw`) or `random` (`seed`: free floor spots near the ship with room above for a pick) | `boxes`: ids placed (best fit); `warning` when not all fit. Waits for the package. Loose boxes fall, come to rest and join or found a beacon. |

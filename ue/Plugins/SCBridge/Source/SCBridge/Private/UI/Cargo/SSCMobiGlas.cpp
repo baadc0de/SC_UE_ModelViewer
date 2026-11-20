@@ -2,6 +2,8 @@
 // close motion, the live-view orbit (drag / wheel outside the panels) and the input rules while open.
 #include "SSCMobiGlas.h"
 #include "SSCMobiGlasPanels.h"
+#include "../ShipLink/SSCShipLink.h"
+#include "Widgets/Input/SButton.h"
 #include "SCMobiGlasModel.h"
 #include "SCMobiGlasStyle.h"
 #include "SCCargoViewSource.h"
@@ -53,6 +55,8 @@ void SSCMobiGlas::Construct(const FArguments& Args)
                     SNew(SVerticalBox)
                     + SVerticalBox::Slot().AutoHeight().Padding(RailWidth + Gutter, 0, 0, 12)
                     [Txt(TAttribute<FText>::CreateLambda([this] {
+                         if (Model->GetApp() != ESCMobiGlasApp::Cargo)
+                             return LOCTEXT("ShipLiveView", "LIVE VIEW  ·  DRAG ORBIT  ·  WHEEL ZOOM");
                          int32 Active = 0;
                          for (const FSCCargoJobView& J : Model->GetJobs()) Active += J.bMine && FSCMobiGlasModel::IsActive(J.State);
                          return FText::Format(LOCTEXT("LiveView", "LIVE VIEW  ·  DRAG ORBIT  ·  WHEEL ZOOM  ·  {0} ACTIVE {0}|plural(one=TRANSFER,other=TRANSFERS)"), Active);
@@ -61,10 +65,26 @@ void SSCMobiGlas::Construct(const FArguments& Args)
                     [
                         SNew(SHorizontalBox)
                         + SHorizontalBox::Slot().AutoWidth()[MakeRail()]
-                        + SHorizontalBox::Slot().FillWidth(320).Padding(Gutter, 0, 0, 0)[SNew(SSCMobiGlasNearby).Model(Model)]
-                        + SHorizontalBox::Slot().FillWidth(416).Padding(Gutter, 0, 0, 0)[SNew(SSCMobiGlasDetail).Model(Model)]
-                        + SHorizontalBox::Slot().FillWidth(520).Padding(Gutter, 0, 0, 0)[SNew(SSCMobiGlasTransfer).Model(Model)]
-                        + SHorizontalBox::Slot().FillWidth(400).Padding(Gutter, 0, 0, 0)[SNew(SSCMobiGlasJobs).Model(Model)]
+                        + SHorizontalBox::Slot().FillWidth(1).Padding(Gutter, 0, 0, 0)
+                        [
+                            SNew(SOverlay)
+                            + SOverlay::Slot()
+                            [
+                                SNew(SHorizontalBox).Visibility_Lambda([this] {
+                                    return Model->GetApp() == ESCMobiGlasApp::Cargo ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
+                                })
+                                + SHorizontalBox::Slot().FillWidth(320)[SNew(SSCMobiGlasNearby).Model(Model)]
+                                + SHorizontalBox::Slot().FillWidth(416).Padding(Gutter, 0, 0, 0)[SNew(SSCMobiGlasDetail).Model(Model)]
+                                + SHorizontalBox::Slot().FillWidth(520).Padding(Gutter, 0, 0, 0)[SNew(SSCMobiGlasTransfer).Model(Model)]
+                                + SHorizontalBox::Slot().FillWidth(400).Padding(Gutter, 0, 0, 0)[SNew(SSCMobiGlasJobs).Model(Model)]
+                            ]
+                            + SOverlay::Slot()
+                            [
+                                SNew(SSCShipLink).Model(Model).Visibility_Lambda([this] {
+                                    return Model->GetApp() == ESCMobiGlasApp::ShipLink ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
+                                })
+                            ]
+                        ]
                     ]
                 ]
             ]
@@ -83,8 +103,15 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
         [
             SNew(SVerticalBox)
-            + SVerticalBox::Slot().AutoHeight()[Txt(LOCTEXT("Network", "LOGISTICS / LOCAL NETWORK"), Label(), OnScrim().CopyWithNewOpacity(0.72f))]
-            + SVerticalBox::Slot().AutoHeight()[Txt(LOCTEXT("CargoApp", "CARGO OPERATIONS"), Title(), OnScrim())]
+            + SVerticalBox::Slot().AutoHeight()[Txt(TAttribute<FText>::CreateLambda([this] {
+                if (Model->GetApp() == ESCMobiGlasApp::ShipLink)
+                    return Model->GetShipLink().GetShip() ? LOCTEXT("PairedOwner", "SHIP LINK  ·  PAIRED  ·  OWNER") : LOCTEXT("Unpaired", "SHIP LINK");
+                return LOCTEXT("Network", "LOGISTICS / LOCAL NETWORK");
+            }), Label(), OnScrim().CopyWithNewOpacity(0.72f))]
+            + SVerticalBox::Slot().AutoHeight()[Txt(TAttribute<FText>::CreateLambda([this] {
+                return Model->GetApp() == ESCMobiGlasApp::ShipLink
+                    ? FText::FromString(Caps(FSCShipLinkModel::ShipLabel(Model->GetShipLink().GetShip()))) : LOCTEXT("CargoApp", "CARGO OPERATIONS");
+            }), Title(), OnScrim())]
         ]
         + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpacer)]
         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, Pad, 0)
@@ -94,6 +121,23 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
         ]
         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, Pad, 0)
         [Txt(TAttribute<FText>::CreateLambda([this] {
+             if (Model->GetApp() == ESCMobiGlasApp::ShipLink)
+             {
+                 const ASCVehicle* Ship = Model->GetShipLink().GetShip();
+                 if (!Ship) return FText::GetEmpty();
+                 int32 Open = 0, Locked = 0;
+                 for (int32 I = 0; I < Ship->Doors.Num(); ++I)
+                     if (FSCShipLinkModel::Listed(Ship, I)) { Open += Ship->IsDoorOpen(I); Locked += Ship->IsDoorLocked(I); }
+                 const USCViewerSubsystem* Viewer = Model->GetViewer();
+                 const ASCFirstPersonCharacter* First = Viewer ? Viewer->GetFirstPerson() : nullptr;
+                 FVector Position;
+                 // The orbit camera is the preview, so use the stationary player while it is active.
+                 if (First) Position = First->GetActorLocation();
+                 else if (!SCCargoUI::ViewerLocation(SCCargoUI::ViewerWorld(), Position)) Position = Ship->GetActorLocation();
+                 const FVector Offset = Ship->GetActorLocation() - Position;
+                 const int32 Bearing = (FMath::RoundToInt(FMath::RadiansToDegrees(FMath::Atan2(Offset.Y, Offset.X))) + 360) % 360;
+                 return FText::FromString(FString::Printf(TEXT("%.0f m  ·  %03d°  ·  %d OPEN  ·  %d LOCKED"), Offset.Size() / 100, Bearing, Open, Locked));
+             }
              if (!Model->HasSource()) return LOCTEXT("NoCargo", "NO CARGO SYSTEM");
              return FText::Format(LOCTEXT("Status", "{0} GRIDS · {1} DRONES"), Model->GetGrids().Num(), Model->GetDrones().Num());
          }), Label(), OnScrim())]
@@ -101,9 +145,26 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[KeyCap(LOCTEXT("EscClose", "ESC CLOSE"))];
 }
 
+void SSCMobiGlas::SelectApp(ESCMobiGlasApp App)
+{
+    if (Model->GetApp() == App || App == ESCMobiGlasApp::Garage) return;
+    Model->SetApp(App);
+    bRefocusApp = true;
+}
+
 TSharedRef<SWidget> SSCMobiGlas::MakeRail()
 {
-    // One app exists (Cargo); no placeholder apps.
+    auto AppButton = [this](ESCMobiGlasApp App, const FText& Text) -> TSharedRef<SWidget> {
+        return SNew(SButton).ButtonStyle(&RailButton()).HAlign(HAlign_Fill).ContentPadding(0)
+            .OnClicked_Lambda([this, App] { SelectApp(App); return FReply::Handled(); })
+            [
+                SNew(SBorder).BorderImage(White()).HAlign(HAlign_Center).Padding(FMargin(0, 12))
+                .BorderBackgroundColor_Lambda([this, App] { return Model->GetApp() == App ? Paper() : FLinearColor::Transparent; })
+                [Txt(Text, Label(), TAttribute<FSlateColor>::CreateLambda([this, App] {
+                    return FSlateColor(Model->GetApp() == App ? Ink() : OnScrim());
+                }))]
+            ];
+    };
     return SNew(SBox).WidthOverride(RailWidth)
     [
         SNew(SBorder).BorderImage(White()).BorderBackgroundColor(OnScrim().CopyWithNewOpacity(0.3f)).Padding(1)
@@ -112,9 +173,18 @@ TSharedRef<SWidget> SSCMobiGlas::MakeRail()
             [
                 SNew(SVerticalBox)
                 + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 14)[Txt(LOCTEXT("Apps", "APPS"), Label(), OnScrim())]
-                + SVerticalBox::Slot().AutoHeight()
-                [SNew(SBorder).BorderImage(White()).BorderBackgroundColor(Paper()).HAlign(HAlign_Center).Padding(FMargin(0, 22))
-                     [Txt(LOCTEXT("Cargo", "CARGO"), Label(), Ink())]]
+                + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::Cargo, LOCTEXT("Cargo", "CARGO"))]
+                + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::ShipLink, LOCTEXT("ShipLink", "SHIP\nLINK"))]
+                + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 12)
+                [
+                    SNew(SVerticalBox)
+                    + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[Txt(LOCTEXT("Garage", "GARAGE"), Label(), OnScrim().CopyWithNewOpacity(0.65f))]
+                    + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+                    [
+                        SNew(STextBlock).Font(Label()).ColorAndOpacity(OnScrim().CopyWithNewOpacity(0.65f))
+                        .Text(LOCTEXT("GaragePending", "NOT\nINSTALLED")).Justification(ETextJustify::Center)
+                    ]
+                ]
             ]
         ]
     ];
@@ -127,6 +197,8 @@ bool SSCMobiGlas::InLiveView(const FPointerEvent& Event) const
 
 FBox SSCMobiGlas::FocusBox() const
 {
+    if (Model->GetApp() == ESCMobiGlasApp::ShipLink)
+        if (const ASCVehicle* Ship = Model->GetShipLink().GetShip()) return Ship->ExplorationBounds();
     // The selected grid's group (the ship, the elevator platform) and the drones' work around it: boxes in the air and
     // drones away from their dock. Else the player.
     FBox Box(ForceInit);
@@ -153,6 +225,7 @@ FBox SSCMobiGlas::FocusBox() const
 
 TOptional<FVector2D> SSCMobiGlas::WorkAxis() const
 {
+    if (Model->GetApp() != ESCMobiGlasApp::Cargo) return {};
     FVector From = FVector::ZeroVector, To = FVector::ZeroVector;
     int32 NFrom = 0, NTo = 0;
     for (const FSCCargoJobView& J : Model->GetJobs())
@@ -169,6 +242,14 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
 {
     SCompoundWidget::Tick(Geometry, Time, Delta);
     Model->Refresh(Delta);
+    Model->GetShipLink().Refresh();
+    FSCMobiGlasRequests& Requests = FSCMobiGlasRequests::Get();
+    if (Requests.App.IsSet())
+    {
+        if (Requests.App.GetValue().Equals(TEXT("shiplink"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::ShipLink);
+        if (Requests.App.GetValue().Equals(TEXT("cargo"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::Cargo);
+        Requests.App.Reset();
+    }
     FitScale = FMath::Clamp(float(Geometry.GetLocalSize().X) / MinLayoutWidth, 0.5f, 1.f);
     const bool bOpen = Model->IsOpen();
     if (Clear && Geometry.GetAbsoluteSize().Y > 1)
@@ -192,6 +273,8 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
         for (const FSCCargoJobView& J : Model->GetJobs()) FocusJobs += J.bMine && FSCMobiGlasModel::IsActive(J.State);
         Orbit.SetWorkAxis(WorkAxis());
         Orbit.Begin(Model->GetViewer(), FocusBox());
+        FocusShip = Model->GetShipLink().GetShip();
+        bRefocusApp = false;
     }
     if (!bOpen && bWasOpen)
     {
@@ -206,10 +289,14 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
         const FSCCargoGridView* Selected = Model->FindGrid(Model->GetSelectedGrid());
         int32 Jobs = 0;
         for (const FSCCargoJobView& J : Model->GetJobs()) Jobs += J.bMine && FSCMobiGlasModel::IsActive(J.State);
-        if ((Selected && Selected->GroupKey != FocusGroup) || Jobs != FocusJobs)
+        const bool bShipLink = Model->GetApp() == ESCMobiGlasApp::ShipLink;
+        if (bRefocusApp || (bShipLink && FocusShip.Get() != Model->GetShipLink().GetShip()) ||
+            (!bShipLink && ((Selected && Selected->GroupKey != FocusGroup) || Jobs != FocusJobs)))
         {
             FocusGroup = Selected ? Selected->GroupKey : NAME_None;
             FocusJobs = Jobs;
+            FocusShip = Model->GetShipLink().GetShip();
+            bRefocusApp = false;
             Orbit.SetWorkAxis(WorkAxis());
             Orbit.Refocus(FocusBox());
         }
@@ -261,6 +348,8 @@ FReply SSCMobiGlas::OnMouseButtonDown(const FGeometry&, const FPointerEvent& Eve
     // Panels handle their own clicks; what reaches here is the live view (orbit) or empty band space (swallowed).
     if (!InLiveView(Event)) return FReply::Handled();
     const FKey Button = Event.GetEffectingButton();
+    if (Button == EKeys::LeftMouseButton && Model->GetApp() == ESCMobiGlasApp::ShipLink &&
+        Model->GetShipLink().SelectCallout(Event.GetScreenSpacePosition())) return FReply::Handled();
     const bool bPan = Button == EKeys::MiddleMouseButton || (Button == EKeys::LeftMouseButton && Event.IsShiftDown());
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Handled();
     Drag = bPan ? EDrag::Pan : EDrag::Rotate;

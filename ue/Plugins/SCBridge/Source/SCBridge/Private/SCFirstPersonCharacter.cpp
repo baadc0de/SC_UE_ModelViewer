@@ -604,7 +604,13 @@ bool ASCFirstPersonCharacter::Interact()
     // The door interaction (a pad, the rig under the crosshair, or the nearest driven joint), logged with how it was found.
     FSCInteractionPick Pick;
     const int32 Door = Vehicle->FindInteraction(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this, &Pick);
-    const bool bToggled = Vehicle->ToggleDoor(Door);
+    const bool bOpen = Vehicle->IsDoorOpen(Door);
+    const ESCShipDoorAction Action = Pick.bLockControl
+        ? (Vehicle->IsDoorLocked(Door) ? ESCShipDoorAction::Unlock : ESCShipDoorAction::Lock)
+        : (bOpen ? ESCShipDoorAction::Close : ESCShipDoorAction::Open);
+    const FString Refusal = Vehicle->OrderShipDoor(Door, Action, Vehicle->ShipLinkPlayer(), GetActorLocation());
+    const bool bToggled = Refusal.IsEmpty();
+    if (!bToggled && Door != INDEX_NONE) UE_LOG(LogTemp, Display, TEXT("FP_DOOR_REFUSED door=%d reason=%s"), Door, *Refusal);
     UE_LOG(LogTemp, Display, TEXT("FP_INTERACT door=%d via=%s hit=%s dist=%.0f reach=%.0f toggled=%d label=\"%s\""), Door, *Pick.Via, *Pick.Hit,
            Pick.Distance, Pick.Reach, bToggled, Vehicle->Doors.IsValidIndex(Door) ? *Vehicle->Doors[Door].DisplayName : TEXT(""));
     return bToggled;
@@ -921,9 +927,20 @@ void ASCFirstPersonCharacter::SetupPlayerInputComponent(UInputComponent* Input)
 FString ASCFirstPersonCharacter::HUDText() const
 {
     if (!Vehicle) return FString();
-    const int32 Door = FocusedInteraction();
-    FString Prompt = Door == INDEX_NONE ? FString()
-        : FString::Printf(TEXT("E: %s %s"), Vehicle->IsDoorOpen(Door) ? TEXT("Close") : TEXT("Open"), *Vehicle->Doors[Door].DisplayName);
+    FSCInteractionPick Pick;
+    const FVector Eye = InteractionOrigin();
+    const int32 Door = Vehicle->FindInteraction(Eye, GetViewRotation().Vector(), InteractReach, this, &Pick);
+    FString Prompt;
+    if (Door != INDEX_NONE)
+    {
+        const bool bOpen = Vehicle->IsDoorOpen(Door), bLocked = Vehicle->IsDoorLocked(Door);
+        const ESCShipDoorAction Action = Pick.bLockControl
+            ? (bLocked ? ESCShipDoorAction::Unlock : ESCShipDoorAction::Lock)
+            : (bOpen ? ESCShipDoorAction::Close : ESCShipDoorAction::Open);
+        const FString Why = Vehicle->DoorOrderRefusal(Door, Action, Vehicle->ShipLinkPlayer(), GetActorLocation());
+        const TCHAR* Verb = Pick.bLockControl ? (bLocked ? TEXT("Unlock") : TEXT("Lock")) : (bOpen ? TEXT("Close") : TEXT("Open"));
+        Prompt = Why.IsEmpty() ? FString::Printf(TEXT("E: %s %s"), Verb, *Vehicle->Doors[Door].DisplayName) : Why;
+    }
     // WP-P5: a floor panel's highlighted option (its face shows the rest); another lift panel's primary interaction.
     if (Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
     {

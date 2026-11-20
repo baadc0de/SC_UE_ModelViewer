@@ -674,6 +674,22 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
     {
         UMeshComponent* Component = F.Component.Get();
         if (!Component || F.ImageSizePx.X <= 0 || F.ImageSizePx.Y <= 0 || F.Buttons.IsEmpty()) continue;
+        if (DoorControls.Contains(F.Panel))
+        {
+            FSCFloorPanel LockFace;
+            LockFace.Anchor = F.Panel;
+            LockFace.Component = Component;
+            LockFace.Geometry = F.Geometry.Scaled(Component->GetComponentScale());
+            if (!LockFace.Geometry.Build(LockFace.Frame().InverseTransformVectorNoScale(GetActorUpVector()))) continue;
+            FVector2D Mean = FVector2D::ZeroVector;
+            for (const FVector2f& UV : LockFace.Geometry.UVs) Mean += FVector2D(UV.X, UV.Y) / LockFace.Geometry.UVs.Num();
+            LockFace.UVBase = FVector2D(FMath::FloorToDouble(Mean.X), FMath::FloorToDouble(Mean.Y));
+            for (const FSCUiButton& B : F.Buttons)
+                if (B.Interaction == FName(TEXT("LockDoor")) || B.Interaction == FName(TEXT("UnlockDoor")))
+                    LockFace.Layout.Options.Add({INDEX_NONE, B.Interaction, B.Interaction.ToString(), FBox2D(B.RectPx.Min / F.ImageSizePx, B.RectPx.Max / F.ImageSizePx)});
+            if (!LockFace.Layout.Options.IsEmpty()) DoorPanelLocks.Add(MoveTemp(LockFace));
+            continue;
+        }
         // Operated only where every node's press does what the game does: it sends a tag a light group the owner drives
         // receives (a light panel). A door pad (its door button is the door interaction, FindInteraction, and its face
         // follows the door), kiosks and the rest stay the exporter's render.

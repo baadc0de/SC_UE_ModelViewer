@@ -643,7 +643,7 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
     } Source;
     Source.Text = TEXT(R"({"version":2,"export_kind":"Decomposed","root_entity":{"entity_name":"Ship"},
       "children":[{"entity_name":"Hatch","source_transform_basis":"gltf_y_up","local_transform_sc":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
-        "door":{"animation_params":"SCItemDoorSingleProceduralParams","animation_speed":1.5,"is_opened":false,"transition_tag":"Open","open_tag":null,"close_tag":null},
+        "door":{"animation_params":"SCItemDoorSingleProceduralParams","animation_speed":1.5,"is_opened":false,"is_locked":true,"transition_tag":"Open","open_tag":null,"close_tag":null},
         "item_port_links":[{"source_slot":"Open","target_port":"hardpoint_front_ramp","target_slot":"Open"}]}],
       "interiors":[{"name":"hold","container_transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
         "placements":[{"cgf_path":"screen.cgf","entity_id":"p","transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"links":["lg"],
@@ -663,6 +663,7 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
     const FSCDoorTiming& D = M.Children[0].Door;
     TestTrue(TEXT("child door"), D.bValid && D.bIsOpened.IsSet() && !D.bIsOpened.GetValue() && D.TransitionTag == FName(TEXT("Open")) &&
                                      D.OpenTag.IsNone() && FMath::IsNearlyEqual(D.AnimationSpeed, 1.5f) && D.AnimationParams == TEXT("SCItemDoorSingleProceduralParams"));
+    TestTrue(TEXT("authored lock state"), D.bIsLocked.Get(false));
     TestTrue(TEXT("item port link"), M.Children[0].ItemPortLinks.Num() == 1 && M.Children[0].ItemPortLinks[0].TargetPort == TEXT("hardpoint_front_ramp"));
     const FSCSceneInstance& P = M.Interiors[0].Placements[0];
     TestTrue(TEXT("sendable"), P.SendableInteractions.Num() == 1 && P.SendableInteractions[0].LinkingTag == TEXT("/Interaction/LightGroup/SetEmergency"));
@@ -751,6 +752,19 @@ bool FSCExteriorPanelReachTest::RunTest(const FString&)
     V->Tick(1.f);
     TestNearlyEqual(TEXT("open at its open fragment's end"), BoneX(Rig), 50.0, 1e-3);
     TestTrue(TEXT("and closes again"), V->ToggleDoor(V->FindInteraction(Eye, Along, 300)) && !V->IsDoorOpen(Door));
+    V->Tick(1.f);
+    TestTrue(TEXT("lock applies without moving the door"), V->SetDoorLocked(Door, true) && !V->IsDoorPlaying(Door));
+    TestFalse(TEXT("E on the locked pad refuses an unpaired actor"), V->ToggleDoor(V->FindInteraction(Eye, Along, 300)));
+    TestEqual(TEXT("refused order exposes the reason"), V->OrderShipDoor(Door, ESCShipDoorAction::Open, TEXT("visitor"), Eye), FString(TEXT("Locked")));
+    FSCDoorSensor& Sensor = V->DoorSensors.AddDefaulted_GetRef();
+    Sensor.Anchor = Pad;
+    Sensor.Box = FBox(FVector(-1000), FVector(1000));
+    Sensor.Doors.Add(Rig);
+    V->UpdateDoorSensors(Eye, 1.0);
+    TestTrue(TEXT("a sensor cannot open the locked door"), !V->IsDoorOpen(Door) && !V->IsDoorPlaying(Door));
+    TestTrue(TEXT("unlock applies without moving the door"), V->SetDoorLocked(Door, false) && !V->IsDoorPlaying(Door));
+    V->UpdateDoorSensors(Eye, 2.0);
+    TestTrue(TEXT("sensor can open the unlocked door"), V->IsDoorOpen(Door));
     return !HasAnyErrors();
 }
 

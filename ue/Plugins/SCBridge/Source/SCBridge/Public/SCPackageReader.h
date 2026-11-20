@@ -95,6 +95,7 @@ struct SCBRIDGE_API FSCSceneInstance
 {
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) FString EntityName;
+    UPROPERTY(BlueprintReadOnly) FString DisplayName;
     UPROPERTY(BlueprintReadOnly) FString MeshAsset;
     UPROPERTY(BlueprintReadOnly) FString MaterialSidecar;
     /** Resolved by the reader: own id, container's, the material set's DefaultPalette, then the host's. */
@@ -102,6 +103,7 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString ParentEntityName;
     UPROPERTY(BlueprintReadOnly) FString ParentNodeName;
     UPROPERTY(BlueprintReadOnly) FString ItemType;
+    UPROPERTY(BlueprintReadOnly) FString ItemSubType;
     UPROPERTY(BlueprintReadOnly) FString PortFlags;
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;

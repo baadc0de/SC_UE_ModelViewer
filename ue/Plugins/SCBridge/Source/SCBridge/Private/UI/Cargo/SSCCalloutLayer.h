@@ -24,7 +24,7 @@ public:
     virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D::ZeroVector; }
 
 private:
-    enum class EKind : uint8 { Grid, Box, Drone };
+    enum class EKind : uint8 { Grid, Box, Drone, Door, Ship };
     struct FItem
     {
         EKind Kind = EKind::Grid;
