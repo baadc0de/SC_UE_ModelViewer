@@ -10,6 +10,7 @@
 #include "SCExploration.h"
 #include "SCLift.h"
 #include "SCFloorPanel.h"
+#include "SCShipLinkSubsystem.h"
 #include "SCVehicle.generated.h"
 class UTexture2D;
 class UMaterialInstanceDynamic;
@@ -87,6 +88,48 @@ public:
     ASCVehicle();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
+    struct FShipDoor
+    {
+        struct FMovementCollider
+        {
+            struct FSample
+            {
+                FTransform Pose; // relative to the ship
+                double TravelCm = 0; // maximum point travel before the next sample
+            };
+            TWeakObjectPtr<UPrimitiveComponent> Component;
+            FName Socket;
+            FTransform ClosedPose; // relative to the ship
+            TArray<FSample> Sweep;
+        };
+        ESCShipDoorGroup Group = ESCShipDoorGroup::Other;
+        FName GroupSource;
+        FString Label;
+        FBox Aperture = FBox(ForceInit); // vehicle-local, at the authored closed pose when available
+        FBox MovementBounds = FBox(ForceInit);
+        TArray<FMovementCollider> MovementColliders;
+        bool bLocked = false;
+        bool bSecurePending = false;
+        bool bCargoRelock = false;
+        bool bActorOpenedWithoutAccess = false; // checked by the RPC state journal
+        bool bRamp = false;
+    };
+    TArray<FShipDoor> ShipDoors;
+    void BuildShipDoors();
+    FString ShipDoorLabel(int32 Index) const;
+    bool IsDoorLocked(int32 Index) const;
+    bool SetDoorLocked(int32 Index, bool bLocked);
+    bool DoorwayOccupied(int32 Index) const;
+    FName ShipLinkPlayer() const;
+    FString DoorOrderRefusal(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {}) const;
+    FString OrderShipDoor(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {});
+    TArray<FSCShipDoorResult> SecureShip(FName Actor);
+    void FinishSecureOrders();
+    void RestoreCargoDoorLocks();
+    TArray<FSCFloorPanel> DoorPanelLocks;
+    TMap<TWeakObjectPtr<const USCRigComponent>, FString> DoorPanelLabels;
+    void RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding);
+    bool AimDoorPanelLock(const USceneComponent* Panel, const FVector& Eye, const FVector& Direction, double Reach, bool bLocked) const;
     /** Hangar waypoints (environments only; SCHangarWaypoints.h): kind Hangar, actor-relative standing hints. Built by
      *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> Waypoints;
@@ -166,7 +209,8 @@ public:
      *  door plays its open or close tag; a single-procedural door plays its transition forwards to open and backwards to
      *  close. SpeedScale <= 0: the door's DoorAnimationSpeed. Then the door's `item_port_links` for that verb are delivered
      *  (Depth bounds a link cycle). Records the door's state for IsDoorOpen and its pads. */
-    bool PlayDoor(int32 Index, bool bOpen, float SpeedScale = 0.f, int32 Depth = 0);
+    bool PlayDoor(int32 Index, bool bOpen, float SpeedScale = 0.f, int32 Depth = 0, FName AsActor = NAME_None,
+        const TOptional<FVector>& LocalUse = {}, bool bCargoAccess = false);
     /** Every door at its authored spawn state (`is_opened`, closed without data): a single-procedural door holds its
      *  transition at the start (closed) or the end (open); an open/close door opened in the data holds its open fragment's
      *  end; a closed one keeps the bind pose (the start of its open fragment). Also after ResetPose. Returns the doors posed. */

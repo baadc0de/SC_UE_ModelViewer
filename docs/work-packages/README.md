@@ -10,6 +10,8 @@ WP-U4 (merged into WP-R4 + WP-V1). Added the same day for the standalone-app and
 first-person requirements: WP-P1, WP-S1; WP-U0 gained the build-path spike. Added for
 the local-file-cache requirement: WP-C1 (layer 2), with layer 1 folded into WP-R1.
 
+Added on 2026-11-20 for the mobiGlas ship features: WP-M1 (Ship Link).
+
 Common preamble every agent receives:
 
 > You are working in `/home/baadc0de/Development/baadc0de/SC_UE_ModelViewer`.

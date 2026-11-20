@@ -28,6 +28,7 @@ struct FSCDoorTiming
     float AutoCloseDelay = 0.f;
     /** `is_opened` (IsOpened): the door's authored state at spawn; unset when the export has none. */
     TOptional<bool> bIsOpened;
+    TOptional<bool> bIsLocked; // is_locked: absence leaves the door unlocked
     /** `animation_params`: the AnimationParams struct (SCItemDoorSimpleOpenCloseParams, SCItemDoorSingleProceduralParams). */
     FString AnimationParams;
     /** `transition_tag`: a single-procedural door's one transition (its fragment tag, "Open"): the door's state is that

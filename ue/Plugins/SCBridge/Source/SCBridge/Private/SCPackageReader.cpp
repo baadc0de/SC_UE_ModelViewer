@@ -53,9 +53,11 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     if (!O) { Error = TEXT("Expected scene instance object"); return false; }
     for (const auto& V : ReaderArray(O, TEXT("lights"))) if (V->Type == EJson::Object) Out.LightJson.Add(Json(V->AsObject()));
     Out.EntityName = String(O, TEXT("entity_name"));
+    Out.DisplayName = String(O, TEXT("display_name"));
     Out.ParentEntityName = String(O, TEXT("parent_entity_name"));
     Out.ParentNodeName = String(O, TEXT("parent_node_name"));
     Out.ItemType = String(O, TEXT("item_type"));
+    Out.ItemSubType = String(O, TEXT("item_sub_type"));
     Out.PortFlags = String(O, TEXT("port_flags"));
     Out.SourceTransformBasis = String(O, TEXT("source_transform_basis"));
     Out.PaletteId = String(O, TEXT("palette_id"));
@@ -96,6 +98,19 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
         Binding.bInteractionDistanceExported = B->HasField(TEXT("interaction_distance"));
         if (B->TryGetNumberField(TEXT("interaction_distance"), Distance) && FMath::IsFinite(Distance) && Distance > 0)
             Binding.InteractionDistance = float(Distance);
+        for (const auto& Variable : ReaderArray(B, TEXT("user_variables")))
+        {
+            const FReaderObject Entry = Variable && Variable->Type == EJson::Object ? Variable->AsObject() : nullptr;
+            const FReaderObject* Value = nullptr;
+            if (!Entry || !Entry->TryGetObjectField(TEXT("value"), Value) || !Value || !*Value) continue;
+            if (String(Entry, TEXT("name")) == TEXT("ui_HideLockControls"))
+                (*Value)->TryGetBoolField(TEXT("value"), Binding.bHideDoorLockControl);
+            else if (String(Entry, TEXT("name")) == TEXT("ui_LocationName"))
+            {
+                const FString Literal = String(*Value, TEXT("value")).TrimStartAndEnd();
+                if (!Literal.StartsWith(TEXT("@"))) Binding.DoorLabel = Literal;
+            }
+        }
         // WP-I1 I1-3: the owner's other states, each with its render; cache format 39 adds `states[]` (one pin for a
         // single-state render, two for a combined one: a combined render has no state_type / state of its own).
         for (const auto& S : ReaderArray(B, TEXT("state_images")))
@@ -160,6 +175,8 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
         Out.Door.AutoCloseDelay = (*Door)->TryGetNumberField(TEXT("auto_close_delay"), Delay) && FMath::IsFinite(Delay) ? float(Delay) : 0.f;
         bool bOpened = false;
         if ((*Door)->TryGetBoolField(TEXT("is_opened"), bOpened)) Out.Door.bIsOpened = bOpened;
+        bool bLocked = false;
+        if ((*Door)->TryGetBoolField(TEXT("is_locked"), bLocked)) Out.Door.bIsLocked = bLocked;
         Out.Door.AnimationParams = String(*Door, TEXT("animation_params"));
         auto Tag = [&](const TCHAR* Key) { const FString S = String(*Door, Key); return S.IsEmpty() ? FName() : FName(*S); };
         Out.Door.TransitionTag = Tag(TEXT("transition_tag"));

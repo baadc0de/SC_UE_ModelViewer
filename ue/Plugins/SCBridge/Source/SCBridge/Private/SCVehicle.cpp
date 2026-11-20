@@ -407,7 +407,8 @@ void ASCVehicle::Tick(float DeltaSeconds)
     auto Orphaned = [](const FSCClipPlayback& P) { return P.bTargeted && !P.TargetRig.IsValid(); };
     Playback.RemoveAll(Orphaned);
     HeldPlayback.RemoveAll(Orphaned);
-    if (!ClipCatalog || Playback.IsEmpty()) { UpdateTickEnabled(); return; }
+    RestoreCargoDoorLocks();
+    if (!ClipCatalog || Playback.IsEmpty()) { FinishSecureOrders(); UpdateTickEnabled(); return; }
     const USCRigComponent* Traced = Doors.IsValidIndex(TraceDoor) ? Doors[TraceDoor].Rig.Get() : nullptr;
     TArray<FString> TraceLines; // sc.Doors.Trace: the traced door's clips advanced this tick
     for (int32 I = Playback.Num() - 1; I >= 0; --I)
@@ -437,6 +438,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
         UE_LOG(LogTemp, Display, TEXT("DOOR_TICK door=%d t=%.3f dt=%.4f open=%d %s tip=%.2f,%.2f,%.2f"), TraceDoor, GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0,
                DeltaSeconds, IsDoorOpen(TraceDoor), *Line, Tip.X, Tip.Y, Tip.Z);
     }
+    FinishSecureOrders();
     if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: a door that started or stopped moving
     UpdateTickEnabled();
 }
@@ -492,7 +494,7 @@ void ASCVehicle::UpdateTickEnabled()
 {
     bool bLifts = false;
     for (const TSharedPtr<FSCLift>& Lift : Lifts) bLifts |= Lift->NeedsTick();
-    SetActorTickEnabled(!Playback.IsEmpty() || bLifts);
+    SetActorTickEnabled(ShipDoors.ContainsByPredicate([](const FShipDoor& Door) { return Door.bCargoRelock || Door.bSecurePending; }) || !Playback.IsEmpty() || bLifts);
 }
 void ASCVehicle::EvaluateClips()
 {

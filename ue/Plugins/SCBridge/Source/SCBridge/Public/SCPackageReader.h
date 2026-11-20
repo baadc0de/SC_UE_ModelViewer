@@ -63,6 +63,8 @@ struct SCBRIDGE_API FSCUiBinding
     /** Cache format 40 (`interaction_distance`): how far from its screen the player operates the owner's UI, metres
      *  (UIRenderToTextureEntityComponentParams.interactionDistance); 0 when not exported. */
     float InteractionDistance = 0.f;
+    FString DoorLabel; // a literal authored label; locale keys have no resolved string in the package
+    bool bHideDoorLockControl = false;
     bool bInteractionDistanceExported = false; // the key is present (null included): an export before format 40 has none
     /** The owner's other states the canvas shows (`state_images[]`; images outside the package dropped). */
     TArray<FSCUiStateImage> StateImages;
@@ -95,6 +97,7 @@ struct SCBRIDGE_API FSCSceneInstance
 {
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) FString EntityName;
+    UPROPERTY(BlueprintReadOnly) FString DisplayName;
     UPROPERTY(BlueprintReadOnly) FString MeshAsset;
     UPROPERTY(BlueprintReadOnly) FString MaterialSidecar;
     /** Resolved by the reader: own id, container's, the material set's DefaultPalette, then the host's. */
@@ -102,6 +105,7 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString ParentEntityName;
     UPROPERTY(BlueprintReadOnly) FString ParentNodeName;
     UPROPERTY(BlueprintReadOnly) FString ItemType;
+    UPROPERTY(BlueprintReadOnly) FString ItemSubType;
     UPROPERTY(BlueprintReadOnly) FString PortFlags;
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;

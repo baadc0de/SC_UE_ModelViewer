@@ -1141,15 +1141,16 @@ void FSCImportJob::FState::Assemble()
             if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->Buttons.IsEmpty())
             {
                 const TMap<int32, FSCScreenFaceGeometry>* MeshFaces = Binding->Buttons.IsEmpty() ? nullptr : MeshScreenGeometry.Find(I.MeshAsset);
-                if (const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr; Captured && !I.EntityId.IsEmpty())
+                if (const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr; Captured && (!I.EntityId.IsEmpty() || !I.PortPath.IsEmpty()))
                 {
                     FSCButtonFace Operable;
                     Operable.Geometry = Captured->Select(Owner, bSoft);
                     if (!Operable.Geometry.Positions.IsEmpty())
                     {
                         Operable.Component = Target; Operable.Slot = Slot; Operable.Panel = E.Anchor;
-                        Operable.Interior = PlacingInterior; Operable.EntityId = I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
+                        Operable.Interior = PlacingInterior; Operable.EntityId = I.EntityId.IsEmpty() ? SCCargoRecords::PortKey(I.PortPath) : I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
                         Operable.Buttons = Binding->Buttons; Operable.ImageSizePx = Binding->ImageSizePx;
+                        Operable.bHideDoorLockControl = Binding->bHideDoorLockControl;
                         Operable.StateTypes = Binding->StateTypes; Operable.StateImages = Binding->PanelStateImages(); Operable.DefaultImage = Image;
                         Operable.MakeMaterial = [Mats = &Materials, Sidecar = I.MaterialSidecar, Palette = I.PaletteId, Ordinal = Sub->Index](UTexture* Img) -> UMaterialInterface* {
                             return Mats->CreateScreen(Sidecar, Palette, Ordinal, Img);
@@ -1398,6 +1399,7 @@ void FSCImportJob::FState::Assemble()
                             if (B.IsOperatingPanel() && !B.bPropagated) // the panel's own screen, not one it carries for another entity
                             {
                                 V->SetPanelReach(Placed.Anchor, B.InteractionDistance);
+                                V->RememberDoorPanelLabel(Rig, B);
                                 PanelsWithoutReachField += !B.bInteractionDistanceExported;
                             }
                     }
@@ -1506,6 +1508,7 @@ void FSCImportJob::FState::Assemble()
                         if (B.IsOperatingPanel() && !B.bPropagated)
                         {
                             V->SetPanelReach(Panel->Anchor, B.InteractionDistance);
+                            V->RememberDoorPanelLabel(Door->Rig, B);
                             PanelsWithoutReachField += !B.bInteractionDistanceExported;
                         }
                     break;
