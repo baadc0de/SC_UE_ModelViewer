@@ -19,6 +19,9 @@
 #include "Misc/Paths.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Rendering/NaniteResources.h"
+#include "SCMeshImporter.h"
+#include "Private/SCProcessedCache.h"
+#include "Private/SCProcessedMeshCache.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
@@ -26,6 +29,7 @@
 #include "StaticMeshResources.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+#include "UObject/GarbageCollection.h"
 #if WITH_EDITOR
 #include "Interfaces/ITargetPlatform.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
@@ -43,6 +47,9 @@ static TWeakObjectPtr<AStaticMeshActor> LastActor;
 static FString CacheDirectory;
 static int32 BuildCalls = 0;
 static int32 CookCalls = 0;
+static TUniquePtr<FSCProcessedCache> ProductionCache;
+static FSCDerivedMesh ProductionCollision;
+static FSCMeshBuildStats ProductionStats;
 static bool bPassed = true;
 static FTSTicker::FDelegateHandle TickHandle;
 
@@ -64,6 +71,13 @@ static FString CacheRoot()
     return CacheDirectory;
 }
 
+static FString ProductionKey()
+{
+    if (!ProductionCache)
+        ProductionCache = MakeUnique<FSCProcessedCache>(CacheRoot() / TEXT("production"), 128ll << 20);
+    return FSCProcessedCache::Key(TEXT("synthetic-spike"), SCProcessedMeshCache::RenderFormat());
+}
+
 static UWorld* GameWorld()
 {
     if (GEngine)
@@ -76,6 +90,10 @@ static void Describe(UStaticMesh* Mesh, const TCHAR* Phase, double Seconds)
 {
     const FStaticMeshRenderData* Data = Mesh->GetRenderData();
     const Nanite::FResources* Nanite = Data ? Data->NaniteResourcesPtr.Get() : nullptr;
+    const FStaticMeshLODResources* Lod = Data && !Data->LODResources.IsEmpty() ? &Data->LODResources[0] : nullptr;
+    UE_LOG(LogSCSpike, Display, TEXT("REPRESENTATIONS phase=%s cards=%d distance_field=%d ray_tracing=%d"),
+        Phase, Lod && Lod->CardRepresentationData, Lod && Lod->DistanceFieldData,
+        Lod && (Lod->RayTracingGeometry != nullptr || (Data->RayTracingProxy && !Data->RayTracingProxy->LODs.IsEmpty())));
     UE_LOG(LogSCSpike, Display, TEXT("%s seconds=%.6f editor=%d nanite=%d clusters=%u input_triangles=%u fallback_triangles=%d physics_meshes=%d build_calls=%d cook_calls=%d"),
         Phase, Seconds, WITH_EDITOR, Data && Data->HasValidNaniteData(), Nanite ? Nanite->NumClusters : 0,
         Nanite ? Nanite->NumInputTriangles : 0, Data && Data->LODResources.Num() ? Data->LODResources[0].GetNumTriangles() : 0,
@@ -151,6 +169,38 @@ static UStaticMesh* Build(UWorld* World)
             Triangle(A, A + Side + 2, A + Side + 1);
         }
     UE_LOG(LogSCSpike, Display, TEXT("GENERATE triangles=%d seconds=%.6f"), Description.Triangles().Num(), FPlatformTime::Seconds() - Start);
+    if (FParse::Param(FCommandLine::Get(), TEXT("SCSpikeProductionMesh")))
+    {
+        Attributes.GetPolygonGroupMaterialSlotNames()[Group] = TEXT("Slot_0");
+        FSCDerivedMesh Input;
+        Input.Description = MoveTemp(Description);
+        Input.MaterialNames.Add(TEXT("Surface"));
+        Input.bHasGeometry = true;
+        FString Error;
+        FSCMeshBuildStats Stats;
+        ++CookCalls;
+        if (!FSCMeshImporter::DeriveCollision(Input, Error))
+        {
+            UE_LOG(LogSCSpike, Error, TEXT("Cannot derive production collision: %s"), *Error);
+            bPassed = false;
+            return nullptr;
+        }
+        ++BuildCalls;
+        UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Input, GetTransientPackage(), NAME_None, true, nullptr, Stats, Error);
+        if (!Mesh)
+        {
+            UE_LOG(LogSCSpike, Error, TEXT("Cannot build production mesh: %s"), *Error);
+            bPassed = false;
+            return nullptr;
+        }
+        ProductionStats = Stats;
+        ProductionCollision.CollisionBytes = MoveTemp(Input.CollisionBytes);
+        ProductionCollision.CollisionVersions = MoveTemp(Input.CollisionVersions);
+        Describe(Mesh, TEXT("PRODUCTION"), Stats.BuildSeconds + Stats.RepresentationSeconds + Stats.CollisionSeconds);
+        bPassed &= Stats.bNaniteEnabled && Stats.bMeshCards && Stats.bDistanceField;
+        PlaceAndTrace(World, Mesh);
+        return Mesh;
+    }
     UStaticMesh* Mesh = NewObject<UStaticMesh>(GetTransientPackage(), NAME_None, RF_Transient);
     Mesh->GetStaticMaterials().Add(FStaticMaterial(UMaterial::GetDefaultMaterial(MD_Surface), TEXT("Surface")));
     Mesh->bAllowCPUAccess = true;
@@ -223,6 +273,17 @@ static void SavePackage()
 #if WITH_EDITOR
     UStaticMesh* Mesh = LastMesh.Get();
     if (!Mesh) return;
+    if (FParse::Param(FCommandLine::Get(), TEXT("SCSpikeProductionMesh")))
+    {
+        const FString Key = ProductionKey();
+        const double Start = FPlatformTime::Seconds();
+        const bool bSaved = SCProcessedMeshCache::Store(*ProductionCache, Key, *Mesh, ProductionCollision, ProductionStats) &&
+            ProductionCache->Flush();
+        UE_LOG(LogSCSpike, Display, TEXT("PROCESSED_SAVE ok=%d seconds=%.6f bytes=%lld"), bSaved,
+            FPlatformTime::Seconds() - Start, ProductionCache->Stats().Bytes);
+        bPassed &= bSaved;
+        return;
+    }
     CacheRoot();
     const double Start = FPlatformTime::Seconds();
     UPackage* Package = CreatePackage(TEXT("/SCCache/SpikeMesh"));
@@ -230,8 +291,14 @@ static void SavePackage()
     Mesh->ClearFlags(RF_Transient);
     Mesh->SetFlags(RF_Public | RF_Standalone);
     Mesh->GetBodySetup()->ClearFlags(RF_Transient);
-    const ITargetPlatform* Platform = GetTargetPlatformManagerRef().FindTargetPlatform(TEXT("Linux"));
-    check(Platform);
+    const FString PlatformName(ANSI_TO_TCHAR(FPlatformProperties::IniPlatformName()));
+    const ITargetPlatform* Platform = GetTargetPlatformManagerRef().FindTargetPlatform(*PlatformName);
+    if (!Platform)
+    {
+        UE_LOG(LogSCSpike, Error, TEXT("No target platform %s"), *PlatformName);
+        bPassed = false;
+        return;
+    }
     FArchiveCookContext CookContext(Package, UE::Cook::ECookType::ByTheBook, UE::Cook::ECookingDLC::No, Platform, nullptr);
     FArchiveCookData CookData(*Platform, CookContext);
     FSavePackageArgs Args;
@@ -266,7 +333,17 @@ static void LoadPackage(UWorld* World)
 {
     CacheRoot();
     const double Start = FPlatformTime::Seconds();
-    UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/SCCache/SpikeMesh.SpikeMesh"));
+    const int32 InitialBuilds = BuildCalls, InitialCooks = CookCalls;
+    UStaticMesh* Mesh = nullptr;
+    if (FParse::Param(FCommandLine::Get(), TEXT("SCSpikeProductionMesh")))
+    {
+        const FString Key = ProductionKey();
+        FSCMeshBuildStats Stats;
+        if (auto Pin = ProductionCache->PinEntry(Key))
+            Mesh = SCProcessedMeshCache::Load(*ProductionCache, *Pin, Stats);
+    }
+    else
+        Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/SCCache/SpikeMesh.SpikeMesh"));
     if (!Mesh)
     {
         UE_LOG(LogSCSpike, Error, TEXT("LOAD_PACKAGE failed"));
@@ -293,9 +370,46 @@ static void LoadPackage(UWorld* World)
     bPassed &= Stream && StreamBytes > 0 && Nanite.RootData.Num() > 0;
     UE_LOG(LogSCSpike, Display, TEXT("CACHE_NANITE root_bytes=%d stream_bytes=%lld stream_read=%d"), Nanite.RootData.Num(), StreamBytes, Stream != nullptr);
     Nanite.StreamablePages.Unlock();
-    bPassed &= BuildCalls == 0 && CookCalls == 0;
+    bPassed &= BuildCalls == InitialBuilds && CookCalls == InitialCooks;
     Describe(Mesh, TEXT("LOAD_PACKAGE"), FPlatformTime::Seconds() - Start);
     PlaceAndTrace(World, Mesh);
+}
+
+static void ExerciseCacheLifetime(UWorld* World)
+{
+    if (!Build(World)) return;
+    SavePackage();
+    if (LastActor.IsValid()) LastActor->Destroy();
+    CollectGarbage(RF_NoFlags, true);
+    // Load again in the same process after cooking briefly created a package
+    // with this name. Then use the same loaded mesh in two actors.
+    LoadPackage(World);
+    UStaticMesh* First = LastMesh.Get();
+    if (!First || !First->GetBodySetup() || First->GetBodySetup()->TriMeshGeometries.Num() != 1)
+    {
+        bPassed = false;
+        return;
+    }
+    const auto* Collision = First->GetBodySetup()->TriMeshGeometries[0].GetReference();
+    AStaticMeshActor* Other = World->SpawnActor<AStaticMeshActor>(FVector(2000, 0, 150), FRotator::ZeroRotator);
+    if (!Other)
+    {
+        bPassed = false;
+        return;
+    }
+    Other->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+    Other->GetStaticMeshComponent()->SetStaticMesh(First);
+    LoadPackage(World);
+    const bool bShared = First == LastMesh.Get() && Other->GetStaticMeshComponent()->GetStaticMesh() == First &&
+        First->GetBodySetup()->TriMeshGeometries.Num() == 1 && First->GetBodySetup()->TriMeshGeometries[0].GetReference() == Collision;
+    ProductionCache->Clear();
+    const bool bKept = ProductionCache->Stats().Entries == 0 && ProductionCache->Stats().Bytes > 0;
+    Other->Destroy();
+    if (LastActor.IsValid()) LastActor->Destroy();
+    CollectGarbage(RF_NoFlags, true);
+    const bool bReleased = ProductionCache->Stats().Bytes == 0;
+    bPassed &= bShared && bKept && bReleased;
+    UE_LOG(LogSCSpike, Display, TEXT("PROCESSED_LIFETIME shared_collision=%d retained_live=%d reclaimed_after_gc=%d"), bShared, bKept, bReleased);
 }
 
 static FAutoConsoleCommandWithWorld BuildCommand(TEXT("sc.SpikeBuildMesh"), TEXT("WP-U0: build 100,352 synthetic triangles, Nanite and collision; line trace."), FConsoleCommandWithWorldDelegate::CreateStatic([](UWorld* World) { if (World) Build(World); }));
@@ -324,6 +438,7 @@ void Start()
             Executed = true;
             UE_LOG(LogSCSpike, Display, TEXT("HOST editor=%d game_world=%d mode=%s"), WITH_EDITOR, World->IsGameWorld(), *Mode);
             if (Mode == TEXT("load")) LoadPackage(World);
+            else if (Mode == TEXT("cycle") && FParse::Param(FCommandLine::Get(), TEXT("SCSpikeProductionMesh"))) ExerciseCacheLifetime(World);
 #if SC_SPIKE_RAW_SERIALIZE
             else if (Mode == TEXT("load-raw")) LoadRaw(World);
 #endif
@@ -340,7 +455,7 @@ void Start()
                 ACameraActor* Camera = World->SpawnActor<ACameraActor>(FVector(900, -1200, 850), FRotator(-28, 125, 0));
                 PC->SetViewTarget(Camera);
             }
-            ExitAt = FPlatformTime::Seconds() + 20.0;
+            ExitAt = FPlatformTime::Seconds() + (FParse::Param(FCommandLine::Get(), TEXT("nullrhi")) ? 0.0 : 20.0);
         }
         if (FPlatformTime::Seconds() >= ExitAt && !FParse::Param(FCommandLine::Get(), TEXT("SCSpikeStay")))
         {
@@ -354,6 +469,7 @@ void Start()
 void Stop()
 {
     FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
+    ProductionCache.Reset();
 }
 }
 #endif // SC_SPIKE

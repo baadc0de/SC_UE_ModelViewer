@@ -22,6 +22,7 @@
 #include "SCViewerSettings.h"
 #include "SCImportJob.h"
 #include "SCImporter.h"
+#include "SCProcessedCache.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
 #include "Dom/JsonValue.h"
@@ -93,6 +94,9 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     LoadOptions = NewObject<USCViewOptions>(this, TEXT("LoadOptions"));
     Client = MakeShared<FSCBridgeClient, ESPMode::ThreadSafe>();
     CacheDir = USCViewerSettings::Get()->ResolveCacheDir();
+    if (!CacheDir.IsEmpty())
+        ProcessedCache = MakeShared<FSCProcessedCache, ESPMode::ThreadSafe>(CacheDir / TEXT("processed"),
+            int64(USCViewerSettings::Get()->ProcessedCacheMiB) * (1ll << 20));
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
     VehicleInstances = MakeShared<FSCVehicleInstances>(*this);
@@ -134,6 +138,7 @@ void USCViewerSubsystem::Deinitialize()
     UnloadInternal(false); // the subsystem owns the loaded vehicle; the host collects garbage afterwards
     VehicleInstances.Reset();
     Client.Reset();
+    ProcessedCache.Reset();
     Super::Deinitialize();
 }
 
@@ -643,7 +648,7 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
     PendingKey = FString::Printf(TEXT("%u|%s|%s"), ArchiveGeneration, *Entity.ToLower(), *LoadOptions->GetHash());
     LoadStart = FPlatformTime::Seconds();
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_LOAD_START entity=%s options=\"%s\""), *Entity, *Report.Options);
-    if (PendingKey == LoadedKey && Vehicle.IsValid())
+    if (!bRebuildProcessed && PendingKey == LoadedKey && Vehicle.IsValid())
     {
         Report.bReused = true; // identical request: keep the live objects, skip export and import
         FinishLoad(ESCLoadPhase::Succeeded, FString());
@@ -671,6 +676,50 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
     ExportTask = Client->ExportDecomposed(Entity, Ffi, ExportProgress.ToSharedRef());
     Phase = ESCLoadPhase::Exporting;
     return true;
+}
+
+FSCCacheStats USCViewerSubsystem::GetProcessedCacheStats() const
+{
+    FSCCacheStats Stats;
+    if (ProcessedCache)
+    {
+        Stats.bEnabled = ProcessedCache->IsEnabled();
+        Stats.CapBytes = uint64(ProcessedCache->GetCapBytes());
+        Stats.bLastHit = Report.CachedMeshes > 0 && Report.MeshBuilds == 0;
+        const FSCProcessedCache::FStats Disk = ProcessedCache->Stats();
+        Stats.Bytes = uint64(Disk.Bytes);
+        Stats.Entries = uint64(Disk.Entries);
+    }
+    return Stats;
+}
+
+void USCViewerSubsystem::ClearProcessedCache()
+{
+    if (!IsBusy() && ProcessedCache) ProcessedCache->Clear();
+}
+
+void USCViewerSubsystem::SetProcessedCacheCap(int32 MiB)
+{
+    if (IsBusy()) return;
+    USCViewerSettings* Settings = USCViewerSettings::Get();
+    Settings->ProcessedCacheMiB = FMath::Max(0, MiB);
+    Settings->Save();
+    if (ProcessedCache) ProcessedCache->SetCapBytes(int64(Settings->ProcessedCacheMiB) * (1ll << 20));
+}
+
+bool USCViewerSubsystem::CanRebuildLoadedEntity() const
+{
+    return !IsBusy() && !LoadedEntity.IsEmpty() && CookedShipLevel(LoadedEntity).IsEmpty();
+}
+
+bool USCViewerSubsystem::RebuildLoadedEntity()
+{
+    if (!CanRebuildLoadedEntity()) return false;
+    bRebuildProcessed = true;
+    const FString Entity = LoadedEntity;
+    if (LoadEntity(Entity, LoadOptions)) return true;
+    bRebuildProcessed = false;
+    return false;
 }
 void USCViewerSubsystem::CancelLoad()
 {
@@ -850,6 +899,14 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         ImportOptions.World = GetViewerWorld();
         ImportOptions.bBuildCollision = LoadOptions->bCollision;
         ImportOptions.bRetainAssets = FSCVehicleInstances::ShareAssets(); // extra instances of it are assembled from them
+        // Keep as Assets in the editor needs source models. The game host can
+        // load cooked render data and leave the editable path available in PIE.
+        if (!GIsEditor || !KeepHandler().IsBound())
+        {
+            ImportOptions.ProcessedCache = ProcessedCache;
+            ImportOptions.CacheArchiveBuild = ArchiveBuildId;
+        }
+        ImportOptions.bRebuildProcessed = bRebuildProcessed;
         Job = MakeShared<FSCImportJob>(*Source, ImportOptions, Source);
         ImportStart = FPlatformTime::Seconds();
         Phase = ESCLoadPhase::Importing;
@@ -867,6 +924,9 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         Report.AssembleSeconds = T.Assemble;
         Report.Assets = Result.MeshCount;
         Report.Instances = Result.InstanceCount;
+        Report.CachedMeshes = Result.CachedMeshes;
+        Report.MeshBuilds = Result.MeshBuilds;
+        Report.CollisionBuilds = Result.CollisionBuilds;
         Report.Warnings = Result.Warnings.Num();
         const ESCImportStage Stage = Job->GetStage();
         const FString Error = Result.Error;
@@ -899,6 +959,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
 
 void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
 {
+    bRebuildProcessed = false;
     Phase = Result;
     Report.Result = Result;
     Report.Error = Error;
@@ -1040,6 +1101,7 @@ bool USCViewerSubsystem::Tick(float)
         OpenTask = {};
         OpenSeconds = Result.Seconds;
         ArchiveState = Result.bOK ? ESCArchiveState::Ready : ESCArchiveState::Failed;
+        ArchiveBuildId = Result.ArchiveBuildId;
         ArchiveError = Result.Error;
         if (Result.bOK)
         {

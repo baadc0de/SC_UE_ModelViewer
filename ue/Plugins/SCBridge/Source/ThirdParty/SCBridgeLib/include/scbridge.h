@@ -150,6 +150,12 @@ enum sc_status sc_open(const char *p4k_or_null,
                        struct sc_handle **out);
 
 /*
+ Return the archive build identity for cache keys, owned by the caller.
+ Free a successful result with sc_free_string. On failure *out is NULL.
+ */
+enum sc_status sc_archive_build_id(struct sc_handle *h, char **out);
+
+/*
  Fill defaults from the core (LOD 0, mip 2, textures, attachments/interior/lights/
  animations enabled, shields/default pose disabled). NULL export options uses these too.
  */

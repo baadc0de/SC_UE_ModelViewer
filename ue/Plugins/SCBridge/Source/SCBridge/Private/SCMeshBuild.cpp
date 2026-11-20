@@ -237,29 +237,10 @@ bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollis
     auto* Body = Mesh->GetBodySetup();
     if (bBuildCollision)
     {
-        if (Data.CollisionBytes.IsEmpty())
-        {
-            Error = TEXT("Collision requested without DeriveCollision data");
+        if (!FSCMeshImporter::InstallCollision(Body, Data.CollisionBytes, Data.CollisionVersions, Stats.CollisionTriangles, Error))
             return false;
-        }
-        FMemoryReader Reader(Data.CollisionBytes);
-        Reader.SetCustomVersions(Data.CollisionVersions);
-        Chaos::FChaosArchive Archive(Reader);
-        Chaos::FTriangleMeshImplicitObjectPtr Geometry;
-        Archive << Geometry;
-        if (Reader.IsError() || !Geometry)
-        {
-            Error = TEXT("Cannot instantiate derived Chaos BVH");
-            return false;
-        }
-        Body->TriMeshGeometries.Add(Geometry);
-        Body->bCreatedPhysicsMeshes = true;
-        Body->bFailedToCreatePhysicsMeshes = false;
-        Body->bHasCookedCollisionData = true;
-        Body->bNeverNeedsCookedCollisionData = false;
         Stats.CollisionSeconds = Data.CollisionDeriveSeconds;
         Stats.bCollision = true;
-        Stats.CollisionTriangles = Geometry->Elements().GetNumTriangles();
     }
     const auto* Render = Mesh->GetRenderData();
     if (!Render || Render->LODResources.IsEmpty())
@@ -282,6 +263,34 @@ bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollis
     return true;
 }
 } // namespace
+
+bool FSCMeshImporter::InstallCollision(UBodySetup* Body, const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions,
+                                      int32& TriangleCount, FString& Error)
+{
+    if (!Body || Bytes.IsEmpty())
+    {
+        Error = TEXT("Collision requested without a body or DeriveCollision data");
+        return false;
+    }
+    FMemoryReader Reader(Bytes);
+    Reader.SetCustomVersions(Versions);
+    Chaos::FChaosArchive Archive(Reader);
+    Chaos::FTriangleMeshImplicitObjectPtr Geometry;
+    Archive << Geometry;
+    if (Reader.IsError() || !Geometry)
+    {
+        Error = TEXT("Cannot instantiate derived Chaos BVH");
+        return false;
+    }
+    Body->TriMeshGeometries.Reset();
+    Body->TriMeshGeometries.Add(Geometry);
+    Body->bCreatedPhysicsMeshes = true;
+    Body->bFailedToCreatePhysicsMeshes = false;
+    Body->bHasCookedCollisionData = true;
+    Body->bNeverNeedsCookedCollisionData = false;
+    TriangleCount = Geometry->Elements().GetNumTriangles();
+    return true;
+}
 
 UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision,
                                           UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error)

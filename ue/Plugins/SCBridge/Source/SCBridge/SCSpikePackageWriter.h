@@ -1,4 +1,4 @@
-// WP-U0 only: synchronous, single-package sink for SavePackage's cooked bytes.
+// Synchronous, single-package sink for the importer and WP-U0 package probe.
 // No geometry is encoded here. UE owns the .uasset/.uexp/.ubulk serialization.
 #pragma once
 #if WITH_EDITOR
@@ -39,7 +39,7 @@ public:
         return EPackageWriterResult::Success;
     }
 
-    // This spike writes one package synchronously. It has no cooker server,
+    // The cache writes one package synchronously. It has no cooker server,
     // incremental cook log, DLC, multiprocess protocol, or hash database.
     virtual void SetCooker(UE::PackageWriter::Private::ICookerInterface*) override { checkNoEntry(); }
     virtual void Initialize(const FCookInfo&) override {}
