@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string]$BayEntity,
     [Parameter(Mandatory)][string]$FloorEntity,
     [int]$TimeoutSeconds = 240,
-    [switch]$Screenshots
+    [switch]$Screenshots,
+    [switch]$CheckAboard
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,7 +26,7 @@ function Find-Row($Snapshot, [string]$Entity) {
 function Wait-ForRow([string]$Entity, [string]$State) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     do {
-        $row = Find-Row (Call /garage/fleet) $Entity
+        $row = Find-Row (Call /garage/fleet @{ entity = $Entity }) $Entity
         if ($row -and (!$State -or $row.state -eq $State)) { return $row }
         if ($row.state -eq 'Unavailable') { throw "$Entity unavailable: $($row.reason)" }
         Start-Sleep -Milliseconds 150
@@ -57,6 +58,13 @@ Test-Pairing $floorRow.ship $true
 if ($Screenshots) {
     $null = Call /console @{ cmd = 'sc.MobiGlas 1' }
     $null = Call /console @{ cmd = 'sc.MobiGlas.App Garage' }
+    $present = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $state = (Call /garage/fleet @{ entity = $BayEntity }).garage
+        if ($state.ui_ready) { break }
+        Start-Sleep -Milliseconds 100
+    } while ($present.Elapsed.TotalSeconds -lt $TimeoutSeconds)
+    if (!$state.ui_ready) { throw 'The Garage layout was not presented.' }
     $null = Call /wait @{ until = 'settled'; timeout_s = $TimeoutSeconds }
     Call /screenshot @{ name = 'garage-fleet'; ui = $true } | Select-Object path
     $null = Call /console @{ cmd = 'sc.MobiGlas 0' }
@@ -66,6 +74,14 @@ if ($paint) {
     $null = Call /garage/paint @{ ship = $bayRow.ship; paint = $paint }
     $repainted = Wait-ForRow $BayEntity 'In hangar'
     if ($repainted.paint -ne $paint) { throw "Paint did not apply: $($repainted.paint)." }
+}
+if ($CheckAboard) {
+    $null = Call /camera @{ mode = 'first' }
+    $null = Call /console @{ cmd = 'sc.FP.Spawn interior:0' }
+    $aboard = Invoke-SC /garage/store @{ ship = $bayRow.ship }
+    if ($aboard.ok -or $aboard.error -ne 'Leave the ship before storing it') {
+        throw "Expected aboard refusal: $($aboard | ConvertTo-Json -Compress)"
+    }
 }
 $null = Call /camera @{ mode = 'orbit' }
 $null = Call /garage/store @{ ship = $bayRow.ship }

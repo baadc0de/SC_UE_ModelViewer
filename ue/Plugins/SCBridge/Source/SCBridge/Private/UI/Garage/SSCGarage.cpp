@@ -241,12 +241,15 @@ TSharedRef<SWidget> SSCGarage::Details()
             }
         }
     }
-    BodyRows->AddSlot().Padding(0, 12, 0, 0)[Future(TEXT("Loadout changes"), TEXT("Swap weapons, shields and components."))];
-    BodyRows->AddSlot()[Future(TEXT("Ship delivery"), TEXT("Watch the hangar elevator bring the ship up and take it down."))];
-    BodyRows->AddSlot()[Future(TEXT("Insurance claim"), TEXT("Replace a lost or destroyed ship."))];
-    BodyRows->AddSlot()[Future(TEXT("Transfer"), TEXT("Move a ship to another hangar or location."))];
-    BodyRows->AddSlot()[Future(TEXT("Hand over"), TEXT("Give a ship to another player."))];
-    return BodyRows;
+    TSharedRef<SScrollBox> FutureRows = SNew(SScrollBox);
+    FutureRows->AddSlot().Padding(0, 12, 0, 0)[Future(TEXT("Loadout changes"), TEXT("Swap weapons, shields and components."))];
+    FutureRows->AddSlot()[Future(TEXT("Ship delivery"), TEXT("Watch the hangar elevator bring the ship up and take it down."))];
+    FutureRows->AddSlot()[Future(TEXT("Insurance claim"), TEXT("Replace a lost or destroyed ship."))];
+    FutureRows->AddSlot()[Future(TEXT("Transfer"), TEXT("Move a ship to another hangar or location."))];
+    FutureRows->AddSlot()[Future(TEXT("Hand over"), TEXT("Give a ship to another player."))];
+    return SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().FillWidth(0.62f)[BodyRows]
+        + SHorizontalBox::Slot().FillWidth(0.38f).Padding(16, 0, 0, 0)[FutureRows];
 }
 
 void SSCGarage::Retrieve(ESCGaragePlacement At)

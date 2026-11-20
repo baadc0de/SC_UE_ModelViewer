@@ -61,7 +61,7 @@ world metres, rotations `[pitch, yaw, roll]` degrees, forces newtons.
 | `/ship/lights` | `ship`, `group` id or `all: true`, `mode` (authored state or `toggle` for all), optional `as` actor | Apply through each group's interaction. All-group orders report skipped ids. |
 | `/ship/locate` | `ship` | Toggles the paired ship's world marker and returns `locating`. |
 | `/ship/despawn` | `id` | Removes an extra instance (its grids, boxes, docks and drones go; jobs touching them fail) |
-| `/garage/fleet` | — | `garage.fleet` with vehicle catalogue entries, placement state, progress and live paint |
+| `/garage/fleet` | Optional `entity` filter | `garage.fleet` with vehicle catalogue entries, placement state, progress and live paint |
 | `/garage/retrieve` | `entity`, optional `at` (`bay` or `floor`) and `confirm_store` | Starts retrieval. If the bay holds a paired ship, returns its `occupant` and asks for `confirm_store`. |
 | `/garage/store` | `ship` instance id | Removes the paired ship if no player or cargo transfer depends on it. |
 | `/garage/paint` | `ship` or `entity`, `paint` palette id or `default` | Applies and remembers the chosen paint for the retrieved ship. |

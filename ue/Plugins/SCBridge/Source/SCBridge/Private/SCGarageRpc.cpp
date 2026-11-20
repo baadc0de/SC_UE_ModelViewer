@@ -3,6 +3,7 @@
 #if SC_WITH_RPC
 #include "SCGarageSubsystem.h"
 #include "Engine/World.h"
+#include "UI/Cargo/SCCargoViewSource.h"
 
 using namespace SCRpcJson;
 
@@ -33,12 +34,12 @@ bool ShipId(const TSharedPtr<FJsonObject>& Body, int32& Out)
 }
 }
 
-FObj SCGarageRpc::Snapshot(UWorld* World)
+FObj SCGarageRpc::Snapshot(UWorld* World, const FString& Entity, bool bIncludeDefaultStored)
 {
     auto* Garage = USCGarageSubsystem::Get(World);
     TArray<TSharedPtr<FJsonValue>> Fleet;
     if (Garage)
-        for (const FSCGarageRow& Row : Garage->Rows())
+        for (const FSCGarageRow& Row : Garage->Rows(Entity, bIncludeDefaultStored))
         {
             const FObj Info = MakeShared<FJsonObject>();
             Info->SetStringField(TEXT("entity"), Row.Entity);
@@ -59,6 +60,8 @@ FObj SCGarageRpc::Snapshot(UWorld* World)
         }
     const FObj Out = MakeShared<FJsonObject>();
     Out->SetArrayField(TEXT("fleet"), Fleet);
+    if (World == SCCargoUI::ViewerWorld())
+        Out->SetBoolField(TEXT("ui_ready"), FSCMobiGlasRequests::Get().bGarageReady);
     return Out;
 }
 
@@ -70,7 +73,7 @@ FObj SCGarageRpc::Command(UWorld* World, const FString& Route, const TSharedPtr<
     {
         Garage->RequestCatalog();
         FObj Out = Reply();
-        Out->SetObjectField(TEXT("garage"), Snapshot(World));
+        Out->SetObjectField(TEXT("garage"), Snapshot(World, Text(Body, TEXT("entity")), true));
         return Out;
     }
 

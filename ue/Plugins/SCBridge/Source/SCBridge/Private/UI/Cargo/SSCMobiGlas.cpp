@@ -317,8 +317,9 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
         R.ZoomNotches = 0;
     }
     Openness = bOpen ? FMath::Min(1.f, Openness + Delta / PanelIn) : FMath::Max(0.f, Openness - Delta / PanelOut);
-    Requests.bShipLinkReady = bOpen && Openness >= 1 && Model->GetApp() == ESCMobiGlasApp::ShipLink &&
-        Clear && Clear->GetTickSpaceGeometry().GetLocalSize().Y > 0;
+    const bool bPresented = bOpen && Openness >= 1 && Clear && Clear->GetTickSpaceGeometry().GetLocalSize().Y > 0;
+    Requests.bShipLinkReady = bPresented && Model->GetApp() == ESCMobiGlasApp::ShipLink;
+    Requests.bGarageReady = bPresented && Model->GetApp() == ESCMobiGlasApp::Garage;
     const float Shown = bOpen ? EaseOutCubic(Openness) : 1 - EaseInQuad(1 - Openness);
     SetRenderOpacity(Shown);
     SetRenderTransform(FSlateRenderTransform(FVector2f(0, PanelSlide * (1 - Shown))));

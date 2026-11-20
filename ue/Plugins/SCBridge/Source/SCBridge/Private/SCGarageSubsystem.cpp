@@ -114,13 +114,13 @@ bool USCGarageSubsystem::Available(const FString& Entity) const
         Catalog.ContainsByPredicate([&](const FSCEntityHit& Ship) { return Ship.Name.Equals(Entity, ESearchCase::IgnoreCase); });
 }
 
-TArray<FSCGarageRow> USCGarageSubsystem::Rows() const
+TArray<FSCGarageRow> USCGarageSubsystem::Rows(const FString& EntityFilter, bool bIncludeDefaultStored) const
 {
     const USCViewerSubsystem* V = Viewer();
     const USCShipLinkSubsystem* Link = USCShipLinkSubsystem::Get(this);
     const USCViewerSettings* Settings = USCViewerSettings::Get();
     TArray<FString> Names = Settings->GarageFleet;
-    if (Names.IsEmpty())
+    if (Names.IsEmpty() && bIncludeDefaultStored)
     {
         Names = Cooked;
         for (const FSCEntityHit& Hit : Catalog) Names.Add(Hit.Name);
@@ -137,10 +137,16 @@ TArray<FSCGarageRow> USCGarageSubsystem::Rows() const
                 Names.Add(Name);
             }
     if (Pending.IsSet()) Names.Add(Pending->Entity);
+    for (const auto& Failure : Failures) Names.Add(Failure.Key);
+    if (!EntityFilter.IsEmpty())
+        Names.RemoveAll([&](const FString& Name) { return !Canonical(Name).Equals(EntityFilter, ESearchCase::IgnoreCase); });
 
     TMap<FName, const FSCEntityHit*> Hits;
-    Hits.Reserve(Catalog.Num());
-    for (const auto& Hit : Catalog) Hits.Add(FName(*Hit.Name), &Hit);
+    if (Names.Num() > 16)
+    {
+        Hits.Reserve(Catalog.Num());
+        for (const auto& Hit : Catalog) Hits.Add(FName(*Hit.Name), &Hit);
+    }
     TArray<FSCGarageRow> Out;
     TSet<FName> Seen;
     const ASCFirstPersonCharacter* Player = V ? V->GetFirstPerson() : nullptr;
@@ -152,7 +158,10 @@ TArray<FSCGarageRow> USCGarageSubsystem::Rows() const
         Seen.Add(Key);
         FSCGarageRow& Row = Out.AddDefaulted_GetRef();
         Row.Entity = Entity;
-        if (const FSCEntityHit* Hit = Hits.FindRef(Key))
+        const FSCEntityHit* Hit = Hits.IsEmpty()
+            ? Catalog.FindByPredicate([&](const FSCEntityHit& Item) { return Item.Name.Equals(Entity, ESearchCase::IgnoreCase); })
+            : Hits.FindRef(Key);
+        if (Hit)
             Row.DisplayName = Hit->DisplayName;
         if (Row.DisplayName.IsEmpty()) Row.DisplayName = Entity.Replace(TEXT("_"), TEXT(" "));
         Row.Error = Failures.FindRef(Entity.ToLower());
@@ -212,7 +221,7 @@ FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacem
     if (V->IsSpace()) return Refuse(TEXT("Retrieve ships from a hangar"));
     RequestCatalog();
     const FString Entity = Canonical(Name);
-    const TArray<FSCGarageRow> Fleet = Rows();
+    const TArray<FSCGarageRow> Fleet = Rows(Entity);
     const auto* Row = Fleet.FindByPredicate([&](const FSCGarageRow& R) { return R.Entity.Equals(Entity, ESearchCase::IgnoreCase); });
     if (!Row) return Refuse(TEXT("This ship is not in your fleet"));
     if (Row->Status == ESCGarageStatus::InHangar) return Refuse(TEXT("This ship is already in the hangar"));
@@ -285,7 +294,7 @@ FString USCGarageSubsystem::Store(int32 Id)
 
 FString USCGarageSubsystem::PaintEntity(const FString& Entity, const FString& Palette)
 {
-    const TArray<FSCGarageRow> Fleet = Rows();
+    const TArray<FSCGarageRow> Fleet = Rows(Entity);
     const auto* Row = Fleet.FindByPredicate([&](const FSCGarageRow& R) { return R.Entity.Equals(Entity, ESearchCase::IgnoreCase); });
     if (!Row) return TEXT("This ship is not in your fleet");
     return Row->Ship != INDEX_NONE ? Paint(Row->Ship, Palette) : FString(TEXT("Retrieve the ship before choosing its paint"));

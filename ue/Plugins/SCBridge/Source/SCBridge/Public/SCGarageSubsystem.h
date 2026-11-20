@@ -53,7 +53,7 @@ public:
     virtual TStatId GetStatId() const override;
 
     void RequestCatalog();
-    TArray<FSCGarageRow> Rows() const;
+    TArray<FSCGarageRow> Rows(const FString& EntityFilter = {}, bool bIncludeDefaultStored = true) const;
     bool AddToFleet(const FString& Entity);
     const TArray<FSCEntityHit>& GetCatalog() const { return Catalog; }
     FSCGarageOrder Retrieve(const FString& Entity, ESCGaragePlacement At, bool bConfirmStore);

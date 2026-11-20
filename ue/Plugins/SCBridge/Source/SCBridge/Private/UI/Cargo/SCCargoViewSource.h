@@ -60,6 +60,7 @@ struct FSCMobiGlasRequests
     TOptional<FString> SelectGrid, From, To; // grid selectors: an id, "ship" / "vehicle", "elevator" / "environment", or label text
     TOptional<int32> Layer, Amount;
     TOptional<FString> App; // consumed by the app rail
+    bool bGarageReady = false;
     bool bShipLinkReady = false; // the open transition reached its layout, including the live-view band
     int32 ShipLinkLabels = 0;    // door labels placed by the callout solver on the last frame
     bool bConfirm = false;
