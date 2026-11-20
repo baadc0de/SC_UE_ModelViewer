@@ -282,8 +282,8 @@ TArray<FSCVehicleInstanceInfo> FSCVehicleInstances::GetInstances() const
         if (Info.State == ESCVehicleInstanceState::Ready) Info.Progress = 1.f;
         else if (Info.Id == Running)
         {
-            if (Info.State == ESCVehicleInstanceState::Exporting && Progress) Info.Progress = 0.5f * Progress->GetFraction();
-            if (Info.State == ESCVehicleInstanceState::Parsing) Info.Progress = 0.5f;
+            if (Info.State == ESCVehicleInstanceState::Exporting)
+                Info.Progress = Parse.IsValid() ? 0.5f : Progress ? 0.5f * Progress->GetFraction() : 0.f;
             if (Info.State == ESCVehicleInstanceState::Importing && Job) Info.Progress = 0.5f + 0.5f * Job->GetFraction();
         }
     }

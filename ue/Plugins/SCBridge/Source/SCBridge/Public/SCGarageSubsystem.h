@@ -16,7 +16,7 @@ enum class ESCGaragePlacement : uint8 { Bay, Floor };
 
 struct FSCGarageRow
 {
-    FString Entity, DisplayName, Role, Size, Paint, Error;
+    FString Entity, DisplayName, Manufacturer, Role, Size, Paint, Error;
     TArray<FString> PaintOptions;
     ESCGarageStatus Status = ESCGarageStatus::Stored;
     int32 Ship = INDEX_NONE;
@@ -53,6 +53,7 @@ public:
     virtual TStatId GetStatId() const override;
 
     void RequestCatalog();
+    void RequestDetails(const FString& Entity);
     TArray<FSCGarageRow> Rows(const FString& EntityFilter = {}, bool bIncludeDefaultStored = true) const;
     bool AddToFleet(const FString& Entity);
     const TArray<FSCEntityHit>& GetCatalog() const { return Catalog; }
@@ -77,4 +78,10 @@ private:
     TMap<FString, FString> Failures;
     int32 RequestedGeneration = INDEX_NONE;
     bool bScannedCooked = false;
+    struct FDetails { FString Manufacturer, Role, Size; };
+    TMap<FName, FDetails> Details;
+    TMap<FString, FString> ManufacturerCodes;
+    TArray<FString> DetailsQueue;
+    bool bDetailsReading = false;
+    void ReadNextDetail();
 };

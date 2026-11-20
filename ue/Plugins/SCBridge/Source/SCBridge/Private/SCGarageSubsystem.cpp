@@ -14,6 +14,9 @@
 #include "AssetRegistry/AssetData.h"
 #include "Misc/PackageName.h"
 #include "Modules/ModuleManager.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 FString FSCGaragePolicy::StoreRefusal(bool bOwned, bool bAboard, bool bTransfer)
 {
@@ -100,11 +103,78 @@ void USCGarageSubsystem::RequestCatalog()
         RequestedGeneration == V->GetArchiveGeneration()) return;
     RequestedGeneration = V->GetArchiveGeneration();
     Catalog.Reset();
+    Details.Reset();
+    DetailsQueue.Reset();
+    ManufacturerCodes.Reset();
+    bDetailsReading = false;
     V->SearchAsync(FString(), MAX_int32, [Weak = TWeakObjectPtr<USCGarageSubsystem>(this), Generation = RequestedGeneration](const FSCSearchResult& Result) {
         USCGarageSubsystem* Garage = Weak.Get();
         if (!Garage || !Garage->Viewer() || Garage->Viewer()->GetArchiveGeneration() != Generation || !Result.Error.IsEmpty()) return;
         for (const FSCEntityHit& Item : Result.Hits)
             if (FSCGaragePolicy::IsFleetCandidate(Item)) Garage->Catalog.Add(Item);
+    });
+}
+
+
+void USCGarageSubsystem::RequestDetails(const FString& Name)
+{
+    const FString Entity = Canonical(Name);
+    if (Entity.IsEmpty() || Details.Contains(FName(*Entity))) return;
+    Details.Add(FName(*Entity));
+    DetailsQueue.Add(Entity);
+}
+
+void USCGarageSubsystem::ReadNextDetail()
+{
+    USCViewerSubsystem* V = Viewer();
+    if (bDetailsReading || DetailsQueue.IsEmpty() || !V || !V->GetClient() || V->GetArchiveState() != ESCArchiveState::Ready ||
+        V->IsBusy() || V->IsSpawningVehicles() || V->IsEnvironmentLoading()) return;
+    const FString Entity = MoveTemp(DetailsQueue[0]);
+    DetailsQueue.RemoveAt(0, EAllowShrinking::No);
+    const FName Key(*Entity);
+    const int32 Generation = V->GetArchiveGeneration();
+    const TWeakObjectPtr<USCGarageSubsystem> Weak(this);
+    bDetailsReading = true;
+    V->GetClient()->DataCoreRecord(TEXT("EntityClassDefinition.") + Entity, [Weak, Key, Generation](const FSCTextResult& Record) {
+        USCGarageSubsystem* G = Weak.Get();
+        if (!G || !G->Viewer() || G->Viewer()->GetArchiveGeneration() != Generation) return;
+        const auto Finish = [&] { G->bDetailsReading = false; };
+        TSharedPtr<FJsonObject> Class;
+        if (!Record.bOK || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Record.Json), Class) || !Class)
+        {
+            Finish();
+            return;
+        }
+        FDetails& Item = G->Details.FindOrAdd(Key);
+        Class->TryGetStringField(TEXT("vehicleRole"), Item.Role);
+        if (Item.Role.StartsWith(TEXT("@"))) Item.Role.Reset(); // the live record carries the key only
+        FString ManufacturerRef;
+        const TArray<TSharedPtr<FJsonValue>>* Components = nullptr;
+        if (Class->TryGetArrayField(TEXT("Components"), Components) && Components)
+            for (const auto& Value : *Components)
+            {
+                const TSharedPtr<FJsonObject>* Component = nullptr;
+                const TSharedPtr<FJsonObject>* Attach = nullptr;
+                if (!Value || !Value->TryGetObject(Component) || !Component || !*Component ||
+                    !(*Component)->TryGetObjectField(TEXT("AttachDef"), Attach) || !Attach || !*Attach) continue;
+                (*Attach)->TryGetStringField(TEXT("Manufacturer"), ManufacturerRef);
+                double Size = 0;
+                if ((*Attach)->TryGetNumberField(TEXT("Size"), Size) && Size > 0) Item.Size = FString::FromInt(int32(Size));
+                break;
+            }
+        if (ManufacturerRef.IsEmpty() || !G->Viewer()->GetClient()) { Finish(); return; }
+        if (const FString* Code = G->ManufacturerCodes.Find(ManufacturerRef)) { Item.Manufacturer = *Code; Finish(); return; }
+        G->Viewer()->GetClient()->DataCoreRecord(ManufacturerRef, [Weak, Key, Generation, ManufacturerRef](const FSCTextResult& Manufacturer) {
+            USCGarageSubsystem* Garage = Weak.Get();
+            if (!Garage || !Garage->Viewer() || Garage->Viewer()->GetArchiveGeneration() != Generation) return;
+            FString Code;
+            TSharedPtr<FJsonObject> Result;
+            if (Manufacturer.bOK && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Manufacturer.Json), Result) && Result)
+                Result->TryGetStringField(TEXT("Code"), Code);
+            Garage->ManufacturerCodes.Add(ManufacturerRef, Code);
+            Garage->Details.FindOrAdd(Key).Manufacturer = MoveTemp(Code);
+            Garage->bDetailsReading = false;
+        });
     });
 }
 
@@ -164,6 +234,12 @@ TArray<FSCGarageRow> USCGarageSubsystem::Rows(const FString& EntityFilter, bool 
         if (Hit)
             Row.DisplayName = Hit->DisplayName;
         if (Row.DisplayName.IsEmpty()) Row.DisplayName = Entity.Replace(TEXT("_"), TEXT(" "));
+        if (const FDetails* Metadata = Details.Find(Key))
+        {
+            Row.Manufacturer = Metadata->Manufacturer;
+            Row.Role = Metadata->Role;
+            Row.Size = Metadata->Size;
+        }
         Row.Error = Failures.FindRef(Entity.ToLower());
         if (!Row.Error.IsEmpty()) Row.Status = ESCGarageStatus::Unavailable;
         if (Pending.IsSet() && Pending->Entity.Equals(Entity, ESearchCase::IgnoreCase))
@@ -184,8 +260,8 @@ TArray<FSCGarageRow> USCGarageSubsystem::Rows(const FString& EntityFilter, bool 
             Row.DistanceM = Player ? FVector::Dist(Ship->GetActorLocation(), Player->GetActorLocation()) / 100.0 : 0;
             const FSCSceneInstance& Root = Ship->Manifest.Root;
             if (!Root.DisplayName.IsEmpty()) Row.DisplayName = Root.DisplayName;
-            Row.Role = Root.ItemSubType;
-            Row.Size = Root.ItemSize;
+            if (Row.Role.IsEmpty()) Row.Role = Root.ItemSubType;
+            if (Row.Size.IsEmpty()) Row.Size = Root.ItemSize;
             const int32 ActivePaint = Ship->GetPaint();
             Row.Paint = Ship->Manifest.Paints.IsValidIndex(ActivePaint) ? Ship->Manifest.Paints[ActivePaint].PaletteId : TEXT("default");
             for (const FSCPaintVariant& Paint : Ship->Manifest.Paints) Row.PaintOptions.Add(Paint.PaletteId);
@@ -283,7 +359,7 @@ FString USCGarageSubsystem::Store(int32 Id)
         const FVector At = Player->GetActorLocation();
         const UCapsuleComponent* Capsule = Player->GetCapsuleComponent();
         const FVector Feet = Capsule ? At - FVector(0, 0, Capsule->GetScaledCapsuleHalfHeight()) : At;
-        const UPrimitiveComponent* Base = Player->GetMovementBase();
+        const UPrimitiveComponent* Base = Cast<UPrimitiveComponent>(Player->GetMovementBaseObject());
         bAboard = (Base && Base->GetOwner() == Ship) || Ship->IsInPhysicsGrid(At) || Ship->IsInsideLightArea(At) ||
             Ship->LiftRiddenBy(Feet, Base) != INDEX_NONE;
     }
@@ -339,7 +415,7 @@ void USCGarageSubsystem::FinishRetrieve(const FString& Error, ASCVehicle* Ship)
 
 void USCGarageSubsystem::Tick(float)
 {
-    if (!Pending.IsSet()) return;
+    if (!Pending.IsSet()) { ReadNextDetail(); return; }
     USCViewerSubsystem* V = Viewer();
     if (!V) return;
     if (Pending->Id == 0)

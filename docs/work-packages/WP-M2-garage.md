@@ -120,7 +120,7 @@ assemblies. The current Garage uses read-only manifest items and stores paint by
 The primary slot uses the viewer's ordinary prepared ship bay and preserves extra instances on Garage store/retrieve.
 An explicit floor retrieval uses the same free-floor solver as existing extra vehicles and excludes the ship bay.
 Kiosks are recognized by their operating panel's authored VehicleList and RetrievingVehicle states and UseConsole
-interaction. The browser index and scene manifests used by Garage provide no dedicated manufacturer or thumbnail field. Garage uses the localized ship label and exported type and size when available.
+interaction. Garage reads the visible rows' authored manufacturer codes by AttachDef.Manufacturer, plus configured type/role and size where present. The examined vehicle catalogue and scene manifests provide no usable ship thumbnails.
 
 ## Out of scope
 

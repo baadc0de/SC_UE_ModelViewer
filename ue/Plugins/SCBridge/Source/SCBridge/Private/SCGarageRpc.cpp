@@ -45,6 +45,7 @@ FObj SCGarageRpc::Snapshot(UWorld* World, const FString& Entity, bool bIncludeDe
             Info->SetStringField(TEXT("entity"), Row.Entity);
             Info->SetStringField(TEXT("label"), Row.DisplayName);
             Info->SetStringField(TEXT("state"), FSCGaragePolicy::StatusName(Row.Status));
+            if (!Row.Manufacturer.IsEmpty()) Info->SetStringField(TEXT("manufacturer"), Row.Manufacturer);
             if (!Row.Role.IsEmpty()) Info->SetStringField(TEXT("role"), Row.Role);
             if (!Row.Size.IsEmpty()) Info->SetStringField(TEXT("size"), Row.Size);
             if (!Row.Error.IsEmpty()) Info->SetStringField(TEXT("reason"), Row.Error);
@@ -72,8 +73,10 @@ FObj SCGarageRpc::Command(UWorld* World, const FString& Route, const TSharedPtr<
     if (Route == TEXT("fleet"))
     {
         Garage->RequestCatalog();
+        const FString Entity = Text(Body, TEXT("entity"));
+        if (!Entity.IsEmpty()) Garage->RequestDetails(Entity);
         FObj Out = Reply();
-        Out->SetObjectField(TEXT("garage"), Snapshot(World, Text(Body, TEXT("entity")), true));
+        Out->SetObjectField(TEXT("garage"), Snapshot(World, Entity, true));
         return Out;
     }
 
@@ -86,7 +89,7 @@ FObj SCGarageRpc::Command(UWorld* World, const FString& Route, const TSharedPtr<
         if (Body) Body->TryGetBoolField(TEXT("confirm_store"), bConfirmed);
         double Occupant = INDEX_NONE;
         if (Body) Body->TryGetNumberField(TEXT("occupant"), Occupant);
-        if (!FMath::IsFinite(Occupant) || Occupant < INDEX_NONE || Occupant > MAX_int32 || FMath::TruncToDouble(Occupant) != Occupant)
+        if (!FMath::IsFinite(Occupant) || Occupant < double(INDEX_NONE) || Occupant > MAX_int32 || FMath::TruncToDouble(Occupant) != Occupant)
             return Reply(TEXT("occupant must be an instance id"));
         const FSCGarageOrder R = Garage->Retrieve(Text(Body, TEXT("entity")),
             Position == TEXT("floor") ? ESCGaragePlacement::Floor : ESCGaragePlacement::Bay, bConfirmed, int32(Occupant));

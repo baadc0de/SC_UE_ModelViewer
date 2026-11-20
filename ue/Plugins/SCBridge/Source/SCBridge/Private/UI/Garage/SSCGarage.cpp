@@ -40,10 +40,19 @@ TSharedRef<SWidget> Future(const TCHAR* Name, const TCHAR* Description)
         [SNew(STextBlock).Font(Body()).AutoWrapText(true).ColorAndOpacity(Ink2()).Text(Text(Description))];
 }
 
+FString DetailsLine(const FSCGarageRow& Row)
+{
+    TArray<FString> Details;
+    if (!Row.Manufacturer.IsEmpty()) Details.Add(Row.Manufacturer);
+    if (!Row.Role.IsEmpty()) Details.Add(Row.Role);
+    if (!Row.Size.IsEmpty()) Details.Add(TEXT("Size ") + Row.Size);
+    return FString::Join(Details, TEXT("  ·  "));
+}
+
 bool Same(const FSCGarageRow& A, const FSCGarageRow& B)
 {
     return A.Entity == B.Entity && A.DisplayName == B.DisplayName && A.Status == B.Status &&
-        A.Error == B.Error && A.Ship == B.Ship && int32(A.Progress * 100) == int32(B.Progress * 100) &&
+        A.Manufacturer == B.Manufacturer && A.Role == B.Role && A.Size == B.Size && A.Error == B.Error && A.Ship == B.Ship && int32(A.Progress * 100) == int32(B.Progress * 100) &&
         FMath::RoundToInt(A.DistanceM) == FMath::RoundToInt(B.DistanceM);
 }
 }
@@ -75,7 +84,8 @@ void SSCGarage::Construct(const FArguments& Args)
                 Error.Reset();
                 DetailKey.Reset();
             })
-            .OnGenerateRow_Lambda([](TSharedPtr<FSCGarageRow> Item, const TSharedRef<STableViewBase>& Table) {
+            .OnGenerateRow_Lambda([this](TSharedPtr<FSCGarageRow> Item, const TSharedRef<STableViewBase>& Table) {
+                if (auto* G = Garage()) G->RequestDetails(Item->Entity);
                 FString Status = FSCGaragePolicy::StatusName(Item->Status);
                 if (Item->Status == ESCGarageStatus::InHangar) Status += FString::Printf(TEXT(" · %.0f m"), Item->DistanceM);
                 if (Item->Status == ESCGarageStatus::Retrieving && Item->Progress > 0) Status += FString::Printf(TEXT(" · %.0f%%"), 100 * Item->Progress);
@@ -83,7 +93,16 @@ void SSCGarage::Construct(const FArguments& Args)
                     [
                         SNew(SHorizontalBox)
                         + SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
-                        [SNew(STextBlock).Font(Body()).Text(FText::FromString(Item->DisplayName)).OverflowPolicy(ETextOverflowPolicy::Ellipsis)]
+                        [
+                            SNew(SVerticalBox)
+                            + SVerticalBox::Slot().AutoHeight()
+                            [SNew(STextBlock).Font(Body()).Text(FText::FromString(Item->DisplayName)).OverflowPolicy(ETextOverflowPolicy::Ellipsis)]
+                            + SVerticalBox::Slot().AutoHeight()
+                            [
+                                SNew(STextBlock).Font(Label()).ColorAndOpacity(Ink2()).Text(FText::FromString(DetailsLine(*Item)))
+                                .Visibility(DetailsLine(*Item).IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+                            ]
+                        ]
                         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0)
                         [Txt(FText::FromString(Caps(Status)), Label(), Ink2())]
                     ];
@@ -127,7 +146,7 @@ void SSCGarage::Tick(const FGeometry& Geometry, double Time, float Delta)
     const FSCGarageRow* Row = Selected();
     const USCShipLinkSubsystem* Link = USCShipLinkSubsystem::Get(SCCargoUI::ViewerWorld());
     const ASCVehicle* Ship = Row && Link ? Link->FindShip(Row->Ship) : nullptr;
-    const FString Key = Row ? FString::Printf(TEXT("%s:%d:%d:%d"), *Row->Entity, int32(Row->Status), Row->Ship, Ship ? Ship->GetPaint() : INDEX_NONE)
+    const FString Key = Row ? FString::Printf(TEXT("%s:%d:%d:%d"), *Row->Entity, int32(Row->Status), Row->Ship, Ship ? Ship->GetPaint() : INDEX_NONE) + Row->Manufacturer + Row->Role + Row->Size
                             : Model->GetGarageEntity();
     if (DetailKey != Key)
     {
@@ -184,8 +203,8 @@ TSharedRef<SWidget> SSCGarage::Details()
 
     TSharedRef<SScrollBox> BodyRows = SNew(SScrollBox);
     BodyRows->AddSlot().Padding(0, 0, 0, 6)[Txt(FText::FromString(Row->DisplayName), Title(), Ink())];
-    if (!Row->Role.IsEmpty() || !Row->Size.IsEmpty())
-        BodyRows->AddSlot().Padding(0, 0, 0, 6)[Txt(FText::FromString(Row->Role + TEXT("  ") + Row->Size), Label(), Ink2())];
+    if (const FString Metadata = DetailsLine(*Row); !Metadata.IsEmpty())
+        BodyRows->AddSlot().Padding(0, 0, 0, 6)[Txt(FText::FromString(Metadata), Label(), Ink2())];
     if (!Row->Error.IsEmpty())
         BodyRows->AddSlot().Padding(0, 3)
         [SNew(STextBlock).Text(FText::FromString(Row->Error)).ColorAndOpacity(Alert()).Font(Body()).AutoWrapText(true)];
