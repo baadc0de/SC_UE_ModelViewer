@@ -65,7 +65,17 @@ loading. The full run waited for the published environment and issued C2 load ag
   query. Removing that one fixture box started rear closure on the next frame, then the locked pad state returned.
   The route passed in 263.21 seconds with this intervention. Whether the stored slot intersects the ramp collision
   or the current query is conservative remains open.
-- The available captures are `ship-link-locked.png` and `ship-link-opening.png` in
+- The first captures were `ship-link-locked.png` and `ship-link-opening.png` in
   `out/M2-C2XL-20261120-222506/` of the Garage worktree. Astra confirmed both state rows and header counts. The orbit
-  framing hid the selected rear ramp and an engine ray-tracing budget overlay was visible. The first-person
-  locked-pad capture and a C2 framing retake remain.
+  framing hid the selected rear ramp and an engine ray-tracing budget overlay was visible.
+
+## C2 physical pad and framing retest
+
+The warmed viewer reached XL plus C2 readiness in 77.27 seconds. The same route without the transfer replay passed
+in 34.77 seconds, including denial, secure closure, and light modes. It captured the rear ramp from behind and
+then aimed the first-person view at its linked physical pad from 85 cm. The viewer reported focus on door 0 and
+the material selected `DoorLockState.DoorLocked` with no pinned override.
+
+Astra approved `ship-link-locked.png`, `ship-link-opening.png` and `locked-pad.png` under
+`out/M2-XLretest-20261120-225717/` in the Garage worktree. The Rear ramp leader and access row agree as the
+header changes from one locked to one moving. The physical pad shows a red closed padlock.
