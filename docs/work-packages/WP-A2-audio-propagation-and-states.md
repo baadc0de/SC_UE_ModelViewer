@@ -486,5 +486,15 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
   `sc.Audio.OcclusionMinM`, `sc.Audio.OcclusionMaxM`, and `sc.Audio.ObstructionFullM` supply the measured
   profile for a test. Unconfigured sessions use the parameters' authored defaults. `sc.Audio.OcclusionDebug 1`
   enables trace and reduction logging. The layout follows the lineage geometry with deterministic offsets.
-- Room traversal is pending. Vehicle contexts require WP-P6 to publish stable seat occupancy.
-  The stereo direction and controlled C2/XL A/B and walk acceptance still need the recorded live checks in §9.
+- Room membership uses the vehicle instance, interior placement and room GUID. A point inside two distinct rooms is
+  unresolved. Placed audio keeps its authored room. A listener and emitter in the same known room read 1 / 0 for
+  `propagation_listenerInSameRoom` / `propagation_occlusion`. Known rooms in different vehicles read 0 for same-room.
+- The graph checks the opposite face centers of each transformed connector box against the placed room volumes.
+  A unique pair identifies an edge. The graph refreshes when an interior moves relative to the vehicle. D5 uses
+  minimum-hop paths only when their costs agree. Missing closed weights, missing or ambiguous door rigs, moving
+  doors and unresolved paths defer to the bank default. Cooked packages retain connector data in the audio sidecar
+  but lack a serialized per-placement rig binding. The live C2 and XL inputs have 12 and 11 bounded connectors
+  respectively, all missing a closed weight. These exports cannot demonstrate the D5 closed-door LPF effect.
+  `AUDIO_ROOM_CONNECTOR` records the scoped endpoints, door and authored weight of each connector.
+- The joint P6 integration drives VehicleDriver and VehicleCrew. The top-deck filter captures cover the stereo master.
+  The isolated hangar-bus and moving listener acceptance still needs the checks in §9.

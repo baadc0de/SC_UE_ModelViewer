@@ -2,6 +2,10 @@
 // parsing, bus gain composition, the room -> environment -> convolution reverb mapping, and the bus effect chain (EQ at
 // RTPC values, meters writing game parameters, side-chain ducking, the Peak Limiter ceiling). No game data.
 #include "SCAudio.h"
+#include "SCAudioSystem.h"
+#include "SCVehicle.h"
+#include "SCRigComponent.h"
+#include "Engine/World.h"
 #include "SCAudioBusFx.h"
 #include "SCAudioRayOcclusion.h"
 #include "SCAudioStereoDirections.h"
@@ -506,6 +510,50 @@ bool FSCWwiseStateTransitionTest::RunTest(const FString&)
     TestEqual(TEXT("the authored pair takes precedence over the default duration"), State.Weight->load(), 0.25f);
     Bank.Advance(0.1f);
     TestEqual(TEXT("state without values fades previous offsets to zero"), State.Weight->load(), 0.f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCWwiseRoomPropagationTest, "SCBridge.Audio.Rooms.ConnectorPropagation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCWwiseRoomPropagationTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ASCVehicle* Vehicle = World->SpawnActor<ASCVehicle>();
+    FSCAudioScene S;
+    S.Vehicle = Vehicle;
+    TArray<FString> Warnings;
+    S.AddInterior(0, Vehicle->GetRootComponent(), false, {}, {}, Warnings);
+    const FString Transform = TEXT(R"("transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])");
+    const FString Left = FString::Printf(TEXT(R"({"room":"a","kind":"box",%s,"box_min":[-2,-2,-2],"box_max":[-0.1,2,2]})"), *Transform);
+    const FString Right = FString::Printf(TEXT(R"({"room":"b","kind":"box",%s,"box_min":[0.1,-2,-2],"box_max":[2,2,2]})"), *Transform);
+    FSCLightAreas::Register(Vehicle, Vehicle->GetRootComponent(), {Left, Right}, false, Warnings);
+    S.AddConnectors(0, {FString::Printf(TEXT(R"({"entity_id":"connector","door_entity_id":"Door","bounds":[1,2,2],"offset":[0,0,0],%s,"physical_occlusion_when_closed":0.75})"), *Transform )});
+    S.BuildRoomGraph();
+    const FSCAudioRoomKey A{0,TEXT("a")}, B{0,TEXT("b")};
+    TestTrue(TEXT("opposite faces resolve two distinct room volumes"), S.Connectors.Num() == 1 && S.Connectors[0].A == A && S.Connectors[0].B == B);
+    S.ListenerRoomKey = B;
+    TestEqual(TEXT("same scoped room has no physical occlusion"), S.RoomOcclusion(B).Get(-1.f), 0.f);
+    TestFalse(TEXT("reused GUID in another placement is distinct"), S.RoomOcclusion({1,TEXT("b")}).IsSet());
+    if (S.Connectors.Num() == 1)
+    {
+        auto* Rig = NewObject<USCRigComponent>(Vehicle);
+        FSCDoorInteraction Door;
+        Door.Rig = Rig;
+        Door.Fragment = TEXT("door");
+        Vehicle->Doors.Add(Door);
+        S.Connectors[0].DoorRig = Rig;
+        TestEqual(TEXT("closed authored weight / 3"), S.RoomOcclusion(A).Get(-1.f), 0.25f);
+        auto Second = S.Connectors[0];
+        Second.ClosedOcclusion.Reset();
+        S.Connectors.Add(Second);
+        TestFalse(TEXT("unknown equally short path remains unknown"), S.RoomOcclusion(A).IsSet());
+        S.Connectors.Pop();
+        S.Connectors[0].ClosedOcclusion = 0.f;
+        TestEqual(TEXT("authored zero remains zero"), S.RoomOcclusion(A).Get(-1.f), 0.f);
+        S.Connectors[0].ClosedOcclusion.Reset();
+        TestFalse(TEXT("missing authored weight remains unknown"), S.RoomOcclusion(A).IsSet());
+    }
+    World->DestroyWorld(false);
     return true;
 }
 

@@ -6,6 +6,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "UObject/WeakObjectPtr.h"
+class FJsonObject;
 class ASCVehicle;
 class USceneComponent;
 class UPrimitiveComponent;
@@ -22,6 +23,8 @@ struct SCBRIDGE_API FSCRoomVolume
     FVector Min = FVector::ZeroVector, Max = FVector::ZeroVector; // box
     TArray<FVector> Points; // prism: polygon (xy; the base is the lowest z) / trimesh: three vertices per triangle
     double Height = 0;      // prism extrusion along +z
+    static bool ReadVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Key, FVector& Out);
+    static bool ReadTransform(const TSharedPtr<FJsonObject>& Object, FMatrix& Out, FString& Error);
     static bool Parse(const FString& Json, FSCRoomVolume& Out, FString& Error);
     /** Same tests as the exporter's RoomVolume::contains (box / even-odd polygon / ray-crossing parity). */
     bool Contains(const FVector& ContainerPointM) const;
