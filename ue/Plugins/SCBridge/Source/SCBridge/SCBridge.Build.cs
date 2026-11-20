@@ -13,7 +13,7 @@ public class SCBridge : ModuleRules
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "MeshDescription", "SCBridgeLib" });
         // Extracted Star Engine render constants (FSCStarEngine); staged with the plugin.
         RuntimeDependencies.Add("$(PluginDir)/Resources/StarEngineRender.json");
-        PrivateDependencyModuleNames.AddRange(new[] { "Json", "StaticMeshDescription", "RenderCore", "RHI", "PhysicsCore", "Chaos", "ChaosCore", "GeometryCore", "ImageWrapper", "Projects", "Slate", "SlateCore", "InputCore", "ApplicationCore", "Niagara", "XmlParser" });
+        PrivateDependencyModuleNames.AddRange(new[] { "Json", "StaticMeshDescription", "RenderCore", "RHI", "PhysicsCore", "Chaos", "ChaosCore", "GeometryCore", "ImageWrapper", "Projects", "Slate", "SlateCore", "InputCore", "ApplicationCore", "Niagara", "NiagaraShader", "XmlParser", "AudioMixer", "AudioExtensions", "Synthesis" });
         PublicDefinitions.Add("SC_SPIKE=" + (Environment.GetEnvironmentVariable("SC_SPIKE") == "1" ? "1" : "0"));
         PublicDefinitions.Add("SC_SPIKE_RAW_SERIALIZE=" + (Environment.GetEnvironmentVariable("SC_SPIKE_RAW_SERIALIZE") == "1" ? "1" : "0"));
         if (Target.bBuildEditor)
@@ -22,7 +22,7 @@ public class SCBridge : ModuleRules
         bool bDesktopPlatform = Target.bBuildDeveloperTools;
         if (bDesktopPlatform) PrivateDependencyModuleNames.Add("DesktopPlatform");
         PrivateDefinitions.Add("SC_WITH_DESKTOP_PLATFORM=" + (bDesktopPlatform ? "1" : "0"));
-        // RPC harness and state log (WP-H1): a localhost HTTP server for scripted testing; desktop, not Shipping or Wasm.
+        // RPC harness and state log (WP-H1): a localhost HTTP server for scripted testing; desktop, not Shipping.
         bool bRpc = Target.Configuration != UnrealTargetConfiguration.Shipping &&
                     (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Linux || Target.Platform == UnrealTargetPlatform.Mac);
         if (bRpc) PrivateDependencyModuleNames.AddRange(new[] { "HTTPServer" });

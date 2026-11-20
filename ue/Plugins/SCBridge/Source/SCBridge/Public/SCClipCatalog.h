@@ -31,6 +31,20 @@ struct SCBRIDGE_API FSCBoneTrack
     UPROPERTY() float Fps = 0;           // that animation's own rate, always set by the importer; a merged clip's
                                          // tracks can differ in rate and length
 };
+/** WP-A1: an audio event of the animation a binding plays (clip source `audio_events[]`), at a clip frame. */
+USTRUCT()
+struct SCBRIDGE_API FSCClipAudioEvent
+{
+    GENERATED_BODY()
+    UPROPERTY() double Frame = 0;   // clip frame (the clip's rate) of the event's normalised time in its own animation
+    /** The clip frame of the same moment when the clip plays backward: reverse playback aligns a shorter source's end
+     *  with the clip's end (FSCAnimImporter::TrackFrame); -1 = the same as Frame. */
+    UPROPERTY() double FrameReverse = -1;
+    UPROPERTY() int8 Direction = 1; // 1 forward, -1 reverse, 0 both
+    UPROPERTY() FString Trigger;
+    UPROPERTY() FString Bone;
+    UPROPERTY() FVector Offset = FVector::ZeroVector; // CryEngine axes, metres
+};
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCClipBinding
 {
@@ -39,6 +53,7 @@ struct SCBRIDGE_API FSCClipBinding
     // One per animation rate and length among the tracks: a sequence has one timeline, a merged clip several.
     UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<UAnimSequence>> Sequences;
     UPROPERTY() TArray<FSCBoneTrack> Tracks; // also provides a non-editor runtime evaluation path
+    UPROPERTY() TArray<FSCClipAudioEvent> AudioEvents; // WP-A1: of the source animations this binding's tracks play
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCImportedClip

@@ -87,7 +87,8 @@ TArray<FEmissiveSection> Collect(ASCVehicle* Vehicle, double MinNits)
                 !Material->GetVectorParameterValue(FHashedMaterialParameterInfo(FName(TEXT("EmissiveColor"))), Colour))
                 continue;
             const double Nits = double(Strength) * Colour.GetLuminance();
-            if (Nits < MinNits || Section.NumTriangles == 0) continue;
+            // A section that emits nothing (an unbound screen, WP-I1) is never an emitter, whatever the threshold.
+            if (Nits <= 0 || Nits < MinNits || Section.NumTriangles == 0) continue;
             // Contiguous parts: triangles joined through shared corners (positions welded at 0.1 mm, so UV / normal
             // seams do not split a strip). One emitter per part, shaped like it.
             TArray<FVector> Corner;

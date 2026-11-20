@@ -8,7 +8,10 @@
 #include "Cargo/SCCargoScenario.h"
 #include "Cargo/SCCargoFlightPath.h"
 #include "Cargo/SCCargoTug.h"
+#include "Cargo/SCCargoSpawn.h"
 #include "SCCargoBoxLibrary.h"
+#include "Tasks/Task.h"
+#include <atomic>
 
 class ASCVehicle;
 class ASCCargoContainer;
@@ -344,6 +347,29 @@ struct FSCCargoMoverState
     double Until = 0;
 };
 
+/** Reading the game's box records off the game thread (SCCargoSpawnLive.cpp): progress and cancel, and the result. */
+struct FSCCargoCatalogProgress
+{
+    std::atomic<int32> Done{0}, Total{0};
+    std::atomic<bool> bCancel{false};
+};
+struct FSCCargoCatalogResult
+{
+    TSharedPtr<FSCCargoBoxCatalog> Catalog;
+    FString Error;
+    int32 Hits = 0, Skipped = 0, Failed = 0, Unresolved = 0, Commodities = 0;
+    double Seconds = 0;
+};
+
+/** A live spawn after its confirm (SCCargoSpawnLive.cpp). */
+struct FSCCargoPendingSpawn
+{
+    FSCCargoSpawnRequest Request;
+    FSCCargoSpawnStatus Status;
+    double Since = 0;
+    TArray<FString> Entities; // the box packages its plan needs (waited for without planning again each frame)
+};
+
 struct FSCCargoState
 {
     TMap<TPair<TObjectKey<USCRigComponent>, int32>, FSCCargoMoverState> Movers;
@@ -373,6 +399,19 @@ struct FSCCargoState
     bool bLoosePlaced = false;   // the scenario's loose stock is down (WP-K2)
     TArray<int32> ObstacleIds;   // vehicle instances the scenario placed as obstacles (WP-K3)
     double LastScenarioWait = -1000;
+    // Live spawning (SCCargoSpawnLive.cpp): the box records (read on demand), the spawns after their confirm, and the
+    // default drone fleet a session without a scenario takes on with its first spawn (Scenario then holds the fleet).
+    bool bCatalogWanted = false;
+    ESCCargoCatalogState CatalogState = ESCCargoCatalogState::None;
+    FString CatalogError;
+    TSharedPtr<FSCCargoBoxCatalog> Catalog;
+    TSharedPtr<FSCCargoCatalogProgress> CatalogProgress;
+    UE::Tasks::TTask<FSCCargoCatalogResult> CatalogTask;
+    int32 CatalogGeneration = INDEX_NONE; // the viewer archive generation the records were read from
+    TOptional<FString> CatalogListing;    // sc.Cargo.Catalog [text] asked before the records were read: listed when they are
+    TArray<FSCCargoPendingSpawn> Spawns;
+    int32 NextSpawnId = 1;
+    bool bFleetRequested = false, bFleetTried = false, bDefaultFleet = false;
     FSCCargoBoxLibrary Library;
     bool bDebug = false;
     enum class ELookup : uint8 { None, Pending, Done };

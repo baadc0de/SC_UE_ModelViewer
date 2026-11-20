@@ -136,6 +136,81 @@ bool FSCRigPlayback::RunTest(const FString&)
     World->DestroyWorld(false);
     return true;
 }
+// WP-P5: two door geometries that share bone names (the C2's hold and top lift doors, CRUS_Starlifter_Lift_Doors.cga and
+// _Lift_Doors_Top.cga: the hold clip moves the cage too, 80 frames; the top clip 50) bind both clips to both rigs. A door
+// rig plays the clip authored for its own geometry (the clip's owner), never the other door's at random.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCRigClipOwner, "SCBridge.Rig.FragmentPrefersOwnClip",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCRigClipOwner::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    auto* Vehicle = World->SpawnActor<ASCVehicle>();
+    Vehicle->ClipCatalog = NewObject<USCClipCatalog>(Vehicle);
+    const TCHAR* Owners[] = {TEXT("Objects/Synthetic/Lift_Doors.cga"), TEXT("Objects/Synthetic/Lift_Doors_Top.cga")};
+    for (int32 I = 0; I < 2; ++I)
+    {
+        FSCDerivedMesh Data;
+        FSCRigNode Node;
+        Node.SourceName = TEXT("Door_Lift_Bottom");
+        Data.RigNodes.Add(Node);
+        USkeleton* Skeleton;
+        auto* Mesh = FSCSkeletonBuilder::Build(Data, Vehicle, Skeleton);
+        FString Error;
+        TestTrue(TEXT("rig"), FSCSkeletalMeshImporter::Build(Data, Mesh, Error));
+        auto* Rig = NewObject<USCRigComponent>(Vehicle);
+        Vehicle->AddInstanceComponent(Rig);
+        Rig->SetSkeletalMesh(Mesh);
+        Rig->OwnerEntity = FString(TEXT("Data/")) + Owners[I]; // interior placements are named by their cgf_path
+        Rig->RegisterComponent();
+        Rig->ResetPose();
+        Vehicle->Rigs.Add(Rig);
+        Vehicle->SkeletalMeshes.Add(Mesh);
+    }
+    for (int32 I = 0; I < 2; ++I)
+    {
+        FSCImportedClip Clip;
+        Clip.Id = I == 0 ? TEXT("hold_open") : TEXT("top_open");
+        Clip.Owner = Owners[I];
+        Clip.LastFrame = I == 0 ? 80 : 50;
+        Clip.Fps = 30;
+        for (USkeletalMesh* Mesh : Vehicle->SkeletalMeshes) // the shared bone binds the clip to both geometries
+        {
+            FSCClipBinding Binding;
+            Binding.Mesh = Mesh;
+            FSCBoneTrack Track;
+            Track.Bone = 1;
+            Track.bPosition = true;
+            Track.Fps = 30;
+            Track.Keys = {FTransform(FVector::ZeroVector), FTransform(FVector(0, -100, 0))};
+            Binding.Tracks.Add(Track);
+            Clip.Bindings.Add(Binding);
+        }
+        FSCClipFragment F;
+        F.Fragment = TEXT("SCItemDoor");
+        F.FragmentTags.Add(TEXT("Open"));
+        F.Scopes = {TEXT("SCItemDoor"), TEXT("SyncedEntity"), TEXT("DoorUser")};
+        F.Speed = 1;
+        F.OptionWeight = 1;
+        F.AnimationNames.Add(Clip.Id);
+        F.OptionId = Clip.Id.ToString(); // two options of one fragment (the real fragments differ by their JSON)
+        Clip.Fragments.Add(F);
+        Vehicle->ClipCatalog->Clips.Add(Clip);
+    }
+    int32 Own[2] = {0, 0};
+    for (int32 Try = 0; Try < 16; ++Try)
+        for (int32 R = 0; R < 2; ++R)
+        {
+            Vehicle->ResetPose();
+            TestTrue(TEXT("plays"), Vehicle->PlayFragmentAt(TEXT("SCItemDoor"), TEXT("Open"), Vehicle->Rigs[R]));
+            Own[R] += Vehicle->Playback.Num() == 1 && Vehicle->Playback[0].Clip == R;
+        }
+    TestEqual(TEXT("the hold door plays its own clip"), Own[0], 16);
+    TestEqual(TEXT("the top door plays its own clip"), Own[1], 16);
+    Vehicle->Destroy();
+    World->DestroyWorld(false);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCRigCyclic, "SCBridge.Rig.CyclicPositionAnchor",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCRigCyclic::RunTest(const FString&)

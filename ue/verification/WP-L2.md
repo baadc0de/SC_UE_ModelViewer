@@ -3,6 +3,10 @@
 Brief: [docs/work-packages/WP-L2-unshadowed-occlusion.md](../../docs/work-packages/WP-L2-unshadowed-occlusion.md).
 UE 5.9.0 preview-1, Vulkan SM6, MegaLights (DownsampleMode 0), 2026-11-12.
 
+> Historical record of the shader-patch implementation (`engine_patches.py`, `r.GeneralPurposeTweak`), both removed in
+> WP-E1 E1-7: the SSDO is now an engine feature of the fork (`r.SSDO*`, `SSDO*` post-process settings, `sc.Look.SSDO`),
+> verified against these patches in the E1-7 Result of `docs/work-packages/WP-E1-engine-fork-features.md`.
+
 ## Game data
 
 ```

@@ -5,7 +5,7 @@
 // -SCLod=<n> / -SCMip=<n> override them; -SCQuitAfterLoad exits (status 0 only if every load succeeded).
 // -SCScript=<file> runs "<delay seconds> <console command>" lines once a vehicle is loaded (see ue/README.md).
 // Console: sc.Load <entity>, sc.Unload, sc.Cancel, sc.Camera <orbit|fly|first>, sc.FP.* (first person),
-// sc.Player.* (player body, WP-P2). -SCPlayerWeapon=<n|none> / -SCPlayerView=fp|tp[,yaw[,distance]] apply once the
+// sc.Player.* (player body, WP-P2), sc.Lift.* (lifts, WP-P5). -SCPlayerWeapon=<n|none> / -SCPlayerView=fp|tp[,yaw[,distance]] apply once the
 // body is attached; -SCPlayerDemo[=<entity>] runs ue/scripts/routes/player-demo.txt (loading <entity> if given).
 #pragma once
 #include "CoreMinimal.h"
@@ -28,6 +28,7 @@ private:
     };
     void RegisterFirstPersonCommands();
     void RegisterPlayerCommands();
+    void RegisterLiftCommands(); // sc.Lift.* (WP-P5), SCLiftCommands.cpp
     void ApplyPlayerOptions(USCViewerSubsystem& S);
     void TickScript(USCViewerSubsystem& S);
     void RunStep(USCViewerSubsystem& S, const FStep& Step);

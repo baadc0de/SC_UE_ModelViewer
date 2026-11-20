@@ -48,8 +48,10 @@ uint32 SetupHash(const UStaticMeshComponent* C)
 
 bool FSCInstancing::UnderRig(const USceneComponent* C)
 {
+    // A rig's parts follow its bones, a lift's parts its moving anchor (WP-P5, tag SCLift): neither can be an instance of a
+    // component fixed to the vehicle root.
     for (const USceneComponent* P = C->GetAttachParent(); P; P = P->GetAttachParent())
-        if (P->IsA<USCRigComponent>()) return true;
+        if (P->IsA<USCRigComponent>() || P->ComponentHasTag(TEXT("SCLift"))) return true;
     return false;
 }
 
@@ -64,7 +66,7 @@ FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle)
     {
         // Exactly a plain component (not an instanced one or a subclass), registered, rigid, and a leaf.
         if (!C || C->GetClass() != UStaticMeshComponent::StaticClass() || !C->IsRegistered() || !C->GetStaticMesh() ||
-            !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || Emissive(C))
+            !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || Emissive(C) || C->ComponentHasTag(FSCInstancing::KeepTag))
             continue;
         ++Stats.Components;
         TArray<TArray<UStaticMeshComponent*>>& Bucket = Groups.FindOrAdd(SetupHash(C));

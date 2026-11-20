@@ -4,6 +4,7 @@
 // game-thread textures/MIDs) -> Assembling (components, lights, publish).
 #include "SCImportJob.h"
 #include "SCInstancing.h"
+#include "SCVehicleLifts.h"
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
@@ -11,6 +12,7 @@
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCLightAreas.h"
+#include "SCAudioSystem.h"
 #include "SCDirt.h"
 #include "SCEmissiveLights.h"
 #include "Dom/JsonObject.h"
@@ -18,8 +20,12 @@
 #include "SCViewerSettings.h"
 #include "SCRigComponent.h"
 #include "Cargo/SCCargoRecords.h"
+#include "Cargo/SCCargoPlanner.h"
+#include "SCHangarWaypoints.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "StaticMeshResources.h"
 #include "Async/Async.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "IImageWrapperModule.h"
@@ -87,6 +93,8 @@ struct FMeshSlot
     TArray<TPair<FString, FString>> PrepareWarnings; // (path, message), logged on the game thread
     TSet<int32> TranslucentSlots;
     TArray<int32> SlotTriangles;
+    TMap<int32, TArray<int32>> ScreenOwners, SoftScreenOwners; // WP-I1: screen slot -> rig nodes owning its rigid / skinned triangles
+    TMap<int32, FSCScreenFaceGeometry> ScreenGeometry; // WP-P5 floor panel: screen slot -> its triangles (the build drops the description)
     TMap<int32, FSCClipBinding> Bindings;
     bool bAnimated = false;
     FSCDerivedMesh Soft;
@@ -150,6 +158,8 @@ struct FSCImportJob::FState
     TMap<FString, TSet<int32>> GamePhysicsVariants; // per mesh asset: variants holding the game's colliders (WP-P3)
     TSet<FString> GamePhysicsReplacesRender; // mesh assets whose every blocking collider was built: render ignores the pawn
     TMap<FString, TArray<int32>> MeshSlotTriangles; // host-paint weighting for POM decal tint
+    TMap<FString, TMap<int32, FSCScreenFaceGeometry>> MeshScreenGeometry; // WP-P5 floor panel: per mesh asset, screen slot -> triangles
+    TMap<FString, TMap<int32, TArray<int32>>> MeshScreenOwners, MeshSoftScreenOwners; // WP-I1: per mesh asset, screen slot -> owning rig nodes (rigid / skinned)
 
     void Warn(const FString& Path, const FString& Message)
     {
@@ -608,6 +618,8 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             if (IsTranslucent(Data.MaterialFamilies[Slot2])) TranslucentSlots.Add(Slot2);
         TArray<FString> Paths;
         Sidecars.MultiFind(Path, Paths);
+        TSet<int32> ScreenSlots; // DisplayScreen submaterials in any sidecar of this mesh: the faces ui_bindings may light
+        TSet<int32> DescribedSplit; // slots the material descriptions send to the non-Nanite split
         for (const auto& Sidecar : Paths)
         {
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; });
@@ -615,17 +627,24 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             for (int32 MaterialSlot = 0; MaterialSlot < Data.MaterialNames.Num(); ++MaterialSlot)
                 if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Data.MaterialSourceNames, MaterialSlot))
                 {
+                    if (Sub->ShaderFamily == TEXT("DisplayScreen")) ScreenSlots.Add(MaterialSlot);
                     const bool bGlowTarget = Manifest.EngineGlow.Targets.ContainsByPredicate([&](const FSCEngineGlowTarget& T) {
                         return T.MaterialSidecar == Sidecar && T.SourceMaterialIndex == Sub->SourceIndex;
                     });
-                    if (FSCMaterialBuilder::RequiresNonNanite(*Sub, bGlowTarget)) TranslucentSlots.Add(MaterialSlot); // D6
+                    if (FSCMaterialBuilder::RequiresNonNanite(*Sub, bGlowTarget)) { TranslucentSlots.Add(MaterialSlot); DescribedSplit.Add(MaterialSlot); } // D6
                 }
         }
+        // A screen's coverage is its description's (M_SC_Screen opaque, or _Translucent for authored partial opacity): a
+        // GLB-only BLEND on a screen slot whose sidecar describes it opaque must not put an opaque screen in the split.
+        for (int32 Screen : ScreenSlots)
+            if (Data.BlendedSlots.Contains(Screen) && !DescribedSplit.Contains(Screen)) TranslucentSlots.Remove(Screen);
         Slot.TranslucentSlots = TranslucentSlots;
         Slot.SlotTriangles.SetNumZeroed(Data.MaterialNames.Num());
         for (auto T : Data.Description.Triangles().GetElementIDs())
-            if (Slot.SlotTriangles.IsValidIndex(Data.Description.GetTrianglePolygonGroup(T).GetValue()))
-                ++Slot.SlotTriangles[Data.Description.GetTrianglePolygonGroup(T).GetValue()];
+        {
+            const int32 Group = Data.Description.GetTrianglePolygonGroup(T).GetValue();
+            if (Slot.SlotTriangles.IsValidIndex(Group)) ++Slot.SlotTriangles[Group];
+        }
         // Binding is CPU-only. Static assets with no receiving channels retain the U1/U2 path.
         for (int32 Index = 0; Index < ClipJson.Num(); ++Index)
         {
@@ -644,11 +663,22 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
         for (auto T : Data.Description.Triangles().GetElementIDs())
         {
             const auto V = Data.Description.GetTriangleVertices(T);
-            if (Slot.bAnimated && Data.SkinWeights.Contains(V[0]))
+            const bool bSoft = Slot.bAnimated && Data.SkinWeights.Contains(V[0]);
+            if (bSoft)
                 Soft.Add(T);
             else
                 Rigid.FindOrAdd(Slot.bAnimated ? Data.TriangleNodes.FindRef(T) : INDEX_NONE).Add(T);
+            // WP-I1: which nodes draw each screen slot, per drawn mesh (the skeletal soft part, or the rigid parts), so a
+            // binding's helper can claim its own face.
+            const int32 Group = Data.Description.GetTrianglePolygonGroup(T).GetValue();
+            if (ScreenSlots.Contains(Group))
+                (bSoft ? Slot.SoftScreenOwners : Slot.ScreenOwners).FindOrAdd(Group).AddUnique(Data.TriangleNodes.FindRef(T, INDEX_NONE));
         }
+        for (int32 Screen : ScreenSlots)
+            if (FSCScreenFaceGeometry G; FSCScreenFaceGeometry::FromDescription(Data.Description, Screen,
+                    [&](FTriangleID T) { return Data.TriangleNodes.FindRef(T, INDEX_NONE); },
+                    [&](FTriangleID T) { return Slot.bAnimated && Data.SkinWeights.Contains(Data.Description.GetTriangleVertices(T)[0]); }, G))
+                Slot.ScreenGeometry.Add(Screen, MoveTemp(G));
         Slot.SoftTriangles = Soft.Num();
         Slot.RigidGroups = Rigid.Num();
         if (Slot.bAnimated)
@@ -770,6 +800,9 @@ void FSCImportJob::FState::BeginBuild(FMeshSlot& Slot)
     Slot.bBuildBegun = true;
     const FString& Path = Slot.Path;
     MeshSlotTriangles.Add(Path, MoveTemp(Slot.SlotTriangles));
+    MeshScreenOwners.Add(Path, MoveTemp(Slot.ScreenOwners));
+    MeshScreenGeometry.Add(Path, MoveTemp(Slot.ScreenGeometry));
+    MeshSoftScreenOwners.Add(Path, MoveTemp(Slot.SoftScreenOwners));
     Slot.Package = CreatePackage(*AssetPackage(Session, Path));
     Slot.Package->SetFlags(RF_Transient);
     KeepAlive.Add(Slot.Package);
@@ -1023,9 +1056,110 @@ void FSCImportJob::FState::Assemble()
         }
         if (bAny) V->PaintSlots.Add(MoveTemp(Entry));
     };
+    // WP-I1: each screen face (a slot drawn by a screen master with triangles in the drawn variant / LOD) shows the
+    // image its own binding resolves to (FSCSceneInstance::ScreenSlotImage); every other screen face stays dark glass.
+    int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;
+    TSet<FString> ScreenImagesBound;
+    TSet<FString> ScreenStateImagesBound; // I1-3 state images bound to faces (beside the default images)
+    // WP-P5 floor panel: blank faces of placements that send interaction links (a lift panel may draw its list there).
+    TArray<FSCBlankScreenFace> BlankFaces;
+    TArray<FSCButtonFace> ButtonFaces; // C2 fixes: faces of the game's panel UIs with clickable nodes (light panels)
+    int32 PlacingInterior = INDEX_NONE; // the interior whose placements Place() is placing (INDEX_NONE: children, the root)
+    auto StaticSlotTriangles = [](const UStaticMesh* Mesh, int32 Slot) {
+        uint32 N = 0;
+        if (const FStaticMeshRenderData* R = Mesh ? Mesh->GetRenderData() : nullptr; R && !R->LODResources.IsEmpty())
+            for (const FStaticMeshSection& S : R->LODResources[0].Sections) N += S.MaterialIndex == Slot ? S.NumTriangles : 0;
+        return N;
+    };
+    auto SkeletalSlotTriangles = [](USkeletalMesh* Mesh, int32 Slot) {
+        uint32 N = 0;
+        if (const FSkeletalMeshRenderData* R = Mesh ? Mesh->GetResourceForRendering() : nullptr; R && !R->LODRenderData.IsEmpty())
+            for (const FSkelMeshRenderSection& S : R->LODRenderData[0].RenderSections) N += S.MaterialIndex == Slot ? S.NumTriangles : 0;
+        return N;
+    };
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
+        bool bScreenBound = false;
+        ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };
+        const TMap<int32, TArray<int32>>* ScreenOwners = MeshScreenOwners.Find(I.MeshAsset);
+        const TMap<int32, TArray<int32>>* SoftScreenOwners = MeshSoftScreenOwners.Find(I.MeshAsset);
+        TSet<FString> MeshNodes;
+        // The screen instance for a slot, or null to keep Find's (a non-screen slot, or a dark face). Owner: the rig node
+        // a rigid part variant belongs to (all its triangles do), INDEX_NONE for the whole mesh. Triangles: the slot's
+        // triangles in the drawn variant / LOD (an unused slot binds and counts nothing).
+        auto ScreenMaterial = [&](const FSCSubmaterial* Sub, int32 Slot, int32 Owner, uint32 Triangles, bool bSoft, UMeshComponent* Target) -> UMaterialInterface* {
+            if (!Options.bImportMaterials || !Sub || !E.Mesh || !Triangles || !Materials.IsScreen(I.MaterialSidecar, I.PaletteId, Sub->Index))
+                return nullptr;
+            TArray<TArray<FString>> Chains; // per owning node: its name, then its ancestors' (lower case)
+            const TMap<int32, TArray<int32>>* Map = bSoft ? SoftScreenOwners : ScreenOwners;
+            if (const TArray<int32>* Owners = Map ? Map->Find(Slot) : nullptr)
+                for (int32 Node : *Owners)
+                {
+                    if (Owner != INDEX_NONE && Node != Owner) continue;
+                    TArray<FString>& Chain = Chains.AddDefaulted_GetRef();
+                    for (int32 N = Node; E.Mesh->RigNodes.IsValidIndex(N); N = E.Mesh->RigNodes[N].Parent) Chain.Add(E.Mesh->RigNodes[N].SourceName.ToLower());
+                }
+            if (MeshNodes.IsEmpty())
+                for (const FSCRigNode& Node : E.Mesh->RigNodes) MeshNodes.Add(Node.SourceName.ToLower());
+            bool bAmbiguous = false;
+            const FString Image = Chains.IsEmpty() ? FString() : I.ScreenSlotImage(MeshNodes, Chains, &bAmbiguous);
+            ScreenAmbiguousSlots += bAmbiguous;
+            UMaterialInterface* Screen = Image.IsEmpty() ? nullptr : Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, Image);
+            if (Screen) { ScreenImagesBound.Add(Image); ++ScreenBoundSlots; bScreenBound = true; }
+            else
+            {
+                ++ScreenDarkSlots;
+                FSCBlankScreenFace Blank;
+                const TMap<int32, FSCScreenFaceGeometry>* MeshFaces = I.InteractionLinks.IsEmpty() ? nullptr : MeshScreenGeometry.Find(I.MeshAsset);
+                const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr;
+                if (Captured && !(Blank.Geometry = Captured->Select(Owner, bSoft)).Positions.IsEmpty())
+                {
+                    Blank.Component = Target; Blank.Slot = Slot; Blank.Panel = E.Anchor;
+                    Blank.MakeMaterial = [Mats = &Materials, Sidecar = I.MaterialSidecar, Palette = I.PaletteId, Ordinal = Sub->Index](UTexture* Image) -> UMaterialInterface* {
+                        return Mats->CreateScreen(Sidecar, Palette, Ordinal, Image);
+                    };
+                    BlankFaces.Add(MoveTemp(Blank));
+                }
+            }
+            // I1-3: the panel owner's other states, one instance each; the face swaps them (ASCVehicle::RefreshPanelScreens).
+            if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->PanelStateImages().IsEmpty())
+            {
+                FSCScreenFace& Face = V->ScreenFaces.AddDefaulted_GetRef();
+                Face.Component = Target; Face.Slot = Slot; Face.Panel = E.Anchor; Face.Default = Screen; Face.Image = Image;
+                for (const FSCUiStateImage& State : Binding->PanelStateImages())
+                    if (UMaterialInterface* M = Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, State.ImagePath))
+                    {
+                        Face.States.Add(State.Key(), M);
+                        ScreenStateImagesBound.Add(State.ImagePath);
+                    }
+                // Its slot is swapped per component: never consolidated into a shared instance (FSCInstancing).
+                Target->ComponentTags.AddUnique(FSCInstancing::KeepTag);
+            }
+            // C2 fixes: a render with clickable nodes (a light panel) is operated on its face (ASCVehicle::BuildButtonPanels),
+            // whether or not the owner has other state renders.
+            if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->Buttons.IsEmpty())
+            {
+                const TMap<int32, FSCScreenFaceGeometry>* MeshFaces = Binding->Buttons.IsEmpty() ? nullptr : MeshScreenGeometry.Find(I.MeshAsset);
+                if (const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr; Captured && !I.EntityId.IsEmpty())
+                {
+                    FSCButtonFace Operable;
+                    Operable.Geometry = Captured->Select(Owner, bSoft);
+                    if (!Operable.Geometry.Positions.IsEmpty())
+                    {
+                        Operable.Component = Target; Operable.Slot = Slot; Operable.Panel = E.Anchor;
+                        Operable.Interior = PlacingInterior; Operable.EntityId = I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
+                        Operable.Buttons = Binding->Buttons; Operable.ImageSizePx = Binding->ImageSizePx;
+                        Operable.StateTypes = Binding->StateTypes; Operable.StateImages = Binding->PanelStateImages(); Operable.DefaultImage = Image;
+                        Operable.MakeMaterial = [Mats = &Materials, Sidecar = I.MaterialSidecar, Palette = I.PaletteId, Ordinal = Sub->Index](UTexture* Img) -> UMaterialInterface* {
+                            return Mats->CreateScreen(Sidecar, Palette, Ordinal, Img);
+                        };
+                        ButtonFaces.Add(MoveTemp(Operable));
+                    }
+                }
+            }
+            return Screen;
+        };
         FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
                                                               bAtHelper, FSCMeshImporter::InCryFrame(I.SourceTransformBasis, bAtHelper));
         // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
@@ -1058,6 +1192,8 @@ void FSCImportJob::FState::Assemble()
             E.Rig->SetSkeletalMesh(*RigMesh);
             E.Rig->MeshAsset = I.MeshAsset;
             E.Rig->OwnerEntity = I.EntityName;
+            // C2 fixes: the door data of the instance that carries the rig (its spawn state, fragment tags, port links).
+            if (I.Door.bValid || !I.ItemPortLinks.IsEmpty()) V->DoorRecords.Add(E.Rig, {I.Door, I.ItemPortLinks});
             E.Rig->SetCollisionProfileName(TEXT("NoCollision"));
             if (Options.bBuildCollision)
                 for (const FMeshSlot& Slot : Slots)
@@ -1076,8 +1212,9 @@ void FSCImportJob::FState::Assemble()
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
                     if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
                     {
-                        E.Rig->SetMaterial(Slot, Mat);
-                        RecordPaint(I, E.Rig, Slot, *E.Mesh);
+                        UMaterialInterface* Screen = ScreenMaterial(Sub, Slot, INDEX_NONE, SkeletalSlotTriangles(*RigMesh, Slot), true, E.Rig);
+                        E.Rig->SetMaterial(Slot, Screen ? Screen : Mat);
+                        if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh); // a panel's image does not follow the paint
                     }
             const double RigStart = FPlatformTime::Seconds();
             E.Rig->RegisterComponent();
@@ -1158,10 +1295,13 @@ void FSCImportJob::FState::Assemble()
                     if (bNanite && Translucent.Contains(Slot)) continue;
                     const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot);
                     UMaterialInterface* Material = Sub ? Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host) : nullptr;
+                    UMaterialInterface* Screen = Material ? ScreenMaterial(Sub, Slot, Node, StaticSlotTriangles(Mesh, Slot), false, C) : nullptr;
+                    if (Screen) Material = Screen;
                     // A split (decal/glass/glow) section without its instance is hidden, never drawn opaque.
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
                     if (Material) C->SetMaterial(Slot, Material);
-                    if (Material && Material != Materials.Invisible()) RecordPaint(I, C, Slot, *E.Mesh);
+                    // A panel's image does not follow the paint.
+                    if (Material && Material != Materials.Invisible() && !Screen) RecordPaint(I, C, Slot, *E.Mesh);
                     if (Material && V->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
                 }
                 const double RegisterStart = FPlatformTime::Seconds();
@@ -1224,6 +1364,7 @@ void FSCImportJob::FState::Assemble()
     V->PhysicsGridBounds.Init();
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
+    int32 PanelsWithoutReachField = 0;     // door panels of an export before cache format 40 (no interaction_distance)
     if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
     for (const auto& I : Manifest.Children)
     {
@@ -1243,7 +1384,25 @@ void FSCImportJob::FState::Assemble()
         {
             EntitiesByPort.Add(SCCargoRecords::PortKey(I.PortPath), Placed);
             V->PortAnchors.Add(SCCargoRecords::PortKey(I.PortPath), Placed.Anchor);
+            if (Placed.Rig) V->PortRigs.Add(SCCargoRecords::PortKey(I.PortPath), Placed.Rig); // item_port_links deliver here
         }
+        // A panel in a door's loadout operates that door (the rear ramp's pads, the front hatch's): its face follows the door.
+        if (Placed.Anchor && I.UiBindings.ContainsByPredicate([](const FSCUiBinding& B) { return B.IsOperatingPanel(); }))
+            for (USceneComponent* C = Placed.Anchor->GetAttachParent(); C; C = C->GetAttachParent())
+                if (auto* Rig = Cast<USCRigComponent>(C))
+                {
+                    if (V->DoorRecords.Contains(Rig) && V->DoorRecords[Rig].Door.bValid)
+                    {
+                        V->DoorControls.Add(Placed.Anchor, Rig);
+                        for (const FSCUiBinding& B : I.UiBindings)
+                            if (B.IsOperatingPanel() && !B.bPropagated) // the panel's own screen, not one it carries for another entity
+                            {
+                                V->SetPanelReach(Placed.Anchor, B.InteractionDistance);
+                                PanelsWithoutReachField += !B.bInteractionDistanceExported;
+                            }
+                    }
+                    break;
+                }
     }
     // WP-K1: one anchor per inventory container in the container entity's frame, axes X = SC y, Y = SC x, Z = SC z
     // (the frame placed items use: SC (x, y, z) m -> (y, x, z) cm). A loadout grid hangs on its parent item's helper
@@ -1269,6 +1428,15 @@ void FSCImportJob::FState::Assemble()
         V->InventoryAnchors[C] = NewAnchor(TEXT("Inventory_") + R.EntityName, Parent, ContainerFrame(R.LocalMatrix, bHelper));
         V->InventoryOwnerRigs[C] = Owner->Rig;
     }
+    // WP-A1: the package's audio (audio.json, its media and impulse responses), placed per interior below.
+    FString AudioError;
+    TSharedPtr<FSCAudioScene> Audio = FSCAudioScene::Load(*Source, Manifest.ScenePath, AudioError);
+    if (Audio) Audio->Vehicle = V;
+    else UE_LOG(LogSCImport, Display, TEXT("AUDIO_NONE %s: %s"), *Manifest.ScenePath, *AudioError);
+    // Hangar waypoints (environments): the records the rule chooses, anchored per interior below, in the rule's order.
+    const TArray<FSCWaypointCandidate> WaypointCandidates = Options.bEnvironment ? SCHangarWaypoints::Select(Manifest) : TArray<FSCWaypointCandidate>();
+    TArray<FSCWaypointSource> WaypointSources;
+    WaypointSources.SetNum(WaypointCandidates.Num());
     for (int32 InteriorIndex = 0; InteriorIndex < Manifest.Interiors.Num(); ++InteriorIndex)
     {
         const FSCInterior& Interior = Manifest.Interiors[InteriorIndex];
@@ -1280,31 +1448,79 @@ void FSCImportJob::FState::Assemble()
             Interior.Container.EntityName, Parent,
             FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
         V->InteriorAnchors.Add(Container);
+        V->InteriorHelperFrames.Add(bHelper);
+        V->InteriorSceneIndex.Add(InteriorIndex);
+        const int32 LightsBefore = V->LightStates.Num();
         FSCLightImporter::Build(
             *Source, Interior.Container, V, Container, [](const FString&) -> USceneComponent* { return nullptr; }, Result.Warnings, bHelper);
+        for (int32 L = LightsBefore; L < V->LightStates.Num(); ++L) V->LightStates[L].Interior = InteriorIndex; // group ids are per container
+        PlacingInterior = InteriorIndex; // the interior Place() runs for (button panels keep it)
+        ON_SCOPE_EXIT { PlacingInterior = INDEX_NONE; };
         const int32 AreasBefore = V->LightAreas.Num();
         FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
         TMap<FString, FEntity> ById; // entity ids are unique within one container
-        for (const auto& P : Interior.Placements)
-            if (CanPlace(P))
+        TMap<int32, FEntity> ByPlacement;
+        for (int32 PlacementIndex = 0; PlacementIndex < Interior.Placements.Num(); ++PlacementIndex)
+            if (const auto& P = Interior.Placements[PlacementIndex]; CanPlace(P))
             {
                 FEntity Placed = Place(P, Container, bHelper, false);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
+                ByPlacement.Add(PlacementIndex, Placed);
             }
-        // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel.
+        // Waypoints of this interior: a transit gateway at its entity frame (an anchor of its own: the entity has no
+        // geometry), a panel at its placement's anchor.
+        for (int32 WaypointIndex = 0; WaypointIndex < WaypointCandidates.Num(); ++WaypointIndex)
+        {
+            const FSCWaypointCandidate& Candidate = WaypointCandidates[WaypointIndex];
+            if (Candidate.Interior != InteriorIndex) continue;
+            WaypointSources[WaypointIndex].Source = Candidate.Source;
+            WaypointSources[WaypointIndex].Label = Candidate.Label;
+            if (Candidate.Source == ESCWaypointSource::TransitGateway && Interior.Entities.IsValidIndex(Candidate.Index))
+                WaypointSources[WaypointIndex].Anchor = NewAnchor(TEXT("Waypoint_") + Interior.Entities[Candidate.Index].EntityName, Container,
+                                                      ContainerFrame(Interior.Entities[Candidate.Index].LocalMatrix, bHelper));
+            else if (const FEntity* Placed = ByPlacement.Find(Candidate.Index); Placed && Candidate.Source == ESCWaypointSource::Panel)
+                WaypointSources[WaypointIndex].Anchor = Placed->Anchor;
+        }
+        if (Audio)
+        {
+            Audio->AddInterior(InteriorIndex, Container, bHelper, Interior.AudioSpotJson, Interior.AudioAreaJson, Result.Warnings);
+            for (const auto& P : Interior.Placements)
+                if (const FEntity* Placed = ById.Find(P.EntityId); Placed && Audio->Manifest.Classes.Contains(P.EntityClassGuid))
+                    Audio->Entities.Add(FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower()),
+                                        {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
+        }
+        // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel. A lift carriage links
+        // its gate (a door) but operates it itself: an entity that is a lift is not a pad (WP-P5).
+        const TSet<FString> Carriages = SCVehicleLifts::CarriageIds(Interior);
         for (const auto& P : Interior.Placements)
         {
             const FEntity* Panel = ById.Find(P.EntityId);
-            if (!Panel || !Panel->Anchor) continue;
+            if (!Panel || !Panel->Anchor || Carriages.Contains(P.EntityId)) continue;
             TArray<FString> Targets = P.Links;
             if (!P.LoadoutOwnerEntityId.IsEmpty()) Targets.Add(P.LoadoutOwnerEntityId);
             for (const FString& Target : Targets)
                 if (const FEntity* Door = ById.Find(Target); Door && Door->Rig && Door->Anchor != Panel->Anchor)
                 {
                     V->DoorControls.Add(Panel->Anchor, Door->Rig);
+                    for (const FSCUiBinding& B : P.UiBindings)
+                        if (B.IsOperatingPanel() && !B.bPropagated)
+                        {
+                            V->SetPanelReach(Panel->Anchor, B.InteractionDistance);
+                            PanelsWithoutReachField += !B.bInteractionDistanceExported;
+                        }
                     break;
                 }
         }
+        // WP-P5: the interior's interaction links and lifts (carriage and riders re-parented under a moving anchor).
+        {
+            TMap<FString, FSCLiftBuildPart> Parts;
+            for (const auto& [Id, Placed] : ById) Parts.Add(Id, {Placed.Anchor, Placed.Rig});
+            SCVehicleLifts::BuildInteriorLifts(V, InteriorIndex, Interior, Container, bHelper, Parts);
+        }
+        // C2 fixes: the interior's light groups (what each receives; its lights carry its id).
+        for (const FSCInteriorEntity& Entity : Interior.Entities)
+            if (Entity.Kind == TEXT("light_group"))
+                V->LightGroups.Add({InteriorIndex, Entity.EntityId, Entity.EntityName, Entity.Links, Entity.LightGroupInteractions, FString()});
         // WP-K1: the interior's inventory containers in its placement frame; the owner rig is the first linked entity's.
         for (int32 C = 0; C < Manifest.InventoryContainers.Num(); ++C)
         {
@@ -1349,7 +1565,44 @@ void FSCImportJob::FState::Assemble()
             V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName,
                 FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
-    UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d"), V->DoorControls.Num(), V->DoorSensors.Num());
+    // Inventory waypoints stand on the container's floor centre: the container entity sits at the centre of its lattice
+    // floor, grid_pos_offset adds to it (USCCargoGridComponent::LatticeToWorld).
+    for (int32 WaypointIndex = 0; WaypointIndex < WaypointCandidates.Num(); ++WaypointIndex)
+        if (const FSCWaypointCandidate& Candidate = WaypointCandidates[WaypointIndex];
+            Candidate.Source == ESCWaypointSource::Inventory && V->InventoryAnchors.IsValidIndex(Candidate.Index) && V->InventoryAnchors[Candidate.Index])
+        {
+            WaypointSources[WaypointIndex].Source = Candidate.Source;
+            WaypointSources[WaypointIndex].Label = Candidate.Label;
+            WaypointSources[WaypointIndex].Anchor = V->InventoryAnchors[Candidate.Index].Get();
+            WaypointSources[WaypointIndex].Local = FSCCargoLattice::FromSC(Manifest.InventoryContainers[Candidate.Index].Container.GridPosOffset) * 100.0;
+        }
+    for (FSCWaypointSource& WaypointSource : WaypointSources)
+        if (WaypointSource.Anchor.IsValid()) V->WaypointSources.Add(MoveTemp(WaypointSource));
+    if (Options.bEnvironment)
+        UE_LOG(LogSCImport, Display, TEXT("HANGAR_WAYPOINT_SOURCES chosen=%d anchored=%d"), WaypointCandidates.Num(), V->WaypointSources.Num());
+    UE_LOG(LogSCImport, Display, TEXT("DOOR_LINKS panels=%d sensors=%d panel_reach=%d max_reach_cm=%.0f"), V->DoorControls.Num(), V->DoorSensors.Num(),
+           V->PanelReach.Num(), V->MaxPanelReach);
+    UE_LOG(LogSCImport, Display,
+           TEXT("SCREEN_BIND instances=%d images=%d panel_images=%d skipped_mfd=%d slots_bound=%d slots_dark=%d ambiguous=%d unclassified=%d"),
+           ScreenBoundInstances, ScreenImagesBound.Num(), Materials.PanelImages.Num(), Materials.SkippedVehicleScreens, ScreenBoundSlots,
+           ScreenDarkSlots, ScreenAmbiguousSlots, Materials.UnclassifiedBindings);
+    // I1-3: faces whose image follows their panel's state, and the state images they hold; then the faces' initial state.
+    const int32 InitialSwaps = V->RefreshPanelScreens();
+    UE_LOG(LogSCImport, Display, TEXT("SCREEN_STATES faces=%d state_images=%d initial_swaps=%d"), V->ScreenFaces.Num(),
+           ScreenStateImagesBound.Num(), InitialSwaps);
+    // WP-P5 floor panel: lift panels draw their stops on a blank face (appended to ScreenFaces after the counts above).
+    V->BuildFloorPanels(BlankFaces, [&](const FString& Path) { return Materials.Texture(Path); });
+    V->BuildButtonPanels(ButtonFaces, [&](const FString& Path) { return Materials.Texture(Path); });
+    if (PanelsWithoutReachField)
+        Warn(Manifest.ScenePath, FString::Printf(TEXT("%d door-panel UI bindings carry no interaction_distance (an export before cache format 40): ")
+            TEXT("those panels are operated from 3 m only (the C2's exterior pads are out of reach); re-export with the current exporter"),
+            PanelsWithoutReachField));
+    if (Materials.UnclassifiedBindings)
+        Warn(Manifest.ScenePath, FString::Printf(TEXT("%d UI bindings carry no screen role (an export before source_item_type, or an unresolved ")
+            TEXT("owner): their screens stay dark; re-export with the current exporter (cache format 30) to show door and lift panel images"),
+            Materials.UnclassifiedBindings));
+    Result.ScreenBoundInstances = ScreenBoundInstances; Result.ScreenBoundSlots = ScreenBoundSlots;
+    Result.ScreenDarkSlots = ScreenDarkSlots; Result.ScreenAmbiguousSlots = ScreenAmbiguousSlots;
     UE_LOG(LogSCImport, Display, TEXT("PAINTS variants=%d slots=%d"), Manifest.Paints.Num(), V->PaintSlots.Num());
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());
@@ -1364,6 +1617,8 @@ void FSCImportJob::FState::Assemble()
     }
     if (!V->Lights.IsEmpty()) FSCEmissive::SetLumen(V, USCViewerSettings::Get()->bEmissiveInLumen); // ships and environments, not the player kit
     if (EffectOnlySkipped) UE_LOG(LogSCImport, Display, TEXT("EFFECT_ONLY_PLACEMENTS skipped=%d"), EffectOnlySkipped);
+    if (Audio && Options.World->IsGameWorld())
+        if (USCAudioSubsystem* AudioSystem = USCAudioSubsystem::Get(V)) AudioSystem->AddScene(Audio.ToSharedRef());
     if (Options.bPublish)
     {
         V->BuildExploration();

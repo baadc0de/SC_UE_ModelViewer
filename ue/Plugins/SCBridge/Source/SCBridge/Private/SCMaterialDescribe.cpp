@@ -327,6 +327,51 @@ void HardSurfaceStencil(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A,
         D.Vectors.Add(*FString::Printf(TEXT("StencilColor%d"), I + 1), C);
     }
 }
+/** DisplayScreen with a render-to-texture face (WP-I1, M_SC_Screen): the game draws it as an opaque surface whose
+ *  emission is the run-time image x the authored glow. Here:
+ *    base colour = the authored BackColour (public param; the colour of the unlit panel);
+ *    F0 = the authored Specular (the masters' 0.04 when absent, reported), with the look's glass reflectance;
+ *    gloss = Shininess / 255, or the DDNA when the material has one (SurfaceGloss);
+ *    emission = ScreenImage (bound per panel instance from ui_bindings; black = none) x the authored rule (Emission:
+ *    EmissiveColor tint, EmissiveStrength = the game's MaterialGlowToLinearGlow of Glow).
+ *  The emission follows DisplayScreenPS (WP-I1 fix pass): the image through MonitorEffects_ApplyViewingAngle (authored
+ *  EmissiveContrast / EmissiveSaturation / ViewingAngle / ViewAngleMode), x the glow, x %DBA_GLOBAL's
+ *  GetGlobalDBAMultiplier_HDR (ScreenDBA and its EV bounds), x the glass transmittance of the authored Diffuse.
+ *  Not applied: the pixel grid (its map is not exported), interference, dirt, cracks and condensation. */
+void Screen(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
+{
+    FLinearColor Back = FLinearColor::Black;
+    if (!A.Params.Contains(TEXT("BackColour")) || !ParseRgb(A.Params[TEXT("BackColour")], Back))
+        D.Warnings.Add(TEXT("DisplayScreen without BackColour: the unlit face is drawn black"));
+    D.Vectors.Add(TEXT("ScreenBackColor"), Back);
+    if (A.Attr.Contains(TEXT("Specular"))) D.Vectors.Add(TEXT("SpecularColor"), A.Color(TEXT("Specular"), FLinearColor::Black));
+    else D.Warnings.Add(TEXT("DisplayScreen without an authored Specular: reflectance falls back to the master's 0.04"));
+    if (D.bTwoSided) D.Warnings.Add(TEXT("two-sided DisplayScreen: M_SC_Screen is single-sided"));
+    SurfaceGloss(D, Sub, A);
+    Emission(D, Sub, A);
+    // DisplayScreenPS (WP-I1 fix pass; ue/verification and WP-I1 "Fix pass"): emission = (front + back emission) x
+    // (1 - glass opacity 0) x transmittance, the back emission = MonitorEffects_ApplyViewingAngle(image, N.V) x the glow
+    // x, under %DBA_GLOBAL, GetGlobalDBAMultiplier_HDR. The master evaluates the viewing-angle grade and the DBA
+    // multiplier per pixel from these constants; the transmittance is the GlassShared absorption of the authored
+    // Diffuse at normal incidence (path 1 x the layer height 1).
+    const FSCStarEngine& Game = FSCStarEngine::Get();
+    D.Scalars.Add(TEXT("ScreenDBA"), HasToken(Sub, TEXT("DBA_GLOBAL")) ? 1.f : 0.f);
+    D.Scalars.Add(TEXT("DBAMinNits"), float(Game.NitsAtEV(Game.DBAMinAdaptedEV)));
+    D.Scalars.Add(TEXT("DBAMaxNits"), float(Game.NitsAtEV(Game.DBAMaxAdaptedEV)));
+    D.Scalars.Add(TEXT("DBANitsPerUnit"), float(Game.DBAMiddleGrey * Game.SceneUnitNits));
+    D.Scalars.Add(TEXT("DBAExposureGrey"), float(Game.MiddleGrey));
+    D.Scalars.Add(TEXT("EmissiveContrast"), A.Param(TEXT("EmissiveContrast"), float(Game.MonitorEmissiveContrastDefault)));
+    D.Scalars.Add(TEXT("EmissiveSaturation"), A.Param(TEXT("EmissiveSaturation"), float(Game.MonitorEmissiveSaturationDefault)));
+    D.Scalars.Add(TEXT("ViewingAngle"), A.Param(TEXT("ViewingAngle"), float(Game.MonitorViewingAngleDefault)));
+    D.Scalars.Add(TEXT("ViewAngleMode"), A.Param(TEXT("ViewAngleMode"), float(Game.MonitorViewAngleModeDefault)));
+    const FLinearColor Diffuse = A.Color(TEXT("Diffuse"), FLinearColor::White);
+    auto Transmit = [&Game](float C) { return float(FMath::Exp(-(1.0 / FMath::Max(double(C), Game.GlassColourFloor) - 1.0) * Game.GlassDensityScale)); };
+    D.Vectors.Add(TEXT("ScreenTransmittance"), FLinearColor(Transmit(Diffuse.R), Transmit(Diffuse.G), Transmit(Diffuse.B)));
+    // The emission is the bound image x the glow: an unbound screen (black image) emits nothing, and says so in its
+    // strength, which the emitter tools read (sc.Emissive.Lights / Report). FindScreen restores it with the image.
+    D.ScreenGlow = D.Scalars.FindRef(TEXT("EmissiveStrength"));
+    D.Scalars.Add(TEXT("EmissiveStrength"), 0.f);
+}
 bool IsWear(const FObj& Layer) { return Str(Layer, TEXT("name")).StartsWith(TEXT("Wear"), ESearchCase::IgnoreCase); }
 /** GlassPBR, the game's glassLib.cfib GlassShared (ue/verification/WP-U3b.md §14). The glass is a clear dielectric
  *  over what is behind it: base-layer albedo 0, Reflectance = MatSpecColor.rrr, and a transmissive colour that
@@ -590,6 +635,9 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     else if (F == TEXT("LayerBlend_V2") || F == TEXT("Layer")) D.Master = ESCMaster::Layered;
     else if (F == TEXT("GlassPBR")) D.Master = ESCMaster::Glass;
     else if (F == TEXT("MeshDecal")) D.Master = ESCMaster::MeshDecal;
+    // WP-I1: the display face of a panel or MFD, whose image the game renders at run time into the virtual
+    // $RenderToTexture slot, is an opaque deferred surface (alpha_config opacity 1): dark glass, lit by the bound image.
+    else if (F == TEXT("DisplayScreen") && HasVirtualRole(Sub, TEXT("render_to_texture"))) D.Master = ESCMaster::Screen;
     else if (F == TEXT("DisplayScreen") || F == TEXT("UIPlane") || F == TEXT("Monitor") || F == TEXT("UIMesh")
         || F == TEXT("Hologram") || F == TEXT("HologramCIG") || F == TEXT("Shield_Holo")) D.Master = ESCMaster::EmissiveUnlit;
     // Character families (WP-P2 round 2): plain lit mapping of their textures through the Illum master, no
@@ -620,6 +668,18 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     D.bTwoSided = bDecal; // v1: mtl.rs is_double_sided
     if (AC) AC->TryGetBoolField(TEXT("two_sided"), D.bTwoSided); // v2: authored MtlFlags two-sided
     if (D.Master == ESCMaster::Glass || D.Master == ESCMaster::EmissiveUnlit) D.Blend = ESCBlend::Translucent;
+    // A screen is opaque whatever its forward flag (the forward pass is how CryEngine draws the face, not coverage),
+    // unless its data asks for partial coverage: authored opacity below 1 or a blended alpha mode. Then it is a lit
+    // translucent screen (M_SC_Screen_Translucent, coverage = Opacity) in the non-Nanite split, like any blended surface.
+    if (D.Master == ESCMaster::Screen)
+    {
+        const bool bPartial = In.bBlended || (Opacity < 1.f && AlphaTest <= 0.f);
+        D.Blend = bPartial ? ESCBlend::Translucent : ESCBlend::Opaque;
+        if (bPartial) D.Scalars.Add(TEXT("Opacity"), Opacity);
+        // TODO(WP-I1): an alpha-tested render-to-texture screen has no masked screen master (what the game tests is the
+        // run-time image's alpha); none of the C2, hangar or Ironclad screens is alpha-tested. Drawn opaque, reported.
+        if (AlphaTest > 0.f) D.Warnings.Add(TEXT("alpha-tested DisplayScreen drawn without its mask (no masked screen master)"));
+    }
     const bool bOpaqueFamily = D.Master == ESCMaster::Illum || D.Master == ESCMaster::HardSurface || D.Master == ESCMaster::Layered || D.Master == ESCMaster::Fallback;
     // Decal surfaces (MeshDecal, %DECAL sheets) modify the host through the DBuffer; other blended surfaces of
     // the opaque families (Opacity < 1, alpha_config blend) are lit translucent surfaces.
@@ -658,6 +718,10 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     else if (D.Master == ESCMaster::Glass)
     {
         Glass(D, Sub, A, Palette);
+    }
+    else if (D.Master == ESCMaster::Screen)
+    {
+        Screen(D, Sub, A);
     }
     else
     {
@@ -699,7 +763,8 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
         }
         if (D.Master == ESCMaster::EmissiveUnlit && !D.Textures.Contains(TEXT("DiffuseMap")))
         {
-            // Screens draw render-to-texture content bound per instance (ui_bindings, WP later); dark until then.
+            // UIPlane / Monitor / UIMesh / hologram faces with render-to-texture content (the HUD projector glass) draw
+            // nothing: the owner's HUDs are the viewer's own UI (WP-I1). DisplayScreen faces take M_SC_Screen above.
             D.Scalars.Add(TEXT("EmissiveStrength"), 0.f);
             if (!HasVirtualRole(Sub, TEXT("render_to_texture"))) D.Warnings.Add(TEXT("Emissive family without an image; drawn dark"));
         }

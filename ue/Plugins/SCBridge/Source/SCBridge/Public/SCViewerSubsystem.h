@@ -193,7 +193,8 @@ public:
      *  empty when none was cooked. */
     static FString CookedEnvironmentLevel(const FString& Folder);
     /** The cooked level of a ship (Content/SC/Ships/Maps/<entity>, ue/scripts/cook_ships.py), empty when none was cooked.
-     *  LoadEntity streams it instead of exporting from the archive, so it also works without one (the web build). */
+     *  LoadEntity streams it instead of exporting from the archive, so it also works without one (a showcase
+     *  package on a machine without Star Citizen). */
     static FString CookedShipLevel(const FString& Entity);
     /** LoadEntity can run now: the archive is open, or the entity has a cooked level. */
     bool CanLoad(const FString& Entity) const;

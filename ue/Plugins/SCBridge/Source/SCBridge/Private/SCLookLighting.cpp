@@ -17,19 +17,20 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCLookLighting, Log, All);
 
+void SCLookLighting::MigrateLookSettings()
+{
+    USCViewerSettings* Settings = USCViewerSettings::Get();
+    if (!Settings->MigrateLook()) return;
+    Settings->Save();
+    UE_LOG(LogSCLookLighting, Display, TEXT("LOOK settings migrated to look revision %d (star_bloom=%.2f)"), Settings->LookRevision,
+           Settings->StarBloom);
+}
+
 void SCLookLighting::ApplyDefaults(UWorld* World)
 {
     if (!World) return;
     USCViewerSettings* Settings = USCViewerSettings::Get();
-    if (Settings->LookRevision < USCViewerSettings::CurrentLookRevision)
-    {
-        // LOOK-8 replaced the star bloom by the standard bloom; a StarBloom saved under an earlier revision is that old
-        // default, not a user choice (no UI sets it), so it moves to the new one.
-        Settings->StarBloom = USCViewerSettings::LookStarBloom; // not the CDO: config already loaded the old value into it
-        Settings->LookRevision = USCViewerSettings::CurrentLookRevision;
-        Settings->Save();
-        UE_LOG(LogSCLookLighting, Display, TEXT("LOOK settings migrated to look revision %d"), Settings->LookRevision);
-    }
+    MigrateLookSettings(); // normally already done before the viewer volume was installed (ASCViewerGameMode::StartPlay)
     if (Settings->StarBloom > 0) SCLook::SetBloomStar(World, 4, 0.5f, Settings->StarBloom);
     int32 Volumes = 0;
     for (TActorIterator<APostProcessVolume> It(World); It; ++It)
@@ -61,7 +62,9 @@ void EmissionSamples(const ULightComponent* Light, TArray<TPair<FVector, double>
 {
     constexpr int32 Rings = 8, PerRing = 16;
     const auto* Spot = Cast<USpotLightComponent>(Light);
-    const double MaxAngle = Spot ? FMath::DegreesToRadians(FMath::Clamp(double(Spot->OuterConeAngle), 1.0, 89.0)) : FMath::DegreesToRadians(85.0);
+    // The bounding cone: the outer cone, or the cone through a square frustum projector's corners (WP-E1 E1-3).
+    const double MaxAngle = Spot ? FMath::Clamp(double(Spot->GetHalfConeAngle()), FMath::DegreesToRadians(1.0), FMath::DegreesToRadians(89.0))
+                                 : FMath::DegreesToRadians(85.0);
     Out.Add({FVector::ForwardVector, 1.0});
     for (int32 R = 1; R <= Rings; ++R)
     {

@@ -1,4 +1,5 @@
-// Regression fixtures for instance-local shadow budgets, authored default light states and the game's light model.
+// Regression fixtures for instance-local shadow budgets, authored default light states, the game's light model and the
+// player's torch (the game's personal light).
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "SCLightImporter.h"
@@ -16,6 +17,21 @@
 #include "SCLightAreas.h"
 #include "SCStarEngine.h"
 #include "Algo/AllOf.h"
+#include "LightDefinitions.h"
+#include "LightSceneProxy.h"
+#include "Misc/ScopeExit.h"
+#include "SceneManagement.h"
+#include "SpotLightSceneProxyDesc.h"
+#include "SCViewerEngineObjectVersion.h"
+#include "Serialization/ObjectReader.h"
+#include "Serialization/ObjectWriter.h"
+#include "Misc/Parse.h"
+#include "SCPlayerKit.h"
+#include "SCFirstPersonCharacter.h"
+#include "Engine/Texture2D.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -129,10 +145,28 @@ bool FSCLightAuthoredModel::RunTest(const FString&)
     TestEqual(TEXT("no bulb: the authored intensity at 1 m"), Candela(5), Unit * 2.0, Unit * 1e-5);
     TestEqual(TEXT("bulb is the source radius (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SourceRadius), 10.0, 0.001);
     TestEqual(TEXT("plane is the rect source (cm)"), double(Cast<URectLightComponent>(Vehicle->Lights[2])->SourceWidth), 50.0, 0.001);
-    // The tweak's distance offset bulb * (1 - tweak) / tweak rides in SoftSourceRadius (cm) for the engine shader patch.
-    TestEqual(TEXT("tweak offset is carried (cm)"), double(Cast<UPointLightComponent>(Vehicle->Lights[4])->SoftSourceRadius), 30.0, 0.001);
-    TestEqual(TEXT("tweak 1: no offset"), double(Cast<UPointLightComponent>(Vehicle->Lights[0])->SoftSourceRadius), 0.0, 1e-9);
-    TestEqual(TEXT("legacy packages: no offset"), double(Cast<UPointLightComponent>(Vehicle->Lights[3])->SoftSourceRadius), 0.0, 1e-9);
+    // GetPhysicalLightAttenuation is the engine fork's bulb offset law (WP-E1 E1-2): candela / (max(d, b) + c)^2 with the
+    // bulb b and the tweak's distance offset c = b (1 - tweak) / tweak, both in cm, on authored point and spot lights.
+    const auto* Bulb = Cast<ULocalLightComponent>(Vehicle->Lights[0]);
+    const auto* Tweaked = Cast<ULocalLightComponent>(Vehicle->Lights[4]);
+    TestEqual(TEXT("authored point: bulb offset law"), Bulb->DistanceAttenuation, ELightDistanceAttenuation::BulbOffset);
+    TestEqual(TEXT("authored point: the bulb (cm)"), double(Bulb->AttenuationBulbRadius), 10.0, 0.001);
+    TestEqual(TEXT("tweak 1: no offset"), double(Bulb->AttenuationDistanceOffset), 0.0, 1e-9);
+    TestEqual(TEXT("authored spot: bulb offset law"), Cast<ULocalLightComponent>(Vehicle->Lights[1])->DistanceAttenuation, ELightDistanceAttenuation::BulbOffset);
+    TestEqual(TEXT("tweaked spot: bulb offset law"), Tweaked->DistanceAttenuation, ELightDistanceAttenuation::BulbOffset);
+    TestEqual(TEXT("tweak offset is carried (cm)"), double(Tweaked->AttenuationDistanceOffset), 30.0, 0.001);
+    TestEqual(TEXT("planar: UE's area law"), Cast<ULocalLightComponent>(Vehicle->Lights[2])->DistanceAttenuation, ELightDistanceAttenuation::Default);
+    TestEqual(TEXT("legacy packages: UE's law"), Cast<ULocalLightComponent>(Vehicle->Lights[3])->DistanceAttenuation, ELightDistanceAttenuation::Default);
+    TestEqual(TEXT("no bulb: no bulb offset law"), Cast<ULocalLightComponent>(Vehicle->Lights[5])->DistanceAttenuation, ELightDistanceAttenuation::Default);
+    // SoftSourceRadius keeps its UE meaning (the soft specular radius); the importer leaves it alone.
+    TestEqual(TEXT("soft source radius untouched"), double(Cast<UPointLightComponent>(Vehicle->Lights[4])->SoftSourceRadius), 0.0, 1e-9);
+    // GetLightForcedDistanceFade is every local light's range fade: the squared linear tail over the fixture's fraction.
+    for (int32 I = 0; I < 6; ++I)
+    {
+        const auto* Local = Cast<ULocalLightComponent>(Vehicle->Lights[I]);
+        TestEqual(TEXT("forced fade: squared linear tail"), Local->RangeFade, ELightRangeFade::SquaredLinearTail);
+        TestEqual(TEXT("forced fade: the fixture's fraction"), double(Local->RangeFadeFraction), FSCStarEngine::Get().ForcedFadeFraction, 1e-6);
+    }
     TestTrue(TEXT("fallback shadows follow shadow_casting (on)"), bool(Vehicle->Lights[0]->CastShadows));
     TestFalse(TEXT("fallback shadows follow shadow_casting (off)"), bool(Vehicle->Lights[1]->CastShadows));
     TestEqual(TEXT("no warnings"), Warnings.Num(), 0);
@@ -142,36 +176,177 @@ bool FSCLightAuthoredModel::RunTest(const FString&)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProjectorCone, "SCBridge.Lights.ProjectorCone",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightSpecularMultiplier, "SCBridge.Lights.SpecularMultiplier",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FSCLightProjectorCone::RunTest(const FString&)
+bool FSCLightSpecularMultiplier::RunTest(const FString&)
 {
-    // The game's projector frustum is square with half-angle FOV / 2; UE's cone must contain its corners (half-angle
-    // atan(sqrt 2 tan(FOV / 2))) and the gobo UVs, which UE scales by tan(outer), are pulled back to tan(FOV / 2).
-    const auto Cone = FSCLightImporter::ProjectorCone(50);
-    TestEqual(TEXT("corner half-angle"), Cone.OuterDeg, FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * FMath::Tan(FMath::DegreesToRadians(50.0)))), 1e-9);
-    TestEqual(TEXT("lateral light-function scale undoes the wider cone"), Cone.LateralScale(FMath::DegreesToRadians(Cone.OuterDeg)), 1 / UE_DOUBLE_SQRT_2, 1e-9);
-    // The gobo's UV edge (UE: tan of the outer angle it renders, which GetClampedConeAngles widens by at least 0.001 rad
-    // over the inner) times the lateral scale must land on the FOV frustum.
-    USpotLightComponent* Spot = NewObject<USpotLightComponent>();
-    const auto UvEdge = [Spot](const FSCLightImporter::FProjectorCone& C)
+    // miscParams.specularMultiplier (`specular_multiplier`) is the light's specular scale for every kind; packages without the
+    // field keep UE's 1. Synthetic values.
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    auto* Vehicle = World->SpawnActor<ASCVehicle>();
+    ON_SCOPE_EXIT { Vehicle->Destroy(); World->DestroyWorld(false); };
+    FSCFolderPackageSource Source(TEXT("/tmp"));
+    TArray<FString> Warnings;
+    const auto Helper = [](const FString&) -> USceneComponent* { return nullptr; };
+    FSCSceneInstance Instance;
+    const TCHAR* Common = TEXT(R"("transform_basis":"cryengine_z_up","radius_m":3,"intensity_candela_proxy":25,"outer_angle":40,"inner_angle":30)");
+    for (const TCHAR* Light : {TEXT(R"("name":"PointZero","semantic_light_kind":"point","specular_multiplier":0)"),
+                               TEXT(R"("name":"SpotQuarter","semantic_light_kind":"spot","specular_multiplier":0.25)"),
+                               TEXT(R"("name":"AreaZero","semantic_light_kind":"area","specular_multiplier":0)"),
+                               TEXT(R"("name":"Unauthored","semantic_light_kind":"point")")})
+        Instance.LightJson.Add(FString::Printf(TEXT("{%s,%s}"), Light, Common));
+    FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
+    if (!TestEqual(TEXT("four components"), Vehicle->Lights.Num(), 4)) return false;
+    TestEqual(TEXT("point: specular off"), double(Vehicle->Lights[0]->SpecularScale), 0.0, 1e-6);
+    TestEqual(TEXT("spot: authored scale"), double(Vehicle->Lights[1]->SpecularScale), 0.25, 1e-6);
+    TestEqual(TEXT("area: specular off"), double(Vehicle->Lights[2]->SpecularScale), 0.0, 1e-6);
+    TestEqual(TEXT("older packages: UE's 1"), double(Vehicle->Lights[3]->SpecularScale), 1.0, 1e-6);
+    TestEqual(TEXT("diffuse untouched"), double(Vehicle->Lights[0]->DiffuseScale), 1.0, 1e-6);
+    TestEqual(TEXT("no warnings"), Warnings.Num(), 0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProjectorShape, "SCBridge.Lights.ProjectorShape",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightProjectorShape::RunTest(const FString&)
+{
+    // The game's projector is its texture over the square frustum of half-angle FOV / 2 (border sampler, no cone falloff). The
+    // engine fork's SquareFrustum spot light (WP-E1 E1-3) is that frustum for OuterConeAngle = FOV / 2: the light function's UVs
+    // span the square (0 and 1 at tan(FOV / 2)), culling / bounds / shadows use the cone through its corners, and the shaders get
+    // the square through the packed spot angles and the light model word (LightDefinitions.h).
+    const double HalfFov = 50.0, Tan = FMath::Tan(FMath::DegreesToRadians(HalfFov));
+    const double Corner = FMath::Atan(UE_DOUBLE_SQRT_2 * Tan);
+    // The proxies need a scene: a registered component in a test world.
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    USpotLightComponent* Spot = NewObject<USpotLightComponent>(World);
+    Spot->InnerConeAngle = 20.f;
+    Spot->OuterConeAngle = float(HalfFov);
+    Spot->RegisterComponentWithWorld(World);
+    ON_SCOPE_EXIT { Spot->UnregisterComponent(); World->DestroyWorld(false); };
+    TestTrue(TEXT("UE default: cone"), Spot->Shape == ESpotLightShape::Cone);
+    TestTrue(TEXT("UE default: wrapping light function"), Spot->LightFunctionAddress == ELightFunctionAddress::Wrap);
+    TestEqual(TEXT("UE default: no near clip"), Spot->ProjectorNearClip, 0.f);
+    TestEqual(TEXT("UE default: bounding cone is the clamped outer cone"), Spot->GetHalfConeAngle(), Spot->GetClampedConeAngles().Y);
+    const auto Packed = [](const USpotLightComponent* S, FLightRenderParameters& P, float& LightFunctionTan, float& BoundingCone)
     {
-        Spot->InnerConeAngle = Spot->OuterConeAngle = float(C.OuterDeg);
-        const double Rendered = Spot->GetClampedConeAngles().Y;
-        return FMath::Tan(Rendered) * C.LateralScale(Rendered);
+        FLightSceneProxy* Proxy = S->CreateSceneProxy();
+        if (!Proxy) return false;
+        Proxy->GetLightShaderParameters(P);
+        LightFunctionTan = Proxy->GetLightFunctionTanOuterAngle();
+        BoundingCone = Proxy->GetOuterConeAngle();
+        delete Proxy;
+        return true;
     };
-    TestEqual(TEXT("UV edge at the FOV (100-degree FOV)"), UvEdge(Cone), FMath::Tan(FMath::DegreesToRadians(50.0)), 1e-6);
-    TestTrue(TEXT("the rendered cone contains the frustum corners"), FMath::Tan(Spot->GetClampedConeAngles().Y) >= UE_DOUBLE_SQRT_2 * Cone.FovTan);
-    TestTrue(TEXT("the rendered cone barely exceeds them (hard edge just outside the corners)"),
-             FMath::Tan(Spot->GetClampedConeAngles().Y) < UE_DOUBLE_SQRT_2 * Cone.FovTan * 1.01);
-    TestEqual(TEXT("UV edge at the FOV (small)"), UvEdge(FSCLightImporter::ProjectorCone(10)), FMath::Tan(FMath::DegreesToRadians(10.0)), 1e-6);
-    // A frustum whose corners lie beyond UE's limit keeps the limit; the gobo still ends at the FOV.
-    const auto Wide = FSCLightImporter::ProjectorCone(80);
-    TestTrue(TEXT("wide: within UE's cone limit"), Wide.OuterDeg <= FSCLightImporter::MaxSpotConeDeg);
-    TestEqual(TEXT("wide: UV edge still at the FOV"), UvEdge(Wide), FMath::Tan(FMath::DegreesToRadians(80.0)), 1e-6);
-    const auto Flat = FSCLightImporter::ProjectorCone(90);
-    TestEqual(TEXT("180-degree FOV: UE's limit"), Flat.OuterDeg, FSCLightImporter::MaxSpotConeDeg, 1e-9);
-    TestEqual(TEXT("180-degree FOV: UV edge at UE's limit"), UvEdge(Flat), FMath::Tan(FMath::DegreesToRadians(FSCLightImporter::MaxSpotConeDeg)), 1e-4);
+    FLightRenderParameters P;
+    float LightFunctionTan = 0, BoundingCone = 0;
+    if (!TestTrue(TEXT("cone proxy"), Packed(Spot, P, LightFunctionTan, BoundingCone))) return false;
+    const FVector2f Clamped = Spot->GetClampedConeAngles();
+    TestEqual(TEXT("cone: UE's spot angles"), double(P.SpotAngles.Y), 1.0 / (FMath::Cos(Clamped.X) - FMath::Cos(Clamped.Y)), 1e-3);
+    TestEqual(TEXT("cone: the model word is UE's (all zero)"), FMath::AsUInt(P.GetPackedDistanceFalloff().Y) & 0xFFFFFFF0u, 0u);
+    TestEqual(TEXT("cone: light function spans the outer cone"), double(LightFunctionTan), FMath::Tan(double(Clamped.Y)), 1e-6);
+
+    Spot->Shape = ESpotLightShape::SquareFrustum;
+    Spot->LightFunctionAddress = ELightFunctionAddress::Border;
+    Spot->ProjectorNearClip = 25.f;
+    TestEqual(TEXT("square: bounding cone through the corners"), double(Spot->GetHalfConeAngle()), Corner, 1e-5);
+    if (!TestTrue(TEXT("square proxy"), Packed(Spot, P, LightFunctionTan, BoundingCone))) return false;
+    TestEqual(TEXT("square: proxy culls with the corner cone"), double(BoundingCone), Corner, 1e-5);
+    TestEqual(TEXT("square: light function UVs span the square (edge at tan(FOV / 2))"), double(LightFunctionTan), Tan, 1e-5);
+    TestEqual(TEXT("square: SpotAngles.x is the corner cone"), double(P.SpotAngles.X), FMath::Cos(Corner), 1e-5);
+    TestEqual(TEXT("square: SpotAngles.y is tan(FOV / 2)"), double(P.SpotAngles.Y), Tan, 1e-5);
+    const uint32 Word = FMath::AsUInt(P.GetPackedDistanceFalloff().Y);
+    TestEqual(TEXT("square: shape in the model word"), (Word >> LIGHT_MODEL_WORD_BIT_OFFSET_SPOT_SHAPE) & LIGHT_MODEL_WORD_MASK_SPOT_SHAPE, uint32(LIGHT_SPOT_SHAPE_SQUARE_FRUSTUM));
+    TestEqual(TEXT("square: near clip in the model word (half, cm)"),
+              uint32((Word >> LIGHT_MODEL_WORD_BIT_OFFSET_PROJECTOR_NEAR_CLIP) & LIGHT_MODEL_WORD_MASK_PROJECTOR_NEAR_CLIP), uint32(FFloat16(25.f).Encoded));
+    // The near clip is packed as a half (E1-3 review): the setter and the proxy descriptor clamp to the half's range (65504 cm) with
+    // a warning, so the property never promises a depth the packed light cannot hold.
+    AddExpectedMessage(TEXT("above the packed range"), EAutomationExpectedMessageFlags::Contains, 0);
+    Spot->SetMobility(EComponentMobility::Movable);
+    Spot->SetProjectorNearClip(100000.f);
+    TestEqual(TEXT("near clip: the setter clamps to the packed range"), Spot->ProjectorNearClip, 65504.f);
+    Spot->ProjectorNearClip = 100000.f; // as a serialized value would arrive
+    TestEqual(TEXT("near clip: the proxy descriptor clamps to the packed range"), USpotLightComponent::BuildSceneProxyDesc(*Spot).ProjectorNearClip, 65504.f);
+    Spot->ProjectorNearClip = 25.f;
+    // The square's corner direction lies on the bounding cone: a probe just inside it is inside the bounds, a probe outside is not.
+    Spot->SetWorldLocation(FVector::ZeroVector);
+    const FVector CornerDir = FVector(1, Tan, Tan).GetSafeNormal();
+    const FVector Lateral = FVector(0, 1, 1).GetSafeNormal();
+    const double R = Spot->AttenuationRadius;
+    TestTrue(TEXT("square: the corner is inside the bounds"), Spot->AffectsBounds(FBoxSphereBounds(CornerDir * 0.5 * R - Lateral * 2.0, FVector(1), 1)));
+    TestFalse(TEXT("square: past the corner is outside the bounds"), Spot->AffectsBounds(FBoxSphereBounds(CornerDir * 0.5 * R + Lateral * 0.05 * R, FVector(1), 1)));
+    // UE's limit stays: a 90-degree half-FOV is an infinite frustum.
+    const float Wide = USpotLightComponent::GetClampedSquareFrustumHalfAngle(90.f);
+    TestEqual(TEXT("limit: half-FOV clamped like UE's outer cone"), double(Wide), FMath::DegreesToRadians(88.9) + 0.001, 1e-6);
+    TestTrue(TEXT("limit: the corner cone stays below 90 degrees"), USpotLightComponent::GetSquareFrustumEnclosingConeAngle(Wide) < UE_HALF_PI);
+    TestEqual(TEXT("solid angle of a 90-degree (half 45) square frustum: 4 asin(1/2) = 2 pi / 3"),
+              double(USpotLightComponent::GetSquareFrustumSolidAngle(UE_PI / 4)), 2.0 * UE_DOUBLE_PI / 3.0, 1e-5);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProxyDescArchive, "SCBridge.Lights.ProxyDescArchive",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightProxyDescArchive::RunTest(const FString&)
+{
+    // FastGeo writes light descriptors without property tags. The fork's fields (E1-2 falloff models, E1-3 shape, near clip and
+    // light function address) are versioned (FSCViewerEngineObjectVersion): an archive written with UE's layout or E1-2's loads
+    // with UE's defaults for what it lacks and still reads every field after them.
+    FSpotLightSceneProxyDesc Out;
+    Out.LightFunctionAddress = LIGHT_FUNCTION_ADDRESS_BORDER;
+    Out.AttenuationRadius = 500.f;
+    Out.RangeFadeFraction = 0.2f;
+    Out.bBulbOffsetAttenuation = true;
+    Out.AttenuationBulbRadius = 3.f;
+    Out.AttenuationDistanceOffset = -1.f;
+    Out.SourceRadius = 7.f;
+    Out.bUseInverseSquaredFalloff = true;
+    Out.InnerConeAngle = 12.f;
+    Out.OuterConeAngle = 34.f;
+    Out.Shape = uint8(ESpotLightShape::SquareFrustum);
+    Out.ProjectorNearClip = 25.f;
+    const auto RoundTrip = [&Out](int32 WriterVersion, FSpotLightSceneProxyDesc& In, bool& bConsumedAll)
+    {
+        TArray<uint8> Bytes;
+        FObjectWriter Writer(Bytes);
+        if (WriterVersion >= 0)
+        {
+            Writer.SetCustomVersion(FSCViewerEngineObjectVersion::GUID, WriterVersion, TEXT("SCViewerEngineObjectVer"));
+            Writer.SetShouldSkipUpdateCustomVersion(true);
+        }
+        Out.Serialize(Writer);
+        FObjectReader Reader(Bytes);
+        Reader.SetCustomVersions(Writer.GetCustomVersions());
+        In.Serialize(Reader);
+        bConsumedAll = Reader.Tell() == Reader.TotalSize() && !Reader.IsError();
+    };
+    bool bAll = false;
+    FSpotLightSceneProxyDesc Latest;
+    RoundTrip(-1, Latest, bAll);
+    TestTrue(TEXT("latest: every byte read"), bAll);
+    TestEqual(TEXT("latest: light function address"), int32(Latest.LightFunctionAddress), int32(LIGHT_FUNCTION_ADDRESS_BORDER));
+    TestEqual(TEXT("latest: range fade"), Latest.RangeFadeFraction, 0.2f);
+    TestTrue(TEXT("latest: bulb offset"), Latest.bBulbOffsetAttenuation && Latest.AttenuationDistanceOffset == -1.f);
+    TestEqual(TEXT("latest: shape"), int32(Latest.Shape), int32(ESpotLightShape::SquareFrustum));
+    TestEqual(TEXT("latest: near clip"), Latest.ProjectorNearClip, 25.f);
+
+    FSpotLightSceneProxyDesc UE;
+    RoundTrip(FSCViewerEngineObjectVersion::BeforeCustomVersionWasAdded, UE, bAll);
+    TestTrue(TEXT("UE layout: every byte read"), bAll);
+    TestEqual(TEXT("UE layout: Wrap"), int32(UE.LightFunctionAddress), int32(LIGHT_FUNCTION_ADDRESS_WRAP));
+    TestEqual(TEXT("UE layout: UE's range fade"), UE.RangeFadeFraction, 0.f);
+    TestFalse(TEXT("UE layout: UE's distance law"), UE.bBulbOffsetAttenuation);
+    TestEqual(TEXT("UE layout: cone"), int32(UE.Shape), int32(ESpotLightShape::Cone));
+    TestEqual(TEXT("UE layout: no near clip"), UE.ProjectorNearClip, 0.f);
+    TestEqual(TEXT("UE layout: fields after the fork's still read (attenuation radius)"), UE.AttenuationRadius, 500.f);
+    TestEqual(TEXT("UE layout: fields after the fork's still read (source radius)"), UE.SourceRadius, 7.f);
+    TestEqual(TEXT("UE layout: fields after the fork's still read (cone angles)"), UE.OuterConeAngle, 34.f);
+
+    FSpotLightSceneProxyDesc E12;
+    RoundTrip(FSCViewerEngineObjectVersion::LocalLightFalloffModels, E12, bAll);
+    TestTrue(TEXT("E1-2 layout: every byte read"), bAll);
+    TestEqual(TEXT("E1-2 layout: falloff read"), E12.RangeFadeFraction, 0.2f);
+    TestEqual(TEXT("E1-2 layout: cone (no shape yet)"), int32(E12.Shape), int32(ESpotLightShape::Cone));
+    TestEqual(TEXT("E1-2 layout: Wrap (no address yet)"), int32(E12.LightFunctionAddress), int32(LIGHT_FUNCTION_ADDRESS_WRAP));
+    TestEqual(TEXT("E1-2 layout: cone angles"), E12.InnerConeAngle, 12.f);
     return true;
 }
 
@@ -453,6 +628,229 @@ bool FSCLightRoomChannels::RunTest(const FString&)
     auto Self = FSCLightAreas::ColorRooms({TEXT("a")}, {{TEXT("a"), TEXT("a")}}, Conflicts);
     TestEqual(TEXT("a room reaching itself is no conflict"), Conflicts, 0);
     TestEqual(TEXT("single room: channel 1"), Self.FindRef(TEXT("a")), 1);
+    return true;
+}
+
+namespace
+{
+// The light grid's cell estimate (LightCulling.ush EstimateLocalLight, engine fork WP-E1 E1-2), statement for statement, with the
+// range window and distance law of LocalLightFalloff.ush. RangeFadeScale 0: UE's window; > 0: 1 / F (squared linear tail).
+double EngineRangeFade(double DistSq, double InvRadius, double RangeFadeScale)
+{
+    if (RangeFadeScale > 0) return FMath::Square(FMath::Clamp(RangeFadeScale * (1.0 - FMath::Sqrt(DistSq) * InvRadius), 0.0, 1.0));
+    return FMath::Square(FMath::Clamp(1.0 - FMath::Square(DistSq * FMath::Square(InvRadius)), 0.0, 1.0));
+}
+double EngineDistanceLaw(double DistSq, double DistBiasSq, bool bBulb, double B, double C)
+{
+    return bBulb ? 1.0 / FMath::Square(FMath::Max(FMath::Sqrt(DistSq), B) + C) : 1.0 / (DistSq + DistBiasSq);
+}
+double EngineEstimateLocalLight(double DistSq, double Power, double InvRadius, double FalloffExponent, double RangeFadeScale, bool bBulb, double B, double C)
+{
+    if (FalloffExponent <= 0 && bBulb)
+        return Power * EngineRangeFade(DistSq, InvRadius, RangeFadeScale) * EngineDistanceLaw(DistSq, 0, bBulb, B, C) / UE_DOUBLE_PI;
+    const double TrueDistSq = DistSq;
+    DistSq = FMath::Max(DistSq, 0.01);
+    double Falloff = 1;
+    if (FalloffExponent > 0)
+        Falloff = FMath::Pow(1.0 - FMath::Clamp(DistSq * FMath::Square(InvRadius), 0.0, 1.0), FalloffExponent);
+    else
+        Falloff = EngineRangeFade(RangeFadeScale > 0 ? TrueDistSq : DistSq, InvRadius, RangeFadeScale) * EngineDistanceLaw(DistSq, 0, bBulb, B, C);
+    return Power * Falloff / UE_DOUBLE_PI;
+}
+double ProbeLux(const UWorld* World, const FVector& Point)
+{
+    const TArray<FString> Lines = FSCLightImporter::Probe(World, Point, nullptr, 0);
+    double Lux = -1;
+    if (Lines.Num()) FParse::Value(*Lines[0], TEXT("lux_unshadowed="), Lux);
+    return Lux;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightGridEstimate, "SCBridge.Lights.LightGridEstimate",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightGridEstimate::RunTest(const FString&)
+{
+    // The cell estimate is evaluated at the cell's nearest point (0 inside a cell that contains the light) and must not cull a cell
+    // the light lights (Astra E1-1..E1-4 review 4): a tiny range-fade-only light (SquaredLinearTail, UE's inverse square, radius
+    // 0.05 cm) has a positive window everywhere inside its radius.
+    const double Radius = 0.05, InvRadius = 1.0 / Radius, Tail = 1.0 / 0.2;
+    TestTrue(TEXT("tiny tail light: positive estimate at the light"), EngineEstimateLocalLight(0, 1, InvRadius, 0, Tail, false, 0, 0) > 0);
+    TestTrue(TEXT("tiny tail light: positive estimate inside its radius"), EngineEstimateLocalLight(FMath::Square(0.04), 1, InvRadius, 0, Tail, false, 0, 0) > 0);
+    TestEqual(TEXT("tiny tail light: none at its radius"), EngineEstimateLocalLight(FMath::Square(Radius), 1, InvRadius, 0, Tail, false, 0, 0), 0.0);
+    // Conservative: never below what shading gives there (shading's inverse square is 1 / (d^2 + 1)).
+    for (const double D : {0.0, 0.01, 0.02, 0.03, 0.04})
+        TestTrue(FString::Printf(TEXT("tiny tail light: estimate >= shading at %.2f cm"), D),
+                 EngineEstimateLocalLight(D * D, 1, InvRadius, 0, Tail, false, 0, 0) >= EngineRangeFade(D * D, InvRadius, Tail) * EngineDistanceLaw(D * D, 1, false, 0, 0) / UE_DOUBLE_PI);
+    // UE's window keeps UE's estimate (clamped distance), unchanged.
+    TestEqual(TEXT("UE window: UE's estimate at the light"), EngineEstimateLocalLight(0, 1, 1.0 / 100, 0, 0, false, 0, 0),
+              EngineRangeFade(0.01, 1.0 / 100, 0) / 0.01 / UE_DOUBLE_PI, 1e-9);
+    // The negative-offset bulb (E1-2 review) stays at the true distance: its peak 1 / (b + c)^2.
+    TestEqual(TEXT("bulb offset: the peak at the light"), EngineEstimateLocalLight(0, 1, 1.0 / 100, 0, Tail, true, 0.05, -0.04), 1.0 / FMath::Square(0.01) / UE_DOUBLE_PI, 1e-3);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightProbeFollowsRenderer, "SCBridge.Lights.ProbeFollowsRenderer",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightProbeFollowsRenderer::RunTest(const FString&)
+{
+    // The probe's lux is the renderer's law (Astra E1-1..E1-4 review 11): UE's inverse square regularised as 1 / (d^2 + 1 cm^2), the
+    // projector near clip in either spot shape, lumens over the square frustum's solid angle. Lights 50 m apart, 10 m radius each.
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    const auto Make = [World](UClass* Class, const FVector& At) {
+        auto* L = NewObject<ULocalLightComponent>(World, Class);
+        L->SetMobility(EComponentMobility::Movable);
+        L->IntensityUnits = ELightUnits::Candelas;
+        L->Intensity = 100.f;
+        L->AttenuationRadius = 1000.f;
+        L->SetWorldLocation(At);
+        L->RegisterComponentWithWorld(World);
+        return L;
+    };
+    auto* Point = Make(UPointLightComponent::StaticClass(), FVector(0, 0, 0));
+    auto* Cone = Cast<USpotLightComponent>(Make(USpotLightComponent::StaticClass(), FVector(5000, 0, 0)));
+    Cone->InnerConeAngle = 20.f; Cone->OuterConeAngle = 30.f; Cone->ProjectorNearClip = 50.f;
+    auto* Square = Cast<USpotLightComponent>(Make(USpotLightComponent::StaticClass(), FVector(10000, 0, 0)));
+    Square->Shape = ESpotLightShape::SquareFrustum; Square->OuterConeAngle = 45.f;
+    Square->IntensityUnits = ELightUnits::Lumens; Square->Intensity = 1000.f;
+    // Astra fixes-2 review 16: a narrow cone (inner 0, outer 0.5 degrees) in lumens. On its axis the proxy's cone term is 1 (its
+    // denominator is the clamped angles' cosine difference, unfloored), and its candela are the component's own conversion
+    // (ComputeLightBrightness: lumens over 2 pi (1 - cos), no clamp of the cosine).
+    auto* Narrow = Cast<USpotLightComponent>(Make(USpotLightComponent::StaticClass(), FVector(15000, 0, 0)));
+    Narrow->InnerConeAngle = 0.f; Narrow->OuterConeAngle = 0.5f;
+    Narrow->IntensityUnits = ELightUnits::Lumens; Narrow->Intensity = 1000.f;
+    ON_SCOPE_EXIT { Point->UnregisterComponent(); Cone->UnregisterComponent(); Square->UnregisterComponent(); Narrow->UnregisterComponent(); World->DestroyWorld(false); };
+    const auto Window = [](double D) { return FMath::Square(1.0 - FMath::Square(FMath::Square(D / 1000.0))); };
+    const double NarrowCandela = 1000.0 / (2.0 * UE_DOUBLE_PI * (1.0 - double(Narrow->GetCosHalfConeAngle())));
+    TestEqual(TEXT("narrow cone in lumens, on its axis: cone term 1, the component's lumens conversion"), ProbeLux(World, FVector(15100, 0, 0)),
+              NarrowCandela * 1e4 / (1e4 + 1) * Window(100), NarrowCandela * 1e-3);
+    TestEqual(TEXT("point at 1 cm: 100 cd x 1e4 / (1 + 1)"), ProbeLux(World, FVector(1, 0, 0)), 100.0 * 1e4 / 2.0 * Window(1), 0.1);
+    TestEqual(TEXT("cone in front of its near clip: no light"), ProbeLux(World, FVector(5020, 0, 0)), 0.0, 1e-6);
+    TestEqual(TEXT("cone behind its near clip: lit"), ProbeLux(World, FVector(5100, 0, 0)), 100.0 * 1e4 / (1e4 + 1) * Window(100), 0.1);
+    const double Candela = 1000.0 / USpotLightComponent::GetSquareFrustumSolidAngle(UE_PI / 4);
+    TestEqual(TEXT("square in lumens: over the square's solid angle"), ProbeLux(World, FVector(10100, 0, 0)), Candela * 1e4 / (1e4 + 1) * Window(100), 0.1);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightComparisonRestorePerWorld, "SCBridge.Lights.ComparisonRestorePerWorld",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightComparisonRestorePerWorld::RunTest(const FString&)
+{
+    // sc.Lights.ProjectorShape / FalloffModels restore one world without erasing another world's saved lights (Astra E1-1..E1-4
+    // review 12): two worlds switched to UE's cone / falloff, the first restored, then the second.
+    UWorld* Worlds[2] = {UWorld::CreateWorld(EWorldType::Game, false), UWorld::CreateWorld(EWorldType::Game, false)};
+    USpotLightComponent* Spots[2];
+    UPointLightComponent* Points[2];
+    for (int32 I = 0; I < 2; ++I)
+    {
+        Spots[I] = NewObject<USpotLightComponent>(Worlds[I]);
+        Spots[I]->SetMobility(EComponentMobility::Movable);
+        Spots[I]->Shape = ESpotLightShape::SquareFrustum; Spots[I]->LightFunctionAddress = ELightFunctionAddress::Border; Spots[I]->OuterConeAngle = 40.f;
+        Spots[I]->RegisterComponentWithWorld(Worlds[I]);
+        Points[I] = NewObject<UPointLightComponent>(Worlds[I]);
+        Points[I]->SetMobility(EComponentMobility::Movable);
+        Points[I]->RangeFade = ELightRangeFade::SquaredLinearTail; Points[I]->RangeFadeFraction = 0.2f;
+        Points[I]->RegisterComponentWithWorld(Worlds[I]);
+    }
+    ON_SCOPE_EXIT { for (int32 I = 0; I < 2; ++I) { Spots[I]->UnregisterComponent(); Points[I]->UnregisterComponent(); Worlds[I]->DestroyWorld(false); } };
+    const auto Run = [](const TCHAR* Command, UWorld* World) { IConsoleManager::Get().ProcessUserConsoleInput(Command, *GLog, World); };
+    for (UWorld* W : Worlds) { Run(TEXT("sc.Lights.ProjectorShape 0"), W); Run(TEXT("sc.Lights.FalloffModels 0"), W); }
+    TestTrue(TEXT("both worlds compare on UE's cone"), Spots[0]->Shape == ESpotLightShape::Cone && Spots[1]->Shape == ESpotLightShape::Cone);
+    TestTrue(TEXT("both worlds compare on UE's range window"), Points[0]->RangeFade == ELightRangeFade::Default && Points[1]->RangeFade == ELightRangeFade::Default);
+    Run(TEXT("sc.Lights.ProjectorShape 1"), Worlds[0]); Run(TEXT("sc.Lights.FalloffModels 1"), Worlds[0]);
+    TestTrue(TEXT("first world restored: square"), Spots[0]->Shape == ESpotLightShape::SquareFrustum && Spots[0]->LightFunctionAddress == ELightFunctionAddress::Border);
+    TestTrue(TEXT("second world still compares: cone"), Spots[1]->Shape == ESpotLightShape::Cone);
+    Run(TEXT("sc.Lights.ProjectorShape 1"), Worlds[1]); Run(TEXT("sc.Lights.FalloffModels 1"), Worlds[1]);
+    TestTrue(TEXT("second world restored: square"), Spots[1]->Shape == ESpotLightShape::SquareFrustum && Spots[1]->LightFunctionAddress == ELightFunctionAddress::Border);
+    TestTrue(TEXT("first world restored: tail window"), Points[0]->RangeFade == ELightRangeFade::SquaredLinearTail);
+    TestTrue(TEXT("second world restored: tail window"), Points[1]->RangeFade == ELightRangeFade::SquaredLinearTail);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightFlashlightMapping, "SCBridge.Lights.FlashlightMapping",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightFlashlightMapping::RunTest(const FString&)
+{
+    // The player's torch is the game's personal light: a player kit's `flashlights[]` entry (an item's SCItemFlashlightParams,
+    // kept verbatim by the exporter) -> FSCFlashlight (the local player's split) -> the spot light every imported light would be
+    // (FSCStarEngine light model) shaped as the game's projector with the cookie as its light function. Synthetic values.
+    const TCHAR* Entry = TEXT(R"({"entity":"synthetic_item","port":"synthetic_port","params":{"_Type_":"SCItemFlashlightParams",)"
+                              R"("localPlayerParams":{"color":{"r":128,"g":64,"b":255},"diffuseMult":3,"attenuationBulbSize":0.02,"distance":12,"fov":70,)"
+                              R"("lightCookie":{"path":"textures/synthetic_cookie.tif"}},)"
+                              R"("otherParams":{"color":{"r":1,"g":2,"b":3},"diffuseMult":99,"attenuationBulbSize":0.5,"distance":1,"fov":10,)"
+                              R"("lightCookie":{"path":"textures/synthetic_other.tif"}}},)"
+                              R"("projector_textures":{"textures/synthetic_cookie.tif":"Data/Synthetic/synthetic_cookie.exr"}})");
+    const auto Json = [](const FString& Text) { TSharedPtr<FJsonObject> O; FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), O); return O; };
+    FSCFlashlight Light;
+    FString Error;
+    if (!TestTrue(TEXT("entry parses"), FSCFlashlight::Parse(Json(Entry), Light, Error))) return false;
+    TestEqual(TEXT("item"), Light.Entity, FString(TEXT("synthetic_item")));
+    TestEqual(TEXT("local player's split, not other viewers'"), double(Light.DiffuseMult), 3.0, 1e-6);
+    TestEqual(TEXT("cookie source"), Light.Cookie, FString(TEXT("textures/synthetic_cookie.tif")));
+    TestEqual(TEXT("cookie package path from projector_textures"), Light.ProjectorTexture, FString(TEXT("Data/Synthetic/synthetic_cookie.exr")));
+    TestTrue(TEXT("SRGB8 colour as authored"), Light.Color == FColor(128, 64, 255));
+    FSCFlashlight Bare;
+    TestFalse(TEXT("an entry without the local player's split is refused"),
+              FSCFlashlight::Parse(Json(TEXT(R"({"entity":"synthetic_bare","params":{"otherParams":{"color":{"r":1,"g":1,"b":1}}}})")), Bare, Error));
+    TestTrue(TEXT("the refusal names the item"), Error.Contains(TEXT("synthetic_bare")));
+
+    // The kit keeps flashlights in loadout order and reports the ones it cannot use.
+    FSCPlayerKit Kit;
+    const FString Scene = FString::Printf(TEXT(R"({"root_entity":{},"player":{"camera_bone":"synthetic_camera","root_motion_bone":"synthetic_root",)"
+                                               R"("flashlights":[%s,{"entity":"synthetic_bare","params":{}}]}})"), Entry);
+    if (!TestTrue(TEXT("kit parses"), FSCPlayerKit::Parse(Scene, TEXT("Packages/synthetic"), Kit, Error))) return false;
+    TestEqual(TEXT("one usable flashlight"), Kit.Flashlights.Num(), 1);
+    TestTrue(TEXT("the unusable one is a diagnostic"), Kit.Diagnostics.ContainsByPredicate([](const FString& D) { return D.Contains(TEXT("synthetic_bare")); }));
+
+    // Light model: pi * unit * diffuseMult * (1 + bulb)^2 (no attenuation tweak), radius = distance, half-FOV = fov / 2.
+    const double Unit = UE_DOUBLE_PI * FSCStarEngine::Get().SceneUnitNits;
+    const FSCLightImporter::FFlashlightSettings S = FSCLightImporter::FlashlightSettings(Light);
+    TestEqual(TEXT("candela: the game's point model over the attenuation bulb"), S.Candela, Unit * 3.0 * FMath::Square(1.02), Unit * 1e-6);
+    TestEqual(TEXT("radius: distance (cm)"), S.RadiusCm, 1200.0, 1e-3);
+    TestEqual(TEXT("bulb (cm)"), S.BulbCm, 2.0, 1e-4);
+    TestEqual(TEXT("no tweak: no distance offset"), S.OffsetCm, 0.0, 1e-9);
+    TestTrue(TEXT("bulb offset law"), S.bBulbOffset);
+    TestEqual(TEXT("projector half-FOV"), S.HalfFovDeg, 35.0, 1e-6);
+    TestTrue(TEXT("colour decoded from sRGB"), S.Color.Equals(FLinearColor::FromSRGBColor(FColor(128, 64, 255))));
+
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    // One light-function material per cookie texture, shared with ship projectors (GoboLightFunction).
+    auto* Kitless = World->SpawnActor<ASCVehicle>();
+    UTexture2D* Cookie = UTexture2D::CreateTransient(4, 4);
+    UMaterialInterface* Function = FSCLightImporter::GoboLightFunction(Kitless, Cookie);
+    if (!TestNotNull(TEXT("cookie light function"), Function)) return false;
+    TestTrue(TEXT("the cookie's material is shared"), FSCLightImporter::GoboLightFunction(Kitless, Cookie) == Function);
+    TestNull(TEXT("no texture: no light function"), FSCLightImporter::GoboLightFunction(Kitless, nullptr));
+
+    // The character's torch takes it, keeps its on / off state, and falls back to the viewer beam without a game light.
+    auto* Character = World->SpawnActor<ASCFirstPersonCharacter>();
+    if (!TestNotNull(TEXT("character"), Character)) return false;
+    USpotLightComponent* Torch = Character->Flashlight;
+    TestEqual(TEXT("starts on the fallback"), Character->GetTorchSource(), FString(TEXT("fallback")));
+    Character->SetTorch(true);
+    Character->SetTorchLight(&Light, Function);
+    TestEqual(TEXT("source names the item"), Character->GetTorchSource(), FString(TEXT("game:synthetic_item")));
+    TestTrue(TEXT("still on"), Torch->IsVisible());
+    TestTrue(TEXT("candela units"), Torch->IntensityUnits == ELightUnits::Candelas);
+    TestEqual(TEXT("candela"), double(Torch->Intensity), S.Candela, S.Candela * 1e-5);
+    TestEqual(TEXT("attenuation radius"), double(Torch->AttenuationRadius), 1200.0, 1e-3);
+    TestEqual(TEXT("source radius is the bulb"), double(Torch->SourceRadius), 2.0, 1e-4);
+    TestTrue(TEXT("bulb offset law"), Torch->DistanceAttenuation == ELightDistanceAttenuation::BulbOffset);
+    TestTrue(TEXT("forced range fade"), Torch->RangeFade == ELightRangeFade::SquaredLinearTail);
+    TestTrue(TEXT("projector: square frustum"), Torch->Shape == ESpotLightShape::SquareFrustum);
+    TestEqual(TEXT("projector: half-FOV"), double(Torch->OuterConeAngle), 35.0, 1e-4);
+    TestTrue(TEXT("projector: border addressing"), Torch->LightFunctionAddress == ELightFunctionAddress::Border);
+    TestTrue(TEXT("projector: the cookie"), Torch->LightFunctionMaterial.Get() == Function);
+    TestTrue(TEXT("colour"), Torch->GetLightColor().Equals(S.Color, 0.01f));
+    Character->SetTorchLight(nullptr, nullptr);
+    TestEqual(TEXT("fallback source"), Character->GetTorchSource(), FString(TEXT("fallback")));
+    TestTrue(TEXT("fallback: a cone"), Torch->Shape == ESpotLightShape::Cone);
+    TestNull(TEXT("fallback: no light function"), Torch->LightFunctionMaterial.Get());
+    TestEqual(TEXT("fallback: viewer candela"), double(Torch->Intensity), double(ASCFirstPersonCharacter::TorchCandelas), 1e-3);
+    TestEqual(TEXT("fallback: viewer cone"), double(Torch->OuterConeAngle), double(ASCFirstPersonCharacter::TorchOuterCone), 1e-4);
+    TestTrue(TEXT("fallback: UE's distance law"), Torch->DistanceAttenuation == ELightDistanceAttenuation::Default);
+    TestTrue(TEXT("still on after the fallback"), Torch->IsVisible());
+    Character->Destroy();
+    Kitless->Destroy();
     return true;
 }
 #endif

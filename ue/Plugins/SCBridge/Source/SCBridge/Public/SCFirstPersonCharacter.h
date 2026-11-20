@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Camera/CameraComponent.h"
+#include "SCExploration.h"
 #include "SCFirstPersonCharacter.generated.h"
 class ASCVehicle;
 class USpotLightComponent;
@@ -50,7 +51,8 @@ enum class ESCFirstPersonAction : uint8
     Fire,                                              // held, player body: the drawn weapon fires while down
     Orbit,                                             // held: third-person camera orbits the player while down;
                                                        // two presses within DoubleTapSeconds put it behind again
-    MobiGlas                                           // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    MobiGlas,                                          // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    MenuUp, MenuDown, MenuSelect                       // pressed, teleport menu open: move the selection / teleport there
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),
@@ -87,6 +89,37 @@ public:
     /** Spawn index used by the last successful teleport (INDEX_NONE before the first). */
     UPROPERTY(BlueprintReadOnly) int32 CurrentSpawn = INDEX_NONE;
 
+    /** Hangar waypoints (SCHangarWaypoints.h): the environment the character explores beside its vehicle. Null: the
+     *  viewer's current environment (USCViewerSubsystem::GetEnvironment). Tests set it. */
+    TWeakObjectPtr<ASCVehicle> HangarOverride;
+    ASCVehicle* GetHangar() const;
+    /** The hangar's waypoints where a standing capsule fits on a floor (ResolveSpawn), re-checked whenever the hangar or
+     *  its waypoints change; transforms relative to the hangar. Rejected ones are logged (HANGAR_WAYPOINT_REJECT). */
+    const TArray<FSCSpawnPoint>& GetHangarSpots();
+    /** Check the standing places again on the next GetHangarSpots (the menu opening, sc.FP.Spawns). */
+    void InvalidateHangarSpots() { HangarListedRevision = INDEX_NONE - 1; }
+    /** Incremented on each check of the standing places (the HUD rebuilds its rows on a change). */
+    int32 HangarSpotsRevision = 0;
+    bool TeleportToHangar(int32 Index);
+    /** The teleport menu: ship spawns, then hangar places, each section under its heading (SCTeleportMenu::Rows). */
+    TArray<FSCTeleportRow> TeleportRows();
+    bool TeleportToRow(int32 Row);
+    /** The label of the destination Row names now (with the row, a destination's identity: the rows renumber when a
+     *  list changes while the menu is open). */
+    FString DestinationLabel(const FSCTeleportRow& Row);
+    /** The row of a destination picked as (Row, Label): the same section and index with the same label, else the row of
+     *  that section with that label; INDEX_NONE when it is gone. */
+    int32 FindDestination(const FSCTeleportRow& Row, const FString& Label);
+    /** A clicked row (the HUD keeps what it showed): teleports there if it is still listed. */
+    bool TeleportToDestination(const FSCTeleportRow& Row, const FString& Label);
+    /** The highlighted destination (Up / Down or W / S move it across both sections, Enter teleports there) and its
+     *  current row (INDEX_NONE when none). */
+    FSCTeleportRow TeleportSelection;
+    FString TeleportSelectionLabel;
+    int32 TeleportSelectionRow();
+    void SetTeleportMenuOpen(bool bOpen);
+    void MoveTeleportSelection(int32 Delta);
+
     /** The single setter for body/locomotion dimensions; nothing else writes these values. */
     void SetProfile(const FSCCharacterProfile& InProfile);
     const FSCCharacterProfile& GetProfile() const { return Profile; }
@@ -106,6 +139,13 @@ public:
      *  must touch it, so a clear pocket beside the seat (behind its back, past a bulkhead) is refused. */
     bool TeleportToSeat(FVector Floor, const FBox& Seat, const FTransform& Frame = FTransform::Identity);
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") bool Interact();
+    /** WP-P5: E on a lift panel under the crosshair sends an interaction through ASCVehicle::SendInteraction: on a floor
+     *  panel (its stops drawn on its face) the option under the crosshair, nothing off the rows; on another lift panel
+     *  (a call button) its primary interaction. The focused lift panel's entity id and that interaction (None: a floor
+     *  panel with nothing under the crosshair); false without a panel in focus. */
+    bool FocusedPanel(FString& EntityId, FName& Choice) const;
+    /** The floor panel and option under the crosshair (ASCVehicle::AimFloorPanel), updated each tick; INDEX_NONE without. */
+    int32 AimedFloorPanel = INDEX_NONE, AimedFloorOption = INDEX_NONE;
     /** Interaction E would toggle now: under the crosshair within reach, else the nearest joint in reach. */
     int32 FocusedInteraction() const;
     /** Where E reaches from: the eye camera in first person, the body's camera joint in third person. */
@@ -118,6 +158,11 @@ public:
     void AddViewKick(float PitchDegrees, float YawDegrees);
     /** Absolute view relative to the vehicle (degrees). */
     void SetVehicleRelativeView(float Yaw, float Pitch);
+    /** Scripted aim (sc.Lift.PanelAim): keep the view on point Local of Frame, turned again each tick from where the eye
+     *  is (the body's camera joint moves as the view turns, so one turn misses a close target). Mouse look or
+     *  ClearViewHold ends it. */
+    void HoldViewOn(const USceneComponent* Frame, const FVector& Local);
+    void ClearViewHold() { ViewHoldFrame.Reset(); }
     FRotator GetVehicleRelativeView() const;
     FVector GetVehicleRelativeLocation() const;
     /** Hold a movement input for a duration of game time (automation); bRun selects run speed. */
@@ -130,8 +175,17 @@ public:
     bool IsRunning() const { return bRunning; }
     /** Two Orbit presses closer than this reset the third-person orbit (viewer input constant, s). */
     static constexpr float DoubleTapSeconds = 0.3f;
-    /** Torch beam (viewer-owned light, not game data): candelas (a tactical weapon light; 6000 cd brightened a lit
-     *  hangar floor by only a few levels under the game's exposure), cone angles (degrees), reach (cm). */
+    /** The torch is the game's personal light: the player kit's first flashlight (FSCFlashlight, an item's
+     *  SCItemFlashlightParams) with its cookie's light function (FSCLightImporter::ApplyFlashlight). Null Game: the viewer's
+     *  fallback beam below (no player body, or a loadout without a flashlight). Keeps the on / off state. */
+    void SetTorchLight(const struct FSCFlashlight* Game, class UMaterialInterface* LightFunction);
+    /** WP-A1: the kit and the item whose Light_On_SFX / Light_Off_SFX the torch plays (empty item: none). */
+    void SetTorchAudio(ASCVehicle* Kit, const FString& ItemEntity);
+    /** Where the torch's light comes from: `game:<item entity>` or `fallback`. */
+    const FString& GetTorchSource() const { return TorchSource; }
+    /** Fallback torch beam, used only while the player kit supplies no flashlight (viewer values, not game data): candelas
+     *  (a tactical weapon light; 6000 cd brightened a lit hangar floor by only a few levels under the game's exposure),
+     *  cone angles (degrees), reach (cm). */
     static constexpr float TorchCandelas = 40000;
     static constexpr float TorchInnerCone = 10;
     static constexpr float TorchOuterCone = 22;
@@ -150,6 +204,13 @@ public:
     bool ResolveSpawn(FVector Hint, FVector& CapsuleCentre) const { bool C; return ResolveSpawn(Hint, CapsuleCentre, C); }
 private:
     FSCCharacterProfile Profile;
+    TArray<FSCSpawnPoint> HangarSpots;
+    TWeakObjectPtr<ASCVehicle> HangarListed;
+    int32 HangarListedRevision = INDEX_NONE;
+    TWeakObjectPtr<ASCVehicle> HangarRecoveryFor; // the hangar whose floors RecoveryZ already lies below
+    FString TorchSource;
+    TWeakObjectPtr<ASCVehicle> TorchKit;
+    FString TorchItem;
     TFunction<FVector()> EyeSource;
     FVector Move = FVector::ZeroVector, LastPosition = FVector::ZeroVector, HoldInput = FVector::ZeroVector;
     FTransform LastSpawn;
@@ -161,6 +222,30 @@ private:
     /** WP-P3: whether the capsule is inside the vehicle's physics grid (-1 unknown), and the vehicle that was for. */
     int8 GridState = -1;
     TWeakObjectPtr<ASCVehicle> GridVehicle;
+    /** WP-P5: the riding log. */
+    int32 RideLift = INDEX_NONE;
+    /** C2 fixes (rider retention): the lift whose moving carriage carries the capsule (ASCVehicle::LiftRiddenBy) and its
+     *  leg (the lift's LegStartedAt): what the leg passes through does not block the capsule then. */
+    int32 RiddenLift = INDEX_NONE;
+    double RiddenLeg = -1;
+    /** The per-tick ride trace: the carriage anchor's height the last CMC update moved the capsule against, and the leg's
+     *  feet-to-anchor statistics (LIFT_RIDE_TICK / LIFT_RIDE_LEG). */
+    double TraceAnchorZ = 0;
+    bool bTraceAnchor = false;
+    int32 TraceSamples = 0, TraceOtherBase = 0;
+    double TraceMin = 0, TraceMax = 0;
+    /** Rebuild the capsule's move-ignore list: the hull colliders inside the physics grid (WP-P3) and what a ridden leg
+     *  passes through (C2 fixes). */
+    void RefreshMoveIgnores(bool bInGrid, int32 Lift);
+    void UpdateRideTrace(int32 Lift);
+    TWeakObjectPtr<const USceneComponent> ViewHoldFrame;
+    FVector ViewHoldLocal = FVector::ZeroVector;
+    void ApplyViewHold();
+    double LastRideLog = -1;
+    void UpdateLiftFocusAndRide();
+    void UpdateFloorPanelAim();
+    void UpdateRideLog();
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     /** Ignore the vehicle's hull colliders in Params when a capsule at Centre is in its physics grid (as movement does). */
     void AddGridIgnores(struct FCollisionQueryParams& Params, const FVector& Centre, double HalfHeight) const;
     double RecoveryZ = -UE_BIG_NUMBER;

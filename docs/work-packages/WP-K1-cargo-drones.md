@@ -73,7 +73,7 @@ relevant JSON excerpts pasted. The superproject's FFI needs no new entry point: 
 ## K1b — UE cargo domain, containers, drones (Runtime module)
 
 Files under `SCBridge/Private/Cargo/` and `SCBridge/Public/Cargo/` (one writer). Works without the FFI at run time
-except for exporting packages: the cargo logic itself is plain C++ so the Wasm build can host it later.
+except for exporting packages: the cargo logic itself is plain C++.
 
 - **Reader**: parse `inventory_containers` (vehicle + interiors) and `children[].port_path`, `root_entity.inventory_*`
   into `FSCSceneManifest` (`SCPackageReader`); keep a port-path → anchor map on `ASCVehicle` (import job).

@@ -50,6 +50,27 @@ public:
     /** WP-L1 room confinement (area-only lights reach only their room's lighting channel). Off in the look (D15):
      *  every light is shadowed, so walls contain the light; the path tracer ignores channels. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") bool bConfineLightsToRooms = false;
+    /** WP-L2 / WP-E1 E1-7: the game's screen-space directional occlusion (the engine fork's SSDO, from the fixture) on lights that cast
+     *  no shadow, the sun and ambient light, in place of Lumen's short-range AO. Always on, part of the look (owner, 2026-11-19; D15 had
+     *  it off): not a saved setting, so no user config can turn it off. sc.Look.SSDO game|off switches it for this session only
+     *  (diagnostics, routes). */
+    bool bStarEngineSSDO = true;
+    /** Look (owner, 2026-11-19; D15): every glass material instance reflects max(F0 x GlassReflectanceScale, GlassReflectanceFloor),
+     *  the floor only where the authored F0 is not zero, clamped to 1 in M_SC_Glass; 1 and 0 = the game's .mtl Specular. The game's
+     *  glass reflects a biased, bloomed cubemap and reads stronger than a plain capture of the same F0 (ue/verification/WP-U3b.md
+     *  §14.9). Not saved settings, like bStarEngineSSDO; sc.Look.GlassReflectance sets them for this session on every glass instance. */
+    float GlassReflectanceScale = LookGlassReflectanceScale;
+    float GlassReflectanceFloor = LookGlassReflectanceFloor;
+    // The adjudicated look (Astra, C2 lift glass vs the game video and the C2 cockpit window from outside, §14.9): the floor alone
+    // lifts the faint interior glass (F0 0.0075-0.0086 -> 0.045) to the game's apparent strength and leaves exterior glass (0.036 ->
+    // 0.045) clear; a plain scale cannot do both (lift needs ~6, exterior turns milky from 3).
+    static constexpr float LookGlassReflectanceScale = 1.f;
+    static constexpr float LookGlassReflectanceFloor = 0.045f;
+    /** Look (owner, 2026-11-19; D15, not game data): glass refracts the scene behind it (M_SC_Glass GlassRefractionLook, UE's
+     *  distortion pass; ue/verification/WP-U3b.md §14.10), with the owner's profiles (SCLook::GlassProfile*). Part of the look,
+     *  like bStarEngineSSDO: on at every start and not a saved setting, so no user config can turn it off;
+     *  sc.Look.GlassRefraction 0 switches it off for this session only (diagnostics). */
+    bool bGlassRefraction = true;
     // Look (LOOK-6, revised LOOK-8): FFT bloom with a 4-point diffraction kernel at this intensity; 0 = the standard
     // bloom. LOOK-8 (adjudicated across the Galaxy in XL and the Golem in small hangars): the diffraction streaks veiled
     // hull edges and cockpits; standard bloom it is. 0.15 still suits stills. Console: sc.Look.BloomStar.
@@ -66,6 +87,9 @@ public:
     UPROPERTY(Config) int32 LookRevision = 0;
     // 9: LOOK-8 (revision 8 copied the class default object, which config had already loaded, and kept the old value).
     static constexpr int32 CurrentLookRevision = 9;
+    /** Moves values saved under an earlier look revision to this revision's defaults (they were defaults, not choices) and
+     *  records the revision; returns whether anything changed (the caller saves). Runs before the viewer volume is installed. */
+    bool MigrateLook();
     static constexpr float LookStarBloom = 0.f; // the adjudicated StarBloom (LOOK-8); the migration's target
     // Look (LOOK-1) vs frame time: Lumen short-range AO is traced with hardware ray tracing while the world's
     // ray-tracing segments stay within this budget (SCLook::UpdateShortRangeAO; a performance budget, not game data);
@@ -88,6 +112,15 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") int32 CargoPickAttempts = 3;
     /** Absolute path of the scenario file, empty when none is set. */
     FString ResolveCargoScenario() const;
+    /** Live cargo spawning without a scenario: the drone fleet (a scenario file's drone definition and docks; its ship,
+     *  environment and stock are ignored) a session takes on with its first spawn. Resolved like CargoScenario;
+     *  -SCCargoFleet=<file> overrides it, empty or "none" = no drones for spawned cargo. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoFleet = TEXT("fleet");
+    /** The entity-index search that finds the candidate box records for live spawning (a name substring); each hit is
+     *  kept only when its DataCore record is a whole-SCU box holding a resource (empty: every entity, one record read
+     *  each: slow). A name filter for speed only: what is a box is decided by the record. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoBoxSearch = TEXT("Carryable_TBO_");
+    FString ResolveCargoFleet() const;
 
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static USCViewerSettings* Get();
     /** -SCPlayerGender=<g> / -SCPlayerLoadout=<p4k path> override the settings for one run. */

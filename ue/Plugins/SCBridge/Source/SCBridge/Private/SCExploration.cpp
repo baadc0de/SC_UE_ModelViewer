@@ -17,6 +17,7 @@ const FName FSCSpawnKind::Interior(TEXT("Interior"));
 const FName FSCSpawnKind::Door(TEXT("Door"));
 const FName FSCSpawnKind::Hull(TEXT("Hull"));
 const FName FSCSpawnKind::Selected(TEXT("Selected"));
+const FName FSCSpawnKind::Hangar(TEXT("Hangar"));
 const TArray<FName>& FSCSpawnKind::StartOrder()
 {
     // Entrance only when the data identifies a hull entrance (see WP-P1 follow-ups: no exported
@@ -101,15 +102,24 @@ void ASCVehicle::BuildExploration()
         for (const auto& Clip : ClipCatalog->Clips)
             for (const auto& Fragment : Clip.Fragments)
             {
-                if (!Fragment.FragmentTags.Contains(TEXT("Open")) && !Fragment.Tags.Contains(TEXT("Open"))) continue;
-                const bool HasClose = ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) {
-                    return Other.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) {
-                        return F.Fragment == Fragment.Fragment && (F.FragmentTags.Contains(TEXT("Close")) || F.Tags.Contains(TEXT("Close")));
+                auto HasTag = [](const FSCClipFragment& F, FName Tag) { return !Tag.IsNone() && (F.FragmentTags.Contains(Tag) || F.Tags.Contains(Tag)); };
+                auto FragmentHasTag = [&](FName Tag) {
+                    return ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) {
+                        return Other.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == Fragment.Fragment && HasTag(F, Tag); });
                     });
-                });
-                // The category is the Mannequin Open/Close tag pair on a rig the clip binds; no
-                // fragment or entity vocabulary.
-                if (!HasClose) continue;
+                };
+                // A door by its own data (C2 fixes): a rig the clip binds whose door record's open tag (a single-procedural door's
+                // transition) is this fragment's, with its close tag on the fragment for an open/close door.
+                bool bDataDoor = false;
+                for (const USCRigComponent* Rig : Rigs)
+                    if (const FSCDoorRecord* R = Rig ? DoorRecords.Find(Rig) : nullptr;
+                        R && R->Door.bValid && Clip.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); }))
+                    {
+                        const bool bSingle = !R->Door.TransitionTag.IsNone();
+                        bDataDoor |= HasTag(Fragment, bSingle ? R->Door.TransitionTag : R->Door.OpenTag) && (bSingle || FragmentHasTag(R->Door.CloseTag));
+                    }
+                // Else the category is the Mannequin Open/Close tag pair on a rig the clip binds; no fragment or entity vocabulary.
+                if (!bDataDoor && (!HasTag(Fragment, TEXT("Open")) || !FragmentHasTag(TEXT("Close")))) continue;
                 TArray<FName> Joints;
                 TSharedPtr<FJsonObject> Json;
                 if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Fragment.Json), Json) && Json)
@@ -142,6 +152,18 @@ void ASCVehicle::BuildExploration()
                         Door.Rig = Rig;
                         Door.Fragment = Fragment.Fragment;
                         Door.Joint = Joint;
+                        // The door's own data (SCItemDoorParams via `door`): its fragment tags, spawn state, rate and port links.
+                        if (const FSCDoorRecord* Record = DoorRecords.Find(Rig); Record && Record->Door.bValid)
+                        {
+                            const FSCDoorTiming& D = Record->Door;
+                            Door.bReverseClose = !D.TransitionTag.IsNone();
+                            if (Door.bReverseClose) Door.OpenTag = D.TransitionTag;
+                            else if (!D.OpenTag.IsNone()) Door.OpenTag = D.OpenTag;
+                            if (!D.CloseTag.IsNone()) Door.CloseTag = D.CloseTag;
+                            Door.bStartsOpen = D.bIsOpened.Get(false);
+                            Door.Speed = D.bSpeedKnown && D.AnimationSpeed > 0 ? D.AnimationSpeed : 1.f;
+                            Door.PortLinks = Record->PortLinks;
+                        }
                         const FString Label = Instance ? Instance->EntityName :
                             Clip.Owner.Contains(TEXT("/")) ? FPaths::GetBaseFilename(Clip.Owner) : Joint.ToString();
                         Door.DisplayName = Label.Replace(TEXT("_"), TEXT(" "));
@@ -157,7 +179,76 @@ void ASCVehicle::BuildExploration()
     const FBox Bounds = ExplorationBounds();
     if (Bounds.IsValid)
         AddSpawnPoint(FSCSpawnKind::Hull, TEXT("Above hull centre"), FTransform(FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z)));
-    UE_LOG(LogTemp, Display, TEXT("EXPLORATION spawns=%d doors=%d collision_ready=%d"), SpawnPoints.Num(), Doors.Num(), bCollisionReady);
+    const int32 Posed = ApplyDoorRestPoses();
+    UE_LOG(LogTemp, Display, TEXT("EXPLORATION spawns=%d doors=%d door_rest_poses=%d collision_ready=%d"), SpawnPoints.Num(), Doors.Num(), Posed,
+           bCollisionReady);
+}
+int32 ASCVehicle::ApplyDoorRestPoses()
+{
+    // The authored spawn state (SCItemDoorParams.IsOpened; DoorOpenState's default is DoorClosed): a single-procedural door
+    // is its transition's time (closed at the start, open at the end), so it holds that frame; an open/close door opened in
+    // the data holds its open fragment's end; a closed one keeps the bind pose, which is its open fragment's start.
+    int32 Posed = 0;
+    TSet<TPair<const USCRigComponent*, FName>> Done;
+    for (const FSCDoorInteraction& D : Doors)
+    {
+        if (!D.Rig || Done.Contains({D.Rig.Get(), D.Fragment})) continue;
+        Done.Add({D.Rig.Get(), D.Fragment});
+        // The authored end pose of the state: open = the end of the open fragment; closed = the start of a single-procedural
+        // door's transition, or the end of an open/close door's close fragment. A door without door data keeps its bind pose
+        // closed (the Mannequin pair only).
+        const FSCDoorRecord* Record = DoorRecords.Find(D.Rig.Get());
+        const bool bData = Record && Record->Door.bValid;
+        bool bPosed = false;
+        if (D.bStartsOpen) bPosed = PlayFragmentAt(D.Fragment, D.OpenTag, D.Rig, 1.f, ESCFragmentStart::HoldLast);
+        else if (D.bReverseClose) bPosed = PlayFragmentAt(D.Fragment, D.OpenTag, D.Rig, 1.f, ESCFragmentStart::HoldFirst);
+        else if (bData) bPosed = PlayFragmentAt(D.Fragment, D.CloseTag, D.Rig, 1.f, ESCFragmentStart::HoldLast);
+        if (bPosed || (!bData && !D.bStartsOpen))
+            FragmentTargets.Add({D.Rig.Get(), D.Fragment}, D.bStartsOpen ? D.OpenTag : D.CloseTag);
+        else
+            UE_LOG(LogTemp, Warning, TEXT("DOOR_REST owner=%s fragment=%s open=%d: no fragment poses the authored state; left at the bind pose, state not recorded"),
+                   *D.Rig->OwnerEntity, *D.Fragment.ToString(), D.bStartsOpen);
+        Posed += bPosed;
+    }
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
+    return Posed;
+}
+bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth)
+{
+    if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig) return false;
+    if (Depth > 8) // a cycle of item-port links in the data
+    {
+        UE_LOG(LogTemp, Warning, TEXT("DOOR_PORT_LINK depth=%d: link chain too deep, not followed"), Depth);
+        return false;
+    }
+    const FSCDoorInteraction D = Doors[Index]; // a copy: the deliveries below may touch the array's owner state
+    USCRigComponent* Rig = D.Rig;
+    const bool bBackward = !bOpen && D.bReverseClose;
+    const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
+    const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
+    if (!PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose)) return false;
+    FragmentTargets.Add({Rig, D.Fragment}, bOpen ? D.OpenTag : D.CloseTag);
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
+    UpdateTickEnabled();
+    // The door's own interaction goes on to the items of the vehicle ports its links name (the C2's front hatch: its Open and
+    // Close reach the front doors and the ramp).
+    for (const FSCItemPortLink& L : D.PortLinks)
+    {
+        bool bSourceOpen = false, bSourceToggle = false, bTargetOpen = false, bTargetToggle = false;
+        if (!FSCInteractionNetwork::DoorVerb(L.SourceSlot, bSourceOpen, bSourceToggle) || bSourceToggle || bSourceOpen != bOpen) continue;
+        const TWeakObjectPtr<USCRigComponent>* Target = PortRigs.Find(L.TargetPort);
+        const int32 TargetDoor = Target ? DoorForRig(Target->Get()) : INDEX_NONE;
+        bool bHandled = false;
+        if (TargetDoor != INDEX_NONE && FSCInteractionNetwork::DoorVerb(L.TargetSlot, bTargetOpen, bTargetToggle))
+        {
+            if (bTargetToggle) bTargetOpen = !IsDoorOpen(TargetDoor);
+            bHandled = IsDoorOpen(TargetDoor) == bTargetOpen || PlayDoor(TargetDoor, bTargetOpen, 0.f, Depth + 1);
+        }
+        UE_LOG(LogTemp, Display, TEXT("DOOR_PORT_LINK source=%s slot=%s port=%s target=%s target_slot=%s handled=%d depth=%d"), *Rig->OwnerEntity,
+               *L.SourceSlot.ToString(), *L.TargetPort, Target && Target->IsValid() ? *(*Target)->OwnerEntity : TEXT("-"), *L.TargetSlot.ToString(),
+               bHandled, Depth);
+    }
+    return true;
 }
 int32 ASCVehicle::NearestDoor(FVector Position, float Reach) const
 {
@@ -166,26 +257,62 @@ int32 ASCVehicle::NearestDoor(FVector Position, float Reach) const
     for (int32 I = 0; I < Doors.Num(); ++I)
     {
         const auto& D = Doors[I];
-        if (!D.Rig) continue;
+        if (!D.Rig || LiftDrivenRigs.Contains(D.Rig.Get())) continue;
         const double Candidate = FVector::DistSquared(Position, D.Rig->GetSocketLocation(D.Joint));
         if (Candidate <= Distance) { Distance = Candidate; Best = I; }
     }
     return Best;
 }
-int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, const AActor* Ignore) const
+void ASCVehicle::SetPanelReach(const USceneComponent* Panel, float Metres)
+{
+    if (!Panel || !(Metres > 0)) return;
+    float& Reach = PanelReach.FindOrAdd(Panel);
+    Reach = FMath::Max(Reach, Metres * 100.f);
+    MaxPanelReach = FMath::Max(MaxPanelReach, Reach);
+}
+int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, FSCInteractionPick* Pick) const
 {
     // What the crosshair is on (the ray itself bounds the reach): the nearest rig owning the hit part.
     // Doors are large and their driven joints (hinges, hydraulics) can sit metres from the surface the
-    // player faces, so joint distance alone misses them.
+    // player faces, so joint distance alone misses them. The ray runs as far as the farthest-operated door panel: a panel
+    // is used from as far as its own UI allows (PanelReach; the C2's exterior pads sit 3.5-4 m above a standing player's
+    // eye), anything else only within Reach.
+    FSCInteractionPick Local;
+    FSCInteractionPick& Out = Pick ? *Pick : Local;
+    Out = FSCInteractionPick();
+    Out.Reach = Reach;
     FHitResult Hit;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCInteract), true, Ignore);
-    if (GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Direction.GetSafeNormal() * Reach, ECC_Visibility, Params) &&
-        Hit.GetActor() == this)
+    const float Longest = FMath::Max(Reach, MaxPanelReach);
+    const bool bHit = GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Direction.GetSafeNormal() * Longest, ECC_Visibility, Params);
+    if (bHit)
     {
-        // A door panel (pad) operates its door, wherever the panel stands.
+        Out.Hit = GetNameSafe(Hit.GetComponent());
+        Out.Distance = Hit.Distance;
+    }
+    if (bHit && Hit.GetActor() == this)
+    {
+        // A door panel (pad) operates its door, wherever the panel stands, within the panel's own reach: the panel's own
+        // parts only (a rig mounted under the panel is another item: it keeps Reach).
+        bool bCrossedRig = false;
         for (const USceneComponent* C = Hit.GetComponent(); C; C = C->GetAttachParent())
+        {
             if (const TWeakObjectPtr<USCRigComponent>* Door = DoorControls.Find(C))
-                if (const int32 Index = DoorForRig(Door->Get()); Index != INDEX_NONE) return Index;
+            {
+                const float PadReach = bCrossedRig ? Reach : FMath::Max(Reach, PanelReach.FindRef(C));
+                const int32 Index = DoorForRig(Door->Get());
+                if (Index != INDEX_NONE && Hit.Distance <= PadReach)
+                {
+                    Out.Via = TEXT("panel");
+                    Out.Reach = PadReach;
+                    return Index;
+                }
+            }
+            bCrossedRig |= C->IsA<USCRigComponent>();
+        }
+    }
+    if (bHit && Hit.GetActor() == this && Hit.Distance <= Reach)
+    {
         FName Socket = NAME_None;
         const USCRigComponent* Rig = nullptr;
         for (const USceneComponent* C = Hit.GetComponent(); C && !Rig; C = C->GetAttachParent())
@@ -194,9 +321,9 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
             if (!Rig) Socket = C->GetAttachSocketName();
         }
         TArray<int32> OnRig;
-        for (int32 I = 0; Rig && I < Doors.Num(); ++I)
+        for (int32 I = 0; Rig && !LiftDrivenRigs.Contains(Rig) && I < Doors.Num(); ++I)
             if (Doors[I].Rig == Rig) OnRig.AddUnique(I);
-        if (OnRig.Num() == 1) return OnRig[0]; // the entity is the interaction (a door, a seat)
+        if (OnRig.Num() == 1) { Out.Via = TEXT("rig"); return OnRig[0]; } // the entity is the interaction (a door, a seat)
         if (OnRig.Num() > 1)
         {
             // Several fragments drive one rig (root-entity panels): the one whose driven joint carries
@@ -204,7 +331,7 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
             const auto& Ref = Rig->GetSkeletalMeshAsset()->GetRefSkeleton();
             for (int32 Bone = Ref.FindBoneIndex(Socket); Bone != INDEX_NONE; Bone = Ref.GetParentIndex(Bone))
                 for (int32 I : OnRig)
-                    if (Ref.GetBoneName(Bone) == Doors[I].Joint) return I;
+                    if (Ref.GetBoneName(Bone) == Doors[I].Joint) { Out.Via = TEXT("rig"); return I; }
             int32 Best = INDEX_NONE;
             double Distance = FMath::Square(Reach);
             for (int32 I : OnRig)
@@ -212,21 +339,33 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
                 const double Candidate = FVector::DistSquared(Hit.ImpactPoint, Rig->GetSocketLocation(Doors[I].Joint));
                 if (Candidate <= Distance) { Distance = Candidate; Best = I; }
             }
-            if (Best != INDEX_NONE) return Best;
+            if (Best != INDEX_NONE) { Out.Via = TEXT("rig"); return Best; }
         }
     }
-    return NearestDoor(Eye, Reach);
+    const int32 Nearest = NearestDoor(Eye, Reach);
+    if (Nearest != INDEX_NONE) Out.Via = TEXT("nearest");
+    return Nearest;
 }
 bool ASCVehicle::IsDoorOpen(int32 Index) const
 {
-    return Doors.IsValidIndex(Index) && IsFragmentOpen(Doors[Index].Fragment, Doors[Index].Rig);
+    return Doors.IsValidIndex(Index) && FragmentTargets.FindRef({Doors[Index].Rig.Get(), Doors[Index].Fragment}) == Doors[Index].OpenTag;
+}
+bool ASCVehicle::IsDoorPlaying(int32 Index) const
+{
+    if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig || !ClipCatalog) return false;
+    const FSCDoorInteraction& D = Doors[Index];
+    return Playback.ContainsByPredicate([&](const FSCClipPlayback& P) {
+        return AppliesTo(P, D.Rig) && ClipCatalog->Clips.IsValidIndex(P.Clip) &&
+               ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == D.Rig->GetSkeletalMeshAsset(); }) &&
+               ClipCatalog->Clips[P.Clip].Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment; });
+    });
 }
 bool ASCVehicle::ToggleDoor(int32 Index)
 {
     if (!Doors.IsValidIndex(Index)) return false;
     const auto& D = Doors[Index];
-    const FName Tag = IsDoorOpen(Index) ? TEXT("Close") : TEXT("Open");
-    if (!PlayFragmentAt(D.Fragment, Tag, D.Rig)) return false;
+    // The press is the door's own (its DoorAnimationSpeed), from its current pose, and goes on along its port links.
+    if (!PlayDoor(Index, !IsDoorOpen(Index))) return false;
     UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_DOOR fragment=%s owner=%s joint=%s open=%d label=\"%s\""), *D.Fragment.ToString(),
            D.Rig ? *D.Rig->OwnerEntity : TEXT("-"), *D.Joint.ToString(), IsDoorOpen(Index), *D.DisplayName);
     return true;
@@ -247,7 +386,8 @@ void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
         for (const auto& Rig : Sensor.Doors)
         {
             const int32 Door = DoorForRig(Rig.Get());
-            if (Door == INDEX_NONE) continue;
+            // A lift's doors open and close with its carriage (WP-P5): a sensor reopening one would undo the handshake.
+            if (Door == INDEX_NONE || LiftDrivenRigs.Contains(Rig.Get())) continue;
             FSensorDoorState& State = SensorDoorStates.FindOrAdd(Door);
             State.LastInside = Now;
             State.ExitDelay = FMath::Max(State.ExitDelay, Sensor.ExitDelay);

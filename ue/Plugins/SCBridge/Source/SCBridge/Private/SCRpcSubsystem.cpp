@@ -391,7 +391,34 @@ private:
             O->SetObjectField(TEXT("camera"), CameraObj);
         }
         if (const USCCargoSubsystem* C = Cargo()) O->SetObjectField(TEXT("cargo"), C->StateJson());
+        if (const TSharedPtr<FJsonValue> Lifts = LiftsJson(); Lifts->AsArray().Num() > 0) O->SetField(TEXT("lifts"), Lifts);
         return O;
+    }
+    /** WP-P5: one record per lift of the loaded vehicle: state, path position, speed, queue and door state at its stop. */
+    TSharedPtr<FJsonValue> LiftsJson() const
+    {
+        TArray<TSharedPtr<FJsonValue>> Out;
+        const USCViewerSubsystem* V = Viewer();
+        if (const ASCVehicle* Vehicle = V ? V->GetVehicle() : nullptr)
+            for (const TSharedPtr<FSCLift>& L : Vehicle->Lifts)
+            {
+                FObj LO = MakeShared<FJsonObject>();
+                LO->SetNumberField(TEXT("id"), L->Id);
+                LO->SetStringField(TEXT("entity"), L->EntityId);
+                LO->SetStringField(TEXT("state"), LexToString(L->State));
+                LO->SetStringField(TEXT("phase"), LexToString(L->SpeedPhase));
+                LO->SetNumberField(TEXT("at"), L->CurrentStop);
+                LO->SetNumberField(TEXT("target"), L->TargetStop);
+                LO->SetField(TEXT("s_m"), Number(L->S, 0.001));
+                LO->SetField(TEXT("v"), Number(L->V, 0.001));
+                LO->SetBoolField(TEXT("idle"), L->IsIdle());
+                LO->SetStringField(TEXT("doors"), LexToString(L->DoorState(L->CurrentStop)));
+                TArray<TSharedPtr<FJsonValue>> Queue;
+                for (const FSCLiftRequest& R : L->Queue) Queue.Add(MakeShared<FJsonValueNumber>(R.Stop));
+                LO->SetArrayField(TEXT("queue"), Queue);
+                Out.Add(MakeShared<FJsonValueObject>(LO));
+            }
+        return MakeShared<FJsonValueArray>(Out);
     }
 
     /** Anomalies in a snapshot: positions that are not finite, stored boxes off their slots, boxes without actors or
@@ -756,16 +783,18 @@ private:
 
     void Wait(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)
     {
-        // until: idle | settled | job (job: <id>, finished). The condition must hold on a frame after the request (what
-        // the previous request started has been seen); min_s: and not before this many seconds.
+        // until: idle | settled | job (job: <id>, finished) | lift_idle (lift: <id>, default every lift; WP-P5: no request
+        // queued, not moving, no door in motion). The condition must hold on a frame after the request (what the previous
+        // request started has been seen); min_s: and not before this many seconds.
         const FString Until = Str(B, TEXT("until"), TEXT("settled"));
         const int32 Job = int32(Num(B, TEXT("job"), -1));
+        const int32 LiftId = int32(Num(B, TEXT("lift"), -1));
         const double MinS = Num(B, TEXT("min_s"), 0);
         const uint64 Frame = GFrameCounter;
         const double Started = Now();
-        if (Until != TEXT("idle") && Until != TEXT("settled") && Until != TEXT("job"))
-            return Respond(Done, Error(TEXT("until: idle, settled or job")));
-        Defer(TEXT("/wait"), Num(B, TEXT("timeout_s"), 120), true, Done, [this, Until, Job, MinS, Frame, Started](bool bTimedOut) -> TSharedPtr<FJsonObject> {
+        if (Until != TEXT("idle") && Until != TEXT("settled") && Until != TEXT("job") && Until != TEXT("lift_idle"))
+            return Respond(Done, Error(TEXT("until: idle, settled, job or lift_idle")));
+        Defer(TEXT("/wait"), Num(B, TEXT("timeout_s"), 120), true, Done, [this, Until, Job, LiftId, MinS, Frame, Started](bool bTimedOut) -> TSharedPtr<FJsonObject> {
             if (GFrameCounter < Frame + 2 || (Now() - Started < MinS && !bTimedOut)) return nullptr;
             bool bReached = false;
             FObj O = MakeShared<FJsonObject>();
@@ -778,6 +807,17 @@ private:
                 bReached = State == ESCCargoJobState::Done || State == ESCCargoJobState::Failed || State == ESCCargoJobState::Cancelled;
                 O->SetStringField(TEXT("job_state"), StaticEnum<ESCCargoJobState>()->GetNameStringByValue(int64(State)));
                 if (!Reason.IsEmpty()) O->SetStringField(TEXT("job_reason"), Reason.ToString());
+            }
+            else if (Until == TEXT("lift_idle"))
+            {
+                const USCViewerSubsystem* V = Viewer();
+                const ASCVehicle* Vehicle = V ? V->GetVehicle() : nullptr;
+                if (!Vehicle || Vehicle->Lifts.IsEmpty() || (LiftId >= 0 && !Vehicle->Lifts.IsValidIndex(LiftId)))
+                    return Error(FString::Printf(TEXT("no lift %d"), LiftId));
+                bReached = true;
+                for (int32 I = 0; I < Vehicle->Lifts.Num(); ++I)
+                    if (LiftId < 0 || I == LiftId) bReached &= Vehicle->Lifts[I]->IsIdle();
+                O->SetField(TEXT("lifts"), LiftsJson());
             }
             else bReached = Until == TEXT("idle") ? bIdle : bSettled;
             if (!bReached && !bTimedOut) return nullptr;

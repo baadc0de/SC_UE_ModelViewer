@@ -73,7 +73,7 @@ class Graph:
         self.m.set_editor_property("used_with_skeletal_mesh", True)
         # Environments draw repeated rigid parts as instanced static meshes (FSCInstancing, LOOK-6); same reason.
         self.m.set_editor_property("used_with_instanced_static_meshes", True)
-        # Hangars with baked lighting (bake_hangar_lighting.py, the web build) draw lightmapped meshes; same reason.
+        # Lightmapped (statically lit) meshes need the static-lighting usage; same reason.
         self.m.set_editor_property("used_with_static_lighting", True)
         # Explicit clip: mask graphs output (alpha - AlphaTest + 0.5), i.e. a texel survives when alpha >= the
         # instance's authored AlphaTest. UE's default clip (0.3333, Material.cpp) would shift every threshold.
@@ -575,8 +575,121 @@ float height = lerp(1.0, saturate((Vertex.b - HeightBias) * HeightScale), UseVer
 float3 density = (1.0 / max(colour, Floor) - 1.0) * DensityScale;
 return exp(-density * height);
 """
+# Viewer look (not the game's; WP-U3b.md section 14.9): F0 x Scale, at least Floor where the authored F0 is not zero
+# (a glass authored not to reflect keeps 0), clamped to 1. Scale 1, Floor 0 is the game's F0.
+GLASS_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor * step(1e-6, F0)));"
 # glassLib.cfib under %HEIGHT_MAP: clip(heightMap - 0.01).
-GLASS_COVERAGE = "return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
+# M_SC_Screen: the same look over every screen face (no F0 > 0 condition: a screen always has its glass cover).
+SCREEN_REFLECTANCE_LOOK = "return saturate(max(F0 * Scale, Floor));"
+# MonitorEffects.cfib MonitorEffects_ApplyViewingAngle (StarEngineRender.json pins its token hash; WP-I1 fix pass): the
+# DisplayScreen image graded by the viewing angle (fNdotV = the vertex normal against the view, GlassShared's
+# NdotVVertex), the authored EmissiveContrast and EmissiveSaturation. ViewingAngle 180 (the C2 screens) gives a view
+# factor of 1 at every angle.
+SCREEN_VIEWING_ANGLE = """
+float3 Ng = normalize(Parameters.TangentToWorld[2]);
+float fNdotV = saturate(dot(Ng, Parameters.CameraVector));
+float fViewingAngle = ViewingAngle * (PI / 180.0);
+float fViewFactor = saturate(pow(fNdotV + 1e-9, PI - fViewingAngle));
+float sat = Saturation;
+float3 col = Col;
+if (Mode == 0.0) {
+    float fViewMask = saturate(dot(col.rgb, float3(4.0, 4.0, 4.0)));
+    float3 cInvertColor = saturate(0.125 * fViewMask - col.rgb) + col.rgb * (0.5 - fViewMask);
+    col = max(0.0, lerp(cInvertColor, col, fViewFactor));
+} else {
+    sat *= 1.0 + 0.5 * (1.0 - fViewFactor);
+    col *= fViewFactor;
+}
+col = max(lerp(0.5, col, Contrast), 0.0);
+col = lerp(dot(col, float3(0.33, 0.59, 0.11)), col, sat);
+return col;
+"""
+# OpticsExposure.cfib GetGlobalDBAMultiplier_HDR under %DBA_GLOBAL (pinned likewise): clamp(adapted luminance,
+# luminance at EV 1, at EV 14) / middle grey, in the game's scene units, so the screen keeps its displayed brightness
+# whatever the exposure. The adapted luminance is the exposure's inverse: the game exposes it to middle grey
+# (CalcExposureAndNoise: exposure = middleGray / adaptedLuminance), so here MiddleGrey x 1 / exposure (the viewer's
+# exposure follows the game's, SCViewerExposure), in cd/m2; NitsPerUnit = DBA middle grey x HDR_LUMINANCE_SCALE.
+# UseDBA 0 (no %DBA_GLOBAL) leaves the absolute glow.
+# The screen image's texture coordinates: an affine map of the face's UV0 (ScreenUVTransformX / Y rows: u' = X.x u + X.y v
+# + X.z). Identity by default (an exported panel render covers the face's UVs); a viewer-drawn render target maps the
+# face's own UV window onto itself (WP-P5 floor panel, FSCScreenFaceGeometry::ContentFromUV).
+SCREEN_IMAGE_UV = """
+return float2(dot(TX.xyz, float3(UV, 1.0)), dot(TY.xyz, float3(UV, 1.0)));
+"""
+
+SCREEN_DBA = """
+float adapted = ExposureGrey * InvExposure.x;
+return lerp(1.0, clamp(adapted, MinNits, MaxNits) / NitsPerUnit, UseDBA);
+"""
+GLASS_COVERAGE ="return lerp(1.0, HeightMap < Clip ? 0.0 : 1.0, UseHeightMap);"
+# Viewer look, not the game's (D15; WP-U3b.md section 14.10): the glass refracts the scene behind it through UE's distortion
+# pass (RefractionMethod 2D offset). The pass moves the scene colour itself under every glass pixel before the translucency is
+# composited, so whatever is drawn between (glass behind glass, emissive and translucent surfaces) stays itself, unrefracted;
+# the first version replaced the background in the glass's own blend from a scene-colour copy, which embossed every
+# translucent layer behind with a difference image of the opaque scene (section 14.10, the embossing). GLASS_REFRACTION_OFFSET
+# returns the offset in viewport UV (xy, y down) and the dispersion spread (z: red at 1 - z, blue at 1 + z, the fork's distortion
+# pass, WP-E1 E1-8). Two terms, as angles seen from the camera (view space, x right, y up):
+# - wedge: the surface tilt of the normal map deviates the ray by (IOR - 1) x tilt x Strength, a thin prism; at the background
+#   that is x (1 - glass depth / background depth), so a surface right behind the pane barely moves;
+# - slab: a pane Thickness cm thick shifts the ray sideways by t sin(i) (1 - cos(i) / sqrt(n^2 - sin^2(i))) (zero head-on, growing
+#   towards grazing incidence), seen at the background's distance.
+# Dispersion spread s = GlassDispersion x (2 - N.V) (wider towards grazing). The offset is shrunk so every channel's sample stays on
+# the screen, by the room towards the edge it moves to (the pass would drop it to zero there: a hard cut). Look 0
+# (sc.Look.GlassRefraction 0, a diagnostic) returns zero.
+GLASS_REFRACTION_OFFSET = """
+if (Look <= 0.0) return float3(0.0, 0.0, 0.0);
+float n = clamp(IOR, 1.0001, 3.0);
+float3 Ng = normalize(Parameters.TangentToWorld[2]);
+float3 V = Parameters.CameraVector;
+float NoV = dot(Ng, V);
+if (NoV < 0.0) { Ng = -Ng; NoV = -NoV; }
+NoV = clamp(NoV, 1e-3, 1.0);
+float3 Nw = normalize(mul(normalize(NormalTS), (float3x3)Parameters.TangentToWorld));
+if (dot(Nw, Ng) < 0.0) Nw = -Nw;
+float Zg = PixelZ;
+float Zb = max(SceneZ, Zg + 0.01);
+float2 a = (TransformWorldVectorToView(Ng).xy - TransformWorldVectorToView(Nw).xy) * ((n - 1.0) * Strength * (1.0 - Zg / Zb));
+float sin2 = 1.0 - NoV * NoV;
+float shift = Thickness * sqrt(sin2) * (1.0 - NoV / sqrt(max(n * n - sin2, 1e-4)));
+float3 D = -(Ng - NoV * V);
+float lenD = length(D);
+if (lenD > 1e-4) a += TransformWorldVectorToView(D / lenD).xy * (shift / Zb);
+float2 O = a * float2(ResolvedView.ViewToClip[0][0], ResolvedView.ViewToClip[1][1]) * float2(0.5, -0.5);
+float s = clamp(Dispersion, 0.0, 0.95) * (2.0 - NoV);
+float2 uv = GetViewportUV(Parameters);
+float2 room = max(lerp(uv, 1.0 - uv, step(0.0, O)) - 0.002, 0.0);
+float2 reach = abs(O) * (1.0 + s) + 1e-6;
+O *= saturate(min(room.x / reach.x, room.y / reach.y));
+return float3(O, s);
+"""
+# One depth probe along the offset: the pixel's viewport UV + Offset x K x (1 + spread), i.e. along the farthest (blue) channel.
+GLASS_REFRACTION_PROBE = "return GetViewportUV(Parameters) + Offset.xy * (K * (1.0 + Offset.z));"
+# The moved sample must show what lies behind the pane at about the pixel's own background depth. Where it lands on something much
+# nearer (an object between the glass and the background: a rod inside the engineering cylinder, a door edge), screen-space
+# refraction would draw that object a second time beside itself; the offset is then shortened to the longest of 1, 1/2, 1/4 of it
+# whose sample (taken at the blue channel's reach, offset x (1 + spread)) is still at least ~3/4 of the way from the glass to the
+# pixel's background (soft between 1/2 and 9/10), else 0. The
+# result is converted to the distortion pass's units: DistortionCommon.ush ComputeBufferUVDistortion scales a 2D offset by
+# ViewSize / BufferSize x (unscaled view width, height) x (0.00023, -0.00023) x (ViewToClip[0][0], aspect x ViewToClip[0][0]), i.e.
+# both axes by unscaled width x 0.00023 x ViewToClip[0][0] and y flipped (the unscaled width is the view width / ViewResolutionFraction,
+# right for temporal and spatial upscaling alike); the pass itself also drops the offset where the moved sample is in front of the
+# glass (PostProcessUVDistortion with the material's refraction depth bias, 0). Returns the Refraction input: xy is the 2D offset
+# (the translator takes xy only and appends the material's depth bias; z is unused). The dispersion spread reaches the fork's
+# distortion pass through SCViewerRefractionDispersion (DistortAccumulatePS.usf, WP-E1 E1-8; only that pass defines
+# SCVIEWER_REFRACTION_DISPERSION_PASS, every other pass compiles the node without it).
+GLASS_REFRACTION_GUARD = """
+#ifdef SCVIEWER_REFRACTION_DISPERSION_PASS
+SCViewerRefractionDispersion = Offset.z;
+#endif
+float Zg = PixelZ;
+float span = max(SceneZ - Zg, 1.0);
+float3 d = float3(D1, D2, D4);
+float3 w = saturate(((d - Zg) / span - 0.5) * 2.5);
+float t = max(w.x, max(0.5 * w.y, 0.25 * w.z));
+float2 O = Offset.xy * t;
+float k = ResolvedView.ViewSizeAndInvSize.x / max(ResolvedView.ViewResolutionFraction, 1e-3) * 0.00023 * ResolvedView.ViewToClip[0][0];
+return float3(O.x / k, -O.y / k, 0.0);
+"""
 # The glass graph is a port of these game functions. StarEngineRender.json pins their token hashes and
 # scripts/verify_star_engine_render.py re-checks them against the installed game; the master is not built from a
 # fixture that no longer carries the hashes the port was written against.
@@ -595,6 +708,29 @@ def check_ported(ported):
             raise RuntimeError(f"{name}: the game shader changed since the port was written; re-derive the graph")
 
 
+def glass_refraction(g, normal):
+    """The glass refraction look (viewer, not the game's; WP-U3b.md section 14.10): the master's Refraction input, a 2D offset
+    for UE's distortion pass (GLASS_REFRACTION_OFFSET, shortened by GLASS_REFRACTION_GUARD from three scene-depth probes along it).
+    GlassRefractionLook (master default 1: on, the shipped look; 0 only through the session diagnostic sc.Look.GlassRefraction 0)
+    switches the offset off; GlassRefractionStrength and GlassDispersion (the colour fringing, through the fork's per-channel
+    distortion, WP-E1 E1-8) are set per instance from the owner's profiles (SCLook.h), IOR and thickness are master defaults
+    (WP-U3b.md section 14.10)."""
+    f2, f3 = unreal.CustomMaterialOutputType.CMOT_FLOAT2, unreal.CustomMaterialOutputType.CMOT_FLOAT3
+    scene_z, pixel_z = (g.node(unreal.MaterialExpressionSceneDepth), ""), (g.node(unreal.MaterialExpressionPixelDepth), "")
+    offset = g.custom(GLASS_REFRACTION_OFFSET, f3,
+                      Look=g.scalar("GlassRefractionLook", 1.0, "Look"), Strength=g.scalar("GlassRefractionStrength", 1.0, "Look"),
+                      IOR=g.scalar("GlassRefractionIOR", 1.5, "Look"), Thickness=g.scalar("GlassRefractionThickness", 1.5, "Look"),
+                      Dispersion=g.scalar("GlassDispersion", 0.25, "Look"), NormalTS=normal, SceneZ=scene_z, PixelZ=pixel_z)
+
+    def depth_at(k):
+        e = g.node(unreal.MaterialExpressionSceneDepth, input_mode=unreal.MaterialSceneAttributeInputMode.COORDINATES)
+        g.link_any(*g.custom(GLASS_REFRACTION_PROBE, f2, Offset=offset, K=g.const(k)), e, ("Coordinates", "UV", "Input", ""))
+        return (e, "")
+
+    return g.custom(GLASS_REFRACTION_GUARD, f3, Offset=offset, D1=depth_at(1.0), D2=depth_at(0.5), D4=depth_at(0.25),
+                    SceneZ=scene_z, PixelZ=pixel_z)
+
+
 def glass_master():
     """M_SC_Glass, the game's GlassPBR (ue/verification/WP-U3b.md §14): a clear dielectric slab, albedo 0, F0 =
     SpecularColor, whose only colour is absorption through its height. The slab is a Substrate *simple volume*: UE
@@ -602,7 +738,10 @@ def glass_master():
     transmittance along the refracted path and multiplying by (1 - Fresnel). TransmittanceToMFP converts the
     normal-incidence transmittance into the slab's mean free path. Any other sub-surface type has no transmittance
     in a translucent blend mode and draws the slab opaque. Coverage is 1: the authored Opacity is not read. Every
-    glass map is read at the game's glassUV = baseUV * GlassTiling, v *= GlassVStretch."""
+    glass map is read at the game's glassUV = baseUV * GlassTiling, v *= GlassVStretch. F0 takes the look's
+    GlassReflectanceScale and GlassReflectanceFloor (defaults 1 and 0 = the game's value). The refraction look
+    (glass_refraction, always on in the viewer's look) is the Refraction input of UE's distortion pass (2D offset): it moves
+    the scene behind the glass and leaves the slab itself as the game's."""
     check_ported(GLASS_PORTED)
     g = Graph("M_SC_Glass", unreal.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE,
               unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
@@ -621,13 +760,17 @@ def glass_master():
         HeightScale=g.scalar("GlassVertexHeightScale", 1.0), UseVertexHeight=g.scalar("UseVertexHeight", 0.0),
         HeightMap=height_map, UseHeightMap=use_height_map, Floor=g.scalar("GlassColorFloor", 1.0),
         DensityScale=g.scalar("GlassDensityScale", 0.0))
-    mfp = g.node(unreal.MaterialExpressionSubstrateTransmittanceToMFP)
-    g.link(*transmittance, mfp, "TransmittanceColor")
     # Fresnel: the game's lerp(Reflectance, 1, Schlick) (F0 = SpecularColor, F90 = 1); under %THIN_FILM (UseThinFilm)
     # UE's thin-film node instead. The node is not an identity at zero thickness: it always adds the film's own
     # dielectric interface (IOR 1.44) and so raises a clear glass's F0 several-fold, which drew a milky reflection over
     # every canopy (WP-U3b.md section 14.8). It is therefore selected, not fed a zero thickness.
-    f0 = g.vector("SpecularColor", (0.04, 0.04, 0.04))
+    # GlassReflectanceScale / GlassReflectanceFloor are viewer look values, not the game's (WP-U3b.md section 14.9):
+    # F0 x scale, raised to the floor where the material reflects at all, clamped to 1, before the film selection; F90
+    # stays 1. The master defaults (1, 0) are the game's reflectance; the builder sets the look's values
+    # (USCViewerSettings) on every glass instance.
+    f0 = g.custom(GLASS_REFLECTANCE_LOOK, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
+                  F0=g.vector("SpecularColor", (0.04, 0.04, 0.04)), Scale=g.scalar("GlassReflectanceScale", 1.0),
+                  Floor=g.scalar("GlassReflectanceFloor", 0.0))
     f90 = g.const3((1, 1, 1))
     film = g.node(unreal.MaterialExpressionSubstrateThinFilm)
     g.link(*normal, film, "Normal")
@@ -635,12 +778,21 @@ def glass_master():
     g.link(*f90, film, "F90")
     g.link(*g.scalar("ThinFilmThickness", 0.0), film, "Thickness")
     use_film = g.scalar("UseThinFilm", 0.0)
+    mfp = g.node(unreal.MaterialExpressionSubstrateTransmittanceToMFP)
+    g.link(*transmittance, mfp, "TransmittanceColor")
     slab = g.slab(g.const3((0, 0, 0)), g.lerp(f0, (film, "Specular Color"), use_film),
                   g.lerp(f90, (film, "Edge Specular Color"), use_film), g.roughness("", uv), normal, None, (mfp, "MFP"),
                   front=False)
     slab.set_editor_property("sub_surface_type", unreal.MaterialSubSurfaceType.MSS_SIMPLE_VOLUME)
-    g.weight(slab, g.custom(GLASS_COVERAGE, f1, HeightMap=height_map, UseHeightMap=use_height_map,
-                            Clip=g.scalar("GlassHeightClip", 0.0)))
+    coverage = g.custom(GLASS_COVERAGE, f1, HeightMap=height_map, UseHeightMap=use_height_map, Clip=g.scalar("GlassHeightClip", 0.0))
+    g.weight(slab, coverage)
+    # The refraction look: UE's distortion pass with the material's own 2D offset (GLASS_REFRACTION_OFFSET; WP-U3b.md section
+    # 14.10), x the coverage (the pass writes the offset wherever the mesh is drawn, a clipped hole in the glass too). The glass
+    # surface (After-DOF translucency) is composited after the distortion; a pane UE moves into standard translucency while depth
+    # of field is on (behind the focus distance) is drawn into the scene colour first, so the distortion moves its own surface too
+    # (WP-U3b.md section 14.10, limits).
+    g.m.set_editor_property("refraction_method", unreal.RefractionMode.RM_2D_OFFSET)
+    g.out(*g.mul(glass_refraction(g, normal), coverage), MP.MP_REFRACTION)
     return g.save()
 
 
@@ -724,6 +876,58 @@ def translucent_master():
     base = g.mul(base, vertex_albedo)
     slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive, front=False)
     g.weight(slab, g.mul(coverage, vertex_alpha))
+    return g.save()
+
+
+def screen_master(translucent=False):
+    """M_SC_Screen: the game's DisplayScreen face whose image is a render target ($RenderToTexture, WP-I1): an opaque
+    deferred surface in the game (alpha_config opacity 1), drawn as dark glass. Base colour = ScreenBackColor (the
+    authored BackColour), F0 = SpecularColor with the look's glass reflectance (GlassReflectanceScale /
+    GlassReflectanceFloor, as M_SC_Glass; here the floor applies to every screen: the face is the display's glass cover),
+    roughness from the authored gloss, and the game's DisplayScreenPS emission (WP-I1 fix pass): ScreenImage graded by
+    MonitorEffects_ApplyViewingAngle (SCREEN_VIEWING_ANGLE) x the image's alpha x EmissiveStrength (the builder's glow
+    rule; GlassShared scales by the scalar glow, not the material's emissive colour)
+    x the %DBA_GLOBAL display-brightness multiplier (SCREEN_DBA, through EyeAdaptationInverse) x ScreenTransmittance.
+    ScreenImage is bound per panel instance (ui_bindings); the black default leaves an unbound screen (MFDs, lift
+    buttons) as clean dark glass. The image is sampled at UV0 untiled through ScreenUVTransformX / Y (identity: the
+    render target covers the face; a viewer-drawn target maps the face's UV window onto itself).
+    Not ported: the pixel grid (PixelGridMap is not exported; the game fades it to 1 once a cell is under ~2/3 px),
+    interference (InterferenceAmount 0 on the C2) and the %EMISSIVE_REFLECTION front layer.
+    With `translucent`: M_SC_Screen_Translucent, the same screen for a face whose data asks for partial coverage
+    (authored Opacity < 1 or a blended alpha mode, e.g. a 0.6 `Flash` overlay): lit translucent, coverage = Opacity
+    through a Substrate weight (as M_SC_Translucent), non-Nanite (the builder splits it into the conventional mesh)."""
+    if translucent:
+        g = Graph("M_SC_Screen_Translucent", unreal.BlendMode.BLEND_TRANSLUCENT,
+                  unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
+    else:
+        g = Graph("M_SC_Screen", unreal.BlendMode.BLEND_OPAQUE, nanite=True)
+    uv = g.uv(g.const(1.0))
+    image_uv = g.custom(SCREEN_IMAGE_UV, unreal.CustomMaterialOutputType.CMOT_FLOAT2, UV=uv,
+                        TX=g.vector("ScreenUVTransformX", (1, 0, 0)), TY=g.vector("ScreenUVTransformY", (0, 1, 0)))
+    image_sample = g.texture("ScreenImage", g.black, ST.SAMPLERTYPE_COLOR, image_uv)
+    image = (image_sample, "RGB")
+    normal = (g.texture("NormalGlossMap", g.flat_normal, ST.SAMPLERTYPE_NORMAL, uv), "RGB")
+    f0 = g.custom(SCREEN_REFLECTANCE_LOOK, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
+                  F0=g.vector("SpecularColor", (0.04, 0.04, 0.04)), Scale=g.scalar("GlassReflectanceScale", 1.0),
+                  Floor=g.scalar("GlassReflectanceFloor", 0.0))
+    base = g.vector("ScreenBackColor", (0, 0, 0))
+    f1, f3 = unreal.CustomMaterialOutputType.CMOT_FLOAT1, unreal.CustomMaterialOutputType.CMOT_FLOAT3
+    graded = g.custom(SCREEN_VIEWING_ANGLE, f3, Col=image,
+                      ViewingAngle=g.scalar("ViewingAngle", 180.0), Mode=g.scalar("ViewAngleMode", 0.0),
+                      Contrast=g.scalar("EmissiveContrast", 1.0), Saturation=g.scalar("EmissiveSaturation", 1.0))
+    # 1 / the exposure: EyeAdaptationInverse of a unit scalar light value at full alpha.
+    inverse_exposure = g.node(unreal.MaterialExpressionEyeAdaptationInverse)
+    g.link_any(*g.const(1.0), inverse_exposure, ("LightValueInput", "Light Value Input", "LightValue", "Light Value"))
+    g.link_any(*g.const(1.0), inverse_exposure, ("AlphaInput", "Alpha Input", "Alpha"))
+    dba = g.custom(SCREEN_DBA, f1, InvExposure=(inverse_exposure, ""), UseDBA=g.scalar("ScreenDBA", 0.0),
+                   ExposureGrey=g.scalar("DBAExposureGrey", 0.18), MinNits=g.scalar("DBAMinNits", 0.0),
+                   MaxNits=g.scalar("DBAMaxNits", 0.0), NitsPerUnit=g.scalar("DBANitsPerUnit", 1.0))
+    # GlassShared: emissiveBack *= the scalar glow (MatEmissiveColor.a, not its colour) and the render target's alpha.
+    emissive = g.mul(g.mul(g.mul(g.mul(graded, (image_sample, "A")), g.scalar("EmissiveStrength", 0.0)), dba),
+                     g.vector("ScreenTransmittance", (1, 1, 1)))
+    slab = g.slab(g.conserve(base, f0), f0, None, g.roughness("", uv), normal, emissive, front=not translucent)
+    if translucent:
+        g.weight(slab, g.saturate(g.scalar("Opacity", 1.0)))
     return g.save()
 
 
@@ -922,9 +1126,8 @@ if not unreal.SystemLibrary.get_console_variable_bool_value("r.Substrate"):
 # Regenerate from scratch so the checked-in assets always equal this script's output. Packages that the
 # commandlet has not loaded are removed on disk first (editor-side deletion leaves them in this session).
 CONTENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Plugins", "SCBridge", "Content", "Materials")
-# M_SC_LightFunction belongs to create_light_material.py (WP-U3) and M_SC_DisplayMapping to
-# create_display_mapping_material.py (WP-U3b §13); both are kept.
-KEEP = {"M_SC_LightFunction.uasset", "M_SC_DisplayMapping.uasset"}
+# M_SC_LightFunction belongs to create_light_material.py (WP-U3) and is kept.
+KEEP = {"M_SC_LightFunction.uasset"}
 for entry in (os.listdir(CONTENT) if os.path.isdir(CONTENT) else []):
     path = os.path.join(CONTENT, entry)
     if os.path.isdir(path):
@@ -955,10 +1158,13 @@ Graph.white = default_texture("T_SC_White", (255, 255, 255, 255), True, unreal.T
 Graph.white_linear = default_texture("T_SC_WhiteLinear", (255, 255, 255, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.black_linear = default_texture("T_SC_BlackLinear", (0, 0, 0, 255), False, unreal.TextureCompressionSettings.TC_MASKS)
 Graph.flat_normal = default_texture("T_SC_FlatNormal", (128, 128, 255, 255), False, unreal.TextureCompressionSettings.TC_NORMALMAP)
+Graph.black = default_texture("T_SC_Black", (0, 0, 0, 255), True, unreal.TextureCompressionSettings.TC_DEFAULT)
 for opaque in (surface_master("M_SC_Illum"), hardsurface_master(),
                layered_master("M_SC_Layered", LAYERS), surface_master("M_SC_Fallback")):
     variants(opaque)
 glass_master()
+screen_master()
+screen_master(translucent=True)
 for sided in (decal_master("M_SC_MeshDecal", True), decal_master("M_SC_MeshDecal_Relief", False), translucent_master()):
     variants(sided, (("_TwoSided", False, True),))  # is_double_sided decals keep reverse-facing triangles
 unlit_master()

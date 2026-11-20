@@ -4,7 +4,7 @@
 // system's +X is the game emitter's forward (the emission axis, the beam direction); by default it points up
 // (pitch=90), as an impact on a floor; rel=1 makes the angles camera-relative. every=<s> re-triggers it every s
 // real seconds (bursts are short); sx scales X only. The SCFxBuild runtime contract: strength=<0..1> sets
-// User.SC.Strength (and the curves SCFxStrength.h evaluates); scale=<s> also sets SC.Scale2 (sprite sizes); len=<cm> sets a guided beam's User.SC.BeamLength / BeamEnd / BeamStartTangent (the beam leaves
+// User.SC.Strength; scale=<s> scales the component (positions, speeds and, in the built systems, sprite sizes); len=<cm> sets a guided beam's User.SC.BeamLength / BeamEnd / BeamStartTangent (the beam leaves
 // along +X), bend=<deg> turns its end about the component's Z so the beam curves.
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
@@ -97,7 +97,6 @@ void Spawn(const TArray<FString>& Args, UWorld* World)
         return;
     }
     if (const double* Strength = Keys.Find(TEXT("strength"))) SCFxStrength::Set(C, float(*Strength));
-    if (Uniform != 1.0) C->SetVariableVec2(TEXT("SC.Scale2"), FVector2D(Uniform, Uniform)); // sprite sizes (SCFxBuild contract)
     if (const double* Len = Keys.Find(TEXT("len")))
     {
         const double Bend = FMath::DegreesToRadians(Key(TEXT("bend"), 0.0));

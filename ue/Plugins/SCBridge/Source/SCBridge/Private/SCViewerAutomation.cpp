@@ -11,6 +11,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/CollisionProfile.h"
 #include "UObject/UObjectIterator.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/Engine.h"
@@ -40,7 +41,7 @@ public:
     virtual void SetupViewFamily(FSceneViewFamily&) override {}
     virtual void SetupView(FSceneViewFamily& Family, FSceneView& View) override
     {
-#if RHI_RAYTRACING // the path tracer and its sample count exist only with ray tracing (not on Wasm)
+#if RHI_RAYTRACING // the path tracer and its sample count exist only with ray tracing
         if (Family.EngineShowFlags.PathTracing && View.State) Samples = View.State->GetPathTracingSampleIndex();
 #endif
     }
@@ -126,6 +127,7 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
         })));
     RegisterFirstPersonCommands();
     RegisterPlayerCommands();
+    RegisterLiftCommands();
 }
 
 namespace
@@ -164,16 +166,33 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         Commands.Add(MakeUnique<FAutoConsoleCommand>(Name, Help,
             FConsoleCommandWithArgsDelegate::CreateLambda([Body](const TArray<FString>& Args) { Body(Args); })));
     };
-    Add(TEXT("sc.FP.Spawns"), TEXT("sc.FP.Spawns: log the spawn list (index, kind, label, vehicle-relative location)"), [Weak](const TArray<FString>&) {
+    Add(TEXT("sc.FP.Spawns"), TEXT("sc.FP.Spawns: log the spawn list (index, kind, label, vehicle-relative location; then the hangar's places, kind Hangar)"),
+        [Weak](const TArray<FString>&) {
         ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
         for (int32 I = 0; V && I < V->SpawnPoints.Num(); ++I)
             UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_SPAWN_LIST index=%d kind=%s pos=%s label=\"%s\""), I,
                    *V->SpawnPoints[I].Kind.ToString(), *V->SpawnPoints[I].Transform.GetLocation().ToCompactString(), *V->SpawnPoints[I].DisplayName);
+        // The hangar's standing places (first person: those a capsule fits on), numbered after the ship's spawns; pos is
+        // relative to the hangar, world= where it is.
+        if (ASCFirstPersonCharacter* C = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr; V && C && C->GetHangar())
+        {
+            C->InvalidateHangarSpots(); // checked now, where the ship and cargo stand
+            const TArray<FSCSpawnPoint>& Spots = C->GetHangarSpots();
+            for (int32 I = 0; I < Spots.Num(); ++I)
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_SPAWN_LIST index=%d kind=%s hangar=%d source=%s pos=%s world=%s label=\"%s\""),
+                       V->SpawnPoints.Num() + I, *Spots[I].Kind.ToString(), I, *Spots[I].Source.ToString(), *Spots[I].Transform.GetLocation().ToCompactString(),
+                       *C->GetHangar()->GetActorTransform().TransformPosition(Spots[I].Transform.GetLocation()).ToCompactString(), *Spots[I].DisplayName);
+        }
+        else if (const ASCVehicle* Env = Weak.IsValid() ? Weak->GetEnvironment() : nullptr)
+            for (int32 I = 0; I < Env->Waypoints.Num(); ++I) // not in first person: the hangar's waypoints, unchecked
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_HANGAR_WAYPOINT index=%d source=%s pos=%s label=\"%s\""), I,
+                       *Env->Waypoints[I].Source.ToString(), *Env->Waypoints[I].Transform.GetLocation().ToCompactString(), *Env->Waypoints[I].DisplayName);
         for (int32 I = 0; V && I < V->Doors.Num(); ++I)
             UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_DOOR_LIST index=%d fragment=%s open=%d label=\"%s\""), I,
                    *V->Doors[I].Fragment.ToString(), V->IsDoorOpen(I), *V->Doors[I].DisplayName);
     });
-    Add(TEXT("sc.FP.Spawn"), TEXT("sc.FP.Spawn <index|kind[:n]>: enter first person if needed and teleport to a spawn"), [Weak](const TArray<FString>& Args) {
+    Add(TEXT("sc.FP.Spawn"), TEXT("sc.FP.Spawn <index|kind[:n]|hangar:n>: enter first person if needed and teleport to a spawn or a hangar place"),
+        [Weak](const TArray<FString>& Args) {
         USCViewerSubsystem* S = Weak.Get();
         ASCVehicle* V = S ? S->GetVehicle() : nullptr;
         if (!V || Args.IsEmpty()) return;
@@ -182,23 +201,35 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
             UE_LOG(LogSCViewerAutomation, Warning, TEXT("FP_CMD spawn ok=0 reason=first_person_refused"));
             return;
         }
-        int32 Index = INDEX_NONE;
+        ASCFirstPersonCharacter* C = S->GetFirstPerson();
+        int32 Index = INDEX_NONE, Hangar = INDEX_NONE;
+        FString Kind = Args[0], Nth = TEXT("0");
+        Args[0].Split(TEXT(":"), &Kind, &Nth);
         if (Args[0].IsNumeric())
+        {
+            // One numbering: the ship's spawns, then the hangar's places (as sc.FP.Spawns lists them).
             Index = FCString::Atoi(*Args[0]);
+            if (Index >= V->SpawnPoints.Num()) { Hangar = Index - V->SpawnPoints.Num(); Index = INDEX_NONE; }
+        }
+        else if (Kind.Equals(FSCSpawnKind::Hangar.ToString(), ESearchCase::IgnoreCase))
+            Hangar = FCString::Atoi(*Nth);
         else
         {
-            FString Kind = Args[0], Nth = TEXT("0");
-            Args[0].Split(TEXT(":"), &Kind, &Nth);
             TArray<int32> Matches;
             for (int32 I = 0; I < V->SpawnPoints.Num(); ++I)
                 if (V->SpawnPoints[I].Kind.ToString().Equals(Kind, ESearchCase::IgnoreCase)) Matches.Add(I);
             if (Matches.IsValidIndex(FCString::Atoi(*Nth))) Index = Matches[FCString::Atoi(*Nth)];
         }
-        const bool OK = S->GetFirstPerson()->TeleportToSpawn(Index);
-        UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn arg=%s index=%d ok=%d"), *Args[0], Index, OK);
+        const bool OK = Hangar != INDEX_NONE ? C->TeleportToHangar(Hangar) : C->TeleportToSpawn(Index);
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn arg=%s index=%d hangar=%d ok=%d pos=%s"), *Args[0], Index, Hangar, OK,
+               *C->GetVehicleRelativeLocation().ToCompactString());
     });
     Add(TEXT("sc.FP.Look"), TEXT("sc.FP.Look <yaw> <pitch>: absolute view relative to the vehicle (degrees)"), [Weak](const TArray<FString>& Args) {
-        if (auto* C = FirstPerson(Weak); C && Args.Num() >= 2) C->SetVehicleRelativeView(FCString::Atof(*Args[0]), FCString::Atof(*Args[1]));
+        if (auto* C = FirstPerson(Weak); C && Args.Num() >= 2)
+        {
+            C->ClearViewHold(); // a held aim (sc.Lift.PanelAim) ends
+            C->SetVehicleRelativeView(FCString::Atof(*Args[0]), FCString::Atof(*Args[1]));
+        }
     });
     Add(TEXT("sc.FP.Move"), TEXT("sc.FP.Move <forward> <right> <seconds> [run 0|1] [up]: hold movement input (-1..1) for a duration"),
         [Weak](const TArray<FString>& Args) {
@@ -234,6 +265,14 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Torch"), TEXT("sc.FP.Torch 0|1"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak)) C->SetTorch(Flag(Args, 0, true));
     });
+    Add(TEXT("sc.FP.TorchLight"), TEXT("sc.FP.TorchLight 1|0: the torch is the kit's game flashlight (1) or the viewer's fallback beam (0), for A/B"),
+        [Weak](const TArray<FString>& Args) {
+            if (auto* C = FirstPerson(Weak))
+            {
+                C->Body->ApplyTorchLight(Flag(Args, 0, true));
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD torch_light source=%s"), *C->GetTorchSource());
+            }
+        });
     Add(TEXT("sc.FP.Aim"), TEXT("sc.FP.Aim 0|1: hold / release aim down sights (the right mouse button)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak))
         {
@@ -256,8 +295,26 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         }
     });
     Add(TEXT("sc.FP.Menu"), TEXT("sc.FP.Menu 0|1: show the teleport menu"), [Weak](const TArray<FString>& Args) {
-        if (auto* C = FirstPerson(Weak)) C->bTeleportMenuOpen = Flag(Args, 0, true);
+        if (auto* C = FirstPerson(Weak)) C->SetTeleportMenuOpen(Flag(Args, 0, true));
     });
+    Add(TEXT("sc.FP.Tap"), TEXT("sc.FP.Tap <key name>: press and release a key of the first-person key table (Up, Down, Enter, T, ...) and log the menu"),
+        [Weak](const TArray<FString>& Args) {
+            auto* C = FirstPerson(Weak);
+            if (!C || Args.IsEmpty()) return;
+            const FKey Key{FName(*Args[0])};
+            const bool bHandled = C->HandleKey(Key, true);
+            C->HandleKey(Key, false);
+            const TArray<FSCTeleportRow> Rows = C->TeleportRows();
+            const int32 Sel = C->TeleportSelectionRow();
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_KEY key=%s handled=%d menu=%d selection=%d row=%s:%d"), *Key.ToString(), bHandled,
+                   C->bTeleportMenuOpen, Sel, Rows.IsValidIndex(Sel) ? (Rows[Sel].Type == FSCTeleportRow::EType::Ship ? TEXT("ship") : Rows[Sel].Type ==
+                   FSCTeleportRow::EType::Hangar ? TEXT("hangar") : TEXT("heading")) : TEXT("-"), Rows.IsValidIndex(Sel) ? Rows[Sel].Index : -1);
+        });
+    Add(TEXT("sc.FP.AimAt"), TEXT("sc.FP.AimAt <x> <y> <z>: keep the first-person view on a vehicle-relative point (cm; mouse look ends it)"),
+        [Weak](const TArray<FString>& Args) {
+            if (auto* C = FirstPerson(Weak); C && C->Vehicle && Args.Num() >= 3)
+                C->HoldViewOn(C->Vehicle->GetRootComponent(), FVector(FCString::Atod(*Args[0]), FCString::Atod(*Args[1]), FCString::Atod(*Args[2])));
+        });
     Add(TEXT("sc.FP.Teleport"), TEXT("sc.FP.Teleport <x> <y> <z>: vehicle-relative floor hint (cm)"), [Weak](const TArray<FString>& Args) {
         if (auto* C = FirstPerson(Weak); C && C->Vehicle && Args.Num() >= 3)
         {
@@ -325,12 +382,17 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
     Add(TEXT("sc.FP.Where"), TEXT("sc.FP.Where: log mode, vehicle-relative position and movement state"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_WHERE %s"), *Where(*Weak.Get()));
     });
-    Add(TEXT("sc.FP.Pads"), TEXT("sc.FP.Pads: aim at every door panel from 80 cm in front (four sides) and log whether E resolves to its door"),
-        [Weak](const TArray<FString>&) {
+    Add(TEXT("sc.FP.Pads"), TEXT("sc.FP.Pads [negative]: aim at every door panel from 80 cm in front (four sides); a pad passes when the view ray's ")
+        TEXT("first hit is the pad itself and E then resolves to its door. negative: the same with each pad's collision off (must all fail)"),
+        [Weak](const TArray<FString>& Args) {
             ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
             if (!V) return;
+            const bool bNegative = !Args.IsEmpty() && Args[0].Equals(TEXT("negative"), ESearchCase::IgnoreCase);
             const AActor* Ignore = Weak->GetFirstPerson();
-            int32 Total = 0, Resolved = 0, NoDoor = 0;
+            // hittable: the first visibility hit is a component under the pad's anchor; resolved: and FindInteraction
+            // from that ray returns the pad's door; fallback_only: the door came back only from a ray that missed the
+            // pad (FindInteraction's NearestDoor fallback or the door itself), which proves nothing about the pad.
+            int32 Total = 0, Resolved = 0, Hittable = 0, NoDoor = 0, FallbackOnly = 0, Unmeasured = 0;
             for (const auto& [Panel, Rig] : V->DoorControls)
             {
                 const USceneComponent* Anchor = Panel.Get();
@@ -341,17 +403,62 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
                 FBox Box(ForceInit);
                 TArray<USceneComponent*> Parts;
                 Anchor->GetChildrenComponents(true, Parts);
-                for (const USceneComponent* Part : Parts)
-                    if (const auto* P = Cast<UPrimitiveComponent>(Part); P && P->IsVisible()) Box += P->Bounds.GetBox();
-                if (!Box.IsValid) continue;
-                bool bOK = false;
+                // The full collision state, restored after the negative fixture (disabling collision turns a named profile
+                // into Custom, which instancing compares).
+                struct FSaved { UPrimitiveComponent* P; FName Profile; ECollisionEnabled::Type Mode; FCollisionResponseContainer Responses; };
+                TArray<FSaved> Collision;
+                for (USceneComponent* Part : Parts)
+                    if (auto* P = Cast<UPrimitiveComponent>(Part); P && P->IsVisible())
+                    {
+                        Box += P->Bounds.GetBox();
+                        Collision.Add({P, P->GetCollisionProfileName(), P->GetCollisionEnabled(), P->GetCollisionResponseToChannels()});
+                    }
+                if (!Box.IsValid) { ++Unmeasured; continue; }
+                // Negative fixture: the pad cannot be hit, while its door stays where the old any-ray check found it.
+                if (bNegative) for (const FSaved& S : Collision) S.P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+                bool bHit = false, bOK = false, bFallback = false;
+                FString FirstHit = TEXT("-");
                 for (const FVector& D : {FVector::ForwardVector, FVector::BackwardVector, FVector::RightVector, FVector::LeftVector})
-                    bOK |= V->FindInteraction(Box.GetCenter() + D * (Box.GetExtent().GetMax() + 80), -D, 300, Ignore) == Expected;
+                {
+                    const FVector Eye = Box.GetCenter() + D * (Box.GetExtent().GetMax() + 80);
+                    FHitResult Hit;
+                    FCollisionQueryParams Q(SCENE_QUERY_STAT(SCPads), true, Ignore);
+                    bool bOwn = false;
+                    if (V->GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye - D * 300, ECC_Visibility, Q))
+                    {
+                        for (const USceneComponent* C = Hit.GetComponent(); C && !bOwn; C = C->GetAttachParent()) bOwn = C == Anchor;
+                        if (FirstHit == TEXT("-") || bOwn)
+                        {
+                            const auto* SM = Cast<UStaticMeshComponent>(Hit.GetComponent());
+                            FirstHit = FString::Printf(TEXT("%s mesh=%s dist=%.1f"), *GetNameSafe(Hit.GetComponent()),
+                                                       SM ? *GetNameSafe(SM->GetStaticMesh()) : TEXT("-"), Hit.Distance);
+                        }
+                    }
+                    const bool bDoor = V->FindInteraction(Eye, -D, 300, Ignore) == Expected;
+                    bHit |= bOwn;
+                    bOK |= bOwn && bDoor;
+                    bFallback |= !bOwn && bDoor;
+                }
+                if (bNegative)
+                    for (const FSaved& S : Collision)
+                    {
+                        if (S.Profile != UCollisionProfile::CustomCollisionProfileName) { S.P->SetCollisionProfileName(S.Profile); continue; }
+                        S.P->SetCollisionEnabled(S.Mode);
+                        S.P->SetCollisionResponseToChannels(S.Responses);
+                    }
+                Hittable += bHit;
                 Resolved += bOK;
-                if (!bOK) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PAD_UNRESOLVED panel=%s door=\"%s\" at=%s"), *Anchor->GetName(),
-                                 *V->Doors[Expected].DisplayName, *Box.GetCenter().ToCompactString());
+                FallbackOnly += !bOK && bFallback;
+                if (!bOK) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PAD_UNRESOLVED panel=%s door=\"%s\" hittable=%d fallback=%d first_hit=%s at=%s"),
+                                 *Anchor->GetName(), *V->Doors[Expected].DisplayName, bHit, bFallback, *FirstHit, *Box.GetCenter().ToCompactString());
             }
-            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS total=%d resolved=%d no_door=%d"), Total, Resolved, NoDoor);
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS%s total=%d resolved=%d hittable=%d no_door=%d fallback_only=%d unmeasured=%d"),
+                   bNegative ? TEXT("_NEGATIVE") : TEXT(""), Total, Resolved, Hittable, NoDoor, FallbackOnly, Unmeasured);
+            // The fixture is meaningful only when the door still comes back through the fallback (it was in range): then the
+            // old any-ray check would have passed those pads, and the strict check must not.
+            if (bNegative)
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PADS_NEGATIVE ok=%d (no pad passes without its collision; %d doors still in fallback range)"),
+                       Resolved == 0 && Hittable == 0 && FallbackOnly > 0, FallbackOnly);
         });
     Add(TEXT("sc.FP.Probe"), TEXT("sc.FP.Probe [reach cm]: log what the view ray hits (component chain, rig, socket) and the focused interaction"),
         [Weak](const TArray<FString>& Args) {
@@ -370,9 +477,13 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
                                          P->GetAttachSocketName().IsNone() ? TEXT("") : *(TEXT("@") + P->GetAttachSocketName().ToString()));
                 if (Rig) break;
             }
-            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PROBE hit=%d dist=%.0f point=%s focus=%d chain=%s"), bHit, Hit.Distance,
+            // WP-P5: the lift panel E would press (its entity and the wheel's pick), when one is focused.
+            FString PanelId;
+            FName Choice;
+            const bool bPanel = C->FocusedPanel(PanelId, Choice);
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PROBE hit=%d dist=%.0f point=%s focus=%d panel=%s choice=%s chain=%s"), bHit, Hit.Distance,
                    C->Vehicle ? *C->Vehicle->GetActorTransform().InverseTransformPosition(Hit.ImpactPoint).ToCompactString() : TEXT("-"),
-                   C->FocusedInteraction(), *Chain);
+                   C->FocusedInteraction(), bPanel ? *PanelId : TEXT("-"), bPanel ? *Choice.ToString() : TEXT("-"), *Chain);
         });
     Add(TEXT("sc.SpawnWhereLooking"), TEXT("sc.SpawnWhereLooking: orbit/fly camera ray -> first person on that surface"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_CMD spawn_where_looking ok=%d"), Weak->SpawnWhereLooking());
@@ -611,7 +722,7 @@ void FSCViewerAutomation::Tick()
             }
         }
     }
-    // A cooked ship loads without the archive (the web build has none).
+    // A cooked ship loads without the archive.
     const bool bCookedNext = !Queue.IsEmpty() && !USCViewerSubsystem::CookedShipLevel(Queue[0].TrimStartAndEnd()).IsEmpty();
     if (S->GetArchiveState() == ESCArchiveState::Failed && !Queue.IsEmpty() && !bCookedNext)
     {

@@ -30,7 +30,39 @@ use std::{
 //     `children[].port_path` and the root item's footprint (`root_entity.inventory_occupancy`, …) (WP-K1).
 // 28: in a trimesh collider with both, the triangles without a surface are their own `sc_physics` record, class
 //     `no_surface` (WP-P4; 27 was a development step of the same change).
-pub const CACHE_FORMAT_VERSION: u32 = 28;
+// 29: scene lights carry `specular_multiplier` (miscParams.specularMultiplier, class-inherited, default 1).
+// 30: ui_bindings carry `source_item_type` (the UI owner's AttachDef.Type) and `source_owner_resolved` (WP-I1 review).
+// 31: interiors carry lifts (`interiors[].lifts[]`), geometry-less interactive entities (`interiors[].entities[]`), and
+//     placements their interaction links, parent attachment, door timing and interaction points; a root item port an
+//     entity occupies is no longer placed a second time (WP-P5).
+// 32: operating-panel UI renders carry their owner's values and states: `ui_bindings[]` gain
+//     `ui_texture_aspect_w_over_h`, `user_variables`, `state_types` and `state_images[]`; door pads render at their
+//     face's texture aspect, with the large button, style-set labels and tag switches (WP-I1 I1-5 / I1-3 / I1-2).
+// 33: panel renders follow non-grow flex items beside a growing one, start-edge items with an unanchored pivot, the
+//     owner's complete user-variable set (an undeclared one at its default) and no invented brand (a hangar's panels
+//     render without one) (WP-I1 fix pass).
+// 34: panel renders route style-set component parameters (button glyphs), apply the widget standards' own styles
+//     and size bounds, scope the kit sheets to their standard, keep `aspectOverrides*` canvas units square and take a
+//     custom shape's own colour (WP-I1 fix pass 2).
+// 35: lifts carry `panel_style` (the door pads' palette and label style, a label mask per named stop; WP-P5 floor panel).
+// 36: packages carry their audio (WP-A1): `Packages/<name>/audio.json` (triggers resolved to Wwise playable trees,
+//     attenuations, buses, rooms and their reverb environments, entity sound effects) with `Audio/<media>.ogg` and
+//     `Audio/ir/<media>.f32`; interiors carry `audio_spots[]` / `audio_areas[]`, room volumes their `room_class`, and
+//     clip sources their `audio_events[]`.
+// 37: a Wwise 2012+ media converts with the aoTuV codebooks its layout determines; a loud media that peaks above full
+//     scale is no longer rejected as a wrong codebook and dropped from `audio.json` (WP-A1 playback fix).
+// 38: `audio.json` bus effect slots carry a Meter's ballistics and written game parameter, the RTPC curves on the
+//     effect's own parameters (`fx_param_<id>`, with their accumulation) and the state groups that bypass the slot
+//     (WP-A1 A1-2 mix: limiter, side-chains, bus EQ).
+// 39: doors carry their rest state and animation struct (`door.is_opened` / `is_locked` / `animation_params` / tags),
+//     also on loadout children; children and placements carry `item_port_links[]`, placements `sendable_interactions[]`;
+//     loadouts given by an XML file attach their items (the C2's front door panels); light groups and linked
+//     chipsets are `entities[]` (`light_group` / `logic`), lights name their group (`attachment.group_entity_id` /
+//     `group_links`); UI bindings carry `buttons[]`, `image_size_px`, state-type `transitions` / `linked`, and
+//     combined two-state `state_images` (C2 fixes).
+// 40: UI bindings carry `interaction_distance` (the owner's render-to-texture `interactionDistance`, metres): how far
+//     from its screen a panel is operated (hangar waypoints: the C2's exterior door pads).
+pub const CACHE_FORMAT_VERSION: u32 = 40;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

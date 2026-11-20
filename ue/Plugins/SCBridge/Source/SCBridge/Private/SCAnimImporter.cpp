@@ -200,6 +200,7 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
         Error = TEXT("Clip source animation list is not an array");
         return false;
     }
+    TSet<int32> UsedSources; // WP-A1: the source animations whose audio events this binding fires
     for (int32 I = 0; I < Rig.RigNodes.Num(); ++I)
     {
         const auto& Node = Rig.RigNodes[I];
@@ -302,6 +303,7 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
                 return false;
             }
             Timing = Sources[int32(Index)]->AsObject();
+            UsedSources.Add(int32(Index));
             if (!Timing->TryGetNumberField(TEXT("fps"), Fps) || !Timing->TryGetNumberField(TEXT("frame_count"), Frames) ||
                 !ValidTiming(Fps, Frames))
             {
@@ -354,6 +356,39 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
                            Track.Keys[0].GetTranslation().Equals(Track.Keys.Last().GetTranslation(), 0.01);
         Binding.Tracks.Add(MoveTemp(Track));
     }
+    // WP-A1: the audio events of the animations this binding plays, at clip frames (an event's time is normalised to
+    // its own animation's length).
+    auto AddEvents = [&](const FObj& Timing) {
+        double Fps = Clip.Fps, Frames = Clip.LastFrame;
+        Timing->TryGetNumberField(TEXT("fps"), Fps);
+        Timing->TryGetNumberField(TEXT("frame_count"), Frames);
+        for (const auto& V : Arr(Timing, TEXT("audio_events")))
+        {
+            if (V->Type != EJson::Object) continue;
+            const auto O = V->AsObject();
+            FSCClipAudioEvent E;
+            double T = 0;
+            O->TryGetNumberField(TEXT("time"), T);
+            const double Span = (Fps > 0 ? Frames / Fps : 0.) * Clip.Fps; // the source's length in clip frames
+            E.Frame = T * Span;
+            E.FrameReverse = FMath::Max(0., Clip.LastFrame - (Span - E.Frame));
+            const FString Dir = Str(O, TEXT("dir"));
+            E.Direction = Dir == TEXT("reverse") ? -1 : Dir == TEXT("both") ? 0 : 1;
+            E.Trigger = Str(O, TEXT("trigger"));
+            E.Bone = Str(O, TEXT("bone"));
+            const auto& Off = Arr(O, TEXT("offset"));
+            if (Off.Num() == 3) E.Offset = FVector(Off[0]->AsNumber(), Off[1]->AsNumber(), Off[2]->AsNumber());
+            if (!E.Trigger.IsEmpty()) Binding.AudioEvents.Add(MoveTemp(E));
+        }
+    };
+    if (SourceList)
+    {
+        const auto& Sources = SourceList->AsArray();
+        for (const int32 Index : UsedSources)
+            if (Sources.IsValidIndex(Index) && Sources[Index]->Type == EJson::Object) AddEvents(Sources[Index]->AsObject());
+    }
+    else if (!Binding.Tracks.IsEmpty())
+        AddEvents(Json);
     return true;
 }
 bool FSCAnimImporter::Bind(const FObj& Json, const FSCDerivedMesh& Rig, const FString& Path, USkeletalMesh* Mesh, UObject* Outer,

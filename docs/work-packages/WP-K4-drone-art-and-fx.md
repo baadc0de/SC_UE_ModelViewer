@@ -123,7 +123,7 @@ submodule branch `scviewer/cryxml-content`.
 
 **Recommended way.** A few Niagara templates made by hand: a beam ribbon along a curve, an impact glow and a muzzle
 flash. At run time they are driven by the values decoded from the library (colours, curves, sizes, counts, textures
-through the existing DDS path) and by the beam strength. The web build needs those values baked at cook time.
+through the existing DDS path) and by the beam strength.
 
 The alternatives:
 - an offline translation of each library emitter into Niagara assets (higher fidelity, much larger);
@@ -172,7 +172,7 @@ Approximations, recorded per emitter in the build log:
 
 **What was built:**
 - **FFI:** `sc_p4k_read`, `sc_p4k_read_xml`, `sc_p4k_read_dds` (split mips merged, through the core's
-  `read_package_dds`), `sc_particle_effect`, `sc_material_effect`; stubbed in `SCBridgeNoFFI.cpp` for the web build.
+  `read_package_dds`), `sc_particle_effect`, `sc_material_effect`.
 - **Core:** `archive.rs` (archive reads, a small XML tree), `particle_params.rs` (the CryEngine parameter syntax) and
   `particles.rs` (effects and material effects). CLI: `scviewer p4k-xml`, `effect`, `material-effect`.
 - **Curve semantics, checked across all 877 libraries:** a key with no `t` or `v` means 0. A curve key's missing colour
@@ -225,6 +225,14 @@ in the header comment of `SCFxBuildCommandlet.cpp`; `-Features=` switches them o
 | `SC.BeamLength2` | vec2 cm | (`SC.BeamLength`, `SC.BeamLength`): stateless expressions cannot widen a float. |
 
 Defaults (100 cm along +X) reproduce a 1 m straight beam. The component is no longer scaled.
+
+**Since WP-E1 E1-6** (the fork's stateless expressions) this table is the whole contract: the built systems evaluate their
+EmitterStrength curves (exact piecewise-linear clamp expressions in `SC.Strength`) and the beam emitters' spawn rates (expressions of
+`SC.BeamLength`) themselves, and an effect's scale is the component's scale (sprite sizes through Niagara's Apply Owner Scale To
+Attributes module). `SC.SV<i>` / `SC.SK<i>`, `SC.BR<i>` / `SC.BK<i>` and `SC.Scale2` (below, K4a round 2) are gone; systems built
+before E1-6 need a rebuild (`-run=SCFxBuild`). Since the E1-6 review the contract is versioned: every built system carries the int User
+parameter `SC.FxContract` (`SCFxRules::FxContractVersion`, 2); the runtime warns `SC_FX_STALE` (non-shipping) for a system without it or
+with an older one, `-run=SCFxBuild -VerifyContract` fails on one, and `ue/scripts/package_showcase.ps1` refuses to package while one exists.
 
 **Per item:**
 1. **Strength.** The game's strengths are read from DataCore (`effects.json` `strength`: the tractor record's
@@ -484,7 +492,7 @@ only at boxes.
   ±0.5 cm idle bob. That needs the hull's underside profile, and the idle clips move the body ±1 cm.
 - **The box surface group** is a config stand-in (`metal`). Reading it would take the box package's material
   `surface_type` (and SurfaceTypes.xml's fxGroup) through to the runtime.
-- **Without the archive** (the web build) the effects resolve to nothing, and the beam mesh is drawn. The scenario's
+- **Without the archive** (a cooked showcase on a machine without Star Citizen) the effects resolve to nothing, and the beam mesh is drawn. The scenario's
   tractor fallback carries no effect references yet.
 - ~~**Cook rule.**~~ Verified by a packaged build (see Packaging); it also fixed `/SCBridge/Cargo` not being cooked.
 - **Bay exits.** The dock's bay-exit probe (a cell-sized sphere at each exit) is unchanged from K1. A sphere at a low exit

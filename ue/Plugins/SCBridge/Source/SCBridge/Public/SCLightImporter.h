@@ -8,7 +8,12 @@ class FJsonObject;
 class SCBRIDGE_API FSCLightImporter
 {
 public:
+    /** Component tag prefix naming the entity an attached light rides (`parent_entity_id`, WP-P5). */
+    static constexpr const TCHAR* RidesTagPrefix = TEXT("SCRides:");
     static void RefreshShadows(ASCVehicle* Vehicle);
+    /** Put the light's authored state StateKey (`defaultState`, `auxiliaryState`, `emergencyState`, ...) on light Index of
+     *  Vehicle->LightStates: intensity (StateCandela) and colour. False when the light authors no such state. */
+    static bool ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey);
     // UE candela for one light state. Packages with the authored light fields (bulb_radius_m, …) use the game
     // renderer's model (FSCStarEngine::PointCandela / PlanarCandela; ue/verification/WP-U3b.md §13); older packages
     // keep the x1500 proxy.
@@ -28,24 +33,31 @@ public:
     // that cannot shade that surface and reports them as `gated`.
     static TArray<FString> Probe(const UWorld* World, const FVector& Point, const AActor* Ignore, int32 Top, uint8 ReceiverChannels = 0);
     // A game projector is its texture over a square frustum of half-angle FOV / 2 (TiledShading samples SpotTexArray at
-    // the projected position, border = 0) with no cone falloff. In UE the spot cone must reach the frustum corners and
-    // the light function, whose UVs UE scales by tan(outer), is scaled back laterally to the FOV frustum.
-    // UE's spot inner-cone limit (USpotLightComponent::GetClampedConeAngles), not a game value. UE renders the outer
-    // angle at least 0.001 rad wider than the inner one and scales light-function UVs by the tangent of that rendered
-    // angle, so the lateral scale is taken from the component's clamped angles (LateralScale).
-    static constexpr double MaxSpotConeDeg = 88.9;
-    struct FProjectorCone
+    // the projected position with a border sampler) with no cone falloff. The engine fork's spot light shape (WP-E1 E1-3)
+    // renders exactly that: Shape SquareFrustum with OuterConeAngle = FOV / 2 (UE's light function UVs then span the
+    // square: LightFunctionScale stays uniform) and LightFunctionAddress Border (black outside the gobo). The engine keeps
+    // UE's 88.9-degree limit on the half-FOV. The game's near-depth cut (projDepthCutoff) is not set: the CPU mapping of
+    // projectorNearPlane is unverified (ProjectorNearClip stays 0).
+    static void MakeProjector(class USpotLightComponent* Spot, double HalfFovDeg);
+    // A projector's gobo: the package texture at Path (EXR keeps its HDR values, PNG / DDS decode linear), clamped, loaded once
+    // per vehicle (Vehicle->GoboTextures, the cache key is the package path). Null when the package cannot supply it.
+    static class UTexture2D* LoadGobo(const FSCPackageSource& Source, ASCVehicle* Vehicle, const FString& Path);
+    // The light-function material of a gobo: one M_SC_LightFunction instance per texture on the vehicle (the light function atlas
+    // de-duplicates slots by material; a MID per light exhausts it). Null without a texture or the master material.
+    static class UMaterialInterface* GoboLightFunction(ASCVehicle* Vehicle, class UTexture2D* Texture);
+    // The game's personal light (an item's SCItemFlashlightParams split, FSCFlashlight) as UE spot-light settings: the light
+    // model of every imported light (FSCStarEngine::PointCandela of the authored diffuseMult over the attenuation bulb, no
+    // attenuation tweak; the bulb offset law; the forced range fade), radius = distance, the SRGB8 colour, and a projector
+    // (MakeProjector) of half-angle fov / 2 whose gobo is the light cookie.
+    struct FFlashlightSettings
     {
-        double OuterDeg = 0; // UE outer = inner cone half-angle as set on the component
-        double FovTan = 0;   // tan(FOV / 2): where the gobo's edge must land
-        // LightFunctionScale.X / .Z = .Y / .Z for the outer angle UE renders (radians, GetClampedConeAngles().Y).
-        double LateralScale(double RenderedOuterRad) const
-        {
-            const double RenderedTan = FMath::Tan(RenderedOuterRad);
-            return RenderedTan > 0 ? FovTan / RenderedTan : 1.0;
-        }
+        double Candela = 0, RadiusCm = 0, BulbCm = 0, OffsetCm = 0, HalfFovDeg = 0, RangeFadeFraction = 0;
+        FLinearColor Color = FLinearColor::White;
+        bool bBulbOffset = false; // the bulb offset law applies (ULocalLightComponent::IsValidBulbOffsetAttenuation)
     };
-    static FProjectorCone ProjectorCone(double HalfFovDeg);
+    static FFlashlightSettings FlashlightSettings(const struct FSCFlashlight& Light);
+    // Apply FlashlightSettings to a movable spot light; LightFunction is the cookie's (GoboLightFunction), null when unavailable.
+    static void ApplyFlashlight(class USpotLightComponent* Spot, const struct FSCFlashlight& Light, class UMaterialInterface* LightFunction);
     // Container-local CryEngine vector (metres) -> the axes of the component its lights hang from (still metres).
     static FVector ContainerBasis(const FVector& Cry, bool bHelperFrame);
     static void Build(const FSCPackageSource& Source, const FSCSceneInstance& Instance, ASCVehicle* Vehicle, USceneComponent* Parent,

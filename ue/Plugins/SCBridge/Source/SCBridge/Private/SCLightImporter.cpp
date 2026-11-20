@@ -7,6 +7,7 @@
 #include "SCMeshImporter.h"
 #include "SCImporter.h"
 #include "SCTextureImporter.h"
+#include "SCPlayerKit.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Components/PointLightComponent.h"
@@ -21,6 +22,7 @@
 #include "Modules/ModuleManager.h"
 #include "Misc/Paths.h"
 #include "HAL/IConsoleManager.h"
+#include "Misc/ScopeExit.h"
 #include "RenderUtils.h"
 #include "RHI.h"
 #include "SceneManagement.h"
@@ -139,13 +141,86 @@ double FSCLightImporter::StateCandela(const TSharedPtr<FJsonObject>& Light, cons
     return Game.PointCandela(Raw, FMath::Max(0., LightNumber(Light, TEXT("bulb_radius_m"))),
                              LightNumber(Light, TEXT("attenuation_tweak"), 1.0));
 }
-FSCLightImporter::FProjectorCone FSCLightImporter::ProjectorCone(double HalfFovDeg)
+void FSCLightImporter::MakeProjector(USpotLightComponent* Spot, double HalfFovDeg)
 {
-    FProjectorCone Cone;
-    Cone.FovTan = FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(HalfFovDeg, 0.0, MaxSpotConeDeg)));
-    // The square frustum's diagonal, within UE's limit.
-    Cone.OuterDeg = FMath::Min(FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * Cone.FovTan)), MaxSpotConeDeg);
-    return Cone;
+    Spot->SetShape(ESpotLightShape::SquareFrustum);
+    Spot->SetOuterConeAngle(float(HalfFovDeg));
+    Spot->SetInnerConeAngle(float(HalfFovDeg)); // unused by the square frustum; no cone falloff in the game either
+    Spot->SetLightFunctionAddress(ELightFunctionAddress::Border);
+}
+UTexture2D* FSCLightImporter::LoadGobo(const FSCPackageSource& Source, ASCVehicle* Vehicle, const FString& Path)
+{
+    if (!Vehicle || Path.IsEmpty()) return nullptr;
+    if (UTexture2D* Cached = Vehicle->GoboTextures.FindRef(Path)) return Cached;
+    UTexture2D* Texture = nullptr;
+    if (FPaths::GetExtension(Path).Equals(TEXT("exr"), ESearchCase::IgnoreCase))
+    {
+        TArray<uint8> Bytes;
+        FString Error;
+        auto Wrapper = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper")).CreateImageWrapper(EImageFormat::EXR);
+        const auto Limits = FSCTextureLimits::FromHost();
+        if (Source.ReadBytes(Path, Bytes, Error) && Bytes.Num() <= Limits.MaxTextureBytes && Wrapper &&
+            Wrapper->SetCompressed(Bytes.GetData(), Bytes.Num()) && Wrapper->GetWidth() > 0 && Wrapper->GetHeight() > 0 &&
+            Wrapper->GetWidth() <= Limits.MaxDimension && Wrapper->GetHeight() <= Limits.MaxDimension &&
+            int64(Wrapper->GetWidth()) * Wrapper->GetHeight() * 16 <= Limits.MaxTextureBytes)
+        {
+            Texture = FImageUtils::ImportBufferAsTexture2D(Bytes); // preserves HDR platform pixels, no editor factory
+            if (Texture)
+            {
+                Texture->Rename(nullptr, Vehicle, REN_DontCreateRedirectors | REN_NonTransactional);
+                Texture->SRGB = false;
+            }
+        }
+    }
+    else
+    {
+        FSCDecodedTexture Decoded;
+        if (FSCTextureImporter::Decode(Source, {Path, ESCTextureRole::Linear}, Decoded)) Texture = FSCTextureImporter::Create(MoveTemp(Decoded), Vehicle);
+    }
+    if (!Texture) return nullptr;
+    Texture->AddressX = TA_Clamp;
+    Texture->AddressY = TA_Clamp;
+    Texture->UpdateResource(); // sampler state must include clamp for PNG and EXR
+    Vehicle->Textures.Add(Texture);
+    Vehicle->GoboTextures.Add(Path, Texture);
+    Vehicle->SourcePaths.Add(Texture, TEXT("gobo:") + Path);
+    return Texture;
+}
+UMaterialInterface* FSCLightImporter::GoboLightFunction(ASCVehicle* Vehicle, UTexture2D* Texture)
+{
+    auto* Master = LoadObject<UMaterialInterface>(nullptr, TEXT("/SCBridge/Materials/M_SC_LightFunction.M_SC_LightFunction"));
+    return Vehicle && Texture && Master ? GoboMaterial(Vehicle, Master, Texture) : nullptr;
+}
+FSCLightImporter::FFlashlightSettings FSCLightImporter::FlashlightSettings(const FSCFlashlight& Light)
+{
+    // SCItemFlashlightParams carries no attenuation tweak: CryEngine's neutral 1 (the importer's default for lights without one).
+    constexpr double NoTweak = 1.0;
+    const FSCStarEngine& Game = FSCStarEngine::Get();
+    const double Bulb = FMath::Max(0.0, double(Light.BulbRadiusM));
+    FFlashlightSettings S;
+    S.Candela = Game.PointCandela(FMath::Max(0.0, double(Light.DiffuseMult)), Bulb, NoTweak);
+    S.RadiusCm = FMath::Max(0.0, double(Light.DistanceM)) * 100;
+    S.BulbCm = Bulb * 100;
+    S.OffsetCm = Game.AttenuationOffset(Bulb, NoTweak) * 100;
+    S.bBulbOffset = ULocalLightComponent::IsValidBulbOffsetAttenuation(float(S.BulbCm), float(S.OffsetCm));
+    S.HalfFovDeg = FMath::Max(0.0, double(Light.FovDeg)) / 2;
+    S.RangeFadeFraction = Game.ForcedFadeFraction;
+    S.Color = FLinearColor::FromSRGBColor(Light.Color); // SRGB8: an sRGB-encoded colour (as the exporter decodes palette SRGB8)
+    return S;
+}
+void FSCLightImporter::ApplyFlashlight(USpotLightComponent* Spot, const FSCFlashlight& Light, UMaterialInterface* LightFunction)
+{
+    const FFlashlightSettings S = FlashlightSettings(Light);
+    Spot->SetIntensityUnits(ELightUnits::Candelas);
+    Spot->SetIntensity(float(S.Candela));
+    Spot->SetLightColor(S.Color);
+    Spot->SetAttenuationRadius(float(S.RadiusCm));
+    Spot->SetSourceRadius(float(S.BulbCm));
+    Spot->SetDistanceAttenuation(S.bBulbOffset ? ELightDistanceAttenuation::BulbOffset : ELightDistanceAttenuation::Default,
+                                 S.bBulbOffset ? float(S.BulbCm) : 0.f, S.bBulbOffset ? float(S.OffsetCm) : 0.f);
+    Spot->SetRangeFade(ELightRangeFade::SquaredLinearTail, float(S.RangeFadeFraction));
+    MakeProjector(Spot, S.HalfFovDeg);
+    Spot->SetLightFunctionMaterial(LightFunction);
 }
 
 FVector FSCLightImporter::ContainerBasis(const FVector& Cry, bool bHelperFrame)
@@ -159,6 +234,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
     auto Basis = [bHelperFrame](FVector V) { return ContainerBasis(V, bHelperFrame); };
     Vehicle->bMegaLightsActive = MegaLightsActive();
     const double ShadowRadius = ShadowRadiusThreshold(Instance.LightJson);
+    int32 NonUnitSpecular = 0;
+    ON_SCOPE_EXIT
+    {
+        if (NonUnitSpecular)
+            UE_LOG(LogSCImport, Display, TEXT("LIGHT_SPECULAR instance=%s non_unit=%d of %d"), *Instance.EntityName, NonUnitSpecular,
+                   Instance.LightJson.Num());
+    };
     for (const auto& Text : Instance.LightJson)
     {
         FLightJson J;
@@ -185,10 +267,16 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         Vehicle->Lights.Add(Light);
         Light->SetMobility(EComponentMobility::Movable);
         Light->ComponentTags.Add(FName(*Name));
+        // The entity an attached light rides (a lift carriage re-parents it, WP-P5).
+        if (const FString Rides = LightString(J, TEXT("parent_entity_id")); !Rides.IsEmpty())
+            Light->ComponentTags.Add(FName(*(FSCLightImporter::RidesTagPrefix + Rides)));
         FSCImportedLightState State;
         State.Component = Light;
         State.Name = Name;
         State.OwnerEntity = Instance.EntityName;
+        State.Json = J; // the record ApplyState reads another state from
+        if (const FLightJson* Attachment; J->TryGetObjectField(TEXT("attachment"), Attachment))
+            State.GroupEntityId = LightString(*Attachment, TEXT("group_entity_id"));
         J->TryGetBoolField(TEXT("affects_this_area_only"), State.bAreaOnly);
         const FString ExportState = LightString(J, TEXT("active_state"));
         State.ExportActiveState = FName(*ExportState);
@@ -222,12 +310,20 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         Light->SetVisibility(State.bEnabled);
         const FVector Color = LightVector(Selected, TEXT("color"), LightVector(J, TEXT("color"), FVector(1)));
         Light->SetLightColor(FLinearColor(Color.X, Color.Y, Color.Z));
+        // miscParams.specularMultiplier scales the light's specular in the game's shaders (0 = diffuse only); packages without
+        // the field keep UE's 1.
+        const double Specular = FMath::Max(0., LightNumber(J, TEXT("specular_multiplier"), 1.0));
+        Light->SetSpecularScale(float(Specular));
+        NonUnitSpecular += Specular != 1.0;
         if (auto* Local = Cast<ULocalLightComponent>(Light))
         {
             Local->SetIntensityUnits(ELightUnits::Candelas);
             const double Radius = FMath::Max(0., LightNumber(J, TEXT("radius_m")));
             Local->SetAttenuationRadius(Radius * 100);
             Local->SetCastShadows(State.bFallbackShadow || USCViewerSettings::Get()->bShadowAllLights); // look: every light (D15)
+            // GetLightForcedDistanceFade: every light fades over the last forcedFalloffFraction of its radius (the fixture), in
+            // place of UE's (1 - (d / R)^4)^2 (engine fork, WP-E1 E1-2).
+            Local->SetRangeFade(ELightRangeFade::SquaredLinearTail, float(FSCStarEngine::Get().ForcedFadeFraction));
         }
         // Emitter size from the authored bulb / plane (CryEngine's attenuation bulb is the source radius).
         if (bAuthored)
@@ -236,10 +332,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             {
                 const double Bulb = FMath::Max(0., LightNumber(J, TEXT("bulb_radius_m")));
                 Point->SetSourceRadius(Bulb * 100);
-                // The attenuation tweak's distance offset (FSCStarEngine::AttenuationOffset). UE has no field for it:
-                // SoftSourceRadius carries it, and the engine shader patch (WP-L3) reads it there instead of as a soft
-                // specular radius. Negative for tweak > 1, which only the editor's property clamp would refuse.
-                Point->SetSoftSourceRadius(FSCStarEngine::Get().AttenuationOffset(Bulb, LightNumber(J, TEXT("attenuation_tweak"), 1.0)) * 100);
+                // GetPhysicalLightAttenuation: candela / (max(d, bulb) + offset)^2 with the attenuation tweak's distance offset
+                // (FSCStarEngine::AttenuationOffset; negative for tweak > 1), the engine fork's bulb offset law (WP-E1 E1-2).
+                // A light without a bulb has no such law (b + c = 0) and keeps UE's inverse square.
+                const double BulbCm = Bulb * 100;
+                const double OffsetCm = FSCStarEngine::Get().AttenuationOffset(Bulb, LightNumber(J, TEXT("attenuation_tweak"), 1.0)) * 100;
+                if (ULocalLightComponent::IsValidBulbOffsetAttenuation(float(BulbCm), float(OffsetCm)))
+                    Point->SetDistanceAttenuation(ELightDistanceAttenuation::BulbOffset, float(BulbCm), float(OffsetCm));
             }
             else if (auto* Rect = Cast<URectLightComponent>(Light))
             {
@@ -279,61 +378,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         const FString TexturePath = LightString(J, TEXT("projector_texture"));
         if (!TexturePath.IsEmpty())
         {
-            auto* Master = LoadObject<UMaterialInterface>(nullptr, TEXT("/SCBridge/Materials/M_SC_LightFunction.M_SC_LightFunction"));
-            UTexture2D* Texture = Vehicle->GoboTextures.FindRef(TexturePath);
-            if (Master && !Texture)
+            if (UMaterialInterface* Gobo = GoboLightFunction(Vehicle, LoadGobo(Source, Vehicle, TexturePath)))
             {
-                if (FPaths::GetExtension(TexturePath).Equals(TEXT("exr"), ESearchCase::IgnoreCase))
-                {
-                    TArray<uint8> Bytes;
-                    FString Error;
-                    auto Wrapper =
-                        FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper")).CreateImageWrapper(EImageFormat::EXR);
-                    const auto Limits = FSCTextureLimits::FromHost();
-                    if (Source.ReadBytes(TexturePath, Bytes, Error) && Bytes.Num() <= Limits.MaxTextureBytes && Wrapper &&
-                        Wrapper->SetCompressed(Bytes.GetData(), Bytes.Num()) && Wrapper->GetWidth() > 0 && Wrapper->GetHeight() > 0 &&
-                        Wrapper->GetWidth() <= Limits.MaxDimension && Wrapper->GetHeight() <= Limits.MaxDimension &&
-                        int64(Wrapper->GetWidth()) * Wrapper->GetHeight() * 16 <= Limits.MaxTextureBytes)
-                    {
-                        Texture = FImageUtils::ImportBufferAsTexture2D(Bytes); // preserves HDR platform pixels, no editor factory
-                        if (Texture)
-                        {
-                            Texture->Rename(nullptr, Vehicle, REN_DontCreateRedirectors | REN_NonTransactional);
-                            Texture->SRGB = false;
-                        }
-                    }
-                }
-                else
-                {
-                    FSCDecodedTexture Decoded;
-                    if (FSCTextureImporter::Decode(Source, {TexturePath, ESCTextureRole::Linear}, Decoded))
-                        Texture = FSCTextureImporter::Create(MoveTemp(Decoded), Vehicle);
-                }
-                if (Texture)
-                {
-                    Texture->AddressX = TA_Clamp;
-                    Texture->AddressY = TA_Clamp;
-                    Texture->UpdateResource(); // sampler state must include clamp for PNG and EXR
-                    Vehicle->Textures.Add(Texture);
-                    Vehicle->GoboTextures.Add(TexturePath, Texture);
-                    Vehicle->SourcePaths.Add(Texture, TEXT("gobo:") + TexturePath);
-                }
-            }
-            if (Master && Texture)
-            {
-                Light->SetLightFunctionMaterial(GoboMaterial(Vehicle, Master, Texture));
-                // The game's projector is the texture over the square FOV frustum, without a cone falloff: open UE's
-                // cone to the frustum corners (the material zeroes everything outside the texture) and keep the gobo on
-                // the FOV frustum. The exported inner angle is not a game value and is not used for projectors.
+                Light->SetLightFunctionMaterial(Gobo);
+                // The game's projector is the texture over the square FOV frustum, without a cone falloff (MakeProjector).
+                // The exported inner angle is not a game value and is not used for projectors.
                 if (auto* Spot = Cast<USpotLightComponent>(Light))
-                {
-                    const FProjectorCone Cone = ProjectorCone(LightNumber(J, TEXT("outer_angle")));
-                    Spot->SetOuterConeAngle(Cone.OuterDeg);
-                    Spot->SetInnerConeAngle(Cone.OuterDeg);
-                    const double Axial = Spot->LightFunctionScale.Z; // along the light ("z of the user scale", UE)
-                    const double Lateral = Axial * Cone.LateralScale(Spot->GetClampedConeAngles().Y);
-                    Spot->SetLightFunctionScale(FVector(Lateral, Lateral, Axial));
-                }
+                    MakeProjector(Spot, LightNumber(J, TEXT("outer_angle")));
             }
             else
                 Warnings.Add(Name + TEXT(": gobo unavailable: ") + TexturePath);
@@ -345,6 +396,27 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
     }
 }
 
+bool FSCLightImporter::ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey)
+{
+    // Another of the light's authored states (`states.<key>`): its intensity by the same model as at import (StateCandela)
+    // and its colour; a state the light does not author leaves it as it is (nothing invented). Light styles (waveforms)
+    // are not modelled, as at import.
+    if (!Vehicle || !Vehicle->LightStates.IsValidIndex(Index)) return false;
+    FSCImportedLightState& S = Vehicle->LightStates[Index];
+    ULightComponent* Light = S.Component;
+    const FLightJson* States = nullptr;
+    const FLightJson* Selected = nullptr;
+    if (!Light || !S.Json || !S.Json->TryGetObjectField(TEXT("states"), States) || !(*States)->TryGetObjectField(StateKey.ToString(), Selected))
+        return false;
+    const double Intensity = StateCandela(S.Json, *Selected);
+    S.ActiveState = StateKey;
+    S.bEnabled = StateKey != FName(TEXT("offState")) && Intensity > 0; // as at import: an explicit offState stays off
+    const FVector Color = LightVector(*Selected, TEXT("color"), LightVector(S.Json, TEXT("color"), FVector(1)));
+    Light->SetLightColor(FLinearColor(Color.X, Color.Y, Color.Z));
+    Light->SetIntensity(S.bEnabled ? Intensity : 0.);
+    Light->SetVisibility(S.bEnabled);
+    return true;
+}
 void FSCLightImporter::RefreshShadows(ASCVehicle* Vehicle)
 {
     Vehicle->bMegaLightsActive = MegaLightsActive();

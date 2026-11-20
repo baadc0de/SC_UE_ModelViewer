@@ -17,6 +17,9 @@ namespace FSCInstancing
 // Groups identical rigid static parts of the actor (not under a rig, no attached children) and replaces every group of
 // two or more with one UInstancedStaticMeshComponent on the actor root carrying the same settings.
 SCBRIDGE_API FSCInstancingStats Consolidate(ASCVehicle* Vehicle);
-/** Attached below a USCRigComponent: the part moves with an animated rig, so it cannot share an instance transform. */
+/** Attached below a USCRigComponent or a lift anchor (tag SCLift, WP-P5): the part moves, so it cannot share an instance transform. */
 SCBRIDGE_API bool UnderRig(const USceneComponent* C);
+/** Component tag: the component keeps its own materials (a panel screen face whose image is swapped per component, WP-I1
+ *  I1-3), so it is never consolidated. */
+inline const FName KeepTag(TEXT("SCKeepComponent"));
 }

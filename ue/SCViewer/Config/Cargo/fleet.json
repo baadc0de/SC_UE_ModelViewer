@@ -1,0 +1,48 @@
+{
+  "name": "Default drone fleet (live cargo spawning without a scenario)",
+  "note": "Read only in a session without a cargo scenario, with its first live spawn (sc.Cargo.Spawn; setting CargoFleet, -SCCargoFleet=<file|none>). Only the drone definition and the docks are used; a dock whose grid the scene does not have is left out. Two docks of two drones on the environment's first grid (a hangar's freight elevator), as in the hangar scenarios: the hangar's shared pool, which serves every grid of the hangar and its ships.",
+  "drone": {
+    "tractor_beam": {
+      "record": "EntityClassDefinition.grin_multitool_01_default_tractorbeam",
+      "record_guid": "dc0b1117-8590-43c7-9c68-7644ed8c89aa",
+      "action": "TractorBeam",
+      "max_force": 257500.0,
+      "min_distance": 0.5,
+      "max_distance": 150.0,
+      "full_strength_distance": 3.0,
+      "max_volume": 20.0,
+      "volume_force_coefficient": 0.3,
+      "provenance": "Fallback only, as in the scenarios (c2_hangar.json): with the archive (FFI) the values come from the record at run time (CARGO_TRACTOR source=datacore). LIVE 4.10.2 Data.p4k values (docs/cargo/datamine.md, Drone and tractor references)."
+    },
+    "flight": {
+      "max_speed_m_s": 10.0,
+      "max_accel_m_s2": 12.0,
+      "max_jerk_m_s3": 30.0,
+      "drone_mass_kg": 180.0,
+      "min_load_accel_m_s2": 1.0,
+      "normal_clearance_m": 0.3,
+      "clearance_margin_m": 2.0,
+      "formation_spacing_m": 1.5,
+      "sway_amplitude_cm": 4.0,
+      "sway_tilt_deg": 3.0,
+      "sway_frequency_hz": 0.3,
+      "note": "Viewer choices, not game data, the same as the hangar scenarios'."
+    }
+  },
+  "docks": [
+    {
+      "grid": {
+        "owner": "environment",
+        "index": 0
+      },
+      "drones": 2
+    },
+    {
+      "grid": {
+        "owner": "environment",
+        "index": 0
+      },
+      "drones": 2
+    }
+  ]
+}

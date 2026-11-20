@@ -188,6 +188,8 @@ bool FSCRigLights::RunTest(const FString&)
         {
             TestEqual(TEXT("outer is half-angle"), Spot->OuterConeAngle, 30.f);
             TestEqual(TEXT("inner is half-angle"), Spot->InnerConeAngle, 20.f);
+            TestTrue(TEXT("a spot without a gobo keeps UE's cone"), Spot->Shape == ESpotLightShape::Cone);
+            TestTrue(TEXT("a spot without a gobo keeps UE's light function wrap"), Spot->LightFunctionAddress == ELightFunctionAddress::Wrap);
         }
     }
     const FString Directory = FPaths::ProjectSavedDir() / TEXT("Import/RigTests");
@@ -213,14 +215,14 @@ bool FSCRigLights::RunTest(const FString&)
     TestTrue(TEXT("one material shared by repeated gobos"), Vehicle->Lights.Last()->LightFunctionMaterial == Vehicle->Lights[Vehicle->Lights.Num() - 2]->LightFunctionMaterial);
     if (const auto* Projector = Cast<USpotLightComponent>(Vehicle->Lights.Last()))
     {
-        // A gobo projector is its texture over the square FOV frustum (the game's SpotTexArray sampling), not a UE cone.
-        const FSCLightImporter::FProjectorCone Cone = FSCLightImporter::ProjectorCone(30);
-        TestEqual(TEXT("projector: cone reaches the frustum corners"), double(Projector->OuterConeAngle), Cone.OuterDeg, 1e-4);
-        TestEqual(TEXT("projector: no cone falloff"), double(Projector->InnerConeAngle), Cone.OuterDeg, 1e-4);
-        TestEqual(TEXT("projector: gobo keeps the FOV frustum (lateral)"), double(Projector->LightFunctionScale.X / Projector->LightFunctionScale.Z),
-                  Cone.LateralScale(Projector->GetClampedConeAngles().Y), 1e-6);
-        TestEqual(TEXT("projector: gobo keeps the FOV frustum (both lateral axes)"), double(Projector->LightFunctionScale.Y),
-                  double(Projector->LightFunctionScale.X), 1e-6);
+        // A gobo projector is its texture over the square FOV frustum (the game's SpotTexArray sampling with a border sampler),
+        // not a UE cone: the engine fork's SquareFrustum spot light with the half-FOV as its outer angle (WP-E1 E1-3).
+        TestTrue(TEXT("projector: square frustum"), Projector->Shape == ESpotLightShape::SquareFrustum);
+        TestEqual(TEXT("projector: outer angle is the game's half-FOV"), double(Projector->OuterConeAngle), 30.0, 1e-6);
+        TestTrue(TEXT("projector: gobo black outside its square (border)"), Projector->LightFunctionAddress == ELightFunctionAddress::Border);
+        TestEqual(TEXT("projector: near clip not set (projectorNearPlane mapping unverified)"), Projector->ProjectorNearClip, 0.f);
+        TestTrue(TEXT("projector: uniform light function scale, so the gobo spans the square"),
+                 Projector->LightFunctionScale.X == Projector->LightFunctionScale.Z && Projector->LightFunctionScale.Y == Projector->LightFunctionScale.Z);
     }
     if (UTexture2D* Texture = Vehicle->GoboTextures.FindRef(TEXT("gobo.exr")))
     {

@@ -29,6 +29,10 @@
       "Enabled": true
     },
     {
+      "Name": "Synthesis",
+      "Enabled": true
+    },
+    {
       "Name": "Interchange",
       "Enabled": true,
       "TargetAllowList": [

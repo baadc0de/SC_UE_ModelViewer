@@ -298,11 +298,8 @@ void USCCargoSubsystem::OnBoxContact(ASCCargoContainer* Box, AActor* Other, cons
     // The effect's +X is the emit axis: out of the ship's surface, towards the box.
     const FVector Normal = (Hit.ImpactNormal.IsNearlyZero() ? -NormalImpulse : FVector(Hit.ImpactNormal)).GetSafeNormal();
     const FVector Out = FVector::DotProduct(Normal, Box->GetActorLocation() - Hit.ImpactPoint) >= 0 ? Normal : -Normal;
-    // The scale: the component's (positions and speeds of local-space emitters) and SC.Scale2 (sprite sizes).
+    // The scale: the component's (positions and speeds of local-space emitters and, in the built systems, sprite sizes).
     if (UNiagaraComponent* C = UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), System, Hit.ImpactPoint, Out.Rotation(), FVector(Scale), true, false, ENCPoolMethod::AutoRelease))
-    {
-        C->SetVariableVec2(TEXT("SC.Scale2"), FVector2D(Scale, Scale));
         C->Activate(true);
-    }
     UE_LOG(LogSCCargoFx, Display, TEXT("CARGO_FX_CONTACT box=%d ship=%s at=%s dv_cm_s=%.0f scale=%.2f"), Box->BoxId, *Entity, *Hit.ImpactPoint.ToCompactString(), Dv, Scale);
 }

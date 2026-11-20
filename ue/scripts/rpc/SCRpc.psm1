@@ -35,9 +35,14 @@ function Start-SCViewer {
     # Launches the viewer as a game with the RPC on; returns the process once /health answers (or throws).
     # Without -Visible the viewer runs in UE 5.9 agent mode: rendered off screen (no window to take focus), unattended,
     # no modal dialogs; screenshots and /record still capture the viewport.
+    # -Engine: the SCViewer fork of UE 5.9 built from source (plan D17); default $env:UE_ENGINE_ROOT, else
+    # %USERPROFILE%\UnrealEngine-5.9-src.
     param([string]$Extra = '', [int]$Port = 8770, [string]$Log = 'SCRpc.log', [string]$ShotDir = '', [switch]$Visible,
           [int]$ResX = 1920, [int]$ResY = 1080,
-          [string]$Engine = 'C:\Program Files\Epic Games\UE_5.9', [int]$StartTimeoutSec = 300)
+          [string]$Engine = $(if ($env:UE_ENGINE_ROOT) { $env:UE_ENGINE_ROOT } else { Join-Path $env:USERPROFILE 'UnrealEngine-5.9-src' }),
+          [int]$StartTimeoutSec = 300)
+    $editor = "$Engine\Engine\Binaries\Win64\UnrealEditor.exe"
+    if (-not (Test-Path $editor)) { throw "no UnrealEditor.exe under $Engine (pass -Engine or set UE_ENGINE_ROOT)" }
     Set-SCRpcPort $Port
     $root = (Resolve-Path "$PSScriptRoot\..\..\..").Path
     $proj = "$root\ue\SCViewer\SCViewer.uproject"
@@ -49,7 +54,7 @@ function Start-SCViewer {
     if ($Extra) { $argv += ($Extra -split ' ' | Where-Object { $_ }) }
     $style = if ($Visible) { 'Normal' } else { 'Minimized' }
     # From the repository root: the archive's processed cache goes to ./cache of the working directory (gitignored there).
-    $p = Start-Process -FilePath "$Engine\Engine\Binaries\Win64\UnrealEditor.exe" -ArgumentList $argv -PassThru -WindowStyle $style -WorkingDirectory $root
+    $p = Start-Process -FilePath $editor -ArgumentList $argv -PassThru -WindowStyle $style -WorkingDirectory $root
     $deadline = (Get-Date).AddSeconds($StartTimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if ($p.HasExited) { throw "viewer exited during start (code $($p.ExitCode))" }

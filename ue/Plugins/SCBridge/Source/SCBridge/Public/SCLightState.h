@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "SCLightState.generated.h"
 class ULightComponent;
+class FJsonObject;
 
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCImportedLightState
@@ -26,4 +27,11 @@ struct SCBRIDGE_API FSCImportedLightState
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") bool bInsideArea = false;
     /** Room GUID the light sits in (WP-L1); empty outside every room volume. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") FString AreaRoom;
+    /** The light group entity holding the light (`attachment.group_entity_id`, cache format 39); empty outside a group. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") FString GroupEntityId;
+    /** The interior (scene `interiors[]` index) whose container the light came from; INDEX_NONE for the root and items. Group
+     *  ids are unique within one container only. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") int32 Interior = INDEX_NONE;
+    /** The light record (its states and intensity model): FSCLightImporter::ApplyState puts another of its states on. */
+    TSharedPtr<FJsonObject> Json;
 };

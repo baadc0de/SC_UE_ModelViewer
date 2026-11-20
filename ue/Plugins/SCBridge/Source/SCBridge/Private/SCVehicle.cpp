@@ -1,5 +1,6 @@
 // Vehicle parameters and on-demand evaluation of sparse, ordered animation layers.
 #include "SCVehicle.h"
+#include "SCAudioSystem.h"
 #include "Components/SceneComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SCMaterialBuilder.h"
@@ -49,50 +50,176 @@ void ASCVehicle::MarkDirty(int32 ClipIndex)
     for (const auto& Binding : ClipCatalog->Clips[ClipIndex].Bindings)
         DirtyMeshes.Add(Binding.Mesh);
 }
-bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes, USCRigComponent* Target)
+double ASCVehicle::ClipPoseCost(const FSCImportedClip& Clip, const FSCClipBinding& Binding, const TArray<FTransform>& Local, double Frame, bool bBackward)
+{
+    double Cost = 0;
+    for (const FSCBoneTrack& T : Binding.Tracks)
+    {
+        if (!Local.IsValidIndex(T.Bone)) continue;
+        const FTransform S = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(Clip, T, Frame, bBackward));
+        if (T.bRotation) Cost += Local[T.Bone].GetRotation().AngularDistance(S.GetRotation());
+        if (T.bPosition) Cost += FVector::Dist(Local[T.Bone].GetTranslation(), S.GetTranslation()) / 100.0;
+    }
+    return Cost;
+}
+double ASCVehicle::NearestClipFrame(const FSCImportedClip& Clip, const FSCClipBinding& Binding, const TArray<FTransform>& Local, bool bBackward)
+{
+    double Best = bBackward ? Clip.LastFrame : 0, BestCost = TNumericLimits<double>::Max();
+    for (int32 Step = 0; Step <= Clip.LastFrame; ++Step)
+    {
+        const int32 Frame = bBackward ? Clip.LastFrame - Step : Step;
+        const double Cost = ClipPoseCost(Clip, Binding, Local, Frame, bBackward);
+        if (Cost < BestCost - 1e-9)
+        {
+            BestCost = Cost;
+            Best = Frame;
+        }
+    }
+    // Between samples: the playhead is fractional (a door stopped mid-key), so refine around the best key frame in tenths.
+    const double Centre = Best;
+    for (int32 Step = -9; Step <= 9; ++Step)
+    {
+        const double Frame = Centre + Step * 0.1;
+        if (Step == 0 || Frame < 0 || Frame > Clip.LastFrame) continue;
+        const double Cost = ClipPoseCost(Clip, Binding, Local, Frame, bBackward);
+        if (Cost < BestCost - 1e-9)
+        {
+            BestCost = Cost;
+            Best = Frame;
+        }
+    }
+    return Best;
+}
+bool ASCVehicle::AppliesTo(const FSCClipPlayback& P, const USCRigComponent* Rig)
+{
+    // A targeted entry poses its own rig only (none once that rig is gone); an untargeted one every rig its clip binds.
+    return P.bTargeted ? (Rig && P.TargetRig.Get() == Rig) : true;
+}
+bool ASCVehicle::IsCoveredOnRig(const FSCClipPlayback& Entry, const USCRigComponent* Rig) const
+{
+    // EvaluateClips layers entries by Order: Entry shows nothing on Rig when later entries there drive every channel it drives.
+    const USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr;
+    if (!Mesh || !ClipCatalog || !ClipCatalog->Clips.IsValidIndex(Entry.Clip)) return false;
+    auto BindingOf = [&](int32 Clip) {
+        return ClipCatalog->Clips.IsValidIndex(Clip) ? ClipCatalog->Clips[Clip].Bindings.FindByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Mesh; })
+                                                     : nullptr;
+    };
+    const FSCClipBinding* Own = BindingOf(Entry.Clip);
+    if (!Own) return false;
+    TArray<const FSCClipBinding*> Later;
+    for (const TArray<FSCClipPlayback>* List : {&Playback, &HeldPlayback})
+        for (const FSCClipPlayback& Other : *List)
+            if (Other.Order > Entry.Order && AppliesTo(Other, Rig))
+                if (const FSCClipBinding* B = BindingOf(Other.Clip)) Later.Add(B);
+    auto Covered = [&](int32 Bone, bool bRotation) {
+        return Later.ContainsByPredicate([&](const FSCClipBinding* B) {
+            return B->Tracks.ContainsByPredicate([&](const FSCBoneTrack& T) { return T.Bone == Bone && (bRotation ? T.bRotation : T.bPosition); });
+        });
+    };
+    for (const FSCBoneTrack& T : Own->Tracks)
+        if ((T.bRotation && !Covered(T.Bone, true)) || (T.bPosition && !Covered(T.Bone, false))) return false;
+    return true;
+}
+bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, const TArray<FName>& Scopes, USCRigComponent* Target, double StartFrame)
 {
     if (!ClipCatalog || !ClipCatalog->Clips.IsValidIndex(Index) || !FMath::IsFinite(Speed)) return false;
     const auto& Clip = ClipCatalog->Clips[Index];
     if (Clip.Bindings.IsEmpty()) return false;
-    Playback.RemoveAll([&](const FSCClipPlayback& P) { return P.Clip == Index && P.TargetRig.Get() == Target; });
-    HeldPlayback.RemoveAll([&](const FSCClipPlayback& P) { return P.Clip == Index && P.TargetRig.Get() == Target; });
+    // The same clip on the same target is replaced; targeted entries whose rig is gone are dropped.
+    auto Replaced = [&](const FSCClipPlayback& P) {
+        return (P.bTargeted && !P.TargetRig.IsValid()) || (P.Clip == Index && P.bTargeted == (Target != nullptr) && P.TargetRig.Get() == Target);
+    };
+    Playback.RemoveAll(Replaced);
+    HeldPlayback.RemoveAll(Replaced);
     FSCClipPlayback P;
     P.Clip = Index;
     P.TargetRig = Target;
+    P.bTargeted = Target != nullptr;
     P.Speed = Speed;
-    P.Frame = (bSnap ? bLast : Speed < 0) ? Clip.LastFrame : 0;
+    P.Frame = StartFrame >= 0 && !bSnap ? FMath::Clamp(StartFrame, 0.0, double(Clip.LastFrame)) : (bSnap ? bLast : Speed < 0) ? Clip.LastFrame : 0;
     P.bPlaying = !bSnap && Speed != 0 && Clip.LastFrame > 0;
     P.Order = ++NextOrder;
     P.Scopes = Scopes;
     (P.bPlaying ? Playback : HeldPlayback).Add(MoveTemp(P));
     MarkDirty(Index);
     EvaluateClips();
-    SetActorTickEnabled(!Playback.IsEmpty());
+    UpdateTickEnabled();
     return true;
+}
+void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast)
+{
+    // A clip started outside a door interaction (sc.Vehicle.Clip, a harness, an environment state) on a door's channels: the
+    // door's recorded state is what that clip ends in when it is one of the door's own fragments (an open fragment's end is
+    // open, its start closed; a close fragment the reverse; a single-procedural transition's end open, its start closed),
+    // otherwise unknown (no state: IsDoorOpen reads closed, so a press, a pad or a sensor opens it from the pose it shows).
+    if (!ClipCatalog || !ClipCatalog->Clips.IsValidIndex(Index)) return;
+    const FSCImportedClip& Clip = ClipCatalog->Clips[Index];
+    auto HasTag = [](const FSCClipFragment& F, FName Tag) { return !Tag.IsNone() && (F.FragmentTags.Contains(Tag) || F.Tags.Contains(Tag)); };
+    bool bChanged = false;
+    for (const FSCDoorInteraction& D : Doors)
+    {
+        USCRigComponent* Rig = D.Rig;
+        if (!Rig || (Target && Rig != Target)) continue;
+        const USkeletalMesh* Mesh = Rig->GetSkeletalMeshAsset();
+        const FSCClipBinding* Raw = Clip.Bindings.FindByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Mesh; });
+        if (!Raw) continue;
+        const bool bOpenClip = Clip.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment && HasTag(F, D.OpenTag); });
+        const bool bCloseClip = !D.bReverseClose &&
+                                Clip.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment && HasTag(F, D.CloseTag); });
+        // Another clip: does it drive a channel the door's own fragments drive?
+        bool bShares = bOpenClip || bCloseClip;
+        for (int32 C = 0; !bShares && C < ClipCatalog->Clips.Num(); ++C)
+        {
+            const FSCImportedClip& Own = ClipCatalog->Clips[C];
+            if (!Own.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment; })) continue;
+            const FSCClipBinding* B = Own.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; });
+            bShares = B && B->Tracks.ContainsByPredicate([&](const FSCBoneTrack& T) {
+                return Raw->Tracks.ContainsByPredicate([&](const FSCBoneTrack& R) { return R.Bone == T.Bone && ((R.bRotation && T.bRotation) || (R.bPosition && T.bPosition)); });
+            });
+        }
+        if (!bShares) continue;
+        const TPair<const USCRigComponent*, FName> Key(Rig, D.Fragment);
+        if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenClip == bEndsAtLast) ? D.OpenTag : D.CloseTag);
+        else FragmentTargets.Remove(Key);
+        bChanged = true;
+        UE_LOG(LogTemp, Display, TEXT("DOOR_STATE_RAW_CLIP owner=%s fragment=%s clip=%s ends_at_last=%d state=%s"), *Rig->OwnerEntity, *D.Fragment.ToString(),
+               *Clip.Id.ToString(), bEndsAtLast, bOpenClip || bCloseClip ? *FragmentTargets[Key].ToString() : TEXT("unknown"));
+    }
+    if (bChanged && !ScreenFaces.IsEmpty()) RefreshPanelScreens();
 }
 bool ASCVehicle::PlayClip(FName Id)
 {
     if (!ClipCatalog) return false;
-    return StartClip(ClipCatalog->Clips.IndexOfByPredicate([&](const FSCImportedClip& C) { return C.Id == Id; }), 1, false, false);
+    const int32 Index = ClipCatalog->Clips.IndexOfByPredicate([&](const FSCImportedClip& C) { return C.Id == Id; });
+    if (!StartClip(Index, 1, false, false)) return false;
+    ReconcileDoorStates(Index, nullptr, true);
+    return true;
 }
 bool ASCVehicle::SnapClip(FName Id, bool bLast)
 {
     if (!ClipCatalog) return false;
-    return StartClip(ClipCatalog->Clips.IndexOfByPredicate([&](const FSCImportedClip& C) { return C.Id == Id; }), 1, true, bLast);
+    const int32 Index = ClipCatalog->Clips.IndexOfByPredicate([&](const FSCImportedClip& C) { return C.Id == Id; });
+    if (!StartClip(Index, 1, true, bLast)) return false;
+    ReconcileDoorStates(Index, nullptr, bLast);
+    return true;
 }
 bool ASCVehicle::PlayClipAt(int32 Index, USCRigComponent* Target, float Speed)
 {
-    return StartClip(Index, Speed, false, false, {}, Target);
+    if (!StartClip(Index, Speed, false, false, {}, Target)) return false;
+    ReconcileDoorStates(Index, Target, Speed >= 0);
+    return true;
 }
 bool ASCVehicle::SnapClipAt(int32 Index, USCRigComponent* Target, bool bLast)
 {
-    return StartClip(Index, 1, true, bLast, {}, Target);
+    if (!StartClip(Index, 1, true, bLast, {}, Target)) return false;
+    ReconcileDoorStates(Index, Target, bLast);
+    return true;
 }
 bool ASCVehicle::PlayFragment(FName Fragment, FName Tag)
 {
     return PlayFragmentAt(Fragment, Tag, nullptr);
 }
-bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target)
+bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Target, float SpeedScale, ESCFragmentStart Start)
 {
     if (!ClipCatalog) return false;
     struct FOption
@@ -104,19 +231,40 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
     };
     TArray<FOption> Options;
     const uint64 OrderBefore = NextOrder;
+    auto Matches = [&](const FSCClipFragment& F) {
+        return F.Fragment == Fragment && F.OptionWeight > 0 && (Tag.IsNone() || F.Tags.Contains(Tag) || F.FragmentTags.Contains(Tag));
+    };
+    // Geometries that share bone names bind each other's clips (the C2's hold and top lift doors): a rig plays the clips
+    // authored for its own geometry (the clip's owner) when it has any, never another geometry's at random.
+    auto OwnPath = [](FString Path) {
+        Path.ReplaceInline(TEXT("\\"), TEXT("/"));
+        Path.RemoveFromStart(TEXT("Data/"), ESearchCase::IgnoreCase);
+        return Path;
+    };
+    const FString TargetOwner = Target ? OwnPath(Target->OwnerEntity) : FString();
+    auto OwnClip = [&](const FSCImportedClip& C) { return !TargetOwner.IsEmpty() && OwnPath(C.Owner).Equals(TargetOwner, ESearchCase::IgnoreCase); };
+    auto Binds = [&](const FSCImportedClip& C) {
+        return !C.Bindings.IsEmpty() &&
+               (!Target || C.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Target->GetSkeletalMeshAsset(); }));
+    };
+    // An alias keeps metadata but plays its canonical animation; only what would play counts for the preference.
+    auto Alias = [&](const FSCImportedClip& C, const FSCClipFragment& F) {
+        return !F.AnimationNames.Contains(C.Id) && F.AnimationNames.ContainsByPredicate([&](FName Id) {
+            return ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) { return Other.Id == Id; });
+        });
+    };
+    const bool bOwnClips = ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& C) {
+        return Binds(C) && OwnClip(C) && C.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return Matches(F) && !Alias(C, F); });
+    });
     for (int32 Index = 0; Index < ClipCatalog->Clips.Num(); ++Index)
     {
         const auto& C = ClipCatalog->Clips[Index];
-        if (C.Bindings.IsEmpty() || (Target && !C.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Target->GetSkeletalMeshAsset(); }))) continue;
+        if (!Binds(C) || (bOwnClips && !OwnClip(C))) continue;
         for (const auto& F : C.Fragments)
         {
-            if (F.Fragment != Fragment || F.OptionWeight <= 0 || (!Tag.IsNone() && !F.Tags.Contains(Tag) && !F.FragmentTags.Contains(Tag)))
-                continue;
+            if (!Matches(F)) continue;
             // Aliases keep metadata, but play the canonical animation only once.
-            if (!F.AnimationNames.Contains(C.Id) && F.AnimationNames.ContainsByPredicate([&](FName Id) {
-                    return ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) { return Other.Id == Id; });
-                }))
-                continue;
+            if (Alias(C, F)) continue;
             const FString Key = F.OptionId.IsEmpty() ? F.Json : F.OptionId;
             FOption* Option = Options.FindByPredicate([&](const FOption& O) { return O.Key == Key; });
             if (!Option)
@@ -127,7 +275,7 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
                 NewOption.Scopes = F.Scopes;
                 Option = &Options.Add_GetRef(MoveTemp(NewOption));
             }
-            Option->Clips.Add(Index, F.Speed);
+            Option->Clips.Add(Index, F.Speed * SpeedScale);
         }
     }
     // Weighted alternatives compete for scopes; disjoint scope groups can run together.
@@ -155,7 +303,7 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         }
         const FOption Selected = Options[Choice];
         for (int32 I = Playback.Num() - 1; I >= 0; --I)
-            if (Playback[I].TargetRig.Get() == Target && Conflicts(Selected.Scopes, Playback[I].Scopes))
+            if (Playback[I].bTargeted == (Target != nullptr) && Playback[I].TargetRig.Get() == Target && Conflicts(Selected.Scopes, Playback[I].Scopes))
             {
                 Playback[I].bPlaying = false;
                 HeldPlayback.Add(Playback[I]);
@@ -165,7 +313,46 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         Selected.Clips.GetKeys(Indices);
         Indices.Sort();
         for (int32 Index : Indices)
-            Found |= StartClip(Index, Selected.Clips[Index], false, false, Selected.Scopes, Target);
+        {
+            const float Speed = Selected.Clips[Index];
+            double From = -1;
+            // From the rig's current pose: the frame of this clip nearest to what the rig shows now (a door turned around
+            // mid-stroke, or one whose rest pose is not its clip's first frame), so nothing snaps.
+            // The same clip already on the rig (a transition turned around) continues from its exact playhead, but only while
+            // that playhead is what the rig shows, sampled in the direction it will now play. A held layer a later clip covers
+            // (an open/close door's Open under the Close that followed it, or the rest pose's Close under an Open) is a stale
+            // playhead: resuming it would snap the door to that clip's end with no frame played (and no sound). A clip whose
+            // sources differ in length samples other keys at the same playhead once reversed. Otherwise the nearest frame.
+            const FSCClipBinding* TargetBinding = Target && Target->GetSkeletalMeshAsset() ? ClipCatalog->Clips[Index].Bindings.FindByPredicate(
+                [&](const FSCClipBinding& X) { return X.Mesh == Target->GetSkeletalMeshAsset(); }) : nullptr;
+            const FSCClipPlayback* Same = nullptr;
+            for (const TArray<FSCClipPlayback>* List : {&Playback, &HeldPlayback})
+                for (const FSCClipPlayback& P : *List)
+                    if (P.Clip == Index && AppliesTo(P, Target) && (!Same || P.Order > Same->Order)) Same = &P;
+            constexpr double ShownCost = 1e-4; // rad + m over the clip's channels: the same pose to sampling precision
+            const TCHAR* FromWhat = TEXT("begin");
+            if (Start == ESCFragmentStart::CurrentPose && TargetBinding)
+            {
+                const FSCImportedClip& C = ClipCatalog->Clips[Index];
+                if (Same && ClipPoseCost(C, *TargetBinding, Target->LocalPose, Same->Frame, Speed < 0) < ShownCost)
+                {
+                    From = Same->Frame;
+                    FromWhat = TEXT("playhead");
+                }
+                else
+                {
+                    From = NearestClipFrame(C, *TargetBinding, Target->LocalPose, Speed < 0);
+                    FromWhat = TEXT("nearest_pose");
+                }
+            }
+            if (Start == ESCFragmentStart::CurrentPose)
+                UE_LOG(LogTemp, Display, TEXT("DOOR_CLIP_START owner=%s rig=%s fragment=%s tag=%s clip=%s from=%.2f last=%d speed=%.2f start=%s"),
+                       Target ? *Target->OwnerEntity : TEXT("-"), Target ? *Target->GetName() : TEXT("-"), *Fragment.ToString(), *Tag.ToString(), *ClipCatalog->Clips[Index].Id.ToString(), From,
+                       ClipCatalog->Clips[Index].LastFrame, Speed, FromWhat);
+            const bool bHold = Start == ESCFragmentStart::HoldFirst || Start == ESCFragmentStart::HoldLast;
+            // Held at the start or the end of play: a fragment that plays its clip backwards (speed < 0) ends at frame 0.
+            Found |= StartClip(Index, Speed, bHold, (Start == ESCFragmentStart::HoldLast) == (Speed >= 0), Selected.Scopes, Target, From);
+        }
         Options.RemoveAll([&](const FOption& O) { return Conflicts(Selected.Scopes, O.Scopes); });
     }
     if (Found)
@@ -176,13 +363,14 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         auto Record = [&](const FSCClipPlayback& P) {
             if (P.Order <= OrderBefore) return;
             for (USCRigComponent* Rig : Rigs)
-                if ((!P.TargetRig.IsValid() || P.TargetRig.Get() == Rig) &&
+                if (AppliesTo(P, Rig) &&
                     ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); }))
                     FragmentTargets.Add({Rig, Fragment}, Tag);
         };
         for (const auto& P : Playback) Record(P);
         for (const auto& P : HeldPlayback) Record(P);
     }
+    if (Found && !ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: the pads of a door that starts moving
     return Found;
 }
 bool ASCVehicle::IsFragmentOpen(FName Fragment, const USCRigComponent* Rig) const
@@ -199,14 +387,29 @@ void ASCVehicle::ResetPose()
     HeldPlayback.Reset();
     DirtyMeshes.Reset();
     FragmentTargets.Reset();
-    SetActorTickEnabled(false);
+    SensorDoorStates.Reset(); // a door a sensor opened is back at rest: no pending exit closes it later
+    UpdateTickEnabled();
     for (USCRigComponent* Rig : Rigs)
         Rig->ResetPose();
+    ApplyDoorRestPoses(); // every door back at its authored spawn state (C2 fixes)
+    // A lift whose doors were opening or open has them at rest now: it drives them open again (else it waits for them forever).
+    for (const TSharedPtr<FSCLift>& Lift : Lifts) Lift->ReopenDoorsAfterReset();
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: every door is back at rest
 }
 void ASCVehicle::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    if (!ClipCatalog || Playback.IsEmpty() || DeltaSeconds <= 0) return;
+    if (DeltaSeconds <= 0) return;
+    // Lifts first (pre-physics, before the riders' movement: FSCLift moves the carriage anchor, doors start here).
+    for (const TSharedPtr<FSCLift>& Lift : Lifts) Lift->Tick(DeltaSeconds);
+    if (!FloorPanels.IsEmpty()) RefreshFloorPanels(); // WP-P5 floor panel: the lift's state on its panels
+    // A targeted entry whose rig is gone poses nothing (it is not an untargeted layer for the rigs sharing its mesh).
+    auto Orphaned = [](const FSCClipPlayback& P) { return P.bTargeted && !P.TargetRig.IsValid(); };
+    Playback.RemoveAll(Orphaned);
+    HeldPlayback.RemoveAll(Orphaned);
+    if (!ClipCatalog || Playback.IsEmpty()) { UpdateTickEnabled(); return; }
+    const USCRigComponent* Traced = Doors.IsValidIndex(TraceDoor) ? Doors[TraceDoor].Rig.Get() : nullptr;
+    TArray<FString> TraceLines; // sc.Doors.Trace: the traced door's clips advanced this tick
     for (int32 I = Playback.Num() - 1; I >= 0; --I)
     {
         auto& P = Playback[I];
@@ -214,8 +417,12 @@ void ASCVehicle::Tick(float DeltaSeconds)
         const double Previous = P.Frame;
         P.Frame = FMath::Clamp(P.Frame + DeltaSeconds * C.Fps * P.Speed, 0., double(C.LastFrame));
         if (P.Frame != Previous) MarkDirty(P.Clip);
+        FireClipAudio(P, Previous); // WP-A1: route C, the clip's animation events crossed this frame
         // A forward clip at frame zero has not finished; reverse playback ends at zero.
-        if ((P.Speed > 0 && P.Frame >= C.LastFrame) || (P.Speed < 0 && P.Frame <= 0))
+        const bool bEnded = (P.Speed > 0 && P.Frame >= C.LastFrame) || (P.Speed < 0 && P.Frame <= 0);
+        if (Traced && P.TargetRig.Get() == Traced)
+            TraceLines.Add(FString::Printf(TEXT("clip=%s from=%.2f frame=%.2f last=%d speed=%.2f ended=%d"), *C.Id.ToString(), Previous, P.Frame, C.LastFrame, P.Speed, bEnded));
+        if (bEnded)
         {
             P.bPlaying = false;
             HeldPlayback.Add(P);
@@ -223,7 +430,69 @@ void ASCVehicle::Tick(float DeltaSeconds)
         }
     }
     EvaluateClips();
-    SetActorTickEnabled(!Playback.IsEmpty());
+    for (const FString& Line : TraceLines)
+    {
+        const FSCDoorInteraction& D = Doors[TraceDoor];
+        const FVector Tip = GetActorTransform().InverseTransformPosition(D.Rig->GetSocketTransform(D.Joint).TransformPosition(FVector(300)));
+        UE_LOG(LogTemp, Display, TEXT("DOOR_TICK door=%d t=%.3f dt=%.4f open=%d %s tip=%.2f,%.2f,%.2f"), TraceDoor, GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0,
+               DeltaSeconds, IsDoorOpen(TraceDoor), *Line, Tip.X, Tip.Y, Tip.Z);
+    }
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: a door that started or stopped moving
+    UpdateTickEnabled();
+}
+void ASCVehicle::BeginPlay()
+{
+    Super::BeginPlay();
+    if (!CookedAudio.IsEmpty()) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
+}
+
+void ASCVehicle::FireClipAudio(FSCClipPlayback& P, double Previous)
+{
+    USCAudioSubsystem* Audio = USCAudioSubsystem::Get(this);
+    if (!ClipCatalog || !ClipCatalog->Clips.IsValidIndex(P.Clip)) return;
+    const double Lo = FMath::Min(Previous, P.Frame), Hi = FMath::Max(Previous, P.Frame);
+    if (Lo == Hi) return; // a zero-length step keeps the start frame for the first real advance
+    const bool bFresh = P.bAudioFresh;
+    P.bAudioFresh = false;
+    const int8 Dir = P.Speed >= 0 ? 1 : -1;
+    const double Last = ClipCatalog->Clips[P.Clip].LastFrame;
+    for (const FSCClipBinding& B : ClipCatalog->Clips[P.Clip].Bindings)
+    {
+        if (B.AudioEvents.IsEmpty()) continue;
+        for (USCRigComponent* Rig : Rigs)
+        {
+            if (!Rig || Rig->GetSkeletalMeshAsset() != B.Mesh || !AppliesTo(P, Rig)) continue;
+            int8 Shown = -1; // whether this entry shows on Rig at all (a later layer may cover every channel it drives there)
+            for (const FSCClipAudioEvent& E : B.AudioEvents)
+            {
+                if (E.Direction != 0 && E.Direction != Dir) continue;
+                // The event's clip frame in this direction (reverse playback aligns a source with the clip's end).
+                const double F = Dir < 0 && E.FrameReverse >= 0 ? E.FrameReverse : E.Frame;
+                // Crossed this frame: (Lo, Hi] forward, [Lo, Hi) backward. On the first advance, an event the authors put at the
+                // start of play in this direction (within one clip frame of it: the C2 doors' audio_trigger at t 0.0001 and
+                // audio_trigger_reverse at t 0.9999) is the motion's start sound: it plays also when the clip starts past it (a
+                // door turned around mid-stroke starts its other clip or direction at the frame showing its pose).
+                const bool bStartSound = bFresh && (Dir > 0 ? F <= Lo && F <= 1.0 : F >= Hi && F >= Last - 1.0);
+                const bool bCrossed = bStartSound || (Dir > 0 ? F > Lo && F <= Hi : F < Hi && F >= Lo);
+                if (!bCrossed) continue;
+                if (Shown < 0) Shown = IsCoveredOnRig(P, Rig) ? 0 : 1;
+                if (!Shown) continue;
+                ++ClipAudioEvents;
+                LastClipAudioTrigger = E.Trigger;
+                if (TraceDoor != INDEX_NONE && Doors.IsValidIndex(TraceDoor) && Doors[TraceDoor].Rig == Rig)
+                    UE_LOG(LogTemp, Display, TEXT("DOOR_AUDIO_EVENT door=%d clip=%s trigger=%s event_frame=%.2f from=%.2f to=%.2f speed=%.2f"), TraceDoor,
+                           *ClipCatalog->Clips[P.Clip].Id.ToString(), *E.Trigger, F, Previous, P.Frame, P.Speed);
+                if (Audio) Audio->PlayClipEvent(this, Rig, E.Trigger, E.Bone, E.Offset);
+            }
+        }
+    }
+}
+
+void ASCVehicle::UpdateTickEnabled()
+{
+    bool bLifts = false;
+    for (const TSharedPtr<FSCLift>& Lift : Lifts) bLifts |= Lift->NeedsTick();
+    SetActorTickEnabled(!Playback.IsEmpty() || bLifts);
 }
 void ASCVehicle::EvaluateClips()
 {
@@ -238,7 +507,7 @@ void ASCVehicle::EvaluateClips()
         TArray<FTransform> Pose = Rig->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose();
         for (const auto& P : ClipLayers)
             for (const auto& B : ClipCatalog->Clips[P.Clip].Bindings)
-                if ((!P.TargetRig.IsValid() || P.TargetRig.Get() == Rig) && B.Mesh == Rig->GetSkeletalMeshAsset())
+                if (AppliesTo(P, Rig) && B.Mesh == Rig->GetSkeletalMeshAsset())
                     for (const auto& T : B.Tracks)
                     {
                         const FTransform Sample =

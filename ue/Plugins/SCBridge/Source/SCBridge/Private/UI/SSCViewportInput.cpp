@@ -5,6 +5,7 @@
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
 #include "Cargo/SCCargoViewSource.h"
+#include "Engine/GameInstance.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
@@ -24,8 +25,14 @@ FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Unhandled();
     if (SCCargoUI::IsMobiGlasOpen(Subsystem.Get())) return FReply::Unhandled(); // the cursor belongs to the mobiGlas
     // First person: the button is also a key-table input (right button held: aim down sights).
-    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) Subsystem->GetFirstPerson()->HandleKey(Button, true);
-    Drag = bPan ? EDrag::Pan : EDrag::Rotate;
+    const bool bFirstPerson = Subsystem.IsValid() && Subsystem->GetFirstPerson();
+    if (bFirstPerson) Subsystem->GetFirstPerson()->HandleKey(Button, true);
+    // Already captured (a second button while looking: right button to aim, left to fire): keep the capture. Asking for it again
+    // makes Slate release it first (FSlateUser::SetPointerCaptor), whose OnMouseCaptureLost ended the look until the window was
+    // refocused (2026-11-19).
+    const bool bKeepCapture = HasMouseCapture() && Drag != EDrag::None;
+    if (!bKeepCapture || !bFirstPerson) Drag = bPan ? EDrag::Pan : EDrag::Rotate;
+    if (bKeepCapture) return FReply::Handled();
     return FReply::Handled().CaptureMouse(AsShared()).UseHighPrecisionMouseMovement(AsShared()).SetUserFocus(AsShared());
 }
 FReply SSCViewportInput::OnMouseButtonUp(const FGeometry&, const FPointerEvent& Event)
@@ -54,6 +61,8 @@ FReply SSCViewportInput::OnMouseMove(const FGeometry& Geometry, const FPointerEv
 }
 FReply SSCViewportInput::OnMouseWheel(const FGeometry&, const FPointerEvent& Event)
 {
+    // First person: the wheel has no action (a lift's floor is picked by aiming at its panel, WP-P5 floor panel).
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) return FReply::Handled();
     if (ASCViewerPawn* Pawn = Subsystem.IsValid() ? Subsystem->GetViewerPawn() : nullptr) Pawn->Wheel(Event.GetWheelDelta());
     return FReply::Handled();
 }

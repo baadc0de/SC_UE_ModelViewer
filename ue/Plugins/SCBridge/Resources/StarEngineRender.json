@@ -4,7 +4,35 @@
     "branch": "sc-alpha-4.10.2",
     "version": "4.10.197.2878",
     "change": 12913470,
-    "notes": "StarEngineRender.notes.md"
+    "notes": "StarEngineRender.notes.md",
+    "additions": [
+      {
+        "work_package": "WP-E1 E1-5",
+        "source": "the installed LIVE build read by scripts/verify_star_engine_render.py on 2026-11-18 (StarCitizen.exe and Engine/ShaderCache_Vulkan.pak)",
+        "version": "4.10.0",
+        "change": 13165946,
+        "entries": ["exe_cvars.r_exposureIncidentSmoothingTime", "meterMaxCompensationPerBlend", "meterMinCompensationPerBlend", "incidentMiddleGray", "CalcUpdatedFrameState", "ApplyEyeAdaptation", "ExposureAdaptationCS"],
+        "note": "extracted from and validated against change 13165946; the entries above it were extracted from change 12913470 and validated (87/87) against 13165946 too"
+      },
+      {
+        "work_package": "WP-E1 E1-7",
+        "source": "Engine/ShaderCache_Vulkan.pak (2663973822 bytes, crc32 8e895d78) read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
+        "entries": ["DeriveSpecularOcclusion"],
+        "note": "the SSDO's specular occlusion (TiledShading.cfxb); DirOcclusionPS, SpatialDenoisePS, GetSSDORadius and CalculateSSDO were re-hashed from the same pak and match"
+      },
+      {
+        "work_package": "WP-E1 E1-7 review",
+        "source": "Engine/ShaderCache_Vulkan.pak (2663973822 bytes, crc32 8e895d78) read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
+        "entries": ["ACosFast", "ACosEst2", "ASinEst"],
+        "note": "the arc cosines DirOcclusionPS uses for its horizon angles (ACosFast in DeferredShading.cfxb; ACosEst2 / ASinEst in CIGMathLib.cfib), ported as UE::SSDO::AcosFastGame / AcosEst2Game"
+      },
+      {
+        "work_package": "WP-I1 fix pass (I1-5)",
+        "source": "Engine/ShaderCache_Vulkan.pak read in place from the installed LIVE Data.p4k by scripts/verify_star_engine_render.py's Shaders reader on 2026-11-19",
+        "entries": ["dbaMiddleGray", "dbaMinAdaptedEV", "dbaMaxAdaptedEV", "monitorViewingAngleDefault", "monitorEmissiveContrastDefault", "monitorEmissiveSaturationDefault", "monitorViewAngleModeDefault", "GetGlobalDBAMultiplier_HDR", "MonitorEffects_ApplyViewingAngle", "DisplayScreenPS"],
+        "note": "the DisplayScreen render-to-texture emission (DisplayScreen.cfxb DisplayScreenPS over glassLib GlassShared's %EMISSIVE_MAP path): the image through MonitorEffects_ApplyViewingAngle, x the linear glow, x the %DBA_GLOBAL display-brightness multiplier GetGlobalDBAMultiplier_HDR (OpticsExposure.cfib); ported into M_SC_Screen"
+      }
+    ]
   },
   "exe_cvars": {
     "r_exposureMeterMode": {
@@ -12,6 +40,10 @@
       "value": 3
     },
     "r_exposureIncidentBlendAmt": {
+      "kind": "float",
+      "value": 0.5
+    },
+    "r_exposureIncidentSmoothingTime": {
       "kind": "float",
       "value": 0.5
     },
@@ -155,6 +187,21 @@
       "file": "OpticsExposure.cfxb",
       "pattern": "float middleGray = (\\S+) ;"
     },
+    "meterMaxCompensationPerBlend": {
+      "value": 3.0,
+      "file": "OpticsExposure.cfxb",
+      "pattern": "const float maxCompensation = (\\S+) \\* IncidentBlendAmt ;"
+    },
+    "meterMinCompensationPerBlend": {
+      "value": -2.0,
+      "file": "OpticsExposure.cfxb",
+      "pattern": "const float minCompensation = (- \\S+|\\S+) \\* IncidentBlendAmt ;"
+    },
+    "incidentMiddleGray": {
+      "value": 0.18,
+      "file": "OpticsExposure.cfxb",
+      "pattern": "float middleGray = (\\S+) ; float avgLumIncident"
+    },
     "LOG_MIN": {
       "value": -14.0,
       "file": "Histogram.cfib",
@@ -214,6 +261,41 @@
       "value": 0.2,
       "file": "lightbeam.cfxb",
       "pattern": "GetLightForcedDistanceFade \\( fLightDist , fInvRadius , \\( 1\\.0 / (\\S+) \\) \\)"
+    },
+    "dbaMiddleGray": {
+      "value": 0.18,
+      "file": "OpticsExposure.cfib",
+      "pattern": "GetGlobalDBAMultiplier_HDR \\( \\) \\{ #if %_RT_TONEMAP_OUTPUT return 1\\.0f ; #endif const float middleGray = (\\S+) ;"
+    },
+    "dbaMinAdaptedEV": {
+      "value": 1.0,
+      "file": "OpticsExposure.cfib",
+      "pattern": "const float minAdaptedEV = (\\S+) ;"
+    },
+    "dbaMaxAdaptedEV": {
+      "value": 14.0,
+      "file": "OpticsExposure.cfib",
+      "pattern": "const float maxAdaptedEV = (\\S+) ;"
+    },
+    "monitorViewingAngleDefault": {
+      "value": 180.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float ViewingAngle < .*? ; > = (\\S+) ;"
+    },
+    "monitorEmissiveContrastDefault": {
+      "value": 1.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float EmissiveContrast < .*? ; > = (\\S+) ;"
+    },
+    "monitorEmissiveSaturationDefault": {
+      "value": 1.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float EmissiveSaturation < .*? ; > = (\\S+) ;"
+    },
+    "monitorViewAngleModeDefault": {
+      "value": 0.0,
+      "file": "MonitorEffects.cfib",
+      "pattern": "float ViewAngleMode < .*? ; > = (\\S+) ;"
     }
   },
   "shader_textures": {
@@ -276,6 +358,18 @@
       "file": "OpticsExposure.cfxb",
       "sha256": "64c1a2f44cce6bea06bc3c49d4cbaf9e9cfc0973d71b9290f1c0c1de9a5b7ad1"
     },
+    "CalcUpdatedFrameState": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "4f563d3dc44fe11d044df4d53c97dca4dd4c1f86542ed4ff0ca22cf27701bb0f"
+    },
+    "ApplyEyeAdaptation": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "2c7f8bd7f1908e23dd39654b4042b3de4e42c2e65bbc97ec189d67051d1c9f63"
+    },
+    "ExposureAdaptationCS": {
+      "file": "OpticsExposure.cfxb",
+      "sha256": "503485836a216f3a3d3ad92c0bc1bb2a39636e1eaff049a729d4a3dcabe52909"
+    },
     "PlanarLightDiffuse_LightSpace": {
       "file": "AreaLightDiffuse.cfib",
       "sha256": "a33d204a71802739214726a580b8a3348ec0947967c1d5640be315b76a4779ca"
@@ -328,6 +422,22 @@
       "file": "ShadeLib.cfib",
       "sha256": "588ccce3f95a3918dd43960be6e62ecb6ae0db83065791c6b0712f85f80a2552"
     },
+    "DeriveSpecularOcclusion": {
+      "file": "TiledShading.cfxb",
+      "sha256": "a382cb5e9e642aa7688017551fba5e9b487db21783c201befc17ba383f63b99c"
+    },
+    "ACosFast": {
+      "file": "DeferredShading.cfxb",
+      "sha256": "c9d6eed79c45da942e67035d215e77b104ca67a8b9c5ba0cf76cddc83f93daa5"
+    },
+    "ACosEst2": {
+      "file": "CIGMathLib.cfib",
+      "sha256": "311eac5ce581723c7134e16efab450ac28bf3820eccd43e1142edd353674efb7"
+    },
+    "ASinEst": {
+      "file": "CIGMathLib.cfib",
+      "sha256": "040a85b518f97fb87ddd4af89cdf079caccfc51a979eef10fd87b7a084dbf193"
+    },
     "CalcStencilWearAlpha": {
       "file": "stencilLib.cfib",
       "sha256": "c8522957b2f7e32643e453e0c9fd7b85f7682444879144d71dbbf8a1d8eb8f80"
@@ -347,6 +457,18 @@
     "GetPaletteStencilColors": {
       "file": "paletteLib.cfib",
       "sha256": "54c2f9aaf555e19d45bbeea0435e3dda0888132110b1cafb704af3c9558abbbc"
+    },
+    "GetGlobalDBAMultiplier_HDR": {
+      "file": "OpticsExposure.cfib",
+      "sha256": "7403c1d9b8cb717e3cf8afa77f152123e0431c44897d7d9ecdeb7eb16dd32a8c"
+    },
+    "MonitorEffects_ApplyViewingAngle": {
+      "file": "MonitorEffects.cfib",
+      "sha256": "b8ec8282dc5f3ec704dce6e0ebd19a153fcba7fc3efa0007caa172301e9d01df"
+    },
+    "DisplayScreenPS": {
+      "file": "DisplayScreen.cfxb",
+      "sha256": "36f0eb2fb25b2aef3033d3b81962e8115ae1507692125a0adcc2336c85d368dd"
     }
   }
 }

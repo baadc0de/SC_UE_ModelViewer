@@ -34,6 +34,9 @@ public:
     /** Detach and hide the kit (the subsystem keeps it for the next first-person session). */
     void Detach();
     bool HasBody() const { return Kit != nullptr; }
+    /** Give the character's torch the kit's flashlight (the loadout's first, with its cookie), or the fallback beam when
+     *  bGame is false or the kit has none (Attach uses the game light; sc.FP.TorchLight compares the two). */
+    void ApplyTorchLight(bool bGame);
     ASCVehicle* GetKit() const { return Kit; }
     USCRigComponent* GetLeader() const { return Leader; }
 
@@ -119,12 +122,6 @@ public:
     /** Pure (unit-tested): the f-stop at which a point at infinity blurs by FarBlur of the image width when focused at
      *  Focus cm (lens covering FovDegrees on a SensorWidth mm sensor, thin lens); 0 when it cannot (focus inside the lens). */
     static float FarBlurFStop(float Focus, float FarBlur, float SensorWidth, float FovDegrees);
-    /** Pure (unit-tested): the f-stop (at least FStop) at which a subject reaching Depth cm in front of the focal plane
-     *  at Focus cm blurs by at most MaxBlur of the image width, for a lens covering FovDegrees on a SensorWidth mm
-     *  sensor (thin lens). */
-    static float SubjectFStop(float FStop, float Focus, float Depth, float SensorWidth, float FovDegrees, float MaxBlur);
-    /** Largest blur of the third-person character (fraction of the image width): about 2 px at 1600 px. Viewer look. */
-    static constexpr float MaxSubjectBlur = 1.f / 750;
     /** Pure (unit-tested): focal distance of Point for a camera at Eye looking along Forward (depth along the view). */
     static float FocalDepth(const FVector& Eye, const FVector& Forward, const FVector& Point);
 

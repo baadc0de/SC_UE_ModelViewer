@@ -3,19 +3,21 @@
   "configurations": [
     {
       "name": "ue-editor",
-      "runtimeExecutable": "bash",
+      "runtimeExecutable": "powershell",
       "runtimeArgs": [
-        "-lc",
-        "exec \"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor\" \"$PWD/ue/SCViewer/SCViewer.uproject\" -ddc=SCViewerDDC"
+        "-NoProfile",
+        "-Command",
+        "$e = if ($env:UE_ENGINE_ROOT) { $env:UE_ENGINE_ROOT } else { \"$env:USERPROFILE\\UnrealEngine-5.9-src\" }; & \"$e\\Engine\\Binaries\\Win64\\UnrealEditor.exe\" \"$PWD\\ue\\SCViewer\\SCViewer.uproject\" -ddc=SCViewerDDC"
       ],
       "port": 0
     },
     {
       "name": "ue-game",
-      "runtimeExecutable": "bash",
+      "runtimeExecutable": "powershell",
       "runtimeArgs": [
-        "-lc",
-        "exec \"$HOME/UnrealEngine/5.9/Engine/Binaries/Linux/UnrealEditor\" \"$PWD/ue/SCViewer/SCViewer.uproject\" -game -windowed -resx=1600 -resy=900 -ddc=SCViewerDDC"
+        "-NoProfile",
+        "-Command",
+        "$e = if ($env:UE_ENGINE_ROOT) { $env:UE_ENGINE_ROOT } else { \"$env:USERPROFILE\\UnrealEngine-5.9-src\" }; & \"$e\\Engine\\Binaries\\Win64\\UnrealEditor.exe\" \"$PWD\\ue\\SCViewer\\SCViewer.uproject\" -game -windowed -resx=1600 -resy=900 -ddc=SCViewerDDC"
       ],
       "port": 0
     }

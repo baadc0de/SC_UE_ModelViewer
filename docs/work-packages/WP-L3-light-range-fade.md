@@ -51,7 +51,8 @@ session notes): pad centre band UE 8,000–10,000 lux vs game 14,000–16,000 lu
 - Fixture: `shader_constants.forcedFalloffFraction` = 0.2 (`lightbeam.cfxb`) and the token hash of
   `GetLightForcedDistanceFade` (`ShadeLib.cfib`); `FSCStarEngine::ForcedFadeFraction` (domain 0 < f ≤ 1) and
   `LightRangeFade(d, R)`; the light probe (`FSCLightImporter::Probe`) uses it.
-- Engine shader patch (plan D14, `ue/scripts/engine_patches.py`): `GetLocalLightAttenuation` and the light grid's
+- Engine shader patch (plan D14, then `ue/scripts/engine_patches.py`; since WP-E1 E1-2 the fork's `ELightRangeFade::SquaredLinearTail`,
+  and the patch mechanism is removed, E1-7): `GetLocalLightAttenuation` and the light grid's
   `EstimateLocalLight` (`LightCulling.ush`, MegaLights sampling / culling) use `saturate((1 − d / R) / f)²`. Every
   shading path that calls `GetLocalLightAttenuation` follows (deferred, MegaLights, Lumen scene lighting,
   translucency, volumetric fog, heterogeneous volumes). Light culling is unchanged: both windows end at R.
@@ -165,6 +166,9 @@ Change:
 - **Border.** `M_SC_LightFunction` returns 0 outside UV [0, 1] (`create_light_material.py`; needs
   `-AllowCommandletRendering`). The light-function atlas, which MegaLights uses and which wraps UVs with `frac`, is
   engine-patched to zero spot light functions outside [0, 1].
+- **Superseded (WP-E1 E1-3).** The engine fork renders the square frustum itself: the importer sets `Shape` SquareFrustum
+  with the half-FOV as outer angle and `LightFunctionAddress` Border (`FSCLightImporter::MakeProjector`); the corner cone,
+  the lateral `LightFunctionScale`, the material's border node and the atlas patch are gone. See WP-E1 "Result (E1-3)".
 - **Tests.** `SCBridge.Lights.ProjectorCone` covers the corner angle, the UV edge at the FOV for the angle UE renders, the corners inside the rendered cone, and the 88.9° limit.
   `SCBridge.Rig.Lights` checks that a projector with a bound gobo gets the frustum and that one without keeps its
   cone.
@@ -227,3 +231,8 @@ Measured in the viewer: Lumen GI off lowers the left wall base 0.0197 → 0.0138
 starved of lights. No GI change was made: there is no game value to move it to. The game's probe ambient is spatially
 uniform within a box (darkened only by SSDO, which the look D15 replaced with Lumen's AO), while Lumen is locally
 occluded. That is the likely reason for the deeper recesses Astra notes.
+
+## Owner decision (2026-11-20)
+
+The square projector frustum (WP-E1 E1-3) stays as it is: with the gobos back in the atlas it reads correctly. Fog
+(volumetric) will be brought in later and may revisit how projector beams read.

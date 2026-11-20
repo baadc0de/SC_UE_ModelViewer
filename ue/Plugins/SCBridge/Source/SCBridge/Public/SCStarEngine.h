@@ -22,6 +22,15 @@ struct SCBRIDGE_API FSCStarEngine
     double AdaptTimePupil = 0, AdaptRangePupil = 0;              // pupil half-life (s) and range (stops)
     double DiscardRatioDark = 0, DiscardRatioBright = 0;         // histogram fractions left out of the meter
     double MeterLogMin = 0, MeterLogMax = 0;                     // LOG_MIN / LOG_MAX: the meter's log2 scene-unit range
+    // The meter (CalcLogLumMetered, OpticsExposure.cfxb): r_exposureMeterMode 0 reflected, 1 incident, 2 blend, 3 clamped blend of the
+    // reflected and the incident meter, in log2 luminance; the blend moves r_exposureIncidentBlendAmt of the way to the incident one,
+    // clamped to [reflected - MaxCompensationPerBlend * blend, reflected - MinCompensationPerBlend * blend] (mode 3).
+    int32 ExposureMeterMode = 0;                                 // r_exposureMeterMode
+    double IncidentBlendAmount = 0;                              // r_exposureIncidentBlendAmt
+    double IncidentSmoothingTime = 0;                            // r_exposureIncidentSmoothingTime: half-life (s) of the incident meter
+    double MeterMaxCompensationPerBlend = 0;                     // maxCompensation = this * IncidentBlendAmt (stops below reflected)
+    double MeterMinCompensationPerBlend = 0;                     // minCompensation = this * IncidentBlendAmt (<= 0: stops above reflected)
+    double IncidentMiddleGrey = 0;                               // ExposureAdaptationCS: incident luminance = this * white-diffuse luminance
     int32 TonemappingCurve = 0;                                  // r_HDRTonemappingCurve
     double TonemappingCurveToe = 0;                              // r_HDRTonemappingCurveToe
     // GlassPBR (glassLib.cfib GlassShared). Absorption per unit of layer height:
@@ -43,9 +52,24 @@ struct SCBRIDGE_API FSCStarEngine
     FString WearDirtFrostDetailMap;
     double DirtDetailScale = 0;
     // GetLightForcedDistanceFade: every local light ends at its radius through saturate((1 - d / R) / fraction)^2, full
-    // strength until the last `fraction` of the radius. The engine shader patch (ue/EnginePatches) puts the same window in
-    // UE's local-light attenuation in place of (1 - (d / R)^4)^2.
+    // strength until the last `fraction` of the radius. The importer sets it as the light's range fade (engine fork,
+    // ULocalLightComponent::RangeFade = SquaredLinearTail with RangeFadeFraction = fraction; UE's is (1 - (d / R)^4)^2).
     double ForcedFadeFraction = 0;
+    // Screen-space directional occlusion (DirOcclusionPS, CalculateSSDO, DeriveSpecularOcclusion; the engine fork's SSDO, WP-E1 E1-7):
+    // r_ssdo on / off, r_ssdoQuality (0 = 3 slices x 6 samples per side, the quality ported), the search radius (m), the AO exponent and
+    // the amounts on direct light (lights that cast no shadow, the sun), ambient light and its reflections.
+    bool bSSDO = false;
+    int32 SSDOQuality = 0;
+    double SSDORadiusM = 0, SSDOStrength = 0;
+    double SSDOAmountDirect = 0, SSDOAmountAmbient = 0, SSDOAmountReflection = 0;
+    // The DisplayScreen render-to-texture emission (DisplayScreen.cfxb DisplayScreenPS over glassLib GlassShared's
+    // %EMISSIVE_MAP path; WP-I1 fix pass). %DBA_GLOBAL multiplies it by GetGlobalDBAMultiplier_HDR (OpticsExposure.cfib):
+    // clamp(adapted luminance, luminance at DBAMinAdaptedEV, at DBAMaxAdaptedEV) / DBAMiddleGrey, so a screen keeps its
+    // brightness on the display whatever the scene's exposure. MonitorEffects_ApplyViewingAngle (MonitorEffects.cfib)
+    // grades the image by EmissiveContrast / EmissiveSaturation and the ViewingAngle falloff; these are its defaults.
+    double DBAMiddleGrey = 0, DBAMinAdaptedEV = 0, DBAMaxAdaptedEV = 0;
+    double MonitorViewingAngleDefault = 0, MonitorEmissiveContrastDefault = 0, MonitorEmissiveSaturationDefault = 0;
+    double MonitorViewAngleModeDefault = 0;
 
     static FString FixturePath();
     static bool Load(const FString& Path, FSCStarEngine& Out, FString& Error);
@@ -65,8 +89,8 @@ struct SCBRIDGE_API FSCStarEngine
     double PointCandela(double Intensity, double BulbRadiusM, double AttenuationTweak) const;
     /**
      * Distance offset of the same attenuation (m): for every distance it is PointCandela / (max(d, bulb) + offset)^2,
-     * offset = bulb (1 - tweak) / tweak. 0 for tweak 1 (plain inverse square beyond the bulb), negative above 1. UE has
-     * no such term; the importer carries it in SoftSourceRadius and the engine shader patch (WP-L3) applies it.
+     * offset = bulb (1 - tweak) / tweak. 0 for tweak 1 (plain inverse square beyond the bulb), negative above 1. The
+     * importer sets it as the light's bulb offset law (engine fork, ULocalLightComponent::DistanceAttenuation = BulbOffset).
      */
     double AttenuationOffset(double BulbRadiusM, double AttenuationTweak) const;
     /** Normal luminous intensity (cd) of a planar light: its colour is luminance / pi (PlanarLightDiffuse). */

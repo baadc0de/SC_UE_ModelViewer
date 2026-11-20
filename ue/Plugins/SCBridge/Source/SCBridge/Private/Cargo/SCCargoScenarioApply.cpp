@@ -64,6 +64,13 @@ void USCCargoSubsystem::TryScenario()
                *State->Scenario.Name, *State->Scenario.Ship, *State->Scenario.Environment, State->Scenario.Stock.Num(), State->Scenario.Docks.Num(),
                *D.TractorRecord, *D.TractorAction, D.MaxForceN, D.FullStrengthDistanceM);
     }
+    // No scenario: the default drone fleet once cargo is spawned live (SCCargoSpawnLive.cpp); from here on it is applied as
+    // a scenario of docks only.
+    if (!State->Scenario.IsSet() && State->bFleetRequested && !State->bFleetTried)
+    {
+        State->bFleetTried = true;
+        LoadFleet();
+    }
     const FSCCargoScenario& S = State->Scenario;
     if (!S.IsSet()) return;
     // The tractor values from the game data (the record the scenario names); the scenario's copy without the archive.
@@ -197,12 +204,13 @@ void USCCargoSubsystem::ApplyScenario()
         // applying (activity cargo_scenario) until they are out.
         bool bExtended = true;
         for (const FSCCargoStock& St : S.Stock)
-            if (USCCargoGridComponent* G = St.Grid.Kind == Kind ? SelectGrid(St.Grid) : nullptr; G && !G->Movers.IsEmpty())
+            if (USCCargoGridComponent* G = St.Grid.Kind == Kind ? SelectGrid(St.Grid) : nullptr; G && (!G->Movers.IsEmpty() || G->bAccessRule))
                 bExtended &= RequestAccess(G, true, GetWorld()->GetTimeSeconds());
-        // A dock grid with nothing to extend is usable once it is ready (Opening until then): waited for as well.
+        // A dock grid with nothing to extend is usable once it is ready (Opening until then; a ship's hold is opened first):
+        // waited for as well.
         for (const FSCCargoDockSpec& D : S.Docks)
             if (USCCargoGridComponent* G = D.Grid.Kind == Kind ? SelectGrid(D.Grid) : nullptr)
-                bExtended &= G->Movers.IsEmpty() ? G->Access == ESCCargoGridAccess::Open : RequestAccess(G, true, GetWorld()->GetTimeSeconds());
+                bExtended &= G->Movers.IsEmpty() && !G->bAccessRule ? G->Access == ESCCargoGridAccess::Open : RequestAccess(G, true, GetWorld()->GetTimeSeconds());
         if (!bExtended) continue;
         State->AppliedKinds |= Bit;
         int32 Boxes = 0, Docks = 0;
@@ -238,7 +246,8 @@ void USCCargoSubsystem::ApplyScenario()
     State->bScenarioPlaced |= State->AppliedKinds == 3;
 }
 
-int32 USCCargoSubsystem::SpawnBox(USCCargoGridComponent* Grid, const FString& Entity, FName Commodity, const FText& Label, const TOptional<FIntVector>& Origin, bool bRotated)
+int32 USCCargoSubsystem::SpawnBox(USCCargoGridComponent* Grid, const FString& Entity, FName Commodity, const FText& Label, const TOptional<FIntVector>& Origin, bool bRotated,
+                                  const TSet<int32>* NoSupport)
 {
     const FSCCargoBoxLibrary::FEntry* Package = State->Library.Find(Entity);
     if (!Grid || !Package || Package->State != FSCCargoBoxLibrary::EState::Ready)
@@ -271,7 +280,8 @@ int32 USCCargoSubsystem::SpawnBox(USCCargoGridComponent* Grid, const FString& En
         Slot.bRotated = bRotated;
         Slot.Cells = Grid->Lattice.CellsFor(bRotated ? FVector(Item.SizeM.Y, Item.SizeM.X, Item.SizeM.Z) : Item.SizeM);
         const FSCCargoGridModel Model = Grid->Model();
-        bFits = FSCCargoPlanner::FitsMaxItem(Grid->Lattice, Item.SizeM, bTurn) && Model.IsFree(Slot.Origin, Slot.Cells) && Model.IsSupported(Slot.Origin, Slot.Cells);
+        bFits = FSCCargoPlanner::FitsMaxItem(Grid->Lattice, Item.SizeM, bTurn) && Model.IsFree(Slot.Origin, Slot.Cells) &&
+                Model.IsSupported(Slot.Origin, Slot.Cells, INDEX_NONE, NoSupport);
     }
     else bFits = FSCCargoPlanner::FindSlot(Grid->Model(), Item, Slot);
     if (!bFits)

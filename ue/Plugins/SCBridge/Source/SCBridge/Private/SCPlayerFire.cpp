@@ -1,5 +1,6 @@
 // FSCPlayerFire / ASCShotFx: player weapon fire (see SCPlayerFire.h).
 #include "SCPlayerFire.h"
+#include "SCAudioSystem.h"
 #include "SCPlayerBody.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
@@ -136,18 +137,19 @@ void FSCPlayerFire::Reset()
     bTrigger = bWasFiring = false;
     ShotClock = 0;
 }
-void FSCPlayerFire::Attach(ASCVehicle* Kit, const FSCPlayerKit& Data)
+void FSCPlayerFire::Attach(ASCVehicle* InKit, const FSCPlayerKit& Data)
 {
     Reset();
+    Kit = InKit;
     Weapons.SetNum(Data.Weapons.Num());
     for (int32 I = 0; I < Data.Weapons.Num(); ++I)
     {
         const FSCPlayerWeapon& Weapon = Data.Weapons[I];
         FWeaponFire& W = Weapons[I];
         W.Weapon = &Weapon;
-        W.Anchor = Kit->InstanceAnchors.FindRef(Weapon.ChildId);
+        W.Anchor = InKit->InstanceAnchors.FindRef(Weapon.ChildId);
         if (!Weapon.FireActions.IsEmpty())
-            if (const FSCInstanceHelpers* Helpers = Kit->InstanceHelpers.Find(Weapon.ChildId))
+            if (const FSCInstanceHelpers* Helpers = InKit->InstanceHelpers.Find(Weapon.ChildId))
                 for (const auto& Pair : Helpers->Frames)
                     if (Pair.Key.Equals(Weapon.FireActions[0].FireHelper, ESearchCase::IgnoreCase))
                     {
@@ -157,7 +159,7 @@ void FSCPlayerFire::Attach(ASCVehicle* Kit, const FSCPlayerKit& Data)
                     }
         // The weapon's own rig: the kit rig of the weapon entity that carries the most of its fire clips' joints.
         int32 BestRouted = 0;
-        for (USCRigComponent* Rig : Kit->Rigs)
+        for (USCRigComponent* Rig : InKit->Rigs)
         {
             if (!Rig || !Rig->OwnerEntity.Equals(Weapon.Entity, ESearchCase::IgnoreCase) || !Rig->GetSkeletalMeshAsset()) continue;
             const FReferenceSkeleton& Ref = Rig->GetSkeletalMeshAsset()->GetRefSkeleton();
@@ -208,6 +210,9 @@ void FSCPlayerFire::Shoot(FWeaponFire& W, const FVector& AimOrigin, const FVecto
 {
     ++Shots;
     USceneComponent* Anchor = W.Anchor.Get();
+    // WP-A1: the weapon's own fire sound (its class's fireAudioTrigger field).
+    if (USCAudioSubsystem* Audio = World ? USCAudioSubsystem::Get(World) : nullptr; Audio && W.Weapon && Anchor)
+        Audio->PlayItemAction(Kit.Get(), W.Weapon->Entity, TEXT("fireAudioTrigger"), Anchor);
     if (!World || !Anchor || !W.bLaunch) return;
     const FVector Muzzle = (W.Launch * Anchor->GetComponentTransform()).GetLocation();
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SCShot), true);

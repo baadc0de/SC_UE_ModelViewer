@@ -2,6 +2,9 @@
 #pragma once
 #include "CoreMinimal.h"
 
+class AActor;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
 class UWorld;
 
 namespace SCLook
@@ -22,4 +25,44 @@ void UpdateShortRangeAO(UWorld* World);
  *  reflections) and hardware ray tracing with hit lighting for GI and reflections and area shadows at hits. Applied
  *  once the game's own settings are (the subsystem's first tick with a world); logs the effective values. */
 void ApplyMaxQuality();
+/** Which of the owner's refraction profiles a glass instance takes (ue/verification/WP-U3b.md §14.10), from data only:
+ *  Canopy = glass authored not to reflect (game F0, SpecularColor.r, below 1e-6: the reflectance floor's own test);
+ *  Kit = glass on the first-person player kit actor (USCPlayerBodyComponent::GetKit(): weapon optics, visor);
+ *  Default = every other glass. */
+enum class EGlassProfile : uint8 { Canopy, Kit, Default };
+/** The owner's tuned refraction look per profile (in person, C2 demo, 2026-11-19): the values SetGlassRefraction puts on each
+ *  glass instance it switches on. IOR and thickness keep the master defaults. The dispersion is the colour fringing, rendered by
+ *  the fork's per-channel distortion pass (WP-E1 E1-8, r.Refraction.Dispersion). */
+struct FGlassRefractionProfile
+{
+    float Strength;   // GlassRefractionStrength
+    float Dispersion; // GlassDispersion
+};
+inline constexpr FGlassRefractionProfile GlassProfileCanopy{1.f, 0.25f};
+inline constexpr FGlassRefractionProfile GlassProfileKit{0.125f, 0.25f}; // owner, in person (live): 5 / 1 broke the optic; settled 0.125 / 0.25
+inline constexpr FGlassRefractionProfile GlassProfileDefault{5.f, 0.5f};
+const FGlassRefractionProfile& GlassRefractionProfile(EGlassProfile Profile);
+/** The profile of a glass instance: Kit when it is on a player kit, else Canopy when its F0 (SpecularColor.r, through its
+ *  parents: a cooked constant's value) is zero, else Default. Pure. */
+EGlassProfile SelectGlassProfile(const UMaterialInterface* Glass, bool bOnPlayerKit);
+/** Puts the profile's values on a glass instance. */
+void ApplyGlassProfile(UMaterialInstanceDynamic* MID, EGlassProfile Profile);
+/** The player kit actors of the world's first-person bodies (USCPlayerBodyComponent::GetKit()). */
+TArray<const AActor*> PlayerKits(UWorld* World);
+/** Glass instances SetGlassRefraction gave each profile (only while switching the look on). */
+struct FGlassProfileCounts { int32 Canopy = 0, Kit = 0, Default = 0; };
+/** The glass refraction look (USCViewerSettings::bGlassRefraction, M_SC_Glass GlassRefractionLook; ue/verification/WP-U3b.md
+ *  §14.10): always on in the viewer's look; off only for a session through sc.Look.GlassRefraction 0 (diagnostics). Sets the
+ *  setting and the parameter on every M_SC_Glass instance of the world's vehicles and environments (instances built later take
+ *  it from the setting). Switching on also puts each instance's profile on it (SelectGlassProfile, the kits from PlayerKits).
+ *  A constant glass instance (a cooked ship or hangar) gets a dynamic instance over it (one per actor and constant, shared by its
+ *  slots), on so it takes its profile, off so the diagnostic reaches it too. Logs
+ *  `LOOK glass_refraction on=… instances=… converted=… canopy=… kit=… default=…` and one `LOOK glass_refraction_actor` line per
+ *  vehicle with glass; returns the instances set. */
+int32 SetGlassRefraction(UWorld* World, bool bOn);
+/** SetGlassRefraction with the player kit actors given (tests); OutCounts receives the profile counts. */
+int32 SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const AActor*> Kits, FGlassProfileCounts* OutCounts = nullptr);
+/** After a load: SetGlassRefraction(World, the setting): the loaded vehicle's glass takes its profile (on, the default) or the
+ *  diagnostic off, a cooked ship's or hangar's constant glass a dynamic instance over it either way. */
+void RefreshGlassRefraction(UWorld* World);
 }

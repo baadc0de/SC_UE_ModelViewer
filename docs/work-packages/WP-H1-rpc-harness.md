@@ -20,7 +20,7 @@ exploratory driver `ue/scripts/rpc/explore.ps1`.
 
 | `-SCFfmpeg=<exe>` | ffmpeg for `/record` (default: `ffmpeg` on PATH). |
 
-Built only for desktop targets that are not Shipping (`SC_WITH_RPC`); the Wasm and Shipping packages have neither.
+Built only for desktop targets that are not Shipping (`SC_WITH_RPC`); Shipping packages have neither.
 
 **No window.** `Start-SCViewer` (SCRpc.psm1) launches with UE 5.9's `-AgentMode`: the viewer renders off screen
 (`-RenderOffScreen`), runs unattended, and answers modal dialogs with their default, so nothing takes focus;
@@ -49,7 +49,7 @@ world metres, rotations `[pitch, yaw, roll]` degrees, forces newtons.
 | `/health` | | `port`, `pid`, `log`, `idle`, `settled`, `reasons`, `anomalies_total`, `frame` |
 | `/state` | | The state record (below) |
 | `/catalog` | | Box `packages` (entity, state, scu, mass, size), stored `commodities`, `environments` |
-| `/wait` | `until`: `idle` \| `settled` \| `job` (+ `job`), `timeout_s` (120), `min_s` | Answers once the condition holds on a frame after the request: `waited_s`, `reasons`, `unsettled`, `anomalies`; `ok: false` on timeout |
+| `/wait` | `until`: `idle` \| `settled` \| `job` (+ `job`) \| `lift_idle` (+ `lift`, default every lift; WP-P5), `timeout_s` (120), `min_s` | Answers once the condition holds on a frame after the request: `waited_s`, `reasons`, `unsettled`, `anomalies` (`lift_idle`: and `lifts[]`); `ok: false` on timeout |
 | `/mark` | `note` | Writes a `mark` record (a driver's step marker) |
 | `/console` | `cmd` | Runs a console command; `lines`: what it logged (verification hooks: `sc.Cargo.LoseDrone busy`, `sc.Cargo.Interrupt [job]`) |
 | `/load`, `/unload` | `entity` | Loads / unloads the main vehicle (instance 0) |

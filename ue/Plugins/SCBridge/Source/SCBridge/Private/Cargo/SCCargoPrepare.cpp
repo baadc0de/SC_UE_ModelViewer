@@ -188,9 +188,9 @@ bool USCCargoSubsystem::HomeFlight(const FSCCargoJob& Job, FSCCargoMove& M, ASCC
 
 bool USCCargoSubsystem::EnvironmentAccess(USCCargoGridComponent* Grid, bool bOpen)
 {
-    // FSCEnvironmentAccess opened its way at discovery (and keeps it open on re-pose); a job waits until that is done.
-    (void)bOpen;
-    return Grid->Access == ESCCargoGridAccess::Open;
+    // FSCEnvironmentAccess opens its way: an environment's at discovery (kept open on re-pose), a ship's hold on this first
+    // request (RequestAccess); a job waits until that is done.
+    return RequestAccess(Grid, bOpen, GetWorld()->GetTimeSeconds());
 }
 
 bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why)

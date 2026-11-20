@@ -228,3 +228,35 @@ Open TODOs:
 - **Skinned collision** is refit by our own CPU skinning (`USCRigComponent::RefitCollision`)
   on every pose change of a weighting bone, identically with and without a GPU; the
   serialized trimesh carries an identity external vertex map.
+
+## Hangar waypoints and exterior door panels (2026-11-20)
+
+- **Teleport menu (T)** has two sections: **Ship** (the vehicle's spawns, unchanged) and **Hangar** (the loaded
+  environment's places, kind `Hangar`). Up / Down or W / S move the highlight across both (headings skipped, wrapping),
+  Enter or a click teleports. `sc.FP.Spawns` lists the hangar places after the ship's spawns (`kind=Hangar hangar=<n>
+  source=`), `sc.FP.Spawn hangar:<n>` (or the listed index) teleports there. Rule and evidence: `ue/README.md` "Hangar
+  waypoints"; code `SCHangarWaypoints.h` (`Select`, `SCTeleportMenu`), `ASCVehicle::BuildWaypoints`,
+  `ASCFirstPersonCharacter::GetHangarSpots`; tests `SCBridge.Hangar.WaypointRule`, `SCBridge.Hangar.TeleportMenu`.
+- **Data.** Neither `hangar_xltop_001` nor `hangar_medfrnt_001` authors a player spawn, nav point or exported landing point
+  (their `.soc` objects: kiosks, item banks, gurneys, tag points, area shapes, one `LandingArea`, one `DoorDefaultTemplate`;
+  no SpawnPoint / NavPoint / PlayerSpawn). The waypoints are therefore the places a player walks to: the personnel
+  elevators' transit gateways (`TransitGatewayParams`, the arrival), the operated panels (`KioskInteraction` UIs:
+  ship-selector and freight-elevator kiosks, the medical drop-off lift's transit panels), the interior inventory containers
+  (item banks, the freight elevator's cargo grid) and the ship pad. Each is offered only where a standing capsule fits.
+- **Exterior door panels** (owner report: drawn and in the crosshair, E does nothing). Cause, measured: the C2's exterior
+  pads ride the closed rear ramp and front hatch (`IP_Exterior`), 3.3-4.1 m from a standing player's eye on the hangar
+  floor; E's ray was 3 m long, so it never reached them (from 0.9 m they resolve: `FP_PROBE focus=0` rear ramp, `focus=10`
+  Door_Bottom). The game operates these screens from 15 m (`UIRenderToTextureEntityComponentParams.interactionDistance`
+  of `ControlPanel_Screen_DoorControl_Starlifter_{Exterior,Interior}_Button`; generic door pads 2 m). Fix: the exporter
+  writes it (`ui_bindings[].interaction_distance`, cache format 40, StarBreaker `scviewer/hangar-waypoints`), a door panel
+  is operated from as far as its UI allows when its pad is the first thing the view ray meets (`ASCVehicle::PanelReach`),
+  never below the 3 m reach. Test `SCBridge.Doors.ExteriorPanelReach`; `FP_INTERACT` logs each press.
+- **Result (2026-11-20, C2 in `hangar_xltop_001` / `hangar_medfrnt_001`, off screen, port 8771).** xltop: 29 waypoints (8
+  transit gateways, 8 ship-selector kiosks, 4 medical drop-off panels, 2 freight kiosks, 4 item banks, 2 cargo grids, the
+  ship pad), medfrnt: 17 (4, 4, 2, 2, 2, 2, 1); every one a standing place (`HANGAR_SPOTS … rejected=0`) and every
+  `sc.FP.Spawn hangar:<n>` on a floor, not stuck, no recovery, and walkable afterwards. Menu: Down from the last ship spawn
+  crosses the Hangar heading, Enter teleports (`FP_KEY`). Exterior pads from the hangar floor: rear ramp pad hit at 3.52 m,
+  front hatch pad at 4.12 m, `FP_INTERACT via=panel reach=1500`; each opens and closes its door with its clip (from the
+  current pose) and sound (`Play_SSMP_CRUS_StarLifter_Rear_Ramp_Deploy` / `_Retract`, `..._Front_Ramp_Deploy` /
+  `_Retract`), the hatch's port links moving both front doors and the front ramp. Screenshots `out/hangar-waypoints/`.
+  SCBridge tests 196/200 (the 4 known failures).

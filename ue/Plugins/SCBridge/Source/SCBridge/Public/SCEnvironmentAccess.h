@@ -16,6 +16,8 @@ struct FSCAccessMove
     FName ClipId;
     double BlockedBefore = 0, BlockedAfter = 0; // m3 of the rig's collidable parts inside the access corridors
     float Seconds = 0;                          // the clip's length (0 when kept)
+    bool bDoor = false; // moved by a door interaction (ASCVehicle::PlayDoor): waited for by its playback, not Seconds
+    int32 Door = INDEX_NONE; // that interaction (ASCVehicle::Doors index); also a door found open that the corridors need
 };
 
 struct FSCAccessResult

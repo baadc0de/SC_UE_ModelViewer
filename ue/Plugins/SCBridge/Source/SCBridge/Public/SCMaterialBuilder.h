@@ -9,8 +9,10 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UTexture2D;
 
-/** One master per shader family group; names match ue/scripts/create_materials.py. */
-enum class ESCMaster : uint8 { Illum, HardSurface, Layered, Glass, MeshDecal, MeshDecalRelief, Translucent, EmissiveUnlit, Fallback };
+/** One master per shader family group; names match ue/scripts/create_materials.py. Screen: a DisplayScreen face whose
+ *  image is a render target ($RenderToTexture), drawn as dark glass with the bound panel image as emission (opaque;
+ *  M_SC_Screen_Translucent when the authored opacity is below 1). */
+enum class ESCMaster : uint8 { Illum, HardSurface, Layered, Glass, MeshDecal, MeshDecalRelief, Translucent, EmissiveUnlit, Fallback, Screen };
 enum class ESCBlend : uint8 { Opaque, Masked, Translucent };
 
 /** Pure description of one material instance: safe to build on a worker, unit-testable without UObjects. */
@@ -26,6 +28,9 @@ struct SCBRIDGE_API FSCMaterialDesc
     bool bGlowCard = false;
     bool bForward = false;     // CryEngine MTL_FLAG_REQUIRE_FORWARD_RENDERING (MtlFlags & 0x8000)
     bool bV2 = false;          // described from the sidecar v2 `emissive` / `alpha_config` objects    // forward-flag Illum glow card: additive, alpha-weighted, non-Nanite  // POM mesh decal: colour follows the host surface's palette channel (HostTint)
+    /** ESCMaster::Screen: EmissiveStrength once a panel image is bound (the authored Glow by the game's rule, cd/m2).
+     *  The unbound description emits nothing: its image is black and an analytic light must not see a glowing face. */
+    float ScreenGlow = 0.f;
     TMap<FName, float> Scalars;
     TMap<FName, FLinearColor> Vectors;
     TMap<FName, FSCTextureKey> Textures;
@@ -62,7 +67,28 @@ public:
     static const TCHAR* MasterName(ESCMaster Master);
     /** Object path of the master or its blend/two-sided constant variant. */
     static FString ParentPath(ESCMaster Master, ESCBlend Blend, bool bTwoSided);
-    /** Game thread. Missing textures keep the master's neutral default and add a warning. */
+    /** M_SC_Glass scalars: F0' = max(F0 x scale, floor where F0 > 0) (look values, USCViewerSettings::GlassReflectanceScale /
+     *  GlassReflectanceFloor; master defaults 1 and 0 = the game's F0). */
+    static const FName GlassReflectanceScaleParam;
+    static const FName GlassReflectanceFloorParam;
+    /** M_SC_Glass scalar: the refraction look (UE's distortion pass) on (1, the master default and the viewer's look) or off
+     *  (0, the session diagnostic), from USCViewerSettings::bGlassRefraction. Its strengths (GlassRefractionStrength,
+     *  GlassDispersion) come from the instance's profile (canopy, player kit, default; SCLook.h): set when it is built and by
+     *  SCLook::SetGlassRefraction. */
+    static const FName GlassRefractionLookParam;
+    /** M_SC_Screen's texture parameter: the panel's image (the exporter's render of its UI, ui_bindings), sRGB colour.
+     *  Unset (black) draws the screen as dark glass. */
+    static const FName ScreenImageParam;
+    /** Sets the look's glass reflectance (USCViewerSettings) on a glass or screen instance, and on an M_SC_Glass instance the
+     *  refraction look. */
+    static void ApplyGlassLook(UMaterialInstanceDynamic* MID);
+    /** Whether the instance's master is M_SC_Glass (the one master with the refraction look). */
+    static bool IsGlassMaster(const UMaterialInterface* Material);
+    /** Whether the instance's master is a screen master (M_SC_Screen, M_SC_Screen_Translucent; WP-I1). */
+    static bool IsScreenMaster(const UMaterialInterface* Material);
+    /** Game thread. Missing textures keep the master's neutral default and add a warning. A glass instance also takes the
+     *  look's glass reflectance and refraction (ApplyGlassLook) and its non-kit refraction profile (SCLook::SelectGlassProfile);
+     *  neither is part of the pure description. */
     static UMaterialInstanceDynamic* Create(const FSCMaterialDesc& Desc, const TMap<FSCTextureKey, UTexture2D*>& Textures,
         UObject* Outer, TArray<FString>& Warnings);
 };

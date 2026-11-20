@@ -59,10 +59,12 @@ bool USCViewerSettings::ResolvePlayerSpareAttachments() const
     FParse::Bool(FCommandLine::Get(), TEXT("SCPlayerSpares="), bValue);
     return bValue;
 }
-FString USCViewerSettings::ResolveCargoScenario() const
+namespace
 {
-    FString Value = CargoScenario;
-    FParse::Value(FCommandLine::Get(), TEXT("SCCargoScenario="), Value);
+/** A cargo JSON a setting or switch names: a bare name or a path under Config/Cargo, else relative to the launch
+ *  directory; empty or "none" = none. */
+FString ResolveCargoFile(FString Value)
+{
     Value.TrimStartAndEndInline();
     if (Value.IsEmpty() || Value.Equals(TEXT("none"), ESearchCase::IgnoreCase)) return FString();
     if (FPaths::IsRelative(Value))
@@ -73,6 +75,28 @@ FString USCViewerSettings::ResolveCargoScenario() const
         Value = FPaths::FileExists(Named) ? Named : FPaths::ConvertRelativePathToFull(FPlatformMisc::LaunchDir(), Value);
     }
     return FPaths::ConvertRelativePathToFull(Value);
+}
+} // namespace
+FString USCViewerSettings::ResolveCargoScenario() const
+{
+    FString Value = CargoScenario;
+    FParse::Value(FCommandLine::Get(), TEXT("SCCargoScenario="), Value);
+    return ResolveCargoFile(Value);
+}
+FString USCViewerSettings::ResolveCargoFleet() const
+{
+    FString Value = CargoFleet;
+    FParse::Value(FCommandLine::Get(), TEXT("SCCargoFleet="), Value);
+    return ResolveCargoFile(Value);
+}
+bool USCViewerSettings::MigrateLook()
+{
+    if (LookRevision >= CurrentLookRevision) return false;
+    // A value saved under an earlier look revision is that revision's default, not a user choice (no UI sets these), so it moves to
+    // the new one; later user changes are kept.
+    if (LookRevision < 9) StarBloom = LookStarBloom; // LOOK-8: the standard bloom replaced the star bloom
+    LookRevision = CurrentLookRevision;
+    return true;
 }
 void USCViewerSettings::Save()
 {

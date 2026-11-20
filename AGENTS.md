@@ -38,18 +38,20 @@ inherit for all Rust that touches the vendored crates).
   delete `target/debug/incremental` if it reappears. Never a blind `cargo clean`.
   `/` is ~97 % full (~55 GB free); the UE project's `Saved/Import/*.tar` test tars
   are regenerable scratch.
-- Unreal: 5.9.0 preview-1 (CL 60351404) at `~/UnrealEngine/5.9`, Vulkan RHI; it replaced 5.8.2
-  (plan D9); its Lumen World Cache is off for now (D13). Engine shader patches (D14) live in
-  `ue/EnginePatches`: run `uv run python ue/scripts/engine_patches.py apply` after installing an engine. The deliverable is a standalone
-  game-mode app (plan D2/D3): user-facing code goes in the Runtime module; editor-only
-  dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
-- Win64: UE 5.9 from the Epic launcher, D3D12 SM6 (`ue/SCViewer/Config/Windows/WindowsEngine.ini`), FFI via
-  `scripts/build_ffi.ps1`, NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored download) — see
-  `ue/README.md`. Standalone showcase: `ue/scripts/package_showcase.ps1 -Platform Win64` (Shipping, `-SCMaxQuality`).
-- Web: the 5.9 Wasm / WebGPU build is a separate package of the viewer with one cooked hangar and one cooked ship
-  (`ue/scripts/cook_hangars.py`, `cook_ships.py`, `bake_hangar_lighting.py`, `package_web.ps1`; emsdk 6.0.10 via
-  `WASM_EMSDK_ROOT`). No Data.p4k or FFI in the browser: Wasm builds compile with `SC_WITH_FFI=0`, so code that needs
-  the archive must also work without it.
+- Unreal: **the SCViewer fork of UE 5.9, built from source, is the only engine** (plan D17): checkout
+  `C:\Users\bojan\UnrealEngine-5.9-src`, branch `scviewer/5.9`, registered as `UE_5.9_src` (the `.uproject`'s
+  `EngineAssociation`). Rendering rules that need engine changes are engine features on that branch (WP-E1), with UE's
+  behaviour as the default. Scripts take `-Engine` / `$env:UE_ENGINE_ROOT` and default to `%USERPROFILE%\UnrealEngine-5.9-src`.
+  The launcher (binary) engine, the Web / Wasm build, the NVIDIA RTX-fork (UE 5.8) build and the shader text patches of
+  D14 (`ue/EnginePatches`, `engine_patches.py`) are gone: WP-E1 carries them as engine features (the SSDO is E1-7,
+  `r.SSDO*` and the `SSDO*` post-process settings; `sc.Look.SSDO`). The Lumen World Cache is
+  off for now (D13). The deliverable is a standalone game-mode app (plan D2/D3): user-facing code goes in the Runtime
+  module; editor-only dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
+- Win64, D3D12 SM6 (`ue/SCViewer/Config/Windows/WindowsEngine.ini`): build with
+  `C:\Users\bojan\UnrealEngine-5.9-src\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs uproject> -WaitMutex`;
+  FFI via `scripts/build_ffi.ps1` (every build links it); NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored
+  download, compiled against the fork) — see `ue/README.md`. Standalone showcase: `ue/scripts/package_showcase.ps1`
+  (one cooked ship and hangar from `ue/scripts/cook_ships.py` / `cook_hangars.py`; Shipping, `-SCMaxQuality`).
 
 ## Working rules
 

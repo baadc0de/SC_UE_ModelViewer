@@ -54,6 +54,34 @@ FString GripHelper(const FObj& Grip)
 }
 } // namespace
 
+bool FSCFlashlight::Parse(const FObj& Entry, FSCFlashlight& Out, FString& Error)
+{
+    Out = FSCFlashlight();
+    Out.Entity = Str(Entry, TEXT("entity"));
+    Out.Port = Str(Entry, TEXT("port"));
+    // localPlayerParams: what the game lights for the player who wears the item (otherParams is what other players see).
+    const FObj Split = Obj(Obj(Entry, TEXT("params")), TEXT("localPlayerParams"));
+    const FObj Color = Obj(Split, TEXT("color"));
+    if (!Split || !Color)
+    {
+        Error = FString::Printf(TEXT("flashlight of %s has no localPlayerParams with a color"), *Out.Entity);
+        return false;
+    }
+    auto Channel = [&](const TCHAR* Key) { return uint8(FMath::Clamp(FMath::RoundToInt(Num(Color, Key, 0)), 0, 255)); };
+    Out.Color = FColor(Channel(TEXT("r")), Channel(TEXT("g")), Channel(TEXT("b")));
+    Out.DiffuseMult = Num(Split, TEXT("diffuseMult"), 0);
+    Out.BulbRadiusM = Num(Split, TEXT("attenuationBulbSize"), 0);
+    Out.DistanceM = Num(Split, TEXT("distance"), 0);
+    Out.FovDeg = Num(Split, TEXT("fov"), 0);
+    Out.Cookie = Str(Obj(Split, TEXT("lightCookie")), TEXT("path"));
+    if (!Out.Cookie.IsEmpty())
+    {
+        FString Packaged;
+        if (FSCPackageSource::Normalize(Str(Obj(Entry, TEXT("projector_textures")), *Out.Cookie), Packaged)) Out.ProjectorTexture = Packaged;
+    }
+    return true;
+}
+
 int32 FSCItemPort::Accepts(const FString& ItemType, const FString& SubType) const
 {
     int32 Best = 0;
@@ -237,6 +265,13 @@ bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FS
                         Weapon.ClipSidecars.Add(FName(*FPaths::GetBaseFilename(Str(CV->AsObject(), TEXT("name"))).ToLower()), Path);
                 }
         Out.Weapons.Add(MoveTemp(Weapon));
+    }
+    for (const auto& V : Arr(Player, TEXT("flashlights")))
+    {
+        FSCFlashlight Light;
+        FString LightError;
+        if (V->Type == EJson::Object && FSCFlashlight::Parse(V->AsObject(), Light, LightError)) Out.Flashlights.Add(MoveTemp(Light));
+        else Out.Diagnostics.Add(TEXT("flashlight skipped: ") + (LightError.IsEmpty() ? FString(TEXT("not an object")) : LightError));
     }
     const FObj Motion = Obj(Player, TEXT("motion"));
     for (const auto& V : Arr(Motion, TEXT("states")))

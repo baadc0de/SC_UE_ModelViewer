@@ -41,7 +41,8 @@ struct SCBRIDGE_API FSCCargoDockSpec
 };
 
 /** Lift from a DataCore tractor-beam action: read from the record at run time (sc_datacore_record); the scenario's copy
- *  (with its provenance) is the fallback without the archive (Web builds, no FFI). Flight limits are viewer choices (no
+ *  (with its provenance) is the fallback when the archive or the record is
+ *  unavailable. Flight limits are viewer choices (no
  *  drone entity exists in the game data). */
 struct SCBRIDGE_API FSCCargoDroneDefinition
 {

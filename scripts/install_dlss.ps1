@@ -6,6 +6,8 @@
 # runtime DLLs (Binaries/ThirdParty). NVIDIA has no UE 5.9 release yet; its newest (8.7.2, UE 5.8) needs nine format
 # arguments cast for 5.9's compile-time format-string check (enum / int64 values passed to %d / %u). Each replacement
 # must match exactly once or the script stops: a newer plugin may not need them, or may need others.
+# The plugin is a project plugin: UBT compiles it against the engine the project builds with, the UE 5.9 source fork
+# (plan D17).
 #
 # Usage: powershell -File scripts/install_dlss.ps1 -Zip <path to ..._DLSS..._Plugin_vX.Y.Z.zip>
 param([Parameter(Mandatory = $true)][string]$Zip)

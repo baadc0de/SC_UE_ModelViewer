@@ -492,4 +492,18 @@ bool FSCFirstPersonSeatReach::RunTest(const FString&)
     World->DestroyWorld(false);
     return !HasAnyErrors();
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFirstPersonKeyTable, "SCBridge.FirstPerson.KeyTable",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFirstPersonKeyTable::RunTest(const FString&)
+{
+    // One action per key (the Slate and native input paths share the table).
+    TSet<FKey> Keys;
+    for (const auto& Entry : ASCFirstPersonCharacter::KeyTable())
+    {
+        TestFalse(*FString::Printf(TEXT("%s bound once"), *Entry.Key.ToString()), Keys.Contains(Entry.Key));
+        Keys.Add(Entry.Key);
+    }
+    return true;
+}
 #endif

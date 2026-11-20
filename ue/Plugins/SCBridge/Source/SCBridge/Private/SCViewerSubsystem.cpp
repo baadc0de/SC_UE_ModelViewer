@@ -35,6 +35,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Engine/StaticMeshActor.h"
 #include "SCPlayerKit.h"
+#include "SCLightImporter.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -366,8 +367,6 @@ FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
     const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
     if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
     const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
-    // -SCBakedLighting (the web build): the variant with Lightmass lighting (bake_hangar_lighting.py), when baked.
-    if (FParse::Param(FCommandLine::Get(), TEXT("SCBakedLighting")) && FPackageName::DoesPackageExist(Level + TEXT("_Lit"))) return Level + TEXT("_Lit");
     return FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
 void USCViewerSubsystem::SetSpace(bool bInSpace)
@@ -475,6 +474,7 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
     EnvOptions.ScenePath = Scene;
     EnvOptions.bBuildCollision = true;
     EnvOptions.bPublish = false;        // not the vehicle: routes, first person and light pairing keep the ship
+    EnvOptions.bEnvironment = true;     // its waypoints (the first-person teleport menu's Hangar section)
     EnvOptions.bReplacePrevious = false;
     EnvOptions.bHideEffectOnlyPlacements = true;
     EnvOptions.bInstanceRepeatedParts = true;
@@ -600,13 +600,16 @@ void USCViewerSubsystem::PlaceEnvironment()
     if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(EnvironmentActor);
     SetEnvironmentState(EnvironmentState); // placement measures the presented pose (the ship elevator raised or lowered)
     FSCEnvironment::PlaceOnFloor(EnvironmentActor, ViewerFloorZ, Vehicle.Get());
+    EnvironmentActor->BuildWaypoints(); // the presented pose (the ship elevator raised); a cooked one keeps its own
     SCLook::UpdateShortRangeAO(EnvironmentActor->GetWorld());
+    SCLook::RefreshGlassRefraction(EnvironmentActor->GetWorld());
 }
 
 void USCViewerSubsystem::SetEnvironmentState(const FString& State)
 {
     EnvironmentState = State.ToLower();
     FSCEnvironment::SetState(Environment.Get(), EnvironmentState);
+    if (Environment.IsValid()) Environment->BuildWaypoints(); // the new pose moves pads and kiosks riding a mechanism
 }
 FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
 {
@@ -933,7 +936,11 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
                     V->SetPaint(Index);
         FitEnvironmentToShip();
     }
-    if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr) SCLook::UpdateShortRangeAO(World);
+    if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)
+    {
+        SCLook::UpdateShortRangeAO(World);
+        SCLook::RefreshGlassRefraction(World); // cooked glass loaded while the look is on
+    }
     OnLoadFinished.Broadcast(Report);
 }
 
@@ -1249,7 +1256,13 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
         }
         FKitClips Result = KitClipsTask.GetResult();
         KitClipsTask = {};
-        KitSource.Reset(); // the package bytes are no longer needed: meshes, textures and clips are built
+        // The personal lights' cookies (gobos) are built while the package is open; the body's torch takes them at attach.
+        if (Result.Kit && KitSource && KitActor)
+            for (const FSCFlashlight& Light : Result.Kit->Flashlights)
+                if (!FSCLightImporter::LoadGobo(*KitSource, KitActor, Light.ProjectorTexture))
+                    UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_FLASHLIGHT gobo unavailable entity=%s cookie=%s package=%s"), *Light.Entity, *Light.Cookie,
+                           *Light.ProjectorTexture);
+        KitSource.Reset(); // the package bytes are no longer needed: meshes, textures, gobos and clips are built
         if (!Result.Kit)
         {
             FailPlayerKit(Result.Error);
@@ -1276,7 +1289,9 @@ void USCViewerSubsystem::AttachPlayerKit()
     {
         UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_BODY attach failed: %s"), *Error);
         FailPlayerKit(Error); // capsule only; the kit actor and data are released
+        return;
     }
+    SCLook::RefreshGlassRefraction(GetViewerWorld()); // the kit's glass (optics, visor) takes the kit profile once it is the body's
 }
 
 // ---------------------------------------------------------------- camera and inspection

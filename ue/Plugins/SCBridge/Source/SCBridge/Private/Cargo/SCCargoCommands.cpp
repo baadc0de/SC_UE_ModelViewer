@@ -3,6 +3,8 @@
 //   sc.Cargo.Cancel <job> | sc.Cargo.Access <grids> open|close | sc.Cargo.Debug 0|1 | sc.Cargo.Origin corner|bottom|centre
 //   sc.Cargo.View <grids> [m] [up m] [yaw] | sc.Cargo.ViewMoving [m] [up m] [yaw] | sc.Cargo.LoseDrone <id|busy>
 //   sc.Cargo.Section <grids> [reach m] [step m]
+//   sc.Cargo.Spawn <grids> <commodity|entity> [<scu>|x<count>] [--size=<scu>] [--owner=<id>] | sc.Cargo.Clear <grids>
+//   sc.Cargo.Catalog [text]
 #include "Cargo/SCCargoSubsystem.h"
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
@@ -195,6 +197,69 @@ FAutoConsoleCommandWithWorldAndArgs GSCCargoTransfer(TEXT("sc.Cargo.Transfer"), 
         FText Error;
         const int32 Job = S->Submit(R, Error);
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_TRANSFER job=%d%s"), Job, Job == INDEX_NONE ? *(TEXT(" error=\"") + Error.ToString() + TEXT("\"")) : TEXT(""));
+    }));
+// Live spawning (SCCargoSpawnLive.cpp): a developer feature, console (and RPC /console) only.
+FAutoConsoleCommandWithWorldAndArgs GSCCargoSpawn(TEXT("sc.Cargo.Spawn"),
+    TEXT("sc.Cargo.Spawn <grids> <commodity|entity> [<scu>|x<count>] [--size=<scu>] [--owner=<id>]: put boxes of the game's box records on grids (grids: id, ship, "
+         "elevator, label text; CARGO_SPAWN, refusals CARGO_SPAWN refused=)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& InArgs, UWorld* World) {
+        USCCargoSubsystem* S = Cargo(World);
+        if (!S) return;
+        FSCCargoSpawnRequest R;
+        TArray<FString> Args;
+        FString BadSize;
+        for (const FString& A : InArgs)
+        {
+            if (A.StartsWith(TEXT("--owner="))) R.Owner = FName(*A.RightChop(8));
+            else if (A.StartsWith(TEXT("--size="))) { if (!SCCargoSpawn::ParseWhole(A.RightChop(7), R.SizeSCU)) BadSize = A.RightChop(7); }
+            else Args.Add(A);
+        }
+        if (Args.Num() < 2)
+        {
+            UE_LOG(LogSCCargo, Warning, TEXT("CARGO_CMD usage: sc.Cargo.Spawn <grids> <commodity|entity> [<scu>|x<count>] [--size=<scu>] [--owner=<id>]"));
+            return;
+        }
+        // The amount, when the last word is one: SCU ("48") or a box count ("x3"); the words between name the commodity.
+        // A malformed amount or size is refused, never read as "one box".
+        FString BadAmount;
+        if (Args.Num() >= 3)
+            switch (SCCargoSpawn::ParseAmountWord(Args.Last(), R.AmountSCU, R.Count))
+            {
+            case SCCargoSpawn::EAmountWord::Amount: Args.Pop(); break;
+            case SCCargoSpawn::EAmountWord::Invalid: BadAmount = Args.Pop(); break;
+            default: break;
+            }
+        // The grids as for a transfer (the player's ship for "ship"); --owner names whose the new boxes are.
+        R.Grids = S->ResolveGrids(Args[0]);
+        for (int32 I = 1; I < Args.Num(); ++I) R.What += (I > 1 ? TEXT(" ") : TEXT("")) + Args[I];
+        if (!BadAmount.IsEmpty() || !BadSize.IsEmpty())
+        {
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_SPAWN refused=%s grid=%s what=\"%s\" reason=\"%s is not a whole number from 1 to 999999\""),
+                   BadAmount.IsEmpty() ? TEXT("size") : TEXT("amount"), *Args[0], *R.What, BadAmount.IsEmpty() ? *BadSize : *BadAmount);
+            return;
+        }
+        FSCCargoSpawnPreview P;
+        S->Spawn(R, P); // logs CARGO_SPAWN_QUEUED / refused, then CARGO_SPAWN once the boxes are down
+    }));
+FAutoConsoleCommandWithWorldAndArgs GSCCargoClear(TEXT("sc.Cargo.Clear"),
+    TEXT("sc.Cargo.Clear <grids>: remove the boxes on grids (or beacons) that no transfer holds (CARGO_CLEAR)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        USCCargoSubsystem* S = Cargo(World);
+        if (!S || Args.IsEmpty()) return;
+        const TArray<int32> Ids = S->ResolveGrids(FString::Join(Args, TEXT(" ")));
+        if (Ids.IsEmpty()) UE_LOG(LogSCCargo, Display, TEXT("CARGO_CLEAR refused=grid reason=\"no grid or beacon matches %s\""), *FString::Join(Args, TEXT(" ")));
+        for (const int32 Id : Ids)
+        {
+            TArray<int32> Removed;
+            int32 Kept = 0;
+            FString Error;
+            if (!S->ClearLocation(Id, Removed, Kept, Error)) UE_LOG(LogSCCargo, Display, TEXT("CARGO_CLEAR refused=grid reason=\"%s\""), *Error);
+        }
+    }));
+FAutoConsoleCommandWithWorldAndArgs GSCCargoCatalog(TEXT("sc.Cargo.Catalog"),
+    TEXT("sc.Cargo.Catalog [text]: the commodities and box sizes live spawns offer (reads the game's box records once; CARGO_CATALOG_COMMODITY)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        if (USCCargoSubsystem* S = Cargo(World)) S->ListSpawnCatalog(FString::Join(Args, TEXT(" "))); // read first when needed: listed then
     }));
 FAutoConsoleCommandWithWorldAndArgs GSCCargoCancel(TEXT("sc.Cargo.Cancel"), TEXT("sc.Cargo.Cancel <job id>: cancel a transfer (boxes in the air finish their move)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {

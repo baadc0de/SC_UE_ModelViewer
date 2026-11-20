@@ -10,6 +10,7 @@
 #include "Components/LocalLightComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "HAL/IConsoleManager.h"
+#include "LightDefinitions.h" // light function atlas capacities (engine fork, WP-E1 E1-1)
 #include "Components/SpotLightComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Engine/World.h"
@@ -31,19 +32,45 @@ TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Poin
         const auto* Spot = Cast<USpotLightComponent>(L);
         const auto* Bulb = Cast<UPointLightComponent>(L);
         double Cone = 1;
-        if (Spot)
+        const FVector Local = L->GetComponentTransform().InverseTransformVectorNoScale(Point - Origin);
+        if (Spot && Spot->Shape == ESpotLightShape::SquareFrustum)
         {
-            const double CosOuter = FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle));
-            const double CosInner = FMath::Cos(FMath::DegreesToRadians(FMath::Min(Spot->InnerConeAngle, Spot->OuterConeAngle)));
-            const double CosPoint = FVector::DotProduct(L->GetForwardVector(), (Point - Origin).GetSafeNormal());
-            Cone = FMath::Square(FMath::Clamp((CosPoint - CosOuter) / FMath::Max(1e-4, CosInner - CosOuter), 0., 1.));
+            // The engine fork's square frustum (WP-E1 E1-3, LocalLightFalloff.ush): hard-edged square of half-FOV OuterConeAngle
+            // in light space, no cone falloff.
+            const double Tan = FMath::Tan(USpotLightComponent::GetClampedSquareFrustumHalfAngle(Spot->OuterConeAngle));
+            Cone = Local.X > 0 && FMath::Max(FMath::Abs(Local.Y), FMath::Abs(Local.Z)) <= Local.X * Tan ? 1 : 0;
         }
-        const double Candela = L->Intensity * ULocalLightComponent::GetUnitsConversionFactor(
-            L->IntensityUnits, ELightUnits::Candelas, Spot ? FMath::Cos(FMath::DegreesToRadians(Spot->OuterConeAngle)) : -1.f);
-        // GetPhysicalLightAttenuation: candela / (max(d, bulb) + offset)^2, the offset in SoftSourceRadius (engine patch).
-        const double M = FMath::Max(1., FMath::Max(Cm, Bulb ? double(Bulb->SourceRadius) : 0.) + (Bulb ? double(Bulb->SoftSourceRadius) : 0.)) / 100.;
-        // The range window is the game's forced fade, which the engine shader patch puts in UE's local-light attenuation.
-        const double Lux = Candela / (M * M) * FSCStarEngine::Get().LightRangeFade(Cm, Radius) * Cone;
+        else if (Spot)
+        {
+            // UE's cone at the clamped angles the renderer uses (GetClampedConeAngles), with the proxy's denominator
+            // (FSpotLightSceneProxy::InvCosConeDifference, in float, unfloored: the clamp keeps outer >= inner + 0.001 rad). Review fixes 3
+            // (Astra A16): a 1e-4 floor gave a 0.5-degree cone 0.145 on its own axis.
+            const FVector2f Angles = Spot->GetClampedConeAngles();
+            const float CosOuter = FMath::Cos(Angles.Y), CosInner = FMath::Cos(Angles.X);
+            const float InvCosConeDifference = 1.0f / (CosInner - CosOuter);
+            const double CosPoint = FVector::DotProduct(L->GetForwardVector(), (Point - Origin).GetSafeNormal());
+            Cone = FMath::Square(FMath::Clamp((CosPoint - double(CosOuter)) * double(InvCosConeDifference), 0., 1.));
+        }
+        // The projector near clip, in either shape (GetSpotLightShapeAttenuation): no light in front of the axial depth.
+        if (Spot && Spot->ProjectorNearClip > 0 && Local.X < Spot->ProjectorNearClip) Cone = 0;
+        // Lumens spread over the shape's solid angle as the renderer converts them: the component's own conversion
+        // (ComputeLightBrightness, in UE units of candela x 1e4: the square frustum's 4 asin(sin^2 h), else UE's cone of the bounding half
+        // angle, its cosine unclamped). Review fixes 3 (Astra A16): GetUnitsConversionFactor clamps the cosine at 1 - 1e-4, which
+        // understates a narrow cone (0.5 degrees: 2.6x). Other units through the unit conversion as before.
+        const double Candela = L->IntensityUnits == ELightUnits::Lumens && Bulb && Bulb->bUseInverseSquaredFalloff
+                                   ? double(L->ComputeLightBrightness()) / (100.0 * 100.0)
+                                   : L->Intensity * ULocalLightComponent::GetUnitsConversionFactor(L->IntensityUnits, ELightUnits::Candelas, Spot ? Spot->GetCosHalfConeAngle() : -1.f);
+        // The light's own falloff models (engine fork, WP-E1 E1-2), as the renderer evaluates them (LocalLightFalloff.ush):
+        // the bulb offset law candela / (max(d, b) + c)^2 on point and spot lights, else UE's inverse square regularised as the
+        // renderer does, 1 / (d^2 + 1 cm^2) (GetLocalLightDistanceAttenuation's DistBiasSqr); the range window as selected.
+        const bool bBulbOffset = Bulb && L->DistanceAttenuation == ELightDistanceAttenuation::BulbOffset &&
+                                 ULocalLightComponent::IsValidBulbOffsetAttenuation(L->AttenuationBulbRadius, L->AttenuationDistanceOffset);
+        const double M2 = bBulbOffset ? FMath::Square((FMath::Max(Cm, double(L->AttenuationBulbRadius)) + double(L->AttenuationDistanceOffset)) / 100.)
+                                      : (Cm * Cm + 1.0) / 1e4;
+        const double Fade = L->RangeFade == ELightRangeFade::SquaredLinearTail
+                                ? FMath::Square(FMath::Clamp((1.0 - Cm / Radius) / double(L->RangeFadeFraction), 0.0, 1.0))
+                                : FMath::Square(FMath::Clamp(1.0 - FMath::Square(FMath::Square(Cm / Radius)), 0.0, 1.0));
+        const double Lux = Candela / M2 * Fade * Cone;
         if (Lux <= 0) continue;
         const uint8 Channels = L->LightingChannels.bChannel0 | (L->LightingChannels.bChannel1 << 1) | (L->LightingChannels.bChannel2 << 2);
         if (ReceiverChannels && !(Channels & ReceiverChannels)) { ++Gated; GatedLux += Lux; continue; }
@@ -173,12 +200,143 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         }
     }
     OK &= Materials.Num() == Textures.Num() && Vehicle->GoboTextures.Num() == Textures.Num();
+    // The light function atlas capacities as the engine clamps them (LightDefinitions.h; LightFunctionAtlas.cpp): material tiles
+    // (Size^2, Size in [2, LIGHT_FUNCTION_ATLAS_MAX_EDGE_SIZE]) and light records (MaxLightCount, -1 = every addressable record;
+    // record 0 is reserved). The engine logs what it allocated ("LightFunctionAtlas: ...").
     const auto* Atlas = IConsoleManager::Get().FindConsoleVariable(TEXT("r.LightFunctionAtlas.Size"));
-    const int32 Edge = Atlas ? Atlas->GetInt() : 0;
+    const auto* AtlasLights = IConsoleManager::Get().FindConsoleVariable(TEXT("r.LightFunctionAtlas.MaxLightCount"));
+    const int32 Edge = FMath::Clamp(Atlas ? Atlas->GetInt() : 0, 2, int32(LIGHT_FUNCTION_ATLAS_MAX_EDGE_SIZE));
+    const int32 MaxRecords = int32(LIGHT_FUNCTION_ATLAS_MAX_LIGHT_RECORD_COUNT);
+    const int32 MaxLights = AtlasLights ? AtlasLights->GetInt() : -1;
+    const int32 Records = FMath::Max((MaxLights < 0 ? MaxRecords : FMath::Min(MaxLights, MaxRecords)) - 1, 0);
     UE_LOG(LogSCImport, Display,
            TEXT("LIGHT_VERIFY passed=%d components=%d enabled=%d disabled=%d projectors=%d gobo_textures=%d gobo_materials=%d "
-                "fallback_selected=%d shadow_flags=%d visible_shadowed=%d megalights_active=%d atlas_slots=%d"),
+                "fallback_selected=%d shadow_flags=%d visible_shadowed=%d megalights_active=%d atlas_slots=%d atlas_light_records=%d"),
            OK, Vehicle->Lights.Num(), Vehicle->Lights.Num() - Disabled, Disabled, Projectors, Textures.Num(), Materials.Num(), Fallback,
-           Shadowed, VisibleShadowed, Vehicle->bMegaLightsActive, Edge * Edge);
+           Shadowed, VisibleShadowed, Vehicle->bMegaLightsActive, Edge * Edge, Records);
     return OK;
 }
+
+namespace
+{
+// After a restore: drop the saved lights of that world only (other worlds, e.g. a second PIE world, keep theirs) and every
+// entry whose light is gone.
+template <typename TComponent, typename TSaved>
+void ForgetWorld(TMap<TWeakObjectPtr<TComponent>, TSaved>& Saved, const UWorld* World)
+{
+    for (auto It = Saved.CreateIterator(); It; ++It)
+    {
+        const TComponent* Light = It.Key().Get();
+        if (!Light || Light->GetWorld() == World) It.RemoveCurrent();
+    }
+}
+
+// The imported falloff models of one light, kept while sc.Lights.FalloffModels 0 shows UE's falloff in their place.
+struct FSCImportedFalloff
+{
+    ELightRangeFade RangeFade;
+    float RangeFadeFraction;
+    ELightDistanceAttenuation DistanceAttenuation;
+    float BulbRadius;
+    float DistanceOffset;
+};
+TMap<TWeakObjectPtr<ULocalLightComponent>, FSCImportedFalloff> GSCImportedFalloffs;
+
+// A/B of the engine fork's falloff models (WP-E1 E1-2): 0 puts every local light of the world on UE's range window and inverse
+// square law, 1 restores what the importer set. Movable lights only (the importer's are).
+void SetFalloffModels(UWorld* World, bool bOn)
+{
+    int32 Changed = 0;
+    for (TObjectIterator<ULocalLightComponent> It; It; ++It)
+    {
+        ULocalLightComponent* L = *It;
+        if (L->GetWorld() != World || !L->IsRegistered()) continue;
+        if (!bOn)
+        {
+            if (GSCImportedFalloffs.Contains(L)) continue;
+            GSCImportedFalloffs.Add(L, {L->RangeFade, L->RangeFadeFraction, L->DistanceAttenuation, L->AttenuationBulbRadius, L->AttenuationDistanceOffset});
+            L->SetRangeFade(ELightRangeFade::Default, L->RangeFadeFraction);
+            L->SetDistanceAttenuation(ELightDistanceAttenuation::Default, L->AttenuationBulbRadius, L->AttenuationDistanceOffset);
+            ++Changed;
+        }
+        else if (const FSCImportedFalloff* Saved = GSCImportedFalloffs.Find(L))
+        {
+            L->SetRangeFade(Saved->RangeFade, Saved->RangeFadeFraction);
+            L->SetDistanceAttenuation(Saved->DistanceAttenuation, Saved->BulbRadius, Saved->DistanceOffset);
+            ++Changed;
+        }
+    }
+    if (bOn) ForgetWorld(GSCImportedFalloffs, World);
+    UE_LOG(LogSCImport, Display, TEXT("LIGHT_FALLOFF_MODELS %s lights=%d"), bOn ? TEXT("imported") : TEXT("ue_default"), Changed);
+}
+
+// The imported projector of one spot light, kept while sc.Lights.ProjectorShape 0 or 2 shows a UE cone in its place.
+struct FSCImportedProjector
+{
+    ESpotLightShape Shape;
+    ELightFunctionAddress Address;
+    float InnerConeAngle;
+    float OuterConeAngle;
+    FVector LightFunctionScale;
+};
+TMap<TWeakObjectPtr<USpotLightComponent>, FSCImportedProjector> GSCImportedProjectors;
+
+// A/B of the engine fork's spot light shape (WP-E1 E1-3) on every square frustum projector the importer made:
+//  1  the import: SquareFrustum + Border (the game's projector).
+//  0  UE's cone with UE's light function wrap at the same angles (OuterConeAngle = half-FOV: the square's inscribed circle).
+//  2  the E1-2 importer's emulation on a UE cone: the cone through the square's corners (inner = outer), the light function
+//     scaled back laterally to the half-FOV, UE's wrap (so the gobo repeats between the square and the cone).
+//  3  as 2 with the Border address: the light function alone cuts the corner cone to the square (verifies the border, e.g. when
+//     the light function fades out by screen size).
+void SetProjectorShape(UWorld* World, int32 Mode)
+{
+    int32 Changed = 0;
+    for (TObjectIterator<USpotLightComponent> It; It; ++It)
+    {
+        USpotLightComponent* S = *It;
+        if (S->GetWorld() != World || !S->IsRegistered()) continue;
+        const FSCImportedProjector* Saved = GSCImportedProjectors.Find(S);
+        if (!Saved)
+        {
+            if (Mode == 1 || S->Shape != ESpotLightShape::SquareFrustum) continue;
+            Saved = &GSCImportedProjectors.Add(S, {S->Shape, S->LightFunctionAddress, S->InnerConeAngle, S->OuterConeAngle, S->LightFunctionScale});
+        }
+        S->SetShape(Mode == 1 ? Saved->Shape : ESpotLightShape::Cone);
+        S->SetLightFunctionAddress(Mode == 1 ? Saved->Address : Mode == 3 ? ELightFunctionAddress::Border : ELightFunctionAddress::Wrap);
+        if (Mode >= 2)
+        {
+            const double HalfFov = FMath::DegreesToRadians(double(Saved->OuterConeAngle));
+            const float Corner = float(FMath::Min(FMath::RadiansToDegrees(FMath::Atan(UE_DOUBLE_SQRT_2 * FMath::Tan(HalfFov))), 88.9));
+            S->SetOuterConeAngle(Corner);
+            S->SetInnerConeAngle(Corner);
+            const double Rendered = FMath::Tan(double(S->GetClampedConeAngles().Y));
+            const double Axial = Saved->LightFunctionScale.Z, Lateral = Axial * FMath::Tan(HalfFov) / Rendered;
+            S->SetLightFunctionScale(FVector(Lateral, Lateral, Axial));
+        }
+        else
+        {
+            S->SetOuterConeAngle(Saved->OuterConeAngle);
+            S->SetInnerConeAngle(Saved->InnerConeAngle);
+            S->SetLightFunctionScale(Saved->LightFunctionScale);
+        }
+        ++Changed;
+    }
+    if (Mode == 1) ForgetWorld(GSCImportedProjectors, World);
+    static const TCHAR* Names[] = {TEXT("cone_wrap"), TEXT("square_border"), TEXT("e12_corner_cone_wrap"), TEXT("corner_cone_border")};
+    UE_LOG(LogSCImport, Display, TEXT("LIGHT_PROJECTOR_SHAPE %s lights=%d"), Names[FMath::Clamp(Mode, 0, 3)], Changed);
+}
+
+FAutoConsoleCommandWithWorldAndArgs GSCLightsProjectorShape(
+    TEXT("sc.Lights.ProjectorShape"),
+    TEXT("sc.Lights.ProjectorShape <0|1|2|3>: 1 the imported SquareFrustum + Border projectors; 0 UE's cone + wrap at the same angles; 2 the E1-2 importer's corner cone + lateral light function scale + wrap; 3 that corner cone with the Border address"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        SetProjectorShape(World, Args.Num() == 0 ? 1 : FMath::Clamp(FCString::Atoi(*Args[0]), 0, 3));
+    }));
+
+FAutoConsoleCommandWithWorldAndArgs GSCLightsFalloffModels(
+    TEXT("sc.Lights.FalloffModels"),
+    TEXT("sc.Lights.FalloffModels <0|1>: 0 renders every local light with UE's range window and inverse square law, 1 restores the imported (game) falloff"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        SetFalloffModels(World, Args.Num() == 0 || FCString::Atoi(*Args[0]) != 0);
+    }));
+} // namespace

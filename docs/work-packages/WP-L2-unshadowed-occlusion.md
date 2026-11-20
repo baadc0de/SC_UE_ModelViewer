@@ -3,6 +3,12 @@
 Branch `wp/l2-unshadowed-occlusion`. Follows WP-L1 (only the authored `shadow_casting` lights cast shadows) and the
 WP-U2c AO survey (`ue/verification/WP-U2c.md`).
 
+> Superseded implementation (2026-11-19): the shader patches below were written for the binary engine (plan D14). The
+> SSDO is now an engine feature of the UE 5.9 fork, WP-E1 E1-7 (`docs/work-packages/WP-E1-engine-fork-features.md`):
+> one RDG pass, the `SSDO*` post-process settings (driven from this fixture by `FSCSSDOSettings`), `r.SSDO`,
+> `r.SSDO.Quality`, `r.SSDO.Debug`; `sc.Look.SSDO game|off` is the A/B (off in the look, D15). `ue/EnginePatches`,
+> `engine_patches.py` and `r.GeneralPurposeTweak` are gone. The game's rule below is unchanged.
+
 ## Problem
 
 After WP-L1 most ship lights (Cutlass 222 of 225) cast no shadow, as in the game. The game does not leave them
@@ -43,17 +49,17 @@ The patch lives in the repo:
   `DeriveSpecularOcclusion` (gloss = 1 − UE roughness, `create_materials.py`). Lumen's traced reflections stay
   unoccluded, as the game's SSR does. Colour bleeding's exponent is not ported: its `bleed` is the game's SSGI bounce,
   which Lumen's GI computes itself.
-- `r.GeneralPurposeTweak` scales the amounts for A/B in development builds (0 = UE's behaviour: no SSDO on lights,
-  Lumen short-range AO on ambient; 1 = the game, default, fixed in shipping).
+- (then) `r.GeneralPurposeTweak` scaled the amounts for A/B; now `sc.Look.SSDO off` (UE's behaviour: no SSDO on lights,
+  Lumen short-range AO on ambient) / `game`.
 
 `projScale` / `invProjScale` / `rcpAspectRatio` are set in the game's C++, not the shader text; read from the executable:
 `0.5 × P11`, `2 / P11`, `P00 / P11` (see the verification).
 
-Debug view (development): `r.GeneralPurposeTweak2 2` writes the SSDO AO, `3` the bent normal, as the MegaLights
-diffuse light (route `cutlass-ssdo-debug.txt`, lighting-only view mode, Lumen indirect and reflections off).
+Debug view (development): `r.SSDO.Debug 1` writes the SSDO AO, `2` the bent normal, over the lit scene colour (then
+`r.GeneralPurposeTweak2 2` / `3` as the MegaLights diffuse light) (route `cutlass-ssdo-debug.txt`, lighting-only view mode, Lumen indirect and reflections off).
 
 ## Acceptance
 
 - `verify_star_engine_render.py` matches the new cvars and function hashes against the installed game.
-- `engine_patches.py check` OK; MegaLights shaders compile; GPU route `cutlass-ssdo.txt` shows the effect, its cost
+- (then) `engine_patches.py check` OK; MegaLights shaders compile; GPU route `cutlass-ssdo.txt` shows the effect, its cost
   and the frame-to-frame noise at three views; recorded in `ue/verification/WP-L2.md`.
