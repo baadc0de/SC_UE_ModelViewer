@@ -226,3 +226,21 @@ at the same pose then reported `AAM_TSR` and `HuePreservingShoulder` for both fr
 and PNG8. Their mean RGB errors were 0.027 and 0.062 of 255, with individual channel peaks of 19 and 6.
 There was no display-mode change in this control. Output is in `out/h2/aa1` and `out/h2/aa1-repeat`.
 The full-precision Cutlass HDR, repeatability, viewport appearance and image-evenness gates remain open.
+
+`render_check.ps1` also checks the authored orbit geometrically. For the Cutlass it queries the actor's
+world centre from `/state` after loading. It recovers each angle from the camera's XY position, then
+checks the signed step, absolute angle, radius and height against the request, independently of the
+reported camera rotation. Against the original 150-frame sidecar and centre (0, 0, 5.427) m, maximum
+step error was 0.00220° for a 0.6° step; maximum absolute angle error was 0.00132°, and combined
+radius/height error was 0.524 mm. Substituting the previous frame's position into one smoke-test sample
+correctly failed this check. The separate live-image difference gate remains unchanged.
+
+`SCBridge.RenderGpu.FrozenOutputDevice` runs a 64×32 GPU colour chart through the stock view-family
+post-processing pipeline in a D3D12 game world. The input scene colour is fixed before depth of field;
+the float render target advertises SDR/sRGB or HDR10/PQ. Across every RGB sample, the production PNG
+and EXR capture sources each had zero difference. Its positive control, the ordinary display-referred
+source, produced a peak difference of 0.356934 on the same chart. The six renders took 0.259 s inside
+the test, with no physical display changes or imported assets. Run in `-game -AgentMode` with
+`-ExecCmds="Automation Now; RunTests SCBridge.RenderGpu.FrozenOutputDevice"` and
+`-TestExit="Automation Test Queue Empty"`. This isolates the renderer's output-device selection from
+scene history. The real Cutlass HDR result above remains the integration measurement.

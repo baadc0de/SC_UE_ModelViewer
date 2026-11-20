@@ -25,7 +25,7 @@ public class SCBridge : ModuleRules
         // RPC harness and state log (WP-H1): a localhost HTTP server for scripted testing; desktop, not Shipping.
         bool bRpc = Target.Configuration != UnrealTargetConfiguration.Shipping &&
                     (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Linux || Target.Platform == UnrealTargetPlatform.Mac);
-        if (bRpc) PrivateDependencyModuleNames.AddRange(new[] { "HTTPServer" });
+        if (bRpc) PrivateDependencyModuleNames.AddRange(new[] { "HTTPServer", "Renderer" });
         PrivateDefinitions.Add("SC_WITH_RPC=" + (bRpc ? "1" : "0"));
     }
 }

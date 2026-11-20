@@ -11,6 +11,8 @@ class FSCRenderMainLook;
 class FSCRpcRender
 {
 public:
+    static constexpr ESceneCaptureSource PngSource = SCS_FinalToneCurveHDR;
+    static constexpr ESceneCaptureSource ExrSource = SCS_FinalColorHDR;
     using FCamera = TFunction<TSharedRef<FJsonObject>(const TSharedPtr<FJsonObject>&)>;
     ~FSCRpcRender();
     bool Start(UWorld* World, const TSharedPtr<FJsonObject>& Body, FCamera Camera, FString& Error);

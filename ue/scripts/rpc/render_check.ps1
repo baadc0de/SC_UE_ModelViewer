@@ -13,6 +13,7 @@ if ($FrameLimit) {
 }
 $fps = 30
 $center = if ($Acceptance) { 'vehicle' } else { @(0, 0, 1) }
+$worldCenter = @(0, 0, 1)
 $width = if ($Acceptance) { 1920 } else { 320 }
 $height = if ($Acceptance) { 1080 } else { 180 }
 $orbit = @{ center = $center; radius = 25; height = 5; fromDeg = 0; toDeg = 90; seconds = ($orbitFrames / $fps) }
@@ -30,10 +31,17 @@ if ($Acceptance) {
         $ready = Invoke-SC /wait @{ until = 'settled'; timeout_s = 600 }
         if (!$ready.ok) { throw $ready.error }
     }
+    $state = Invoke-SC /state
+    $vehicle = $state.vehicles | Where-Object { $_.id -eq 0 -and $_.entity -eq 'DRAK_Cutlass_Black' } | Select-Object -First 1
+    if (!$state.ok -or !$vehicle -or $vehicle.pos.Count -ne 3) { throw 'Cannot resolve the Cutlass orbit centre' }
+    $worldCenter = $vehicle.pos
 }
 $result = Invoke-SCRender $req
 if (!$result.ok) { throw $result.error }
 $sidecar = Get-Content -Raw -LiteralPath $result.sidecar | ConvertFrom-Json
+$geometry = & "$PSScriptRoot/orbit_metrics.ps1" -Sidecar $result.sidecar -Center $worldCenter
+$result | Add-Member -NotePropertyName 'orbit_geometry' -NotePropertyValue $geometry
+if (!$geometry.passed) { throw "Camera positions diverged from authored orbit: $($geometry | ConvertTo-Json -Compress)" }
 if ($sidecar.frames.Count -ne $count) { throw "expected $count sidecar frames" }
 for ($i = 0; $i -lt $count; $i++) {
     $f = $sidecar.frames[$i]
