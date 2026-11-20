@@ -38,6 +38,10 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/Material.h"
 #include "Misc/Paths.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#endif
 #include "UObject/Package.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Misc/ScopeExit.h"
@@ -78,11 +82,20 @@ struct FEntity
 };
 struct FPart
 {
-    struct FCacheVariant { FString Key; TUniquePtr<FSCProcessedCache::FReadPin> Pin; };
+    struct FCacheVariant
+    {
+        FString Key;
+        TUniquePtr<FSCProcessedCache::FReadPin> Pin;
+        // A full processed hit can keep just the source selection and the light-channel samples.
+        TArray<FTriangleID> SplitTriangles;
+        TArray<FVector3f> LightSamples;
+        bool bDisableNanite = false;
+    };
     int32 Owner = INDEX_NONE;
     FSCDerivedMesh Mesh, Translucent;
     FCacheVariant OpaqueCache, TranslucentCache;
-    TArray<FTriangleID> CollisionTriangles; // cold fallback if the validated package fails to load
+    TArray<FTriangleID> CollisionTriangles; // unsplit source for collision and for a deferred unsplit description
+    bool bDeferredGeometry = false;
     bool bGamePhysics = false; // WP-P3: the game's colliders of Owner; hidden, blocks the pawn only
 };
 /** One unique mesh asset moving through derive -> prepare -> build. */
@@ -92,7 +105,9 @@ struct FMeshSlot
     TUniquePtr<FSCDerivedMesh> Data = MakeUnique<FSCDerivedMesh>();
     TFuture<bool> Derive;
     FString DeriveError;
-    double DeriveSeconds = 0;
+    double DeriveSeconds = 0, DeriveWaitStart = 0, DeriveWaitSeconds = 0;
+    double PrepareSeconds = 0, PrepareWaitStart = 0;
+    int32 DeferredRigidParts = 0;
     bool bDeriveLaunched = false, bDeriveWarned = false;
     TFuture<void> Prepare;
     bool bPrepareLaunched = false;
@@ -150,6 +165,7 @@ struct FSCImportJob::FState
     TArray<TObjectPtr<UObject>> KeepAlive; // session packages between build steps
     FString Session;
     FString MeshCacheNamespace;
+    bool bDeferCachedRigidGeometry = true;
     FSCImportMaterials Materials;
     TFuture<void> MaterialPrep;
     double MaterialStart = 0;
@@ -200,6 +216,8 @@ struct FSCImportJob::FState
     void LaunchDerives();
     bool StepMesh(bool bBlocking);
     void LaunchPrepare(FMeshSlot& Slot);
+    bool DeferCachedRigidPart(FPart& Part, const FSCDerivedMesh& Data, TArray<FTriangleID>& Triangles,
+        const TSet<int32>& TranslucentSlots, const FString& BaseKey);
     void ProbeMeshCache(FPart::FCacheVariant& Variant, const FString& Key);
     void BeginBuild(FMeshSlot& Slot);
     void BuildNextVariant(FMeshSlot& Slot);
@@ -556,6 +574,10 @@ void FSCImportJob::FState::Begin()
     Session = TEXT("/Temp/SC/") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
     if (Options.ProcessedCache && Options.ProcessedCache->IsEnabled() && !Options.CacheArchiveBuild.IsEmpty())
         MeshCacheNamespace = FSCProcessedCache::Key(Options.CacheArchiveBuild, SCProcessedMeshCache::RenderFormat());
+#if WITH_DEV_AUTOMATION_TESTS
+    // Compare the same valid warm packages with and without rebuilding CPU descriptions.
+    bDeferCachedRigidGeometry = !FParse::Param(FCommandLine::Get(), TEXT("SCDisableDeferredRigidGeometry"));
+#endif
     FActorSpawnParameters Spawn;
     Spawn.ObjectFlags |= RF_Transient;
     Vehicle = Options.World->SpawnActor<ASCVehicle>(ASCVehicle::StaticClass(), Options.ActorTransform, Spawn);
@@ -624,11 +646,45 @@ void FSCImportJob::FState::ProbeMeshCache(FPart::FCacheVariant& Variant, const F
     if (!Options.bRebuildProcessed) Variant.Pin = Options.ProcessedCache->PinEntry(Variant.Key);
 }
 
+bool FSCImportJob::FState::DeferCachedRigidPart(FPart& Part, const FSCDerivedMesh& Data, TArray<FTriangleID>& Triangles,
+    const TSet<int32>& TranslucentSlots, const FString& BaseKey)
+{
+    if (!bDeferCachedRigidGeometry || !Part.OpaqueCache.Pin) return false;
+    TArray<FTriangleID> Opaque, Blend;
+    if (!TranslucentSlots.IsEmpty())
+        for (FTriangleID Triangle : Triangles)
+            (TranslucentSlots.Contains(Data.Description.GetTrianglePolygonGroup(Triangle).GetValue()) ? Blend : Opaque).Add(Triangle);
+
+    const bool bSplit = !Opaque.IsEmpty() && !Blend.IsEmpty();
+    if (bSplit)
+    {
+        ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
+        if (!Part.TranslucentCache.Pin) return false;
+        Part.TranslucentCache.SplitTriangles = MoveTemp(Blend);
+        Part.OpaqueCache.SplitTriangles = MoveTemp(Opaque);
+        Part.TranslucentCache.LightSamples = FSCLightAreas::Sample(Data.Description, Part.TranslucentCache.SplitTriangles);
+        Part.TranslucentCache.bDisableNanite = true;
+        Part.Translucent.SocketNode = Part.Owner;
+        Part.Translucent.bHasGeometry = true;
+    }
+
+    Part.OpaqueCache.bDisableNanite = !bSplit && !Blend.IsEmpty();
+    Part.OpaqueCache.LightSamples = FSCLightAreas::Sample(Data.Description, bSplit ? Part.OpaqueCache.SplitTriangles : Triangles);
+    Part.Mesh.SocketNode = Part.Owner;
+    Part.Mesh.bHasGeometry = true;
+    Part.CollisionTriangles = MoveTemp(Triangles);
+    Part.bDeferredGeometry = true;
+    return true;
+}
+
 void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
 {
     Slot.bPrepareLaunched = true;
+    Slot.PrepareWaitStart = FPlatformTime::Seconds();
     // Runs while no game-thread build is in flight: it is the only writer of the clip catalogue at this time.
     Slot.Prepare = Async(EAsyncExecution::ThreadPool, [this, &Slot] {
+        const double PrepareStart = FPlatformTime::Seconds();
+        ON_SCOPE_EXIT { Slot.PrepareSeconds = FPlatformTime::Seconds() - PrepareStart; };
         FSCDerivedMesh& Data = *Slot.Data;
         const FString& Path = Slot.Path;
         TSet<int32> TranslucentSlots = Data.BlendedSlots;
@@ -727,8 +783,6 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
         {
             FPart Part;
             Part.Owner = Owner;
-            Part.Mesh = FSCMeshImporter::Select(Data, Rigid[Owner]);
-            Part.Mesh.SocketNode = Owner;
             FString BaseKey;
             if (!MeshCacheNamespace.IsEmpty() && !Data.ContentHash.IsEmpty())
             {
@@ -736,6 +790,14 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                     FString::Printf(TEXT("%s|owner=%d|animated=%d|split=%s"), *Data.ContentHash, Owner, Slot.bAnimated, *SplitKey));
                 ProbeMeshCache(Part.OpaqueCache, BaseKey + (Options.bBuildCollision ? TEXT("|visual+collision") : TEXT("|visual")));
             }
+            if (DeferCachedRigidPart(Part, Data, Rigid[Owner], TranslucentSlots, BaseKey))
+            {
+                ++Slot.DeferredRigidParts;
+                Slot.Parts.Add(MoveTemp(Part));
+                continue;
+            }
+            Part.Mesh = FSCMeshImporter::Select(Data, Rigid[Owner]);
+            Part.Mesh.SocketNode = Owner;
             // Collision includes all triangles of this owner, including glass/decal split, as in U1.
             FString Error;
             if (Options.bBuildCollision && !Part.OpaqueCache.Pin && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
@@ -747,7 +809,7 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                 Part.CollisionTriangles = MoveTemp(Rigid[Owner]);
             Slot.CollisionSeconds += Part.Mesh.CollisionDeriveSeconds;
             FSCMeshImporter::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
-            if (Part.Translucent.bHasGeometry && !BaseKey.IsEmpty())
+            if (Part.Translucent.bHasGeometry && !BaseKey.IsEmpty() && Part.TranslucentCache.Key.IsEmpty())
                 ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
             Slot.Parts.Add(MoveTemp(Part));
         }
@@ -796,10 +858,13 @@ bool FSCImportJob::FState::StepMesh(bool bBlocking)
     FMeshSlot& Slot = Slots[Current];
     if (!Slot.bPrepareLaunched)
     {
+        if (Slot.DeriveWaitStart <= 0.) Slot.DeriveWaitStart = FPlatformTime::Seconds();
         if (!bBlocking && !Slot.Derive.IsReady()) return false;
         const bool bOK = Slot.Derive.Get();
         Slot.Derive = TFuture<bool>();
+        Slot.DeriveWaitSeconds = FPlatformTime::Seconds() - Slot.DeriveWaitStart;
         Timings.Derive += Slot.DeriveSeconds;
+        Timings.DeriveWait += Slot.DeriveWaitSeconds;
         if (!bOK)
         {
             Warn(Slot.Path, Slot.DeriveError);
@@ -817,11 +882,16 @@ bool FSCImportJob::FState::StepMesh(bool bBlocking)
         if (!bBlocking && !Slot.Prepare.IsReady()) return false;
         Slot.Prepare.Wait();
         Slot.Prepare = TFuture<void>();
+        const double PrepareWait = FPlatformTime::Seconds() - Slot.PrepareWaitStart;
+        Timings.Prepare += Slot.PrepareSeconds;
+        Timings.PrepareWait += PrepareWait;
+        Timings.DeferredRigidParts += Slot.DeferredRigidParts;
         for (const auto& W : Slot.PrepareWarnings)
             Warn(W.Key, W.Value);
         Timings.Collision += Slot.CollisionSeconds;
         if (Options.bBuildCollision)
-            UE_LOG(LogSCImport, Display, TEXT("COLLISION_DERIVE mesh=%s exact_s=%.6f"), *Slot.Path, Slot.CollisionSeconds);
+            UE_LOG(LogSCImport, Display, TEXT("COLLISION_DERIVE mesh=%s exact_s=%.6f derive_worker_s=%.4f derive_wait_s=%.4f prepare_worker_s=%.4f prepare_wait_s=%.4f deferred_rigid_parts=%d"),
+                *Slot.Path, Slot.CollisionSeconds, Slot.DeriveSeconds, Slot.DeriveWaitSeconds, Slot.PrepareSeconds, PrepareWait, Slot.DeferredRigidParts);
     }
     const double BuildStart = FPlatformTime::Seconds(); // game-thread build time only, not the wait for workers
     ON_SCOPE_EXIT { Timings.Build += FPlatformTime::Seconds() - BuildStart; };
@@ -886,11 +956,18 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         ++Result.CachedMeshes;
     else
     {
+        if (Part.bDeferredGeometry)
+        {
+            const auto& Triangles = Cached.SplitTriangles.IsEmpty() ? Part.CollisionTriangles : Cached.SplitTriangles;
+            Variant = FSCMeshImporter::Select(*Slot.Data, Triangles);
+            Variant.SocketNode = Part.Owner;
+            Variant.bEnableNanite &= !Cached.bDisableNanite;
+        }
         if (bNeedsCollision && Variant.CollisionBytes.IsEmpty())
         {
             // The package failed to load despite valid disk checksums. Re-create
             // collision from the same unsplit triangles used on a regular miss.
-            if (Part.bGamePhysics)
+            if (Part.bGamePhysics || (Part.bDeferredGeometry && Cached.SplitTriangles.IsEmpty()))
                 FSCMeshImporter::DeriveCollision(Variant, AssetError);
             else
             {
@@ -921,7 +998,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         Vehicle->Meshes.Add(Mesh);
         Vehicle->SourcePaths.Add(Mesh, Path + Suffix);
         if (Part.bGamePhysics) Slot.GamePhysicsVariants.Add(Slot.Variants.Num());
-        else Vehicle->MeshSamples.Add(Mesh, FSCLightAreas::Sample(Variant.Description));
+        else Vehicle->MeshSamples.Add(Mesh, Part.bDeferredGeometry ? MoveTemp(Cached.LightSamples) : FSCLightAreas::Sample(Variant.Description));
         Slot.Variants.Add(Mesh);
         SocketNodes.FindOrAdd(Path).Add(Variant.SocketNode);
         Result.MeshStats.Add(Path + Suffix, Stats);
@@ -1726,6 +1803,8 @@ void FSCImportJob::FState::Assemble()
            TEXT("IMPORT_PHASES read_s=%.4f derive_s=%.4f collision_s=%.4f build_s=%.4f materials_s=%.4f assemble_s=%.4f (clips_s=%.4f rigs_s=%.4f register_s=%.4f lights_s=%.4f anchors_s=%.4f bind_s=%.4f)"),
            Timings.Read, Timings.Derive, Timings.Collision, Timings.Build, Timings.Materials, Timings.Assemble, FinalizeSeconds, RigSeconds,
            RegisterSeconds, LightSeconds, AnchorSeconds, BindSeconds);
+    UE_LOG(LogSCImport, Display, TEXT("IMPORT_PREPARE derive_worker_s=%.4f derive_wait_s=%.4f prepare_worker_s=%.4f prepare_wait_s=%.4f deferred_rigid_parts=%d"),
+           Timings.Derive, Timings.DeriveWait, Timings.Prepare, Timings.PrepareWait, Timings.DeferredRigidParts);
     const FBox Bounds = V->GetComponentsBoundingBox(true);
     UE_LOG(LogSCImport, Display, TEXT("BOUNDS_CM min=%s max=%s size=%s"), *Bounds.Min.ToString(), *Bounds.Max.ToString(),
            *Bounds.GetSize().ToString());

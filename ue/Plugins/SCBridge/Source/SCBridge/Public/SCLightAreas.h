@@ -10,6 +10,7 @@ class ASCVehicle;
 class USceneComponent;
 class UPrimitiveComponent;
 struct FMeshDescription;
+struct FTriangleID;
 
 /** One `interiors[].room_volumes[]` segment: container-local CryEngine axes, metres. */
 struct SCBRIDGE_API FSCRoomVolume
@@ -56,6 +57,8 @@ public:
     static constexpr int32 MaxExactRooms = 16;
     /** Up to MaxSamples vertex positions, evenly strided by vertex index (mesh-local cm). */
     static TArray<FVector3f> Sample(const FMeshDescription& Description);
+    /** Same samples as a copied triangle selection, without constructing its other vertex attributes. */
+    static TArray<FVector3f> Sample(const FMeshDescription& Description, TConstArrayView<FTriangleID> Triangles);
     /** Parse a container's room volumes and keep them on the vehicle; malformed volumes warn and are dropped. */
     static void Register(ASCVehicle* Vehicle, USceneComponent* Anchor, const TArray<FString>& VolumeJson, bool bHelperFrame,
                          TArray<FString>& Warnings);

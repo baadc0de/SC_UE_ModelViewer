@@ -3,6 +3,8 @@
 #include "SCProcessedCache.h"
 #include "SCProcessedMeshCache.h"
 #include "SCMeshImporter.h"
+#include "SCLightAreas.h"
+#include "StaticMeshAttributes.h"
 #include "SCProcessedTextureCache.h"
 #include "SCTextureImporter.h"
 #include "Engine/Texture2D.h"
@@ -132,6 +134,37 @@ bool FSCProcessedCacheSemanticTest::RunTest(const FString&)
     const FString FailedDirectory = Failed->Directory;
     Failed.Reset();
     TestFalse(TEXT("The old files are reclaimed after the reader releases them"), IFileManager::Get().DirectoryExists(*FailedDirectory));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCProcessedCacheLightSamplesTest, "SCBridge.Import.ProcessedCache.LightSamples",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FSCProcessedCacheLightSamplesTest::RunTest(const FString&)
+{
+    FSCDerivedMesh Source;
+    Source.MaterialNames.Add(TEXT("Fixture"));
+    FStaticMeshAttributes Attributes(Source.Description);
+    Attributes.Register();
+    const FPolygonGroupID Group = Source.Description.CreatePolygonGroup();
+    auto Point = [&](FVector3f Position) {
+        const FVertexID Vertex = Source.Description.CreateVertex();
+        Attributes.GetVertexPositions()[Vertex] = Position;
+        return Source.Description.CreateVertexInstance(Vertex);
+    };
+    const FVertexInstanceID Shared = Point(FVector3f::ZeroVector);
+    TArray<FTriangleID> Selection;
+    for (int32 I = 0; I < FSCLightAreas::MaxSamples; ++I)
+    {
+        const FVertexInstanceID Corners[] = {Shared, Point(FVector3f(1, 0, I)), Point(FVector3f(0, 1, I))};
+        const FTriangleID Triangle = Source.Description.CreateTriangle(Group, Corners);
+        if (I % 3 != 0) Selection.Insert(Triangle, 0); // split and reverse the original order
+    }
+    const FSCDerivedMesh Copied = FSCMeshImporter::Select(Source, Selection);
+    const TArray<FVector3f> Expected = FSCLightAreas::Sample(Copied.Description);
+    TestEqual(TEXT("Fixture exceeds the sample budget"), Expected.Num(), FSCLightAreas::MaxSamples);
+    TestTrue(TEXT("Deferred geometry keeps the same room-light samples as a full copied description"),
+        FSCLightAreas::Sample(Source.Description, Selection) == Expected);
     return true;
 }
 

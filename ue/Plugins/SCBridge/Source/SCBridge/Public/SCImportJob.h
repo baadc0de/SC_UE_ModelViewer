@@ -22,10 +22,13 @@ enum class ESCImportStage : uint8
     Cancelled
 };
 
-/** Wall seconds per import phase. Derive/Collision are worker time, Build/Materials/Assemble game-thread time. */
+/** Phase wall durations. Derive and Prepare sum worker durations and may overlap other phases.
+ *  DeriveWait and PrepareWait measure how long each required result holds up the game-thread import cursor. */
 struct SCBRIDGE_API FSCImportTimings
 {
-    double Read = 0, Derive = 0, Collision = 0, Build = 0, Materials = 0, Assemble = 0;
+    double Read = 0, Derive = 0, DeriveWait = 0, Prepare = 0, PrepareWait = 0;
+    double Collision = 0, Build = 0, Materials = 0, Assemble = 0;
+    int32 DeferredRigidParts = 0;
 };
 
 class SCBRIDGE_API FSCImportJob : public FGCObject

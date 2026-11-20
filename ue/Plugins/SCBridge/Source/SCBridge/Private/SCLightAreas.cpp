@@ -8,6 +8,7 @@
 #include "SCRigComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Containers/BitArray.h"
 #include "Dom/JsonObject.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/SkeletalMesh.h"
@@ -237,6 +238,28 @@ TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description)
         if (Out.Num() < Wanted && Index == int32(int64(Out.Num()) * Count / Wanted)) Out.Add(Positions[Vertex]);
         ++Index;
     }
+    return Out;
+}
+
+TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description, TConstArrayView<FTriangleID> Triangles)
+{
+    // FSCMeshImporter::Select inserts vertices in first-use order while walking the selected triangle corners.
+    TBitArray<> Seen(false, Description.Vertices().GetArraySize());
+    TArray<FVertexID> Order;
+    Order.Reserve(Triangles.Num());
+    for (FTriangleID Triangle : Triangles)
+        for (FVertexID Vertex : Description.GetTriangleVertices(Triangle))
+            if (!Seen[Vertex.GetValue()])
+            {
+                Seen[Vertex.GetValue()] = true;
+                Order.Add(Vertex);
+            }
+    const auto Positions = FStaticMeshConstAttributes(Description).GetVertexPositions();
+    const int32 Wanted = FMath::Min(Order.Num(), MaxSamples);
+    TArray<FVector3f> Out;
+    Out.Reserve(Wanted);
+    for (int32 Index = 0; Index < Wanted; ++Index)
+        Out.Add(Positions[Order[int32(int64(Index) * Order.Num() / Wanted)]]);
     return Out;
 }
 
