@@ -16,7 +16,7 @@ mod boundary;
 mod cache;
 mod types;
 mod player;
-pub use player::scbridge_export_player;
+pub use player::{scbridge_export_player, scbridge_export_player_clips};
 use boundary::{Result, cstring, handle, output, run, string};
 use scviewer_core::{CancelToken, Session};
 use std::{

@@ -37,6 +37,10 @@ namespace
 const FString kAzimuth = TEXT("Azimuth");
 const FString kListenerCone = TEXT("Listener_Cone");
 const FString kInteriority = TEXT("Interiority");
+const FString kFreeViewContext = TEXT("DefaultGlobalState");
+const FString kActorContext = TEXT("ActorDefault");
+const FString kDriverContext = TEXT("VehicleDriver");
+const FString kCrewContext = TEXT("VehicleCrew");
 constexpr double kForever = 1e18;
 
 /** A/B switch for measuring the playback fix against the behaviour before it (bit 1: a looping media replays the
@@ -1914,10 +1918,9 @@ void USCAudioSubsystem::ScheduleHitches(float Ms, int32 Count, float EveryS)
     UE_LOG(LogSCAudio, Display, TEXT("AUDIO_HITCH scheduled ms=%.0f count=%d every_s=%.2f"), HitchMs, HitchesLeft, HitchEveryS);
 }
 
-void USCAudioSubsystem::UpdateGameContext(bool bFirstPerson)
+void USCAudioSubsystem::UpdateGameContext(const FString& Desired)
 {
     if (!RtpcBank) return;
-    const FString Desired = bFirstPerson ? TEXT("ActorDefault") : TEXT("DefaultGlobalState");
     if (Desired == ActiveGameContext) return;
     for (const TSharedRef<FSCAudioScene>& Scene : Scenes)
     {
@@ -1961,7 +1964,18 @@ void USCAudioSubsystem::Tick(float DeltaTime)
     if (APlayerController* PC = World->GetFirstPlayerController())
     {
         PC->GetAudioListenerPosition(ListenerPos, ListenerFwd, ListenerRight);
-        UpdateGameContext(Cast<ASCFirstPersonCharacter>(PC->GetPawn()) != nullptr);
+        const ASCFirstPersonCharacter* Actor = Cast<ASCFirstPersonCharacter>(PC->GetPawn());
+        if (!Actor)
+            UpdateGameContext(kFreeViewContext);
+        else
+        {
+            switch (Actor->GetOccupiedSeatRole())
+            {
+            case ESCSeatRole::Driver: UpdateGameContext(kDriverContext); break;
+            case ESCSeatRole::Crew: UpdateGameContext(kCrewContext); break;
+            default: UpdateGameContext(kActorContext); break;
+            }
+        }
     }
     const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World);
     const ASCVehicle* Primary = Viewer ? Viewer->GetVehicle() : nullptr;

@@ -250,7 +250,7 @@ private:
     TArray<TPair<TWeakObjectPtr<USoundSubmix>, TSharedRef<class FSCLimiterTap, ESPMode::ThreadSafe>>> LimiterTaps;
     TMap<uint32, TSharedPtr<FSCBusDsp, ESPMode::ThreadSafe>> BusDsps; // bus -> its effect chain (render thread)
     FString ActiveGameContext;
-    void UpdateGameContext(bool bFirstPerson);
+    void UpdateGameContext(const FString& Desired);
     TSharedPtr<FSCRtpcBank> RtpcBank;                                // the game parameters meters write
     bool bMixTracing = false;                                        // sc.Audio.MixTrace running
     double MixTraceStart = 0;

@@ -152,10 +152,24 @@ struct FGlb
             }
             Offset += Size;
         }
-        if (!Json || !Bin)
+        if (!Json)
         {
-            Error = TEXT("GLB needs JSON and BIN chunks");
+            Error = TEXT("GLB needs a JSON chunk");
             return false;
+        }
+        // A hierarchy-only asset may omit BIN and still declare a zero-length buffer and buffer view.
+        if (!Bin)
+        {
+            const auto NeedsBytes = [](const TSharedPtr<FJsonValue>& Value) {
+                return Value && Value->Type == EJson::Object && Int(Value->AsObject(), TEXT("byteLength")) > 0;
+            };
+            if (!Array(Json, TEXT("accessors")).IsEmpty() ||
+                Array(Json, TEXT("buffers")).ContainsByPredicate(NeedsBytes) ||
+                Array(Json, TEXT("bufferViews")).ContainsByPredicate(NeedsBytes))
+            {
+                Error = TEXT("GLB declares binary data but has no BIN chunk");
+                return false;
+            }
         }
         if (!Array(Json, TEXT("extensionsRequired")).IsEmpty())
         {

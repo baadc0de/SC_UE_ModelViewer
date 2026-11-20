@@ -70,6 +70,7 @@ struct FSCInteractionPoint
 {
     FString HelperName;
     float Radius = 0.f;          // metres, 0 when not authored
+    TOptional<float> AngleRange, ViewAngleLimit; // degrees
     bool bHasHelperTransform = false;
     FMatrix HelperTransform = FMatrix::Identity; // entity-local metres (geometry-less entities)
     TArray<FSCPointInteraction> Interactions;

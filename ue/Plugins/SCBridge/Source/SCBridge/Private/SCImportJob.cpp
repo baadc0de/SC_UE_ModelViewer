@@ -1180,7 +1180,7 @@ void FSCImportJob::FState::Assemble()
         }
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
         if (!I.Id.IsEmpty()) V->InstanceAnchors.Add(I.Id, E.Anchor);
-        else if (!I.ParentId.IsEmpty() && E.Mesh) AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
+        else if (E.Mesh && (!I.ParentId.IsEmpty() || !I.SeatEntrances.IsEmpty())) AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
         V->AddItemSpawn(I, E.Anchor);
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {
