@@ -18,12 +18,15 @@
 #include "EngineUtils.h"
 #include "EffectConvolutionReverb.h"
 #include "SCAudioBusFx.h"
+#include "SCAudioRayOcclusion.h"
 #include "SCAudioStereoDirections.h"
+#include "DrawDebugHelpers.h"
 #include "ISubmixBufferListener.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -39,6 +42,10 @@ namespace
 const FString kAzimuth = TEXT("Azimuth");
 const FString kListenerCone = TEXT("Listener_Cone");
 const FString kInteriority = TEXT("Interiority");
+TAutoConsoleVariable<float> GAudioOcclusionMin(TEXT("sc.Audio.OcclusionMinM"), 0.f, TEXT("Minimum configured emitter ray distance in metres."));
+TAutoConsoleVariable<float> GAudioOcclusionMax(TEXT("sc.Audio.OcclusionMaxM"), 0.f, TEXT("Maximum configured emitter ray distance in metres. Zero disables ray evaluation."));
+TAutoConsoleVariable<float> GAudioObstructionFull(TEXT("sc.Audio.ObstructionFullM"), 0.f, TEXT("Configured distance for full centre-ray obstruction in metres."));
+TAutoConsoleVariable<int32> GAudioOcclusionDebug(TEXT("sc.Audio.OcclusionDebug"), 0, TEXT("Log sampled audio occlusion rays and draw their segments."));
 constexpr double kForever = 1e18;
 
 /** A/B switch for measuring the playback fix against the behaviour before it (bit 1: a looping media replays the
@@ -991,6 +998,7 @@ FString USCAudioSubsystem::EnvironmentAt(const FSCAudioScene& S, const FInstance
 
 float USCAudioSubsystem::RtpcValue(const FSCAudioScene& S, const FInstance& I, const FString& Name, const FVector& Emitter) const
 {
+    if (const FInstance::FRayValue* Ray = I.RayParameters.Find(Name)) return Ray->Value;
     if (!I.Place.AreaFadeRtpc.IsEmpty() && Name == I.Place.AreaFadeRtpc)
     {
         if (S.Areas.IsValidIndex(I.Place.Area)) return S.Areas[I.Place.Area].Fade;
@@ -1064,7 +1072,7 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
         I.Position = PlacePosition(I);
         I.Environment = EnvironmentAt(S, I, I.Position);
         Start(I, S, {A.Root}, Clock + A.DelayS + A.Context.InitialDelayS, A.FadeInS, 0.f);
-        UpdateInstance(I, Clock);
+        UpdateInstance(I, Clock, 0.f);
         if (bLog)
             for (const FVoice& V : I.Voices)
             {
@@ -1228,6 +1236,17 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     FSCAudioGain Gain;
     const FVector Here = PlacePosition(I);
     auto IsDynamic = [&](const FString& R) {
+        if ((I.Place.Spot != INDEX_NONE || I.Place.Attach.IsValid()) && !I.Place.bListener)
+            if (const uint32* Id = S.Manifest.RtpcIds.Find(R))
+                if (const FSCAudioRamp* Ramp = S.Manifest.GameParameters.Find(*Id); Ramp && Ramp->IsRayParameter())
+                {
+                    if (!I.RayParameters.Contains(R))
+                    {
+                        const float Default = S.Manifest.RtpcDefaults.FindRef(R);
+                        I.RayParameters.Add(R, {Default, Default, *Ramp});
+                    }
+                    return true;
+                }
         return R == kAzimuth || R == kListenerCone || (!I.Place.AreaFadeRtpc.IsEmpty() && R == I.Place.AreaFadeRtpc) || (RtpcBank && RtpcBank->Driven().Contains(R));
     };
     auto BindVoiceStates = [&](const TArray<FSCAudioStateValue>& States) {
@@ -1384,7 +1403,88 @@ int32 USCAudioSubsystem::VoiceCount() const
     return N;
 }
 
-void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
+void USCAudioSubsystem::UpdateOcclusion(FInstance& I, const FSCAudioScene& S, double Now, float Seconds)
+{
+    if (I.RayParameters.IsEmpty()) return;
+    UWorld* World = GetWorld();
+    const float* DefaultSurface = S.Manifest.SurfaceObstruction.Find(FName(TEXT("mat_default")));
+    const FSCAudioRayProfile Profile{GAudioOcclusionMin.GetValueOnGameThread(),
+        GAudioOcclusionMax.GetValueOnGameThread(), GAudioObstructionFull.GetValueOnGameThread()};
+    const FVector Delta = I.Position - ListenerPos;
+    const double DistanceM = Delta.Length() / 100.0;
+    const bool bProfileReady = World && DefaultSurface && Profile.IsConfigured();
+    const bool bTrace = bProfileReady && Profile.Includes(DistanceM) && !I.Voices.IsEmpty();
+    if (!bTrace)
+    {
+        I.PendingRays.Reset();
+        I.RayTargets = FVector2f::ZeroVector;
+        I.NextRaySample = Now;
+    }
+    else if (!I.PendingRays.IsEmpty() && I.RayFrame != GFrameCounter)
+    {
+        float RayAmounts[5] = {};
+        bool bComplete = true;
+        const bool bDebug = GAudioOcclusionDebug.GetValueOnGameThread() > 0;
+        for (int32 Index = 0; Index < I.PendingRays.Num(); ++Index)
+        {
+            FTraceDatum Result;
+            if (!World->QueryTraceData(I.PendingRays[Index], Result)) { bComplete = false; break; }
+            int32 Count = 0;
+            for (const FHitResult& Hit : Result.OutHits)
+            {
+                const UPrimitiveComponent* HitComponent = Hit.GetComponent();
+                if (!HitComponent || HitComponent->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block) continue;
+                const UPhysicalMaterial* Physical = Hit.PhysMaterial.Get();
+                const float* Surface = Physical ? S.Manifest.SurfaceObstruction.Find(Physical->GetFName()) : nullptr;
+                RayAmounts[Index] += Surface ? *Surface : *DefaultSurface;
+                if (++Count == 5) break;
+            }
+            if (bDebug)
+                DrawDebugLine(World, Result.Start, Result.End, Count > 0 ? FColor::Red : FColor::Green, false, 0.12f);
+        }
+        if (bComplete)
+        {
+            const FSCAudioRayLevels Levels = FSCAudioRayLevels::Reduce(Profile, I.RayDistanceM, RayAmounts);
+            I.RayTargets = FVector2f(Levels.Occlusion, Levels.Obstruction);
+            if (bDebug)
+                UE_LOG(LogSCAudio, Display, TEXT("AUDIO_OCCL emitter=\"%s\" rays=%.2f,%.2f,%.2f,%.2f,%.2f occlusion=%.3f obstruction=%.3f amount=%.1f"),
+                    *I.Place.Label, RayAmounts[0], RayAmounts[1], RayAmounts[2], RayAmounts[3], RayAmounts[4],
+                    Levels.Occlusion, Levels.Obstruction, 100.f * Levels.Occlusion);
+        }
+        I.PendingRays.Reset(); // a handle is only readable on the next world frame
+    }
+    if (bTrace && I.PendingRays.IsEmpty() && Now >= I.NextRaySample && RayBatchesLeft > 0)
+    {
+        --RayBatchesLeft;
+        I.NextRaySample = Now + 0.10; // viewer sampling budget, independent of the authored RTPC attack/release
+        I.RayDistanceM = DistanceM;
+        I.RayFrame = GFrameCounter;
+        const FVector Along = Delta.GetSafeNormal();
+        FVector Side = FVector::CrossProduct(Along, FVector::UpVector).GetSafeNormal();
+        if (Side.IsNearlyZero()) Side = ListenerRight.GetSafeNormal();
+        const FVector Up = FVector::CrossProduct(Side, Along).GetSafeNormal();
+        // Lineage sampling footprint in cm. The game does not expose its random jitter in the package.
+        const double RadiusCm = FMath::GetMappedRangeValueClamped(FVector2D(1.0, 20.0), FVector2D(30.0, 100.0), DistanceM);
+        const FVector Offsets[] = {FVector::ZeroVector, Up * RadiusCm, -Up * RadiusCm, Side * RadiusCm, -Side * RadiusCm};
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(SCAudioOcclusion), true);
+        Params.bReturnPhysicalMaterial = true;
+        if (const APlayerController* PC = World->GetFirstPlayerController()) Params.AddIgnoredActor(PC->GetPawn());
+        if (const UPrimitiveComponent* Source = Cast<UPrimitiveComponent>(I.Place.Attach.Get())) Params.AddIgnoredComponent(Source);
+        FCollisionObjectQueryParams Objects;
+        Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+        Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+        Objects.AddObjectTypesToQuery(ECC_PhysicsBody);
+        for (const FVector& Offset : Offsets)
+            I.PendingRays.Add(World->AsyncLineTraceByObjectType(EAsyncTraceType::Multi, ListenerPos + Offset, I.Position, Objects, Params));
+    }
+    for (auto& [Name, Ray] : I.RayParameters)
+    {
+        const float Factor = Ray.Ramp.BuiltIn == FSCAudioRamp::BuiltInOcclusion ? I.RayTargets.X : I.RayTargets.Y;
+        Ray.Value = Ray.Ramp.Advance(Ray.Value, bProfileReady ? 100.f * Factor : Ray.Default, Seconds);
+    }
+}
+
+void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now, float Seconds)
 {
     const TSharedPtr<FSCAudioScene> SP = I.Scene.Pin();
     if (!SP) { I.Voices.Reset(); I.Runs.Reset(); return; }
@@ -1418,6 +1518,7 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
     }
     I.Runs.RemoveAll([](const FRun& R) { return R.ItemsLeft == 0 || R.NextAt >= kForever; });
     I.Position = PlacePosition(I);
+    UpdateOcclusion(I, S, Now, Seconds);
     if (const FString Env = EnvironmentAt(S, I, I.Position); Env != I.Environment)
     {
         for (FVoice& V : I.Voices)
@@ -2063,9 +2164,10 @@ void USCAudioSubsystem::Tick(float DeltaTime)
     }
     for (const TSharedRef<FSCAudioScene>& S : TArray<TSharedRef<FSCAudioScene>>(Scenes))
         if (S->Vehicle.IsValid()) UpdateAreasAndSpots(*S, Clock);
+    RayBatchesLeft = 8; // amortize asynchronous batches across active emitters
     for (auto It = Instances.CreateIterator(); It; ++It)
     {
-        UpdateInstance(It->Value, Clock);
+        UpdateInstance(It->Value, Clock, DeltaTime);
         if (It->Value.Voices.IsEmpty() && It->Value.Runs.IsEmpty() && (It->Value.bStopping || Clock > It->Value.StopAt)) It.RemoveCurrent();
     }
 }

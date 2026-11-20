@@ -3,6 +3,7 @@
 // RTPC values, meters writing game parameters, side-chain ducking, the Peak Limiter ceiling). No game data.
 #include "SCAudio.h"
 #include "SCAudioBusFx.h"
+#include "SCAudioRayOcclusion.h"
 #include "SCAudioStereoDirections.h"
 #include "Misc/AutomationTest.h"
 
@@ -601,5 +602,33 @@ bool FSCAudioStereoDirectionsTest::RunTest(const FString&)
     const FVector2f HardLeft(1.f, 0.f);
     FSCAudioStereoDirections::Render(RightImpulse, 1, 2, HardLeft, HardLeft);
     TestEqual(TEXT("the right source reaches the left output at a hard pan"), RightImpulse[0], 0.5f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioRayOcclusionTest, "SCBridge.Audio.RayOcclusion",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioRayOcclusionTest::RunTest(const FString&)
+{
+    const FSCAudioRayProfile Profile{0.3f, 500.f, 5.f};
+    const float Wall[] = {0.4f, 0.4f, 0.4f, 0.4f, 0.4f};
+    const FSCAudioRayLevels Covered = FSCAudioRayLevels::Reduce(Profile, 2.0, Wall);
+    TestTrue(TEXT("equal rays behind a wall give its obstruction coefficient as occlusion"),
+        FMath::IsNearlyEqual(Covered.Occlusion, 0.4f));
+    TestEqual(TEXT("equal rays at close range give zero separate obstruction"), Covered.Obstruction, 0.f);
+    const float Centre[] = {0.8f, 0.f, 0.f, 0.f, 0.f};
+    TestTrue(TEXT("the central ray's obstruction falls off beyond the full distance"),
+        FMath::IsNearlyEqual(FSCAudioRayLevels::Reduce(Profile, 10.0, Centre).Obstruction, 0.4f));
+    TestEqual(TEXT("very near ray target is neutral"), FSCAudioRayLevels::Reduce(Profile, 0.25, Wall).Occlusion, 0.f);
+    TestEqual(TEXT("out of range ray target is neutral"), FSCAudioRayLevels::Reduce(Profile, 501.0, Wall).Occlusion, 0.f);
+    TestEqual(TEXT("absent configuration does not invent a distance profile"),
+        FSCAudioRayLevels::Reduce({}, 2.0, Wall).Occlusion, 0.f);
+
+    const FString Json = TEXT(R"({"version":1,"game_parameters":{"71":{"ramp_type":2,"ramp_up":0.3,"ramp_down":0.3,"builtin":6}},
+        "surface_obstruction":{"mat_default":0.25,"mat_hollow":0.35}})");
+    FSCAudioManifest Data;
+    FString Error;
+    TestTrue(TEXT("ray fixture manifest parses"), FSCAudioManifest::Parse(Json, Data, Error));
+    TestTrue(TEXT("the STMG binding selects per-emitter occlusion"), Data.GameParameters.FindRef(71).IsRayParameter());
+    TestEqual(TEXT("the fallback retains the archive coefficient"), Data.SurfaceObstruction.FindRef(FName(TEXT("mat_default"))), 0.25f);
     return true;
 }

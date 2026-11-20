@@ -476,9 +476,14 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
         {
             const FObj P = Value->AsObject();
             Out.GameParameters.Add(Id(FString(*Key)), FSCAudioRamp{
-                float(Num(P, TEXT("ramp_up"))), float(Num(P, TEXT("ramp_down"))), uint8(Num(P, TEXT("ramp_type")))
+                float(Num(P, TEXT("ramp_up"))), float(Num(P, TEXT("ramp_down"))), uint8(Num(P, TEXT("ramp_type"))),
+                uint8(Num(P, TEXT("builtin")))
             });
         }
+    if (const FObj Surfaces = Obj(Root, TEXT("surface_obstruction")))
+        for (const auto& [Name, Value] : Surfaces->Values)
+            if (Value->Type == EJson::Number)
+                Out.SurfaceObstruction.Add(FName(*Name), FMath::Clamp(float(Value->AsNumber()), 0.f, 1.f));
     if (const FObj Contexts = Obj(Root, TEXT("game_contexts")))
         for (const auto& [Key, Value] : Contexts->Values)
         {

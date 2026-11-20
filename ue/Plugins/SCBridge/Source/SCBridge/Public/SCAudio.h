@@ -249,8 +249,11 @@ struct SCBRIDGE_API FSCAudioClass
 /** An Init.bnk game parameter's authored ramp from its current to target value. */
 struct SCBRIDGE_API FSCAudioRamp
 {
+    enum : uint8 { BuiltInObstruction = 5, BuiltInOcclusion = 6 };
     float Up = 0.f, Down = 0.f;
     uint8 Type = 0;
+    uint8 BuiltIn = 0;
+    bool IsRayParameter() const { return BuiltIn == BuiltInObstruction || BuiltIn == BuiltInOcclusion; }
     float Advance(float Current, float Target, float Seconds) const;
 };
 
@@ -274,6 +277,7 @@ struct SCBRIDGE_API FSCAudioManifest
     TMap<FString, FSCAudioGameContext> GameContexts;
     TMap<FString, uint32> RtpcIds;
     TMap<FString, float> RtpcDefaults; // ATL default, else the Wwise game-parameter default (Init.bnk STMG)
+    TMap<FName, float> SurfaceObstruction;
     TMap<FString, FSCAudioEnvironment> Environments;
     TMap<FString, FSCAudioRoom> Rooms;
     TMap<FString, FSCAudioClass> Classes; // by class GUID (lower case)
