@@ -89,12 +89,18 @@ public:
         Lpf.store(Levels.Lpf, std::memory_order_relaxed);
         Hpf.store(Levels.Hpf, std::memory_order_relaxed);
     }
+    /** Use the stereo output layout before posting this wave. The Ogg decoder keeps its own channel count. */
+    bool EnableStereoDirections();
+    void SetStereoDirectionGains(FVector2f Gains);
 
 private:
     FCriticalSection Lock;
     sc_audio_stream* Stream = nullptr;
     FSCAudioFilter Filter;
     std::atomic<float> Lpf{0.f}, Hpf{0.f};
+    bool bStereoDirections = false;
+    FVector2f PreviousDirectionGains = FVector2f::ZeroVector;
+    std::atomic<uint64> StereoDirectionGains{0};
     TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Bytes; // reopened per pass in the whole-file mode
     int32 LoopsLeft = 0;        // whole-file mode: remaining plays after the current one; INDEX_NONE = forever
     bool bWholeFile = false;
@@ -169,6 +175,7 @@ struct SCBRIDGE_API FSCAudioPlace
     FVector World = FVector::ZeroVector;    // when not attached and not in an interior
     int32 Interior = INDEX_NONE;            // placed audio: follows its interior's anchor at ContainerPos (metres)
     FVector ContainerPos = FVector::ZeroVector;
+    FVector DirectionalOffset = FVector::ZeroVector; // the same random displacement for each position in a spot
     FString Room;                           // room GUID for the reverb send ("" = from the position)
     float VolumeDb = 0, PitchCents = 0;     // the emitter's own (a spot's volume and pitch, with their random draws)
     float AttenuationScale = 1;
@@ -268,7 +275,7 @@ private:
         float StaticPitchCents = 0.f, LastPitchCents = 0.f;
         TArray<const FSCAudioRtpcCurve*> Dynamic; // curves on RTPCs that change while playing
         const FSCAudioAttenuation* Attenuation = nullptr;
-        bool bSpatial = false, bAux = false, bSent = false;
+        bool bSpatial = false, bStereoDirections = false, bAux = false, bSent = false;
         TObjectPtr<USoundSubmix> DrySubmix; // the voice's bus (a send: the base submix output is off)
         uint32 Bus = 0;
         float LastGain = 0, LastDistance = 0, LastSend = 0;

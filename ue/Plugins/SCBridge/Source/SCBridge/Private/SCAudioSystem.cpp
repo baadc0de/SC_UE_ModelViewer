@@ -11,12 +11,14 @@
 #include "scbridge.h"
 #include "AudioDevice.h"
 #include "AudioMixerBlueprintLibrary.h"
+#include "AudioMixerDevice.h"
 #include "Components/AudioComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "EffectConvolutionReverb.h"
 #include "SCAudioBusFx.h"
+#include "SCAudioStereoDirections.h"
 #include "ISubmixBufferListener.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
@@ -202,6 +204,22 @@ bool USCAudioWave::Init(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSaf
     return true;
 }
 
+bool USCAudioWave::EnableStereoDirections()
+{
+    if (Channels < 1 || Channels > 2) return false;
+    bStereoDirections = true;
+    NumChannels = 2;
+    return true;
+}
+
+void USCAudioWave::SetStereoDirectionGains(FVector2f Gains)
+{
+    static_assert(sizeof(Gains) == sizeof(uint64));
+    uint64 WireValue = 0;
+    FMemory::Memcpy(&WireValue, &Gains, sizeof(WireValue));
+    StereoDirectionGains.store(WireValue, std::memory_order_relaxed);
+}
+
 void USCAudioWave::OnBeginGenerate()
 {
     Super::OnBeginGenerate();
@@ -221,7 +239,8 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     const uint64 Now = FPlatformTime::Cycles64();
     FScopeLock Guard(&Lock);
     const int32 Ch = FMath::Max(1, Channels);
-    const int32 Frames = NumSamples / Ch;
+    const int32 OutputChannels = bStereoDirections ? 2 : Ch;
+    const int32 Frames = NumSamples / OutputChannels;
     // Health: was this pull later than the audio the last one returned lasts?
     if (const uint64 Last = Health.LastCycles.load(std::memory_order_relaxed); Last && Rate > 0)
     {
@@ -232,7 +251,7 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
             AtomicMax(Health.MaxGapUs, int32(FMath::Min(Late * 1e6, 2e9)));
         }
     }
-    OutAudio.SetNumZeroed(Frames * Ch * int32(sizeof(float)));
+    OutAudio.SetNumZeroed(Frames * OutputChannels * int32(sizeof(float)));
     float* Out = reinterpret_cast<float*>(OutAudio.GetData());
     if (!bAligned)
     {
@@ -283,6 +302,14 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     // A pull that finds the stream already ended means the mixer has consumed all of its audio: the voice is done.
     if (bWasEnded) Health.bFinished.store(true, std::memory_order_relaxed);
     Filter.Process(Out, Frames, Rate * Pitch.load(std::memory_order_relaxed), {Lpf.load(std::memory_order_relaxed), Hpf.load(std::memory_order_relaxed)});
+    if (bStereoDirections && Frames > 0)
+    {
+        const uint64 WireValue = StereoDirectionGains.load(std::memory_order_relaxed);
+        FVector2f Target;
+        FMemory::Memcpy(&Target, &WireValue, sizeof(Target));
+        FSCAudioStereoDirections::Render(Out, Frames, Ch, PreviousDirectionGains, Target);
+        PreviousDirectionGains = Target;
+    }
     const uint64 After = FPlatformTime::Cycles64();
     const int64 Ns = int64(CyclesToSeconds(After - Now) * 1e9);
     Health.DecodeNs.fetch_add(Ns, std::memory_order_relaxed);
@@ -293,7 +320,7 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
     uint64 Zero = 0;
     Health.FirstCycles.compare_exchange_strong(Zero, Now, std::memory_order_relaxed);
     Health.LastCycles.store(Now, std::memory_order_relaxed);
-    return Frames * Ch; // silence past the end
+    return Frames * OutputChannels; // silence past the end
 }
 
 void USCAudioWave::BeginDestroy()
@@ -1256,6 +1283,20 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     if (FAudioDeviceHandle Device = GetWorld()->GetAudioDevice())
     {
         Wave->ClockDevice = Device.GetAudioDevice();
+        if (V.bSpatial && S.Spots.IsValidIndex(I.Place.Spot) && S.Spots[I.Place.Spot].Positions.Num() > 1)
+        {
+            const Audio::FMixerDevice* Mixer = static_cast<const Audio::FMixerDevice*>(Wave->ClockDevice);
+            const bool bStereoLayout = [Mixer] {
+                const Audio::FScopedDeviceSwapLock Lock(Mixer->GetAudioMixerPlatform());
+                const auto& Channels = Mixer->GetChannelArray();
+                return Channels.Num() == 2 && Channels[0] == EAudioMixerChannel::FrontLeft && Channels[1] == EAudioMixerChannel::FrontRight;
+            }();
+            if (bStereoLayout)
+            {
+                V.bStereoDirections = Wave->EnableStereoDirections();
+                if (V.bStereoDirections) V.bSpatial = false;
+            }
+        }
         const bool bEpoch = Leaf.LoopCount == 0 && I.Place.EpochClock >= 0.0;
         Wave->ScheduledClock = (bEpoch ? I.Place.EpochClock : I.PostAudioClock) + (T0 - I.PostTime);
         Wave->bSeek = bEpoch;
@@ -1469,6 +1510,29 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
             if (!V.Attenuation->Hpf.IsEmpty()) Filters.Hpf += V.Attenuation->Hpf.Eval(Scaled);
             if (!V.Attenuation->VolumeAuxGame.IsEmpty()) AuxDb += V.Attenuation->VolumeAuxGame.EvalDb(Scaled);
         }
+        if (V.bStereoDirections && V.Wave && S.Spots.IsValidIndex(I.Place.Spot))
+        {
+            const FSCAudioPlaced& Spot = S.Spots[I.Place.Spot];
+            const FVector Forward = ListenerFwd.GetSafeNormal();
+            const FVector Right = ListenerRight.GetSafeNormal();
+            const FSCAudioTrigger* Trigger = S.Manifest.Triggers.Find(I.Trigger);
+            const double Reach = V.Attenuation && V.Attenuation->MaxDistance > 0.f ? V.Attenuation->MaxDistance
+                : Trigger ? Trigger->RadiusMax : 0.0;
+            FSCAudioStereoDirections Directions;
+            for (const FVector& At : Spot.Positions)
+            {
+                const FVector Offset = S.ContainerToWorld(Spot.Interior, At + I.Place.DirectionalOffset) - ListenerPos;
+                const double Metres = Offset.Length() / (100.0 * FMath::Max(0.01f, I.Place.AttenuationScale));
+                if (Reach > 0.0 && Metres > Reach) continue;
+                const double Front = FVector::DotProduct(Offset, Forward), Side = FVector::DotProduct(Offset, Right);
+                const double PlanarLength = FMath::Sqrt(FMath::Square(Front) + FMath::Square(Side));
+                const float Gain = !V.Attenuation || V.Attenuation->VolumeDry.IsEmpty()
+                    ? 1.f : FSCAudioGain::Linear(V.Attenuation->VolumeDry.EvalDb(Metres));
+                Directions.Add(PlanarLength > UE_SMALL_NUMBER ? float(Side / PlanarLength) : 0.f, Gain);
+            }
+            V.Wave->SetStereoDirectionGains(Directions.RelativeGains());
+            DryDb = Directions.Reference > 0.f ? 20.f * FMath::LogX(10.f, Directions.Reference) : -200.f;
+        }
         if (V.Wave && (FMath::Abs(Filters.Lpf - V.LastFilters.Lpf) >= 0.01f || FMath::Abs(Filters.Hpf - V.LastFilters.Hpf) >= 0.01f))
         {
             V.Wave->SetFilterLevels(Filters);
@@ -1668,11 +1732,12 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
             {
                 // playRandom spots play each time within radiusRandom along the enabled axes.
                 const float R = float(Num(Spot.Params, TEXT("radiusRandom")));
-                At += FVector(Flag(Spot.Params, TEXT("playOnX")) ? FMath::FRandRange(-R, R) : 0.f, Flag(Spot.Params, TEXT("playOnY")) ? FMath::FRandRange(-R, R) : 0.f,
-                              Flag(Spot.Params, TEXT("playOnZ")) ? FMath::FRandRange(-R, R) : 0.f);
+                P.DirectionalOffset = FVector(Flag(Spot.Params, TEXT("playOnX")) ? FMath::FRandRange(-R, R) : 0.f,
+                    Flag(Spot.Params, TEXT("playOnY")) ? FMath::FRandRange(-R, R) : 0.f,
+                    Flag(Spot.Params, TEXT("playOnZ")) ? FMath::FRandRange(-R, R) : 0.f);
             }
             P.Interior = Spot.Interior;
-            P.ContainerPos = At;
+            P.ContainerPos = At + P.DirectionalOffset;
             P.Room = Spot.Room;
             const float VR = float(Num(Spot.Params, TEXT("volumeRandomRange"))), PR = float(Num(Spot.Params, TEXT("pitchRandomRange")));
             P.VolumeDb = float(Num(Spot.Params, TEXT("volume"))) + (VR > 0 ? FMath::FRandRange(-VR, VR) : 0.f);
@@ -2113,8 +2178,9 @@ FString USCAudioSubsystem::Describe() const
                                   *ListenerRoom, *ListenerEnvironment);
     for (const auto& [Id, I] : Instances)
         for (const FVoice& V : I.Voices)
-            Out += FString::Printf(TEXT("  #%d %s \"%s\" dist_m=%.1f gain_db=%.1f send_db=%.1f env=%s bus=%u\n"), Id, *I.Trigger, *I.Place.Label, V.LastDistance, V.LastGain,
-                                   V.LastSend, *I.Environment, V.Bus);
+            Out += FString::Printf(TEXT("  #%d %s \"%s\" dist_m=%.1f gain_db=%.1f send_db=%.1f env=%s bus=%u stereo_directions=%d\n"),
+                                   Id, *I.Trigger, *I.Place.Label, V.LastDistance, V.LastGain, V.LastSend, *I.Environment, V.Bus,
+                                   V.bStereoDirections);
     return Out;
 }
 

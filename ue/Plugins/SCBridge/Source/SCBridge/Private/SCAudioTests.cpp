@@ -3,6 +3,7 @@
 // RTPC values, meters writing game parameters, side-chain ducking, the Peak Limiter ceiling). No game data.
 #include "SCAudio.h"
 #include "SCAudioBusFx.h"
+#include "SCAudioStereoDirections.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -559,5 +560,46 @@ bool FSCWwiseFilterBusTest::RunTest(const FString&)
     const double Attenuation = 10. * FMath::LogX(10., WetEnergy / DryEnergy);
     TestTrue(TEXT("the authored cutoff is about minus three decibels"), FMath::Abs(Attenuation + 3.) <= 0.25);
     TestEqual(TEXT("independent filter history per channel"), SilentChannelEnergy, 0.);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioStereoDirectionsTest, "SCBridge.Audio.StereoDirections",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioStereoDirectionsTest::RunTest(const FString&)
+{
+    FSCAudioStereoDirections MonoLeft, StereoPair;
+    MonoLeft.Add(-1.f, 0.25f);
+    StereoPair.Add(-1.f, 0.25f);
+    StereoPair.Add(1.f, 0.25f);
+    StereoPair.Add(-1.f, 0.25f);
+    TestTrue(TEXT("the left channel matches one position and does not sum duplicate positions"),
+        FMath::IsNearlyEqual(StereoPair.PerSpeaker.X, MonoLeft.PerSpeaker.X));
+    TestEqual(TEXT("the right channel matches one position"), StereoPair.PerSpeaker.Y, 0.25f);
+    MonoLeft.Add(1.f, 0.f);
+    TestTrue(TEXT("an inaudible direction does not affect either channel"),
+        MonoLeft.RelativeGains().Equals(FVector2f(1.f, 0.f), 1.e-6f));
+    FSCAudioStereoDirections Silent;
+    TestTrue(TEXT("no audible position gives a silent matrix"), Silent.RelativeGains().IsZero());
+
+    float Pcm[] = {0.25f, 0.5f, 0.75f, 0.f, 0.f, 0.f};
+    const FVector2f Equal = StereoPair.RelativeGains();
+    FSCAudioStereoDirections::Render(Pcm, 3, 1, FVector2f::ZeroVector, Equal);
+    TestTrue(TEXT("expands a single mono block backwards and smooths from silence"),
+        FMath::IsNearlyEqual(Pcm[0], 0.25f / 3.f) && FMath::IsNearlyEqual(Pcm[1], 0.25f / 3.f) &&
+        FMath::IsNearlyEqual(Pcm[2], 1.f / 3.f) && FMath::IsNearlyEqual(Pcm[3], 1.f / 3.f) &&
+        Pcm[4] == 0.75f && Pcm[5] == 0.75f);
+    float DistinctStereo[] = {0.25f, 0.75f};
+    FSCAudioStereoDirections::Render(DistinctStereo, 1, 2, Equal, Equal);
+    TestEqual(TEXT("preserves the source's left signal"), DistinctStereo[0], 0.25f);
+    TestEqual(TEXT("preserves the source's right signal"), DistinctStereo[1], 0.75f);
+    float LeftImpulse[] = {1.f, 0.f};
+    const FVector2f HardRight(0.f, 1.f);
+    FSCAudioStereoDirections::Render(LeftImpulse, 1, 2, HardRight, HardRight);
+    TestEqual(TEXT("the left source reaches the right output at a hard pan"), LeftImpulse[1], 0.5f);
+    TestEqual(TEXT("the opposite output is silent at a hard pan"), LeftImpulse[0], 0.f);
+    float RightImpulse[] = {0.f, 1.f};
+    const FVector2f HardLeft(1.f, 0.f);
+    FSCAudioStereoDirections::Render(RightImpulse, 1, 2, HardLeft, HardLeft);
+    TestEqual(TEXT("the right source reaches the left output at a hard pan"), RightImpulse[0], 0.5f);
     return true;
 }
