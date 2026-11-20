@@ -22,6 +22,7 @@ private:
     USCGarageSubsystem* Garage() const;
     const FSCGarageRow* Selected() const;
     void Refresh();
+    void SyncSelection(bool bRowsChanged);
     TSharedRef<SWidget> Details();
     void Retrieve(ESCGaragePlacement At);
     void Store();
@@ -32,6 +33,7 @@ private:
     TSharedPtr<SBox> DetailBody;
     TArray<FSCGarageRow> Fleet;
     FString Search;
+    FString LastSelectedEntity;
     FString DetailKey = TEXT("<uninitialized>");
     FString Error;
     FString ConfirmEntity;

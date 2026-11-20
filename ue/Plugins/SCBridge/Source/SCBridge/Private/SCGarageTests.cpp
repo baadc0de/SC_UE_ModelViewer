@@ -59,6 +59,9 @@ bool FSCGarageFleetCatalogTest::RunTest(const FString&)
     TestFalse(TEXT("a record with no geometry is not retrievable"), FSCGaragePolicy::IsFleetCandidate(Entry));
     Entry.GeometryPath = TEXT("synthetic.cgf");
     TestTrue(TEXT("the vehicle browser category determines eligibility"), FSCGaragePolicy::IsFleetCandidate(Entry));
+    Entry.DisplayName = TEXT("<= PLACEHOLDER =>");
+    TestFalse(TEXT("localization placeholders are excluded despite usable geometry"), FSCGaragePolicy::IsFleetCandidate(Entry));
+    Entry.DisplayName.Reset();
     Entry.Category = TEXT("Other");
     TestFalse(TEXT("props are not offered by the garage"), FSCGaragePolicy::IsFleetCandidate(Entry));
     return true;

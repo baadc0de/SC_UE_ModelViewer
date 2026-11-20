@@ -125,7 +125,7 @@ void SSCCalloutLayer::Gather(const FGeometry& Geometry)
                             Anchor, FBox(ForceInit), bSelected ? 7 : 4, bSelected);
                     }
         }
-        else if (Model->HasSource())
+        else if (Model->HasSource() && (!Model->IsOpen() || Model->GetApp() == ESCMobiGlasApp::Cargo))
         {
             // One callout per thing that moves as one: a box with the drones holding it, a team on its way to (or back
             // from) a box, a lone drone. A team is the drones that share a move; it joins its box while any of them holds

@@ -35,7 +35,11 @@ FString FSCGaragePolicy::BayRefusal(bool bOwned, bool bConfirmed, bool& bNeedsCo
 
 bool FSCGaragePolicy::IsFleetCandidate(const FSCEntityHit& Entity)
 {
-    return Entity.Category == TEXT("Ships") && !Entity.GeometryPath.IsEmpty();
+    const FString Name = Entity.DisplayName.TrimStartAndEnd();
+    // The game localization marks internal placeholders with <= ... =>. Their geometry makes them browser
+    // candidates, but they are not named fleet entries.
+    const bool bPlaceholder = Name.StartsWith(TEXT("<=")) && Name.EndsWith(TEXT("=>"));
+    return Entity.Category == TEXT("Ships") && !Entity.GeometryPath.IsEmpty() && !bPlaceholder;
 }
 
 bool FSCGaragePolicy::IsVehicleKiosk(const FSCUiBinding& Binding)
@@ -268,6 +272,9 @@ TArray<FSCGarageRow> USCGarageSubsystem::Rows(const FString& EntityFilter, bool 
         }
     }
     Out.Sort([](const FSCGarageRow& A, const FSCGarageRow& B) {
+        const bool bAActive = A.Status == ESCGarageStatus::InHangar || A.Status == ESCGarageStatus::Retrieving;
+        const bool bBActive = B.Status == ESCGarageStatus::InHangar || B.Status == ESCGarageStatus::Retrieving;
+        if (bAActive != bBActive) return bAActive;
         return A.DisplayName == B.DisplayName ? A.Entity < B.Entity : A.DisplayName < B.DisplayName;
     });
     return Out;

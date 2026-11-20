@@ -5,6 +5,7 @@
 #include "SCShipLinkSubsystem.h"
 #include "SCVehicle.h"
 #include "Engine/World.h"
+#include "Brushes/SlateColorBrush.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBox.h"
@@ -38,6 +39,27 @@ TSharedRef<SWidget> Future(const TCHAR* Name, const TCHAR* Description)
         ]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
         [SNew(STextBlock).Font(Body()).AutoWrapText(true).ColorAndOpacity(Ink2()).Text(Text(Description))];
+}
+
+const FTableViewStyle& FleetViewStyle()
+{
+    static const FTableViewStyle Style = FTableViewStyle().SetBackgroundBrush(FSlateColorBrush(Paper()));
+    return Style;
+}
+
+const FTableRowStyle& FleetRowStyle()
+{
+    static const FTableRowStyle Style = FTableRowStyle()
+        .SetEvenRowBackgroundBrush(FSlateColorBrush(Paper()))
+        .SetOddRowBackgroundBrush(FSlateColorBrush(Paper()))
+        .SetEvenRowBackgroundHoveredBrush(FSlateColorBrush(PaperDim()))
+        .SetOddRowBackgroundHoveredBrush(FSlateColorBrush(PaperDim()))
+        .SetActiveBrush(FSlateColorBrush(PaperDim()))
+        .SetInactiveBrush(FSlateColorBrush(PaperDim()))
+        .SetActiveHoveredBrush(FSlateColorBrush(PaperDim()))
+        .SetInactiveHoveredBrush(FSlateColorBrush(PaperDim()))
+        .SetTextColor(Ink()).SetSelectedTextColor(Ink());
+    return Style;
 }
 
 FString DetailsLine(const FSCGarageRow& Row)
@@ -76,6 +98,7 @@ void SSCGarage::Construct(const FArguments& Args)
         + SVerticalBox::Slot().FillHeight(1)
         [
             SAssignNew(List, SListView<TSharedPtr<FSCGarageRow>>).ListItemsSource(&Visible)
+            .ListViewStyle(&FleetViewStyle())
             .SelectionMode(ESelectionMode::Single)
             .OnSelectionChanged_Lambda([this](TSharedPtr<FSCGarageRow> Item, ESelectInfo::Type Type) {
                 if (!Item || Type == ESelectInfo::Direct) return;
@@ -89,8 +112,12 @@ void SSCGarage::Construct(const FArguments& Args)
                 FString Status = FSCGaragePolicy::StatusName(Item->Status);
                 if (Item->Status == ESCGarageStatus::InHangar) Status += FString::Printf(TEXT(" · %.0f m"), Item->DistanceM);
                 if (Item->Status == ESCGarageStatus::Retrieving && Item->Progress > 0) Status += FString::Printf(TEXT(" · %.0f%%"), 100 * Item->Progress);
-                return SNew(STableRow<TSharedPtr<FSCGarageRow>>, Table).Padding(FMargin(4, 8))
+                return SNew(STableRow<TSharedPtr<FSCGarageRow>>, Table).Style(&FleetRowStyle()).Padding(FMargin(8, 6))
                     [
+                        SNew(SVerticalBox)
+                        + SVerticalBox::Slot().AutoHeight()[HRule()]
+                        + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+                        [
                         SNew(SHorizontalBox)
                         + SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
                         [
@@ -105,6 +132,7 @@ void SSCGarage::Construct(const FArguments& Args)
                         ]
                         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0)
                         [Txt(FText::FromString(Caps(Status)), Label(), Ink2())]
+                        ]
                     ];
             })
         ];
@@ -179,18 +207,26 @@ void SSCGarage::Refresh()
     {
         bool bSame = true;
         for (int32 I = 0; I < Rows.Num() && bSame; ++I) bSame = Same(*Visible[I], Rows[I]);
-        if (bSame) return;
+        if (bSame) { SyncSelection(false); return; }
     }
     Visible.Reset();
     for (FSCGarageRow& Row : Rows) Visible.Add(MakeShared<FSCGarageRow>(MoveTemp(Row)));
     List->RequestListRefresh();
+    SyncSelection(true);
+}
+
+void SSCGarage::SyncSelection(bool bRowsChanged)
+{
+    if (Visible.IsEmpty()) return;
+    if (Model->GetGarageEntity().IsEmpty()) Model->SetGarageEntity(Visible[0]->Entity);
     const FString& SelectedEntity = Model->GetGarageEntity();
+    const bool bSelectionChanged = LastSelectedEntity != SelectedEntity;
+    if (!bRowsChanged && !bSelectionChanged) return;
+    LastSelectedEntity = SelectedEntity;
     if (const auto* Match = Visible.FindByPredicate([&](const auto& Row) { return Row->Entity.Equals(SelectedEntity, ESearchCase::IgnoreCase); }))
-        List->SetSelection(*Match, ESelectInfo::Direct);
-    else if (SelectedEntity.IsEmpty() && !Visible.IsEmpty())
     {
-        Model->SetGarageEntity(Visible[0]->Entity);
-        List->SetSelection(Visible[0], ESelectInfo::Direct);
+        List->SetSelection(*Match, ESelectInfo::Direct);
+        if (bSelectionChanged || (*Match)->Status == ESCGarageStatus::InHangar) List->RequestScrollIntoView(*Match);
     }
 }
 
