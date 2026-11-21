@@ -10,7 +10,7 @@ class FSCViewerModule final : public FDefaultGameModuleImpl
         FDefaultGameModuleImpl::StartupModule();
 #if WITH_EDITOR
         // The uncooked game uses the runtime importer. Skip editor Python initialization and its
-        // collection callback in this host; Python's startup still honors explicit opt-ins.
+        // collection callback in this host. Explicit Python launch options stay available.
         const TCHAR* CommandLine = FCommandLine::Get();
         if (!GIsEditor && !IsRunningCommandlet() && FParse::Param(CommandLine, TEXT("game")) &&
             !FParse::Param(CommandLine, TEXT("EnablePython")) &&

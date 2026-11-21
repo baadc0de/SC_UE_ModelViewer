@@ -7,7 +7,8 @@ engine once in the checkout (`Engine\Build\BatchFiles\Build.bat UnrealEditor Win
 project. Scripts (`ue/scripts/rpc/SCRpc.psm1` `Start-SCViewer`, `package_showcase.ps1`, the `.sh` helpers) take
 `-Engine` / `UE_ENGINE_ROOT` and default to `%USERPROFILE%\UnrealEngine-5.9-src` (`~/UnrealEngine-5.9-src`). The
 launcher (binary) engine, the Web / Wasm build and the NVIDIA RTX-fork (UE 5.8) build were removed in WP-E1 (E1-0).
-Editor-hosted `-game` sessions skip Python startup by default. Pass `-EnablePython` when a viewer session needs it.
+Editor-hosted -game sessions skip Python startup by default. Pass -EnablePython when a viewer session needs it.
+The game host's command-line flag has priority over the Editor Preferences Python override.
 The Lumen World Cache is off for now (plan D13); verification and the World Cache / G-buffer A/B routes:
 [verification/WP-U59.md](verification/WP-U59.md). The shader patches of plan D14 (`ue/EnginePatches`, written for the binary
 engine) are gone: WP-E1 replaced them with engine features (light falloff E1-2, projector shape E1-3, the game's SSDO E1-7:

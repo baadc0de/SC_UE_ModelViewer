@@ -301,14 +301,15 @@ the pattern. Unreal Insights showed a 31.86 ms room frame, 23.14 ms in `RHI_Subm
 22.47 ms in `OcclusionSubmittedFence Wait` on the render thread, and 25.78 ms of game-thread frame synchronization.
 GPU time in the associated CSV sample was 10.36 ms. `DeleteRHIResources` took less than 0.01 ms in that submit.
 
-Temporary trace scopes in the UE 5.9 fork narrowed the stall to the D3D12 end-of-frame fast upload allocator.
+Temporary trace scopes in the UE 5.9 fork located long waits in D3D12 end-of-frame allocator cleanup.
 In the next capture, `FD3D12FastAllocator::CleanupPages` took 18.63 ms of an 18.74 ms submit close, alongside
-18.98 ms waiting for the occlusion fence. A separate 5.46 ms sample was in default buffer-pool cleanup.
+18.98 ms waiting for the occlusion fence. That cleanup scope includes the wait for a lock shared with upload
+allocation. A separate 5.46 ms sample was in default buffer-pool cleanup.
 The overlap with mesh promotion in the first captures still leaves its role uncertain.
 
 The Windows project raises the fast upload page retention floor from 5 to 16 via
 `d3d12.FastAllocator.MinPagesToRetain`. With 4 MiB pages, the larger floor can retain up to 44 MiB of
-additional idle upload memory per D3D12 device once the pages have been allocated. Pages above the
+additional idle system memory per D3D12 device once the pages have been allocated. Pages above the
 floor still retire after their GPU fence and the engine's normal age check.
 
 With identical trace scopes, the five-page run retired 21 pages on the room route and had a 25.59 ms
@@ -328,8 +329,8 @@ Windows project settings and completed 67 promotions with no failures.
 
 The repeat's 37.66 ms frame followed a 33.84 ms RHI sample with 38.15 ms on the render thread,
 31.44 ms of game-thread event wait, and 9.74 ms of GPU time. This CSV recurrence leaves the exact
-allocator responsible for that sample unresolved. The setting reduced page retirement in the traced pair,
-and the large RHI stall remains possible. The two project-setting runs reached first person in
+allocator responsible for that sample unresolved. The traced pair showed less page retirement, and the
+CSV runs show mixed frame times. The two project-setting runs reached first person in
 70.29 and 69.74 seconds. The serial Win64 Development build and 15 audio and importer tests passed.
 
 The `rhi-before-*`, `rhi-allocator-*`, `rhi-fast-pages-*` and `rhi-final*` captures and timing-scope
