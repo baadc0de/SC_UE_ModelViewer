@@ -14,8 +14,54 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
+#include "SceneView.h"
+#include "SceneViewExtension.h"
+#include "UnrealClient.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCLookLighting, Log, All);
+
+namespace
+{
+TAutoConsoleVariable<int32> CVarNativeHDR(TEXT("sc.Look.NativeHDR"), 1,
+    TEXT("Use the display's native ACES output transform on HDR player views. 0: expand the game's SDR shoulder."));
+
+class FSCViewerDisplayOutput final : public FWorldSceneViewExtension
+{
+public:
+    FSCViewerDisplayOutput(const FAutoRegister& Register, UWorld* World) : FWorldSceneViewExtension(Register, World) {}
+    void SetupView(FSceneViewFamily& Family, FSceneView& View) override
+    {
+        SCLookLighting::ApplyDisplayOutput(Family, View, CVarNativeHDR.GetValueOnGameThread() != 0);
+    }
+};
+}
+
+TSharedRef<ISceneViewExtension, ESPMode::ThreadSafe> SCLookLighting::InstallDisplayOutput(UWorld& World)
+{
+    return FSceneViewExtensions::NewExtension<FSCViewerDisplayOutput>(&World);
+}
+
+void SCLookLighting::ApplyDisplayOutput(const FSceneViewFamily& Family, FSceneView& View, bool bNativeHDR)
+{
+    // H2's fixed output devices are independent of the monitor, including when the viewport advertises HDR.
+    if (!bNativeHDR || View.bIsSceneCapture || Family.SceneCaptureSource == SCS_FinalToneCurveHDR ||
+        Family.SceneCaptureSource == SCS_FinalColorHDR || !Family.RenderTarget || !Family.RenderTarget->GetSceneHDREnabled() ||
+        View.FinalPostProcessSettings.TonemappingMethod != ETonemappingMethod::HuePreservingShoulder) return;
+
+    switch (Family.RenderTarget->GetDisplayOutputFormat())
+    {
+    case EDisplayOutputFormat::HDR_ACES_1000nit_ST2084:
+    case EDisplayOutputFormat::HDR_ACES_2000nit_ST2084:
+    case EDisplayOutputFormat::HDR_ACES_1000nit_ScRGB:
+    case EDisplayOutputFormat::HDR_ACES_2000nit_ScRGB:
+        // Standard ACES consumes the graded scene signal, the target's actual peak and its paper white.
+        // The game's SDR shoulder saturates before UE can expand the signal for the display.
+        View.FinalPostProcessSettings.TonemappingMethod = ETonemappingMethod::StandardACES;
+        break;
+    default:
+        break;
+    }
+}
 
 void SCLookLighting::MigrateLookSettings()
 {

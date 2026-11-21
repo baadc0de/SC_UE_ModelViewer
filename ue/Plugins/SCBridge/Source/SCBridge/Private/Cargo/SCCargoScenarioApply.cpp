@@ -11,6 +11,7 @@
 #include "SCCargoFx.h"
 #include "SCViewerSettings.h"
 #include "SCViewerSubsystem.h"
+#include "SCShipLinkSubsystem.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -152,14 +153,19 @@ void USCCargoSubsystem::TryScenario()
         State->Player = S.Player;
         for (const auto& [Id, Label] : S.Owners) State->OwnerLabels.Add(Id, Label);
         State->ScenarioVehicleIds = {0};
-        State->VehicleOwners.Add(0, S.VehicleOwners.IsEmpty() ? S.Player : S.VehicleOwners[0]);
+        USCShipLinkSubsystem* ShipLink = USCShipLinkSubsystem::Get(this);
+        if (ShipLink)
+        {
+            ShipLink->SetScenarioPlayer(S.Player);
+            if (!S.VehicleOwners.IsEmpty()) ShipLink->SetOwner(0, S.VehicleOwners[0]);
+        }
         for (int32 I = 1; I < S.VehicleOwners.Num(); ++I)
         {
             // Placed where the scenario says (in space: floating there), else on free floor beside the first.
             const TOptional<FTransform>& Pose = S.VehiclePoses.IsValidIndex(I) ? S.VehiclePoses[I] : TOptional<FTransform>();
             const int32 Id = Pose ? Viewer->SpawnVehicleInstance(S.Ship, *Pose, /*bRest=*/!S.bSpace) : Viewer->SpawnVehicleInstance(S.Ship);
             State->ScenarioVehicleIds.Add(Id);
-            State->VehicleOwners.Add(Id, S.VehicleOwners[I]);
+            if (ShipLink) ShipLink->SetOwner(Id, S.VehicleOwners[I]);
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO vehicle=%d instance=%d owner=%s"), I, Id, *S.VehicleOwners[I].ToString());
         }
         // Obstacles (asteroids in space): entities placed as they are; drones and loads keep clear of them like any geometry.
@@ -172,7 +178,7 @@ void USCCargoSubsystem::TryScenario()
         // Grids found before the owners were known take them now.
         for (const auto& Pair : State->Grids)
             if (USCCargoGridComponent* G = Pair.Value.Get(); G && G->Kind == ESCCargoGridKind::Vehicle)
-                G->Owner = State->VehicleOwners.FindRef(FMath::Max(Viewer->GetVehicleInstanceId(G->OwnerVehicle.Get()), 0), State->Player);
+                G->Owner = ShipLink ? ShipLink->GetOwner(G->OwnerVehicle.Get()) : State->Player;
     }
     if (Viewer->IsSpawningVehicles()) return;
     if (!S.Ship.IsEmpty() && !Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))

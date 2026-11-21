@@ -10,6 +10,7 @@
 #include "Cargo/SCCargoRecords.h"
 #include "SCClipCatalog.h"
 #include "SCEnvironmentAccess.h"
+#include "SCShipLinkSubsystem.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "SCViewerSubsystem.h"
@@ -133,7 +134,9 @@ void USCCargoSubsystem::DiscoverOn(ASCVehicle* Actor, ESCCargoGridKind Kind)
     const FString Owner = Kind == ESCCargoGridKind::Vehicle && Viewer && Instance == 0 && !Viewer->GetLoadedEntity().IsEmpty() ? Viewer->GetLoadedEntity()
                                                                                                                              : M.Root.EntityName;
     // A vehicle belongs to whom the scenario says (the player by default); the hangar's grids are shared.
-    const FName GridOwner = Kind == ESCCargoGridKind::Vehicle ? State->VehicleOwners.FindRef(FMath::Max(Instance, 0), State->Player) : NAME_None;
+    const USCShipLinkSubsystem* ShipLink = USCShipLinkSubsystem::Get(this);
+    const FName GridOwner = Kind == ESCCargoGridKind::Vehicle
+        ? (ShipLink ? ShipLink->GetOwner(Actor) : State->Player) : NAME_None;
     const bool bSeveral = Viewer && Viewer->GetVehicles().Num() + int32(Viewer->IsSpawningVehicles()) > 1;
     int32 Found = 0;
     for (int32 C = 0; C < M.InventoryContainers.Num(); ++C)
@@ -247,14 +250,30 @@ void USCCargoSubsystem::UpdateAccess(USCCargoGridComponent* Grid, double Now)
     ++Revision;
 }
 
-bool USCCargoSubsystem::RequestAccess(USCCargoGridComponent* Grid, bool bOpen, double Now)
+bool USCCargoSubsystem::RequestAccess(USCCargoGridComponent* Grid, bool bOpen, double Now, FName Requester, FString* OutRefusal)
 {
     // A grid of the access rule is opened on request: whatever poses clear its corridors (a ship's doors through their own
     // interaction, FSCEnvironmentAccess), again whenever a door it opened was closed since (UpdateAccess). It does not close
     // (the rule has no closing pose); a mechanism of its own (Movers) is driven below either way.
+    if (Grid->Kind == ESCCargoGridKind::Vehicle && Requester.IsNone()) Requester = State->Player;
+    ASCVehicle* Vehicle = Grid->OwnerVehicle.Get();
+    const auto* ShipLink = USCShipLinkSubsystem::Get(this);
+    if (bOpen && Vehicle && Grid->AccessDoors.ContainsByPredicate([&](int32 Door) {
+        return Vehicle->ShipDoors.IsValidIndex(Door) &&
+            (Vehicle->ShipDoors[Door].bLocked || Vehicle->ShipDoors[Door].bCargoRelock);
+    }) && (!ShipLink || ShipLink->RoleOf(Requester, Vehicle) != ESCShipRole::Owner))
+    {
+        if (OutRefusal) *OutRefusal = TEXT("Hold locked by owner");
+        return false;
+    }
     if (Grid->bAccessRule && bOpen && !Grid->bAccessOpened)
     {
-        const FSCAccessResult Opened = FSCEnvironmentAccess::OpenGrid(Grid);
+        const FSCAccessResult Opened = FSCEnvironmentAccess::OpenGrid(Grid, Requester);
+        if (!Opened.Refusal.IsEmpty())
+        {
+            if (OutRefusal) *OutRefusal = Opened.Refusal;
+            return false;
+        }
         Grid->ReadyAt = Now;
         Grid->AccessDoors.Reset();
         for (const FSCAccessMove& Move : Opened.Moves)
@@ -264,7 +283,6 @@ bool USCCargoSubsystem::RequestAccess(USCCargoGridComponent* Grid, bool bOpen, d
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_GRID_ENV_ACCESS id=%d rigs_tested=%d rigs_moved=%d doors=%d on_request=1"), Grid->GridId, Opened.RigsTested,
                Opened.Moves.Num(), Grid->AccessDoors.Num());
     }
-    ASCVehicle* Vehicle = Grid->OwnerVehicle.Get();
     int32 Played = 0;
     float Seconds = 0;
     for (const FSCCargoMover& M : Grid->Movers)
@@ -285,6 +303,33 @@ bool USCCargoSubsystem::RequestAccess(USCCargoGridComponent* Grid, bool bOpen, d
                Played, Seconds);
     UpdateAccess(Grid, Now);
     return Grid->Access == (bOpen ? ESCCargoGridAccess::Open : ESCCargoGridAccess::Closed);
+}
+
+bool USCCargoSubsystem::IsAccessDoorBusy(const ASCVehicle* Ship, int32 Door) const
+{
+    if (!State) return false;
+    for (const auto& Pair : State->Grids)
+        if (const USCCargoGridComponent* Grid = Pair.Value.Get();
+            Grid && Grid->OwnerVehicle.Get() == Ship && Grid->bAccessRule &&
+            (Grid->AccessDoors.Contains(Door) || (Ship->ShipDoors.IsValidIndex(Door) && Ship->ShipDoors[Door].bCargoRelock)) &&
+            State->Jobs.ContainsByPredicate([&](const FSCCargoJob& Job) {
+                return Job.IsActive() && Job.Moves.ContainsByPredicate([&](const FSCCargoMove& Move) {
+                    return Move.Plan.FromGrid == Grid->GridId || Move.Plan.ToGrid == Grid->GridId;
+                });
+            })) return true;
+    return false;
+}
+
+bool USCCargoSubsystem::IsVehicleTransferActive(const ASCVehicle* Ship) const
+{
+    if (!State || !Ship) return false;
+    return State->Jobs.ContainsByPredicate([&](const FSCCargoJob& Job) {
+        return Job.IsActive() && Job.Moves.ContainsByPredicate([&](const FSCCargoMove& Move) {
+            for (const int32 GridId : {Move.Plan.FromGrid, Move.Plan.ToGrid})
+                if (const auto* Grid = FindGrid(GridId); Grid && Grid->OwnerVehicle.Get() == Ship) return true;
+            return false;
+        });
+    });
 }
 
 bool USCCargoSubsystem::CanClose(const USCCargoGridComponent* Grid, FText* OutWhy, int32 IgnoreJob) const

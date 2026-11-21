@@ -16,6 +16,9 @@ class ASCViewerPawn;
 class ASCFirstPersonCharacter;
 class USCViewOptions;
 class FSCImportJob;
+struct FSCImportOptions;
+class FSCProcessedCache;
+class FSCGeometryStreaming;
 class FSCFolderPackageSource;
 class FSCPackageSource;
 class FSCTarPackageSource;
@@ -73,6 +76,9 @@ struct SCBRIDGE_API FSCLoadReport
     UPROPERTY(BlueprintReadOnly, Category = "SC") int64 TarBytes = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int64 CacheBytes = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int64 CacheEntries = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 CachedMeshes = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 MeshBuilds = 0;
+    UPROPERTY(BlueprintReadOnly, Category = "SC") int32 CollisionBuilds = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Assets = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Instances = 0;
     UPROPERTY(BlueprintReadOnly, Category = "SC") int32 Warnings = 0;
@@ -135,6 +141,14 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveError() const { return ArchiveError.ToString(); }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveLabel() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetCacheDir() const { return CacheDir; }
+    FSCCacheStats GetProcessedCacheStats() const;
+    void ConfigureProcessedImport(FSCImportOptions& Options, bool bFolderPackage = false) const;
+    void PrepareGeometryForCapture();
+    void LogGeometryStreaming() const;
+    void ClearProcessedCache();
+    void SetProcessedCacheCap(int32 MiB);
+    bool CanRebuildLoadedEntity() const;
+    bool RebuildLoadedEntity();
     /** Incremented by every OpenArchive: reuse keys and search results are scoped to one archive session. */
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") int32 GetArchiveGeneration() const { return int32(ArchiveGeneration); }
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForArchive(float TimeoutSeconds = 300.f);
@@ -151,6 +165,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool LoadEntity(const FString& Entity, USCViewOptions* Options);
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void CancelLoad();
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void Unload();
+    /** Garage lifecycle for the primary slot. Extra vehicle instances stay where they are. */
+    bool LoadGarageVehicle(const FString& Entity);
+    bool StoreGaragePrimary();
+    int32 SpawnGarageFloorVehicle(const FString& Entity);
     /** Pumps the pipeline on the calling (game) thread until the load finishes; for commandlets and tests. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForLoad(float TimeoutSeconds = 600.f);
     /** Pumps until the pipeline reaches Phase (or finishes); lets tests cancel inside a given phase. */
@@ -289,7 +307,8 @@ private:
     void StepLoad(bool bBlocking);
     void StartImport();
     void FinishLoad(ESCLoadPhase Result, const FString& Error);
-    void UnloadInternal(bool bCollect);
+    void UnloadInternal(bool bCollect, bool bKeepExtras = false);
+    bool bGarageLoad = false;
     void CompleteSearches(bool bBlocking);
     void LogPhaseChange();
     /** Archive lost to an FFI panic: leave Ready so the overlay offers Choose/Retry. */
@@ -309,9 +328,13 @@ private:
     uint32 ArchiveGeneration = 0;
     FText ArchiveError;
     FString ArchivePath, CacheDir;
+    FString ArchiveBuildId;
     UE::Tasks::TTask<FSCOpenResult> OpenTask;
     double OpenSeconds = 0;
     FSCCacheStats CacheStats;
+    TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
+    TSharedPtr<FSCGeometryStreaming> GeometryStreaming;
+    bool bGeometryCapturePrepared = false;
 
     struct FPendingSearch
     {
@@ -327,6 +350,7 @@ private:
     ESCLoadPhase Phase = ESCLoadPhase::Idle;
     FSCLoadReport Report;
     FString PendingEntity, PendingKey, LoadedEntity, LoadedKey;
+    bool bRebuildProcessed = false;
     double LoadStart = 0, ParseStart = 0, ImportStart = 0;
     FString LastPhaseKey;
     TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> ExportProgress;

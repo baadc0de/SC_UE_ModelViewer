@@ -402,9 +402,19 @@ void USCCargoSubsystem::TickJobs(float DeltaSeconds)
         {
             // Vehicle grids extend by their mechanism; environment grids are made reachable by the environment (doors, lights).
             bool bOpen = true;
+            FString Refusal;
             for (const int32 Id : Involved(J))
                 if (USCCargoGridComponent* G = FindGrid(Id))
-                    bOpen &= G->bAccessRule ? EnvironmentAccess(G, true) : RequestAccess(G, true, Now);
+                {
+                    const FName Requester = G->Kind == ESCCargoGridKind::Vehicle ? RequesterOf(J.Request) : NAME_None;
+                    bOpen &= RequestAccess(G, true, Now, Requester, &Refusal);
+                    if (!Refusal.IsEmpty()) break;
+                }
+            if (!Refusal.IsEmpty())
+            {
+                AbandonJob(J, FText::FromString(Refusal), Now);
+                continue;
+            }
             if (bOpen) SetJobState(J, ESCCargoJobState::Moving);
         }
         if (J.State == ESCCargoJobState::Moving)

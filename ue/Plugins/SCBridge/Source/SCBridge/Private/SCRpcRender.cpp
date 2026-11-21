@@ -330,6 +330,7 @@ bool FSCRpcRender::Start(UWorld* InWorld, const TSharedPtr<FJsonObject>& Body, F
         if (Step->Type != EJson::Object || (Value(Step->AsObject(), TEXT("at"), -1) < 0 || Value(Step->AsObject(), TEXT("at"), -1) > (Total - 1) / Fps))
         { Error = TEXT("steps require a nonnegative at"); return false; }
     Steps.StableSort([](const auto& A, const auto& B) { return Value(A->AsObject(), TEXT("at"), 0) < Value(B->AsObject(), TEXT("at"), 0); });
+    if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(InWorld)) Viewer->PrepareGeometryForCapture();
     Request = Body; World = InWorld; ApplyCamera = MoveTemp(Camera);
     if (Body->TryGetArrayField(TEXT("setup"), Array))
         for (const auto& Step : *Array)

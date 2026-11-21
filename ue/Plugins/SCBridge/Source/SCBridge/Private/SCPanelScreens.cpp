@@ -42,6 +42,12 @@ int32 ASCVehicle::RefreshPanelScreens()
                            ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); });
                 }));
                 Key = DoorOpenStateKey(IsRigOpen(Rig), bMoving);
+                if (IsDoorLocked(DoorForRig(Rig)))
+                {
+                    const FString Lock = TEXT("DoorLockState.DoorLocked");
+                    const FString Combined = Lock + TEXT("+") + Key;
+                    Key = Face.States.Contains(Combined) ? Combined : Lock;
+                }
             }
         }
         const TWeakObjectPtr<UMaterialInterface>* State = Face.States.Find(Key);

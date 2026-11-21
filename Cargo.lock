@@ -1254,6 +1254,8 @@ dependencies = [
  "starbreaker-datacore",
  "starbreaker-dds",
  "starbreaker-p4k",
+ "starbreaker-wem",
+ "starbreaker-wwise",
  "tar",
  "tempfile",
 ]

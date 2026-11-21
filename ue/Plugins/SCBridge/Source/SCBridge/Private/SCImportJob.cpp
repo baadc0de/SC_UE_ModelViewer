@@ -8,10 +8,15 @@
 #include "SCVehicle.h"
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
+#include "SCProcessedCache.h"
+#include "SCGeometryStreaming.h"
+#include "SCProcessedMeshCache.h"
+#include "SCProcessedTextureCache.h"
 #include "SCSkeletonBuilder.h"
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCLightAreas.h"
+#include "SCGarageSubsystem.h"
 #include "SCAudioSystem.h"
 #include "SCDirt.h"
 #include "SCEmissiveLights.h"
@@ -25,6 +30,7 @@
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
 #include "Rendering/SkeletalMeshRenderData.h"
+#include "Rendering/NaniteResources.h"
 #include "StaticMeshResources.h"
 #include "Async/Async.h"
 #include "Async/TaskGraphInterfaces.h"
@@ -35,6 +41,10 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/Material.h"
 #include "Misc/Paths.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#endif
 #include "UObject/Package.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Misc/ScopeExit.h"
@@ -48,6 +58,7 @@ namespace
 // Unique assets whose derivation may run ahead of the game-thread build: one per worker thread, at most MaxDeriveLookAhead
 // (bounds peak CPU mesh memory; a resource budget, not game data). A large ship has ~500 assets.
 constexpr int32 MaxDeriveLookAhead = 12;
+constexpr int32 PerVehicleTriangleBudget = 500000;
 int32 DeriveLookAhead() { return FMath::Clamp(FTaskGraphInterface::Get().GetNumWorkerThreads(), 3, MaxDeriveLookAhead); }
 // Fractions of the whole import assigned to each stage, for the progress bar only.
 constexpr float ReadShare = 0.05f, MeshShare = 0.80f, MaterialShare = 0.05f;
@@ -75,8 +86,22 @@ struct FEntity
 };
 struct FPart
 {
+    struct FCacheVariant
+    {
+        FString Key;
+        TUniquePtr<FSCProcessedCache::FReadPin> Pin;
+        // A full processed hit can keep just the source selection and the light-channel samples.
+        TArray<FTriangleID> SplitTriangles;
+        TArray<FVector3f> LightSamples;
+        bool bDisableNanite = false;
+        TUniquePtr<FSCDerivedMesh> Coarse;
+        double Deviation = 0;
+    };
     int32 Owner = INDEX_NONE;
     FSCDerivedMesh Mesh, Translucent;
+    FCacheVariant OpaqueCache, TranslucentCache;
+    TArray<FTriangleID> CollisionTriangles; // unsplit source for collision and for a deferred unsplit description
+    bool bDeferredGeometry = false;
     bool bGamePhysics = false; // WP-P3: the game's colliders of Owner; hidden, blocks the pawn only
 };
 /** One unique mesh asset moving through derive -> prepare -> build. */
@@ -86,7 +111,9 @@ struct FMeshSlot
     TUniquePtr<FSCDerivedMesh> Data = MakeUnique<FSCDerivedMesh>();
     TFuture<bool> Derive;
     FString DeriveError;
-    double DeriveSeconds = 0;
+    double DeriveSeconds = 0, DeriveWaitStart = 0, DeriveWaitSeconds = 0;
+    double PrepareSeconds = 0, PrepareWaitStart = 0;
+    int32 DeferredRigidParts = 0;
     bool bDeriveLaunched = false, bDeriveWarned = false;
     TFuture<void> Prepare;
     bool bPrepareLaunched = false;
@@ -120,6 +147,9 @@ struct FSCImportJob::FState
     FSCImportOptions Options;
     FSCImportResult Result;
     FSCImportTimings Timings;
+    int32 CachedNaniteStreamable = 0, CachedNaniteDemandPaged = 0;
+    int32 FineTrianglesDeferred = 0;
+    TSet<UStaticMesh*> OpaqueProxies;
     ESCImportStage Stage = ESCImportStage::Reading;
     std::atomic<bool> bCancel{false};
     double Start = 0;
@@ -143,6 +173,8 @@ struct FSCImportJob::FState
     TWeakObjectPtr<ASCVehicle> Spawned; // never cleared: lets hosts account for a destroyed partial actor
     TArray<TObjectPtr<UObject>> KeepAlive; // session packages between build steps
     FString Session;
+    FString MeshCacheNamespace;
+    bool bDeferCachedRigidGeometry = true;
     FSCImportMaterials Materials;
     TFuture<void> MaterialPrep;
     double MaterialStart = 0;
@@ -193,6 +225,9 @@ struct FSCImportJob::FState
     void LaunchDerives();
     bool StepMesh(bool bBlocking);
     void LaunchPrepare(FMeshSlot& Slot);
+    bool DeferCachedRigidPart(FPart& Part, const FSCDerivedMesh& Data, TArray<FTriangleID>& Triangles,
+        const TSet<int32>& TranslucentSlots, const FString& BaseKey);
+    void ProbeMeshCache(FPart::FCacheVariant& Variant, const FString& Key);
     void BeginBuild(FMeshSlot& Slot);
     void BuildNextVariant(FMeshSlot& Slot);
     void FinishBuild(FMeshSlot& Slot);
@@ -426,8 +461,12 @@ FString FSCImportJob::GetPhase() const
         if (!S->Slots.IsValidIndex(S->Current)) return TEXT("Building meshes");
         const FMeshSlot& Slot = S->Slots[S->Current];
         if (Slot.bBuildBegun)
-            return FString::Printf(TEXT("Building mesh %d/%d (part %d/%d)"), S->Current + 1, N, FMath::Min(Slot.NextPart + 1, Slot.Parts.Num()),
-                                   Slot.Parts.Num());
+        {
+            const FPart* Part = Slot.Parts.IsValidIndex(Slot.NextPart) ? &Slot.Parts[Slot.NextPart] : nullptr;
+            const bool bCached = Part && (Slot.bTranslucentNext ? Part->TranslucentCache : Part->OpaqueCache).Pin;
+            return FString::Printf(TEXT("%s mesh %d/%d (part %d/%d)"), bCached ? TEXT("Loading cached") : TEXT("Building"),
+                S->Current + 1, N, FMath::Min(Slot.NextPart + 1, Slot.Parts.Num()), Slot.Parts.Num());
+        }
         const TCHAR* Step = !Slot.bPrepareLaunched ? TEXT("Deriving mesh")
                             : S->Options.bBuildCollision ? TEXT("Deriving collision") : TEXT("Preparing mesh");
         return FString::Printf(TEXT("%s %d/%d"), Step, S->Current + 1, N);
@@ -542,6 +581,12 @@ bool FSCImportJob::FState::StepRead(bool bBlocking)
 void FSCImportJob::FState::Begin()
 {
     Session = TEXT("/Temp/SC/") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    if (Options.ProcessedCache && Options.ProcessedCache->IsEnabled() && !Options.CacheArchiveBuild.IsEmpty())
+        MeshCacheNamespace = FSCProcessedCache::Key(Options.CacheArchiveBuild, SCProcessedMeshCache::RenderFormat());
+#if WITH_DEV_AUTOMATION_TESTS
+    // Compare the same valid warm packages with and without rebuilding CPU descriptions.
+    bDeferCachedRigidGeometry = !FParse::Param(FCommandLine::Get(), TEXT("SCDisableDeferredRigidGeometry"));
+#endif
     FActorSpawnParameters Spawn;
     Spawn.ObjectFlags |= RF_Transient;
     Vehicle = Options.World->SpawnActor<ASCVehicle>(ASCVehicle::StaticClass(), Options.ActorTransform, Spawn);
@@ -570,7 +615,8 @@ void FSCImportJob::FState::Begin()
         FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
         MaterialPrep = Async(EAsyncExecution::ThreadPool, [this] {
             Materials.Describe(Manifest);
-            Materials.Decode(*Source);
+            const FSCTextureCacheRequest Cache{Options.ProcessedCache.Get(), Options.CacheArchiveBuild, Options.bRebuildProcessed};
+            Materials.Decode(*Source, &Cache);
         });
     }
     auto CollectSidecar = [&](const FSCSceneInstance& I) { Sidecars.AddUnique(I.MeshAsset, I.MaterialSidecar); };
@@ -603,11 +649,51 @@ void FSCImportJob::FState::LaunchDerives()
     }
 }
 
+void FSCImportJob::FState::ProbeMeshCache(FPart::FCacheVariant& Variant, const FString& Key)
+{
+    Variant.Key = FSCProcessedCache::Key(MeshCacheNamespace, Key);
+    if (!Options.bRebuildProcessed) Variant.Pin = Options.ProcessedCache->PinEntry(Variant.Key);
+}
+
+bool FSCImportJob::FState::DeferCachedRigidPart(FPart& Part, const FSCDerivedMesh& Data, TArray<FTriangleID>& Triangles,
+    const TSet<int32>& TranslucentSlots, const FString& BaseKey)
+{
+    if (!bDeferCachedRigidGeometry || !Part.OpaqueCache.Pin) return false;
+    TArray<FTriangleID> Opaque, Blend;
+    if (!TranslucentSlots.IsEmpty())
+        for (FTriangleID Triangle : Triangles)
+            (TranslucentSlots.Contains(Data.Description.GetTrianglePolygonGroup(Triangle).GetValue()) ? Blend : Opaque).Add(Triangle);
+
+    const bool bSplit = !Opaque.IsEmpty() && !Blend.IsEmpty();
+    if (bSplit)
+    {
+        ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
+        if (!Part.TranslucentCache.Pin) return false;
+        Part.TranslucentCache.SplitTriangles = MoveTemp(Blend);
+        Part.OpaqueCache.SplitTriangles = MoveTemp(Opaque);
+        Part.TranslucentCache.LightSamples = FSCLightAreas::Sample(Data.Description, Part.TranslucentCache.SplitTriangles);
+        Part.TranslucentCache.bDisableNanite = true;
+        Part.Translucent.SocketNode = Part.Owner;
+        Part.Translucent.bHasGeometry = true;
+    }
+
+    Part.OpaqueCache.bDisableNanite = !bSplit && !Blend.IsEmpty();
+    Part.OpaqueCache.LightSamples = FSCLightAreas::Sample(Data.Description, bSplit ? Part.OpaqueCache.SplitTriangles : Triangles);
+    Part.Mesh.SocketNode = Part.Owner;
+    Part.Mesh.bHasGeometry = true;
+    Part.CollisionTriangles = MoveTemp(Triangles);
+    Part.bDeferredGeometry = true;
+    return true;
+}
+
 void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
 {
     Slot.bPrepareLaunched = true;
+    Slot.PrepareWaitStart = FPlatformTime::Seconds();
     // Runs while no game-thread build is in flight: it is the only writer of the clip catalogue at this time.
     Slot.Prepare = Async(EAsyncExecution::ThreadPool, [this, &Slot] {
+        const double PrepareStart = FPlatformTime::Seconds();
+        ON_SCOPE_EXIT { Slot.PrepareSeconds = FPlatformTime::Seconds() - PrepareStart; };
         FSCDerivedMesh& Data = *Slot.Data;
         const FString& Path = Slot.Path;
         TSet<int32> TranslucentSlots = Data.BlendedSlots;
@@ -695,21 +781,57 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
         TArray<int32> Owners;
         Rigid.GetKeys(Owners);
         Owners.Sort();
+        FString SplitKey;
+        if (!MeshCacheNamespace.IsEmpty())
+        {
+            TArray<int32> SortedSlots = TranslucentSlots.Array();
+            SortedSlots.Sort();
+            for (int32 MaterialSlot : SortedSlots) SplitKey += FString::Printf(TEXT(",%d"), MaterialSlot);
+        }
         for (int32 Owner : Owners)
         {
             FPart Part;
             Part.Owner = Owner;
+            FString BaseKey;
+            if (!MeshCacheNamespace.IsEmpty() && !Data.ContentHash.IsEmpty())
+            {
+                BaseKey = FSCProcessedCache::Key(Path,
+                    FString::Printf(TEXT("%s|owner=%d|animated=%d|split=%s"), *Data.ContentHash, Owner, Slot.bAnimated, *SplitKey));
+                ProbeMeshCache(Part.OpaqueCache, BaseKey + (Options.bBuildCollision ? TEXT("|visual+collision") : TEXT("|visual")));
+            }
+            if (DeferCachedRigidPart(Part, Data, Rigid[Owner], TranslucentSlots, BaseKey))
+            {
+                ++Slot.DeferredRigidParts;
+                Slot.Parts.Add(MoveTemp(Part));
+                continue;
+            }
             Part.Mesh = FSCMeshImporter::Select(Data, Rigid[Owner]);
             Part.Mesh.SocketNode = Owner;
             // Collision includes all triangles of this owner, including glass/decal split, as in U1.
             FString Error;
-            if (Options.bBuildCollision && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
+            if (Options.bBuildCollision && !Part.OpaqueCache.Pin && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
             {
                 Slot.PrepareWarnings.Emplace(Path, Error);
                 continue;
             }
+            if (Options.bBuildCollision && Part.OpaqueCache.Pin)
+                Part.CollisionTriangles = MoveTemp(Rigid[Owner]);
             Slot.CollisionSeconds += Part.Mesh.CollisionDeriveSeconds;
             FSCMeshImporter::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
+            if (Part.Translucent.bHasGeometry && !BaseKey.IsEmpty() && Part.TranslucentCache.Key.IsEmpty())
+                ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
+            if (Options.GeometryStreaming && !Options.bRebuildProcessed && ScreenSlots.IsEmpty())
+            {
+                auto PrepareCoarse = [&](FPart::FCacheVariant& Cache, const FSCDerivedMesh& Variant) {
+                    if (Cache.Pin || !Variant.bHasGeometry ||
+                        Variant.Description.Triangles().Num() > PerVehicleTriangleBudget - FineTrianglesDeferred) return;
+                    auto Coarse = MakeUnique<FSCDerivedMesh>();
+                    if (Options.GeometryStreaming->Reduce(Variant, *Coarse, Cache.Deviation))
+                        Cache.Coarse = MoveTemp(Coarse);
+                };
+                PrepareCoarse(Part.OpaqueCache, Part.Mesh);
+                PrepareCoarse(Part.TranslucentCache, Part.Translucent);
+            }
             Slot.Parts.Add(MoveTemp(Part));
         }
         // WP-P3: the game's colliders, one collision-only part per owner (the rig node they move with).
@@ -729,8 +851,11 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                 Part.bGamePhysics = true;
                 Part.Mesh = FSCMeshImporter::SelectPhysics(Data, Owner);
                 if (!Part.Mesh.bHasGeometry) continue;
+                if (!MeshCacheNamespace.IsEmpty() && !Data.ContentHash.IsEmpty())
+                    ProbeMeshCache(Part.OpaqueCache, FSCProcessedCache::Key(Path,
+                        FString::Printf(TEXT("%s|physics=%d|animated=%d"), *Data.ContentHash, Owner, Slot.bAnimated)));
                 FString Error;
-                if (!FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
+                if (!Part.OpaqueCache.Pin && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
                 {
                     Slot.PrepareWarnings.Emplace(Path, Error);
                     Slot.bGamePhysicsFailed = true;
@@ -754,10 +879,13 @@ bool FSCImportJob::FState::StepMesh(bool bBlocking)
     FMeshSlot& Slot = Slots[Current];
     if (!Slot.bPrepareLaunched)
     {
+        if (Slot.DeriveWaitStart <= 0.) Slot.DeriveWaitStart = FPlatformTime::Seconds();
         if (!bBlocking && !Slot.Derive.IsReady()) return false;
         const bool bOK = Slot.Derive.Get();
         Slot.Derive = TFuture<bool>();
+        Slot.DeriveWaitSeconds = FPlatformTime::Seconds() - Slot.DeriveWaitStart;
         Timings.Derive += Slot.DeriveSeconds;
+        Timings.DeriveWait += Slot.DeriveWaitSeconds;
         if (!bOK)
         {
             Warn(Slot.Path, Slot.DeriveError);
@@ -775,11 +903,16 @@ bool FSCImportJob::FState::StepMesh(bool bBlocking)
         if (!bBlocking && !Slot.Prepare.IsReady()) return false;
         Slot.Prepare.Wait();
         Slot.Prepare = TFuture<void>();
+        const double PrepareWait = FPlatformTime::Seconds() - Slot.PrepareWaitStart;
+        Timings.Prepare += Slot.PrepareSeconds;
+        Timings.PrepareWait += PrepareWait;
+        Timings.DeferredRigidParts += Slot.DeferredRigidParts;
         for (const auto& W : Slot.PrepareWarnings)
             Warn(W.Key, W.Value);
         Timings.Collision += Slot.CollisionSeconds;
         if (Options.bBuildCollision)
-            UE_LOG(LogSCImport, Display, TEXT("COLLISION_DERIVE mesh=%s exact_s=%.6f"), *Slot.Path, Slot.CollisionSeconds);
+            UE_LOG(LogSCImport, Display, TEXT("COLLISION_DERIVE mesh=%s exact_s=%.6f derive_worker_s=%.4f derive_wait_s=%.4f prepare_worker_s=%.4f prepare_wait_s=%.4f deferred_rigid_parts=%d"),
+                *Slot.Path, Slot.CollisionSeconds, Slot.DeriveSeconds, Slot.DeriveWaitSeconds, Slot.PrepareSeconds, PrepareWait, Slot.DeferredRigidParts);
     }
     const double BuildStart = FPlatformTime::Seconds(); // game-thread build time only, not the wait for workers
     ON_SCOPE_EXIT { Timings.Build += FPlatformTime::Seconds() - BuildStart; };
@@ -834,11 +967,80 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
                                          : Slot.Variants.IsEmpty() ? TEXT("") : FString::Printf(TEXT("_Node%d"), Part.Owner);
     const FString Suffix = Slot.PartSuffix + (bTranslucent ? TEXT("_Translucent") : TEXT(""));
     FSCDerivedMesh& Variant = bTranslucent ? Part.Translucent : Part.Mesh;
+    auto& Cached = bTranslucent ? Part.TranslucentCache : Part.OpaqueCache;
+    const bool bNeedsCollision = !bTranslucent && Options.bBuildCollision;
     FSCMeshBuildStats Stats;
     FString AssetError;
-    UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)),
-                                                     !bTranslucent && Options.bBuildCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats,
-                                                     AssetError);
+    bool bUsesCoarse = false;
+    UStaticMesh* Mesh = Cached.Pin ? SCProcessedMeshCache::Load(*Options.ProcessedCache, *Cached.Pin, Stats) : nullptr;
+    Cached.Pin.Reset();
+    if (Mesh)
+    {
+        ++Result.CachedMeshes;
+        const FStaticMeshRenderData* Render = Mesh->GetRenderData();
+        if (Render->HasValidNaniteData() && Render->NaniteResourcesPtr->HasStreamingData())
+        {
+            ++CachedNaniteStreamable;
+            CachedNaniteDemandPaged += !Render->NaniteResourcesPtr->StreamablePages.IsBulkDataLoaded();
+        }
+    }
+    else
+    {
+        if (Part.bDeferredGeometry)
+        {
+            const auto& Triangles = Cached.SplitTriangles.IsEmpty() ? Part.CollisionTriangles : Cached.SplitTriangles;
+            Variant = FSCMeshImporter::Select(*Slot.Data, Triangles);
+            Variant.SocketNode = Part.Owner;
+            Variant.bEnableNanite &= !Cached.bDisableNanite;
+        }
+        if (bNeedsCollision && Variant.CollisionBytes.IsEmpty())
+        {
+            // The package failed to load despite valid disk checksums. Re-create
+            // collision from the same unsplit triangles used on a regular miss.
+            if (Part.bGamePhysics || (Part.bDeferredGeometry && Cached.SplitTriangles.IsEmpty()))
+                FSCMeshImporter::DeriveCollision(Variant, AssetError);
+            else
+            {
+                FSCDerivedMesh Unsplit = FSCMeshImporter::Select(*Slot.Data, Part.CollisionTriangles);
+                if (FSCMeshImporter::DeriveCollision(Unsplit, AssetError))
+                {
+                    Variant.CollisionBytes = MoveTemp(Unsplit.CollisionBytes);
+                    Variant.CollisionVersions = MoveTemp(Unsplit.CollisionVersions);
+                    Variant.CollisionDeriveSeconds = Unsplit.CollisionDeriveSeconds;
+                }
+            }
+            Timings.Collision += Variant.CollisionDeriveSeconds;
+        }
+        Result.MeshBuilds += Variant.bHasGeometry;
+        Result.CollisionBuilds += bNeedsCollision && Variant.bHasGeometry;
+        const FName Name(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix));
+        FName ExactName = Name;
+        if (Cached.Coarse && Variant.Description.Triangles().Num() <= PerVehicleTriangleBudget - FineTrianglesDeferred &&
+            Options.GeometryStreaming->CanDefer(Variant))
+        {
+            Mesh = FSCMeshImporter::Instantiate(*Cached.Coarse, Slot.Package, Name,
+                bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError, true);
+            bUsesCoarse = Mesh != nullptr;
+            if (bUsesCoarse)
+                Mesh->SetExtendedBounds(Variant.Description.GetBounds());
+            else
+            {
+                ExactName = MakeUniqueObjectName(Slot.Package, UStaticMesh::StaticClass(), Name);
+                Stats = {};
+                AssetError.Reset();
+            }
+        }
+        if (!Mesh)
+            Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, ExactName,
+                bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
+        if (Mesh && !Cached.Key.IsEmpty())
+        {
+            if (!bUsesCoarse && Options.GeometryStreaming)
+                Options.GeometryStreaming->QueueWrite(Mesh, Variant, Stats, Options.ProcessedCache, Cached.Key);
+            else if (!bUsesCoarse)
+                SCProcessedMeshCache::Store(*Options.ProcessedCache, Cached.Key, *Mesh, Variant, Stats);
+        }
+    }
     if (!Mesh)
     {
         Warn(Path + Suffix, AssetError);
@@ -849,10 +1051,17 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         Vehicle->Meshes.Add(Mesh);
         Vehicle->SourcePaths.Add(Mesh, Path + Suffix);
         if (Part.bGamePhysics) Slot.GamePhysicsVariants.Add(Slot.Variants.Num());
-        else Vehicle->MeshSamples.Add(Mesh, FSCLightAreas::Sample(Variant.Description));
+        else Vehicle->MeshSamples.Add(Mesh, Part.bDeferredGeometry ? MoveTemp(Cached.LightSamples) : FSCLightAreas::Sample(Variant.Description));
         Slot.Variants.Add(Mesh);
         SocketNodes.FindOrAdd(Path).Add(Variant.SocketNode);
         Result.MeshStats.Add(Path + Suffix, Stats);
+        if (bUsesCoarse)
+        {
+            if (Variant.bEnableNanite) OpaqueProxies.Add(Mesh);
+            FineTrianglesDeferred += Variant.Description.Triangles().Num();
+            Options.GeometryStreaming->Defer(Vehicle, Mesh, MoveTemp(Variant), Path + Suffix, Cached.Deviation,
+                bNeedsCollision, Options.ProcessedCache, Cached.Key);
+        }
         UE_LOG(LogSCImport, Display,
                TEXT("MESH path=%s%s triangles=%d nanite=%s clusters=%d fallback=%d cards=%d collision=%d build_s=%.4f"), *Path, *Suffix,
                Stats.Triangles, *Stats.NaniteReason, Stats.Clusters, Stats.FallbackTriangles, Stats.Cards, Stats.bCollision,
@@ -927,8 +1136,8 @@ bool FSCImportJob::FState::StepMaterials(bool bBlocking)
         Result.MaterialSeconds = FPlatformTime::Seconds() - MaterialStart;
         Result.TextureCount = T.Created;
         Result.MaterialCount = Materials.MaterialCount;
-        UE_LOG(LogSCImport, Display, TEXT("TEXTURES requested=%d created=%d failed=%d bytes=%lld decode_s=%.4f create_s=%.4f"), T.Requested,
-               T.Created, T.Failed, T.Bytes, T.DecodeSeconds, T.CreateSeconds);
+        UE_LOG(LogSCImport, Display, TEXT("TEXTURES requested=%d created=%d failed=%d bytes=%lld decode_s=%.4f create_s=%.4f png_cache_hits=%d"),
+               T.Requested, T.Created, T.Failed, T.Bytes, T.DecodeSeconds, T.CreateSeconds, T.Cached);
         FString Masters;
         for (const auto& Pair : Materials.MasterCounts)
             Masters += FString::Printf(TEXT(" %s=%d"), FSCMaterialBuilder::MasterName(Pair.Key), Pair.Value);
@@ -1020,41 +1229,49 @@ void FSCImportJob::FState::Assemble()
         return ResolveHelper(E, I.EntityName, I.ParentEntityName, I.ParentNodeName, bHelper);
     };
     int32 RenderInstances = 0;
+    TArray<UStaticMeshComponent*> DeferredRegistration;
     double RegisterSeconds = 0, LightSeconds = 0, RigSeconds = 0;
     // Host paint channel depends only on (sidecar, mesh asset); HostChannel parses submaterial JSON, so compute once.
     TMap<TPair<FString, FString>, FString> HostChannels;
-    auto HostFor = [&](const FSCSceneInstance& I, const FSCMaterialSet* Set, const FSCDerivedMesh& Mesh) -> const FString& {
-        const TPair<FString, FString> Key(I.MaterialSidecar, I.MeshAsset);
+    auto HostFor = [&](const FString& Sidecar, const FString& Asset, const FSCMaterialSet* Set, const FSCDerivedMesh& Mesh) -> const FString& {
+        const TPair<FString, FString> Key(Sidecar, Asset);
         if (const FString* Found = HostChannels.Find(Key)) return *Found;
-        return HostChannels.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
+        return HostChannels.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(Asset)));
     };
-    // Paints: each slot a paint touches keeps that paint's instance (built by the material phase) beside the one bound now.
-    TMap<TPair<FString, FString>, FString> PaintHosts;
-    auto RecordPaint = [&](const FSCSceneInstance& I, UMeshComponent* C, int32 Slot, const FSCDerivedMesh& Mesh)
+    // A split mesh can bind the same slot on many components. Compute its paint material list once for each
+    // (mesh, sidecar, palette, slot) and use it for both the soft rig and rigid companions.
+    using FPaintMaterials = TArray<TWeakObjectPtr<UMaterialInterface>>;
+    using FPaintsBySlot = TMap<int32, FPaintMaterials>;
+    TMap<TTuple<FString, FString, FString>, FPaintsBySlot> PaintVariants;
+    auto RecordPaint = [&](const FSCSceneInstance& I, UMeshComponent* C, int32 Slot, const FSCDerivedMesh& Mesh, FPaintsBySlot* Slots)
     {
-        if (Manifest.Paints.IsEmpty() || !C) return;
-        FSCPaintSlot Entry;
+        if (!Slots) return;
+        const FPaintMaterials* Variants = Slots->Find(Slot);
+        if (!Variants)
+        {
+            FPaintMaterials& MaterialsForSlot = Slots->Add(Slot);
+            bool bAny = false;
+            MaterialsForSlot.Reserve(Manifest.Paints.Num());
+            FString Sidecar, Palette;
+            for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
+            {
+                UMaterialInterface* Material = nullptr;
+                if (Manifest.PaintTarget(I, Paint, Sidecar, Palette))
+                    if (const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
+                        if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
+                            Material = Materials.Find(Sidecar, Palette, Sub->Index, HostFor(Sidecar, I.MeshAsset, Set, Mesh));
+                MaterialsForSlot.Add(Material);
+                bAny |= Material != nullptr;
+            }
+            if (!bAny) MaterialsForSlot.Reset();
+            Variants = &MaterialsForSlot;
+        }
+        if (Variants->IsEmpty()) return;
+        FSCPaintSlot& Entry = V->PaintSlots.AddDefaulted_GetRef();
         Entry.Component = C;
         Entry.Slot = Slot;
         Entry.Default = C->GetMaterial(Slot);
-        bool bAny = false;
-        for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
-        {
-            FString Sidecar, Palette;
-            UMaterialInterface* Material = nullptr;
-            if (Manifest.PaintTarget(I, Paint, Sidecar, Palette))
-                if (const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
-                    if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
-                    {
-                        const TPair<FString, FString> Key(Sidecar, I.MeshAsset);
-                        const FString* Host = PaintHosts.Find(Key);
-                        if (!Host) Host = &PaintHosts.Add(Key, FSCImportMaterials::HostChannel(Set, Mesh.MaterialSourceNames, MeshSlotTriangles.FindRef(I.MeshAsset)));
-                        Material = Materials.Find(Sidecar, Palette, Sub->Index, *Host);
-                    }
-            Entry.Paints.Add(Material);
-            bAny |= Material != nullptr;
-        }
-        if (bAny) V->PaintSlots.Add(MoveTemp(Entry));
+        Entry.Paints = *Variants;
     };
     // WP-I1: each screen face (a slot drawn by a screen master with triangles in the drawn variant / LOD) shows the
     // image its own binding resolves to (FSCSceneInstance::ScreenSlotImage); every other screen face stays dark glass.
@@ -1080,6 +1297,9 @@ void FSCImportJob::FState::Assemble()
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
+        FSCThrusterBinding Thruster;
+        FPaintsBySlot* Paints = Manifest.Paints.IsEmpty() || !E.Mesh ? nullptr
+            : &PaintVariants.FindOrAdd(TTuple<FString, FString, FString>(I.MeshAsset, I.MaterialSidecar, I.PaletteId));
         bool bScreenBound = false;
         ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };
         const TMap<int32, TArray<int32>>* ScreenOwners = MeshScreenOwners.Find(I.MeshAsset);
@@ -1141,15 +1361,16 @@ void FSCImportJob::FState::Assemble()
             if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->Buttons.IsEmpty())
             {
                 const TMap<int32, FSCScreenFaceGeometry>* MeshFaces = Binding->Buttons.IsEmpty() ? nullptr : MeshScreenGeometry.Find(I.MeshAsset);
-                if (const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr; Captured && !I.EntityId.IsEmpty())
+                if (const FSCScreenFaceGeometry* Captured = MeshFaces ? MeshFaces->Find(Slot) : nullptr; Captured && (!I.EntityId.IsEmpty() || !I.PortPath.IsEmpty()))
                 {
                     FSCButtonFace Operable;
                     Operable.Geometry = Captured->Select(Owner, bSoft);
                     if (!Operable.Geometry.Positions.IsEmpty())
                     {
                         Operable.Component = Target; Operable.Slot = Slot; Operable.Panel = E.Anchor;
-                        Operable.Interior = PlacingInterior; Operable.EntityId = I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
+                        Operable.Interior = PlacingInterior; Operable.EntityId = I.EntityId.IsEmpty() ? SCCargoRecords::PortKey(I.PortPath) : I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
                         Operable.Buttons = Binding->Buttons; Operable.ImageSizePx = Binding->ImageSizePx;
+                        Operable.bHideDoorLockControl = Binding->bHideDoorLockControl;
                         Operable.StateTypes = Binding->StateTypes; Operable.StateImages = Binding->PanelStateImages(); Operable.DefaultImage = Image;
                         Operable.MakeMaterial = [Mats = &Materials, Sidecar = I.MaterialSidecar, Palette = I.PaletteId, Ordinal = Sub->Index](UTexture* Img) -> UMaterialInterface* {
                             return Mats->CreateScreen(Sidecar, Palette, Ordinal, Img);
@@ -1207,14 +1428,16 @@ void FSCImportJob::FState::Assemble()
             E.Rig->SetVisibility(!I.bInvisible);
             E.Rig->SetHiddenInGame(I.bInvisible);
             const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
-            const FString& Host = HostFor(I, Set, *E.Mesh);
+            const FString Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh); // paint lookup can grow HostChannels
             for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 if (const auto* Sub = FSCImportMaterials::Resolve(Set, E.Mesh->MaterialSourceNames, Slot))
                     if (auto* Mat = Materials.Find(I.MaterialSidecar, I.PaletteId, Sub->Index, Host))
                     {
                         UMaterialInterface* Screen = ScreenMaterial(Sub, Slot, INDEX_NONE, SkeletalSlotTriangles(*RigMesh, Slot), true, E.Rig);
                         E.Rig->SetMaterial(Slot, Screen ? Screen : Mat);
-                        if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh); // a panel's image does not follow the paint
+                        if (!I.ThrusterEffects.IsEmpty() && !Screen && V->EngineGlowMaterials.Contains(Mat))
+                            Thruster.Materials.AddUnique(Cast<UMaterialInstanceDynamic>(Mat));
+                        if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh, Paints); // a panel's image does not follow the paint
                     }
             const double RigStart = FPlatformTime::Seconds();
             E.Rig->RegisterComponent();
@@ -1271,11 +1494,8 @@ void FSCImportJob::FState::Assemble()
                 C->SetHiddenInGame(I.bInvisible);
                 const UStaticMesh* Mesh = (*Variants)[Variant];
                 const TSet<int32>& Translucent = MeshTranslucentSlots.FindRef(I.MeshAsset);
-#if WITH_EDITOR
-                const bool bNanite = Mesh->IsNaniteEnabled();
-#else
-                const bool bNanite = Mesh->HasValidNaniteData(); // IsNaniteEnabled is editor-only; cooked meshes carry the data
-#endif
+                // Cooked cache packages strip the editor settings even when their Nanite resources are valid.
+                const bool bNanite = Mesh->HasValidNaniteData() || OpaqueProxies.Contains(Mesh);
                 if (!bNanite && !Translucent.IsEmpty())
                 {
                     // Glass/decal/screen split: lit by Lumen but not part of its scene (no cards, no DF).
@@ -1287,7 +1507,7 @@ void FSCImportJob::FState::Assemble()
                 ON_SCOPE_EXIT { BindSeconds += FPlatformTime::Seconds() - BindStart; };
                 const FSCMaterialSet* Set =
                     Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == I.MaterialSidecar; });
-                const FString& Host = HostFor(I, Set, *E.Mesh);
+                const FString Host = HostFor(I.MaterialSidecar, I.MeshAsset, Set, *E.Mesh); // paint lookup can grow HostChannels
                 TArray<int32> GlowSlots;
                 for (int32 Slot = 0; Set && Slot < E.Mesh->MaterialNames.Num(); ++Slot)
                 {
@@ -1301,11 +1521,23 @@ void FSCImportJob::FState::Assemble()
                     if (!Material && !bNanite && Translucent.Contains(Slot)) Material = Materials.Invisible();
                     if (Material) C->SetMaterial(Slot, Material);
                     // A panel's image does not follow the paint.
-                    if (Material && Material != Materials.Invisible() && !Screen) RecordPaint(I, C, Slot, *E.Mesh);
-                    if (Material && V->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
+                    if (Material && Material != Materials.Invisible() && !Screen) RecordPaint(I, C, Slot, *E.Mesh, Paints);
+                    if (Material && V->EngineGlowMaterials.Contains(Material))
+                    {
+                        GlowSlots.Add(Slot);
+                        if (!I.ThrusterEffects.IsEmpty()) Thruster.Materials.AddUnique(Cast<UMaterialInstanceDynamic>(Material));
+                    }
                 }
                 const double RegisterStart = FPlatformTime::Seconds();
-                C->RegisterComponent();
+                if (Options.bInstanceRepeatedParts && GlowSlots.IsEmpty() && !E.Rig && !C->ComponentHasTag(FSCInstancing::KeepTag))
+                {
+                    // Give room and dirt classification a world transform without creating a scene proxy or a
+                    // physics body that instancing would immediately destroy.
+                    C->UpdateComponentToWorld();
+                    C->UpdateBounds();
+                    DeferredRegistration.Add(C);
+                }
+                else C->RegisterComponent();
                 RegisterSeconds += FPlatformTime::Seconds() - RegisterStart;
                 ++RenderInstances;
                 for (int32 Slot : GlowSlots) // engine-glow diagnostics: binding, visibility, bounds
@@ -1314,6 +1546,57 @@ void FSCImportJob::FState::Assemble()
                            *I.EntityName, *C->GetName(), Slot, bNanite, C->IsVisible(), *C->Bounds.BoxExtent.ToString(),
                            *C->GetMaterial(Slot)->GetName());
             }
+        }
+        for (const FSCThrusterEffect& Source : I.ThrusterEffects)
+        {
+            USceneComponent* Anchor = Source.bParent ? Parent : E.Anchor;
+            auto BindEmitter = [&](USceneComponent* Mount, FName Socket, const FTransform& Offset) {
+                if (!Mount) return;
+                FSCThrusterEmitter& Emitter = Thruster.Emitters.AddDefaulted_GetRef();
+                Emitter.Source = Source;
+                Emitter.Source.Offset = Offset;
+                Emitter.Mount = Mount;
+                Emitter.Socket = Socket;
+            };
+            if (Source.Bone.IsEmpty())
+            {
+                BindEmitter(Anchor, NAME_None, Source.Offset);
+                continue;
+            }
+            const int32 Before = Thruster.Emitters.Num();
+            USceneComponent* Rig = Source.bParent ? Parent : E.Rig;
+            TSet<FName> Animated;
+            const FName Exact(*Source.Bone);
+            if (Rig && Rig->DoesSocketExist(Exact))
+            {
+                BindEmitter(Rig, Exact, Source.Offset);
+                Animated.Add(Exact);
+            }
+            else if (USkinnedMeshComponent* MeshRig = Cast<USkinnedMeshComponent>(Rig))
+            {
+                TArray<FName> Bones;
+                MeshRig->GetBoneNames(Bones);
+                for (FName Bone : Bones)
+                    if (Bone.ToString().MatchesWildcard(Source.Bone, ESearchCase::IgnoreCase))
+                    {
+                        BindEmitter(Rig, Bone, Source.Offset);
+                        Animated.Add(Bone);
+                    }
+            }
+            if (E.Mesh && !Source.bParent)
+                for (const auto& Node : E.Mesh->Nodes)
+                    if (Node.Key.MatchesWildcard(Source.Bone, ESearchCase::IgnoreCase) && !Animated.Contains(FName(*Node.Key)))
+                        BindEmitter(Anchor, NAME_None, Source.Offset * FTransform(FSCMeshImporter::Transform(Node.Value)));
+            if (Thruster.Emitters.Num() == Before)
+                Warn(I.EntityName, TEXT("Thruster attachment not found: ") + Source.Bone);
+        }
+        if (!Thruster.Emitters.IsEmpty())
+        {
+            Thruster.Rig = E.Rig;
+            Thruster.NozzleAnimation = I.NozzleAnimation;
+            Thruster.Glow = I.ThrusterGlow;
+            Thruster.bHasGlow = I.bHasThrusterGlow;
+            V->Thrusters.Add(MoveTemp(Thruster));
         }
         const double LightStart = FPlatformTime::Seconds();
         FSCLightImporter::Build(
@@ -1398,6 +1681,7 @@ void FSCImportJob::FState::Assemble()
                             if (B.IsOperatingPanel() && !B.bPropagated) // the panel's own screen, not one it carries for another entity
                             {
                                 V->SetPanelReach(Placed.Anchor, B.InteractionDistance);
+                                V->RememberDoorPanelLabel(Rig, B);
                                 PanelsWithoutReachField += !B.bInteractionDistanceExported;
                             }
                     }
@@ -1460,6 +1744,7 @@ void FSCImportJob::FState::Assemble()
         FSCLightAreas::Register(V, Container, Interior.RoomVolumeJson, bHelper, Result.Warnings);
         TMap<FString, FEntity> ById; // entity ids are unique within one container
         TMap<int32, FEntity> ByPlacement;
+        const int32 FirstDeferred = DeferredRegistration.Num();
         for (int32 PlacementIndex = 0; PlacementIndex < Interior.Placements.Num(); ++PlacementIndex)
             if (const auto& P = Interior.Placements[PlacementIndex]; CanPlace(P))
             {
@@ -1479,7 +1764,16 @@ void FSCImportJob::FState::Assemble()
                 WaypointSources[WaypointIndex].Anchor = NewAnchor(TEXT("Waypoint_") + Interior.Entities[Candidate.Index].EntityName, Container,
                                                       ContainerFrame(Interior.Entities[Candidate.Index].LocalMatrix, bHelper));
             else if (const FEntity* Placed = ByPlacement.Find(Candidate.Index); Placed && Candidate.Source == ESCWaypointSource::Panel)
+            {
                 WaypointSources[WaypointIndex].Anchor = Placed->Anchor;
+                if (Placed->Anchor && Interior.Placements.IsValidIndex(Candidate.Index))
+                    for (const FSCUiBinding& Binding : Interior.Placements[Candidate.Index].UiBindings)
+                        if (FSCGaragePolicy::IsVehicleKiosk(Binding))
+                        {
+                            V->GarageKiosks.Add(Placed->Anchor, Binding.InteractionDistance * 100.f);
+                            break;
+                        }
+            }
         }
         if (Audio)
         {
@@ -1506,6 +1800,7 @@ void FSCImportJob::FState::Assemble()
                         if (B.IsOperatingPanel() && !B.bPropagated)
                         {
                             V->SetPanelReach(Panel->Anchor, B.InteractionDistance);
+                            V->RememberDoorPanelLabel(Door->Rig, B);
                             PanelsWithoutReachField += !B.bInteractionDistanceExported;
                         }
                     break;
@@ -1556,6 +1851,13 @@ void FSCImportJob::FState::Assemble()
         Container->GetChildrenComponents(true, Descendants);
         for (const auto* C : Descendants)
             if (const auto* Primitive = Cast<UPrimitiveComponent>(C); Primitive && Primitive->IsCollisionEnabled()) Floor += Primitive->Bounds.GetBox();
+        for (int32 Index = FirstDeferred; Index < DeferredRegistration.Num(); ++Index)
+        {
+            UStaticMeshComponent* Component = DeferredRegistration[Index];
+            Component->UpdateComponentToWorld();
+            Component->UpdateBounds();
+            if (Component->IsCollisionEnabled() && Component->IsAttachedTo(Container)) Floor += Component->Bounds.GetBox();
+        }
         // The container's largest room stands on its floor; without rooms, the bounds of what collides (a container's
         // collision can reach far below its rooms, e.g. a ship's lift down to the ground).
         FVector RoomFloor;
@@ -1606,14 +1908,25 @@ void FSCImportJob::FState::Assemble()
     UE_LOG(LogSCImport, Display, TEXT("PAINTS variants=%d slots=%d"), Manifest.Paints.Num(), V->PaintSlots.Num());
     UE_LOG(LogSCImport, Display, TEXT("LIGHTS components=%d"), V->Lights.Num());
     UE_LOG(LogSCImport, Display, TEXT("PHYSICS_GRID triangles=%d hull_colliders=%d"), V->PhysicsGridTriangles.Num() / 3, V->HullColliders.Num());
+    const double RoomStart = FPlatformTime::Seconds();
     FSCLightAreas::Apply(V); // after every light and placement exists, in the rest pose
+    const double RoomSeconds = FPlatformTime::Seconds() - RoomStart;
     FSCDirt::MarkExterior(V); // exterior = outside every room, from the channels just set
     FSCDirt::Push(V->GetWorld());
     if (Options.bInstanceRepeatedParts) // after light areas and dirt set channels / custom data, before emissive proxies attach
     {
-        const FSCInstancingStats Instancing = FSCInstancing::Consolidate(V);
-        UE_LOG(LogSCImport, Display, TEXT("INSTANCING components=%d consolidated=%d instanced_components=%d"), Instancing.Components,
-               Instancing.Consolidated, Instancing.Instanced);
+        const FSCInstancingStats Instancing = FSCInstancing::Consolidate(V, DeferredRegistration);
+        int32 Registered = 0;
+        for (UStaticMeshComponent* Component : DeferredRegistration)
+            if (IsValid(Component) && !Component->IsBeingDestroyed())
+            {
+                const double RegisterStart = FPlatformTime::Seconds();
+                Component->RegisterComponent();
+                RegisterSeconds += FPlatformTime::Seconds() - RegisterStart;
+                ++Registered;
+            }
+        UE_LOG(LogSCImport, Display, TEXT("INSTANCING components=%d consolidated=%d instanced_components=%d before_registration=%d registered_individually=%d"),
+               Instancing.Components, Instancing.Consolidated, Instancing.Instanced, DeferredRegistration.Num() - Registered, Registered);
     }
     if (!V->Lights.IsEmpty()) FSCEmissive::SetLumen(V, USCViewerSettings::Get()->bEmissiveInLumen); // ships and environments, not the player kit
     if (EffectOnlySkipped) UE_LOG(LogSCImport, Display, TEXT("EFFECT_ONLY_PLACEMENTS skipped=%d"), EffectOnlySkipped);
@@ -1624,10 +1937,17 @@ void FSCImportJob::FState::Assemble()
         V->BuildExploration();
         FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
     }
+    if (Options.GeometryStreaming) Options.GeometryStreaming->Attach(V);
     Result.Vehicle = V;
     Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;
     Timings.Assemble = FPlatformTime::Seconds() - AssembleStart;
+    if (!MeshCacheNamespace.IsEmpty())
+    {
+        const bool bCommitted = Options.ProcessedCache->Flush();
+        UE_LOG(LogSCImport, Display, TEXT("PROCESSED_CACHE meshes_hit=%d mesh_builds=%d collision_builds=%d manifest_written=%d nanite_streamable=%d nanite_demand_paged=%d"),
+            Result.CachedMeshes, Result.MeshBuilds, Result.CollisionBuilds, bCommitted, CachedNaniteStreamable, CachedNaniteDemandPaged);
+    }
     Stage = ESCImportStage::Succeeded;
     UE_LOG(LogSCImport, Display,
            TEXT("IMPORT_OK seconds=%.4f assets=%d instances=%d children=%d interiors=%d materials=%d palettes=%d clips=%d game_world=%d "
@@ -1636,9 +1956,11 @@ void FSCImportJob::FState::Assemble()
            Manifest.Materials.Num(), Manifest.Palettes.Num(), Manifest.Clips.Num(), Options.World->IsGameWorld(), V->Meshes.Num(),
            RenderInstances, Result.TextureCount, Result.MaterialCount, Result.MaterialSeconds, Result.Warnings.Num());
     UE_LOG(LogSCImport, Display,
-           TEXT("IMPORT_PHASES read_s=%.4f derive_s=%.4f collision_s=%.4f build_s=%.4f materials_s=%.4f assemble_s=%.4f (clips_s=%.4f rigs_s=%.4f register_s=%.4f lights_s=%.4f anchors_s=%.4f bind_s=%.4f)"),
+           TEXT("IMPORT_PHASES read_s=%.4f derive_s=%.4f collision_s=%.4f build_s=%.4f materials_s=%.4f assemble_s=%.4f (clips_s=%.4f rigs_s=%.4f register_s=%.4f lights_s=%.4f anchors_s=%.4f bind_s=%.4f room_s=%.4f)"),
            Timings.Read, Timings.Derive, Timings.Collision, Timings.Build, Timings.Materials, Timings.Assemble, FinalizeSeconds, RigSeconds,
-           RegisterSeconds, LightSeconds, AnchorSeconds, BindSeconds);
+           RegisterSeconds, LightSeconds, AnchorSeconds, BindSeconds, RoomSeconds);
+    UE_LOG(LogSCImport, Display, TEXT("IMPORT_PREPARE derive_worker_s=%.4f derive_wait_s=%.4f prepare_worker_s=%.4f prepare_wait_s=%.4f deferred_rigid_parts=%d"),
+           Timings.Derive, Timings.DeriveWait, Timings.Prepare, Timings.PrepareWait, Timings.DeferredRigidParts);
     const FBox Bounds = V->GetComponentsBoundingBox(true);
     UE_LOG(LogSCImport, Display, TEXT("BOUNDS_CM min=%s max=%s size=%s"), *Bounds.Min.ToString(), *Bounds.Max.ToString(),
            *Bounds.GetSize().ToString());

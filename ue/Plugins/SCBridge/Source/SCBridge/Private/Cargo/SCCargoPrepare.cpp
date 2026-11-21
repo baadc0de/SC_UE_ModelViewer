@@ -186,13 +186,6 @@ bool USCCargoSubsystem::HomeFlight(const FSCCargoJob& Job, FSCCargoMove& M, ASCC
     return true;
 }
 
-bool USCCargoSubsystem::EnvironmentAccess(USCCargoGridComponent* Grid, bool bOpen)
-{
-    // FSCEnvironmentAccess opens its way: an environment's at discovery (kept open on re-pose), a ship's hold on this first
-    // request (RequestAccess); a job waits until that is done.
-    return RequestAccess(Grid, bOpen, GetWorld()->GetTimeSeconds());
-}
-
 bool USCCargoSubsystem::PrepareMove(FSCCargoJob& Job, FSCCargoMove& M, FString& Why)
 {
     // Planned (PlanMove) against the space kept for other teams' drones as it is now. A plan that fails where only

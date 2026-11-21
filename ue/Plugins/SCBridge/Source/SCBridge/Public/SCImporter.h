@@ -5,6 +5,8 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "SCImporter.generated.h"
 class ASCVehicle;
+class FSCProcessedCache;
+class FSCGeometryStreaming;
 struct SCBRIDGE_API FSCImportOptions
 {
     UWorld* World = nullptr;
@@ -33,6 +35,11 @@ struct SCBRIDGE_API FSCImportOptions
     /** Keep what the import built after success (FSCImportJob::GetRetainedAssets) so more actors of the package can be
      *  assembled from it without deriving or building again (extra vehicle instances). The package bytes are released. */
     bool bRetainAssets = false;
+    /** Only a source associated with an identified archive build may use on-disk processed assets. */
+    TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
+    FString CacheArchiveBuild;
+    bool bRebuildProcessed = false;
+    TSharedPtr<FSCGeometryStreaming> GeometryStreaming;
     FTransform ActorTransform = FTransform::Identity;
 };
 struct SCBRIDGE_API FSCImportResult
@@ -44,6 +51,7 @@ struct SCBRIDGE_API FSCImportResult
     TMap<FString, FString> ContentHashes;
     double TotalSeconds = 0, MaterialSeconds = 0;
     int32 MeshCount = 0, InstanceCount = 0, TextureCount = 0, MaterialCount = 0;
+    int32 CachedMeshes = 0, MeshBuilds = 0, CollisionBuilds = 0;
     /** WP-I1 SCREEN_BIND: instances with a bound screen face; screen slots (with triangles) bound / dark / dark because
      *  faces of different outcomes share them. */
     int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;

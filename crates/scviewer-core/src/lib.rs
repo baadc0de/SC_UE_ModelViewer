@@ -20,6 +20,8 @@ mod datacore;
 mod engine_textures;
 mod lights;
 mod items;
+mod music;
+pub use music::MusicCue;
 mod player;
 pub use player::{PlayerRequest, PlayerLoadout};
 pub use items::ChildItemIdentity;
@@ -33,6 +35,7 @@ mod package;
 mod archive;
 pub mod particle_params;
 mod particles;
+mod thrusters;
 pub use particles::{EffectRef, SYSTEM_DEFAULTS, split_reference};
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -68,6 +71,7 @@ pub struct Session {
     branch: Option<String>,
     browser: BrowserIndex,
     loaded: OnceCell<Loaded>,
+    music_cues: OnceCell<Vec<MusicCue>>,
     cache: Option<cache::Cache>,
     index_status: CacheStatus,
     status: Cell<CacheStatus>,
@@ -120,6 +124,7 @@ impl Session {
             branch,
             browser,
             loaded,
+            music_cues: OnceCell::new(),
             cache,
             index_status,
             status: Cell::new(index_status),
@@ -374,6 +379,7 @@ impl Session {
         let mut package = result
             .decomposed
             .context("upstream returned no decomposed files")?;
+        thrusters::add_to_package(self, &mut package)?;
         engine_textures::add_to_package(&mut package, &self.loaded()?.p4k, options.geometry.mip)?;
         self.checkpoint(cancel, 0.94, "Building tar")?;
         let bytes = package::to_tar(&package)?;

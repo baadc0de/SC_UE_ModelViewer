@@ -15,6 +15,8 @@ pub use dds::{sc_dds_prepare, sc_dds_mean_rgb};
 mod boundary;
 mod cache;
 mod types;
+mod music;
+pub use music::{sc_music_catalogue, sc_music_read};
 mod player;
 pub use player::scbridge_export_player;
 use boundary::{Result, cstring, handle, output, run, string};
@@ -64,6 +66,19 @@ pub unsafe extern "C" fn sc_open(
                 error: CString::default(),
                 poisoned: false,
             }));
+            Ok(())
+        })
+    }
+}
+
+/// Return the archive build identity for cache keys, owned by the caller.
+/// Free a successful result with sc_free_string. On failure *out is NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_archive_build_id(h: *mut sc_handle, out: *mut *mut c_char) -> sc_status {
+    unsafe {
+        run(h, || {
+            let out = output(out, ptr::null_mut())?;
+            *out = cstring(handle(h)?.session.build_id()).into_raw();
             Ok(())
         })
     }

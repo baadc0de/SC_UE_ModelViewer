@@ -311,10 +311,19 @@ Cache boundaries for WP-C1:
   `CollisionBytes` plus `CollisionVersions`. It does not allocate a UObject.
 - `Instantiate` creates the mesh and body setup and deserializes the BVH without
   cooking it again. `bBuildCollision=false` skips collision derivation and replay.
-- A processed-cache key must also include `DerivedFormatVersion`, engine version,
-  platform and build options. Engine Nanite/card/DF building remains in the
-  UObject phase; WP-C1 can replay its cooked package rather than call that phase.
-  No persistent processed cache is implemented here.
+- Ships, Garage imports and environments reuse cooked static meshes and Chaos collision
+  from the launch-relative `cache/processed`. Entries are keyed by the input geometry,
+  archive build or folder namespace, renderer format, and import options. The first
+  load builds and saves the cache; a hit restores the cooked mesh while Nanite requests
+  fine geometry pages as needed. The importer still places components and binds lights
+  and materials on each fresh load. See [WP-C1](../docs/work-packages/WP-C1-processed-cache.md)
+  for the XL hangar and C2 measurements.
+- `-SCStreamGeometry` enables the cold-load preview in Editor `-game`. Eligible
+  cold mesh variants start with smaller render proxies, then build their exact
+  meshes when the camera approaches or sees enough projected detail. The source
+  collision and rig bindings are installed at assembly. Processed cache hits
+  restore the exact geometry directly. The profile uses approximate lighting on
+  coarse proxies, and fixed-step render capture prepares exact geometry before frame one.
 
 From the repository root:
 

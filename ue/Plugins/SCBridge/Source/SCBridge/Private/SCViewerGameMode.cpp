@@ -25,6 +25,7 @@ void ASCViewerGameMode::StartPlay()
         SCLookLighting::MigrateLookSettings(); // first: the volume reads the look settings (SSDO)
         SCViewerExposure::Install(*World);
         SCLookLighting::ApplyDefaults(World); // LOOK-8: bloom, threshold, exposure bias
+        DisplayOutput = SCLookLighting::InstallDisplayOutput(*World);
     }
     Super::StartPlay();
 }

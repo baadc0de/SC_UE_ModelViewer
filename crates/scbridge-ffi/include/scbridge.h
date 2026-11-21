@@ -150,6 +150,12 @@ enum sc_status sc_open(const char *p4k_or_null,
                        struct sc_handle **out);
 
 /*
+ Return the archive build identity for cache keys, owned by the caller.
+ Free a successful result with sc_free_string. On failure *out is NULL.
+ */
+enum sc_status sc_archive_build_id(struct sc_handle *h, char **out);
+
+/*
  Fill defaults from the core (LOD 0, mip 2, textures, attachments/interior/lights/
  animations enabled, shields/default pose disabled). NULL export options uses these too.
  */
@@ -481,6 +487,16 @@ void sc_eq_set_output(struct sc_eq *eq, float output_db);
 void sc_eq_process(struct sc_eq *eq, float *data, size_t frames);
 
 void sc_eq_free(struct sc_eq *eq);
+
+/*
+ Return the archive's named whole-source music cues as JSON. Free with sc_free_string.
+ */
+enum sc_status sc_music_catalogue(struct sc_handle *h, char **out_json);
+
+/*
+ Return one catalogue cue as Ogg bytes. Free with sc_free_blob.
+ */
+enum sc_status sc_music_read(struct sc_handle *h, const char *cue_id, struct sc_blob *out_blob);
 
 /*
  Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses

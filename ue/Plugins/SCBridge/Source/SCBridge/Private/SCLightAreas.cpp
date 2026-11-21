@@ -8,6 +8,7 @@
 #include "SCRigComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Containers/BitArray.h"
 #include "Dom/JsonObject.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/SkeletalMesh.h"
@@ -114,6 +115,7 @@ bool FSCRoomVolume::Parse(const FString& Json, FSCRoomVolume& Out, FString& Erro
         { Error = TEXT("room volume trimesh needs three vertices per triangle"); return false; }
     }
     else { Error = TEXT("unsupported room volume kind '") + Kind + TEXT("'"); return false; }
+    Out.ParsedSegmentBounds = Out.SegmentBounds();
     return true;
 }
 
@@ -127,9 +129,7 @@ bool FSCRoomVolume::Contains(const FVector& ContainerPointM) const
         return P.X >= Min.X && P.X <= Max.X && P.Y >= Min.Y && P.Y <= Max.Y && P.Z >= Min.Z && P.Z <= Max.Z;
     case EShape::Prism:
     {
-        double Base = TNumericLimits<double>::Max();
-        for (const FVector& Q : Points) Base = FMath::Min(Base, Q.Z);
-        if (P.Z < Base || P.Z > Base + Height) return false;
+        if (!SegmentBounds().IsInsideOrOn(P)) return false;
         bool bInside = false; // even-odd rule on the xy polygon
         for (int32 I = 0; I < Points.Num(); ++I)
         {
@@ -141,6 +141,10 @@ bool FSCRoomVolume::Contains(const FVector& ContainerPointM) const
     }
     case EShape::Trimesh:
     {
+        const FBox Bounds = SegmentBounds();
+        // The ray points up. Even imperfect authoring can yield odd parity below the lower Z bound.
+        if (P.X < Bounds.Min.X || P.X > Bounds.Max.X || P.Y < Bounds.Min.Y || P.Y > Bounds.Max.Y || P.Z >= Bounds.Max.Z)
+            return false;
         int32 Crossings = 0; // an odd count is inside a closed soup
         for (int32 I = 0; I + 2 < Points.Num(); I += 3)
             Crossings += UpwardRayCrosses(Points[I] - P, Points[I + 1] - P, Points[I + 2] - P);
@@ -152,6 +156,7 @@ bool FSCRoomVolume::Contains(const FVector& ContainerPointM) const
 
 FBox FSCRoomVolume::SegmentBounds() const
 {
+    if (ParsedSegmentBounds.IsValid) return ParsedSegmentBounds;
     FBox Bounds(ForceInit);
     if (Shape == EShape::Box)
         Bounds = FBox(Min, Max);
@@ -237,6 +242,28 @@ TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description)
         if (Out.Num() < Wanted && Index == int32(int64(Out.Num()) * Count / Wanted)) Out.Add(Positions[Vertex]);
         ++Index;
     }
+    return Out;
+}
+
+TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description, TConstArrayView<FTriangleID> Triangles)
+{
+    // FSCMeshImporter::Select inserts vertices in first-use order while walking the selected triangle corners.
+    TBitArray<> Seen(false, Description.Vertices().GetArraySize());
+    TArray<FVertexID> Order;
+    Order.Reserve(Triangles.Num());
+    for (FTriangleID Triangle : Triangles)
+        for (FVertexID Vertex : Description.GetTriangleVertices(Triangle))
+            if (!Seen[Vertex.GetValue()])
+            {
+                Seen[Vertex.GetValue()] = true;
+                Order.Add(Vertex);
+            }
+    const auto Positions = FStaticMeshConstAttributes(Description).GetVertexPositions();
+    const int32 Wanted = FMath::Min(Order.Num(), MaxSamples);
+    TArray<FVector3f> Out;
+    Out.Reserve(Wanted);
+    for (int32 Index = 0; Index < Wanted; ++Index)
+        Out.Add(Positions[Order[int32(int64(Index) * Order.Num() / Wanted)]]);
     return Out;
 }
 

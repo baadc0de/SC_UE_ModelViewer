@@ -379,7 +379,6 @@ struct FSCCargoState
     // Vehicles (multi-vehicle hangars): the instances whose grids are discovered (instance id -> actor), their owners.
     TMap<int32, TWeakObjectPtr<ASCVehicle>> SeenVehicles;
     int32 SeenVehiclesRevision = INDEX_NONE;
-    TMap<int32, FName> VehicleOwners;   // instance id -> owner (default: the player)
     TArray<int32> ScenarioVehicleIds;   // scenario vehicle index -> instance id (0 = the loaded vehicle)
     bool bScenarioVehiclesRequested = false;
     // Owners: the player and the others the scenario names (labels); the shared drone pool served fairly.
