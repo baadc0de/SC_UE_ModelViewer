@@ -140,4 +140,3 @@ bool FSCFrozenOutputDeviceTest::RunTest(const FString&)
     return true;
 }
 #endif
-
