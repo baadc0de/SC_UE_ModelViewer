@@ -18,8 +18,9 @@ $width = if ($Acceptance) { 1920 } else { 320 }
 $height = if ($Acceptance) { 1080 } else { 180 }
 $orbit = @{ center = $center; radius = 25; height = 5; fromDeg = 0; toDeg = 90; seconds = ($orbitFrames / $fps) }
 $req = @{ path = $dir; frames = $count; fps = $fps; width = $width; height = $height
-          warmup_frames = $(if ($Acceptance) { 32 } else { 2 }); outputs = $(if ($Acceptance) { @('png16','exr') } else { @('png16','exr','png8') })
+          outputs = $(if ($Acceptance) { @('png16','exr') } else { @('png16','exr','png8') })
           setup = @(@{ orbit = $orbit }); steps = @(@{ at = 0; orbit = $orbit }) }
+if (!$Acceptance) { $req.warmup_frames = 2 }
 if ($Acceptance) {
     $ready = Invoke-SC /wait @{ until = 'settled'; timeout_s = 600 }
     if (!$ready.ok) { throw $ready.error }

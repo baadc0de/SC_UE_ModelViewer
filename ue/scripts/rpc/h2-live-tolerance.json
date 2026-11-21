@@ -33,7 +33,7 @@
           }
         }
       ],
-      "warmup_frames": 32,
+      "warmup_frames": 64,
       "width": 1920
     },
     "cvars": {
@@ -49,6 +49,7 @@
     "anti_aliasing_method": "AAM_TSR",
     "display_method": "HuePreservingShoulder"
   },
+  "calibration_warmup_frames": 32,
   "calibration_sidecar_sha256": [
     "8A3EA530514ED8C5007F7BB95BBDBE4EA46949DA78ADCD9540A2DD9423C8C26F",
     "E47199C6CB1819A0821659894BDF64D82DDFA9ED0F48FC5EFC9B94DF997486F7"

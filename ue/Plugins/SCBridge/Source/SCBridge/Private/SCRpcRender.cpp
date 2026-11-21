@@ -157,7 +157,8 @@ bool ValidateSchedule(const TSharedPtr<FJsonObject>& Body, FIntPoint ViewSize, d
     const double Count = Value(Body, TEXT("frames"), FMath::RoundToDouble(Value(Body, TEXT("seconds"), 0) * Fps));
     const double W = Value(Body, TEXT("width"), ViewSize.X);
     const double H = Value(Body, TEXT("height"), ViewSize.Y);
-    const double Warm = Value(Body, TEXT("warmup_frames"), 32);
+    // Give the capture's fresh Lumen history time to settle before moving the camera.
+    const double Warm = Value(Body, TEXT("warmup_frames"), 64);
     if (!(Fps > 0 && Fps <= 240 && Count >= 1 && Count <= MAX_int32 && Count == FMath::FloorToDouble(Count)
         && W >= 1 && W <= 16384 && H >= 1 && H <= 16384 && W == FMath::FloorToDouble(W) && H == FMath::FloorToDouble(H)
         && Warm >= 0 && Warm <= MAX_int32 && Warm == FMath::FloorToDouble(Warm)))
@@ -664,6 +665,13 @@ bool FSCRpcRenderScheduleTest::RunTest(const FString&)
     TestTrue(TEXT("seconds"), Parse());
     TestEqual(TEXT("rounded frame count"), Count, 36);
     TestEqual(TEXT("default viewport width"), W, 123);
+    TestEqual(TEXT("default lighting warm-up"), Warm, 64);
+    B->SetNumberField(TEXT("warmup_frames"), 32);
+    TestTrue(TEXT("explicit warm-up"), Parse());
+    TestEqual(TEXT("explicit warm-up is preserved"), Warm, 32);
+    B->SetNumberField(TEXT("warmup_frames"), 0);
+    TestTrue(TEXT("zero warm-up"), Parse());
+    TestEqual(TEXT("no warm-up when explicitly disabled"), Warm, 0);
     B->SetNumberField(TEXT("frames"), 10000);
     TestTrue(TEXT("frames override seconds"), Parse());
     TestEqual(TEXT("explicit count"), Count, 10000);

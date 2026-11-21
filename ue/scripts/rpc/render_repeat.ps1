@@ -26,8 +26,10 @@ function Sort-JsonFields($value) {
 }
 
 function Read-Fixture($sidecar) {
+    $request = $sidecar.request | Select-Object -Property * -ExcludeProperty path, warmup_frames
+    $request | Add-Member -NotePropertyName warmup_frames -NotePropertyValue $sidecar.warmup_frames
     [ordered]@{
-        request = Sort-JsonFields ($sidecar.request | Select-Object -Property * -ExcludeProperty path)
+        request = Sort-JsonFields $request
         cvars = Sort-JsonFields $sidecar.cvars
         anti_aliasing_method = $sidecar.frames[0].anti_aliasing_method
         display_method = $sidecar.frames[0].display_method
@@ -38,6 +40,10 @@ function Read-Capture([string]$dir) {
     $s = Get-Content -Raw -LiteralPath (Join-Path $dir 'render.json') | ConvertFrom-Json
     if (!$s.ok -or $s.running -or !$s.frames.Count -or $s.frames.Count -ne $s.request.frames -or
         $s.outputs -notcontains 'png16') { throw "Incomplete PNG16 capture: $dir" }
+    if ($null -eq $s.warmup_frames -or
+        ($null -ne $s.request.warmup_frames -and $s.request.warmup_frames -ne $s.warmup_frames)) {
+        throw "Invalid effective warm-up in capture: $dir"
+    }
     $pngDir = Join-Path $dir 'png16'
     $files = @(Get-ChildItem -LiteralPath $pngDir -Filter '*.png' -File | Sort-Object Name)
     if ($files.Count -ne $s.frames.Count) { throw "Wrong PNG16 file count: $dir" }
@@ -129,6 +135,7 @@ $report = [ordered]@{
 if ($Calibrate) {
     $limits = [ordered]@{
         fixture = $fixture
+        calibration_warmup_frames = $referenceCapture.warmup_frames
         calibration_sidecar_sha256 = @($referenceHash, $candidateHash)
         baseline_shot_mae = $report.shot_mae
         baseline_worst_frame_mae = $report.worst_frame_mae

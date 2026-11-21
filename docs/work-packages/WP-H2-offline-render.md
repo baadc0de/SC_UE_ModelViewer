@@ -47,7 +47,7 @@ it can pass them through unchanged:
 | `seconds` or `frames` | Length |
 | `width`, `height` | Output size (default the viewport's); independent of the window under `-AgentMode` |
 | `outputs` | Any of `exr` (linear, see below), `png16` (display-referred SDR, 16-bit), `png8` (SDR, 8-bit) — default `["png16"]` |
-| `warmup_frames` | Frames rendered and discarded before frame 0 at the start pose (default enough for TSR/DLSS history and Lumen to converge; measure and document the default) |
+| `warmup_frames` | Frames rendered and discarded at the start pose before frame 0 (default 64) |
 | `setup` | Actions applied before warm-up (start pose, console commands) |
 | `steps` | Timed actions, `at` seconds from frame 0 (see below) |
 | `encode` | Optional: `prores` (ProRes 4444 from `png16`) or `h264` via `-SCFfmpeg`; frames are kept either way |
@@ -169,12 +169,14 @@ if any, follow the WP-E1 rules (fork branch `scviewer/5.9`, UE behaviour as the 
 4. **Look.** Frame 0 `png16` vs a `/screenshot` of the same pose with the HDR device off: same image within TSR/DLSS
    history differences; `sc.Look.SSDO off` / `game` change the render.
 5. **Live repeatability.** Keep the same viewer session, Windows display mode, render settings and five-second
-   TSR Cutlass request. Calibrate from the first two captures, adding 25% headroom independently to the shot-wide
+   TSR Cutlass request. Acceptance uses the production default warm-up. Calibrate from the first two captures,
+   adding 25% headroom independently to the shot-wide
    and worst-frame mean absolute RGB16 error, then rounding each limit up to a whole 16-bit code (minimum one).
    Compare a third capture against the first using those fixed limits. Both metrics, normalized to full scale,
    must be at or below their respective limits. Report the peak individual channel error for diagnosis.
-   Repeat acceptance runs use the checked-in limits. Use `-Calibrate` when deliberately establishing a new baseline
-   for this fixture and fix the limits before scoring a held-out capture.
+   Repeat acceptance runs use the checked-in limits. The provided limits were calibrated at 32 warm-up frames
+   and also apply to the 64-frame default. Use `-Calibrate` when deliberately establishing a new baseline for
+   this fixture and fix the limits before scoring a held-out capture.
 6. **Off screen.** All of the above under `-AgentMode` (`Start-SCViewer` without `-Visible`).
 7. **Cost.** Render wall time per frame for the orbit, with and without the streaming holds.
 
@@ -286,5 +288,48 @@ the three captures.
 | Worst-frame mean absolute error | 0.001109958 | 0.001388571 | 0.001536248 (fail, frame 4) |
 
 The held-out peak individual channel error was 0.638178. The live tolerance stays at the calibrated values.
-The live repeatability, consecutive-image evenness and viewport appearance gates are open. Logs, sidecars
-and the scorer report are under `out/h2/acceptance-hdr`.
+That live repeatability run failed. The consecutive-image evenness and viewport appearance gates are open.
+Logs, sidecars and the scorer report are under `out/h2/acceptance-hdr`.
+
+### Frame 4 investigation
+
+Twelve frames in the original held-out pair exceeded the fixed worst-frame limit, all between frames 4 and 16.
+Frame 4 had the largest mean absolute RGB16 error, 0.001536248. The sidecars agreed on camera pose, time, TSR and
+streaming holds. Capture exposure differed by 0.082%. Astra found matching geometry and localized the most
+visible change around the left wing lamp. That region contributed 5.4% of the frame's RGB error. The hangar
+walls also varied.
+
+In a serialized viewer session, repeating the first 12 frames with Lumen diffuse GI disabled brought frame 4
+to zero in all three pair comparisons. The worst error at any frame in those controls was 0.000000023. With
+Lumen enabled, the spike persisted after disabling one-pass virtual-shadow projection, MegaLights, bloom or
+lens flare. Disabling Lumen screen-probe screen traces reduced the early error. Forcing full Lumen surface-cache
+lighting updates during warm-up and serializing its CPU updates both left over-limit pairs. These controls
+used modified lighting and did not run as acceptance captures.
+
+With the production look, doubling the start-pose warm-up reduced the three short pair comparisons' worst
+errors from 0.001373–0.001748 at 32 samples to 0.001001–0.001051 at 64. Astra found matching scene appearance
+at normal viewing scale, with small differences in the wing lamp halo, cockpit reflections and specular edges.
+The short captures took about 0.8 s longer. The runtime now defaults to 64 and still honours explicit counts,
+including zero. The acceptance script uses that default. The original calibration values and source hashes
+remain fixed.
+
+Short controls and regional measurements are under `out/h2/frame4-diagnostics`, `out/h2/frame4-controls`,
+`out/h2/frame4-lumen` and `out/h2/acceptance-hdr/frame4-regions.jsonl`.
+
+### Full rerun with the 64-frame default
+
+All three full TSR Cutlass captures ran in the same offscreen D3D12 viewer with the display mode held constant.
+Each wrote 150 PNG16 and 150 EXR frames, passed the camera and `t = n/30` checks, and reported zero holds.
+Capture times were 80.72, 79.94 and 80.21 s. Every pair passed both original RGB16 limits.
+
+| Full capture pair | Shot MAE (limit 0.001007095) | Worst-frame MAE (limit 0.001388571) | Frame 4 MAE |
+| --- | ---: | ---: | ---: |
+| First / second | 0.000776574 | 0.001083233 (frame 6) | 0.000902020 |
+| First / third | 0.000829478 | 0.001120893 (frame 6) | 0.000947411 |
+| Second / third | 0.000804702 | 0.001063072 (frame 13) | 0.000929853 |
+
+Peak individual RGB channel differences ranged from 0.687434 to 0.732341. The separate consecutive-image
+check still failed, with differences spanning 53.3–53.5% of the mean. Viewport appearance remains open.
+The Win64 build, frozen HDR chart and all five focused NullRHI tests passed with builds and sessions serialized.
+The scheduling test failed at 32 before the fix and passed at 64 afterward, including the override assertions.
+Logs, sidecars and numerical reports are under `out/h2/frame4-warmup-fix`.

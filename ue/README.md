@@ -1035,7 +1035,8 @@ Null-RHI tests: `-run=pythonscript -script=ue/scripts/test_player.py -SCPlayerTe
 ### Offline render RPC (WP-H2)
 
 With the viewer running under the RPC harness, run `ue/scripts/rpc/render_check.ps1` for a short camera-path test.
-`-Acceptance` runs the five-second Cutlass orbit. Output goes to `out/h2/<tag>`.
+`-Acceptance` runs the five-second Cutlass orbit with the default 64 warm-up frames. Output goes to
+`out/h2/<tag>`.
 `Invoke-SCRender` accepts the request in [the H2 brief](../docs/work-packages/WP-H2-offline-render.md).
 For the live repeat check, start the viewer with `-SCDefaults -SCShowcase -SCLoad=DRAK_Cutlass_Black`.
 Capture twice in that session with Windows display mode held constant. The scoring command can run after
