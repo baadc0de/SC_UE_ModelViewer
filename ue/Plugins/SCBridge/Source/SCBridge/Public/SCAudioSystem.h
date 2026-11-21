@@ -188,7 +188,7 @@ public:
 
     /** Post Trigger of Scene at Where; returns the post's handle (one instance per play action, all stopped and queried
      *  through the handle; INDEX_NONE when nothing plays) and logs AUDIO_PLAY. */
-    int32 Post(FSCAudioScene& Scene, const FString& Trigger, const FSCAudioPlace& Where);
+    int32 Post(FSCAudioScene& Scene, const FString& Trigger, const FSCAudioPlace& Where, int32* CreatedVoices = nullptr);
     /** Stop every instance of a post (after DelayS, fading over FadeS). */
     void Stop(int32 Post, float FadeS = 0.f, float DelayS = 0.f);
     bool IsPlaying(int32 Instance) const;
@@ -300,7 +300,7 @@ private:
     FSCAudioContainerState& ContainerState(FSCAudioScene& S, int32 Node, const FInstance& I);
     void SetSpatial(FInstance& I, bool bListener);
     void UpdateInstance(FInstance& I, double Now);
-    void UpdateAreasAndSpots(FSCAudioScene& S, double Now);
+    void UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32& StartsLeft);
     float RtpcValue(const FSCAudioScene& S, const FInstance& I, const FString& Name, const FVector& Emitter) const;
     FVector PlacePosition(const FInstance& I) const;
     FString EnvironmentAt(const FSCAudioScene& S, const FInstance& I, const FVector& World) const;
