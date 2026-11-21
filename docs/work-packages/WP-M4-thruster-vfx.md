@@ -62,14 +62,48 @@ footprint and opacity remain open under the reference-based visual criterion.
 
 ## Preparing local exhaust assets
 
-Export each ship with attachments. The first entry in the resulting tar is the scene manifest and contains the authored references. The helper reads just that entry. Pass the unique references to the existing SCFxBuild commandlet to generate the local Niagara assets.
+Export each ship with attachments. The first entry in the resulting tar is the scene manifest and contains the authored references. The helper reads just that entry. Pass the unique references to SCFxBuild as stationary nozzle effects.
 
 ~~~powershell
 $refs = @(./ue/scripts/thruster_fx_refs.ps1 -Package $packageTars)
-& $editorCmd $uproject '-run=SCFxBuild' "-Effects=$($refs -join ';')" '-unattended' '-NullRHI'
+& $editorCmd $uproject '-run=SCFxBuild' "-ThrusterEffects=$($refs -join ';')" '-unattended' '-NullRHI'
 ~~~
 
-The viewer reads the resulting Niagara assets under /Game/SC/FX through the existing FX contract. A missing asset is reported in Ship Link. Ship packages from before this work can be re-exported through the normal load path. Game media and generated Niagara assets stay out of source control.
+Ship Link prefers the stationary variants under `/Game/SC/FX/Nozzles`. Existing local bakes under
+`/Game/SC/FX` remain playable with their previous appearance. A missing asset is reported in Ship Link.
+Ship packages from before this work can be re-exported through the normal load path. Game media and
+generated Niagara assets stay out of source control.
+
+## Stationary preview and flight effects
+
+The Cutter main thruster record assigns `Thrust`, `AfterBurn`, `EngineTrail`, `DefaultContrail`, and
+`ShockDiamond` separately, even though the entries share the exhaust attachment. Ship Link imports and
+activates only `Thrust` and `AfterBurn`. The stationary preview never activates a flight trail, contrail,
+or atmospheric shock diamond. The exporter test exercises all three exclusions.
+
+The stationary bake profiles the broad, continuously moving camera-facing sprites. It reduces their
+billboard size, travel and opacity and multiplies their authored size-over-life curve by an additional
+taper. For layers with few particles it adds samples and divides the opacity by the same factor, which
+smooths the glow. It narrows the filament spawn spread across the nozzle and reduces filament opacity.
+The relative colours, free-facing rings and nozzle material glow come from the source. The values in
+`FX/effects.json` are shared viewer appearance controls chosen for the stationary preview.
+
+The Cutter's authored boost sparks could nominally travel 28 m during their lifetime. On a fixed ship
+they produced isolated orange dashes well behind the exhaust. The stationary bake caps the nominal
+travel of sparse emitters using the largest sustained sprite's profiled diameter in the same effect.
+The measured input on the Cutter's main afterburner gives a cap of 2.15 m. This keeps the local spark
+layer near the nozzles.
+
+The serialized stationary checks captured all four modes with no ship translation or rotation. Both
+ships loaded their stationary nozzle variants for every active binding, with zero travel systems
+mounted. The bake converted all 16 references, and the verifier loaded all 38 local FX systems.
+Eleven Unreal FX and mesh-basis tests and the Rust tag-filter test passed. The matched captures and
+logs are under `out/m4-nozzle-preview/stationary-b`.
+
+Astra found the distant Cutter streaks gone at boost. At ship-view scale the warm cores stay in the
+rims, the two jets stay distinct in profile, and the taper reads as local exhaust. In close views
+the large tip can still appear slightly beaded and cooler blue than the reference. The C2 keeps
+eight legible aft openings, and its boosted plumes now show a continuous taper in profile.
 
 ## Verification
 

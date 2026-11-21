@@ -21,6 +21,14 @@
   },
   "unlit_diffuse_scene_units": 0.35,
   "flare_world_scale": 0.35,
+  "nozzle_preview": {
+    "fill_size": 0.43,
+    "fill_travel": 0.65,
+    "fill_opacity": 0.42,
+    "fill_tip_size": 0.28,
+    "filament_spread": 0.48,
+    "filament_opacity": 0.30
+  },
   "runtime_comment": "Read at run time by the cargo drones and boxes (FSCCargoFx, WP-K4c hook-up). The effects themselves come from the data: the tractor record's beam, muzzle and hit (a MaterialEffects custom effect) and a ship record's CollisionMFXEntityParams.customEffect, resolved through MaterialEffects.xml for the boxes' surface group and the FXLib entry's first particle effect; each finds its system by the SCFxNames.h rule. Viewer stand-ins: box_surface_group is the fx group of the carryable boxes' surface (metal_dense -> metal in SurfaceTypes.xml, the WP-K4c survey of all 2183 carryable_* records; no box surface reaches the runtime). A box knocking a ship plays its effect when its speed change along the contact normal is at least contact_min_speed_cm_s (CryEngine's collision MFX thresholds are engine settings, not data), at most once per contact_min_interval_s per box; the FXLib entry's minscale..maxscale is spread over contact_min_speed_cm_s..contact_full_speed_cm_s (the data gives no rule between; the ships' metal entries have minscale = maxscale). 100 and 350 cm/s from the WP-K4a review (out/k4a/astra/fx.md).",
   "runtime": {
     "box_surface_group": "metal",

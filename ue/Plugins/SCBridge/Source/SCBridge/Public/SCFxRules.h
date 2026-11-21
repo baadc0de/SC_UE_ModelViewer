@@ -27,6 +27,18 @@ inline FVector2f FrameAspect(int32 Width, int32 Height, FVector2f Tiles)
     return Frame.X > 0 && Frame.Y > 0 ? Frame / Frame.GetMax() : FVector2f(1, 1);
 }
 
+/** Blend the stationary-preview adjustment from thin filaments to round volume-filling sprites. */
+inline double NozzleFillWeight(FVector2f Aspect)
+{
+    if (Aspect.GetMax() <= 0.f) return 0.0;
+    return FMath::SmoothStep(0.4, 0.95, double(Aspect.GetMin() / Aspect.GetMax()));
+}
+
+inline double NozzleSparkTravelScale(double Reach, double Limit)
+{
+    return Limit > 0 && Reach > Limit ? Limit / Reach : 1.0;
+}
+
 /**
  * Spawn infos a looping lightweight emitter's spawn info keeps alive: one per loop whose particles may still live, i.e. the
  * loop being spawned plus ceil(MaxLifetime / LoopDuration) earlier ones (Niagara's stateless emitter draws at most

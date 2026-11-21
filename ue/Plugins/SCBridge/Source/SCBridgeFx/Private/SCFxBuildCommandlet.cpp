@@ -535,6 +535,8 @@ struct FBuilder
     double SceneUnitNits = 0;
     double LitSceneUnits = 0;   // config: luminance (scene units) given to DiffuseLighting x colour of an unlit sprite
     double FlareWorldScale = 1; // config flare_world_scale: the viewer's stand-in for CryEngine's screen-space flare size
+    double NozzleFillSize = 1, NozzleFillTravel = 1, NozzleFillOpacity = 1, NozzleFillTipSize = 1;
+    double NozzleFilamentSpread = 1, NozzleFilamentOpacity = 1;
     TArray<double> Knots = {1}; // the game's strengths (config "strength" record): where a curve is checked for variation
     double BeamRangeM = 0;      // the strength record's beam range: the beam emitters' bounds
     TArray<TSharedPtr<FJsonValue>> CurrentEmitters; // the effect being built
@@ -914,7 +916,7 @@ struct FBuilder
     /** Configure one lightweight emitter from a game emitter (Kind: the sprite, its light, distortion or flare twin).
      *  Returns false when it ends up with nothing to draw; bInvisible when it draws nothing at any game strength. */
     bool Configure(UNiagaraStatelessEmitter* Em, const FJson& E, const FJson& Parent, EKind Kind, const FFlareElement* Flare, FLog& L,
-                   bool& bInvisible)
+                   bool& bInvisible, bool bNozzle, double SparkReachM)
     {
         // Every template module off first; each rule below enables what it uses.
         for (UNiagaraStatelessModule* M : Em->GetModules())
@@ -923,7 +925,43 @@ struct FBuilder
 
         const bool bSpline = Has(E, TEXT("spline"));
         const bool bBeam = bSpline && F.Spline;
-        const FSpawn S = Spawn(E, Parent, bSpline, L);
+        FSpawn S = Spawn(E, Parent, bSpline, L);
+        const FString Facing = Kind == EKind::Flare ? FString(TEXT("Camera")) : Str(E, TEXT("facing"));
+        const FString TexturePath = Str(E, TEXT("texture"));
+        const TArray<double> Tiles = Kind == EKind::Flare ? TArray<double>() : Nums(E, TEXT("tiles"));
+        const FVector2f FrameGrid = Tiles.Num() == 2 ? FVector2f(Tiles[0], Tiles[1]) : FVector2f(1, 1);
+        FVector2f FrameAspect(1, 1);
+        if ((Kind == EKind::Sprite || Kind == EKind::Distortion) && !TexturePath.IsEmpty())
+            if (const UTexture2D* Tex = Texture(TexturePath))
+                FrameAspect = SCFxRules::FrameAspect(Tex->Source.GetSizeX(), Tex->Source.GetSizeY(), FrameGrid);
+        const double Aspect = Num(E, TEXT("aspect"), 1);
+        const double Count = Num(E, TEXT("spawn.count"));
+        const double AuthoredSpeed = Num(E, TEXT("speed.value"));
+        const FString Acceleration = EffectiveRaw(E, TEXT("Acceleration"));
+        const FVector3f AccelerationCm = Basis({RawComponent(Acceleration, TEXT("x")).Get(0),
+                                               RawComponent(Acceleration, TEXT("y")).Get(0),
+                                               RawComponent(Acceleration, TEXT("z")).Get(0)});
+        const bool bNozzleSprite = bNozzle && Kind == EKind::Sprite && !bSpline;
+        const bool bPlume = bNozzleSprite && Count > 1 && !S.bBurst && S.Loop == ENiagaraLoopBehavior::Infinite &&
+            (Facing.IsEmpty() || Facing == TEXT("Camera")) && (AuthoredSpeed != 0 || !AccelerationCm.IsNearlyZero());
+        const double FillWeight = bPlume ? SCFxRules::NozzleFillWeight(FrameAspect * FVector2f(Aspect, 1)) : 0.0;
+        const double FilamentWeight = bPlume ? 1.0 - FillWeight : 0.0;
+        double TravelScale = FMath::Lerp(1.0, NozzleFillTravel, FillWeight);
+        const double Life = Num(E, TEXT("lifetime.value"), 1) * Eval(Curve(E, TEXT("lifetime.strength_curve")), 1.0);
+        if (bNozzleSprite && Count <= 1)
+        {
+            // Bound sparse, fast particles within the stationary plume footprint.
+            const double ReachM = FMath::Abs(AuthoredSpeed) * Life + 0.5 * AccelerationCm.Size() / Cm * Life * Life;
+            TravelScale = SCFxRules::NozzleSparkTravelScale(ReachM, SparkReachM);
+            if (TravelScale < 1.0) L.Mapped.Add(TEXT("stationary spark reach"));
+        }
+        // Smaller quads need closer samples to form a continuous glow. Divide per-particle opacity
+        // by the same factor so the added samples do not raise the layer's total contribution.
+        const double Density = 1.0 + FillWeight * (1.0 - FMath::SmoothStep(16.0, 64.0, Count));
+        S.RateMin *= Density;
+        S.RateMax *= Density;
+        if (FillWeight > 0) L.Mapped.Add(TEXT("stationary nozzle fill profile"));
+        if (FilamentWeight > 0) L.Mapped.Add(TEXT("stationary nozzle filament profile"));
         FNiagaraEmitterStateData State = Em->GetEmitterState();
         State.InactiveResponse = ENiagaraEmitterInactiveResponse::Complete;
         State.LoopBehavior = S.Loop;
@@ -988,7 +1026,6 @@ struct FBuilder
 
         // Lifetime (strength curve baked at 1).
         auto* Init = Module<UNiagaraStatelessModule_InitializeParticle>(Em);
-        const double Life = Num(E, TEXT("lifetime.value"), 1) * Eval(Curve(E, TEXT("lifetime.strength_curve")), 1.0);
         const double LifeRandom = FMath::Clamp(Num(E, TEXT("lifetime.random")), 0.0, 1.0);
         SetRange(Init->LifetimeDistribution, Life * (1 - LifeRandom), Life);
         Init->LifetimeDistribution.UpdateValuesFromDistribution();
@@ -1003,6 +1040,9 @@ struct FBuilder
         Shape->CoordinateSpace = ENiagaraCoordinateSpace::Simulation;
         const FVector3f Offset = Basis(Nums(E, TEXT("position_offset_m")));
         FVector3f Box = Basis(Nums(E, TEXT("random_offset_m"))).GetAbs() * 2.f;
+        const float FilamentSpread = float(FMath::Lerp(1.0, NozzleFilamentSpread, FilamentWeight));
+        Box.Y *= FilamentSpread;
+        Box.Z *= FilamentSpread;
         FVector3f Centre = Offset;
         const TArray<double> Amp = Nums(E, TEXT("spline.noise_amplitude_xyz"));
         const double AmpCm = Cm * (Amp.IsEmpty() ? 0.0 : FMath::Max(Amp));
@@ -1027,7 +1067,7 @@ struct FBuilder
 
         // Motion: the guided beam path, or a signed cone with forces.
         const FStrength SpeedStrength = Strength(Curve(E, TEXT("speed.strength_curve")));
-        const double Speed = Num(E, TEXT("speed.value"));
+        const double Speed = AuthoredSpeed * TravelScale;
         const double SpeedRandom = FMath::Clamp(Num(E, TEXT("speed.random")), 0.0, 1.0);
         double BoundsReach = 0, TypicalSpeedCm = FMath::Abs(Speed * SpeedStrength.At1) * Cm;
         if (bBeam)
@@ -1122,18 +1162,14 @@ struct FBuilder
             L.Skipped.Add(TEXT("speed(spline travel)"));
         if (!bBeam)
         {
-            const FString Acceleration = EffectiveRaw(E, TEXT("Acceleration"));
-            const FVector3f AccelerationCm = Basis({RawComponent(Acceleration, TEXT("x")).Get(0),
-                                                   RawComponent(Acceleration, TEXT("y")).Get(0),
-                                                   RawComponent(Acceleration, TEXT("z")).Get(0)});
             if (!AccelerationCm.IsNearlyZero())
             {
                 auto* Acc = Module<UNiagaraStatelessModule_AccelerationForce>(Em);
                 Acc->SetIsModuleEnabled(true);
                 const bool bRelative = EffectiveRaw(E, TEXT("MoveRelativeEmitter")).TrimStart().StartsWith(TEXT("true"), ESearchCase::IgnoreCase);
                 Acc->CoordinateSpace = bRelative ? ENiagaraCoordinateSpace::Local : ENiagaraCoordinateSpace::World;
-                SetVec3(Acc->AccelerationDistribution, AccelerationCm);
-                BoundsReach += 0.5 * AccelerationCm.Size() / Cm * Life * Life;
+                SetVec3(Acc->AccelerationDistribution, AccelerationCm * float(TravelScale));
+                BoundsReach += 0.5 * AccelerationCm.Size() / Cm * Life * Life * TravelScale;
                 L.Mapped.Add(bRelative ? TEXT("Acceleration(local)") : TEXT("Acceleration(world)"));
             }
         }
@@ -1157,9 +1193,9 @@ struct FBuilder
         }
         if (Has(E, TEXT("turbulence"))) L.Skipped.Add(TEXT("turbulence"));
 
-        const double Size = Num(E, TEXT("size.value"), 1) * Eval(Curve(E, TEXT("size.strength_curve")), 1.0);
+        const double Size = Num(E, TEXT("size.value"), 1) * Eval(Curve(E, TEXT("size.strength_curve")), 1.0)
+            * FMath::Lerp(1.0, NozzleFillSize, FillWeight);
         if (Has(E, TEXT("size.strength_curve"))) L.Approx.AddUnique(TEXT("size.strength_curve@1"));
-        const double Aspect = Num(E, TEXT("aspect"), 1);
         const double Reach = (Offset.Size() / Cm) + (Box.Size() / Cm) + BoundsReach + 2 * Size * FMath::Max(1.0, Aspect) + 0.5;
         const double BeamReach = bBeam ? FMath::Max(BeamRangeM, DefaultBeamCm / Cm) : (bSpline ? DefaultBeamCm / Cm : 0.0);
         if (FStructProperty* P = FindFProperty<FStructProperty>(UNiagaraStatelessEmitter::StaticClass(), TEXT("FixedBounds")))
@@ -1258,7 +1294,8 @@ struct FBuilder
         const double Emissive = Num(E, TEXT("emissive_lighting"));
         double Luminance = Emissive + Num(E, TEXT("diffuse_lighting")) * LitSceneUnits;
         if (Emissive <= 0 && Kind == EKind::Sprite) L.Approx.AddUnique(FString::Printf(TEXT("diffuse_lighting:unlit at %g scene units"), LitSceneUnits));
-        double Alpha = Num(E, TEXT("alpha.value"), 1);
+        double Alpha = Num(E, TEXT("alpha.value"), 1) * FMath::Lerp(1.0, NozzleFillOpacity, FillWeight)
+            * FMath::Lerp(1.0, NozzleFilamentOpacity, FilamentWeight) / Density;
         const double AlphaRandom = FMath::Clamp(Num(E, TEXT("alpha.random")), 0.0, 1.0);
         FCurve AlphaStrengthCurve = Curve(E, TEXT("alpha.strength_curve"));
         FCurve AlphaAge = Curve(E, TEXT("alpha.age_curve"));
@@ -1341,7 +1378,18 @@ struct FBuilder
             L.Mapped.AddUnique(TEXT("RandomRotationRate.y"));
         }
 
-        const FCurve SizeCurve = Kind == EKind::Flare ? FCurve() : Curve(E, TEXT("size.age_curve"));
+        FCurve SizeCurve = Kind == EKind::Flare ? FCurve() : Curve(E, TEXT("size.age_curve"));
+        if (FillWeight > 0)
+        {
+            TArray<double> Ages{0, 0.25, 0.5, 0.75, 1};
+            for (const auto& Key : SizeCurve) Ages.AddUnique(Key[0]);
+            Ages.Sort();
+            FCurve Tapered;
+            const double TipScale = FMath::Lerp(1.0, NozzleFillTipSize, FillWeight);
+            for (double Age : Ages)
+                Tapered.Add({Age, Eval(SizeCurve, Age) * FMath::Lerp(1.0, TipScale, Age)});
+            SizeCurve = MoveTemp(Tapered);
+        }
         if (!SizeCurve.IsEmpty())
         {
             auto* Scale = Module<UNiagaraStatelessModule_ScaleSpriteSize>(Em);
@@ -1383,8 +1431,7 @@ struct FBuilder
                    : (Kind == EKind::Flare || Blend == TEXT("Additive")) ? FMat::EMaster::Additive
                                                                          : FMat::EMaster::Translucent;
         if (Kind == EKind::Sprite && Blend != TEXT("Additive") && Blend != TEXT("AlphaBased")) L.Approx.Add(TEXT("blend ") + Blend + TEXT(":translucent"));
-        const TArray<double> Tiles = Kind == EKind::Flare ? TArray<double>() : Nums(E, TEXT("tiles"));
-        if (Tiles.Num() == 2) M.Frames = FVector2f(float(Tiles[0]), float(Tiles[1]));
+        M.Frames = FrameGrid;
         if (Kind == EKind::Flare)
         {
             M.Texture = Flare->bGlow ? FString() : Flare->Texture;
@@ -1392,7 +1439,7 @@ struct FBuilder
         }
         else
         {
-            M.Texture = Str(E, TEXT("texture"));
+            M.Texture = TexturePath;
             if (F.Extras)
             {
                 M.bFlipU = RawFlag(E, TEXT("RandomFlipU"));
@@ -1428,22 +1475,15 @@ struct FBuilder
         L.Mapped.AddUnique(TEXT("texture"));
         L.Mapped.AddUnique(TEXT("blend"));
 
-        SizeX *= Aspect;
-        if (Kind != EKind::Flare && !M.Texture.IsEmpty())
-            if (const UTexture2D* Tex = Texture(M.Texture))
-            {
-                const FVector2f Frame = SCFxRules::FrameAspect(Tex->Source.GetSizeX(), Tex->Source.GetSizeY(), M.Frames);
-                SizeX *= Frame.X;
-                SizeY *= Frame.Y;
-                if (Frame != FVector2f(1, 1)) L.Mapped.AddUnique(TEXT("texture frame aspect"));
-            }
+        SizeX *= Aspect * FrameAspect.X;
+        SizeY *= FrameAspect.Y;
+        if (FrameAspect != FVector2f(1, 1)) L.Mapped.AddUnique(TEXT("texture frame aspect"));
         const double SizeRandom = FMath::Clamp(Num(E, TEXT("size.random")), 0.0, 1.0);
         if (FMath::IsNearlyEqual(SizeX, SizeY)) SetUniformRange(Init->SpriteSizeDistribution, SizeY * (1 - SizeRandom), SizeY);
         else SetVec2Range(Init->SpriteSizeDistribution, FVector2f(SizeX, SizeY) * float(1 - SizeRandom), FVector2f(SizeX, SizeY));
         L.Mapped.Add(TEXT("size"));
 
         // Facing and stretch.
-        const FString Facing = Kind == EKind::Flare ? FString(TEXT("Camera")) : Str(E, TEXT("facing"));
         const double Stretch = Kind == EKind::Flare ? 0.0 : RawNumber(E, TEXT("VelocityStretch")).Get(0);
         const bool bStretch = F.Stretch && Stretch > 0 && (TypicalSpeedCm > 0);
         const bool bVelocity = Bool(E, TEXT("orient_to_velocity")) || bStretch;
@@ -1672,7 +1712,7 @@ struct FBuilder
     }
 
     /** One game effect (sc_particle_effect JSON) -> /Game/SC/FX/<library>/<effect>. */
-    bool BuildEffect(const FString& Reference)
+    bool BuildEffect(const FString& Reference, bool bNozzle = false)
     {
         char* Text = nullptr;
         if (sc_particle_effect(H, TCHAR_TO_UTF8(*Reference), &Text) != SC_STATUS_OK)
@@ -1690,7 +1730,7 @@ struct FBuilder
             return false;
         }
         const FString EffectName = Str(Effect, TEXT("effect"));
-        const FString LongName = SCFxNames::PackageFor(Str(Effect, TEXT("library")), EffectName); // the runtime finds it by the same rule
+        const FString LongName = SCFxNames::PackageFor(Str(Effect, TEXT("library")), EffectName, bNozzle);
         const FString Name = FPaths::GetBaseFilename(LongName);
 
         UNiagaraSystem* Template = LoadObject<UNiagaraSystem>(nullptr, TemplatePath);
@@ -1714,6 +1754,18 @@ struct FBuilder
 
         const TArray<TSharedPtr<FJsonValue>> Emitters = Effect->GetArrayField(TEXT("emitters"));
         CurrentEmitters = Emitters;
+        double SparkReachM = 0;
+        if (bNozzle)
+        {
+            for (const auto& Value : Emitters)
+            {
+                const FJson Emitter = Value->AsObject();
+                if (Bool(Emitter, TEXT("enabled")) && Num(Emitter, TEXT("spawn.count")) > 1 &&
+                    Str(Emitter, TEXT("spawn.mode")) == TEXT("continuous") && !Str(Emitter, TEXT("texture")).IsEmpty() &&
+                    Num(Emitter, TEXT("alpha.value"), 1) > 0)
+                    SparkReachM = FMath::Max(SparkReachM, 2 * Num(Emitter, TEXT("size.value"), 1) * NozzleFillSize);
+            }
+        }
         GuideCurvature.Reset();
         GuideName.Reset();
         for (const auto& V : Emitters)
@@ -1734,7 +1786,7 @@ struct FBuilder
             FNiagaraEmitterHandle& Handle = System->GetEmitterHandles().Last();
             bool bInvisible = false;
             FLog Local;
-            const bool bOK = Configure(Handle.GetStatelessEmitter(), E, Parent, Kind, Flare, Local, bInvisible);
+            const bool bOK = Configure(Handle.GetStatelessEmitter(), E, Parent, Kind, Flare, Local, bInvisible, bNozzle, SparkReachM);
             if (bInvisible)
             {
                 Handle.SetIsEnabled(false, *System, false);
@@ -1949,13 +2001,15 @@ int32 USCFxBuildCommandlet::Main(const FString& Params)
         UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR config %s missing or not JSON"), *ConfigPath);
         return 1;
     }
-    TArray<FString> Effects, MaterialEffects;
+    TArray<FString> Effects, MaterialEffects, ThrusterEffects;
     FString Arg;
     const bool bEffectsArg = FParse::Value(*Params, TEXT("Effects="), Arg, false);
     if (bEffectsArg) Effects = SplitList(Arg);
     const bool bMaterialArg = FParse::Value(*Params, TEXT("MaterialEffects="), Arg, false);
     if (bMaterialArg) MaterialEffects = SplitList(Arg);
-    if (!bEffectsArg && !bMaterialArg)
+    const bool bThrusterArg = FParse::Value(*Params, TEXT("ThrusterEffects="), Arg, false);
+    if (bThrusterArg) ThrusterEffects = SplitList(Arg);
+    if (!bEffectsArg && !bMaterialArg && !bThrusterArg)
     {
         for (const auto& V : Config->GetArrayField(TEXT("effects"))) Effects.Add(V->AsString());
         for (const auto& V : Config->GetArrayField(TEXT("material_effects"))) MaterialEffects.Add(V->AsString());
@@ -1971,6 +2025,12 @@ int32 USCFxBuildCommandlet::Main(const FString& Params)
     B.SceneUnitNits = FSCStarEngine::Get().SceneUnitNits;
     B.LitSceneUnits = Num(Config, TEXT("unlit_diffuse_scene_units"), 0.0);
     B.FlareWorldScale = Num(Config, TEXT("flare_world_scale"), 1.0);
+    B.NozzleFillSize = FMath::Clamp(Num(Config, TEXT("nozzle_preview.fill_size"), 1.0), 0.01, 1.0);
+    B.NozzleFillTravel = FMath::Clamp(Num(Config, TEXT("nozzle_preview.fill_travel"), 1.0), 0.01, 1.0);
+    B.NozzleFillOpacity = FMath::Clamp(Num(Config, TEXT("nozzle_preview.fill_opacity"), 1.0), 0.0, 1.0);
+    B.NozzleFillTipSize = FMath::Clamp(Num(Config, TEXT("nozzle_preview.fill_tip_size"), 1.0), 0.01, 1.0);
+    B.NozzleFilamentSpread = FMath::Clamp(Num(Config, TEXT("nozzle_preview.filament_spread"), 1.0), 0.0, 1.0);
+    B.NozzleFilamentOpacity = FMath::Clamp(Num(Config, TEXT("nozzle_preview.filament_opacity"), 1.0), 0.0, 1.0);
     if (sc_open(nullptr, nullptr, &B.H) != SC_STATUS_OK)
     {
         UE_LOG(LogSCFx, Error, TEXT("SC_FX_ERROR sc_open: %s"), UTF8_TO_TCHAR(sc_last_error(nullptr)));
@@ -1980,6 +2040,7 @@ int32 USCFxBuildCommandlet::Main(const FString& Params)
     UE_LOG(LogSCFx, Display, TEXT("SC_FX build effects=%d material_effects=%d scene_unit_nits=%g unlit_diffuse_scene_units=%g features=%s spawn_infos=%d loop_capacity=%d"),
            Effects.Num(), MaterialEffects.Num(), B.SceneUnitNits, B.LitSceneUnits, *B.F.ToString(), SpawnInfoCapacity(), B.LoopCapacity);
     for (const FString& E : Effects) B.BuildEffect(E);
+    for (const FString& E : ThrusterEffects) B.BuildEffect(E, true);
     for (const FString& M : MaterialEffects) B.BuildMaterialEffect(M);
     sc_close(B.H);
     UE_LOG(LogSCFx, Display, TEXT("SC_FX_DONE systems=%d textures=%d materials=%d errors=%d"), B.Systems, B.Textures.Num(), B.Materials.Num(), B.Errors);

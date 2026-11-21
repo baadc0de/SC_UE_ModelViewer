@@ -46,6 +46,21 @@ bool FSCFxFrameAspectTest::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFxNozzleFillTest, "SCBridge.Fx.NozzleFill",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFxNozzleFillTest::RunTest(const FString&)
+{
+    TestEqual(TEXT("round fill is fully profiled"), SCFxRules::NozzleFillWeight(FVector2f(1, 1)), 1.0);
+    TestEqual(TEXT("narrow filaments retain the source shape"), SCFxRules::NozzleFillWeight(FVector2f(0.25f, 1)), 0.0);
+    TestEqual(TEXT("orientation of a rectangular sprite does not change the blend"),
+              SCFxRules::NozzleFillWeight(FVector2f(0.65f, 1)),
+              SCFxRules::NozzleFillWeight(FVector2f(1, 0.65f)));
+    TestEqual(TEXT("local sparks keep their travel"), SCFxRules::NozzleSparkTravelScale(1, 2), 1.0);
+    TestEqual(TEXT("sparks cannot travel past the stationary footprint"), SCFxRules::NozzleSparkTravelScale(28, 2), 2.0 / 28.0);
+    TestEqual(TEXT("zero-speed emission needs no adjustment"), SCFxRules::NozzleSparkTravelScale(0, 2), 1.0);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFxLoopGuardTest, "SCBridge.Fx.LoopGuard",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCFxLoopGuardTest::RunTest(const FString&)
