@@ -236,6 +236,11 @@ bool FSCBasis::RunTest(const FString&)
     TestTrue(TEXT("colour"), A.GetVertexInstanceColors()[VI].Equals(FVector4f(1,0,0,1)));
     const FMatrix W = FSCMeshImporter::CryToGltf();
     const FMatrix HelperMatrix = FTranslationMatrix(FVector(0,5,1)) * W;
+    const FMatrix FxOffset = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(0,2,0)), W, false, true);
+    const FMatrix FxWorld = FxOffset * FSCMeshImporter::CryFxToHelper() * FSCMeshImporter::Transform(HelperMatrix);
+    TestTrue(TEXT("Particle offsets and axes follow the authored helper's Cry +Y"),
+             FVector(FxWorld.GetOrigin()).Equals(FVector(700,0,100), 0.001) &&
+             FVector(FxWorld.TransformVector(FVector::ForwardVector)).Equals(FVector::ForwardVector, 0.001));
     const FMatrix Child = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(0,2,0)), W, true, false);
     const FMatrix ChildWorld = FSCMeshImporter::Transform(W) * Child * FSCMeshImporter::Transform(HelperMatrix);
     TestTrue(TEXT("Resolved child offsets are relative to source helper, one wrapper only"), FVector(ChildWorld.TransformPosition(FVector::ZeroVector)).Equals(FVector(700,0,100), 0.001));

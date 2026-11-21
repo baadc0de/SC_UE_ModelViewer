@@ -40,6 +40,10 @@ bool Start(FSCThrusterEmitter& Emitter, float Strength)
         Emitter.Component = UNiagaraFunctionLibrary::SpawnSystemAttached(
             Asset, Emitter.Mount, Emitter.Socket, Offset.GetLocation(), Offset.Rotator(), Offset.GetScale3D(),
             EAttachLocation::KeepRelativeOffset, false, ENCPoolMethod::None, false, false);
+        if (Emitter.Component)
+            UE_LOG(LogTemp, Verbose, TEXT("THRUSTER_FX_MOUNT reference=%s socket=%s origin=%s positive_axis=%s scale=%s"),
+                *Emitter.Source.Reference, *Emitter.Socket.ToString(), *Emitter.Component->GetComponentLocation().ToCompactString(),
+                *Emitter.Component->GetForwardVector().ToCompactString(), *Emitter.Component->GetComponentScale().ToCompactString());
     }
     if (!Emitter.Component) return false;
     Emitter.Component->SetVariableFloat(TEXT("User.SC.Strength"), Strength);

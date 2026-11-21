@@ -22,6 +22,30 @@ double Reference(const TArray<FVector2D>& K, double X)
 }
 } // namespace
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFxSignedSpeedTest, "SCBridge.Fx.SignedSpeed",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFxSignedSpeedTest::RunTest(const FString&)
+{
+    const auto Forward = SCFxRules::ConeSpeed(20.0, 0.25, 5.0);
+    const auto Reverse = SCFxRules::ConeSpeed(-20.0, 0.25, 5.0);
+    TestEqual(TEXT("Cry +Y maps to Unreal +X"), Forward.Axis, FVector3f(1, 0, 0));
+    TestEqual(TEXT("negative speed reverses the axis"), Reverse.Axis, FVector3f(-1, 0, 0));
+    TestEqual(TEXT("random reduces the base speed magnitude"), Reverse.Min, 15.0);
+    TestEqual(TEXT("parent contribution widens the magnitude range"), Reverse.Max, 25.0);
+    TestEqual(TEXT("forward range uses the same magnitudes"), Forward.Max, Reverse.Max);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFxFrameAspectTest, "SCBridge.Fx.FrameAspect",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCFxFrameAspectTest::RunTest(const FString&)
+{
+    TestEqual(TEXT("portrait sprites narrow across the flow"), SCFxRules::FrameAspect(128, 512, {1, 1}), FVector2f(0.25f, 1));
+    TestEqual(TEXT("landscape sprites preserve their width"), SCFxRules::FrameAspect(512, 128, {1, 1}), FVector2f(1, 0.25f));
+    TestEqual(TEXT("square frames in a strip stay square"), SCFxRules::FrameAspect(128, 512, {1, 4}), FVector2f(1, 1));
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFxLoopGuardTest, "SCBridge.Fx.LoopGuard",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCFxLoopGuardTest::RunTest(const FString&)

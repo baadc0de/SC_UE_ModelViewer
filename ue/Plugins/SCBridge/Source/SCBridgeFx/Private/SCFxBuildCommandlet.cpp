@@ -49,7 +49,8 @@
 //         alive at once do not fit is reported (its period is the data's);
 //         SpawnDelay -> delay.
 //  lifetime (+Random) -> InitializeParticle Lifetime range [v(1-r), v].
-//  size (+Random, Aspect) -> Sprite Size: CryEngine's Size is a radius -> 2 x 100 x size; age_curve -> ScaleSpriteSize.
+//  size (+Random, Aspect) -> Sprite Size: 2 x 100 x radius, scaled by the texture frame and the authored aspect.
+//         age_curve -> ScaleSpriteSize.
 //  color x (EmissiveLighting + DiffuseLighting x LitSceneUnits) -> particle colour in scene units; the material
 //         instance's EmissiveScale is the game's scene unit (FSCStarEngine::SceneUnitNits, cd/m2). Color Random -> one
 //         random for all channels; age curves (colour, alpha) -> ScaleColor.
@@ -59,7 +60,8 @@
 //         game's strengths overshot between them: WP-K4a round 2). Colour / alpha go to Dynamic Material Parameter 0 (the
 //         masters multiply by it), speed to the cone velocity scale, light intensity to the light's diffuse/specular scale,
 //         count to the spawn rate. Lifetime and size curves stay baked at strength 1 (lifetime and random size ranges).
-//  speed (+Random) + EmitAngle / FocusAngle -> AddVelocity cone about +X (Niagara's cone angle is the full angle).
+//  speed (+Random) + EmitAngle / FocusAngle -> AddVelocity cone about signed local X (Niagara takes a full angle).
+//  Acceleration -> AccelerationForce in cm/s2, in emitter space for MoveRelativeEmitter, otherwise world space.
 //  gravity_scale -> GravityForce (0, 0, -981 x scale) cm/s2, world space; Drag / AirResistance -> Drag.
 //  position_offset_m -> ShapeLocation offset; random_offset_m (EmissionSize) -> box of 2 x the offset.
 //  spline (SplineGuided): particles start at the emitter and travel to SC.BeamEnd over their lifetime on the quadratic
@@ -254,15 +256,18 @@ FVector3f Basis(const TArray<double>& V)
 FString Raw(const FJson& E, const FString& Attr) { return Str(E, TEXT("raw.") + Attr); }
 /** The base value of a raw attribute ("true,..." -> true). */
 bool RawFlag(const FJson& E, const FString& Attr) { return Raw(E, Attr).TrimStart().StartsWith(TEXT("true"), ESearchCase::IgnoreCase); }
-/** First number after `key=` in a raw attribute (e.g. RandomAngles "y=360", SoftParticleV2 "FadeThickness=2.5"). */
-TOptional<double> RawComponent(const FJson& E, const FString& Attr, const FString& Key)
+/** First number after `key=` in an attribute (e.g. RandomAngles "y=360", SoftParticleV2 "FadeThickness=2.5"). */
+TOptional<double> RawComponent(const FString& Text, const FString& Key)
 {
-    const FString Text = Raw(E, Attr);
     int32 At = INDEX_NONE;
     for (int32 From = 0; (At = Text.Find(Key + TEXT("="), ESearchCase::IgnoreCase, ESearchDir::FromStart, From)) != INDEX_NONE; From = At + 1)
         if (At == 0 || !FChar::IsAlnum(Text[At - 1])) break; // a whole key, not the tail of a longer one
     if (At == INDEX_NONE) return {};
     return FCString::Atod(*Text.Mid(At + Key.Len() + 1));
+}
+TOptional<double> RawComponent(const FJson& E, const FString& Attr, const FString& Key)
+{
+    return RawComponent(Raw(E, Attr), Key);
 }
 /** The leading number of a raw attribute ("0.078067,Random=1" -> 0.078067). */
 TOptional<double> RawNumber(const FJson& E, const FString& Attr)
@@ -709,12 +714,14 @@ struct FBuilder
             return nullptr;
         }
         bool bSRGB = true;
-        FSCTextureImporter::PixelFormatOf(Info.dxgi_format, bSRGB);
-        return Slot = SaveTexture(ArchivePath, Role, int32(Info.width), int32(Info.height), Bgra, bSRGB, FString::Printf(TEXT("dxgi=%u"), Info.dxgi_format));
+        const bool bSourceBC7 = FSCTextureImporter::PixelFormatOf(Info.dxgi_format, bSRGB) == PF_BC7;
+        return Slot = SaveTexture(ArchivePath, Role, int32(Info.width), int32(Info.height), Bgra, bSRGB,
+                                  FString::Printf(TEXT("dxgi=%u"), Info.dxgi_format), bSourceBC7);
     }
 
     /** An editable BGRA8 texture asset under /Game/SC/FX/Textures/<archive path>. */
-    UTexture2D* SaveTexture(const FString& ArchivePath, ETexRole Role, int32 W, int32 Hgt, const TArray64<uint8>& Bgra, bool bSRGB, const FString& Format)
+    UTexture2D* SaveTexture(const FString& ArchivePath, ETexRole Role, int32 W, int32 Hgt, const TArray64<uint8>& Bgra,
+                            bool bSRGB, const FString& Format, bool bSourceBC7 = false)
     {
         if (Role != ETexRole::Color) bSRGB = false;
         const FString Name = SafeSegment(FPaths::GetBaseFilename(ArchivePath)) + (Role == ETexRole::Color ? TEXT("") : Role == ETexRole::Flow ? TEXT("_flow") : TEXT("_normal"));
@@ -725,7 +732,9 @@ struct FBuilder
         Tex->PreEditChange(nullptr);
         Tex->Source.Init(W, Hgt, 1, 1, TSF_BGRA8, Bgra.GetData());
         Tex->SRGB = bSRGB;
-        Tex->CompressionSettings = Role == ETexRole::Normal ? TC_Normalmap : Role == ETexRole::Flow ? TC_VectorDisplacementmap : TC_Default;
+        // In HDR, BC1/3 re-encoding can give neutral BC7 gradients colored steps that become visible under bloom.
+        Tex->CompressionSettings = Role == ETexRole::Normal ? TC_Normalmap : Role == ETexRole::Flow ? TC_VectorDisplacementmap :
+                                   bSourceBC7 ? TC_BC7 : TC_Default;
         Tex->LODGroup = TEXTUREGROUP_Effects;
         Tex->MipGenSettings = TMGS_FromTextureGroup;
         Tex->PostEditChange();
@@ -1016,11 +1025,11 @@ struct FBuilder
         L.Mapped.Add(TEXT("position_offset_m"));
         L.Mapped.Add(TEXT("random_offset_m"));
 
-        // Motion: the guided beam path, or a cone about +X with forces.
+        // Motion: the guided beam path, or a signed cone with forces.
         const FStrength SpeedStrength = Strength(Curve(E, TEXT("speed.strength_curve")));
         const double Speed = Num(E, TEXT("speed.value"));
         const double SpeedRandom = FMath::Clamp(Num(E, TEXT("speed.random")), 0.0, 1.0);
-        double BoundsReach = 0, TypicalSpeedCm = Speed * SpeedStrength.At1 * Cm;
+        double BoundsReach = 0, TypicalSpeedCm = FMath::Abs(Speed * SpeedStrength.At1) * Cm;
         if (bBeam)
         {
             const double T = FMath::Max(Life, 1e-3);
@@ -1075,27 +1084,28 @@ struct FBuilder
             }
             TypicalSpeedCm = (BeamRangeM > 0 ? BeamRangeM * Cm : DefaultBeamCm) / T;
         }
-        else if (Speed > 0 && !bSpline)
+        else if (Speed != 0 && !bSpline)
         {
             auto* Vel = Module<UNiagaraStatelessModule_AddVelocity>(Em);
             Vel->SetIsModuleEnabled(true);
             Vel->VelocityType = ENSM_VelocityType::InCone;
-            double SpeedMax = Speed;
+            double ParentSpeed = 0;
             // Inherited parent velocity (Spawn=FromParentBirth): the parent's speed x InheritVelocity widens the speed range.
             const double Inherit = Num(E, TEXT("inherit_velocity"));
             if (F.Extras && Inherit != 0 && Parent && !Str(E, TEXT("spawn.spawn_on_parent")).IsEmpty())
             {
-                SpeedMax += FMath::Abs(Inherit) * Num(Parent, TEXT("speed.value"));
+                ParentSpeed = FMath::Abs(Inherit) * Num(Parent, TEXT("speed.value"));
                 L.Approx.Add(TEXT("inherit_velocity:parent speed added to the speed range"));
             }
             else if (Inherit != 0)
                 L.Skipped.Add(TEXT("inherit_velocity"));
-            SetRange(Vel->ConeVelocityDistribution, Speed * (1 - SpeedRandom) * Cm, SpeedMax * Cm);
+            const SCFxRules::FConeSpeed ConeSpeed = SCFxRules::ConeSpeed(Speed, SpeedRandom, ParentSpeed);
+            SetRange(Vel->ConeVelocityDistribution, ConeSpeed.Min * Cm, ConeSpeed.Max * Cm);
             Vel->ConeVelocityDistribution.UpdateValuesFromDistribution();
             Apply(Vel->ConeVelocityScale, SpeedStrength);
             if (SpeedStrength.bVaries) L.Mapped.Add(TEXT("speed.strength_curve"));
             Vel->ConeRotationType = ENSM_ConeRotationType::Direction;
-            SetVec3(Vel->ConeDirection, FVector3f(1, 0, 0));
+            SetVec3(Vel->ConeDirection, ConeSpeed.Axis);
             const double EmitMax = Num(E, TEXT("emit_angle_deg.max")), EmitMin = Num(E, TEXT("emit_angle_deg.min"));
             const double Focus = Num(E, TEXT("focus_angle_deg.max"));
             Vel->ConeAngle = float(FMath::Clamp(2 * (EmitMax + Focus), 0.0, 360.0));
@@ -1105,10 +1115,28 @@ struct FBuilder
             L.Mapped.Add(TEXT("speed"));
             if (Has(E, TEXT("emit_angle_deg"))) L.Mapped.Add(TEXT("emit_angle_deg"));
             if (Focus > 0) L.Approx.Add(TEXT("focus_angle:widens the cone"));
-            BoundsReach += SpeedMax * SpeedStrength.At1 * Life;
+            if (Speed < 0) L.Mapped.Add(TEXT("speed(reverse cone)"));
+            BoundsReach += ConeSpeed.Max * FMath::Abs(SpeedStrength.At1) * Life;
         }
-        else if (Speed > 0)
+        else if (Speed != 0)
             L.Skipped.Add(TEXT("speed(spline travel)"));
+        if (!bBeam)
+        {
+            const FString Acceleration = EffectiveRaw(E, TEXT("Acceleration"));
+            const FVector3f AccelerationCm = Basis({RawComponent(Acceleration, TEXT("x")).Get(0),
+                                                   RawComponent(Acceleration, TEXT("y")).Get(0),
+                                                   RawComponent(Acceleration, TEXT("z")).Get(0)});
+            if (!AccelerationCm.IsNearlyZero())
+            {
+                auto* Acc = Module<UNiagaraStatelessModule_AccelerationForce>(Em);
+                Acc->SetIsModuleEnabled(true);
+                const bool bRelative = EffectiveRaw(E, TEXT("MoveRelativeEmitter")).TrimStart().StartsWith(TEXT("true"), ESearchCase::IgnoreCase);
+                Acc->CoordinateSpace = bRelative ? ENiagaraCoordinateSpace::Local : ENiagaraCoordinateSpace::World;
+                SetVec3(Acc->AccelerationDistribution, AccelerationCm);
+                BoundsReach += 0.5 * AccelerationCm.Size() / Cm * Life * Life;
+                L.Mapped.Add(bRelative ? TEXT("Acceleration(local)") : TEXT("Acceleration(world)"));
+            }
+        }
         const double Gravity = Num(E, TEXT("gravity_scale"));
         if (Gravity != 0)
         {
@@ -1131,7 +1159,8 @@ struct FBuilder
 
         const double Size = Num(E, TEXT("size.value"), 1) * Eval(Curve(E, TEXT("size.strength_curve")), 1.0);
         if (Has(E, TEXT("size.strength_curve"))) L.Approx.AddUnique(TEXT("size.strength_curve@1"));
-        const double Reach = (Offset.Size() / Cm) + (Box.Size() / Cm) + BoundsReach + 2 * Size + 0.5;
+        const double Aspect = Num(E, TEXT("aspect"), 1);
+        const double Reach = (Offset.Size() / Cm) + (Box.Size() / Cm) + BoundsReach + 2 * Size * FMath::Max(1.0, Aspect) + 0.5;
         const double BeamReach = bBeam ? FMath::Max(BeamRangeM, DefaultBeamCm / Cm) : (bSpline ? DefaultBeamCm / Cm : 0.0);
         if (FStructProperty* P = FindFProperty<FStructProperty>(UNiagaraStatelessEmitter::StaticClass(), TEXT("FixedBounds")))
             *P->ContainerPtrToValuePtr<FBox>(Em) = FBox(FVector(-(Reach + BeamReach) * Cm), FVector((Reach + BeamReach) * Cm));
@@ -1295,12 +1324,6 @@ struct FBuilder
         if (bColorVaries) L.Mapped.Add(TEXT("color.strength_curve(SC.Strength)"));
         if (AlphaS.bVaries) L.Mapped.Add(TEXT("alpha.strength_curve(SC.Strength)"));
 
-        const double SizeRandom = FMath::Clamp(Num(E, TEXT("size.random")), 0.0, 1.0);
-        const double Aspect = Has(E, TEXT("aspect")) ? Num(E, TEXT("aspect"), 1) : 1.0;
-        SizeX *= Aspect;
-        if (FMath::IsNearlyEqual(SizeX, SizeY)) SetUniformRange(Init->SpriteSizeDistribution, SizeY * (1 - SizeRandom), SizeY);
-        else SetVec2Range(Init->SpriteSizeDistribution, FVector2f(SizeX, SizeY) * float(1 - SizeRandom), FVector2f(SizeX, SizeY));
-        L.Mapped.Add(TEXT("size"));
         if (TOptional<double> Angle = RawComponent(E, TEXT("RandomAngles"), TEXT("y")); Angle && Kind != EKind::Flare)
         {
             SetRange(Init->SpriteRotationDistribution, -*Angle, *Angle);
@@ -1404,6 +1427,20 @@ struct FBuilder
         R->SortMode = M.Master == FMat::EMaster::Translucent ? ENiagaraSortMode::ViewDepth : ENiagaraSortMode::None;
         L.Mapped.AddUnique(TEXT("texture"));
         L.Mapped.AddUnique(TEXT("blend"));
+
+        SizeX *= Aspect;
+        if (Kind != EKind::Flare && !M.Texture.IsEmpty())
+            if (const UTexture2D* Tex = Texture(M.Texture))
+            {
+                const FVector2f Frame = SCFxRules::FrameAspect(Tex->Source.GetSizeX(), Tex->Source.GetSizeY(), M.Frames);
+                SizeX *= Frame.X;
+                SizeY *= Frame.Y;
+                if (Frame != FVector2f(1, 1)) L.Mapped.AddUnique(TEXT("texture frame aspect"));
+            }
+        const double SizeRandom = FMath::Clamp(Num(E, TEXT("size.random")), 0.0, 1.0);
+        if (FMath::IsNearlyEqual(SizeX, SizeY)) SetUniformRange(Init->SpriteSizeDistribution, SizeY * (1 - SizeRandom), SizeY);
+        else SetVec2Range(Init->SpriteSizeDistribution, FVector2f(SizeX, SizeY) * float(1 - SizeRandom), FVector2f(SizeX, SizeY));
+        L.Mapped.Add(TEXT("size"));
 
         // Facing and stretch.
         const FString Facing = Kind == EKind::Flare ? FString(TEXT("Camera")) : Str(E, TEXT("facing"));
@@ -1526,7 +1563,7 @@ struct FBuilder
         static const TSet<FString> Known = {
             TEXT("Enabled"), TEXT("Inheritance"), TEXT("ParticleSystem"), TEXT("Count"), TEXT("Continuous"), TEXT("ParticleLifeTime"),
             TEXT("EmitterLifeTime"), TEXT("PulsePeriod"), TEXT("SpawnDelay"), TEXT("EmitPerDistance"), TEXT("Size"), TEXT("Aspect"),
-            TEXT("Alpha"), TEXT("Color"), TEXT("Speed"), TEXT("EmitAngle"), TEXT("FocusAngle"), TEXT("GravityScale"),
+            TEXT("Alpha"), TEXT("Color"), TEXT("Speed"), TEXT("EmitAngle"), TEXT("FocusAngle"), TEXT("GravityScale"), TEXT("Acceleration"),
             TEXT("AirResistance"), TEXT("Drag"), TEXT("BlendType"), TEXT("Facing"), TEXT("OrientToVelocity"), TEXT("EmissiveLighting"),
             TEXT("DiffuseLighting"), TEXT("Texture"), TEXT("TextureAnimation"), TEXT("TextureTiling"), TEXT("LightSource"),
             TEXT("PositionOffset"), TEXT("RandomOffset"), TEXT("EmissionSize"), TEXT("RandomAngles"), TEXT("RandomRotationRate"),

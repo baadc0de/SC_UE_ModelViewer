@@ -19,6 +19,47 @@ those outlets at idle. The diagnostic line reports main and manoeuvring strength
 The Niagara bake still samples strength-driven size and lifetime at full strength. Matching the game's
 low-thrust plume shape needs a separate renderer change and a visual check.
 
+## Exhaust orientation and sprite dimensions
+
+The thruster placement composes the particle offset and axes with the authored helper or bone in its
+source frame. That removes a 90° mismatch introduced by the decomposed GLB wrapper. The Niagara bake
+honors the sign of emitter speed, so negative speed travels opposite the helper's positive axis and a
+mirrored authoring setup can use positive speed. It also applies authored acceleration. The viewer uses
+emitter space for the acceleration on layers marked `MoveRelativeEmitter`, based on the Cutter exhaust
+records and the stationary preview. World-space acceleration is used on other layers.
+
+Sprite dimensions use each flipbook cell's pixel proportions before applying the authored aspect. The
+Cutter's 128×512 outer-flame texture therefore has one quarter of its previous sprite width. Color textures
+decoded from BC7 bake back into BC7, which avoids the particle baker's previous conversion to BC1 or BC3.
+The legacy basis for the distance and aspect units is documented in the
+[CryEngine particle parameter reference](https://www.cryengine.com/docs/static/engines/cryengine-3/categories/1114113/pages/11239648).
+The per-frame aspect mapping follows
+[Lumberyard's texture-frame calculation](https://raw.githubusercontent.com/aws/lumberyard/master/dev/Code/CryEngine/Cry3DEngine/ParticleEffect.cpp)
+and [sprite vertex scaling](https://raw.githubusercontent.com/aws/lumberyard/master/dev/Code/CryEngine/Cry3DEngine/ParticleRender.cpp).
+
+The generated FX contract is now version 4. Rebuild the configured cargo and impact effects with
+`-run=SCFxBuild`, then rebuild any local ship exhaust systems with the references below. Check the local
+packages with `-run=SCFxBuild -VerifyContract`.
+
+For the visual check, capture fixed aft and profile views with the normal project look in all four states.
+Thrust should travel outward along each nozzle. Boost should read as separate tapered jets with the hot
+centers inside the mouths and the housing legible. The Cutter's supplied game stills establish the visual
+target. The C2 in the XL hangar serves as a second check of the attachment axes and mode changes.
+
+The Win64 Development Editor build and all ten FX and mesh-basis automation tests passed. The
+commandlet rebuilt the 16 Cutter and C2 systems and ran the ten configured cargo and impact bake
+entries with zero errors. The contract verifier found 22 unique systems, with zero stale packages
+or load failures. In serialized D3D12 Surface Cache runs, both ships resolved every exhaust binding
+through all four modes. Mount logs showed the signed launch axes point aft on the forward thrusters
+of both ships. The captures and logs are in the ignored `out/m4-nozzle-preview/frame-aspect` folder.
+
+Astra confirmed the direction correction on both ships. The Cutter's small jet has a narrow pink
+tail in profile, and the new streaks leave more of the housing visible. The large blue fill still
+stays too thick downstream. The large afterburn core still adds an oversized round halo at boost,
+and Minimum can leave detached dashes around the rim. A diagnostic capture of each layer separately
+identified the blue `Core_Fill`, afterburn cores and outer streaks as separate contributors. Their
+footprint and opacity remain open under the reference-based visual criterion.
+
 ## Preparing local exhaust assets
 
 Export each ship with attachments. The first entry in the resulting tar is the scene manifest and contains the authored references. The helper reads just that entry. Pass the unique references to the existing SCFxBuild commandlet to generate the local Niagara assets.

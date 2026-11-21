@@ -1296,6 +1296,7 @@ void FSCImportJob::FState::Assemble()
             for (const FSkelMeshRenderSection& S : R->LODRenderData[0].RenderSections) N += S.MaterialIndex == Slot ? S.NumTriangles : 0;
         return N;
     };
+    const FTransform FxToHelper(FSCMeshImporter::CryFxToHelper());
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
@@ -1563,16 +1564,17 @@ void FSCImportJob::FState::Assemble()
             };
             if (Source.Bone.IsEmpty())
             {
-                BindEmitter(Anchor, NAME_None, Source.Offset);
+                BindEmitter(Anchor, NAME_None, Source.bParent && bAtHelper ? Source.Offset * FxToHelper : Source.Offset);
                 continue;
             }
+            const FTransform HelperOffset = Source.Offset * FxToHelper;
             const int32 Before = Thruster.Emitters.Num();
             USceneComponent* Rig = Source.bParent ? Parent : E.Rig;
             TSet<FName> Animated;
             const FName Exact(*Source.Bone);
             if (Rig && Rig->DoesSocketExist(Exact))
             {
-                BindEmitter(Rig, Exact, Source.Offset);
+                BindEmitter(Rig, Exact, HelperOffset);
                 Animated.Add(Exact);
             }
             else if (USkinnedMeshComponent* MeshRig = Cast<USkinnedMeshComponent>(Rig))
@@ -1582,14 +1584,14 @@ void FSCImportJob::FState::Assemble()
                 for (FName Bone : Bones)
                     if (Bone.ToString().MatchesWildcard(Source.Bone, ESearchCase::IgnoreCase))
                     {
-                        BindEmitter(Rig, Bone, Source.Offset);
+                        BindEmitter(Rig, Bone, HelperOffset);
                         Animated.Add(Bone);
                     }
             }
             if (E.Mesh && !Source.bParent)
                 for (const auto& Node : E.Mesh->Nodes)
                     if (Node.Key.MatchesWildcard(Source.Bone, ESearchCase::IgnoreCase) && !Animated.Contains(FName(*Node.Key)))
-                        BindEmitter(Anchor, NAME_None, Source.Offset * FTransform(FSCMeshImporter::Transform(Node.Value)));
+                        BindEmitter(Anchor, NAME_None, HelperOffset * FTransform(FSCMeshImporter::Transform(Node.Value)));
             if (Thruster.Emitters.Num() == Before)
                 Warn(I.EntityName, TEXT("Thruster attachment not found: ") + Source.Bone);
         }
