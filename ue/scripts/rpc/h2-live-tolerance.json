@@ -33,7 +33,7 @@
           }
         }
       ],
-      "warmup_frames": 64,
+      "warmup_frames": 256,
       "width": 1920
     },
     "cvars": {
@@ -47,7 +47,8 @@
       "r.SSDO.Quality": "1"
     },
     "anti_aliasing_method": "AAM_TSR",
-    "display_method": "HuePreservingShoulder"
+    "display_method": "HuePreservingShoulder",
+    "ray_tracing_allowed": true
   },
   "calibration_warmup_frames": 32,
   "calibration_sidecar_sha256": [

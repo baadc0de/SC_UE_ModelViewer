@@ -33,6 +33,7 @@ function Read-Fixture($sidecar) {
         cvars = Sort-JsonFields $sidecar.cvars
         anti_aliasing_method = $sidecar.frames[0].anti_aliasing_method
         display_method = $sidecar.frames[0].display_method
+        ray_tracing_allowed = $sidecar.frames[0].ray_tracing_allowed
     }
 }
 
@@ -81,11 +82,14 @@ if ($referenceCapture.commit -cne $repeat.commit -or $referenceCapture.engine -c
     throw 'Render request, build, or rendering settings differ'
 }
 $frameFields = @('index', 't', 'at', 'rot', 'fov', 'anti_aliasing_method', 'display_method',
-    'ssdo_direct', 'ssdo_ambient', 'ssdo_reflections')
+    'ray_tracing_allowed', 'ssdo_direct', 'ssdo_ambient', 'ssdo_reflections')
 for ($i = 0; $i -lt $referenceCapture.frames.Count; $i++) {
     $first = $referenceCapture.frames[$i] | Select-Object -Property $frameFields | ConvertTo-Json -Compress
     $second = $repeat.frames[$i] | Select-Object -Property $frameFields | ConvertTo-Json -Compress
     if ($first -cne $second) { throw "Camera, timing, or look differs at frame $i" }
+    if ($repeat.frames[$i].ray_tracing_allowed -cne $fixture.ray_tracing_allowed) {
+        throw "Ray-tracing permission changed at frame $i"
+    }
 }
 
 if (!$Calibrate) {

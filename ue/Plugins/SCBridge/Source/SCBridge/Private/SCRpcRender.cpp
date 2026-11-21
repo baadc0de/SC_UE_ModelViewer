@@ -58,6 +58,7 @@ public:
             View.OverrideFrameIndexValue = SampleIndex;
             View.OverrideOutputFrameIndexValue = OutputIndex;
             CaptureAAMethod = View.AntiAliasingMethod;
+            bCaptureAllowsRayTracing = View.IsRayTracingAllowedForView();
             View.FinalPostProcessSettings.DynamicGlobalIlluminationMethod = GI;
             View.FinalPostProcessSettings.ReflectionMethod = Reflections;
             View.FinalPostProcessSettings.LumenSurfaceCacheResolution = Resolution;
@@ -75,6 +76,7 @@ public:
     float FrameDelta = 0;
     float MainExposure = 0;
     EAntiAliasingMethod CaptureAAMethod = AAM_None;
+    bool bCaptureAllowsRayTracing = false;
     bool bReady = false;
     ETonemappingMethod DisplayMethod{};
     float SSDODirect = 0, SSDOAmbient = 0, SSDOReflections = 0;
@@ -157,8 +159,8 @@ bool ValidateSchedule(const TSharedPtr<FJsonObject>& Body, FIntPoint ViewSize, d
     const double Count = Value(Body, TEXT("frames"), FMath::RoundToDouble(Value(Body, TEXT("seconds"), 0) * Fps));
     const double W = Value(Body, TEXT("width"), ViewSize.X);
     const double H = Value(Body, TEXT("height"), ViewSize.Y);
-    // Give the capture's fresh Lumen history time to settle before moving the camera.
-    const double Warm = Value(Body, TEXT("warmup_frames"), 64);
+    // Let ray-traced lighting and Lumen histories settle at the start pose before moving the camera.
+    const double Warm = Value(Body, TEXT("warmup_frames"), 256);
     if (!(Fps > 0 && Fps <= 240 && Count >= 1 && Count <= MAX_int32 && Count == FMath::FloorToDouble(Count)
         && W >= 1 && W <= 16384 && H >= 1 && H <= 16384 && W == FMath::FloorToDouble(W) && H == FMath::FloorToDouble(H)
         && Warm >= 0 && Warm <= MAX_int32 && Warm == FMath::FloorToDouble(Warm)))
@@ -175,6 +177,8 @@ USceneCaptureComponent2D* CreateCapture(UWorld* World, int32 Width, int32 Height
     Capture->bCaptureEveryFrame = false;
     Capture->bCaptureOnMovement = false;
     Capture->bAlwaysPersistRenderingState = true;
+    // The viewport uses ray-traced lighting when available. Scene captures opt out by default.
+    Capture->bUseRayTracingIfEnabled = true;
     Capture->CaptureSource = Source;
     auto* Target = NewObject<UTextureRenderTarget2D>(Capture);
     Target->InitCustomFormat(Width, Height, PF_FloatRGBA, true);
@@ -460,8 +464,12 @@ bool FSCRpcRender::CaptureFrame(bool bWrite, FString& Error)
                     for (int32 X = Rect.Max.X; X < Width; ++X) Row[X] = Black;
             }
         }
-        if (auto* State = Capture->GetViewState(0); State && (Capture == Sdr.Get() || !Sdr))
-            Frame->SetNumberField(TEXT("exposure"), State->GetLastAutoExposureReadback().Exposure);
+        if (Capture == Sdr.Get() || !Sdr)
+        {
+            Frame->SetBoolField(TEXT("ray_tracing_allowed"), MainLook->bCaptureAllowsRayTracing);
+            if (auto* State = Capture->GetViewState(0))
+                Frame->SetNumberField(TEXT("exposure"), State->GetLastAutoExposureReadback().Exposure);
+        }
         for (const auto& Format : Outputs)
         {
             if ((Format == TEXT("exr")) != (Capture == Linear.Get())) continue;
@@ -665,10 +673,10 @@ bool FSCRpcRenderScheduleTest::RunTest(const FString&)
     TestTrue(TEXT("seconds"), Parse());
     TestEqual(TEXT("rounded frame count"), Count, 36);
     TestEqual(TEXT("default viewport width"), W, 123);
-    TestEqual(TEXT("default lighting warm-up"), Warm, 64);
-    B->SetNumberField(TEXT("warmup_frames"), 32);
+    TestEqual(TEXT("default lighting warm-up"), Warm, 256);
+    B->SetNumberField(TEXT("warmup_frames"), 64);
     TestTrue(TEXT("explicit warm-up"), Parse());
-    TestEqual(TEXT("explicit warm-up is preserved"), Warm, 32);
+    TestEqual(TEXT("explicit warm-up is preserved"), Warm, 64);
     B->SetNumberField(TEXT("warmup_frames"), 0);
     TestTrue(TEXT("zero warm-up"), Parse());
     TestEqual(TEXT("no warm-up when explicitly disabled"), Warm, 0);

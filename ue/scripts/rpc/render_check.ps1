@@ -40,18 +40,11 @@ if ($Acceptance) {
 $result = Invoke-SCRender $req
 if (!$result.ok) { throw $result.error }
 $sidecar = Get-Content -Raw -LiteralPath $result.sidecar | ConvertFrom-Json
+if ($sidecar.frames.Count -ne $count) { throw "expected $count sidecar frames" }
+if ($sidecar.fps -ne $fps) { throw "expected $fps fps in the sidecar" }
 $geometry = & "$PSScriptRoot/orbit_metrics.ps1" -Sidecar $result.sidecar -Center $worldCenter
 $result | Add-Member -NotePropertyName 'orbit_geometry' -NotePropertyValue $geometry
-if (!$geometry.passed) { throw "Camera positions diverged from authored orbit: $($geometry | ConvertTo-Json -Compress)" }
-if ($sidecar.frames.Count -ne $count) { throw "expected $count sidecar frames" }
-for ($i = 0; $i -lt $count; $i++) {
-    $f = $sidecar.frames[$i]
-    if ($f.index -ne $i -or [math]::Abs($f.t - $i / $fps) -gt 0.000001) { throw "bad time or index at $i" }
-    if ($i -gt 0) {
-        $delta = ($f.rot[1] - $sidecar.frames[$i-1].rot[1] + 540) % 360 - 180
-        if ([math]::Abs($delta - 90 / $orbitFrames) -gt 0.05 * 90 / $orbitFrames) { throw "bad camera step at $i" }
-    }
-}
+if (!$geometry.passed) { throw "Camera timing or pose diverged from the authored orbit: $($geometry | ConvertTo-Json -Compress)" }
 foreach ($format in $req.outputs) {
     if ((Get-ChildItem -File (Join-Path $dir $format)).Count -ne $count) { throw "bad frame count for $format" }
 }
@@ -62,7 +55,7 @@ function Read-ImageMetric([string[]]$FfmpegArgs, [string]$Metric) {
     $lines = & $ff @FfmpegArgs 2>&1
     if ($LASTEXITCODE -ne 0) { throw ($lines -join [Environment]::NewLine) }
     foreach ($line in $lines) {
-        if ("$line" -match "lavfi\.signalstats\.$Metric=([\d.]+)") {
+        if ("$line" -match "lavfi\.signalstats\.$Metric=(\S+)") {
             [double]::Parse($Matches[1], [cultureinfo]::InvariantCulture)
         }
     }
@@ -73,9 +66,9 @@ $filter = "$stack,tblend=all_mode=difference,format=gray16le,scale=in_range=full
 $diff = @(Read-ImageMetric @('-hide_banner','-nostdin','-i',$pattern,'-vf',$filter,'-f','null','-') 'YAVG')
 if ($diff.Count -ne $count - 1) { throw "expected $($count - 1) consecutive image comparisons, got $($diff.Count)" }
 $result | Add-Member -NotePropertyName 'image_step_luma16' -NotePropertyValue $diff
-$stats = $diff | Measure-Object -Average -Minimum -Maximum
-$pass = $stats.Minimum -gt 0 -and ($stats.Maximum - $stats.Minimum) -lt 0.05 * $stats.Average
-$result | Add-Member -NotePropertyName 'image_evenness_pass' -NotePropertyValue $pass
+# Adjacent image differences reflect lighting and scene detail. Use them to detect exact repeats.
+$repeatedFrames = @(for ($i = 0; $i -lt $diff.Count; $i++) { if ($diff[$i] -eq 0) { $i + 1 } })
+$result | Add-Member -NotePropertyName 'repeated_image_frames' -NotePropertyValue $repeatedFrames
 $result | Add-Member -NotePropertyName 'wall_s_per_frame' -NotePropertyValue ($result.render_s / $count)
 $result | Add-Member -NotePropertyName 'holds_total' -NotePropertyValue (($sidecar.frames | Measure-Object -Property holds -Sum).Sum)
 if ($CompareWith) {
@@ -87,4 +80,5 @@ if ($CompareWith) {
     $result | Add-Member -NotePropertyName 'comparison_peak' -NotePropertyValue (($max | Measure-Object -Maximum).Maximum / 65535)
 }
 $result | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $dir 'report.json')
+if ($repeatedFrames.Count) { throw "Identical adjacent RGB frames at indices $($repeatedFrames -join ', ')" }
 $result

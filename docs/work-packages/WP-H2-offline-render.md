@@ -47,7 +47,7 @@ it can pass them through unchanged:
 | `seconds` or `frames` | Length |
 | `width`, `height` | Output size (default the viewport's); independent of the window under `-AgentMode` |
 | `outputs` | Any of `exr` (linear, see below), `png16` (display-referred SDR, 16-bit), `png8` (SDR, 8-bit) — default `["png16"]` |
-| `warmup_frames` | Frames rendered and discarded at the start pose before frame 0 (default 64) |
+| `warmup_frames` | Frames rendered and discarded at the start pose before frame 0 (default 256) |
 | `setup` | Actions applied before warm-up (start pose, console commands) |
 | `steps` | Timed actions, `at` seconds from frame 0 (see below) |
 | `encode` | Optional: `prores` (ProRes 4444 from `png16`) or `h264` via `-SCFfmpeg`; frames are kept either way |
@@ -73,7 +73,7 @@ while one is running is refused. `/quit` during a render stops after the current
 
 Sidecar `render.json`: the request as received, engine/branch/commit, `r.*` values that affect the image
 (screen percentage, AA method, Lumen, the look's settings), and per frame: `index`, `t` (seconds), camera `at`,
-`rot` (as rendered), `fov`.
+`rot` (as rendered), `fov` and `ray_tracing_allowed` for the PNG capture view (or the EXR view for EXR-only runs).
 
 ## Colour rules
 
@@ -159,23 +159,28 @@ if any, follow the WP-E1 rules (fork branch `scviewer/5.9`, UE behaviour as the 
 
 1. **Frame count and timing.** `/render` 5 s at 30 fps, 1920×1080, orbit of `DRAK_Cutlass_Black` (`-SCDefaults`),
    `outputs: ["png16", "exr"]`. Exactly 150 frames per output, sidecar `t` = `n/30`.
-2. **Evenness.** The camera's angular step between consecutive frames (from the sidecar and, independently, from an
-   image-based check: mean absolute difference between consecutive frames) varies by less than 5 % across the shot,
-   with no zero-difference (repeated) frame.
+2. **Evenness.** Require consecutive frame indices and timestamps at `n / fps`. Derive the camera's angular
+   position from its recorded world position and the independently queried orbit centre. Both that step and the
+   recorded yaw step must be within 5% of the authored step. Decode the PNG16 sequence and reject adjacent frames
+   with identical RGB. The adjacent-image mean absolute differences in the report describe changes in scene
+   content. The same-mode repeat in step 5 also checks whether the image at each index matches its independent
+   reference, including held pixels that differ slightly in lighting.
 3. **HDR independence.** `SCBridge.RenderGpu.FrozenOutputDevice` renders a fixed GPU colour chart in D3D12.
    Every RGB half-float code must match exactly between the advertised SDR/sRGB and HDR10/PQ targets for each
    production capture source (PNG and EXR). The ordinary display-referred path must differ by more than 1/1023
    at some RGB sample as a positive control. Physical Windows HDR on/off comparisons can provide integration data.
-4. **Look.** Frame 0 `png16` vs a `/screenshot` of the same pose with the HDR device off: same image within TSR/DLSS
-   history differences; `sc.Look.SSDO off` / `game` change the render.
+4. **Look.** Compare frame 0 `png16` with a UI-free viewport `/screenshot` at the same pose. For the reference,
+   disable engine HDR output and DLSS, set 100% screen percentage and use TSR in both views. Verify the same
+   lighting, shadows, reflections and display curve within temporal-history differences. Switch
+   `sc.Look.SSDO off` / `game` to confirm that the capture follows the active look.
 5. **Live repeatability.** Keep the same viewer session, Windows display mode, render settings and five-second
-   TSR Cutlass request. Acceptance uses the production default warm-up. Calibrate from the first two captures,
-   adding 25% headroom independently to the shot-wide
+   TSR Cutlass request. The acceptance fixture uses the production default warm-up and ray-traced capture.
+   Calibrate from the first two captures, adding 25% headroom independently to the shot-wide
    and worst-frame mean absolute RGB16 error, then rounding each limit up to a whole 16-bit code (minimum one).
    Compare a third capture against the first using those fixed limits. Both metrics, normalized to full scale,
    must be at or below their respective limits. Report the peak individual channel error for diagnosis.
    Repeat acceptance runs use the checked-in limits. The provided limits were calibrated at 32 warm-up frames
-   and also apply to the 64-frame default. Use `-Calibrate` when deliberately establishing a new baseline for
+   and also apply to the 256-frame default. Use `-Calibrate` when deliberately establishing a new baseline for
    this fixture and fix the limits before scoring a held-out capture.
 6. **Off screen.** All of the above under `-AgentMode` (`Start-SCViewer` without `-Visible`).
 7. **Cost.** Render wall time per frame for the orbit, with and without the streaming holds.
@@ -288,7 +293,7 @@ the three captures.
 | Worst-frame mean absolute error | 0.001109958 | 0.001388571 | 0.001536248 (fail, frame 4) |
 
 The held-out peak individual channel error was 0.638178. The live tolerance stays at the calibrated values.
-That live repeatability run failed. The consecutive-image evenness and viewport appearance gates are open.
+That live repeatability run failed. At that point the image-evenness and viewport appearance checks were still open.
 Logs, sidecars and the scorer report are under `out/h2/acceptance-hdr`.
 
 ### Frame 4 investigation
@@ -309,9 +314,9 @@ used modified lighting and did not run as acceptance captures.
 With the production look, doubling the start-pose warm-up reduced the three short pair comparisons' worst
 errors from 0.001373–0.001748 at 32 samples to 0.001001–0.001051 at 64. Astra found matching scene appearance
 at normal viewing scale, with small differences in the wing lamp halo, cockpit reflections and specular edges.
-The short captures took about 0.8 s longer. The runtime now defaults to 64 and still honours explicit counts,
-including zero. The acceptance script uses that default. The original calibration values and source hashes
-remain fixed.
+The short captures took about 0.8 s longer. That revision defaulted to 64 and honoured explicit counts,
+including zero. The acceptance script followed the runtime default. The original calibration values and source
+hashes remained fixed.
 
 Short controls and regional measurements are under `out/h2/frame4-diagnostics`, `out/h2/frame4-controls`,
 `out/h2/frame4-lumen` and `out/h2/acceptance-hdr/frame4-regions.jsonl`.
@@ -328,8 +333,66 @@ Capture times were 80.72, 79.94 and 80.21 s. Every pair passed both original RGB
 | First / third | 0.000829478 | 0.001120893 (frame 6) | 0.000947411 |
 | Second / third | 0.000804702 | 0.001063072 (frame 13) | 0.000929853 |
 
-Peak individual RGB channel differences ranged from 0.687434 to 0.732341. The separate consecutive-image
-check still failed, with differences spanning 53.3–53.5% of the mean. Viewport appearance remains open.
+Peak individual RGB channel differences ranged from 0.687434 to 0.732341. The former consecutive-image
+spread rule failed, with differences spanning 53.3–53.5% of the mean. Viewport appearance remained open.
 The Win64 build, frozen HDR chart and all five focused NullRHI tests passed with builds and sessions serialized.
 The scheduling test failed at 32 before the fix and passed at 64 afterward, including the override assertions.
 Logs, sidecars and numerical reports are under `out/h2/frame4-warmup-fix`.
+
+### Judder metric and viewport lighting investigation
+
+The original adjacent-image rule rejected a geometrically uniform 0.6° orbit because the consecutive RGB errors
+spanned 53.3% of their mean, even though every timestamp was correct and every adjacent frame differed. A second
+control used a held camera followed by a double step on a brightness ramp. One frame's brightness offset made
+all differences equal, so the original test passed the faulty motion.
+
+The revised orbit test rejected an injected held position, a held yaw and a timestamp slip in separate controls.
+The RGB check caught an exact repeated frame. The same-mode repeat scorer rejected both that repeated frame and
+a repeat brightened by one 16-bit code, in each case at the injected index 4. These controls are under
+`out/h2/evenness`.
+
+With engine HDR output disabled, matching the viewport's AA to the capture's TSR reduced the visible difference
+around the wing lamps. It left the dark viewport canopy and broad under-hull shadow missing from the offline
+view. Astra confirmed that enabling ray tracing in the capture restored both, and that disabling MegaLights
+made both views use the brighter lighting. Disabling bloom removed the lamp halos. Disabling Lumen GI,
+reflections or SSDO separately left the dominant shading mismatch.
+
+Unreal's scene-capture component defaults to opting out of ray tracing. The MegaLights hardware path checks
+that permission. Both H2 capture components now opt in when ray tracing is available, following the same
+path as the viewport. With the runtime CVar test the matched-TSR mean absolute RGB difference dropped from
+0.05629 to 0.02021. Astra still saw a grainier offline floor shadow and softer wall lighting in the viewport.
+The lighting controls are under `out/h2/appearance` and `out/h2/appearance-ray`.
+
+The compiled change reproduced the appearance improvement at 64 warm-up frames (mean absolute RGB error
+0.02000), and the 256-frame stationary control reduced it to 0.01735. Consecutive viewport snapshots differed
+by about 0.0015. Astra confirmed persistent offline floor-shadow grain and brighter viewport wall lighting
+behind the rear pods. Disabling Lumen reduced the cross-path error to 0.01256 and largely removed the
+wall-lighting mismatch. The floor grain persisted. The remaining look differences stay open. These
+controls are under `out/h2/appearance-fixed`.
+
+At 64 warm-up frames, the first full ray-traced repeat exceeded both original live limits (shot MAE
+0.001109399 and worst frame 0.001812741 at frame 5). The first 16 frames averaged 0.001686, and every
+frame from 40 onward passed the per-frame limit. In short repeats, 128 warm-up frames still produced
+two over-limit pairs. At 256 all three worst-frame errors were between 0.000710 and 0.000912 with the
+default MegaLights samples. The 256-frame short control took about three seconds longer than the
+128-frame control. The runtime now defaults to 256. Callers can still request their own count, and
+the quick test uses two. The fixed thresholds and calibration hashes stayed unchanged.
+
+The serialized Win64 build, frozen HDR chart, five focused NullRHI tests and full 256-frame-warm-up rerun
+passed. All three 150-frame captures reported zero timestamp error, a maximum angular step error of 0.002203°
+against the 0.6° target, zero streaming holds and no repeated images. Capture times were 84.01, 84.78 and 84.55 s.
+
+| Full ray-traced capture pair | Shot MAE (limit 0.001007095) | Worst-frame MAE (limit 0.001388571) |
+| --- | ---: | ---: |
+| First / second | 0.000698408 | 0.000870318 (frame 33) |
+| First / third | 0.000780572 | 0.001003696 (frame 19) |
+| Second / third | 0.000759471 | 0.000975883 (frame 19) |
+
+Astra confirmed the floor grain and rear-wall differences in the final matched-TSR pair. Its cross-view
+mean RGB error was 0.01735, compared with 0.00139 between two viewport screenshots. Switching SSDO off changed
+all three recorded weights from 1 to 0. Logs, captures and reports are under `out/h2/evenness-look-256`.
+
+The final metadata build passed a 320×180 procedural-hangar smoke run. The two-frame warm-up and eight-frame
+orbit took 1.67 s with no repeated images. The PNG+EXR sidecar recorded ray-tracing permission enabled at
+the default and disabled under the engine override. The EXR-only sidecar also recorded the default correctly.
+The repeat scorer rejected missing, disabled and mid-shot-changing permission in the ray-traced fixture.
