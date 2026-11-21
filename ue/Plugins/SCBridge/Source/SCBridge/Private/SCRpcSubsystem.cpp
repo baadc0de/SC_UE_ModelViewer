@@ -6,6 +6,9 @@
 #if SC_WITH_RPC
 #include "SCRpcJson.h"
 #include "SCRpcVideo.h"
+#include "SCShipLinkRpc.h"
+#include "SCGarageRpc.h"
+#include "SCRpcRender.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
 #include "SCVehicle.h"
@@ -204,6 +207,7 @@ public:
     void Stop()
     {
         // A recording still running when the app closes is finished here, not lost (encoding a long one takes minutes).
+        Renderer.Stop(TEXT("shutdown"));
         Video.Finish(30 * 60);
         if (TickHandle.IsValid()) FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
         TickHandle.Reset();
@@ -254,6 +258,7 @@ private:
     int32 AnomalyCount = 0;
     TMap<FString, int32> LogKinds, LogTotals; // warnings / errors seen per kind, and in all
     FSCVideoRecorder Video;
+    FSCRpcRender Renderer;
     bool bPanelsSet = false;
     FTransform LastCamera = FTransform::Identity;
 
@@ -314,6 +319,7 @@ private:
             if (V->IsEnvironmentLoading()) Out.Add(TEXT("environment"));
             if (V->GetArchiveState() == ESCArchiveState::Opening) Out.Add(TEXT("archive"));
         }
+        if (Renderer.IsBusy()) Out.Add(TEXT("rendering"));
         if (const USCCargoSubsystem* C = Cargo()) Out.Append(C->ActivityReasons());
         for (const FPending& P : Pending)
             if (!P.bWait) Out.AddUnique(TEXT("rpc:") + P.Path);
@@ -391,6 +397,8 @@ private:
             O->SetObjectField(TEXT("camera"), CameraObj);
         }
         if (const USCCargoSubsystem* C = Cargo()) O->SetObjectField(TEXT("cargo"), C->StateJson());
+        O->SetObjectField(TEXT("ship"), SCShipLinkRpc::Snapshot(World()));
+        O->SetObjectField(TEXT("garage"), SCGarageRpc::Snapshot(World()));
         if (const TSharedPtr<FJsonValue> Lifts = LiftsJson(); Lifts->AsArray().Num() > 0) O->SetField(TEXT("lifts"), Lifts);
         return O;
     }
@@ -426,6 +434,7 @@ private:
     void Scan(const FObj& S)
     {
         TSet<FString> Found;
+        SCShipLinkRpc::Scan(World(), Found);
         auto PosBad = [](const TSharedPtr<FJsonObject>& O, double& Z) {
             const TArray<TSharedPtr<FJsonValue>>* P;
             if (!O->TryGetArrayField(TEXT("pos"), P) || P->Num() < 3) return false;
@@ -573,6 +582,11 @@ private:
                 NextState = T + (bSettled ? 10.0 : 1.0 / StateHz);
             }
         }
+        if (Renderer.IsBusy())
+        {
+            const bool bOtherwiseIdle = Reasons.Num() == 1 && Reasons.Contains(TEXT("rendering"));
+            Renderer.Tick(bOtherwiseIdle && Unsettled.IsEmpty(), Unsettled.Contains(TEXT("streaming")) || Unsettled.Contains(TEXT("assets")) || Unsettled.Contains(TEXT("shaders")));
+        }
         Video.Tick();
         // Deferred answers.
         for (int32 I = 0; I < Pending.Num();)
@@ -663,6 +677,20 @@ private:
             V->SetEnvironment(Str(B, TEXT("folder")));
             Respond(Done, Ok());
         });
+        for (const TCHAR* ShipRoute : {TEXT("state"), TEXT("door"), TEXT("secure"), TEXT("lights"), TEXT("locate")})
+        {
+            const FString Path = FString(TEXT("/ship/")) + ShipRoute;
+            Bind(*Path, [this, Route = FString(ShipRoute)](auto& Body, auto& Done) {
+                Respond(Done, SCShipLinkRpc::Command(World(), Route, Body));
+            });
+        }
+        for (const TCHAR* GarageRoute : {TEXT("fleet"), TEXT("retrieve"), TEXT("store"), TEXT("paint")})
+        {
+            const FString Path = FString(TEXT("/garage/")) + GarageRoute;
+            Bind(*Path, [this, Route = FString(GarageRoute)](auto& Body, auto& Done) {
+                Respond(Done, SCGarageRpc::Command(World(), Route, Body));
+            });
+        }
         Bind(TEXT("/ship/spawn"), [this](auto& B, auto& Done) { SpawnShip(B, Done); });
         Bind(TEXT("/ship/despawn"), [this](auto& B, auto& Done) {
             USCViewerSubsystem* V = Viewer();
@@ -698,6 +726,15 @@ private:
         });
         Bind(TEXT("/camera"), [this](auto& B, auto& Done) { Camera(B, Done); });
         Bind(TEXT("/screenshot"), [this](auto& B, auto& Done) { Screenshot(B, Done); });
+        Bind(TEXT("/render"), [this](auto& B, auto& Done) {
+            if (Str(B, TEXT("action")) == TEXT("status")) return Respond(Done, Renderer.Describe());
+            FString Why;
+            if (!Renderer.Start(World(), B, [this](const auto& Body) { return ApplyCamera(Body); }, Why)) return Respond(Done, Error(Why));
+            Defer(TEXT("/render"), Num(B, TEXT("timeout_s"), 3600), true, Done, [this](bool bTimeout) -> TSharedPtr<FJsonObject> {
+                if (bTimeout) Renderer.Stop(TEXT("render timed out"));
+                return Renderer.IsBusy() ? nullptr : TSharedPtr<FJsonObject>(Renderer.Describe());
+            });
+        });
         Bind(TEXT("/record"), [this](auto& B, auto& Done) { Record(B, Done); });
         Bind(TEXT("/ui"), [this](auto& B, auto& Done) {
             USCViewerSubsystem* V = Viewer();
@@ -709,6 +746,7 @@ private:
         });
         Bind(TEXT("/quit"), [this](auto& B, auto& Done) {
             Respond(Done, Ok());
+            Renderer.Stop(TEXT("quit"));
             FPlatformMisc::RequestExitWithStatus(false, uint8(Num(B, TEXT("code"), 0)));
         });
         FHttpServerModule::Get().StartAllListeners();
@@ -1010,15 +1048,15 @@ private:
         Respond(Done, O);
     }
 
-    void Camera(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)
+    FObj ApplyCamera(const TSharedPtr<FJsonObject>& B)
     {
         USCViewerSubsystem* V = Viewer();
-        if (!V) return Respond(Done, Error(TEXT("no viewer")));
+        if (!V) return Error(TEXT("no viewer"));
         const FString Mode = Str(B, TEXT("mode"));
         if (!Mode.IsEmpty())
         {
             const ESCCameraMode M = Mode == TEXT("first") ? ESCCameraMode::FirstPerson : Mode == TEXT("orbit") ? ESCCameraMode::Orbit : ESCCameraMode::Fly;
-            if (!V->SetCameraMode(M)) return Respond(Done, Error(TEXT("camera mode refused")));
+            if (!V->SetCameraMode(M)) return Error(TEXT("camera mode refused"));
         }
         FVector At, LookAt;
         const bool bAt = Vec(B, TEXT("at"), At), bLook = Vec(B, TEXT("look_at"), LookAt);
@@ -1026,19 +1064,19 @@ private:
         if (bAt || !Focus.IsEmpty())
         {
             if (V->GetCameraMode() == ESCCameraMode::FirstPerson && !V->SetCameraMode(ESCCameraMode::Fly))
-                return Respond(Done, Error(TEXT("cannot leave first person")));
+                return Error(TEXT("cannot leave first person"));
             // A pose (at) is the fly camera's: the orbit camera keeps its own pivot and distance, and puts a view set on it
             // elsewhere (below the floor in the C2 hangar).
             if (bAt && Mode.IsEmpty() && V->GetCameraMode() == ESCCameraMode::Orbit && !V->SetCameraMode(ESCCameraMode::Fly))
-                return Respond(Done, Error(TEXT("cannot switch to the fly camera")));
+                return Error(TEXT("cannot switch to the fly camera"));
             ASCViewerPawn* Pawn = V->GetViewerPawn();
-            if (!Pawn) return Respond(Done, Error(TEXT("no viewer pawn")));
+            if (!Pawn) return Error(TEXT("no viewer pawn"));
             if (!Focus.IsEmpty())
             {
                 FBox Box(ForceInit);
                 for (const FSCVehicleInstanceInfo& I : V->GetVehicleInstances())
                     if (I.Actor.IsValid() && (Focus == TEXT("all") || FString::FromInt(I.Id) == Focus)) Box += FSCEnvironment::SolidBounds(I.Actor.Get());
-                if (!Box.IsValid) return Respond(Done, Error(TEXT("focus: a vehicle id or all")));
+                if (!Box.IsValid) return Error(TEXT("focus: a vehicle id or all"));
                 Pawn->FocusBounds(Box);
             }
             else
@@ -1050,7 +1088,12 @@ private:
         }
         FObj O = Ok();
         O->SetStringField(TEXT("mode"), StaticEnum<ESCCameraMode>()->GetNameStringByValue(int64(V->GetCameraMode())));
-        Respond(Done, O);
+        return O;
+    }
+
+    void Camera(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)
+    {
+        Respond(Done, ApplyCamera(B));
     }
 
     void Screenshot(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)

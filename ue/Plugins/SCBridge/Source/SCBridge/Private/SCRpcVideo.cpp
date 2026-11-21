@@ -37,6 +37,11 @@ FString FfmpegExe()
     return TEXT("ffmpeg"); // on PATH
 }
 
+bool IsHDRPreviewSource(EPixelFormat Format, bool bHDRDevice)
+{
+    return Format == PF_FloatRGBA || (Format == PF_A2B10G10R10 && bHDRDevice);
+}
+
 /** Rows of a readback in Format into 8-bit BGRA (gamma as displayed). False for a format it does not know. */
 bool ToColors(const uint8* Data, int32 PitchPixels, FIntPoint Size, EPixelFormat Format, TArray<FColor>& Out)
 {
@@ -102,6 +107,11 @@ public:
             UE_LOG(LogSCRpcVideo, Display, TEXT("RPC_RECORD source texture=%s extent=%dx%d format=%s rect=%s views=%d"), Texture->Name, Texture->Desc.Extent.X, Texture->Desc.Extent.Y,
                    GetPixelFormatString(Texture->Desc.Format), *Rect.ToString(), Family.Views.Num());
         }
+        if (IsHDRPreviewSource(Texture->Desc.Format, Family.RenderTarget->GetSceneHDREnabled()) && !SawHDR.exchange(true))
+        {
+            UE_LOG(LogSCRpcVideo, Warning, TEXT("RPC_RECORD HDR source %s converted to 8-bit preview. Highlights may clip."),
+                   GetPixelFormatString(Texture->Desc.Format));
+        }
         FPendingFrame& P = Pending.AddDefaulted_GetRef();
         P.Readback = MakeUnique<FRHIGPUTextureReadback>(TEXT("SCRecordFrame"));
         P.Size = Rect.Size();
@@ -129,6 +139,7 @@ public:
     }
 
     const FRenderTarget* Target;
+    std::atomic<bool> SawHDR{false};
     std::atomic<int32> Requests{0}, Dropped{0}, InGpu{0};
 
 private:
@@ -207,6 +218,7 @@ bool FSCVideoRecorder::Start(const FString& InPath, double InFps, double InMaxSe
     *WriteFailures = 0;
     Error.Reset();
     Format.Reset();
+    bSawHDR = false;
     Extension = FSceneViewExtensions::NewExtension<FSCRecordExtension>(Viewport);
     Started = NextAt = FPlatformTime::Seconds();
     Phase = EPhase::Recording;
@@ -283,6 +295,7 @@ void FSCVideoRecorder::Tick()
             Collect();
             Dropped += Extension->Dropped.load();
             Format = Extension->GetFormatName();
+            bSawHDR = Extension->SawHDR.load();
             Extension.Reset(); // unregisters (the engine holds extensions weakly)
         }
         if (!Extension && *InFlight == 0) Encode();
@@ -344,9 +357,24 @@ TSharedRef<FJsonObject> FSCVideoRecorder::Describe() const
     O->SetNumberField(TEXT("frames"), Times.Num());
     O->SetNumberField(TEXT("dropped"), Dropped);
     O->SetField(TEXT("seconds"), SCRpcJson::Number(Times.IsEmpty() ? 0.0 : Times.Last() - Times[0] + 1.0 / Fps, 0.1));
-    if (!Format.IsEmpty()) O->SetStringField(TEXT("source_format"), Format);
+    const FString CurrentFormat = Extension ? Extension->GetFormatName() : Format;
+    if (!CurrentFormat.IsEmpty()) O->SetStringField(TEXT("source_format"), CurrentFormat);
+    O->SetBoolField(TEXT("source_hdr"), bSawHDR || (Extension && Extension->SawHDR.load()));
     if (Phase == EPhase::Done) O->SetNumberField(TEXT("bytes"), double(IFileManager::Get().FileSize(*Path)));
     if (!Error.IsEmpty()) { O->SetStringField(TEXT("error"), Error); O->SetStringField(TEXT("frames_dir"), FrameDir); }
     return O;
 }
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCRpcVideoSourceTest, "SCBridge.RpcVideo.SourceFormat",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCRpcVideoSourceTest::RunTest(const FString&)
+{
+    TestFalse(TEXT("SDR 10-bit surface"), IsHDRPreviewSource(PF_A2B10G10R10, false));
+    TestTrue(TEXT("PQ device with 10-bit surface"), IsHDRPreviewSource(PF_A2B10G10R10, true));
+    TestTrue(TEXT("linear float surface"), IsHDRPreviewSource(PF_FloatRGBA, false));
+    TestFalse(TEXT("SDR preview surface"), IsHDRPreviewSource(PF_B8G8R8A8, false));
+    return true;
+}
+#endif
 #endif // SC_WITH_RPC

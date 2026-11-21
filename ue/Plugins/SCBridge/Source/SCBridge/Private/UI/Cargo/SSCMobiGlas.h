@@ -9,6 +9,7 @@
 #include "SCMobiGlasOrbit.h"
 
 class FSCMobiGlasModel;
+enum class ESCMobiGlasApp : uint8;
 
 class SSCMobiGlas : public SCompoundWidget
 {
@@ -21,6 +22,7 @@ public:
 
     void Construct(const FArguments& Args);
     virtual ~SSCMobiGlas() override;
+    void SelectApp(ESCMobiGlasApp App);
     virtual void Tick(const FGeometry& Geometry, double Time, float Delta) override;
     virtual bool SupportsKeyboardFocus() const override { return true; }
     virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
@@ -47,6 +49,9 @@ private:
     FSCMobiGlasOrbit Orbit;
     enum class EDrag : uint8 { None, Rotate, Pan } Drag = EDrag::None;
     FName FocusGroup;
+    TWeakObjectPtr<class ASCVehicle> FocusShip;
+    bool bRefocusApp = false;
+    ESCMobiGlasApp LastApp = ESCMobiGlasApp(0);
     int32 FocusJobs = 0; // our active transfers when last framed: a new one widens the framing to its work area
     float Openness = 0; // 0 closed .. 1 open (fade + slide)
     float FitScale = 1;

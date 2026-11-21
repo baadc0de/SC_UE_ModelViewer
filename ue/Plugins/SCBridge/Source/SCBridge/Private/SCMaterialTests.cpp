@@ -563,11 +563,13 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // colour only: the unsampled spec maps of hard_wear_tinted and blend1. GlassPBR adds 2: the glass_thickness
     // height map and the glass_vertex_tint tint map.
     TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 48); // + Layered WearMap, the decal DirtBlendMap, the engine detail map (WP-U2b), the HardSurface stencil
-    // Scene schema v2 (WP-R5, additive) reads; unknown versions are rejected.
+    // Scene schemas v2 (WP-R5) and v3 (WP-K1) are additive. Future versions are rejected.
     {
-        FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3; FString Error;
+        FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3, Unknown; FString Error;
         TestTrue(TEXT("scene v2 accepted: ") + Error, FSCPackageReader::Read(Source, V2, Error, TEXT("scene_v2.json")) && V2.Materials.Num() == 1);
-        TestFalse(TEXT("scene v3 rejected"), FSCPackageReader::Read(Source, V3, Error, TEXT("scene_v3.json")));
+        TestTrue(TEXT("scene v3 accepted"), FSCPackageReader::Read(Source, V3, Error, TEXT("scene_v3.json")) && V3.Materials.Num() == 1);
+        TestFalse(TEXT("scene v4 rejected"), FSCPackageReader::Read(Source, Unknown, Error, TEXT("scene_v4.json")));
+        TestEqual(TEXT("rejected by the version check"), Error, FString(TEXT("Expected decomposed scene version 1 to 3")));
     }
     return true;
 }

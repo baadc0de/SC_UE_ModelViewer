@@ -112,6 +112,12 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
         }
         Result.bOK = true;
         Result.bIndexCacheHit = Self->CacheStatsLocked().bLastHit;
+        char* BuildId = nullptr;
+        if (sc_archive_build_id(Handle, &BuildId) == SC_STATUS_OK)
+        {
+            Result.ArchiveBuildId = UTF8_TO_TCHAR(BuildId);
+            sc_free_string(BuildId);
+        }
         return Result;
     }, UE::Tasks::ETaskPriority::BackgroundNormal);
 }
@@ -338,6 +344,57 @@ void FSCBridgeClient::P4kReadXml(const FString& Path, TFunction<void(const FSCTe
 void FSCBridgeClient::MaterialEffect(const FString& LibraryAndEffect, TFunction<void(const FSCTextResult&)> OnDone)
 {
     TextCall(LibraryAndEffect, &sc_material_effect, MoveTemp(OnDone));
+}
+
+UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::MusicCatalogue()
+{
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared()] {
+        FSCTextResult Result;
+        FScopeLock Guard(&Self->HandleLock);
+        char* Json = nullptr;
+        const sc_status Status = Self->Handle ? sc_music_catalogue(Self->Handle, &Json) : SC_STATUS_INVALID_ARGUMENT;
+        if (Status == SC_STATUS_OK)
+        {
+            Result.Json = UTF8_TO_TCHAR(Json);
+            sc_free_string(Json);
+            Result.bOK = true;
+        }
+        else
+        {
+            Result.Error = Self->Handle ? Self->FailLocked(Status, Result.bPanicked) : NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+        }
+        return Result;
+    });
+}
+
+UE::Tasks::TTask<FSCMusicBytesResult> FSCBridgeClient::MusicRead(const FString& CueId)
+{
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), CueId] {
+        FSCMusicBytesResult Result;
+        FScopeLock Guard(&Self->HandleLock);
+        sc_blob Blob{};
+        const sc_status Status = Self->Handle ? sc_music_read(Self->Handle, TCHAR_TO_UTF8(*CueId), &Blob) : SC_STATUS_INVALID_ARGUMENT;
+        if (Status == SC_STATUS_OK)
+        {
+            if (Blob.len > 0 && Blob.len <= MAX_int32)
+            {
+                auto Bytes = MakeShared<TArray<uint8>, ESPMode::ThreadSafe>();
+                Bytes->Append(Blob.data, int32(Blob.len));
+                Result.Ogg = MoveTemp(Bytes);
+            }
+            else
+            {
+                Result.Error = NSLOCTEXT("SCBridge", "InvalidMusicSize", "Invalid music payload size.");
+            }
+            sc_free_blob(&Blob);
+        }
+        else
+        {
+            bool bPanicked = false;
+            Result.Error = Self->Handle ? Self->FailLocked(Status, bPanicked) : NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+        }
+        return Result;
+    });
 }
 
 UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons,

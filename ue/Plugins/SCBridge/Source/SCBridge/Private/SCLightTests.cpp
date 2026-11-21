@@ -440,6 +440,11 @@ bool FSCLightRoomVolumes::RunTest(const FString&)
     TestFalse(TEXT("trimesh: behind a face"), Mesh.Contains(FVector(-1, 0.5, 0.5)));
     // The +Z ray from here enters and leaves the solid: two crossings are still outside.
     TestFalse(TEXT("trimesh: outside with the solid ahead"), Mesh.Contains(FVector(0.5, 0.5, -0.7)));
+    FSCRoomVolume OpenMesh;
+    TestTrue(TEXT("one triangle parses"), FSCRoomVolume::Parse(TEXT(R"({"room":"a","kind":"trimesh",)"
+        R"("transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"vertices":[[0,0,0],[4,0,0],[0,4,0]]})"), OpenMesh, Error));
+    TestTrue(TEXT("open mesh: a point below the bounds still crosses one face"), OpenMesh.Contains(FVector(0.5, 0.5, -1)));
+    TestFalse(TEXT("open mesh: a ray outside the horizontal bounds crosses no face"), OpenMesh.Contains(FVector(4.5, 0.5, -1)));
     FSCRoomVolume Bad;
     const TCHAR* Identity = TEXT(R"("transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])");
     // Closed unit cube, top split along a diagonal or fanned around its centre (the exporter's room_containment

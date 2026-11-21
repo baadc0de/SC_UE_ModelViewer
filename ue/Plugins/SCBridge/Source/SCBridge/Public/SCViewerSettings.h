@@ -14,6 +14,8 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString ArchivePath;
     /** Cache directory; empty = <launch dir>/cache, relative paths resolve against the launch dir, "none" disables. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FString CacheDir;
+    /** Byte budget for processed UE assets, in MiB. Zero disables the second layer. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") int32 ProcessedCacheMiB = 20 * 1024;
     /** Most recent first, exact entity class names. */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") TArray<FString> RecentEntities;
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") int32 MaxRecents = 12;
@@ -82,6 +84,8 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float ExposureBias = -0.10f;
     /** The paint chosen per vehicle entity: the paint's palette id (paints.json); absent = the vehicle's own paint. */
     UPROPERTY(Config) TMap<FString, FString> Paints;
+    /** An empty list uses the available vehicle catalog; explicit entries remain available as the player's fleet. */
+    UPROPERTY(Config) TArray<FString> GarageFleet;
     /** Look defaults the saved settings were last migrated to (SCLookLighting::ApplyDefaults): a saved StarBloom from an
      *  earlier look revision is replaced by the adjudicated default once; later user changes are kept. */
     UPROPERTY(Config) int32 LookRevision = 0;

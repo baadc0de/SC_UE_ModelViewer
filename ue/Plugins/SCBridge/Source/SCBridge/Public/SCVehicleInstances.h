@@ -39,6 +39,7 @@ struct SCBRIDGE_API FSCVehicleInstanceInfo
     bool bShared = false;
     /** Wall seconds from start to ready (queue wait excluded). */
     double Seconds = 0;
+    float Progress = 0.f;
     FString Error;
 };
 
@@ -102,7 +103,7 @@ public:
 
     /** Queue an instance. bAuto: free floor next to the loaded vehicle; else World (bRest: landing gear rested and the
      *  lowest visible point on World's Z). Entity empty or "loaded": the loaded vehicle's entity. Returns its id. */
-    int32 Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest);
+    int32 Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest, bool bGarageFloor = false);
     bool Destroy(int32 Id);
     /** The loaded vehicle first, then every ready instance by id. */
     TArray<ASCVehicle*> GetVehicles() const;
@@ -116,6 +117,7 @@ public:
     /** The loaded vehicle finished loading (Key: archive generation | entity | options hash, as the viewer's reuse key);
      *  Assets: its retained import (null: none, e.g. a cooked level). */
     void SetPrimary(ASCVehicle* Primary, const TSharedPtr<FSCImportedAssets>& Assets, const FString& Key);
+    bool RetainsSession(const FString& Session) const;
     /** The loaded vehicle goes: every instance and retained asset set with it. Their objects are added to Tracked
      *  (unload accounting) when given; bWorldAlive false: the world is tearing down and destroys the actors itself. */
     void Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive);
@@ -130,6 +132,7 @@ private:
         FString Key;
         FTransform Requested = FTransform::Identity;
         bool bRest = true;
+        bool bGarageFloor = false;
         double Started = 0, ExportSeconds = 0, ImportSeconds = 0;
     };
     FInstance* FindInstance(int32 Id);

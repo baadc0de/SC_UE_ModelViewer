@@ -45,6 +45,7 @@ struct SCBRIDGE_API FSCOpenResult
 {
     bool bOK = false;
     FText Error;
+    FString ArchiveBuildId;
     double Seconds = 0;
     bool bIndexCacheHit = false;
 };
@@ -75,6 +76,12 @@ struct SCBRIDGE_API FSCTextResult
 {
     bool bOK = false, bPanicked = false;
     FString Json;
+    FText Error;
+};
+
+struct FSCMusicBytesResult
+{
+    TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Ogg;
     FText Error;
 };
 
@@ -115,6 +122,9 @@ public:
      *  default attachments (its magazine) into the wearer's empty storage ports. */
     UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments,
                                                   TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    /** The archive's authored soundtrack catalogue and one selected Ogg cue. */
+    UE::Tasks::TTask<FSCTextResult> MusicCatalogue();
+    UE::Tasks::TTask<FSCMusicBytesResult> MusicRead(const FString& CueId);
     /** Blocking; waits for a running export (host lock). */
     /** Clip-only player actions, including seat transitions. */
     UE::Tasks::TTask<FSCExportResult> ExportPlayerClips(const FString& Gender, const TArray<FString>& Clips,

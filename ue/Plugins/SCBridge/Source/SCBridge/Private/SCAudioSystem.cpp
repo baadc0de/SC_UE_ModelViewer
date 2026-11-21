@@ -20,6 +20,8 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -35,6 +37,9 @@ namespace
 const FString kAzimuth = TEXT("Azimuth");
 const FString kListenerCone = TEXT("Listener_Cone");
 constexpr double kForever = 1e18;
+// A newly audible room can start dozens of decoders and components in one tick.
+constexpr int32 PlacedVoiceStartsPerTick = 6;
+constexpr double PlacedStartRetrySeconds = 0.5;
 
 /** A/B switch for measuring the playback fix against the behaviour before it (bit 1: a looping media replays the
  *  whole file from its start instead of its loop region; bit 2: a voice ends at its game-clock end, not when its
@@ -927,7 +932,7 @@ float USCAudioSubsystem::RtpcValue(const FSCAudioScene& S, const FInstance& I, c
     return D ? *D : 0.f;
 }
 
-int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FSCAudioPlace& Where)
+int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FSCAudioPlace& Where, int32* CreatedVoices)
 {
     const FSCAudioTrigger* T = S.Manifest.Triggers.Find(Trigger);
     if (!T)
@@ -978,6 +983,7 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
         I.Position = PlacePosition(I);
         I.Environment = EnvironmentAt(S, I, I.Position);
         Start(I, S, {A.Root}, Clock + A.DelayS + A.Context.InitialDelayS, A.FadeInS, 0.f);
+        if (CreatedVoices) *CreatedVoices += I.Voices.Num();
         UpdateInstance(I, Clock);
         if (bLog)
             for (const FVoice& V : I.Voices)
@@ -1127,6 +1133,7 @@ void USCAudioSubsystem::SetSpatial(FInstance& I, bool bListener)
 
 double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArray<int32>& Path, double T0, float FadeIn)
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(SCAudioStartVoice);
     const FSCAudioNode& Leaf = S.Manifest.Nodes[Path.Last()];
     const auto* Bytes = S.MediaBytes.Find(Leaf.Media);
     const FSCAudioMedia* Media = S.Manifest.Media.Find(Leaf.Media);
@@ -1302,8 +1309,11 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
     if (const FString Env = EnvironmentAt(S, I, I.Position); Env != I.Environment)
     {
         for (FVoice& V : I.Voices)
-            if (V.Component && V.bSent)
+        {
+            if (V.Component && V.bSent && V.AppliedWetLevel > 0.f)
                 if (USoundSubmix* Old = EnvironmentSubmix(S, I.Environment)) V.Component->SetSubmixSend(Old, 0.f);
+            V.AppliedWetLevel = -1.f;
+        }
         I.Environment = Env;
     }
     USoundSubmix* EnvSubmix = I.Environment.IsEmpty() ? nullptr : EnvironmentSubmix(S, I.Environment);
@@ -1348,6 +1358,8 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
                 V.PlayWall = Wall;
             ++V.Plays;
             V.Component->Play();
+            // The engine consumes pending sends on Play; a new active sound needs its sends again.
+            V.AppliedDryLevel = V.AppliedWetLevel = -1.f;
         }
         CheckVoice(I, V);
         if (V.Component && !I.Place.Attach.IsValid()) V.Component->SetWorldLocation(I.Position);
@@ -1391,31 +1403,63 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
         const bool bSceneMuted = MutedScenes.ContainsByPredicate([&](const FString& M) { return S.Name.Contains(M); });
         const float Linear = bMuted || bSceneMuted ? 0.f : FSCAudioGain::Linear(Db + Common) * Fade;
         V.MinLinear = FMath::Min(V.MinLinear, Linear);
-        V.LastLinear = Linear;
         if (V.Component)
         {
-            V.Component->SetVolumeMultiplier(Linear);
-            if (V.DrySubmix) V.Component->SetSubmixSend(V.DrySubmix, FSCAudioGain::Linear(DryDb - Common));
+            // Unchanged values need no command on the audio thread, even for a moving listener.
+            if (Linear != V.LastLinear) V.Component->SetVolumeMultiplier(Linear);
+            if (V.DrySubmix)
+            {
+                const float DryLevel = FSCAudioGain::Linear(DryDb - Common);
+                if (DryLevel != V.AppliedDryLevel)
+                {
+                    V.Component->SetSubmixSend(V.DrySubmix, DryLevel);
+                    V.AppliedDryLevel = DryLevel;
+                }
+            }
             if (bWet || (V.bSent && EnvSubmix))
             {
                 // With the sends off (sc.Audio.Sends 0) a voice that never sent gets no send at all (a clean dry path).
                 V.LastSend = bWet ? Db + AuxDb : 0.f;
                 V.bSent |= bWet;
-                V.Component->SetSubmixSend(EnvSubmix, bWet ? FSCAudioGain::Linear(AuxDb - Common) : 0.f);
+                const float WetLevel = bWet ? FSCAudioGain::Linear(AuxDb - Common) : 0.f;
+                if (WetLevel != V.AppliedWetLevel)
+                {
+                    V.Component->SetSubmixSend(EnvSubmix, WetLevel);
+                    V.AppliedWetLevel = WetLevel;
+                }
             }
         }
+        V.LastLinear = Linear;
     }
 }
 
-void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
+void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32& StartsLeft)
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(SCAudioPlaced);
+    TArray<FVector, TInlineAllocator<16>> InteriorListeners;
+    InteriorListeners.Reserve(S.InteriorAnchors.Num());
+    for (int32 Index = 0; Index < S.InteriorAnchors.Num(); ++Index)
+        InteriorListeners.Add(S.WorldToContainer(Index, ListenerPos));
+    auto ListenerIn = [&](int32 Interior) {
+        return InteriorListeners.IsValidIndex(Interior) ? InteriorListeners[Interior] : FVector::ZeroVector;
+    };
+    // Reevaluate audibility next tick for starts that do not fit. Looping spots retain their
+    // scene epoch so their decoder can seek to the correct phase when they start.
+    auto PostPlaced = [&](FSCAudioPlaced& Emitter, const FSCAudioPlace& Place) {
+        // A layered trigger starts as a group. Charge all the voices it created before admitting another.
+        int32 CreatedVoices = 0;
+        const int32 Group = Post(S, Emitter.PlayTrigger, Place, &CreatedVoices);
+        StartsLeft -= CreatedVoices;
+        if (CreatedVoices == 0) Emitter.RetryAt = Now + PlacedStartRetrySeconds;
+        return Group;
+    };
     // Areas: inside -> fade 1, the bed at the listener; outside within fadeDistance -> fade falls to 0 and the bed sits
     // at the nearest point of the area (the CryEngine area-ambience behaviour the brief describes; the bank's curve on
     // the area-fade RTPC shapes the level).
     for (int32 A = 0; A < S.Areas.Num(); ++A)
     {
         FSCAudioPlaced& Area = S.Areas[A];
-        const FVector L = S.WorldToContainer(Area.Interior, ListenerPos);
+        const FVector L = ListenerIn(Area.Interior);
         double Best = TNumericLimits<double>::Max();
         FVector Nearest = L;
         bool bInside = false;
@@ -1436,7 +1480,7 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
                    *Area.PlayTrigger, Area.Fade, bInside, bInside ? 0.0 : Best, FadeDistance, Now);
         }
         const bool bWant = bAmbience && Area.Fade > 0.f && !Area.PlayTrigger.IsEmpty();
-        if (bWant && !IsPlaying(Area.Instance))
+        if (bWant && StartsLeft > 0 && Now >= Area.RetryAt && !IsPlaying(Area.Instance))
         {
             FSCAudioPlace P;
             P.bListener = bInside;
@@ -1447,19 +1491,20 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
             P.Area = A;
             P.AreaFadeRtpc = Str(Area.Params, TEXT("areaFadeRTPC.rtpc"));
             P.Label = Area.Name;
-            Area.Instance = Post(S, Area.PlayTrigger, P);
+            Area.Instance = PostPlaced(Area, P);
         }
         else if (!bWant && IsPlaying(Area.Instance))
         {
             Stop(Area.Instance, 0.1f);
             Area.Instance = INDEX_NONE;
         }
-        for (auto& [Key, I] : Instances)
-            if (Area.Instance != INDEX_NONE && I.Group == Area.Instance)
-            {
-                SetSpatial(I, bInside);
-                I.Place.ContainerPos = Nearest;
-            }
+        if (Area.Instance != INDEX_NONE)
+            for (auto& [Key, I] : Instances)
+                if (I.Group == Area.Instance)
+                {
+                    SetSpatial(I, bInside);
+                    I.Place.ContainerPos = Nearest;
+                }
     }
     // Spots: voiced while the listener is within reach of their nearest position (and their area, if any, is heard).
     for (int32 Si = 0; Si < S.Spots.Num(); ++Si)
@@ -1467,7 +1512,7 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
         FSCAudioPlaced& Spot = S.Spots[Si];
         const FSCAudioTrigger* T = S.Manifest.Triggers.Find(Spot.PlayTrigger);
         if (!T || !T->IsPlayable()) continue;
-        const FVector L = S.WorldToContainer(Spot.Interior, ListenerPos);
+        const FVector L = ListenerIn(Spot.Interior);
         int32 Best = 0;
         for (int32 P = 1; P < Spot.Positions.Num(); ++P)
             if (FVector::DistSquared(Spot.Positions[P], L) < FVector::DistSquared(Spot.Positions[Best], L)) Best = P;
@@ -1503,9 +1548,9 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
         };
         if (bRandom)
         {
-            if (bNear && Now >= Spot.NextPlay)
+            if (bNear && StartsLeft > 0 && Now >= Spot.RetryAt && Now >= Spot.NextPlay)
             {
-                Spot.Instance = Post(S, Spot.PlayTrigger, Place(Spot.Positions[Best]));
+                Spot.Instance = PostPlaced(Spot, Place(Spot.Positions[Best]));
                 const double Delay = FMath::FRandRange(Num(Spot.Params, TEXT("minDelay")), Num(Spot.Params, TEXT("maxDelay")));
                 double Length = 0;
                 for (const auto& [Key, I] : Instances)
@@ -1517,9 +1562,9 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
         }
         // A looping spot plays while in reach; a one-shot spot plays once each time the listener comes within reach.
         const bool bInfinite = T->DurationType == TEXT("Infinite");
-        if (bNear && !IsPlaying(Spot.Instance) && !Spot.bFired)
+        if (bNear && StartsLeft > 0 && Now >= Spot.RetryAt && !Spot.bFired && !IsPlaying(Spot.Instance))
         {
-            Spot.Instance = Post(S, Spot.PlayTrigger, Place(Spot.Positions[Best]));
+            Spot.Instance = PostPlaced(Spot, Place(Spot.Positions[Best]));
             Spot.bFired = !bInfinite;
         }
         else if (!bNear && IsPlaying(Spot.Instance) && bInfinite)
@@ -1530,9 +1575,9 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now)
         }
         if (!bNear) Spot.bFired = false;
         // Single-source multi-position spots follow the listener's nearest position.
-        if (Spot.Positions.Num() > 1)
+        if (Spot.Positions.Num() > 1 && Spot.Instance != INDEX_NONE)
             for (auto& [Key, I] : Instances)
-                if (Spot.Instance != INDEX_NONE && I.Group == Spot.Instance) I.Place.ContainerPos = Spot.Positions[Best];
+                if (I.Group == Spot.Instance) I.Place.ContainerPos = Spot.Positions[Best];
     }
 }
 
@@ -1732,6 +1777,7 @@ void USCAudioSubsystem::ScheduleHitches(float Ms, int32 Count, float EveryS)
 
 void USCAudioSubsystem::Tick(float DeltaTime)
 {
+    CSV_SCOPED_TIMING_STAT_EXCLUSIVE(SCAudioTick);
     if (HitchesLeft > 0 && WallNow() >= NextHitch)
     {
         // A measured game-thread stall (the frame-time spike a heavy frame or a load causes).
@@ -1746,10 +1792,11 @@ void USCAudioSubsystem::Tick(float DeltaTime)
     if (Scenes.ContainsByPredicate([](const TSharedRef<FSCAudioScene>& S) { return !S->Vehicle.IsValid(); })) RemoveScene(nullptr);
     if (APlayerController* PC = World->GetFirstPlayerController())
         PC->GetAudioListenerPosition(ListenerPos, ListenerFwd, ListenerRight);
+    int32 StartsLeft = PlacedVoiceStartsPerTick;
     for (const TSharedRef<FSCAudioScene>& S : TArray<TSharedRef<FSCAudioScene>>(Scenes))
     {
         if (!S->Vehicle.IsValid()) continue;
-        UpdateAreasAndSpots(*S, Clock);
+        UpdateAreasAndSpots(*S, Clock, StartsLeft);
         if (const ASCVehicle* V = S->Vehicle.Get(); V && V->IsInsideLightArea(ListenerPos))
         {
             ListenerRoom = V->LightRoomAt(ListenerPos).ToLower();

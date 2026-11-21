@@ -197,6 +197,7 @@ struct FSCButtonFace
     TArray<FSCUiStateType> StateTypes;
     TArray<FSCUiStateImage> StateImages;
     FString DefaultImage;
+    bool bHideDoorLockControl = false;
     TFunction<UMaterialInterface*(UTexture* Image)> MakeMaterial;
 };
 
