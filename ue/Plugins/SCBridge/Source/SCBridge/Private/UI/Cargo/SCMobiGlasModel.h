@@ -23,7 +23,7 @@ struct FSCGridPick
     bool operator==(const FSCGridPick& O) const { return Group == O.Group && GridId == O.GridId && BeaconId == O.BeaconId; }
 };
 
-enum class ESCMobiGlasApp : uint8 { Cargo, ShipLink, Garage };
+enum class ESCMobiGlasApp : uint8 { Cargo, ShipLink, Garage, Music };
 
 class FSCMobiGlasModel
 {

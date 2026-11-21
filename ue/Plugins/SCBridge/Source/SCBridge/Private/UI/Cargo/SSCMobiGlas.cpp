@@ -4,6 +4,7 @@
 #include "SSCMobiGlasPanels.h"
 #include "../ShipLink/SSCShipLink.h"
 #include "../Garage/SSCGarage.h"
+#include "../Music/SSCMusic.h"
 #include "Widgets/Input/SButton.h"
 #include "SCMobiGlasModel.h"
 #include "SCMobiGlasStyle.h"
@@ -56,6 +57,7 @@ void SSCMobiGlas::Construct(const FArguments& Args)
                     SNew(SVerticalBox)
                     + SVerticalBox::Slot().AutoHeight().Padding(RailWidth + Gutter, 0, 0, 12)
                     [Txt(TAttribute<FText>::CreateLambda([this] {
+                         if (Model->GetApp() == ESCMobiGlasApp::Music) return FText::GetEmpty();
                          if (Model->GetApp() != ESCMobiGlasApp::Cargo)
                              return LOCTEXT("ShipLiveView", "LIVE VIEW  ·  DRAG ORBIT  ·  WHEEL ZOOM");
                          int32 Active = 0;
@@ -91,6 +93,12 @@ void SSCMobiGlas::Construct(const FArguments& Args)
                                     return Model->GetApp() == ESCMobiGlasApp::Garage ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
                                 })
                             ]
+                            + SOverlay::Slot()
+                            [
+                                SNew(SSCMusic).Model(Model).Visibility_Lambda([this] {
+                                    return Model->GetApp() == ESCMobiGlasApp::Music ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed;
+                                })
+                            ]
                         ]
                     ]
                 ]
@@ -111,12 +119,14 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
         [
             SNew(SVerticalBox)
             + SVerticalBox::Slot().AutoHeight()[Txt(TAttribute<FText>::CreateLambda([this] {
+                if (Model->GetApp() == ESCMobiGlasApp::Music) return FText::GetEmpty();
                 if (Model->GetApp() == ESCMobiGlasApp::Garage) return LOCTEXT("Fleet", "PERSONAL FLEET");
                 if (Model->GetApp() == ESCMobiGlasApp::ShipLink)
                     return Model->GetShipLink().GetShip() ? LOCTEXT("PairedOwner", "SHIP LINK  ·  PAIRED  ·  OWNER") : LOCTEXT("Unpaired", "SHIP LINK");
                 return LOCTEXT("Network", "LOGISTICS / LOCAL NETWORK");
             }), Label(), OnScrim().CopyWithNewOpacity(0.72f))]
             + SVerticalBox::Slot().AutoHeight()[Txt(TAttribute<FText>::CreateLambda([this] {
+                if (Model->GetApp() == ESCMobiGlasApp::Music) return LOCTEXT("MusicApp", "MUSIC");
                 if (Model->GetApp() == ESCMobiGlasApp::Garage) return LOCTEXT("GarageApp", "GARAGE");
                 return Model->GetApp() == ESCMobiGlasApp::ShipLink
                     ? FText::FromString(Caps(FSCShipLinkModel::ShipLabel(Model->GetShipLink().GetShip()))) : LOCTEXT("CargoApp", "CARGO OPERATIONS");
@@ -153,7 +163,7 @@ TSharedRef<SWidget> SSCMobiGlas::MakeHeader()
                  const int32 Bearing = (FMath::RoundToInt(FMath::RadiansToDegrees(FMath::Atan2(Offset.Y, Offset.X))) + 360) % 360;
                  return FText::FromString(FString::Printf(TEXT("%.0f m  ·  %03d°  ·  %d OPEN  ·  %d LOCKED  ·  %d MOVING"), Offset.Size() / 100, Bearing, Open, Locked, Moving));
              }
-             if (Model->GetApp() == ESCMobiGlasApp::Garage) return FText::GetEmpty();
+             if (Model->GetApp() == ESCMobiGlasApp::Garage || Model->GetApp() == ESCMobiGlasApp::Music) return FText::GetEmpty();
              if (!Model->HasSource()) return LOCTEXT("NoCargo", "NO CARGO SYSTEM");
              return FText::Format(LOCTEXT("Status", "{0} GRIDS · {1} DRONES"), Model->GetGrids().Num(), Model->GetDrones().Num());
          }), Label(), OnScrim())]
@@ -192,6 +202,7 @@ TSharedRef<SWidget> SSCMobiGlas::MakeRail()
                 + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::Cargo, LOCTEXT("Cargo", "CARGO"))]
                 + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::ShipLink, LOCTEXT("ShipLink", "SHIP\nLINK"))]
                 + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::Garage, LOCTEXT("Garage", "GARAGE"))]
+                + SVerticalBox::Slot().AutoHeight()[AppButton(ESCMobiGlasApp::Music, LOCTEXT("Music", "MUSIC"))]
             ]
         ]
     ];
@@ -256,6 +267,7 @@ void SSCMobiGlas::Tick(const FGeometry& Geometry, double Time, float Delta)
         if (Requests.App.GetValue().Equals(TEXT("shiplink"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::ShipLink);
         if (Requests.App.GetValue().Equals(TEXT("cargo"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::Cargo);
         if (Requests.App.GetValue().Equals(TEXT("garage"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::Garage);
+        if (Requests.App.GetValue().Equals(TEXT("music"), ESearchCase::IgnoreCase)) SelectApp(ESCMobiGlasApp::Music);
         Requests.App.Reset();
     }
     if (Requests.GarageEntity.IsSet())

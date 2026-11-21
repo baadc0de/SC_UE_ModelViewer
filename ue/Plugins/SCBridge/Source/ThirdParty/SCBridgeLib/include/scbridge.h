@@ -483,6 +483,16 @@ void sc_eq_process(struct sc_eq *eq, float *data, size_t frames);
 void sc_eq_free(struct sc_eq *eq);
 
 /*
+ Return the archive's named whole-source music cues as JSON. Free with sc_free_string.
+ */
+enum sc_status sc_music_catalogue(struct sc_handle *h, char **out_json);
+
+/*
+ Return one catalogue cue as Ogg bytes. Free with sc_free_blob.
+ */
+enum sc_status sc_music_read(struct sc_handle *h, const char *cue_id, struct sc_blob *out_blob);
+
+/*
  Export a contract-v2 player kit. NULL gender means male; NULL loadout chooses
  the first default loadout in name order with a stowed personal weapon.
  Strings are UTF-8. Release out_tar with sc_free_blob. Progress and cancellation

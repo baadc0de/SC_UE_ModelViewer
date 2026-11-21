@@ -76,6 +76,12 @@ struct SCBRIDGE_API FSCTextResult
     FText Error;
 };
 
+struct FSCMusicBytesResult
+{
+    TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Ogg;
+    FText Error;
+};
+
 class SCBRIDGE_API FSCBridgeClient : public TSharedFromThis<FSCBridgeClient, ESPMode::ThreadSafe>
 {
 public:
@@ -113,6 +119,9 @@ public:
      *  default attachments (its magazine) into the wearer's empty storage ports. */
     UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments,
                                                   TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    /** The archive's authored soundtrack catalogue and one selected Ogg cue. */
+    UE::Tasks::TTask<FSCTextResult> MusicCatalogue();
+    UE::Tasks::TTask<FSCMusicBytesResult> MusicRead(const FString& CueId);
     /** Blocking; waits for a running export (host lock). */
     FSCCacheStats CacheStats();
     bool IsOpen() const;

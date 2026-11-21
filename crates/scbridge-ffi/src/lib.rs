@@ -15,6 +15,8 @@ pub use dds::{sc_dds_prepare, sc_dds_mean_rgb};
 mod boundary;
 mod cache;
 mod types;
+mod music;
+pub use music::{sc_music_catalogue, sc_music_read};
 mod player;
 pub use player::scbridge_export_player;
 use boundary::{Result, cstring, handle, output, run, string};

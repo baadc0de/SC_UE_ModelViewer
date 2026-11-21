@@ -87,7 +87,7 @@ FAutoConsoleCommandWithWorldAndArgs GShotCommand(TEXT("sc.UI.Shot"),
         FScreenshotRequest::RequestScreenshot(Path, /*bInShowUI=*/true, /*bAddFilenameSuffix=*/false);
         UE_LOG(LogSCMobiGlas, Display, TEXT("UI_SHOT path=%s"), *Path);
     }));
-FAutoConsoleCommand GMobiGlasAppCommand(TEXT("sc.MobiGlas.App"), TEXT("sc.MobiGlas.App Cargo|ShipLink|Garage: open a mobiGlas app"),
+FAutoConsoleCommand GMobiGlasAppCommand(TEXT("sc.MobiGlas.App"), TEXT("sc.MobiGlas.App Cargo|ShipLink|Garage|Music: select a mobiGlas app"),
     FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) {
         if (!Args.IsEmpty()) FSCMobiGlasRequests::Get().App = Args[0];
     }));

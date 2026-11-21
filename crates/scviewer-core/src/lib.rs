@@ -20,6 +20,8 @@ mod datacore;
 mod engine_textures;
 mod lights;
 mod items;
+mod music;
+pub use music::MusicCue;
 mod player;
 pub use player::{PlayerRequest, PlayerLoadout};
 pub use items::ChildItemIdentity;
@@ -68,6 +70,7 @@ pub struct Session {
     branch: Option<String>,
     browser: BrowserIndex,
     loaded: OnceCell<Loaded>,
+    music_cues: OnceCell<Vec<MusicCue>>,
     cache: Option<cache::Cache>,
     index_status: CacheStatus,
     status: Cell<CacheStatus>,
@@ -120,6 +123,7 @@ impl Session {
             branch,
             browser,
             loaded,
+            music_cues: OnceCell::new(),
             cache,
             index_status,
             status: Cell::new(index_status),
