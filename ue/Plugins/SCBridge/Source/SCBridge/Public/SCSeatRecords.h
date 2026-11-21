@@ -34,6 +34,14 @@ struct FSCSeatTransition
     FString FragmentTags;
 };
 
+struct FSCSeatGateway
+{
+    FName Fragment, OpenTag, CloseTag;
+    TMap<FName, FName> Conditions;
+    float OpenEnter = 0, OpenExit = 0, CloseEnter = 0, CloseExit = 0;
+    bool bKeepOpenOnEnter = false, bKeepOpenOnExit = false;
+};
+
 /** Port path is relative to the root entity, including nested loadout owners. */
 struct FSCSeatEntrance
 {
@@ -41,5 +49,7 @@ struct FSCSeatEntrance
     TArray<FString> SeatPortPath;
     FString DashboardPort;
     FSCSeatTransition Enter, Exit;
-    bool bRequiresWorldState = false, bHasGateways = false;
+    TMap<FName, FName> Conditions;
+    TArray<FSCSeatGateway> Gateways;
+    bool bUnsupportedSequence = false;
 };

@@ -12,6 +12,7 @@ class ASCVehicle;
 class USpotLightComponent;
 class USCPlayerBodyComponent;
 class FSCSeatRuntime;
+class FSCLadderRuntime;
 
 /** The exploration camera; NearClip > 0 overrides the global near plane (arms and weapon at the eye, WP-P2). */
 UCLASS()
@@ -178,6 +179,7 @@ public:
     void SetMobiGlasOpen(bool bOpen);
     bool SetNoclip(bool bOn);
     bool IsRunning() const { return bRunning; }
+    FString LadderStatus() const;
     /** Two Orbit presses closer than this reset the third-person orbit (viewer input constant, s). */
     static constexpr float DoubleTapSeconds = 0.3f;
     /** The torch is the game's personal light: the player kit's first flashlight (FSCFlashlight, an item's
@@ -259,8 +261,11 @@ private:
     double LastOrbitPress = -1;
     void SetRunning(bool bRun);
     void ApplyHeldInput();
+    bool TraversalOwnsMovement() const;
     friend class FSCSeatRuntime;
+    friend class FSCLadderRuntime;
     TPimplPtr<FSCSeatRuntime> Seats;
+    TPimplPtr<FSCLadderRuntime> Ladder;
     bool FindCapsuleSpot(FVector Hint, double HalfHeight, FVector& Centre, const FSCSeatBox* Seat = nullptr) const;
     bool Place(FVector Floor, const FSCSeatBox* Seat);
     UFUNCTION() void CapsuleHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp,

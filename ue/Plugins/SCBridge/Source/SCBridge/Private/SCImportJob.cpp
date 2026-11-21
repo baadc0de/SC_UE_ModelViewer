@@ -1403,7 +1403,8 @@ void FSCImportJob::FState::Assemble()
         }
         E.Anchor = NewAnchor(I.EntityName, Parent, bRoot ? FMatrix::Identity : Relative);
         if (!I.Id.IsEmpty()) V->InstanceAnchors.Add(I.Id, E.Anchor);
-        else if (E.Mesh && (!I.ParentId.IsEmpty() || !I.SeatEntrances.IsEmpty())) AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
+        else if (E.Mesh && (!I.ParentId.IsEmpty() || I.Seat.IsSet() || !I.SeatEntrances.IsEmpty()))
+            AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
         V->AddItemSpawn(I, E.Anchor);
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {
@@ -1753,6 +1754,11 @@ void FSCImportJob::FState::Assemble()
                 FEntity Placed = Place(P, Container, bHelper, false);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);
                 ByPlacement.Add(PlacementIndex, Placed);
+                if (P.Ladder.IsSet() && Placed.Anchor)
+                {
+                    USceneComponent* Ladder = NewAnchor(TEXT("LadderFrame"), Container, ContainerFrame(P.LocalMatrix, bHelper));
+                    V->LadderAnchors.Add({Ladder, P.EntityId, P.Ladder.GetValue()});
+                }
             }
         // Waypoints of this interior: a transit gateway at its entity frame (an anchor of its own: the entity has no
         // geometry), a panel at its placement's anchor.

@@ -371,6 +371,35 @@ void ReadSeatRecords(const FReaderObject& Object, FSCSceneInstance& Instance)
         if (const FReaderObject* Attachment; (*Step)->TryGetObjectField(TEXT("attachment"), Attachment))
             Result.Attachment = FName(*String(*Attachment, TEXT("bone")));
     };
+    auto Conditions = [](const FReaderObject& Object) {
+        TMap<FName, FName> Out;
+        const FReaderObject* Fields = nullptr;
+        if (Object->TryGetObjectField(TEXT("conditions"), Fields))
+            for (const auto& Field : (*Fields)->Values)
+                if (Field.Value && Field.Value->Type == EJson::String)
+                {
+                    const FName Test(*Field.Value->AsString());
+                    if (!Test.IsNone() && Test != TEXT("Either")) Out.Add(FName(*Field.Key), Test);
+                }
+        return Out;
+    };
+    TMap<FName, FSCSeatGateway> Gateways;
+    for (const auto& Value : ReaderArray(*Data, TEXT("gateways")))
+    {
+        if (!Value || Value->Type != EJson::Object) continue;
+        const FReaderObject O = Value->AsObject();
+        const FName Name(*String(O, TEXT("name")));
+        if (Name.IsNone()) continue;
+        FSCSeatTransition Open, Close;
+        Transition(O, TEXT("open"), Open);
+        Transition(O, TEXT("close"), Close);
+        FSCSeatGateway& Gateway = Gateways.Add(Name);
+        Gateway.Fragment = FName(*String(O, TEXT("vehicle_fragment")));
+        if (Gateway.Fragment.IsNone()) Gateway.Fragment = Name;
+        Gateway.OpenTag = FName(*Open.FragmentTags);
+        Gateway.CloseTag = FName(*Close.FragmentTags);
+        Gateway.Conditions = Conditions(O);
+    }
     for (const auto& Value : ReaderArray(*Data, TEXT("entrances")))
     {
         const FReaderObject O = Value && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
@@ -382,17 +411,42 @@ void ReadSeatRecords(const FReaderObject& Object, FSCSceneInstance& Instance)
         Entrance.DashboardPort = String(O, TEXT("dashboard_port"));
         Transition(O, TEXT("enter"), Entrance.Enter);
         Transition(O, TEXT("exit"), Entrance.Exit);
-        Entrance.bHasGateways = !ReaderArray(O, TEXT("linked_gateways")).IsEmpty();
-        if (const FReaderObject* Conditions; O->TryGetObjectField(TEXT("conditions"), Conditions))
-            for (const auto& Field : (*Conditions)->Values)
-                Entrance.bRequiresWorldState |= Field.Value && Field.Value->Type == EJson::String &&
-                    !Field.Value->AsString().Equals(TEXT("Either"), ESearchCase::IgnoreCase);
+        Entrance.Conditions = Conditions(O);
+        for (const auto& Link : ReaderArray(O, TEXT("linked_gateways")))
+        {
+            const FReaderObject L = Link && Link->Type == EJson::Object ? Link->AsObject() : nullptr;
+            const FSCSeatGateway* Definition = L ? Gateways.Find(FName(*String(L, TEXT("gateway")))) : nullptr;
+            if (!Definition || Definition->OpenTag.IsNone() || Definition->CloseTag.IsNone())
+            {
+                Entrance.bUnsupportedSequence = true;
+                break;
+            }
+            const FReaderObject *Open = nullptr, *Close = nullptr;
+            bool bSync = false, bOneWay = false;
+            L->TryGetBoolField(TEXT("sync_to_entrance"), bSync);
+            L->TryGetBoolField(TEXT("one_way"), bOneWay);
+            if (bSync || bOneWay || !L->TryGetObjectField(TEXT("open"), Open) || !L->TryGetObjectField(TEXT("close"), Close) ||
+                !String(*Open, TEXT("dependency")).Equals(TEXT("Never"), ESearchCase::IgnoreCase) ||
+                !String(*Close, TEXT("dependency")).Equals(TEXT("Never"), ESearchCase::IgnoreCase))
+            {
+                Entrance.bUnsupportedSequence = true;
+                break;
+            }
+            FSCSeatGateway& Gateway = Entrance.Gateways.Add_GetRef(*Definition);
+            Gateway.OpenEnter = float(Number(*Open, TEXT("enter_delay"), 0.0));
+            Gateway.OpenExit = float(Number(*Open, TEXT("exit_delay"), 0.0));
+            Gateway.CloseEnter = float(Number(*Close, TEXT("enter_delay"), 0.0));
+            Gateway.CloseExit = float(Number(*Close, TEXT("exit_delay"), 0.0));
+            L->TryGetBoolField(TEXT("ignore_close_on_enter"), Gateway.bKeepOpenOnEnter);
+            L->TryGetBoolField(TEXT("ignore_close_on_exit"), Gateway.bKeepOpenOnExit);
+        }
         Instance.SeatEntrances.Add(MoveTemp(Entrance));
     }
 }
 void ReadInteractions(const FReaderObject& O, FSCSceneInstance& Out)
 {
     Out.SocEntityName = String(O, TEXT("entity_name"));
+    if (O) Out.Ladder = FSCLadderDefinition::Read(*O);
     Out.InteractionLinks = InteractionLinks(O);
     Out.Parent = ParentAttachment(O);
     Out.InteractionPoints = InteractionPoints(O);

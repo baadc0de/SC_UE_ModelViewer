@@ -166,6 +166,20 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
         Commands.Add(MakeUnique<FAutoConsoleCommand>(Name, Help,
             FConsoleCommandWithArgsDelegate::CreateLambda([Body](const TArray<FString>& Args) { Body(Args); })));
     };
+    Add(TEXT("sc.Ladder.State"), TEXT("sc.Ladder.State: log the current ladder action"), [Weak](const TArray<FString>&) {
+        if (const ASCFirstPersonCharacter* Character = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr)
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("%s"), *Character->LadderStatus());
+    });
+    Add(TEXT("sc.Ladder.List"), TEXT("sc.Ladder.List: log the loaded ladder endpoints"), [Weak](const TArray<FString>&) {
+        const ASCVehicle* Vehicle = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+        if (!Vehicle) return;
+        for (const FSCLadderAnchor& Ladder : Vehicle->LadderAnchors)
+            if (const USceneComponent* Anchor = Ladder.Anchor.Get())
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("LADDER_LIST id=%s base=%s facing=%s height_cm=%.2f exits=%d,%d,%d"),
+                    *Ladder.EntityId, *Vehicle->GetActorTransform().InverseTransformPosition(Anchor->GetComponentLocation()).ToCompactString(),
+                    *Vehicle->GetActorTransform().InverseTransformVectorNoScale(Anchor->GetForwardVector()).ToCompactString(),
+                    Ladder.Data.Height * 100.f, Ladder.Data.TopExits.X, Ladder.Data.TopExits.Y, Ladder.Data.TopExits.Z);
+    });
     Add(TEXT("sc.Seat.State"), TEXT("sc.Seat.State: log the currently occupied cockpit role"), [Weak](const TArray<FString>&) {
         const ASCFirstPersonCharacter* Character = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr;
         const ESCSeatRole Role = Character ? Character->GetOccupiedSeatRole() : ESCSeatRole::Unknown;

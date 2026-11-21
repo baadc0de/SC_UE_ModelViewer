@@ -65,6 +65,36 @@ The Rust checks used `cargo test --manifest-path vendor/StarBreaker/Cargo.toml -
 The live checks used `scviewer-cli decomposed-tar CRUS_Starlifter_C2 out/p6-research/c2-seats-lod2.tar --lod 2 --materials none --no-interior --no-lights`
 followed by `scviewer-cli player clips` for the unique body layers of the exported seat fragments.
 
+## Boarding and ladder follow-up
+
+The C1 selects its untagged Constellation Enter and Exit fragments by template and state. The C2 retains its
+side-tagged Freelancer fragments. The Buccaneer selects its ladder route on the ground and uses its authored
+canopy and ladder gateway delays and Open/Close fragments. It waits for both gates before playing the body
+clip. The gates close again after entry and exit. The regular seat action path polls animated seat and dashboard
+rigs, and a static seat can use its authored attachment helper.
+
+Win64 first-person fixture runs completed both C1 and both C2 cockpit seats and the Buccaneer pilot seat. Each
+reported the expected driver or crew role and returned to a standing floor. The Buccaneer ran its authored
+canopy and ladder pairs in both directions. The C1 fixture needed a cockpit-floor waypoint below the roof for
+the state-polled smoke test.
+
+The ladder exporter follows the player actor's LadderConfig V2 and resolves the unarmed Mannequin fragments.
+A placement can override the type's scalar settings. At runtime, walking toward an authored auto-mount point
+starts the corresponding clip once the body and clips are ready. W and S move up and down after mounting.
+The loop pose follows physical height in both directions. Top dismount chooses only enabled sides and hands
+off to walking at a checked standing position.
+
+The C2 package exported the ladder's 7.25 m instance height and right-only top exit. In the live C2
+fixture, pressing forward while approaching each end triggered the bottom and top mount clips. Ascent
+ran for 5.75 s before the authored right dismount, and descent ran for 5.96 s before the bottom dismount.
+Both steps ended standing with floor contact and no recovery. This slice uses the unarmed walk animation.
+Its movement conversion divides one authored loop's root travel by its configured rung count.
+
+The logs and state-polled drivers are local at `out/p6-research/`. Use `sc.Seat.State`,
+`sc.Ladder.List`, `sc.Ladder.State` and `sc.FP.Where` to reproduce the transitions on a loaded ship.
+The live fixture runs used NullRHI. An independent visual check of the player's contact with individual rungs
+remains open.
+
 ## Goal
 
 In first person, with the real player body (WP-P2), the player can:

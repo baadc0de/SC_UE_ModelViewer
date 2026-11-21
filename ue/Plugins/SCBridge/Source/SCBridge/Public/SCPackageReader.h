@@ -3,6 +3,7 @@
 #include "SCPackageSource.h"
 #include "Cargo/SCCargoTypes.h"
 #include "SCInteractionRecords.h"
+#include "SCLadderRecords.h"
 #include "SCSeatRecords.h"
 #include "SCThrusterPreview.h"
 #include "SCPackageReader.generated.h"
@@ -146,6 +147,7 @@ struct SCBRIDGE_API FSCSceneInstance
     FSCDoorTiming Door; // placements and (cache format 39) loadout children
     TArray<FSCInteractionPoint> InteractionPoints;
     TOptional<FSCSeatDefinition> Seat;
+    TOptional<FSCLadderDefinition> Ladder;
     TArray<FSCSeatEntrance> SeatEntrances;
     /** Cache format 39: interactions forwarded to the items of vehicle ports, and the Sendable interactions with tags. */
     TArray<FSCItemPortLink> ItemPortLinks;

@@ -2,21 +2,11 @@
 #include "SCSeatRuntime.h"
 #include "Cargo/SCCargoRecords.h"
 #include "SCFirstPersonCharacter.h"
-#include "SCPackageSource.h"
 #include "SCPlayerBody.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "SCViewerSubsystem.h"
-#include "Engine/SkeletalMesh.h"
-#include "Dom/JsonObject.h"
-#include "Dom/JsonValue.h"
-#include "Serialization/JsonReader.h"
-#include "Serialization/JsonSerializer.h"
-#include "Misc/CommandLine.h"
-#include "Misc/FileHelper.h"
-#include "Misc/Parse.h"
 #include "Components/CapsuleComponent.h"
-#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
@@ -38,12 +28,14 @@ bool DescendsFrom(const USceneComponent* Component, const USceneComponent* Ances
 
 bool FSCSeatRuntime::FRoute::IsValid() const
 {
-    return Access.IsValid() && SeatRig.IsValid() && (Definition.DashboardPort.IsEmpty() || DashRig.IsValid());
+    return Access.IsValid() && SeatAnchor.IsValid() && (bStaticSocket || SeatRig.IsValid()) &&
+        (!bAnimateDash || DashRig.IsValid());
 }
 
 FTransform FSCSeatRuntime::FRoute::Socket() const
 {
-    FTransform World = SeatRig->GetSocketTransform(Definition.Attachment);
+    FTransform World = bStaticSocket ? StaticSocket * SeatAnchor->GetComponentTransform()
+        : SeatRig->GetSocketTransform(Definition.Attachment);
     World.SetScale3D(FVector::OneVector);
     return World;
 }
@@ -63,24 +55,34 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
         }
         for (const FSCSeatEntrance& Entrance : Access.SeatEntrances)
         {
-            // This slice supports cockpit entrances without gateways or a dependency on simulated ship state.
-            if (Entrance.bHasGateways || Entrance.bRequiresWorldState || Entrance.Enter.Interaction.IsNone() ||
-                Entrance.Exit.Interaction.IsNone() || Entrance.Enter.SkipState != FName(TEXT("SkipDeploy")) ||
-                Entrance.Exit.SkipState != FName(TEXT("SkipRetract")))
+            if (Entrance.bUnsupportedSequence || Entrance.Enter.Interaction.IsNone() || Entrance.Exit.Interaction.IsNone() ||
+                (Entrance.Enter.SkipState != TEXT("SkipDeploy") && !Entrance.Enter.SkipState.IsNone()) ||
+                (Entrance.Exit.SkipState != TEXT("SkipRetract") && !Entrance.Exit.SkipState.IsNone()))
                 continue;
             const FString Key = SCCargoRecords::PortKey(Entrance.SeatPortPath);
             const FSCSceneInstance* Child = Vehicle.Manifest.Children.FindByPredicate([&](const FSCSceneInstance& I) {
                 return I.Seat.IsSet() && I.PortPath == Entrance.SeatPortPath;
             });
+            USceneComponent* SeatAnchor = Vehicle.PortAnchors.FindRef(Key);
             USCRigComponent* Rig = Vehicle.PortRigs.FindRef(Key).Get();
-            if (!Child || !Rig || Child->Seat->Attachment.IsNone() || !Rig->DoesSocketExist(Child->Seat->Attachment) ||
+            if (!Child || !SeatAnchor || Child->Seat->Attachment.IsNone() ||
                 (!Entrance.Enter.Attachment.IsNone() && Child->Seat->Attachment != Entrance.Enter.Attachment) ||
                 (!Entrance.Exit.Attachment.IsNone() && Child->Seat->Attachment != Entrance.Exit.Attachment))
                 continue;
 
             FRoute Route;
             Route.Access = Anchor;
+            Route.SeatAnchor = SeatAnchor;
             Route.SeatRig = Rig;
+            if (!Rig || !Rig->DoesSocketExist(Child->Seat->Attachment))
+            {
+                const FSCInstanceHelpers* Helpers = Child->Id.IsEmpty() ? Vehicle.AttachmentHelpers.Find(SeatAnchor)
+                    : Vehicle.InstanceHelpers.Find(Child->Id);
+                const FTransform* Socket = Helpers ? Helpers->Frames.Find(Child->Seat->Attachment.ToString()) : nullptr;
+                if (!Socket) continue;
+                Route.StaticSocket = *Socket;
+                Route.bStaticSocket = true;
+            }
             Route.Definition = Child->Seat.GetValue();
             Route.Entrance = Entrance;
             if (!Entrance.DashboardPort.IsEmpty()) Route.Definition.DashboardPort = Entrance.DashboardPort;
@@ -90,6 +92,35 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
                 DashPath.Last() = Route.Definition.DashboardPort;
                 Route.DashRig = Vehicle.PortRigs.FindRef(SCCargoRecords::PortKey(DashPath));
             }
+            auto HasSeatAnimation = [&](const USCRigComponent* Target) {
+                if (!Target || !Vehicle.ClipCatalog) return false;
+                return Vehicle.ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Clip) {
+                    return Clip.Owner.Equals(Target->OwnerEntity, ESearchCase::IgnoreCase) &&
+                        Clip.Bindings.ContainsByPredicate([&](const FSCClipBinding& Binding) {
+                            return Binding.Mesh == Target->GetSkeletalMeshAsset();
+                        }) &&
+                        Clip.Fragments.ContainsByPredicate([](const FSCClipFragment& Fragment) {
+                            return Fragment.Fragment == SeatState;
+                        });
+                });
+            };
+            Route.bAnimateSeat = HasSeatAnimation(Rig);
+            Route.bAnimateDash = HasSeatAnimation(Route.DashRig.Get());
+            for (const FSCSeatGateway& Gateway : Entrance.Gateways)
+            {
+                const int32 Door = Vehicle.Doors.IndexOfByPredicate([&](const FSCDoorInteraction& Candidate) {
+                    return Candidate.Fragment == Gateway.Fragment && Candidate.OpenTag == Gateway.OpenTag &&
+                        Candidate.CloseTag == Gateway.CloseTag && Candidate.Rig;
+                });
+                if (Door == INDEX_NONE)
+                {
+                    UE_LOG(LogSCSeat, Warning, TEXT("SEAT_GATEWAY_UNAVAILABLE route=%s fragment=%s"),
+                        *Entrance.Name, *Gateway.Fragment.ToString());
+                    break;
+                }
+                Route.GatewayDoors.Add(Door);
+            }
+            if (Route.GatewayDoors.Num() != Entrance.Gateways.Num()) continue;
             if (!Route.IsValid() || Route.Definition.Role == ESCSeatRole::Unknown)
             {
                 UE_LOG(LogSCSeat, Warning, TEXT("SEAT_ROUTE_UNAVAILABLE route=%s reason=missing_rig_or_role"), *Entrance.Name);
@@ -98,7 +129,14 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
             for (const FSCSeatAction& Action : Route.Definition.Actions)
             {
                 const FString* Path = Action.State == Enter ? &Entrance.Enter.FragmentTags : Action.State == Exit ? &Entrance.Exit.FragmentTags : nullptr;
-                if (Path && !Path->IsEmpty() && !Action.QueryTags.Contains(FName(**Path))) continue;
+                if (Path)
+                {
+                    TArray<FString> Tags;
+                    Path->ParseIntoArray(Tags, TEXT("+"), true);
+                    if (Action.QueryTags.Num() != Tags.Num() + 2 ||
+                        Tags.ContainsByPredicate([&](const FString& Tag) { return !Action.QueryTags.Contains(FName(*Tag)); }))
+                        continue;
+                }
                 if (!Route.Actions.Contains(Action.State) && FMath::IsFinite(Action.Speed) && Action.Speed > 0.f)
                     Route.Actions.Add(Action.State, Action);
             }
@@ -111,7 +149,8 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
                 if (!Press || !Point.bHasHelperTransform || Point.Radius <= 0) continue;
                 Route.Point = Point;
                 Route.Press = *Press;
-                const FSCInstanceHelpers* Helpers = Vehicle.AttachmentHelpers.Find(Anchor);
+                const FSCInstanceHelpers* Helpers = Access.Id.IsEmpty() ? Vehicle.AttachmentHelpers.Find(Anchor)
+                    : Vehicle.InstanceHelpers.Find(Access.Id);
                 const FTransform* Resolved = Helpers ? Helpers->Frames.Find(Point.HelperName) : nullptr;
                 if (!Resolved)
                 {
@@ -119,7 +158,7 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
                     continue;
                 }
                 Route.PointFrame = *Resolved;
-                if (PlayRigs(Route, Vehicle, Deploy, true))
+                if (PlayRigs(Route, Vehicle, Entrance.Enter.SkipState == TEXT("SkipDeploy") ? Deploy : Retract, true))
                 {
                     const FVector Local = Vehicle.GetActorTransform().InverseTransformPosition(
                         (Route.PointFrame * Anchor->GetComponentTransform()).GetLocation());
@@ -146,7 +185,7 @@ int32 FSCSeatRuntime::Focus(const ASCFirstPersonCharacter& Character) const
     for (int32 Index = 0; Index < Routes.Num(); ++Index)
     {
         const FRoute& Route = Routes[Index];
-        if (!Route.IsValid()) continue;
+        if (!Route.IsValid() || !CanUse(Route, Character)) continue;
         const FTransform Point = Route.PointFrame * Route.Access->GetComponentTransform();
         const FVector Offset = Point.GetLocation() - Eye;
         const double Distance = Offset.Size();
@@ -163,7 +202,10 @@ int32 FSCSeatRuntime::Focus(const ASCFirstPersonCharacter& Character) const
         Params.AddIgnoredActor(Character.Body->GetKit());
         FHitResult Hit;
         if (Character.GetWorld()->LineTraceSingleByChannel(Hit, Eye, Point.GetLocation(), ECC_Visibility, Params) &&
-            !DescendsFrom(Hit.GetComponent(), Route.Access.Get()) && !DescendsFrom(Hit.GetComponent(), Route.SeatRig.Get()))
+            !DescendsFrom(Hit.GetComponent(), Route.Access.Get()) && !DescendsFrom(Hit.GetComponent(), Route.SeatAnchor.Get()) &&
+            !Route.GatewayDoors.ContainsByPredicate([&](int32 Index) {
+                return Host->Doors.IsValidIndex(Index) && Host->Doors[Index].Rig == Hit.GetComponent();
+            }))
             continue;
         if (Best == INDEX_NONE || Aim > BestAngle || (FMath::IsNearlyEqual(Aim, BestAngle) && Distance < BestDistance))
         {
@@ -215,103 +257,12 @@ bool FSCSeatRuntime::Interact(ASCFirstPersonCharacter& Character)
 
 bool FSCSeatRuntime::RequestClips(ASCFirstPersonCharacter& Character)
 {
-    const FString Gender = Character.Body->Gender();
     TArray<FString> Names;
-    for (const auto& Pair : Routes[Active].Actions) Names.AddUnique(Pair.Value.Animation.ToString());
-    Names.Sort();
-    TMap<FString, int32> Bones;
-    const auto& Ref = Character.Body->GetLeader()->GetSkeletalMeshAsset()->GetRefSkeleton();
-    for (int32 Index = 0; Index < Ref.GetNum(); ++Index) Bones.Add(Ref.GetBoneName(Index).ToString(), Index);
-
-    FString File;
-    if (FParse::Value(FCommandLine::Get(), TEXT("SCSeatClipsPackage="), File))
-    {
-        Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [File, Gender, Names = MoveTemp(Names), Bones = MoveTemp(Bones)] {
-            TArray64<uint8> Tar;
-            if (!FFileHelper::LoadFileToArray(Tar, *File)) return FClipResult{{}, TEXT("Cannot read seat clips: ") + File};
-            return ReadClips(MoveTemp(Tar), Gender, Names, Bones);
-        }, UE::Tasks::ETaskPriority::BackgroundNormal);
-    }
-    else
-    {
-        UGameInstance* Game = Character.GetGameInstance();
-        const USCViewerSubsystem* Viewer = Game ? Game->GetSubsystem<USCViewerSubsystem>() : nullptr;
-        const auto Client = Viewer ? Viewer->GetClient() : nullptr;
-        if (!Client) return false;
-        Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
-        auto Export = Client->ExportPlayerClips(Gender, Names, Progress.ToSharedRef());
-        Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Export, Gender, Names = MoveTemp(Names), Bones = MoveTemp(Bones)]() mutable {
-            FSCExportResult& Result = Export.GetResult();
-            if (!Result.bOK) return FClipResult{{}, Result.Error.ToString()};
-            return ReadClips(MoveTemp(Result.Tar), Gender, Names, Bones);
-        }, UE::Tasks::Prerequisites(Export), UE::Tasks::ETaskPriority::BackgroundNormal);
-    }
+    for (const auto& [State, Action] : Routes[Active].Actions) Names.AddUnique(Action.Animation.ToString());
+    if (!Request.Start(*Character.Body, USCViewerSubsystem::Get(&Character), MoveTemp(Names), TEXT("SCSeatClipsPackage="))) return false;
     PlayerKit = Character.Body->GetKit();
     Phase = EPhase::LoadClips;
     return true;
-}
-
-FSCSeatRuntime::FClipResult FSCSeatRuntime::ReadClips(TArray64<uint8>&& Tar, const FString& Gender, const TArray<FString>& Names,
-    const TMap<FString, int32>& Bones)
-{
-    FSCTarPackageSource Source(MoveTemp(Tar));
-    FClipResult Result;
-    if (!Source.IsValid())
-    {
-        Result.Error = Source.GetError();
-        return Result;
-    }
-    auto ReadText = [&](const FString& Path, FString& Json) {
-        TArray<uint8> Bytes;
-        if (!Source.ReadBytes(Path, Bytes, Result.Error)) return false;
-        Json = FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(Bytes.GetData()), Bytes.Num()));
-        return true;
-    };
-    FString Json;
-    TSharedPtr<FJsonObject> Scene;
-    const TSharedPtr<FJsonObject>* Root = nullptr;
-    const TSharedPtr<FJsonObject>* ClipSet = nullptr;
-    const TArray<TSharedPtr<FJsonValue>>* Records = nullptr;
-    FString PackageGender;
-    if (!ReadText(TEXT("Packages/player_clips/scene.json"), Json) ||
-        !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Scene) || !Scene ||
-        !Scene->TryGetObjectField(TEXT("root_entity"), Root) || !(*Root)->TryGetArrayField(TEXT("animations"), Records) ||
-        !Scene->TryGetObjectField(TEXT("player_clips"), ClipSet) || !(*ClipSet)->TryGetStringField(TEXT("gender"), PackageGender) ||
-        !PackageGender.Equals(Gender, ESearchCase::IgnoreCase))
-    {
-        if (Result.Error.IsEmpty()) Result.Error = TEXT("Invalid seat clip manifest");
-        return Result;
-    }
-    TMap<FName, FString> Paths;
-    for (const auto& Value : *Records)
-        if (Value && Value->Type == EJson::Object)
-        {
-            FString Name, Sidecar;
-            const auto Object = Value->AsObject();
-            if (Object && Object->TryGetStringField(TEXT("name"), Name) && Object->TryGetStringField(TEXT("sidecar"), Sidecar))
-                Paths.Add(FName(*Name), Sidecar);
-        }
-    for (const FString& Name : Names)
-    {
-        const FString* Path = Paths.Find(FName(*Name));
-        const auto Clip = MakeShared<FSCPlayerClip>();
-        if (!Path)
-        {
-            Result.Error = TEXT("Missing seat animation ") + Name;
-            return Result;
-        }
-        if (!ReadText(FString(TEXT("Packages/player_clips/")) + *Path, Json) ||
-            !FSCPlayerClip::Parse(Json,
-                [&](const FString& Bone) { const int32* Index = Bones.Find(Bone); return Index ? *Index : INDEX_NONE; },
-                *Clip, Result.Error) || Clip->bAdditive ||
-            Clip->Tracks.IsEmpty() || !FMath::IsFinite(Clip->Duration) || Clip->Duration <= 0.f)
-        {
-            if (Result.Error.IsEmpty()) Result.Error = TEXT("Unreadable seat animation ") + Name;
-            return Result;
-        }
-        Result.Clips.Add(FName(*Name), Clip);
-    }
-    return Result;
 }
 
 void FSCSeatRuntime::Begin(ASCFirstPersonCharacter& Character)
@@ -342,7 +293,13 @@ void FSCSeatRuntime::Begin(ASCFirstPersonCharacter& Character)
     bSavedControllerYaw = Character.bUseControllerRotationYaw;
     Character.bUseControllerRotationYaw = false;
     RelativeView = (Character.GetActorQuat().Inverse() * Character.GetViewRotation().Quaternion()).Rotator();
-    StartAction(EPhase::Enter, Enter);
+    if (Route.GatewayDoors.IsEmpty() && Route.Entrance.Enter.SkipState == TEXT("SkipDeploy"))
+    {
+        StartAction(EPhase::Enter, Enter);
+        return;
+    }
+    StartGateways(EPhase::OpenForEnter);
+    if (Route.Entrance.Enter.SkipState.IsNone() && !PlayRigs(Route, *Host, Deploy)) Stop(Character);
 }
 
 void FSCSeatRuntime::StartAction(EPhase NewPhase, FName State)
@@ -357,11 +314,93 @@ void FSCSeatRuntime::StartAction(EPhase NewPhase, FName State)
 bool FSCSeatRuntime::PlayRigs(const FRoute& Route, ASCVehicle& Vehicle, FName Tag, bool bHold)
 {
     const auto Start = bHold ? ESCFragmentStart::HoldLast : ESCFragmentStart::Begin;
-    const bool bSeat = Vehicle.PlayFragmentAt(SeatState, Tag, Route.SeatRig.Get(), 1.f, Start);
-    const bool bDash = !Route.DashRig.IsValid() || Vehicle.PlayFragmentAt(SeatState, Tag, Route.DashRig.Get(), 1.f, Start);
+    const bool bSeat = !Route.bAnimateSeat || Vehicle.PlayFragmentAt(SeatState, Tag, Route.SeatRig.Get(), 1.f, Start);
+    const bool bDash = !Route.bAnimateDash || Vehicle.PlayFragmentAt(SeatState, Tag, Route.DashRig.Get(), 1.f, Start);
     UE_LOG(LogSCSeat, Display, TEXT("SEAT_RIG route=%s state=%s seat=%d dashboard=%d hold=%d"),
         *Route.Entrance.Name, *Tag.ToString(), bSeat, bDash, bHold);
     return bSeat && bDash;
+}
+
+bool FSCSeatRuntime::CanUse(const FRoute& Route, const ASCFirstPersonCharacter& Character) const
+{
+    const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(&Character);
+    const bool bSpace = Viewer && Viewer->IsSpace();
+    auto Matches = [&](const TMap<FName, FName>& Conditions) {
+        for (const auto& [Key, Expected] : Conditions)
+        {
+            TOptional<bool> Actual;
+            if (Key == TEXT("idle")) Actual = Host->GetVelocity().IsNearlyZero();
+            if (Key == TEXT("zero_g")) Actual = bSpace;
+            if (Key == TEXT("in_quantum")) Actual = false;
+            if (!Actual.IsSet() || Expected != (Actual.GetValue() ? TEXT("True") : TEXT("False"))) return false;
+        }
+        return true;
+    };
+    return Host.IsValid() && Matches(Route.Entrance.Conditions) &&
+        !Route.Entrance.Gateways.ContainsByPredicate([&](const FSCSeatGateway& Gate) { return !Matches(Gate.Conditions); });
+}
+
+void FSCSeatRuntime::StartGateways(EPhase NewPhase)
+{
+    Phase = NewPhase;
+    ActionClock = 0.f;
+    GatewayIssued.Init(false, Routes[Active].GatewayDoors.Num());
+}
+
+bool FSCSeatRuntime::UpdateGateways(ASCFirstPersonCharacter& Character, const FRoute& Route, bool bEnter, bool bOpen)
+{
+    bool bReady = true;
+    for (int32 Index = 0; Index < Route.GatewayDoors.Num(); ++Index)
+    {
+        const FSCSeatGateway& Gate = Route.Entrance.Gateways[Index];
+        if (!bOpen && (bEnter ? Gate.bKeepOpenOnEnter : Gate.bKeepOpenOnExit)) continue;
+        const int32 Door = Route.GatewayDoors[Index];
+        const float Delay = bOpen ? (bEnter ? Gate.OpenEnter : Gate.OpenExit) : (bEnter ? Gate.CloseEnter : Gate.CloseExit);
+        if (!GatewayIssued[Index] && ActionClock >= Delay)
+        {
+            if (Host->IsDoorOpen(Door) != bOpen)
+            {
+                const FString Error = Host->OrderShipDoor(Door, bOpen ? ESCShipDoorAction::Open : ESCShipDoorAction::Close,
+                    Host->ShipLinkPlayer(), Character.GetActorLocation());
+                UE_LOG(LogSCSeat, Display, TEXT("SEAT_GATEWAY route=%s fragment=%s open=%d result=%s"),
+                    *Route.Entrance.Name, *Gate.Fragment.ToString(), bOpen, *Error);
+                if (bOpen && !Error.IsEmpty())
+                {
+                    if (bEnter) Stop(Character);
+                    else ReturnToSeat(Character, Route);
+                    return false;
+                }
+            }
+            GatewayIssued[Index] = true;
+        }
+        bReady &= GatewayIssued[Index] && (!bOpen || (Host->IsDoorOpen(Door) && !Host->IsDoorPlaying(Door)));
+    }
+    return bReady;
+}
+
+void FSCSeatRuntime::StartExit(ASCFirstPersonCharacter& Character, const FRoute& Route)
+{
+    StartAction(EPhase::Exit, Exit);
+    const FTransform Frame = SeatedTransform(Route);
+    ExitInShip = Frame.GetRelativeTransform(Host->GetActorTransform());
+    const FSCPlayerClip& ExitClip = *Clips.FindChecked(Route.Actions.FindChecked(Exit).Animation);
+    if (!StandingClear(Character, (Motion(Character, ExitClip.Duration) * Frame).GetLocation()))
+        ReturnToSeat(Character, Route);
+}
+
+void FSCSeatRuntime::FinishExit(ASCFirstPersonCharacter& Character, const FRoute& Route)
+{
+    if (!StandingClear(Character, Character.GetActorLocation()))
+    {
+        ReturnToSeat(Character, Route);
+        return;
+    }
+    Character.SetActorRotation(FRotator(0, Character.GetActorRotation().Yaw, 0));
+    Restore(Character);
+    Phase = EPhase::Walk;
+    Active = INDEX_NONE;
+    Clips.Reset();
+    UE_LOG(LogSCSeat, Display, TEXT("SEAT_STATE state=Walking"));
 }
 
 FTransform FSCSeatRuntime::Motion(const ASCFirstPersonCharacter& Character, float Seconds) const
@@ -424,9 +463,7 @@ void FSCSeatRuntime::Restore(ASCFirstPersonCharacter& Character)
 
 void FSCSeatRuntime::Stop(ASCFirstPersonCharacter& Character)
 {
-    if (Progress) Progress->RequestCancel();
-    Progress.Reset();
-    Parse = {};
+    Request.Cancel();
     if (OwnsMovement())
     {
         FTransform Spawn = Character.LastSpawn;
@@ -465,17 +502,15 @@ void FSCSeatRuntime::Tick(ASCFirstPersonCharacter& Character, float DeltaSeconds
     if (Phase == EPhase::LoadClips)
     {
         if (Focus(Character) != Active) { Stop(Character); return; }
-        if (!Parse.IsCompleted()) return;
-        FClipResult Result = MoveTemp(Parse.GetResult());
-        Parse = {};
-        Progress.Reset();
-        if (!Result.Error.IsEmpty())
+        auto Result = Request.Take();
+        if (!Result.IsSet()) return;
+        if (!Result->Error.IsEmpty())
         {
-            UE_LOG(LogSCSeat, Warning, TEXT("SEAT_CLIPS %s"), *Result.Error);
+            UE_LOG(LogSCSeat, Warning, TEXT("SEAT_CLIPS %s"), *Result->Error);
             Stop(Character);
             return;
         }
-        Clips = MoveTemp(Result.Clips);
+        Clips = MoveTemp(Result->Clips);
         Phase = EPhase::Holster;
     }
     if (Phase == EPhase::Holster)
@@ -488,9 +523,37 @@ void FSCSeatRuntime::Tick(ASCFirstPersonCharacter& Character, float DeltaSeconds
     }
 
     const FRoute& Route = Routes[Active];
+    ActionClock += DeltaSeconds;
+    const bool bRigsDone = !Host->IsRigPlaying(Route.SeatRig.Get()) && !Host->IsRigPlaying(Route.DashRig.Get());
+    switch (Phase)
+    {
+    case EPhase::OpenForEnter:
+        Character.SetActorTransform(StartInShip * Host->GetActorTransform(), false, nullptr, ETeleportType::TeleportPhysics);
+        if (UpdateGateways(Character, Route, true, true) && bRigsDone) StartAction(EPhase::Enter, Enter);
+        return;
+    case EPhase::OpenForExit:
+        Character.SetActorTransform(SeatedTransform(Route), false, nullptr, ETeleportType::TeleportPhysics);
+        if (UpdateGateways(Character, Route, false, true)) StartExit(Character, Route);
+        return;
+    case EPhase::CloseOnEnter:
+        Character.SetActorTransform(SeatedTransform(Route), false, nullptr, ETeleportType::TeleportPhysics);
+        if (UpdateGateways(Character, Route, true, false))
+        {
+            if (PlayRigs(Route, *Host, Retract)) StartAction(EPhase::Retract, Retract);
+            else Stop(Character);
+        }
+        return;
+    case EPhase::CloseOnExit:
+        if (UpdateGateways(Character, Route, false, false))
+        {
+            if (Route.Entrance.Exit.SkipState.IsNone()) PlayRigs(Route, *Host, Retract);
+            FinishExit(Character, Route);
+        }
+        return;
+    default: break;
+    }
     const FSCSeatAction& Action = Route.Actions.FindChecked(ActionState);
     const FSCPlayerClip* Clip = Clips.FindChecked(Action.Animation).Get();
-    ActionClock += DeltaSeconds;
     const float Seconds = ActionClock * Action.Speed;
     const float Sample = Action.bLoop ? FMath::Fmod(Seconds, Clip->Duration) : FMath::Min(Seconds, Clip->Duration);
     const float Blend = Action.BlendIn > 0.f ? FMath::Clamp(ActionClock / Action.BlendIn, 0.f, 1.f) : 1.f;
@@ -509,7 +572,6 @@ void FSCSeatRuntime::Tick(ASCFirstPersonCharacter& Character, float DeltaSeconds
     Character.Body->SetSeatAction(Clip, Sample, Blend, float(RelativeView.Pitch));
 
     const bool bBodyDone = Seconds >= Clip->Duration;
-    const bool bRigsDone = !Host->IsRigPlaying(Route.SeatRig.Get()) && !Host->IsRigPlaying(Route.DashRig.Get());
     switch (Phase)
     {
     case EPhase::Enter:
@@ -517,7 +579,8 @@ void FSCSeatRuntime::Tick(ASCFirstPersonCharacter& Character, float DeltaSeconds
         {
             const double Error = FVector::Dist(Frame.GetLocation(), SeatedTransform(Route).GetLocation());
             UE_LOG(LogSCSeat, Display, TEXT("SEAT_ATTACH route=%s err_cm=%.3f"), *Route.Entrance.Name, Error);
-            if (PlayRigs(Route, *Host, Retract)) StartAction(EPhase::Retract, Retract);
+            if (!Route.GatewayDoors.IsEmpty()) StartGateways(EPhase::CloseOnEnter);
+            else if (PlayRigs(Route, *Host, Retract)) StartAction(EPhase::Retract, Retract);
             else Stop(Character);
         }
         break;
@@ -537,28 +600,20 @@ void FSCSeatRuntime::Tick(ASCFirstPersonCharacter& Character, float DeltaSeconds
     case EPhase::Deploy:
         if (bRigsDone)
         {
-            StartAction(EPhase::Exit, Exit);
-            ExitInShip = Frame.GetRelativeTransform(Host->GetActorTransform());
-            const FSCPlayerClip& ExitClip = *Clips.FindChecked(Route.Actions.FindChecked(Exit).Animation);
-            const FVector End = (Motion(Character, ExitClip.Duration) * Frame).GetLocation();
-            if (!StandingClear(Character, End)) ReturnToSeat(Character, Route);
+            if (Route.GatewayDoors.IsEmpty()) StartExit(Character, Route);
+            else StartGateways(EPhase::OpenForExit);
         }
         break;
     case EPhase::Exit:
         if (bBodyDone)
         {
-            // A cab or loose cargo may have arrived since the preflight. Check the actual standing point again.
-            if (!StandingClear(Character, Frame.GetLocation()))
+            if (!Route.GatewayDoors.IsEmpty() && StandingClear(Character, Frame.GetLocation()))
+                StartGateways(EPhase::CloseOnExit);
+            else
             {
-                ReturnToSeat(Character, Route);
-                break;
+                if (Route.Entrance.Exit.SkipState.IsNone()) PlayRigs(Route, *Host, Retract);
+                FinishExit(Character, Route);
             }
-            Character.SetActorRotation(FRotator(0, Frame.Rotator().Yaw, 0));
-            Restore(Character);
-            Phase = EPhase::Walk;
-            Active = INDEX_NONE;
-            Clips.Reset();
-            UE_LOG(LogSCSeat, Display, TEXT("SEAT_STATE state=Walking"));
         }
         break;
     default: break;
