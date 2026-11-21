@@ -48,10 +48,54 @@ bool Matrix(const FReaderObject& O, const TCHAR* Key, FMatrix& Out, FString& Err
     { Error = TEXT("Non-affine matrix"); return false; }
     return true;
 }
+bool Vector3(const FReaderObject& O, const TCHAR* Field, FVector& Out)
+{
+    const auto& Values = ReaderArray(O, Field);
+    if (Values.Num() != 3) return false;
+    for (int32 I = 0; I < 3; ++I)
+        if (!Values[I]->TryGetNumber(Out[I]) || !FMath::IsFinite(Out[I])) return false;
+    return true;
+}
+
+void ReadThrusters(const FReaderObject& O, FSCSceneInstance& Instance)
+{
+    const FReaderObject* Data;
+    if (!O->TryGetObjectField(TEXT("thruster_vfx"), Data)) return;
+    Instance.NozzleAnimation = String(*Data, TEXT("nozzle_animation"));
+    Instance.bHasThrusterGlow = Vector3(*Data, TEXT("glow"), Instance.ThrusterGlow);
+    for (const auto& Value : ReaderArray(*Data, TEXT("effects")))
+    {
+        const FReaderObject* Effect;
+        if (!Value->TryGetObject(Effect)) continue;
+        FSCThrusterEffect Source;
+        Source.Reference = String(*Effect, TEXT("reference"));
+        Source.Bone = String(*Effect, TEXT("bone"));
+        const FString Role = String(*Effect, TEXT("role"));
+        const FString Zone = String(*Effect, TEXT("zone"));
+        Source.bBoost = Role == TEXT("boost");
+        Source.bParent = Zone == TEXT("HostParent");
+        if (Source.Reference.IsEmpty() || (Role != TEXT("thrust") && !Source.bBoost) ||
+            (Zone != TEXT("Host") && !Source.bParent)) continue;
+        FVector Position, Angles;
+        if (!Vector3(*Effect, TEXT("position_sc_m"), Position) || !Vector3(*Effect, TEXT("rotation_sc"), Angles)) continue;
+        const auto& Strength = ReaderArray(*Effect, TEXT("strength"));
+        if (Strength.Num() != 2 || !Strength[0]->TryGetNumber(Source.Strength.X) || !Strength[1]->TryGetNumber(Source.Strength.Y) ||
+            !FMath::IsFinite(Source.Strength.X) || !FMath::IsFinite(Source.Strength.Y)) continue;
+
+        const FQuat X(FVector::XAxisVector, FMath::DegreesToRadians(Angles.X));
+        const FQuat Y(FVector::YAxisVector, FMath::DegreesToRadians(Angles.Y));
+        const FQuat Z(FVector::ZAxisVector, FMath::DegreesToRadians(Angles.Z));
+        const FMatrix Local = FTransform(X * Y * Z, Position).ToMatrixWithScale();
+        Source.Offset = FTransform(FSCMeshImporter::InstanceTransform(Local, FMatrix::Identity, false, true));
+        Instance.ThrusterEffects.Add(MoveTemp(Source));
+    }
+}
+
 bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, const TCHAR* MatrixKey = TEXT("local_transform_sc"))
 {
     if (!O) { Error = TEXT("Expected scene instance object"); return false; }
     for (const auto& V : ReaderArray(O, TEXT("lights"))) if (V->Type == EJson::Object) Out.LightJson.Add(Json(V->AsObject()));
+    ReadThrusters(O, Out);
     Out.EntityName = String(O, TEXT("entity_name"));
     Out.DisplayName = String(O, TEXT("display_name"));
     Out.ParentEntityName = String(O, TEXT("parent_entity_name"));

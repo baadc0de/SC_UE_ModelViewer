@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "SCShipLinkSubsystem.h"
+#include "SCThrusterPreview.h"
 
 class FSCShipLinkModel
 {
@@ -23,6 +24,7 @@ public:
     void Ramp();
     void Lights();
     void SetLight(int32 Group, const FString& Mode);
+    void SetThrusterPreview(ESCThrusterPreviewMode Mode);
     void ToggleLocate();
     TMap<int32, FBox2D> CalloutHits;
     bool SelectCallout(const FVector2D& Absolute);
