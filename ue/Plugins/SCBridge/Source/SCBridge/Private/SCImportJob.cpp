@@ -1080,6 +1080,7 @@ void FSCImportJob::FState::Assemble()
     auto Place = [&](const FSCSceneInstance& I, USceneComponent* Parent, bool bAtHelper, bool bRoot) -> FEntity {
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
+        FSCThrusterBinding Thruster;
         bool bScreenBound = false;
         ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };
         const TMap<int32, TArray<int32>>* ScreenOwners = MeshScreenOwners.Find(I.MeshAsset);
@@ -1215,6 +1216,8 @@ void FSCImportJob::FState::Assemble()
                     {
                         UMaterialInterface* Screen = ScreenMaterial(Sub, Slot, INDEX_NONE, SkeletalSlotTriangles(*RigMesh, Slot), true, E.Rig);
                         E.Rig->SetMaterial(Slot, Screen ? Screen : Mat);
+                        if (!I.ThrusterEffects.IsEmpty() && !Screen && V->EngineGlowMaterials.Contains(Mat))
+                            Thruster.Materials.AddUnique(Cast<UMaterialInstanceDynamic>(Mat));
                         if (!Screen) RecordPaint(I, E.Rig, Slot, *E.Mesh); // a panel's image does not follow the paint
                     }
             const double RigStart = FPlatformTime::Seconds();
@@ -1303,7 +1306,11 @@ void FSCImportJob::FState::Assemble()
                     if (Material) C->SetMaterial(Slot, Material);
                     // A panel's image does not follow the paint.
                     if (Material && Material != Materials.Invisible() && !Screen) RecordPaint(I, C, Slot, *E.Mesh);
-                    if (Material && V->EngineGlowMaterials.Contains(Material)) GlowSlots.Add(Slot);
+                    if (Material && V->EngineGlowMaterials.Contains(Material))
+                    {
+                        GlowSlots.Add(Slot);
+                        if (!I.ThrusterEffects.IsEmpty()) Thruster.Materials.AddUnique(Cast<UMaterialInstanceDynamic>(Material));
+                    }
                 }
                 const double RegisterStart = FPlatformTime::Seconds();
                 C->RegisterComponent();
@@ -1315,6 +1322,57 @@ void FSCImportJob::FState::Assemble()
                            *I.EntityName, *C->GetName(), Slot, bNanite, C->IsVisible(), *C->Bounds.BoxExtent.ToString(),
                            *C->GetMaterial(Slot)->GetName());
             }
+        }
+        for (const FSCThrusterEffect& Source : I.ThrusterEffects)
+        {
+            USceneComponent* Anchor = Source.bParent ? Parent : E.Anchor;
+            auto BindEmitter = [&](USceneComponent* Mount, FName Socket, const FTransform& Offset) {
+                if (!Mount) return;
+                FSCThrusterEmitter& Emitter = Thruster.Emitters.AddDefaulted_GetRef();
+                Emitter.Source = Source;
+                Emitter.Source.Offset = Offset;
+                Emitter.Mount = Mount;
+                Emitter.Socket = Socket;
+            };
+            if (Source.Bone.IsEmpty())
+            {
+                BindEmitter(Anchor, NAME_None, Source.Offset);
+                continue;
+            }
+            const int32 Before = Thruster.Emitters.Num();
+            USceneComponent* Rig = Source.bParent ? Parent : E.Rig;
+            TSet<FName> Animated;
+            const FName Exact(*Source.Bone);
+            if (Rig && Rig->DoesSocketExist(Exact))
+            {
+                BindEmitter(Rig, Exact, Source.Offset);
+                Animated.Add(Exact);
+            }
+            else if (USkinnedMeshComponent* MeshRig = Cast<USkinnedMeshComponent>(Rig))
+            {
+                TArray<FName> Bones;
+                MeshRig->GetBoneNames(Bones);
+                for (FName Bone : Bones)
+                    if (Bone.ToString().MatchesWildcard(Source.Bone, ESearchCase::IgnoreCase))
+                    {
+                        BindEmitter(Rig, Bone, Source.Offset);
+                        Animated.Add(Bone);
+                    }
+            }
+            if (E.Mesh && !Source.bParent)
+                for (const auto& Node : E.Mesh->Nodes)
+                    if (Node.Key.MatchesWildcard(Source.Bone, ESearchCase::IgnoreCase) && !Animated.Contains(FName(*Node.Key)))
+                        BindEmitter(Anchor, NAME_None, Source.Offset * FTransform(FSCMeshImporter::Transform(Node.Value)));
+            if (Thruster.Emitters.Num() == Before)
+                Warn(I.EntityName, TEXT("Thruster attachment not found: ") + Source.Bone);
+        }
+        if (!Thruster.Emitters.IsEmpty())
+        {
+            Thruster.Rig = E.Rig;
+            Thruster.NozzleAnimation = I.NozzleAnimation;
+            Thruster.Glow = I.ThrusterGlow;
+            Thruster.bHasGlow = I.bHasThrusterGlow;
+            V->Thrusters.Add(MoveTemp(Thruster));
         }
         const double LightStart = FPlatformTime::Seconds();
         FSCLightImporter::Build(

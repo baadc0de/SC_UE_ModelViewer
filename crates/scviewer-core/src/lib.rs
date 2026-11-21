@@ -33,6 +33,7 @@ mod package;
 mod archive;
 pub mod particle_params;
 mod particles;
+mod thrusters;
 pub use particles::{EffectRef, SYSTEM_DEFAULTS, split_reference};
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -374,6 +375,7 @@ impl Session {
         let mut package = result
             .decomposed
             .context("upstream returned no decomposed files")?;
+        thrusters::add_to_package(self, &mut package)?;
         engine_textures::add_to_package(&mut package, &self.loaded()?.p4k, options.geometry.mip)?;
         self.checkpoint(cancel, 0.94, "Building tar")?;
         let bytes = package::to_tar(&package)?;

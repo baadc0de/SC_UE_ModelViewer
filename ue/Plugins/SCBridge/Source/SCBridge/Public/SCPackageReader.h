@@ -3,6 +3,7 @@
 #include "SCPackageSource.h"
 #include "Cargo/SCCargoTypes.h"
 #include "SCInteractionRecords.h"
+#include "SCThrusterPreview.h"
 #include "SCPackageReader.generated.h"
 
 /** `ui_bindings[].state_images[]` (WP-I1 I1-3): the render of the UI owner in one other state of its interaction state
@@ -110,6 +111,10 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;
     UPROPERTY(BlueprintReadOnly) TArray<FString> LightJson; // lossless state/style/attachment metadata
+    UPROPERTY() TArray<FSCThrusterEffect> ThrusterEffects;
+    UPROPERTY() FString NozzleAnimation;
+    UPROPERTY() FVector ThrusterGlow = FVector::ZeroVector;
+    UPROPERTY() bool bHasThrusterGlow = false;
     /** Instance id (`children[].id`, player kits); unique where entity names repeat. */
     UPROPERTY(BlueprintReadOnly) FString Id;
     /** Id of the enclosing child for nested assemblies (`children[].children[]`); resolves the parent before the name. */

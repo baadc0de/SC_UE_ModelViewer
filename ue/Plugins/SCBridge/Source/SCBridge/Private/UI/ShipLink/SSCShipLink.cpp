@@ -183,7 +183,28 @@ TSharedRef<SWidget> SSCShipLink::Build()
         Systems->AddSlot().Padding(0, 2, 0, 8)[Modes];
     }
     Systems->AddSlot()[DisabledRow(TEXT("Power"), TEXT("Bring ship power up or down."))];
-    Systems->AddSlot()[DisabledRow(TEXT("Engines"), TEXT("Start or stop the engines."))];
+    if (!Ship->Thrusters.IsEmpty())
+    {
+        TSharedRef<SHorizontalBox> Modes = SNew(SHorizontalBox);
+        const TPair<ESCThrusterPreviewMode, const TCHAR*> Choices[] = {
+            {ESCThrusterPreviewMode::Off, TEXT("OFF")},
+            {ESCThrusterPreviewMode::Minimum, TEXT("MINIMUM")},
+            {ESCThrusterPreviewMode::Full, TEXT("FULL")},
+            {ESCThrusterPreviewMode::Boosted, TEXT("BOOSTED")}
+        };
+        for (const auto& [Mode, Label] : Choices)
+        {
+            Modes->AddSlot().AutoWidth().Padding(0, 0, 4, 0)
+            [Action(TAttribute<FText>::CreateLambda([M, Mode, Label] {
+                const ASCVehicle* V = M->GetShip();
+                const bool bCurrent = V && V->bThrusterPreviewActive && V->ThrusterPreview == Mode;
+                return FText::FromString((bCurrent ? FString(TEXT("• ")) : FString()) + Label);
+            }), [M, Mode] { M->SetThrusterPreview(Mode); })];
+        }
+        Systems->AddSlot().Padding(0, 3)[HRule()];
+        Systems->AddSlot().Padding(0, 2)[Txt(LabelText(TEXT("THRUSTER VFX")), Section(), Ink())];
+        Systems->AddSlot().Padding(0, 2, 0, 8)[Modes];
+    }
     Systems->AddSlot().Padding(0, 12, 0, 8)[Txt(LabelText(TEXT("FLIGHT")), Section(), Ink())];
     Systems->AddSlot()[DisabledRow(TEXT("Hold position"), TEXT("Stop the ship drifting and keep it where it is."))];
     Systems->AddSlot()[DisabledRow(TEXT("Auto-land"), TEXT("Find a pad or flat ground and set the ship down."))];

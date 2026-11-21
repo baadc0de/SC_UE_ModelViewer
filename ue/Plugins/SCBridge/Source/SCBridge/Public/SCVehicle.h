@@ -426,6 +426,10 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> EngineGlowMaterials;
     /** Sets the engine-glow control value (package units, clamped to its range); see EngineGlowToEmissive. */
     UFUNCTION(BlueprintCallable, Category = "SC") void SetEngineGlow(float Strength);
+    UPROPERTY() TArray<FSCThrusterBinding> Thrusters;
+    UPROPERTY(Transient) ESCThrusterPreviewMode ThrusterPreview = ESCThrusterPreviewMode::Minimum;
+    UPROPERTY(Transient) bool bThrusterPreviewActive = false;
+    bool SetThrusterPreview(ESCThrusterPreviewMode Mode);
     UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USCClipCatalog> ClipCatalog;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FSCSceneManifest Manifest;
     /** Anchors of instances that carry an id (player-kit items), by id. */

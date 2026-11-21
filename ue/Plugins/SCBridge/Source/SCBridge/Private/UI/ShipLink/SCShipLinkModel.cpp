@@ -121,6 +121,12 @@ void FSCShipLinkModel::SetLight(int32 Group, const FString& Mode)
     Notice = USCShipLinkSubsystem::SetLight(GetShip(), Group, Mode);
 }
 
+void FSCShipLinkModel::SetThrusterPreview(ESCThrusterPreviewMode Mode)
+{
+    if (ASCVehicle* Vehicle = GetShip())
+        Notice = Vehicle->SetThrusterPreview(Mode) ? FString() : TEXT("Some exhaust assets need a local build.");
+}
+
 void FSCShipLinkModel::ToggleLocate()
 {
     if (USCShipLinkSubsystem* Link = GetLink()) Link->ToggleLocate(GetShip());
