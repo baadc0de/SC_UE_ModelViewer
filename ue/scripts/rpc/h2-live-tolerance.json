@@ -1,0 +1,62 @@
+{
+  "fixture": {
+    "request": {
+      "fps": 30,
+      "frames": 150,
+      "height": 1080,
+      "outputs": [
+        "png16",
+        "exr"
+      ],
+      "setup": [
+        {
+          "orbit": {
+            "center": "vehicle",
+            "fromDeg": 0,
+            "height": 5,
+            "radius": 25,
+            "seconds": 5,
+            "toDeg": 90
+          }
+        }
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "orbit": {
+            "center": "vehicle",
+            "fromDeg": 0,
+            "height": 5,
+            "radius": 25,
+            "seconds": 5,
+            "toDeg": 90
+          }
+        }
+      ],
+      "warmup_frames": 256,
+      "width": 1920
+    },
+    "cvars": {
+      "r.AntiAliasingMethod": "4",
+      "r.DynamicGlobalIlluminationMethod": "1",
+      "r.HDR.EnableHDROutput": "0",
+      "r.Lumen.DiffuseIndirect.Allow": "1",
+      "r.Lumen.HardwareRayTracing": "1",
+      "r.ScreenPercentage": "100",
+      "r.SSDO": "1",
+      "r.SSDO.Quality": "1"
+    },
+    "anti_aliasing_method": "AAM_TSR",
+    "display_method": "HuePreservingShoulder",
+    "ray_tracing_allowed": true
+  },
+  "calibration_warmup_frames": 32,
+  "calibration_sidecar_sha256": [
+    "8A3EA530514ED8C5007F7BB95BBDBE4EA46949DA78ADCD9540A2DD9423C8C26F",
+    "E47199C6CB1819A0821659894BDF64D82DDFA9ED0F48FC5EFC9B94DF997486F7"
+  ],
+  "baseline_shot_mae": 0.0007994923323414963,
+  "baseline_worst_frame_mae": 0.001109958037689784,
+  "shot_mae_limit": 0.001007095445181964,
+  "worst_frame_mae_limit": 0.0013885709925993744
+}

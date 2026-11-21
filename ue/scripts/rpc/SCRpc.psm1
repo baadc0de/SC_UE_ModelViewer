@@ -72,4 +72,10 @@ function Stop-SCViewer {
     "exit=$($Process.ExitCode)"
 }
 
-Export-ModuleMember -Function Invoke-SC, Set-SCRpcPort, Start-SCViewer, Stop-SCViewer, Find-SCFfmpeg
+function Invoke-SCRender {
+    param([Parameter(Mandatory)][hashtable]$Request)
+    $deadline = if ($Request.ContainsKey('timeout_s')) { [int][math]::Ceiling($Request.timeout_s) } else { 3600 }
+    Invoke-SC /render $Request -TimeoutSec ($deadline + 30)
+}
+
+Export-ModuleMember -Function Invoke-SCRender, Invoke-SC, Set-SCRpcPort, Start-SCViewer, Stop-SCViewer, Find-SCFfmpeg
