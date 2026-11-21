@@ -252,6 +252,48 @@ in 72.31 s. Unloading the C2 left zero of 49,439 tracked objects alive after col
 The HDR RPC smoke test produced valid PNGs with and without UI. Recording encoded an MP4 from
 the float HDR source with zero dropped frames.
 
+#### Garbage collection and frame pacing
+
+The fresh `f62b128` run brought room p95 back from 16.34 to 12.87 ms and hull p95 from 13.84 to
+10.89 ms. The previous slow run had 13.82 ms room GPU p95 and 11.92 ms hull GPU p95. Those fell to
+10.67 and 9.70 ms on the fresh run of the same tree. The slowdown tracked run-to-run render and
+GPU variation. Room audio also spent more frames on decoder creation after
+the start budget was introduced. The earlier room trace had a 5.52 ms audio p95 and a 33.76 ms peak.
+The previous slow run had an 8.49 ms audio p95 and a 14.92 ms peak.
+
+| Unreal Insights scope | Main | Main with `-DisablePython` | Patched |
+| --- | ---: | ---: | ---: |
+| Peak `ConditionalCollectGarbage` | 27.95 ms | 15.29 ms | 15.62 ms |
+| Python pre-collection callback in that pass | 12.70 ms | — | — |
+| UObject reachability in that pass | 13.45 ms | 13.98 ms | 13.85 ms |
+
+The viewer's editor-hosted `-game` startup now defaults to disabling Python. Explicit Python requests,
+the editor, and commandlets retain their Python entry points. The normal Unreal collector still runs.
+The trace showed about 14 ms of UObject reachability and subsequent cleanup slices of about 2 ms.
+The audio tick now shares the listener transform across emitters in each interior and submits gain
+and submix updates when their values change. In equal 11-second windows of the two Python-disabled
+traces, the engine processed 263,717 volume and submix commands before the change and 8,235 after.
+
+The serialized reruns used the same escape-pod-to-hold and port-hull route, cold processed caches,
+populated export cache and DDC, D3D12 HDR, and Lumen Surface Cache.
+
+| Run | Room p95 / p99 / max (ms) | Hull p95 / p99 / max (ms) |
+| --- | ---: | ---: |
+| Fresh `main`, lightweight CSV | 12.87 / 20.98 / 34.68 | 10.89 / 12.10 / 13.22 |
+| Patched, lightweight CSV | 13.88 / 17.41 / 24.35 | 11.81 / 13.61 / 14.75 |
+| Patched repeat, lightweight CSV | 13.01 / 16.92 / 35.39 | 11.79 / 12.79 / 14.08 |
+| Patched, Insights trace and CSV | 13.72 / 21.13 / 31.69 | 11.62 / 13.00 / 15.42 |
+
+The lightweight repeats lowered room p99, with room and hull p95 slightly above the fresh control.
+The 35.39 ms frame in the repeat coincided with a 34.05 ms RHI sample, a 34.55 ms render-thread sample,
+and 23.00 ms of game-thread event wait. Its game-thread work was 11.06 ms.
+In the lightweight patched runs, hangar import took 17.90–18.43 s, C2 load took 32.35–32.42 s,
+and first-person readiness took 71.65–72.50 s. Each ended the route with 67 successful promotions.
+
+The Win64 Development build, 15 audio and importer tests, and a Python commandlet smoke test passed.
+The raw traces, trace exports, and frame captures are in `out/xl-cold-geometry/` with the
+`pacing-main`, `pacing-no-python`, and `pacing-fixed` prefixes.
+
 ### Commands
 
 From the repository root, build once initially and use a fresh scratch cache for each independent comparison.

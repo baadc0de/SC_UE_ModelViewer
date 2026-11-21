@@ -260,6 +260,7 @@ private:
         TObjectPtr<USoundSubmix> DrySubmix; // the voice's bus (a send: the base submix output is off)
         uint32 Bus = 0;
         float LastGain = 0, LastDistance = 0, LastSend = 0;
+        float AppliedDryLevel = -1.f, AppliedWetLevel = -1.f; // invalidated when playback or its room changes
         bool bStopped = false;      // Stop() set End: the voice ends there (after its fade), not at its media's end
         int32 Plays = 0;            // Play() calls (more than one: the engine stopped the component and it restarted)
         double PlayWall = 0;        // FPlatformTime::Seconds of the first Play()
