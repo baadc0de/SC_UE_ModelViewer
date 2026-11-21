@@ -1599,6 +1599,7 @@ void FSCImportJob::FState::Assemble()
             Thruster.NozzleAnimation = I.NozzleAnimation;
             Thruster.Glow = I.ThrusterGlow;
             Thruster.bHasGlow = I.bHasThrusterGlow;
+            Thruster.bManeuvering = I.ItemType.Equals(TEXT("ManneuverThruster"), ESearchCase::IgnoreCase);
             V->Thrusters.Add(MoveTemp(Thruster));
         }
         const double LightStart = FPlatformTime::Seconds();

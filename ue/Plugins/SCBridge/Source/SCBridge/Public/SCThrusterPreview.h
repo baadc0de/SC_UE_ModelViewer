@@ -53,4 +53,5 @@ struct FSCThrusterBinding
     UPROPERTY() FString NozzleAnimation;
     UPROPERTY() FVector Glow = FVector::ZeroVector;
     UPROPERTY() bool bHasGlow = false;
+    UPROPERTY() bool bManeuvering = false;
 };
