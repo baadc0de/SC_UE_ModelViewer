@@ -1,5 +1,6 @@
 // WP-M1: door runtime state, access, and the data-derived room classification.
 #include "SCVehicle.h"
+#include "SCGangwayGround.h"
 #include "Cargo/SCCargoSubsystem.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Engine/OverlapResult.h"
@@ -193,6 +194,27 @@ bool PawnInDoor(const ASCVehicle& Ship, const FBox& Aperture)
 
 }
 
+void ASCVehicle::RememberGangwayStop(int32 Index)
+{
+    FShipDoor& Door = ShipDoors[Index];
+    Door.GroundLastSample = INDEX_NONE;
+    if (Door.MovementColliders.IsEmpty() || Door.MovementColliders.ContainsByPredicate([](const auto& C) {
+        return C.Sweep.IsEmpty() || !C.Component.IsValid();
+    })) return;
+    const FSCImportedClip* Clip = ReversibleDoorClip(ClipCatalog, Doors[Index]);
+    const FSCClipPlayback* Held = nullptr;
+    for (const auto& P : HeldPlayback)
+        if (P.OpeningGangway == Index)
+        {
+            if (Held || &ClipCatalog->Clips[P.Clip] != Clip || P.Speed <= 0) return;
+            Held = &P;
+        }
+    if (!Held) return;
+    Door.GroundLastSample = FMath::FloorToInt(Held->Frame);
+    for (auto& C : Door.MovementColliders)
+        C.GroundPose = C.Component->GetComponentTransform().GetRelativeTransform(GetActorTransform());
+}
+
 bool ASCVehicle::DoorwayOccupied(int32 Index) const
 {
     if (!ShipDoors.IsValidIndex(Index)) return false;
@@ -232,12 +254,16 @@ bool ASCVehicle::DoorwayOccupied(int32 Index) const
             const FBodyInstance* Body = Part ? Part->GetBodyInstance(NAME_None, false) : nullptr;
             // Narrow only from the fully open authored pose. Interrupted motion and other pose layers keep the bounds guard.
             if (!Body || !Body->IsValidBodyInstance() || Collider.Sweep.IsEmpty()) return true;
-            if (!SameColliderPose(Part->GetComponentTransform().GetRelativeTransform(ShipFrame), Collider.Sweep.Last().Pose))
+            const bool bGrounded = Collider.Sweep.IsValidIndex(Door.GroundLastSample);
+            const FTransform& EndPose = bGrounded ? Collider.GroundPose : Collider.Sweep.Last().Pose;
+            if (!SameColliderPose(Part->GetComponentTransform().GetRelativeTransform(ShipFrame), EndPose))
                 return true;
             if (Body->OverlapTest(Position, Rotation, Shape)) return true;
             const FTransform Current = Body->GetUnrealWorldTransform();
             const FTransform BodyOffset = Current.GetRelativeTransform(Part->GetComponentTransform());
-            return Collider.Sweep.ContainsByPredicate([&](const FShipDoor::FMovementCollider::FSample& Sample) {
+            // The last interval retains its full conservative travel allowance when contact was between two keys.
+            const int32 Count = bGrounded ? Door.GroundLastSample + 1 : Collider.Sweep.Num();
+            return MakeArrayView(Collider.Sweep).Left(Count).ContainsByPredicate([&](const FShipDoor::FMovementCollider::FSample& Sample) {
                 const FTransform Pose = BodyOffset * Sample.Pose * ShipFrame;
                 // Map the grown box to the collider's current physics frame without changing the live door pose.
                 const FVector InCurrent = Current.TransformPositionNoScale(Pose.InverseTransformPositionNoScale(Position));
@@ -273,8 +299,9 @@ void ASCVehicle::BuildShipDoors()
             });
             if (Source)
             {
-                Data.bRamp = Source->ItemType.Equals(TEXT("Ramp"), ESearchCase::IgnoreCase) ||
-                    Source->ItemSubType.Equals(TEXT("Ramp"), ESearchCase::IgnoreCase);
+                Data.bRamp = SCGangwayGround::IsRampRole(Source->ItemType, Source->ItemSubType,
+                    Source->PortPath.IsEmpty() ? FString() : Source->PortPath.Last());
+                if (Data.bRamp) BuildGangwayProbes(ShipDoors.Num() - 1);
                 if (!Source->DisplayName.IsEmpty()) Label = Source->DisplayName;
                 else if (!Source->PortPath.IsEmpty())
                 {

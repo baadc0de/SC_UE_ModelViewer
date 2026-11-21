@@ -411,16 +411,19 @@ void ASCVehicle::Tick(float DeltaSeconds)
     if (!ClipCatalog || Playback.IsEmpty()) { FinishSecureOrders(); UpdateTickEnabled(); return; }
     const USCRigComponent* Traced = Doors.IsValidIndex(TraceDoor) ? Doors[TraceDoor].Rig.Get() : nullptr;
     TArray<FString> TraceLines; // sc.Doors.Trace: the traced door's clips advanced this tick
+    TMap<int32, double> GroundStops;
+    GangwayStops(DeltaSeconds, GroundStops);
     for (int32 I = Playback.Num() - 1; I >= 0; --I)
     {
         auto& P = Playback[I];
         const auto& C = ClipCatalog->Clips[P.Clip];
         const double Previous = P.Frame;
-        P.Frame = FMath::Clamp(P.Frame + DeltaSeconds * C.Fps * P.Speed, 0., double(C.LastFrame));
+        const double* GroundStop = GroundStops.Find(P.OpeningGangway);
+        P.Frame = FMath::Clamp(P.Frame + DeltaSeconds * C.Fps * P.Speed * (GroundStop ? *GroundStop : 1.), 0., double(C.LastFrame));
         if (P.Frame != Previous) MarkDirty(P.Clip);
         FireClipAudio(P, Previous); // WP-A1: route C, the clip's animation events crossed this frame
         // A forward clip at frame zero has not finished; reverse playback ends at zero.
-        const bool bEnded = (P.Speed > 0 && P.Frame >= C.LastFrame) || (P.Speed < 0 && P.Frame <= 0);
+        const bool bEnded = GroundStop || (P.Speed > 0 && P.Frame >= C.LastFrame) || (P.Speed < 0 && P.Frame <= 0);
         if (Traced && P.TargetRig.Get() == Traced)
             TraceLines.Add(FString::Printf(TEXT("clip=%s from=%.2f frame=%.2f last=%d speed=%.2f ended=%d"), *C.Id.ToString(), Previous, P.Frame, C.LastFrame, P.Speed, bEnded));
         if (bEnded)
@@ -431,6 +434,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
         }
     }
     EvaluateClips();
+    for (const auto& Pair : GroundStops) RememberGangwayStop(Pair.Key);
     for (const FString& Line : TraceLines)
     {
         const FSCDoorInteraction& D = Doors[TraceDoor];

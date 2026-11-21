@@ -91,6 +91,20 @@ bool FSCShipLinkDoorObstructionTest::RunTest(const FString&)
     Box->SetActorLocation(FVector(-50, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
     TestTrue(TEXT("a box between the translation endpoints prevents closing"), Ship->DoorwayOccupied(0));
 
+    Collider->SetRelativeLocation(FVector(-25, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
+    auto& GroundDoor = Ship->ShipDoors[0];
+    GroundDoor.MovementBounds = FBox(FVector(-125,-25,-25), FVector(25));
+    GroundDoor.GroundLastSample = 2;
+    GroundDoor.MovementColliders[0].GroundPose = Collider->GetRelativeTransform();
+    Box->SetActorLocation(FVector(-95, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
+    TestFalse(TEXT("grounded gangway never reached cargo beyond its shortened stroke"), Ship->DoorwayOccupied(0));
+    Box->SetActorLocation(FVector(-13, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
+    TestTrue(TEXT("grounded gangway still guards cargo in its closing stroke"), Ship->DoorwayOccupied(0));
+    Collider->SetRelativeLocation(FVector(-55, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
+    Box->SetActorLocation(FVector(95, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
+    TestTrue(TEXT("unrelated later motion invalidates the stored ground pose"), Ship->DoorwayOccupied(0));
+    GroundDoor.GroundLastSample = INDEX_NONE;
+
     Sweep.Reset();
     for (int32 Step = 0; Step <= 18; ++Step)
     {

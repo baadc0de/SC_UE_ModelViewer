@@ -79,6 +79,7 @@ struct FSCClipPlayback
     TArray<FName> Scopes;
     bool bAudioFresh = true; // WP-A1: the first advance plays the start-of-play events (they sit at t = 0.0001 / 0.9999)
     bool bTargeted = false;  // started for one rig (TargetRig): once that rig is gone the entry poses nothing
+    int32 OpeningGangway = INDEX_NONE;
 };
 UCLASS(BlueprintType)
 class SCBRIDGE_API ASCVehicle : public AActor
@@ -101,6 +102,7 @@ public:
             FName Socket;
             FTransform ClosedPose; // relative to the ship
             TArray<FSample> Sweep;
+            FTransform GroundPose = FTransform::Identity;
         };
         ESCShipDoorGroup Group = ESCShipDoorGroup::Other;
         FName GroupSource;
@@ -113,9 +115,19 @@ public:
         bool bCargoRelock = false;
         bool bActorOpenedWithoutAccess = false; // checked by the RPC state journal
         bool bRamp = false;
+        struct FGroundProbeSet
+        {
+            int32 Bone = INDEX_NONE;
+            TArray<FVector> Points; // actual rigid collision surface points in the socket bone's frame
+        };
+        TArray<FGroundProbeSet> GroundProbes;
+        int32 GroundLastSample = INDEX_NONE; // only for an exact, reversible single-clip cargo sweep
     };
     TArray<FShipDoor> ShipDoors;
     void BuildShipDoors();
+    void BuildGangwayProbes(int32 Index);
+    void GangwayStops(float Seconds, TMap<int32, double>& OutFractions) const;
+    void RememberGangwayStop(int32 Index);
     FString ShipDoorLabel(int32 Index) const;
     bool IsDoorLocked(int32 Index) const;
     bool SetDoorLocked(int32 Index, bool bLocked);
