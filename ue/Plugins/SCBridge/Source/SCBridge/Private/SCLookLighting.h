@@ -3,9 +3,15 @@
 #include "CoreMinimal.h"
 
 class UWorld;
+class FSceneView;
+class FSceneViewFamily;
+class ISceneViewExtension;
 
 namespace SCLookLighting
 {
+/** Select the display transform after the player view has evaluated its volumes. */
+void ApplyDisplayOutput(const FSceneViewFamily& Family, FSceneView& View, bool bNativeHDR);
+TSharedRef<ISceneViewExtension, ESPMode::ThreadSafe> InstallDisplayOutput(UWorld& World);
 /** USCViewerSettings look defaults on every unbound post-process volume: star or standard bloom, bloom intensity and
  *  threshold (standard bloom), exposure bias over the game's compensation curve. */
 void ApplyDefaults(UWorld* World);
