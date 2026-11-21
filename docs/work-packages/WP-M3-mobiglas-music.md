@@ -30,14 +30,21 @@ The source and converted bytes stay local and no music files ship with the viewe
 
 - `cargo test --locked -p scviewer-core --lib music` passed **2/2**, including rejection of partial and event-only sources.
 - `cargo test --locked -p scbridge-ffi --test header` passed **1/1** after generating and staging the ABI header.
-- LIVE 4.10.2 indexed **46 cues**. The first catalogue took **0.443 s** after archive open. Biome Coastal,
-  Lorville Flight and Microtech New Babbage Interior decoded nonzero samples through the A1 stream as
-  stereo 48 kHz, with lengths **295.000 s**, **182.769 s** and **285.800 s**. An unknown cue ID failed
-  with an empty return blob.
+- LIVE 4.10.2 indexed **46 cues**. All 46 decoded to nonzero PCM through the A1 stream as stereo 48 kHz,
+  with decoded lengths within 0.5 ms of catalogue durations. Eleven cues had an opening silence or fade
+  before audio registered within 2.65 s. Catalogue generation took **0.443 s** with archive and DataCore
+  already loaded. A warm browser index took **2.55–3.08 s** on the first catalogue request, including
+  lazy archive and DataCore initialization. An unknown cue ID failed with an empty return blob.
+- The Win64 Development editor build passed in **75.377 s**. A D3D12 procedural Viewer smoke with audio
+  enabled loaded Gladius at LOD 2 and mip 4 in **15.756 s**, using a 49 MB seeded layer-1 tar. The pawn
+  stood on a floor in first person and the open Music app listed all 46 cues. The **35.732 s** smoke
+  played Lorville Flight, paused and resumed it, closed the app with the same voice still rendering,
+  stopped the voice, and exited cleanly. Astra checked the 1280×720 library, rail and transport layout.
 
-The procedural Viewer smoke uses a Development game-mode host with D3D12, audio enabled and
-`-SCDefaults`. Open the app with `sc.MobiGlas.App Music` and `sc.MobiGlas 1`. The RPC console
-`sc.Music.State` reports library readiness and the decoder frame count. Use `sc.Music.List` to find
-the bank-qualified cue ID. Use `sc.Music.Control <cue-id>`, `sc.Music.Control pause` and
+Run the procedural Viewer with `-game -d3d12 -SCDefaults -SCLoad=AEGS_Gladius -SCLod=2 -SCMip=4`
+and audio enabled. Use the RPC harness to wait for load success, switch to first person and
+check the pawn's floor status. Open the app with `sc.MobiGlas.App Music` and `sc.MobiGlas 1`. The RPC
+console `sc.Music.State` reports library readiness and the decoder frame count. Use `sc.Music.List`
+to find the bank-qualified cue ID. Use `sc.Music.Control <cue-id>`, `sc.Music.Control pause` and
 `sc.Music.Control stop` to exercise the same transport as the widget. Close the app while playing
 and verify that decoded frames continue increasing.
