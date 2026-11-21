@@ -1031,3 +1031,27 @@ ue/scripts/capture_route.sh p2-cutlass ue/scripts/routes/cutlass-armed-walkthrou
 
 Null-RHI tests: `-run=pythonscript -script=ue/scripts/test_player.py -SCPlayerTests
 [-SCPlayerPackage=<kit tar>]` (see [WP-P2 verification](verification/WP-P2.md)).
+
+### Offline render RPC (WP-H2)
+
+With the viewer running under the RPC harness, run `ue/scripts/rpc/render_check.ps1` for a short camera-path test.
+Start with `-SCDefaults` and no ship to use the procedural hangar for this quick check.
+`-Acceptance` runs the five-second Cutlass orbit with the default 256 warm-up frames. Output goes to
+`out/h2/<tag>`.
+`report.json` records timing and camera-step checks, any exact RGB frame repeats, and adjacent-image differences
+for diagnosis.
+`Invoke-SCRender` accepts the request in [the H2 brief](../docs/work-packages/WP-H2-offline-render.md).
+For the live repeat check, start the viewer with `-SCDefaults -SCShowcase -SCLoad=DRAK_Cutlass_Black`.
+Capture twice in that session with Windows display mode held constant. The scoring command can run after
+the viewer exits.
+
+```powershell
+./ue/scripts/rpc/render_check.ps1 -Acceptance -Tag reference
+./ue/scripts/rpc/render_check.ps1 -Acceptance -Tag repeat
+./ue/scripts/rpc/render_repeat.ps1 -Reference out/h2/reference -Candidate out/h2/repeat `
+    -Tolerance ue/scripts/rpc/h2-live-tolerance.json
+```
+
+Run `SCBridge.RenderGpu.FrozenOutputDevice` in a separate D3D12 game session to verify exact RGB equality
+for the frozen chart across SDR and HDR output-device settings.
+Use `/record` for real-time 8-bit previews.
