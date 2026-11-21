@@ -1,4 +1,5 @@
 // Ship Link controls authored exhaust effects without changing the ship's movement.
+#include "SCThrusterPreview.h"
 #include "SCVehicle.h"
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
@@ -79,22 +80,34 @@ bool ASCVehicle::SetThrusterPreview(ESCThrusterPreviewMode Mode)
     int32 BoostEffects = 0;
     int32 Missing = 0;
     int32 Animations = 0;
-    double StrengthSum = 0;
+    int32 MainEmitters = 0, ManeuverEmitters = 0;
+    double MainStrength = 0, ManeuverStrength = 0;
     for (FSCThrusterBinding& Thruster : Thrusters)
     {
-        const bool bBoost = Mode == ESCThrusterPreviewMode::Boosted &&
+        // A forward-thrust preview leaves lateral, vertical and reverse thrusters at their authored idle ends.
+        const bool bIdle = bMinimum || Thruster.bManeuvering;
+        const bool bBoost = !bIdle && Mode == ESCThrusterPreviewMode::Boosted &&
             Thruster.Emitters.ContainsByPredicate([](const FSCThrusterEmitter& Emitter) { return Emitter.Source.bBoost; });
         for (FSCThrusterEmitter& Emitter : Thruster.Emitters)
         {
             if (bOff || Emitter.Source.bBoost != bBoost) Stop(Emitter);
             else
             {
-                const float Strength = float(bMinimum ? Emitter.Source.Strength.X : Emitter.Source.Strength.Y);
+                const float Strength = float(bIdle ? Emitter.Source.Strength.X : Emitter.Source.Strength.Y);
                 if (Start(Emitter, Strength))
                 {
                     ++Active;
                     BoostEffects += Emitter.Source.bBoost;
-                    StrengthSum += Strength;
+                    if (Thruster.bManeuvering)
+                    {
+                        ++ManeuverEmitters;
+                        ManeuverStrength += Strength;
+                    }
+                    else
+                    {
+                        ++MainEmitters;
+                        MainStrength += Strength;
+                    }
                 }
                 else ++Missing;
             }
@@ -103,7 +116,7 @@ bool ASCVehicle::SetThrusterPreview(ESCThrusterPreviewMode Mode)
         if (Thruster.bHasGlow && !bOff)
         {
             const FVector& Glow = Thruster.Glow;
-            const float Driver = float(bMinimum ? Glow.X : (bBoost ? Glow.Z : Glow.Y));
+            const float Driver = float(bIdle ? Glow.X : (bBoost ? Glow.Z : Glow.Y));
             for (UMaterialInstanceDynamic* MID : Thruster.Materials)
                 if (MID) MID->SetScalarParameterValue(TEXT("EmissiveStrength"), Driver * FSCStarEngine::Get().SceneUnitNits);
         }
@@ -120,12 +133,14 @@ bool ASCVehicle::SetThrusterPreview(ESCThrusterPreviewMode Mode)
                         return Fragment.Fragment == Name || Fragment.AnimationNames.Contains(Name);
                     });
             });
-            if (ClipIndex != INDEX_NONE && StartClip(ClipIndex, 0, true, !bOff && !bMinimum, {}, Thruster.Rig, -1))
+            if (ClipIndex != INDEX_NONE && StartClip(ClipIndex, 0, true, !bOff && !bIdle, {}, Thruster.Rig, -1))
                 ++Animations;
         }
     }
-    UE_LOG(LogTemp, Display, TEXT("THRUSTER_PREVIEW mode=%s bindings=%d active=%d boosted=%d strength_sum=%g missing=%d nozzle_poses=%d"),
-        ModeName(Mode), Thrusters.Num(), Active, BoostEffects, StrengthSum, Missing, Animations);
+    UE_LOG(LogTemp, Display,
+        TEXT("THRUSTER_PREVIEW mode=%s bindings=%d active=%d boosted=%d strength_sum=%g missing=%d nozzle_poses=%d main=%d main_strength=%g maneuver=%d maneuver_strength=%g"),
+        ModeName(Mode), Thrusters.Num(), Active, BoostEffects, MainStrength + ManeuverStrength, Missing, Animations,
+        MainEmitters, MainStrength, ManeuverEmitters, ManeuverStrength);
     return Missing == 0;
 }
 
