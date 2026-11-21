@@ -575,6 +575,7 @@ void FSCVehicleInstances::StepRunning()
         Options.bPublish = false;
         Options.bReplacePrevious = false;
         Options.bRetainAssets = ShareAssets();
+        Viewer.ConfigureProcessedImport(Options);
         Job = MakeShared<FSCImportJob>(*Source, Options, Source);
         I->Info.State = ESCVehicleInstanceState::Importing;
         return;

@@ -1,6 +1,8 @@
 // FSCTextureImporter: package DDS blocks (prepared by the bridge) or PNG decode + CPU mips on workers, transient
 // UTexture2D creation on the game thread.
 #include "SCTextureImporter.h"
+#include "SCProcessedCache.h"
+#include "SCProcessedTextureCache.h"
 #include "RHI.h"
 #include "SCBridgeClient.h" // scbridge.h: sc_dds_prepare / sc_dds_mean_rgb
 #include "Async/ParallelFor.h"
@@ -71,6 +73,7 @@ struct FProbe
     uint8 Format = PF_Unknown;
     int32 MipCount = 0;
     int64 DataOffset = 0;
+    FString CacheKey;
 };
 bool ProbeDds(const FSCTextureKey& Key, const FSCTextureLimits& Limits, FProbe& P, FString& Error)
 {
@@ -98,7 +101,8 @@ bool ProbeDds(const FSCTextureKey& Key, const FSCTextureLimits& Limits, FProbe& 
     { Error = FString::Printf(TEXT("Texture %lldx%lld exceeds the per-texture budget: %s"), P.Width, P.Height, *Key.Path); return false; }
     return true;
 }
-bool Probe(const FSCPackageSource& Source, const FSCTextureKey& Key, const FSCTextureLimits& Limits, FProbe& P, FString& Error)
+bool Probe(const FSCPackageSource& Source, const FSCTextureKey& Key, const FSCTextureLimits& Limits, FProbe& P, FString& Error,
+           const FString& CacheNamespace = FString())
 {
     if (!Source.ReadBytes(Key.Path, P.Bytes, Error)) return false;
     if (P.Bytes.Num() >= 4 && !FMemory::Memcmp(P.Bytes.GetData(), "DDS ", 4)) return ProbeDds(Key, Limits, P, Error);
@@ -114,7 +118,37 @@ bool Probe(const FSCPackageSource& Source, const FSCTextureKey& Key, const FSCTe
     P.Upload = FSCTextureImporter::DecodedBytes(P.Width, P.Height);
     if (P.Upload > Limits.MaxTextureBytes)
     { Error = FString::Printf(TEXT("Texture %lldx%lld exceeds the per-texture budget: %s"), P.Width, P.Height, *Key.Path); return false; }
+    if (!CacheNamespace.IsEmpty() && P.Upload <= MAX_int32 - 2)
+        P.CacheKey = FSCProcessedCache::Key(CacheNamespace, FString::Printf(TEXT("%d:%s"), int32(Key.Role),
+            *FSCProcessedCache::Digest(TConstArrayView64<uint8>(P.Bytes.GetData(), P.Bytes.Num()))));
     return true;
+}
+
+bool ReadPngMips(FSCProcessedCache& Cache, const FProbe& P, FSCDecodedTexture& Out)
+{
+    TArray<uint8> Bytes;
+    if (!Cache.ReadBlob(P.CacheKey, Bytes) || Bytes.Num() != P.Upload) return false;
+    Out.Width = int32(P.Width);
+    Out.Height = int32(P.Height);
+    Out.bSRGB = P.bSRGB;
+    int64 Next = 0;
+    for (int32 W = Out.Width, H = Out.Height; ; W = FMath::Max(1, W / 2), H = FMath::Max(1, H / 2))
+    {
+        const int64 Count = int64(W) * H * 4;
+        Out.Mips.AddDefaulted_GetRef().Append(Bytes.GetData() + Next, Count);
+        Next += Count;
+        if (W == 1 && H == 1) break;
+    }
+    Out.bFromCache = true;
+    return true;
+}
+
+void WritePngMips(FSCProcessedCache& Cache, const FProbe& P, const FSCDecodedTexture& Texture)
+{
+    TArray<uint8> Bytes;
+    Bytes.Reserve(int32(P.Upload));
+    for (const auto& Mip : Texture.Mips) Bytes.Append(Mip.GetData(), int32(Mip.Num()));
+    Cache.WriteBlob(P.CacheKey, Bytes);
 }
 bool Finish(FProbe& P, const FSCTextureKey& Key, FSCDecodedTexture& Out)
 {
@@ -224,12 +258,18 @@ void FSCTextureImporter::BuildMips(FSCDecodedTexture& T)
     }
 }
 
-TArray<FSCDecodedTexture> FSCTextureImporter::DecodeAll(const FSCPackageSource& Source, const TArray<FSCTextureKey>& Keys, const FSCTextureLimits& Limits)
+TArray<FSCDecodedTexture> FSCTextureImporter::DecodeAll(const FSCPackageSource& Source, const TArray<FSCTextureKey>& Keys,
+    const FSCTextureLimits& Limits, const FSCTextureCacheRequest* Cache)
 {
     TArray<FSCDecodedTexture> Out; Out.SetNum(Keys.Num());
     TArray<FProbe> Probes; Probes.SetNum(Keys.Num());
     TArray<bool> Ok; Ok.Init(false, Keys.Num());
-    ParallelFor(Keys.Num(), [&](int32 I) { Out[I].Key = Keys[I]; Ok[I] = Probe(Source, Keys[I], Limits, Probes[I], Out[I].Error); });
+    const FString Namespace = Cache && Cache->Cache && Cache->Cache->IsEnabled() && !Cache->ArchiveBuild.IsEmpty()
+        ? FSCProcessedCache::Key(Cache->ArchiveBuild, TEXT("processed-png-bgra-mips-v1")) : FString();
+    ParallelFor(Keys.Num(), [&](int32 I) {
+        Out[I].Key = Keys[I];
+        Ok[I] = Probe(Source, Keys[I], Limits, Probes[I], Out[I].Error, Namespace);
+    });
     int64 Total = 0; // aggregate budget in deterministic key order
     for (int32 I = 0; I < Keys.Num(); ++I)
     {
@@ -239,7 +279,13 @@ TArray<FSCDecodedTexture> FSCTextureImporter::DecodeAll(const FSCPackageSource& 
         { Ok[I] = false; Probes[I] = FProbe(); Out[I].Error = TEXT("Import texture budget exhausted: ") + Keys[I].Path; continue; }
         Total += Bytes;
     }
-    ParallelFor(Keys.Num(), [&](int32 I) { if (Ok[I]) Finish(Probes[I], Keys[I], Out[I]); });
+    ParallelFor(Keys.Num(), [&](int32 I) {
+        if (!Ok[I]) return;
+        FProbe& P = Probes[I];
+        const bool bUseCache = !P.CacheKey.IsEmpty();
+        if (bUseCache && !Cache->bForceRebuild && ReadPngMips(*Cache->Cache, P, Out[I])) return;
+        if (Finish(P, Keys[I], Out[I]) && bUseCache) WritePngMips(*Cache->Cache, P, Out[I]);
+    });
     return Out;
 }
 

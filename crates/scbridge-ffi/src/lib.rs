@@ -71,6 +71,19 @@ pub unsafe extern "C" fn sc_open(
     }
 }
 
+/// Return the archive build identity for cache keys, owned by the caller.
+/// Free a successful result with sc_free_string. On failure *out is NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sc_archive_build_id(h: *mut sc_handle, out: *mut *mut c_char) -> sc_status {
+    unsafe {
+        run(h, || {
+            let out = output(out, ptr::null_mut())?;
+            *out = cstring(handle(h)?.session.build_id()).into_raw();
+            Ok(())
+        })
+    }
+}
+
 /// Fill defaults from the core (LOD 0, mip 2, textures, attachments/interior/lights/
 /// animations enabled, shields/default pose disabled). NULL export options uses these too.
 #[unsafe(no_mangle)]

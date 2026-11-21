@@ -43,6 +43,7 @@ struct SCBRIDGE_API FSCOpenResult
 {
     bool bOK = false;
     FText Error;
+    FString ArchiveBuildId;
     double Seconds = 0;
     bool bIndexCacheHit = false;
 };

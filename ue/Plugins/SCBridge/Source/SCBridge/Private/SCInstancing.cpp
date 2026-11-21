@@ -55,17 +55,18 @@ bool FSCInstancing::UnderRig(const USceneComponent* C)
     return false;
 }
 
-FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle)
+FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle, TConstArrayView<UStaticMeshComponent*> Deferred)
 {
     FSCInstancingStats Stats;
     if (!Vehicle || !Vehicle->GetRootComponent()) return Stats;
     TArray<UStaticMeshComponent*> Parts;
     Vehicle->GetComponents(Parts);
+    const TSet<UStaticMeshComponent*> Pending(Deferred);
     TMap<uint32, TArray<TArray<UStaticMeshComponent*>>> Groups;
     for (UStaticMeshComponent* C : Parts)
     {
-        // Exactly a plain component (not an instanced one or a subclass), registered, rigid, and a leaf.
-        if (!C || C->GetClass() != UStaticMeshComponent::StaticClass() || !C->IsRegistered() || !C->GetStaticMesh() ||
+        // Only plain, rigid leaf components. An import can supply fully configured pieces before registration.
+        if (!C || C->GetClass() != UStaticMeshComponent::StaticClass() || (!C->IsRegistered() && !Pending.Contains(C)) || !C->GetStaticMesh() ||
             !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || Emissive(C) || C->ComponentHasTag(FSCInstancing::KeepTag))
             continue;
         ++Stats.Components;
@@ -103,8 +104,8 @@ FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle)
             TArray<FTransform> Instances;
             Instances.Reserve(Group.Num());
             for (const UStaticMeshComponent* C : Group) Instances.Add(C->GetComponentTransform().GetRelativeTransform(Root));
-            ISM->RegisterComponent();
             ISM->AddInstances(Instances, false, false);
+            ISM->RegisterComponent();
             for (UStaticMeshComponent* C : Group) C->DestroyComponent();
             Stats.Consolidated += Group.Num();
             ++Stats.Instanced;
