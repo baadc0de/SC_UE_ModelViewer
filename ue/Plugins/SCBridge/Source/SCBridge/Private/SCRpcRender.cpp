@@ -8,6 +8,7 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
+#include "GameTime.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/GameInstance.h"
 #include "HAL/IConsoleManager.h"
@@ -29,6 +30,16 @@
 #include "Camera/CameraComponent.h"
 #include "UnrealClient.h"
 
+namespace
+{
+FGameTime CaptureTime(int32 FrameIndex, uint32 SampleIndex, double Fps)
+{
+    // The renderer treats a zero previous real time as a history reset.
+    const float Delta = 1.0 / Fps;
+    return FGameTime::CreateDilated((double(SampleIndex) + 1.0) / Fps, Delta, FrameIndex / Fps, Delta);
+}
+}
+
 // Scene captures disable Lumen GI/reflections and halve the surface cache after applying the world's
 // volumes. Restore just those overrides from the player's evaluated view. Each capture still evaluates
 // its own position, exposure, post-process volumes and tone-mapping output device.
@@ -40,7 +51,7 @@ public:
     virtual void SetupViewFamily(FSceneViewFamily& Family) override
     {
         if (Family.RenderTarget == SdrTarget || Family.RenderTarget == LinearTarget)
-            Family.Time = FGameTime::CreateUndilated(ShotTime, FrameDelta);
+            Family.Time = FrameTime;
     }
     virtual void BeginRenderViewFamily(FSceneViewFamily&) override {}
     virtual void SetupView(FSceneViewFamily& Family, FSceneView& View) override
@@ -72,8 +83,7 @@ public:
     const FRenderTarget* LinearTarget = nullptr;
     uint32 SampleIndex = 0;
     uint32 OutputIndex = 0;
-    double ShotTime = 0;
-    float FrameDelta = 0;
+    FGameTime FrameTime;
     float MainExposure = 0;
     EAntiAliasingMethod CaptureAAMethod = AAM_None;
     bool bCaptureAllowsRayTracing = false;
@@ -422,12 +432,11 @@ bool FSCRpcRender::CaptureFrame(bool bWrite, FString& Error)
     Frame->SetNumberField(TEXT("fov"), View.FOV);
     Frame->SetNumberField(TEXT("holds"), Holds);
     Frame->SetNumberField(TEXT("viewport_exposure"), MainLook->MainExposure);
-    // Match Movie Pipeline's per-view temporal seed and material clock. Streaming holds repeat
-    // the current sample. Both targets see the same time even when the readbacks take seconds.
+    // Both targets use the same temporal sample. Warm-up advances renderer time while authored
+    // world time stays at frame zero. Streaming holds repeat the current sample.
     MainLook->OutputIndex = Index;
-    MainLook->SampleIndex = Warmup - Remaining + Index;
-    MainLook->ShotTime = Index / Fps;
-    MainLook->FrameDelta = 1.0 / Fps;
+    MainLook->SampleIndex = uint32(Warmup - Remaining) + uint32(Index);
+    MainLook->FrameTime = CaptureTime(Index, MainLook->SampleIndex, Fps);
     FSceneViewProjectionData Projection;
     Projection.SetViewRectangle(FIntRect(0, 0, Width, Height));
     FMinimalViewInfo::CalculateProjectionMatrixGivenView(View, PC->GetLocalPlayer()->AspectRatioAxisConstraint,
@@ -696,6 +705,29 @@ bool FSCRpcRenderScheduleTest::RunTest(const FString&)
     TestFalse(TEXT("invalid steps type"), Parse());
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCRpcRenderClockTest, "SCBridge.RpcRender.Clock",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FSCRpcRenderClockTest::RunTest(const FString&)
+{
+    constexpr double Fps = 30;
+    const FGameTime First = CaptureTime(0, 0, Fps);
+    const FGameTime Warm = CaptureTime(0, 255, Fps);
+    const FGameTime FrameZero = CaptureTime(0, 256, Fps);
+    const FGameTime Next = CaptureTime(1, 257, Fps);
+
+    TestTrue(TEXT("renderer clock starts above the first-frame sentinel"), First.GetRealTimeSeconds() > 0.0001);
+    TestTrue(TEXT("renderer clock advances through warm-up and into the shot"),
+        First.GetRealTimeSeconds() < Warm.GetRealTimeSeconds() && Warm.GetRealTimeSeconds() < FrameZero.GetRealTimeSeconds());
+    TestTrue(TEXT("renderer clock advances by one frame after warm-up"),
+        FMath::IsNearlyEqual(Next.GetRealTimeSeconds() - FrameZero.GetRealTimeSeconds(), 1.0 / Fps));
+    TestEqual(TEXT("authored time stays at zero during warm-up"), Warm.GetWorldTimeSeconds(), 0.0);
+    TestEqual(TEXT("authored shot starts at zero"), FrameZero.GetWorldTimeSeconds(), 0.0);
+    TestEqual(TEXT("authored time advances at the requested rate"), Next.GetWorldTimeSeconds(), 1.0 / Fps);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCRpcRenderEncodeTest, "SCBridge.RpcRender.Encode",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 

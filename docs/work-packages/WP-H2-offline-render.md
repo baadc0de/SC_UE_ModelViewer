@@ -102,6 +102,10 @@ Sidecar `render.json`: the request as received, engine/branch/commit, `r.*` valu
 - **Complete frames.** Before frame 0 (after `setup`): the H1 `settled` condition, then `warmup_frames`. During the
   render, a frame whose textures or Nanite pages are still streaming in is held: rendered again, not written, until
   complete, without advancing time. Count holds per frame in the sidecar.
+- **View history.** The capture's renderer clock starts at one fixed step and advances once per sample, including
+  warm-up. A held sample reuses the same clock value. Materials using world time still start at shot time zero
+  and stay there through warm-up. Materials that explicitly use the real-time clock see the fixed sample time,
+  including warm-up.
 - **No drops.** The writer applies back-pressure: if readbacks or writes are behind, the game thread waits. Frame
   count = `seconds × fps` exactly.
 - **Repeatability.** Repeating the request on the same build and display mode uses the same frame times, camera
@@ -272,7 +276,7 @@ offline frame against the UI-free viewport at the same recorded camera pose had 
 0.056784791 and peak 0.861951629, expanding each viewport RGB8 code to RGB16 by multiplication by 257.
 Visual review found matching ship silhouette and hangar framing, with stronger grouped wing lamps in the
 viewport, different floor shadows and more colourful cockpit highlights in the offline frame.
-This exceeded the original 0.0001 live peak limit. The viewport appearance gate remains open. The comparison
+This exceeded the original 0.0001 live peak limit. At that point the viewport appearance gate remained open. The comparison
 files, camera sidecars and per-frame metrics are in `out/h2/tsr1080`.
 
 ## Frozen HDR and calibrated live rerun (2026-11-21)
@@ -367,7 +371,7 @@ The compiled change reproduced the appearance improvement at 64 warm-up frames (
 0.02000), and the 256-frame stationary control reduced it to 0.01735. Consecutive viewport snapshots differed
 by about 0.0015. Astra confirmed persistent offline floor-shadow grain and brighter viewport wall lighting
 behind the rear pods. Disabling Lumen reduced the cross-path error to 0.01256 and largely removed the
-wall-lighting mismatch. The floor grain persisted. The remaining look differences stay open. These
+wall-lighting mismatch. The floor grain persisted. The remaining look differences stayed open at this stage. These
 controls are under `out/h2/appearance-fixed`.
 
 At 64 warm-up frames, the first full ray-traced repeat exceeded both original live limits (shot MAE
@@ -396,3 +400,50 @@ The final metadata build passed a 320×180 procedural-hangar smoke run. The two-
 orbit took 1.67 s with no repeated images. The PNG+EXR sidecar recorded ray-tracing permission enabled at
 the default and disabled under the engine override. The EXR-only sidecar also recorded the default correctly.
 The repeat scorer rejected missing, disabled and mid-shot-changing permission in the ray-traced fixture.
+
+### View history and the remaining floor and wall differences
+
+In the same-pose baseline, four fixed 1920×1080 regions isolated two effects. The offline floor boxes had
+about 0.025–0.027 mean absolute high-pass luma error against their local 5×5 average, versus about 0.003
+in the viewport. The viewport wall boxes averaged 0.658–0.664 luma, while the offline boxes averaged
+0.339. Repeating the stock capture reproduced both. Extending MegaLights history and forcing more Lumen
+surface-cache work left the differences visible.
+
+Astra verified that disabling Lumen screen traces dimmed the viewport wall halos to match the original
+offline wall, and that disabling MegaLights smoothed the floor by removing the intended broad shadow.
+These controls changed the lighting of the reference scene. The renderer also caps this build's MegaLights
+per-pixel sample CVar at four effective samples, so setting it to 16 served as a repeat control.
+
+The shared cause was H2's use of shot time for both world and renderer clocks. Warm-up kept both at zero.
+Unreal treats a near-zero previous renderer timestamp as an uninitialized view. It discards previous-view
+data such as the scene colour and depth that Lumen screen traces need, and its reset flag prevents
+MegaLights from using temporal history. A deterministic positive renderer clock now advances during
+warm-up. The authored clock and output timestamps retain their fixed-step schedule.
+`SCBridge.RpcRender.Clock` failed on the old clock and exercises the transition into frame zero.
+
+| Matched-TSR frame 0 | Viewport | Offline before | Offline after |
+| --- | ---: | ---: | ---: |
+| Under-wing floor high-pass luma, left / right | 0.00308 / 0.00287 | 0.02484 / 0.02659 | 0.00306 / 0.00284 |
+| Rear-wall luma, left / right | 0.659 / 0.665 | 0.339 / 0.339 | 0.658 / 0.666 |
+
+Disabling Lumen screen traces after the fix dimmed both views' rear-wall boxes to 0.337–0.342. With the
+production settings, whole-image normalized RGB error fell from 0.01735 to 0.00428. Two consecutive
+viewport screenshots in the new run differed by 0.00143.
+
+**Viewport appearance passes for the matched-TSR Cutlass fixture.** Astra verified that both floor shadows
+are smooth and the wall halos match both the new and original viewport references. Minor tonal and sampling
+differences remain around bright gradients. Future comparisons can use the two viewport screenshots to
+establish the reference's own variation. The older controls are in `out/h2/appearance-residuals`, and the
+fixed captures and regional metrics are in `out/h2/appearance-render-clock`.
+
+The serialized Win64 build, exact frozen HDR chart and all six focused NullRHI tests passed. Three
+150-frame ray-traced orbits at 1920×1080 passed cadence and PNG16/EXR frame-count checks with zero timestamp
+error, zero holds and no repeated RGB frames. Capture times were 87.24, 89.02 and 88.48 s.
+
+| Full capture pair | Shot MAE (limit 0.001007095) | Worst-frame MAE (limit 0.001388571) |
+| --- | ---: | ---: |
+| First / second | 0.000718650 | 0.000897713 (frame 0) |
+| First / third | 0.000730857 | 0.000943380 (frame 27) |
+| Second / third | 0.000728906 | 0.000904639 (frame 0) |
+
+All comparisons used the unchanged checked-in limits and the 256-frame warm-up.
