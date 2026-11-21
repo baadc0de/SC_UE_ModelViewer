@@ -213,6 +213,35 @@ Geometry-streaming automation covered the fine source commit, capture wait, and 
 The route runner, raw CSV captures, and logs are under `out/xl-cold-geometry/`
 with prefixes `hitch-control`, `hitch-offthread`, and `hitch-offthread-repeat`.
 
+#### Room audio follow-up
+
+An Unreal Insights trace at `a092a54` put 33.76 ms of a 37.96 ms game-thread frame inside
+`USCAudioSubsystem::Tick`. The escape-pod entry logged 46 voice starts in that tick.
+Limiting the number of emitter posts reduced the largest burst to 23 voices, because several
+authored triggers open multiple voices together.
+
+The audio tick now charges a budget of six newly started placed voices across the active scenes.
+It completes each trigger's layers before checking the budget again. Deferred emitters must still
+be audible on a later tick, and placed loops retain their scene clock phase. Explicit audio events
+keep their existing timing. The two reruns logged a peak of 14 voice starts in any room frame and
+355–357 starts across the segment, compared with 355 in the trace run. Audio tick time peaked
+at 12.34 and 13.55 ms, respectively.
+
+| Segment | Baseline p95 / p99 / max (ms) | Rerun 1 p95 / p99 / max (ms) | Rerun 2 p95 / p99 / max (ms) |
+| --- | ---: | ---: | ---: |
+| Room transitions | 13.25–14.83 / 19.98–23.43 / 38.54–39.29 | 16.03 / 25.17 / 33.90 | 14.02 / 20.00 / 31.44 |
+| Close hull pass | 10.51–11.62 / 11.42–12.60 / 12.50–15.06 | 13.11 / 14.10 / 14.75 | 12.58 / 13.35 / 14.96 |
+
+Room frames over 33.3 ms fell from 1–3 per run to 0–1. The largest game-thread samples still
+included about 13.2 ms of Unreal garbage collection and additional world tick work. The peak
+game-thread sample in the repeat was 44.48 ms. The runs used the same route, cold processed
+cache, HDR, and Surface Cache. The hangar imported in 18.40–18.42 s, the C2 loaded in 32.40–32.51 s,
+and first person was ready in 74.22–75.03 s.
+
+The Win64 Development build and all seven `SCBridge.Audio` tests passed. All Unreal runs and
+builds were serialized. The Insights trace and the benchmark captures are in `out/xl-cold-geometry/`
+under the `room-profile-before` and `room-audio-layered` prefixes.
+
 ### Commands
 
 From the repository root, build once initially and use a fresh scratch cache for each independent comparison.
