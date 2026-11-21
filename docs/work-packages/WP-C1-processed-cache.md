@@ -294,6 +294,48 @@ The Win64 Development build, 15 audio and importer tests, and a Python commandle
 The raw traces, trace exports, and frame captures are in `out/xl-cold-geometry/` with the
 `pacing-main`, `pacing-no-python`, and `pacing-fixed` prefixes.
 
+### D3D12 room-transition stall
+
+The earlier 35.39 ms room frame carried a 34.05 ms RHI sample. Another XL hangar + Hercules C2 run reproduced
+the pattern. Unreal Insights showed a 31.86 ms room frame, 23.14 ms in `RHI_SubmitClose` on the RHI thread,
+22.47 ms in `OcclusionSubmittedFence Wait` on the render thread, and 25.78 ms of game-thread frame synchronization.
+GPU time in the associated CSV sample was 10.36 ms. `DeleteRHIResources` took less than 0.01 ms in that submit.
+
+Temporary trace scopes in the UE 5.9 fork narrowed the stall to the D3D12 end-of-frame fast upload allocator.
+In the next capture, `FD3D12FastAllocator::CleanupPages` took 18.63 ms of an 18.74 ms submit close, alongside
+18.98 ms waiting for the occlusion fence. A separate 5.46 ms sample was in default buffer-pool cleanup.
+The overlap with mesh promotion in the first captures still leaves its role uncertain.
+
+The Windows project raises the fast upload page retention floor from 5 to 16 via
+`d3d12.FastAllocator.MinPagesToRetain`. With 4 MiB pages, the larger floor can retain up to 44 MiB of
+additional idle upload memory per D3D12 device once the pages have been allocated. Pages above the
+floor still retire after their GPU fence and the engine's normal age check.
+
+With identical trace scopes, the five-page run retired 21 pages on the room route and had a 25.59 ms
+maximum RHI sample. The 16-page run retired 10 and had an 8.21 ms maximum RHI sample. The slowest
+end-frame close in the five-page repeat spent 20.55 ms in default buffer allocator cleanup. That
+buffer allocator remains a separate source of room-transition stalls.
+
+The normal CSV reruns used the restored engine, fresh processed caches, HDR, D3D12, Lumen Surface Cache,
+the geometry-streaming opt-in and the same room and hull camera poses. Both reruns read 16 from the
+Windows project settings and completed 67 promotions with no failures.
+
+| Run | Room p95 / p99 / max (ms) | Hull p95 / p99 / max (ms) | Room RHI max (ms) |
+| --- | ---: | ---: | ---: |
+| Five pages, CSV control | 12.63 / 16.58 / 27.93 | 10.77 / 11.73 / 14.06 | 27.22 |
+| 16 pages, project settings | 12.52 / 19.81 / 30.09 | 11.14 / 12.81 / 15.64 | 6.87 |
+| 16 pages, repeat | 12.33 / 16.08 / 37.66 | 10.74 / 11.48 / 12.85 | 33.84 |
+
+The repeat's 37.66 ms frame followed a 33.84 ms RHI sample with 38.15 ms on the render thread,
+31.44 ms of game-thread event wait, and 9.74 ms of GPU time. This CSV recurrence leaves the exact
+allocator responsible for that sample unresolved. The setting reduced page retirement in the traced pair,
+and the large RHI stall remains possible. The two project-setting runs reached first person in
+70.29 and 69.74 seconds. The serial Win64 Development build and 15 audio and importer tests passed.
+
+The `rhi-before-*`, `rhi-allocator-*`, `rhi-fast-pages-*` and `rhi-final*` captures and timing-scope
+patch are in `out/xl-cold-geometry/`. The scratch route can be run with
+`./out/xl-cold-geometry/route-benchmark.ps1 -Mode stream -Tag <fresh-tag>` on the local XL fixture.
+
 ### Commands
 
 From the repository root, build once initially and use a fresh scratch cache for each independent comparison.
