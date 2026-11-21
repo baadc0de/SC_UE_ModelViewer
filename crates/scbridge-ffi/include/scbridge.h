@@ -523,6 +523,16 @@ enum sc_status scbridge_export_player_request(struct sc_handle *h,
                                               void *user,
                                               struct sc_blob *out_tar);
 
+/*
+ Export body animation sidecars from a JSON request {"gender":"male"|"female","clips":[<name>...]}.
+ The result is a clip-only tar with the same progress, cancellation and ownership rules as a player kit.
+ */
+enum sc_status scbridge_export_player_clips(struct sc_handle *h,
+                                            const char *request_json,
+                                            sc_progress_cb progress,
+                                            void *user,
+                                            struct sc_blob *out_tar);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

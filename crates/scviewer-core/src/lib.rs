@@ -23,7 +23,7 @@ mod items;
 mod music;
 pub use music::MusicCue;
 mod player;
-pub use player::{PlayerRequest, PlayerLoadout};
+pub use player::{PlayerClipsRequest, PlayerRequest, PlayerLoadout};
 pub use items::ChildItemIdentity;
 pub use catalogue::{Catalogue, ClipInfo, ClipSource, Fragment, SkeletonInfo};
 pub use lights::{

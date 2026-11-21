@@ -101,6 +101,13 @@ enum PlayerCommand {
         #[arg(long, default_value = "male", value_parser = ["male", "female"])]
         gender: String,
     },
+    Clips {
+        out: PathBuf,
+        #[arg(long, default_value = "male", value_parser = ["male", "female"])]
+        gender: String,
+        #[arg(required = true)]
+        clips: Vec<String>,
+    },
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum MaterialArg {
@@ -190,6 +197,10 @@ pub(crate) fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&session.player_loadouts(&gender)?)?
             ),
+            PlayerCommand::Clips { out, gender, clips } => write(
+                &out,
+                &session.export_player_clips(&scviewer_core::PlayerClipsRequest { gender, clips }, None)?,
+            )?,
         },
         Command::Lights { entity } => {
             let entity = resolve_entity(&session, &entity)?;

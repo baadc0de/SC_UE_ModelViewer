@@ -89,6 +89,7 @@ public:
     ASCVehicle();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
+    TArray<FSCLadderAnchor> LadderAnchors;
     struct FShipDoor
     {
         struct FMovementCollider

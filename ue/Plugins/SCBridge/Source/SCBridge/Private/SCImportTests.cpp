@@ -90,6 +90,64 @@ FString PaxPath(const FString& Path)
 }
 
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderSeats, "SCBridge.Seat.PackageMetadata",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FSCReaderSeats::RunTest(const FString&)
+{
+    FMemorySource Source;
+    Source.Add(TEXT("scene.json"), TEXT(R"({"version":1,"export_kind":"Decomposed","root_entity":{"entity_name":"Fixture"},
+        "children":[
+          {"entity_name":"FixtureSeat","source_transform_basis":"gltf_y_up","port_path":["owner","seat"],
+           "seat":{"attachment":{"bone":"sitting"},"can_drive":false,"min_yaw":-30.0,
+                   "dashboard":{"port":"panel"},"usable":{"validate_exit":true},
+                   "user_fragments":[{"state":"Select","look_layer":false,"query_frag_tags":["control","Select"],
+                     "layers":[{"layer":0,"animation":"fixture_clip","speed":1.0}],
+                     "procedurals":[{"type":"PositionAdjust","blend":0.4}]}]}},
+          {"entity_name":"FixtureAccess","source_transform_basis":"gltf_y_up",
+           "interaction_points":[{"helper_name":"access","radius":1.2,"angle_range":180,"view_angle_limit":90,
+                                  "interactions":[{"name":"press","display_name":"Use chair"}]}],
+           "seat_access":{"gateways":[{"name":"gate","vehicle_fragment":"Door",
+              "open":{"fragment_tags":"Open"},"close":{"fragment_tags":"Close"}}],
+             "entrances":[{"name":"boarding","seat_port_path":["owner","seat"],
+             "conditions":{"zero_g":"Either","landed":"True"},"linked_gateways":[{"gateway":"gate",
+               "open":{"dependency":"Never","enter_delay":0.25},"close":{"dependency":"Never"}}],
+             "enter":{"interaction":"press","fragment_tags":"Back","skip_state":"SkipDeploy"}}]}},
+          {"entity_name":"Unknown","source_transform_basis":"gltf_y_up","seat":{"attachment":{"bone":"unknown"}}}
+        ]})"));
+    FSCSceneManifest Scene;
+    FString Error;
+    if (!TestTrue(TEXT("Read seat manifest"), FSCPackageReader::Read(Source, Scene, Error)) ||
+        !TestEqual(TEXT("All fixtures are kept"), Scene.Children.Num(), 3)) return false;
+    const auto& Seat = Scene.Children[0].Seat;
+    if (!TestTrue(TEXT("Seat metadata is present"), Seat.IsSet())) return false;
+    TestEqual(TEXT("A flight-observer seat is Crew"), int32(Seat->Role), int32(ESCSeatRole::Crew));
+    TestEqual(TEXT("Attachment"), Seat->Attachment, FName(TEXT("sitting")));
+    TestTrue(TEXT("Exit validation preserved"), Seat->ValidateExit.Get(false));
+    if (TestEqual(TEXT("One authored action"), Seat->Actions.Num(), 1))
+    {
+        TestEqual(TEXT("Action clip"), Seat->Actions[0].Animation, FName(TEXT("fixture_clip")));
+        TestEqual(TEXT("PositionAdjust blend"), Seat->Actions[0].PositionAdjust, 0.4f);
+    }
+    const auto& Access = Scene.Children[1];
+    if (TestEqual(TEXT("One seat access path"), Access.SeatEntrances.Num(), 1))
+    {
+        TestEqual(TEXT("Nested path preserved"), FString::Join(Access.SeatEntrances[0].SeatPortPath, TEXT("/")), FString(TEXT("owner/seat")));
+        TestEqual(TEXT("Resolved interaction"), Access.SeatEntrances[0].Enter.Interaction, FName(TEXT("press")));
+        TestEqual(TEXT("Only specific world conditions are retained"), Access.SeatEntrances[0].Conditions.Num(), 1);
+        TestEqual(TEXT("Landed condition"), Access.SeatEntrances[0].Conditions.FindRef(TEXT("landed")), FName(TEXT("True")));
+        const auto& Gates = Access.SeatEntrances[0].Gateways;
+        if (TestEqual(TEXT("One supported gateway"), Gates.Num(), 1))
+        {
+            TestEqual(TEXT("Gateway fragment override"), Gates[0].Fragment, FName(TEXT("Door")));
+            TestEqual(TEXT("Authored opening delay"), Gates[0].OpenEnter, 0.25f);
+        }
+    }
+    if (TestEqual(TEXT("One child interaction prompt"), Access.InteractionPoints.Num(), 1))
+        TestEqual(TEXT("View angle"), Access.InteractionPoints[0].ViewAngleLimit.Get(0.f), 90.f);
+    if (TestTrue(TEXT("Unknown seat definition is kept"), Scene.Children[2].Seat.IsSet()))
+        TestEqual(TEXT("Missing pilot capability leaves role unknown"), int32(Scene.Children[2].Seat->Role), int32(ESCSeatRole::Unknown));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderSparse, "SCBridge.Package.SparseAuthoredMaterialIndices", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCReaderSparse::RunTest(const FString&)
 {
@@ -191,13 +249,25 @@ bool FSCBasis::RunTest(const FString&)
     TestFalse(TEXT("Child at a helper keeps the glTF frame"), FSCMeshImporter::InCryFrame(TEXT("gltf_y_up"), true));
     auto& Bytes = Source.Files[TEXT("triangle.glb")];
     FFileHelper::SaveArrayToFile(Bytes, *(FPaths::ProjectSavedDir() / TEXT("Import/synthetic.glb")));
-    TArray<uint8> HelperBytes = Bytes;
-    for (int32 I = 20; I + 8 < HelperBytes.Num(); ++I)
-        if (FMemory::Memcmp(HelperBytes.GetData() + I, "\"mesh\":0", 8) == 0) { HelperBytes[I + 1] = 'x'; break; }
-    Source.Files.Add(TEXT("helper.glb"), MoveTemp(HelperBytes));
+    auto JsonOnly = [](const TCHAR* Json) {
+        FTCHARToUTF8 Utf8(Json);
+        TArray<uint8> Payload;
+        Payload.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+        while (Payload.Num() % 4) Payload.Add(' ');
+        TArray<uint8> Glb;
+        Append32(Glb, 0x46546c67); Append32(Glb, 2); Append32(Glb, 20 + Payload.Num());
+        Append32(Glb, Payload.Num()); Append32(Glb, 0x4e4f534a); Glb.Append(Payload);
+        return Glb;
+    };
+    Source.Files.Add(TEXT("helper.glb"), JsonOnly(TEXT(R"({"asset":{"version":"2.0"},
+        "buffers":[{"byteLength":0}],"bufferViews":[{"buffer":0,"byteLength":0}],
+        "nodes":[{"name":"interaction_helper","translation":[0,1,0]}],"scenes":[{"nodes":[0]}]})")));
+    Source.Files.Add(TEXT("missing-bin.glb"), JsonOnly(TEXT(R"({"asset":{"version":"2.0"},
+        "buffers":[{"byteLength":12}],"nodes":[{"name":"invalid"}],"scenes":[{"nodes":[0]}]})")));
     FSCDerivedMesh Helper;
-    TestTrue(TEXT("Hierarchy-only GLB is valid"), FSCMeshImporter::Derive(Source, TEXT("helper.glb"), Helper, Error));
-    TestEqual(TEXT("Helper nodes retained"), Helper.Nodes.Num(), 1);
+    TestTrue(TEXT("Hierarchy-only GLB with an empty buffer declaration needs no BIN"), FSCMeshImporter::Derive(Source, TEXT("helper.glb"), Helper, Error));
+    TestTrue(TEXT("Named helper frame retained"), Helper.Nodes.Contains(TEXT("interaction_helper")));
+    TestFalse(TEXT("GLB declaring binary data needs a BIN chunk"), FSCMeshImporter::Derive(Source, TEXT("missing-bin.glb"), Helper, Error));
     Source.Files[TEXT("triangle.glb")][8] = 0;
     TestFalse(TEXT("truncated header rejected"), FSCMeshImporter::Derive(Source, TEXT("triangle.glb"), D, Error));
     return true;

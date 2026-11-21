@@ -290,6 +290,9 @@ TArray<FSCInteractionPoint> InteractionPoints(const FReaderObject& O)
         FSCInteractionPoint& Point = Out.AddDefaulted_GetRef();
         Point.HelperName = String(P, TEXT("helper_name"));
         Point.Radius = float(Number(P, TEXT("radius"), 0));
+        double Angle = 0;
+        if (P->TryGetNumberField(TEXT("angle_range"), Angle) && FMath::IsFinite(Angle)) Point.AngleRange = float(Angle);
+        if (P->TryGetNumberField(TEXT("view_angle_limit"), Angle) && FMath::IsFinite(Angle)) Point.ViewAngleLimit = float(Angle);
         FString Ignored;
         Point.bHasHelperTransform = P->HasTypedField<EJson::Array>(TEXT("helper_transform")) && Matrix(P, TEXT("helper_transform"), Point.HelperTransform, Ignored);
         for (const auto& IV : ReaderArray(P, TEXT("interactions")))
@@ -303,9 +306,147 @@ TArray<FSCInteractionPoint> InteractionPoints(const FReaderObject& O)
     }
     return Out;
 }
+void ReadSeatRecords(const FReaderObject& Object, FSCSceneInstance& Instance)
+{
+    const FReaderObject* Data = nullptr;
+    if (Object && Object->TryGetObjectField(TEXT("seat"), Data))
+    {
+        FSCSeatDefinition Seat;
+        auto Name = [](const FReaderObject& Obj, const TCHAR* Field) { return FName(*String(Obj, Field)); };
+        auto Limit = [Data](const TCHAR* Field) -> TOptional<double> {
+            double Value = 0;
+            return (*Data)->TryGetNumberField(Field, Value) && FMath::IsFinite(Value) ? TOptional<double>(Value) : TOptional<double>();
+        };
+        bool bDriver = false;
+        if ((*Data)->TryGetBoolField(TEXT("can_drive"), bDriver)) Seat.Role = bDriver ? ESCSeatRole::Driver : ESCSeatRole::Crew;
+        Seat.ClassTag = String(*Data, TEXT("class_tag"));
+        Seat.TransitionTemplate = String(*Data, TEXT("transition_template"));
+        Seat.ControlTemplate = String(*Data, TEXT("control_template"));
+        Seat.MinYaw = Limit(TEXT("min_yaw")); Seat.MaxYaw = Limit(TEXT("max_yaw"));
+        Seat.MinPitch = Limit(TEXT("min_pitch")); Seat.MaxPitch = Limit(TEXT("max_pitch"));
+        if (const FReaderObject* Sub; (*Data)->TryGetObjectField(TEXT("attachment"), Sub)) Seat.Attachment = Name(*Sub, TEXT("bone"));
+        if (const FReaderObject* Sub; (*Data)->TryGetObjectField(TEXT("dashboard"), Sub)) Seat.DashboardPort = String(*Sub, TEXT("port"));
+        if (const FReaderObject* Sub; (*Data)->TryGetObjectField(TEXT("usable"), Sub))
+        {
+            bool bValidate = false;
+            if ((*Sub)->TryGetBoolField(TEXT("validate_exit"), bValidate)) Seat.ValidateExit = bValidate;
+        }
+        for (const auto& Value : ReaderArray(*Data, TEXT("user_fragments")))
+        {
+            const FReaderObject Fragment = Value && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+            if (!Fragment) continue;
+            bool bLook = false;
+            Fragment->TryGetBoolField(TEXT("look_layer"), bLook);
+            if (bLook) continue;
+            FSCSeatAction Action;
+            Action.State = Name(Fragment, TEXT("state"));
+            for (const auto& Tag : ReaderArray(Fragment, TEXT("query_frag_tags")))
+                if (Tag && Tag->Type == EJson::String) Action.QueryTags.Add(FName(*Tag->AsString()));
+            for (const auto& LayerValue : ReaderArray(Fragment, TEXT("layers")))
+                if (const FReaderObject Layer = LayerValue && LayerValue->Type == EJson::Object ? LayerValue->AsObject() : nullptr;
+                    Layer && Number(Layer, TEXT("layer"), -1) == 0)
+                {
+                    Action.Animation = Name(Layer, TEXT("animation"));
+                    Action.Speed = float(Number(Layer, TEXT("speed"), 1.0));
+                    Action.BlendIn = float(Number(Layer, TEXT("blend_in"), 0.0));
+                    Layer->TryGetBoolField(TEXT("loop"), Action.bLoop);
+                    break;
+                }
+            for (const auto& ProcedureValue : ReaderArray(Fragment, TEXT("procedurals")))
+                if (const FReaderObject Procedure = ProcedureValue && ProcedureValue->Type == EJson::Object ? ProcedureValue->AsObject() : nullptr;
+                    Procedure && String(Procedure, TEXT("type")).Equals(TEXT("PositionAdjust"), ESearchCase::IgnoreCase))
+                    Action.PositionAdjust = float(Number(Procedure, TEXT("blend"), 0.0));
+            if (!Action.State.IsNone() && !Action.Animation.IsNone()) Seat.Actions.Add(MoveTemp(Action));
+        }
+        Instance.Seat = MoveTemp(Seat);
+    }
+    if (!Object || !Object->TryGetObjectField(TEXT("seat_access"), Data)) return;
+    auto Transition = [](const FReaderObject& Entrance, const TCHAR* Field, FSCSeatTransition& Result)
+    {
+        const FReaderObject* Step;
+        if (!Entrance->TryGetObjectField(Field, Step)) return;
+        Result.Interaction = FName(*String(*Step, TEXT("interaction")));
+        Result.FragmentTags = String(*Step, TEXT("fragment_tags"));
+        Result.SkipState = FName(*String(*Step, TEXT("skip_state")));
+        if (const FReaderObject* Attachment; (*Step)->TryGetObjectField(TEXT("attachment"), Attachment))
+            Result.Attachment = FName(*String(*Attachment, TEXT("bone")));
+    };
+    auto Conditions = [](const FReaderObject& Object) {
+        TMap<FName, FName> Out;
+        const FReaderObject* Fields = nullptr;
+        if (Object->TryGetObjectField(TEXT("conditions"), Fields))
+            for (const auto& Field : (*Fields)->Values)
+                if (Field.Value && Field.Value->Type == EJson::String)
+                {
+                    const FName Test(*Field.Value->AsString());
+                    if (!Test.IsNone() && Test != TEXT("Either")) Out.Add(FName(*Field.Key), Test);
+                }
+        return Out;
+    };
+    TMap<FName, FSCSeatGateway> Gateways;
+    for (const auto& Value : ReaderArray(*Data, TEXT("gateways")))
+    {
+        if (!Value || Value->Type != EJson::Object) continue;
+        const FReaderObject O = Value->AsObject();
+        const FName Name(*String(O, TEXT("name")));
+        if (Name.IsNone()) continue;
+        FSCSeatTransition Open, Close;
+        Transition(O, TEXT("open"), Open);
+        Transition(O, TEXT("close"), Close);
+        FSCSeatGateway& Gateway = Gateways.Add(Name);
+        Gateway.Fragment = FName(*String(O, TEXT("vehicle_fragment")));
+        if (Gateway.Fragment.IsNone()) Gateway.Fragment = Name;
+        Gateway.OpenTag = FName(*Open.FragmentTags);
+        Gateway.CloseTag = FName(*Close.FragmentTags);
+        Gateway.Conditions = Conditions(O);
+    }
+    for (const auto& Value : ReaderArray(*Data, TEXT("entrances")))
+    {
+        const FReaderObject O = Value && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+        if (!O) continue;
+        FSCSeatEntrance Entrance;
+        Entrance.Name = String(O, TEXT("name"));
+        for (const auto& Segment : ReaderArray(O, TEXT("seat_port_path")))
+            if (Segment && Segment->Type == EJson::String) Entrance.SeatPortPath.Add(Segment->AsString());
+        Entrance.DashboardPort = String(O, TEXT("dashboard_port"));
+        Transition(O, TEXT("enter"), Entrance.Enter);
+        Transition(O, TEXT("exit"), Entrance.Exit);
+        Entrance.Conditions = Conditions(O);
+        for (const auto& Link : ReaderArray(O, TEXT("linked_gateways")))
+        {
+            const FReaderObject L = Link && Link->Type == EJson::Object ? Link->AsObject() : nullptr;
+            const FSCSeatGateway* Definition = L ? Gateways.Find(FName(*String(L, TEXT("gateway")))) : nullptr;
+            if (!Definition || Definition->OpenTag.IsNone() || Definition->CloseTag.IsNone())
+            {
+                Entrance.bUnsupportedSequence = true;
+                break;
+            }
+            const FReaderObject *Open = nullptr, *Close = nullptr;
+            bool bSync = false, bOneWay = false;
+            L->TryGetBoolField(TEXT("sync_to_entrance"), bSync);
+            L->TryGetBoolField(TEXT("one_way"), bOneWay);
+            if (bSync || bOneWay || !L->TryGetObjectField(TEXT("open"), Open) || !L->TryGetObjectField(TEXT("close"), Close) ||
+                !String(*Open, TEXT("dependency")).Equals(TEXT("Never"), ESearchCase::IgnoreCase) ||
+                !String(*Close, TEXT("dependency")).Equals(TEXT("Never"), ESearchCase::IgnoreCase))
+            {
+                Entrance.bUnsupportedSequence = true;
+                break;
+            }
+            FSCSeatGateway& Gateway = Entrance.Gateways.Add_GetRef(*Definition);
+            Gateway.OpenEnter = float(Number(*Open, TEXT("enter_delay"), 0.0));
+            Gateway.OpenExit = float(Number(*Open, TEXT("exit_delay"), 0.0));
+            Gateway.CloseEnter = float(Number(*Close, TEXT("enter_delay"), 0.0));
+            Gateway.CloseExit = float(Number(*Close, TEXT("exit_delay"), 0.0));
+            L->TryGetBoolField(TEXT("ignore_close_on_enter"), Gateway.bKeepOpenOnEnter);
+            L->TryGetBoolField(TEXT("ignore_close_on_exit"), Gateway.bKeepOpenOnExit);
+        }
+        Instance.SeatEntrances.Add(MoveTemp(Entrance));
+    }
+}
 void ReadInteractions(const FReaderObject& O, FSCSceneInstance& Out)
 {
     Out.SocEntityName = String(O, TEXT("entity_name"));
+    if (O) Out.Ladder = FSCLadderDefinition::Read(*O);
     Out.InteractionLinks = InteractionLinks(O);
     Out.Parent = ParentAttachment(O);
     Out.InteractionPoints = InteractionPoints(O);
@@ -596,7 +737,10 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             for (const auto& V : List)
             {
                 FSCSceneInstance I;
-                if (!Instance(Object(V), I, Detail)) I.ImportWarning = Detail;
+                const FReaderObject Child = Object(V);
+                if (!Instance(Child, I, Detail)) I.ImportWarning = Detail;
+                I.InteractionPoints = InteractionPoints(Child);
+                ReadSeatRecords(Child, I);
                 I.ParentId = ParentKey;
                 // A child carries its own UI, and that of geometry-less children propagated onto it (another source).
                 for (FSCUiBinding& B : I.UiBindings) B.bPropagated = B.SourceEntityName != I.EntityName;

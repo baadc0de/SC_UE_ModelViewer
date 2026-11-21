@@ -6,6 +6,8 @@
 #include "SCLightAreas.h"
 #include "SCLightImporter.h"
 #include "SCPlayerKit.h"
+#include "SCSeatRuntime.h"
+#include "SCLadderRuntime.h"
 #include "SCViewerSubsystem.h"
 #include "UI/Cargo/SCCargoViewSource.h"
 #include "Camera/CameraComponent.h"
@@ -149,6 +151,8 @@ void ASCFirstPersonCharacter::Look(FVector2D Pixels)
         Body->AddOrbit(Pixels.X * .2f, -Pixels.Y * .2f);
         return;
     }
+    if (Seats && Seats->ApplyLook(*this, Pixels)) return;
+    if (Ladder && Ladder->ApplyLook(*this, Pixels)) return;
     if (Controller)
     {
         FRotator View = Controller->GetControlRotation();
@@ -167,6 +171,7 @@ void ASCFirstPersonCharacter::AddViewKick(float PitchDegrees, float YawDegrees)
 }
 void ASCFirstPersonCharacter::SetVehicleRelativeView(float Yaw, float Pitch)
 {
+    if (TraversalOwnsMovement()) return;
     const FQuat Base = Vehicle ? Vehicle->GetActorQuat() : FQuat::Identity;
     const FRotator View = (Base * FRotator(FMath::Clamp(Pitch, -89.f, 89.f), Yaw, 0).Quaternion()).Rotator();
     if (Controller) Controller->SetControlRotation(View);
@@ -191,10 +196,21 @@ void ASCFirstPersonCharacter::HoldMoveInput(FVector Input, float Seconds, bool b
 void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+    if (!Ladder || !Ladder->OwnsMovement())
+        if (Seats) Seats->Tick(*this, DeltaSeconds);
+    if (HoldSeconds > 0)
+    {
+        HoldSeconds -= DeltaSeconds;
+        if (HoldSeconds <= 0) { HoldSeconds = 0; ApplyHeldInput(); }
+    }
+    if ((!Seats || !Seats->IsActive()) && Ladder) Ladder->Tick(*this, DeltaSeconds);
     if (!Vehicle || Vehicle->IsActorBeingDestroyed()) { ClearInput(); return; }
     Vehicle->UpdateDoorSensors(GetActorLocation(), GetWorld()->GetTimeSeconds()); // the game's door proximity sensors
-    ApplyViewHold();
-    UpdateLiftFocusAndRide();
+    if (!TraversalOwnsMovement())
+    {
+        ApplyViewHold();
+        UpdateLiftFocusAndRide();
+    }
     // The body and its kit are lit like the surfaces around them: by the lights of the room the player stands in.
     ASCVehicle* Kit = Body->GetKit();
     if (const int32 Channel = Vehicle->LightChannelAt(GetActorLocation()); LightAreaState != int8(Channel) || LightAreaKit.Get() != Kit)
@@ -208,6 +224,7 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
             for (UPrimitiveComponent* Primitive : Primitives) FSCLightAreas::SetChannel(Primitive, Channel);
         }
     }
+    if (TraversalOwnsMovement()) return;
     // WP-P3: inside the physics grid the vehicle's own (hull) colliders do not block; the grid's contents do.
     // C2 fixes: on a moving lift carriage, what the leg passes through does not block either (the carriage carries its riders).
     const FVector Axis(0, 0, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
@@ -227,11 +244,6 @@ void ASCFirstPersonCharacter::Tick(float DeltaSeconds)
     UpdateRideTrace(Ridden);
     // Single eye anchor; a camera re-attached to another driver (e.g. a head joint) is left alone.
     if (Camera->GetAttachParent() == GetCapsuleComponent()) Camera->SetRelativeLocation(EyeOffset());
-    if (HoldSeconds > 0)
-    {
-        HoldSeconds -= DeltaSeconds;
-        if (HoldSeconds <= 0) { HoldSeconds = 0; ApplyHeldInput(); }
-    }
     NoclipRefusedSeconds = FMath::Max(0.f, NoclipRefusedSeconds - DeltaSeconds);
     const FRotator Rotation = GetViewRotation(); // control rotation; actor rotation without a controller
     const FRotator Heading(0, Rotation.Yaw, 0);
@@ -360,6 +372,7 @@ bool ASCFirstPersonCharacter::TeleportToSeat(FVector Floor, const FBox& Seat, co
 }
 bool ASCFirstPersonCharacter::Place(FVector Floor, const FSCSeatBox* Seat)
 {
+    if (TraversalOwnsMovement()) return false;
     FVector Centre;
     bool bCrouchedSpot = false;
     if (!ResolveSpawn(Floor, Centre, bCrouchedSpot, Seat)) return false;
@@ -538,8 +551,13 @@ void ASCFirstPersonCharacter::MoveTeleportSelection(int32 Delta)
 }
 bool ASCFirstPersonCharacter::Explore(ASCVehicle* InVehicle)
 {
+    if (Seats) Seats->Stop(*this);
+    if (Ladder) Ladder->Stop(*this);
     Vehicle = InVehicle;
     if (!Vehicle || !Vehicle->bCollisionReady) return false;
+    if (!Seats) Seats = MakePimpl<FSCSeatRuntime>();
+    if (!Ladder) Ladder = MakePimpl<FSCLadderRuntime>();
+    Seats->Setup(*Vehicle);
     // A moving carriage (WP-P5) moves before the character follows its movement base in the same frame, and the movement
     // runs after the character's own tick (C2 fixes: this frame's input and move-ignore list, e.g. what a ridden leg
     // passes, apply to this frame's move; without the prerequisite the engine may run the movement first).
@@ -571,8 +589,24 @@ FVector ASCFirstPersonCharacter::InteractionOrigin() const
     // Third person: reach from the character's eye (camera joint) along its view, not from the orbit camera.
     return Body && Body->HasBody() && Body->IsThirdPerson() ? Body->HeadLocation() : Camera->GetComponentLocation();
 }
+bool ASCFirstPersonCharacter::TraversalOwnsMovement() const
+{
+    return (Seats && Seats->OwnsMovement()) || (Ladder && Ladder->OwnsMovement());
+}
+
+FString ASCFirstPersonCharacter::LadderStatus() const
+{
+    return Ladder ? Ladder->State() : TEXT("LADDER_STATUS state=walking index=-1");
+}
+
+ESCSeatRole ASCFirstPersonCharacter::GetOccupiedSeatRole() const
+{
+    return Seats ? Seats->OccupiedRole() : ESCSeatRole::Unknown;
+}
 bool ASCFirstPersonCharacter::Interact()
 {
+    if (Seats && Seats->IsActive()) return Seats->Interact(*this);
+    if (Ladder && Ladder->OwnsMovement()) return Ladder->Interact(*this);
     USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this);
     const ASCVehicle* Environment = Viewer ? Viewer->GetEnvironment() : nullptr;
     if (Environment && Environment->AimGarageKiosk(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this))
@@ -610,6 +644,8 @@ bool ASCFirstPersonCharacter::Interact()
                *Interaction.ToString(), Handled);
         return Handled > 0;
     }
+    if (Seats && Seats->Interact(*this)) return true;
+    if (Ladder && Ladder->Interact(*this)) return true;
     // The door interaction (a pad, the rig under the crosshair, or the nearest driven joint), logged with how it was found.
     FSCInteractionPick Pick;
     const int32 Door = Vehicle->FindInteraction(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this, &Pick);
@@ -642,6 +678,8 @@ bool ASCFirstPersonCharacter::FocusedPanel(FString& EntityId, FName& Choice) con
 }
 void ASCFirstPersonCharacter::EndPlay(const EEndPlayReason::Type Reason)
 {
+    if (Seats) Seats->Stop(*this);
+    if (Ladder) Ladder->Stop(*this);
     // The highlight lives on the vehicle: leaving first person must not leave a row lit with no crosshair on it.
     if (Vehicle && Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
     {
@@ -747,6 +785,7 @@ void ASCFirstPersonCharacter::UpdateRideTrace(int32 Lift)
 }
 void ASCFirstPersonCharacter::ToggleNoclip()
 {
+    if (TraversalOwnsMovement()) return;
     if (bNoclip)
     {
         FCollisionQueryParams Params(SCENE_QUERY_STAT(SCNoclip), false, this);
@@ -773,6 +812,7 @@ bool ASCFirstPersonCharacter::SetNoclip(bool bOn)
 }
 void ASCFirstPersonCharacter::SetCrouching(bool bCrouch)
 {
+    if (TraversalOwnsMovement()) return;
     if (bCrouch) Crouch(); else UnCrouch();
 }
 void ASCFirstPersonCharacter::SetMobiGlasOpen(bool bOpen)
@@ -854,6 +894,14 @@ void ASCFirstPersonCharacter::ApplyHeldInput()
 bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDown)
 {
     using A = ESCFirstPersonAction;
+    if (Seats && Seats->OwnsMovement() && Action != A::Interact && Action != A::Torch && Action != A::View && Action != A::Orbit)
+        return true;
+    if (Ladder && Ladder->OwnsMovement() && Action != A::Forward && Action != A::Back &&
+        Action != A::Interact && Action != A::Torch && Action != A::View && Action != A::Orbit)
+    {
+        if (!bDown && Held.Remove(Action) && HoldSeconds <= 0) ApplyHeldInput();
+        return true;
+    }
     // The open teleport menu takes W / S as Up / Down (a press moves the selection; nothing is held, so closing the menu
     // does not start a walk).
     if (bTeleportMenuOpen && bDown && (Action == A::Forward || Action == A::Back)) Action = Action == A::Forward ? A::MenuUp : A::MenuDown;
@@ -962,16 +1010,25 @@ FString ASCFirstPersonCharacter::HUDText() const
         const FSCPointInteraction* C = Panel->Choices.FindByPredicate([&](const FSCPointInteraction& X) { return X.Name == Interaction; });
         Prompt = !C ? FString() : FString::Printf(TEXT("E: %s"), C->DisplayName.IsEmpty() ? *C->Name.ToString() : *C->DisplayName);
     }
-    if (const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this))
-        if (const ASCVehicle* Environment = Viewer->GetEnvironment();
-            Environment && Environment->AimGarageKiosk(Eye, GetViewRotation().Vector(), InteractReach, this))
-            Prompt = TEXT("E: Open Garage");
+    if (Seats)
+    {
+        const FString SeatPrompt = Seats->Prompt(*this);
+        if (!SeatPrompt.IsEmpty() || Seats->OwnsMovement()) Prompt = SeatPrompt;
+    }
+    if (!TraversalOwnsMovement())
+        if (const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this))
+            if (const ASCVehicle* Environment = Viewer->GetEnvironment();
+                Environment && Environment->AimGarageKiosk(Eye, GetViewRotation().Vector(), InteractReach, this))
+                Prompt = TEXT("E: Open Garage");
+    if (Ladder && Ladder->OwnsMovement()) Prompt = TEXT("W / S: Climb   E: Return to approach");
     const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: the capsule overlaps geometry")
         : bStuck ? TEXT("Movement blocked — press V for noclip")
         : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");
     const FString Player = Body->HasBody() ? Body->HUDLine() : BodyStatus;
     return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · F torch · V noclip · T teleport · C view · Z orbit (double-tap: behind) · LMB fire · RMB aim · F1 mobiGlas"),
-        bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
+        Ladder && Ladder->OwnsMovement() ? TEXT("On ladder") :
+        Seats && Seats->OwnsMovement() ? (GetOccupiedSeatRole() == ESCSeatRole::Unknown ? TEXT("Seat transition") : TEXT("Seated"))
+            : bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
         GetVelocity().Size() / 100, Flashlight->IsVisible() ? TEXT("on") : TEXT("off"),
         *GetVehicleRelativeLocation().ToCompactString(), *Prompt, Status, Player.IsEmpty() ? TEXT("") : TEXT("\n"), *Player);
 }

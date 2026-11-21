@@ -69,6 +69,9 @@ public:
     bool IsHiddenInFirstPerson(const UPrimitiveComponent* Part) const { return HeadParts.Contains(Part); }
     int32 NumHeadParts() const { return HeadParts.Num(); }
     const FSCPlayerAnimator& GetAnimator() const { return Animator; }
+    const FString& Gender() const { return Data->Gender; }
+    void SetSeatAction(const FSCPlayerClip* Clip, float Seconds, float Blend, float PitchDegrees);
+    FTransform BodyFrame() const;
     FString HUDLine() const;
     FString Describe() const;
     /** First-person camera near plane (cm): small enough for arms and weapon in front of the eye (viewer constant). */
@@ -172,6 +175,8 @@ private:
     TSharedPtr<const FSCPlayerKit> Data;
     TSharedPtr<const FSCPlayerClipMap> ClipStore;
     FSCPlayerAnimator Animator;
+    const FSCPlayerClip* SeatClip = nullptr;
+    float SeatSeconds = 0.f, SeatBlend = 1.f, SeatPitch = 0.f;
     FSCWeaponStateMachine Weapons;
     TArray<int32> Slots; // indices into Data->Weapons
     TMap<int32, FName> WeaponAttach; // weapon index -> port joint/helper it sits on now
