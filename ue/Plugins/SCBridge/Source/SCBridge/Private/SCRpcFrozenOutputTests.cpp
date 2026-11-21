@@ -15,6 +15,7 @@
 #include "SceneView.h"
 #include "SceneViewExtension.h"
 #include "SCRpcRender.h"
+#include "SCLookLighting.h"
 #include "TextureResource.h"
 #include "UnrealClient.h"
 
@@ -60,12 +61,20 @@ private:
         AddClearRenderTargetPass(Graph, Color.Texture, FLinearColor(0.02f, 0.03f, 0.04f), Rect);
         AddClearRenderTargetPass(Graph, Color.Texture, FLinearColor(4.f, 1.f, 0.25f),
             FIntRect((Rect.Min.X + Rect.Max.X) / 2, Rect.Min.Y, Rect.Max.X, Rect.Max.Y));
+        // Neutral patches above scene white distinguish native highlight detail from an expanded SDR plateau.
+        for (int32 I = 0; I < 3; ++I)
+        {
+            const float Level = float(1 << (2 * I));
+            AddClearRenderTargetPass(Graph, Color.Texture, FLinearColor(Level, Level, Level),
+                FIntRect(Rect.Min.X + I * Rect.Width() / 3, Rect.Min.Y,
+                         Rect.Min.X + (I + 1) * Rect.Width() / 3, Rect.Min.Y + Rect.Height() / 4));
+        }
         bWritten = true;
         return Color;
     }
 };
 
-bool RenderChart(UWorld* World, ESceneCaptureSource Source, bool bHDR, TArray<FFloat16Color>& Pixels)
+bool RenderChart(UWorld* World, ESceneCaptureSource Source, bool bHDR, TArray<FFloat16Color>& Pixels, bool bNativeHDR = true)
 {
     TStrongObjectPtr<UTextureRenderTarget2D> Texture(NewObject<UTextureRenderTarget2D>());
     Texture->InitCustomFormat(ChartWidth, ChartHeight, PF_FloatRGBA, true);
@@ -98,6 +107,7 @@ bool RenderChart(UWorld* World, ESceneCaptureSource Source, bool bHDR, TArray<FF
     View->FinalPostProcessSettings.VignetteIntensity = 0.f;
     View->FinalPostProcessSettings.FilmGrainIntensity = 0.f;
     View->FinalPostProcessSettings.TonemappingMethod = ETonemappingMethod::HuePreservingShoulder;
+    SCLookLighting::ApplyDisplayOutput(Family, *View, bNativeHDR);
     FCanvas Canvas(&Target, nullptr, World, World->GetFeatureLevel());
     GetRendererModule().BeginRenderingViewFamily(&Canvas, &Family);
     FlushRenderingCommands();
@@ -134,7 +144,22 @@ bool FSCFrozenOutputDeviceTest::RunTest(const FString&)
         AddInfo(FString::Printf(TEXT("source=%d frozen HDR/SDR mismatched RGB pixels=%d/%d, linear target peak=%g"),
             int32(Source), MismatchedPixels, Sdr.Num(), Peak));
         TestTrue(TEXT("frozen chart RGB is finite on both devices"), bFinite);
-        if (Source == SCS_FinalColorLDR) TestTrue(TEXT("control follows the advertised output device"), Peak > 1.f/1023);
+        if (Source == SCS_FinalColorLDR)
+        {
+            TestTrue(TEXT("control follows the advertised output device"), Peak > 1.f/1023);
+            TArray<FFloat16Color> Legacy;
+            if (!RenderChart(World, Source, true, Legacy, false)) { AddError(TEXT("HDR comparison chart failed")); return false; }
+            const int32 Offset = ChartWidth * (ChartHeight / 8);
+            const float White = Hdr[Offset + ChartWidth / 6].R.GetFloat();
+            const float Bright = Hdr[Offset + ChartWidth / 2].R.GetFloat();
+            const float Hot = Hdr[Offset + 5 * ChartWidth / 6].R.GetFloat();
+            const float LegacyBright = Legacy[Offset + ChartWidth / 2].R.GetFloat();
+            const float LegacyHot = Legacy[Offset + 5 * ChartWidth / 6].R.GetFloat();
+            AddInfo(FString::Printf(TEXT("1000-nit PQ output: neutral scene values 1/4/16 -> %.5f/%.5f/%.5f; legacy 4/16 -> %.5f/%.5f"),
+                White, Bright, Hot, LegacyBright, LegacyHot));
+            TestTrue(TEXT("distinct HDR highlight levels at scene white, four and sixteen"), Bright > White && Hot > Bright);
+            TestTrue(TEXT("native transform retains more upper highlight separation"), Hot - Bright > LegacyHot - LegacyBright);
+        }
         else TestEqual(TEXT("offline RGB half-float codes are identical on SDR and HDR targets"), MismatchedPixels, 0);
     }
     return true;

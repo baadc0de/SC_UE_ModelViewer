@@ -6,6 +6,7 @@
 #include "SCViewerGameMode.generated.h"
 
 class SWidget;
+class ISceneViewExtension;
 
 UCLASS()
 class SCBRIDGE_API ASCViewerGameMode : public AGameModeBase
@@ -15,6 +16,9 @@ public:
     ASCViewerGameMode();
     /** Applies the game's exposure and display mapping to the map (SCViewerExposure.h). */
     virtual void StartPlay() override;
+
+private:
+    TSharedPtr<ISceneViewExtension, ESPMode::ThreadSafe> DisplayOutput;
 };
 
 UCLASS()

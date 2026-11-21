@@ -59,6 +59,11 @@ struct FSCMobiGlasRequests
 {
     TOptional<FString> SelectGrid, From, To; // grid selectors: an id, "ship" / "vehicle", "elevator" / "environment", or label text
     TOptional<int32> Layer, Amount;
+    TOptional<FString> App; // consumed by the app rail
+    TOptional<FString> GarageEntity; // test route equivalent of clicking a fleet row
+    bool bGarageReady = false;
+    bool bShipLinkReady = false; // the open transition reached its layout, including the live-view band
+    int32 ShipLinkLabels = 0;    // door labels placed by the callout solver on the last frame
     bool bConfirm = false;
     TOptional<int32> CancelJob;
     TOptional<bool> AccessSelectedGroup; // extend (true) / retract the selected grid's group

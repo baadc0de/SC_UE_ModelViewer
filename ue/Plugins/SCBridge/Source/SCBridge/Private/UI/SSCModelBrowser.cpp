@@ -12,6 +12,8 @@
 #include "Misc/CommandLine.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBorder.h"
@@ -309,7 +311,78 @@ TSharedRef<SWidget> SSCModelBrowser::MakeOptions()
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Underside]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[DirtColours]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 1)[Environment]
-        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Paint];
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 1)[Paint]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+        [
+            SNew(SComboButton)
+            .ButtonContent()[SNew(STextBlock).Font(Font(9)).Text(LOCTEXT("CacheOptions", "Cache options"))]
+            .OnGetMenuContent(this, &SSCModelBrowser::MakeCacheOptions)
+        ];
+}
+
+TSharedRef<SWidget> SSCModelBrowser::MakeCacheOptions()
+{
+    const TWeakObjectPtr<USCViewerSubsystem> Weak = Subsystem;
+    return SNew(SBorder).BorderImage(Fill()).BorderBackgroundColor(Panel()).Padding(10)
+    [
+        SNew(SBox).MinDesiredWidth(320)
+        [
+            SNew(SVerticalBox)
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+            [SNew(STextBlock).Font(Font(9)).Text(LOCTEXT("CachePath", "Cache folder (next launch)"))]
+            + SVerticalBox::Slot().AutoHeight()
+            [
+                SNew(SEditableTextBox)
+                .HintText(LOCTEXT("CacheDefault", "cache"))
+                .Text(FText::FromString(USCViewerSettings::Get()->CacheDir))
+                .OnTextCommitted_Lambda([](const FText& Value, ETextCommit::Type)
+                {
+                    USCViewerSettings* Settings = USCViewerSettings::Get();
+                    Settings->CacheDir = Value.ToString().TrimStartAndEnd();
+                    Settings->Save();
+                })
+            ]
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 4)
+            [
+                SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+                [SNew(STextBlock).Font(Font(9)).Text(LOCTEXT("CacheCap", "Processed cache cap (MiB)"))]
+                + SHorizontalBox::Slot().AutoWidth()
+                [
+                    SNew(SNumericEntryBox<int32>)
+                    .MinValue(0)
+                    .IsEnabled_Lambda([Weak] { return Weak.IsValid() && !Weak->IsBusy(); })
+                    .Value_Lambda([] { return TOptional<int32>(USCViewerSettings::Get()->ProcessedCacheMiB); })
+                    .OnValueCommitted_Lambda([Weak](int32 Value, ETextCommit::Type) { if (Weak.IsValid()) Weak->SetProcessedCacheCap(Value); })
+                ]
+            ]
+            + SVerticalBox::Slot().AutoHeight()
+            [
+                SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Dim()).Text_Lambda([Weak] {
+                    if (!Weak.IsValid()) return FText();
+                    const FSCCacheStats Stats = Weak->GetProcessedCacheStats();
+                    return FText::Format(LOCTEXT("CacheUsage", "{0} MiB on disk · {1} reusable entries"),
+                        FText::AsNumber(double(Stats.Bytes) / double(1ll << 20)), FText::AsNumber(Stats.Entries));
+                })
+            ]
+            + SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+            [
+                SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+                [
+                    SNew(SButton).Text(LOCTEXT("ClearCache", "Clear processed cache"))
+                    .IsEnabled_Lambda([Weak] { return Weak.IsValid() && !Weak->IsBusy() && Weak->GetProcessedCacheStats().Entries > 0; })
+                    .OnClicked_Lambda([Weak] { if (Weak.IsValid()) Weak->ClearProcessedCache(); return FReply::Handled(); })
+                ]
+                + SHorizontalBox::Slot().AutoWidth()
+                [
+                    SNew(SButton).Text(LOCTEXT("RebuildCache", "Rebuild loaded model"))
+                    .IsEnabled_Lambda([Weak] { return Weak.IsValid() && Weak->CanRebuildLoadedEntity(); })
+                    .OnClicked_Lambda([Weak] { if (Weak.IsValid()) Weak->RebuildLoadedEntity(); return FReply::Handled(); })
+                ]
+            ]
+        ]
+    ];
 }
 
 TSharedRef<ITableRow> SSCModelBrowser::MakeRow(FHit Hit, const TSharedRef<STableViewBase>& Owner)

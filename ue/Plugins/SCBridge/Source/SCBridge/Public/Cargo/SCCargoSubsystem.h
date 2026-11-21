@@ -37,6 +37,8 @@ public:
     TArray<FSCCargoBoxView> GetMovingBoxes() const;
     /** Active jobs first, then the most recent finished ones. */
     TArray<FSCCargoJobView> GetJobs() const;
+    bool IsAccessDoorBusy(const class ASCVehicle* Ship, int32 Door) const;
+    bool IsVehicleTransferActive(const class ASCVehicle* Ship) const;
 
     // Freestyle cargo beacons (WP-K2, SCCargoBeacons.cpp): loose boxes at rest, grouped; a beacon's id is a location id
     // (like a grid's, never equal to one) that transfers take as a source.
@@ -132,6 +134,9 @@ protected:
     int32 Revision = 0;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+    friend class FSCCargoEnvironmentAccessTest;
+#endif
     TSharedPtr<struct FSCCargoState> State;
     void Discover();
     void DiscoverOn(class ASCVehicle* Actor, ESCCargoGridKind Kind);
@@ -186,7 +191,7 @@ private:
     bool FleetPending() const;
     void SpawnDock(class USCCargoGridComponent* Grid, int32 Drones);
     void UpdateAccess(class USCCargoGridComponent* Grid, double Now);
-    bool RequestAccess(class USCCargoGridComponent* Grid, bool bOpen, double Now);
+    bool RequestAccess(class USCCargoGridComponent* Grid, bool bOpen, double Now, FName Requester = NAME_None, FString* OutRefusal = nullptr);
     /** Whether Grid's mechanism may retract now (nothing on the grids it carries, no transfer using them). */
     bool CanClose(const class USCCargoGridComponent* Grid, FText* OutWhy = nullptr, int32 IgnoreJob = INDEX_NONE) const;
     void TickJobs(float DeltaSeconds);
@@ -322,7 +327,6 @@ private:
     FVector Departure(class ASCCargoDrone* Drone, const FVector& BayExit) const;
     bool HomeFlight(const struct FSCCargoJob& Job, struct FSCCargoMove& Move, class ASCCargoDrone* Drone, struct FSCCargoFlight& Out);
     /** The hook where an environment grid is made reachable (its doors opened, its lights on): K1e provides it. */
-    bool EnvironmentAccess(class USCCargoGridComponent* Grid, bool bOpen);
     void SetJobState(struct FSCCargoJob& Job, ESCCargoJobState NewState, const FText& Reason = FText());
     void FinishMove(struct FSCCargoJob& Job, struct FSCCargoMove& Move, bool bOK);
     void DebugDraw() const;

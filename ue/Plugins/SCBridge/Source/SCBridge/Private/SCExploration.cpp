@@ -180,6 +180,7 @@ void ASCVehicle::BuildExploration()
     if (Bounds.IsValid)
         AddSpawnPoint(FSCSpawnKind::Hull, TEXT("Above hull centre"), FTransform(FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z)));
     const int32 Posed = ApplyDoorRestPoses();
+    BuildShipDoors();
     UE_LOG(LogTemp, Display, TEXT("EXPLORATION spawns=%d doors=%d door_rest_poses=%d collision_ready=%d"), SpawnPoints.Num(), Doors.Num(), Posed,
            bCollisionReady);
 }
@@ -213,9 +214,15 @@ int32 ASCVehicle::ApplyDoorRestPoses()
     if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
     return Posed;
 }
-bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth)
+bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth, FName AsActor, const TOptional<FVector>& LocalUse, bool bCargoAccess)
 {
     if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig) return false;
+    const USCShipLinkSubsystem* Link = USCShipLinkSubsystem::Get(this);
+    const bool bOwnerCargoOpen = bOpen && bCargoAccess && Link &&
+        Link->RoleOf(AsActor, this) == ESCShipRole::Owner && !LiftDrivenRigs.Contains(Doors[Index].Rig.Get()) &&
+        !(ShipDoors.IsValidIndex(Index) && ShipDoors[Index].bSecurePending);
+    if (!AsActor.IsNone() && !bOwnerCargoOpen &&
+        !DoorOrderRefusal(Index, bOpen ? ESCShipDoorAction::Open : ESCShipDoorAction::Close, AsActor, LocalUse).IsEmpty()) return false;
     if (Depth > 8) // a cycle of item-port links in the data
     {
         UE_LOG(LogTemp, Warning, TEXT("DOOR_PORT_LINK depth=%d: link chain too deep, not followed"), Depth);
@@ -226,7 +233,24 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const bool bBackward = !bOpen && D.bReverseClose;
     const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
+    const uint64 PriorOrder = NextOrder;
     if (!PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose)) return false;
+    if (ShipDoors.IsValidIndex(Index))
+    {
+        FShipDoor& State = ShipDoors[Index];
+        State.GroundLastSample = INDEX_NONE;
+        if (bOpen && !State.GroundProbes.IsEmpty())
+            for (FSCClipPlayback& P : Playback)
+                if (P.TargetRig.Get() == Rig && P.Order > PriorOrder) P.OpeningGangway = Index;
+        const bool bOwnerEgress = Link && Link->RoleOf(AsActor, this) == ESCShipRole::Owner &&
+            State.Group == ESCShipDoorGroup::Exterior && LocalUse.IsSet() && IsInsideLightArea(LocalUse.GetValue());
+        State.bActorOpenedWithoutAccess = bOpen && !AsActor.IsNone() && IsDoorLocked(Index) && !bOwnerCargoOpen && !bOwnerEgress;
+    }
+    if (bOwnerCargoOpen && IsDoorLocked(Index))
+    {
+        SetDoorLocked(Index, false);
+        ShipDoors[Index].bCargoRelock = true;
+    }
     FragmentTargets.Add({Rig, D.Fragment}, bOpen ? D.OpenTag : D.CloseTag);
     if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
     UpdateTickEnabled();
@@ -242,7 +266,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
         if (TargetDoor != INDEX_NONE && FSCInteractionNetwork::DoorVerb(L.TargetSlot, bTargetOpen, bTargetToggle))
         {
             if (bTargetToggle) bTargetOpen = !IsDoorOpen(TargetDoor);
-            bHandled = IsDoorOpen(TargetDoor) == bTargetOpen || PlayDoor(TargetDoor, bTargetOpen, 0.f, Depth + 1);
+            bHandled = IsDoorOpen(TargetDoor) == bTargetOpen || PlayDoor(TargetDoor, bTargetOpen, 0.f, Depth + 1, AsActor, LocalUse, bCargoAccess);
         }
         UE_LOG(LogTemp, Display, TEXT("DOOR_PORT_LINK source=%s slot=%s port=%s target=%s target_slot=%s handled=%d depth=%d"), *Rig->OwnerEntity,
                *L.SourceSlot.ToString(), *L.TargetPort, Target && Target->IsValid() ? *(*Target)->OwnerEntity : TEXT("-"), *L.TargetSlot.ToString(),
@@ -305,6 +329,7 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
                 {
                     Out.Via = TEXT("panel");
                     Out.Reach = PadReach;
+                    Out.bLockControl = AimDoorPanelLock(C, Eye, Direction, PadReach, IsDoorLocked(Index));
                     return Index;
                 }
             }
@@ -365,7 +390,7 @@ bool ASCVehicle::ToggleDoor(int32 Index)
     if (!Doors.IsValidIndex(Index)) return false;
     const auto& D = Doors[Index];
     // The press is the door's own (its DoorAnimationSpeed), from its current pose, and goes on along its port links.
-    if (!PlayDoor(Index, !IsDoorOpen(Index))) return false;
+    if (!OrderShipDoor(Index, IsDoorOpen(Index) ? ESCShipDoorAction::Close : ESCShipDoorAction::Open, ShipLinkPlayer()).IsEmpty()) return false;
     UE_LOG(LogTemp, Display, TEXT("FIRST_PERSON_DOOR fragment=%s owner=%s joint=%s open=%d label=\"%s\""), *D.Fragment.ToString(),
            D.Rig ? *D.Rig->OwnerEntity : TEXT("-"), *D.Joint.ToString(), IsDoorOpen(Index), *D.DisplayName);
     return true;
@@ -391,7 +416,7 @@ void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
             FSensorDoorState& State = SensorDoorStates.FindOrAdd(Door);
             State.LastInside = Now;
             State.ExitDelay = FMath::Max(State.ExitDelay, Sensor.ExitDelay);
-            if (!IsDoorOpen(Door) && ToggleDoor(Door)) State.bOpenedBySensor = true;
+            if (!IsDoorOpen(Door) && OrderShipDoor(Door, ESCShipDoorAction::Open, ShipLinkPlayer(), PlayerWorld).IsEmpty()) State.bOpenedBySensor = true;
         }
     }
     for (auto& [Door, State] : SensorDoorStates)

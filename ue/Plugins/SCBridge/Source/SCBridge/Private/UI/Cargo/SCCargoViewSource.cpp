@@ -87,6 +87,14 @@ FAutoConsoleCommandWithWorldAndArgs GShotCommand(TEXT("sc.UI.Shot"),
         FScreenshotRequest::RequestScreenshot(Path, /*bInShowUI=*/true, /*bAddFilenameSuffix=*/false);
         UE_LOG(LogSCMobiGlas, Display, TEXT("UI_SHOT path=%s"), *Path);
     }));
+FAutoConsoleCommand GMobiGlasAppCommand(TEXT("sc.MobiGlas.App"), TEXT("sc.MobiGlas.App Cargo|ShipLink|Garage|Music: select a mobiGlas app"),
+    FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) {
+        if (!Args.IsEmpty()) FSCMobiGlasRequests::Get().App = Args[0];
+    }));
+FAutoConsoleCommand GGarageEntityCommand(TEXT("sc.MobiGlas.GarageSelect"), TEXT("sc.MobiGlas.GarageSelect <entity>: select a fleet row"),
+    FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) {
+        if (!Args.IsEmpty()) FSCMobiGlasRequests::Get().GarageEntity = Args[0];
+    }));
 FAutoConsoleCommand GSelectCommand(TEXT("sc.MobiGlas.Select"), TEXT("sc.MobiGlas.Select <grid>: select a grid (id, ship, elevator or label text) as a click on its row"),
     FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) { if (!Args.IsEmpty()) FSCMobiGlasRequests::Get().SelectGrid = FString::Join(Args, TEXT(" ")); }));
 FAutoConsoleCommand GFromCommand(TEXT("sc.MobiGlas.From"), TEXT("sc.MobiGlas.From <grid>: the transfer source (id, ship / elevator = the whole group, or label text)"),

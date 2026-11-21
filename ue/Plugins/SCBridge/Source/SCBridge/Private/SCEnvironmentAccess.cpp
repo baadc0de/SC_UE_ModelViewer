@@ -25,6 +25,7 @@ struct FRequest
     FTransform Frame;   // relative to the vehicle's actor (survives the environment being moved by placement)
     FBox Volume = FBox(ForceInit);
     double Reach = 0, Tolerance = 0, Band = 0;
+    FName Requester;
     double MinGain = 1e-3; // m3: the least corridor volume a pose must clear to be played (one lattice cell for grids)
 };
 TMap<TWeakObjectPtr<ASCVehicle>, TMap<FName, FRequest>>& Requests()
@@ -228,7 +229,23 @@ FSCAccessResult Apply(ASCVehicle* Vehicle, FName Key, const FRequest& R)
         if (BestClip == INDEX_NONE) continue;
         // A door already opening (its target open) is not started again but is waited for like one this request starts.
         const int32 Door = ClipDoor.FindRef(BestClip, INDEX_NONE);
-        if (bDoorRig ? (Door == INDEX_NONE || (!Vehicle->IsDoorOpen(Door) && !Vehicle->PlayDoor(Door, true))) : !Vehicle->PlayClipAt(BestClip, Rig, 1.f)) continue;
+        if (bDoorRig)
+        {
+            if (Door == INDEX_NONE) continue;
+            if (!R.Requester.IsNone() && (Vehicle->IsDoorLocked(Door) ||
+                (Vehicle->ShipDoors.IsValidIndex(Door) && Vehicle->ShipDoors[Door].bCargoRelock)))
+            {
+                const auto* Link = USCShipLinkSubsystem::Get(Vehicle);
+                if (!Link || Link->RoleOf(R.Requester, Vehicle) != ESCShipRole::Owner)
+                {
+                    Result.Refusal = TEXT("Hold locked by owner");
+                    continue;
+                }
+            }
+            if (!Vehicle->IsDoorOpen(Door) && !Vehicle->PlayDoor(Door, true, 0.f, 0, R.Requester, {}, !R.Requester.IsNone()))
+                continue;
+        }
+        else if (!Vehicle->PlayClipAt(BestClip, Rig, 1.f)) continue;
         FSCAccessMove& Move = Result.Moves.AddDefaulted_GetRef();
         Move.Rig = Rig;
         Move.Clip = BestClip;
@@ -247,7 +264,7 @@ FSCAccessResult Apply(ASCVehicle* Vehicle, FName Key, const FRequest& R)
 } // namespace
 
 FSCAccessResult FSCEnvironmentAccess::Open(ASCVehicle* Vehicle, FName Key, const FTransform& Frame, const FBox& Volume, double ReachCm,
-                                           double ToleranceCm, double FloorBandCm, double MinGainM3)
+                                           double ToleranceCm, double FloorBandCm, double MinGainM3, FName Requester)
 {
     if (!Vehicle || !Volume.IsValid) return {};
     FRequest R;
@@ -257,6 +274,7 @@ FSCAccessResult FSCEnvironmentAccess::Open(ASCVehicle* Vehicle, FName Key, const
     R.Tolerance = ToleranceCm;
     R.Band = FloorBandCm;
     R.MinGain = MinGainM3;
+    R.Requester = Requester;
     Requests().FindOrAdd(Vehicle).Add(Key, R);
     return Apply(Vehicle, Key, R);
 }
@@ -266,14 +284,14 @@ FName FSCEnvironmentAccess::GridKey(const USCCargoGridComponent* Grid)
     return Grid ? FName(*FString::Printf(TEXT("grid:%d"), Grid->GridId)) : NAME_None;
 }
 
-FSCAccessResult FSCEnvironmentAccess::OpenGrid(const USCCargoGridComponent* Grid)
+FSCAccessResult FSCEnvironmentAccess::OpenGrid(const USCCargoGridComponent* Grid, FName Requester)
 {
     ASCVehicle* Vehicle = Grid ? Grid->OwnerVehicle.Get() : nullptr;
     if (!Vehicle) return {};
     const FSCCargoLattice& L = Grid->Lattice;
     const FVector MaxItem = L.MaxItemM.GetMax() > 0 ? L.MaxItemM : L.InteriorM; // a zero limit is no limit: the interior
     return Open(Vehicle, GridKey(Grid), Grid->LatticeToWorld(), FBox(FVector::ZeroVector, L.InteriorM * 100.0), MaxItem.GetMax() * 100.0,
-                Grid->Record.Container.GridCellSize * 100.0, L.CellM.Z * 100.0, L.CellM.X * L.CellM.Y * L.CellM.Z);
+                Grid->Record.Container.GridCellSize * 100.0, L.CellM.Z * 100.0, L.CellM.X * L.CellM.Y * L.CellM.Z, Requester);
 }
 
 void FSCEnvironmentAccess::Release(ASCVehicle* Vehicle, FName Key)

@@ -48,6 +48,7 @@ struct FSCInteractionPick
     FString Hit;                // the first component the view ray met ("-": none within the longest reach)
     double Distance = -1;       // to that hit, cm
     double Reach = 0;           // the reach that applied, cm
+    bool bLockControl = false;  // the pad's authored LockDoor / UnlockDoor hit region
 };
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCDoorInteraction

@@ -12,6 +12,8 @@ starbreaker-3d.workspace = true
 starbreaker-common.workspace = true
 starbreaker-datacore.workspace = true
 starbreaker-p4k.workspace = true
+starbreaker-wem = { path = "../../vendor/StarBreaker/crates/starbreaker-wem" }
+starbreaker-wwise = { path = "../../vendor/StarBreaker/crates/starbreaker-wwise" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

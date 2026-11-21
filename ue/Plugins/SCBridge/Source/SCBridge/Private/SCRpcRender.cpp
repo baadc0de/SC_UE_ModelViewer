@@ -334,6 +334,11 @@ bool FSCRpcRender::Start(UWorld* InWorld, const TSharedPtr<FJsonObject>& Body, F
     if (Body->TryGetArrayField(TEXT("setup"), Array))
         for (const auto& Step : *Array)
             if (Step->Type != EJson::Object || !Apply(Step->AsObject(), 0, true, Error)) return false;
+    if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(InWorld); Viewer && !Viewer->PrepareGeometryForCapture())
+    {
+        Error = TEXT("wait for the current import before rendering with streamed geometry");
+        return false;
+    }
     if (Outputs.Contains(TEXT("exr"))) Linear.Reset(CreateCapture(InWorld, Width, Height, ExrSource));
     if (Outputs.Contains(TEXT("png8")) || Outputs.Contains(TEXT("png16"))) Sdr.Reset(CreateCapture(InWorld, Width, Height, PngSource));
     MainLook = FSceneViewExtensions::NewExtension<FSCRenderMainLook>(GEngine->GameViewport->Viewport);

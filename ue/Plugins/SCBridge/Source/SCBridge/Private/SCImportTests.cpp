@@ -8,11 +8,13 @@
 #include "Misc/Paths.h"
 #include "Misc/CommandLine.h"
 #include "SCImporter.h"
+#include "SCInstancing.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "SCVehicle.h"
 #include "Engine/StaticMesh.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Materials/Material.h"
 #include "StaticMeshResources.h"
 #include "Dom/JsonObject.h"
@@ -329,6 +331,50 @@ bool FSCReviewMaterials::RunTest(const FString&)
     }
     FSCImporter::Unload(World); World->DestroyWorld(false); return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCDeferredInstancingTest, "SCBridge.Import.DeferredInstancing",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FSCDeferredInstancingTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ASCVehicle* Vehicle = World->SpawnActor<ASCVehicle>();
+    UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+    if (!TestNotNull(TEXT("static mesh fixture"), Mesh))
+    {
+        World->DestroyWorld(false);
+        return false;
+    }
+    TArray<UStaticMeshComponent*> Parts;
+    TArray<FTransform> Expected;
+    for (const FVector& Position : {FVector(100, 200, 300), FVector(-200, 400, 0)})
+    {
+        auto* Component = NewObject<UStaticMeshComponent>(Vehicle);
+        Vehicle->AddInstanceComponent(Component);
+        Component->SetupAttachment(Vehicle->GetRootComponent());
+        Component->SetStaticMesh(Mesh);
+        Component->SetRelativeLocation(Position);
+        Component->UpdateComponentToWorld();
+        Parts.Add(Component);
+        Expected.Add(FTransform(Position));
+        TestFalse(TEXT("source component is still unregistered"), Component->IsRegistered());
+    }
+    const FSCInstancingStats Stats = FSCInstancing::Consolidate(Vehicle, Parts);
+    TestEqual(TEXT("both placements were batched"), Stats.Consolidated, 2);
+    const auto* Instances = Vehicle->FindComponentByClass<UInstancedStaticMeshComponent>();
+    if (TestNotNull(TEXT("resulting component"), Instances))
+    {
+        TestTrue(TEXT("result is registered"), Instances->IsRegistered());
+        TestEqual(TEXT("result has both instances"), Instances->GetInstanceCount(), 2);
+        for (int32 Index = 0; Index < Instances->GetInstanceCount(); ++Index)
+        {
+            FTransform Actual;
+            Instances->GetInstanceTransform(Index, Actual, true);
+            TestTrue(TEXT("instance retained its world transform"), Expected.RemoveAll([&](const FTransform& T) { return T.Equals(Actual); }) == 1);
+        }
+    }
+    World->DestroyWorld(false);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFolderTarImport, "SCBridge.Package.FolderTarImport", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCFolderTarImport::RunTest(const FString&)
 {

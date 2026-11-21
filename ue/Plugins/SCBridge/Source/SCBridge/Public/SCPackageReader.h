@@ -3,6 +3,7 @@
 #include "SCPackageSource.h"
 #include "Cargo/SCCargoTypes.h"
 #include "SCInteractionRecords.h"
+#include "SCThrusterPreview.h"
 #include "SCPackageReader.generated.h"
 
 /** `ui_bindings[].state_images[]` (WP-I1 I1-3): the render of the UI owner in one other state of its interaction state
@@ -63,6 +64,8 @@ struct SCBRIDGE_API FSCUiBinding
     /** Cache format 40 (`interaction_distance`): how far from its screen the player operates the owner's UI, metres
      *  (UIRenderToTextureEntityComponentParams.interactionDistance); 0 when not exported. */
     float InteractionDistance = 0.f;
+    FString DoorLabel; // a literal authored label; locale keys have no resolved string in the package
+    bool bHideDoorLockControl = false;
     bool bInteractionDistanceExported = false; // the key is present (null included): an export before format 40 has none
     /** The owner's other states the canvas shows (`state_images[]`; images outside the package dropped). */
     TArray<FSCUiStateImage> StateImages;
@@ -95,6 +98,7 @@ struct SCBRIDGE_API FSCSceneInstance
 {
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) FString EntityName;
+    UPROPERTY(BlueprintReadOnly) FString DisplayName;
     UPROPERTY(BlueprintReadOnly) FString MeshAsset;
     UPROPERTY(BlueprintReadOnly) FString MaterialSidecar;
     /** Resolved by the reader: own id, container's, the material set's DefaultPalette, then the host's. */
@@ -102,10 +106,16 @@ struct SCBRIDGE_API FSCSceneInstance
     UPROPERTY(BlueprintReadOnly) FString ParentEntityName;
     UPROPERTY(BlueprintReadOnly) FString ParentNodeName;
     UPROPERTY(BlueprintReadOnly) FString ItemType;
+    UPROPERTY(BlueprintReadOnly) FString ItemSubType;
+    UPROPERTY(BlueprintReadOnly) FString ItemSize;
     UPROPERTY(BlueprintReadOnly) FString PortFlags;
     UPROPERTY(BlueprintReadOnly) FString SourceTransformBasis;
     UPROPERTY(BlueprintReadOnly) bool bInvisible = false;
     UPROPERTY(BlueprintReadOnly) TArray<FString> LightJson; // lossless state/style/attachment metadata
+    UPROPERTY() TArray<FSCThrusterEffect> ThrusterEffects;
+    UPROPERTY() FString NozzleAnimation;
+    UPROPERTY() FVector ThrusterGlow = FVector::ZeroVector;
+    UPROPERTY() bool bHasThrusterGlow = false;
     /** Instance id (`children[].id`, player kits); unique where entity names repeat. */
     UPROPERTY(BlueprintReadOnly) FString Id;
     /** Id of the enclosing child for nested assemblies (`children[].children[]`); resolves the parent before the name. */

@@ -10,6 +10,7 @@
 #include "SCExploration.h"
 #include "SCLift.h"
 #include "SCFloorPanel.h"
+#include "SCShipLinkSubsystem.h"
 #include "SCVehicle.generated.h"
 class UTexture2D;
 class UMaterialInstanceDynamic;
@@ -78,6 +79,7 @@ struct FSCClipPlayback
     TArray<FName> Scopes;
     bool bAudioFresh = true; // WP-A1: the first advance plays the start-of-play events (they sit at t = 0.0001 / 0.9999)
     bool bTargeted = false;  // started for one rig (TargetRig): once that rig is gone the entry poses nothing
+    int32 OpeningGangway = INDEX_NONE;
 };
 UCLASS(BlueprintType)
 class SCBRIDGE_API ASCVehicle : public AActor
@@ -87,10 +89,66 @@ public:
     ASCVehicle();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
+    struct FShipDoor
+    {
+        struct FMovementCollider
+        {
+            struct FSample
+            {
+                FTransform Pose; // relative to the ship
+                double TravelCm = 0; // maximum point travel before the next sample
+            };
+            TWeakObjectPtr<UPrimitiveComponent> Component;
+            FName Socket;
+            FTransform ClosedPose; // relative to the ship
+            TArray<FSample> Sweep;
+            FTransform GroundPose = FTransform::Identity;
+        };
+        ESCShipDoorGroup Group = ESCShipDoorGroup::Other;
+        FName GroupSource;
+        FString Label;
+        FBox Aperture = FBox(ForceInit); // vehicle-local, at the authored closed pose when available
+        FBox MovementBounds = FBox(ForceInit);
+        TArray<FMovementCollider> MovementColliders;
+        bool bLocked = false;
+        bool bSecurePending = false;
+        bool bCargoRelock = false;
+        bool bActorOpenedWithoutAccess = false; // checked by the RPC state journal
+        bool bRamp = false;
+        struct FGroundProbeSet
+        {
+            int32 Bone = INDEX_NONE;
+            TArray<FVector> Points; // actual rigid collision surface points in the socket bone's frame
+        };
+        TArray<FGroundProbeSet> GroundProbes;
+        int32 GroundLastSample = INDEX_NONE; // only for an exact, reversible single-clip cargo sweep
+    };
+    TArray<FShipDoor> ShipDoors;
+    void BuildShipDoors();
+    void BuildGangwayProbes(int32 Index);
+    void GangwayStops(float Seconds, TMap<int32, double>& OutFractions) const;
+    void RememberGangwayStop(int32 Index);
+    FString ShipDoorLabel(int32 Index) const;
+    bool IsDoorLocked(int32 Index) const;
+    bool SetDoorLocked(int32 Index, bool bLocked);
+    bool DoorwayOccupied(int32 Index) const;
+    FName ShipLinkPlayer() const;
+    FString DoorOrderRefusal(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {}) const;
+    FString OrderShipDoor(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {});
+    TArray<FSCShipDoorResult> SecureShip(FName Actor);
+    void FinishSecureOrders();
+    void RestoreCargoDoorLocks();
+    TArray<FSCFloorPanel> DoorPanelLocks;
+    TMap<TWeakObjectPtr<const USCRigComponent>, FString> DoorPanelLabels;
+    void RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding);
+    bool AimDoorPanelLock(const USceneComponent* Panel, const FVector& Eye, const FVector& Direction, double Reach, bool bLocked) const;
     /** Hangar waypoints (environments only; SCHangarWaypoints.h): kind Hangar, actor-relative standing hints. Built by
      *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> Waypoints;
     int32 WaypointRevision = 0;
+    /** Authored vehicle-retrieval interfaces on hangar operating panels, and their reach in cm. */
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, float> GarageKiosks;
+    bool AimGarageKiosk(const FVector& Eye, const FVector& Direction, float Reach, const AActor* Ignore) const;
     /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; transient. */
     TArray<FSCWaypointSource> WaypointSources;
     /** Waypoints from WaypointSources and the ship pad in the current pose; a cooked environment (no sources, no rigs)
@@ -166,7 +224,8 @@ public:
      *  door plays its open or close tag; a single-procedural door plays its transition forwards to open and backwards to
      *  close. SpeedScale <= 0: the door's DoorAnimationSpeed. Then the door's `item_port_links` for that verb are delivered
      *  (Depth bounds a link cycle). Records the door's state for IsDoorOpen and its pads. */
-    bool PlayDoor(int32 Index, bool bOpen, float SpeedScale = 0.f, int32 Depth = 0);
+    bool PlayDoor(int32 Index, bool bOpen, float SpeedScale = 0.f, int32 Depth = 0, FName AsActor = NAME_None,
+        const TOptional<FVector>& LocalUse = {}, bool bCargoAccess = false);
     /** Every door at its authored spawn state (`is_opened`, closed without data): a single-procedural door holds its
      *  transition at the start (closed) or the end (open); an open/close door opened in the data holds its open fragment's
      *  end; a closed one keeps the bind pose (the start of its open fragment). Also after ResetPose. Returns the doors posed. */
@@ -382,6 +441,10 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<UMaterialInstanceDynamic>> EngineGlowMaterials;
     /** Sets the engine-glow control value (package units, clamped to its range); see EngineGlowToEmissive. */
     UFUNCTION(BlueprintCallable, Category = "SC") void SetEngineGlow(float Strength);
+    UPROPERTY() TArray<FSCThrusterBinding> Thrusters;
+    UPROPERTY(Transient) ESCThrusterPreviewMode ThrusterPreview = ESCThrusterPreviewMode::Minimum;
+    UPROPERTY(Transient) bool bThrusterPreviewActive = false;
+    bool SetThrusterPreview(ESCThrusterPreviewMode Mode);
     UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USCClipCatalog> ClipCatalog;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FSCSceneManifest Manifest;
     /** Anchors of instances that carry an id (player-kit items), by id. */

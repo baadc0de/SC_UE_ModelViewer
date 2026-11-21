@@ -37,7 +37,8 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
         const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Pair.Key; });
         if (!Set) continue;
         const FSCPalette* Palette = Manifest.Palettes.FindByPredicate([&](const FSCPalette& P) { return P.Id == Pair.Value; });
-        FSet& Out = Sets.AddDefaulted_GetRef(); Out.Sidecar = Pair.Key; Out.PaletteId = Pair.Value; Out.Palette = Palette;
+        SetBySidecarAndPalette.FindOrAdd(Pair.Key).Add(Pair.Value, Sets.Num());
+        FSet& Out = Sets.AddDefaulted_GetRef(); Out.Sidecar = Pair.Key; Out.Palette = Palette;
         for (const FSCSubmaterial& Sub : Set->Submaterials)
         {
             FSCMaterialDesc Desc = FSCMaterialBuilder::Describe(Sub, Palette);
@@ -81,10 +82,11 @@ void FSCImportMaterials::Describe(const FSCSceneManifest& Manifest)
     DescribeSeconds = FPlatformTime::Seconds() - Start;
 }
 
-void FSCImportMaterials::Decode(const FSCPackageSource& Source)
+void FSCImportMaterials::Decode(const FSCPackageSource& Source, const FSCTextureCacheRequest* Cache)
 {
     const double Start = FPlatformTime::Seconds();
-    Decoded = FSCTextureImporter::DecodeAll(Source, Keys);
+    Decoded = FSCTextureImporter::DecodeAll(Source, Keys, FSCTextureLimits::FromHost(), Cache);
+    for (const FSCDecodedTexture& Texture : Decoded) TextureStats.Cached += Texture.bFromCache;
     TextureStats.Requested = Keys.Num();
     TArray<FLinearColor> Mean; Mean.SetNum(Decoded.Num());
     TArray<bool> HasMean; HasMean.Init(false, Decoded.Num());
@@ -136,10 +138,18 @@ void FSCImportMaterials::Instantiate(ASCVehicle* Vehicle, TArray<FString>& Warni
     MaterialSeconds = FPlatformTime::Seconds() - Start;
 }
 
+int32 FSCImportMaterials::SetIndex(const FString& Sidecar, const FString& PaletteId) const
+{
+    const auto* Palettes = SetBySidecarAndPalette.Find(Sidecar);
+    const int32* Index = Palettes ? Palettes->Find(PaletteId) : nullptr;
+    return Index ? *Index : INDEX_NONE;
+}
+
 UMaterialInterface* FSCImportMaterials::Find(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, const FString& HostChannel)
 {
-    FSet* Set = Sets.FindByPredicate([&](const FSet& S) { return S.Sidecar == Sidecar && S.PaletteId == PaletteId; });
-    if (!Set || !Set->Instances.IsValidIndex(Ordinal)) return nullptr;
+    const int32 Index = SetIndex(Sidecar, PaletteId);
+    if (Index == INDEX_NONE || !Sets[Index].Instances.IsValidIndex(Ordinal)) return nullptr;
+    FSet* Set = &Sets[Index];
     FLinearColor Host;
     if (!Set->Descs[Ordinal].bHostTinted || !FSCMaterialBuilder::PaletteColor(Set->Palette, HostChannel, Host) || !Owner) return Set->Instances[Ordinal];
     if (UMaterialInterface** Existing = Set->HostVariants.Find({Ordinal, HostChannel})) return *Existing;
@@ -156,7 +166,8 @@ UMaterialInterface* FSCImportMaterials::FindScreen(const FString& Sidecar, const
 {
     const TTuple<FString, int32, FString> CacheKey(Sidecar, Ordinal, Image);
     if (UMaterialInterface** Existing = ScreenInstances.Find(CacheKey)) return *Existing;
-    const FSet* Set = Sets.FindByPredicate([&](const FSet& S) { return S.Sidecar == Sidecar && S.PaletteId == PaletteId; });
+    const int32 Index = SetIndex(Sidecar, PaletteId);
+    const FSet* Set = Index != INDEX_NONE ? &Sets[Index] : nullptr;
     const FSCTextureKey Key{Image, ESCTextureRole::Color};
     if (!Set || !Set->Descs.IsValidIndex(Ordinal) || Set->Descs[Ordinal].Master != ESCMaster::Screen || !Owner) return nullptr;
     UMaterialInstanceDynamic* MID = nullptr;
@@ -177,7 +188,8 @@ UMaterialInterface* FSCImportMaterials::FindScreen(const FString& Sidecar, const
 
 UMaterialInstanceDynamic* FSCImportMaterials::CreateScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal, UTexture* Image)
 {
-    const FSet* Set = Sets.FindByPredicate([&](const FSet& S) { return S.Sidecar == Sidecar && S.PaletteId == PaletteId; });
+    const int32 Index = SetIndex(Sidecar, PaletteId);
+    const FSet* Set = Index != INDEX_NONE ? &Sets[Index] : nullptr;
     if (!Set || !Set->Descs.IsValidIndex(Ordinal) || Set->Descs[Ordinal].Master != ESCMaster::Screen || !Owner) return nullptr;
     FSCMaterialDesc Desc = Set->Descs[Ordinal];
     Desc.Name += TEXT("__viewer");
@@ -192,7 +204,8 @@ UMaterialInstanceDynamic* FSCImportMaterials::CreateScreen(const FString& Sideca
 
 bool FSCImportMaterials::IsScreen(const FString& Sidecar, const FString& PaletteId, int32 Ordinal) const
 {
-    const FSet* Set = Sets.FindByPredicate([&](const FSet& S) { return S.Sidecar == Sidecar && S.PaletteId == PaletteId; });
+    const int32 Index = SetIndex(Sidecar, PaletteId);
+    const FSet* Set = Index != INDEX_NONE ? &Sets[Index] : nullptr;
     return Set && Set->Descs.IsValidIndex(Ordinal) && Set->Descs[Ordinal].Master == ESCMaster::Screen;
 }
 

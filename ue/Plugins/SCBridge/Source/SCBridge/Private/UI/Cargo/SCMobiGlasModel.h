@@ -6,6 +6,7 @@
 #include "CoreMinimal.h"
 #include "Cargo/SCCargoTypes.h"
 #include "Layout/SlateRect.h"
+#include "../ShipLink/SCShipLinkModel.h"
 
 class ISCCargoViewSource;
 class USCViewerSubsystem;
@@ -22,6 +23,8 @@ struct FSCGridPick
     bool operator==(const FSCGridPick& O) const { return Group == O.Group && GridId == O.GridId && BeaconId == O.BeaconId; }
 };
 
+enum class ESCMobiGlasApp : uint8 { Cargo, ShipLink, Garage, Music };
+
 class FSCMobiGlasModel
 {
 public:
@@ -35,6 +38,15 @@ public:
     bool IsPreview() const;
     bool IsOpen() const;
     void SetOpen(bool bOpen);
+    ESCMobiGlasApp GetApp() const { return App; }
+    void SetApp(ESCMobiGlasApp InApp) { App = InApp; }
+    FSCShipLinkModel& GetShipLink() { return ShipLink; }
+    const FString& GetGarageEntity() const { return GarageEntity; }
+    void SetGarageEntity(FString Entity)
+    {
+        Entity.RemoveFromStart(TEXT("EntityClassDefinition."), ESearchCase::IgnoreCase);
+        GarageEntity = MoveTemp(Entity);
+    }
     /** Bumps when lists must be rebuilt (revision, nearby grid set, source). */
     int32 GetStamp() const { return Stamp; }
 
@@ -145,4 +157,7 @@ private:
     int32 PreviewStamp = 0;
     FText SubmitError, AccessError;
     TOptional<FSlateRect> ClearArea;
+    ESCMobiGlasApp App = ESCMobiGlasApp::Cargo;
+    FSCShipLinkModel ShipLink;
+    FString GarageEntity;
 };

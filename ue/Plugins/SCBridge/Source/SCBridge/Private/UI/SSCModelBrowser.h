@@ -31,6 +31,7 @@ private:
     void RebuildRecents();
     FReply Load();
     TSharedRef<SWidget> MakeOptions();
+    TSharedRef<SWidget> MakeCacheOptions();
     TSharedRef<SWidget> MakeChoice(const FText& Label, const TArray<int32>& Values, TFunction<int32&()> Field);
     TSharedRef<SWidget> MakeToggle(const FText& Label, TFunction<bool&()> Field);
 

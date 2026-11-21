@@ -6,6 +6,8 @@
 #if SC_WITH_RPC
 #include "SCRpcJson.h"
 #include "SCRpcVideo.h"
+#include "SCShipLinkRpc.h"
+#include "SCGarageRpc.h"
 #include "SCRpcRender.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
@@ -395,6 +397,8 @@ private:
             O->SetObjectField(TEXT("camera"), CameraObj);
         }
         if (const USCCargoSubsystem* C = Cargo()) O->SetObjectField(TEXT("cargo"), C->StateJson());
+        O->SetObjectField(TEXT("ship"), SCShipLinkRpc::Snapshot(World()));
+        O->SetObjectField(TEXT("garage"), SCGarageRpc::Snapshot(World()));
         if (const TSharedPtr<FJsonValue> Lifts = LiftsJson(); Lifts->AsArray().Num() > 0) O->SetField(TEXT("lifts"), Lifts);
         return O;
     }
@@ -430,6 +434,7 @@ private:
     void Scan(const FObj& S)
     {
         TSet<FString> Found;
+        SCShipLinkRpc::Scan(World(), Found);
         auto PosBad = [](const TSharedPtr<FJsonObject>& O, double& Z) {
             const TArray<TSharedPtr<FJsonValue>>* P;
             if (!O->TryGetArrayField(TEXT("pos"), P) || P->Num() < 3) return false;
@@ -672,6 +677,20 @@ private:
             V->SetEnvironment(Str(B, TEXT("folder")));
             Respond(Done, Ok());
         });
+        for (const TCHAR* ShipRoute : {TEXT("state"), TEXT("door"), TEXT("secure"), TEXT("lights"), TEXT("locate")})
+        {
+            const FString Path = FString(TEXT("/ship/")) + ShipRoute;
+            Bind(*Path, [this, Route = FString(ShipRoute)](auto& Body, auto& Done) {
+                Respond(Done, SCShipLinkRpc::Command(World(), Route, Body));
+            });
+        }
+        for (const TCHAR* GarageRoute : {TEXT("fleet"), TEXT("retrieve"), TEXT("store"), TEXT("paint")})
+        {
+            const FString Path = FString(TEXT("/garage/")) + GarageRoute;
+            Bind(*Path, [this, Route = FString(GarageRoute)](auto& Body, auto& Done) {
+                Respond(Done, SCGarageRpc::Command(World(), Route, Body));
+            });
+        }
         Bind(TEXT("/ship/spawn"), [this](auto& B, auto& Done) { SpawnShip(B, Done); });
         Bind(TEXT("/ship/despawn"), [this](auto& B, auto& Done) {
             USCViewerSubsystem* V = Viewer();
