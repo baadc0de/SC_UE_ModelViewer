@@ -233,10 +233,15 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const bool bBackward = !bOpen && D.bReverseClose;
     const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
+    const uint64 PriorOrder = NextOrder;
     if (!PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose)) return false;
     if (ShipDoors.IsValidIndex(Index))
     {
         FShipDoor& State = ShipDoors[Index];
+        State.GroundLastSample = INDEX_NONE;
+        if (bOpen && !State.GroundProbes.IsEmpty())
+            for (FSCClipPlayback& P : Playback)
+                if (P.TargetRig.Get() == Rig && P.Order > PriorOrder) P.OpeningGangway = Index;
         const bool bOwnerEgress = Link && Link->RoleOf(AsActor, this) == ESCShipRole::Owner &&
             State.Group == ESCShipDoorGroup::Exterior && LocalUse.IsSet() && IsInsideLightArea(LocalUse.GetValue());
         State.bActorOpenedWithoutAccess = bOpen && !AsActor.IsNone() && IsDoorLocked(Index) && !bOwnerCargoOpen && !bOwnerEgress;
