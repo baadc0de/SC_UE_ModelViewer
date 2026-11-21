@@ -216,6 +216,7 @@ struct FSCImportJob::FState
     }
     void DestroyPartial()
     {
+        if (Options.GeometryStreaming) Options.GeometryStreaming->Forget(Vehicle);
         if (Vehicle && IsValid(Vehicle) && Vehicle->GetWorld() && !Vehicle->IsActorBeingDestroyed()) Vehicle->Destroy();
         Vehicle = nullptr;
     }
@@ -1030,13 +1031,14 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
                 AssetError.Reset();
             }
         }
+        Cached.Coarse.Reset();
         if (!Mesh)
             Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, ExactName,
                 bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
         if (Mesh && !Cached.Key.IsEmpty())
         {
             if (!bUsesCoarse && Options.GeometryStreaming)
-                Options.GeometryStreaming->QueueWrite(Mesh, Variant, Stats, Options.ProcessedCache, Cached.Key);
+                Options.GeometryStreaming->QueueWrite(Vehicle, Mesh, Variant, Stats, Options.ProcessedCache, Cached.Key);
             else if (!bUsesCoarse)
                 SCProcessedMeshCache::Store(*Options.ProcessedCache, Cached.Key, *Mesh, Variant, Stats);
         }

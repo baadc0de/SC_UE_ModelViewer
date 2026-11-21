@@ -150,11 +150,13 @@ thread once the static mesh, distance field, and Lumen card work is complete. Th
 exact Chaos collision already held by the proxy.
 
 The profile stays opt-in because fine geometry can change the lighting as it arrives. `-SCMaxQuality` uses
-the exact path. Fixed-step RPC captures drain the in-flight build and promote pending geometry before
-starting. Later loads in that capture session use exact meshes at import.
+the exact path. Fixed-step RPC captures require active streamed imports to settle. Once setup is valid,
+capture drains the in-flight build and promotes pending geometry before starting. Later loads in that
+capture session use exact meshes at import.
 
 On a cold miss, processed packages are written after initial readiness while the camera is steady and
-the fine build queue has no active job.
+the fine build queue has no active job. Unloading an actor drops its pending upgrades and unwritten
+packages before collecting its assets.
 The cache contains exact variants. A quick exit retains packages already published and drops the
 remaining work. A populated cache uses the direct exact restore path.
 
@@ -222,7 +224,8 @@ authored triggers open multiple voices together.
 
 The audio tick now charges a budget of six newly started placed voices across the active scenes.
 It completes each trigger's layers before checking the budget again. Deferred emitters must still
-be audible on a later tick, and placed loops retain their scene clock phase. Explicit audio events
+be audible on a later tick, and placed loops retain their scene clock phase. Zero-voice posts
+consume no budget and wait half a second before retrying. Explicit audio events
 keep their existing timing. The two reruns logged a peak of 14 voice starts in any room frame and
 355–357 starts across the segment, compared with 355 in the trace run. Audio tick time peaked
 at 12.34 and 13.55 ms, respectively.
@@ -241,6 +244,13 @@ and first person was ready in 74.22–75.03 s.
 The Win64 Development build and all seven `SCBridge.Audio` tests passed. All Unreal runs and
 builds were serialized. The Insights trace and the benchmark captures are in `out/xl-cold-geometry/`
 under the `room-profile-before` and `room-audio-layered` prefixes.
+
+After the cross-review fixes, the final `room-audio-final` run measured 16.34 / 19.04 / 33.17 ms
+for room p95 / p99 / max and 13.84 / 15.27 / 17.06 ms for the hull. The peak room audio tick was
+14.92 ms. The hangar imported in 18.84 s, the C2 loaded in 32.26 s, and first person was ready
+in 72.31 s. Unloading the C2 left zero of 49,439 tracked objects alive after collection.
+The HDR RPC smoke test produced valid PNGs with and without UI. Recording encoded an MP4 from
+the float HDR source with zero dropped frames.
 
 ### Commands
 

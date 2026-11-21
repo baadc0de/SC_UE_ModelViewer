@@ -108,6 +108,7 @@ struct SCBRIDGE_API FSCAudioPlaced
     int32 Interior = INDEX_NONE;
     int32 Area = INDEX_NONE;      // spots: the governing area (index into Areas)
     double NextPlay = 0;          // playRandom spots
+    double RetryAt = 0;           // cooldown after a placed trigger produced no voices
     bool bFired = false;          // a one-shot spot played since the listener came within reach
     int32 Instance = INDEX_NONE;  // the playing instance
     float Fade = 0;               // areas: area-fade value this frame

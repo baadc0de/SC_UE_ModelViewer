@@ -143,7 +143,8 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetCacheDir() const { return CacheDir; }
     FSCCacheStats GetProcessedCacheStats() const;
     void ConfigureProcessedImport(FSCImportOptions& Options, bool bFolderPackage = false) const;
-    void PrepareGeometryForCapture();
+    bool PrepareGeometryForCapture();
+    void ForgetGeometry(ASCVehicle* Owner);
     void LogGeometryStreaming() const;
     void ClearProcessedCache();
     void SetProcessedCacheCap(int32 MiB);

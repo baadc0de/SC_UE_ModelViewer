@@ -303,7 +303,7 @@ void FSCGeometryStreaming::FinishPromotion(bool bWait)
     TArray<FVector3f> Samples;
     if (Owner->MeshSamples.RemoveAndCopyValue(Proxy, Samples))
         Owner->MeshSamples.Add(Fine, MoveTemp(Samples));
-    QueueWrite(Fine, Item.Fine, Build.Stats, Item.Cache, Item.Key);
+    QueueWrite(Owner, Fine, Item.Fine, Build.Stats, Item.Cache, Item.Key);
     ++Promoted;
     const double End = FPlatformTime::Seconds();
     UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_PROMOTE entity=%s path=%s triangles=%d components=%d apply_ms=%.2f elapsed_ms=%.2f waited=%d pending=%d"),
@@ -311,17 +311,35 @@ void FSCGeometryStreaming::FinishPromotion(bool bWait)
         (End - Start) * 1000, (End - Build.Started) * 1000, bWait, Pending.Num());
 }
 
-void FSCGeometryStreaming::QueueWrite(UStaticMesh* Mesh, const FSCDerivedMesh& Data,
+void FSCGeometryStreaming::QueueWrite(ASCVehicle* Owner, UStaticMesh* Mesh, const FSCDerivedMesh& Data,
     const FSCMeshBuildStats& Stats, TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> Cache, const FString& Key)
 {
     if (!Cache || Key.IsEmpty() || Stats.Triangles <= 0) return;
     auto& Write = Writes.AddDefaulted_GetRef();
+    Write.Owner = Owner;
     Write.Mesh.Reset(Mesh);
     Write.Key = Key;
     Write.Stats = Stats;
     Write.Cache = MoveTemp(Cache);
     Write.Collision.CollisionBytes = Data.CollisionBytes;
     Write.Collision.CollisionVersions = Data.CollisionVersions;
+}
+
+void FSCGeometryStreaming::Forget(ASCVehicle* Owner)
+{
+    if (!Owner) return;
+    Pending.RemoveAllSwap([&](const FPending& Item) {
+        if (Item.Owner.Get(true) != Owner) return false;
+        PendingTriangles -= Item.Fine.Description.Triangles().Num();
+        return true;
+    });
+    if (InFlight.IsSet() && InFlight->Item.Owner.Get(true) == Owner)
+    {
+        if (InFlight->SourceCommit.IsValid()) InFlight->SourceCommit.Wait();
+        PendingTriangles -= InFlight->Stats.Triangles;
+        InFlight.Reset();
+    }
+    Writes.RemoveAll([Owner](const FWrite& Write) { return Write.Owner.Get(true) == Owner; });
 }
 
 void FSCGeometryStreaming::WriteOne()

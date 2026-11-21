@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Cargo/SCCargoContainer.h"
+#include "Cargo/SCCargoGridComponent.h"
+#include "Cargo/SCCargoSubsystem.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
@@ -10,6 +12,29 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "StaticMeshAttributes.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoEnvironmentAccessTest, "SCBridge.Cargo.EnvironmentDoorAccess",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCCargoEnvironmentAccessTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    USCCargoSubsystem* Cargo = World->GetSubsystem<USCCargoSubsystem>();
+    if (!TestNotNull(TEXT("cargo subsystem"), Cargo)) return false;
+    ASCVehicle* Actor = World->SpawnActor<ASCVehicle>();
+    Actor->ShipDoors.AddDefaulted_GetRef().bLocked = true;
+    auto* Grid = NewObject<USCCargoGridComponent>(Actor);
+    Grid->OwnerVehicle = Actor;
+    Grid->AccessDoors.Add(0);
+    Grid->Kind = ESCCargoGridKind::Environment;
+    FString Refusal;
+    TestTrue(TEXT("hangar grid is accessible without a ship owner role"), Cargo->RequestAccess(Grid, true, 0, NAME_None, &Refusal));
+    TestTrue(TEXT("no ship hold lock refusal on the hangar grid"), Refusal.IsEmpty());
+    Grid->Kind = ESCCargoGridKind::Vehicle;
+    TestFalse(TEXT("guest cannot access a locked ship hold"), Cargo->RequestAccess(Grid, true, 0, FName(TEXT("Guest")), &Refusal));
+    TestEqual(TEXT("ship lock refuses with the hold message"), Refusal, FString(TEXT("Hold locked by owner")));
+    return !HasAnyErrors();
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCShipLinkAccessTest, "SCBridge.ShipLink.Access",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

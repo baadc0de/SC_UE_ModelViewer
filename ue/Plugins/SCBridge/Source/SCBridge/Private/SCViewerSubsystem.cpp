@@ -358,7 +358,11 @@ void USCViewerSubsystem::RequestEnvironment(const FString& Folder)
     EnvParse = {};
     EnvJob.Reset();
     EnvSource.Reset();
-    if (Environment.IsValid() && !EnvLevel) Environment->Destroy(); // a cooked environment leaves with its level
+    if (Environment.IsValid() && !EnvLevel)
+    {
+        ForgetGeometry(Environment.Get());
+        Environment->Destroy(); // a cooked environment leaves with its level
+    }
     Environment.Reset();
     UnloadEnvironmentLevel();
     EnvironmentFolder = Folder.TrimQuotes();
@@ -738,12 +742,19 @@ void USCViewerSubsystem::ConfigureProcessedImport(FSCImportOptions& Import, bool
     }
 }
 
-void USCViewerSubsystem::PrepareGeometryForCapture()
+bool USCViewerSubsystem::PrepareGeometryForCapture()
 {
-    if (!GeometryStreaming) return;
+    if (!GeometryStreaming || bGeometryCapturePrepared) return true;
+    if (IsBusy() || (VehicleInstances && VehicleInstances->IsSpawning())) return false;
     bGeometryCapturePrepared = true; // cuts and console-triggered loads in a capture use exact geometry
     GeometryStreaming->FlushForCapture(GetViewerWorld());
     GeometryStreaming->FinishWrites(GetViewerWorld());
+    return true;
+}
+
+void USCViewerSubsystem::ForgetGeometry(ASCVehicle* Owner)
+{
+    if (GeometryStreaming) GeometryStreaming->Forget(Owner);
 }
 
 void USCViewerSubsystem::LogGeometryStreaming() const
@@ -1132,6 +1143,7 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
     }
     if (Previous)
     {
+        ForgetGeometry(Previous);
         const FString Session = bKeepExtras && VehicleInstances && VehicleInstances->RetainsSession(Previous->SessionPath)
             ? FString() : Previous->SessionPath;
         TrackSession(Previous, Session, Tracked);

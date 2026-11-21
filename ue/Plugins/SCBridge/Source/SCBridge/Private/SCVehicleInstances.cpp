@@ -386,6 +386,7 @@ void FSCVehicleInstances::Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool b
     for (FInstance& I : Instances)
         if (ASCVehicle* V = I.Info.Actor.Get(/*bEvenIfPendingKill*/ true))
         {
+            Viewer.ForgetGeometry(V);
             Actors.Add(V);
             // The viewer tracks the loaded vehicle's session (shared by its instances) itself.
             if (!Primary.IsValid() || V->SessionPath != Primary->SessionPath) Sessions.AddUnique(V->SessionPath);
@@ -434,6 +435,7 @@ bool FSCVehicleInstances::Destroy(int32 Id)
     }
     if (ASCVehicle* V = I.Info.Actor.Get())
     {
+        Viewer.ForgetGeometry(V);
         Actors.Add(V);
         V->Destroy();
     }

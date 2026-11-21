@@ -134,6 +134,9 @@ protected:
     int32 Revision = 0;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+    friend class FSCCargoEnvironmentAccessTest;
+#endif
     TSharedPtr<struct FSCCargoState> State;
     void Discover();
     void DiscoverOn(class ASCVehicle* Actor, ESCCargoGridKind Kind);

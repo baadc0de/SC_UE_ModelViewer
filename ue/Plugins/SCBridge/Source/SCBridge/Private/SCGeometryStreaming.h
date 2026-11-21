@@ -21,8 +21,9 @@ public:
     void Defer(ASCVehicle* Owner, UStaticMesh* Proxy, FSCDerivedMesh&& Fine, FString Label, double Deviation,
         bool bCollision, TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> Cache, const FString& Key);
     void Attach(ASCVehicle* Owner);
-    void QueueWrite(UStaticMesh* Mesh, const FSCDerivedMesh& Data, const FSCMeshBuildStats& Stats,
+    void QueueWrite(ASCVehicle* Owner, UStaticMesh* Mesh, const FSCDerivedMesh& Data, const FSCMeshBuildStats& Stats,
         TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> Cache, const FString& Key);
+    void Forget(ASCVehicle* Owner);
     void Tick(UWorld* World);
     void FlushForCapture(UWorld* World);
     void FinishWrites(UWorld* World);
@@ -47,6 +48,7 @@ private:
     };
     struct FWrite
     {
+        TWeakObjectPtr<ASCVehicle> Owner;
         TStrongObjectPtr<UStaticMesh> Mesh;
         FString Key;
         FSCDerivedMesh Collision;

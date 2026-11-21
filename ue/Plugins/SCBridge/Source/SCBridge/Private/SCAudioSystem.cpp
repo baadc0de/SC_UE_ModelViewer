@@ -39,6 +39,7 @@ const FString kListenerCone = TEXT("Listener_Cone");
 constexpr double kForever = 1e18;
 // A newly audible room can start dozens of decoders and components in one tick.
 constexpr int32 PlacedVoiceStartsPerTick = 6;
+constexpr double PlacedStartRetrySeconds = 0.5;
 
 /** A/B switch for measuring the playback fix against the behaviour before it (bit 1: a looping media replays the
  *  whole file from its start instead of its loop region; bit 2: a voice ends at its game-clock end, not when its
@@ -1418,11 +1419,12 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32&
     TRACE_CPUPROFILER_EVENT_SCOPE(SCAudioPlaced);
     // Reevaluate audibility next tick for starts that do not fit. Looping spots retain their
     // scene epoch so their decoder can seek to the correct phase when they start.
-    auto PostPlaced = [&](const FString& Trigger, const FSCAudioPlace& Place) {
+    auto PostPlaced = [&](FSCAudioPlaced& Emitter, const FSCAudioPlace& Place) {
         // A layered trigger starts as a group. Charge all the voices it created before admitting another.
         int32 CreatedVoices = 0;
-        const int32 Group = Post(S, Trigger, Place, &CreatedVoices);
-        StartsLeft -= FMath::Max(1, CreatedVoices);
+        const int32 Group = Post(S, Emitter.PlayTrigger, Place, &CreatedVoices);
+        StartsLeft -= CreatedVoices;
+        if (CreatedVoices == 0) Emitter.RetryAt = Now + PlacedStartRetrySeconds;
         return Group;
     };
     // Areas: inside -> fade 1, the bed at the listener; outside within fadeDistance -> fade falls to 0 and the bed sits
@@ -1452,7 +1454,7 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32&
                    *Area.PlayTrigger, Area.Fade, bInside, bInside ? 0.0 : Best, FadeDistance, Now);
         }
         const bool bWant = bAmbience && Area.Fade > 0.f && !Area.PlayTrigger.IsEmpty();
-        if (bWant && StartsLeft > 0 && !IsPlaying(Area.Instance))
+        if (bWant && StartsLeft > 0 && Now >= Area.RetryAt && !IsPlaying(Area.Instance))
         {
             FSCAudioPlace P;
             P.bListener = bInside;
@@ -1463,7 +1465,7 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32&
             P.Area = A;
             P.AreaFadeRtpc = Str(Area.Params, TEXT("areaFadeRTPC.rtpc"));
             P.Label = Area.Name;
-            Area.Instance = PostPlaced(Area.PlayTrigger, P);
+            Area.Instance = PostPlaced(Area, P);
         }
         else if (!bWant && IsPlaying(Area.Instance))
         {
@@ -1520,9 +1522,9 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32&
         };
         if (bRandom)
         {
-            if (bNear && StartsLeft > 0 && Now >= Spot.NextPlay)
+            if (bNear && StartsLeft > 0 && Now >= Spot.RetryAt && Now >= Spot.NextPlay)
             {
-                Spot.Instance = PostPlaced(Spot.PlayTrigger, Place(Spot.Positions[Best]));
+                Spot.Instance = PostPlaced(Spot, Place(Spot.Positions[Best]));
                 const double Delay = FMath::FRandRange(Num(Spot.Params, TEXT("minDelay")), Num(Spot.Params, TEXT("maxDelay")));
                 double Length = 0;
                 for (const auto& [Key, I] : Instances)
@@ -1534,9 +1536,9 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32&
         }
         // A looping spot plays while in reach; a one-shot spot plays once each time the listener comes within reach.
         const bool bInfinite = T->DurationType == TEXT("Infinite");
-        if (bNear && StartsLeft > 0 && !Spot.bFired && !IsPlaying(Spot.Instance))
+        if (bNear && StartsLeft > 0 && Now >= Spot.RetryAt && !Spot.bFired && !IsPlaying(Spot.Instance))
         {
-            Spot.Instance = PostPlaced(Spot.PlayTrigger, Place(Spot.Positions[Best]));
+            Spot.Instance = PostPlaced(Spot, Place(Spot.Positions[Best]));
             Spot.bFired = !bInfinite;
         }
         else if (!bNear && IsPlaying(Spot.Instance) && bInfinite)

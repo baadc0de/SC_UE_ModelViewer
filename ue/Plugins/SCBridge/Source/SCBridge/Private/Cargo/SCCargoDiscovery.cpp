@@ -258,7 +258,7 @@ bool USCCargoSubsystem::RequestAccess(USCCargoGridComponent* Grid, bool bOpen, d
     if (Grid->Kind == ESCCargoGridKind::Vehicle && Requester.IsNone()) Requester = State->Player;
     ASCVehicle* Vehicle = Grid->OwnerVehicle.Get();
     const auto* ShipLink = USCShipLinkSubsystem::Get(this);
-    if (bOpen && Vehicle && Grid->AccessDoors.ContainsByPredicate([&](int32 Door) {
+    if (bOpen && Grid->Kind == ESCCargoGridKind::Vehicle && Vehicle && Grid->AccessDoors.ContainsByPredicate([&](int32 Door) {
         return Vehicle->ShipDoors.IsValidIndex(Door) &&
             (Vehicle->ShipDoors[Door].bLocked || Vehicle->ShipDoors[Door].bCargoRelock);
     }) && (!ShipLink || ShipLink->RoleOf(Requester, Vehicle) != ESCShipRole::Owner))
