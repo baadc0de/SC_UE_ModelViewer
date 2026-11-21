@@ -1309,8 +1309,11 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
     if (const FString Env = EnvironmentAt(S, I, I.Position); Env != I.Environment)
     {
         for (FVoice& V : I.Voices)
-            if (V.Component && V.bSent)
+        {
+            if (V.Component && V.bSent && V.AppliedWetLevel > 0.f)
                 if (USoundSubmix* Old = EnvironmentSubmix(S, I.Environment)) V.Component->SetSubmixSend(Old, 0.f);
+            V.AppliedWetLevel = -1.f;
+        }
         I.Environment = Env;
     }
     USoundSubmix* EnvSubmix = I.Environment.IsEmpty() ? nullptr : EnvironmentSubmix(S, I.Environment);
@@ -1355,6 +1358,8 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
                 V.PlayWall = Wall;
             ++V.Plays;
             V.Component->Play();
+            // The engine consumes pending sends on Play; a new active sound needs its sends again.
+            V.AppliedDryLevel = V.AppliedWetLevel = -1.f;
         }
         CheckVoice(I, V);
         if (V.Component && !I.Place.Attach.IsValid()) V.Component->SetWorldLocation(I.Position);
@@ -1398,25 +1403,46 @@ void USCAudioSubsystem::UpdateInstance(FInstance& I, double Now)
         const bool bSceneMuted = MutedScenes.ContainsByPredicate([&](const FString& M) { return S.Name.Contains(M); });
         const float Linear = bMuted || bSceneMuted ? 0.f : FSCAudioGain::Linear(Db + Common) * Fade;
         V.MinLinear = FMath::Min(V.MinLinear, Linear);
-        V.LastLinear = Linear;
         if (V.Component)
         {
-            V.Component->SetVolumeMultiplier(Linear);
-            if (V.DrySubmix) V.Component->SetSubmixSend(V.DrySubmix, FSCAudioGain::Linear(DryDb - Common));
+            // Unchanged values need no command on the audio thread, even for a moving listener.
+            if (Linear != V.LastLinear) V.Component->SetVolumeMultiplier(Linear);
+            if (V.DrySubmix)
+            {
+                const float DryLevel = FSCAudioGain::Linear(DryDb - Common);
+                if (DryLevel != V.AppliedDryLevel)
+                {
+                    V.Component->SetSubmixSend(V.DrySubmix, DryLevel);
+                    V.AppliedDryLevel = DryLevel;
+                }
+            }
             if (bWet || (V.bSent && EnvSubmix))
             {
                 // With the sends off (sc.Audio.Sends 0) a voice that never sent gets no send at all (a clean dry path).
                 V.LastSend = bWet ? Db + AuxDb : 0.f;
                 V.bSent |= bWet;
-                V.Component->SetSubmixSend(EnvSubmix, bWet ? FSCAudioGain::Linear(AuxDb - Common) : 0.f);
+                const float WetLevel = bWet ? FSCAudioGain::Linear(AuxDb - Common) : 0.f;
+                if (WetLevel != V.AppliedWetLevel)
+                {
+                    V.Component->SetSubmixSend(EnvSubmix, WetLevel);
+                    V.AppliedWetLevel = WetLevel;
+                }
             }
         }
+        V.LastLinear = Linear;
     }
 }
 
 void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32& StartsLeft)
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(SCAudioPlaced);
+    TArray<FVector, TInlineAllocator<16>> InteriorListeners;
+    InteriorListeners.Reserve(S.InteriorAnchors.Num());
+    for (int32 Index = 0; Index < S.InteriorAnchors.Num(); ++Index)
+        InteriorListeners.Add(S.WorldToContainer(Index, ListenerPos));
+    auto ListenerIn = [&](int32 Interior) {
+        return InteriorListeners.IsValidIndex(Interior) ? InteriorListeners[Interior] : FVector::ZeroVector;
+    };
     // Reevaluate audibility next tick for starts that do not fit. Looping spots retain their
     // scene epoch so their decoder can seek to the correct phase when they start.
     auto PostPlaced = [&](FSCAudioPlaced& Emitter, const FSCAudioPlace& Place) {
@@ -1433,7 +1459,7 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32&
     for (int32 A = 0; A < S.Areas.Num(); ++A)
     {
         FSCAudioPlaced& Area = S.Areas[A];
-        const FVector L = S.WorldToContainer(Area.Interior, ListenerPos);
+        const FVector L = ListenerIn(Area.Interior);
         double Best = TNumericLimits<double>::Max();
         FVector Nearest = L;
         bool bInside = false;
@@ -1486,7 +1512,7 @@ void USCAudioSubsystem::UpdateAreasAndSpots(FSCAudioScene& S, double Now, int32&
         FSCAudioPlaced& Spot = S.Spots[Si];
         const FSCAudioTrigger* T = S.Manifest.Triggers.Find(Spot.PlayTrigger);
         if (!T || !T->IsPlayable()) continue;
-        const FVector L = S.WorldToContainer(Spot.Interior, ListenerPos);
+        const FVector L = ListenerIn(Spot.Interior);
         int32 Best = 0;
         for (int32 P = 1; P < Spot.Positions.Num(); ++P)
             if (FVector::DistSquared(Spot.Positions[P], L) < FVector::DistSquared(Spot.Positions[Best], L)) Best = P;

@@ -252,6 +252,91 @@ in 72.31 s. Unloading the C2 left zero of 49,439 tracked objects alive after col
 The HDR RPC smoke test produced valid PNGs with and without UI. Recording encoded an MP4 from
 the float HDR source with zero dropped frames.
 
+#### Garbage collection and frame pacing
+
+The fresh `f62b128` run brought room p95 back from 16.34 to 12.87 ms and hull p95 from 13.84 to
+10.89 ms. The previous slow run had 13.82 ms room GPU p95 and 11.92 ms hull GPU p95. Those fell to
+10.67 and 9.70 ms on the fresh run of the same tree. The slowdown tracked run-to-run render and
+GPU variation. Room audio also spent more frames on decoder creation after
+the start budget was introduced. The earlier room trace had a 5.52 ms audio p95 and a 33.76 ms peak.
+The previous slow run had an 8.49 ms audio p95 and a 14.92 ms peak.
+
+| Unreal Insights scope | Main | Main with `-DisablePython` | Patched |
+| --- | ---: | ---: | ---: |
+| Peak `ConditionalCollectGarbage` | 27.95 ms | 15.29 ms | 15.62 ms |
+| Python pre-collection callback in that pass | 12.70 ms | — | — |
+| UObject reachability in that pass | 13.45 ms | 13.98 ms | 13.85 ms |
+
+The viewer's editor-hosted `-game` startup now defaults to disabling Python. Explicit Python requests,
+the editor, and commandlets retain their Python entry points. The normal Unreal collector still runs.
+The trace showed about 14 ms of UObject reachability and subsequent cleanup slices of about 2 ms.
+The audio tick now shares the listener transform across emitters in each interior and submits gain
+and submix updates when their values change. In equal 11-second windows of the two Python-disabled
+traces, the engine processed 263,717 volume and submix commands before the change and 8,235 after.
+
+The serialized reruns used the same escape-pod-to-hold and port-hull route, cold processed caches,
+populated export cache and DDC, D3D12 HDR, and Lumen Surface Cache.
+
+| Run | Room p95 / p99 / max (ms) | Hull p95 / p99 / max (ms) |
+| --- | ---: | ---: |
+| Fresh `main`, lightweight CSV | 12.87 / 20.98 / 34.68 | 10.89 / 12.10 / 13.22 |
+| Patched, lightweight CSV | 13.88 / 17.41 / 24.35 | 11.81 / 13.61 / 14.75 |
+| Patched repeat, lightweight CSV | 13.01 / 16.92 / 35.39 | 11.79 / 12.79 / 14.08 |
+| Patched, Insights trace and CSV | 13.72 / 21.13 / 31.69 | 11.62 / 13.00 / 15.42 |
+
+The lightweight repeats lowered room p99, with room and hull p95 slightly above the fresh control.
+The 35.39 ms frame in the repeat coincided with a 34.05 ms RHI sample, a 34.55 ms render-thread sample,
+and 23.00 ms of game-thread event wait. Its game-thread work was 11.06 ms.
+In the lightweight patched runs, hangar import took 17.90–18.43 s, C2 load took 32.35–32.42 s,
+and first-person readiness took 71.65–72.50 s. Each ended the route with 67 successful promotions.
+
+The Win64 Development build, 15 audio and importer tests, and a Python commandlet smoke test passed.
+The raw traces, trace exports, and frame captures are in `out/xl-cold-geometry/` with the
+`pacing-main`, `pacing-no-python`, and `pacing-fixed` prefixes.
+
+### D3D12 room-transition stall
+
+The earlier 35.39 ms room frame carried a 34.05 ms RHI sample. Another XL hangar + Hercules C2 run reproduced
+the pattern. Unreal Insights showed a 31.86 ms room frame, 23.14 ms in `RHI_SubmitClose` on the RHI thread,
+22.47 ms in `OcclusionSubmittedFence Wait` on the render thread, and 25.78 ms of game-thread frame synchronization.
+GPU time in the associated CSV sample was 10.36 ms. `DeleteRHIResources` took less than 0.01 ms in that submit.
+
+Temporary trace scopes in the UE 5.9 fork located long waits in D3D12 end-of-frame allocator cleanup.
+In the next capture, `FD3D12FastAllocator::CleanupPages` took 18.63 ms of an 18.74 ms submit close, alongside
+18.98 ms waiting for the occlusion fence. That cleanup scope includes the wait for a lock shared with upload
+allocation. A separate 5.46 ms sample was in default buffer-pool cleanup.
+The overlap with mesh promotion in the first captures still leaves its role uncertain.
+
+The Windows project raises the fast upload page retention floor from 5 to 16 via
+`d3d12.FastAllocator.MinPagesToRetain`. With 4 MiB pages, the larger floor can retain up to 44 MiB of
+additional idle system memory per D3D12 device once the pages have been allocated. Pages above the
+floor still retire after their GPU fence and the engine's normal age check.
+
+With identical trace scopes, the five-page run retired 21 pages on the room route and had a 25.59 ms
+maximum RHI sample. The 16-page run retired 10 and had an 8.21 ms maximum RHI sample. The slowest
+end-frame close in the five-page repeat spent 20.55 ms in default buffer allocator cleanup. That
+buffer allocator remains a separate source of room-transition stalls.
+
+The normal CSV reruns used the restored engine, fresh processed caches, HDR, D3D12, Lumen Surface Cache,
+the geometry-streaming opt-in and the same room and hull camera poses. Both reruns read 16 from the
+Windows project settings and completed 67 promotions with no failures.
+
+| Run | Room p95 / p99 / max (ms) | Hull p95 / p99 / max (ms) | Room RHI max (ms) |
+| --- | ---: | ---: | ---: |
+| Five pages, CSV control | 12.63 / 16.58 / 27.93 | 10.77 / 11.73 / 14.06 | 27.22 |
+| 16 pages, project settings | 12.52 / 19.81 / 30.09 | 11.14 / 12.81 / 15.64 | 6.87 |
+| 16 pages, repeat | 12.33 / 16.08 / 37.66 | 10.74 / 11.48 / 12.85 | 33.84 |
+
+The repeat's 37.66 ms frame followed a 33.84 ms RHI sample with 38.15 ms on the render thread,
+31.44 ms of game-thread event wait, and 9.74 ms of GPU time. This CSV recurrence leaves the exact
+allocator responsible for that sample unresolved. The traced pair showed less page retirement, and the
+CSV runs show mixed frame times. The two project-setting runs reached first person in
+70.29 and 69.74 seconds. The serial Win64 Development build and 15 audio and importer tests passed.
+
+The `rhi-before-*`, `rhi-allocator-*`, `rhi-fast-pages-*` and `rhi-final*` captures and timing-scope
+patch are in `out/xl-cold-geometry/`. The scratch route can be run with
+`./out/xl-cold-geometry/route-benchmark.ps1 -Mode stream -Tag <fresh-tag>` on the local XL fixture.
+
 ### Commands
 
 From the repository root, build once initially and use a fresh scratch cache for each independent comparison.
