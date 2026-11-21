@@ -175,7 +175,8 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
 
 int32 FSCSeatRuntime::Focus(const ASCFirstPersonCharacter& Character) const
 {
-    if (!Character.Body->HasBody() || Character.bNoclip || Character.bIsCrouched ||
+    if (!Host.IsValid() || Character.Vehicle != Host.Get() || !Host->bCollisionReady ||
+        !Character.Body->HasBody() || Character.bNoclip || Character.bIsCrouched ||
         !Character.GetCharacterMovement()->IsMovingOnGround() || !Character.GetWorld())
         return INDEX_NONE;
     const FVector Eye = Character.InteractionOrigin();

@@ -49,5 +49,6 @@ private:
     float FacingSign = 1.f, Height = 0.f, Velocity = 0.f, ActionClock = 0.f, Cycle = 0.f;
     float RemountDelay = 0.f;
     FRotator RelativeView = FRotator::ZeroRotator;
-    FTransform BodyInActor = FTransform::Identity, Start = FTransform::Identity, End = FTransform::Identity;
+    FTransform BodyInActor = FTransform::Identity;
+    FTransform Start = FTransform::Identity, End = FTransform::Identity, ReturnToApproach = FTransform::Identity;
 };

@@ -897,7 +897,7 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     if (Seats && Seats->OwnsMovement() && Action != A::Interact && Action != A::Torch && Action != A::View && Action != A::Orbit)
         return true;
     if (Ladder && Ladder->OwnsMovement() && Action != A::Forward && Action != A::Back &&
-        Action != A::Torch && Action != A::View && Action != A::Orbit)
+        Action != A::Interact && Action != A::Torch && Action != A::View && Action != A::Orbit)
     {
         if (!bDown && Held.Remove(Action) && HoldSeconds <= 0) ApplyHeldInput();
         return true;
@@ -1020,7 +1020,7 @@ FString ASCFirstPersonCharacter::HUDText() const
             if (const ASCVehicle* Environment = Viewer->GetEnvironment();
                 Environment && Environment->AimGarageKiosk(Eye, GetViewRotation().Vector(), InteractReach, this))
                 Prompt = TEXT("E: Open Garage");
-    if (Ladder && Ladder->OwnsMovement()) Prompt = TEXT("W / S: Climb");
+    if (Ladder && Ladder->OwnsMovement()) Prompt = TEXT("W / S: Climb   E: Return to approach");
     const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: the capsule overlaps geometry")
         : bStuck ? TEXT("Movement blocked — press V for noclip")
         : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");

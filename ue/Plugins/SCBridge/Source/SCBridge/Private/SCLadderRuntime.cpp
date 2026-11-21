@@ -148,6 +148,7 @@ bool FSCLadderRuntime::TryMount(ASCFirstPersonCharacter& Character, const FAppro
     Host = Character.Vehicle;
     Active = Approach.Index;
     Start = Character.GetActorTransform().GetRelativeTransform(Ladder.Anchor->GetComponentTransform());
+    ReturnToApproach = Start;
     Velocity = 0.f;
     RelativeView = FRotator::ZeroRotator;
     bNeedFreshInput = Approach.bTop;
@@ -223,9 +224,37 @@ void FSCLadderRuntime::Restore(ASCFirstPersonCharacter& Character)
 void FSCLadderRuntime::Recover(ASCFirstPersonCharacter& Character)
 {
     if (!OwnsMovement()) return;
-    const FTransform Safe = Character.LastSpawn;
+    if (Character.IsActorBeingDestroyed() || !Character.GetWorld())
+    {
+        Restore(Character);
+        return;
+    }
+    FTransform Safe = Character.LastSpawn;
+    if (Host.IsValid() && !Host->IsActorBeingDestroyed() && Host->LadderAnchors.IsValidIndex(Active))
+        if (const USceneComponent* Anchor = Host->LadderAnchors[Active].Anchor.Get())
+            Safe = ReturnToApproach * Anchor->GetComponentTransform();
+
+    auto Standing = [&](FTransform& At) {
+        FVector Centre;
+        bool bCrouched = false;
+        const FVector Feet = At.GetLocation() - FVector::UpVector * Character.GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        if (!Character.ResolveSpawn(Feet, Centre, bCrouched) || bCrouched) return false;
+        At.SetLocation(Centre);
+        return true;
+    };
+    bool bClear = Standing(Safe);
+    if (!bClear)
+    {
+        Safe = Character.LastSpawn;
+        bClear = Standing(Safe);
+    }
+    RemountDelay = Host.IsValid() && Host->LadderAnchors.IsValidIndex(Active)
+        ? FMath::Max(Host->LadderAnchors[Active].Data.Bottom.RemountDelay, Host->LadderAnchors[Active].Data.Top.RemountDelay)
+        : 0.f;
     Character.SetActorTransform(Safe, false, nullptr, ETeleportType::TeleportPhysics);
+    if (!bClear) Character.SetActorEnableCollision(false);
     Restore(Character);
+    if (!bClear) Character.ToggleNoclip();
 }
 
 void FSCLadderRuntime::Stop(ASCFirstPersonCharacter& Character)
@@ -239,7 +268,11 @@ void FSCLadderRuntime::Stop(ASCFirstPersonCharacter& Character)
 
 bool FSCLadderRuntime::Interact(ASCFirstPersonCharacter& Character)
 {
-    if (OwnsMovement()) return true;
+    if (OwnsMovement())
+    {
+        Recover(Character);
+        return true;
+    }
     const bool bHandled = TryMount(Character, FindApproach(Character, false));
     bManualPending = bHandled && !OwnsMovement();
     return bHandled;
