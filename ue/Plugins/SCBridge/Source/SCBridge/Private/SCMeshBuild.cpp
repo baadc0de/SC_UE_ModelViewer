@@ -11,6 +11,7 @@
 #include "Materials/Material.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Rendering/NaniteResources.h"
+#include "UObject/StrongObjectPtrTemplates.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Chaos/ChaosArchive.h"
 #include "Serialization/MemoryWriter.h"
@@ -161,15 +162,26 @@ bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool
 }
 namespace
 {
+void CommitSource(UStaticMesh& Mesh)
+{
+#if WITH_EDITOR
+    UStaticMesh::FCommitMeshDescriptionParams Commit;
+    Commit.bMarkPackageDirty = false;
+    Commit.bUseHashAsGuid = true;
+    Mesh.CommitMeshDescription(0, Commit);
+#endif
+}
+
 // Instantiate in three steps so that many meshes can build together (InstantiateBatch): configure (game thread), build,
 // then collision and stats once the render data exists.
 UStaticMesh* ConfigureMesh(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision, UMaterialInterface* Material,
-                           FSCMeshBuildStats& Stats, bool bCoarseProxy = false)
+                           FSCMeshBuildStats& Stats, bool bCoarseProxy = false, FMeshDescription* DeferredSource = nullptr)
 {
     check(IsInGameThread());
     UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer, Name, RF_Transient);
     Stats.NaniteReason = TEXT("disabled:empty_geometry");
-    if (Data.Description.Triangles().Num() == 0) return Mesh;
+    Stats.Triangles = Data.Description.Triangles().Num();
+    if (Stats.Triangles == 0) return Mesh;
     Mesh->bSupportRayTracing = true;
     for (int32 I = 0; I < Data.MaterialNames.Num(); ++I)
         Mesh->GetStaticMaterials().Add(
@@ -202,11 +214,13 @@ UStaticMesh* ConfigureMesh(const FSCDerivedMesh& Data, UObject* Outer, FName Nam
     Model.BuildSettings.bUseHighPrecisionTangentBasis = true;
     Model.BuildSettings.bRemoveDegenerates = false;
     Model.BuildSettings.MaxLumenMeshCards = Data.bEnableNanite ? 12 : 0;
-    Mesh->CreateMeshDescription(0, Data.Description);
-    UStaticMesh::FCommitMeshDescriptionParams Commit;
-    Commit.bMarkPackageDirty = false;
-    Commit.bUseHashAsGuid = true;
-    Mesh->CommitMeshDescription(0, Commit);
+    if (DeferredSource)
+        Mesh->CreateMeshDescription(0, MoveTemp(*DeferredSource));
+    else
+    {
+        Mesh->CreateMeshDescription(0, Data.Description);
+        CommitSource(*Mesh);
+    }
     for (int32 I = 0; I < Data.MaterialNames.Num(); ++I)
     {
         FMeshSectionInfo Info(I);
@@ -242,12 +256,28 @@ void AwaitRepresentations(UStaticMesh* Mesh, FSCMeshBuildStats& Stats)
 #endif
     Stats.RepresentationSeconds = FPlatformTime::Seconds() - RepresentationStart;
 }
-bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollision, FSCMeshBuildStats& Stats, FString& Error)
+void SetCollisionReady(UBodySetup& Body)
 {
-    auto* Body = Mesh->GetBodySetup();
+    Body.bCreatedPhysicsMeshes = true;
+    Body.bFailedToCreatePhysicsMeshes = false;
+    Body.bHasCookedCollisionData = true;
+    Body.bNeverNeedsCookedCollisionData = false;
+}
+
+bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollision, FSCMeshBuildStats& Stats,
+                FString& Error, const UBodySetup* ProxyBody = nullptr)
+{
     if (bBuildCollision)
     {
-        if (!FSCMeshImporter::InstallCollision(Body, Data.CollisionBytes, Data.CollisionVersions, Stats.CollisionTriangles, Error))
+        auto* Body = Mesh->GetBodySetup();
+        // The coarse mesh already owns the exact, immutable collision geometry.
+        if (ProxyBody && ProxyBody->TriMeshGeometries.Num() == 1)
+        {
+            Body->TriMeshGeometries = ProxyBody->TriMeshGeometries;
+            SetCollisionReady(*Body);
+            Stats.CollisionTriangles = Body->TriMeshGeometries[0]->Elements().GetNumTriangles();
+        }
+        else if (!FSCMeshImporter::InstallCollision(Body, Data.CollisionBytes, Data.CollisionVersions, Stats.CollisionTriangles, Error))
             return false;
         Stats.CollisionSeconds = Data.CollisionDeriveSeconds;
         Stats.bCollision = true;
@@ -259,7 +289,6 @@ bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollis
         return false;
     }
     const auto& LOD = Render->LODResources[0];
-    Stats.Triangles = Data.Description.Triangles().Num();
     Stats.FallbackTriangles = LOD.GetNumTriangles();
     Stats.Clusters = Render->HasValidNaniteData() ? Render->NaniteResourcesPtr->NumClusters : 0;
     Stats.bDistanceField = LOD.DistanceFieldData != nullptr;
@@ -294,10 +323,7 @@ bool FSCMeshImporter::InstallCollision(UBodySetup* Body, const TArray<uint8>& By
     }
     Body->TriMeshGeometries.Reset();
     Body->TriMeshGeometries.Add(Geometry);
-    Body->bCreatedPhysicsMeshes = true;
-    Body->bFailedToCreatePhysicsMeshes = false;
-    Body->bHasCookedCollisionData = true;
-    Body->bNeverNeedsCookedCollisionData = false;
+    SetCollisionReady(*Body);
     TriangleCount = Geometry->Elements().GetNumTriangles();
     return true;
 }
@@ -321,6 +347,59 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
     if (!bCoarseProxy) AwaitRepresentations(Mesh, Stats);
     return FinishMesh(Mesh, Data, bBuildCollision, Stats, Error) ? Mesh : nullptr;
+}
+
+UStaticMesh* FSCMeshImporter::PrepareFineBuild(FSCDerivedMesh& Data, const UStaticMesh& Proxy, FName Name,
+    bool bBuildCollision, FSCMeshBuildStats& Stats, UE::Tasks::FTask& SourceCommit)
+{
+    UStaticMesh* Mesh = ConfigureMesh(Data, Proxy.GetOuter(), Name, bBuildCollision, nullptr, Stats, false, &Data.Description);
+#if WITH_EDITOR
+    // The source model and its bulk-data UObject already exist. Commit only on this worker
+    // until it returns, leaving package dirtying disabled as required by the engine API.
+    SourceCommit = UE::Tasks::Launch(UE_SOURCE_LOCATION, [OwnedMesh = TStrongObjectPtr<UStaticMesh>(Mesh)] {
+        CommitSource(*OwnedMesh);
+    });
+#endif
+    return Mesh;
+}
+
+void FSCMeshImporter::SubmitFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data)
+{
+    check(IsInGameThread());
+#if WITH_EDITOR
+    Mesh->Build(true);
+#else
+    BuildRuntime(Mesh, Data);
+#endif
+}
+
+bool FSCMeshImporter::IsFineBuildReady(const UStaticMesh* Mesh)
+{
+#if WITH_EDITOR
+    // Keep the mesh unbound until all three engine compilers have applied their results. The
+    // game-mode compiler would finish any unfinished static mesh attached to a live component.
+    return !Mesh->IsCompiling() &&
+        (!GDistanceFieldAsyncQueue || GDistanceFieldAsyncQueue->GetNumOutstandingTasks(Mesh) == 0) &&
+        (!GCardRepresentationAsyncQueue || GCardRepresentationAsyncQueue->GetNumOutstandingTasks(Mesh) == 0);
+#else
+    return true;
+#endif
+}
+
+bool FSCMeshImporter::FinishFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data, UStaticMesh* Proxy,
+    bool bBuildCollision, bool bWait, FSCMeshBuildStats& Stats, FString& Error)
+{
+#if WITH_EDITOR
+    if (bWait)
+    {
+        const double Start = FPlatformTime::Seconds();
+        FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
+        Stats.BuildSeconds += FPlatformTime::Seconds() - Start;
+        AwaitRepresentations(Mesh, Stats);
+    }
+#endif
+    check(IsFineBuildReady(Mesh));
+    return FinishMesh(Mesh, Data, bBuildCollision, Stats, Error, bBuildCollision ? Proxy->GetBodySetup() : nullptr);
 }
 
 TArray<UStaticMesh*> FSCMeshImporter::InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,
@@ -352,3 +431,54 @@ TArray<UStaticMesh*> FSCMeshImporter::InstantiateBatch(const TArray<const FSCDer
     }
     return Meshes;
 }
+
+#if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFineBuildTest, "SCBridge.Import.GeometryStreaming.FineBuild",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FSCFineBuildTest::RunTest(const FString&)
+{
+    FSCDerivedMesh Data;
+    Data.MaterialNames.Add(TEXT("Synthetic"));
+    Data.bHasGeometry = true;
+    Data.bEnableNanite = false;
+    Data.bHasTangents = true;
+    FStaticMeshAttributes Attributes(Data.Description);
+    Attributes.Register();
+    Attributes.GetVertexInstanceUVs().SetNumChannels(1);
+    const auto Group = Data.Description.CreatePolygonGroup();
+    TArray<FVertexInstanceID> Corners;
+    for (const FVector3f Position : {FVector3f(0, -100, -100), FVector3f(0, 100, -100), FVector3f(0, 0, 100)})
+    {
+        const auto Vertex = Data.Description.CreateVertex();
+        Attributes.GetVertexPositions()[Vertex] = Position;
+        const auto Corner = Data.Description.CreateVertexInstance(Vertex);
+        Attributes.GetVertexInstanceNormals()[Corner] = FVector3f(1, 0, 0);
+        Attributes.GetVertexInstanceTangents()[Corner] = FVector3f(0, 1, 0);
+        Attributes.GetVertexInstanceBinormalSigns()[Corner] = 1;
+        Corners.Add(Corner);
+    }
+    Data.Description.CreateTriangle(Group, Corners);
+    FString Error;
+    if (!TestTrue(*Error, FSCMeshImporter::DeriveCollision(Data, Error))) return false;
+    FSCMeshBuildStats ProxyStats, FineStats;
+    UStaticMesh* Proxy = FSCMeshImporter::Instantiate(Data, GetTransientPackage(), NAME_None, true, nullptr, ProxyStats, Error, true);
+    if (!TestNotNull(*Error, Proxy)) return false;
+    UE::Tasks::FTask SourceCommit;
+    UStaticMesh* Fine = FSCMeshImporter::PrepareFineBuild(Data, *Proxy, NAME_None, true, FineStats, SourceCommit);
+    SourceCommit.Wait();
+    FSCMeshImporter::SubmitFineBuild(Fine, Data);
+    if (!TestTrue(*Error, FSCMeshImporter::FinishFineBuild(Fine, Data, Proxy, true, true, FineStats, Error))) return false;
+    TestTrue(TEXT("capture waits for all fine work"), FSCMeshImporter::IsFineBuildReady(Fine));
+    TestEqual(TEXT("fine render triangles"), FineStats.Triangles, 1);
+    auto* FineBody = Fine->GetBodySetup();
+    auto* ProxyBody = Proxy->GetBodySetup();
+    if (!TestEqual(TEXT("exact fine collision shapes"), FineBody->TriMeshGeometries.Num(), 1)) return false;
+    TestTrue(TEXT("fine build reuses the exact proxy collision"), FineBody->TriMeshGeometries[0] == ProxyBody->TriMeshGeometries[0]);
+    ProxyBody->ClearPhysicsMeshes();
+    TestEqual(TEXT("recycled proxy releases only its own collision reference"), FineBody->TriMeshGeometries[0]->Elements().GetNumTriangles(), 1);
+    return !HasAnyErrors();
+}
+#endif

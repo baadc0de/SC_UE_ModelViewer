@@ -14,6 +14,7 @@ class UWorld;
 class FSCGeometryStreaming
 {
 public:
+    ~FSCGeometryStreaming();
     /** Pure worker operation. Failure means the caller uses the exact variant as usual. */
     bool Reduce(const FSCDerivedMesh& Fine, FSCDerivedMesh& Coarse, double& Deviation) const;
     bool CanDefer(const FSCDerivedMesh& Fine) const;
@@ -52,10 +53,22 @@ private:
         FSCMeshBuildStats Stats;
         TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> Cache;
     };
+    struct FFineBuild
+    {
+        FPending Item;
+        TStrongObjectPtr<UStaticMesh> Mesh;
+        UE::Tasks::FTask SourceCommit;
+        FSCMeshBuildStats Stats;
+        double Started = 0;
+        bool bSubmitted = false;
+    };
 
-    void Promote(int32 Index);
+    void BeginPromotion(int32 Index);
+    void SubmitPromotion();
+    void FinishPromotion(bool bWait);
     void WriteOne();
     TArray<FPending> Pending;
+    TOptional<FFineBuild> InFlight;
     TArray<FWrite> Writes;
     TSet<TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe>> DirtyCaches;
     std::atomic<int32> PendingTriangles{0};

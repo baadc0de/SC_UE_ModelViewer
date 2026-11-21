@@ -10,6 +10,8 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Materials/Material.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 #include "StaticMeshAttributes.h"
 
 namespace
@@ -223,21 +225,69 @@ double FSCGeometryStreaming::Priority(const FBox& Bounds, const FVector& Eye, co
     return 1.0 + Screen;
 }
 
-void FSCGeometryStreaming::Promote(int32 Index)
+FSCGeometryStreaming::~FSCGeometryStreaming()
 {
-    FPending Item = MoveTemp(Pending[Index]);
+    if (InFlight.IsSet() && InFlight->SourceCommit.IsValid()) InFlight->SourceCommit.Wait();
+}
+
+void FSCGeometryStreaming::BeginPromotion(int32 Index)
+{
+    TRACE_CPUPROFILER_EVENT_SCOPE(SCGeometryPrepare);
+    CSV_SCOPED_TIMING_STAT_EXCLUSIVE(SCGeometryPrepare);
+    check(!InFlight.IsSet());
+    FPending& Item = InFlight.Emplace().Item;
+    Item = MoveTemp(Pending[Index]);
     Pending.RemoveAtSwap(Index);
-    PendingTriangles -= Item.Fine.Description.Triangles().Num();
+    UStaticMesh* Proxy = Item.Proxy.Get();
+    if (!Item.Owner.IsValid() || !Proxy || Item.Components.IsEmpty())
+    {
+        PendingTriangles -= Item.Fine.Description.Triangles().Num();
+        InFlight.Reset();
+        return;
+    }
+    InFlight->Started = FPlatformTime::Seconds();
+    InFlight->Mesh.Reset(FSCMeshImporter::PrepareFineBuild(Item.Fine, *Proxy,
+        MakeUniqueObjectName(Proxy->GetOuter(), UStaticMesh::StaticClass(), TEXT("Fine")), Item.bCollision,
+        InFlight->Stats, InFlight->SourceCommit));
+    UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_PREPARE path=%s ms=%.2f"),
+        *Item.Label, (FPlatformTime::Seconds() - InFlight->Started) * 1000);
+}
+
+void FSCGeometryStreaming::SubmitPromotion()
+{
+    TRACE_CPUPROFILER_EVENT_SCOPE(SCGeometrySubmit);
+    CSV_SCOPED_TIMING_STAT_EXCLUSIVE(SCGeometrySubmit);
+    FFineBuild& Build = InFlight.GetValue();
+    const double Start = FPlatformTime::Seconds();
+    check(!Build.SourceCommit.IsValid() || Build.SourceCommit.IsCompleted());
+    Build.SourceCommit = {};
+    FSCMeshImporter::SubmitFineBuild(Build.Mesh.Get(), Build.Item.Fine);
+    Build.bSubmitted = true;
+    Build.Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
+    UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_SUBMIT path=%s ms=%.2f compiling=%d"),
+        *Build.Item.Label, Build.Stats.BuildSeconds * 1000, Build.Mesh->IsCompiling());
+}
+
+void FSCGeometryStreaming::FinishPromotion(bool bWait)
+{
+    TRACE_CPUPROFILER_EVENT_SCOPE(SCGeometryApply);
+    CSV_SCOPED_TIMING_STAT_EXCLUSIVE(SCGeometryApply);
+    const double Start = FPlatformTime::Seconds();
+    if (bWait && !InFlight->bSubmitted)
+    {
+        if (InFlight->SourceCommit.IsValid()) InFlight->SourceCommit.Wait();
+        SubmitPromotion();
+    }
+    FFineBuild Build = MoveTemp(InFlight.GetValue());
+    InFlight.Reset();
+    const FPending& Item = Build.Item;
+    PendingTriangles -= Build.Stats.Triangles;
     ASCVehicle* Owner = Item.Owner.Get();
     UStaticMesh* Proxy = Item.Proxy.Get();
-    if (!Owner || !Proxy || Item.Components.IsEmpty()) return;
+    if (!Owner || !Proxy) return;
+    UStaticMesh* Fine = Build.Mesh.Get();
     FString Error;
-    FSCMeshBuildStats Stats;
-    const double Start = FPlatformTime::Seconds();
-    auto* Fine = FSCMeshImporter::Instantiate(Item.Fine, Proxy->GetOuter(),
-        MakeUniqueObjectName(Proxy->GetOuter(), UStaticMesh::StaticClass(), TEXT("Fine")),
-        Item.bCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, Error);
-    if (!Fine)
+    if (!FSCMeshImporter::FinishFineBuild(Fine, Item.Fine, Proxy, Item.bCollision, bWait, Build.Stats, Error))
     {
         ++Failed;
         UE_LOG(LogSCImport, Warning, TEXT("GEOMETRY_STREAM_FAILED path=%s error=%s"), *Item.Label, *Error);
@@ -253,10 +303,12 @@ void FSCGeometryStreaming::Promote(int32 Index)
     TArray<FVector3f> Samples;
     if (Owner->MeshSamples.RemoveAndCopyValue(Proxy, Samples))
         Owner->MeshSamples.Add(Fine, MoveTemp(Samples));
-    QueueWrite(Fine, Item.Fine, Stats, Item.Cache, Item.Key);
+    QueueWrite(Fine, Item.Fine, Build.Stats, Item.Cache, Item.Key);
     ++Promoted;
-    UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_PROMOTE entity=%s path=%s triangles=%d components=%d seconds=%.4f pending=%d"),
-        *Owner->Manifest.Root.EntityName, *Item.Label, Stats.Triangles, Item.Components.Num(), FPlatformTime::Seconds() - Start, Pending.Num());
+    const double End = FPlatformTime::Seconds();
+    UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_PROMOTE entity=%s path=%s triangles=%d components=%d apply_ms=%.2f elapsed_ms=%.2f waited=%d pending=%d"),
+        *Owner->Manifest.Root.EntityName, *Item.Label, Build.Stats.Triangles, Item.Components.Num(),
+        (End - Start) * 1000, (End - Build.Started) * 1000, bWait, Pending.Num());
 }
 
 void FSCGeometryStreaming::QueueWrite(UStaticMesh* Mesh, const FSCDerivedMesh& Data,
@@ -274,6 +326,8 @@ void FSCGeometryStreaming::QueueWrite(UStaticMesh* Mesh, const FSCDerivedMesh& D
 
 void FSCGeometryStreaming::WriteOne()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(SCGeometryCacheWrite);
+    CSV_SCOPED_TIMING_STAT_EXCLUSIVE(SCGeometryCacheWrite);
     FWrite Write = Writes.Pop(EAllowShrinking::No);
     if (UStaticMesh* Mesh = Write.Mesh.Get(); Mesh &&
         SCProcessedMeshCache::Store(*Write.Cache, Write.Key, *Mesh, Write.Collision, Write.Stats))
@@ -286,6 +340,18 @@ void FSCGeometryStreaming::WriteOne()
 void FSCGeometryStreaming::Tick(UWorld* World)
 {
     if (!World || IsEngineExitRequested()) return;
+    // A single fine build bounds memory and leaves worker capacity for rendering and streaming.
+    // Cache package saves can drain the engine's compiler queues, so keep them out of this interval.
+    if (InFlight.IsSet())
+    {
+        if (!InFlight->bSubmitted)
+        {
+            if (!InFlight->SourceCommit.IsValid() || InFlight->SourceCommit.IsCompleted()) SubmitPromotion();
+        }
+        else if (FSCMeshImporter::IsFineBuildReady(InFlight->Mesh.Get()))
+            FinishPromotion(false);
+        return;
+    }
     for (int32 Index = Pending.Num() - 1; Index >= 0; --Index)
         if (!Pending[Index].Owner.IsValid() || (Pending[Index].bAttached && Pending[Index].Components.IsEmpty()))
         {
@@ -329,7 +395,7 @@ void FSCGeometryStreaming::Tick(UWorld* World)
             }
         }
     }
-    if (Candidate != INDEX_NONE) Promote(Candidate);
+    if (Candidate != INDEX_NONE) BeginPromotion(Candidate);
     else if (!Writes.IsEmpty() && FPlatformTime::Seconds() - LastCameraMotion > 0.25) WriteOne();
     if (!DirtyCaches.IsEmpty() && (Writes.IsEmpty() || FPlatformTime::Seconds() - LastFlush > 2.0))
     {
@@ -340,9 +406,13 @@ void FSCGeometryStreaming::Tick(UWorld* World)
 
 void FSCGeometryStreaming::FlushForCapture(UWorld* World)
 {
+    if (InFlight.IsSet()) FinishPromotion(true);
     for (int32 Index = Pending.Num() - 1; Index >= 0; --Index)
         if (const ASCVehicle* Owner = Pending[Index].Owner.Get(); Owner && Owner->GetWorld() == World && Pending[Index].bAttached)
-            Promote(Index);
+        {
+            BeginPromotion(Index);
+            if (InFlight.IsSet()) FinishPromotion(true);
+        }
 }
 
 void FSCGeometryStreaming::FinishWrites(UWorld* World)
@@ -362,12 +432,13 @@ void FSCGeometryStreaming::DropWrites()
 {
     Writes.Reset();
     for (auto& Item : Pending) Item.Key.Empty();
+    if (InFlight.IsSet()) InFlight->Item.Key.Empty();
 }
 
 void FSCGeometryStreaming::LogStatus(UWorld* World) const
 {
-    UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_STATUS pending=%d pending_triangles=%d promoted=%d failed=%d writes_pending=%d written=%d"),
-        Pending.Num(), PendingTriangles.load(), Promoted, Failed, Writes.Num(), Written);
+    UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_STATUS pending=%d pending_triangles=%d promoted=%d failed=%d writes_pending=%d written=%d in_flight=%d"),
+        Pending.Num(), PendingTriangles.load(), Promoted, Failed, Writes.Num(), Written, InFlight.IsSet());
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

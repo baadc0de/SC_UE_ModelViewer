@@ -1,5 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
+#include "Tasks/Task.h"
 #include "MeshDescription.h"
 #include "Serialization/CustomVersion.h"
 #include "SCPackageSource.h"
@@ -92,6 +93,12 @@ public:
         int32& TriangleCount, FString& Error);
     static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
         bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error, bool bCoarseProxy = false);
+    static UStaticMesh* PrepareFineBuild(FSCDerivedMesh& Data, const UStaticMesh& Proxy, FName Name,
+        bool bBuildCollision, FSCMeshBuildStats& Stats, UE::Tasks::FTask& SourceCommit);
+    static void SubmitFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data);
+    static bool IsFineBuildReady(const UStaticMesh* Mesh);
+    static bool FinishFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data, UStaticMesh* Proxy,
+        bool bBuildCollision, bool bWait, FSCMeshBuildStats& Stats, FString& Error);
     /** Instantiate for many meshes without collision or material (slots get the default material): every mesh is
      *  configured first and the editor builds them together. A null entry failed (its Errors entry says why). */
     static TArray<UStaticMesh*> InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,

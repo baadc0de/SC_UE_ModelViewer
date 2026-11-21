@@ -142,14 +142,19 @@ and no deforming ship render sections in this fixture.
 
 The viewer schedules finer meshes for nearby surfaces in the occupied room and recently visible surfaces
 whose projected error is large enough. Distant and occluded geometry can remain in its coarse representation.
-It promotes one variant per tick, retains promoted meshes until unload, and caps pending fine CPU geometry
+It allows one fine build in flight, retains promoted meshes until unload, and caps pending fine CPU geometry
 at 500,000 triangles per import and 1,200,000 globally. The GLB still needs an initial decode to derive
-collision and the proxy. Coarse geometry has hardware ray tracing and receives its Nanite, distance field,
-and Lumen card representations on promotion. The profile stays opt-in because fine geometry can change
-the lighting as it arrives. `-SCMaxQuality` uses the exact path. Fixed-step RPC captures promote pending
-geometry before starting and use exact assets for subsequent loads.
+collision and the proxy. Coarse geometry has hardware ray tracing. The fine mesh commits its source
+description on a worker and compiles through Unreal's asset queues. The viewer swaps it in on the game
+thread once the static mesh, distance field, and Lumen card work is complete. The fine mesh reuses the
+exact Chaos collision already held by the proxy.
 
-On a cold miss, processed packages are written after initial readiness while the camera is steady.
+The profile stays opt-in because fine geometry can change the lighting as it arrives. `-SCMaxQuality` uses
+the exact path. Fixed-step RPC captures drain the in-flight build and promote pending geometry before
+starting. Later loads in that capture session use exact meshes at import.
+
+On a cold miss, processed packages are written after initial readiness while the camera is steady and
+the fine build queue has no active job.
 The cache contains exact variants. A quick exit retains packages already published and drops the
 remaining work. A populated cache uses the direct exact restore path.
 
@@ -169,6 +174,44 @@ escape pods, the cargo hold, and alongside the hull. The route ended with 86 sti
 promotions. All 22 promotions through shutdown took a median 17.8 ms and a maximum 51.5 ms on the game
 thread. The ready snapshots agreed on ship position, cargo grids, and door states. Both sessions exited
 cleanly. The demand-priority, importer, instancing, and processed-cache tests passed.
+
+#### Fine-build hitch benchmark
+
+The synchronous control ran at `c7f3a1f`. Two runs used the worker path. All three ran serially with separate
+empty processed caches, the same populated export cache and DDC, D3D12 HDR, and Lumen Surface Cache.
+Each started in first person and waited for the Brightsky kit before sampling. The benchmark then flew
+the same camera poses through the C2 escape pod and cargo hold areas and followed the port hull.
+Unreal CSV profiling recorded every frame during the two approximately 5.5-second segments.
+
+| Segment and build path | Frames | p50 (ms) | p95 (ms) | p99 (ms) | Max (ms) | Frames over 33.3 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Room transitions, synchronous | 457 | 10.13 | 24.80 | 46.95 | 69.88 | 14 |
+| Room transitions, worker run 1 | 521 | 9.97 | 14.83 | 23.43 | 38.54 | 3 |
+| Room transitions, worker run 2 | 570 | 9.27 | 13.25 | 19.98 | 39.29 | 1 |
+| Close hull pass, synchronous | 614 | 8.73 | 11.19 | 16.66 | 29.98 | 0 |
+| Close hull pass, worker run 1 | 612 | 8.70 | 11.62 | 12.60 | 15.06 | 0 |
+| Close hull pass, worker run 2 | 644 | 8.43 | 10.51 | 11.42 | 12.50 | 0 |
+
+The synchronous control spent up to 60.60 ms in a single game-thread promotion. Across the worker
+runs, the instrumented game-thread work during the route peaked at 0.35 ms for preparation, 2.27 ms
+for submission, and 3.49 ms for applying a completed mesh. The longest apply across the full sessions
+was 13.29 ms. Median wall time from request to swap was 21–23 ms, while the proxy stayed in use.
+The room segment completed 53 fine upgrades in the control and 51 in each worker run. The hull
+segment completed 12 in the control and 14–15 in the worker runs. Every worker submission reported
+asynchronous compilation, with zero failed promotions. Room-frame spikes remained in the broader
+game-thread tick, beyond the instrumented prepare, submit, and apply scopes.
+
+| Cold processed-cache load | Synchronous | Worker run 1 | Worker run 2 |
+| --- | ---: | ---: | ---: |
+| XL hangar import | 17.99 s | 18.14 s | 17.79 s |
+| C2 load | 31.93 s | 33.47 s | 32.03 s |
+| First-person ready | 70.55 s | 73.07 s | 71.58 s |
+
+The ready snapshots agreed on the ship, root position, cargo grids, and doors. The Win64 Development
+build, geometry-streaming tests, processed-cache tests, and deferred-instancing test passed.
+Geometry-streaming automation covered the fine source commit, capture wait, and shared collision.
+The route runner, raw CSV captures, and logs are under `out/xl-cold-geometry/`
+with prefixes `hitch-control`, `hitch-offthread`, and `hitch-offthread-repeat`.
 
 ### Commands
 
