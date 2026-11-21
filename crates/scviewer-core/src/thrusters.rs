@@ -194,6 +194,9 @@ mod tests {
             "run" => Some("Thrust".to_owned()),
             "boost" => Some("AfterBurn".to_owned()),
             "throttle" => Some("ThrustStrength".to_owned()),
+            "engine_trail" => Some("EngineTrail".to_owned()),
+            "contrail" => Some("DefaultContrail".to_owned()),
+            "shock_diamonds" => Some("ShockDiamond".to_owned()),
             _ => None,
         }
     }
@@ -219,7 +222,10 @@ mod tests {
             {"__type": "SEntityComponentEffects", "entityEffects": {"particleEffects": {
                 "enabled": true, "tagEffects": [
                     effect("run", "test.live", true), effect("boost", "test.boost", true),
-                    effect("run", "test.disabled", false), effect("unrelated", "test.damage", true)
+                    effect("run", "test.disabled", false), effect("unrelated", "test.damage", true),
+                    effect("engine_trail", "test.engine_trail", true),
+                    effect("contrail", "test.contrail", true),
+                    effect("shock_diamonds", "test.atmo", true)
                 ]
             }}}
         ]});

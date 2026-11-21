@@ -107,6 +107,8 @@ public:
     static FVector Position(const FVector& V) { return FVector(-V.Z, V.X, V.Y) * 100.0; }
     static FMatrix Transform(const FMatrix& Gltf);
     static FMatrix CryToGltf();
+    // Niagara offsets and axes are converted from Cry space, while imported helpers retain the glTF wrapper.
+    static FMatrix CryFxToHelper() { return Transform(CryToGltf().Inverse()); }
     static FMatrix InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis);
     // The exporter builds every child node inside the CryEngine_Z_up root, so a child placed on its parent entity itself
     // (no helper, e.g. an object container's root-level entities) carries a matrix in that entity's CryEngine frame.

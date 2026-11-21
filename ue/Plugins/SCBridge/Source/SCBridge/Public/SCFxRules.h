@@ -6,6 +6,39 @@
 
 namespace SCFxRules
 {
+struct FConeSpeed
+{
+    FVector3f Axis;
+    double Min;
+    double Max;
+};
+
+/** Cry's signed speed follows local Y; Unreal's cone takes a forward axis and a nonnegative speed range. */
+inline FConeSpeed ConeSpeed(double Speed, double Random, double ParentSpeed)
+{
+    const double Magnitude = FMath::Abs(Speed);
+    return {FVector3f(Speed < 0.0 ? -1.f : 1.f, 0, 0), Magnitude * (1.0 - Random), Magnitude + FMath::Abs(ParentSpeed)};
+}
+
+/** The larger axis takes the authored diameter. The smaller axis follows the texture frame's proportions. */
+inline FVector2f FrameAspect(int32 Width, int32 Height, FVector2f Tiles)
+{
+    const FVector2f Frame(float(Width) / FMath::Max(Tiles.X, 1.f), float(Height) / FMath::Max(Tiles.Y, 1.f));
+    return Frame.X > 0 && Frame.Y > 0 ? Frame / Frame.GetMax() : FVector2f(1, 1);
+}
+
+/** Blend the stationary-preview adjustment from thin filaments to round volume-filling sprites. */
+inline double NozzleFillWeight(FVector2f Aspect)
+{
+    if (Aspect.GetMax() <= 0.f) return 0.0;
+    return FMath::SmoothStep(0.4, 0.95, double(Aspect.GetMin() / Aspect.GetMax()));
+}
+
+inline double NozzleSparkTravelScale(double Reach, double Limit)
+{
+    return Limit > 0 && Reach > Limit ? Limit / Reach : 1.0;
+}
+
 /**
  * Spawn infos a looping lightweight emitter's spawn info keeps alive: one per loop whose particles may still live, i.e. the
  * loop being spawned plus ceil(MaxLifetime / LoopDuration) earlier ones (Niagara's stateless emitter draws at most
@@ -63,9 +96,9 @@ inline TArray<double> ClassificationStrengths(const TArray<double>& Knots, const
  * about a system without it or with an older one, and the showcase package refuses to cook stale systems. 2: E1-6 (stateless spawn-rate
  * expressions, clamp-sum strength curves, owner-scale sprite sizes; no SC.SV / SC.BR / SC.Scale2 runtime parameters). 3: review fixes 3
  * (strict steps as comparison expressions, strength curves classified on both sides of a step, light colour relative to a non-black
- * reference); systems built by version 2 lose those curves.
+ * reference); systems built by version 2 lose those curves. 4: signed motion, particle acceleration and texture frame aspect.
  */
-inline constexpr int32 FxContractVersion = 3;
+inline constexpr int32 FxContractVersion = 4;
 inline const TCHAR* FxContractParameter = TEXT("SC.FxContract");
 
 /**

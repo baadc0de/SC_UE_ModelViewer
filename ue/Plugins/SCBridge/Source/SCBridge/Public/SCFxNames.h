@@ -3,6 +3,7 @@
 // is Data/Libs/Particles/<library>.xml, split at the first '.' after the last '/', as scviewer-core's split_reference)
 // becomes /Game/SC/FX/<library>/<effect>, dots of the effect name as underscores, every other character outside
 // [A-Za-z0-9_] as '_'. Package paths are case-insensitive, so a library written in another case names the same asset.
+// Stationary nozzle variants use the same mapping under /Game/SC/FX/Nozzles.
 #pragma once
 #include "CoreMinimal.h"
 #include "Misc/Paths.h"
@@ -28,9 +29,10 @@ inline FString SafePath(const FString& Path)
 }
 
 /** The long package name of the system built for Library / Effect (as the effect JSON names them). */
-inline FString PackageFor(const FString& Library, const FString& Effect)
+inline FString PackageFor(const FString& Library, const FString& Effect, bool bNozzle = false)
 {
-    return FString(Root()) / SafePath(Library.Replace(TEXT("\\"), TEXT("/"))) / SafeSegment(Effect.Replace(TEXT("."), TEXT("_")));
+    const FString Base = bNozzle ? FString(Root()) / TEXT("Nozzles") : FString(Root());
+    return Base / SafePath(Library.Replace(TEXT("\\"), TEXT("/"))) / SafeSegment(Effect.Replace(TEXT("."), TEXT("_")));
 }
 
 /** Split `<GUID>|<library>.<effect>` (GUID optional) into its library and effect; false when it has no `<library>.<effect>`. */
@@ -50,11 +52,11 @@ inline bool SplitReference(const FString& Reference, FString& OutLibrary, FStrin
 }
 
 /** The object path (`<package>.<name>`) of the system built for an effect reference; empty when it is not one. */
-inline FString SystemPathForReference(const FString& Reference)
+inline FString SystemPathForReference(const FString& Reference, bool bNozzle = false)
 {
     FString Library, Effect;
     if (!SplitReference(Reference, Library, Effect)) return FString();
-    const FString Package = PackageFor(Library, Effect);
+    const FString Package = PackageFor(Library, Effect, bNozzle);
     return Package + TEXT(".") + FPaths::GetBaseFilename(Package);
 }
 } // namespace SCFxNames

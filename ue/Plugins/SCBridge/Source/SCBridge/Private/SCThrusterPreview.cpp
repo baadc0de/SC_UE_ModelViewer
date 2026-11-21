@@ -28,8 +28,16 @@ bool Start(FSCThrusterEmitter& Emitter, float Strength)
     if (!IsValid(Emitter.Mount)) return false;
     if (!IsValid(Emitter.Component))
     {
-        const FString Path = SCFxNames::SystemPathForReference(Emitter.Source.Reference);
-        UNiagaraSystem* Asset = Path.IsEmpty() ? nullptr : LoadObject<UNiagaraSystem>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+        const FString Path = SCFxNames::SystemPathForReference(Emitter.Source.Reference, true);
+        if (Path.IsEmpty()) return false;
+        UNiagaraSystem* Asset = LoadObject<UNiagaraSystem>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+        if (!Asset)
+        {
+            // Local installations with an older bake still use the same authored nozzle-only references.
+            const FString LegacyPath = SCFxNames::SystemPathForReference(Emitter.Source.Reference);
+            Asset = LoadObject<UNiagaraSystem>(nullptr, *LegacyPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+            UE_CLOG(Asset, LogTemp, Verbose, TEXT("THRUSTER_FX_LEGACY reference=%s; bake with -ThrusterEffects"), *Emitter.Source.Reference);
+        }
         if (!Asset)
         {
             UE_LOG(LogTemp, Warning, TEXT("THRUSTER_FX_MISSING reference=%s path=%s"), *Emitter.Source.Reference, *Path);
@@ -40,6 +48,10 @@ bool Start(FSCThrusterEmitter& Emitter, float Strength)
         Emitter.Component = UNiagaraFunctionLibrary::SpawnSystemAttached(
             Asset, Emitter.Mount, Emitter.Socket, Offset.GetLocation(), Offset.Rotator(), Offset.GetScale3D(),
             EAttachLocation::KeepRelativeOffset, false, ENCPoolMethod::None, false, false);
+        if (Emitter.Component)
+            UE_LOG(LogTemp, Verbose, TEXT("THRUSTER_FX_MOUNT reference=%s system=%s socket=%s origin=%s positive_axis=%s scale=%s"),
+                *Emitter.Source.Reference, *Asset->GetPathName(), *Emitter.Socket.ToString(), *Emitter.Component->GetComponentLocation().ToCompactString(),
+                *Emitter.Component->GetForwardVector().ToCompactString(), *Emitter.Component->GetComponentScale().ToCompactString());
     }
     if (!Emitter.Component) return false;
     Emitter.Component->SetVariableFloat(TEXT("User.SC.Strength"), Strength);
