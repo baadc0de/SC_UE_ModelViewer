@@ -120,14 +120,22 @@ bool FSCFrozenOutputDeviceTest::RunTest(const FString&)
         TestTrue(TEXT("chart has both dark and bright regions"),
             Sdr[ChartWidth * 16 + 48].R.GetFloat() > Sdr[ChartWidth * 16 + 16].R.GetFloat());
         float Peak = 0;
+        int32 MismatchedPixels = 0;
+        bool bFinite = true;
         for (int32 I = 0; I < Sdr.Num(); ++I)
         {
-            const FLinearColor Delta = FLinearColor(Sdr[I]) - FLinearColor(Hdr[I]);
+            const FFloat16Color& A = Sdr[I];
+            const FFloat16Color& B = Hdr[I];
+            MismatchedPixels += A.R.Encoded != B.R.Encoded || A.G.Encoded != B.G.Encoded || A.B.Encoded != B.B.Encoded;
+            const FLinearColor Delta = FLinearColor(A) - FLinearColor(B);
+            bFinite &= FMath::IsFinite(Delta.R) && FMath::IsFinite(Delta.G) && FMath::IsFinite(Delta.B);
             Peak = FMath::Max(Peak, FMath::Max3(FMath::Abs(Delta.R), FMath::Abs(Delta.G), FMath::Abs(Delta.B)));
         }
-        AddInfo(FString::Printf(TEXT("source=%d frozen HDR/SDR linear target peak=%g"), int32(Source), Peak));
+        AddInfo(FString::Printf(TEXT("source=%d frozen HDR/SDR mismatched RGB pixels=%d/%d, linear target peak=%g"),
+            int32(Source), MismatchedPixels, Sdr.Num(), Peak));
+        TestTrue(TEXT("frozen chart RGB is finite on both devices"), bFinite);
         if (Source == SCS_FinalColorLDR) TestTrue(TEXT("control follows the advertised output device"), Peak > 1.f/1023);
-        else TestEqual(TEXT("offline capture ignores the advertised output device"), Peak, 0.f);
+        else TestEqual(TEXT("offline RGB half-float codes are identical on SDR and HDR targets"), MismatchedPixels, 0);
     }
     return true;
 }
