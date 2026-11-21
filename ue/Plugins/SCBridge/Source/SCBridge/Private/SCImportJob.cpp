@@ -9,6 +9,7 @@
 #include "SCPackageReader.h"
 #include "SCImportMaterials.h"
 #include "SCProcessedCache.h"
+#include "SCGeometryStreaming.h"
 #include "SCProcessedMeshCache.h"
 #include "SCProcessedTextureCache.h"
 #include "SCSkeletonBuilder.h"
@@ -57,6 +58,7 @@ namespace
 // Unique assets whose derivation may run ahead of the game-thread build: one per worker thread, at most MaxDeriveLookAhead
 // (bounds peak CPU mesh memory; a resource budget, not game data). A large ship has ~500 assets.
 constexpr int32 MaxDeriveLookAhead = 12;
+constexpr int32 PerVehicleTriangleBudget = 500000;
 int32 DeriveLookAhead() { return FMath::Clamp(FTaskGraphInterface::Get().GetNumWorkerThreads(), 3, MaxDeriveLookAhead); }
 // Fractions of the whole import assigned to each stage, for the progress bar only.
 constexpr float ReadShare = 0.05f, MeshShare = 0.80f, MaterialShare = 0.05f;
@@ -92,6 +94,8 @@ struct FPart
         TArray<FTriangleID> SplitTriangles;
         TArray<FVector3f> LightSamples;
         bool bDisableNanite = false;
+        TUniquePtr<FSCDerivedMesh> Coarse;
+        double Deviation = 0;
     };
     int32 Owner = INDEX_NONE;
     FSCDerivedMesh Mesh, Translucent;
@@ -144,6 +148,8 @@ struct FSCImportJob::FState
     FSCImportResult Result;
     FSCImportTimings Timings;
     int32 CachedNaniteStreamable = 0, CachedNaniteDemandPaged = 0;
+    int32 FineTrianglesDeferred = 0;
+    TSet<UStaticMesh*> OpaqueProxies;
     ESCImportStage Stage = ESCImportStage::Reading;
     std::atomic<bool> bCancel{false};
     double Start = 0;
@@ -814,6 +820,18 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             FSCMeshImporter::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
             if (Part.Translucent.bHasGeometry && !BaseKey.IsEmpty() && Part.TranslucentCache.Key.IsEmpty())
                 ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
+            if (Options.GeometryStreaming && !Options.bRebuildProcessed && ScreenSlots.IsEmpty())
+            {
+                auto PrepareCoarse = [&](FPart::FCacheVariant& Cache, const FSCDerivedMesh& Variant) {
+                    if (Cache.Pin || !Variant.bHasGeometry ||
+                        Variant.Description.Triangles().Num() > PerVehicleTriangleBudget - FineTrianglesDeferred) return;
+                    auto Coarse = MakeUnique<FSCDerivedMesh>();
+                    if (Options.GeometryStreaming->Reduce(Variant, *Coarse, Cache.Deviation))
+                        Cache.Coarse = MoveTemp(Coarse);
+                };
+                PrepareCoarse(Part.OpaqueCache, Part.Mesh);
+                PrepareCoarse(Part.TranslucentCache, Part.Translucent);
+            }
             Slot.Parts.Add(MoveTemp(Part));
         }
         // WP-P3: the game's colliders, one collision-only part per owner (the rig node they move with).
@@ -953,6 +971,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
     const bool bNeedsCollision = !bTranslucent && Options.bBuildCollision;
     FSCMeshBuildStats Stats;
     FString AssetError;
+    bool bUsesCoarse = false;
     UStaticMesh* Mesh = Cached.Pin ? SCProcessedMeshCache::Load(*Options.ProcessedCache, *Cached.Pin, Stats) : nullptr;
     Cached.Pin.Reset();
     if (Mesh)
@@ -994,10 +1013,33 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         }
         Result.MeshBuilds += Variant.bHasGeometry;
         Result.CollisionBuilds += bNeedsCollision && Variant.bHasGeometry;
-        Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, FName(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix)),
-            bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
+        const FName Name(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix));
+        FName ExactName = Name;
+        if (Cached.Coarse && Variant.Description.Triangles().Num() <= PerVehicleTriangleBudget - FineTrianglesDeferred &&
+            Options.GeometryStreaming->CanDefer(Variant))
+        {
+            Mesh = FSCMeshImporter::Instantiate(*Cached.Coarse, Slot.Package, Name,
+                bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError, true);
+            bUsesCoarse = Mesh != nullptr;
+            if (bUsesCoarse)
+                Mesh->SetExtendedBounds(Variant.Description.GetBounds());
+            else
+            {
+                ExactName = MakeUniqueObjectName(Slot.Package, UStaticMesh::StaticClass(), Name);
+                Stats = {};
+                AssetError.Reset();
+            }
+        }
+        if (!Mesh)
+            Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, ExactName,
+                bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
         if (Mesh && !Cached.Key.IsEmpty())
-            SCProcessedMeshCache::Store(*Options.ProcessedCache, Cached.Key, *Mesh, Variant, Stats);
+        {
+            if (!bUsesCoarse && Options.GeometryStreaming)
+                Options.GeometryStreaming->QueueWrite(Mesh, Variant, Stats, Options.ProcessedCache, Cached.Key);
+            else if (!bUsesCoarse)
+                SCProcessedMeshCache::Store(*Options.ProcessedCache, Cached.Key, *Mesh, Variant, Stats);
+        }
     }
     if (!Mesh)
     {
@@ -1013,6 +1055,13 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         Slot.Variants.Add(Mesh);
         SocketNodes.FindOrAdd(Path).Add(Variant.SocketNode);
         Result.MeshStats.Add(Path + Suffix, Stats);
+        if (bUsesCoarse)
+        {
+            if (Variant.bEnableNanite) OpaqueProxies.Add(Mesh);
+            FineTrianglesDeferred += Variant.Description.Triangles().Num();
+            Options.GeometryStreaming->Defer(Vehicle, Mesh, MoveTemp(Variant), Path + Suffix, Cached.Deviation,
+                bNeedsCollision, Options.ProcessedCache, Cached.Key);
+        }
         UE_LOG(LogSCImport, Display,
                TEXT("MESH path=%s%s triangles=%d nanite=%s clusters=%d fallback=%d cards=%d collision=%d build_s=%.4f"), *Path, *Suffix,
                Stats.Triangles, *Stats.NaniteReason, Stats.Clusters, Stats.FallbackTriangles, Stats.Cards, Stats.bCollision,
@@ -1446,7 +1495,7 @@ void FSCImportJob::FState::Assemble()
                 const UStaticMesh* Mesh = (*Variants)[Variant];
                 const TSet<int32>& Translucent = MeshTranslucentSlots.FindRef(I.MeshAsset);
                 // Cooked cache packages strip the editor settings even when their Nanite resources are valid.
-                const bool bNanite = Mesh->HasValidNaniteData();
+                const bool bNanite = Mesh->HasValidNaniteData() || OpaqueProxies.Contains(Mesh);
                 if (!bNanite && !Translucent.IsEmpty())
                 {
                     // Glass/decal/screen split: lit by Lumen but not part of its scene (no cards, no DF).
@@ -1888,6 +1937,7 @@ void FSCImportJob::FState::Assemble()
         V->BuildExploration();
         FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
     }
+    if (Options.GeometryStreaming) Options.GeometryStreaming->Attach(V);
     Result.Vehicle = V;
     Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;

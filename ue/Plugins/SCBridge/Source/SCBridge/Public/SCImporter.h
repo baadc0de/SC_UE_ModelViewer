@@ -6,6 +6,7 @@
 #include "SCImporter.generated.h"
 class ASCVehicle;
 class FSCProcessedCache;
+class FSCGeometryStreaming;
 struct SCBRIDGE_API FSCImportOptions
 {
     UWorld* World = nullptr;
@@ -38,6 +39,7 @@ struct SCBRIDGE_API FSCImportOptions
     TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
     FString CacheArchiveBuild;
     bool bRebuildProcessed = false;
+    TSharedPtr<FSCGeometryStreaming> GeometryStreaming;
     FTransform ActorTransform = FTransform::Identity;
 };
 struct SCBRIDGE_API FSCImportResult

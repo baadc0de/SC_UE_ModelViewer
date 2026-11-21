@@ -318,6 +318,12 @@ Cache boundaries for WP-C1:
   fine geometry pages as needed. The importer still places components and binds lights
   and materials on each fresh load. See [WP-C1](../docs/work-packages/WP-C1-processed-cache.md)
   for the XL hangar and C2 measurements.
+- `-SCStreamGeometry` enables the cold-load preview in Editor `-game`. Eligible
+  cold mesh variants start with smaller render proxies, then build their exact
+  meshes when the camera approaches or sees enough projected detail. The source
+  collision and rig bindings are installed at assembly. Processed cache hits
+  restore the exact geometry directly. The profile uses approximate lighting on
+  coarse proxies, and fixed-step render capture prepares exact geometry before frame one.
 
 From the repository root:
 

@@ -18,6 +18,7 @@ class USCViewOptions;
 class FSCImportJob;
 struct FSCImportOptions;
 class FSCProcessedCache;
+class FSCGeometryStreaming;
 class FSCFolderPackageSource;
 class FSCPackageSource;
 class FSCTarPackageSource;
@@ -142,6 +143,8 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetCacheDir() const { return CacheDir; }
     FSCCacheStats GetProcessedCacheStats() const;
     void ConfigureProcessedImport(FSCImportOptions& Options, bool bFolderPackage = false) const;
+    void PrepareGeometryForCapture();
+    void LogGeometryStreaming() const;
     void ClearProcessedCache();
     void SetProcessedCacheCap(int32 MiB);
     bool CanRebuildLoadedEntity() const;
@@ -330,6 +333,8 @@ private:
     double OpenSeconds = 0;
     FSCCacheStats CacheStats;
     TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
+    TSharedPtr<FSCGeometryStreaming> GeometryStreaming;
+    bool bGeometryCapturePrepared = false;
 
     struct FPendingSearch
     {

@@ -129,6 +129,47 @@ builds the full exported LOD and writes the processed cache. Deferring source ge
 requires separate coarse and fine inputs, and a policy that keeps working collision and geometry visible
 through open doors and in reflections. Skeletal and non-Nanite detail remains eager.
 
+### Cold-load render previews
+
+`-SCStreamGeometry` is an opt-in Editor game-mode profile. It uses the existing GLB on a cold miss
+to make a short-lived, lower-detail render mesh. The reducer collapses connected edges within a grid
+cell and protects material seams and sharp normals. It accepts a proxy only when it saves at least
+20% of its triangles and preserves every populated material slot. Authored colliders, exact render-derived
+collision, and the original bounds and rig binding are ready at assembly. This also applies to eligible
+translucent splits and rigid meshes attached to animated rigs. Display panels and deforming skeletal
+sections use their full geometry. The XL hangar and C2 have rigid ship parts attached to skeletal rigs
+and no deforming ship render sections in this fixture.
+
+The viewer schedules finer meshes for nearby surfaces in the occupied room and recently visible surfaces
+whose projected error is large enough. Distant and occluded geometry can remain in its coarse representation.
+It promotes one variant per tick, retains promoted meshes until unload, and caps pending fine CPU geometry
+at 500,000 triangles per import and 1,200,000 globally. The GLB still needs an initial decode to derive
+collision and the proxy. Coarse geometry has hardware ray tracing and receives its Nanite, distance field,
+and Lumen card representations on promotion. The profile stays opt-in because fine geometry can change
+the lighting as it arrives. `-SCMaxQuality` uses the exact path. Fixed-step RPC captures promote pending
+geometry before starting and use exact assets for subsequent loads.
+
+On a cold miss, processed packages are written after initial readiness while the camera is steady.
+The cache contains exact variants. A quick exit retains packages already published and drops the
+remaining work. A populated cache uses the direct exact restore path.
+
+The serialized comparison used separate empty processed caches, the same populated StarBreaker export
+cache and engine DDC, LOD 0/mip 3 for the C2, and the same XL folder. Both ran in Agent Mode on Win64 D3D12.
+First-person ready includes engine startup, hangar and ship placement, and the Brightsky kit.
+
+| Measure | Eager | Cold-load preview |
+| --- | ---: | ---: |
+| Hangar import | 24.1 s | 18.5 s |
+| C2 load | 42.2 s | 32.9 s |
+| First-person ready | 88.0 s | 72.1 s |
+
+Startup used 50 hangar proxies and 56 C2 proxies, including 26 translucent variants and 57 rigid variants
+attached to rigs. At readiness, 102 fine variants were still pending. The camera proved C2 promotion in the
+escape pods, the cargo hold, and alongside the hull. The route ended with 86 still pending and zero failed
+promotions. All 22 promotions through shutdown took a median 17.8 ms and a maximum 51.5 ms on the game
+thread. The ready snapshots agreed on ship position, cargo grids, and door states. Both sessions exited
+cleanly. The demand-priority, importer, instancing, and processed-cache tests passed.
+
 ### Commands
 
 From the repository root, build once initially and use a fresh scratch cache for each independent comparison.

@@ -23,6 +23,7 @@
 #include "SCImportJob.h"
 #include "SCImporter.h"
 #include "SCProcessedCache.h"
+#include "SCGeometryStreaming.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
 #include "Dom/JsonValue.h"
@@ -97,6 +98,11 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     if (!CacheDir.IsEmpty())
         ProcessedCache = MakeShared<FSCProcessedCache, ESPMode::ThreadSafe>(CacheDir / TEXT("processed"),
             int64(USCViewerSettings::Get()->ProcessedCacheMiB) * (1ll << 20));
+#if WITH_EDITOR
+    if (!GIsEditor && !FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality")) &&
+        FParse::Param(FCommandLine::Get(), TEXT("SCStreamGeometry")))
+        GeometryStreaming = MakeShared<FSCGeometryStreaming>();
+#endif
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
     VehicleInstances = MakeShared<FSCVehicleInstances>(*this);
@@ -135,10 +141,12 @@ void USCViewerSubsystem::Deinitialize()
     if (EnvParse.IsValid()) EnvParse.Wait();
     if (EnvListTask.IsValid()) EnvListTask.Wait();
     EnvJob.Reset();
+    if (GeometryStreaming) GeometryStreaming->PublishWrites();
     UnloadInternal(false); // the subsystem owns the loaded vehicle; the host collects garbage afterwards
     VehicleInstances.Reset();
     Client.Reset();
     ProcessedCache.Reset();
+    GeometryStreaming.Reset();
     Super::Deinitialize();
 }
 
@@ -723,11 +731,38 @@ void USCViewerSubsystem::ConfigureProcessedImport(FSCImportOptions& Import, bool
     // A folder may be used without opening any archive. The cache still keys each mesh on its
     // path and GLB content and each texture on its bytes. Separate folders from archive exports.
     Import.CacheArchiveBuild = bFolderPackage ? TEXT("folder-package") : ArchiveBuildId;
+    if (GeometryStreaming && !bGeometryCapturePrepared)
+    {
+        Import.GeometryStreaming = GeometryStreaming;
+        Import.bRetainAssets = false; // streaming replacements belong to a single assembled actor
+    }
 }
+
+void USCViewerSubsystem::PrepareGeometryForCapture()
+{
+    if (!GeometryStreaming) return;
+    bGeometryCapturePrepared = true; // cuts and console-triggered loads in a capture use exact geometry
+    GeometryStreaming->FlushForCapture(GetViewerWorld());
+    GeometryStreaming->FinishWrites(GetViewerWorld());
+}
+
+void USCViewerSubsystem::LogGeometryStreaming() const
+{
+    if (GeometryStreaming) GeometryStreaming->LogStatus(GetViewerWorld());
+}
+
+static FAutoConsoleCommandWithWorldAndArgs GSCGeometryStatus(
+    TEXT("sc.Geometry.Status"), TEXT("Report pending fine meshes and processed cache writes."),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>&, UWorld* World) {
+        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World))
+            Viewer->LogGeometryStreaming();
+    }));
 
 void USCViewerSubsystem::ClearProcessedCache()
 {
-    if (!IsBusy() && ProcessedCache) ProcessedCache->Clear();
+    if (IsBusy() || !ProcessedCache) return;
+    if (GeometryStreaming) GeometryStreaming->DropWrites();
+    ProcessedCache->Clear();
 }
 
 void USCViewerSubsystem::SetProcessedCacheCap(int32 MiB)
@@ -1163,6 +1198,9 @@ bool USCViewerSubsystem::Tick(float)
     PollClientPanic();
     LogPhaseChange();
     if (Automation) Automation->Tick();
+    if (GeometryStreaming && !bGeometryCapturePrepared && !IsBusy() &&
+        (KitState == EPlayerKitState::None || KitState == EPlayerKitState::Ready || KitState == EPlayerKitState::Failed))
+        GeometryStreaming->Tick(GetViewerWorld());
     return true;
 }
 void USCViewerSubsystem::LogPhaseChange()

@@ -91,7 +91,7 @@ public:
     static bool InstallCollision(UBodySetup* Body, const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions,
         int32& TriangleCount, FString& Error);
     static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
-        bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error);
+        bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error, bool bCoarseProxy = false);
     /** Instantiate for many meshes without collision or material (slots get the default material): every mesh is
      *  configured first and the editor builds them together. A null entry failed (its Errors entry says why). */
     static TArray<UStaticMesh*> InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,

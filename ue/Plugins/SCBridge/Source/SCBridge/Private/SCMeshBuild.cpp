@@ -164,7 +164,7 @@ namespace
 // Instantiate in three steps so that many meshes can build together (InstantiateBatch): configure (game thread), build,
 // then collision and stats once the render data exists.
 UStaticMesh* ConfigureMesh(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision, UMaterialInterface* Material,
-                           FSCMeshBuildStats& Stats)
+                           FSCMeshBuildStats& Stats, bool bCoarseProxy = false)
 {
     check(IsInGameThread());
     UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer, Name, RF_Transient);
@@ -179,6 +179,11 @@ UStaticMesh* ConfigureMesh(const FSCDerivedMesh& Data, UObject* Outer, FName Nam
     Body->CollisionTraceFlag = CTF_UseComplexAsSimple;
     Body->bDoubleSidedGeometry = true;
     Body->bNeverNeedsCookedCollisionData = true; // Avoid the synchronous implicit cook in Build().
+    if (bCoarseProxy)
+    {
+        Stats.NaniteReason = TEXT("proxy:deferred_detail");
+        return Mesh;
+    }
 #if WITH_EDITOR
     Mesh->bGenerateMeshDistanceField = Data.bEnableNanite;
     Mesh->GetNaniteSettings().bEnabled = Data.bEnableNanite;
@@ -213,16 +218,21 @@ UStaticMesh* ConfigureMesh(const FSCDerivedMesh& Data, UObject* Outer, FName Nam
 #endif
     return Mesh;
 }
-#if !WITH_EDITOR
-void BuildRuntime(UStaticMesh* Mesh, const FSCDerivedMesh& Data)
+void BuildRuntime(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bCoarseProxy = false)
 {
     UStaticMesh::FBuildMeshDescriptionsParams Params;
     Params.bFastBuild = true;
     Params.bAllowCpuAccess = false;
     Params.bBuildSimpleCollision = false;
+    if (bCoarseProxy)
+    {
+        Params.bCommitMeshDescription = false;
+        auto& LOD = Params.PerLODOverrides.AddDefaulted_GetRef();
+        LOD.bUseFullPrecisionUVs = true;
+        LOD.bUseHighPrecisionTangentBasis = true;
+    }
     Mesh->BuildFromMeshDescriptions({&Data.Description}, Params);
 }
-#endif
 void AwaitRepresentations(UStaticMesh* Mesh, FSCMeshBuildStats& Stats)
 {
     const double RepresentationStart = FPlatformTime::Seconds();
@@ -293,19 +303,23 @@ bool FSCMeshImporter::InstallCollision(UBodySetup* Body, const TArray<uint8>& By
 }
 
 UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision,
-                                          UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error)
+                                          UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error, bool bCoarseProxy)
 {
-    UStaticMesh* Mesh = ConfigureMesh(Data, Outer, Name, bBuildCollision, Material, Stats);
+    UStaticMesh* Mesh = ConfigureMesh(Data, Outer, Name, bBuildCollision, Material, Stats, bCoarseProxy);
     if (Data.Description.Triangles().Num() == 0) return Mesh;
     const double Start = FPlatformTime::Seconds();
 #if WITH_EDITOR
-    Mesh->Build(true);
-    FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
+    if (bCoarseProxy) BuildRuntime(Mesh, Data, true);
+    else
+    {
+        Mesh->Build(true);
+        FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
+    }
 #else
     BuildRuntime(Mesh, Data);
 #endif
     Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
-    AwaitRepresentations(Mesh, Stats);
+    if (!bCoarseProxy) AwaitRepresentations(Mesh, Stats);
     return FinishMesh(Mesh, Data, bBuildCollision, Stats, Error) ? Mesh : nullptr;
 }
 
