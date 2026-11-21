@@ -12,7 +12,7 @@ Jonrellim's original [C1 cockpit](https://starcitizen.tools/File:CRUS-C1-spirit-
 
 More recent composition references include the photographer's [2025 Star Citizen Alpha 4.0–4.5 collection](https://www.hasgaha.com/2026/01/12/my-42-favorite-star-citizen-screenshots-from-2025/) and a [November 2026 Galaxy PTU galley comparison](https://www.reddit.com/r/starcitizen/comments/1y0n4hd/galaxy_ptu_kitchen_was_updated_with_higher/). Their published previews have no verified HDR mastering metadata.
 
-The 2026 Crimson Desert Serkis Estate original provides a contemporary HDR night scene from another game. The photographer describes an unedited Steam capture at midnight. The original 3840 × 2160 AVIF identifies BT.2020 primaries and the PQ transfer function. The photographer reports a roughly 500-nit peak. The relationship between the lit sky, torchlight and shaded terrain makes a better comparison than matching that number across games. [Original capture](https://eu.zonerama.com/PrestigiousCap4934/Photo/15065535/609355335) and [photographer's description](https://www.reddit.com/r/HDR_Den/comments/1sgr2ui/this_is_crimson_desert_native_hdr_screenshots/).
+The 2026 Crimson Desert Serkis Estate original provides a contemporary HDR night scene from another game. The photographer describes an unedited Steam capture at midnight. The original 3840 × 2160 AVIF decodes as full-range 10-bit BT.2020 RGB with PQ transfer. Its median luminance is 1.32 nits, its 99th percentile is 191 and its peak is 516. A broad pale sky, narrow reflected creek highlights and tiny warm fire pockets remain distinct above the shaded terrain. These numbers describe the encoded signal of one frame. [Original capture](https://eu.zonerama.com/PrestigiousCap4934/Photo/15065535/609355335) and [photographer's description](https://www.reddit.com/r/HDR_Den/comments/1sgr2ui/this_is_crimson_desert_native_hdr_screenshots/).
 
 ## Controlled comparison
 
@@ -35,3 +35,20 @@ Three matched 1600 × 900 player cameras used Surface Cache, the LOOK-8 exposure
 Astra reviewed SDR viewing copies with a common 203-nit white anchor and the same compressive transfer for every image. The native hangar kept the overhead fixture distinct from the white A1 paint, and the blue floor markings were less neon. In the cargo bay the amber paint was easier to distinguish from the pale lamps, with the deck grate and rail edges intact. The cockpit kept the worn windscreen and dark bezels, with less competition from small white highlights. These findings support the native HDR transform. Physical appearance on other HDR monitors remains unmeasured.
 
 The standard bloom intensities of 0.10, 0.14 and 0.18 at threshold 1 looked almost identical at normal scale in all three scenes. The strongest variant slightly softened strip edges without a visible veil. The first comparison established no convincing preference across that narrow range.
+
+### Fixed-exposure bloom sweep
+
+The second player session launched without an HDR command-line override. UE enabled output device 5 through the game settings on the Windows HDR desktop. The same Cutlass cargo camera held its settled exposure scale of 0.00513437 across six captures, verified with `sc.Look.ExposureLog` before every shot. Standard bloom intensity ranged from 0.10 to 0.80, with a lower-threshold control and a final repeat of the baseline. For a spatial check, the mean signal luminance was measured in bands around the first frame's pixels above 203 nits, using Manhattan distance within the cargo area (x 120–1479, y 310–889).
+
+| Bloom intensity | Threshold | Mean at 2–6 px (nits) | Mean at 8–16 px | Mean at 30–50 px |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.10 | 1.0 | 11.975 | 5.805 | 4.090 |
+| 0.30 | 1.0 | 12.045 | 5.821 | 4.091 |
+| 0.50 | 1.0 | 12.120 | 5.838 | 4.095 |
+| 0.80 | 1.0 | 12.218 | 5.854 | 4.098 |
+| 0.50 | 0.3 | 12.393 | 5.886 | 4.104 |
+| 0.10 repeat | 1.0 | 11.967 | 5.807 | 4.091 |
+
+**Decision.** Keep standard bloom at 0.10 with threshold 1.0. At 1600 × 900 the lower threshold softened the amber floor markings slightly, while the white lamp strips, adjacent trim and grated deck retained almost the same appearance. Even the largest halo increase was concentrated at the marking edges. This fixture supplies no visual reason to broaden bloom across every scene. The native HDR transform provided the clearer improvement in the hierarchy of fixture, paint and shadow.
+
+Local proofs under `out/look-9/proofs/` include the viewport scRGB EXRs and matched HDR AVIFs for each of the three cameras. The AVIFs convert scRGB into BT.2020 at 80 nits per unit, encode full-range 10-bit PQ and round-trip the quantized values losslessly. SDR proofs use one fixed viewing transform. No game imagery is included in source control.
