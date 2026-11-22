@@ -32,7 +32,7 @@ bool FSCLadderRuntime::OwnsMovement() const { return Phase != EPhase::Walk; }
 FSCLadderRuntime::FApproach FSCLadderRuntime::FindApproach(const ASCFirstPersonCharacter& Character, bool bAutomatic) const
 {
     if (!Character.Vehicle || !Character.Body->HasBody() || Character.bNoclip || Character.bIsCrouched ||
-        Character.bMobiGlasOpen || Character.bTeleportMenuOpen || RemountDelay > 0.f ||
+        Character.bMenuOpen || Character.bTeleportMenuOpen || RemountDelay > 0.f ||
         !Character.GetCharacterMovement()->IsMovingOnGround()) return {};
     const FVector Feet = Character.GetActorLocation() -
         FVector::UpVector * Character.GetCapsuleComponent()->GetScaledCapsuleHalfHeight();

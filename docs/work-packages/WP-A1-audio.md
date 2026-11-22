@@ -544,7 +544,7 @@ over the bank's IR (wet 0 dB, dry −96 dB, pre-delay 0 ms as authored). Probes 
 every room (−32.6 dBFS RMS); wet tails after the sound ends, to the 16-bit floor: Large 3.98 s, Medium 2.06 s, Small
 0.03 s, dry 0 s; the wet return sits 11 dB (Large), 14 dB (Medium) and 33 dB (Small) below the dry peak.
 
-**Cook (Phase 5).** `viewer/scripts/cook_audio.py` stages `audio.json`, `audio_interiors.json` (spots, areas, room volumes
+**Cook (Phase 5).** `game/scripts/cook_audio.py` stages `audio.json`, `audio_interiors.json` (spots, areas, room volumes
 per interior) and every payload under `Content/SCAudio/<level>` (gitignored, non-UFS staging); a missing manifest or
 payload stops that level (cook format 6, so earlier cooked levels report stale); `ASCVehicle::BeginPlay` loads it,
 mapping anchors to interiors by their recorded scene index. Verified: the staging step against the C2 export outside UE

@@ -42,7 +42,7 @@ cargo code paths that assumed a hangar.
 - `USCViewerSubsystem::SetSpace(bool)` / `IsSpace()`; RPC `/state` `load.space`; ships spawned through the RPC in space
   are not rested on a floor.
 - `FSCCargoPlanner::DronesFor`: with g = 0 the lift needs one drone (volume rules still apply).
-- New scenario `viewer/Config/Cargo/hull_a_space.json`: two MISC Hull A 45 m apart, five asteroids 40–60 m out,
+- New scenario `game/Config/Cargo/hull_a_space.json`: two MISC Hull A 45 m apart, five asteroids 40–60 m out,
   stock on ship 0's grids, nine boxes loose (six random, three placed in a row).
 
 ## Hardening found on the way (exploration batches across all scenarios)

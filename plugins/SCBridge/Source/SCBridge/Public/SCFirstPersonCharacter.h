@@ -57,7 +57,7 @@ enum class ESCFirstPersonAction : uint8
     Fire,                                              // held, player body: the drawn weapon fires while down
     Orbit,                                             // held: third-person camera orbits the player while down;
                                                        // two presses within DoubleTapSeconds put it behind again
-    MobiGlas,                                          // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
+    Menu,                                              // pressed: toggle the application's menu (SCViewerShell; UnrealCitizen: the mobiGlas); Close also closes it
     MenuUp, MenuDown, MenuSelect,                      // pressed, teleport menu open: move the selection / teleport there
     PromptPrevious, PromptNext                         // pressed (the mouse wheel): the prompt's action E performs (WP-I1-4)
 };
@@ -88,9 +88,9 @@ public:
     UPROPERTY(BlueprintReadOnly) bool bNoclip = false;
     UPROPERTY(BlueprintReadOnly) bool bStuck = false;
     UPROPERTY(BlueprintReadOnly) bool bTeleportMenuOpen = false;
-    /** The mobiGlas is up (WP-K1c): the player stands still (movement presses, mouse look and the weapon are ignored);
-     *  the cursor drives the UI and the live-view orbit camera. */
-    UPROPERTY(BlueprintReadOnly) bool bMobiGlasOpen = false;
+    /** The application's F1 menu is up (SCViewerShell; UnrealCitizen's mobiGlas, WP-K1c): the player stands still
+     *  (movement presses, mouse look and the weapon are ignored); the cursor drives the UI and the live-view orbit camera. */
+    UPROPERTY(BlueprintReadOnly) bool bMenuOpen = false;
     UPROPERTY(BlueprintReadOnly) int32 RecoveryCount = 0;
     UPROPERTY(BlueprintReadOnly) int32 CapsuleHits = 0;
     /** Spawn index used by the last successful teleport (INDEX_NONE before the first). */
@@ -173,6 +173,9 @@ public:
     const FSCUsableTarget* AimedUsable(int32* OutPoint = nullptr, const ASCVehicle** OutHost = nullptr, FVector* OutWorld = nullptr) const;
     /** Where the view ray first meets something within Reach (else a point 1.5 m along it): a popout anchor. */
     FVector AimPoint(float Reach) const;
+    /** The eye the interactions trace from and its reach (interaction providers, SCViewerShell). */
+    FVector GetInteractionOrigin() const { return InteractionOrigin(); }
+    float GetInteractReach() const;
     void Look(FVector2D Pixels);
     /** Weapon kick on the view (degrees; pitch positive up). */
     void AddViewKick(float PitchDegrees, float YawDegrees);
@@ -190,7 +193,7 @@ public:
     bool IsHoldingMove() const { return HoldSeconds > 0; }
     void SetCrouching(bool bCrouch);
     void SetTorch(bool bOn);
-    void SetMobiGlasOpen(bool bOpen);
+    void SetMenuOpen(bool bOpen);
     bool SetNoclip(bool bOn);
     bool IsRunning() const { return bRunning; }
     FString LadderStatus() const;

@@ -187,5 +187,5 @@ loadout changes (WP-M2).
 - Door labels use a literal label from the operating panel when available, then the item's display name or port
   label. The inspected panel's location value was a locale key with no localized label in the package.
 - For a quick game-mode check, load a door-capable ship such as Cutlass Black in the default Viewer map, then run
-  `viewer/scripts/rpc/ship-link.ps1 -Port 8770`. It polls pairing, door playback and lock state. Add
+  `game/scripts/rpc/ship-link.ps1 -Port 8770`. It polls pairing, door playback and lock state. Add
   `-Screenshots` for Slate evidence or `-RequireExterior` for an exterior-door acceptance fixture.

@@ -87,14 +87,14 @@ Colour values are **linear RGB**, not 8-bit sRGB. Runtime may create MIDs. The L
 
 ## Rebuild and verification
 
-`viewer/scripts/create_cargo_art.py` updates existing assets in place and replaces its named sockets. It scans the plugin asset directory before reusing assets, so commandlet registry startup does not create duplicate packages. It never saves the preview level or modifies the project/engine configuration. Geometry Scripting and Python must be enabled; the current project already enables both.
+`game/scripts/create_cargo_art.py` updates existing assets in place and replaces its named sockets. It scans the plugin asset directory before reusing assets, so commandlet registry startup does not create duplicate packages. It never saves the preview level or modifies the project/engine configuration. Geometry Scripting and Python must be enabled; the current project already enables both.
 
 Take the shared UE lock **before** either launch, retry an occupied lock at 60-second intervals for at most 45 minutes, and release it in `finally`. Do not remove another worker's lock. The launch flags below keep shader scratch in the workspace and use this repository's filesystem DDC:
 
 ```powershell
 $editor = "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
 $project = "$PWD/viewer/SCViewer.uproject"
-$script = "$PWD/viewer/scripts/create_cargo_art.py"
+$script = "$PWD/game/scripts/create_cargo_art.py"
 # Build-only/headless path; acquire the shared UE lock first.
 & $editor $project -run=pythonscript "-script=$script" -unattended -nop4 -nosplash `
   -AllowCommandletRendering -EnablePlugins=GeometryScripting -ddc=SCViewerDDC `

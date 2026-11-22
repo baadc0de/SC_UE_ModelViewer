@@ -16,7 +16,6 @@
 #include "SCAnimImporter.h"
 #include "SCLightImporter.h"
 #include "SCLightAreas.h"
-#include "SCGarageSubsystem.h"
 #include "SCAudioSystem.h"
 #include "SCDirt.h"
 #include "SCEmissiveLights.h"
@@ -1817,7 +1816,7 @@ void FSCImportJob::FState::Assemble()
                 WaypointSources[WaypointIndex].Anchor = Placed->Anchor;
                 if (Placed->Anchor && Interior.Placements.IsValidIndex(Candidate.Index))
                     for (const FSCUiBinding& Binding : Interior.Placements[Candidate.Index].UiBindings)
-                        if (FSCGaragePolicy::IsVehicleKiosk(Binding))
+                        if (ASCVehicle::IsGarageKiosk(Binding))
                         {
                             V->GarageKiosks.Add(Placed->Anchor, Binding.InteractionDistance * 100.f);
                             break;

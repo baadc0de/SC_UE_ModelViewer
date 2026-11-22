@@ -13,7 +13,7 @@ enum class ESCShipRole : uint8 { None, Owner, Crew, Guest };
 enum class ESCShipDoorAction : uint8 { Open, Close, Lock, Unlock };
 enum class ESCShipDoorGroup : uint8 { Exterior, Interior, Other };
 
-struct FSCShipDoorPolicy
+struct SCBRIDGE_API FSCShipDoorPolicy
 {
     static ESCShipDoorGroup Classify(bool bHasRooms, const FString& SideA, const FString& SideB);
     static FString Refusal(ESCShipRole Role, ESCShipDoorAction Action, bool bLocked, ESCShipDoorGroup Group, bool bInside);

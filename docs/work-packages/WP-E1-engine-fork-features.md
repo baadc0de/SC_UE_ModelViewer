@@ -903,7 +903,7 @@ Engine `e2ec17572` (`SCViewer: stateless spawn review fixes`; Terra `out/e1/E1-6
   loops do not fit (7.75 s at 0.25 s fits 32 exactly and keeps 0.25 s).
 - **Stale FX.** The generated contract is versioned: SCFxBuild writes the user parameter `SC.FxContract` = `SCFxRules::FxContractVersion` (2);
   the runtime (`SCFxContract::Check`, from `SCFxStrength::Set`, non-shipping) warns `SC_FX_STALE` once per system without it or with an older
-  one; `-run=SCFxBuild -VerifyContract` lists every system under `/Game/SC/FX` and fails on a stale one, and `viewer/scripts/package_showcase.ps1`
+  one; `-run=SCFxBuild -VerifyContract` lists every system under `/Game/SC/FX` and fails on a stale one, and `game/scripts/package_showcase.ps1`
   runs it before cooking and refuses stale systems. The legacy setters (`SC.SV`, `SC.BR`, `SC.Scale2`) stay removed.
 - **Tests** (tests first for the builder rules: `out/e1/E1-6/review/testsfirst.log`, the new `SCBridge.Fx.ReviewRules` against the E1-6
   rules: the exact fit stretched to 0.25025 s, 33 / 33 / 34 bursts where 32 / 32 / 33 are alive, the step's later value

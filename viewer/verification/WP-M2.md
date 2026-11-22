@@ -20,8 +20,8 @@ The state-polling driver now checks primary store, retrieval, aboard refusal and
 extra-vehicle placement. The bounded-floor and lifecycle retest below exercised those checks.
 
 ```powershell
-& viewer/scripts/rpc/garage.ps1 -Port 8789 -BayEntity DRAK_Cutlass_Black -CheckAboard -Screenshots
-& viewer/scripts/rpc/garage.ps1 -Port 8789 -BayEntity DRAK_Cutlass_Black -FloorEntity DRAK_Buccaneer_AI_Super_CIV
+& game/scripts/rpc/garage.ps1 -Port 8789 -BayEntity DRAK_Cutlass_Black -CheckAboard -Screenshots
+& game/scripts/rpc/garage.ps1 -Port 8789 -BayEntity DRAK_Cutlass_Black -FloorEntity DRAK_Buccaneer_AI_Super_CIV
 ```
 
 ## Bounded-floor and lifecycle retest
@@ -50,7 +50,7 @@ solver rejected 29,780 candidates in keep-outs and the remaining 5,612 for missi
 height of -5 cm. The output distinguishes that geometry result from the verified procedural floor placement.
 
 ```powershell
-& viewer/scripts/rpc/garage.ps1 -Port 8789 -BayEntity CRUS_Starlifter_C2 -FloorEntity DRAK_Cutlass_Black -CheckAboard -Screenshots
+& game/scripts/rpc/garage.ps1 -Port 8789 -BayEntity CRUS_Starlifter_C2 -FloorEntity DRAK_Cutlass_Black -CheckAboard -Screenshots
 ```
 
 Astra confirmed the C2 in-hangar row pinned at the top of the readable list with no leaked Cargo overlay in

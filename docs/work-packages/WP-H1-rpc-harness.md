@@ -6,7 +6,7 @@ scene is idle and settled, so a driver continues as soon as it can instead of sl
 
 Code: `USCRpcSubsystem` (`Public/SCRpcSubsystem.h`, `Private/SCRpcSubsystem.cpp`), the cargo side in
 `Private/Cargo/SCCargoRpc.cpp`, JSON helpers in `Private/SCRpcJson.h`. Client: `viewer/scripts/rpc/SCRpc.psm1`; the
-exploratory driver `viewer/scripts/rpc/explore.ps1`.
+exploratory driver `game/scripts/rpc/explore.ps1`.
 
 ## Switches
 

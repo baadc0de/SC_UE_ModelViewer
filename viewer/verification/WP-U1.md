@@ -205,7 +205,7 @@ After `test_importer.py` generates the synthetic GLB:
 ```bash
 timeout -k 5 90 "$HOME/UnrealEngine/5.8/Engine/Binaries/Linux/UnrealEditor-Cmd" \
   "$PWD/viewer/SCViewer.uproject" -run=pythonscript \
-  -script="$PWD/viewer/scripts/interchange_baseline.py" \
+  -script="$PWD/game/scripts/interchange_baseline.py" \
   -SCBaseline="$PWD/viewer/Saved/Import/synthetic.glb" \
   -unattended -nop4 -nosplash -nullrhi -ddc=SCViewerDDC \
   -abslog="$PWD/viewer/Saved/Spikes/baseline-final.log" \
@@ -298,13 +298,13 @@ plugins/SCBridge/Source/SCBridge/Public/SCVehicle.h
 plugins/SCBridge/Source/SCBridge/SCBridge.Build.cs
 plugins/SCBridge/Source/SCBridge/SCBridge.cpp
 plugins/SCBridge/Source/SCBridge/SCSpike.cpp
-plugins/SCBridge/Source/SCBridgeEditor/Private/SCInterchangeBaseline.cpp
-plugins/SCBridge/Source/SCBridgeEditor/Public/SCInterchangeBaseline.h
-plugins/SCBridge/Source/SCBridgeEditor/SCBridgeEditor.Build.cs
-plugins/SCBridge/Source/SCBridgeEditor/SCBridgeEditor.cpp
+game/Source/UnrealCitizenEditor/Private/SCInterchangeBaseline.cpp
+game/Source/UnrealCitizenEditor/Public/SCInterchangeBaseline.h
+game/Source/UnrealCitizenEditor/UnrealCitizenEditor.Build.cs
+game/Source/UnrealCitizenEditor/UnrealCitizenEditor.cpp
 viewer/README.md
 viewer/scripts/import_package.py
-viewer/scripts/interchange_baseline.py
+game/scripts/interchange_baseline.py
 viewer/scripts/make_test_tar.py
 viewer/scripts/run_import.sh
 viewer/scripts/test_importer.py

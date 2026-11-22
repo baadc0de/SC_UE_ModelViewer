@@ -27,11 +27,11 @@ exporting and importing an object container on every start.
    smallest cooked hangar of that style whose platform holds the ship's solid footprint (centred on the elevator) and
    height, the chosen entrance kind first; none holds it: the largest. `-SCEnvironment` / `sc.Environment` load exactly
    what they name; `USCViewerSettings::bFitHangarToShip` turns it off. Already-cooked hangars are measured with
-   `SC_COOK_MEASURE=1 viewer/scripts/cook_hangars.sh` (~30 s each).
+   `SC_COOK_MEASURE=1 game/scripts/cook_hangars.sh` (~30 s each).
 
 ## Status (2026-11-13)
 
-- Pipeline in place: export (`scripts/export_hangars.sh`), cook (`viewer/scripts/cook_hangars.py` +
+- Pipeline in place: export (`scripts/export_hangars.sh`), cook (`game/scripts/cook_hangars.py` +
   `USCCookLibrary::CookEnvironment`: rigs baked static, repeated parts instanced, meshes/textures pooled under
   `/Game/SC/Hangars/Shared`, materials as constants per hangar, texture sources decoded from the game's DDS blocks by
   `sc_texels_decode_bgra8`), viewer (`USCViewerSubsystem::CookedEnvironmentLevel`: a cooked level is streamed in when one
@@ -46,7 +46,7 @@ exporting and importing an object container on every start.
   on the roof hatch; front-loading and utility hangars on the floor or at a building corner), so the origin cannot be
   used. All 14 pick their ship elevator (cook logs `ENVIRONMENT_PLACE elevator=...`); checked in the viewer: modern
   large top/front, utility large/small top.
-- All 14 cooked (`viewer/scripts/cook_hangars.sh`: one editor process per hangar in a memory-capped systemd scope; a
+- All 14 cooked (`game/scripts/cook_hangars.sh`: one editor process per hangar in a memory-capped systemd scope; a
   single commandlet cooking all of them grew to ~26 GB and was OOM-killed). Content/SC/Hangars ~ the shared pool plus
   per-hangar materials and levels.
 - Validation (modern large top-loader, Scorpius): hangar ready in 7.6-10.3 s cooked vs 47 s runtime; lit captures within

@@ -177,6 +177,14 @@ public:
     bool IsDoorLocked(int32 Index) const;
     bool SetDoorLocked(int32 Index, bool bLocked);
     bool DoorwayOccupied(int32 Index) const;
+    /** Things in a doorway the doors wait for: actors with this tag and a box root (UnrealCitizen: cargo boxes). */
+    static const FName DoorwayBlockerTag;
+    /** Why something holds door Index as it is ("" = nothing): an application's systems register one (UnrealCitizen:
+     *  a cargo job using an access door). Closing is refused with the reason, and a cargo relock waits for it. */
+    using FDoorUseQuery = TFunction<FString(const ASCVehicle& Ship, int32 Door)>;
+    static void AddDoorUseQuery(FName Name, FDoorUseQuery Query);
+    static void RemoveDoorUseQuery(FName Name);
+    FString DoorInUse(int32 Index) const;
     FName ShipLinkPlayer() const;
     FString DoorOrderRefusal(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {}) const;
     FString OrderShipDoor(int32 Index, ESCShipDoorAction Action, FName Actor, const TOptional<FVector>& LocalUse = {});
@@ -212,6 +220,8 @@ public:
     /** Authored vehicle-retrieval interfaces on hangar operating panels, and their reach in cm. */
     UPROPERTY() TMap<TObjectPtr<USceneComponent>, float> GarageKiosks;
     bool AimGarageKiosk(const FVector& Eye, const FVector& Direction, float Reach, const AActor* Ignore) const;
+    /** A drawn operating panel that is a vehicle kiosk: a console use and the vehicle list / retrieval states (WP-M2). */
+    static bool IsGarageKiosk(const FSCUiBinding& Binding);
     /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; transient. */
     TArray<FSCWaypointSource> WaypointSources;
     /** Waypoints from WaypointSources and the ship pad in the current pose; a cooked environment (no sources, no rigs)

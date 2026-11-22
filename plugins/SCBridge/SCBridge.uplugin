@@ -3,18 +3,13 @@
   "Version": 1,
   "VersionName": "0.0.1",
   "FriendlyName": "SC Bridge",
-  "Description": "Runtime viewer and optional editor persistence",
+  "Description": "The shared Star Citizen runtime of the viewer and UnrealCitizen: import, rendering, ships and places, first person (WP-O1)",
   "Category": "Importers",
   "CanContainContent": true,
   "Modules": [
     {
       "Name": "SCBridge",
       "Type": "Runtime",
-      "LoadingPhase": "Default"
-    },
-    {
-      "Name": "SCBridgeEditor",
-      "Type": "Editor",
       "LoadingPhase": "Default"
     },
     {
