@@ -7,6 +7,7 @@
 #include "Containers/Ticker.h"
 #include "Tasks/Task.h"
 #include "SCBridgeClient.h"
+#include "SCViewerCatalog.h"
 #include "SCPlayerAnimator.h"
 #include "SCVehicleInstances.h"
 #include "SCViewerSubsystem.generated.h"
@@ -198,11 +199,14 @@ public:
      *  entity (USCViewerSettings::Paints). Also `sc.Paint [index|default|name part]`. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetPaint(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
-    /** The requested environment (folder, archive path or empty) and the archive's hangars (listed once per archive). */
+    /** The requested environment (folder, archive path or empty) and the catalogue's environments (listed once per
+     *  archive session; GetCatalog). */
     FString GetEnvironmentRequest() const { return EnvironmentFolder; }
     /** Pose the environment's mechanisms: "bind" (as exported), "open" or "closed" fragment end poses. */
     void SetEnvironmentState(const FString& State);
     const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
+    /** WP-O1-3: the pick lists (environments, vehicles) chosen from game data; bReady once listed for this archive. */
+    const FSCViewerCatalog& GetCatalog() const { return Catalog; }
     bool IsEnvironmentLoading() const
     {
         return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
@@ -219,12 +223,9 @@ public:
     bool CanLoad(const FString& Entity) const;
     float GetEnvironmentProgress() const;      // 0..1 over export, parse, import and placement
     FString GetEnvironmentPhaseText() const;
-    // The side panels (model browser, hierarchy); hidden for scripted runs and by the top-bar toggle.
-    void SetPanelsVisible(bool bVisible) { bPanelsVisible = bVisible; }
     /** -SCShowcase (the standalone showcase build): no viewer chrome (top bar, footer, side panels); the scene, the
      *  first-person HUD and its teleport menu only. Keys switch the view (C first/third person). */
     bool IsShowcase() const { return bShowcase; }
-    bool ArePanelsVisible() const { return bPanelsVisible; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadPhaseText() const;
@@ -365,8 +366,8 @@ private:
     void BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source);
     void PlaceEnvironment();
     int32 EnvPlaceInTicks = 0;
-    bool bPanelsVisible = true;
     bool bShowcase = false;
+    bool bStartSkinApplied = false; // -SCSkin is applied to the first loaded vehicle only
     bool bMaxQualityPending = false; // -SCMaxQuality: SCLook::ApplyMaxQuality on the first tick with a world
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
@@ -387,6 +388,7 @@ private:
     UE::Tasks::TTask<FSCExportResult> EnvExport;
     UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> EnvParse;
     TArray<FString> EnvironmentChoices;
+    FSCViewerCatalog Catalog;
     UE::Tasks::TTask<FSCTextResult> EnvListTask;
     uint32 EnvListedGeneration = 0;
     TSharedPtr<FSCImportJob> EnvJob;

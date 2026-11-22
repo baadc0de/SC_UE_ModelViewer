@@ -24,7 +24,6 @@ private:
     TSharedRef<SWidget> MakeTopBar();
     TSharedRef<SWidget> MakeArchiveOverlay();
     TSharedRef<SWidget> MakeLoadingOverlay();
-    EVisibility PanelVisibility() const;
     /** Top bar and footer: hidden in the showcase (-SCShowcase). */
     EVisibility ChromeVisibility() const;
     /** Collapsed while the application's F1 menu is open (first-person HUD, key help). */

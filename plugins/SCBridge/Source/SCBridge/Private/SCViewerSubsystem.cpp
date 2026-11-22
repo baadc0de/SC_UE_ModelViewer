@@ -3,6 +3,7 @@
 #include "SCViewerSubsystem.h"
 #include "SCLook.h"
 #include "SCHangarIndex.h"
+#include "SCViewerShell.h"
 #include "SCEnvironment.h"
 #include "Misc/PackageName.h"
 #include "SCDirt.h"
@@ -108,7 +109,6 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     VehicleInstances = MakeShared<FSCVehicleInstances>(*this);
     bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
     bShowcase = FParse::Param(FCommandLine::Get(), TEXT("SCShowcase"));
-    if (bShowcase) bPanelsVisible = false;
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
     if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
@@ -382,7 +382,7 @@ void USCViewerSubsystem::UnloadEnvironmentLevel()
 FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
 {
     const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
-    if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
+    if (!SCViewerShell::UsesCookedLevels() || !Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
     const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
     return FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
@@ -502,19 +502,22 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
 void USCViewerSubsystem::StepEnvironment()
 {
     if (EnvPlaceInTicks > 0 && --EnvPlaceInTicks == 0) PlaceEnvironment();
-    // The archive's hangars for the picker: listed once per archive session.
+    // The pick lists (WP-O1-3): chosen by the core from game data, listed once per archive session.
     if (ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
-        EnvListTask = Client->SearchEnvironments(TEXT("hangar"), 2000);
+        EnvListTask = Client->ViewerCatalog();
     if (EnvListTask.IsValid() && EnvListTask.IsCompleted())
     {
         const FSCTextResult Listed = EnvListTask.GetResult();
         EnvListTask = {};
         EnvListedGeneration = ArchiveGeneration;
+        Catalog = FSCViewerCatalog();
+        Catalog.Revision = ArchiveGeneration;
+        Catalog.bReady = Listed.bOK && FSCViewerCatalog::Parse(Listed.Json, Catalog, Catalog.Error);
+        if (!Listed.bOK) Catalog.Error = Listed.Error.ToString();
         EnvironmentChoices.Reset();
-        TArray<TSharedPtr<FJsonValue>> Values;
-        if (Listed.bOK && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Listed.Json), Values))
-            for (const auto& V : Values) EnvironmentChoices.Add(V->AsString());
-        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_CHOICES hangars=%d"), EnvironmentChoices.Num());
+        for (const FSCCatalogEntry& E : Catalog.Environments) EnvironmentChoices.Add(E.Id);
+        UE_LOG(LogSCViewer, Display, TEXT("VIEWER_CATALOG environments=%d vehicles=%d%s%s"), Catalog.Environments.Num(), Catalog.Vehicles.Num(),
+               Catalog.Error.IsEmpty() ? TEXT("") : TEXT(" error="), *Catalog.Error);
     }
     if (EnvLevel && !Environment.IsValid())
     {
@@ -632,7 +635,7 @@ void USCViewerSubsystem::SetEnvironmentState(const FString& State)
 }
 FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
 {
-    if (Entity.IsEmpty() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
+    if (Entity.IsEmpty() || !SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
     FString Name = Entity.TrimStartAndEnd();
     for (TCHAR& C : Name)
         if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
@@ -1069,6 +1072,18 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
             if (const FString* Saved = USCViewerSettings::Get()->Paints.Find(Report.Entity))
                 if (const int32 Index = V->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.PaletteId == *Saved; }); Index != INDEX_NONE)
                     V->SetPaint(Index);
+        // WP-O1-3: -SCSkin=<index|default|name part> on the first vehicle the command line loads (as sc.Paint).
+        FString Skin;
+        if (!bStartSkinApplied && FParse::Value(FCommandLine::Get(), TEXT("SCSkin="), Skin) && Vehicle.IsValid())
+        {
+            bStartSkinApplied = true;
+            const TArray<FSCPaintVariant>& Paints = Vehicle->Manifest.Paints;
+            const bool bDefault = Skin.Equals(TEXT("default"), ESearchCase::IgnoreCase);
+            const int32 Index = Skin.IsNumeric() ? FCString::Atoi(*Skin) : bDefault ? INDEX_NONE
+                : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Skin) || P.PaletteId.Contains(Skin); });
+            if ((Index == INDEX_NONE && !bDefault) || !SetPaint(Index))
+                UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" for -SCSkin (sc.Paint lists them)"), *Skin);
+        }
         FitEnvironmentToShip();
     }
     if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)
@@ -1633,12 +1648,6 @@ static FAutoConsoleCommandWithWorldAndArgs GSCPaint(
             : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Arg) || P.PaletteId.Contains(Arg); });
         if ((Index == INDEX_NONE && !bDefault) || !Viewer->SetPaint(Index))
             UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" (sc.Paint lists them)"), *Arg);
-    }));
-static FAutoConsoleCommandWithWorldAndArgs GSCUIPanels(
-    TEXT("sc.UI.Panels"), TEXT("sc.UI.Panels <0|1>: hide or show the side panels (model browser, hierarchy)"),
-    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
-        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World))
-            Viewer->SetPanelsVisible(Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) != 0 : !Viewer->ArePanelsVisible());
     }));
 static FAutoConsoleCommandWithWorldAndArgs GSCEnvironmentState(
     TEXT("sc.Environment.State"), TEXT("sc.Environment.State <bind|open|closed>: pose the environment's mechanisms (doors, elevators)"),

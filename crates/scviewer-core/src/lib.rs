@@ -36,6 +36,8 @@ mod archive;
 pub mod particle_params;
 mod particles;
 mod thrusters;
+mod viewer_catalog;
+pub use viewer_catalog::{CatalogRow, ViewerCatalog};
 pub use particles::{EffectRef, SYSTEM_DEFAULTS, split_reference};
 
 use anyhow::{Context, Result, anyhow, ensure};

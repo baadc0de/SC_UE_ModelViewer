@@ -278,6 +278,14 @@ enum sc_status sc_export_decomposed_mem(struct sc_handle *h,
                                         struct sc_blob *out_tar);
 
 /*
+ Return the viewer's pick lists as JSON, chosen from game data (WP-O1-3, `Session::viewer_catalog`):
+ `{"environments": [rows], "vehicles": [rows]}`, rows `{"id", "label", "group", "detail"}`; an environment's id is its
+ archive object-container path, a vehicle's its entity name.
+ */
+enum sc_status sc_viewer_catalog(struct sc_handle *h,
+                                 char **out);
+
+/*
  Return a JSON array of object-container paths (`.socpak`, slash-normalised) whose path contains every
  whitespace-separated term of query (case-insensitive): game environments such as hangars ("hangar").
  */

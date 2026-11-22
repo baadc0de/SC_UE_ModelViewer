@@ -105,6 +105,8 @@ public:
                                                        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** JSON array of object-container paths matching every term of Query (sc_search_environments). */
     UE::Tasks::TTask<FSCTextResult> SearchEnvironments(const FString& Query, int32 Limit);
+    /** The viewer's pick lists, chosen from game data (sc_viewer_catalog; FSCViewerCatalog::Parse reads the JSON). */
+    UE::Tasks::TTask<FSCTextResult> ViewerCatalog();
     /** One DataCore record as JSON (sc_datacore_record): NameOrGuid is `Type.Name`, a bare record name (exact,
      *  case-insensitive) or a GUID. Objects carry `__type`; references are record GUID strings (look them up the
      *  same way); `__record_name` / `__record_id` name the record. No match or an ambiguous bare name fails. */

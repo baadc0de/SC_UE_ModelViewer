@@ -73,6 +73,7 @@ class FUnrealCitizenModule final : public FDefaultGameModuleImpl
         }
 #endif
         // WP-K1c: the mobiGlas (F1) and the world-space callouts above it share one model; both show in the showcase too.
+        SCViewerShell::SetAppName(LOCTEXT("AppName", "UnrealCitizen"));
         SCViewerShell::SetMenu(LOCTEXT("MobiGlas", "mobiGlas"));
         SCViewerShell::AddOverlay(TEXT("MobiGlas"), [](const FSCViewOverlayArgs& Args) -> TSharedRef<SWidget> {
             const TSharedRef<FSCMobiGlasModel> Model = MakeShared<FSCMobiGlasModel>(Args.Subsystem);

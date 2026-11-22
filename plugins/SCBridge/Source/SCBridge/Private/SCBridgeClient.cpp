@@ -287,6 +287,25 @@ UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::SearchEnvironments(const FStrin
     });
 }
 
+UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::ViewerCatalog()
+{
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared()] {
+        FSCTextResult Result;
+        FScopeLock Guard(&Self->HandleLock);
+        char* Json = nullptr;
+        const sc_status Status = Self->Handle ? sc_viewer_catalog(Self->Handle, &Json) : SC_STATUS_INVALID_ARGUMENT;
+        if (Status != SC_STATUS_OK)
+        {
+            Result.Error = Self->Handle ? Self->FailLocked(Status, Result.bPanicked) : NSLOCTEXT("SCBridge", "NoArchive", "No archive is open");
+            return Result;
+        }
+        Result.Json = UTF8_TO_TCHAR(Json);
+        sc_free_string(Json);
+        Result.bOK = true;
+        return Result;
+    });
+}
+
 UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::DataCoreRecord(const FString& NameOrGuid)
 {
     return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), NameOrGuid] {

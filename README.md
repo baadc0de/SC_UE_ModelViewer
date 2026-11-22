@@ -21,10 +21,10 @@ vendored as a git submodule at `vendor/StarBreaker` (our patches live on `scview
 
 ## What it does
 
-- **Model browser.** Search the archive, pick level of detail and texture mip, load. The model comes through the FFI
-  library (`scbridge-ffi`) as a decomposed package (geometry, material semantics, lights, hierarchy, clips). The
-  runtime importer builds it step by step within a frame budget. Orbit and free-fly cameras, a hierarchy panel,
-  focus and framing.
+- **Picker (F1).** An environment from the game's player hangars, a vehicle from one row per ship a player would
+  recognise, and its paint; the lists come from game data (WP-O1-3). The model comes through the FFI library
+  (`scbridge-ffi`) as a decomposed package (geometry, material semantics, lights, hierarchy, clips). The runtime
+  importer builds it step by step within a frame budget. Orbit and free-fly cameras, focus and framing.
 - **Game-derived appearance.**
   - Materials follow the game's shader families: HardSurface, Layered, Illum, glass, decals, stencils, paints from
     the tint system, dirt.

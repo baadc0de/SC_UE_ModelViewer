@@ -7,6 +7,7 @@
 #include "SCRpcJson.h"
 #include "SCRpcVideo.h"
 #include "SCRpcExtension.h"
+#include "SCViewerShell.h"
 #include "SCRpcRender.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
@@ -231,7 +232,6 @@ private:
     TMap<FString, int32> LogKinds, LogTotals; // warnings / errors seen per kind, and in all
     FSCVideoRecorder Video;
     FSCRpcRender Renderer;
-    bool bPanelsSet = false;
     FTransform LastCamera = FTransform::Identity;
 
     // ------------------------------------------------------------------------------------------------ world access
@@ -447,9 +447,6 @@ private:
     bool Tick(float)
     {
         const double T = Now();
-        // Driven runs show the full-width scene (as scripted routes do); /ui {panels: true} shows the panels again.
-        if (!bPanelsSet)
-            if (USCViewerSubsystem* V = Viewer()) { V->SetPanelsVisible(false); bPanelsSet = true; }
         if (Capture)
             for (FSCRpcLogCapture::FLine& L : Capture->Take())
             {
@@ -655,9 +652,10 @@ private:
         Bind(TEXT("/ui"), [this](auto& B, auto& Done) {
             USCViewerSubsystem* V = Viewer();
             if (!V) return Respond(Done, Error(TEXT("no viewer")));
-            if (B->HasField(TEXT("panels"))) V->SetPanelsVisible(Flag(B, TEXT("panels"), false));
+            // The application's menu (SCViewerShell): {menu: true|false} opens or closes it.
+            if (B->HasField(TEXT("menu"))) SCViewerShell::SetMenuOpen(V, Flag(B, TEXT("menu"), false));
             FObj O = Ok();
-            O->SetBoolField(TEXT("panels"), V->ArePanelsVisible());
+            O->SetBoolField(TEXT("menu"), SCViewerShell::IsMenuOpen(V));
             Respond(Done, O);
         });
         Bind(TEXT("/quit"), [this](auto& B, auto& Done) {

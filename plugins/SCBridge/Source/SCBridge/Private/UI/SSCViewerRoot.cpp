@@ -1,8 +1,6 @@
 // SSCViewerRoot: layout, archive picker overlay (IDesktopPlatform), camera mode buttons, footer statistics.
 #include "SSCViewerRoot.h"
 #include "SCViewerStyle.h"
-#include "SSCHierarchyPanel.h"
-#include "SSCModelBrowser.h"
 #include "SSCViewportInput.h"
 #include "SSCFirstPersonHUD.h"
 #include "SCViewerShell.h"
@@ -34,7 +32,6 @@ using namespace SCViewerStyle;
 
 namespace
 {
-constexpr float SidePanelWidth = 380.f, HierarchyWidth = 400.f;
 constexpr float SystemSampleSeconds = 1.f;
 } // namespace
 
@@ -50,8 +47,6 @@ void SSCViewerRoot::Construct(const FArguments& Args)
         + SVerticalBox::Slot().FillHeight(1.f)
         [
             SNew(SHorizontalBox)
-            + SHorizontalBox::Slot().AutoWidth()
-            [SNew(SBox).WidthOverride(SidePanelWidth).Visibility_Lambda([this] { return PanelVisibility(); })[SNew(SSCModelBrowser).Subsystem(Subsystem.Get())]]
             + SHorizontalBox::Slot().FillWidth(1.f)
             [
                 SAssignNew(View, SOverlay)
@@ -78,8 +73,6 @@ void SSCViewerRoot::Construct(const FArguments& Args)
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(FMargin(0, 0, 0, 36))[MakeLoadingOverlay()]
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[MakeArchiveOverlay()]
             ]
-            + SHorizontalBox::Slot().AutoWidth()
-            [SNew(SBox).WidthOverride(HierarchyWidth).Visibility_Lambda([this] { return PanelVisibility(); })[SNew(SSCHierarchyPanel).Subsystem(Subsystem.Get())]]
         ]
         + SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([this] { return ChromeVisibility(); })[MakeFooter()]]
     ];
@@ -146,7 +139,7 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
     [
         SNew(SHorizontalBox)
         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 16, 0)
-        [SNew(STextBlock).Font(Font(12, true)).ColorAndOpacity(Text()).Text(LOCTEXT("Title", "SC Model Viewer"))]
+        [SNew(STextBlock).Font(Font(12, true)).ColorAndOpacity(Text()).Text_Lambda([] { return SCViewerShell::AppName(); })]
         + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
         [
             SNew(STextBlock).Font(Font(9)).ColorAndOpacity_Lambda([this] {
@@ -182,14 +175,15 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
                           LOCTEXT("FirstPersonTip", "Walk the ship with collision"))]
         + SHorizontalBox::Slot().AutoWidth().Padding(12, 0, 2, 0)
         [
-            SNew(SCheckBox)
-            .Style(FCoreStyle::Get(), "ToggleButtonCheckbox")
-            .ToolTipText(LOCTEXT("PanelsTip", "Show or hide the side panels (model browser, hierarchy); console: sc.UI.Panels"))
-            .IsChecked_Lambda([this] { return Subsystem.IsValid() && Subsystem->ArePanelsVisible() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-            .OnCheckStateChanged_Lambda([this](ECheckBoxState State) {
-                if (Subsystem.IsValid()) Subsystem->SetPanelsVisible(State == ECheckBoxState::Checked);
+            // The application's menu (SCViewerShell; the viewer's picker, UnrealCitizen's mobiGlas), also F1.
+            SNew(SButton)
+            .Visibility_Lambda([] { return SCViewerShell::HasMenu() ? EVisibility::Visible : EVisibility::Collapsed; })
+            .ToolTipText(LOCTEXT("MenuTip", "Open the menu (F1)"))
+            .OnClicked_Lambda([this] {
+                SCViewerShell::SetMenuOpen(Subsystem.Get(), !SCViewerShell::IsMenuOpen(Subsystem.Get()));
+                return FReply::Handled();
             })
-            [SNew(SBox).Padding(FMargin(8, 2))[SNew(STextBlock).Font(Font(9)).Text(LOCTEXT("Panels", "Panels"))]]
+            [SNew(STextBlock).Font(Font(9)).Text_Lambda([] { return FText::Format(LOCTEXT("MenuButton", "{0} (F1)"), SCViewerShell::MenuName()); })]
         ]
         + SHorizontalBox::Slot().AutoWidth().Padding(2, 0)
         [SNew(SButton).Text(LOCTEXT("SpawnLook", "Spawn where I look"))
@@ -216,10 +210,6 @@ EVisibility SSCViewerRoot::ChromeVisibility() const
 EVisibility SSCViewerRoot::MenuHidden() const
 {
     return SCViewerShell::IsMenuOpen(Subsystem.Get()) ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible;
-}
-EVisibility SSCViewerRoot::PanelVisibility() const
-{
-    return !Subsystem.IsValid() || Subsystem->ArePanelsVisible() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
 // On-screen loading bars over the 3D view: the model and the environment (hangar), each while it loads; a failed model
