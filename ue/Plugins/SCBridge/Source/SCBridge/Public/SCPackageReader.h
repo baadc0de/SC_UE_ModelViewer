@@ -41,6 +41,7 @@ struct FSCUiButton
     FString Node;
     FName Interaction;
     FBox2D RectPx = FBox2D(ForceInit);
+    FString Label; // cache format 43: the button's caption ("Auxiliary"); "" without one
 };
 /** `ui_bindings[].state_types[]`: one state type of the UI owner's state machine, its default, the owner's own
  *  interactions that set a state (`transitions`) and the linked entities' state tags that set one (`linked`). */

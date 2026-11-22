@@ -50,17 +50,21 @@ int32 SSCInteractionPrompt::OnPaint(const FPaintArgs&, const FGeometry& G, const
     // Measure: the title, each action (label, and why it is unavailable), the footer.
     const FString Title = Caps(P.Title);
     const FVector2f TitleSize = Title.IsEmpty() ? FVector2f::ZeroVector : Measure(Title, Small);
+    // Several actions held back for one reason: the reason once, in the footer, not on every row.
+    const bool bSharedNote = P.Options.Num() > 1 && !P.Options[0].Note.IsEmpty() &&
+                             !P.Options.ContainsByPredicate([&](const FSCPromptOption& O) { return O.Note != P.Options[0].Note; });
     TArray<FString> Notes;
     float RowsWidth = 0, RowHeight = KeyCap;
     for (const FSCPromptOption& O : P.Options)
     {
-        Notes.Add(O.Note.IsEmpty() ? FString() : Caps(O.Note));
+        Notes.Add(O.Note.IsEmpty() || bSharedNote ? FString() : Caps(O.Note));
         const FVector2f L = Measure(O.Label, Row), N = Notes.Last().IsEmpty() ? FVector2f::ZeroVector : Measure(Notes.Last(), Small);
         RowsWidth = FMath::Max(RowsWidth, KeyCap + KeyGap + L.X + (N.X > 0 ? KeyGap + N.X : 0));
         RowHeight = FMath::Max(RowHeight, L.Y);
     }
     RowHeight += 2 * RowPadY;
     TArray<FString> Footer;
+    if (bSharedNote) Footer.Add(Caps(P.Options[0].Note));
     if (!P.Hint.IsEmpty()) Footer.Add(Caps(P.Hint));
     if (P.Options.Num() > 1) Footer.Add(TEXT("WHEEL  CHOOSE"));
     const FString FooterText = FString::Join(Footer, TEXT("   "));

@@ -607,6 +607,10 @@ ESCSeatRole ASCFirstPersonCharacter::GetOccupiedSeatRole() const
 }
 bool ASCFirstPersonCharacter::Interact()
 {
+    // The prompt of this moment (the view may have turned since the last tick): the wheel's choice holds only for the
+    // same thing (FSCInteractionPrompt::Update). Nothing in the world is acted on while a menu is up.
+    UpdatePrompt();
+    if (bMobiGlasOpen || bTeleportMenuOpen) return false;
     if (Seats && Seats->IsActive()) return Seats->Interact(*this);
     if (Ladder && Ladder->OwnsMovement()) return Ladder->Interact(*this);
     USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this);
@@ -652,7 +656,7 @@ bool ASCFirstPersonCharacter::Interact()
     // perform uses yet (WP-P6-4): the choice is logged and the popout says so.
     if (const FSCUsableTarget* Usable = AimedUsable())
     {
-        const FSCPromptOption* Chosen = Prompt.SelectedOption();
+        const FSCPromptOption* Chosen = Prompt.Key.StartsWith(TEXT("usable:")) ? Prompt.SelectedOption() : nullptr;
         UE_LOG(LogTemp, Display, TEXT("FP_USABLE entity=%s label=\"%s\" interaction=\"%s\" performed=0 (usables are WP-P6-4)"), *Usable->EntityId,
                *Usable->Label, Chosen ? *Chosen->Label : TEXT(""));
         return false;
@@ -712,6 +716,7 @@ void ASCFirstPersonCharacter::UpdateLiftFocusAndRide()
 }
 void ASCFirstPersonCharacter::UpdateFloorPanelAim()
 {
+    if (bMobiGlasOpen || bTeleportMenuOpen) return; // nothing is aimed while a menu is up (UpdatePanelHover clears the row)
     // WP-P5 floor panel: the option under the crosshair is highlighted (nothing off the panel's face or its rows).
     if (Vehicle && !Vehicle->FloorPanels.IsEmpty())
     {
@@ -1056,10 +1061,18 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
             AddSeat(Line);
             return P;
         }
-    if (const FSCUsableTarget* Usable = AimedUsable())
+    // A ladder E would mount (a ladder has no prompt of its own in the data; the action is the viewer's word for it).
+    if (Ladder && Ladder->CanMount(*this))
     {
-        P.Key = TEXT("usable:") + Usable->EntityId;
-        for (const FSCPointInteraction& I : Usable->Options)
+        P.Key = TEXT("ladder:mount");
+        Add(TEXT("Climb"));
+        return P;
+    }
+    int32 Point = INDEX_NONE;
+    if (const FSCUsableTarget* Usable = AimedUsable(&Point))
+    {
+        P.Key = FString::Printf(TEXT("usable:%s:%d"), *Usable->EntityId, Point);
+        for (const FSCPointInteraction& I : Usable->Points[Point].Options)
             Add(I.DisplayName.IsEmpty() ? I.Name.ToString() : I.DisplayName, false, TEXT("not in the viewer yet"));
         return P;
     }
@@ -1088,11 +1101,11 @@ bool ASCFirstPersonCharacter::CyclePrompt(int32 Steps)
     UE_LOG(LogTemp, Display, TEXT("FP_PROMPT_SELECT %s"), *Prompt.Describe());
     return true;
 }
-const FSCUsableTarget* ASCFirstPersonCharacter::AimedUsable(const ASCVehicle** OutHost) const
+const FSCUsableTarget* ASCFirstPersonCharacter::AimedUsable(int32* OutPoint, const ASCVehicle** OutHost) const
 {
     const FVector Eye = InteractionOrigin(), View = GetViewRotation().Vector();
     for (const ASCVehicle* V : {static_cast<const ASCVehicle*>(Vehicle.Get()), static_cast<const ASCVehicle*>(GetHangar())})
-        if (const FSCUsableTarget* Usable = V ? V->FindUsableTarget(Eye, View, InteractReach, this) : nullptr)
+        if (const FSCUsableTarget* Usable = V ? V->FindUsableTarget(Eye, View, InteractReach, this, OutPoint) : nullptr)
         {
             if (OutHost) *OutHost = V;
             return Usable;
@@ -1103,6 +1116,13 @@ void ASCFirstPersonCharacter::UpdatePanelHover()
 {
     // The ship's panels and the hangar's: the one under the crosshair shows its hover render, the others rest.
     const bool bAiming = !TraversalOwnsMovement() && !bMobiGlasOpen && !bTeleportMenuOpen;
+    // A drawn panel's row (UpdateFloorPanelAim) rests too while nothing is aimed (a menu, a seat, a ladder).
+    if (!bAiming && Vehicle && Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
+    {
+        AimedFloorPanel = AimedFloorOption = INDEX_NONE;
+        Vehicle->SetFloorPanelHighlight(INDEX_NONE, INDEX_NONE);
+        Vehicle->RefreshFloorPanels();
+    }
     const FVector Eye = InteractionOrigin(), View = GetViewRotation().Vector();
     for (ASCVehicle* V : {Vehicle.Get(), GetHangar()})
     {

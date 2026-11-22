@@ -89,6 +89,7 @@ bool ASCVehicle::AimPanelButton(FVector Eye, FVector Direction, float Reach, con
         // A panel is reached from as far as its UI is operated when that is farther (FindInteraction's rule).
         const double AimReach = FMath::Max<double>(Reach, A.Reach);
         const FTransform T = A.Frame();
+        if (FVector::Dist(Eye, T.TransformPosition(A.Centre)) > AimReach + A.Radius) continue; // out of reach
         const FVector LocalEye = T.InverseTransformPosition(Eye);
         const FVector LocalRay = T.InverseTransformPosition(Eye + Dir * AimReach) - LocalEye;
         const double LocalReach = LocalRay.Size();

@@ -63,9 +63,10 @@ use std::{
 // 40: UI bindings carry `interaction_distance` (the owner's render-to-texture `interactionDistance`, metres): how far
 //     from its screen a panel is operated (hangar waypoints: the C2's exterior door pads).
 // 42: light records preserve style speed and phase, and styled packages include the archive waveform table.
-// 43: UI bindings carry `hover_images[]` (each written render with the cursor on each of its buttons: the engine's hover
-//     tag on the node), styled role fills keep their alpha (a large button's background), and placements carry
-//     `usable_interactions[]` (the interactions that start a use of the class's usable). WP-I1-4.
+// 43: UI bindings of operated panels carry `hover_images[]` (each written render with the cursor on each of its buttons:
+//     the engine's hover tag on the node) and `buttons[].label` (the button's caption), styled role fills keep their
+//     alpha (a large button's background), and placements carry `usable_interactions[]` (the interactions that start a
+//     use of the class's usable). WP-I1-4.
 pub const CACHE_FORMAT_VERSION: u32 = 43;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");

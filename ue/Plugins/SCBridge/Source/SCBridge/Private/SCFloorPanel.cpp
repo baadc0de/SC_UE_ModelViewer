@@ -601,11 +601,10 @@ int32 ASCVehicle::RefreshFloorPanels()
         {
             V.Highlight = P.Highlight;
             V.Image = P.ImageForState();
-            if (const FString Hover = P.HoverImageFor(V.Image, P.Highlight); !Hover.IsEmpty())
-            {
-                V.Image = Hover;
-                V.bHoverImage = true;
-            }
+            // An export with hover renders (cache format 43) gives the game's look of the aimed node: its render, or none
+            // when hovering changes nothing there (the active row); either way not our frame.
+            V.bHoverImage = P.Layout.Options.IsValidIndex(P.Highlight) && !P.HoverImages.IsEmpty();
+            if (const FString Hover = P.HoverImageFor(V.Image, P.Highlight); !Hover.IsEmpty()) V.Image = Hover;
         }
         else if (Lifts.IsValidIndex(P.Lift)) V = FSCFloorPanelView::Of(*Lifts[P.Lift], P.Highlight, Now);
         else continue;
@@ -685,6 +684,16 @@ FString FSCFloorPanel::HoverImageFor(const FString& Image, int32 Option) const
     return H ? H->ImagePath : FString();
 }
 
+FString FSCPanelAim::DoorButtonOf(const TArray<FSCUiButton>& Buttons, const TArray<FSCUiStateType>& StateTypes)
+{
+    for (const FSCUiButton& B : Buttons)
+        if (!StateTypes.ContainsByPredicate([&](const FSCUiStateType& T) {
+                return T.Transitions.ContainsByPredicate([&](const FSCUiStateType::FTransition& X) { return X.Interaction == B.Interaction; });
+            }))
+            return B.Node;
+    return FString();
+}
+
 FTransform FSCPanelAim::Frame() const
 {
     const UMeshComponent* C = Component.Get();
@@ -704,8 +713,9 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
         UMeshComponent* Component = F.Component.Get();
         if (!Component || F.ImageSizePx.X <= 0 || F.ImageSizePx.Y <= 0 || F.Buttons.IsEmpty()) continue;
         // WP-I1-4: a face whose hover renders are swapped on it (a door pad, a call panel, a kiosk: not drawn as a panel)
-        // is aimed at by its buttons. Off every button, a door pad's door button is what E presses (the lock control
-        // is a button of its own, AimDoorPanelLock); a face with one node, that node.
+        // is aimed at by its buttons. Off every button, a door pad's door button is what E presses: the button whose
+        // interaction sets none of the pad's own states (its open/close acts on the door, whose state comes back by
+        // link; the lock and light buttons set the pad's lock and light states). A face with one node: that node.
         auto AddAim = [&](bool bDoorPad) {
             const int32 Face = ScreenFaces.IndexOfByPredicate([&](const FSCScreenFace& S) { return S.Component.Get() == Component && S.Slot == F.Slot; });
             if (Face == INDEX_NONE || ScreenFaces[Face].Hovers.IsEmpty()) return;
@@ -715,6 +725,10 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
             if (const float* Operated = PanelReach.Find(F.Panel)) Aim.Reach = *Operated;
             Aim.Geometry = F.Geometry.Scaled(Component->GetComponentScale());
             if (!Aim.Geometry.Build(Aim.Frame().InverseTransformVectorNoScale(GetActorUpVector()))) return;
+            FBox Box(ForceInit);
+            for (const FVector3f& Corner : Aim.Geometry.Positions) Box += FVector(Corner);
+            Aim.Centre = Box.GetCenter();
+            Aim.Radius = Box.GetExtent().Size();
             FVector2D Mean = FVector2D::ZeroVector;
             for (const FVector2f& UV : Aim.Geometry.UVs) Mean += FVector2D(UV.X, UV.Y) / Aim.Geometry.UVs.Num();
             Aim.UVBase = FVector2D(FMath::FloorToDouble(Mean.X), FMath::FloorToDouble(Mean.Y));
@@ -723,10 +737,9 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
             {
                 Aim.Buttons.Add({B.Node, B.Interaction, FBox2D(B.RectPx.Min / F.ImageSizePx, B.RectPx.Max / F.ImageSizePx)});
                 Nodes.Add(B.Node);
-                if (Aim.Fallback.IsEmpty() && bDoorPad && B.Interaction != FName(TEXT("LockDoor")) && B.Interaction != FName(TEXT("UnlockDoor")))
-                    Aim.Fallback = B.Node;
             }
-            if (!bDoorPad && Nodes.Num() == 1) Aim.Fallback = F.Buttons[0].Node;
+            if (bDoorPad) Aim.Fallback = FSCPanelAim::DoorButtonOf(F.Buttons, F.StateTypes);
+            else if (Nodes.Num() == 1) Aim.Fallback = F.Buttons[0].Node;
             PanelAims.Add(MoveTemp(Aim));
         };
         if (DoorControls.Contains(F.Panel))
@@ -783,7 +796,8 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
         for (const FVector2f& UV : P.Geometry.UVs) Mean += FVector2D(UV.X, UV.Y) / P.Geometry.UVs.Num();
         P.UVBase = FVector2D(FMath::FloorToDouble(Mean.X), FMath::FloorToDouble(Mean.Y));
         for (const FSCUiButton& B : F.Buttons)
-            P.Layout.Options.Add({INDEX_NONE, B.Interaction, B.Interaction.ToString(), FBox2D(B.RectPx.Min / F.ImageSizePx, B.RectPx.Max / F.ImageSizePx), B.Node});
+            P.Layout.Options.Add({INDEX_NONE, B.Interaction, B.Label.IsEmpty() ? B.Interaction.ToString() : B.Label,
+                                  FBox2D(B.RectPx.Min / F.ImageSizePx, B.RectPx.Max / F.ImageSizePx), B.Node});
         P.StateTypes = F.StateTypes;
         P.HoverImages = F.HoverImages;
         P.StateImages = F.StateImages;

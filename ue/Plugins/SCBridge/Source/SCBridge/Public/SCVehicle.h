@@ -48,13 +48,23 @@ struct FSCScreenFace
     TMap<FString, TWeakObjectPtr<UMaterialInterface>> Hovers;
     FString Hovered;
 };
-/** WP-I1-4: a placed usable (a bed, a sofa, a chair: `usable_interactions[]`) and what it offers a standing player: its
- *  points' interactions that start a use, in authored order (the union over its points). */
+/** WP-I1-4: one interaction point of a placed usable: where its helper is (anchor space, when the mesh names it), how
+ *  near the player must be (its `radius`) and what it offers a standing player there (its interactions that start a use). */
+struct FSCUsablePoint
+{
+    FString Helper;
+    FVector Local = FVector::ZeroVector;
+    bool bLocated = false;
+    float RadiusCm = 0; // 0: not authored (no limit)
+    float ViewAngleLimit = 0; // degrees: the point is used only within half this of the view; 0 (or >= 180): any
+    TArray<FSCPointInteraction> Options;
+};
+/** WP-I1-4: a placed usable (a bed, a sofa, a chair: `usable_interactions[]`) and its points. */
 struct FSCUsableTarget
 {
     int32 Interior = INDEX_NONE;
     FString EntityId, Label;
-    TArray<FSCPointInteraction> Options;
+    TArray<FSCUsablePoint> Points;
 };
 /** WP-I1-4: an operating panel's face whose render has clickable nodes and that is not drawn as a FloorPanel (a door pad,
  *  a lift call panel, a kiosk): where its buttons are on the face, for the game's hover look under the crosshair. */
@@ -69,7 +79,14 @@ struct FSCPanelAim
     FString Fallback;
     /** How far it is operated from (cm): its UI's interaction distance (ASCVehicle::PanelReach); 0 without one. */
     double Reach = 0;
+    /** The face's bounding sphere in the component's frame: a face out of reach is skipped before its triangles. */
+    FVector Centre = FVector::ZeroVector;
+    double Radius = 0;
     FTransform Frame() const;
+    /** A door pad's door button: the first whose interaction sets none of the pad's own states (`state_types[]`
+     *  transitions): its open / close acts on the door, whose state comes back by link, while the lock and light buttons
+     *  set the pad's own lock and light states. "" when every button sets one. */
+    static FString DoorButtonOf(const TArray<FSCUiButton>& Buttons, const TArray<FSCUiStateType>& StateTypes);
 };
 /** Where a fragment's clips start (ASCVehicle::PlayFragmentAt). */
 enum class ESCFragmentStart : uint8
@@ -181,8 +198,10 @@ public:
     int32 SetPanelHover(int32 Aim, const FString& Node);
     // ------------------------------------------------------------------------- WP-I1-4 usables
     TMap<TWeakObjectPtr<const USceneComponent>, FSCUsableTarget> UsableTargets;
-    /** The usable whose geometry the view ray meets first within Reach (by its anchor), and where. */
-    const FSCUsableTarget* FindUsableTarget(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, FVector* OutPoint = nullptr) const;
+    /** The usable whose geometry the view ray meets first within Reach (by its anchor) and the point the player uses
+     *  there (OutPoint): of its located points within their radius of the eye, the one nearest where the ray hits; a
+     *  usable whose mesh names none of its helpers offers its first point. Null when no point is in reach. */
+    const FSCUsableTarget* FindUsableTarget(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32* OutPoint = nullptr) const;
     /** Hangar waypoints (environments only; SCHangarWaypoints.h): kind Hangar, actor-relative standing hints. Built by
      *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> Waypoints;

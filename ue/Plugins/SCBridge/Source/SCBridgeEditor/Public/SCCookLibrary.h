@@ -25,8 +25,12 @@ public:
      *  7: WP-A1 A1-2 (the staged audio.json carries the bus effects: meters and side-chains, EQs, effect RTPCs; a level
      *  staged before plays the A1-1 mix).
      *  8: hangar waypoints (ASCVehicle::Waypoints, built by present_environment before the rigs are baked; a hangar cooked
-     *  before has none: the first-person teleport menu's Hangar section would be empty). */
-    static constexpr int32 FormatVersion = 8;
+     *  before has none: the first-person teleport menu's Hangar section would be empty).
+     *  9: WP-I1-4 (panel renders: a large button's background at its styled alpha, so a level cooked before shows the
+     *  old, full-strength pads; generated UI textures are pooled under a key that carries this version, so a recook
+     *  never reuses a render of an older format by its unchanged path). The hover renders, panel aims and usables are
+     *  import-time records a cooked level does not keep yet. */
+    static constexpr int32 FormatVersion = 9;
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in

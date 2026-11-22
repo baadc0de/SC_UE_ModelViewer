@@ -1417,17 +1417,34 @@ void FSCImportJob::FState::Assemble()
             AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
         V->AddItemSpawn(I, E.Anchor);
         // WP-I1-4: a placed usable offers, at its points, the interactions that start a use (a bed: Sit, LieDown, Sleep).
-        if (!I.UsableInteractions.IsEmpty() && E.Anchor)
+        // A door's usable is its walk-through (a navigation link: StepThrough): the door's own interaction is what E does
+        // there (FindInteraction), so a door is not registered as a usable.
+        if (!I.UsableInteractions.IsEmpty() && E.Anchor && !I.Door.bValid)
         {
             FSCUsableTarget Usable;
             Usable.Interior = PlacingInterior;
             Usable.EntityId = I.EntityId;
             Usable.Label = I.SocEntityName.IsEmpty() ? I.EntityName : I.SocEntityName;
             for (const FSCInteractionPoint& Point : I.InteractionPoints)
+            {
+                FSCUsablePoint P;
+                P.Helper = Point.HelperName;
+                P.RadiusCm = Point.Radius * 100.f;
+                P.ViewAngleLimit = Point.ViewAngleLimit.Get(0.f);
                 for (const FSCPointInteraction& X : Point.Interactions)
-                    if (I.UsableInteractions.Contains(X.Name) && !Usable.Options.ContainsByPredicate([&](const FSCPointInteraction& O) { return O.Name == X.Name; }))
-                        Usable.Options.Add(X);
-            if (!Usable.Options.IsEmpty()) V->UsableTargets.Add(E.Anchor, MoveTemp(Usable));
+                    if (I.UsableInteractions.Contains(X.Name)) P.Options.Add(X);
+                if (P.Options.IsEmpty()) continue;
+                // The helper in the item's frame (as AddHelpers): the mesh keeps the helper nodes, named with or without '$'.
+                const FMatrix* Node = E.Mesh ? E.Mesh->Nodes.Find(Point.HelperName) : nullptr;
+                if (!Node && E.Mesh) Node = E.Mesh->Nodes.Find(Point.HelperName.Replace(TEXT("$"), TEXT("")));
+                if (Node)
+                {
+                    P.Local = FTransform(FSCMeshImporter::Transform(*Node)).GetLocation();
+                    P.bLocated = true;
+                }
+                Usable.Points.Add(MoveTemp(P));
+            }
+            if (!Usable.Points.IsEmpty()) V->UsableTargets.Add(E.Anchor, MoveTemp(Usable));
         }
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {
@@ -1945,6 +1962,15 @@ void FSCImportJob::FState::Assemble()
     const double RoomSeconds = FPlatformTime::Seconds() - RoomStart;
     FSCDirt::MarkExterior(V); // exterior = outside every room, from the channels just set
     FSCDirt::Push(V->GetWorld());
+    // WP-I1-4: a usable is found by the geometry under its anchor (FindUsableTarget): its meshes stay its own.
+    for (const auto& [Anchor, Usable] : V->UsableTargets)
+        if (const USceneComponent* A = Anchor.Get())
+        {
+            TArray<USceneComponent*> Parts;
+            A->GetChildrenComponents(true, Parts);
+            for (USceneComponent* Part : Parts)
+                if (Part->IsA<UStaticMeshComponent>()) Part->ComponentTags.AddUnique(FSCInstancing::KeepTag);
+        }
     if (Options.bInstanceRepeatedParts) // after light areas and dirt set channels / custom data, before emissive proxies attach
     {
         const FSCInstancingStats Instancing = FSCInstancing::Consolidate(V, DeferredRegistration);

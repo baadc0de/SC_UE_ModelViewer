@@ -1444,37 +1444,90 @@ panel's `AuxLightsButton` change; a node of another canvas changes nothing (not 
   refuses, a usable). The HUD's status text no longer carries the prompt.
 - **Wheel**: `MouseScrollUp` / `MouseScrollDown` are `PromptPrevious` / `PromptNext` (Slate `OnMouseWheel` → `HandleKey`);
   the choice holds while the same thing stays under the crosshair (`FSCInteractionPrompt::Update`).
-- **Usables**: placements with `usable_interactions[]` are registered by anchor (`UsableTargets`, `FindUsableTarget`);
-  the popout lists their points' use-starting interactions (C2 bed: Sit, Lie Down, Sleep). Performing a use is WP-P6-4:
+- **Usables**: placements with `usable_interactions[]` (doors excepted: see Review) are registered by anchor with their
+  points (`UsableTargets`, `FindUsableTarget`); the popout lists the use-starting interactions of the point in reach
+  (C2 bed: Sit, Lie Down, Sleep). Performing a use is WP-P6-4:
   E logs `FP_USABLE … performed=0`.
 - Console: `sc.FP.Prompt` (`FP_PROMPT_NOW`), `FP_PROMPT` / `FP_PROMPT_SELECT` on change; the wheel is
   `sc.FP.Key MouseScrollDown 1`; `sc.Panels.Hover` lists the hover faces (`PANEL_AIM`) and usables (`USABLE`).
 
 ### Verification (C2 in `hangar_xltop_001`, first person, port 8772, `ue/scripts/rpc/interaction-feedback.ps1`)
 
-- Export at cache format 43: hangar `SCREEN_STATES faces=20 hover_images=47`, `PANEL_HOVER_FACES aims=20`; C2
-  `faces=62 state_images=141 hover_images=169 usables=41`, `PANEL_HOVER_FACES aims=52 light_panels_with_hover=4`;
-  export 260 s (cache miss), 2 s on the cache hit.
+- Export at cache format 43 (after review): hangar `SCREEN_STATES faces=20 hover_images=38`, `PANEL_HOVER_FACES
+  aims=20`; C2 `faces=62 state_images=141 hover_images=169 usables=7`, `PANEL_HOVER_FACES aims=52
+  light_panels_with_hover=4`; export 245 s (cache miss), 2 s on a hit.
 - Rear-ramp pad: crosshair on it → `shown=|hover:DoorButton`, popout `title="Rear ramp" options=[>Open]`; off it →
   `shown=default`, no prompt. The button measures rgb(34,152,237) hovered against rgb(22,124,201) at rest from the
   same place (`out/i1-4/a3-pad-hovered.png`, `a5-pad-lock-aimed.png`).
 - Light panel (`4b3c1b3d…`): rows 1 and 2 aimed → `image=…__hover_auxlightsbutton` / `…__hover_emergencylightsbutton`,
-  no frame; row 0 is the active state (`On`), whose hover render equals the rest render and is not written: the frame
-  stays off and the image unchanged.
-- Bed (`Bed_CRUS_Starlifter_Single_Left-000`): `options=[>-Sit, -Lie Down, -Sleep]`; the wheel →
-  `[-Sit, >-Lie Down, -Sleep]`; E → `FP_USABLE … interaction="Lie Down" performed=0`.
+  no frame; row 0 is the active state (`On`), whose hover render equals the rest render and is not written: no frame,
+  the image unchanged. The popout names the rows by their captions: `On`, `Auxiliary`, `Emergency`.
+- Bed (`Bed_CRUS_Starlifter_Single_Left-000`): its points located (`$IP_enter_left=Sit/Lie Down/Sleep;
+  $IP_exit_left=Sit/Sleep; $IP_exit_sit_left=Sleep/Lie Down`); from the side, the point in reach nearest the crosshair:
+  `key="usable:413be4be…:2" options=[>-Sleep, -Lie Down]`; the wheel → `[-Sleep, >-Lie Down]`; E →
+  `FP_USABLE … interaction="Lie Down" performed=0`; the reason shown once, in the footer.
 - Tests: starbreaker-ui `ui_check.sh` ALL GREEN (TDD tier; `--full` needs a Clipper export this machine does not have),
-  starbreaker-3d lib 1018 passed, CLI `ui::` 2 passed, `scviewer-core` 56 passed; UE `SCBridge` 233 tests, 230 pass,
-  new `SCBridge.Interaction.PromptSelection`, `SCBridge.Reader.InteractionFeedbackFields`,
-  `SCBridge.Screens.ButtonPanelHoverImage` pass; the 3 failures need inputs this run did not give
+  starbreaker-3d lib 1021 passed, CLI `ui::` 3 passed, `scviewer-core` 56 passed, `cargo check -p starbreaker-mcp`
+  clean; UE `SCBridge` 234 tests, 231 pass, new `SCBridge.Interaction.PromptSelection`,
+  `SCBridge.Reader.InteractionFeedbackFields`, `SCBridge.Screens.ButtonPanelHoverImage`, `SCBridge.Screens.PadDoorButton`
+  pass; the 3 failures need inputs this run did not give
   (`Package.FolderTarImport`: `-SCPackage`; `Player.KitRigAndWeapons`: `-SCPlayerPackage`) or are not touched here
   (`FirstPerson.SkeletalCollision`, failed with no error logged).
 
+### Review (Terra xhigh + Astra, `out/pr-38-cross-review/`)
+
+Fixed:
+- **Alpha applied twice** (Astra, high): a role fill resolved at style time carries its alpha into the SVG fill; only a
+  token-only fill records `FillColorTokenAlpha`, and the IR takes only that (tests: resolved fill not scaled again).
+- **Operated panels only, no shared names** (Astra): hover renders were made for every binding with buttons (cockpit
+  MFDs' dozens of pips, which the viewer never shows as panels); now `is_operated_panel` only, and a node name two
+  regions share gets none (the tag would light both; `hoverable_nodes`).
+- **Ladder** (both): E mounts a ladder before usables and doors; the prompt now says "Climb" there
+  (`FSCLadderRuntime::CanMount`, the approach `Interact` takes, without side effects).
+- **Usable points** (both): the actions were the union over every point. A usable keeps its points (the helper from the
+  mesh's nodes, `radius`, `viewAngleLimit`); the prompt offers the point within reach nearest where the ray hits
+  (`FindUsableTarget`), keyed `usable:<entity>:<point>`.
+- **Door usables** (found in the run): door classes carry `SActorUsableParams` too (a navigation link, `StepThrough`, with
+  `canPlayerUse` set): 41 "usables" on the C2 were mostly doors, and a usable outranks the door prompt. A door
+  (`SCItemDoorParams`) is no longer registered as a usable: its own interaction is what E does there.
+- **Frame on an unchanged hover** (both): an export with hover renders gives the game's look of the aimed row, also when
+  that look is unchanged (the active row): no frame then; the frame stays for an export without hover renders.
+- **Stale drawn-panel highlight** (both): a light panel's row rests while a menu is up or a seat or ladder owns the
+  player, and E acts on nothing in the world while a menu is up.
+- **Name-matched fallback** (both): the door pad's fallback no longer excludes `LockDoor` / `UnlockDoor` by name; the door
+  button is the button whose interaction sets none of the pad's own states (`FSCPanelAim::DoorButtonOf`, test
+  `SCBridge.Screens.PadDoorButton`). The pad's lock face (C2 fixes) still selects its buttons by those names: flagged,
+  not changed here.
+- **Instancing** (Astra): a usable's meshes carry `SCKeepComponent`, so consolidation never moves them from the anchor
+  the ray walks to.
+- **Stale wheel choice on E** (Astra): `Interact()` rebuilds the prompt first (the choice holds only for the same thing).
+- **Per-tick rays** (Astra): an aim face out of reach is skipped by its bounding sphere before its triangles.
+- **Light-row names** (Astra): `buttons[].label` (the button's caption, the first resolved text of its subtree) names the
+  row: "Auxiliary", not `LightsLow`.
+- **Repeated reason** (Astra, nit): several actions held back for one reason show it once, in the footer.
+- **CLI replay** (Astra): hover renders replay under their exported stems; distinct node names never share a file; an
+  exported hover is not rendered twice. **MCP** (Astra): `ui_ir_query` builds the current `UiBindingView`
+  (`cargo check -p starbreaker-mcp` clean).
+- **Cooked levels** (Astra, high): cook format 8 → 9 (the resting pads changed: earlier cooks are stale), and generated
+  UI textures are pooled under a key with the cook format, so a recook never reuses an older render by its unchanged
+  path. Not cooked here (cooking only on the owner's request).
+
+Declined:
+- **Hover of states that look like the default at rest** (both): those states are mostly pairs (over 1 000 pair renders on
+  the C2), each times its buttons; the only singles affected are the opening / closing frames, where the default's hover
+  stands in. Recorded, not rendered.
+- **Hit regions per state** (Astra): the regions are the default render's, as for E (C2 fixes); a button a state moves
+  would need regions per state image. Open.
+
 ### Open
 
-- Light-panel rows are named by their interaction (`LightsLow`): the row's own text (`Auxiliary`) is in the canvas, not
-  in `buttons[]`; exporting each button's label would name them.
-- The pad's lock button hover is verified in the CLI renders only (the scripted aim did not land on the 2 cm bar).
+- Cooked levels do not keep the hover faces, panel aims and usables (import-time records): a cooked hangar's panels do
+  not hover yet. Rebuilding them on cooked load is a follow-up.
+- The pad's lock button hover is verified in the CLI renders only (the scripted aim did not land on the 2 cm bar); the
+  "Climb" prompt at a ladder is not exercised in the app (the run stands in noclip, where a ladder is not mounted).
+- `scviewer-core`'s exporter stamp can be stale when another worktree's session builds into the same `target/`: here the
+  DLL carried another branch's revision until `build.rs` was touched, so an exporter commit hit the old package cache.
+  The stamp should be keyed per checkout (follow-up; not changed here).
 - Performing uses (sit, lie down) is WP-P6-4; the Buccaneer ground point's five interactions (P6-3) would use the same
   popout and wheel.
 

@@ -101,7 +101,7 @@ struct SCBRIDGE_API FSCFloorPanelView
     TArray<int32> Requested;      // stops queued (sorted)
     int8 Direction = 0;           // +1 up, -1 down: the leg's direction
     bool bBlink = false;          // the target's marker phase
-    bool bHoverImage = false;     // a button panel: Image is the render with the cursor on the highlighted node (no frame)
+    bool bHoverImage = false;     // a button panel: the export's hover look applies to the highlighted node (no frame)
     /** Our blink rate for the target's marker (Hz). */
     static constexpr double BlinkHz = 1.5;
     static FSCFloorPanelView Of(const FSCLift& Lift, int32 Highlight, double Time);

@@ -168,7 +168,13 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
                 for (const FStaticMeshSection& S : Render->LODResources[0].Sections) Topology += FString::Printf(TEXT("%u:%u;"), S.MaterialIndex, S.NumTriangles);
             Cook.Pool(Object, Key + TEXT("#topology=") + FMD5::HashAnsiString(*Topology).Left(8), TEXT("Meshes"));
         }
-        else if (Object) Cook.Pool(Object, Key, TEXT("Textures"));
+        else if (Object)
+        {
+            // The exporter's generated UI images keep their path when what they render changes (a renderer fix): their
+            // pool key carries the cook format, so a recook takes the new render instead of the pooled older one.
+            const bool bGeneratedUi = Key.Contains(TEXT("/UI/Generated/"));
+            Cook.Pool(Object, bGeneratedUi ? Key + FString::Printf(TEXT("#cookformat=%d"), USCCookLibrary::FormatVersion) : Key, TEXT("Textures"));
+        }
     TArray<UStaticMeshComponent*> MeshComponents;
     Environment->GetComponents(MeshComponents);
     for (UStaticMeshComponent* C : MeshComponents)

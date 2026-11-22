@@ -206,6 +206,7 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
             FSCUiButton Button;
             Button.Node = String(BO, TEXT("node"));
             Button.Interaction = FName(*String(BO, TEXT("interaction")));
+            Button.Label = String(BO, TEXT("label"));
             const FVector2D Min(R[0]->AsNumber(), R[1]->AsNumber());
             Button.RectPx = FBox2D(Min, Min + FVector2D(R[2]->AsNumber(), R[3]->AsNumber()));
             if (!Button.Interaction.IsNone() && Button.RectPx.GetArea() > 0) Binding.Buttons.Add(MoveTemp(Button));

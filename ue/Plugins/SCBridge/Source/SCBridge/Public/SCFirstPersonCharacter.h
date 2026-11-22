@@ -168,8 +168,9 @@ public:
     FSCInteractionPrompt BuildPrompt() const;
     void UpdatePrompt();
     bool CyclePrompt(int32 Steps);
-    /** The usable under the crosshair (the ship's or the hangar's) and its host; null without. */
-    const FSCUsableTarget* AimedUsable(const ASCVehicle** OutHost = nullptr) const;
+    /** The usable under the crosshair (the ship's or the hangar's), the point the player uses there and its host; null
+     *  without (ASCVehicle::FindUsableTarget). */
+    const FSCUsableTarget* AimedUsable(int32* OutPoint = nullptr, const ASCVehicle** OutHost = nullptr) const;
     void Look(FVector2D Pixels);
     /** Weapon kick on the view (degrees; pitch positive up). */
     void AddViewKick(float PitchDegrees, float YawDegrees);

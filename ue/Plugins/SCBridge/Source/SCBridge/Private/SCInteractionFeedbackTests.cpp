@@ -4,6 +4,7 @@
 #include "SCPackageReader.h"
 #include "SCPackageSource.h"
 #include "SCFloorPanel.h"
+#include "SCVehicle.h"
 #include "Misc/AutomationTest.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderInteractionFeedbackTest, "SCBridge.Reader.InteractionFeedbackFields",
@@ -89,6 +90,24 @@ bool FSCButtonPanelHoverImageTest::RunTest(const FString&)
     TestEqual(TEXT("no hover render of that state and row: none (our frame)"), P.HoverImageFor(TEXT("alarm.png"), 1), FString());
     TestEqual(TEXT("no row aimed at"), P.HoverImageFor(TEXT("default.png"), INDEX_NONE), FString());
     TestEqual(TEXT("an image the panel does not list"), P.HoverImageFor(TEXT("other.png"), 0), FString());
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPadDoorButtonTest, "SCBridge.Screens.PadDoorButton",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCPadDoorButtonTest::RunTest(const FString&)
+{
+    // A pad's buttons and state machine as the C2 exports them (synthetic names): the lock and light buttons set the pad's
+    // own states, the door button's open/close acts on the door.
+    auto Button = [](const TCHAR* Node, const TCHAR* I) { return FSCUiButton{Node, FName(I), FBox2D(FVector2D(0, 0), FVector2D(1, 1))}; };
+    const TArray<FSCUiButton> Buttons = {Button(TEXT("Shelf"), TEXT("Latch")), Button(TEXT("Big"), TEXT("Swing")), Button(TEXT("Big"), TEXT("Unswing"))};
+    FSCUiStateType Lock;
+    Lock.Name = TEXT("LockState");
+    Lock.Transitions = {{FString(), TEXT("Latch"), TEXT("Latched")}};
+    FSCUiStateType Open; // set only by the door's own events
+    Open.Name = TEXT("OpenState");
+    Open.Transitions = {{TEXT("Closed"), TEXT("SyncOpen"), TEXT("Opening")}};
+    TestEqual(TEXT("the button that sets none of the pad's states"), FSCPanelAim::DoorButtonOf(Buttons, {Lock, Open}), FString(TEXT("Big")));
+    TestEqual(TEXT("every button sets one: none"), FSCPanelAim::DoorButtonOf({Buttons[0]}, {Lock, Open}), FString());
     return !HasAnyErrors();
 }
 #endif

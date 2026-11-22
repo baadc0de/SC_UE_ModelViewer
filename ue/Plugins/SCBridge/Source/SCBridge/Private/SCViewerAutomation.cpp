@@ -317,8 +317,13 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
             for (const auto& [Anchor, U] : V->UsableTargets)
             {
                 const USceneComponent* A = Anchor.Get();
-                TArray<FString> Options;
-                for (const FSCPointInteraction& O : U.Options) Options.Add(O.DisplayName.IsEmpty() ? O.Name.ToString() : O.DisplayName);
+                TArray<FString> Options; // per point: helper[located]=its options
+                for (const FSCUsablePoint& Pt : U.Points)
+                {
+                    TArray<FString> Names;
+                    for (const FSCPointInteraction& O : Pt.Options) Names.Add(O.DisplayName.IsEmpty() ? O.Name.ToString() : O.DisplayName);
+                    Options.Add(FString::Printf(TEXT("%s%s=%s"), *Pt.Helper, Pt.bLocated ? TEXT("") : TEXT("(unlocated)"), *FString::Join(Names, TEXT("/"))));
+                }
                 // The centre of what it draws (the anchor is the entity's origin, often on the floor).
                 FBox Bounds(ForceInit);
                 TArray<USceneComponent*> Parts;
@@ -327,7 +332,7 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
                     if (const auto* Prim = Cast<UPrimitiveComponent>(P); Prim && Prim->IsVisible()) Bounds += Prim->Bounds.GetBox();
                 UE_LOG(LogSCViewerAutomation, Display, TEXT("USABLE entity=%s label=\"%s\" at=%s centre=%s options=%s"), *U.EntityId, *U.Label,
                        A ? *Ship.InverseTransformPosition(A->GetComponentLocation()).ToCompactString() : TEXT("-"),
-                       Bounds.IsValid ? *Ship.InverseTransformPosition(Bounds.GetCenter()).ToCompactString() : TEXT("-"), *FString::Join(Options, TEXT(",")));
+                       Bounds.IsValid ? *Ship.InverseTransformPosition(Bounds.GetCenter()).ToCompactString() : TEXT("-"), *FString::Join(Options, TEXT(";")));
             }
         });
     Add(TEXT("sc.FP.Door"), TEXT("sc.FP.Door <index>: toggle an interaction by index (sc.FP.Spawns lists them)"), [Weak](const TArray<FString>& Args) {
