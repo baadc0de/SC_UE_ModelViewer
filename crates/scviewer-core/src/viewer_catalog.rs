@@ -158,6 +158,25 @@ fn split_by_model(members: Vec<&VehicleRecord>) -> Vec<Vec<&VehicleRecord>> {
     groups
 }
 
+/// R3's crew evidence from the crew-manifest component: `Ok(None)` no manifest (no component, no reference, the empty
+/// GUID), `Ok(Some(guid))` a manifest to read, `Err(why)` when it cannot be told (the query failed, the reference is
+/// malformed).
+pub(crate) fn crew_reference(component: Option<&Json>, query_failed: bool) -> std::result::Result<Option<CigGuid>, String> {
+    if query_failed {
+        return Err("the crew component does not read".to_owned());
+    }
+    match component.and_then(|c| c.get("crewManifest")) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Json::String(s)) => match CigGuid::from_str(s.trim()) {
+            Ok(id) if id.is_empty() => Ok(None),
+            Ok(id) => Ok(Some(id)),
+            Err(_) => Err(format!("crew manifest reference {s:?} is malformed")),
+        },
+        Some(other) => Err(format!("crew manifest reference {other} is no reference")),
+    }
+}
+
 /// A loc key's text; keys in `global.ini` may carry a `,P` suffix (`parse_localization` keeps it).
 fn localize(loc: &HashMap<String, String>, key: &str) -> Option<String> {
     let k = key.trim().trim_start_matches('@').to_lowercase();
@@ -184,10 +203,11 @@ fn record_by_guid(db: &Database, guid: Option<&str>) -> Option<Json> {
 }
 /// The parts of `EntityClassDefinition` records the rules read, without materializing whole records (a large vehicle
 /// exceeds the record materializer's node limit): each component or static-data entry by its type, references kept as
-/// GUIDs, in `record_json`'s shape (`Components`, `StaticEntityClassData`, `tags`, `__record_name`).
+/// GUIDs, in `record_json`'s shape (`Components`, `StaticEntityClassData`, `tags`, `__record_name`), plus `__failed`:
+/// the entry types whose query failed (absent is not failed).
 struct EntityParts<'d> {
     db: &'d Database<'d>,
-    parts: Vec<(&'static str, CompiledPath)>,
+    parts: Vec<(&'static str, String, CompiledPath)>,
     tags: CompiledPath,
 }
 impl<'d> EntityParts<'d> {
@@ -196,7 +216,7 @@ impl<'d> EntityParts<'d> {
         let mut parts = Vec::new();
         for (list, kinds) in [("Components", components), ("StaticEntityClassData", statics)] {
             for kind in kinds {
-                parts.push((list, db.compile_rooted::<Value>(&format!("EntityClassDefinition.{list}[{kind}]"))?));
+                parts.push((list, (*kind).to_owned(), db.compile_rooted::<Value>(&format!("EntityClassDefinition.{list}[{kind}]"))?));
             }
         }
         Ok(Self { db, parts, tags: db.compile_rooted::<Value>("EntityClassDefinition.tags")? })
@@ -206,18 +226,23 @@ impl<'d> EntityParts<'d> {
         let db = self.db;
         db.records_by_type_name("EntityClassDefinition")
             .filter(move |r| db.is_main_record(r))
-            .filter(move |r| self.db.query_no_references(&self.parts[kind_index].1, r).is_ok_and(|v| !v.is_empty()))
+            .filter(move |r| self.db.query_no_references(&self.parts[kind_index].2, r).is_ok_and(|v| !v.is_empty()))
     }
     fn json(&self, record: &Record) -> Json {
         let mut out = serde_json::Map::new();
-        for (list, path) in &self.parts {
-            if let Ok(values) = self.db.query_no_references(path, record) {
-                let entry = out.entry(*list).or_insert_with(|| Json::Array(Vec::new()));
-                if let Json::Array(items) = entry {
-                    items.extend(values.iter().map(value_to_json));
+        let mut failed = Vec::new();
+        for (list, kind, path) in &self.parts {
+            match self.db.query_no_references(path, record) {
+                Ok(values) => {
+                    let entry = out.entry(*list).or_insert_with(|| Json::Array(Vec::new()));
+                    if let Json::Array(items) = entry {
+                        items.extend(values.iter().map(value_to_json));
+                    }
                 }
+                Err(_) => failed.push(Json::String(kind.clone())),
             }
         }
+        out.insert("__failed".into(), Json::Array(failed));
         // `tags` is absent when the query fails (the rules then cannot judge the record).
         if let Ok(tags) = self.db.query_no_references(&self.tags, record) {
             out.insert("tags".into(), Json::Array(tags.iter().map(value_to_json).flat_map(|v| match v {
@@ -317,6 +342,7 @@ fn environments(db: &Database, loc: &HashMap<String, String>, archive: &HashMap<
     let mut rows: Vec<(i64, CatalogRow)> = containers
         .into_iter()
         .map(|(id, mut c)| {
+            c.places.sort();
             c.placed.sort();
             c.unplaced.sort();
             let (label, detail) = if c.places.is_empty() {
@@ -327,7 +353,7 @@ fn environments(db: &Database, loc: &HashMap<String, String>, archive: &HashMap<
             (c.size_id, CatalogRow { id, label, group: c.size, detail })
         })
         .collect();
-    rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.label.cmp(&b.1.label)));
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.label.cmp(&b.1.label)).then(a.1.id.cmp(&b.1.id)));
     Ok(rows.into_iter().map(|(_, r)| r).collect())
 }
 
@@ -343,7 +369,7 @@ fn vehicle_rows(records: &[VehicleRecord]) -> Vec<CatalogRow> {
             CatalogRow { id: v.name.clone(), label: v.label.clone().unwrap_or_default(), group: v.manufacturer.clone(), detail: detail.join(" · ") }
         })
         .collect();
-    rows.sort_by(|a, b| a.group.cmp(&b.group).then(a.label.cmp(&b.label)));
+    rows.sort_by(|a, b| a.group.cmp(&b.group).then(a.label.cmp(&b.label)).then(a.id.cmp(&b.id)));
     rows
 }
 
@@ -376,21 +402,26 @@ pub(crate) fn vehicle_records(db: &Database, loc: &HashMap<String, String>) -> R
                     .unwrap_or_default()
             })
             .clone();
-        let crew_guid = component(&record, "Components", "SEntityComponentCrewManifestParams")
-            .and_then(|c| c.get("crewManifest")).and_then(Json::as_str).unwrap_or_default().to_owned();
-        // No manifest (no reference, or the empty GUID) is no crew; a reference that does not resolve is unknown.
-        let has_manifest = CigGuid::from_str(crew_guid.trim()).is_ok_and(|g| !g.is_empty());
-        let crew = if has_manifest {
-            *crews.entry(crew_guid.clone()).or_insert_with(|| {
-                record_by_guid(db, Some(&crew_guid)).and_then(|m| m.get("crew").and_then(Json::as_array).map(Vec::len))
-            })
-        } else {
-            Some(0)
-        };
+        let crew_failed = record.get("__failed").and_then(Json::as_array)
+            .is_some_and(|f| f.iter().any(|k| k.as_str() == Some("SEntityComponentCrewManifestParams")));
         let mut unreadable = Vec::new();
-        if crew.is_none() {
-            unreadable.push(format!("crew manifest {crew_guid} does not resolve"));
-        }
+        let crew = match crew_reference(component(&record, "Components", "SEntityComponentCrewManifestParams"), crew_failed) {
+            Ok(None) => 0,
+            Ok(Some(id)) => {
+                let read = *crews.entry(id.to_string()).or_insert_with(|| {
+                    db.record_by_id(&id).and_then(|m| record_json(db, m).ok())
+                        .and_then(|m| m.get("crew").and_then(Json::as_array).map(Vec::len))
+                });
+                read.unwrap_or_else(|| {
+                    unreadable.push(format!("crew manifest {id} does not resolve"));
+                    0
+                })
+            }
+            Err(why) => {
+                unreadable.push(why);
+                0
+            }
+        };
         let mut tags = Vec::new();
         match record.get("tags").and_then(Json::as_array) {
             None => unreadable.push("tags do not read".to_owned()),
@@ -420,7 +451,7 @@ pub(crate) fn vehicle_records(db: &Database, loc: &HashMap<String, String>) -> R
             label: localize(loc, name_key),
             label_is_placeholder: placeholder(name_key),
             tags,
-            crew: crew.unwrap_or(0),
+            crew,
             unreadable: unreadable.join("; "),
             insurance_class: insurance.map(|i| str_at(i, &["shipInsuranceParams", "shipEntityClassName"]).unwrap_or_default().to_owned()),
             ea_included: ea.and_then(|e| e.get("inclusionMode")).and_then(Json::as_str) == Some("ReadyToInclude"),

@@ -89,3 +89,22 @@ fn placeholder_family_blank_text_and_unreadable_evidence_leave() {
     assert_eq!(names(&kept), ["Plain"]);
     assert!(super::placeholder("@LOC_SOMETHING_NEW") && super::placeholder("") && !super::placeholder("@vehicle_NameTest"));
 }
+
+#[test]
+fn crew_evidence_tells_absent_from_unreadable() {
+    use super::crew_reference;
+    use serde_json::json;
+    let empty = "00000000-0000-0000-0000-000000000000";
+    // No component, no reference, a null or empty one: no crew manifest.
+    assert_eq!(crew_reference(None, false), Ok(None));
+    assert_eq!(crew_reference(Some(&json!({})), false), Ok(None));
+    assert_eq!(crew_reference(Some(&json!({"crewManifest": null})), false), Ok(None));
+    assert_eq!(crew_reference(Some(&json!({"crewManifest": empty})), false), Ok(None));
+    // A reference to read.
+    let id = "3db8fac5-9177-4373-a976-0730eff112fe";
+    assert_eq!(crew_reference(Some(&json!({"crewManifest": id})), false).unwrap().map(|g| g.to_string()), Some(id.to_owned()));
+    // Cannot be told: the query failed, or the reference is malformed.
+    assert!(crew_reference(None, true).is_err());
+    assert!(crew_reference(Some(&json!({"crewManifest": "not-a-guid"})), false).is_err());
+    assert!(crew_reference(Some(&json!({"crewManifest": 7})), false).is_err());
+}

@@ -355,7 +355,7 @@ void USCViewerSubsystem::FitEnvironmentToShip()
 
 void USCViewerSubsystem::CancelEnvironmentWork()
 {
-    if (EnvProgress && IsEnvironmentWorking()) EnvProgress->RequestCancel();
+    if (EnvProgress && (EnvExport.IsValid() || EnvParse.IsValid())) EnvProgress->RequestCancel();
 }
 
 void USCViewerSubsystem::RequestEnvironment(const FString& Folder)
@@ -517,21 +517,24 @@ void USCViewerSubsystem::StepEnvironment()
         EnvListTask = Client->ViewerCatalog();
         EnvListIssued = ArchiveGeneration;
     }
-    if (EnvListTask.IsValid() && EnvListTask.IsCompleted() && EnvListIssued != ArchiveGeneration)
-        EnvListTask = {}; // listed for an earlier archive session: dropped, asked again
+    // Completion is tested once; a listing issued for an earlier archive session is dropped (asked again next tick).
     if (EnvListTask.IsValid() && EnvListTask.IsCompleted())
     {
         const FSCTextResult Listed = EnvListTask.GetResult();
         EnvListTask = {};
-        EnvListedGeneration = ArchiveGeneration;
-        Catalog = FSCViewerCatalog();
-        Catalog.Revision = ArchiveGeneration;
-        Catalog.bReady = Listed.bOK && FSCViewerCatalog::Parse(Listed.Json, Catalog, Catalog.Error);
-        if (!Listed.bOK) Catalog.Error = Listed.Error.ToString();
-        EnvironmentChoices.Reset();
-        for (const FSCCatalogEntry& E : Catalog.Environments) EnvironmentChoices.Add(E.Id);
-        UE_LOG(LogSCViewer, Display, TEXT("VIEWER_CATALOG environments=%d vehicles=%d%s%s"), Catalog.Environments.Num(), Catalog.Vehicles.Num(),
-               Catalog.Error.IsEmpty() ? TEXT("") : TEXT(" error="), *Catalog.Error);
+        if (EnvListIssued == ArchiveGeneration)
+        {
+            EnvListedGeneration = ArchiveGeneration;
+            Catalog = FSCViewerCatalog();
+            Catalog.Revision = ArchiveGeneration;
+            Catalog.bReady = Listed.bOK && FSCViewerCatalog::Parse(Listed.Json, Catalog, Catalog.Error);
+            if (!Listed.bOK) Catalog.Error = Listed.Error.ToString();
+            if (!Catalog.bReady && Catalog.Error.IsEmpty()) Catalog.Error = TEXT("the catalogue did not list"); // a failure is always named
+            EnvironmentChoices.Reset();
+            for (const FSCCatalogEntry& E : Catalog.Environments) EnvironmentChoices.Add(E.Id);
+            UE_LOG(LogSCViewer, Display, TEXT("VIEWER_CATALOG environments=%d vehicles=%d%s%s"), Catalog.Environments.Num(), Catalog.Vehicles.Num(),
+                   Catalog.Error.IsEmpty() ? TEXT("") : TEXT(" error="), *Catalog.Error);
+        }
     }
     if (EnvLevel && !Environment.IsValid())
     {
@@ -586,8 +589,13 @@ void USCViewerSubsystem::StepEnvironment()
     if (EnvExport.IsValid())
     {
         if (!EnvExport.IsCompleted()) return;
-        FSCExportResult Exported = EnvExport.GetResult();
+        FSCExportResult Exported = MoveTemp(EnvExport.GetResult());
         EnvExport = {};
+        if (EnvProgress && EnvProgress->IsCancelRequested())
+        {
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT cancelled: export %s"), *EnvironmentFolder); // a newer choice follows
+            return;
+        }
         if (!Exported.bOK)
         {
             UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: export %s: %s"), *EnvironmentFolder, *Exported.Error.ToString());
@@ -605,6 +613,11 @@ void USCViewerSubsystem::StepEnvironment()
         if (!EnvParse.IsCompleted()) return;
         TSharedPtr<FSCTarPackageSource> Parsed = EnvParse.GetResult();
         EnvParse = {};
+        if (EnvProgress && EnvProgress->IsCancelRequested())
+        {
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT cancelled: parse %s"), *EnvironmentFolder);
+            return;
+        }
         if (!Parsed || !Parsed->IsValid())
         {
             UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), Parsed ? *Parsed->GetError() : TEXT("cannot read the package"));

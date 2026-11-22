@@ -210,10 +210,17 @@ public:
      *  ask pay nothing. */
     const FSCViewerCatalog& GetCatalog() const { return Catalog; }
     void RequestCatalog() const { bCatalogWanted = true; }
-    /** An environment export or parse runs on a worker: RequestEnvironment (SetEnvironment) would wait for it. */
-    bool IsEnvironmentWorking() const { return EnvExport.IsValid() || EnvParse.IsValid(); }
-    /** Ask the running environment export to stop, without waiting (a menu queues its next choice until it has). */
+    /** An environment export, parse or import is under way: RequestEnvironment (SetEnvironment) would wait for its
+     *  workers on the game thread. A menu queues its next choice until this is false. */
+    bool IsEnvironmentWorking() const { return EnvExport.IsValid() || EnvParse.IsValid() || EnvJob.IsValid(); }
+    /** Ask the environment's export or parse to stop, without waiting; its result is then dropped (an import, once
+     *  started, finishes). */
     void CancelEnvironmentWork();
+    /** CancelEnvironmentWork was asked and the export or parse it stops has not finished yet. */
+    bool IsEnvironmentCancelling() const
+    {
+        return EnvProgress && EnvProgress->IsCancelRequested() && (EnvExport.IsValid() || EnvParse.IsValid());
+    }
     bool IsEnvironmentLoading() const
     {
         return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||

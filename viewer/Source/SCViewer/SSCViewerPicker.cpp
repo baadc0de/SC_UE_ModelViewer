@@ -6,7 +6,6 @@
 #include "SCViewerSubsystem.h"
 #include "UI/SCHudStyle.h"
 #include "Brushes/SlateColorBrush.h"
-#include "Engine/Engine.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -49,7 +48,7 @@ const FTableRowStyle& RowStyle()
         .SetTextColor(Ink()).SetSelectedTextColor(Ink());
     return Style;
 }
-/** The search field on paper: a paper-dim well, ink text (the hint at the field's reduced ink). */
+/** The search field on paper: a paper-dim well and ink text (its hint is a secondary-ink label over the field). */
 const FEditableTextBoxStyle& SearchStyle()
 {
     static const FEditableTextBoxStyle Style = FEditableTextBoxStyle(FCoreStyle::Get().GetWidgetStyle<FEditableTextBoxStyle>("NormalEditableTextBox"))
@@ -116,6 +115,11 @@ bool SameId(const FString& A, const FString& B)
     return A.Replace(TEXT("\\"), TEXT("/")).Equals(B.Replace(TEXT("\\"), TEXT("/")), ESearchCase::IgnoreCase);
 }
 bool IsMapHangar(const FString& Request) { return Request.IsEmpty() || Request.Equals(MapHangar, ESearchCase::IgnoreCase); }
+bool IsLoadingVehicle(const USCViewerSubsystem& S)
+{
+    const ESCLoadPhase Phase = S.GetLoadPhase();
+    return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
+}
 /** The command line asks for a scene or drives the app: the menu does not open by itself. */
 bool StartRequested()
 {
@@ -151,14 +155,20 @@ void SSCViewerPicker::Construct(const FArguments& Args)
             SAssignNew(PaintView, SListView<FPaint>).ListItemsSource(&Paints).ListViewStyle(&ListStyle()).SelectionMode(ESelectionMode::None)
             .OnGenerateRow_Lambda([Weak](FPaint Item, const TSharedRef<STableViewBase>& Table) {
                 const int32 Index = Item->Index;
+                const TWeakObjectPtr<const ASCVehicle> Owner = Item->Owner;
+                // The row acts on the vehicle whose manifest listed it, never on one that replaced it since.
+                auto Live = [Weak, Owner]() -> ASCVehicle* {
+                    ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+                    return V && V == Owner.Get() ? V : nullptr;
+                };
                 return SNew(STableRow<FPaint>, Table).Style(&RowStyle()).Padding(0)
                 [
-                    SNew(SButton).ButtonStyle(&RowButton()).ContentPadding(0).OnClicked_Lambda([Weak, Index] {
-                        if (Weak.IsValid()) Weak->SetPaint(Index); // the vehicle in the scene (whose manifest listed the row)
+                    SNew(SButton).ButtonStyle(&RowButton()).ContentPadding(0).OnClicked_Lambda([Weak, Live, Index] {
+                        if (Live()) Weak->SetPaint(Index);
                         return FReply::Handled();
                     })
-                    [Row(Item->Label, FString(), [Weak, Index] {
-                        const ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+                    [Row(Item->Label, FString(), [Live, Index] {
+                        const ASCVehicle* V = Live();
                         return V && V->GetPaint() == Index ? ERowState::Current : ERowState::None;
                     })]
                 ];
@@ -201,11 +211,6 @@ void SSCViewerPicker::Construct(const FArguments& Args)
     ];
 }
 
-SSCViewerPicker::~SSCViewerPicker()
-{
-    if (bWasOpen && GEngine) GAreScreenMessagesEnabled = bScreenMessages;
-}
-
 TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, const FText& Hint, TFunction<ERowState(const FString&)> State,
                                               TFunction<void(const FString&)> Pick)
 {
@@ -214,11 +219,20 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
         SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
         [
-            SNew(SEditableTextBox).Style(&SearchStyle()).Font(Body()).HintText(Hint).Text(FText::FromString(List.Filter))
-            .OnTextChanged_Lambda([this, L](const FText& Value) {
-                L->Filter = Value.ToString();
-                Refilter(*L);
-            })
+            SNew(SOverlay)
+            + SOverlay::Slot()
+            [
+                SNew(SEditableTextBox).Style(&SearchStyle()).Font(Body()).Text(FText::FromString(List.Filter))
+                .OnTextChanged_Lambda([this, L](const FText& Value) {
+                    L->Filter = Value.ToString();
+                    Refilter(*L);
+                })
+            ]
+            + SOverlay::Slot().VAlign(VAlign_Center).Padding(10, 0) // the field's hint, in secondary ink (the engine's is too faint on paper)
+            [
+                SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink2()).Text(Hint)
+                .Visibility_Lambda([L] { return L->Filter.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+            ]
         ]
         + SVerticalBox::Slot().FillHeight(1)
         [
@@ -257,14 +271,19 @@ void SSCViewerPicker::PickEnvironment(const FString& Id)
 {
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
-    // The choice is the user's environment from now on (restored at the next start, as the viewer's settings keep it).
-    USCViewerSettings* Settings = USCViewerSettings::Get();
-    Settings->Environment = IsMapHangar(Id) ? FString(MapHangar) : Id;
-    Settings->Save();
-    // Already there or on its way (with a choice queued the request's export is being stopped: queue it again).
+    // Saved as the user's environment once it is in the scene (Tick), so a failed choice is not restored at the next start.
+    SaveEnvironment = Id;
+    // Already there, or on its way and not being stopped: nothing to do (a failed or stopped one is requested again).
     const FString Request = S->GetEnvironmentRequest();
-    if (!QueuedEnvironment.IsSet() && (IsMapHangar(Id) ? IsMapHangar(Request) : SameId(Id, Request))) return;
-    // A running export would make RequestEnvironment wait for it on this thread: stop it and take the choice once it has.
+    const bool bThere = IsMapHangar(Id) ? IsMapHangar(Request) && !S->IsEnvironmentWorking()
+                                        : SameId(Id, Request) && (S->GetEnvironment() || (S->IsEnvironmentLoading() && !S->IsEnvironmentCancelling()));
+    if (bThere)
+    {
+        QueuedEnvironment.Reset();
+        return;
+    }
+    // A running export, parse or import would make RequestEnvironment wait for its workers on this thread: the export
+    // or parse is asked to stop, and the choice is taken once nothing runs.
     if (S->IsEnvironmentWorking())
     {
         QueuedEnvironment = Id;
@@ -279,19 +298,21 @@ void SSCViewerPicker::PickVehicle(const FString& Id)
 {
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
-    // In the scene (a waiting choice is dropped: this one stays) or on its way already.
-    if (const ERowState State = VehicleState(Id); State != ERowState::None)
+    // The latest click wins. The load already running for it: drop any later choice waiting behind it.
+    if (IsLoadingVehicle(*S) && SameId(S->GetPendingEntity(), Id))
     {
-        if (State == ERowState::Current) QueuedVehicle.Reset();
+        QueuedVehicle.Reset();
         return;
     }
+    // Idle: LoadEntity decides (it keeps the vehicle in the scene when the request is identical for this archive session).
     if (S->CanLoad(Id))
     {
         QueuedVehicle.Reset();
         S->LoadEntity(Id, S->GetOptions());
         return;
     }
-    QueuedVehicle = Id; // a load (vehicle or environment) runs, or the archive is opening: next when it has finished
+    // A load runs (or the archive opens): this choice follows it, also when it is the vehicle being replaced.
+    QueuedVehicle = Id;
 }
 
 ERowState SSCViewerPicker::EnvironmentState(const FString& Id) const
@@ -311,9 +332,7 @@ ERowState SSCViewerPicker::VehicleState(const FString& Id) const
     const USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return ERowState::None;
     if (QueuedVehicle.IsSet() && SameId(*QueuedVehicle, Id)) return ERowState::Pending;
-    const ESCLoadPhase Phase = S->GetLoadPhase();
-    if ((Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing) && SameId(S->GetPendingEntity(), Id))
-        return ERowState::Pending;
+    if (IsLoadingVehicle(*S) && SameId(S->GetPendingEntity(), Id)) return ERowState::Pending;
     return S->GetVehicle() && SameId(S->GetLoadedEntity(), Id) ? ERowState::Current : ERowState::None;
 }
 
@@ -321,9 +340,9 @@ void SSCViewerPicker::RevealCurrent()
 {
     auto Reveal = [this](FList& L, bool bEnvironment) {
         if (!L.View) return;
-        // The pending row when there is one, else the current one.
+        // What is in the scene, else what is on its way.
         const FEntry* Found = nullptr;
-        for (ERowState Want : {ERowState::Pending, ERowState::Current})
+        for (ERowState Want : {ERowState::Current, ERowState::Pending})
             if (!Found)
                 Found = L.Shown.FindByPredicate([&](const FEntry& E) { return (bEnvironment ? EnvironmentState(E->Id) : VehicleState(E->Id)) == Want; });
         if (Found) L.View->RequestScrollIntoView(*Found);
@@ -340,14 +359,16 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
     SCompoundWidget::Tick(Geometry, CurrentTime, DeltaTime);
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
-    S->RequestCatalog();
     // Open by itself once, at start, when the command line asks for no scene.
     if (!bStartDecided)
     {
         bStartDecided = true;
         if (!StartRequested()) SCViewerShell::SetMenuOpen(S, true);
     }
-    // The choices the running loads could not take yet: the environment once its worker has stopped, the vehicle once
+    const bool bOpen = SCViewerShell::IsMenuOpen(S);
+    if (bOpen) S->RequestCatalog(); // listed when first shown, not for a run that never opens the menu
+
+    // The choices the running loads could not take yet: the environment once nothing of it runs, the vehicle once
     // nothing loads (a vehicle waits for the environment it goes into).
     if (QueuedEnvironment.IsSet() && !S->IsEnvironmentWorking())
     {
@@ -361,8 +382,20 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         QueuedVehicle.Reset();
         if (S->CanLoad(Id)) S->LoadEntity(Id, S->GetOptions());
     }
+    // The environment picked is saved once it is in the scene; a failed one is not.
+    if (SaveEnvironment.IsSet() && !QueuedEnvironment.IsSet() && !S->IsEnvironmentLoading())
+    {
+        const FString Id = *SaveEnvironment;
+        SaveEnvironment.Reset();
+        const FString Request = S->GetEnvironmentRequest();
+        if (IsMapHangar(Id) ? IsMapHangar(Request) : SameId(Id, Request) && S->GetEnvironment())
+        {
+            USCViewerSettings* Settings = USCViewerSettings::Get();
+            Settings->Environment = IsMapHangar(Id) ? FString(MapHangar) : Id;
+            Settings->Save();
+        }
+    }
 
-    const bool bOpen = SCViewerShell::IsMenuOpen(S);
     bool bReveal = bOpen && !bWasOpen;
     if (bOpen && !bWasOpen)
     {
@@ -371,13 +404,14 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
             FSlateApplication::Get().ReleaseAllPointerCapture(); // free the cursor (orbit drags, first-person look)
             FSlateApplication::Get().SetAllUserFocus(SharedThis(this), EFocusCause::SetDirectly); // Esc / F1 reach the menu
         }
-        // The engine's on-screen diagnostics print across the menu's header: hidden while it is open.
-        bScreenMessages = GAreScreenMessagesEnabled;
+        // The engine's on-screen diagnostics draw over all UI, across the menu's header: off while it is open, when
+        // they were on, back on when it closes if still off.
+        bHidScreenMessages = GAreScreenMessagesEnabled;
         GAreScreenMessagesEnabled = false;
     }
     if (!bOpen && bWasOpen)
     {
-        GAreScreenMessagesEnabled = bScreenMessages;
+        RestoreScreenMessages();
         if (FocusView) FocusView(); // however it closed (F1, Esc, the button, RPC /ui): keys go back to the view
     }
     bWasOpen = bOpen;
@@ -401,22 +435,34 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         Fill(Vehicles, Catalog.Vehicles, nullptr);
         bReveal |= bOpen;
     }
-    // The paints of the vehicle in the scene, listed again when it changes.
+    // The paints of the vehicle in the scene, listed again when it changes (another entity or another actor).
     const ASCVehicle* V = S->GetVehicle();
     const FString Entity = V ? S->GetLoadedEntity() : FString();
-    if (Entity != PaintsOf)
+    if (Entity != PaintsOf || V != PaintsOwner.Get())
     {
         PaintsOf = Entity;
+        PaintsOwner = V;
         Paints.Reset();
         if (V)
         {
-            Paints.Add(MakeShared<FPaintRow>(FPaintRow{INDEX_NONE, LOCTEXT("OwnPaint", "The vehicle's own").ToString()}));
-            for (int32 I = 0; I < V->Manifest.Paints.Num(); ++I) Paints.Add(MakeShared<FPaintRow>(FPaintRow{I, V->Manifest.Paints[I].Label()}));
+            Paints.Add(MakeShared<FPaintRow>(FPaintRow{INDEX_NONE, LOCTEXT("OwnPaint", "The vehicle's own").ToString(), V}));
+            for (int32 I = 0; I < V->Manifest.Paints.Num(); ++I) Paints.Add(MakeShared<FPaintRow>(FPaintRow{I, V->Manifest.Paints[I].Label(), V}));
         }
         if (PaintView) PaintView->RequestListRefresh();
         bReveal |= bOpen;
     }
     if (bReveal) RevealCurrent();
+}
+
+SSCViewerPicker::~SSCViewerPicker()
+{
+    RestoreScreenMessages();
+}
+
+void SSCViewerPicker::RestoreScreenMessages()
+{
+    if (bHidScreenMessages && !GAreScreenMessagesEnabled) GAreScreenMessagesEnabled = true;
+    bHidScreenMessages = false;
 }
 
 FReply SSCViewerPicker::OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)

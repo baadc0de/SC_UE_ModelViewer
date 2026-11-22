@@ -9,6 +9,7 @@
 #include "SCViewerCatalog.h"
 
 class USCViewerSubsystem;
+class ASCVehicle;
 class SEditableTextBox;
 
 class SSCViewerPicker : public SCompoundWidget
@@ -25,11 +26,12 @@ public:
     virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
     virtual bool SupportsKeyboardFocus() const override { return true; }
 
-    /** A paint row: INDEX_NONE is the vehicle's own. */
+    /** A paint row of Owner's manifest: INDEX_NONE is the vehicle's own. */
     struct FPaintRow
     {
         int32 Index = INDEX_NONE;
         FString Label;
+        TWeakObjectPtr<const ASCVehicle> Owner;
     };
     using FEntry = TSharedPtr<FSCCatalogEntry>;
     using FPaint = TSharedPtr<FPaintRow>;
@@ -54,6 +56,7 @@ private:
     ERowState VehicleState(const FString& Id) const;
     /** The lists' current rows (environment, vehicle, paint) scrolled into view. */
     void RevealCurrent();
+    void RestoreScreenMessages();
 
     TWeakObjectPtr<USCViewerSubsystem> Subsystem;
     TFunction<void()> FocusView;
@@ -62,10 +65,12 @@ private:
     TSharedPtr<SListView<FPaint>> PaintView;
     uint32 CatalogRevision = MAX_uint32;
     bool bCatalogReady = false;
-    FString PaintsOf; // the entity the paint rows were listed for
+    FString PaintsOf; // the entity and actor the paint rows were listed for
+    TWeakObjectPtr<const ASCVehicle> PaintsOwner;
     bool bStartDecided = false;
     bool bWasOpen = false;
-    bool bScreenMessages = true; // GAreScreenMessagesEnabled before the menu opened (hidden while open)
+    bool bHidScreenMessages = false; // the menu turned GAreScreenMessagesEnabled off when it opened
     // The latest choice the running load could not take yet (applied from Tick).
     TOptional<FString> QueuedEnvironment, QueuedVehicle;
+    TOptional<FString> SaveEnvironment; // picked, saved as the user's environment once it is in the scene
 };

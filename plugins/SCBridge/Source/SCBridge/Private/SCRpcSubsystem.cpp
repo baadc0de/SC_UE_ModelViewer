@@ -721,9 +721,12 @@ private:
         O->SetBoolField(TEXT("ok"), true);
         if (const USCViewerSubsystem* V = Viewer())
         {
-            V->RequestCatalog(); // listed on demand: empty until the catalogue is in (poll again)
+            // Listed on demand: environments_ready false and no environments_error means "in progress, poll again";
+            // environments_error is final for this archive session.
+            V->RequestCatalog();
             O->SetField(TEXT("environments"), Strings(V->GetEnvironmentChoices()));
             O->SetBoolField(TEXT("environments_ready"), V->GetCatalog().bReady);
+            if (!V->GetCatalog().bReady && !V->GetCatalog().Error.IsEmpty()) O->SetStringField(TEXT("environments_error"), V->GetCatalog().Error);
         }
         return O;
     }

@@ -96,21 +96,25 @@ The plugin's cargo art (`/SCBridge/Cargo`) stays in the plugin until it can move
 **The menu.** The viewer's F1 menu (`viewer/Source/SCViewer/SSCViewerPicker`, registered with `SCViewerShell` as the
 menu and a view overlay; also the top bar's "Menu (F1)") lists environments, vehicles and the loaded vehicle's paints in
 the HUD look. A pick applies at once (`SetEnvironment`, `LoadEntity`, `SetPaint`), or, while a load runs, as soon as
-it lets it: the latest choice waits in the menu, marked LOADING (a running environment export is asked to stop, never
-waited for on the game thread; a vehicle waits for the environment it goes into). The row in the scene is an inverted
-bar marked IN SCENE. The environment list starts with the procedural hangar (the map's own); the environment chosen is
-saved and restored at the next start. Both lists have a search box (`-SCSearch=<q>` fills the vehicle one); the menu
+it lets it: the latest click waits in the menu, marked LOADING. An environment's export or parse is asked to stop and its
+result dropped; an import, once started, finishes; nothing is waited for on the game thread. A vehicle waits for the
+environment it goes into; clicking the vehicle being loaded drops a later choice, clicking the one it replaces brings it
+back after. The row in the scene is an inverted bar marked IN SCENE. The environment list starts with the procedural
+hangar (the map's own); the environment chosen is saved once it is in the scene (a failed one is not) and restored at
+the next start; clicking a failed one requests it again. Both lists have a search box (`-SCSearch=<q>` fills the vehicle one); the menu
 opens scrolled to the current environment, vehicle and paint, and by itself at start when the command line asks for no
 scene (no `-SCLoad`, `-SCEnvironment`, `-SCScript`, `-SCPackage`, `-SCPlayerDemo`, `-SCShowcase`, `-SCRpc`). While it
-is open the engine's on-screen messages are hidden; however it closes, keys go back to the view. The side panels (model
+is open the engine's on-screen messages (they draw over all UI) are off when they were on, and turned back on when it
+closes (a `DisableAllScreenMessages` given while it is open is undone then); however it closes, keys go back to the view. The side panels (model
 browser with its options, hierarchy) and `sc.UI.Panels` are gone from the shared root; RPC `/ui` takes
 `{menu: true|false}` instead of `panels`. Each app names itself in the top bar (`SCViewerShell::SetAppName`). A paint
-choice is remembered for the vehicle in the scene (`LoadedEntity`), not for one still loading.
+row acts on the vehicle whose manifest listed it and is remembered for it (`LoadedEntity`), not for one still loading.
 
 **The lists come from game data** (`crates/scviewer-core/src/viewer_catalog.rs`, `sc_viewer_catalog`,
-`scviewer catalog`; `USCViewerSubsystem::GetCatalog`, listed once per archive session on demand — the menu and RPC
-`/catalog` call `RequestCatalog`, hosts that never ask (`-SCNoUI`, the game) do not pay for the scan; a listing finished
-for an earlier archive session is dropped — replacing the search for "hangar" in archive paths):
+`scviewer catalog`; `USCViewerSubsystem::GetCatalog`, listed once per archive session on demand — the menu when it opens and RPC
+`/catalog` call `RequestCatalog`, runs that never ask (`-SCNoUI`, `-SCLoad` with the menu closed, the game) do not pay
+for the scan; a listing finished for an earlier archive session is dropped; `/catalog` answers `environments_ready`
+and, once listing failed for the session, `environments_error` — replacing the search for "hangar" in archive paths):
 
 - *Environments*: `EntityClassDefinition` records with `InstancedInteriorComponentParams` and a set
   `SObjectContainerComponentParams.objectContainer` (84 records, 17 of them templates without a container): **61
@@ -126,7 +130,7 @@ for an earlier archive session is dropped — replacing the search for "hangar" 
 |---|---|---|
 | R1 | it has `SEntityInsuranceProperties` (salvage hulks have none) | 1104 |
 | R2 | `AttachDef.Localization.Name` resolves to non-blank text and is no `@LOC_*` placeholder | 1088 |
-| R3 | no tag under `AI.Faction`, `AI.Spawning`, `AI.Ship.Unmanned`, and its crew manifest lists no crew; a record whose tags or crew manifest do not read is left out and listed in the catalogue's `skipped` | 412 |
+| R3 | no tag under `AI.Faction`, `AI.Spawning`, `AI.Ship.Unmanned`, and its crew manifest lists no crew; a record whose tags, crew component or crew manifest do not read (or whose manifest reference is malformed) is left out and listed in the catalogue's `skipped` | 412 |
 | R4 | no `Missions.ItemType.Iasi.DisplayItem` tag | 411 |
 | R5 | it insures to itself (`shipInsuranceParams.shipEntityClassName`) or `EAEntityDataParams.inclusionMode` is `ReadyToInclude` | 364 |
 | R6 | one row per (`vehicleDefinition`, `modification`), split into members connected by shared `Ship.Model.*` tags (untagged members join the largest such group); independent of record order | **229** |
