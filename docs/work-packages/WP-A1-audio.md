@@ -38,7 +38,7 @@ should change in the PR that lands A1-1.
 - `vendor/StarBreaker/cli/src/wwise.rs`;
 - `docs/work-packages/WP-P5-lifts.md` §1, §6;
 - `docs/work-packages/WP-I1-door-and-lift-panels.md` §3, §5;
-- `ue/README.md`, §First-person exploration.
+- `viewer/README.md`, §First-person exploration.
 
 ## 1. How the game binds audio
 
@@ -322,7 +322,7 @@ showcase then ships decoded game audio, the same status as its meshes and textur
 - **The viewer:**
   - `scviewer-core`: the package and cache version;
   - `scbridge-ffi`: an Ogg → PCM decode entry point, if the decode runs at runtime;
-  - `ue/Plugins/SCBridge` Runtime module: `USCSoundWave`, `USCAudioPlayer`, emitters, hooks.
+  - `plugins/SCBridge` Runtime module: `USCSoundWave`, `USCAudioPlayer`, emitters, hooks.
 
 ## 4. Hooks: the viewer event that fires each case
 
@@ -413,7 +413,7 @@ random, sequence, blend and loop; RTPCs at their defaults).
    - the hooks of §4 for doors, the lift and panel presses;
    - console `sc.Audio.List`, `sc.Audio.Play <trigger>`, `sc.Audio.Mute 0|1`, and the log lines `AUDIO_PLAY`
      (trigger, media, emitter, distance, gain) and `AUDIO_EMITTERS` (counts per kind).
-4. **Docs:** this brief's Result section; `ue/README.md` §Audio; `docs/01-starbreaker-analysis.md` (the audio crates
+4. **Docs:** this brief's Result section; `viewer/README.md` §Audio; `docs/01-starbreaker-analysis.md` (the audio crates
    are relevant); `docs/02-implementation-plan.md` (a D18 "audio comes from game data and plays through UE audio,
    not Wwise" and the WP row).
 
@@ -495,7 +495,7 @@ random, sequence, blend and loop; RTPCs at their defaults).
 Done on `wp/E1-engine-fork-features` (uncommitted in the superproject; the owner commits) and submodule branch
 `scviewer/audio` (`eb25922f`, `f4ce6788`, `4abf5b4f`, `0120566f` on `966be180`). Owner decisions: D18 (no Wwise; the
 mix, the reverb and the cooked showcase from game data). Contract: `vendor/StarBreaker/docs/decomposed-export-contract.md`
-§Audio; viewer: `ue/README.md` §Audio.
+§Audio; viewer: `viewer/README.md` §Audio.
 
 **Exporter (Phase 1).** v154 Attenuation (leading height-spread byte) and Bus layouts, checked against every HIRC object
 of the 2,410 banks (524,276 objects parse exactly; 21,495 attenuations, 1,383 buses, 671 aux buses); the v154 prop-id
@@ -511,8 +511,8 @@ plugins, e.g. the hatch's `Play_Silence`) and 2 `not_in_atl`; the C2 package car
 media, 37 buses, 3 environments, 9 rooms and 14 entity classes with effects.
 
 **Player (Phase 2).** `USCAudioWave` (Ogg streamed through `sc_audio_*`, lewton), `USCAudioSubsystem` (containers,
-curves, RTPCs, spots, areas, rooms, hooks). Run `out/audio/run7` (`ue/scripts/rpc/c2-audio.ps1`, C2 in
-`hangar_xltop_001`, first person, port 8771; log `ue/SCViewer/Saved/Logs/a1-run7.log`):
+curves, RTPCs, spots, areas, rooms, hooks). Run `out/audio/run7` (`viewer/scripts/rpc/c2-audio.ps1`, C2 in
+`hangar_xltop_001`, first person, port 8771; log `viewer/Saved/Logs/a1-run7.log`):
 - `AUDIO_EMITTERS`: `top_deck_c2` 246 spots + 318 extra positions, 1 area; the C2 has 610 spots and 8 areas in the
   loaded interiors (the 9th `.soc` area is in `armoury`, a layer the C2 does not load); the hangar 224 spots, 3 areas.
 - Top deck → hold (`AUDIO_AREA`): riding down, `AAA_Top_Deck_C2-001` falls 1.00 → 0.00 over its 5 m `fadeDistance`
@@ -544,7 +544,7 @@ over the bank's IR (wet 0 dB, dry −96 dB, pre-delay 0 ms as authored). Probes 
 every room (−32.6 dBFS RMS); wet tails after the sound ends, to the 16-bit floor: Large 3.98 s, Medium 2.06 s, Small
 0.03 s, dry 0 s; the wet return sits 11 dB (Large), 14 dB (Medium) and 33 dB (Small) below the dry peak.
 
-**Cook (Phase 5).** `ue/scripts/cook_audio.py` stages `audio.json`, `audio_interiors.json` (spots, areas, room volumes
+**Cook (Phase 5).** `viewer/scripts/cook_audio.py` stages `audio.json`, `audio_interiors.json` (spots, areas, room volumes
 per interior) and every payload under `Content/SCAudio/<level>` (gitignored, non-UFS staging); a missing manifest or
 payload stops that level (cook format 6, so earlier cooked levels report stale); `ASCVehicle::BeginPlay` loads it,
 mapping anchors to interiors by their recorded scene index. Verified: the staging step against the C2 export outside UE

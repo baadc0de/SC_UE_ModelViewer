@@ -16,7 +16,7 @@ that runs what it can without game data.
   clip names.
 - `scripts/validate_decomposed.sh`: runs upstream `validate_decomposed_export` on the
   decomposed output.
-- UE smoke: `UnrealEditor-Cmd ue/SCViewer/SCViewer.uproject -run=pythonscript
+- UE smoke: `UnrealEditor-Cmd viewer/SCViewer.uproject -run=pythonscript
   -script=scripts/ue_smoke.py` imports each golden package (folder path, and via
   `ViewEntity` through FFI once WP-V1 lands), asserts object counts, Nanite flags, clip counts and collision presence (a line
   trace hits the hull), renders the `Viewer` level to PNG (`HighResShot`) into `out/smoke/`,

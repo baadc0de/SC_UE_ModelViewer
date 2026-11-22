@@ -1,4 +1,4 @@
-# SC_UE_ModelViewer — agent instructions
+# UnrealCitizen — agent instructions
 
 Read with `docs/02-implementation-plan.md` (what we are building and in which
 order) and `vendor/StarBreaker/AGENTS.md` (upstream engineering rules, which we
@@ -11,9 +11,13 @@ inherit for all Rust that touches the vendored crates).
   (WP-D1). Never edit it without a branch; never commit `Co-Authored-By` trailers
   inside the submodule (upstream rule). The superproject follows this repo's rules.
 - `crates/` — our Rust (`scviewer-core`, `scviewer-cli`, `scbridge-ffi`).
-- `ue/SCViewer/` — the Unreal project (game-mode app, Viewer level);
-  `ue/Plugins/SCBridge/` — Runtime module (FFI client, importer, actor, player, UI),
+- The repository (GitHub `baadc0de/UnrealCitizen`, formerly `SC_UE_ModelViewer`) is being split into the
+  StarBreaker core, the viewer and the UnrealCitizen game: `docs/work-packages/WP-O1-unrealcitizen-split.md`.
+- `plugins/SCBridge/` — the shared Unreal plugin: Runtime module (FFI client, importer, actor, player, UI),
   optional Editor module (Keep as assets), `ThirdParty/SCBridgeLib`.
+- `viewer/` — the viewer Unreal project (`SCViewer.uproject`; game-mode app, Viewer level), its `scripts/`
+  (RPC driver in `scripts/rpc/`) and `verification/` records.
+- `game/` — the UnrealCitizen Unreal project (WP-O1-2 onward).
 - `docs/` — analysis, plan, UE design, `work-packages/` briefs.
 - `scripts/` — `starbreaker.sh` (build + run vendored CLI), `glbinfo.py`.
 - `out/` — exports (gitignored). Scratch belongs in the session scratchpad.
@@ -47,11 +51,11 @@ inherit for all Rust that touches the vendored crates).
   `r.SSDO*` and the `SSDO*` post-process settings; `sc.Look.SSDO`). The Lumen World Cache is
   off for now (D13). The deliverable is a standalone game-mode app (plan D2/D3): user-facing code goes in the Runtime
   module; editor-only dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
-- Win64, D3D12 SM6 (`ue/SCViewer/Config/Windows/WindowsEngine.ini`): build with
+- Win64, D3D12 SM6 (`viewer/Config/Windows/WindowsEngine.ini`): build with
   `C:\Users\bojan\UnrealEngine-5.9-src\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs uproject> -WaitMutex`;
   FFI via `scripts/build_ffi.ps1` (every build links it); NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored
-  download, compiled against the fork) — see `ue/README.md`. Standalone showcase: `ue/scripts/package_showcase.ps1`
-  (one cooked ship and hangar from `ue/scripts/cook_ships.py` / `cook_hangars.py`; Shipping, `-SCMaxQuality`).
+  download, compiled against the fork) — see `viewer/README.md`. Standalone showcase: `viewer/scripts/package_showcase.ps1`
+  (one cooked ship and hangar from `viewer/scripts/cook_ships.py` / `cook_hangars.py`; Shipping, `-SCMaxQuality`).
 
 ## Working rules
 

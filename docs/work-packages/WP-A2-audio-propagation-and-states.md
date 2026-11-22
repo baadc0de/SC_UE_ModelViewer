@@ -31,7 +31,7 @@ No invented values: every number below has its source.
 
 - `docs/work-packages/WP-A1-audio.md`, including "Result (A1-1)", "Result (A1-2)" and "Owner decisions (2026-11-20)";
 - `out/audio-a2-research/NOTES.md`;
-- `ue/Plugins/SCBridge/Source/SCBridge/Private/SCAudioSystem.cpp` (`RtpcValue`, `UpdateAreasAndSpots`,
+- `plugins/SCBridge/Source/SCBridge/Private/SCAudioSystem.cpp` (`RtpcValue`, `UpdateAreasAndSpots`,
   `UpdateInstance`), `SCAudio.cpp` (`FSCAudioGain::Add`), `SCAudioBusFx.cpp`;
 - `vendor/StarBreaker/crates/starbreaker-wwise/src/{stmg.rs,mix.rs,manifest.rs,datacore_effects.rs}`,
   `crates/starbreaker-3d/src/decomposed_audio.rs`, `socpak/audio_entities.rs`.
@@ -417,7 +417,7 @@ play 78 voices (`AUDIO_EMITTERS`); recording on a light-hum spot walking along i
 
 - **Lineage ≠ SC.** CIG rewrote the area manager (`CEAAreaManager`) and added zones and room propagation; the Lumberyard
   rules are the documented ancestor, not SC's code. Mitigation: every lineage rule sits in one function, is logged, and
-  is listed as such in `ue/README.md` §Audio.
+  is listed as such in `viewer/README.md` §Audio.
 - **Surface types missing** in the viewer's collision: occlusion with a single fallback value over- or under-states thin
   walls (`metal_grate` 0.05 vs metal 0.40). Mitigation: D4 fallback; WP-K4.
 - **Filter shape**: a one-pole LPF at 627 Hz differs from a steeper filter by several dB at 2–4 kHz. Mitigation: D6,

@@ -12,11 +12,21 @@ dist/
 app/src-tauri/gen/
 
 # Unreal
-ue/**/Binaries/
-ue/**/Intermediate/
-ue/**/DerivedDataCache/
-ue/**/Saved/
-ue/**/.vs/
+viewer/**/Binaries/
+viewer/**/Intermediate/
+viewer/**/DerivedDataCache/
+viewer/**/Saved/
+viewer/**/.vs/
+plugins/**/Binaries/
+plugins/**/Intermediate/
+plugins/**/DerivedDataCache/
+plugins/**/Saved/
+plugins/**/.vs/
+game/**/Binaries/
+game/**/Intermediate/
+game/**/DerivedDataCache/
+game/**/Saved/
+game/**/.vs/
 *.sln
 
 # Exports / probes / cache (large game-derived data never goes in git)
@@ -41,15 +51,28 @@ ue/**/.vs/
 __pycache__/
 
 # Cooked environments and kept assets are game-derived (WP-C1, Keep as assets)
-ue/SCViewer/Content/SC/
-# WP-A1: cooked levels' audio (game-derived, ue/scripts/cook_audio.py)
-ue/SCViewer/Content/SCAudio/
+viewer/Content/SC/
+# WP-A1: cooked levels' audio (game-derived, viewer/scripts/cook_audio.py)
+viewer/Content/SCAudio/
 
-# NVIDIA DLSS plugin (downloaded from NVIDIA; its license does not allow redistribution)
+# The layout before WP-O1-1 (ue/SCViewer, ue/Plugins): a checkout or worktree that moved to the new layout keeps its
+# old ignored build output and game-derived content there until it is moved or deleted; keep it ignored.
+/ue/**/Binaries/
+/ue/**/Intermediate/
+/ue/**/DerivedDataCache/
+/ue/**/Saved/
+/ue/**/.vs/
+/ue/SCViewer/Content/SC/
+/ue/SCViewer/Content/SCAudio/
+/ue/SCViewer/Content/SciFi_Drone_4/
+/ue/SCViewer/Build/*/FileOpenOrder/
 /ue/Plugins/NVIDIA/
 
+# NVIDIA DLSS plugin (downloaded from NVIDIA; its license does not allow redistribution)
+/plugins/NVIDIA/
+
 # Cook file-open-order logs (written by every cook)
-ue/SCViewer/Build/*/FileOpenOrder/
+viewer/Build/*/FileOpenOrder/
 
 # Fab marketplace assets (licensed for use, not redistribution): installed per machine, never committed
-/ue/SCViewer/Content/SciFi_Drone_4/
+/viewer/Content/SciFi_Drone_4/

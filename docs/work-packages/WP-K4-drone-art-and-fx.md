@@ -19,7 +19,7 @@ the game has its own.
 
 ## K4a — the Fab drone
 
-**Asset.** `ue/SCViewer/Content/SciFi_Drone_4/` (UE 5.7 pack, added through the Epic launcher's "Add to Project"). It is
+**Asset.** `viewer/Content/SciFi_Drone_4/` (UE 5.7 pack, added through the Epic launcher's "Add to Project"). It is
 licensed for use, not redistribution: it is gitignored and installed per machine; without it the stand-in drone is used.
 Measured in 5.9 (`out/fab/SciFi_Drone_4-inspect.json`):
 - `SKM_SciFi_Drone_4`: imported bounds 92 × 138 × 42 cm; the visible hull is 40 × 49 × 42 cm (the bounds include a
@@ -34,7 +34,7 @@ Measured in 5.9 (`out/fab/SciFi_Drone_4-inspect.json`):
   - Scanning (5 s);
   - Attack (5 s, unused).
 
-**Art description, not code.** `ue/SCViewer/Config/Cargo/drone_art.json` names the skeletal mesh, the yaw that turns
+**Art description, not code.** `viewer/Config/Cargo/drone_art.json` names the skeletal mesh, the yaw that turns
 its face to +X, the bone the beam leaves from (`camera`), the body bone that is centred on the actor, and which
 sequence plays for which motion. No asset name appears in C++. With the file or the mesh missing, the K1d stand-in is
 used as before.
@@ -59,7 +59,7 @@ come from the mesh, as they do today.
 
 ## K4b — the dock (Astra)
 
-`ue/scripts/create_cargo_art.py` `dock()`: original art, no game geometry.
+`viewer/scripts/create_cargo_art.py` `dock()`: original art, no game geometry.
 - **Footprint:** two lattice cells, authored at 250 × 125 × 125 cm.
 - **Bays:** two (round 2: side by side, one per cell, open on the long +Y side). Each holds the drone with clearance,
   facing its opening.
@@ -180,7 +180,7 @@ Approximations, recorded per emitter in the build log:
 - **Inheritance:** `Inheritance="Parent"` takes the parent's resolved values, merged field by field. Otherwise the
   defaults were inferred from the data.
 - **Editor module `SCBridgeFx`** (`bTreatAsEngineModule`), commandlet `-run=SCFxBuild`. Its list is
-  `ue/SCViewer/Config/FX/effects.json`; its output goes to `/Game/SC/FX` (gitignored). Each game emitter becomes a
+  `viewer/Config/FX/effects.json`; its output goes to `/Game/SC/FX` (gitignored). Each game emitter becomes a
   stateless emitter duplicated from `FountainLightweight`; the mapping rules are in the commandlet's header comment.
 - **Materials:** masters `M_SC_Particle_Additive` / `_Translucent` from `create_materials.py`.
 - **Runtime preview:** `sc.Fx.Spawn <path> [x y z] [dist= right= up= pitch= yaw= roll= rel=1 sx= scale= every=]` and
@@ -232,7 +232,7 @@ EmitterStrength curves (exact piecewise-linear clamp expressions in `SC.Strength
 Attributes module). `SC.SV<i>` / `SC.SK<i>`, `SC.BR<i>` / `SC.BK<i>` and `SC.Scale2` (below, K4a round 2) are gone; systems built
 before E1-6 need a rebuild (`-run=SCFxBuild`). Since the E1-6 review the contract is versioned: every built system carries the int User
 parameter `SC.FxContract` (`SCFxRules::FxContractVersion`, 2); the runtime warns `SC_FX_STALE` (non-shipping) for a system without it or
-with an older one, `-run=SCFxBuild -VerifyContract` fails on one, and `ue/scripts/package_showcase.ps1` refuses to package while one exists.
+with an older one, `-run=SCFxBuild -VerifyContract` fails on one, and `viewer/scripts/package_showcase.ps1` refuses to package while one exists.
 
 **Per item:**
 1. **Strength.** The game's strengths are read from DataCore (`effects.json` `strength`: the tractor record's
@@ -316,7 +316,7 @@ HalfRes / ResponsiveAA / MinPixels and other render-pipeline flags.
 - The clips move only bones below `root`; no root motion. The Rotate clips turn `body` 90° in 1 s. The Move clips
   raise or lower it by up to 10 cm and tilt it by up to 16°.
 
-**Art description** (`ue/SCViewer/Config/Cargo/drone_art.json`, `FSCCargoDroneArt`): `heading` (yaw rate 90°/s, the
+**Art description** (`viewer/Config/Cargo/drone_art.json`, `FSCCargoDroneArt`): `heading` (yaw rate 90°/s, the
 Rotate clips' pace; hover speed 20 cm/s; turn-clip rate 20°/s; crossfade 0.25 s; travel smoothing 0.2 s) applies to
 every drone. `art` names the mesh, `scale` 1, `yaw_offset_deg` −90 (face +Y → +X), `centre_bone` `body`,
 `beam_bone` `camera`, `beam_axis` down, `light_bone` `camera`, `yaw_lock_bone` `body`, `hidden_slots`
@@ -690,7 +690,7 @@ the box: tested), at 0.35 of its top speed; its beam slides from the top face do
   space kept for that team's drones (`CARGO_REPLAN … waits_for_drones=1` for 180 s; move 1 failed). A load planned first
   keeps no space for a later team still attaching (`KeptSpace`); those drones step out of a load's way (`DodgesLoads`).
 
-**Runs** (logs `ue/SCViewer/Saved/Logs/<tag>.log`, outputs `out/k4b/<tag>.out`):
+**Runs** (logs `viewer/Saved/Logs/<tag>.log`, outputs `out/k4b/<tag>.out`):
 
 | Run | Scenario | Job line | Notes |
 |---|---|---|---|
@@ -934,7 +934,7 @@ boxes (8.0 before).
   push, pull in reverse, strafe, its bay first) and `DroneArtParse` (the grip block) extended). The two
   `Condition failed` lines are the engine's own.
 
-**Runs** (logs `ue/SCViewer/Saved/Logs/<tag>.log`; outputs `out/k4b/<tag>.out`; the final build is `t`):
+**Runs** (logs `viewer/Saved/Logs/<tag>.log`; outputs `out/k4b/<tag>.out`; the final build is `t`):
 
 | Run | Scenario | Job line | Notes |
 |---|---|---|---|
@@ -1033,7 +1033,7 @@ The coordinator suggested keeping only "waiting drones go outside" and dropping 
 outside a drone can wait in, so the drone has to leave, and the load has to wait until it has: the gate is that rule seen
 from the load's side. It costs 24 to 74 s of waiting per run (5 to 8 waits, at most 30 s each).
 
-**Reliability** (the final code; logs `ue/SCViewer/Saved/Logs/<tag>.log`; times `out/k4b/<tag>-times.txt`):
+**Reliability** (the final code; logs `viewer/Saved/Logs/<tag>.log`; times `out/k4b/<tag>-times.txt`):
 
 | Run | Job line | Gate waits | Refuges |
 |---|---|---|---|

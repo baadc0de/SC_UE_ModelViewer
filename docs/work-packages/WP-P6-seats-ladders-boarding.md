@@ -118,7 +118,7 @@ is silent, the viewer's behaviour is a named reading of the data, kept in one fu
 
 ## Read first
 
-`AGENTS.md`; `ue/README.md` §First-person exploration and §Armed first person; `docs/work-packages/WP-P2-armed-first-person.md`
+`AGENTS.md`; `viewer/README.md` §First-person exploration and §Armed first person; `docs/work-packages/WP-P2-armed-first-person.md`
 (player kit, fragment rule, clip sidecars); `docs/work-packages/WP-P5-lifts.md` §4–§6 (interaction points, links,
 `SendInteraction`, the brief's style); `vendor/StarBreaker/docs/decomposed-export-contract.md` §Child scene instances,
 §Interior containers, §Player kits; `out/seats-ladders-datamine/NOTES.md` (the findings log, with every file, command and
@@ -619,7 +619,7 @@ RPC (WP-H1): `/wait until=seated|walking|climbing`; `seat` and `ladder` records 
 - automation tests `SCBridge.Seat.*` (synthetic package: state order with and without skip states; attach and detach;
   blocked exit).
 
-**Done means** (`ue/verification/WP-P6.md`; route `ue/scripts/routes/c2-cockpit-seats.txt`; `-SCLoad=CRUS_Starlifter_C2
+**Done means** (`viewer/verification/WP-P6.md`; route `viewer/scripts/routes/c2-cockpit-seats.txt`; `-SCLoad=CRUS_Starlifter_C2
 -SCCamera=first`):
 
 1. `SEAT_LIST` shows two seats:

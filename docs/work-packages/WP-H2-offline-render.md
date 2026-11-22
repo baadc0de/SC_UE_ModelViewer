@@ -140,11 +140,11 @@ if any, follow the WP-E1 rules (fork branch `scviewer/5.9`, UE behaviour as the 
 - `Private/SCRpcSubsystem.cpp`: bind `/render`; `/health` and the state log show a running render
   (`reasons: rendering`).
 - `Private/SCRpcVideo.cpp`: `source_format` and the HDR warning (Colour rules).
-- `ue/scripts/rpc/SCRpc.psm1`: `Invoke-SCRender` helper. `ue/scripts/rpc/render_check.ps1` captures the orbit and
-  writes `out/h2/<tag>/report.json`. `ue/scripts/rpc/render_repeat.ps1` scores two completed live captures using
-  `ue/scripts/rpc/h2-live-tolerance.json` and writes `repeat-report.json` to the candidate directory.
+- `viewer/scripts/rpc/SCRpc.psm1`: `Invoke-SCRender` helper. `viewer/scripts/rpc/render_check.ps1` captures the orbit and
+  writes `out/h2/<tag>/report.json`. `viewer/scripts/rpc/render_repeat.ps1` scores two completed live captures using
+  `viewer/scripts/rpc/h2-live-tolerance.json` and writes `repeat-report.json` to the candidate directory.
 - Docs: this brief's status; `docs/work-packages/WP-H1-rpc-harness.md` API table (`/render`, `/record` preview
-  note); `ue/README.md` RPC section; `docs/03-unreal-export-design.md` if the player or exposure behaviour changes
+  note); `viewer/README.md` RPC section; `docs/03-unreal-export-design.md` if the player or exposure behaviour changes
   under a fixed timestep.
 
 ## Tests (automation, failing first)

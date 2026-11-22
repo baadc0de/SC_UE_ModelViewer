@@ -43,7 +43,7 @@ Made-up values are allowed; choose them against in-game footage. Implemented:
 - Exterior only: `FSCDirt::MarkExterior` writes custom primitive data slot 0 = 1 on components outside every room
   (WP-L1 lighting channel 0), 0 inside — the game's object-container template sets `InteriorDirtFactor` 0.
 - Viewer: options panel "Dirt" slider (0–100 %) and presets Dust / Sand / Mud / Ash; `sc.Dirt <amount> [preset]`.
-  Defaults 30 % Dust, picked by eye against the owner's Gladius references (`ue/verification/reference/gladius/`)
+  Defaults 30 % Dust, picked by eye against the owner's Gladius references (`viewer/verification/reference/gladius/`)
   and community footage descriptions of flown ships; not game data.
 
 Follow-up (same day), closing the gaps of the first version:

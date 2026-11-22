@@ -29,7 +29,7 @@ acceptance gate cannot be passed until upstream is fixed:
    at the sample in Y-up; the sidecar for the same clip still shows the swapped
    values (parity test).
 3. Regenerate the reference GLB used by the UE rig check
-   (`ue/SCViewer/Saved/Import/u3-scorpius-default.glb` is scratch — produce it with
+   (`viewer/Saved/Import/u3-scorpius-default.glb` is scratch — produce it with
    `scviewer glb RSI_Scorpius out/scorpius-default.glb --default-pose` or equivalent;
    add the `--default-pose` / `default_animation_tags` options to `scviewer-cli` if
    missing) and document the exact command in the brief for the orchestrator to feed
@@ -42,7 +42,7 @@ acceptance gate cannot be passed until upstream is fixed:
 - The regenerated Scorpius default-pose GLB has `BONE_Front_Base_Arm` at the swapped-
   back position (0, 1.0089, −0.038) relative to its parent (in CryEngine Y-up) and
   `BONE_Front_Mid_Arm` at its bind rotation.
-- Orchestrator step (recorded here, not yours): `ue/scripts/run_import.sh
+- Orchestrator step (recorded here, not yours): `viewer/scripts/run_import.sh
   out/dec-scorpius -nullrhi -SCVerifyRig -SCPoseReference=<new glb>
   -SCPoseClip=landing_gear_extend` passes within 5° / 1 cm on all bones.
 
@@ -131,7 +131,7 @@ Changed files under `vendor/StarBreaker` (complete list):
 Orchestrator handoff (not run by this Rust task):
 
 ```bash
-ue/scripts/run_import.sh out/dec-scorpius -nullrhi -SCVerifyRig -SCPoseReference="$PWD/out/scorpius-default.glb" -SCPoseClip=landing_gear_extend
+viewer/scripts/run_import.sh out/dec-scorpius -nullrhi -SCVerifyRig -SCPoseReference="$PWD/out/scorpius-default.glb" -SCPoseClip=landing_gear_extend
 ```
 
 Scope deviation: per task authorization, work remains uncommitted on main and

@@ -24,7 +24,7 @@ in-memory decomposed package without any intermediate files.
   no allocation crosses without its matching `sc_free_*`. Progress callback
   (`phase`, `done`, `total`) may fire from rayon threads — say so in the header.
 - `scripts/build_ffi.sh`: builds release `.so`, copies it + header to
-  `ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib/{lib/Linux,include}/`.
+  `plugins/SCBridge/Source/ThirdParty/SCBridgeLib/{lib/Linux,include}/`.
 - `crates/scbridge-ffi/ctest/`: a 100-line C program linked against the `.so` that
   opens the archive, searches "gladius", exports it and writes the tar; run as an explicit shell step against prebuilt
   artifacts, separate from `cargo test`, with no nested Cargo builds. It skips

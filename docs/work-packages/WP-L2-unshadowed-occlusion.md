@@ -1,7 +1,7 @@
 # WP-L2 — Screen-space directional occlusion (unshadowed lights and ambient)
 
 Branch `wp/l2-unshadowed-occlusion`. Follows WP-L1 (only the authored `shadow_casting` lights cast shadows) and the
-WP-U2c AO survey (`ue/verification/WP-U2c.md`).
+WP-U2c AO survey (`viewer/verification/WP-U2c.md`).
 
 > Superseded implementation (2026-11-19): the shader patches below were written for the binary engine (plan D14). The
 > SSDO is now an engine feature of the UE 5.9 fork, WP-E1 E1-7 (`docs/work-packages/WP-E1-engine-fork-features.md`):
@@ -62,4 +62,4 @@ Debug view (development): `r.SSDO.Debug 1` writes the SSDO AO, `2` the bent norm
 
 - `verify_star_engine_render.py` matches the new cvars and function hashes against the installed game.
 - (then) `engine_patches.py check` OK; MegaLights shaders compile; GPU route `cutlass-ssdo.txt` shows the effect, its cost
-  and the frame-to-frame noise at three views; recorded in `ue/verification/WP-L2.md`.
+  and the frame-to-frame noise at three views; recorded in `viewer/verification/WP-L2.md`.

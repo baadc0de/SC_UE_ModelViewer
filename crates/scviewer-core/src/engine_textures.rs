@@ -1,5 +1,5 @@
 //! Engine textures the game's shaders bind by default but no material authors (WP-U2b). The paths are the
-//! `shader_textures` of the extracted render fixture (`ue/Plugins/SCBridge/Resources/StarEngineRender.json`, re-checked
+//! `shader_textures` of the extracted render fixture (`plugins/SCBridge/Resources/StarEngineRender.json`, re-checked
 //! against the installed game by `scripts/verify_star_engine_render.py`); [`add_to_package`] copies each one from
 //! Data.p4k into a decomposed package that has a material of the shader family sampling it, at the package's texture
 //! mip, under its P4k path. The viewer's material builder reads the same fixture for the path.
@@ -8,7 +8,7 @@ use starbreaker_3d::{DecomposedExport, ExportedFile, ExportedFileKind};
 use starbreaker_dds::{DdsFile, ReadSibling};
 use starbreaker_p4k::MappedP4k;
 
-const FIXTURE: &str = include_str!("../../../ue/Plugins/SCBridge/Resources/StarEngineRender.json");
+const FIXTURE: &str = include_str!("../../../plugins/SCBridge/Resources/StarEngineRender.json");
 /// Fixture texture -> the shader family whose materials sample it (LayerBlend_V2 `GetAlphaBlendDetailMaps`).
 const USERS: &[(&str, &str)] = &[("WearDirtFrostDetailMap", "LayerBlend_V2")];
 

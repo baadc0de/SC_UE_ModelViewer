@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Re-derive the Star Engine render constants in StarEngineRender.json from the installed game.
 
-The fixture (ue/Plugins/SCBridge/Resources/StarEngineRender.json) holds values the Viewer cannot read at
+The fixture (plugins/SCBridge/Resources/StarEngineRender.json) holds values the Viewer cannot read at
 run time: renderer cvar defaults compiled into StarCitizen.exe and constants / functions of the tokenised
 shader sources in ShaderCache_Vulkan.pak. This script extracts them again and fails on any difference.
 
@@ -12,7 +12,7 @@ in place from Data.p4k (it is a stored member, so no extraction can go stale). -
 copy instead; the verdict then says so, because such a copy is not proven to be the installed build's.
 Run with -I: the executable and the shader cache are untrusted input. Standard library plus binutils
 objdump. --dump prints the extracted values as JSON instead of comparing (used to author the fixture).
-Provenance and method: ue/Plugins/SCBridge/Resources/StarEngineRender.notes.md.
+Provenance and method: plugins/SCBridge/Resources/StarEngineRender.notes.md.
 """
 import argparse
 import hashlib
@@ -28,7 +28,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FIXTURE = ROOT / "ue/Plugins/SCBridge/Resources/StarEngineRender.json"
+FIXTURE = ROOT / "plugins/SCBridge/Resources/StarEngineRender.json"
 LIVE = Path(os.environ.get("HOME", "")) / "Games/star-citizen/drive_c/Program Files/Roberts Space Industries/StarCitizen/LIVE"
 PAK = "Engine\\ShaderCache_Vulkan.pak"  # member of Data.p4k holding the tokenised shader sources
 # Open-ended cvar families: the fixture must list every member the executable registers (the loader builds
