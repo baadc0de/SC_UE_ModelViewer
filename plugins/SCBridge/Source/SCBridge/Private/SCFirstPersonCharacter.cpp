@@ -831,6 +831,7 @@ void ASCFirstPersonCharacter::SetCrouching(bool bCrouch)
 }
 void ASCFirstPersonCharacter::SetMenuOpen(bool bOpen)
 {
+    bOpen = bOpen && SCViewerShell::HasMenu(); // without an application menu (the viewer) F1 opens nothing
     if (bOpen == bMenuOpen) return;
     bMenuOpen = bOpen;
     if (bOpen)

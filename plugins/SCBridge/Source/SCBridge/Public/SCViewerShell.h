@@ -40,6 +40,8 @@ SCBRIDGE_API UWorld* ViewerWorld();
 
 /** The menu F1 opens, by the name help lines use; without one F1 does nothing. */
 SCBRIDGE_API void SetMenu(const FText& Name);
+/** No menu (an application's shutdown). */
+SCBRIDGE_API void ClearMenu();
 SCBRIDGE_API bool HasMenu();
 SCBRIDGE_API FText MenuName();
 /** Its open state: on the first-person character while there is one (its input pauses mouse look), else a UI-level flag

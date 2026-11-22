@@ -231,8 +231,12 @@ public:
     }
     void Catalog(UWorld* World, FJsonObject& Out) const override
     {
+        // Held in a local: a range-for over a member of the returned temporary would outlive it (C++20).
         if (const USCCargoSubsystem* C = Cargo(World))
-            for (const auto& [Key, Value] : C->CatalogJson()->Values) Out.SetField(Key, Value);
+        {
+            const TSharedRef<FJsonObject> Catalog = C->CatalogJson();
+            for (const auto& [Key, Value] : Catalog->Values) Out.SetField(Key, Value);
+        }
     }
     bool Wait(UWorld* World, const FString& Until, const TSharedPtr<FJsonObject>& B, bool& bReached, FJsonObject& Out, FString& OutError) const override
     {

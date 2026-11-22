@@ -56,6 +56,9 @@ private:
 
 class FUnrealCitizenModule final : public FDefaultGameModuleImpl
 {
+    // What it registers (RPC routes bound into the HTTP router, deferred polls, overlays built into the viewer root,
+    // interaction providers) lives as long as the session: the module is not unloaded or hot-reloaded under it.
+    bool SupportsDynamicReloading() override { return false; }
     void StartupModule() override
     {
         FDefaultGameModuleImpl::StartupModule();
@@ -92,6 +95,7 @@ class FUnrealCitizenModule final : public FDefaultGameModuleImpl
         ASCVehicle::RemoveDoorUseQuery(TEXT("Cargo"));
         SCViewerShell::RemoveInteraction(TEXT("GarageKiosk"));
         SCViewerShell::RemoveOverlay(TEXT("MobiGlas"));
+        SCViewerShell::ClearMenu();
         FDefaultGameModuleImpl::ShutdownModule();
     }
 };

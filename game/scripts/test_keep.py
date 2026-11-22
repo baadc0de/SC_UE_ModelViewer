@@ -1,7 +1,8 @@
 """WP-V1 editor-host Keep check: load an entity through the viewer subsystem, keep it as assets, reload them.
 
-Writes /Game/SC/<entity>[_n]/ (gitignored, game-derived); delete viewer/Content/SC/<entity>* afterwards.
-UnrealEditor-Cmd viewer/SCViewer.uproject -run=pythonscript -script=viewer/scripts/test_keep.py \
+Keep is UnrealCitizen's editor module (UnrealCitizenEditor, WP-O1-2), so the check runs in the game project.
+Writes /Game/SC/<entity>[_n]/ (gitignored, game-derived); delete game/Content/SC/<entity>* afterwards.
+UnrealEditor-Cmd game/UnrealCitizen.uproject -run=pythonscript -script=game/scripts/test_keep.py \
     -nullrhi -unattended -nop4 -nosplash -ddc=SCViewerDDC [-SCEntity=AEGS_Gladius]
 """
 import shlex

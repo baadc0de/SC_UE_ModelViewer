@@ -16,7 +16,7 @@ was run; the staged release `.so` was used as is.
 | Slate UI: top bar (archive, camera modes, Keep when the editor module is loaded), model browser (debounced search → `SListView`, recents, options, Load/Cancel, progress), 3D view (player view rect restricted to the gap between panels), hierarchy (`STreeView`, static/skeletal/light + Nanite + triangle badges, select → focus, isolate, frame all), footer (export/parse/mesh build/collision/materials/total, cache hit/miss and size, memory, disk headroom), archive overlay with the `IDesktopPlatform` file dialog (opens by itself when discovery fails) | `Private/UI/*` |
 | Automation: `-SCLoad=a,b`, `-SCHold`, `-SCCamera`, `-SCFlyView`, `-SCDefaults`, `-SCLod`, `-SCMip`, `-SCQuitAfterLoad`, `-SCSearch`, `-SCCacheDir`, `-SCArchive`, `-SCNoUI`; console `sc.Load`, `sc.Unload`, `sc.Cancel`, `sc.Camera` | `Private/SCViewerAutomation.*` |
 | Editor host Keep (`SCBridgeEditor`): renames the transient objects into `/Game/SC/<Entity>/` packages, MIDs → MICs, mesh slot materials from component overrides, texture sources from mip 0, saves | `SCBridgeEditor/Private/SCKeepAssets.*`, `SCBridgeEditor.cpp` |
-| Scripts | `viewer/scripts/ue_load_gladius.py`, `test_viewer_cancel.py`, `test_keep.py`, `capture_viewer.sh` |
+| Scripts | `viewer/scripts/ue_load_gladius.py`, `test_viewer_cancel.py`, `test_keep.py` (since WP-O1-2 in `game/scripts/`), `capture_viewer.sh` |
 
 The `-SCPackage` harness (WP-U1..U3 review runs) skips the archive open and the UI.
 
@@ -68,10 +68,10 @@ UnrealEditor-Cmd … -script="$PWD/viewer/scripts/test_viewer_cancel.py" …
 #  CANCEL after result=SUCCEEDED vehicles=1 · WP-V1 CANCEL_OK
 
 # Editor-host Keep, then a fresh process reloads the saved assets (both exit 0)
-UnrealEditor-Cmd … -script="$PWD/viewer/scripts/test_keep.py" …
+UnrealEditor-Cmd … -script="$PWD/game/scripts/test_keep.py" …
 #  KEEP root=/Game/SC/AEGS_Gladius packages=901 saved=901 warnings=13 seconds=1.510
 #  kinds={StaticMesh: 287, Texture2D: 253, MaterialInstanceConstant: 267, AnimSequence: 80, Skeleton: 13, SCClipCatalog: 1}
-UnrealEditor-Cmd … -script="$PWD/viewer/scripts/test_keep.py" -SCKeepReload=/Game/SC/AEGS_Gladius …
+UnrealEditor-Cmd … -script="$PWD/game/scripts/test_keep.py" -SCKeepReload=/Game/SC/AEGS_Gladius …
 #  KEEP_DISK assets=901 failed=0 static_meshes=287 with_kept_materials=287 textures_sized=253 · KEEP_DISK_OK
 # (the generated /Game/SC/AEGS_Gladius was deleted afterwards; Content/SC/ is gitignored)
 

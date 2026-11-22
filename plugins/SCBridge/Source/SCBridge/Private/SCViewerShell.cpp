@@ -42,6 +42,11 @@ namespace SCViewerShell
 UWorld* ViewerWorld() { return GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetWorld() : nullptr; }
 
 void SetMenu(const FText& Name) { Shell().Menu = Name; }
+void ClearMenu()
+{
+    Shell().Menu.Reset();
+    Shell().bOpen = false;
+}
 bool HasMenu() { return Shell().Menu.IsSet(); }
 FText MenuName() { return Shell().Menu.Get(FText::GetEmpty()); }
 
