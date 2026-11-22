@@ -95,7 +95,11 @@ private:
     bool bStartDecided = false;
     bool bWasOpen = false;
     bool bHidScreenMessages = false; // the menu turned GAreScreenMessagesEnabled off when it opened
-    // The latest choice the running load could not take yet (applied from Tick).
+    // The latest choice the running load could not take yet (applied from Tick), and the archive session it was made in
+    // (the lists it came from): a choice from an earlier session is dropped, not applied to another archive.
     TOptional<FString> QueuedEnvironment, QueuedVehicle;
     TOptional<FString> SaveEnvironment; // picked, saved as the user's environment once it is in the scene
+    int32 QueuedEnvironmentSession = 0, QueuedVehicleSession = 0, SaveEnvironmentSession = 0;
+    /** Drops the queued and to-be-saved choices made in an archive session that is no longer the current one. */
+    void DropSupersededChoices(const USCViewerSubsystem& S);
 };

@@ -137,6 +137,15 @@ public:
     bool IsOpen() const;
     /** True once after any call hit SC_STATUS_PANIC (the handle is already closed); the host must reopen. */
     bool TakePanic(FText& OutError);
+#if WITH_DEV_AUTOMATION_TESTS
+    /** Tests: a panic notice as FailLocked leaves it (the handle is not touched). */
+    void NotePanicForTest(const FText& Error)
+    {
+        FScopeLock PanicGuard(&PanicLock);
+        PanicError = Error;
+        bPanicPending = true;
+    }
+#endif
     /** Core defaults (sc_default_options); no handle needed. */
     static sc_options DefaultOptions();
 

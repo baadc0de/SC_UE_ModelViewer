@@ -102,7 +102,8 @@ environment it goes into; clicking the vehicle being loaded drops a later choice
 then it is asked again), clicking the one it replaces brings it back after. The decisions are pure functions
 (`DecideVehiclePick`, `DecideEnvironmentPick`) walked through these click sequences by `SCBridge.Viewer.PickerQueue`.
 The row in the scene is an inverted bar marked IN SCENE; "in the scene" is archive-scoped (an environment or vehicle
-built before the archive was reopened is loaded again when picked from the new archive's lists). The environment list starts with the procedural
+built before the archive was reopened is loaded again when picked from the new archive's lists), and so is a waiting
+choice: one made from an earlier archive session's lists is dropped, never applied to another archive. The environment list starts with the procedural
 hangar (the map's own); the environment chosen is saved once it is in the scene (a failed one is not) and restored at
 the next start; clicking a failed one requests it again. Both lists have a search box (`-SCSearch=<q>` fills the vehicle one); the menu
 opens scrolled to the current environment, vehicle and paint, and by itself at start when the command line asks for no
@@ -120,7 +121,9 @@ for the scan; a listing finished for an earlier archive session is dropped; `/ca
 and, once listing or the archive open failed for the session, the session was lost, or no archive is open (`-SCPackage`),
 `environments_error` (`GetCatalogError`); a listing does not scan when another archive was opened before it ran; a
 saved hangar waiting for a failed or closed archive is not busy work (Retry opens another, automation's archive-failure
-exit runs), while a pick waiting for a ready archive is not carried over to another one — replacing the search for "hangar" in archive paths):
+exit runs; `-SCNoCooked` counts as no cooked copy for this as for loading), while a pick waiting for a ready archive is not
+carried over to another one. An open retires the panic notice of the session it replaces, also when it fails, and a
+notice is not taken while an open is in progress (`SCBridge.Archive.PanicNoticeRetiredByOpen`) — replacing the search for "hangar" in archive paths):
 
 - *Environments*: `EntityClassDefinition` records with `InstancedInteriorComponentParams` and a set
   `SObjectContainerComponentParams.objectContainer` (84 records, 17 of them templates without a container): **61

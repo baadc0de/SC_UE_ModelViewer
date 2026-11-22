@@ -295,6 +295,7 @@ void SSCViewerPicker::PickEnvironment(const FString& Id)
     if (!S) return;
     // Saved as the user's environment once it is in the scene (Tick), so a failed choice is not restored at the next start.
     SaveEnvironment = Id;
+    SaveEnvironmentSession = QueuedEnvironmentSession = S->GetArchiveGeneration();
     FEnvironmentPickState State;
     State.Request = S->GetEnvironmentRequest();
     State.bInstalled = S->IsEnvironmentOfThisArchive();
@@ -326,6 +327,7 @@ void SSCViewerPicker::PickVehicle(const FString& Id)
     State.bCancelling = S->IsLoadCancelling();
     State.bCanLoad = S->CanLoad(Id);
     State.Pending = S->GetPendingEntity();
+    QueuedVehicleSession = S->GetArchiveGeneration();
     switch (DecideVehiclePick(Id, State))
     {
     case EVehiclePick::Keep:
@@ -363,6 +365,19 @@ ERowState SSCViewerPicker::VehicleState(const FString& Id) const
     return IsLoadingVehicle(*S) && SameId(S->GetPendingEntity(), Id) ? ERowState::Pending : ERowState::None;
 }
 
+void SSCViewerPicker::DropSupersededChoices(const USCViewerSubsystem& S)
+{
+    const int32 Session = S.GetArchiveGeneration();
+    auto Drop = [Session](TOptional<FString>& Choice, int32 MadeIn, const TCHAR* What) {
+        if (!Choice.IsSet() || MadeIn == Session) return;
+        UE_LOG(LogTemp, Display, TEXT("VIEWER_MENU dropped %s %s: picked from an earlier archive's lists"), What, **Choice);
+        Choice.Reset();
+    };
+    Drop(QueuedEnvironment, QueuedEnvironmentSession, TEXT("environment"));
+    Drop(QueuedVehicle, QueuedVehicleSession, TEXT("vehicle"));
+    Drop(SaveEnvironment, SaveEnvironmentSession, TEXT("saved environment"));
+}
+
 void SSCViewerPicker::RevealCurrent()
 {
     auto Reveal = [this](FList& L, bool bEnvironment) {
@@ -396,7 +411,8 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
     if (bOpen) S->RequestCatalog(); // listed when first shown, not for a run that never opens the menu
 
     // The choices the running loads could not take yet: the environment once nothing of it runs, the vehicle once
-    // nothing loads (a vehicle waits for the environment it goes into).
+    // nothing loads (a vehicle waits for the environment it goes into); those of an earlier archive session are dropped.
+    DropSupersededChoices(*S);
     if (QueuedEnvironment.IsSet() && !S->IsEnvironmentWorking())
     {
         const FString Id = *QueuedEnvironment;

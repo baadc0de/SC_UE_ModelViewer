@@ -241,7 +241,7 @@ public:
                (EnvLevel && !Environment.IsValid());
     }
     /** The cooked level for an object container path (…/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name>),
-     *  empty when none was cooked. */
+     *  empty when none was cooked, the app does not use cooked levels, or -SCNoCooked. */
     static FString CookedEnvironmentLevel(const FString& Folder);
     /** The cooked level of a ship (Content/SC/Ships/Maps/<entity>, viewer/scripts/cook_ships.py), empty when none was cooked.
      *  LoadEntity streams it instead of exporting from the archive, so it also works without one (a showcase

@@ -407,7 +407,9 @@ void USCViewerSubsystem::UnloadEnvironmentLevel()
 FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
 {
     const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
-    if (!SCViewerShell::UsesCookedLevels() || !Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
+    if (!SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")) ||
+        !Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase))
+        return FString(); // -SCNoCooked: as if none was cooked (StepEnvironment and IsBusy decide alike)
     const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
     return FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
@@ -576,7 +578,7 @@ void USCViewerSubsystem::StepEnvironment()
     const bool bShipIdle = Phase != ESCLoadPhase::Exporting && Phase != ESCLoadPhase::Parsing && Phase != ESCLoadPhase::Importing;
     if (bEnvironmentPending && !EnvJob && !EnvExport.IsValid() && !EnvParse.IsValid() && bShipIdle && GetViewerWorld())
     {
-        if (const FString Cooked = CookedEnvironmentLevel(EnvironmentFolder); !Cooked.IsEmpty() && !FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")))
+        if (const FString Cooked = CookedEnvironmentLevel(EnvironmentFolder); !Cooked.IsEmpty())
         {
             bEnvironmentPending = false;
             bool bOK = false;
@@ -1219,15 +1221,10 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
 
 void USCViewerSubsystem::PollClientPanic()
 {
+    // While an open is in progress a pending notice is left alone: the open retires the replaced session's notice
+    // itself (FSCBridgeClient::Open), so one still pending once its result is applied belongs to the new session.
     FText Error;
-    if (!Client || !Client->TakePanic(Error)) return;
-    if (ArchiveState == ESCArchiveState::Opening)
-    {
-        // The crash of the session the running open replaces (its handle is closed; a failure of the open itself comes
-        // with its result): it does not fail the archive being opened.
-        UE_LOG(LogSCViewer, Warning, TEXT("VIEWER_ARCHIVE_LOST (superseded by the open in progress) %s"), *Error.ToString());
-        return;
-    }
+    if (ArchiveState == ESCArchiveState::Opening || !Client || !Client->TakePanic(Error)) return;
     ArchiveState = ESCArchiveState::Failed;
     ArchiveError = Error;
     ++ArchiveGeneration; // the next open is a new session; nothing from this one may be reused

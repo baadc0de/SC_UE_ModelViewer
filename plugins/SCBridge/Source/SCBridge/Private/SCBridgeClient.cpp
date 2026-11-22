@@ -97,6 +97,12 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
         sc_close(Self->Handle);
         Self->Handle = nullptr;
         ++Self->Session;
+        {
+            // A crash of the session this open replaces is retired with it, whether the open succeeds or not: a panic
+            // notice pending from now on is the new session's (no other call runs while this one holds HandleLock).
+            FScopeLock PanicGuard(&Self->PanicLock);
+            Self->bPanicPending = false;
+        }
         const FTCHARToUTF8 P4kUtf8(*P4k), CacheUtf8(*CacheDir);
         sc_handle* Handle = nullptr;
         const sc_status Status = sc_open(P4k.IsEmpty() ? nullptr : P4kUtf8.Get(), CacheDir.IsEmpty() ? nullptr : CacheUtf8.Get(), &Handle);
@@ -107,10 +113,6 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
             return Result;
         }
         Self->Handle = Handle;
-        {
-            FScopeLock PanicGuard(&Self->PanicLock);
-            Self->bPanicPending = false; // a fresh session supersedes an unreported crash of the old one
-        }
         // A panic in either metadata call closes the handle (FailLocked): the open has failed, nothing uses it after.
         auto Panicked = [&Self, &Result] {
             FScopeLock PanicGuard(&Self->PanicLock);
