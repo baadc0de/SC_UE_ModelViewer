@@ -21,6 +21,19 @@ struct SCBRIDGE_API FSCUiStateImage
      *  states joined with "+" for a combined one. */
     FString Key() const { return States.Num() > 1 ? FString::Join(States, TEXT("+")) : StateType + TEXT(".") + State; }
 };
+/** `ui_bindings[].hover_images[]` (cache format 43, WP-I1-4): the render with the cursor on one button (`Node`, a
+ *  `buttons[].node`): the engine's hover tag on that node, so the button shows the game's hover look. `States`: the
+ *  owner states the render pins, as in FSCUiStateImage (empty: the default render's). */
+struct SCBRIDGE_API FSCUiHoverImage
+{
+    FString Node;
+    TArray<FString> States; // "<StateType>.<State>", sorted
+    FString ImagePath;      // normalized package path
+    /** The state key of the render it is the hovered form of: "" for the default, else FSCUiStateImage::Key(). */
+    FString StateKey() const { return FString::Join(States, TEXT("+")); }
+    /** The key a screen face holds its hover instances by (FSCScreenFace::Hovers). */
+    static FString FaceKey(const FString& Node, const FString& StateKey) { return Node + TEXT("|") + StateKey; }
+};
 /** `ui_bindings[].buttons[]` (cache format 39): a clickable node of the default render, the owner interaction its
  *  left click sends, and its rectangle in the generated image's pixels. */
 struct FSCUiButton
@@ -28,6 +41,7 @@ struct FSCUiButton
     FString Node;
     FName Interaction;
     FBox2D RectPx = FBox2D(ForceInit);
+    FString Label; // cache format 43: the button's caption ("Auxiliary"); "" without one
 };
 /** `ui_bindings[].state_types[]`: one state type of the UI owner's state machine, its default, the owner's own
  *  interactions that set a state (`transitions`) and the linked entities' state tags that set one (`linked`). */
@@ -76,6 +90,8 @@ struct SCBRIDGE_API FSCUiBinding
     TArray<FSCUiButton> Buttons;
     FVector2D ImageSizePx = FVector2D::ZeroVector;
     TArray<FSCUiStateType> StateTypes;
+    /** Cache format 43: the renders with the cursor on a button (`hover_images[]`; images outside the package dropped). */
+    TArray<FSCUiHoverImage> HoverImages;
 
     /** WP-I1 rule (owner decision: door and lift panels are the game's, HUDs and MFDs are the viewer's own UI): the UI
      *  of an operating panel. Derived from data only: a `physical` binding of a resolved owner that is not a display
@@ -93,6 +109,12 @@ struct SCBRIDGE_API FSCUiBinding
     {
         static const TArray<FSCUiStateImage> None;
         return PanelImage().IsEmpty() ? None : StateImages;
+    }
+    /** The hover renders a face showing PanelImage() can swap to (none when PanelImage() is ""). */
+    const TArray<FSCUiHoverImage>& PanelHoverImages() const
+    {
+        static const TArray<FSCUiHoverImage> None;
+        return PanelImage().IsEmpty() ? None : HoverImages;
     }
 };
 USTRUCT(BlueprintType)
@@ -152,6 +174,9 @@ struct SCBRIDGE_API FSCSceneInstance
     /** Cache format 39: interactions forwarded to the items of vehicle ports, and the Sendable interactions with tags. */
     TArray<FSCItemPortLink> ItemPortLinks;
     TArray<FSCSendableInteraction> SendableInteractions;
+    /** Cache format 43 (placements): the class's interactions that start a use of its usable (`usable_interactions[]`:
+     *  a bed's Sit, LieDown, Sleep); empty for an entity that is no usable. */
+    TArray<FName> UsableInteractions;
     /** `ui_bindings[]`: the UI screens this entity carries (WP-I1). */
     TArray<FSCUiBinding> UiBindings;
     /** Every image a screen face of this instance may show (FSCUiBinding::PanelImage), decoded with the material

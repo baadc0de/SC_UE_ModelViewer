@@ -179,6 +179,22 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
                 continue;
             Binding.StateImages.Add(MoveTemp(Image));
         }
+        // Cache format 43 (WP-I1-4): the renders with the cursor on a button.
+        for (const auto& H : ReaderArray(B, TEXT("hover_images")))
+        {
+            const FReaderObject HI = H && H->Type == EJson::Object ? H->AsObject() : nullptr;
+            if (!HI) continue;
+            FSCUiHoverImage Image;
+            Image.Node = String(HI, TEXT("node"));
+            for (const auto& P : ReaderArray(HI, TEXT("states")))
+                if (const FReaderObject Pin = P && P->Type == EJson::Object ? P->AsObject() : nullptr)
+                    if (const FString T = String(Pin, TEXT("state_type")), St = String(Pin, TEXT("state")); !T.IsEmpty() && !St.IsEmpty())
+                        Image.States.AddUnique(T + TEXT(".") + St);
+            Image.States.Sort();
+            if (Image.Node.IsEmpty() || !FSCPackageSource::Normalize(String(HI, TEXT("generated_image_path")), Image.ImagePath) || Image.ImagePath.IsEmpty())
+                continue;
+            Binding.HoverImages.Add(MoveTemp(Image));
+        }
         // Cache format 39: the render's clickable nodes and the owner's state machine.
         const TArray<TSharedPtr<FJsonValue>>& Size = ReaderArray(B, TEXT("image_size_px"));
         if (Size.Num() == 2) Binding.ImageSizePx = FVector2D(Size[0]->AsNumber(), Size[1]->AsNumber());
@@ -190,6 +206,7 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
             FSCUiButton Button;
             Button.Node = String(BO, TEXT("node"));
             Button.Interaction = FName(*String(BO, TEXT("interaction")));
+            Button.Label = String(BO, TEXT("label"));
             const FVector2D Min(R[0]->AsNumber(), R[1]->AsNumber());
             Button.RectPx = FBox2D(Min, Min + FVector2D(R[2]->AsNumber(), R[3]->AsNumber()));
             if (!Button.Interaction.IsNone() && Button.RectPx.GetArea() > 0) Binding.Buttons.Add(MoveTemp(Button));
@@ -237,6 +254,8 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
     for (const auto& V : ReaderArray(O, TEXT("sendable_interactions")))
         if (const FReaderObject S = V && V->Type == EJson::Object ? V->AsObject() : nullptr)
             Out.SendableInteractions.Add({FName(*String(S, TEXT("name"))), String(S, TEXT("linking_tag"))});
+    for (const auto& V : ReaderArray(O, TEXT("usable_interactions")))
+        if (V && V->Type == EJson::String && !V->AsString().IsEmpty()) Out.UsableInteractions.AddUnique(FName(*V->AsString()));
     const FReaderObject* Port;
     if (O->TryGetObjectField(TEXT("port"), Port))
     {
@@ -631,6 +650,7 @@ void FSCSceneInstance::PanelImages(TSet<FString>& Out, int32* Excluded, int32* U
         if (!B.IsOperatingPanel()) { if (Excluded) ++*Excluded; continue; }
         if (!B.PanelImage().IsEmpty()) Out.Add(B.PanelImage());
         for (const FSCUiStateImage& S : B.PanelStateImages()) Out.Add(S.ImagePath);
+        for (const FSCUiHoverImage& H : B.PanelHoverImages()) Out.Add(H.ImagePath);
     }
 }
 FString FSCSceneInstance::ScreenSlotImage(const TSet<FString>& MeshNodes, const TArray<TArray<FString>>& Owners, bool* bAmbiguous) const

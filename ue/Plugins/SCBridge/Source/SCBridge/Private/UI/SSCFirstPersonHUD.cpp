@@ -1,6 +1,7 @@
 // Collision status, relative coordinates, nearest interaction and data-derived teleport choices: the ship's spawns and the
 // hangar's waypoints, each section under its heading (SCTeleportMenu::Rows); keys and the mouse select across both.
 #include "SSCFirstPersonHUD.h"
+#include "SSCInteractionPrompt.h"
 #include "SCViewerSubsystem.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
@@ -25,6 +26,8 @@ void SSCFirstPersonHUD::Construct(const FArguments& Args)
         + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
         [SNew(STextBlock).Text(FText::FromString(TEXT("+"))).Visibility(EVisibility::HitTestInvisible)
             .ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor::Black)]
+        // WP-I1-4: what E does on the thing under the crosshair, the wheel's choice among several.
+        + SOverlay::Slot()[SNew(SSCInteractionPrompt).Subsystem(Subsystem.Get())]
         + SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom).Padding(12,12,12,40)
         // Dark backing: the text must stay readable over bright, lit interiors.
         [SNew(SBorder).Visibility(EVisibility::HitTestInvisible).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))

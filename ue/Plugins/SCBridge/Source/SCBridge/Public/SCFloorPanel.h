@@ -73,6 +73,7 @@ struct FSCFloorPanelOption
     FName Interaction;
     FString Label;
     FBox2D Rect = FBox2D(ForceInit);
+    FString Node; // a Buttons panel: the render's node (`buttons[].node`), whose hover render shows it aimed at
 };
 
 /** Our layout: the rows top to bottom in the order given, over the face above a thin status bar. */
@@ -100,13 +101,14 @@ struct SCBRIDGE_API FSCFloorPanelView
     TArray<int32> Requested;      // stops queued (sorted)
     int8 Direction = 0;           // +1 up, -1 down: the leg's direction
     bool bBlink = false;          // the target's marker phase
+    bool bHoverImage = false;     // a button panel: the export's hover look applies to the highlighted node (no frame)
     /** Our blink rate for the target's marker (Hz). */
     static constexpr double BlinkHz = 1.5;
     static FSCFloorPanelView Of(const FSCLift& Lift, int32 Highlight, double Time);
     bool operator==(const FSCFloorPanelView& O) const
     {
         return Highlight == O.Highlight && Image == O.Image && Current == O.Current && Target == O.Target && Requested == O.Requested &&
-               Direction == O.Direction && bBlink == O.bBlink;
+               Direction == O.Direction && bBlink == O.bBlink && bHoverImage == O.bHoverImage;
     }
     FString Describe() const;
 };
@@ -158,6 +160,8 @@ struct FSCFloorPanel
     TArray<FSCUiStateType> StateTypes;
     TArray<FSCUiStateImage> StateImages;
     FString DefaultImage;
+    /** WP-I1-4: the renders with the cursor on a node (`hover_images[]`). */
+    TArray<FSCUiHoverImage> HoverImages;
     /** The owner's current state per state type (its default until something sets it). */
     TMap<FString, FString> UiState;
     /** Decoded renders by package path (the default and every state image). */
@@ -179,6 +183,8 @@ struct FSCFloorPanel
     /** The render for the current UiState: the state image whose pinned states are all current and that pins the most of
      *  them (exactly the current non-default states when one does), else the default render. */
     FString ImageForState() const;
+    /** WP-I1-4: the render Image (the default or a state image) with the cursor on option Option's node; "" without one. */
+    FString HoverImageFor(const FString& Image, int32 Option) const;
 };
 /** A screen face showing an operating panel's render whose binding has clickable nodes (SCImportJob collects them):
  *  the face's geometry and what a drawn panel needs. */
@@ -196,6 +202,7 @@ struct FSCButtonFace
     FVector2D ImageSizePx = FVector2D::ZeroVector;
     TArray<FSCUiStateType> StateTypes;
     TArray<FSCUiStateImage> StateImages;
+    TArray<FSCUiHoverImage> HoverImages;
     FString DefaultImage;
     bool bHideDoorLockControl = false;
     TFunction<UMaterialInterface*(UTexture* Image)> MakeMaterial;

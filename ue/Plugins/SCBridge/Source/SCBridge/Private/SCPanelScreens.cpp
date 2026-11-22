@@ -2,11 +2,14 @@
 // A door pad's face shows the exporter's render of the pad's DoorOpenState for its door (the pad's state machine mirrors
 // the door in the game): opening / closing while the door's fragment plays, opened / closed at rest. States the viewer
 // does not model (lock, power, override) are shown with a pinned state (sc.Screens.States).
+// WP-I1-4: under the crosshair a face shows the exporter's render of that state with the cursor on the button aimed at
+// (`hover_images[]`: the game's hover look); AimPanelButton finds the button, SetPanelHover shows it.
 #include "SCVehicle.h"
 #include "SCRigComponent.h"
 #include "Components/MeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "EngineUtils.h"
+#include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/Paths.h"
 
@@ -52,7 +55,14 @@ int32 ASCVehicle::RefreshPanelScreens()
         }
         const TWeakObjectPtr<UMaterialInterface>* State = Face.States.Find(Key);
         UMaterialInterface* Material = State && State->IsValid() ? State->Get() : Face.Default.Get();
-        const FString Shown = State && State->IsValid() ? Key : FString();
+        FString Shown = State && State->IsValid() ? Key : FString();
+        // The cursor on a button: that state's render with the button hovered, when the export has it.
+        if (const TWeakObjectPtr<UMaterialInterface>* Hover = Face.Hovered.IsEmpty() ? nullptr : Face.Hovers.Find(FSCUiHoverImage::FaceKey(Face.Hovered, Shown));
+            Hover && Hover->IsValid())
+        {
+            Material = Hover->Get();
+            Shown += TEXT("|hover:") + Face.Hovered;
+        }
         if (!Material || (Shown == Face.Shown && C->GetMaterial(Face.Slot) == Material)) continue;
         C->SetMaterial(Face.Slot, Material);
         Face.Shown = Shown;
@@ -61,6 +71,72 @@ int32 ASCVehicle::RefreshPanelScreens()
                Shown.IsEmpty() ? TEXT("default") : *Shown);
     }
     return Swapped;
+}
+
+bool ASCVehicle::AimPanelButton(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32& OutAim, FString& OutNode) const
+{
+    OutAim = INDEX_NONE;
+    OutNode.Reset();
+    const FVector Dir = Direction.GetSafeNormal();
+    double Best = UE_BIG_NUMBER;
+    FVector BestPoint;
+    FVector2f BestUV;
+    for (int32 I = 0; I < PanelAims.Num(); ++I)
+    {
+        const FSCPanelAim& A = PanelAims[I];
+        const UMeshComponent* C = A.Component.Get();
+        if (!C || !C->IsVisible()) continue;
+        // A panel is reached from as far as its UI is operated when that is farther (FindInteraction's rule).
+        const double AimReach = FMath::Max<double>(Reach, A.Reach);
+        const FTransform T = A.Frame();
+        if (FVector::Dist(Eye, T.TransformPosition(A.Centre)) > AimReach + A.Radius) continue; // out of reach
+        const FVector LocalEye = T.InverseTransformPosition(Eye);
+        const FVector LocalRay = T.InverseTransformPosition(Eye + Dir * AimReach) - LocalEye;
+        const double LocalReach = LocalRay.Size();
+        double Distance;
+        FVector2f UV;
+        if (LocalReach <= 0 || !A.Geometry.Raycast(LocalEye, LocalRay / LocalReach, LocalReach, Distance, UV)) continue;
+        const FVector Point = T.TransformPosition(LocalEye + LocalRay / LocalReach * Distance);
+        const double World = FVector::Dist(Eye, Point);
+        if (World >= FMath::Min(Best, AimReach)) continue;
+        Best = World;
+        BestPoint = Point;
+        BestUV = UV;
+        OutAim = I;
+    }
+    if (OutAim == INDEX_NONE) return false;
+    // As AimFloorPanel: nothing that answers a trace in front of the face (it stops half a centimetre short of it).
+    if (UWorld* World = GetWorld())
+    {
+        FHitResult Hit;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(SCPanelHoverAim), true, Ignore);
+        if (World->LineTraceSingleByChannel(Hit, Eye, BestPoint - Dir * 0.5, ECC_Visibility, Params))
+        {
+            OutAim = INDEX_NONE;
+            return false;
+        }
+    }
+    const FSCPanelAim& A = PanelAims[OutAim];
+    const FVector2D P = FVector2D(BestUV.X, BestUV.Y) - A.UVBase;
+    const FSCUiButton* Under = A.Buttons.FindByPredicate([&](const FSCUiButton& B) { return B.RectPx.IsInsideOrOn(P); });
+    OutNode = Under ? Under->Node : A.Fallback;
+    return true;
+}
+
+int32 ASCVehicle::SetPanelHover(int32 Aim, const FString& Node)
+{
+    bool bChanged = false;
+    for (int32 I = 0; I < PanelAims.Num(); ++I)
+    {
+        if (!ScreenFaces.IsValidIndex(PanelAims[I].Face)) continue;
+        FString& Hovered = ScreenFaces[PanelAims[I].Face].Hovered;
+        const FString Want = I == Aim ? Node : FString();
+        if (Hovered == Want) continue;
+        UE_LOG(LogSCPanelScreens, Display, TEXT("PANEL_HOVER face=%d node=%s"), PanelAims[I].Face, Want.IsEmpty() ? TEXT("-") : *Want);
+        Hovered = Want;
+        bChanged = true;
+    }
+    return bChanged ? RefreshPanelScreens() : 0;
 }
 
 bool ASCVehicle::SetScreenFaceMaterial(int32 Face, UMaterialInterface* Material)

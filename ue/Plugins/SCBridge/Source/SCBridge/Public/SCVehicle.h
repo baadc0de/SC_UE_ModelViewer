@@ -43,6 +43,50 @@ struct FSCScreenFace
     FString Shown;  // the state key shown ("" = the default)
     FString Pinned; // sc.Screens.States: a state held whatever the door does ("" = follow the door)
     TWeakObjectPtr<UMaterialInterface> Custom; // SetScreenFaceMaterial: other content, kept until cleared
+    /** WP-I1-4: the renders with the cursor on a button, by FSCUiHoverImage::FaceKey (node | state key), and the button
+     *  node under the crosshair now ("" none: the face shows its state at rest). */
+    TMap<FString, TWeakObjectPtr<UMaterialInterface>> Hovers;
+    FString Hovered;
+};
+/** WP-I1-4: one interaction point of a placed usable: where its helper is (anchor space, when the mesh names it), how
+ *  near the player must be (its `radius`) and what it offers a standing player there (its interactions that start a use). */
+struct FSCUsablePoint
+{
+    FString Helper;
+    FVector Local = FVector::ZeroVector;
+    bool bLocated = false;
+    float RadiusCm = 0; // 0: not authored (no limit)
+    float ViewAngleLimit = 0; // degrees: the point is used only within half this of the view; 0 (or >= 180): any
+    TArray<FSCPointInteraction> Options;
+};
+/** WP-I1-4: a placed usable (a bed, a sofa, a chair: `usable_interactions[]`) and its points. */
+struct FSCUsableTarget
+{
+    int32 Interior = INDEX_NONE;
+    FString EntityId, Label;
+    TArray<FSCUsablePoint> Points;
+};
+/** WP-I1-4: an operating panel's face whose render has clickable nodes and that is not drawn as a FloorPanel (a door pad,
+ *  a lift call panel, a kiosk): where its buttons are on the face, for the game's hover look under the crosshair. */
+struct FSCPanelAim
+{
+    TWeakObjectPtr<UMeshComponent> Component;
+    int32 Face = INDEX_NONE;            // the ScreenFaces entry that shows the hover renders
+    FSCScreenFaceGeometry Geometry;     // in the component's frame, its scale applied (FSCScreenFaceGeometry::Scaled)
+    FVector2D UVBase = FVector2D::ZeroVector; // the integer UV cell the face samples the render in
+    TArray<FSCUiButton> Buttons;        // RectPx normalized to the render (0..1)
+    /** The node E acts on when the crosshair is on the face but off every button ("" none): a door pad's door button. */
+    FString Fallback;
+    /** How far it is operated from (cm): its UI's interaction distance (ASCVehicle::PanelReach); 0 without one. */
+    double Reach = 0;
+    /** The face's bounding sphere in the component's frame: a face out of reach is skipped before its triangles. */
+    FVector Centre = FVector::ZeroVector;
+    double Radius = 0;
+    FTransform Frame() const;
+    /** A door pad's door button: the first whose interaction sets none of the pad's own states (`state_types[]`
+     *  transitions): its open / close acts on the door, whose state comes back by link, while the lock and light buttons
+     *  set the pad's own lock and light states. "" when every button sets one. */
+    static FString DoorButtonOf(const TArray<FSCUiButton>& Buttons, const TArray<FSCUiStateType>& StateTypes);
 };
 /** Where a fragment's clips start (ASCVehicle::PlayFragmentAt). */
 enum class ESCFragmentStart : uint8
@@ -143,6 +187,21 @@ public:
     TMap<TWeakObjectPtr<const USCRigComponent>, FString> DoorPanelLabels;
     void RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding);
     bool AimDoorPanelLock(const USceneComponent* Panel, const FVector& Eye, const FVector& Direction, double Reach, bool bLocked) const;
+    // ------------------------------------------------------------------------- WP-I1-4 panel hover (SCPanelScreens.cpp)
+    /** Operating-panel faces with clickable nodes that are not FloorPanels (BuildButtonPanels). */
+    TArray<FSCPanelAim> PanelAims;
+    /** The PanelAims face under the view ray within Reach (its front; nothing that collides in front of it) and the button
+     *  node under the crosshair there, else the face's Fallback. False without a face under the ray. */
+    bool AimPanelButton(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32& OutAim, FString& OutNode) const;
+    /** Show Node hovered on aim Aim's face and nothing hovered on the others (INDEX_NONE: none anywhere). Returns the faces
+     *  swapped (RefreshPanelScreens). */
+    int32 SetPanelHover(int32 Aim, const FString& Node);
+    // ------------------------------------------------------------------------- WP-I1-4 usables
+    TMap<TWeakObjectPtr<const USceneComponent>, FSCUsableTarget> UsableTargets;
+    /** The usable whose geometry the view ray meets first within Reach (by its anchor) and the point the player uses
+     *  there (OutPoint): of its located points within their radius of the eye, the one nearest where the ray hits; a
+     *  usable whose mesh names none of its helpers offers its first point. Null when no point is in reach. */
+    const FSCUsableTarget* FindUsableTarget(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32* OutPoint = nullptr) const;
     /** Hangar waypoints (environments only; SCHangarWaypoints.h): kind Hangar, actor-relative standing hints. Built by
      *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> Waypoints;

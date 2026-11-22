@@ -701,6 +701,27 @@ a state, `follow` releases it. `SetScreenFaceMaterial` puts any other material o
 viewer draws itself). The import logs `SCREEN_STATES faces=<n> state_images=<m> initial_swaps=<k>`; a swap logs
 `PANEL_SCREEN face=<i> state=<Type.State|default>`.
 
+### Interaction feedback: hover and the popout (WP-I1-4)
+
+**Hover.** An operating panel's face shows the game's hover look on the button under the crosshair: the exporter renders
+each written image (the default and every `state_images[]` entry) once more per button node with the engine's hover tag
+(`UI.Style.__Internal.hover`) on that node, so the widget standards' hover entries apply (a large button's background
+`Base` 0.3 → 0.6, its foreground 0.4 → 1.0; a light panel row lighter, framed), and writes them as `hover_images[]`
+(cache format 43). Door pads, call panels and kiosks swap their face to the render of the state they show with that
+button hovered (`ASCVehicle::AimPanelButton` / `SetPanelHover`, `PANEL_HOVER face node`); on a door pad off every button
+the door button is hovered (what E presses). Drawn light panels draw the hover render instead of our frame when the
+export has one (`FLOOR_PANEL_VIEW … image=…__hover_…`). An export before format 43 keeps the frame and no pad hover.
+
+**Popout.** Next to the crosshair, in the callouts' paper look, a placard lists what E does on the thing under the
+crosshair, built every tick from what `Interact()` would act on, in its order (`ASCFirstPersonCharacter::BuildPrompt`):
+a seat in use, the ladder climbed, the garage kiosk, a drawn panel's row, a lift panel, a seat access, a usable, a
+door (title: its display name; the action its verb, unavailable with the refusal when the ship-link rules refuse it).
+The E key cap marks the action E performs. With several, the **mouse wheel** moves it (`FP_PROMPT_SELECT`); the choice
+is kept while the same thing stays under the crosshair. Usables (`usable_interactions[]`: beds, sofas, chairs) list the
+interactions that start a use (a C2 bed: Sit, Lie Down, Sleep), dimmed "not in the viewer yet": uses are WP-P6-4
+(`FP_USABLE … performed=0`). `sc.FP.Prompt` logs the current prompt (`FP_PROMPT_NOW key title options`, `>` the
+selected, `-` unavailable); `sc.FP.Key MouseScrollDown 1` is the wheel. The prompt left the HUD's status text.
+
 ### Lifts (WP-P5)
 
 A package's `interiors[].lifts[]` record (an `SCItemElevatorParams` carriage: speed, easing, dwell and queue waits, stops in
@@ -764,8 +785,7 @@ instancing), keeping their world transforms. The carriage stands at its rest nod
   panel whose face could not be drawn (`FLOOR_PANEL_BUILD … not drawn, E sends nothing`). A row is labelled with its
   own interaction's display name. A cyan bar marks the current floor, a yellow one a
   called floor (blinking for the leg in progress), a chevron in the bottom bar the direction of travel
-  (`FLOOR_PANEL_VIEW`). The HUD shows "E: <floor>" for the highlighted row; the mouse wheel has no action in first
-  person. `sc.FP.Probe` names the focused `panel=` and `choice=` (`None` off the rows).
+  (`FLOOR_PANEL_VIEW`). The interaction popout names the highlighted row (WP-I1-4, above). `sc.FP.Probe` names the focused `panel=` and `choice=` (`None` off the rows).
 
 | Command | Effect |
 | --- | --- |

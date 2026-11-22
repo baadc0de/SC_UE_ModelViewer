@@ -287,6 +287,54 @@ void FSCViewerAutomation::RegisterFirstPersonCommands()
                    C->Vehicle && C->Vehicle->IsDoorOpen(Door), Door == INDEX_NONE ? TEXT("") : *C->Vehicle->Doors[Door].DisplayName);
         }
     });
+    // WP-I1-4: what the popout shows now (the wheel is sc.FP.Key MouseScrollDown / MouseScrollUp).
+    Add(TEXT("sc.FP.Prompt"), TEXT("sc.FP.Prompt: log what E does now (the popout's actions, the selected one marked >)"), [Weak](const TArray<FString>&) {
+        if (auto* C = FirstPerson(Weak))
+        {
+            C->UpdatePrompt();
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("FP_PROMPT_NOW %s"), *C->GetPrompt().Describe());
+        }
+    });
+    // WP-I1-4 verification: where the hover faces and the usables are (vehicle-relative cm), to aim at them (sc.FP.AimAt).
+    Add(TEXT("sc.Panels.Hover"), TEXT("sc.Panels.Hover: list the panel faces with hover renders (PANEL_AIM) and the usables (USABLE)"),
+        [Weak](const TArray<FString>&) {
+            ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+            if (!V) return;
+            const FTransform Ship = V->GetActorTransform();
+            for (int32 I = 0; I < V->PanelAims.Num(); ++I)
+            {
+                const FSCPanelAim& A = V->PanelAims[I];
+                const FTransform T = A.Frame();
+                const FVector Centre = Ship.InverseTransformPosition(T.TransformPosition(A.Geometry.PointAt(FVector2D(0.5, 0.5))));
+                const FVector Normal = Ship.InverseTransformVectorNoScale(T.TransformVectorNoScale(A.Geometry.Normal));
+                TArray<FString> Buttons;
+                for (const FSCUiButton& B : A.Buttons) Buttons.Add(B.Node + TEXT(":") + B.Interaction.ToString());
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("PANEL_AIM index=%d face=%d centre=%s normal=%s reach_cm=%.0f fallback=%s hovered=%s buttons=%s"), I, A.Face,
+                       *Centre.ToCompactString(), *Normal.ToCompactString(), A.Reach, A.Fallback.IsEmpty() ? TEXT("-") : *A.Fallback,
+                       V->ScreenFaces.IsValidIndex(A.Face) && !V->ScreenFaces[A.Face].Hovered.IsEmpty() ? *V->ScreenFaces[A.Face].Hovered : TEXT("-"),
+                       *FString::Join(Buttons, TEXT(",")));
+            }
+            for (const auto& [Anchor, U] : V->UsableTargets)
+            {
+                const USceneComponent* A = Anchor.Get();
+                TArray<FString> Options; // per point: helper[located]=its options
+                for (const FSCUsablePoint& Pt : U.Points)
+                {
+                    TArray<FString> Names;
+                    for (const FSCPointInteraction& O : Pt.Options) Names.Add(O.DisplayName.IsEmpty() ? O.Name.ToString() : O.DisplayName);
+                    Options.Add(FString::Printf(TEXT("%s%s=%s"), *Pt.Helper, Pt.bLocated ? TEXT("") : TEXT("(unlocated)"), *FString::Join(Names, TEXT("/"))));
+                }
+                // The centre of what it draws (the anchor is the entity's origin, often on the floor).
+                FBox Bounds(ForceInit);
+                TArray<USceneComponent*> Parts;
+                if (A) A->GetChildrenComponents(true, Parts);
+                for (const USceneComponent* P : Parts)
+                    if (const auto* Prim = Cast<UPrimitiveComponent>(P); Prim && Prim->IsVisible()) Bounds += Prim->Bounds.GetBox();
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("USABLE entity=%s label=\"%s\" at=%s centre=%s options=%s"), *U.EntityId, *U.Label,
+                       A ? *Ship.InverseTransformPosition(A->GetComponentLocation()).ToCompactString() : TEXT("-"),
+                       Bounds.IsValid ? *Ship.InverseTransformPosition(Bounds.GetCenter()).ToCompactString() : TEXT("-"), *FString::Join(Options, TEXT(";")));
+            }
+        });
     Add(TEXT("sc.FP.Door"), TEXT("sc.FP.Door <index>: toggle an interaction by index (sc.FP.Spawns lists them)"), [Weak](const TArray<FString>& Args) {
         ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
         if (V && !Args.IsEmpty()) V->ToggleDoor(FCString::Atoi(*Args[0]));

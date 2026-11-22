@@ -13,6 +13,8 @@ class FSCLadderRuntime
 public:
     void Tick(ASCFirstPersonCharacter& Character, float Delta);
     bool Interact(ASCFirstPersonCharacter& Character);
+    /** Whether E would mount a ladder now (the approach Interact takes, without its side effects): WP-I1-4's prompt. */
+    bool CanMount(const ASCFirstPersonCharacter& Character) const { return FindApproach(Character, false).Index != INDEX_NONE; }
     bool ApplyLook(ASCFirstPersonCharacter& Character, FVector2D Pixels);
     bool OwnsMovement() const;
     void Stop(ASCFirstPersonCharacter& Character);

@@ -6,9 +6,11 @@
 #include "Camera/CameraComponent.h"
 #include "SCExploration.h"
 #include "SCSeatRecords.h"
+#include "SCInteractionPrompt.h"
 #include "Templates/PimplPtr.h"
 #include "SCFirstPersonCharacter.generated.h"
 class ASCVehicle;
+struct FSCUsableTarget;
 class USpotLightComponent;
 class USCPlayerBodyComponent;
 class FSCSeatRuntime;
@@ -56,7 +58,8 @@ enum class ESCFirstPersonAction : uint8
     Orbit,                                             // held: third-person camera orbits the player while down;
                                                        // two presses within DoubleTapSeconds put it behind again
     MobiGlas,                                          // pressed: toggle the mobiGlas (WP-K1c); Close also closes it
-    MenuUp, MenuDown, MenuSelect                       // pressed, teleport menu open: move the selection / teleport there
+    MenuUp, MenuDown, MenuSelect,                      // pressed, teleport menu open: move the selection / teleport there
+    PromptPrevious, PromptNext                         // pressed (the mouse wheel): the prompt's action E performs (WP-I1-4)
 };
 
 /** A seat's collidable geometry: a box in a rigid frame (rotation and translation; lengths are world lengths),
@@ -159,6 +162,15 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") void ToggleNoclip();
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") void SetMoveInput(FVector Input);
     UFUNCTION(BlueprintPure, Category = "SC|Exploration") FString HUDText() const;
+    /** WP-I1-4: what E does now (the popout): rebuilt every tick by UpdatePrompt from what Interact would act on, in the
+     *  same order; the wheel (PromptPrevious / PromptNext, CyclePrompt) picks among several actions. */
+    const FSCInteractionPrompt& GetPrompt() const { return Prompt; }
+    FSCInteractionPrompt BuildPrompt() const;
+    void UpdatePrompt();
+    bool CyclePrompt(int32 Steps);
+    /** The usable under the crosshair (the ship's or the hangar's), the point the player uses there and its host; null
+     *  without (ASCVehicle::FindUsableTarget). */
+    const FSCUsableTarget* AimedUsable(int32* OutPoint = nullptr, const ASCVehicle** OutHost = nullptr) const;
     void Look(FVector2D Pixels);
     /** Weapon kick on the view (degrees; pitch positive up). */
     void AddViewKick(float PitchDegrees, float YawDegrees);
@@ -250,6 +262,9 @@ private:
     void ApplyViewHold();
     double LastRideLog = -1;
     void UpdateLiftFocusAndRide();
+    /** WP-I1-4: the game's hover look on the operating panel button under the crosshair (ASCVehicle::AimPanelButton). */
+    void UpdatePanelHover();
+    FSCInteractionPrompt Prompt;
     void UpdateFloorPanelAim();
     void UpdateRideLog();
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
