@@ -1,6 +1,8 @@
 // WP-I1-4: the first-person interaction popout, in the world-space callouts' look (SSCCalloutLayer, WP-K1c): a leader
-// from the crosshair to a paper placard with the thing's name (when the data names it), its actions and the E key cap on
-// the one E performs; with several actions the wheel moves the cap (ASCFirstPersonCharacter::GetPrompt). Draw-only.
+// from a point on the thing in the world (FSCInteractionPrompt::Anchor, projected every frame, so it stays on the thing
+// as the view moves) to a paper placard with the thing's name (when the data names it), its actions and the E key cap on
+// the one E performs; with several actions the wheel moves the cap (ASCFirstPersonCharacter::GetPrompt). The placard
+// sits up-right of the point and mirrors to the left at the view's edge. Draw-only.
 #pragma once
 #include "CoreMinimal.h"
 #include "Widgets/SLeafWidget.h"
@@ -24,4 +26,6 @@ private:
     TWeakObjectPtr<USCViewerSubsystem> Subsystem;
     double Now = 0, Born = -1; // the time the shown prompt's thing came under the crosshair (the placard's fade-in)
     FString ShownKey;
+    /** The anchor in this widget's space, projected this frame; unset when it is behind the camera or the prompt has none. */
+    TOptional<FVector2D> Projected;
 };

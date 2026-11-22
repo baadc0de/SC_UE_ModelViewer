@@ -712,8 +712,11 @@ button hovered (`ASCVehicle::AimPanelButton` / `SetPanelHover`, `PANEL_HOVER fac
 the door button is hovered (what E presses). Drawn light panels draw the hover render instead of our frame when the
 export has one (`FLOOR_PANEL_VIEW … image=…__hover_…`). An export before format 43 keeps the frame and no pad hover.
 
-**Popout.** Next to the crosshair, in the callouts' paper look, a placard lists what E does on the thing under the
-crosshair, built every tick from what `Interact()` would act on, in its order (`ASCFirstPersonCharacter::BuildPrompt`):
+**Popout.** Pinned to the thing in the world, in the callouts' paper look, a placard lists what E does on the thing
+under the crosshair. Its leader starts at a point on the thing, projected every frame, so the popout stays there while
+the view moves: the aimed button's centre on a panel's face, a door's opening, a usable's interaction point, else where
+the view first met the thing (held while the same thing stays targeted); up-right of it, mirrored left at the view's
+edge, gone when the point leaves the view. Seated or on a ladder (nothing to point at) it sits by the crosshair. It is built every tick from what `Interact()` would act on, in its order (`ASCFirstPersonCharacter::BuildPrompt`):
 a seat in use, the ladder climbed, the garage kiosk, a drawn panel's row, a lift panel, a seat access, a usable, a
 door (title: its display name; the action its verb, unavailable with the refusal when the ship-link rules refuse it).
 The E key cap marks the action E performs. With several, the **mouse wheel** moves it (`FP_PROMPT_SELECT`); the choice

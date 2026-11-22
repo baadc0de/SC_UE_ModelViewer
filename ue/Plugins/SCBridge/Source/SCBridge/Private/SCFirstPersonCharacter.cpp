@@ -1030,11 +1030,15 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
         return P;
     }
     const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this);
+    // Pinned in the world from here on (a seat in use and a ladder climbed have no thing to point at): where the view
+    // meets the thing, or a better point the thing names (a button's centre, a door's opening, a usable's point).
+    auto Pin = [&P](const FVector& Where) { P.Anchor = Where; P.bAnchored = true; };
     if (const ASCVehicle* Environment = Viewer ? Viewer->GetEnvironment() : nullptr;
         Environment && Environment->AimGarageKiosk(Eye, View, InteractReach, this))
     {
         P.Key = TEXT("garage");
         Add(TEXT("Open Garage"));
+        Pin(AimPoint(InteractReach));
         return P;
     }
     if (Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
@@ -1043,6 +1047,8 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
         if (!Panel.Layout.Options.IsValidIndex(AimedFloorOption)) return P; // on the face, off its rows: E does nothing
         P.Key = FString::Printf(TEXT("panel:%s:%d"), *Panel.EntityId, AimedFloorOption);
         Add(Panel.Layout.Options[AimedFloorOption].Label);
+        FVector Row;
+        Pin(Vehicle->FloorPanelWorldPoint(AimedFloorPanel, AimedFloorOption, Row) ? Row : AimPoint(InteractReach));
         return P;
     }
     if (const ASCVehicle::FLiftPanel* Panel = Vehicle->FindLiftPanel(Eye, View, InteractReach, this))
@@ -1052,6 +1058,7 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
         if (!C) return P;
         P.Key = TEXT("lift:") + Panel->EntityId;
         Add(C->DisplayName.IsEmpty() ? C->Name.ToString() : C->DisplayName);
+        Pin(AimPoint(InteractReach));
         return P;
     }
     if (Seats)
@@ -1059,6 +1066,7 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
         {
             P.Key = TEXT("seat:") + Line;
             AddSeat(Line);
+            Pin(AimPoint(InteractReach));
             return P;
         }
     // A ladder E would mount (a ladder has no prompt of its own in the data; the action is the viewer's word for it).
@@ -1066,11 +1074,14 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
     {
         P.Key = TEXT("ladder:mount");
         Add(TEXT("Climb"));
+        Pin(AimPoint(InteractReach));
         return P;
     }
     int32 Point = INDEX_NONE;
-    if (const FSCUsableTarget* Usable = AimedUsable(&Point))
+    FVector Where;
+    if (const FSCUsableTarget* Usable = AimedUsable(&Point, nullptr, &Where))
     {
+        Pin(Where);
         P.Key = FString::Printf(TEXT("usable:%s:%d"), *Usable->EntityId, Point);
         for (const FSCPointInteraction& I : Usable->Points[Point].Options)
             Add(I.DisplayName.IsEmpty() ? I.Name.ToString() : I.DisplayName, false, TEXT("not in the viewer yet"));
@@ -1086,6 +1097,15 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
     const FString Why = Vehicle->DoorOrderRefusal(Door, Action, Vehicle->ShipLinkPlayer(), GetActorLocation());
     P.Key = FString::Printf(TEXT("door:%d:%d"), Door, int32(Pick.bLockControl));
     P.Title = Vehicle->ShipDoorLabel(Door); // the Ship Link's name for it (its label, else the door's display name)
+    // A pad: the button E presses on its face; else the door's opening (as the Ship Link callouts place it); else where
+    // the view meets the door.
+    int32 Aim = INDEX_NONE;
+    FString Node;
+    FVector Button;
+    if (Vehicle->AimPanelButton(Eye, View, InteractReach, this, Aim, Node) && Vehicle->PanelButtonWorldPoint(Aim, Node, Button)) Pin(Button);
+    else if (Vehicle->ShipDoors.IsValidIndex(Door) && Vehicle->ShipDoors[Door].Aperture.IsValid)
+        Pin(Vehicle->GetActorTransform().TransformPosition(Vehicle->ShipDoors[Door].Aperture.GetCenter()));
+    else Pin(AimPoint(InteractReach));
     Add(Pick.bLockControl ? (bLocked ? TEXT("Unlock") : TEXT("Lock")) : (bOpen ? TEXT("Close") : TEXT("Open")), Why.IsEmpty(), Why);
     return P;
 }
@@ -1101,11 +1121,20 @@ bool ASCFirstPersonCharacter::CyclePrompt(int32 Steps)
     UE_LOG(LogTemp, Display, TEXT("FP_PROMPT_SELECT %s"), *Prompt.Describe());
     return true;
 }
-const FSCUsableTarget* ASCFirstPersonCharacter::AimedUsable(int32* OutPoint, const ASCVehicle** OutHost) const
+FVector ASCFirstPersonCharacter::AimPoint(float Reach) const
+{
+    const FVector Eye = InteractionOrigin(), View = GetViewRotation().Vector();
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(SCPromptAnchor), true, this);
+    if (const AActor* Kit = Body ? Body->GetKit() : nullptr) Params.AddIgnoredActor(Kit);
+    FHitResult Hit;
+    if (GetWorld() && GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + View * Reach, ECC_Visibility, Params)) return Hit.ImpactPoint;
+    return Eye + View * FMath::Min(Reach, 150.f);
+}
+const FSCUsableTarget* ASCFirstPersonCharacter::AimedUsable(int32* OutPoint, const ASCVehicle** OutHost, FVector* OutWorld) const
 {
     const FVector Eye = InteractionOrigin(), View = GetViewRotation().Vector();
     for (const ASCVehicle* V : {static_cast<const ASCVehicle*>(Vehicle.Get()), static_cast<const ASCVehicle*>(GetHangar())})
-        if (const FSCUsableTarget* Usable = V ? V->FindUsableTarget(Eye, View, InteractReach, this, OutPoint) : nullptr)
+        if (const FSCUsableTarget* Usable = V ? V->FindUsableTarget(Eye, View, InteractReach, this, OutPoint, OutWorld) : nullptr)
         {
             if (OutHost) *OutHost = V;
             return Usable;

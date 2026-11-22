@@ -4,10 +4,15 @@
 void FSCInteractionPrompt::Update(FSCInteractionPrompt&& Next)
 {
     // The same thing offering the same number of actions keeps the wheel's choice; anything else starts at the first.
-    const bool bKeep = !Key.IsEmpty() && Next.Key == Key && Next.Options.Num() == Options.Num();
+    const bool bSame = !Key.IsEmpty() && Next.Key == Key;
+    const bool bKeep = bSame && Next.Options.Num() == Options.Num();
     const int32 Keep = Selected;
+    const FVector KeptAnchor = Anchor;
+    const bool bKeptAnchor = bSame && bAnchored && Next.bAnchored;
     *this = MoveTemp(Next);
     Selected = bKeep && Options.IsValidIndex(Keep) ? Keep : 0;
+    // The same thing keeps the point the popout was pinned to: it stays on the thing, not on the moving crosshair.
+    if (bKeptAnchor) Anchor = KeptAnchor;
 }
 
 bool FSCInteractionPrompt::Cycle(int32 Steps)
@@ -62,6 +67,21 @@ bool FSCInteractionPromptSelectionTest::RunTest(const FString&)
     P.Update(Prompt(TEXT("sofa"), {TEXT("Sit")}));
     TestEqual(TEXT("fewer actions start again"), P.Selected, 0);
     TestFalse(TEXT("one action: nothing to choose"), P.Cycle(1));
+    // The anchor: held for the same thing, taken anew for another.
+    FSCInteractionPrompt A = Prompt(TEXT("pad"), {TEXT("Open")});
+    A.Anchor = FVector(1, 2, 3);
+    A.bAnchored = true;
+    P.Update(MoveTemp(A));
+    FSCInteractionPrompt Moved = Prompt(TEXT("pad"), {TEXT("Open")});
+    Moved.Anchor = FVector(9, 9, 9);
+    Moved.bAnchored = true;
+    P.Update(MoveTemp(Moved));
+    TestEqual(TEXT("the same thing keeps its point"), P.Anchor, FVector(1, 2, 3));
+    FSCInteractionPrompt Other = Prompt(TEXT("bed"), {TEXT("Sit")});
+    Other.Anchor = FVector(5, 5, 5);
+    Other.bAnchored = true;
+    P.Update(MoveTemp(Other));
+    TestEqual(TEXT("another thing takes its own"), P.Anchor, FVector(5, 5, 5));
     P.Update(FSCInteractionPrompt());
     TestFalse(TEXT("nothing aimed at"), P.IsValid());
     TestFalse(TEXT("no wheel without actions"), P.Cycle(1));

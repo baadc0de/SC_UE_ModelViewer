@@ -196,12 +196,15 @@ public:
     /** Show Node hovered on aim Aim's face and nothing hovered on the others (INDEX_NONE: none anywhere). Returns the faces
      *  swapped (RefreshPanelScreens). */
     int32 SetPanelHover(int32 Aim, const FString& Node);
+    /** The world point at the centre of button Node on aim Aim's face (the interaction popout's anchor). */
+    bool PanelButtonWorldPoint(int32 Aim, const FString& Node, FVector& Out) const;
     // ------------------------------------------------------------------------- WP-I1-4 usables
     TMap<TWeakObjectPtr<const USceneComponent>, FSCUsableTarget> UsableTargets;
     /** The usable whose geometry the view ray meets first within Reach (by its anchor) and the point the player uses
      *  there (OutPoint): of its located points within their radius of the eye, the one nearest where the ray hits; a
      *  usable whose mesh names none of its helpers offers its first point. Null when no point is in reach. */
-    const FSCUsableTarget* FindUsableTarget(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32* OutPoint = nullptr) const;
+    const FSCUsableTarget* FindUsableTarget(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32* OutPoint = nullptr,
+                                            FVector* OutWorld = nullptr) const;
     /** Hangar waypoints (environments only; SCHangarWaypoints.h): kind Hangar, actor-relative standing hints. Built by
      *  BuildWaypoints from WaypointSources in the presented pose; saved with a cooked environment. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> Waypoints;

@@ -170,7 +170,9 @@ public:
     bool CyclePrompt(int32 Steps);
     /** The usable under the crosshair (the ship's or the hangar's), the point the player uses there and its host; null
      *  without (ASCVehicle::FindUsableTarget). */
-    const FSCUsableTarget* AimedUsable(int32* OutPoint = nullptr, const ASCVehicle** OutHost = nullptr) const;
+    const FSCUsableTarget* AimedUsable(int32* OutPoint = nullptr, const ASCVehicle** OutHost = nullptr, FVector* OutWorld = nullptr) const;
+    /** Where the view ray first meets something within Reach (else a point 1.5 m along it): a popout anchor. */
+    FVector AimPoint(float Reach) const;
     void Look(FVector2D Pixels);
     /** Weapon kick on the view (degrees; pitch positive up). */
     void AddViewKick(float PitchDegrees, float YawDegrees);

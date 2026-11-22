@@ -1519,6 +1519,18 @@ Declined:
 - **Hit regions per state** (Astra): the regions are the default render's, as for E (C2 fixes); a button a state moves
   would need regions per state image. Open.
 
+### Follow-up: the popout pinned in the world (owner, after the demo)
+
+The popout started at the crosshair, so it moved with the view. Now `FSCInteractionPrompt::Anchor` is a world point on the
+thing (`BuildPrompt`): the aimed button's centre on a pad's face (`ASCVehicle::PanelButtonWorldPoint`), a drawn panel's
+row (`FloorPanelWorldPoint`), a door's opening (its Ship Link aperture), a usable's interaction point
+(`FindUsableTarget`'s helper), else where the view meets the thing (`AimPoint`). It is held while the same thing stays
+targeted (`FSCInteractionPrompt::Update`, test `PromptSelection`), so the crosshair can move across a button while the
+popout stays on it. `SSCInteractionPrompt` projects it every frame (the callouts' viewport conversion), puts the placard
+up-right of it, mirrors it left at the view's right edge, keeps it inside vertically, and hides it when the point leaves
+the view. A seat in use and a ladder climbed have no anchor: the popout sits by the crosshair. Shots:
+`out/i1-4b/pad-centre.png`, `pad-offcentre.png`.
+
 ### Open
 
 - Cooked levels do not keep the hover faces, panel aims and usables (import-time records): a cooked hangar's panels do

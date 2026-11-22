@@ -123,6 +123,17 @@ bool ASCVehicle::AimPanelButton(FVector Eye, FVector Direction, float Reach, con
     return true;
 }
 
+bool ASCVehicle::PanelButtonWorldPoint(int32 Aim, const FString& Node, FVector& Out) const
+{
+    if (!PanelAims.IsValidIndex(Aim)) return false;
+    const FSCPanelAim& A = PanelAims[Aim];
+    const FSCUiButton* B = A.Buttons.FindByPredicate([&](const FSCUiButton& X) { return X.Node == Node; });
+    if (!B || !A.Component.IsValid()) return false;
+    const FVector2D Centre = A.UVBase + B->RectPx.GetCenter();
+    Out = A.Frame().TransformPosition(A.Geometry.PointAt(A.Geometry.ContentFromUV(FVector2f(float(Centre.X), float(Centre.Y)))));
+    return true;
+}
+
 int32 ASCVehicle::SetPanelHover(int32 Aim, const FString& Node)
 {
     bool bChanged = false;
