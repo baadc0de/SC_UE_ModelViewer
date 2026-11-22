@@ -91,18 +91,91 @@ run time like the viewer, so the split has nothing to leave out yet, and O1-4 sh
 The plugin's cargo art (`/SCBridge/Cargo`) stays in the plugin until it can move with the editor's redirectors
 (O1-4); the game cooks it (`DirectoriesToAlwaysCook`), the viewer no longer does.
 
-### O1-3 — The viewer app
+### O1-3 — The viewer app (this PR)
 
-- **Picker.** First an environment from a filtered list (hangars and other spaces worth standing in), then a vehicle,
-  then its skin. The filters come from the data (DataCore categories, the hangar index, what an environment
-  contains), never from asset names.
-- **Vehicle list.** One row per ship a player would recognise: duplicates, aliases, AI/template/unmanned variants
-  and entities sharing one vehicle definition and geometry collapse into one row (category rules derived from
-  DataCore; the rules are listed in the WP's result with the counts they remove).
-- **F1 menu** changes environment, vehicle or skin at any time. The hierarchy and model-browser panels go.
-- **Command line:** `-SCEnv=<id> -SCVehicle=<id> -SCSkin=<id>` loads directly (no picker).
-- Keeps the local processed cache, every rendering feature, doors/panels/lifts/seats/ladders, first person, the
-  interaction popout and the RPC routes for what it supports (no cargo, music, Ship Link or Garage routes).
+**The menu.** The viewer's F1 menu (`viewer/Source/SCViewer/SSCViewerPicker`, registered with `SCViewerShell` as the
+menu and a view overlay; also the top bar's "Menu (F1)") lists environments, vehicles and the loaded vehicle's paints in
+the HUD look. A pick applies at once (`SetEnvironment`, `LoadEntity`, `SetPaint`), or, while a load runs, as soon as
+it lets it: the latest click waits in the menu, marked LOADING. An environment's export or parse is asked to stop and its
+result dropped; an import, once started, finishes; nothing is waited for on the game thread. A vehicle waits for the
+environment it goes into; clicking the vehicle being loaded drops a later choice (unless its load is being cancelled:
+then it is asked again), clicking the one it replaces brings it back after. The decisions are pure functions
+(`DecideVehiclePick`, `DecideEnvironmentPick`) walked through these click sequences by `SCBridge.Viewer.PickerQueue`.
+The row in the scene is an inverted bar marked IN SCENE; "in the scene" is archive-scoped (an environment or vehicle
+built before the archive was reopened is loaded again when picked from the new archive's lists), and so is a choice: a
+row keeps the archive session of the list it was made from, and a click on a row of an earlier session's lists (the
+list not yet refreshed) or a waiting choice made from them is dropped, never applied to another archive. The environment list starts with the procedural
+hangar (the map's own); the environment chosen is saved once it is in the scene (a failed one is not) and restored at
+the next start; clicking a failed one requests it again. Both lists have a search box (`-SCSearch=<q>` fills the vehicle one); the menu
+opens scrolled to the current environment, vehicle and paint, and by itself at start when the command line asks for no
+scene (no `-SCLoad`, `-SCEnvironment`, `-SCScript`, `-SCPackage`, `-SCPlayerDemo`, `-SCShowcase`, `-SCRpc`). While it
+is open the engine's on-screen messages (they draw over all UI) are off when they were on, and turned back on when it
+closes (a `DisableAllScreenMessages` given while it is open is undone then); however it closes, keys go back to the view. The side panels (model
+browser with its options, hierarchy) and `sc.UI.Panels` are gone from the shared root; RPC `/ui` takes
+`{menu: true|false}` instead of `panels`. Each app names itself in the top bar (`SCViewerShell::SetAppName`). A paint
+row acts on the vehicle whose manifest listed it and is remembered for it (`LoadedEntity`), not for one still loading.
+
+**The lists come from game data** (`crates/scviewer-core/src/viewer_catalog.rs`, `sc_viewer_catalog`,
+`scviewer catalog`; `USCViewerSubsystem::GetCatalog`, listed once per archive session on demand — the menu when it opens and RPC
+`/catalog` call `RequestCatalog`, runs that never ask (`-SCNoUI`, `-SCLoad` with the menu closed, the game) do not pay
+for the scan; a listing finished for an earlier archive session is dropped; `/catalog` answers `environments_ready`
+and, once listing or the archive open failed for the session, the session was lost, or no archive is open (`-SCPackage`),
+`environments_error` (`GetCatalogError`); a listing does not scan when another archive was opened before it ran; a
+saved hangar waiting for a failed or closed archive is not busy work (Retry opens another, automation's archive-failure
+exit runs; `-SCNoCooked` counts as no cooked copy for this as for loading), while a pick waiting for a ready archive is not
+carried over to another one. An open retires the panic notice of the session it replaces, also when it fails, and a
+notice is not taken while an open is in progress (`SCBridge.Archive.PanicNoticeRetiredByOpen`) — replacing the search for "hangar" in archive paths):
+
+- *Environments*: `EntityClassDefinition` records with `InstancedInteriorComponentParams` and a set
+  `SObjectContainerComponentParams.objectContainer` (84 records, 17 of them templates without a container): **61
+  hangar containers**, grouped by size (`InstancedInteriorComponentParams.name`: Small / Medium / Large / XL Hangar),
+  named by the places that offer them (`InstancedInteriorLocationMap.locationInteriors[]`, not `devOnly`:
+  `location.name`, `defaultHangars[]`; records sharing a container merge their places, sorted, and take the smallest
+  named size), else by the record (the first by name); independent of record order (`container_rows`, tested). Of the 239 archive paths with "hangar" in them the other
+  178 are pieces of these containers (each city's hangar wraps the base room as a child: the Area18 XL hangar exports
+  as one 3.9 GB package with it), building parts, test and event content, and legacy hangars nothing references.
+- *Vehicles*: `VehicleComponentParams` records (1111) through these rules, in order:
+
+| Rule | Keeps a record when | Left |
+|---|---|---|
+| R1 | it has `SEntityInsuranceProperties` (salvage hulks have none) | 1104 |
+| R2 | `AttachDef.Localization.Name` resolves to non-blank text and is no `@LOC_*` placeholder | 1088 |
+| R3 | no tag under `AI.Faction`, `AI.Spawning`, `AI.Ship.Unmanned`, and its crew manifest lists no crew; a record whose tags, crew component or crew manifest do not read (or whose manifest reference is malformed) is left out and listed in the catalogue's `skipped` | 412 |
+| R4 | no `Missions.ItemType.Iasi.DisplayItem` tag | 411 |
+| R5 | it insures to itself (`shipInsuranceParams.shipEntityClassName`) or `EAEntityDataParams.inclusionMode` is `ReadyToInclude` | 364 |
+| R6 | one row per (`vehicleDefinition`, `modification`), split into members connected by shared `Ship.Model.*` tags (untagged members join the largest such group); independent of record order | **229** |
+
+  R6's row is the self-insured member, else an entitled one (`DefaultEntitlementEntityParams`), else any: the one
+  most records insure to, then the one whose name begins the others', then the most tagged. 206 spaceships, 23
+  ground vehicles (11 hover bikes, `isGravlevVehicle`); the row shows the manufacturer (`SCItemManufacturer`), size,
+  role and kind. Special editions (Pirate, Best in Show, Wikelo, Exec, ...) fold into their base; most are also paints of
+  it. Known leftovers: a few real ships insure to another record (Idris-M/P, Fortune, Golem OX, Terrapin Medic, Aurora
+  Mk II): in two such groups a template member won the row (`ANVL_Terrapin_Medic_AI_Template`,
+  `RSI_Aurora_Mk2_MissileModule_TEMP`, identical in data to their bases); the old and new Constellation records both
+  list; `DRAK_Caterpillar_PU_Hijacked` and `MISC_Starfarer_NoInterior` pass every rule. The shop and fleet lists that
+  would settle "purchasable" are not in DataCore.
+- *Paints*: the loaded vehicle's (`Manifest.Paints`). They are also knowable before load
+  (`SGeometryResourceParams...SubGeometry[]` tags, paint items with `AttachDef.Type = Paints`); not used yet.
+
+`scviewer catalog` printed the same 229 vehicles and 61 containers as the research scripts (and after the review's rule
+fixes the same 229 vehicles; `skipped` holds one record, an AI Gladius whose crew manifest does not resolve).
+
+**Command line.** `-SCEnvironment=<container path>` and `-SCLoad=<entity>` as before (the ids the lists show), and
+`-SCSkin=<index|default|name part>` puts a paint on the first vehicle loaded or adopted from `-SCPackage` (as `sc.Paint`).
+
+**No cooking in the viewer.** It never streams cooked levels (`SCViewerShell::SetCookedLevels(false)`): ships and
+environments always import from the archive through the local cache. The locally cooked ships and hangars (ignored)
+moved to `game/Content/SC`; the built effects (`/Game/SC/FX`, also ignored) are in both projects.
+
+**Open (found by the research, not changed here):**
+
+- `parse_localization` (`crates/scviewer-core/src/index.rs`) keeps the `,P` suffix some `global.ini` keys carry, so
+  those keys never resolve in the entity index's display names; the catalogue looks keys up with and without it.
+  Fixing the parser changes the cached browser index (a cache-format bump re-exports every cached package).
+- `BrowserIndex::build` sets an entity's `category` from its record path (`entities/spaceships`): a path filter;
+  `AttachDef.SubType` is the data's answer.
+- Hangars without a place in data show their record name; ship fit by size (`sizeId` against `LandingPadSize` and
+  `maxBoundingBoxSize`) is likely but not linked in data, so the menu does not filter hangars by the loaded ship.
 
 ### O1-4 — The UnrealCitizen game
 

@@ -44,6 +44,8 @@ enum Command {
     MaterialEffect {
         library_and_effect: String,
     },
+    /// The viewer's pick lists (environments, vehicles) as JSON, chosen from game data (WP-O1-3)
+    Catalog,
     Search {
         q: String,
         #[arg(long, default_value_t = 20)]
@@ -235,6 +237,9 @@ pub(crate) fn main() -> Result<()> {
         }
         Command::MaterialEffect { library_and_effect } => {
             println!("{}", serde_json::to_string_pretty(&session.material_effect(&library_and_effect)?)?);
+        }
+        Command::Catalog => {
+            println!("{}", serde_json::to_string_pretty(&session.viewer_catalog()?)?);
         }
         Command::Search { q, limit } => {
             for hit in session.search_entities(&q, limit) {

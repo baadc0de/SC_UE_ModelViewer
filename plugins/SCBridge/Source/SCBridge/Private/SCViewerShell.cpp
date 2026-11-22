@@ -18,6 +18,8 @@ template <typename T> struct TNamed
 };
 struct FShell
 {
+    FText App;
+    bool bCookedLevels = true;
     TOptional<FText> Menu;
     bool bOpen = false; // the UI-level mirror of the open state (see IsMenuOpen)
     TWeakObjectPtr<ASCFirstPersonCharacter> Owner;
@@ -41,6 +43,10 @@ namespace SCViewerShell
 {
 UWorld* ViewerWorld() { return GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetWorld() : nullptr; }
 
+void SetAppName(const FText& Name) { Shell().App = Name; }
+FText AppName() { return Shell().App; }
+void SetCookedLevels(bool bUse) { Shell().bCookedLevels = bUse; }
+bool UsesCookedLevels() { return Shell().bCookedLevels; }
 void SetMenu(const FText& Name) { Shell().Menu = Name; }
 void ClearMenu()
 {

@@ -361,7 +361,16 @@ WP-U2 materials (Substrate decision, masters, builder, textures, macro surface /
 HardSurface static wear, palette finish, PNG colour encoding, energy split):
 [verification/WP-U2.md](verification/WP-U2.md).
 
-## WP-V1 viewer app (model browser, load pipeline, cameras)
+## The viewer's menu (WP-O1-3)
+
+F1 (or the top bar's "Menu (F1)") opens the picker: an environment (the game's player hangars), a vehicle (one row per
+ship a player would recognise) and the loaded vehicle's paint. A pick applies at once. The lists come from game data
+(`scviewer catalog` prints them; rules in [WP-O1](../docs/work-packages/WP-O1-unrealcitizen-split.md) O1-3). The menu
+opens by itself at start when the command line asks for no scene. The command line can choose all three:
+`-SCEnvironment=<container path> -SCLoad=<entity> -SCSkin=<index|default|name part>`. The viewer always imports from
+the archive through the local cache; it does not cook or stream cooked levels.
+
+## WP-V1 viewer app (load pipeline, cameras)
 
 The game mode `ASCViewerGameMode` (set in `DefaultEngine.ini`) shows the in-game
 Slate UI in every host. Run from the repository root (the cache defaults to
@@ -372,15 +381,15 @@ Slate UI in every host. Run from the repository root (the cache defaults to
   -game -windowed -resx=1920 -resy=1080 -ddc=SCViewerDDC
 ```
 
-Search, pick options, Load; drag to orbit, Shift/middle-drag to pan, wheel to zoom,
+Pick from the menu (F1); drag to orbit, Shift/middle-drag to pan, wheel to zoom,
 double-click a part to focus, F to frame all; Fly mode uses WASD/QE with Shift/Ctrl.
-Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>`,
+Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>` (fills the menu's vehicle search),
 `-SCLoad=a,b`, `-SCHold=<s>`, `-SCCamera=fly`, `-SCFlyView=dx,dy,dz,pitch,yaw`,
 `-SCDefaults`, `-SCLod=`, `-SCMip=`, `-SCQuitAfterLoad`, `-SCNoUI`, `-SCHostExposure`; console `sc.Load`,
 `sc.Unload`, `sc.Cancel`, `sc.Camera`. `viewer/scripts/capture_viewer.sh` screenshots a run.
-**Dirt** (WP-U2b, [verification/WP-U2b.md](verification/WP-U2b.md)): the options panel's Dirt slider and presets
-(Dust / Sand / Mud / Ash) put the game's dirt rule on exterior surfaces, live and saved per user; `sc.Dirt <amount>
-[preset]` does the same from the console or a route. The game's ships author no dirt; the defaults are viewer choices.
+**Dirt** (WP-U2b, [verification/WP-U2b.md](verification/WP-U2b.md)): `sc.Dirt <amount> [preset]` (Dust / Sand / Mud /
+Ash; the options panel with its slider went with the side panels in WP-O1-3) puts the game's dirt rule on exterior
+surfaces, saved per user. The game's ships author no dirt; the defaults are viewer choices.
 
 Headless (WP-Q1): `UnrealEditor-Cmd … -run=pythonscript -script=viewer/scripts/ue_load_gladius.py
 -nullrhi` drives `USCViewerSubsystem.LoadEntity` through the FFI. Settings persist in
@@ -818,7 +827,7 @@ Console commands (game hosts; `sc.FP.*` other than `Spawn` need first-person mod
 | `sc.FP.Look <yaw> <pitch>` | absolute view, degrees, relative to the vehicle |
 | `sc.FP.Move <fwd> <right> <seconds> [run 0\|1] [up]` | hold movement input (-1..1) for a duration |
 | `sc.FP.Interact` / `sc.FP.Door <index>` | E on the focused interaction / toggle one by index |
-| `sc.Paint [index\|default\|name part]` | list the loaded vehicle's paints (`PAINT_CHOICE`), or put one on (also the side panel's Paint row; remembered per vehicle) |
+| `sc.Paint [index\|default\|name part]` | list the loaded vehicle's paints (`PAINT_CHOICE`), or put one on (also the menu's Paint list; remembered per vehicle) |
 | `sc.FP.Crouch 0\|1`, `sc.FP.Jump`, `sc.FP.Torch 0\|1`, `sc.FP.Noclip 0\|1` | as the keys (a refused noclip exit logs `FIRST_PERSON_NOCLIP refused=1`) |
 | `sc.FP.TorchLight 1\|0` | the torch is the kit's game flashlight (1, default once the body attaches) or the viewer's fallback beam (0), for A/B; logs `FP_CMD torch_light source=...` |
 | `sc.FP.Menu 0\|1` | teleport menu |

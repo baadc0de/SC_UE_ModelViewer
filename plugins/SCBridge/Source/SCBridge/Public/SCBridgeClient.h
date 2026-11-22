@@ -41,6 +41,11 @@ private:
     std::atomic<bool> bCancel{false};
 };
 
+struct SCBRIDGE_API FSCCacheStats
+{
+    bool bEnabled = false, bLastHit = false;
+    uint64 Bytes = 0, Entries = 0, CapBytes = 0;
+};
 struct SCBRIDGE_API FSCOpenResult
 {
     bool bOK = false;
@@ -48,6 +53,7 @@ struct SCBRIDGE_API FSCOpenResult
     FString ArchiveBuildId;
     double Seconds = 0;
     bool bIndexCacheHit = false;
+    FSCCacheStats Cache; // read by the open worker under the handle lock (the game thread never waits for it)
 };
 struct SCBRIDGE_API FSCSearchResult
 {
@@ -58,11 +64,6 @@ struct SCBRIDGE_API FSCSearchResult
     /** Archive generation the search was issued in (set by the host; results of older generations are dropped). */
     uint32 Generation = 0;
     double Seconds = 0;
-};
-struct SCBRIDGE_API FSCCacheStats
-{
-    bool bEnabled = false, bLastHit = false;
-    uint64 Bytes = 0, Entries = 0, CapBytes = 0;
 };
 struct SCBRIDGE_API FSCExportResult
 {
@@ -105,6 +106,9 @@ public:
                                                        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** JSON array of object-container paths matching every term of Query (sc_search_environments). */
     UE::Tasks::TTask<FSCTextResult> SearchEnvironments(const FString& Query, int32 Limit);
+    /** The viewer's pick lists, chosen from game data (sc_viewer_catalog; FSCViewerCatalog::Parse reads the JSON). For
+     *  the archive session open when called: when another archive has been opened by the time it runs, it does not scan. */
+    UE::Tasks::TTask<FSCTextResult> ViewerCatalog();
     /** One DataCore record as JSON (sc_datacore_record): NameOrGuid is `Type.Name`, a bare record name (exact,
      *  case-insensitive) or a GUID. Objects carry `__type`; references are record GUID strings (look them up the
      *  same way); `__record_name` / `__record_id` name the record. No match or an ambiguous bare name fails. */
@@ -133,6 +137,15 @@ public:
     bool IsOpen() const;
     /** True once after any call hit SC_STATUS_PANIC (the handle is already closed); the host must reopen. */
     bool TakePanic(FText& OutError);
+#if WITH_DEV_AUTOMATION_TESTS
+    /** Tests: a panic notice as FailLocked leaves it (the handle is not touched). */
+    void NotePanicForTest(const FText& Error)
+    {
+        FScopeLock PanicGuard(&PanicLock);
+        PanicError = Error;
+        bPanicPending = true;
+    }
+#endif
     /** Core defaults (sc_default_options); no handle needed. */
     static sc_options DefaultOptions();
 
@@ -148,6 +161,7 @@ private:
     void TextCall(const FString& Argument, sc_status (*Call)(sc_handle*, const char*, char**), TFunction<void(const FSCTextResult&)> OnDone);
     mutable FCriticalSection HandleLock; // serializes ALL calls on Handle incl. last_error/close (scbridge.h)
     sc_handle* Handle = nullptr;
+    std::atomic<uint32> Session{0}; // advanced by each Open (under HandleLock): a call can tell its session was replaced
     FCriticalSection PanicLock;
     bool bPanicPending = false;
     FText PanicError;

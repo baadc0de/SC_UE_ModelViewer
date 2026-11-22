@@ -7,6 +7,7 @@
 #include "Containers/Ticker.h"
 #include "Tasks/Task.h"
 #include "SCBridgeClient.h"
+#include "SCViewerCatalog.h"
 #include "SCPlayerAnimator.h"
 #include "SCVehicleInstances.h"
 #include "SCViewerSubsystem.generated.h"
@@ -198,18 +199,49 @@ public:
      *  entity (USCViewerSettings::Paints). Also `sc.Paint [index|default|name part]`. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetPaint(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
-    /** The requested environment (folder, archive path or empty) and the archive's hangars (listed once per archive). */
+    /** The requested environment (folder, archive path or empty) and the catalogue's environments (listed once per
+     *  archive session; GetCatalog). */
     FString GetEnvironmentRequest() const { return EnvironmentFolder; }
     /** Pose the environment's mechanisms: "bind" (as exported), "open" or "closed" fragment end poses. */
     void SetEnvironmentState(const FString& State);
     const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
+    /** WP-O1-3: the pick lists (environments, vehicles) chosen from game data; bReady once listed for this archive.
+     *  Listed on demand: a consumer (the viewer's menu, RPC /catalog) calls RequestCatalog first; hosts that never
+     *  ask pay nothing. */
+    const FSCViewerCatalog& GetCatalog() const { return Catalog; }
+    void RequestCatalog() const { bCatalogWanted = true; }
+    /** Why there are no lists for this archive session, final until another archive opens (empty while listing or
+     *  ready): the listing failed, the archive did not open or was lost, or none is open (a -SCPackage session). */
+    FString GetCatalogError() const;
+    /** An environment export, parse or import is under way: RequestEnvironment (SetEnvironment) would wait for its
+     *  workers on the game thread. A menu queues its next choice until this is false. */
+    bool IsEnvironmentWorking() const { return EnvExport.IsValid() || EnvParse.IsValid() || EnvJob.IsValid(); }
+    /** Ask the environment's export or parse to stop, without waiting; its result is then dropped (an import, once
+     *  started, finishes). */
+    void CancelEnvironmentWork();
+    /** The environment in the scene was built in this archive session (an archive opened since keeps the actor, but a
+     *  pick from the new archive's lists must load it again). */
+    bool IsEnvironmentOfThisArchive() const { return Environment.IsValid() && EnvArchiveGeneration == ArchiveGeneration; }
+    /** The vehicle in the scene was loaded in this archive session (LoadedKey starts with its generation); an adopted
+     *  -SCPackage vehicle has no archive and counts as this session's. */
+    bool IsVehicleOfThisArchive() const
+    {
+        return Vehicle.IsValid() && (LoadedKey.IsEmpty() || LoadedKey.StartsWith(FString::Printf(TEXT("%u|"), ArchiveGeneration)));
+    }
+    /** CancelLoad was asked and the load it stops has not finished yet. */
+    bool IsLoadCancelling() const { return bLoadCancelRequested; }
+    /** CancelEnvironmentWork was asked and the export or parse it stops has not finished yet. */
+    bool IsEnvironmentCancelling() const
+    {
+        return EnvProgress && EnvProgress->IsCancelRequested() && (EnvExport.IsValid() || EnvParse.IsValid());
+    }
     bool IsEnvironmentLoading() const
     {
         return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
                (EnvLevel && !Environment.IsValid());
     }
     /** The cooked level for an object container path (…/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name>),
-     *  empty when none was cooked. */
+     *  empty when none was cooked, the app does not use cooked levels, or -SCNoCooked. */
     static FString CookedEnvironmentLevel(const FString& Folder);
     /** The cooked level of a ship (Content/SC/Ships/Maps/<entity>, viewer/scripts/cook_ships.py), empty when none was cooked.
      *  LoadEntity streams it instead of exporting from the archive, so it also works without one (a showcase
@@ -219,12 +251,9 @@ public:
     bool CanLoad(const FString& Entity) const;
     float GetEnvironmentProgress() const;      // 0..1 over export, parse, import and placement
     FString GetEnvironmentPhaseText() const;
-    // The side panels (model browser, hierarchy); hidden for scripted runs and by the top-bar toggle.
-    void SetPanelsVisible(bool bVisible) { bPanelsVisible = bVisible; }
     /** -SCShowcase (the standalone showcase build): no viewer chrome (top bar, footer, side panels); the scene, the
      *  first-person HUD and its teleport menu only. Keys switch the view (C first/third person). */
     bool IsShowcase() const { return bShowcase; }
-    bool ArePanelsVisible() const { return bPanelsVisible; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ESCLoadPhase GetLoadPhase() const { return Phase; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") float GetLoadProgress() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadPhaseText() const;
@@ -365,8 +394,9 @@ private:
     void BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Source);
     void PlaceEnvironment();
     int32 EnvPlaceInTicks = 0;
-    bool bPanelsVisible = true;
     bool bShowcase = false;
+    bool bStartSkinApplied = false; // -SCSkin is applied to the first loaded vehicle only
+    void ApplyStartSkin();
     bool bMaxQualityPending = false; // -SCMaxQuality: SCLook::ApplyMaxQuality on the first tick with a world
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
@@ -387,8 +417,16 @@ private:
     UE::Tasks::TTask<FSCExportResult> EnvExport;
     UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> EnvParse;
     TArray<FString> EnvironmentChoices;
+    FSCViewerCatalog Catalog;
     UE::Tasks::TTask<FSCTextResult> EnvListTask;
-    uint32 EnvListedGeneration = 0;
+    uint32 EnvListedGeneration = 0; // the archive session the catalogue was listed for
+    uint32 EnvListIssued = 0;       // the archive session EnvListTask was issued against
+    uint32 EnvArchiveGeneration = 0; // the archive session the environment's build started in
+    bool bLoadCancelRequested = false;
+    /** A saved hangar waiting for an archive that is not there (failed or closed): no work under way, so not busy
+     *  (Retry, automation's archive-failure exit); it starts when an archive is ready. */
+    bool EnvironmentAwaitsArchive() const;
+    mutable bool bCatalogWanted = false;
     TSharedPtr<FSCImportJob> EnvJob;
     // WP-C1: a cooked environment level (Content/SC/Hangars/Maps) streamed in instead of the export/import pipeline.
     UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> EnvLevel;

@@ -38,6 +38,15 @@ namespace SCViewerShell
 /** The game world the viewer shows (the game viewport's world). */
 SCBRIDGE_API UWorld* ViewerWorld();
 
+/** The application's name (the top bar's title). */
+SCBRIDGE_API void SetAppName(const FText& Name);
+SCBRIDGE_API FText AppName();
+
+/** Whether ships and environments stream their cooked levels (/Game/SC/Ships, /Game/SC/Hangars) when the project has
+ *  them (default) or always import from the archive through the local cache (the viewer: it does not cook). */
+SCBRIDGE_API void SetCookedLevels(bool bUse);
+SCBRIDGE_API bool UsesCookedLevels();
+
 /** The menu F1 opens, by the name help lines use; without one F1 does nothing. */
 SCBRIDGE_API void SetMenu(const FText& Name);
 /** No menu (an application's shutdown). */

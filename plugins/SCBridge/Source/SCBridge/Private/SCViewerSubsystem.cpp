@@ -3,6 +3,7 @@
 #include "SCViewerSubsystem.h"
 #include "SCLook.h"
 #include "SCHangarIndex.h"
+#include "SCViewerShell.h"
 #include "SCEnvironment.h"
 #include "Misc/PackageName.h"
 #include "SCDirt.h"
@@ -108,7 +109,6 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     VehicleInstances = MakeShared<FSCVehicleInstances>(*this);
     bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
     bShowcase = FParse::Param(FCommandLine::Get(), TEXT("SCShowcase"));
-    if (bShowcase) bPanelsVisible = false;
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
     if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
@@ -220,6 +220,8 @@ ASCVehicle* USCViewerSubsystem::GetVehicle() const
 
 void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
 {
+    // Not busy (IsBusy) includes a saved hangar waiting for a failed or closed archive: Retry opens, the hangar follows.
+    // A pick waiting for a ready archive's next tick is busy: it is not carried over to another archive.
     if (ArchiveState == ESCArchiveState::Opening || IsBusy())
     {
         UE_LOG(LogSCViewer, Warning, TEXT("OpenArchive ignored: an open or load is in progress"));
@@ -229,6 +231,10 @@ void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
     ArchiveState = ESCArchiveState::Opening;
     ++ArchiveGeneration; // a different installation may follow: no reuse of loaded objects, no stale search results
     ArchiveError = FText();
+    Catalog = FSCViewerCatalog(); // the lists of the previous archive are not this one's
+    Catalog.Revision = ArchiveGeneration;
+    EnvironmentChoices.Reset();
+    bCatalogWanted = false; // asked for again by a consumer of this archive's lists (an open menu asks every tick)
     if (!CacheDir.IsEmpty()) IFileManager::Get().MakeDirectory(*CacheDir, true);
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE_OPEN p4k=%s cache=%s"), ArchivePath.IsEmpty() ? TEXT("<auto-discover>") : *ArchivePath,
            CacheDir.IsEmpty() ? TEXT("<disabled>") : *CacheDir);
@@ -291,8 +297,21 @@ void USCViewerSubsystem::CompleteSearches(bool bBlocking)
 bool USCViewerSubsystem::IsBusy() const
 {
     return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing ||
-           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
-           (EnvLevel && !Environment.IsValid());
+           (bEnvironmentPending && !EnvironmentAwaitsArchive()) || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() ||
+           EnvPlaceInTicks > 0 || (EnvLevel && !Environment.IsValid());
+}
+bool USCViewerSubsystem::EnvironmentAwaitsArchive() const
+{
+    return bEnvironmentPending && (ArchiveState == ESCArchiveState::Failed || ArchiveState == ESCArchiveState::Closed) &&
+           EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase) && CookedEnvironmentLevel(EnvironmentFolder).IsEmpty();
+}
+FString USCViewerSubsystem::GetCatalogError() const
+{
+    if (Catalog.bReady) return FString();
+    if (!Catalog.Error.IsEmpty()) return Catalog.Error;
+    if (ArchiveState == ESCArchiveState::Failed) return ArchiveError.ToString();
+    if (ArchiveState == ESCArchiveState::Closed) return TEXT("No archive is open");
+    return FString(); // opening, or listing
 }
 
 void USCViewerSubsystem::SetEnvironment(const FString& Folder, bool bFitToShip)
@@ -308,8 +327,9 @@ bool USCViewerSubsystem::SetPaint(int32 Index)
     ASCVehicle* V = Vehicle.Get();
     if (!V || !V->SetPaint(Index)) return false;
     USCViewerSettings* Settings = USCViewerSettings::Get();
-    if (Index == INDEX_NONE) Settings->Paints.Remove(Report.Entity);
-    else Settings->Paints.Add(Report.Entity, V->Manifest.Paints[Index].PaletteId);
+    // Keyed by the vehicle in the scene: Report.Entity already names a load in progress.
+    if (Index == INDEX_NONE) Settings->Paints.Remove(LoadedEntity);
+    else Settings->Paints.Add(LoadedEntity, V->Manifest.Paints[Index].PaletteId);
     Settings->Save();
     return true;
 }
@@ -349,6 +369,11 @@ void USCViewerSubsystem::FitEnvironmentToShip()
     if (Choice != EnvironmentFolder.Replace(TEXT("\\"), TEXT("/"))) RequestEnvironment(Choice);
 }
 
+void USCViewerSubsystem::CancelEnvironmentWork()
+{
+    if (EnvProgress && (EnvExport.IsValid() || EnvParse.IsValid())) EnvProgress->RequestCancel();
+}
+
 void USCViewerSubsystem::RequestEnvironment(const FString& Folder)
 {
     if (EnvProgress) EnvProgress->RequestCancel();
@@ -382,7 +407,9 @@ void USCViewerSubsystem::UnloadEnvironmentLevel()
 FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
 {
     const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
-    if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
+    if (!SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")) ||
+        !Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase))
+        return FString(); // -SCNoCooked: as if none was cooked (StepEnvironment and IsBusy decide alike)
     const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
     return FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
@@ -502,19 +529,30 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
 void USCViewerSubsystem::StepEnvironment()
 {
     if (EnvPlaceInTicks > 0 && --EnvPlaceInTicks == 0) PlaceEnvironment();
-    // The archive's hangars for the picker: listed once per archive session.
-    if (ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
-        EnvListTask = Client->SearchEnvironments(TEXT("hangar"), 2000);
+    // The pick lists (WP-O1-3): chosen by the core from game data, listed once per archive session when asked for.
+    if (bCatalogWanted && ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
+    {
+        EnvListTask = Client->ViewerCatalog();
+        EnvListIssued = ArchiveGeneration;
+    }
+    // Completion is tested once; a listing issued for an earlier archive session is dropped (asked again next tick).
     if (EnvListTask.IsValid() && EnvListTask.IsCompleted())
     {
         const FSCTextResult Listed = EnvListTask.GetResult();
         EnvListTask = {};
-        EnvListedGeneration = ArchiveGeneration;
-        EnvironmentChoices.Reset();
-        TArray<TSharedPtr<FJsonValue>> Values;
-        if (Listed.bOK && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Listed.Json), Values))
-            for (const auto& V : Values) EnvironmentChoices.Add(V->AsString());
-        UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_CHOICES hangars=%d"), EnvironmentChoices.Num());
+        if (EnvListIssued == ArchiveGeneration)
+        {
+            EnvListedGeneration = ArchiveGeneration;
+            Catalog = FSCViewerCatalog();
+            Catalog.Revision = ArchiveGeneration;
+            Catalog.bReady = Listed.bOK && FSCViewerCatalog::Parse(Listed.Json, Catalog, Catalog.Error);
+            if (!Listed.bOK) Catalog.Error = Listed.Error.ToString();
+            if (!Catalog.bReady && Catalog.Error.IsEmpty()) Catalog.Error = TEXT("the catalogue did not list"); // a failure is always named
+            EnvironmentChoices.Reset();
+            for (const FSCCatalogEntry& E : Catalog.Environments) EnvironmentChoices.Add(E.Id);
+            UE_LOG(LogSCViewer, Display, TEXT("VIEWER_CATALOG environments=%d vehicles=%d%s%s"), Catalog.Environments.Num(), Catalog.Vehicles.Num(),
+                   Catalog.Error.IsEmpty() ? TEXT("") : TEXT(" error="), *Catalog.Error);
+        }
     }
     if (EnvLevel && !Environment.IsValid())
     {
@@ -540,11 +578,12 @@ void USCViewerSubsystem::StepEnvironment()
     const bool bShipIdle = Phase != ESCLoadPhase::Exporting && Phase != ESCLoadPhase::Parsing && Phase != ESCLoadPhase::Importing;
     if (bEnvironmentPending && !EnvJob && !EnvExport.IsValid() && !EnvParse.IsValid() && bShipIdle && GetViewerWorld())
     {
-        if (const FString Cooked = CookedEnvironmentLevel(EnvironmentFolder); !Cooked.IsEmpty() && !FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")))
+        if (const FString Cooked = CookedEnvironmentLevel(EnvironmentFolder); !Cooked.IsEmpty())
         {
             bEnvironmentPending = false;
             bool bOK = false;
             EnvStart = FPlatformTime::Seconds();
+            EnvArchiveGeneration = ArchiveGeneration;
             EnvLevel = ULevelStreamingDynamic::LoadLevelInstance(GetViewerWorld(), Cooked, FVector::ZeroVector, FRotator::ZeroRotator, bOK);
             UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_COOKED_LOAD level=%s ok=%d"), *Cooked, bOK);
             if (!bOK) EnvLevel = nullptr;
@@ -559,18 +598,25 @@ void USCViewerSubsystem::StepEnvironment()
             Ffi.mip = FMath::Max<uint32>(Ffi.mip, 1u); // environments: half-resolution textures (tar under 2 GB)
             EnvProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
             EnvExport = Client->ExportEnvironment(EnvironmentFolder, Ffi, EnvProgress.ToSharedRef());
+            EnvArchiveGeneration = ArchiveGeneration;
             EnvStart = FPlatformTime::Seconds();
             return;
         }
         bEnvironmentPending = false;
         EnvStart = FPlatformTime::Seconds();
+        EnvArchiveGeneration = ArchiveGeneration; // a folder is no archive's: this session's
         BeginEnvironmentImport(MakeShared<FSCFolderPackageSource>(EnvironmentFolder));
     }
     if (EnvExport.IsValid())
     {
         if (!EnvExport.IsCompleted()) return;
-        FSCExportResult Exported = EnvExport.GetResult();
+        FSCExportResult Exported = MoveTemp(EnvExport.GetResult());
         EnvExport = {};
+        if (EnvProgress && EnvProgress->IsCancelRequested())
+        {
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT cancelled: export %s"), *EnvironmentFolder); // a newer choice follows
+            return;
+        }
         if (!Exported.bOK)
         {
             UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: export %s: %s"), *EnvironmentFolder, *Exported.Error.ToString());
@@ -588,6 +634,11 @@ void USCViewerSubsystem::StepEnvironment()
         if (!EnvParse.IsCompleted()) return;
         TSharedPtr<FSCTarPackageSource> Parsed = EnvParse.GetResult();
         EnvParse = {};
+        if (EnvProgress && EnvProgress->IsCancelRequested())
+        {
+            UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT cancelled: parse %s"), *EnvironmentFolder);
+            return;
+        }
         if (!Parsed || !Parsed->IsValid())
         {
             UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), Parsed ? *Parsed->GetError() : TEXT("cannot read the package"));
@@ -632,7 +683,7 @@ void USCViewerSubsystem::SetEnvironmentState(const FString& State)
 }
 FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
 {
-    if (Entity.IsEmpty() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
+    if (Entity.IsEmpty() || !SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
     FString Name = Entity.TrimStartAndEnd();
     for (TCHAR& C : Name)
         if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
@@ -654,6 +705,7 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
         return false;
     }
     LoadOptions->CopyFrom(InOptions ? InOptions : Options.Get());
+    bLoadCancelRequested = false;
     Report = FSCLoadReport();
     Report.Entity = Entity;
     Report.Options = LoadOptions->Describe();
@@ -812,6 +864,8 @@ void USCViewerSubsystem::CancelLoad()
     Report.MeshesBuiltAtCancel = Job ? Job->GetResult().MeshStats.Num() : 0;
     Report.bWorkersPendingAtCancel = Job ? Job->HasPendingWorkers() : (ExportTask.IsValid() && !ExportTask.IsCompleted()) ||
                                                                           (ParseTask.IsValid() && !ParseTask.IsCompleted());
+    // A vehicle load being stopped, until it finishes (FinishLoad); an environment-only busy state is not one.
+    bLoadCancelRequested = Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
     if (ExportProgress) ExportProgress->RequestCancel(); // export: FFI callback returns nonzero; parse: checked after
     if (Job) Job->Cancel();
 }
@@ -1035,6 +1089,7 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
     bGarageLoad = false;
     bRebuildProcessed = false;
     Phase = Result;
+    bLoadCancelRequested = false;
     Report.Result = Result;
     Report.Error = Error;
     Report.TotalSeconds = FPlatformTime::Seconds() - LoadStart;
@@ -1069,6 +1124,7 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
             if (const FString* Saved = USCViewerSettings::Get()->Paints.Find(Report.Entity))
                 if (const int32 Index = V->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.PaletteId == *Saved; }); Index != INDEX_NONE)
                     V->SetPaint(Index);
+        ApplyStartSkin();
         FitEnvironmentToShip();
     }
     if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)
@@ -1165,11 +1221,18 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
 
 void USCViewerSubsystem::PollClientPanic()
 {
+    // While an open is in progress a pending notice is left alone: the open retires the replaced session's notice
+    // itself (FSCBridgeClient::Open), so one still pending once its result is applied belongs to the new session.
     FText Error;
-    if (!Client || !Client->TakePanic(Error)) return;
+    if (ArchiveState == ESCArchiveState::Opening || !Client || !Client->TakePanic(Error)) return;
     ArchiveState = ESCArchiveState::Failed;
     ArchiveError = Error;
     ++ArchiveGeneration; // the next open is a new session; nothing from this one may be reused
+    // The lists of the lost session go with it; the failure is the catalogue's answer (RPC /catalog environments_error).
+    Catalog = FSCViewerCatalog();
+    Catalog.Revision = ArchiveGeneration;
+    Catalog.Error = Error.ToString();
+    EnvironmentChoices.Reset();
     UE_LOG(LogSCViewer, Error, TEXT("VIEWER_ARCHIVE_LOST %s"), *Error.ToString());
 }
 
@@ -1183,9 +1246,10 @@ bool USCViewerSubsystem::Tick(float)
         ArchiveState = Result.bOK ? ESCArchiveState::Ready : ESCArchiveState::Failed;
         ArchiveBuildId = Result.ArchiveBuildId;
         ArchiveError = Result.Error;
+        Catalog.Error = Result.bOK ? FString() : Result.Error.ToString(); // nothing will list after a failure: that is the answer
         if (Result.bOK)
         {
-            CacheStats = Client->CacheStats();
+            CacheStats = Result.Cache;
             // Remember an explicitly chosen archive; auto-discovery stays implicit.
             USCViewerSettings* Settings = USCViewerSettings::Get();
             if (!ArchivePath.IsEmpty() && Settings->ArchivePath != ArchivePath)
@@ -1439,6 +1503,21 @@ void USCViewerSubsystem::AttachPlayerKit()
     SCLook::RefreshGlassRefraction(GetViewerWorld()); // the kit's glass (optics, visor) takes the kit profile once it is the body's
 }
 
+/** WP-O1-3: -SCSkin=<index|default|name part> on the first vehicle the command line brings (a load or an adopted
+ *  -SCPackage import), as sc.Paint. */
+void USCViewerSubsystem::ApplyStartSkin()
+{
+    FString Skin;
+    if (bStartSkinApplied || !Vehicle.IsValid() || !FParse::Value(FCommandLine::Get(), TEXT("SCSkin="), Skin)) return;
+    bStartSkinApplied = true;
+    const TArray<FSCPaintVariant>& Paints = Vehicle->Manifest.Paints;
+    const bool bDefault = Skin.Equals(TEXT("default"), ESearchCase::IgnoreCase);
+    const int32 Index = Skin.IsNumeric() ? FCString::Atoi(*Skin) : bDefault ? INDEX_NONE
+        : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Skin) || P.PaletteId.Contains(Skin); });
+    if ((Index == INDEX_NONE && !bDefault) || !SetPaint(Index))
+        UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" for -SCSkin (sc.Paint lists them)"), *Skin);
+}
+
 // ---------------------------------------------------------------- camera and inspection
 
 void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
@@ -1449,6 +1528,7 @@ void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
     Report.Entity = LoadedEntity;
     Phase = Report.Result = ESCLoadPhase::Succeeded;
     if (VehicleInstances) VehicleInstances->SetPrimary(Imported, nullptr, FString()); // folder harness: instances import fresh
+    ApplyStartSkin();
     FrameAll();
 }
 
@@ -1633,12 +1713,6 @@ static FAutoConsoleCommandWithWorldAndArgs GSCPaint(
             : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Arg) || P.PaletteId.Contains(Arg); });
         if ((Index == INDEX_NONE && !bDefault) || !Viewer->SetPaint(Index))
             UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" (sc.Paint lists them)"), *Arg);
-    }));
-static FAutoConsoleCommandWithWorldAndArgs GSCUIPanels(
-    TEXT("sc.UI.Panels"), TEXT("sc.UI.Panels <0|1>: hide or show the side panels (model browser, hierarchy)"),
-    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
-        if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(World))
-            Viewer->SetPanelsVisible(Args.IsValidIndex(0) ? FCString::Atoi(*Args[0]) != 0 : !Viewer->ArePanelsVisible());
     }));
 static FAutoConsoleCommandWithWorldAndArgs GSCEnvironmentState(
     TEXT("sc.Environment.State"), TEXT("sc.Environment.State <bind|open|closed>: pose the environment's mechanisms (doors, elevators)"),
