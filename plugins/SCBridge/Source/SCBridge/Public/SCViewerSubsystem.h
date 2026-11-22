@@ -210,6 +210,9 @@ public:
      *  ask pay nothing. */
     const FSCViewerCatalog& GetCatalog() const { return Catalog; }
     void RequestCatalog() const { bCatalogWanted = true; }
+    /** Why there are no lists for this archive session, final until another archive opens (empty while listing or
+     *  ready): the listing failed, the archive did not open or was lost, or none is open (a -SCPackage session). */
+    FString GetCatalogError() const;
     /** An environment export, parse or import is under way: RequestEnvironment (SetEnvironment) would wait for its
      *  workers on the game thread. A menu queues its next choice until this is false. */
     bool IsEnvironmentWorking() const { return EnvExport.IsValid() || EnvParse.IsValid() || EnvJob.IsValid(); }
@@ -420,6 +423,9 @@ private:
     uint32 EnvListIssued = 0;       // the archive session EnvListTask was issued against
     uint32 EnvArchiveGeneration = 0; // the archive session the environment's build started in
     bool bLoadCancelRequested = false;
+    /** A saved hangar waiting for an archive that is not there (failed or closed): no work under way, so not busy
+     *  (Retry, automation's archive-failure exit); it starts when an archive is ready. */
+    bool EnvironmentAwaitsArchive() const;
     mutable bool bCatalogWanted = false;
     TSharedPtr<FSCImportJob> EnvJob;
     // WP-C1: a cooked environment level (Content/SC/Hangars/Maps) streamed in instead of the export/import pipeline.

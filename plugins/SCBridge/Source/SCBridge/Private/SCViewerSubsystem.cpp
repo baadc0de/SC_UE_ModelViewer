@@ -220,10 +220,9 @@ ASCVehicle* USCViewerSubsystem::GetVehicle() const
 
 void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
 {
-    // An environment only waiting for the archive (bEnvironmentPending, nothing started) does not hold the open back:
-    // it starts once the new archive is ready (a saved hangar must not block Retry after a failed open).
-    const bool bLoading = Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
-    if (ArchiveState == ESCArchiveState::Opening || bLoading || IsEnvironmentWorking() || EnvPlaceInTicks > 0 || (EnvLevel && !Environment.IsValid()))
+    // Not busy (IsBusy) includes a saved hangar waiting for a failed or closed archive: Retry opens, the hangar follows.
+    // A pick waiting for a ready archive's next tick is busy: it is not carried over to another archive.
+    if (ArchiveState == ESCArchiveState::Opening || IsBusy())
     {
         UE_LOG(LogSCViewer, Warning, TEXT("OpenArchive ignored: an open or load is in progress"));
         return;
@@ -298,8 +297,21 @@ void USCViewerSubsystem::CompleteSearches(bool bBlocking)
 bool USCViewerSubsystem::IsBusy() const
 {
     return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing ||
-           bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
-           (EnvLevel && !Environment.IsValid());
+           (bEnvironmentPending && !EnvironmentAwaitsArchive()) || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() ||
+           EnvPlaceInTicks > 0 || (EnvLevel && !Environment.IsValid());
+}
+bool USCViewerSubsystem::EnvironmentAwaitsArchive() const
+{
+    return bEnvironmentPending && (ArchiveState == ESCArchiveState::Failed || ArchiveState == ESCArchiveState::Closed) &&
+           EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase) && CookedEnvironmentLevel(EnvironmentFolder).IsEmpty();
+}
+FString USCViewerSubsystem::GetCatalogError() const
+{
+    if (Catalog.bReady) return FString();
+    if (!Catalog.Error.IsEmpty()) return Catalog.Error;
+    if (ArchiveState == ESCArchiveState::Failed) return ArchiveError.ToString();
+    if (ArchiveState == ESCArchiveState::Closed) return TEXT("No archive is open");
+    return FString(); // opening, or listing
 }
 
 void USCViewerSubsystem::SetEnvironment(const FString& Folder, bool bFitToShip)
@@ -1209,6 +1221,13 @@ void USCViewerSubsystem::PollClientPanic()
 {
     FText Error;
     if (!Client || !Client->TakePanic(Error)) return;
+    if (ArchiveState == ESCArchiveState::Opening)
+    {
+        // The crash of the session the running open replaces (its handle is closed; a failure of the open itself comes
+        // with its result): it does not fail the archive being opened.
+        UE_LOG(LogSCViewer, Warning, TEXT("VIEWER_ARCHIVE_LOST (superseded by the open in progress) %s"), *Error.ToString());
+        return;
+    }
     ArchiveState = ESCArchiveState::Failed;
     ArchiveError = Error;
     ++ArchiveGeneration; // the next open is a new session; nothing from this one may be reused
@@ -1230,7 +1249,7 @@ bool USCViewerSubsystem::Tick(float)
         ArchiveState = Result.bOK ? ESCArchiveState::Ready : ESCArchiveState::Failed;
         ArchiveBuildId = Result.ArchiveBuildId;
         ArchiveError = Result.Error;
-        if (!Result.bOK) Catalog.Error = Result.Error.ToString(); // nothing will list: the catalogue's answer is the failure
+        Catalog.Error = Result.bOK ? FString() : Result.Error.ToString(); // nothing will list after a failure: that is the answer
         if (Result.bOK)
         {
             CacheStats = Result.Cache;

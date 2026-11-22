@@ -334,12 +334,14 @@ pub(crate) struct ContainerRecord {
     pub name: String,
 }
 
-/// Records sharing one container are one row: their places merged (sorted), its size the smallest named one, labelled
-/// by the places that offer it, else by the first record name. Independent of record order.
+/// Records sharing one container are one row: their places merged (sorted), its size the smallest named one (else, none
+/// named, the smallest size id, which still orders it), labelled by the places that offer it, else by the first record
+/// name. Independent of record order.
 pub(crate) fn container_rows(records: Vec<ContainerRecord>) -> Vec<CatalogRow> {
     #[derive(Default)]
     struct Container {
         size: Option<(i64, String)>,
+        unnamed_size_id: Option<i64>,
         places: Vec<String>,
         placed: Vec<String>,   // records that have places
         unplaced: Vec<String>, // records that have none
@@ -347,7 +349,9 @@ pub(crate) fn container_rows(records: Vec<ContainerRecord>) -> Vec<CatalogRow> {
     let mut containers: BTreeMap<String, Container> = BTreeMap::new();
     for r in records {
         let c = containers.entry(r.path).or_default();
-        if !r.size.is_empty() && c.size.as_ref().is_none_or(|s| (r.size_id, &r.size) < (s.0, &s.1)) {
+        if r.size.is_empty() {
+            c.unnamed_size_id = Some(c.unnamed_size_id.map_or(r.size_id, |s| s.min(r.size_id)));
+        } else if c.size.as_ref().is_none_or(|s| (r.size_id, &r.size) < (s.0, &s.1)) {
             c.size = Some((r.size_id, r.size));
         }
         if r.places.is_empty() {
@@ -372,7 +376,7 @@ pub(crate) fn container_rows(records: Vec<ContainerRecord>) -> Vec<CatalogRow> {
             } else {
                 (c.places.join(", "), c.placed.join(", "))
             };
-            let (size_id, group) = c.size.unwrap_or_default();
+            let (size_id, group) = c.size.unwrap_or((c.unnamed_size_id.unwrap_or_default(), String::new()));
             (size_id, CatalogRow { id, label, group, detail })
         })
         .collect();

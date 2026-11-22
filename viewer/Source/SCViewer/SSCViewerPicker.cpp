@@ -512,9 +512,9 @@ FText SSCViewerPicker::StatusText() const
     const USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return FText();
     if (S->GetArchiveState() == ESCArchiveState::Opening) return LOCTEXT("Opening", "OPENING THE ARCHIVE…");
-    if (S->GetArchiveState() == ESCArchiveState::Failed) return LOCTEXT("NoArchive", "NO ARCHIVE");
-    const FSCViewerCatalog& Catalog = S->GetCatalog();
-    if (!Catalog.bReady) return Catalog.Error.IsEmpty() ? LOCTEXT("Listing", "LISTING…") : FText::FromString(Caps(Catalog.Error));
+    if (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed) return LOCTEXT("NoArchive", "NO ARCHIVE");
+    if (const FString Error = S->GetCatalogError(); !Error.IsEmpty()) return FText::FromString(Caps(Error));
+    if (!S->GetCatalog().bReady) return LOCTEXT("Listing", "LISTING…");
     if (QueuedEnvironment.IsSet() || QueuedVehicle.IsSet()) return LOCTEXT("Queued", "LOADING…  YOUR NEXT CHOICE FOLLOWS");
     if (S->IsBusy() || S->IsEnvironmentLoading()) return LOCTEXT("LoadingStatus", "LOADING…");
     return LOCTEXT("Pick", "PICK A PLACE, A VEHICLE AND ITS PAINT");

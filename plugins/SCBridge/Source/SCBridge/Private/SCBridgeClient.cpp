@@ -96,6 +96,7 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
         FScopeLock Guard(&Self->HandleLock);
         sc_close(Self->Handle);
         Self->Handle = nullptr;
+        ++Self->Session;
         const FTCHARToUTF8 P4kUtf8(*P4k), CacheUtf8(*CacheDir);
         sc_handle* Handle = nullptr;
         const sc_status Status = sc_open(P4k.IsEmpty() ? nullptr : P4kUtf8.Get(), CacheDir.IsEmpty() ? nullptr : CacheUtf8.Get(), &Handle);
@@ -110,15 +111,29 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
             FScopeLock PanicGuard(&Self->PanicLock);
             Self->bPanicPending = false; // a fresh session supersedes an unreported crash of the old one
         }
-        Result.bOK = true;
+        // A panic in either metadata call closes the handle (FailLocked): the open has failed, nothing uses it after.
+        auto Panicked = [&Self, &Result] {
+            FScopeLock PanicGuard(&Self->PanicLock);
+            Result.Error = Self->PanicError;
+            return Result;
+        };
         Result.Cache = Self->CacheStatsLocked();
+        if (!Self->Handle) return Panicked();
         Result.bIndexCacheHit = Result.Cache.bLastHit;
         char* BuildId = nullptr;
-        if (sc_archive_build_id(Handle, &BuildId) == SC_STATUS_OK)
+        const sc_status BuildStatus = sc_archive_build_id(Self->Handle, &BuildId);
+        if (BuildStatus == SC_STATUS_OK)
         {
             Result.ArchiveBuildId = UTF8_TO_TCHAR(BuildId);
             sc_free_string(BuildId);
         }
+        else if (BuildStatus == SC_STATUS_PANIC)
+        {
+            bool bPanicked = false;
+            Self->FailLocked(BuildStatus, bPanicked);
+            return Panicked();
+        }
+        Result.bOK = true;
         return Result;
     }, UE::Tasks::ETaskPriority::BackgroundNormal);
 }
@@ -290,9 +305,14 @@ UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::SearchEnvironments(const FStrin
 
 UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::ViewerCatalog()
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared()] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Expected = Session.load()] {
         FSCTextResult Result;
         FScopeLock Guard(&Self->HandleLock);
+        if (Self->Session != Expected)
+        {
+            Result.Error = NSLOCTEXT("SCBridge", "Superseded", "Another archive was opened"); // the host drops it
+            return Result;
+        }
         char* Json = nullptr;
         const sc_status Status = Self->Handle ? sc_viewer_catalog(Self->Handle, &Json) : SC_STATUS_INVALID_ARGUMENT;
         if (Status != SC_STATUS_OK)

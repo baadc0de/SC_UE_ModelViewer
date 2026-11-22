@@ -722,11 +722,12 @@ private:
         if (const USCViewerSubsystem* V = Viewer())
         {
             // Listed on demand: environments_ready false and no environments_error means "in progress, poll again";
-            // environments_error is final for this archive session (the listing, or the archive open itself, failed).
+            // environments_error is final for this archive session (the listing or the archive open failed, the session was
+            // lost, or no archive is open).
             V->RequestCatalog();
             O->SetField(TEXT("environments"), Strings(V->GetEnvironmentChoices()));
             O->SetBoolField(TEXT("environments_ready"), V->GetCatalog().bReady);
-            if (!V->GetCatalog().bReady && !V->GetCatalog().Error.IsEmpty()) O->SetStringField(TEXT("environments_error"), V->GetCatalog().Error);
+            if (const FString Error = V->GetCatalogError(); !Error.IsEmpty()) O->SetStringField(TEXT("environments_error"), Error);
         }
         return O;
     }

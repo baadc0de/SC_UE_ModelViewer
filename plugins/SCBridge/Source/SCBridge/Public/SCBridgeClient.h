@@ -106,7 +106,8 @@ public:
                                                        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** JSON array of object-container paths matching every term of Query (sc_search_environments). */
     UE::Tasks::TTask<FSCTextResult> SearchEnvironments(const FString& Query, int32 Limit);
-    /** The viewer's pick lists, chosen from game data (sc_viewer_catalog; FSCViewerCatalog::Parse reads the JSON). */
+    /** The viewer's pick lists, chosen from game data (sc_viewer_catalog; FSCViewerCatalog::Parse reads the JSON). For
+     *  the archive session open when called: when another archive has been opened by the time it runs, it does not scan. */
     UE::Tasks::TTask<FSCTextResult> ViewerCatalog();
     /** One DataCore record as JSON (sc_datacore_record): NameOrGuid is `Type.Name`, a bare record name (exact,
      *  case-insensitive) or a GUID. Objects carry `__type`; references are record GUID strings (look them up the
@@ -151,6 +152,7 @@ private:
     void TextCall(const FString& Argument, sc_status (*Call)(sc_handle*, const char*, char**), TFunction<void(const FSCTextResult&)> OnDone);
     mutable FCriticalSection HandleLock; // serializes ALL calls on Handle incl. last_error/close (scbridge.h)
     sc_handle* Handle = nullptr;
+    std::atomic<uint32> Session{0}; // advanced by each Open (under HandleLock): a call can tell its session was replaced
     FCriticalSection PanicLock;
     bool bPanicPending = false;
     FText PanicError;

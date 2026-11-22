@@ -134,6 +134,9 @@ fn rows_do_not_depend_on_record_order() {
     assert_eq!((one.label.as_str(), one.group.as_str(), one.detail.as_str()), ("Alpha, Beta, Gamma", "Small", "One_A, One_B"));
     let two = forward.iter().find(|r| r.id == "c/two.socpak").unwrap();
     assert_eq!((two.label.as_str(), two.detail.as_str()), ("Two_Y", ""));
+    // A size with no name still orders by its id: an unnamed size 4 after a named size 1.
+    let sized = container_rows(vec![rec("c/big.socpak", 4, "", &["Zeta"], "Big"), rec("c/small.socpak", 1, "Small", &["Zeta"], "Small")]);
+    assert_eq!(sized.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["c/small.socpak", "c/big.socpak"]);
 
     // Vehicle rows: two groups with the same manufacturer and label sort by id.
     let mut a = ship("Same_A", "d/a.xml");

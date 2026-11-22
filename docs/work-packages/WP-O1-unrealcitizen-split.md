@@ -117,8 +117,10 @@ row acts on the vehicle whose manifest listed it and is remembered for it (`Load
 `scviewer catalog`; `USCViewerSubsystem::GetCatalog`, listed once per archive session on demand — the menu when it opens and RPC
 `/catalog` call `RequestCatalog`, runs that never ask (`-SCNoUI`, `-SCLoad` with the menu closed, the game) do not pay
 for the scan; a listing finished for an earlier archive session is dropped; `/catalog` answers `environments_ready`
-and, once listing or the archive open failed for the session (or the session was lost), `environments_error`; a
-saved hangar waiting for the archive does not hold back opening another one — replacing the search for "hangar" in archive paths):
+and, once listing or the archive open failed for the session, the session was lost, or no archive is open (`-SCPackage`),
+`environments_error` (`GetCatalogError`); a listing does not scan when another archive was opened before it ran; a
+saved hangar waiting for a failed or closed archive is not busy work (Retry opens another, automation's archive-failure
+exit runs), while a pick waiting for a ready archive is not carried over to another one — replacing the search for "hangar" in archive paths):
 
 - *Environments*: `EntityClassDefinition` records with `InstancedInteriorComponentParams` and a set
   `SObjectContainerComponentParams.objectContainer` (84 records, 17 of them templates without a container): **61
