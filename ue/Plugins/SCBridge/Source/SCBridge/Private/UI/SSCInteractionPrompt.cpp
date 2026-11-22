@@ -4,6 +4,12 @@
 #include "SCFirstPersonCharacter.h"
 #include "Cargo/SCMobiGlasStyle.h"
 #include "Cargo/SSCMobiGlasWidgets.h"
+#include "Cargo/SCCargoViewSource.h"
+#include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "Widgets/SViewport.h"
 
 using namespace SCMobiGlasStyle;
 
@@ -35,6 +41,16 @@ void SSCInteractionPrompt::Tick(const FGeometry& Geometry, double Time, float De
         ShownKey = Key;
         Born = Key.IsEmpty() ? -1 : Time;
     }
+    // The anchor through the player's view (game viewport pixels -> Slate absolute -> this widget, as the callouts do).
+    Projected.Reset();
+    if (!C || !C->GetPrompt().bAnchored) return;
+    UWorld* World = SCCargoUI::ViewerWorld();
+    APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+    TSharedPtr<SViewport> Viewport = GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetGameViewportWidget() : nullptr;
+    FVector2D Pixel;
+    if (!PC || !Viewport || !PC->ProjectWorldLocationToScreen(C->GetPrompt().Anchor, Pixel, false)) return;
+    const FGeometry& View = Viewport->GetCachedGeometry();
+    Projected = Geometry.AbsoluteToLocal(View.LocalToAbsolute(Pixel / FMath::Max(0.01f, View.Scale)));
 }
 
 int32 SSCInteractionPrompt::OnPaint(const FPaintArgs&, const FGeometry& G, const FSlateRect&, FSlateWindowElementList& Out, int32 Layer,
@@ -73,11 +89,26 @@ int32 SSCInteractionPrompt::OnPaint(const FPaintArgs&, const FGeometry& G, const
     const float TitleH = TitleSize.Y > 0 ? TitleSize.Y + PromptRowGap : 0, FooterH = FooterSize.Y > 0 ? FooterSize.Y + PromptRowGap : 0;
     const FVector2f Size(InnerW + 2 * CalloutPadX + FocusWidth, TitleH + P.Options.Num() * RowHeight + (P.Options.Num() - 1) * PromptRowGap + FooterH + 2 * CalloutPadY);
 
-    // Leader: crosshair -> 45° rise -> shelf into the placard's edge at its first action; the placard slides in along it.
-    const FVector2f Centre = FVector2f(G.GetLocalSize()) * 0.5f;
-    const FVector2f A = Centre + FVector2f(LeaderStart, -LeaderStart), E = A + FVector2f(LeaderRise, -LeaderRise);
-    const FVector2f Edge = E + FVector2f(LeaderShelf, 0);
-    const FVector2f Pos = Edge + FVector2f(CalloutSlide * (1 - T), -(CalloutPadY + TitleH + RowHeight * 0.5f));
+    // Leader: the anchor -> 45° rise -> shelf into the placard's edge at its first action; the placard slides in along it.
+    // The anchor is the thing's point in the world, projected (off the view or behind the camera: no popout); a prompt
+    // without one (seated, on a ladder) starts by the crosshair. Up-right of it, mirrored left at the view's right edge,
+    // and kept inside the view vertically.
+    const FVector2f ViewSize(G.GetLocalSize());
+    const FVector2f Centre = ViewSize * 0.5f;
+    FVector2f A = Centre + FVector2f(LeaderStart, -LeaderStart);
+    if (P.bAnchored)
+    {
+        if (!Projected.IsSet()) return Layer;
+        A = FVector2f(Projected.GetValue());
+        if (A.X < 0 || A.Y < 0 || A.X > ViewSize.X || A.Y > ViewSize.Y) return Layer;
+    }
+    const float Side = A.X + LeaderRise + LeaderShelf + Size.X + CalloutScreenInset > ViewSize.X ? -1.f : 1.f;
+    const float Lift = FMath::Clamp(LeaderRise, A.Y - (ViewSize.Y - CalloutScreenInset - Size.Y + CalloutPadY + TitleH + RowHeight * 0.5f),
+                                    A.Y - (CalloutScreenInset + CalloutPadY + TitleH + RowHeight * 0.5f));
+    const FVector2f E = A + FVector2f(Side * FMath::Abs(Lift), -Lift);
+    const FVector2f Edge = E + FVector2f(Side * LeaderShelf, 0);
+    const float Left = Side > 0 ? Edge.X : Edge.X - Size.X;
+    const FVector2f Pos(Left + Side * CalloutSlide * (1 - T), Edge.Y - (CalloutPadY + TitleH + RowHeight * 0.5f));
     const FLinearColor Halo = Ink().CopyWithNewOpacity(0.55f * T), Line = OnScrim().CopyWithNewOpacity(T);
     Lines(Out, Layer, G, {A, E, Edge}, Halo, LeaderWidth + 2);
     Lines(Out, Layer + 1, G, {A, E, Edge}, Line, LeaderWidth);
@@ -86,8 +117,8 @@ int32 SSCInteractionPrompt::OnPaint(const FPaintArgs&, const FGeometry& G, const
 
     // Placard: paper, the accent edge on the shelf side (a target), the title, the actions, the footer.
     Box(Out, Layer + 2, G, Pos, Size, Paper().CopyWithNewOpacity(T));
-    Box(Out, Layer + 3, G, Pos, FVector2f(FocusWidth, Size.Y), Accent().CopyWithNewOpacity(T));
-    const float X = Pos.X + FocusWidth + CalloutPadX;
+    Box(Out, Layer + 3, G, Side > 0 ? Pos : Pos + FVector2f(Size.X - FocusWidth, 0), FVector2f(FocusWidth, Size.Y), Accent().CopyWithNewOpacity(T));
+    const float X = Pos.X + (Side > 0 ? FocusWidth : 0) + CalloutPadX;
     float Y = Pos.Y + CalloutPadY;
     if (!Title.IsEmpty())
     {
@@ -99,7 +130,7 @@ int32 SSCInteractionPrompt::OnPaint(const FPaintArgs&, const FGeometry& G, const
         const FSCPromptOption& O = P.Options[I];
         const bool bSelected = I == P.Selected;
         if (bSelected && P.Options.Num() > 1)
-            Box(Out, Layer + 3, G, FVector2f(Pos.X + FocusWidth, Y), FVector2f(Size.X - FocusWidth, RowHeight), PaperDim().CopyWithNewOpacity(T));
+            Box(Out, Layer + 3, G, FVector2f(Pos.X + (Side > 0 ? FocusWidth : 0), Y), FVector2f(Size.X - FocusWidth, RowHeight), PaperDim().CopyWithNewOpacity(T));
         const float Mid = Y + RowHeight * 0.5f;
         if (bSelected) // the key cap: E performs this one
         {

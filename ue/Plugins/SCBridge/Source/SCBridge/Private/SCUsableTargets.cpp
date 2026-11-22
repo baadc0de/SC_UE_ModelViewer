@@ -4,7 +4,8 @@
 #include "SCVehicle.h"
 #include "Engine/World.h"
 
-const FSCUsableTarget* ASCVehicle::FindUsableTarget(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32* OutPoint) const
+const FSCUsableTarget* ASCVehicle::FindUsableTarget(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32* OutPoint,
+                                                    FVector* OutWorld) const
 {
     if (OutPoint) *OutPoint = INDEX_NONE;
     if (UsableTargets.IsEmpty() || !GetWorld()) return nullptr;
@@ -39,6 +40,9 @@ const FSCUsableTarget* ASCVehicle::FindUsableTarget(FVector Eye, FVector Directi
             if (!bAnyLocated && !Target->Points.IsEmpty()) Best = 0;
             if (Best == INDEX_NONE) return nullptr;
             if (OutPoint) *OutPoint = Best;
+            // Where the point is (its helper), else where the ray met the usable.
+            if (OutWorld)
+                *OutWorld = Target->Points[Best].bLocated ? C->GetComponentTransform().TransformPosition(Target->Points[Best].Local) : FVector(Hit.ImpactPoint);
             return Target;
         }
     return nullptr;
