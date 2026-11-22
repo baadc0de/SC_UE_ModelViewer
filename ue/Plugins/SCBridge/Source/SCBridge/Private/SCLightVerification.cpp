@@ -171,8 +171,10 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         const auto& State = Vehicle->LightStates[I];
         OK &= State.Component == Light && State.Name == Want.Name && State.ActiveState == Want.State;
         OK &= State.bEnabled == Want.Enabled && Light->IsVisible() == Want.Enabled;
-        // The component carries the rule's candela (float precision), in candela.
-        OK &= FMath::IsNearlyEqual(double(Light->Intensity), Want.Candela, 1e-5 * FMath::Max(1.0, Want.Candela));
+        // Animated components carry the current sample; their baseline still follows the same candela rule.
+        const double Candela = State.bEnabled && Vehicle->Manifest.LightStyles.Contains(State.LightStyleId)
+                                   ? State.BaseCandela : Light->Intensity;
+        OK &= FMath::IsNearlyEqual(Candela, Want.Candela, 1e-5 * FMath::Max(1.0, Want.Candela));
         const auto* Local = Cast<ULocalLightComponent>(Light);
         OK &= (Local != nullptr) == Want.Local && (!Local || Local->IntensityUnits == ELightUnits::Candelas);
         OK &= State.bFallbackShadow == Want.Shadow;

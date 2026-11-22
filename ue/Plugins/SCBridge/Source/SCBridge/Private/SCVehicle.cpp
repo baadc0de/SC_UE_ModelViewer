@@ -400,6 +400,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     if (DeltaSeconds <= 0) return;
+    FSCLightImporter::TickStyles(this);
     // Lifts first (pre-physics, before the riders' movement: FSCLift moves the carriage anchor, doors start here).
     for (const TSharedPtr<FSCLift>& Lift : Lifts) Lift->Tick(DeltaSeconds);
     if (!FloorPanels.IsEmpty()) RefreshFloorPanels(); // WP-P5 floor panel: the lift's state on its panels
@@ -498,7 +499,7 @@ void ASCVehicle::UpdateTickEnabled()
 {
     bool bLifts = false;
     for (const TSharedPtr<FSCLift>& Lift : Lifts) bLifts |= Lift->NeedsTick();
-    SetActorTickEnabled(ShipDoors.ContainsByPredicate([](const FShipDoor& Door) { return Door.bCargoRelock || Door.bSecurePending; }) || !Playback.IsEmpty() || bLifts);
+    SetActorTickEnabled(ShipDoors.ContainsByPredicate([](const FShipDoor& Door) { return Door.bCargoRelock || Door.bSecurePending; }) || !Playback.IsEmpty() || bLifts || !LoopingLights.IsEmpty());
 }
 void ASCVehicle::EvaluateClips()
 {

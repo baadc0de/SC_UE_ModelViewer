@@ -14,6 +14,7 @@ public:
     /** Put the light's authored state StateKey (`defaultState`, `auxiliaryState`, `emergencyState`, ...) on light Index of
      *  Vehicle->LightStates: intensity (StateCandela) and colour. False when the light authors no such state. */
     static bool ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey);
+    static void TickStyles(ASCVehicle* Vehicle);
     // UE candela for one light state. Packages with the authored light fields (bulb_radius_m, …) use the game
     // renderer's model (FSCStarEngine::PointCandela / PlanarCandela; ue/verification/WP-U3b.md §13); older packages
     // keep the x1500 proxy.
@@ -62,4 +63,6 @@ public:
     static FVector ContainerBasis(const FVector& Cry, bool bHelperFrame);
     static void Build(const FSCPackageSource& Source, const FSCSceneInstance& Instance, ASCVehicle* Vehicle, USceneComponent* Parent,
                       TFunction<USceneComponent*(const FString&)> Helper, TArray<FString>& Warnings, bool bHelperFrame = false);
+private:
+    static void ApplyStyle(ASCVehicle* Vehicle, int32 Index);
 };

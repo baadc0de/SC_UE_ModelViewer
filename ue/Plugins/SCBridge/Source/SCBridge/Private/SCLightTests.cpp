@@ -109,6 +109,65 @@ bool FSCLightDefaults::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightStylePlayback, "SCBridge.Lights.StylePlayback",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCLightStylePlayback::RunTest(const FString&)
+{
+    const FSCLightStyleWaveform Pulse{2, {FVector3f(0), FVector3f(1)}};
+    TestEqual(TEXT("speed scales time before interpolation"), Pulse.Sample(0.25, 2, 0).X, 1.f);
+    TestEqual(TEXT("wrap interpolates into the first key"), Pulse.Sample(0.75, 1, 0).X, 0.5f);
+    TestEqual(TEXT("phase advances the waveform"), Pulse.Sample(0, 1, 64).X, 254.f / 255.f, 0.0001f);
+    const FSCLightStyleWaveform SlowPulse{1, Pulse.Samples};
+    TestEqual(TEXT("full phase byte offsets time by the sample rate"), SlowPulse.Sample(0, 1, 255).X, 1.f);
+
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    auto* Vehicle = World->SpawnActor<ASCVehicle>();
+    Vehicle->Manifest.Interiors.AddDefaulted(2);
+    Vehicle->Manifest.Interiors[0].Container.EntityName = TEXT("other");
+    Vehicle->Manifest.Interiors[1].Container.EntityName = TEXT("lighting");
+    for (FSCInterior& Interior : Vehicle->Manifest.Interiors)
+    {
+        FSCInteriorEntity& Group = Interior.Entities.AddDefaulted_GetRef();
+        Group.EntityId = TEXT("shared-id");
+        Group.Kind = TEXT("light_group");
+    }
+    Vehicle->Manifest.LightStyles.Add(10, Pulse);
+    Vehicle->Manifest.LightStyles.Add(20, FSCLightStyleWaveform{0, {FVector3f(0, 0.5f, 1)}});
+    FSCFolderPackageSource Source(TEXT("/tmp"));
+    FSCSceneInstance Instance;
+    Instance.LightJson.Add(TEXT(R"({"name":"Pulse","semantic_light_kind":"point","transform_basis":"cryengine_z_up","radius_m":3,)"
+                                R"("source_container":"lighting","attachment":{"group_entity_id":"shared-id"},)"
+                                R"("animation_speed":0.5,"animation_phase":0,"states":{)"
+                                R"("defaultState":{"intensity_candela_proxy":30,"light_style":10},)"
+                                R"("emergencyState":{"intensity_candela_proxy":80,"light_style":20},)"
+                                R"("offState":{"intensity_candela_proxy":0,"light_style":10}}})"));
+    TArray<FString> Warnings;
+    const auto Helper = [](const FString&) -> USceneComponent* { return nullptr; };
+    FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
+    TestEqual(TEXT("no import warnings"), Warnings.Num(), 0);
+    if (TestEqual(TEXT("one imported light"), Vehicle->Lights.Num(), 1))
+    {
+        ULightComponent* Light = Vehicle->Lights[0];
+        TestEqual(TEXT("hull-attached light uses its authored group container"), Vehicle->LightStates[0].Interior, 1);
+        TestTrue(TEXT("default pulse registered for ticking"), Vehicle->LoopingLights.Contains(0));
+        TestEqual(TEXT("speed survives import"), Vehicle->LightStates[0].AnimationSpeed, 0.5);
+        TestTrue(TEXT("dark sample has black render color"), Light->GetLightColor().Equals(FLinearColor::Black));
+        TestTrue(TEXT("dark sample preserves component visibility"), Light->IsVisible());
+        TestTrue(TEXT("emergency selects its own style"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("emergencyState")));
+        TestTrue(TEXT("constant emergency style uses no loop tick"), Vehicle->LoopingLights.IsEmpty());
+        TestEqual(TEXT("emergency intensity"), Light->Intensity, 80.f);
+        TestTrue(TEXT("emergency style multiplies the light color"), Light->GetLightColor().Equals(FLinearColor(0, 0.5f, 1), 0.005f));
+        TestTrue(TEXT("off stops the light"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("offState")));
+        TestFalse(TEXT("off hides the component"), Light->IsVisible());
+        TestEqual(TEXT("off zeroes the intensity"), Light->Intensity, 0.f);
+        TestTrue(TEXT("reselecting default restores the loop"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("defaultState")) &&
+                 Vehicle->LoopingLights.Contains(0));
+    }
+    Vehicle->Destroy();
+    World->DestroyWorld(false);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCLightAuthoredModel, "SCBridge.Lights.AuthoredCryEngineModel",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCLightAuthoredModel::RunTest(const FString&)

@@ -696,6 +696,38 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     if (!Scene->TryGetNumberField(TEXT("version"), Version) || (Version < 1 || Version > 3 || Version != FMath::RoundToDouble(Version)) ||
         String(Scene, TEXT("export_kind")) != TEXT("Decomposed"))
     { Error = TEXT("Expected decomposed scene version 1 to 3"); return false; }
+    if (const FReaderObject* Styles; Scene->TryGetObjectField(TEXT("light_styles"), Styles))
+    {
+        for (const auto& [Key, Value] : (*Styles)->Values)
+        {
+            int32 Id;
+            const FReaderObject Entry = Object(Value);
+            const TArray<TSharedPtr<FJsonValue>>* Samples;
+            if (!LexTryParseString(Id, *Key) || Id <= 0 || !Entry ||
+                !Entry->TryGetArrayField(TEXT("samples"), Samples) || Samples->IsEmpty())
+            {
+                if (Key != TEXT("0")) Warn(FString(TEXT("light_styles.")) + Key, TEXT("invalid waveform"));
+                continue;
+            }
+            FSCLightStyleWaveform Style;
+            Entry->TryGetNumberField(TEXT("samples_per_second"), Style.SamplesPerSecond);
+            for (const auto& Sample : *Samples)
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Channels;
+                double R, G, B;
+                if (Sample->TryGetArray(Channels) && Channels->Num() == 3 &&
+                    (*Channels)[0]->TryGetNumber(R) && (*Channels)[1]->TryGetNumber(G) && (*Channels)[2]->TryGetNumber(B) &&
+                    FMath::IsFinite(float(R)) && FMath::IsFinite(float(G)) && FMath::IsFinite(float(B)) &&
+                    R >= 0 && G >= 0 && B >= 0)
+                    Style.Samples.Emplace(float(R), float(G), float(B));
+            }
+            if (Style.Samples.Num() == Samples->Num() &&
+                (Samples->Num() == 1 || (FMath::IsFinite(Style.SamplesPerSecond) && Style.SamplesPerSecond > 0)))
+                Out.LightStyles.Add(Id, MoveTemp(Style));
+            else
+                Warn(FString(TEXT("light_styles.")) + Key, TEXT("invalid samples or sample rate"));
+        }
+    }
     const FReaderObject* Root;
     if (!Scene->TryGetObjectField(TEXT("root_entity"), Root)) { Error = TEXT("Scene has no root_entity object"); return false; }
     FString Detail;
