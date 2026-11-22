@@ -61,8 +61,13 @@ FReply SSCViewportInput::OnMouseMove(const FGeometry& Geometry, const FPointerEv
 }
 FReply SSCViewportInput::OnMouseWheel(const FGeometry&, const FPointerEvent& Event)
 {
-    // First person: the wheel has no action (a lift's floor is picked by aiming at its panel, WP-P5 floor panel).
-    if (Subsystem.IsValid() && Subsystem->GetFirstPerson()) return FReply::Handled();
+    // First person: the wheel picks which of the prompt's actions E performs (WP-I1-4; a lift's floor is still picked by
+    // aiming at its panel, WP-P5 floor panel).
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson())
+    {
+        if (Event.GetWheelDelta() != 0) HandleKey(Event.GetWheelDelta() > 0 ? EKeys::MouseScrollUp : EKeys::MouseScrollDown, true);
+        return FReply::Handled();
+    }
     if (ASCViewerPawn* Pawn = Subsystem.IsValid() ? Subsystem->GetViewerPawn() : nullptr) Pawn->Wheel(Event.GetWheelDelta());
     return FReply::Handled();
 }

@@ -1280,6 +1280,7 @@ void FSCImportJob::FState::Assemble()
     int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;
     TSet<FString> ScreenImagesBound;
     TSet<FString> ScreenStateImagesBound; // I1-3 state images bound to faces (beside the default images)
+    TSet<FString> ScreenHoverImagesBound; // WP-I1-4 hover renders bound to faces
     // WP-P5 floor panel: blank faces of placements that send interaction links (a lift panel may draw its list there).
     TArray<FSCBlankScreenFace> BlankFaces;
     TArray<FSCButtonFace> ButtonFaces; // C2 fixes: faces of the game's panel UIs with clickable nodes (light panels)
@@ -1345,7 +1346,9 @@ void FSCImportJob::FState::Assemble()
                 }
             }
             // I1-3: the panel owner's other states, one instance each; the face swaps them (ASCVehicle::RefreshPanelScreens).
-            if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr; Binding && !Binding->PanelStateImages().IsEmpty())
+            // WP-I1-4: and its renders with the cursor on a button, swapped under the crosshair (ASCVehicle::SetPanelHover).
+            if (const FSCUiBinding* Binding = Screen ? I.PanelBinding(Image) : nullptr;
+                Binding && (!Binding->PanelStateImages().IsEmpty() || !Binding->PanelHoverImages().IsEmpty()))
             {
                 FSCScreenFace& Face = V->ScreenFaces.AddDefaulted_GetRef();
                 Face.Component = Target; Face.Slot = Slot; Face.Panel = E.Anchor; Face.Default = Screen; Face.Image = Image;
@@ -1354,6 +1357,12 @@ void FSCImportJob::FState::Assemble()
                     {
                         Face.States.Add(State.Key(), M);
                         ScreenStateImagesBound.Add(State.ImagePath);
+                    }
+                for (const FSCUiHoverImage& Hover : Binding->PanelHoverImages())
+                    if (UMaterialInterface* M = Materials.FindScreen(I.MaterialSidecar, I.PaletteId, Sub->Index, Hover.ImagePath))
+                    {
+                        Face.Hovers.Add(FSCUiHoverImage::FaceKey(Hover.Node, Hover.StateKey()), M);
+                        ScreenHoverImagesBound.Add(Hover.ImagePath);
                     }
                 // Its slot is swapped per component: never consolidated into a shared instance (FSCInstancing).
                 Target->ComponentTags.AddUnique(FSCInstancing::KeepTag);
@@ -1374,6 +1383,7 @@ void FSCImportJob::FState::Assemble()
                         Operable.Buttons = Binding->Buttons; Operable.ImageSizePx = Binding->ImageSizePx;
                         Operable.bHideDoorLockControl = Binding->bHideDoorLockControl;
                         Operable.StateTypes = Binding->StateTypes; Operable.StateImages = Binding->PanelStateImages(); Operable.DefaultImage = Image;
+                        Operable.HoverImages = Binding->PanelHoverImages();
                         Operable.MakeMaterial = [Mats = &Materials, Sidecar = I.MaterialSidecar, Palette = I.PaletteId, Ordinal = Sub->Index](UTexture* Img) -> UMaterialInterface* {
                             return Mats->CreateScreen(Sidecar, Palette, Ordinal, Img);
                         };
@@ -1406,6 +1416,19 @@ void FSCImportJob::FState::Assemble()
         else if (E.Mesh && (!I.ParentId.IsEmpty() || I.Seat.IsSet() || !I.SeatEntrances.IsEmpty()))
             AddHelpers(V->AttachmentHelpers.FindOrAdd(E.Anchor));
         V->AddItemSpawn(I, E.Anchor);
+        // WP-I1-4: a placed usable offers, at its points, the interactions that start a use (a bed: Sit, LieDown, Sleep).
+        if (!I.UsableInteractions.IsEmpty() && E.Anchor)
+        {
+            FSCUsableTarget Usable;
+            Usable.Interior = PlacingInterior;
+            Usable.EntityId = I.EntityId;
+            Usable.Label = I.SocEntityName.IsEmpty() ? I.EntityName : I.SocEntityName;
+            for (const FSCInteractionPoint& Point : I.InteractionPoints)
+                for (const FSCPointInteraction& X : Point.Interactions)
+                    if (I.UsableInteractions.Contains(X.Name) && !Usable.Options.ContainsByPredicate([&](const FSCPointInteraction& O) { return O.Name == X.Name; }))
+                        Usable.Options.Add(X);
+            if (!Usable.Options.IsEmpty()) V->UsableTargets.Add(E.Anchor, MoveTemp(Usable));
+        }
         if (auto* RigMesh = RigMeshes.Find(I.MeshAsset))
         {
             E.Rig = NewObject<USCRigComponent>(V, NAME_None, RF_Transient);
@@ -1899,8 +1922,8 @@ void FSCImportJob::FState::Assemble()
            ScreenDarkSlots, ScreenAmbiguousSlots, Materials.UnclassifiedBindings);
     // I1-3: faces whose image follows their panel's state, and the state images they hold; then the faces' initial state.
     const int32 InitialSwaps = V->RefreshPanelScreens();
-    UE_LOG(LogSCImport, Display, TEXT("SCREEN_STATES faces=%d state_images=%d initial_swaps=%d"), V->ScreenFaces.Num(),
-           ScreenStateImagesBound.Num(), InitialSwaps);
+    UE_LOG(LogSCImport, Display, TEXT("SCREEN_STATES faces=%d state_images=%d hover_images=%d initial_swaps=%d usables=%d"), V->ScreenFaces.Num(),
+           ScreenStateImagesBound.Num(), ScreenHoverImagesBound.Num(), InitialSwaps, V->UsableTargets.Num());
     // WP-P5 floor panel: lift panels draw their stops on a blank face (appended to ScreenFaces after the counts above).
     V->BuildFloorPanels(BlankFaces, [&](const FString& Path) { return Materials.Texture(Path); });
     V->BuildButtonPanels(ButtonFaces, [&](const FString& Path) { return Materials.Texture(Path); });

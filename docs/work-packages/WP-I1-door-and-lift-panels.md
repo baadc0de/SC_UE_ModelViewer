@@ -1383,6 +1383,101 @@ New tests: `SCBridge.Doors.ReopenPlaysClip` grew exact sound counts per stroke, 
 a raw open snap then a press, an unknown state after another clip, ResetPose and a sensor's pending exit, and a twin rig
 sharing the mesh whose targeted layer outlives it. SCBridge 184/188 (the 4 known failures).
 
+## Result (I1-4: hover and the interaction popout, 2026-11-22)
+
+Owner request: an operating panel highlights when the crosshair is on it, with the styling the data already has for that
+state; other things that can be used (seats) get a popout like the drones' and cargo's, with the action and the E key;
+a thing with several actions (a bed: sit, lie down) lists them, the wheel picks one and E performs it.
+
+Branch `wp/I1-4-interaction-feedback`; submodule branch `scviewer/interaction-feedback` (from `2712f437`).
+`CACHE_FORMAT_VERSION` 42 → 43.
+
+### The hover look is data
+
+The panels are BuildingBlocks canvases. The engine tags the widget under the cursor with `UI.Style.__Internal.hover`
+(TagDatabase `b567faeb-…`), and the widget standards style that tag. The modular-kit large button (a door pad's
+`DoorButton`, `ButtonGeneralLargeComponentStandard`, and the brand's `sk_<brand>_buttonlargestyles`) has
+`RootBackgroundElementInstanceHover` (`Base` 0.3 → 0.6 on Crusader `sk_crus_env`), `RootForegroundElementInstanceHover`
+(0.4 → 1.0) and `RootTextFieldElementInstanceHover`; the secondary buttons (a pad's `LockButton`) and the light panel's
+rows have their own. Every entry is `Tag(<part>) & Ancestor[Tag(hover) | break Tag(<component>)]`. `HighlightBehaviors`
+on interaction points (the brief's T4 guess) is empty on the pads; on beds and seats it names what the game outlines, not
+a screen look.
+
+### Exporter (submodule)
+
+- **starbreaker-ui**: `UiBindingView::hovered = (node name, tag id)`; the binding overlay registry carries it
+  (`DefaultValueRegistry::set_hovered`) and `resolve_state_tags_into_scene` adds the tag to that node, after the widget
+  standards expand and before their runtime styles apply (tests `bb_bindings::tests_hover`).
+- **starbreaker-ui, a fidelity fix the hover needed**: a style's role fill on a custom shape lost its alpha. An
+  entries-only kit sheet cannot resolve the role at style time, so only `FillColorToken` was written and the IR drew the
+  role at full strength: a large button's background was `Base` at 1.0, not 0.3 (the saturated pad blue the I1-5 reviews
+  called a wash), and its hover (0.6) drew the same. The modifier now records `FillColorTokenAlpha`; the IR takes it for
+  an overlay-tinted custom shape (`styled_role_fill_alpha`; tests `token_only_color_modifier_keeps_the_roles_alpha`,
+  `a_styled_role_fill_tints_at_the_styles_alpha`, `a_token_only_styled_role_fill_tints_at_the_recorded_alpha`). Every
+  resting door pad renders darker and translucent, as the kit sheet says.
+- **starbreaker-3d**: the hover tag by name from the tag database (`Database::tag_id`, `ui_pipeline::hover_tag_id`); the
+  pre-render renders each written image (the default, the single states and pairs that differ: `written_renders`) once
+  per button node of that image with the cursor on it (render key `hovered`), and `ui_bindings[].hover_images[]
+  {node, states, generated_image_path}` lists those that differ from the image at rest (stem `…__hover_<node>`).
+  Placements carry `usable_interactions[]`: the interactions that start a use of the class's usable
+  (`SActorUsableParams.useSlots[].useChannelInstances[].interaction`; a bed: Sit, LieDown, Sleep, SitUp; not Exit or
+  SaveGameLogOut, which act on a use in progress). Contract: `decomposed-export-contract.md`.
+- **CLI**: `ui render` replays `hover_images`, `--hover <node>` renders any node hovered (A/B), the IR dump follows; the
+  CLI's `UiBinding` literal had lost `interaction_distance` (compile fix).
+
+CLI A/B on the C2 (`out/` scratch, `ui render --hover`): the pad's `DoorButton` hover brightens the button in the default,
+opened and locked states and changes nothing in the no-power states (the button is hidden); `LockButton` and the light
+panel's `AuxLightsButton` change; a node of another canvas changes nothing (not written).
+
+### Viewer
+
+- **Hover**: faces of door pads, call panels and kiosks with hover renders get an aim record (`ASCVehicle::PanelAims`:
+  the face geometry, UV cell, the buttons' rects in the render, the panel's operating distance). Each tick the character
+  finds the button under the crosshair (`AimPanelButton`; on a door pad off every button its door button, which E
+  presses) and the face shows the render of the state it shows with that button hovered (`SetPanelHover`,
+  `FSCScreenFace::Hovers`, `PANEL_HOVER`). Drawn light panels draw the hover render of the aimed row instead of our frame
+  (`FSCFloorPanel::HoverImageFor`); the frame stays for an export without one. Floor-panel aim now runs on ships without
+  lifts too (a light panel needs it).
+- **Popout** (`SSCInteractionPrompt`, the callouts' paper look): built every tick from what `Interact()` acts on, in its
+  order (`BuildPrompt`): title when the data names the thing (a door), its actions, the E key cap on the one E performs,
+  `WHEEL  CHOOSE` with several. An action the viewer cannot perform is listed dimmed with why (a door the ship link
+  refuses, a usable). The HUD's status text no longer carries the prompt.
+- **Wheel**: `MouseScrollUp` / `MouseScrollDown` are `PromptPrevious` / `PromptNext` (Slate `OnMouseWheel` → `HandleKey`);
+  the choice holds while the same thing stays under the crosshair (`FSCInteractionPrompt::Update`).
+- **Usables**: placements with `usable_interactions[]` are registered by anchor (`UsableTargets`, `FindUsableTarget`);
+  the popout lists their points' use-starting interactions (C2 bed: Sit, Lie Down, Sleep). Performing a use is WP-P6-4:
+  E logs `FP_USABLE … performed=0`.
+- Console: `sc.FP.Prompt` (`FP_PROMPT_NOW`), `FP_PROMPT` / `FP_PROMPT_SELECT` on change; the wheel is
+  `sc.FP.Key MouseScrollDown 1`; `sc.Panels.Hover` lists the hover faces (`PANEL_AIM`) and usables (`USABLE`).
+
+### Verification (C2 in `hangar_xltop_001`, first person, port 8772, `ue/scripts/rpc/interaction-feedback.ps1`)
+
+- Export at cache format 43: hangar `SCREEN_STATES faces=20 hover_images=47`, `PANEL_HOVER_FACES aims=20`; C2
+  `faces=62 state_images=141 hover_images=169 usables=41`, `PANEL_HOVER_FACES aims=52 light_panels_with_hover=4`;
+  export 260 s (cache miss), 2 s on the cache hit.
+- Rear-ramp pad: crosshair on it → `shown=|hover:DoorButton`, popout `title="Rear ramp" options=[>Open]`; off it →
+  `shown=default`, no prompt. The button measures rgb(34,152,237) hovered against rgb(22,124,201) at rest from the
+  same place (`out/i1-4/a3-pad-hovered.png`, `a5-pad-lock-aimed.png`).
+- Light panel (`4b3c1b3d…`): rows 1 and 2 aimed → `image=…__hover_auxlightsbutton` / `…__hover_emergencylightsbutton`,
+  no frame; row 0 is the active state (`On`), whose hover render equals the rest render and is not written: the frame
+  stays off and the image unchanged.
+- Bed (`Bed_CRUS_Starlifter_Single_Left-000`): `options=[>-Sit, -Lie Down, -Sleep]`; the wheel →
+  `[-Sit, >-Lie Down, -Sleep]`; E → `FP_USABLE … interaction="Lie Down" performed=0`.
+- Tests: starbreaker-ui `ui_check.sh` ALL GREEN (TDD tier; `--full` needs a Clipper export this machine does not have),
+  starbreaker-3d lib 1018 passed, CLI `ui::` 2 passed, `scviewer-core` 56 passed; UE `SCBridge` 233 tests, 230 pass,
+  new `SCBridge.Interaction.PromptSelection`, `SCBridge.Reader.InteractionFeedbackFields`,
+  `SCBridge.Screens.ButtonPanelHoverImage` pass; the 3 failures need inputs this run did not give
+  (`Package.FolderTarImport`: `-SCPackage`; `Player.KitRigAndWeapons`: `-SCPlayerPackage`) or are not touched here
+  (`FirstPerson.SkeletalCollision`, failed with no error logged).
+
+### Open
+
+- Light-panel rows are named by their interaction (`LightsLow`): the row's own text (`Auxiliary`) is in the canvas, not
+  in `buttons[]`; exporting each button's label would name them.
+- The pad's lock button hover is verified in the CLI renders only (the scripted aim did not land on the 2 cm bar).
+- Performing uses (sit, lie down) is WP-P6-4; the Buccaneer ground point's five interactions (P6-3) would use the same
+  popout and wheel.
+
 ## 7. Out of scope: HUDs and MFDs (replaced by our own UI)
 
 Facts for the replacement work:
