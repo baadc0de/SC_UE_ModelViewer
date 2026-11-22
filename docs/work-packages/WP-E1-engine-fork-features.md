@@ -447,7 +447,7 @@ Engine `3079e8bc3` (`SCVIEWER_ENGINE_TONE_CURVE` 1).
   no UE lens vignette (the material had none; the game's vignetting map is not modelled), local exposure off), or clears
   every one of those overrides (`sc.Look.Display ue`: UE's tonemapper as the project and map set it, Filmic with UE's
   vignette). `Install` tags the volume (`SCViewerExposure::VolumeTag`) and no longer adds a blendable; the log line names
-  the curve. Removed: `M_SC_DisplayMapping.uasset`, `viewer/scripts/create_display_mapping_material.py`, its `KEEP` entry in
+  the curve. Removed: `M_SC_DisplayMapping.uasset`, `ue/scripts/create_display_mapping_material.py`, its `KEEP` entry in
   `create_materials.py`; the port's hash guard moved to `SCBridge.ViewerExposure.DisplayCurve` (fails when the fixture's
   `HuePreservingShoulder` / `GetLuminance` / `ToSRGB` hashes differ from the ones the engine port was written from);
   `StarEngineRender.notes.md` and `viewer/README.md` updated (WP-U3b §13.5 and WP-L3 are historical records and keep their
@@ -1012,7 +1012,7 @@ shader edits, `SCSSDO.ush` and the generated `SCSSDOParams.ush` are removed; no 
   ported hashes, UE default = no pass), `.Blend` (viewer over an opt-in map volume, half-weight lerp, install follows the setting), `.Rules`
   (`r.SSDO` modes, debug, unsupported view, clamps), `.LumenInterplay` (the rule; `DirectLightFactor` = the game's `CalculateSSDO` to
   < 1e-5 over 360 cases); `SCBridge.StarEngine.*` read and range-check the new fixture values. Removed: `ue/EnginePatches/`,
-  `viewer/scripts/engine_patches.py`, every `r.GeneralPurposeTweak` use (routes `cutlass-ssdo*.txt`, `cutlass-look-iter1*.txt` now use
+  `ue/scripts/engine_patches.py`, every `r.GeneralPurposeTweak` use (routes `cutlass-ssdo*.txt`, `cutlass-look-iter1*.txt` now use
   `sc.Look.SSDO` / `r.SSDO.Debug`); AGENTS.md, README, `viewer/README.md`, plan D14, WP-L2, WP-L3, LOOK-1, the WP-L2 verification, the fixture
   notes and `DefaultScalability.ini` updated.
 - **Runs** (fork, medfrnt, 1920x1080, E1-5's poses; `out/e1/E1-7/`: `run-old.txt`, `run-new.txt`, `run-def.txt`, `shots/`,

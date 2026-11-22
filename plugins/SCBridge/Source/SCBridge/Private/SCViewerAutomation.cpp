@@ -72,7 +72,7 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
     {
         // Built-in demo route; the route itself names no ship (spawn kinds and relative moves only).
         if (!FParse::Value(Cmd, TEXT("SCScript="), ScriptFile))
-            ScriptFile = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../scripts/routes/player-demo.txt"));
+            ScriptFile = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("scripts/routes/player-demo.txt"));
         if (!DemoEntity.IsEmpty() && Queue.IsEmpty())
         {
             Queue.Add(DemoEntity);

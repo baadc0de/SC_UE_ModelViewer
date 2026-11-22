@@ -7,7 +7,7 @@ selected Ship Link, Cargo, Doors, Panels, Lift and reader tests.
 ```powershell
 $project = (Resolve-Path 'viewer/SCViewer.uproject').Path
 & "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Build/BatchFiles/Build.bat" SCViewerEditor Win64 Development "-Project=$project" -WaitMutex
-& ../SC_UE_ModelViewer-wp-Q1/viewer/scripts/rpc/automation.ps1 -Project $project -Filter SCBridge.Garage,SCBridge.ShipLink,SCBridge.Cargo,SCBridge.Doors,SCBridge.Panels,SCBridge.Lift,SCBridge.Reader.C2FixesFields
+& ../SC_UE_ModelViewer-wp-Q1/ue/scripts/rpc/automation.ps1 -Project $project -Filter SCBridge.Garage,SCBridge.ShipLink,SCBridge.Cargo,SCBridge.Doors,SCBridge.Panels,SCBridge.Lift,SCBridge.Reader.C2FixesFields
 ```
 
 A single D3D12 game-mode run on the procedural Viewer map reached Cutlass ready in 26.95 seconds. It verified the

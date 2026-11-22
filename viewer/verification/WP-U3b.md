@@ -196,8 +196,8 @@ true, shadow method defaults to ray tracing); the patch adds the gobo-material s
 fallback shadow rule. `RenderCore` is already a dependency.
 
 ```diff
---- a/plugins/SCBridge/Source/SCBridge/Private/SCLightImporter.cpp
-+++ b/plugins/SCBridge/Source/SCBridge/Private/SCLightImporter.cpp
+--- a/ue/Plugins/SCBridge/Source/SCBridge/Private/SCLightImporter.cpp
++++ b/ue/Plugins/SCBridge/Source/SCBridge/Private/SCLightImporter.cpp
 @@ -17,6 +17,8 @@
  #include "IImageWrapper.h"
  #include "Modules/ModuleManager.h"
@@ -499,8 +499,8 @@ TODO(WP-V2): light-state default for parked ships (§11.5).
 
 ### 11.8 Measurements (2026-11-09, RTX 4090; UE lock after WP-V1)
 
-**Setup.** Presets: `viewer/scripts/create_viewer_presets.py` (as of `b2b4318`; superseded by `create_viewer.py`, §11.9; run with `UnrealEditor-Cmd … -run=pythonscript
--script=viewer/scripts/create_viewer_presets.py -nullrhi`, after deleting `Content/Maps/Presets/`) duplicates
+**Setup.** Presets: `ue/scripts/create_viewer_presets.py` (as of `b2b4318`; superseded by `create_viewer.py`, §11.9; run with `UnrealEditor-Cmd … -run=pythonscript
+-script=ue/scripts/create_viewer_presets.py -nullrhi`, after deleting `Content/Maps/Presets/`) duplicates
 `/Game/Maps/Viewer` into `/Game/Maps/Presets/Viewer_{Daylight,Hangar,Space}` (sun 100 klux at 45° / 300 lux at
 70° / no sun and no atmosphere; PPV EV100 bounds 10…16 / 2…8 / −6…6) and two measurement maps
 `Viewer_{Daylight,Hangar}_FixedEV` with auto exposure pinned to the predicted EV100 (13.51 / 5.26 =
@@ -985,7 +985,7 @@ UE mapping (`FSCExposureSettings::From`, pure and unit-tested; `SCViewerExposure
 post-process material at "Replacing the Tonemapper" whose Custom node is a statement-by-statement port of
 `HuePreservingShoulder`, `GetLuminance` and `ToSRGB` (scene + bloom, times the eye-adaptation exposure). Its
 parameters (`MaxDisplayNits`, `RefWhiteScale`, `ToeScale`) are set at run time from the fixture; the asset's
-defaults are deliberately unusable. `viewer/scripts/create_display_mapping_material.py` builds it and refuses to
+defaults are deliberately unusable. `ue/scripts/create_display_mapping_material.py` builds it and refuses to
 when one of the three function hashes in the fixture differs from the hash its port was written against.
 
 ### 13.6 Measurements

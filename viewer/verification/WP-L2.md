@@ -21,12 +21,12 @@ New entries: `exe_cvars` `r_ssdo` 1, `r_ssdoQuality` 0, `r_ssdoRadius` 4.0, `r_s
 ## Engine patch
 
 ```
-$ uv run python viewer/scripts/engine_patches.py apply
+$ uv run python ue/scripts/engine_patches.py apply
 WROTE .../Shaders/Private/MegaLights/MegaLightsShading.usf
 WROTE .../Shaders/Private/MegaLights/SCSSDO.ush
 WROTE .../Shaders/Private/MegaLights/SCSSDOParams.ush
 ENGINE_PATCHES applied (3 changed)
-$ uv run python viewer/scripts/engine_patches.py check
+$ uv run python ue/scripts/engine_patches.py check
 ENGINE_PATCHES OK: 3/3 files current
 ```
 

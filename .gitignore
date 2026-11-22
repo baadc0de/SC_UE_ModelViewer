@@ -19,6 +19,9 @@ viewer/**/Saved/
 viewer/**/.vs/
 plugins/**/Binaries/
 plugins/**/Intermediate/
+plugins/**/DerivedDataCache/
+plugins/**/Saved/
+plugins/**/.vs/
 game/**/Binaries/
 game/**/Intermediate/
 game/**/DerivedDataCache/
@@ -51,6 +54,19 @@ __pycache__/
 viewer/Content/SC/
 # WP-A1: cooked levels' audio (game-derived, viewer/scripts/cook_audio.py)
 viewer/Content/SCAudio/
+
+# The layout before WP-O1-1 (ue/SCViewer, ue/Plugins): a checkout or worktree that moved to the new layout keeps its
+# old ignored build output and game-derived content there until it is moved or deleted; keep it ignored.
+/ue/**/Binaries/
+/ue/**/Intermediate/
+/ue/**/DerivedDataCache/
+/ue/**/Saved/
+/ue/**/.vs/
+/ue/SCViewer/Content/SC/
+/ue/SCViewer/Content/SCAudio/
+/ue/SCViewer/Content/SciFi_Drone_4/
+/ue/SCViewer/Build/*/FileOpenOrder/
+/ue/Plugins/NVIDIA/
 
 # NVIDIA DLSS plugin (downloaded from NVIDIA; its license does not allow redistribution)
 /plugins/NVIDIA/

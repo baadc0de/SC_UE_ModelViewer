@@ -5,7 +5,7 @@
 ```powershell
 $project = (Resolve-Path 'viewer/SCViewer.uproject').Path
 & "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Build/BatchFiles/Build.bat" SCViewerEditor Win64 Development "-Project=$project" -WaitMutex
-& ../SC_UE_ModelViewer-wp-Q1/viewer/scripts/rpc/automation.ps1 -Project $project -Filter SCBridge.ShipLink,SCBridge.Cargo,SCBridge.Doors,SCBridge.Panels,SCBridge.Lift,SCBridge.Reader.C2FixesFields
+& ../SC_UE_ModelViewer-wp-Q1/ue/scripts/rpc/automation.ps1 -Project $project -Filter SCBridge.ShipLink,SCBridge.Cargo,SCBridge.Doors,SCBridge.Panels,SCBridge.Lift,SCBridge.Reader.C2FixesFields
 ```
 
 Build succeeded. The first cold build surfaced two compile fixes. The incremental rebuild finished eight actions
@@ -90,7 +90,7 @@ checks both open and closed endpoints, an obstruction between translating endpoi
 path, the conservative fallback for missing path information, and a cooked complex-as-simple triangle.
 
 ```powershell
-& ../SC_UE_ModelViewer-wp-Q1/viewer/scripts/rpc/automation.ps1 -Build -Project $project -Filter SCBridge.ShipLink,SCBridge.Doors,SCBridge.Cargo
+& ../SC_UE_ModelViewer-wp-Q1/ue/scripts/rpc/automation.ps1 -Build -Project $project -Filter SCBridge.ShipLink,SCBridge.Doors,SCBridge.Cargo
 ```
 
 The extracted XL folder and C2 were ready 76.19 seconds from launch. The driver opened the main hold,

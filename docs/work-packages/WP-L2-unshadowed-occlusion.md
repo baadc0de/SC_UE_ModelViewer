@@ -41,7 +41,7 @@ The patch lives in the repo:
 
 - `ue/EnginePatches/MegaLights/SCSSDO.ush`: the port (translated world space, depth at mip 0, the game's 4x4 noise
   rotated per frame so MegaLights' temporal denoiser stands in for the 2x2 blur).
-- `viewer/scripts/engine_patches.py apply|check|revert`: writes `SCSSDO.ush`, `SCSSDOParams.ush` (constants from the
+- `ue/scripts/engine_patches.py apply|check|revert`: writes `SCSSDO.ush`, `SCSSDOParams.ush` (constants from the
   fixture's `exe_cvars`) and three anchored insertions into `MegaLights/MegaLightsShading.usf` (original kept as
   `.scviewer-orig`). The SSDO is computed once per pixel, on the first light that needs it.
 - Ambient: `DiffuseIndirectComposite.usf` (Substrate path, Lumen screen-probe gather) replaces Lumen's short-range AO
