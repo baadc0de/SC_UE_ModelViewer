@@ -383,7 +383,7 @@ Slate UI in every host. Run from the repository root (the cache defaults to
 
 Pick from the menu (F1); drag to orbit, Shift/middle-drag to pan, wheel to zoom,
 double-click a part to focus, F to frame all; Fly mode uses WASD/QE with Shift/Ctrl.
-Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>`,
+Switches: `-SCArchive=<Data.p4k>`, `-SCCacheDir=<dir|none>`, `-SCSearch=<q>` (fills the menu's vehicle search),
 `-SCLoad=a,b`, `-SCHold=<s>`, `-SCCamera=fly`, `-SCFlyView=dx,dy,dz,pitch,yaw`,
 `-SCDefaults`, `-SCLod=`, `-SCMip=`, `-SCQuitAfterLoad`, `-SCNoUI`, `-SCHostExposure`; console `sc.Load`,
 `sc.Unload`, `sc.Cancel`, `sc.Camera`. `viewer/scripts/capture_viewer.sh` screenshots a run.

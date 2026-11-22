@@ -95,21 +95,29 @@ The plugin's cargo art (`/SCBridge/Cargo`) stays in the plugin until it can move
 
 **The menu.** The viewer's F1 menu (`viewer/Source/SCViewer/SSCViewerPicker`, registered with `SCViewerShell` as the
 menu and a view overlay; also the top bar's "Menu (F1)") lists environments, vehicles and the loaded vehicle's paints in
-the HUD look. A pick applies at once: `SetEnvironment`, `LoadEntity`, `SetPaint`. Both lists have a search box; the
-menu opens scrolled to the current choices, and by itself at start when the command line asks for no scene (no
-`-SCLoad`, `-SCEnvironment`, `-SCScript`, `-SCPackage`, `-SCPlayerDemo`, `-SCShowcase`, `-SCRpc`). The side panels
-(model browser with its options, hierarchy) and `sc.UI.Panels` are gone from the shared root; RPC `/ui` takes
-`{menu: true|false}` instead of `panels`. Each app names itself in the top bar (`SCViewerShell::SetAppName`).
+the HUD look. A pick applies at once (`SetEnvironment`, `LoadEntity`, `SetPaint`), or, while a load runs, as soon as
+it lets it: the latest choice waits in the menu, marked LOADING (a running environment export is asked to stop, never
+waited for on the game thread; a vehicle waits for the environment it goes into). The row in the scene is an inverted
+bar marked IN SCENE. The environment list starts with the procedural hangar (the map's own); the environment chosen is
+saved and restored at the next start. Both lists have a search box (`-SCSearch=<q>` fills the vehicle one); the menu
+opens scrolled to the current environment, vehicle and paint, and by itself at start when the command line asks for no
+scene (no `-SCLoad`, `-SCEnvironment`, `-SCScript`, `-SCPackage`, `-SCPlayerDemo`, `-SCShowcase`, `-SCRpc`). While it
+is open the engine's on-screen messages are hidden; however it closes, keys go back to the view. The side panels (model
+browser with its options, hierarchy) and `sc.UI.Panels` are gone from the shared root; RPC `/ui` takes
+`{menu: true|false}` instead of `panels`. Each app names itself in the top bar (`SCViewerShell::SetAppName`). A paint
+choice is remembered for the vehicle in the scene (`LoadedEntity`), not for one still loading.
 
 **The lists come from game data** (`crates/scviewer-core/src/viewer_catalog.rs`, `sc_viewer_catalog`,
-`scviewer catalog`; `USCViewerSubsystem::GetCatalog`, listed once per archive session, replacing the search for
-"hangar" in archive paths):
+`scviewer catalog`; `USCViewerSubsystem::GetCatalog`, listed once per archive session on demand — the menu and RPC
+`/catalog` call `RequestCatalog`, hosts that never ask (`-SCNoUI`, the game) do not pay for the scan; a listing finished
+for an earlier archive session is dropped — replacing the search for "hangar" in archive paths):
 
 - *Environments*: `EntityClassDefinition` records with `InstancedInteriorComponentParams` and a set
   `SObjectContainerComponentParams.objectContainer` (84 records, 17 of them templates without a container): **61
   hangar containers**, grouped by size (`InstancedInteriorComponentParams.name`: Small / Medium / Large / XL Hangar),
   named by the places that offer them (`InstancedInteriorLocationMap.locationInteriors[]`, not `devOnly`:
-  `location.name`, `defaultHangars[]`), else by the record. Of the 239 archive paths with "hangar" in them the other
+  `location.name`, `defaultHangars[]`; records sharing a container merge their places), else by the record (the first
+  by name). Of the 239 archive paths with "hangar" in them the other
   178 are pieces of these containers (each city's hangar wraps the base room as a child: the Area18 XL hangar exports
   as one 3.9 GB package with it), building parts, test and event content, and legacy hangars nothing references.
 - *Vehicles*: `VehicleComponentParams` records (1111) through these rules, in order:
@@ -117,11 +125,11 @@ menu opens scrolled to the current choices, and by itself at start when the comm
 | Rule | Keeps a record when | Left |
 |---|---|---|
 | R1 | it has `SEntityInsuranceProperties` (salvage hulks have none) | 1104 |
-| R2 | `AttachDef.Localization.Name` resolves and is no `@LOC_*` placeholder | 1088 |
-| R3 | no tag under `AI.Faction`, `AI.Spawning`, `AI.Ship.Unmanned`, and its crew manifest lists no crew | 412 |
+| R2 | `AttachDef.Localization.Name` resolves to non-blank text and is no `@LOC_*` placeholder | 1088 |
+| R3 | no tag under `AI.Faction`, `AI.Spawning`, `AI.Ship.Unmanned`, and its crew manifest lists no crew; a record whose tags or crew manifest do not read is left out and listed in the catalogue's `skipped` | 412 |
 | R4 | no `Missions.ItemType.Iasi.DisplayItem` tag | 411 |
 | R5 | it insures to itself (`shipInsuranceParams.shipEntityClassName`) or `EAEntityDataParams.inclusionMode` is `ReadyToInclude` | 364 |
-| R6 | one row per (`vehicleDefinition`, `modification`), split where members carry different `Ship.Model.*` tags | **229** |
+| R6 | one row per (`vehicleDefinition`, `modification`), split into members connected by shared `Ship.Model.*` tags (untagged members join the largest such group); independent of record order | **229** |
 
   R6's row is the self-insured member, else an entitled one (`DefaultEntitlementEntityParams`), else any: the one
   most records insure to, then the one whose name begins the others', then the most tagged. 206 spaceships, 23
@@ -135,10 +143,11 @@ menu opens scrolled to the current choices, and by itself at start when the comm
 - *Paints*: the loaded vehicle's (`Manifest.Paints`). They are also knowable before load
   (`SGeometryResourceParams...SubGeometry[]` tags, paint items with `AttachDef.Type = Paints`); not used yet.
 
-`scviewer catalog` printed the same 229 vehicles and 61 containers as the research scripts.
+`scviewer catalog` printed the same 229 vehicles and 61 containers as the research scripts (and after the review's rule
+fixes the same 229 vehicles; `skipped` holds one record, an AI Gladius whose crew manifest does not resolve).
 
 **Command line.** `-SCEnvironment=<container path>` and `-SCLoad=<entity>` as before (the ids the lists show), and
-`-SCSkin=<index|default|name part>` puts a paint on the first vehicle loaded (as `sc.Paint`).
+`-SCSkin=<index|default|name part>` puts a paint on the first vehicle loaded or adopted from `-SCPackage` (as `sc.Paint`).
 
 **No cooking in the viewer.** It never streams cooked levels (`SCViewerShell::SetCookedLevels(false)`): ships and
 environments always import from the archive through the local cache. The locally cooked ships and hangars (ignored)

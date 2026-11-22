@@ -719,7 +719,12 @@ private:
         FObj O = MakeShared<FJsonObject>();
         for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All()) X->Catalog(World(), *O);
         O->SetBoolField(TEXT("ok"), true);
-        if (const USCViewerSubsystem* V = Viewer()) O->SetField(TEXT("environments"), Strings(V->GetEnvironmentChoices()));
+        if (const USCViewerSubsystem* V = Viewer())
+        {
+            V->RequestCatalog(); // listed on demand: empty until the catalogue is in (poll again)
+            O->SetField(TEXT("environments"), Strings(V->GetEnvironmentChoices()));
+            O->SetBoolField(TEXT("environments_ready"), V->GetCatalog().bReady);
+        }
         return O;
     }
 

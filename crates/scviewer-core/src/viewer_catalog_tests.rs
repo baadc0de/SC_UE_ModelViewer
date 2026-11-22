@@ -53,3 +53,39 @@ fn one_row_per_definition_with_the_self_insured_member() {
     // The edition folds into its base; different Ship.Model tags and a modification stay apart.
     assert_eq!(names(&kept), ["Base", "Base_Mod", "Big_A", "Big_B"]);
 }
+
+#[test]
+fn model_groups_do_not_depend_on_record_order() {
+    let tagged = |name: &str, models: &[&str]| {
+        let mut v = ship(name, "d/big.xml");
+        v.tags = models.iter().map(|m| format!("Ship.Model.{m}")).collect();
+        v
+    };
+    let (a, b, ab, plain) = (tagged("Big_A", &["A"]), tagged("Big_B", &["B"]), tagged("Big_AB", &["A", "B"]), ship("Big", "d/big.xml"));
+    let orders = [
+        vec![a.clone(), b.clone(), ab.clone(), plain.clone()],
+        vec![ab.clone(), a.clone(), b.clone(), plain.clone()],
+        vec![plain.clone(), b.clone(), a.clone(), ab.clone()],
+    ];
+    for records in orders {
+        // A and B meet through AB; the untagged member joins that group: one row.
+        assert_eq!(pick_vehicles(&records).len(), 1, "{:?}", names(&records));
+    }
+    // Apart without the bridge; the untagged member joins one of them, whatever the order.
+    let one = pick_vehicles(&[plain.clone(), a.clone(), b.clone()]);
+    let two = pick_vehicles(&[b, a, plain]);
+    let sorted = |v: &[VehicleRecord]| { let mut n: Vec<String> = v.iter().map(|v| v.name.clone()).collect(); n.sort(); n };
+    assert_eq!(sorted(&one), sorted(&two));
+    assert_eq!(one.len(), 2);
+}
+
+#[test]
+fn placeholder_family_blank_text_and_unreadable_evidence_leave() {
+    let mut blank = ship("Blank", "d/blank.xml");
+    blank.label = Some("  ".into()); // R2: resolves to nothing
+    let mut unread = ship("Unread", "d/unread.xml");
+    unread.unreadable = "tags do not read".into(); // R3 cannot judge it
+    let kept = pick_vehicles(&[blank, unread, ship("Plain", "d/plain.xml")]);
+    assert_eq!(names(&kept), ["Plain"]);
+    assert!(super::placeholder("@LOC_SOMETHING_NEW") && super::placeholder("") && !super::placeholder("@vehicle_NameTest"));
+}

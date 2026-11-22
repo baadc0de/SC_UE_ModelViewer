@@ -30,6 +30,8 @@ pub struct CatalogRow {
 pub struct ViewerCatalog {
     pub environments: Vec<CatalogRow>,
     pub vehicles: Vec<CatalogRow>,
+    /// Vehicle records left out because R3 could not judge them (their tags or crew manifest did not read), with why.
+    pub skipped: Vec<String>,
 }
 
 /// One vehicle record, as the rules see it.
@@ -42,6 +44,8 @@ pub(crate) struct VehicleRecord {
     pub label_is_placeholder: bool,
     pub tags: Vec<String>,
     pub crew: usize,
+    /// R3's evidence did not read (a tag query or tag reference failed, a crew manifest did not resolve): why, else empty.
+    pub unreadable: String,
     pub insurance_class: Option<String>,
     pub ea_included: bool,
     pub entitled: bool,
@@ -76,8 +80,8 @@ pub(crate) fn pick_vehicles(all: &[VehicleRecord]) -> Vec<VehicleRecord> {
     let kept: Vec<&VehicleRecord> = all
         .iter()
         .filter(|v| v.insurance_class.is_some())
-        .filter(|v| !v.label_is_placeholder && v.label.is_some())
-        .filter(|v| !v.has_tag_under(&AI) && v.crew == 0)
+        .filter(|v| !v.label_is_placeholder && v.label.as_deref().is_some_and(|l| !l.trim().is_empty()))
+        .filter(|v| v.unreadable.is_empty() && !v.has_tag_under(&AI) && v.crew == 0)
         .filter(|v| !v.has_tag_under(&["Missions.ItemType.Iasi.DisplayItem"]))
         .filter(|v| v.self_insured() || v.ea_included)
         .collect();
@@ -87,21 +91,13 @@ pub(crate) fn pick_vehicles(all: &[VehicleRecord]) -> Vec<VehicleRecord> {
             *insured_to.entry(c.to_lowercase()).or_default() += 1;
         }
     }
-    // R6: by (definition, modification); within a key, members whose Ship.Model tags meet (or have none) stay together.
-    let mut by_key: BTreeMap<(String, String), Vec<Vec<&VehicleRecord>>> = BTreeMap::new();
+    // R6: by (definition, modification), then split by Ship.Model tags (split_by_model).
+    let mut by_key: BTreeMap<(String, String), Vec<&VehicleRecord>> = BTreeMap::new();
     for v in kept {
-        let subs = by_key.entry((v.definition.to_lowercase(), v.modification.to_lowercase())).or_default();
-        let m = v.models();
-        match subs.iter_mut().find(|s| {
-            let sm: Vec<&str> = s.iter().flat_map(|x| x.models()).collect();
-            m.is_empty() || sm.is_empty() || m.iter().any(|t| sm.contains(t))
-        }) {
-            Some(s) => s.push(v),
-            None => subs.push(vec![v]),
-        }
+        by_key.entry((v.definition.to_lowercase(), v.modification.to_lowercase())).or_default().push(v);
     }
     let mut out = Vec::new();
-    for group in by_key.into_values().flatten() {
+    for group in by_key.into_values().flat_map(split_by_model) {
         let label = |v: &VehicleRecord| v.label.clone().unwrap_or_default();
         let selves: Vec<&VehicleRecord> = group.iter().copied().filter(|v| v.self_insured()).collect();
         let mut pool = if !selves.is_empty() { selves } else { group.iter().copied().filter(|v| v.entitled).collect() };
@@ -121,6 +117,47 @@ pub(crate) fn pick_vehicles(all: &[VehicleRecord]) -> Vec<VehicleRecord> {
     out
 }
 
+/// R6's split of one (definition, modification): members sharing a `Ship.Model.*` tag, directly or through other
+/// members, are one group; members without one join the largest group (then the one holding the smallest GUID), or are
+/// the only group when no member is tagged. The result does not depend on record order.
+fn split_by_model(members: Vec<&VehicleRecord>) -> Vec<Vec<&VehicleRecord>> {
+    let (tagged, untagged): (Vec<&VehicleRecord>, Vec<&VehicleRecord>) = members.into_iter().partition(|v| !v.models().is_empty());
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut parent: Vec<usize> = (0..tagged.len()).collect();
+    let mut first_with: HashMap<&str, usize> = HashMap::new();
+    for (i, &v) in tagged.iter().enumerate() {
+        for model in v.models() {
+            if let Some(&j) = first_with.get(model) {
+                let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                parent[a.max(b)] = a.min(b);
+            } else {
+                first_with.insert(model, i);
+            }
+        }
+    }
+    let mut by_root: BTreeMap<usize, Vec<&VehicleRecord>> = BTreeMap::new();
+    for (i, &v) in tagged.iter().enumerate() {
+        let r = root(&mut parent, i);
+        by_root.entry(r).or_default().push(v);
+    }
+    let mut groups: Vec<Vec<&VehicleRecord>> = by_root.into_values().collect();
+    let smallest_guid = |g: &Vec<&VehicleRecord>| g.iter().map(|v| v.guid.clone()).min().unwrap_or_default();
+    let host = (0..groups.len())
+        .max_by(|&a, &b| groups[a].len().cmp(&groups[b].len()).then_with(|| smallest_guid(&groups[b]).cmp(&smallest_guid(&groups[a]))));
+    match host {
+        Some(host) => groups[host].extend(untagged),
+        None if !untagged.is_empty() => groups.push(untagged),
+        None => {}
+    }
+    groups
+}
+
 /// A loc key's text; keys in `global.ini` may carry a `,P` suffix (`parse_localization` keeps it).
 fn localize(loc: &HashMap<String, String>, key: &str) -> Option<String> {
     let k = key.trim().trim_start_matches('@').to_lowercase();
@@ -129,9 +166,10 @@ fn localize(loc: &HashMap<String, String>, key: &str) -> Option<String> {
     }
     loc.get(&k).or_else(|| loc.get(&format!("{k},p"))).cloned()
 }
+/// No key, or one of the `@LOC_*` placeholder family (`@LOC_PLACEHOLDER`, `@LOC_EMPTY`, ...).
 fn placeholder(key: &str) -> bool {
     let k = key.trim().to_lowercase();
-    k.is_empty() || ["@loc_placeholder", "@loc_empty", "@loc_uninitialized", "@loc_invalid"].contains(&k.as_str())
+    k.is_empty() || k.starts_with("@loc_")
 }
 fn component<'j>(value: &'j Json, list: &str, kind: &str) -> Option<&'j Json> {
     value.get(list)?.as_array()?.iter().find(|c| c.get("__type").and_then(Json::as_str) == Some(kind))
@@ -180,11 +218,13 @@ impl<'d> EntityParts<'d> {
                 }
             }
         }
-        let tags = self.db.query_no_references(&self.tags, record).unwrap_or_default();
-        out.insert("tags".into(), Json::Array(tags.iter().map(value_to_json).flat_map(|v| match v {
-            Json::Array(items) => items,
-            other => vec![other],
-        }).collect()));
+        // `tags` is absent when the query fails (the rules then cannot judge the record).
+        if let Ok(tags) = self.db.query_no_references(&self.tags, record) {
+            out.insert("tags".into(), Json::Array(tags.iter().map(value_to_json).flat_map(|v| match v {
+                Json::Array(items) => items,
+                other => vec![other],
+            }).collect()));
+        }
         out.insert("__record_name".into(), self.db.resolve_string2(record.name_offset).into());
         Json::Object(out)
     }
@@ -198,7 +238,9 @@ impl Session {
         let archive: HashMap<String, &String> = self.browser.environments.iter().map(|p| (p.to_lowercase(), p)).collect();
         loaded.index.with_dependent(|_, idx| -> Result<ViewerCatalog> {
             let db = idx.db;
-            Ok(ViewerCatalog { environments: environments(db, &loc, &archive)?, vehicles: vehicles(db, &loc)? })
+            let records = vehicle_records(db, &loc)?;
+            let skipped = records.iter().filter(|v| !v.unreadable.is_empty()).map(|v| format!("{}: {}", v.name, v.unreadable)).collect();
+            Ok(ViewerCatalog { environments: environments(db, &loc, &archive)?, vehicles: vehicle_rows(&records), skipped })
         })
     }
 }
@@ -226,8 +268,16 @@ fn environments(db: &Database, loc: &HashMap<String, String>, archive: &HashMap<
             }
         }
     }
-    let mut rows: Vec<(i64, CatalogRow)> = Vec::new();
-    let mut seen: HashMap<String, usize> = HashMap::new();
+    // Records sharing one container are one row: their places merged, its size from the first that names one.
+    #[derive(Default)]
+    struct Container {
+        size_id: i64,
+        size: String,
+        places: Vec<String>,
+        placed: Vec<String>,   // records that have places
+        unplaced: Vec<String>, // records that have none
+    }
+    let mut containers: BTreeMap<String, Container> = BTreeMap::new();
     let parts = EntityParts::new(db, &["InstancedInteriorComponentParams", "SObjectContainerComponentParams"], &[])?;
     for entity in parts.with(0) {
         let guid = entity.id.to_string();
@@ -247,30 +297,42 @@ fn environments(db: &Database, loc: &HashMap<String, String>, archive: &HashMap<
             .map(|s| s.replace("\\n", "\n").rsplit('\n').next().unwrap_or_default().trim().to_owned()).unwrap_or_default();
         let name = record.get("__record_name").and_then(Json::as_str).unwrap_or_default();
         let short = name.rsplit('.').next().unwrap_or(name).to_owned();
-        let at = places.get(&guid.to_lowercase()).map(|p| p.join(", ")).unwrap_or_default();
-        // The places that offer it, else the record's name (no place in data); grouped by size.
-        let row = CatalogRow {
-            id: (*path).clone(),
-            label: if at.is_empty() { short.clone() } else { at.clone() },
-            group: size,
-            detail: if at.is_empty() { String::new() } else { short },
-        };
-        // Records sharing one container are one row (its places merged).
-        match seen.get(&row.id) {
-            Some(&i) if !at.is_empty() && rows[i].1.detail.is_empty() => rows[i].1 = row,
-            Some(_) => {}
-            None => {
-                seen.insert(row.id.clone(), rows.len());
-                rows.push((size_id, row));
+        let c = containers.entry((*path).clone()).or_default();
+        if c.size.is_empty() {
+            (c.size_id, c.size) = (size_id, size);
+        }
+        match places.get(&guid.to_lowercase()) {
+            Some(at) => {
+                for place in at {
+                    if !c.places.contains(place) {
+                        c.places.push(place.clone());
+                    }
+                }
+                c.placed.push(short);
             }
+            None => c.unplaced.push(short),
         }
     }
+    // The places that offer it, else the record's name (no place in data); grouped by size.
+    let mut rows: Vec<(i64, CatalogRow)> = containers
+        .into_iter()
+        .map(|(id, mut c)| {
+            c.placed.sort();
+            c.unplaced.sort();
+            let (label, detail) = if c.places.is_empty() {
+                (c.unplaced.first().cloned().unwrap_or_default(), String::new())
+            } else {
+                (c.places.join(", "), c.placed.join(", "))
+            };
+            (c.size_id, CatalogRow { id, label, group: c.size, detail })
+        })
+        .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.label.cmp(&b.1.label)));
     Ok(rows.into_iter().map(|(_, r)| r).collect())
 }
 
-fn vehicles(db: &Database, loc: &HashMap<String, String>) -> Result<Vec<CatalogRow>> {
-    let mut rows: Vec<CatalogRow> = pick_vehicles(&vehicle_records(db, loc)?)
+fn vehicle_rows(records: &[VehicleRecord]) -> Vec<CatalogRow> {
+    let mut rows: Vec<CatalogRow> = pick_vehicles(records)
         .into_iter()
         .map(|v| {
             let kind = if v.gravlev { "Hover bike" } else if v.sub_type == "Vehicle_GroundVehicle" { "Ground vehicle" } else { "" };
@@ -282,13 +344,13 @@ fn vehicles(db: &Database, loc: &HashMap<String, String>) -> Result<Vec<CatalogR
         })
         .collect();
     rows.sort_by(|a, b| a.group.cmp(&b.group).then(a.label.cmp(&b.label)));
-    Ok(rows)
+    rows
 }
 
 /// Every vehicle record as the rules see it (`VehicleComponentParams` entities).
 pub(crate) fn vehicle_records(db: &Database, loc: &HashMap<String, String>) -> Result<Vec<VehicleRecord>> {
     let mut manufacturers: HashMap<String, String> = HashMap::new();
-    let mut crews: HashMap<String, usize> = HashMap::new();
+    let mut crews: HashMap<String, Option<usize>> = HashMap::new();
     let mut all = Vec::new();
     let parts = EntityParts::new(
         db,
@@ -316,14 +378,38 @@ pub(crate) fn vehicle_records(db: &Database, loc: &HashMap<String, String>) -> R
             .clone();
         let crew_guid = component(&record, "Components", "SEntityComponentCrewManifestParams")
             .and_then(|c| c.get("crewManifest")).and_then(Json::as_str).unwrap_or_default().to_owned();
-        let crew = *crews.entry(crew_guid.clone()).or_insert_with(|| {
-            record_by_guid(db, Some(&crew_guid)).and_then(|m| m.get("crew").and_then(Json::as_array).map(Vec::len)).unwrap_or(0)
-        });
-        let tags = record
-            .get("tags").and_then(Json::as_array).into_iter().flatten().filter_map(Json::as_str)
-            // The tag database's full names (`/AI/Spawning/GameMode/PU`) in the dotted form the rules name.
-            .filter_map(|t| CigGuid::from_str(t).ok().and_then(|id| db.tag_path(&id)).map(|p| p.trim_start_matches('/').replace('/', ".")))
-            .collect();
+        // No manifest (no reference, or the empty GUID) is no crew; a reference that does not resolve is unknown.
+        let has_manifest = CigGuid::from_str(crew_guid.trim()).is_ok_and(|g| !g.is_empty());
+        let crew = if has_manifest {
+            *crews.entry(crew_guid.clone()).or_insert_with(|| {
+                record_by_guid(db, Some(&crew_guid)).and_then(|m| m.get("crew").and_then(Json::as_array).map(Vec::len))
+            })
+        } else {
+            Some(0)
+        };
+        let mut unreadable = Vec::new();
+        if crew.is_none() {
+            unreadable.push(format!("crew manifest {crew_guid} does not resolve"));
+        }
+        let mut tags = Vec::new();
+        match record.get("tags").and_then(Json::as_array) {
+            None => unreadable.push("tags do not read".to_owned()),
+            Some(refs) => {
+                for t in refs {
+                    let guid = t.as_str().and_then(|s| CigGuid::from_str(s.trim()).ok());
+                    match guid {
+                        // The tag database's full names (`/AI/Spawning/GameMode/PU`) in the dotted form the rules name.
+                        Some(id) if !id.is_empty() => match db.tag_path(&id) {
+                            Some(p) => tags.push(p.trim_start_matches('/').replace('/', ".")),
+                            None => unreadable.push(format!("tag {id} does not resolve")),
+                        },
+                        Some(_) => {} // the empty reference
+                        None if t.is_null() => {}
+                        None => unreadable.push(format!("tag {t} is no reference")),
+                    }
+                }
+            }
+        }
         let insurance = component(&record, "StaticEntityClassData", "SEntityInsuranceProperties");
         let ea = component(&record, "StaticEntityClassData", "EAEntityDataParams");
         let entitlement = component(&record, "StaticEntityClassData", "DefaultEntitlementEntityParams");
@@ -334,7 +420,8 @@ pub(crate) fn vehicle_records(db: &Database, loc: &HashMap<String, String>) -> R
             label: localize(loc, name_key),
             label_is_placeholder: placeholder(name_key),
             tags,
-            crew,
+            crew: crew.unwrap_or(0),
+            unreadable: unreadable.join("; "),
             insurance_class: insurance.map(|i| str_at(i, &["shipInsuranceParams", "shipEntityClassName"]).unwrap_or_default().to_owned()),
             ea_included: ea.and_then(|e| e.get("inclusionMode")).and_then(Json::as_str) == Some("ReadyToInclude"),
             entitled: entitlement

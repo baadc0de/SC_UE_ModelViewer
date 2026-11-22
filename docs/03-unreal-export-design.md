@@ -284,6 +284,10 @@ headless physics evidence and GPU acceptance still to be filled by the orchestra
 
 ## In-game UI (WP-V1, WP-V2)
 
+> Superseded in part by WP-O1-3: the model browser (with its options) and the hierarchy panel are gone; the viewer's F1
+> menu picks an environment, a vehicle and its paint from lists chosen from game data
+> ([WP-O1](work-packages/WP-O1-unrealcitizen-split.md) O1-3). The list below is the WP-V1/V2 design as built then.
+
 - Startup: p4k path (auto-discovered via `sc_open(NULL)`, else a file picker),
   build branch shown; remembered in `Saved/Config` (`USCViewerSettings`).
 - Model browser: search box → virtualised list (display name, class name, category),

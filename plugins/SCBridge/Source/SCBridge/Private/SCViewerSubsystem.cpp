@@ -229,6 +229,9 @@ void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
     ArchiveState = ESCArchiveState::Opening;
     ++ArchiveGeneration; // a different installation may follow: no reuse of loaded objects, no stale search results
     ArchiveError = FText();
+    Catalog = FSCViewerCatalog(); // the lists of the previous archive are not this one's
+    Catalog.Revision = ArchiveGeneration;
+    EnvironmentChoices.Reset();
     if (!CacheDir.IsEmpty()) IFileManager::Get().MakeDirectory(*CacheDir, true);
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE_OPEN p4k=%s cache=%s"), ArchivePath.IsEmpty() ? TEXT("<auto-discover>") : *ArchivePath,
            CacheDir.IsEmpty() ? TEXT("<disabled>") : *CacheDir);
@@ -308,8 +311,9 @@ bool USCViewerSubsystem::SetPaint(int32 Index)
     ASCVehicle* V = Vehicle.Get();
     if (!V || !V->SetPaint(Index)) return false;
     USCViewerSettings* Settings = USCViewerSettings::Get();
-    if (Index == INDEX_NONE) Settings->Paints.Remove(Report.Entity);
-    else Settings->Paints.Add(Report.Entity, V->Manifest.Paints[Index].PaletteId);
+    // Keyed by the vehicle in the scene: Report.Entity already names a load in progress.
+    if (Index == INDEX_NONE) Settings->Paints.Remove(LoadedEntity);
+    else Settings->Paints.Add(LoadedEntity, V->Manifest.Paints[Index].PaletteId);
     Settings->Save();
     return true;
 }
@@ -347,6 +351,11 @@ void USCViewerSubsystem::FitEnvironmentToShip()
            ShipBox.GetSize().X / 100, ShipBox.GetSize().Y / 100, ShipBox.Max.Z / 100, ShipBox.Min.X / 100, ShipBox.Max.X / 100, ShipBox.Min.Y / 100,
            ShipBox.Max.Y / 100, *Chosen->Name, Chosen->Holds(ShipBox), *Pick->Name, Pick->BayCm.X / 100, Pick->BayCm.Y / 100, Pick->ClearanceCm / 100);
     if (Choice != EnvironmentFolder.Replace(TEXT("\\"), TEXT("/"))) RequestEnvironment(Choice);
+}
+
+void USCViewerSubsystem::CancelEnvironmentWork()
+{
+    if (EnvProgress && IsEnvironmentWorking()) EnvProgress->RequestCancel();
 }
 
 void USCViewerSubsystem::RequestEnvironment(const FString& Folder)
@@ -502,9 +511,14 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
 void USCViewerSubsystem::StepEnvironment()
 {
     if (EnvPlaceInTicks > 0 && --EnvPlaceInTicks == 0) PlaceEnvironment();
-    // The pick lists (WP-O1-3): chosen by the core from game data, listed once per archive session.
-    if (ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
+    // The pick lists (WP-O1-3): chosen by the core from game data, listed once per archive session when asked for.
+    if (bCatalogWanted && ArchiveState == ESCArchiveState::Ready && Client && EnvListedGeneration != ArchiveGeneration && !EnvListTask.IsValid())
+    {
         EnvListTask = Client->ViewerCatalog();
+        EnvListIssued = ArchiveGeneration;
+    }
+    if (EnvListTask.IsValid() && EnvListTask.IsCompleted() && EnvListIssued != ArchiveGeneration)
+        EnvListTask = {}; // listed for an earlier archive session: dropped, asked again
     if (EnvListTask.IsValid() && EnvListTask.IsCompleted())
     {
         const FSCTextResult Listed = EnvListTask.GetResult();
@@ -1072,18 +1086,7 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
             if (const FString* Saved = USCViewerSettings::Get()->Paints.Find(Report.Entity))
                 if (const int32 Index = V->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.PaletteId == *Saved; }); Index != INDEX_NONE)
                     V->SetPaint(Index);
-        // WP-O1-3: -SCSkin=<index|default|name part> on the first vehicle the command line loads (as sc.Paint).
-        FString Skin;
-        if (!bStartSkinApplied && FParse::Value(FCommandLine::Get(), TEXT("SCSkin="), Skin) && Vehicle.IsValid())
-        {
-            bStartSkinApplied = true;
-            const TArray<FSCPaintVariant>& Paints = Vehicle->Manifest.Paints;
-            const bool bDefault = Skin.Equals(TEXT("default"), ESearchCase::IgnoreCase);
-            const int32 Index = Skin.IsNumeric() ? FCString::Atoi(*Skin) : bDefault ? INDEX_NONE
-                : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Skin) || P.PaletteId.Contains(Skin); });
-            if ((Index == INDEX_NONE && !bDefault) || !SetPaint(Index))
-                UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" for -SCSkin (sc.Paint lists them)"), *Skin);
-        }
+        ApplyStartSkin();
         FitEnvironmentToShip();
     }
     if (UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)
@@ -1454,6 +1457,21 @@ void USCViewerSubsystem::AttachPlayerKit()
     SCLook::RefreshGlassRefraction(GetViewerWorld()); // the kit's glass (optics, visor) takes the kit profile once it is the body's
 }
 
+/** WP-O1-3: -SCSkin=<index|default|name part> on the first vehicle the command line brings (a load or an adopted
+ *  -SCPackage import), as sc.Paint. */
+void USCViewerSubsystem::ApplyStartSkin()
+{
+    FString Skin;
+    if (bStartSkinApplied || !Vehicle.IsValid() || !FParse::Value(FCommandLine::Get(), TEXT("SCSkin="), Skin)) return;
+    bStartSkinApplied = true;
+    const TArray<FSCPaintVariant>& Paints = Vehicle->Manifest.Paints;
+    const bool bDefault = Skin.Equals(TEXT("default"), ESearchCase::IgnoreCase);
+    const int32 Index = Skin.IsNumeric() ? FCString::Atoi(*Skin) : bDefault ? INDEX_NONE
+        : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Skin) || P.PaletteId.Contains(Skin); });
+    if ((Index == INDEX_NONE && !bDefault) || !SetPaint(Index))
+        UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" for -SCSkin (sc.Paint lists them)"), *Skin);
+}
+
 // ---------------------------------------------------------------- camera and inspection
 
 void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
@@ -1464,6 +1482,7 @@ void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
     Report.Entity = LoadedEntity;
     Phase = Report.Result = ESCLoadPhase::Succeeded;
     if (VehicleInstances) VehicleInstances->SetPrimary(Imported, nullptr, FString()); // folder harness: instances import fresh
+    ApplyStartSkin();
     FrameAll();
 }
 

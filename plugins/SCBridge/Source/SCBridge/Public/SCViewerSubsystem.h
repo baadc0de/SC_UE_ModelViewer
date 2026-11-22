@@ -205,8 +205,15 @@ public:
     /** Pose the environment's mechanisms: "bind" (as exported), "open" or "closed" fragment end poses. */
     void SetEnvironmentState(const FString& State);
     const TArray<FString>& GetEnvironmentChoices() const { return EnvironmentChoices; }
-    /** WP-O1-3: the pick lists (environments, vehicles) chosen from game data; bReady once listed for this archive. */
+    /** WP-O1-3: the pick lists (environments, vehicles) chosen from game data; bReady once listed for this archive.
+     *  Listed on demand: a consumer (the viewer's menu, RPC /catalog) calls RequestCatalog first; hosts that never
+     *  ask pay nothing. */
     const FSCViewerCatalog& GetCatalog() const { return Catalog; }
+    void RequestCatalog() const { bCatalogWanted = true; }
+    /** An environment export or parse runs on a worker: RequestEnvironment (SetEnvironment) would wait for it. */
+    bool IsEnvironmentWorking() const { return EnvExport.IsValid() || EnvParse.IsValid(); }
+    /** Ask the running environment export to stop, without waiting (a menu queues its next choice until it has). */
+    void CancelEnvironmentWork();
     bool IsEnvironmentLoading() const
     {
         return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
@@ -368,6 +375,7 @@ private:
     int32 EnvPlaceInTicks = 0;
     bool bShowcase = false;
     bool bStartSkinApplied = false; // -SCSkin is applied to the first loaded vehicle only
+    void ApplyStartSkin();
     bool bMaxQualityPending = false; // -SCMaxQuality: SCLook::ApplyMaxQuality on the first tick with a world
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);
@@ -390,7 +398,9 @@ private:
     TArray<FString> EnvironmentChoices;
     FSCViewerCatalog Catalog;
     UE::Tasks::TTask<FSCTextResult> EnvListTask;
-    uint32 EnvListedGeneration = 0;
+    uint32 EnvListedGeneration = 0; // the archive session the catalogue was listed for
+    uint32 EnvListIssued = 0;       // the archive session EnvListTask was issued against
+    mutable bool bCatalogWanted = false;
     TSharedPtr<FSCImportJob> EnvJob;
     // WP-C1: a cooked environment level (Content/SC/Hangars/Maps) streamed in instead of the export/import pipeline.
     UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> EnvLevel;
