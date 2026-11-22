@@ -40,10 +40,13 @@ public:
 
     // What a click does, from the load state alone (pure; SCBridge.Viewer.PickerQueue walks the click sequences).
     /** Keep: the running load is this choice (a later one waiting behind it is dropped); Load: now; Queue: after the
-     *  running load (also the vehicle it replaces, or one whose load is being cancelled). */
-    enum class EVehiclePick : uint8 { Keep, Load, Queue };
+     *  running load (also the vehicle it replaces, or one whose load is being cancelled); Drop: the row came from an
+     *  earlier archive session's lists (nothing is requested, queued or saved). */
+    enum class EVehiclePick : uint8 { Keep, Load, Queue, Drop };
     struct FVehiclePickState
     {
+        int32 RowSession = 0;     // the archive session of the list the clicked row came from
+        int32 Session = 0;        // the current archive session
         bool bLoading = false;    // a vehicle export, parse or import runs
         bool bCancelling = false; // ... and CancelLoad was asked
         bool bCanLoad = false;    // LoadEntity would take a request now
@@ -51,10 +54,12 @@ public:
     };
     static EVehiclePick DecideVehiclePick(const FString& Id, const FVehiclePickState& State);
     /** There: in the scene (of this archive session) or on its way and not being stopped; Request: now; Queue: once the
-     *  environment's running export, parse or import has stopped or finished. */
-    enum class EEnvironmentPick : uint8 { There, Request, Queue };
+     *  environment's running export, parse or import has stopped or finished; Drop: as for vehicles. */
+    enum class EEnvironmentPick : uint8 { There, Request, Queue, Drop };
     struct FEnvironmentPickState
     {
+        int32 RowSession = 0;     // the archive session of the list the clicked row came from
+        int32 Session = 0;        // the current archive session
         FString Request;          // the subsystem's environment request ("" / "none": the procedural hangar)
         bool bInstalled = false;  // the requested one is in the scene, built in this archive session
         bool bLoading = false;    // the request is on its way (pending, exporting, parsing, importing, placing)
@@ -69,14 +74,15 @@ private:
         TArray<FEntry> All, Shown;
         TSharedPtr<SListView<FEntry>> View;
         FString Filter;
+        int32 Session = 0; // the archive session the rows were listed in (the catalogue's revision)
     };
     TSharedRef<SWidget> MakeList(FList& List, const FText& Title, const FText& Hint, TFunction<ERowState(const FString&)> State,
-                                 TFunction<void(const FString&)> Pick);
+                                 TFunction<void(const FString&, int32)> Pick);
     void Refilter(FList& List);
     void Close();
     FText StatusText() const;
-    void PickEnvironment(const FString& Id);
-    void PickVehicle(const FString& Id);
+    void PickEnvironment(const FString& Id, int32 RowSession);
+    void PickVehicle(const FString& Id, int32 RowSession);
     ERowState EnvironmentState(const FString& Id) const;
     ERowState VehicleState(const FString& Id) const;
     /** The lists' current rows (environment, vehicle, paint) scrolled into view. */

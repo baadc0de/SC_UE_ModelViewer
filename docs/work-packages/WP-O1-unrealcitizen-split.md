@@ -102,8 +102,9 @@ environment it goes into; clicking the vehicle being loaded drops a later choice
 then it is asked again), clicking the one it replaces brings it back after. The decisions are pure functions
 (`DecideVehiclePick`, `DecideEnvironmentPick`) walked through these click sequences by `SCBridge.Viewer.PickerQueue`.
 The row in the scene is an inverted bar marked IN SCENE; "in the scene" is archive-scoped (an environment or vehicle
-built before the archive was reopened is loaded again when picked from the new archive's lists), and so is a waiting
-choice: one made from an earlier archive session's lists is dropped, never applied to another archive. The environment list starts with the procedural
+built before the archive was reopened is loaded again when picked from the new archive's lists), and so is a choice: a
+row keeps the archive session of the list it was made from, and a click on a row of an earlier session's lists (the
+list not yet refreshed) or a waiting choice made from them is dropped, never applied to another archive. The environment list starts with the procedural
 hangar (the map's own); the environment chosen is saved once it is in the scene (a failed one is not) and restored at
 the next start; clicking a failed one requests it again. Both lists have a search box (`-SCSearch=<q>` fills the vehicle one); the menu
 opens scrolled to the current environment, vehicle and paint, and by itself at start when the command line asks for no

@@ -52,6 +52,20 @@ bool FSCViewerPickerQueueTest::RunTest(const FString&)
     TestTrue(TEXT("the one being stopped: asked again after"), P::DecideEnvironmentPick(H, Stopping) == P::EEnvironmentPick::Queue);
     P::FEnvironmentPickState Procedural;
     TestTrue(TEXT("the procedural hangar in the scene"), P::DecideEnvironmentPick(TEXT("none"), Procedural) == P::EEnvironmentPick::There);
+
+    // A row of archive A's lists clicked after archive B was opened (its list not yet refreshed): nothing happens.
+    P::FVehiclePickState Reopened = Idle;
+    Reopened.RowSession = 1;
+    Reopened.Session = 2;
+    TestTrue(TEXT("a vehicle row of an earlier archive is dropped"), P::DecideVehiclePick(TEXT("A"), Reopened) == P::EVehiclePick::Drop);
+    P::FVehiclePickState ReopenedLoading = Loading;
+    ReopenedLoading.RowSession = 1;
+    ReopenedLoading.Session = 2;
+    TestTrue(TEXT("... also while a load runs"), P::DecideVehiclePick(TEXT("B"), ReopenedLoading) == P::EVehiclePick::Drop);
+    P::FEnvironmentPickState EnvReopened = Failed;
+    EnvReopened.RowSession = 1;
+    EnvReopened.Session = 2;
+    TestTrue(TEXT("an environment row of an earlier archive is dropped"), P::DecideEnvironmentPick(K, EnvReopened) == P::EEnvironmentPick::Drop);
     return true;
 }
 

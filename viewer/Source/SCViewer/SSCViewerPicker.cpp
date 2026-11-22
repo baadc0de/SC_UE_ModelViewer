@@ -144,9 +144,9 @@ void SSCViewerPicker::Construct(const FArguments& Args)
     FParse::Value(FCommandLine::Get(), TEXT("SCSearch="), Vehicles.Filter); // verification aid: prefill the vehicle search
 
     TSharedRef<SWidget> EnvironmentList = MakeList(Environments, LOCTEXT("Environment", "Environment"), LOCTEXT("SearchPlaces", "Search places"),
-        [this](const FString& Id) { return EnvironmentState(Id); }, [this](const FString& Id) { PickEnvironment(Id); });
+        [this](const FString& Id) { return EnvironmentState(Id); }, [this](const FString& Id, int32 RowSession) { PickEnvironment(Id, RowSession); });
     TSharedRef<SWidget> VehicleList = MakeList(Vehicles, LOCTEXT("Vehicle", "Vehicle"), LOCTEXT("SearchVehicles", "Search vehicles"),
-        [this](const FString& Id) { return VehicleState(Id); }, [this](const FString& Id) { PickVehicle(Id); });
+        [this](const FString& Id) { return VehicleState(Id); }, [this](const FString& Id, int32 RowSession) { PickVehicle(Id, RowSession); });
 
     TSharedRef<SWidget> PaintList = Panel(LOCTEXT("Paint", "Paint"), FText(),
         SNew(SOverlay)
@@ -212,7 +212,7 @@ void SSCViewerPicker::Construct(const FArguments& Args)
 }
 
 TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, const FText& Hint, TFunction<ERowState(const FString&)> State,
-                                              TFunction<void(const FString&)> Pick)
+                                              TFunction<void(const FString&, int32)> Pick)
 {
     FList* L = &List;
     return Panel(Title, TAttribute<FText>::CreateLambda([L] { return FText::AsNumber(L->Shown.Num()); }),
@@ -238,15 +238,16 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
         + SVerticalBox::Slot().FillHeight(1)
         [
             SAssignNew(List.View, SListView<FEntry>).ListItemsSource(&List.Shown).ListViewStyle(&ListStyle()).SelectionMode(ESelectionMode::None)
-            .OnGenerateRow_Lambda([State, Pick](FEntry Item, const TSharedRef<STableViewBase>& Table) {
+            .OnGenerateRow_Lambda([State, Pick, L](FEntry Item, const TSharedRef<STableViewBase>& Table) {
                 const FString Id = Item->Id;
+                const int32 RowSession = L->Session; // the row keeps the archive session of the list it was made from
                 const FString Second = SecondLine(*Item);
                 // The full name (the row may cut it) over the id the viewer loads.
                 const FText Tip = FText::FromString(Item->Label + (Second.IsEmpty() ? FString() : TEXT("\n") + Second) + TEXT("\n") + Id);
                 return SNew(STableRow<FEntry>, Table).Style(&RowStyle()).Padding(0).ToolTipText(Tip)
                 [
-                    SNew(SButton).ButtonStyle(&RowButton()).ContentPadding(0).OnClicked_Lambda([Pick, Id] {
-                        Pick(Id);
+                    SNew(SButton).ButtonStyle(&RowButton()).ContentPadding(0).OnClicked_Lambda([Pick, Id, RowSession] {
+                        Pick(Id, RowSession);
                         return FReply::Handled();
                     })
                     [Row(Item->Label, Second, [State, Id] { return State(Id); })]
@@ -270,6 +271,7 @@ void SSCViewerPicker::Refilter(FList& List)
 
 SSCViewerPicker::EVehiclePick SSCViewerPicker::DecideVehiclePick(const FString& Id, const FVehiclePickState& State)
 {
+    if (State.RowSession != State.Session) return EVehiclePick::Drop; // a row of an earlier archive's lists
     // The latest click wins. The load running for it (and not being stopped): drop any later choice waiting behind it.
     if (State.bLoading && !State.bCancelling && SameId(State.Pending, Id)) return EVehiclePick::Keep;
     // Idle: LoadEntity decides (it keeps the vehicle in the scene when the request is identical for this archive session).
@@ -280,6 +282,7 @@ SSCViewerPicker::EVehiclePick SSCViewerPicker::DecideVehiclePick(const FString& 
 
 SSCViewerPicker::EEnvironmentPick SSCViewerPicker::DecideEnvironmentPick(const FString& Id, const FEnvironmentPickState& State)
 {
+    if (State.RowSession != State.Session) return EEnvironmentPick::Drop; // a row of an earlier archive's lists
     // Already there, or on its way and not being stopped: nothing to do (a failed, stopped or other archive's one is
     // requested again).
     const bool bThere = IsMapHangar(Id) ? IsMapHangar(State.Request) && !State.bWorking
@@ -289,21 +292,31 @@ SSCViewerPicker::EEnvironmentPick SSCViewerPicker::DecideEnvironmentPick(const F
     return State.bWorking ? EEnvironmentPick::Queue : EEnvironmentPick::Request;
 }
 
-void SSCViewerPicker::PickEnvironment(const FString& Id)
+void SSCViewerPicker::PickEnvironment(const FString& Id, int32 RowSession)
 {
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
-    // Saved as the user's environment once it is in the scene (Tick), so a failed choice is not restored at the next start.
-    SaveEnvironment = Id;
-    SaveEnvironmentSession = QueuedEnvironmentSession = S->GetArchiveGeneration();
     FEnvironmentPickState State;
+    State.RowSession = RowSession;
+    State.Session = S->GetArchiveGeneration();
     State.Request = S->GetEnvironmentRequest();
     State.bInstalled = S->IsEnvironmentOfThisArchive();
     State.bLoading = S->IsEnvironmentLoading();
     State.bCancelling = S->IsEnvironmentCancelling();
     State.bWorking = S->IsEnvironmentWorking();
-    switch (DecideEnvironmentPick(Id, State))
+    const EEnvironmentPick Decision = DecideEnvironmentPick(Id, State);
+    if (Decision == EEnvironmentPick::Drop)
     {
+        UE_LOG(LogTemp, Display, TEXT("VIEWER_MENU dropped environment %s: a row of an earlier archive's lists"), *Id);
+        return;
+    }
+    // Saved as the user's environment once it is in the scene (Tick), so a failed choice is not restored at the next start.
+    SaveEnvironment = Id;
+    SaveEnvironmentSession = QueuedEnvironmentSession = RowSession;
+    switch (Decision)
+    {
+    case EEnvironmentPick::Drop:
+        break;
     case EEnvironmentPick::There:
         QueuedEnvironment.Reset();
         break;
@@ -318,18 +331,22 @@ void SSCViewerPicker::PickEnvironment(const FString& Id)
     }
 }
 
-void SSCViewerPicker::PickVehicle(const FString& Id)
+void SSCViewerPicker::PickVehicle(const FString& Id, int32 RowSession)
 {
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
     FVehiclePickState State;
+    State.RowSession = RowSession;
+    State.Session = S->GetArchiveGeneration();
     State.bLoading = IsLoadingVehicle(*S);
     State.bCancelling = S->IsLoadCancelling();
     State.bCanLoad = S->CanLoad(Id);
     State.Pending = S->GetPendingEntity();
-    QueuedVehicleSession = S->GetArchiveGeneration();
     switch (DecideVehiclePick(Id, State))
     {
+    case EVehiclePick::Drop:
+        UE_LOG(LogTemp, Display, TEXT("VIEWER_MENU dropped vehicle %s: a row of an earlier archive's lists"), *Id);
+        break;
     case EVehiclePick::Keep:
         QueuedVehicle.Reset();
         break;
@@ -339,6 +356,7 @@ void SSCViewerPicker::PickVehicle(const FString& Id)
         break;
     case EVehiclePick::Queue:
         QueuedVehicle = Id;
+        QueuedVehicleSession = RowSession;
         break;
     }
 }
@@ -464,7 +482,8 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
     {
         CatalogRevision = Catalog.Revision;
         bCatalogReady = Catalog.bReady;
-        auto Fill = [this](FList& L, const TArray<FSCCatalogEntry>& Rows, const FSCCatalogEntry* First) {
+        auto Fill = [this, Session = int32(Catalog.Revision)](FList& L, const TArray<FSCCatalogEntry>& Rows, const FSCCatalogEntry* First) {
+            L.Session = Session;
             L.All.Reset();
             if (First) L.All.Add(MakeShared<FSCCatalogEntry>(*First));
             for (const FSCCatalogEntry& E : Rows) L.All.Add(MakeShared<FSCCatalogEntry>(E));
