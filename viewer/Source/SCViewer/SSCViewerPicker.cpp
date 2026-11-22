@@ -240,14 +240,14 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
             SAssignNew(List.View, SListView<FEntry>).ListItemsSource(&List.Shown).ListViewStyle(&ListStyle()).SelectionMode(ESelectionMode::None)
             .OnGenerateRow_Lambda([State, Pick, L](FEntry Item, const TSharedRef<STableViewBase>& Table) {
                 const FString Id = Item->Id;
-                const int32 RowSession = L->Session; // the row keeps the archive session of the list it was made from
+                const TFunction<void()> Click = RowClick(Pick, Id, L->Session); // the session of the list it was made from
                 const FString Second = SecondLine(*Item);
                 // The full name (the row may cut it) over the id the viewer loads.
                 const FText Tip = FText::FromString(Item->Label + (Second.IsEmpty() ? FString() : TEXT("\n") + Second) + TEXT("\n") + Id);
                 return SNew(STableRow<FEntry>, Table).Style(&RowStyle()).Padding(0).ToolTipText(Tip)
                 [
-                    SNew(SButton).ButtonStyle(&RowButton()).ContentPadding(0).OnClicked_Lambda([Pick, Id, RowSession] {
-                        Pick(Id, RowSession);
+                    SNew(SButton).ButtonStyle(&RowButton()).ContentPadding(0).OnClicked_Lambda([Click] {
+                        Click();
                         return FReply::Handled();
                     })
                     [Row(Item->Label, Second, [State, Id] { return State(Id); })]
@@ -267,6 +267,11 @@ void SSCViewerPicker::Refilter(FList& List)
             }))
             List.Shown.Add(E);
     if (List.View) List.View->RequestListRefresh();
+}
+
+TFunction<void()> SSCViewerPicker::RowClick(TFunction<void(const FString&, int32)> Pick, const FString& Id, int32 RowSession)
+{
+    return [Pick = MoveTemp(Pick), Id, RowSession] { Pick(Id, RowSession); };
 }
 
 SSCViewerPicker::EVehiclePick SSCViewerPicker::DecideVehiclePick(const FString& Id, const FVehiclePickState& State)

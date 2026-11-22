@@ -66,6 +66,20 @@ bool FSCViewerPickerQueueTest::RunTest(const FString&)
     EnvReopened.RowSession = 1;
     EnvReopened.Session = 2;
     TestTrue(TEXT("an environment row of an earlier archive is dropped"), P::DecideEnvironmentPick(K, EnvReopened) == P::EEnvironmentPick::Drop);
+
+    // The row's click keeps the session of its list: made in archive A (1), clicked after B (2) opened, it reports A's.
+    int32 ListSession = 1;
+    FString PickedId;
+    int32 PickedSession = 0;
+    const TFunction<void()> Click = P::RowClick([&](const FString& Id, int32 RowSession) { PickedId = Id; PickedSession = RowSession; }, TEXT("A"), ListSession);
+    ListSession = 2; // the list is refilled for B after the row was made
+    Click();
+    TestEqual(TEXT("the click names its row"), PickedId, FString(TEXT("A")));
+    TestEqual(TEXT("the click carries the session of the list the row was made from"), PickedSession, 1);
+    P::FVehiclePickState AfterB = Idle;
+    AfterB.RowSession = PickedSession;
+    AfterB.Session = ListSession;
+    TestTrue(TEXT("so the handler drops it"), P::DecideVehiclePick(PickedId, AfterB) == P::EVehiclePick::Drop);
     return true;
 }
 

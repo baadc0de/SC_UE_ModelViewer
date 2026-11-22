@@ -67,6 +67,9 @@ public:
         bool bWorking = false;    // an export, parse or import runs (RequestEnvironment would wait for it)
     };
     static EEnvironmentPick DecideEnvironmentPick(const FString& Id, const FEnvironmentPickState& State);
+    /** A list row's click: Pick with the row's id and the archive session of the list when the row was made (bound by
+     *  value now, never read at click time). */
+    static TFunction<void()> RowClick(TFunction<void(const FString&, int32)> Pick, const FString& Id, int32 RowSession);
 
 private:
     struct FList
