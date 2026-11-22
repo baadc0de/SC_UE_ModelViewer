@@ -6,8 +6,7 @@
 #if SC_WITH_RPC
 #include "SCRpcJson.h"
 #include "SCRpcVideo.h"
-#include "SCShipLinkRpc.h"
-#include "SCGarageRpc.h"
+#include "SCRpcExtension.h"
 #include "SCRpcRender.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
@@ -15,7 +14,6 @@
 #include "SCVehicleInstances.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCEnvironment.h"
-#include "Cargo/SCCargoSubsystem.h"
 #include "Camera/CameraComponent.h"
 #include "AssetCompilingManager.h"
 #include "ContentStreaming.h"
@@ -42,6 +40,7 @@
 DEFINE_LOG_CATEGORY_STATIC(LogSCRpc, Log, All);
 
 using namespace SCRpcJson;
+using namespace SCRpcArgs;
 
 namespace
 {
@@ -142,36 +141,9 @@ const TCHAR* InstanceState(ESCVehicleInstanceState S)
     }
 }
 
-FString Str(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, const FString& Default = FString())
-{
-    FString S;
-    if (!O || !O->HasField(Key)) return Default;
-    if (O->TryGetStringField(Key, S)) return S;
-    double N;
-    return O->TryGetNumberField(Key, N) ? FString::Printf(TEXT("%g"), N) : Default;
-}
-double Num(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, double Default)
-{
-    double N = Default;
-    if (O) O->TryGetNumberField(Key, N);
-    return N;
-}
-bool Flag(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, bool Default)
-{
-    bool B = Default;
-    if (O) O->TryGetBoolField(Key, B);
-    return B;
-}
-bool Vec(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, FVector& Out, double Scale = 100)
-{
-    const TArray<TSharedPtr<FJsonValue>>* A;
-    if (!O || !O->TryGetArrayField(Key, A) || A->Num() < 3) return false;
-    Out = FVector((*A)[0]->AsNumber(), (*A)[1]->AsNumber(), (*A)[2]->AsNumber()) * Scale;
-    return true;
-}
 } // namespace
 
-class FSCRpcServer : public TSharedFromThis<FSCRpcServer>
+class FSCRpcServer : public TSharedFromThis<FSCRpcServer>, public ISCRpcHost
 {
 public:
     explicit FSCRpcServer(UGameInstance* InGame) : Game(InGame) {}
@@ -263,9 +235,8 @@ private:
     FTransform LastCamera = FTransform::Identity;
 
     // ------------------------------------------------------------------------------------------------ world access
-    UWorld* World() const { return Game.IsValid() ? Game->GetWorld() : nullptr; }
+    UWorld* World() const override { return Game.IsValid() ? Game->GetWorld() : nullptr; }
     USCViewerSubsystem* Viewer() const { return Game.IsValid() ? Game->GetSubsystem<USCViewerSubsystem>() : nullptr; }
-    USCCargoSubsystem* Cargo() const { return USCCargoSubsystem::Get(World()); }
     double Now() const { return FPlatformTime::Seconds(); }
 
     // ------------------------------------------------------------------------------------------------ log records
@@ -320,7 +291,8 @@ private:
             if (V->GetArchiveState() == ESCArchiveState::Opening) Out.Add(TEXT("archive"));
         }
         if (Renderer.IsBusy()) Out.Add(TEXT("rendering"));
-        if (const USCCargoSubsystem* C = Cargo()) Out.Append(C->ActivityReasons());
+        double Speed = 0;
+        for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All()) X->Activity(World(), Out, Speed);
         for (const FPending& P : Pending)
             if (!P.bWait) Out.AddUnique(TEXT("rpc:") + P.Path);
         return Out;
@@ -330,7 +302,8 @@ private:
     {
         TArray<FString> Out;
         OutSpeed = 0;
-        if (const USCCargoSubsystem* C = Cargo()) OutSpeed = C->MaxSpeedCmS();
+        TArray<FString> Busy;
+        for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All()) X->Activity(World(), Busy, OutSpeed);
         if (const USCViewerSubsystem* V = Viewer())
         {
             for (const ASCVehicle* Vehicle : V->GetVehicles())
@@ -396,9 +369,7 @@ private:
             }
             O->SetObjectField(TEXT("camera"), CameraObj);
         }
-        if (const USCCargoSubsystem* C = Cargo()) O->SetObjectField(TEXT("cargo"), C->StateJson());
-        O->SetObjectField(TEXT("ship"), SCShipLinkRpc::Snapshot(World()));
-        O->SetObjectField(TEXT("garage"), SCGarageRpc::Snapshot(World()));
+        for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All()) X->Snapshot(World(), *O);
         if (const TSharedPtr<FJsonValue> Lifts = LiftsJson(); Lifts->AsArray().Num() > 0) O->SetField(TEXT("lifts"), Lifts);
         return O;
     }
@@ -429,12 +400,12 @@ private:
         return MakeShared<FJsonValueArray>(Out);
     }
 
-    /** Anomalies in a snapshot: positions that are not finite, stored boxes off their slots, boxes without actors or
-     *  simulated while stored, anything far below the world. New ones are logged as they appear, cleared ones too. */
+    /** Anomalies in a snapshot: positions that are not finite, anything far below the world, and what the application's
+     *  extensions find (UnrealCitizen: boxes off their slots, orphaned drones). New ones are logged as they appear,
+     *  cleared ones too. */
     void Scan(const FObj& S)
     {
         TSet<FString> Found;
-        SCShipLinkRpc::Scan(World(), Found);
         auto PosBad = [](const TSharedPtr<FJsonObject>& O, double& Z) {
             const TArray<TSharedPtr<FJsonValue>>* P;
             if (!O->TryGetArrayField(TEXT("pos"), P) || P->Num() < 3) return false;
@@ -452,35 +423,7 @@ private:
         const TArray<TSharedPtr<FJsonValue>>* Arr;
         if (S->TryGetArrayField(TEXT("vehicles"), Arr))
             for (const TSharedPtr<FJsonValue>& V : *Arr) Check(TEXT("vehicle"), V->AsObject());
-        const TSharedPtr<FJsonObject>* CargoObj;
-        if (S->TryGetObjectField(TEXT("cargo"), CargoObj))
-        {
-            const TSharedPtr<FJsonObject>& C = *CargoObj;
-            if (C->TryGetArrayField(TEXT("boxes"), Arr))
-                for (const TSharedPtr<FJsonValue>& V : *Arr)
-                {
-                    const TSharedPtr<FJsonObject> B = V->AsObject();
-                    Check(TEXT("box"), B);
-                    const FString Id = Str(B, TEXT("id")), State = Str(B, TEXT("state"));
-                    if (!Flag(B, TEXT("actor"), true)) Found.Add(TEXT("box_no_actor:") + Id);
-                    if (Num(B, TEXT("slot_err_cm"), 0) > 5) Found.Add(TEXT("box_off_slot:") + Id);
-                    const bool bOnGrid = Num(B, TEXT("grid"), -1) >= 0;
-                    if (bOnGrid && State == TEXT("Stored") && Flag(B, TEXT("sim"), false)) Found.Add(TEXT("box_simulated_on_grid:") + Id);
-                    // A stored box has a grid; a loose one at rest (frozen) a beacon (WP-K2).
-                    const bool bInBeacon = Num(B, TEXT("beacon"), -1) >= 0;
-                    if (!bOnGrid && State == TEXT("Stored")) Found.Add(TEXT("box_stored_without_grid:") + Id);
-                    if (!bOnGrid && !bInBeacon && State == TEXT("Reserved")) Found.Add(TEXT("box_reserved_nowhere:") + Id);
-                    if (State == TEXT("Loose") && !bInBeacon && !Flag(B, TEXT("sim"), false)) Found.Add(TEXT("box_unbeaconed:") + Id);
-                }
-            if (C->TryGetArrayField(TEXT("drones"), Arr))
-                for (const TSharedPtr<FJsonValue>& V : *Arr)
-                {
-                    const TSharedPtr<FJsonObject> D = V->AsObject();
-                    Check(TEXT("drone"), D);
-                    // Out of its bay with no move to fly it: it would hover there for good.
-                    if (Str(D, TEXT("state")) != TEXT("Docked") && !Flag(D, TEXT("in_move"), true)) Found.Add(TEXT("drone_orphaned:") + Str(D, TEXT("id")));
-                }
-        }
+        for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All()) X->Scan(World(), *S, Found);
         for (const FString& K : Found)
             if (!Anomalies.Contains(K))
             {
@@ -630,8 +573,10 @@ private:
         P.Poll = MoveTemp(Poll);
         P.Done = Done;
     }
+    void Defer(const FString& Path, double TimeoutS, FPoll Poll) override { Defer(Path, TimeoutS, false, CurrentDone, MoveTemp(Poll)); }
     int32 CurrentId = 0;
     double CurrentStart = 0;
+    FHttpResultCallback CurrentDone; // the request an application route is handling (ISCRpcHost::Defer)
 
     // ------------------------------------------------------------------------------------------------ http
     void StartHttp(int32 InPort)
@@ -677,51 +622,22 @@ private:
             V->SetEnvironment(Str(B, TEXT("folder")));
             Respond(Done, Ok());
         });
-        for (const TCHAR* ShipRoute : {TEXT("state"), TEXT("door"), TEXT("secure"), TEXT("lights"), TEXT("locate")})
+        // The application's routes (SCRpcExtension.h; UnrealCitizen: /cargo, /ship, /garage).
+        for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All())
         {
-            const FString Path = FString(TEXT("/ship/")) + ShipRoute;
-            Bind(*Path, [this, Route = FString(ShipRoute)](auto& Body, auto& Done) {
-                Respond(Done, SCShipLinkRpc::Command(World(), Route, Body));
-            });
-        }
-        for (const TCHAR* GarageRoute : {TEXT("fleet"), TEXT("retrieve"), TEXT("store"), TEXT("paint")})
-        {
-            const FString Path = FString(TEXT("/garage/")) + GarageRoute;
-            Bind(*Path, [this, Route = FString(GarageRoute)](auto& Body, auto& Done) {
-                Respond(Done, SCGarageRpc::Command(World(), Route, Body));
-            });
+            TMap<FString, ISCRpcExtension::FRoute> Extra;
+            X->Routes(Extra);
+            for (auto& [Path, Route] : Extra)
+                Bind(*Path, [this, Route](auto& B, auto& Done) {
+                    CurrentDone = Done;
+                    Route(B, *this, [this, Done](const TSharedPtr<FJsonObject>& Body) { Respond(Done, Body.ToSharedRef()); });
+                });
         }
         Bind(TEXT("/ship/spawn"), [this](auto& B, auto& Done) { SpawnShip(B, Done); });
         Bind(TEXT("/ship/despawn"), [this](auto& B, auto& Done) {
             USCViewerSubsystem* V = Viewer();
             const int32 Id = int32(Num(B, TEXT("id"), -1));
             if (!V || !V->DestroyVehicleInstance(Id)) return Respond(Done, Error(FString::Printf(TEXT("no extra vehicle instance %d (0 is the loaded vehicle: unload)"), Id)));
-            Respond(Done, Ok());
-        });
-        Bind(TEXT("/cargo/package"), [this](auto& B, auto& Done) { CargoPackage(B, Done, false); });
-        Bind(TEXT("/cargo/spawn"), [this](auto& B, auto& Done) { CargoPackage(B, Done, true); });
-        Bind(TEXT("/cargo/remove"), [this](auto& B, auto& Done) { CargoRemove(B, Done); });
-        Bind(TEXT("/cargo/dock"), [this](auto& B, auto& Done) {
-            USCCargoSubsystem* C = Cargo();
-            FString Err;
-            const int32 Grid = ResolveGrid(B, TEXT("grid"), Err);
-            if (Grid == INDEX_NONE) return Respond(Done, Error(Err));
-            if (!C->AddDock(Grid, int32(Num(B, TEXT("drones"), 2)), Err)) return Respond(Done, Error(Err));
-            Respond(Done, Ok());
-        });
-        Bind(TEXT("/cargo/transfer"), [this](auto& B, auto& Done) { Transfer(B, Done); });
-        Bind(TEXT("/cargo/cancel"), [this](auto& B, auto& Done) {
-            USCCargoSubsystem* C = Cargo();
-            if (!C || !C->Cancel(int32(Num(B, TEXT("job"), -1)))) return Respond(Done, Error(TEXT("no active job with that id")));
-            Respond(Done, Ok());
-        });
-        Bind(TEXT("/cargo/access"), [this](auto& B, auto& Done) {
-            USCCargoSubsystem* C = Cargo();
-            FString Err;
-            const int32 Grid = ResolveGrid(B, TEXT("grid"), Err);
-            if (Grid == INDEX_NONE) return Respond(Done, Error(Err));
-            FText Why;
-            if (!C->RequestGridAccess(Grid, Flag(B, TEXT("open"), true), Why)) return Respond(Done, Error(Why.ToString()));
             Respond(Done, Ok());
         });
         Bind(TEXT("/camera"), [this](auto& B, auto& Done) { Camera(B, Done); });
@@ -802,51 +718,37 @@ private:
 
     FObj CatalogBody() const
     {
-        const USCCargoSubsystem* C = Cargo();
-        FObj O = C ? C->CatalogJson() : MakeShared<FJsonObject>();
-        O->SetBoolField(TEXT("ok"), C != nullptr);
+        FObj O = MakeShared<FJsonObject>();
+        for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All()) X->Catalog(World(), *O);
+        O->SetBoolField(TEXT("ok"), true);
         if (const USCViewerSubsystem* V = Viewer()) O->SetField(TEXT("environments"), Strings(V->GetEnvironmentChoices()));
         return O;
     }
 
-    int32 ResolveGrid(const TSharedPtr<FJsonObject>& B, const TCHAR* Key, FString& OutError) const
-    {
-        const USCCargoSubsystem* C = Cargo();
-        const FString Sel = Str(B, Key);
-        if (!C || Sel.IsEmpty()) { OutError = FString::Printf(TEXT("%s: a grid id or selector is needed"), Key); return INDEX_NONE; }
-        const TArray<int32> Ids = C->ResolveGrids(Sel, FName(*Str(B, TEXT("owner"))));
-        if (Ids.IsEmpty()) { OutError = FString::Printf(TEXT("no grid matches \"%s\""), *Sel); return INDEX_NONE; }
-        return Ids[0];
-    }
-
     void Wait(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)
     {
-        // until: idle | settled | job (job: <id>, finished) | lift_idle (lift: <id>, default every lift; WP-P5: no request
-        // queued, not moving, no door in motion). The condition must hold on a frame after the request (what the previous
+        // until: idle | settled | lift_idle (lift: <id>, default every lift; WP-P5: no request queued, not moving, no door in
+        // motion) | a condition of the application's (UnrealCitizen: job, with job: <id>, finished). The condition must hold on a frame after the request (what the previous
         // request started has been seen); min_s: and not before this many seconds.
         const FString Until = Str(B, TEXT("until"), TEXT("settled"));
-        const int32 Job = int32(Num(B, TEXT("job"), -1));
         const int32 LiftId = int32(Num(B, TEXT("lift"), -1));
         const double MinS = Num(B, TEXT("min_s"), 0);
         const uint64 Frame = GFrameCounter;
         const double Started = Now();
-        if (Until != TEXT("idle") && Until != TEXT("settled") && Until != TEXT("job") && Until != TEXT("lift_idle"))
-            return Respond(Done, Error(TEXT("until: idle, settled, job or lift_idle")));
-        Defer(TEXT("/wait"), Num(B, TEXT("timeout_s"), 120), true, Done, [this, Until, Job, LiftId, MinS, Frame, Started](bool bTimedOut) -> TSharedPtr<FJsonObject> {
+        const bool bOwn = Until == TEXT("idle") || Until == TEXT("settled") || Until == TEXT("lift_idle");
+        if (!bOwn)
+        {
+            bool bKnown = false, bReached = false;
+            FJsonObject Probe;
+            FString Err;
+            for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All()) bKnown = bKnown || X->Wait(World(), Until, B, bReached, Probe, Err);
+            if (!bKnown) return Respond(Done, Error(FString::Printf(TEXT("until: idle, settled, lift_idle or an application's condition ('%s' is none)"), *Until)));
+        }
+        Defer(TEXT("/wait"), Num(B, TEXT("timeout_s"), 120), true, Done, [this, B, Until, LiftId, MinS, Frame, Started](bool bTimedOut) -> TSharedPtr<FJsonObject> {
             if (GFrameCounter < Frame + 2 || (Now() - Started < MinS && !bTimedOut)) return nullptr;
             bool bReached = false;
             FObj O = MakeShared<FJsonObject>();
-            if (Until == TEXT("job"))
-            {
-                ESCCargoJobState State;
-                FText Reason;
-                const USCCargoSubsystem* C = Cargo();
-                if (!C || !C->FindJobState(Job, State, Reason)) return Error(FString::Printf(TEXT("no job %d"), Job));
-                bReached = State == ESCCargoJobState::Done || State == ESCCargoJobState::Failed || State == ESCCargoJobState::Cancelled;
-                O->SetStringField(TEXT("job_state"), StaticEnum<ESCCargoJobState>()->GetNameStringByValue(int64(State)));
-                if (!Reason.IsEmpty()) O->SetStringField(TEXT("job_reason"), Reason.ToString());
-            }
-            else if (Until == TEXT("lift_idle"))
+            if (Until == TEXT("lift_idle"))
             {
                 const USCViewerSubsystem* V = Viewer();
                 const ASCVehicle* Vehicle = V ? V->GetVehicle() : nullptr;
@@ -857,7 +759,14 @@ private:
                     if (LiftId < 0 || I == LiftId) bReached &= Vehicle->Lifts[I]->IsIdle();
                 O->SetField(TEXT("lifts"), LiftsJson());
             }
-            else bReached = Until == TEXT("idle") ? bIdle : bSettled;
+            else if (Until == TEXT("idle") || Until == TEXT("settled")) bReached = Until == TEXT("idle") ? bIdle : bSettled;
+            else
+            {
+                FString Err;
+                for (const TSharedRef<ISCRpcExtension>& X : SCRpcExtensions::All())
+                    if (X->Wait(World(), Until, B, bReached, *O, Err)) break;
+                if (!Err.IsEmpty()) return Error(Err);
+            }
             if (!bReached && !bTimedOut) return nullptr;
             O->SetBoolField(TEXT("ok"), bReached);
             O->SetStringField(TEXT("until"), Until);
@@ -930,122 +839,6 @@ private:
                 }
             return Error(TEXT("the instance is gone"));
         });
-    }
-
-    void CargoPackage(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done, bool bSpawn)
-    {
-        USCCargoSubsystem* C = Cargo();
-        const FString Entity = Str(B, TEXT("entity"));
-        if (!C || Entity.IsEmpty()) return Respond(Done, Error(TEXT("entity is needed")));
-        FString Err;
-        int32 Grid = INDEX_NONE;
-        // Loose (WP-K2): at a point (metres, yaw) or at random free reachable floor spots (seed); else onto a grid.
-        FVector At;
-        const bool bAt = Vec(B, TEXT("at"), At);
-        const bool bLoose = bAt || Flag(B, TEXT("random"), false);
-        const TOptional<FTransform> Pose = bAt ? TOptional<FTransform>(FTransform(FRotator(0, Num(B, TEXT("yaw"), 0), 0), At)) : TOptional<FTransform>();
-        const TSharedRef<FRandomStream> Rng = MakeShared<FRandomStream>(int32(Num(B, TEXT("seed"), FMath::Rand())));
-        if (bSpawn && !bLoose && (Grid = ResolveGrid(B, TEXT("grid"), Err)) == INDEX_NONE) return Respond(Done, Error(Err));
-        const int32 Count = FMath::Clamp(int32(Num(B, TEXT("count"), 1)), 1, 500);
-        const FString Commodity = Str(B, TEXT("commodity"), TEXT("Test"));
-        const FText Label = FText::FromString(Str(B, TEXT("label"), Commodity));
-        const FName Owner(*Str(B, TEXT("owner")));
-        if (C->RequestBoxPackage(Entity, Err) < 0) return Respond(Done, Error(Err));
-        // The package exports and imports once (it may take a while the first time): answer when it is ready.
-        Defer(bSpawn ? TEXT("/cargo/spawn") : TEXT("/cargo/package"), Num(B, TEXT("timeout_s"), 300), false, Done,
-              [this, Entity, Grid, Count, Commodity, Label, Owner, bSpawn, bLoose, Pose, Rng](bool) -> TSharedPtr<FJsonObject> {
-                  USCCargoSubsystem* Cg = Cargo();
-                  if (!Cg) return Error(TEXT("no cargo subsystem"));
-                  FString E;
-                  const int32 State = Cg->RequestBoxPackage(Entity, E);
-                  if (State < 0) return Error(E);
-                  if (State == 0) return nullptr;
-                  FObj O = Ok();
-                  if (!bSpawn) return O;
-                  const TArray<int32> Ids = bLoose ? Cg->AddLooseBoxes(Entity, Count, Pose.GetPtrOrNull(), &Rng.Get(), FName(*Commodity), Label, Owner, E)
-                                                   : Cg->AddBoxes(Grid, Entity, Count, FName(*Commodity), Label, Owner, E);
-                  O->SetField(TEXT("boxes"), Ints(Ids));
-                  if (!E.IsEmpty()) O->SetStringField(TEXT("warning"), E);
-                  O->SetBoolField(TEXT("ok"), !Ids.IsEmpty());
-                  if (Ids.IsEmpty()) O->SetStringField(TEXT("error"), E);
-                  return O;
-              });
-    }
-
-    void CargoRemove(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)
-    {
-        USCCargoSubsystem* C = Cargo();
-        if (!C) return Respond(Done, Error(TEXT("no cargo subsystem")));
-        const bool bForce = Flag(B, TEXT("force"), false);
-        // box: one id; grid: every box on the grids that match; all: every box.
-        TArray<int32> Targets;
-        const TSharedRef<FJsonObject> S = C->StateJson();
-        TArray<int32> Grids;
-        if (B->HasField(TEXT("grid")))
-        {
-            FString Err;
-            Grids = C->ResolveGrids(Str(B, TEXT("grid")), FName(*Str(B, TEXT("owner"))));
-            if (Grids.IsEmpty()) return Respond(Done, Error(TEXT("no grid matches")));
-        }
-        if (B->HasField(TEXT("box"))) Targets.Add(int32(Num(B, TEXT("box"), -1)));
-        else
-            for (const TSharedPtr<FJsonValue>& V : S->GetArrayField(TEXT("boxes")))
-            {
-                const TSharedPtr<FJsonObject> Box = V->AsObject();
-                if (Flag(B, TEXT("all"), false) || Grids.Contains(int32(Num(Box, TEXT("grid"), -1))) || Grids.Contains(int32(Num(Box, TEXT("beacon"), -1))))
-                    Targets.Add(int32(Num(Box, TEXT("id"), -1)));
-            }
-        if (Targets.IsEmpty()) return Respond(Done, Error(TEXT("nothing to remove (box, grid or all)")));
-        TArray<int32> Removed;
-        TArray<FString> Errors;
-        for (const int32 Id : Targets)
-        {
-            if (Removed.Contains(Id)) continue;
-            FString Err;
-            if (!C->RemoveBox(Id, bForce, Removed, Err)) Errors.Add(Err);
-        }
-        FObj O = Ok();
-        O->SetField(TEXT("removed"), Ints(Removed));
-        O->SetField(TEXT("refused"), Strings(Errors));
-        O->SetBoolField(TEXT("ok"), !Removed.IsEmpty());
-        if (Removed.IsEmpty()) O->SetStringField(TEXT("error"), Errors.IsEmpty() ? TEXT("nothing removed") : Errors[0]);
-        Respond(Done, O);
-    }
-
-    void Transfer(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)
-    {
-        USCCargoSubsystem* C = Cargo();
-        if (!C) return Respond(Done, Error(TEXT("no cargo subsystem")));
-        FSCCargoTransferRequest R;
-        R.Requester = FName(*Str(B, TEXT("owner")));
-        R.FromGrids = C->ResolveGrids(Str(B, TEXT("from")), R.Requester);
-        R.ToGrids = C->ResolveGrids(Str(B, TEXT("to")), R.Requester);
-        R.Commodity = C->ResolveCommodity(Str(B, TEXT("commodity")));
-        R.AmountSCU = int32(Num(B, TEXT("scu"), 0));
-        // Each missing part named (a beacon emptied since the caller looked is the usual one).
-        TArray<FString> Missing;
-        if (R.FromGrids.IsEmpty()) Missing.Add(FString::Printf(TEXT("from: no grid or beacon matches '%s'"), *Str(B, TEXT("from"))));
-        if (R.ToGrids.IsEmpty()) Missing.Add(FString::Printf(TEXT("to: no grid matches '%s'"), *Str(B, TEXT("to"))));
-        if (R.Commodity.IsNone()) Missing.Add(FString::Printf(TEXT("commodity: '%s' is on no grid or beacon"), *Str(B, TEXT("commodity"))));
-        if (R.AmountSCU <= 0) Missing.Add(TEXT("scu > 0 is needed"));
-        if (!Missing.IsEmpty()) return Respond(Done, Error(FString::Join(Missing, TEXT("; "))));
-        const FSCCargoTransferPreview P = C->Preview(R);
-        FObj O = Ok();
-        O->SetNumberField(TEXT("planned_scu"), P.PlannedSCU);
-        O->SetNumberField(TEXT("moves"), P.Moves.Num());
-        TArray<FString> Refusals;
-        for (const FSCCargoRefusal& F : P.Refusals) Refusals.Add(F.Reason.ToString());
-        O->SetField(TEXT("refusals"), Strings(Refusals));
-        if (Flag(B, TEXT("preview"), false)) return Respond(Done, O);
-        FText Err;
-        const int32 Job = C->Submit(R, Err);
-        O->SetNumberField(TEXT("job"), Job);
-        if (Job == INDEX_NONE)
-        {
-            O->SetBoolField(TEXT("ok"), false);
-            O->SetStringField(TEXT("error"), Err.ToString());
-        }
-        Respond(Done, O);
     }
 
     FObj ApplyCamera(const TSharedPtr<FJsonObject>& B)

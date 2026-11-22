@@ -4,7 +4,7 @@
 #include "SCViewerPawn.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCVehicle.h"
-#include "Cargo/SCCargoViewSource.h"
+#include "SCViewerShell.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -23,7 +23,7 @@ FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent
     const FKey Button = Event.GetEffectingButton();
     const bool bPan = Button == EKeys::MiddleMouseButton || (Button == EKeys::LeftMouseButton && Event.IsShiftDown());
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Unhandled();
-    if (SCCargoUI::IsMobiGlasOpen(Subsystem.Get())) return FReply::Unhandled(); // the cursor belongs to the mobiGlas
+    if (SCViewerShell::IsMenuOpen(Subsystem.Get())) return FReply::Unhandled(); // the cursor belongs to the menu
     // First person: the button is also a key-table input (right button held: aim down sights).
     const bool bFirstPerson = Subsystem.IsValid() && Subsystem->GetFirstPerson();
     if (bFirstPerson) Subsystem->GetFirstPerson()->HandleKey(Button, true);
@@ -100,14 +100,14 @@ bool SSCViewportInput::HandleKey(const FKey& Key, bool bDown)
             ApplyMove();
             return true;
         }
-    if (Key == EKeys::Escape && bDown && SCCargoUI::IsMobiGlasOpen(Subsystem.Get()))
+    if (Key == EKeys::Escape && bDown && SCViewerShell::IsMenuOpen(Subsystem.Get()))
     {
-        SCCargoUI::SetMobiGlasOpen(Subsystem.Get(), false); // in case focus stayed on the view
+        SCViewerShell::SetMenuOpen(Subsystem.Get(), false); // in case focus stayed on the view
         return true;
     }
     if (Key == EKeys::F1 && bDown)
     {
-        SCCargoUI::SetMobiGlasOpen(Subsystem.Get(), !SCCargoUI::IsMobiGlasOpen(Subsystem.Get())); // orbit / fly: no character key table
+        SCViewerShell::SetMenuOpen(Subsystem.Get(), !SCViewerShell::IsMenuOpen(Subsystem.Get())); // orbit / fly: no character key table
         return true;
     }
     if (Key == EKeys::F && bDown && Subsystem.IsValid())
@@ -145,8 +145,8 @@ FReply SSCViewportInput::OnKeyUp(const FGeometry&, const FKeyEvent& Event)
 }
 void SSCViewportInput::OnFocusLost(const FFocusEvent&)
 {
-    // Focus moving into the open mobiGlas: it forwards key releases to the player (the character cleared its input on open).
-    if (Subsystem.IsValid() && Subsystem->GetFirstPerson() && !SCCargoUI::IsMobiGlasOpen(Subsystem.Get())) Subsystem->GetFirstPerson()->ClearInput();
+    // Focus moving into the open menu: it forwards key releases to the player (the character cleared its input on open).
+    if (Subsystem.IsValid() && Subsystem->GetFirstPerson() && !SCViewerShell::IsMenuOpen(Subsystem.Get())) Subsystem->GetFirstPerson()->ClearInput();
     Held.Empty();
     ApplyMove();
     Drag = EDrag::None; // no mouse look/orbit without focus

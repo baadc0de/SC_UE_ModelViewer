@@ -1,0 +1,68 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "UE_5.9_src",
+  "Category": "",
+  "Description": "UnrealCitizen: scenarios on Star Citizen ships and places, with the mobiGlas, cargo operations and music (WP-O1)",
+  "AdditionalPluginDirectories": [
+    "../plugins"
+  ],
+  "Modules": [
+    {
+      "Name": "UnrealCitizen",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "UnrealCitizenEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "SCBridge",
+      "Enabled": true
+    },
+    {
+      "Name": "Interchange",
+      "Enabled": true
+    },
+    {
+      "Name": "InterchangeEditor",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
+    },
+    {
+      "Name": "GeometryScripting",
+      "Enabled": true
+    },
+    {
+      "Name": "PythonScriptPlugin",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
+    },
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
+    },
+    {
+      "Name": "AndroidFileServer",
+      "Enabled": false
+    },
+    {
+      "Name": "DLSS",
+      "Enabled": true,
+      "Optional": true,
+      "PlatformAllowList": [
+        "Win64"
+      ]
+    }
+  ]
+}

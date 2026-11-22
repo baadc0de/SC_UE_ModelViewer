@@ -51,7 +51,7 @@ The DLSS plugin is a project plugin, so UBT compiles it against the source fork 
 **Win64 showcase (standalone directory):** one cooked ship and one cooked hangar, dynamic lighting:
 Nanite, Lumen GI and reflections at Cinematic with hardware ray tracing and hit lighting for GI and reflections
 (`-SCMaxQuality`, `SCLook::ApplyMaxQuality`), DLAA. Cook at full resolution (`--lod 0 --mip 0` exports, the hangar-cook
-standard), then `powershell -File viewer/scripts/package_showcase.ps1 -Ship DRAK_Golem -Hangar
+standard), then `powershell -File game/scripts/package_showcase.ps1 -Ship DRAK_Golem -Hangar
 hightech_a/hangar_smltop_001 -Config Shipping` writes `out/win64/<ship>`: run `Play_SCViewer.bat` there (a Windows build
 does not read the staged `UECommandLine.txt`, so the launcher passes `-SCLoad`, `-SCEnvironment` and `-SCMaxQuality`;
 `SCViewer.exe` alone is the plain viewer). Shipping keeps no log: `-SCQualityReport=<file>` writes the effective settings,
@@ -82,8 +82,8 @@ Cooking the showcase content: export the ship and the hangar into one root (deco
 `starbreaker entity export DRAK_Golem out/showcase/bake --kind decomposed --format glb --dds --lod 0 --mip 0 --skip-existing-assets`
 and `starbreaker socpak export 'hangar\hightech_a\hangar_smltop_001.socpak' out/showcase/bake <same options>`, then cook
 them in the editor (`UnrealEditor-Cmd SCViewer.uproject -run=pythonscript -AllowCommandletRendering -unattended -nop4
--SCCookRoot=<abs>/out/showcase/bake ...`): `-script=<abs>/viewer/scripts/cook_hangars.py -SCCookOnly=hightech_a_hangar_smltop_001`
-and `-script=<abs>/viewer/scripts/cook_ships.py -SCCookOnly=DRAK_Golem`. A cooked ship is `/Game/SC/Ships/Maps/<entity>`
+-SCCookRoot=<abs>/out/showcase/bake ...`): `-script=<abs>/game/scripts/cook_hangars.py -SCCookOnly=hightech_a_hangar_smltop_001`
+and `-script=<abs>/game/scripts/cook_ships.py -SCCookOnly=DRAK_Golem`. A cooked ship is `/Game/SC/Ships/Maps/<entity>`
 (gear down, on the viewer floor, rigs baked static, pool `/Game/SC/Ships/Shared`). `LoadEntity` streams it instead of
 exporting, with or without an archive (`-SCNoCooked` turns cooked ships and hangars off).
 
@@ -344,7 +344,7 @@ entry points lift the bounds one metre above the Viewer floor); Python exposes
 `unreal.SCImportLibrary`. `viewer/scripts/import_package.py` is the headless import
 entry point. `viewer/scripts/test_importer.py` runs the synthetic automation tests;
 passing `-SCPackage` and `-SCVerifyTar` also runs the real folder/tar integration
-test. `viewer/scripts/interchange_baseline.py` accepts `-SCBaseline=<absolute GLB>`.
+test. `game/scripts/interchange_baseline.py` accepts `-SCBaseline=<absolute GLB>`.
 Use these scripts with `UnrealEditor-Cmd -run=pythonscript -script=<absolute script>
 -nullrhi -unattended -nop4 -nosplash -ddc=SCViewerDDC`.
 
@@ -401,8 +401,8 @@ SpawnVehicleInstance / DestroyVehicleInstance / GetVehicles / GetVehicleInstance
 
 **Cargo by drones** (WP-K1, [brief](../docs/work-packages/WP-K1-cargo-drones.md),
 [verification/WP-K1.md](verification/WP-K1.md)): cargo grids come from the package (`inventory_containers`), boxes are
-exported box entities, drones are stand-in art (`/SCBridge/Cargo`, rebuilt by `viewer/scripts/create_cargo_art.py`).
-Scenarios (`viewer/Config/Cargo/*.json`, `-SCCargoScenario=<name>`) set the stock, docks and owners:
+exported box entities, drones are stand-in art (`/SCBridge/Cargo`, rebuilt by `game/scripts/create_cargo_art.py`).
+Scenarios (`game/Config/Cargo/*.json`, `-SCCargoScenario=<name>`) set the stock, docks and owners:
 
 | Scenario | Host switches | Route |
 |---|---|---|
@@ -552,7 +552,7 @@ Invoke-SC /screenshot @{ name = 'after' }
 Stop-SCViewer $p
 ```
 
-`viewer/scripts/rpc/explore.ps1 -Scenario <name> -Steps N -Seed S [-Video]` is the exploratory stability run (seeded
+`game/scripts/rpc/explore.ps1 -Scenario <name> -Steps N -Seed S [-Video]` is the exploratory stability run (seeded
 random scene changes, checked after every step; report in `out/h1/`).
 
 ## First-person exploration (WP-P1)
@@ -939,7 +939,7 @@ world subsystem) plays it:
   the same tag name, the `InTransit` tag effect plays from `Start` to `Stop`. Panels: a top-level
   `ASCVehicle::SendInteraction` (a press) fires the source entity's `Activate` effects. Flashlight: the kit item's
   `Light_On_SFX` / `Light_Off_SFX`. Weapon: its `fireAudioTrigger` per shot.
-- **Cooked levels.** `viewer/scripts/cook_audio.py` (called by `cook_ships.py` / `cook_hangars.py`) copies the package's
+- **Cooked levels.** `game/scripts/cook_audio.py` (called by `cook_ships.py` / `cook_hangars.py`) copies the package's
   audio beside the cooked level (`Content/SCAudio/<level>`, gitignored, staged as non-UFS files; a missing `audio.json`
   or payload stops that level's cook, cook format 7: levels staged before A1-2's bus effects are stale); `ASCVehicle::BeginPlay` loads it (`CookedAudio`). Cooked levels
   bake their rigs, so they carry the placed audio and the reverb; door, lift and panel sounds need a live import.

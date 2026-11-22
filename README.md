@@ -66,7 +66,7 @@ web or RTX-fork build.
 | Target | Engine / RHI | Notes |
 | --- | --- | --- |
 | Windows | UE 5.9 source fork, D3D12 SM6 | Optional NVIDIA DLSS (`scripts/install_dlss.ps1`, compiled against the fork; DLAA by default, TSR without it). |
-| Win64 showcase | Shipping package | One cooked ship and hangar at maximum Lumen quality with hardware ray tracing and DLAA, started as a player (`viewer/scripts/package_showcase.ps1`). |
+| Win64 showcase | Shipping package | One cooked ship and hangar at maximum Lumen quality with hardware ray tracing and DLAA, started as a player (`game/scripts/package_showcase.ps1`). |
 
 ## Quick start
 
@@ -96,7 +96,7 @@ Start the viewer from the repository root, so its cache goes to `./cache/`. Usef
 - `-SCLoad=<entity>`;
 - `-SCEnvironment=<socpak>`;
 - `-SCCamera=first`;
-- `-SCCargoScenario=hull_a_hangar` (or `c2_hangar`, `hull_a_multi`, `hull_a_space`);
+- `-SCCargoScenario=hull_a_hangar` (or `c2_hangar`, `hull_a_multi`, `hull_a_space`; UnrealCitizen only, `game/UnrealCitizen.uproject`);
 - `-SCScript=viewer/scripts/routes/<route> -SCShotDir=<dir>`;
 - `-SCRpc`.
 
@@ -114,11 +114,11 @@ Driving the app from scripts (Windows):
 
 ```powershell
 Import-Module viewer/scripts/rpc/SCRpc.psm1
-$p = Start-SCViewer -Extra '-SCCargoScenario=hull_a_space'   # off screen; -Visible for a window
+$p = Start-SCViewer -Game -Extra '-SCCargoScenario=hull_a_space'   # UnrealCitizen, off screen; -Visible for a window
 Invoke-SC /wait @{ until = 'settled'; timeout_s = 900 }
 Invoke-SC /screenshot @{ name = 'space' }
 Stop-SCViewer $p
-viewer/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # exploratory stability run
+game/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # exploratory stability run
 ```
 
 ## Layout
@@ -127,11 +127,13 @@ viewer/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # exp
 crates/scviewer-core    Rust: session over p4k + DataCore, decomposed export (disk and in memory), clip catalogue, cache
 crates/scviewer-cli     CLI over the core, for verification and exports
 crates/scbridge-ffi     C-ABI library the Unreal plugin calls (scbridge.dll / libscbridge.so)
-viewer             UE 5.9 project: game-mode app, Viewer map, cargo scenarios (Config/Cargo/*.json)
-plugins/SCBridge     Runtime module (FFI client, importer, vehicles, player, cargo, mobiGlas, RPC, UI),
-                        optional Editor module (cooking, keep as assets), ThirdParty/SCBridgeLib
-viewer/scripts              builds, cooks, packaging, material generation, routes/, rpc/ (RPC module, explorer)
-viewer/verification         verification records and evidence per work package
+plugins/SCBridge        shared UE plugin: Runtime module (FFI client, importer, vehicles, doors and panels, player, HUD,
+                        RPC harness, viewer shell and its extension points), SCBridgeFx (effects build), ThirdParty/SCBridgeLib
+viewer/                 the viewer: UE 5.9 project (game-mode app, Viewer map), scripts/ (builds, material generation,
+                        routes/, rpc/ with the RPC module), verification/ (records and evidence per work package)
+game/                   UnrealCitizen: UE 5.9 project with the game module (cargo, mobiGlas, Ship Link, Garage, music,
+                        their RPC routes; cargo scenarios in Config/Cargo/*.json), its editor module (cooking, keep as
+                        assets) and scripts/ (cooks, packaging, cargo art, cargo and mobiGlas routes, rpc/ explorer)
 scripts/                FFI and StarBreaker builds, DLSS install, export and verification helpers
 docs/                   analysis, plan, UE design, cargo research, work-package briefs
 vendor/StarBreaker      upstream toolkit (submodule, pinned)

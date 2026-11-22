@@ -9,7 +9,7 @@
 #include "SCSeatRuntime.h"
 #include "SCLadderRuntime.h"
 #include "SCViewerSubsystem.h"
-#include "UI/Cargo/SCCargoViewSource.h"
+#include "SCViewerShell.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -144,7 +144,7 @@ void ASCFirstPersonCharacter::ApplyViewHold()
 }
 void ASCFirstPersonCharacter::Look(FVector2D Pixels)
 {
-    if (bMobiGlasOpen) return; // the cursor drives the mobiGlas; the view holds still
+    if (bMenuOpen) return; // the cursor drives the mobiGlas; the view holds still
     if (!Pixels.IsNearlyZero()) ClearViewHold();
     if (bOrbiting && Body->IsThirdPerson())
     {
@@ -610,17 +610,12 @@ bool ASCFirstPersonCharacter::Interact()
     // The prompt of this moment (the view may have turned since the last tick): the wheel's choice holds only for the
     // same thing (FSCInteractionPrompt::Update). Nothing in the world is acted on while a menu is up.
     UpdatePrompt();
-    if (bMobiGlasOpen || bTeleportMenuOpen) return false;
+    if (bMenuOpen || bTeleportMenuOpen) return false;
     if (Seats && Seats->IsActive()) return Seats->Interact(*this);
     if (Ladder && Ladder->OwnsMovement()) return Ladder->Interact(*this);
-    USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this);
-    const ASCVehicle* Environment = Viewer ? Viewer->GetEnvironment() : nullptr;
-    if (Environment && Environment->AimGarageKiosk(InteractionOrigin(), GetViewRotation().Vector(), InteractReach, this))
-    {
-        FSCMobiGlasRequests::Get().App = TEXT("Garage");
-        SetMobiGlasOpen(true);
-        return true;
-    }
+    // The application's kinds first (SCViewerShell; UnrealCitizen: the garage kiosk), then the shared ones.
+    for (const TSharedRef<ISCInteractionProvider>& Provider : SCViewerShell::Interactions())
+        if (Provider->Interact(*this, InteractionOrigin(), GetViewRotation().Vector(), InteractReach, GetPrompt().Selected)) return true;
     if (!Vehicle) return false;
     // WP-P5: a floor panel under the crosshair sends the option there (nothing off its rows); another lift panel (a call
     // button) its primary interaction, along its exported links; anything else is the door interaction. The aim is taken
@@ -716,7 +711,7 @@ void ASCFirstPersonCharacter::UpdateLiftFocusAndRide()
 }
 void ASCFirstPersonCharacter::UpdateFloorPanelAim()
 {
-    if (bMobiGlasOpen || bTeleportMenuOpen) return; // nothing is aimed while a menu is up (UpdatePanelHover clears the row)
+    if (bMenuOpen || bTeleportMenuOpen) return; // nothing is aimed while a menu is up (UpdatePanelHover clears the row)
     // WP-P5 floor panel: the option under the crosshair is highlighted (nothing off the panel's face or its rows).
     if (Vehicle && !Vehicle->FloorPanels.IsEmpty())
     {
@@ -834,10 +829,11 @@ void ASCFirstPersonCharacter::SetCrouching(bool bCrouch)
     if (TraversalOwnsMovement()) return;
     if (bCrouch) Crouch(); else UnCrouch();
 }
-void ASCFirstPersonCharacter::SetMobiGlasOpen(bool bOpen)
+void ASCFirstPersonCharacter::SetMenuOpen(bool bOpen)
 {
-    if (bOpen == bMobiGlasOpen) return;
-    bMobiGlasOpen = bOpen;
+    bOpen = bOpen && SCViewerShell::HasMenu(); // without an application menu (the viewer) F1 opens nothing
+    if (bOpen == bMenuOpen) return;
+    bMenuOpen = bOpen;
     if (bOpen)
     {
         // The mouse now drives the UI and the live-view orbit; the player stands still where it is (its view comes
@@ -846,7 +842,7 @@ void ASCFirstPersonCharacter::SetMobiGlasOpen(bool bOpen)
         Body->SetTrigger(false);
         bOrbiting = false;
     }
-    UE_LOG(LogTemp, Display, TEXT("FP_MOBIGLAS open=%d"), bOpen);
+    UE_LOG(LogTemp, Display, TEXT("FP_MENU open=%d"), bOpen);
 }
 void ASCFirstPersonCharacter::SetTorchAudio(ASCVehicle* Kit, const FString& ItemEntity)
 {
@@ -893,7 +889,7 @@ const TArray<TPair<FKey, ESCFirstPersonAction>>& ASCFirstPersonCharacter::KeyTab
         {EKeys::H, A::Holster}, {EKeys::C, A::View}, {EKeys::One, A::Weapon1}, {EKeys::Two, A::Weapon2}, {EKeys::Three, A::Weapon3},
         {EKeys::Four, A::Weapon4}, {EKeys::Five, A::Weapon5}, {EKeys::Six, A::Weapon6}, {EKeys::Seven, A::Weapon7},
         {EKeys::Eight, A::Weapon8}, {EKeys::Nine, A::Weapon9}, {EKeys::RightMouseButton, A::Aim},
-        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::MobiGlas},
+        {EKeys::LeftMouseButton, A::Fire}, {EKeys::Z, A::Orbit}, {EKeys::F1, A::Menu},
         {EKeys::Up, A::MenuUp}, {EKeys::Down, A::MenuDown}, {EKeys::Enter, A::MenuSelect},
         {EKeys::MouseScrollUp, A::PromptPrevious}, {EKeys::MouseScrollDown, A::PromptNext}};
     return Table;
@@ -936,7 +932,7 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     {
         // Standing still while the mobiGlas or the teleport menu is up (releases still pass): nothing starts that the
         // menu's closing (a teleport, a click) would leave running.
-        if (bDown && (bMobiGlasOpen || bTeleportMenuOpen)) return true;
+        if (bDown && (bMenuOpen || bTeleportMenuOpen)) return true;
         if (bDown) Held.Add(Action); else Held.Remove(Action);
         if (HoldSeconds <= 0) ApplyHeldInput();
         if (Action == A::Up && !bNoclip) { if (bDown) Jump(); else StopJumping(); }
@@ -945,13 +941,13 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     }
     if (Action == A::Aim) // held: aiming lasts while the button is down
     {
-        if (bDown && bMobiGlasOpen) return true; // the mouse belongs to the mobiGlas
+        if (bDown && bMenuOpen) return true; // the mouse belongs to the mobiGlas
         Body->SetAiming(bDown);
         return Body->HasBody();
     }
     if (Action == A::Fire) // held: the drawn weapon fires while the button is down
     {
-        if (bDown && bMobiGlasOpen) return true;
+        if (bDown && bMenuOpen) return true;
         Body->SetTrigger(bDown);
         return Body->HasBody();
     }
@@ -980,8 +976,8 @@ bool ASCFirstPersonCharacter::HandleAction(ESCFirstPersonAction Action, bool bDo
     case A::Torch: SetTorch(!Flashlight->IsVisible()); return true;
     case A::Noclip: ToggleNoclip(); return true;
     case A::Teleport: SetTeleportMenuOpen(!bTeleportMenuOpen); ClearInput(); return true;
-    case A::Close: SetTeleportMenuOpen(false); SetMobiGlasOpen(false); ClearInput(); return true;
-    case A::MobiGlas: SetMobiGlasOpen(!bMobiGlasOpen); return true;
+    case A::Close: SetTeleportMenuOpen(false); SetMenuOpen(false); ClearInput(); return true;
+    case A::Menu: SetMenuOpen(!bMenuOpen); return true;
     case A::Holster: return Body->RequestSlot(INDEX_NONE);
     case A::View: Body->SetThirdPerson(!Body->IsThirdPerson()); return Body->HasBody();
     default:
@@ -1005,10 +1001,10 @@ void ASCFirstPersonCharacter::SetupPlayerInputComponent(UInputComponent* Input)
 }
 FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
 {
-    // What Interact() acts on, in its order: a seat in use, the ladder climbed, the garage kiosk, a drawn panel's row,
-    // a lift panel, a seat access, a usable, a door. Labels are the data's (display names, the door's verb and name).
+    // What Interact() acts on, in its order: a seat in use, the ladder climbed, the application's kinds (SCViewerShell;
+    // UnrealCitizen: the garage kiosk), a drawn panel's row, a lift panel, a seat access, a usable, a door. Labels are the data's (display names, the door's verb and name).
     FSCInteractionPrompt P;
-    if (!Vehicle || bMobiGlasOpen || bTeleportMenuOpen) return P;
+    if (!Vehicle || bMenuOpen || bTeleportMenuOpen) return P;
     auto Add = [&P](const FString& Label, bool bAvailable = true, const FString& Note = FString()) { P.Options.Add({Label, bAvailable, Note}); };
     // The seat runtime words its prompt "E: <action>"; any other line is a state (loading animations), shown unavailable.
     auto AddSeat = [&](const FString& Line) {
@@ -1029,18 +1025,11 @@ FSCInteractionPrompt ASCFirstPersonCharacter::BuildPrompt() const
         P.Hint = TEXT("W / S: Climb");
         return P;
     }
-    const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(this);
     // Pinned in the world from here on (a seat in use and a ladder climbed have no thing to point at): where the view
     // meets the thing, or a better point the thing names (a button's centre, a door's opening, a usable's point).
     auto Pin = [&P](const FVector& Where) { P.Anchor = Where; P.bAnchored = true; };
-    if (const ASCVehicle* Environment = Viewer ? Viewer->GetEnvironment() : nullptr;
-        Environment && Environment->AimGarageKiosk(Eye, View, InteractReach, this))
-    {
-        P.Key = TEXT("garage");
-        Add(TEXT("Open Garage"));
-        Pin(AimPoint(InteractReach));
-        return P;
-    }
+    for (const TSharedRef<ISCInteractionProvider>& Provider : SCViewerShell::Interactions())
+        if (Provider->BuildPrompt(*this, Eye, View, InteractReach, P)) return P;
     if (Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
     {
         const FSCFloorPanel& Panel = Vehicle->FloorPanels[AimedFloorPanel];
@@ -1121,6 +1110,7 @@ bool ASCFirstPersonCharacter::CyclePrompt(int32 Steps)
     UE_LOG(LogTemp, Display, TEXT("FP_PROMPT_SELECT %s"), *Prompt.Describe());
     return true;
 }
+float ASCFirstPersonCharacter::GetInteractReach() const { return InteractReach; }
 FVector ASCFirstPersonCharacter::AimPoint(float Reach) const
 {
     const FVector Eye = InteractionOrigin(), View = GetViewRotation().Vector();
@@ -1144,7 +1134,7 @@ const FSCUsableTarget* ASCFirstPersonCharacter::AimedUsable(int32* OutPoint, con
 void ASCFirstPersonCharacter::UpdatePanelHover()
 {
     // The ship's panels and the hangar's: the one under the crosshair shows its hover render, the others rest.
-    const bool bAiming = !TraversalOwnsMovement() && !bMobiGlasOpen && !bTeleportMenuOpen;
+    const bool bAiming = !TraversalOwnsMovement() && !bMenuOpen && !bTeleportMenuOpen;
     // A drawn panel's row (UpdateFloorPanelAim) rests too while nothing is aimed (a menu, a seat, a ladder).
     if (!bAiming && Vehicle && Vehicle->FloorPanels.IsValidIndex(AimedFloorPanel))
     {
@@ -1170,10 +1160,11 @@ FString ASCFirstPersonCharacter::HUDText() const
         : bStuck ? TEXT("Movement blocked — press V for noclip")
         : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");
     const FString Player = Body->HasBody() ? Body->HUDLine() : BodyStatus;
-    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · wheel: choose action · F torch · V noclip · T teleport · C view · Z orbit (double-tap: behind) · LMB fire · RMB aim · F1 mobiGlas"),
+    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · wheel: choose action · F torch · V noclip · T teleport · C view · Z orbit (double-tap: behind) · LMB fire · RMB aim%s"),
         Ladder && Ladder->OwnsMovement() ? TEXT("On ladder") :
         Seats && Seats->OwnsMovement() ? (GetOccupiedSeatRole() == ESCSeatRole::Unknown ? TEXT("Seat transition") : TEXT("Seated"))
             : bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
         GetVelocity().Size() / 100, Flashlight->IsVisible() ? TEXT("on") : TEXT("off"),
-        *GetVehicleRelativeLocation().ToCompactString(), Status, Player.IsEmpty() ? TEXT("") : TEXT("\n"), *Player);
+        *GetVehicleRelativeLocation().ToCompactString(), Status, Player.IsEmpty() ? TEXT("") : TEXT("\n"), *Player,
+        SCViewerShell::HasMenu() ? *(TEXT(" · F1 ") + SCViewerShell::MenuName().ToString()) : TEXT(""));
 }

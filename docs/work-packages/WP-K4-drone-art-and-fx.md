@@ -34,7 +34,7 @@ Measured in 5.9 (`out/fab/SciFi_Drone_4-inspect.json`):
   - Scanning (5 s);
   - Attack (5 s, unused).
 
-**Art description, not code.** `viewer/Config/Cargo/drone_art.json` names the skeletal mesh, the yaw that turns
+**Art description, not code.** `game/Config/Cargo/drone_art.json` names the skeletal mesh, the yaw that turns
 its face to +X, the bone the beam leaves from (`camera`), the body bone that is centred on the actor, and which
 sequence plays for which motion. No asset name appears in C++. With the file or the mesh missing, the K1d stand-in is
 used as before.
@@ -59,7 +59,7 @@ come from the mesh, as they do today.
 
 ## K4b — the dock (Astra)
 
-`viewer/scripts/create_cargo_art.py` `dock()`: original art, no game geometry.
+`game/scripts/create_cargo_art.py` `dock()`: original art, no game geometry.
 - **Footprint:** two lattice cells, authored at 250 × 125 × 125 cm.
 - **Bays:** two (round 2: side by side, one per cell, open on the long +Y side). Each holds the drone with clearance,
   facing its opening.
@@ -232,7 +232,7 @@ EmitterStrength curves (exact piecewise-linear clamp expressions in `SC.Strength
 Attributes module). `SC.SV<i>` / `SC.SK<i>`, `SC.BR<i>` / `SC.BK<i>` and `SC.Scale2` (below, K4a round 2) are gone; systems built
 before E1-6 need a rebuild (`-run=SCFxBuild`). Since the E1-6 review the contract is versioned: every built system carries the int User
 parameter `SC.FxContract` (`SCFxRules::FxContractVersion`, 2); the runtime warns `SC_FX_STALE` (non-shipping) for a system without it or
-with an older one, `-run=SCFxBuild -VerifyContract` fails on one, and `viewer/scripts/package_showcase.ps1` refuses to package while one exists.
+with an older one, `-run=SCFxBuild -VerifyContract` fails on one, and `game/scripts/package_showcase.ps1` refuses to package while one exists.
 
 **Per item:**
 1. **Strength.** The game's strengths are read from DataCore (`effects.json` `strength`: the tractor record's
@@ -316,7 +316,7 @@ HalfRes / ResponsiveAA / MinPixels and other render-pipeline flags.
 - The clips move only bones below `root`; no root motion. The Rotate clips turn `body` 90° in 1 s. The Move clips
   raise or lower it by up to 10 cm and tilt it by up to 16°.
 
-**Art description** (`viewer/Config/Cargo/drone_art.json`, `FSCCargoDroneArt`): `heading` (yaw rate 90°/s, the
+**Art description** (`game/Config/Cargo/drone_art.json`, `FSCCargoDroneArt`): `heading` (yaw rate 90°/s, the
 Rotate clips' pace; hover speed 20 cm/s; turn-clip rate 20°/s; crossfade 0.25 s; travel smoothing 0.2 s) applies to
 every drone. `art` names the mesh, `scale` 1, `yaw_offset_deg` −90 (face +Y → +X), `centre_bone` `body`,
 `beam_bone` `camera`, `beam_axis` down, `light_bone` `camera`, `yaw_lock_bone` `body`, `hidden_slots`

@@ -84,8 +84,6 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") float ExposureBias = -0.10f;
     /** The paint chosen per vehicle entity: the paint's palette id (paints.json); absent = the vehicle's own paint. */
     UPROPERTY(Config) TMap<FString, FString> Paints;
-    /** An empty list uses the available vehicle catalog; explicit entries remain available as the player's fleet. */
-    UPROPERTY(Config) TArray<FString> GarageFleet;
     /** Look defaults the saved settings were last migrated to (SCLookLighting::ApplyDefaults): a saved StarBloom from an
      *  earlier look revision is replaced by the adjudicated default once; later user changes are kept. */
     UPROPERTY(Config) int32 LookRevision = 0;
@@ -105,26 +103,7 @@ public:
     /** Linear dirt colour; the default is FSCDirt's "Dust" preset (a viewer choice, not game data). */
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Settings") FLinearColor DirtColor = FLinearColor::FromSRGBColor(FColor(118, 108, 92));
 
-    /** WP-K1 cargo scenario (stock per grid, drone docks, drone definition): a JSON file, relative to the project's
-     *  Config/Cargo directory or absolute; empty = no scenario. -SCCargoScenario=<file> overrides it for one run. */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoScenario;
-    /** The mobiGlas lists the grids within this distance of the player, nearest first (metres; a viewer choice).
-     *  0 = every grid in the level: a ship and the freight elevator it loads from can be far apart in a large hangar,
-     *  and standing at one must not hide the other. */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") float CargoGridListRadiusM = 0.f;
-    /** A transfer fails after this many consecutive boxes could not be lifted (and no other box could take their place). */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") int32 CargoPickAttempts = 3;
-    /** Absolute path of the scenario file, empty when none is set. */
-    FString ResolveCargoScenario() const;
-    /** Live cargo spawning without a scenario: the drone fleet (a scenario file's drone definition and docks; its ship,
-     *  environment and stock are ignored) a session takes on with its first spawn. Resolved like CargoScenario;
-     *  -SCCargoFleet=<file> overrides it, empty or "none" = no drones for spawned cargo. */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoFleet = TEXT("fleet");
-    /** The entity-index search that finds the candidate box records for live spawning (a name substring); each hit is
-     *  kept only when its DataCore record is a whole-SCU box holding a resource (empty: every entity, one record read
-     *  each: slow). A name filter for speed only: what is a box is decided by the record. */
-    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoBoxSearch = TEXT("Carryable_TBO_");
-    FString ResolveCargoFleet() const;
+    // The cargo and Garage settings are UnrealCitizen's (UUCSettings, WP-O1-2).
 
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static USCViewerSettings* Get();
     /** -SCPlayerGender=<g> / -SCPlayerLoadout=<p4k path> override the settings for one run. */

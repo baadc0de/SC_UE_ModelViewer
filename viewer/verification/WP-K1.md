@@ -2,7 +2,7 @@
 
 ## K1b: cargo domain, grids, boxes, drones (Win64, UE 5.9, RTX, 2026-11-14)
 
-Scenario `viewer/Config/Cargo/hull_a_hangar.json`, route `viewer/scripts/routes/cargo-hull-a.txt`. Host:
+Scenario `game/Config/Cargo/hull_a_hangar.json`, route `game/scripts/routes/cargo-hull-a.txt`. Host:
 
 ```powershell
 UnrealEditor.exe <abs>\viewer\SCViewer.uproject -game -windowed -resx=1600 -resy=900 -SCCamera=first -SCLoad=MISC_Hull_A `
@@ -446,7 +446,7 @@ between, nothing intersecting), `plates-*`, `after-destroy`, `explicit-and-fresh
 
 ## K1c: mobiGlas Cargo app and world-space callouts (Win64, UE 5.9, RTX, 2026-11-15)
 
-Code: `plugins/SCBridge/Source/SCBridge/Private/UI/Cargo/` (tokens `SCMobiGlasStyle`, model `SCMobiGlasModel`, shell
+Code: `game/Source/UnrealCitizen/Private/UI/Cargo/` (tokens `SCMobiGlasStyle`, model `SCMobiGlasModel`, shell
 `SSCMobiGlas`, panels `SSCMobiGlasGrids` / `SSCMobiGlasTransfer`, widgets `SSCMobiGlasWidgets`, live-view orbit
 `SCMobiGlasOrbit`, callouts `SSCCalloutLayer` + pure `FSCCalloutSolver`, view source / console `SCCargoViewSource`,
 offline layout data `SCCargoPreviewSource`); integration in `SSCViewerRoot`, `SSCViewportInput`,
@@ -474,7 +474,7 @@ line or a label, previous sides are kept, at most 8 labels by priority, stacks f
 for the rules leaves dots; a 60-frame pan re-solved every frame with the previous sides keeps every rule without side
 flips). The layer re-solves every frame and paints only solved placements (review item 8).
 
-### Runs (live data, scenario `hull_a_hangar`, route `viewer/scripts/routes/mobiglas-live.txt`, shots `out/k1c/live*`)
+### Runs (live data, scenario `hull_a_hangar`, route `game/scripts/routes/mobiglas-live.txt`, shots `out/k1c/live*`)
 
 Host as K1b's with `-SCShowcase -SCScript=<abs>\viewer\scripts\routes\mobiglas-live.txt -SCShotDir=<abs>\out\k1c\live14`.
 
@@ -493,7 +493,7 @@ Host as K1b's with `-SCShowcase -SCScript=<abs>\viewer\scripts\routes\mobiglas-l
 - `live*/live-retract-refused.png`: Retract on the loaded ship refused inline with the subsystem's reason;
   `live*/live-720.png`: the same open view at 1280×720 (Slate DPI 0.67), panels and type scale down, still legible.
 
-Multi-owner (`hull_a_multi`, route `viewer/scripts/routes/mobiglas-multi.txt`, shots `out/k1c/multi*`): other owners'
+Multi-owner (`hull_a_multi`, route `game/scripts/routes/mobiglas-multi.txt`, shots `out/k1c/multi*`): other owners'
 transfers through the shared elevator under OTHER TRAFFIC with their state (OPENING GRIDS), their boxes on the elevator
 hatched and paper-dim in the lattice and listed with their owner, ships of one type numbered ("MISC Hull A · 2"),
 drones and boxes of other owners labelled with their owner ("DRONE 4 · OWNER B", "DRONE 7 · SHARED") in the neutral

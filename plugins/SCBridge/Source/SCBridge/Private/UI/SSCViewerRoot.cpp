@@ -5,9 +5,7 @@
 #include "SSCModelBrowser.h"
 #include "SSCViewportInput.h"
 #include "SSCFirstPersonHUD.h"
-#include "Cargo/SSCMobiGlas.h"
-#include "Cargo/SSCCalloutLayer.h"
-#include "Cargo/SCMobiGlasModel.h"
+#include "SCViewerShell.h"
 #include "SCVehicle.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewerPawn.h"
@@ -43,7 +41,6 @@ constexpr float SystemSampleSeconds = 1.f;
 void SSCViewerRoot::Construct(const FArguments& Args)
 {
     Subsystem = Args._Subsystem;
-    MobiGlas = MakeShared<FSCMobiGlasModel>(Subsystem.Get());
     SampleSystem(0, 0);
     RegisterActiveTimer(SystemSampleSeconds, FWidgetActiveTimerDelegate::CreateSP(this, &SSCViewerRoot::SampleSystem));
     ChildSlot
@@ -61,25 +58,23 @@ void SSCViewerRoot::Construct(const FArguments& Args)
                 + SOverlay::Slot()[SAssignNew(ViewportInput, SSCViewportInput).Subsystem(Subsystem.Get())]
                 + SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom).Padding(10)
                 [
-                    SNew(SBox).Visibility_Lambda([this] { return MobiGlasHidden(); })
+                    SNew(SBox).Visibility_Lambda([this] { return MenuHidden(); })
                     [
                     SNew(STextBlock).Font(Font(8)).ColorAndOpacity(FLinearColor(1, 1, 1, 0.55f)).Visibility(EVisibility::HitTestInvisible)
                     .Text_Lambda([this] {
                         if (Subsystem.IsValid() && Subsystem->GetCameraMode() == ESCCameraMode::FirstPerson)
-                            return LOCTEXT("FirstHelp", "Click view: mouse look · Esc: release cursor · F1: mobiGlas");
+                            return SCViewerShell::HasMenu()
+                                ? FText::Format(LOCTEXT("FirstHelpMenu", "Click view: mouse look · Esc: release cursor · F1: {0}"), SCViewerShell::MenuName())
+                                : LOCTEXT("FirstHelp", "Click view: mouse look · Esc: release cursor");
                         const bool bFly = Subsystem.IsValid() && Subsystem->GetCameraMode() == ESCCameraMode::Fly;
                         return bFly ? LOCTEXT("FlyHelp", "Drag: look · WASD move · E/Q up/down · Shift fast · Ctrl slow · wheel: speed · double-click: focus")
                                     : LOCTEXT("OrbitHelp", "Drag: orbit · Shift/middle drag: pan · wheel: zoom · double-click: focus part · F: frame all");
                     })
                     ]
                 ]
-                // The first-person HUD steps aside while the mobiGlas is up (it would show through the panels' scrim).
-                + SOverlay::Slot()[SNew(SBox).Visibility_Lambda([this] { return MobiGlasHidden(); })[SNew(SSCFirstPersonHUD).Subsystem(Subsystem.Get())]]
-                // WP-K1c: the mobiGlas (F1) and the world-space cargo callouts above it; both shown in the showcase too.
-                + SOverlay::Slot()[SNew(SSCMobiGlas).Model(MobiGlas).OnClosed_Lambda([this] {
-                      if (ViewportInput && FSlateApplication::IsInitialized()) FSlateApplication::Get().SetAllUserFocus(ViewportInput, EFocusCause::SetDirectly);
-                  })]
-                + SOverlay::Slot()[SNew(SSCCalloutLayer).Model(MobiGlas)]
+                // The first-person HUD steps aside while the menu is up (it would show through the menu's scrim).
+                + SOverlay::Slot()[SNew(SBox).Visibility_Lambda([this] { return MenuHidden(); })[SNew(SSCFirstPersonHUD).Subsystem(Subsystem.Get())]]
+                + SOverlay::Slot()[SAssignNew(Overlays, SOverlay)]
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(FMargin(0, 0, 0, 36))[MakeLoadingOverlay()]
                 + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[MakeArchiveOverlay()]
             ]
@@ -88,6 +83,14 @@ void SSCViewerRoot::Construct(const FArguments& Args)
         ]
         + SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([this] { return ChromeVisibility(); })[MakeFooter()]]
     ];
+    // The application's layers (SCViewerShell), in registration order; a menu among them gives focus back to the view on close.
+    FSCViewOverlayArgs OverlayArgs;
+    OverlayArgs.Subsystem = Subsystem.Get();
+    OverlayArgs.FocusView = [Weak = TWeakPtr<SWidget>(ViewportInput)] {
+        if (const TSharedPtr<SWidget> Input = Weak.Pin(); Input && FSlateApplication::IsInitialized())
+            FSlateApplication::Get().SetAllUserFocus(Input, EFocusCause::SetDirectly);
+    };
+    for (const SCViewerShell::FMakeOverlay& Make : SCViewerShell::Overlays()) Overlays->AddSlot()[Make(OverlayArgs)];
 }
 
 SSCViewerRoot::~SSCViewerRoot()
@@ -210,9 +213,9 @@ EVisibility SSCViewerRoot::ChromeVisibility() const
 {
     return Subsystem.IsValid() && Subsystem->IsShowcase() ? EVisibility::Collapsed : EVisibility::Visible;
 }
-EVisibility SSCViewerRoot::MobiGlasHidden() const
+EVisibility SSCViewerRoot::MenuHidden() const
 {
-    return MobiGlas && MobiGlas->IsOpen() ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible;
+    return SCViewerShell::IsMenuOpen(Subsystem.Get()) ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible;
 }
 EVisibility SSCViewerRoot::PanelVisibility() const
 {

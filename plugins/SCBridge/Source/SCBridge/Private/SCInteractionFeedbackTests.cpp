@@ -5,6 +5,9 @@
 #include "SCPackageSource.h"
 #include "SCFloorPanel.h"
 #include "SCVehicle.h"
+#include "SCFirstPersonCharacter.h"
+#include "SCViewerShell.h"
+#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCReaderInteractionFeedbackTest, "SCBridge.Reader.InteractionFeedbackFields",
@@ -108,6 +111,37 @@ bool FSCPadDoorButtonTest::RunTest(const FString&)
     Open.Transitions = {{TEXT("Closed"), TEXT("SyncOpen"), TEXT("Opening")}};
     TestEqual(TEXT("the button that sets none of the pad's states"), FSCPanelAim::DoorButtonOf(Buttons, {Lock, Open}), FString(TEXT("Big")));
     TestEqual(TEXT("every button sets one: none"), FSCPanelAim::DoorButtonOf({Buttons[0]}, {Lock, Open}), FString());
+    return !HasAnyErrors();
+}
+
+// WP-O1-2 review: F1 on the first-person character opens the application's menu, and nothing while no application
+// registered one (the viewer): the player keeps moving and looking.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMenuNeedsApplicationTest, "SCBridge.Interaction.MenuNeedsApplication",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCMenuNeedsApplicationTest::RunTest(const FString&)
+{
+    const bool bHadMenu = SCViewerShell::HasMenu();
+    const FText Registered = SCViewerShell::MenuName();
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    World->InitializeActorsForPlay(FURL());
+    World->BeginPlay();
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    auto* Character = World->SpawnActor<ASCFirstPersonCharacter>(ASCFirstPersonCharacter::StaticClass(), FTransform(FVector(0, 0, 5000)), Params);
+    if (TestNotNull(TEXT("character"), Character))
+    {
+        SCViewerShell::ClearMenu();
+        Character->SetMenuOpen(true);
+        TestFalse(TEXT("without an application menu F1 opens nothing"), Character->bMenuOpen);
+        SCViewerShell::SetMenu(FText::FromString(TEXT("Test menu")));
+        Character->SetMenuOpen(true);
+        TestTrue(TEXT("with one it opens"), Character->bMenuOpen);
+        Character->SetMenuOpen(false);
+        TestFalse(TEXT("and closes"), Character->bMenuOpen);
+    }
+    SCViewerShell::ClearMenu();
+    if (bHadMenu) SCViewerShell::SetMenu(Registered);
+    World->DestroyWorld(false);
     return !HasAnyErrors();
 }
 #endif

@@ -1,8 +1,7 @@
 // WP-M1: door runtime state, access, and the data-derived room classification.
 #include "SCVehicle.h"
 #include "SCGangwayGround.h"
-#include "Cargo/SCCargoSubsystem.h"
-#include "Cargo/SCCargoContainer.h"
+#include "Components/BoxComponent.h"
 #include "Engine/OverlapResult.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCRigComponent.h"
@@ -241,14 +240,16 @@ bool ASCVehicle::DoorwayOccupied(int32 Index) const
     World->OverlapMultiByObjectType(Hits, ShipFrame.TransformPosition(Aperture.GetCenter()), ShipFrame.GetRotation(),
         Objects, FCollisionShape::MakeBox(Half), Params);
     return Hits.ContainsByPredicate([&](const FOverlapResult& Hit) {
-        const ASCCargoContainer* Cargo = Cast<ASCCargoContainer>(Hit.GetActor());
-        if (!Cargo) return false;
+        // A doorway blocker (DoorwayBlockerTag; UnrealCitizen: a cargo box) by its box root.
+        const AActor* Blocker = Hit.GetActor();
+        const UBoxComponent* Box = Blocker && Blocker->ActorHasTag(DoorwayBlockerTag) ? Cast<UBoxComponent>(Blocker->GetRootComponent()) : nullptr;
+        if (!Box) return false;
         const FVector Scale = ShipFrame.GetScale3D();
-        if (Door.MovementColliders.IsEmpty() || !Cargo->Body || Scale.X <= 0 ||
+        if (Door.MovementColliders.IsEmpty() || Scale.X <= 0 ||
             !FMath::IsNearlyEqual(Scale.X, Scale.Y) || !FMath::IsNearlyEqual(Scale.X, Scale.Z)) return true;
-        const FVector Position = Cargo->Body->GetComponentLocation();
-        const FQuat Rotation = Cargo->Body->GetComponentQuat();
-        const FCollisionShape Shape = FCollisionShape::MakeBox(Cargo->Body->GetScaledBoxExtent());
+        const FVector Position = Box->GetComponentLocation();
+        const FQuat Rotation = Box->GetComponentQuat();
+        const FCollisionShape Shape = FCollisionShape::MakeBox(Box->GetScaledBoxExtent());
         return Door.MovementColliders.ContainsByPredicate([&](const FShipDoor::FMovementCollider& Collider) {
             const UPrimitiveComponent* Part = Collider.Component.Get();
             const FBodyInstance* Body = Part ? Part->GetBodyInstance(NAME_None, false) : nullptr;
@@ -268,7 +269,7 @@ bool ASCVehicle::DoorwayOccupied(int32 Index) const
                 // Map the grown box to the collider's current physics frame without changing the live door pose.
                 const FVector InCurrent = Current.TransformPositionNoScale(Pose.InverseTransformPositionNoScale(Position));
                 const FQuat InCurrentRotation = Current.GetRotation() * Pose.GetRotation().Inverse() * Rotation;
-                const FVector Half = Cargo->Body->GetScaledBoxExtent() + FVector(Sample.TravelCm * Scale.X);
+                const FVector Half = Box->GetScaledBoxExtent() + FVector(Sample.TravelCm * Scale.X);
                 return Body->OverlapTest(InCurrent, InCurrentRotation, FCollisionShape::MakeBox(Half));
             });
         });
@@ -385,8 +386,7 @@ FString ASCVehicle::DoorOrderRefusal(int32 Index, ESCShipDoorAction Action, FNam
         if (Action == ESCShipDoorAction::Lock || Action == ESCShipDoorAction::Unlock) return TEXT("Door in use by cargo");
     }
     if (Action == ESCShipDoorAction::Close)
-        if (const auto* Cargo = USCCargoSubsystem::Get(this); Cargo && Cargo->IsAccessDoorBusy(this, Index))
-            return TEXT("Door in use by cargo");
+        if (const FString Why = DoorInUse(Index); !Why.IsEmpty()) return Why;
     if (Info && Info->bSecurePending && Action == ESCShipDoorAction::Open) return TEXT("Securing");
     return FSCShipDoorPolicy::Refusal(ActorRole, Action, IsDoorLocked(Index),
         Info ? Info->Group : ESCShipDoorGroup::Other, bLocalInside);
@@ -437,13 +437,35 @@ void ASCVehicle::FinishSecureOrders()
         }
 }
 
+const FName ASCVehicle::DoorwayBlockerTag(TEXT("SCDoorwayBlocker"));
+
+namespace
+{
+TArray<TPair<FName, ASCVehicle::FDoorUseQuery>>& DoorUseQueries()
+{
+    static TArray<TPair<FName, ASCVehicle::FDoorUseQuery>> Queries;
+    return Queries;
+}
+} // namespace
+void ASCVehicle::AddDoorUseQuery(FName Name, FDoorUseQuery Query)
+{
+    RemoveDoorUseQuery(Name);
+    DoorUseQueries().Emplace(Name, MoveTemp(Query));
+}
+void ASCVehicle::RemoveDoorUseQuery(FName Name) { DoorUseQueries().RemoveAll([&](const auto& Q) { return Q.Key == Name; }); }
+FString ASCVehicle::DoorInUse(int32 Index) const
+{
+    for (const auto& [Name, Query] : DoorUseQueries())
+        if (FString Why = Query(*this, Index); !Why.IsEmpty()) return Why;
+    return FString();
+}
+
 void ASCVehicle::RestoreCargoDoorLocks()
 {
-    const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(this);
     for (int32 Id = 0; Id < ShipDoors.Num(); ++Id)
     {
         FShipDoor& Door = ShipDoors[Id];
-        if (!Door.bCargoRelock || (Cargo && Cargo->IsAccessDoorBusy(this, Id))) continue;
+        if (!Door.bCargoRelock || !DoorInUse(Id).IsEmpty()) continue;
         if (IsDoorOpen(Id))
         {
             if (!DoorwayOccupied(Id)) PlayDoor(Id, false);

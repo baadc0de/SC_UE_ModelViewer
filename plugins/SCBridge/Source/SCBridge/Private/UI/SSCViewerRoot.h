@@ -27,8 +27,8 @@ private:
     EVisibility PanelVisibility() const;
     /** Top bar and footer: hidden in the showcase (-SCShowcase). */
     EVisibility ChromeVisibility() const;
-    /** Collapsed while the mobiGlas is open (first-person HUD, key help). */
-    EVisibility MobiGlasHidden() const;
+    /** Collapsed while the application's F1 menu is open (first-person HUD, key help). */
+    EVisibility MenuHidden() const;
     TSharedRef<SWidget> MakeFooter();
     TSharedRef<SWidget> MakeCameraButton(const FText& Label, uint8 Mode, const FText& Tip);
     FReply PickArchive();
@@ -38,8 +38,9 @@ private:
 
     TWeakObjectPtr<USCViewerSubsystem> Subsystem;
     TSharedPtr<SWidget> View;
-    TSharedPtr<SWidget> ViewportInput;           // focus returns here when the mobiGlas closes
-    TSharedPtr<class FSCMobiGlasModel> MobiGlas; // WP-K1c cargo app + callouts state
+    TSharedPtr<SWidget> ViewportInput; // focus returns here when the menu closes
+    /** The application's layers over the view (SCViewerShell::Overlays; UnrealCitizen: the mobiGlas and the callouts). */
+    TSharedPtr<class SOverlay> Overlays;
     FText Notice; // Keep result / picker errors
     bool bOfferedPicker = false; // the picker opens by itself once when the startup open fails
     uint64 UsedMemory = 0, FreeMemory = 0, DiskFree = 0, DiskTotal = 0;

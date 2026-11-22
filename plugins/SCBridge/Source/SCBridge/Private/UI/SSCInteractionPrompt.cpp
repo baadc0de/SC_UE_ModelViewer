@@ -1,17 +1,17 @@
-// SSCInteractionPrompt: the first-person popout's layout and paint (tokens: SCMobiGlasStyle, the callouts' language).
+// SSCInteractionPrompt: the first-person popout's layout and paint (tokens: SCHudStyle, the callouts' language).
 #include "SSCInteractionPrompt.h"
 #include "SCViewerSubsystem.h"
 #include "SCFirstPersonCharacter.h"
-#include "Cargo/SCMobiGlasStyle.h"
-#include "Cargo/SSCMobiGlasWidgets.h"
-#include "Cargo/SCCargoViewSource.h"
+#include "UI/SCHudStyle.h"
+#include "UI/SCHudPaint.h"
+#include "SCViewerShell.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Widgets/SViewport.h"
 
-using namespace SCMobiGlasStyle;
+using namespace SCHudStyle;
 
 namespace
 {
@@ -44,7 +44,7 @@ void SSCInteractionPrompt::Tick(const FGeometry& Geometry, double Time, float De
     // The anchor through the player's view (game viewport pixels -> Slate absolute -> this widget, as the callouts do).
     Projected.Reset();
     if (!C || !C->GetPrompt().bAnchored) return;
-    UWorld* World = SCCargoUI::ViewerWorld();
+    UWorld* World = SCViewerShell::ViewerWorld();
     APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
     TSharedPtr<SViewport> Viewport = GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetGameViewportWidget() : nullptr;
     FVector2D Pixel;
@@ -56,7 +56,7 @@ void SSCInteractionPrompt::Tick(const FGeometry& Geometry, double Time, float De
 int32 SSCInteractionPrompt::OnPaint(const FPaintArgs&, const FGeometry& G, const FSlateRect&, FSlateWindowElementList& Out, int32 Layer,
                                      const FWidgetStyle&, bool) const
 {
-    using namespace SCMobiGlasPaint;
+    using namespace SCHudPaint;
     const ASCFirstPersonCharacter* C = Character(Subsystem);
     if (!C || Born < 0 || !C->GetPrompt().IsValid()) return Layer;
     const FSCInteractionPrompt& P = C->GetPrompt();

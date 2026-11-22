@@ -32,12 +32,13 @@ function Find-SCFfmpeg {
 }
 
 function Start-SCViewer {
-    # Launches the viewer as a game with the RPC on; returns the process once /health answers (or throws).
+    # Launches the viewer (or with -Game the UnrealCitizen project, WP-O1) as a game with the RPC on; returns the process
+    # once /health answers (or throws).
     # Without -Visible the viewer runs in UE 5.9 agent mode: rendered off screen (no window to take focus), unattended,
     # no modal dialogs; screenshots and /record still capture the viewport.
     # -Engine: the SCViewer fork of UE 5.9 built from source (plan D17); default $env:UE_ENGINE_ROOT, else
     # %USERPROFILE%\UnrealEngine-5.9-src.
-    param([string]$Extra = '', [int]$Port = 8770, [string]$Log = 'SCRpc.log', [string]$ShotDir = '', [switch]$Visible,
+    param([string]$Extra = '', [int]$Port = 8770, [switch]$Game, [string]$Log = 'SCRpc.log', [string]$ShotDir = '', [switch]$Visible,
           [int]$ResX = 1920, [int]$ResY = 1080,
           [string]$Engine = $(if ($env:UE_ENGINE_ROOT) { $env:UE_ENGINE_ROOT } else { Join-Path $env:USERPROFILE 'UnrealEngine-5.9-src' }),
           [int]$StartTimeoutSec = 300)
@@ -45,7 +46,7 @@ function Start-SCViewer {
     if (-not (Test-Path $editor)) { throw "no UnrealEditor.exe under $Engine (pass -Engine or set UE_ENGINE_ROOT)" }
     Set-SCRpcPort $Port
     $root = (Resolve-Path "$PSScriptRoot\..\..\..").Path
-    $proj = "$root\viewer\SCViewer.uproject"
+    $proj = if ($Game) { "$root\game\UnrealCitizen.uproject" } else { "$root\viewer\SCViewer.uproject" }
     $argv = @("`"$proj`"", '-game', '-windowed', "-resx=$ResX", "-resy=$ResY", '-nosplash', "-SCRpc=$Port", "-log=$Log")
     if (-not $Visible) { $argv += '-AgentMode' }
     $ffmpeg = Find-SCFfmpeg

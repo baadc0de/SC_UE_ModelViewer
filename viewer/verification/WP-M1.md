@@ -19,7 +19,7 @@ One Win64 D3D12 game-mode process, 1280 × 720, with `-SCDefaults` and the exist
 before starting the feature driver.
 
 ```powershell
-& viewer/scripts/rpc/ship-link.ps1 -Port 8787 -TimeoutSeconds 60 -Screenshots
+& game/scripts/rpc/ship-link.ps1 -Port 8787 -TimeoutSeconds 60 -Screenshots
 ```
 
 - Procedural Viewer ready in 10.73 s. Cutlass, one owner pairing and 12 door rows ready in 42.68 s from launch.
@@ -54,7 +54,7 @@ cargo scenario, Ship Link and Garage. The cargo scenario initially issued its sh
 loading. The full run waited for the published environment and issued C2 load again in the same process.
 
 ```powershell
-& viewer/scripts/rpc/ship-link.ps1 -Port 8789 -TimeoutSeconds 250 -RequireExterior -RequirePad -C2Cargo -Screenshots
+& game/scripts/rpc/ship-link.ps1 -Port 8789 -TimeoutSeconds 250 -RequireExterior -RequirePad -C2Cargo -Screenshots
 ```
 
 - The C2 paired to `you` and exposed 31 doors, including four exterior and 22 interior. The rear ramp's linked pad
