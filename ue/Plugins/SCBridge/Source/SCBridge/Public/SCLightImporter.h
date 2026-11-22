@@ -5,6 +5,8 @@
 class ASCVehicle;
 class USceneComponent;
 class FJsonObject;
+class ULightComponent;
+enum class ESCLightIntensityScale : uint8 { Wall, FloorWash };
 class SCBRIDGE_API FSCLightImporter
 {
 public:
@@ -12,9 +14,12 @@ public:
     static constexpr const TCHAR* RidesTagPrefix = TEXT("SCRides:");
     static void RefreshShadows(ASCVehicle* Vehicle);
     /** Put the light's authored state StateKey (`defaultState`, `auxiliaryState`, `emergencyState`, ...) on light Index of
-     *  Vehicle->LightStates: intensity (StateCandela) and colour. False when the light authors no such state. */
+     *  Vehicle->LightStates: intensity (StateCandela), colour and style. False when the light authors no such state. */
     static bool ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey);
     static void TickStyles(ASCVehicle* Vehicle);
+    static void ResumeStyles(ASCVehicle* Vehicle);
+    /** Set one look adjustment on a package light, returning false for legacy components. */
+    static bool SetIntensityScale(ASCVehicle* Vehicle, ULightComponent* Light, ESCLightIntensityScale Layer, float Scale);
     // UE candela for one light state. Packages with the authored light fields (bulb_radius_m, …) use the game
     // renderer's model (FSCStarEngine::PointCandela / PlanarCandela; ue/verification/WP-U3b.md §13); older packages
     // keep the x1500 proxy.

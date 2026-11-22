@@ -39,3 +39,25 @@ The authored group interactions switched two C1 cockpit lights, 52 Cutlass
 cockpit lights and 32 Cutlass exterior lights through Emergency and back to
 Default. Hull-attached lights now use the source container of their light
 group while staying physically attached to the hull helper.
+
+## Cross-review follow-up
+
+The scene's waveform table and each light's authored color, intensity, style,
+speed, and phase now survive Unreal serialization. BeginPlay rebuilds active
+loop membership and immediately resamples the state. The regression fixture
+round-trips a light saved on a dark key, then verifies that playback resumes
+with the restored phase and speed.
+
+Hull light groups use the source container ordinal and group ID. The package
+reader retains the ordinal when it skips an invalid container. Older exports
+without the ordinal can still bind when the container name and group ID
+identify one match. Wall and perimeter light tuning apply independent scales
+to the authored waveform.
+
+The independent LIVE shader-cache inspection measured the Vulkan member CRC
+as `54ae6542` and the D3D11 member CRC as `60f7bc4a`. The Rust fixture uses the
+Vulkan CRC to select the recorded counts and style 14 keys. For the phase
+formula, the installed Win64 executable at image base `0x140000000` scales
+time by speed at RVA `0x6e440a9`. The style evaluator at RVA `0xa7f1c0` adds
+`(phase / 255) * TimeIncr` to that time, applies the same TimeIncr again,
+and interpolates over the wrapped sample position.

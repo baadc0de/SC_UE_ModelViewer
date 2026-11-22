@@ -123,7 +123,9 @@ bool FSCLightStylePlayback::RunTest(const FString&)
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
     auto* Vehicle = World->SpawnActor<ASCVehicle>();
     Vehicle->Manifest.Interiors.AddDefaulted(2);
-    Vehicle->Manifest.Interiors[0].Container.EntityName = TEXT("other");
+    Vehicle->Manifest.Interiors[0].Container.EntityName = TEXT("lighting");
+    Vehicle->Manifest.Interiors[0].SourceIndex = 0;
+    Vehicle->Manifest.Interiors[1].SourceIndex = 2; // source slot 1 was skipped by the reader
     Vehicle->Manifest.Interiors[1].Container.EntityName = TEXT("lighting");
     for (FSCInterior& Interior : Vehicle->Manifest.Interiors)
     {
@@ -136,7 +138,7 @@ bool FSCLightStylePlayback::RunTest(const FString&)
     FSCFolderPackageSource Source(TEXT("/tmp"));
     FSCSceneInstance Instance;
     Instance.LightJson.Add(TEXT(R"({"name":"Pulse","semantic_light_kind":"point","transform_basis":"cryengine_z_up","radius_m":3,)"
-                                R"("source_container":"lighting","attachment":{"group_entity_id":"shared-id"},)"
+                                R"("source_container":"lighting","source_container_index":2,"attachment":{"group_entity_id":"shared-id"},)"
                                 R"("animation_speed":0.5,"animation_phase":0,"states":{)"
                                 R"("defaultState":{"intensity_candela_proxy":30,"light_style":10},)"
                                 R"("emergencyState":{"intensity_candela_proxy":80,"light_style":20},)"
@@ -157,11 +159,38 @@ bool FSCLightStylePlayback::RunTest(const FString&)
         TestTrue(TEXT("constant emergency style uses no loop tick"), Vehicle->LoopingLights.IsEmpty());
         TestEqual(TEXT("emergency intensity"), Light->Intensity, 80.f);
         TestTrue(TEXT("emergency style multiplies the light color"), Light->GetLightColor().Equals(FLinearColor(0, 0.5f, 1), 0.005f));
+        TestTrue(TEXT("wall and floor tuning reach the waveform"),
+                 FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::Wall, 0.5f) &&
+                 FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::FloorWash, 0.5f));
+        TestEqual(TEXT("look scales compose with the authored style"), Light->Intensity, 20.f);
+        FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::FloorWash, 1.f);
+        TestEqual(TEXT("restoring floor wash preserves the wall adjustment"), Light->Intensity, 40.f);
+        FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::Wall, 1.f);
         TestTrue(TEXT("off stops the light"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("offState")));
         TestFalse(TEXT("off hides the component"), Light->IsVisible());
         TestEqual(TEXT("off zeroes the intensity"), Light->Intensity, 0.f);
         TestTrue(TEXT("reselecting default restores the loop"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("defaultState")) &&
                  Vehicle->LoopingLights.Contains(0));
+
+        // The saved component is still on the dark key. Serialize through the
+        // actor's reflected properties as cooked levels and PIE do, then resume.
+        Vehicle->LightStates[0].AnimationPhase = 64;
+        TArray<uint8> Bytes;
+        FObjectWriter Writer(Vehicle, Bytes);
+        Vehicle->Manifest.LightStyles.Reset();
+        Vehicle->LightStates.Reset();
+        Vehicle->LoopingLights.Reset();
+        FObjectReader Reader(Vehicle, Bytes);
+        if (TestEqual(TEXT("the reflected light record survives a round trip"), Vehicle->LightStates.Num(), 1))
+        {
+            TestEqual(TEXT("phase survives serialization"), Vehicle->LightStates[0].AnimationPhase, 64.0);
+            TestEqual(TEXT("speed survives serialization"), Vehicle->LightStates[0].AnimationSpeed, 0.5);
+            TestEqual(TEXT("the waveform table survives serialization"), Vehicle->Manifest.LightStyles.Num(), 2);
+            FSCLightImporter::ResumeStyles(Vehicle);
+            TestTrue(TEXT("the reloaded light registers its loop"), Vehicle->LoopingLights.Contains(0));
+            TestTrue(TEXT("the reloaded light updates its previously black color"), Light->GetLightColor().Equals(FLinearColor::White));
+            TestEqual(TEXT("the reloaded light samples its authored phase and candela"), Light->Intensity, 30.f * 254.f / 255.f, 0.0001f);
+        }
     }
     Vehicle->Destroy();
     World->DestroyWorld(false);

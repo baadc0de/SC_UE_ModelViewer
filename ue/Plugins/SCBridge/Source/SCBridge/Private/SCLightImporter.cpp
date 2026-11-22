@@ -286,12 +286,27 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         // Their group control still belongs to the source container, where ids are scoped.
         const FString SourceContainer = LightString(J, TEXT("source_container"));
         if (!SourceContainer.IsEmpty() && !State.GroupEntityId.IsEmpty())
-            State.Interior = Vehicle->Manifest.Interiors.IndexOfByPredicate([&](const FSCInterior& Interior) {
-                return Interior.Container.EntityName == SourceContainer &&
-                       Interior.Entities.ContainsByPredicate([&](const FSCInteriorEntity& Entity) {
-                           return Entity.Kind == TEXT("light_group") && Entity.EntityId == State.GroupEntityId;
-                       });
-            });
+        {
+            const double SourceIndex = LightNumber(J, TEXT("source_container_index"), INDEX_NONE);
+            const auto& Interiors = Vehicle->Manifest.Interiors;
+            for (int32 I = 0; I < Interiors.Num(); ++I)
+            {
+                const FSCInterior& Interior = Interiors[I];
+                if ((SourceIndex != INDEX_NONE && SourceIndex != Interior.SourceIndex) ||
+                    Interior.Container.EntityName != SourceContainer ||
+                    !Interior.Entities.ContainsByPredicate([&](const FSCInteriorEntity& Entity) {
+                        return Entity.Kind == TEXT("light_group") && Entity.EntityId == State.GroupEntityId;
+                    }))
+                    continue;
+                if (State.Interior != INDEX_NONE)
+                {
+                    Warnings.AddUnique(SourceContainer + TEXT(": ambiguous source container for light group ") + State.GroupEntityId);
+                    State.Interior = INDEX_NONE;
+                    break;
+                }
+                State.Interior = I;
+            }
+        }
         J->TryGetBoolField(TEXT("affects_this_area_only"), State.bAreaOnly);
         const FString ExportState = LightString(J, TEXT("active_state"));
         State.ExportActiveState = FName(*ExportState);
@@ -301,6 +316,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         if (J->TryGetObjectField(TEXT("states"), States))
         {
             FJsonSerializer::Serialize(States->ToSharedRef(), TJsonWriterFactory<>::Create(&State.StatesJson));
+            if (Vehicle->Manifest.LightStyles.IsEmpty())
+                for (const auto& [Key, Value] : (*States)->Values)
+                    if (Value->Type == EJson::Object && LightNumber(Value->AsObject(), TEXT("light_style")) > 0)
+                    {
+                        Warnings.AddUnique(TEXT("Package has light style references without waveform definitions; using steady lights"));
+                        break;
+                    }
             const FLightJson* Authored;
             // The exporter falls through zero defaults to auxiliary/emergency. The viewer starts
             // in the authored default instead, while an explicit offState always stays off.

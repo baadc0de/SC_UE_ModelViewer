@@ -6,6 +6,7 @@
 #include "SCHangarIndex.h"
 #include "SCLook.h"
 #include "SCVehicle.h"
+#include "SCLightImporter.h"
 #include "SCViewerSettings.h"
 #include "SCViewerSubsystem.h"
 #include "Components/RectLightComponent.h"
@@ -101,6 +102,7 @@ void SCLookLighting::ApplyDefaults(UWorld* World)
 namespace
 {
 TMap<TWeakObjectPtr<ULightComponent>, float> GFloorWashOriginal;
+TSet<TWeakObjectPtr<ULightComponent>> GScaledFloorWash;
 
 /** Unit directions of the light's emission in its own frame (+X forward), with weights: a spot fills its outer cone
  *  (falloff to the edge), a rect light its cosine-weighted hemisphere. */
@@ -131,6 +133,10 @@ int32 SCLookLighting::SetPerimeterFloorWash(UWorld* World, float Scale)
     for (const auto& [Light, Intensity] : GFloorWashOriginal)
         if (Light.IsValid()) Light->SetIntensity(Intensity);
     GFloorWashOriginal.Reset();
+    for (const auto& WeakLight : GScaledFloorWash)
+        if (ULightComponent* Light = WeakLight.Get())
+            FSCLightImporter::SetIntensityScale(Cast<ASCVehicle>(Light->GetOwner()), Light, ESCLightIntensityScale::FloorWash, 1.f);
+    GScaledFloorWash.Reset();
     USCViewerSubsystem* Viewer = World ? USCViewerSubsystem::Get(World) : nullptr;
     ASCVehicle* Environment = Viewer ? Viewer->GetEnvironment() : nullptr;
     if (!Environment || FMath::IsNearlyEqual(Scale, 1.f)) { UE_LOG(LogSCLookLighting, Display, TEXT("LOOK floor_wash scale=1 lights=0")); return 0; }
@@ -165,8 +171,13 @@ int32 SCLookLighting::SetPerimeterFloorWash(UWorld* World, float Scale)
             else if (Hit.ImpactNormal.Z > 0.9) FloorOutside += Weight;
         }
         if (Total <= 0 || FloorOutside / Total < 0.8 || Inside / Total > 0.1) continue;
-        GFloorWashOriginal.Add(Light, Light->Intensity);
-        Light->SetIntensity(Light->Intensity * Scale);
+        if (FSCLightImporter::SetIntensityScale(Environment, Light, ESCLightIntensityScale::FloorWash, Scale))
+            GScaledFloorWash.Add(Light);
+        else
+        {
+            GFloorWashOriginal.Add(Light, Light->Intensity);
+            Light->SetIntensity(Light->Intensity * Scale);
+        }
         ++Lights;
     }
     UE_LOG(LogSCLookLighting, Display, TEXT("LOOK floor_wash scale=%.2f lights=%d considered=%d bay_m=%.0fx%.0f"), Scale, Lights, Considered,

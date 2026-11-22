@@ -450,6 +450,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
 void ASCVehicle::BeginPlay()
 {
     Super::BeginPlay();
+    FSCLightImporter::ResumeStyles(this);
     if (!CookedAudio.IsEmpty()) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
 }
 

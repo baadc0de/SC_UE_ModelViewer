@@ -71,7 +71,7 @@ int32 ASCVehicle::DeliverLightGroupTag(int32 Group, const FString& LinkingTag, F
         ++Members;
         if (FSCLightImporter::ApplyState(this, L, Key)) ++Changed;
         else ++Unauthored; // a state the light does not author (DisableOverride: the group keeps what it shows)
-        if (const ULightComponent* C = LightStates[L].Component) Candela += C->Intensity;
+        if (LightStates[L].bEnabled) Candela += LightStates[L].BaseCandela;
     }
     G.LightState = I->LightState;
     UE_LOG(LogSCLightControl, Display, TEXT("LIGHT_GROUP_STATE group=%s entity=%s tag=%s interaction=\"%s\" state=%s key=%s lights=%d changed=%d unauthored=%d candela_sum=%.1f"),

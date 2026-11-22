@@ -798,9 +798,11 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     // WP-K1 cargo: the vehicle's inventory containers and the root item's occupancy (interiors' below, by index).
     SCCargoRecords::ParseOccupancy(*Root, Out.RootOccupancy);
     SCCargoRecords::AddContainers(Scene, INDEX_NONE, Out, Warn);
-    for (const auto& V : ReaderArray(Scene, TEXT("interiors")))
+    const auto& Interiors = ReaderArray(Scene, TEXT("interiors"));
+    for (int32 SourceIndex = 0; SourceIndex < Interiors.Num(); ++SourceIndex)
     {
-        const auto O = Object(V); FSCInterior I;
+        const auto O = Object(Interiors[SourceIndex]); FSCInterior I;
+        I.SourceIndex = SourceIndex;
         if (!Instance(O, I.Container, Detail, TEXT("container_transform"))) { Warn(TEXT("interior"), Detail); continue; }
         I.Container.EntityName = String(O, TEXT("name"));
         I.Container.SourceTransformBasis = TEXT("cryengine_z_up");
