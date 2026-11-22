@@ -108,3 +108,37 @@ fn crew_evidence_tells_absent_from_unreadable() {
     assert!(crew_reference(Some(&json!({"crewManifest": "not-a-guid"})), false).is_err());
     assert!(crew_reference(Some(&json!({"crewManifest": 7})), false).is_err());
 }
+
+#[test]
+fn rows_do_not_depend_on_record_order() {
+    use super::{ContainerRecord, container_rows, vehicle_rows};
+    let rec = |path: &str, size_id: i64, size: &str, places: &[&str], name: &str| ContainerRecord {
+        path: path.into(),
+        size_id,
+        size: size.into(),
+        places: places.iter().map(|p| p.to_string()).collect(),
+        name: name.into(),
+    };
+    // One container from three records: places merged, the smallest named size, an unplaced record as detail-less.
+    let records = vec![
+        rec("c/one.socpak", 2, "Medium", &["Beta", "Alpha"], "One_B"),
+        rec("c/one.socpak", 1, "Small", &["Gamma"], "One_A"),
+        rec("c/one.socpak", 3, "", &[], "One_C"),
+        rec("c/two.socpak", 1, "Small", &[], "Two_Z"),
+        rec("c/two.socpak", 1, "Small", &[], "Two_Y"),
+    ];
+    let forward = container_rows(records.clone());
+    let backward = container_rows(records.into_iter().rev().collect());
+    assert_eq!(forward, backward);
+    let one = forward.iter().find(|r| r.id == "c/one.socpak").unwrap();
+    assert_eq!((one.label.as_str(), one.group.as_str(), one.detail.as_str()), ("Alpha, Beta, Gamma", "Small", "One_A, One_B"));
+    let two = forward.iter().find(|r| r.id == "c/two.socpak").unwrap();
+    assert_eq!((two.label.as_str(), two.detail.as_str()), ("Two_Y", ""));
+
+    // Vehicle rows: two groups with the same manufacturer and label sort by id.
+    let mut a = ship("Same_A", "d/a.xml");
+    let mut b = ship("Same_B", "d/b.xml");
+    a.label = Some("Same".into());
+    b.label = Some("Same".into());
+    assert_eq!(vehicle_rows(&[a.clone(), b.clone()]), vehicle_rows(&[b, a]));
+}

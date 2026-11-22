@@ -216,6 +216,17 @@ public:
     /** Ask the environment's export or parse to stop, without waiting; its result is then dropped (an import, once
      *  started, finishes). */
     void CancelEnvironmentWork();
+    /** The environment in the scene was built in this archive session (an archive opened since keeps the actor, but a
+     *  pick from the new archive's lists must load it again). */
+    bool IsEnvironmentOfThisArchive() const { return Environment.IsValid() && EnvArchiveGeneration == ArchiveGeneration; }
+    /** The vehicle in the scene was loaded in this archive session (LoadedKey starts with its generation); an adopted
+     *  -SCPackage vehicle has no archive and counts as this session's. */
+    bool IsVehicleOfThisArchive() const
+    {
+        return Vehicle.IsValid() && (LoadedKey.IsEmpty() || LoadedKey.StartsWith(FString::Printf(TEXT("%u|"), ArchiveGeneration)));
+    }
+    /** CancelLoad was asked and the load it stops has not finished yet. */
+    bool IsLoadCancelling() const { return bLoadCancelRequested; }
     /** CancelEnvironmentWork was asked and the export or parse it stops has not finished yet. */
     bool IsEnvironmentCancelling() const
     {
@@ -407,6 +418,8 @@ private:
     UE::Tasks::TTask<FSCTextResult> EnvListTask;
     uint32 EnvListedGeneration = 0; // the archive session the catalogue was listed for
     uint32 EnvListIssued = 0;       // the archive session EnvListTask was issued against
+    uint32 EnvArchiveGeneration = 0; // the archive session the environment's build started in
+    bool bLoadCancelRequested = false;
     mutable bool bCatalogWanted = false;
     TSharedPtr<FSCImportJob> EnvJob;
     // WP-C1: a cooked environment level (Content/SC/Hangars/Maps) streamed in instead of the export/import pipeline.

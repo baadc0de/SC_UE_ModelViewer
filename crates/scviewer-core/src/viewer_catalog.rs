@@ -293,16 +293,7 @@ fn environments(db: &Database, loc: &HashMap<String, String>, archive: &HashMap<
             }
         }
     }
-    // Records sharing one container are one row: their places merged, its size from the first that names one.
-    #[derive(Default)]
-    struct Container {
-        size_id: i64,
-        size: String,
-        places: Vec<String>,
-        placed: Vec<String>,   // records that have places
-        unplaced: Vec<String>, // records that have none
-    }
-    let mut containers: BTreeMap<String, Container> = BTreeMap::new();
+    let mut records = Vec::new();
     let parts = EntityParts::new(db, &["InstancedInteriorComponentParams", "SObjectContainerComponentParams"], &[])?;
     for entity in parts.with(0) {
         let guid = entity.id.to_string();
@@ -322,23 +313,54 @@ fn environments(db: &Database, loc: &HashMap<String, String>, archive: &HashMap<
             .map(|s| s.replace("\\n", "\n").rsplit('\n').next().unwrap_or_default().trim().to_owned()).unwrap_or_default();
         let name = record.get("__record_name").and_then(Json::as_str).unwrap_or_default();
         let short = name.rsplit('.').next().unwrap_or(name).to_owned();
-        let c = containers.entry((*path).clone()).or_default();
-        if c.size.is_empty() {
-            (c.size_id, c.size) = (size_id, size);
+        records.push(ContainerRecord {
+            path: (*path).clone(),
+            size_id,
+            size,
+            places: places.get(&guid.to_lowercase()).cloned().unwrap_or_default(),
+            name: short,
+        });
+    }
+    Ok(container_rows(records))
+}
+
+/// One hangar record as the environment rows see it: its container (archive spelling), size and places.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ContainerRecord {
+    pub path: String,
+    pub size_id: i64,
+    pub size: String,
+    pub places: Vec<String>,
+    pub name: String,
+}
+
+/// Records sharing one container are one row: their places merged (sorted), its size the smallest named one, labelled
+/// by the places that offer it, else by the first record name. Independent of record order.
+pub(crate) fn container_rows(records: Vec<ContainerRecord>) -> Vec<CatalogRow> {
+    #[derive(Default)]
+    struct Container {
+        size: Option<(i64, String)>,
+        places: Vec<String>,
+        placed: Vec<String>,   // records that have places
+        unplaced: Vec<String>, // records that have none
+    }
+    let mut containers: BTreeMap<String, Container> = BTreeMap::new();
+    for r in records {
+        let c = containers.entry(r.path).or_default();
+        if !r.size.is_empty() && c.size.as_ref().is_none_or(|s| (r.size_id, &r.size) < (s.0, &s.1)) {
+            c.size = Some((r.size_id, r.size));
         }
-        match places.get(&guid.to_lowercase()) {
-            Some(at) => {
-                for place in at {
-                    if !c.places.contains(place) {
-                        c.places.push(place.clone());
-                    }
+        if r.places.is_empty() {
+            c.unplaced.push(r.name);
+        } else {
+            for place in r.places {
+                if !c.places.contains(&place) {
+                    c.places.push(place);
                 }
-                c.placed.push(short);
             }
-            None => c.unplaced.push(short),
+            c.placed.push(r.name);
         }
     }
-    // The places that offer it, else the record's name (no place in data); grouped by size.
     let mut rows: Vec<(i64, CatalogRow)> = containers
         .into_iter()
         .map(|(id, mut c)| {
@@ -350,14 +372,15 @@ fn environments(db: &Database, loc: &HashMap<String, String>, archive: &HashMap<
             } else {
                 (c.places.join(", "), c.placed.join(", "))
             };
-            (c.size_id, CatalogRow { id, label, group: c.size, detail })
+            let (size_id, group) = c.size.unwrap_or_default();
+            (size_id, CatalogRow { id, label, group, detail })
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.label.cmp(&b.1.label)).then(a.1.id.cmp(&b.1.id)));
-    Ok(rows.into_iter().map(|(_, r)| r).collect())
+    rows.into_iter().map(|(_, r)| r).collect()
 }
 
-fn vehicle_rows(records: &[VehicleRecord]) -> Vec<CatalogRow> {
+pub(crate) fn vehicle_rows(records: &[VehicleRecord]) -> Vec<CatalogRow> {
     let mut rows: Vec<CatalogRow> = pick_vehicles(records)
         .into_iter()
         .map(|v| {

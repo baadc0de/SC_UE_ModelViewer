@@ -722,7 +722,7 @@ private:
         if (const USCViewerSubsystem* V = Viewer())
         {
             // Listed on demand: environments_ready false and no environments_error means "in progress, poll again";
-            // environments_error is final for this archive session.
+            // environments_error is final for this archive session (the listing, or the archive open itself, failed).
             V->RequestCatalog();
             O->SetField(TEXT("environments"), Strings(V->GetEnvironmentChoices()));
             O->SetBoolField(TEXT("environments_ready"), V->GetCatalog().bReady);

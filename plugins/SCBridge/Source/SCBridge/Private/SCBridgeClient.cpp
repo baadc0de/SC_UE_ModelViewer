@@ -111,7 +111,8 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
             Self->bPanicPending = false; // a fresh session supersedes an unreported crash of the old one
         }
         Result.bOK = true;
-        Result.bIndexCacheHit = Self->CacheStatsLocked().bLastHit;
+        Result.Cache = Self->CacheStatsLocked();
+        Result.bIndexCacheHit = Result.Cache.bLastHit;
         char* BuildId = nullptr;
         if (sc_archive_build_id(Handle, &BuildId) == SC_STATUS_OK)
         {

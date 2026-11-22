@@ -220,7 +220,10 @@ ASCVehicle* USCViewerSubsystem::GetVehicle() const
 
 void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
 {
-    if (ArchiveState == ESCArchiveState::Opening || IsBusy())
+    // An environment only waiting for the archive (bEnvironmentPending, nothing started) does not hold the open back:
+    // it starts once the new archive is ready (a saved hangar must not block Retry after a failed open).
+    const bool bLoading = Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
+    if (ArchiveState == ESCArchiveState::Opening || bLoading || IsEnvironmentWorking() || EnvPlaceInTicks > 0 || (EnvLevel && !Environment.IsValid()))
     {
         UE_LOG(LogSCViewer, Warning, TEXT("OpenArchive ignored: an open or load is in progress"));
         return;
@@ -232,6 +235,7 @@ void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
     Catalog = FSCViewerCatalog(); // the lists of the previous archive are not this one's
     Catalog.Revision = ArchiveGeneration;
     EnvironmentChoices.Reset();
+    bCatalogWanted = false; // asked for again by a consumer of this archive's lists (an open menu asks every tick)
     if (!CacheDir.IsEmpty()) IFileManager::Get().MakeDirectory(*CacheDir, true);
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE_OPEN p4k=%s cache=%s"), ArchivePath.IsEmpty() ? TEXT("<auto-discover>") : *ArchivePath,
            CacheDir.IsEmpty() ? TEXT("<disabled>") : *CacheDir);
@@ -565,6 +569,7 @@ void USCViewerSubsystem::StepEnvironment()
             bEnvironmentPending = false;
             bool bOK = false;
             EnvStart = FPlatformTime::Seconds();
+            EnvArchiveGeneration = ArchiveGeneration;
             EnvLevel = ULevelStreamingDynamic::LoadLevelInstance(GetViewerWorld(), Cooked, FVector::ZeroVector, FRotator::ZeroRotator, bOK);
             UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_COOKED_LOAD level=%s ok=%d"), *Cooked, bOK);
             if (!bOK) EnvLevel = nullptr;
@@ -579,11 +584,13 @@ void USCViewerSubsystem::StepEnvironment()
             Ffi.mip = FMath::Max<uint32>(Ffi.mip, 1u); // environments: half-resolution textures (tar under 2 GB)
             EnvProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
             EnvExport = Client->ExportEnvironment(EnvironmentFolder, Ffi, EnvProgress.ToSharedRef());
+            EnvArchiveGeneration = ArchiveGeneration;
             EnvStart = FPlatformTime::Seconds();
             return;
         }
         bEnvironmentPending = false;
         EnvStart = FPlatformTime::Seconds();
+        EnvArchiveGeneration = ArchiveGeneration; // a folder is no archive's: this session's
         BeginEnvironmentImport(MakeShared<FSCFolderPackageSource>(EnvironmentFolder));
     }
     if (EnvExport.IsValid())
@@ -684,6 +691,7 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
         return false;
     }
     LoadOptions->CopyFrom(InOptions ? InOptions : Options.Get());
+    bLoadCancelRequested = false;
     Report = FSCLoadReport();
     Report.Entity = Entity;
     Report.Options = LoadOptions->Describe();
@@ -842,6 +850,8 @@ void USCViewerSubsystem::CancelLoad()
     Report.MeshesBuiltAtCancel = Job ? Job->GetResult().MeshStats.Num() : 0;
     Report.bWorkersPendingAtCancel = Job ? Job->HasPendingWorkers() : (ExportTask.IsValid() && !ExportTask.IsCompleted()) ||
                                                                           (ParseTask.IsValid() && !ParseTask.IsCompleted());
+    // A vehicle load being stopped, until it finishes (FinishLoad); an environment-only busy state is not one.
+    bLoadCancelRequested = Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
     if (ExportProgress) ExportProgress->RequestCancel(); // export: FFI callback returns nonzero; parse: checked after
     if (Job) Job->Cancel();
 }
@@ -1065,6 +1075,7 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
     bGarageLoad = false;
     bRebuildProcessed = false;
     Phase = Result;
+    bLoadCancelRequested = false;
     Report.Result = Result;
     Report.Error = Error;
     Report.TotalSeconds = FPlatformTime::Seconds() - LoadStart;
@@ -1201,6 +1212,11 @@ void USCViewerSubsystem::PollClientPanic()
     ArchiveState = ESCArchiveState::Failed;
     ArchiveError = Error;
     ++ArchiveGeneration; // the next open is a new session; nothing from this one may be reused
+    // The lists of the lost session go with it; the failure is the catalogue's answer (RPC /catalog environments_error).
+    Catalog = FSCViewerCatalog();
+    Catalog.Revision = ArchiveGeneration;
+    Catalog.Error = Error.ToString();
+    EnvironmentChoices.Reset();
     UE_LOG(LogSCViewer, Error, TEXT("VIEWER_ARCHIVE_LOST %s"), *Error.ToString());
 }
 
@@ -1214,9 +1230,10 @@ bool USCViewerSubsystem::Tick(float)
         ArchiveState = Result.bOK ? ESCArchiveState::Ready : ESCArchiveState::Failed;
         ArchiveBuildId = Result.ArchiveBuildId;
         ArchiveError = Result.Error;
+        if (!Result.bOK) Catalog.Error = Result.Error.ToString(); // nothing will list: the catalogue's answer is the failure
         if (Result.bOK)
         {
-            CacheStats = Client->CacheStats();
+            CacheStats = Result.Cache;
             // Remember an explicitly chosen archive; auto-discovery stays implicit.
             USCViewerSettings* Settings = USCViewerSettings::Get();
             if (!ArchivePath.IsEmpty() && Settings->ArchivePath != ArchivePath)

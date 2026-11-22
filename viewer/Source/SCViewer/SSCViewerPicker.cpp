@@ -223,6 +223,7 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
             + SOverlay::Slot()
             [
                 SNew(SEditableTextBox).Style(&SearchStyle()).Font(Body()).Text(FText::FromString(List.Filter))
+                .AccessibleText(Hint) // the visible hint is a sibling label
                 .OnTextChanged_Lambda([this, L](const FText& Value) {
                     L->Filter = Value.ToString();
                     Refilter(*L);
@@ -267,52 +268,77 @@ void SSCViewerPicker::Refilter(FList& List)
     if (List.View) List.View->RequestListRefresh();
 }
 
+SSCViewerPicker::EVehiclePick SSCViewerPicker::DecideVehiclePick(const FString& Id, const FVehiclePickState& State)
+{
+    // The latest click wins. The load running for it (and not being stopped): drop any later choice waiting behind it.
+    if (State.bLoading && !State.bCancelling && SameId(State.Pending, Id)) return EVehiclePick::Keep;
+    // Idle: LoadEntity decides (it keeps the vehicle in the scene when the request is identical for this archive session).
+    if (State.bCanLoad) return EVehiclePick::Load;
+    // A load runs (or the archive opens): this choice follows it, also when it is the vehicle being replaced.
+    return EVehiclePick::Queue;
+}
+
+SSCViewerPicker::EEnvironmentPick SSCViewerPicker::DecideEnvironmentPick(const FString& Id, const FEnvironmentPickState& State)
+{
+    // Already there, or on its way and not being stopped: nothing to do (a failed, stopped or other archive's one is
+    // requested again).
+    const bool bThere = IsMapHangar(Id) ? IsMapHangar(State.Request) && !State.bWorking
+                                        : SameId(Id, State.Request) && (State.bInstalled || (State.bLoading && !State.bCancelling));
+    if (bThere) return EEnvironmentPick::There;
+    // A running export, parse or import would make RequestEnvironment wait for its workers on the game thread.
+    return State.bWorking ? EEnvironmentPick::Queue : EEnvironmentPick::Request;
+}
+
 void SSCViewerPicker::PickEnvironment(const FString& Id)
 {
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
     // Saved as the user's environment once it is in the scene (Tick), so a failed choice is not restored at the next start.
     SaveEnvironment = Id;
-    // Already there, or on its way and not being stopped: nothing to do (a failed or stopped one is requested again).
-    const FString Request = S->GetEnvironmentRequest();
-    const bool bThere = IsMapHangar(Id) ? IsMapHangar(Request) && !S->IsEnvironmentWorking()
-                                        : SameId(Id, Request) && (S->GetEnvironment() || (S->IsEnvironmentLoading() && !S->IsEnvironmentCancelling()));
-    if (bThere)
+    FEnvironmentPickState State;
+    State.Request = S->GetEnvironmentRequest();
+    State.bInstalled = S->IsEnvironmentOfThisArchive();
+    State.bLoading = S->IsEnvironmentLoading();
+    State.bCancelling = S->IsEnvironmentCancelling();
+    State.bWorking = S->IsEnvironmentWorking();
+    switch (DecideEnvironmentPick(Id, State))
     {
+    case EEnvironmentPick::There:
         QueuedEnvironment.Reset();
-        return;
-    }
-    // A running export, parse or import would make RequestEnvironment wait for its workers on this thread: the export
-    // or parse is asked to stop, and the choice is taken once nothing runs.
-    if (S->IsEnvironmentWorking())
-    {
+        break;
+    case EEnvironmentPick::Queue: // the export or parse is asked to stop; the choice is taken once nothing runs (Tick)
         QueuedEnvironment = Id;
         S->CancelEnvironmentWork();
-        return;
+        break;
+    case EEnvironmentPick::Request:
+        QueuedEnvironment.Reset();
+        S->SetEnvironment(Id, false);
+        break;
     }
-    QueuedEnvironment.Reset();
-    S->SetEnvironment(Id, false);
 }
 
 void SSCViewerPicker::PickVehicle(const FString& Id)
 {
     USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return;
-    // The latest click wins. The load already running for it: drop any later choice waiting behind it.
-    if (IsLoadingVehicle(*S) && SameId(S->GetPendingEntity(), Id))
+    FVehiclePickState State;
+    State.bLoading = IsLoadingVehicle(*S);
+    State.bCancelling = S->IsLoadCancelling();
+    State.bCanLoad = S->CanLoad(Id);
+    State.Pending = S->GetPendingEntity();
+    switch (DecideVehiclePick(Id, State))
     {
+    case EVehiclePick::Keep:
         QueuedVehicle.Reset();
-        return;
-    }
-    // Idle: LoadEntity decides (it keeps the vehicle in the scene when the request is identical for this archive session).
-    if (S->CanLoad(Id))
-    {
+        break;
+    case EVehiclePick::Load:
         QueuedVehicle.Reset();
         S->LoadEntity(Id, S->GetOptions());
-        return;
+        break;
+    case EVehiclePick::Queue:
+        QueuedVehicle = Id;
+        break;
     }
-    // A load runs (or the archive opens): this choice follows it, also when it is the vehicle being replaced.
-    QueuedVehicle = Id;
 }
 
 ERowState SSCViewerPicker::EnvironmentState(const FString& Id) const
@@ -324,16 +350,17 @@ ERowState SSCViewerPicker::EnvironmentState(const FString& Id) const
     if (IsMapHangar(Id)) return IsMapHangar(Request) ? ERowState::Current : ERowState::None;
     if (!SameId(Id, Request)) return ERowState::None;
     if (S->IsEnvironmentLoading()) return ERowState::Pending;
-    return S->GetEnvironment() ? ERowState::Current : ERowState::None; // requested but failed: not in the scene
+    return S->IsEnvironmentOfThisArchive() ? ERowState::Current : ERowState::None; // failed, or an earlier archive's
 }
 
 ERowState SSCViewerPicker::VehicleState(const FString& Id) const
 {
     const USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return ERowState::None;
+    // What is in the scene reads as such even while its return is queued behind another load.
+    if (S->IsVehicleOfThisArchive() && SameId(S->GetLoadedEntity(), Id)) return ERowState::Current;
     if (QueuedVehicle.IsSet() && SameId(*QueuedVehicle, Id)) return ERowState::Pending;
-    if (IsLoadingVehicle(*S) && SameId(S->GetPendingEntity(), Id)) return ERowState::Pending;
-    return S->GetVehicle() && SameId(S->GetLoadedEntity(), Id) ? ERowState::Current : ERowState::None;
+    return IsLoadingVehicle(*S) && SameId(S->GetPendingEntity(), Id) ? ERowState::Pending : ERowState::None;
 }
 
 void SSCViewerPicker::RevealCurrent()
@@ -388,7 +415,7 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         const FString Id = *SaveEnvironment;
         SaveEnvironment.Reset();
         const FString Request = S->GetEnvironmentRequest();
-        if (IsMapHangar(Id) ? IsMapHangar(Request) : SameId(Id, Request) && S->GetEnvironment())
+        if (IsMapHangar(Id) ? IsMapHangar(Request) : SameId(Id, Request) && S->IsEnvironmentOfThisArchive())
         {
             USCViewerSettings* Settings = USCViewerSettings::Get();
             Settings->Environment = IsMapHangar(Id) ? FString(MapHangar) : Id;

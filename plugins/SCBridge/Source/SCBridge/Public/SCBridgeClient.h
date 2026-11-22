@@ -41,6 +41,11 @@ private:
     std::atomic<bool> bCancel{false};
 };
 
+struct SCBRIDGE_API FSCCacheStats
+{
+    bool bEnabled = false, bLastHit = false;
+    uint64 Bytes = 0, Entries = 0, CapBytes = 0;
+};
 struct SCBRIDGE_API FSCOpenResult
 {
     bool bOK = false;
@@ -48,6 +53,7 @@ struct SCBRIDGE_API FSCOpenResult
     FString ArchiveBuildId;
     double Seconds = 0;
     bool bIndexCacheHit = false;
+    FSCCacheStats Cache; // read by the open worker under the handle lock (the game thread never waits for it)
 };
 struct SCBRIDGE_API FSCSearchResult
 {
@@ -58,11 +64,6 @@ struct SCBRIDGE_API FSCSearchResult
     /** Archive generation the search was issued in (set by the host; results of older generations are dropped). */
     uint32 Generation = 0;
     double Seconds = 0;
-};
-struct SCBRIDGE_API FSCCacheStats
-{
-    bool bEnabled = false, bLastHit = false;
-    uint64 Bytes = 0, Entries = 0, CapBytes = 0;
 };
 struct SCBRIDGE_API FSCExportResult
 {

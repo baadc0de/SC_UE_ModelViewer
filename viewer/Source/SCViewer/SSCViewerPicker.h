@@ -38,6 +38,31 @@ public:
     /** A row's relation to the scene: in it, on its way (loading, or waiting for the running load), or neither. */
     enum class ERowState : uint8 { None, Current, Pending };
 
+    // What a click does, from the load state alone (pure; SCBridge.Viewer.PickerQueue walks the click sequences).
+    /** Keep: the running load is this choice (a later one waiting behind it is dropped); Load: now; Queue: after the
+     *  running load (also the vehicle it replaces, or one whose load is being cancelled). */
+    enum class EVehiclePick : uint8 { Keep, Load, Queue };
+    struct FVehiclePickState
+    {
+        bool bLoading = false;    // a vehicle export, parse or import runs
+        bool bCancelling = false; // ... and CancelLoad was asked
+        bool bCanLoad = false;    // LoadEntity would take a request now
+        FString Pending;          // the entity it loads
+    };
+    static EVehiclePick DecideVehiclePick(const FString& Id, const FVehiclePickState& State);
+    /** There: in the scene (of this archive session) or on its way and not being stopped; Request: now; Queue: once the
+     *  environment's running export, parse or import has stopped or finished. */
+    enum class EEnvironmentPick : uint8 { There, Request, Queue };
+    struct FEnvironmentPickState
+    {
+        FString Request;          // the subsystem's environment request ("" / "none": the procedural hangar)
+        bool bInstalled = false;  // the requested one is in the scene, built in this archive session
+        bool bLoading = false;    // the request is on its way (pending, exporting, parsing, importing, placing)
+        bool bCancelling = false; // ... and its export or parse is being stopped
+        bool bWorking = false;    // an export, parse or import runs (RequestEnvironment would wait for it)
+    };
+    static EEnvironmentPick DecideEnvironmentPick(const FString& Id, const FEnvironmentPickState& State);
+
 private:
     struct FList
     {

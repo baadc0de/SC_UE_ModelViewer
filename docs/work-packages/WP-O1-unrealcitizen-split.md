@@ -98,8 +98,11 @@ menu and a view overlay; also the top bar's "Menu (F1)") lists environments, veh
 the HUD look. A pick applies at once (`SetEnvironment`, `LoadEntity`, `SetPaint`), or, while a load runs, as soon as
 it lets it: the latest click waits in the menu, marked LOADING. An environment's export or parse is asked to stop and its
 result dropped; an import, once started, finishes; nothing is waited for on the game thread. A vehicle waits for the
-environment it goes into; clicking the vehicle being loaded drops a later choice, clicking the one it replaces brings it
-back after. The row in the scene is an inverted bar marked IN SCENE. The environment list starts with the procedural
+environment it goes into; clicking the vehicle being loaded drops a later choice (unless its load is being cancelled:
+then it is asked again), clicking the one it replaces brings it back after. The decisions are pure functions
+(`DecideVehiclePick`, `DecideEnvironmentPick`) walked through these click sequences by `SCBridge.Viewer.PickerQueue`.
+The row in the scene is an inverted bar marked IN SCENE; "in the scene" is archive-scoped (an environment or vehicle
+built before the archive was reopened is loaded again when picked from the new archive's lists). The environment list starts with the procedural
 hangar (the map's own); the environment chosen is saved once it is in the scene (a failed one is not) and restored at
 the next start; clicking a failed one requests it again. Both lists have a search box (`-SCSearch=<q>` fills the vehicle one); the menu
 opens scrolled to the current environment, vehicle and paint, and by itself at start when the command line asks for no
@@ -114,14 +117,15 @@ row acts on the vehicle whose manifest listed it and is remembered for it (`Load
 `scviewer catalog`; `USCViewerSubsystem::GetCatalog`, listed once per archive session on demand — the menu when it opens and RPC
 `/catalog` call `RequestCatalog`, runs that never ask (`-SCNoUI`, `-SCLoad` with the menu closed, the game) do not pay
 for the scan; a listing finished for an earlier archive session is dropped; `/catalog` answers `environments_ready`
-and, once listing failed for the session, `environments_error` — replacing the search for "hangar" in archive paths):
+and, once listing or the archive open failed for the session (or the session was lost), `environments_error`; a
+saved hangar waiting for the archive does not hold back opening another one — replacing the search for "hangar" in archive paths):
 
 - *Environments*: `EntityClassDefinition` records with `InstancedInteriorComponentParams` and a set
   `SObjectContainerComponentParams.objectContainer` (84 records, 17 of them templates without a container): **61
   hangar containers**, grouped by size (`InstancedInteriorComponentParams.name`: Small / Medium / Large / XL Hangar),
   named by the places that offer them (`InstancedInteriorLocationMap.locationInteriors[]`, not `devOnly`:
-  `location.name`, `defaultHangars[]`; records sharing a container merge their places), else by the record (the first
-  by name). Of the 239 archive paths with "hangar" in them the other
+  `location.name`, `defaultHangars[]`; records sharing a container merge their places, sorted, and take the smallest
+  named size), else by the record (the first by name); independent of record order (`container_rows`, tested). Of the 239 archive paths with "hangar" in them the other
   178 are pieces of these containers (each city's hangar wraps the base room as a child: the Area18 XL hangar exports
   as one 3.9 GB package with it), building parts, test and event content, and legacy hangars nothing references.
 - *Vehicles*: `VehicleComponentParams` records (1111) through these rules, in order:
