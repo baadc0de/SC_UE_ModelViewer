@@ -275,8 +275,38 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         State.Name = Name;
         State.OwnerEntity = Instance.EntityName;
         State.Json = J; // the record ApplyState reads another state from
+        State.AnimationSpeed = LightNumber(J, TEXT("animation_speed"), 1);
+        State.AnimationPhase = FMath::Clamp(LightNumber(J, TEXT("animation_phase")), 0., 255.);
+        bool bRandomPhase = false;
+        if (J->TryGetBoolField(TEXT("random_animation_phase"), bRandomPhase) && bRandomPhase)
+            State.AnimationPhase = FMath::RandRange(0, 255);
         if (const FLightJson* Attachment; J->TryGetObjectField(TEXT("attachment"), Attachment))
             State.GroupEntityId = LightString(*Attachment, TEXT("group_entity_id"));
+        // Hull-attached lights can be emitted under the root or a child for placement.
+        // Their group control still belongs to the source container, where ids are scoped.
+        const FString SourceContainer = LightString(J, TEXT("source_container"));
+        if (!SourceContainer.IsEmpty() && !State.GroupEntityId.IsEmpty())
+        {
+            const double SourceIndex = LightNumber(J, TEXT("source_container_index"), INDEX_NONE);
+            const auto& Interiors = Vehicle->Manifest.Interiors;
+            for (int32 I = 0; I < Interiors.Num(); ++I)
+            {
+                const FSCInterior& Interior = Interiors[I];
+                if ((SourceIndex != INDEX_NONE && SourceIndex != Interior.SourceIndex) ||
+                    Interior.Container.EntityName != SourceContainer ||
+                    !Interior.Entities.ContainsByPredicate([&](const FSCInteriorEntity& Entity) {
+                        return Entity.Kind == TEXT("light_group") && Entity.EntityId == State.GroupEntityId;
+                    }))
+                    continue;
+                if (State.Interior != INDEX_NONE)
+                {
+                    Warnings.AddUnique(SourceContainer + TEXT(": ambiguous source container for light group ") + State.GroupEntityId);
+                    State.Interior = INDEX_NONE;
+                    break;
+                }
+                State.Interior = I;
+            }
+        }
         J->TryGetBoolField(TEXT("affects_this_area_only"), State.bAreaOnly);
         const FString ExportState = LightString(J, TEXT("active_state"));
         State.ExportActiveState = FName(*ExportState);
@@ -286,6 +316,13 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         if (J->TryGetObjectField(TEXT("states"), States))
         {
             FJsonSerializer::Serialize(States->ToSharedRef(), TJsonWriterFactory<>::Create(&State.StatesJson));
+            if (Vehicle->Manifest.LightStyles.IsEmpty())
+                for (const auto& [Key, Value] : (*States)->Values)
+                    if (Value->Type == EJson::Object && LightNumber(Value->AsObject(), TEXT("light_style")) > 0)
+                    {
+                        Warnings.AddUnique(TEXT("Package has light style references without waveform definitions; using steady lights"));
+                        break;
+                    }
             const FLightJson* Authored;
             // The exporter falls through zero defaults to auxiliary/emergency. The viewer starts
             // in the authored default instead, while an explicit offState always stays off.
@@ -305,11 +342,11 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         State.bFallbackShadow = !Cast<ULocalLightComponent>(Light) ||
                                 (bAuthored && J->TryGetBoolField(TEXT("shadow_casting"), bAuthoredShadow) ? bAuthoredShadow
                                                                                                           : State.RadiusM >= ShadowRadius);
-        const double Intensity = StateCandela(J, Selected);
-        State.bEnabled = State.ActiveState != TEXT("offState") && Intensity > 0;
-        Light->SetVisibility(State.bEnabled);
+        State.BaseCandela = StateCandela(J, Selected);
+        State.bEnabled = State.ActiveState != TEXT("offState") && State.BaseCandela > 0;
         const FVector Color = LightVector(Selected, TEXT("color"), LightVector(J, TEXT("color"), FVector(1)));
-        Light->SetLightColor(FLinearColor(Color.X, Color.Y, Color.Z));
+        State.BaseColor = FLinearColor(Color.X, Color.Y, Color.Z);
+        State.LightStyleId = int32(FMath::Clamp(LightNumber(Selected, TEXT("light_style")), 0., double(MAX_int32)));
         // miscParams.specularMultiplier scales the light's specular in the game's shaders (0 = diffuse only); packages without
         // the field keep UE's 1.
         const double Specular = FMath::Max(0., LightNumber(J, TEXT("specular_multiplier"), 1.0));
@@ -346,7 +383,6 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
                 Rect->SetSourceHeight(FMath::Max(0., LightNumber(J, TEXT("plane_height_m"))) * 100);
             }
         }
-        Light->SetIntensity(State.bEnabled ? Intensity : 0.);
         if (auto* Spot = Cast<USpotLightComponent>(Light))
         {
             Spot->SetOuterConeAngle(LightNumber(J, TEXT("outer_angle")));
@@ -389,9 +425,9 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
             else
                 Warnings.Add(Name + TEXT(": gobo unavailable: ") + TexturePath);
         }
-        // TODO(WP-V2): select/reapply named states and style waveforms through the light panel.
         // All states stay available even when the default component imports disabled.
-        Vehicle->LightStates.Add(MoveTemp(State));
+        const int32 LightIndex = Vehicle->LightStates.Add(MoveTemp(State));
+        ApplyStyle(Vehicle, LightIndex);
         Light->RegisterComponent();
     }
 }
@@ -399,8 +435,7 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
 bool FSCLightImporter::ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey)
 {
     // Another of the light's authored states (`states.<key>`): its intensity by the same model as at import (StateCandela)
-    // and its colour; a state the light does not author leaves it as it is (nothing invented). Light styles (waveforms)
-    // are not modelled, as at import.
+    // and its colour and style. A state the light does not author leaves it as it is.
     if (!Vehicle || !Vehicle->LightStates.IsValidIndex(Index)) return false;
     FSCImportedLightState& S = Vehicle->LightStates[Index];
     ULightComponent* Light = S.Component;
@@ -408,13 +443,13 @@ bool FSCLightImporter::ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateK
     const FLightJson* Selected = nullptr;
     if (!Light || !S.Json || !S.Json->TryGetObjectField(TEXT("states"), States) || !(*States)->TryGetObjectField(StateKey.ToString(), Selected))
         return false;
-    const double Intensity = StateCandela(S.Json, *Selected);
+    S.BaseCandela = StateCandela(S.Json, *Selected);
     S.ActiveState = StateKey;
-    S.bEnabled = StateKey != FName(TEXT("offState")) && Intensity > 0; // as at import: an explicit offState stays off
+    S.bEnabled = StateKey != FName(TEXT("offState")) && S.BaseCandela > 0;
     const FVector Color = LightVector(*Selected, TEXT("color"), LightVector(S.Json, TEXT("color"), FVector(1)));
-    Light->SetLightColor(FLinearColor(Color.X, Color.Y, Color.Z));
-    Light->SetIntensity(S.bEnabled ? Intensity : 0.);
-    Light->SetVisibility(S.bEnabled);
+    S.BaseColor = FLinearColor(Color.X, Color.Y, Color.Z);
+    S.LightStyleId = int32(FMath::Clamp(LightNumber(*Selected, TEXT("light_style")), 0., double(MAX_int32)));
+    ApplyStyle(Vehicle, Index);
     return true;
 }
 void FSCLightImporter::RefreshShadows(ASCVehicle* Vehicle)

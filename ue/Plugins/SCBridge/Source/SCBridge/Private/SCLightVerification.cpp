@@ -171,8 +171,19 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
         const auto& State = Vehicle->LightStates[I];
         OK &= State.Component == Light && State.Name == Want.Name && State.ActiveState == Want.State;
         OK &= State.bEnabled == Want.Enabled && Light->IsVisible() == Want.Enabled;
-        // The component carries the rule's candela (float precision), in candela.
-        OK &= FMath::IsNearlyEqual(double(Light->Intensity), Want.Candela, 1e-5 * FMath::Max(1.0, Want.Candela));
+        const auto* Style = State.bEnabled ? Vehicle->Manifest.LightStyles.Find(State.LightStyleId) : nullptr;
+        double ExpectedIntensity = Want.Candela;
+        if (Style)
+        {
+            OK &= FMath::IsNearlyEqual(State.BaseCandela, Want.Candela, 1e-5 * FMath::Max(1.0, Want.Candela));
+            const FVector3f Sample = Style->Sample(State.StyleSampleSeconds, State.AnimationSpeed, State.AnimationPhase);
+            const float Scale = Sample.GetMax() > 0 ? Sample.GetMax() : 1.f;
+            const FVector3f Tint = Sample / Scale;
+            ExpectedIntensity *= State.WallLightScale * State.FloorWashScale * Scale;
+            const FLinearColor Color = State.BaseColor * FLinearColor(Tint.X, Tint.Y, Tint.Z);
+            OK &= Light->GetLightColor().Equals(FLinearColor(Color.ToFColor(true)), 1e-5);
+        }
+        OK &= FMath::IsNearlyEqual(double(Light->Intensity), ExpectedIntensity, 1e-5 * FMath::Max(1.0, ExpectedIntensity));
         const auto* Local = Cast<ULocalLightComponent>(Light);
         OK &= (Local != nullptr) == Want.Local && (!Local || Local->IntensityUnits == ELightUnits::Candelas);
         OK &= State.bFallbackShadow == Want.Shadow;

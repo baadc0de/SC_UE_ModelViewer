@@ -189,6 +189,7 @@ struct SCBRIDGE_API FSCInterior
 {
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) FSCSceneInstance Container;
+    int32 SourceIndex = INDEX_NONE; // ordinal before the package reader skips invalid interiors
     /** `room_volumes[]` objects verbatim (container-local CryEngine metres); parsed by FSCRoomVolume. */
     UPROPERTY(BlueprintReadOnly) TArray<FString> RoomVolumeJson;
     /** WP-A1: `audio_spots[]` / `audio_areas[]` objects verbatim (container-local CryEngine metres); read by FSCAudioScene. */
@@ -266,6 +267,14 @@ struct SCBRIDGE_API FSCPaintVariant
     /** Label for pickers: the display name, else the tag. */
     FString Label() const { return DisplayName.IsEmpty() ? SubgeometryTag : DisplayName; }
 };
+USTRUCT()
+struct SCBRIDGE_API FSCLightStyleWaveform
+{
+    GENERATED_BODY()
+    UPROPERTY() double SamplesPerSecond = 0;
+    UPROPERTY() TArray<FVector3f> Samples;
+    FVector3f Sample(double TimeSeconds, double Speed, double Phase) const;
+};
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCSceneManifest
 {
@@ -279,6 +288,7 @@ struct SCBRIDGE_API FSCSceneManifest
     UPROPERTY(BlueprintReadOnly) TArray<FSCPaintVariant> Paints;
     UPROPERTY(BlueprintReadOnly) TArray<FSCClipRecord> Clips;
     UPROPERTY(BlueprintReadOnly) FSCEngineGlow EngineGlow;
+    UPROPERTY() TMap<int32, FSCLightStyleWaveform> LightStyles;
     UPROPERTY(BlueprintReadOnly) FString ContentHash;
     /** WP-P3: `root_entity.physics_grid` as a triangle soup in the root entity's UE frame (cm); empty without one. */
     TArray<FVector> PhysicsGrid;

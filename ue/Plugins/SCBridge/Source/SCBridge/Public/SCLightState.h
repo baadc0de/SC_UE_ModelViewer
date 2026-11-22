@@ -34,4 +34,13 @@ struct SCBRIDGE_API FSCImportedLightState
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") int32 Interior = INDEX_NONE;
     /** The light record (its states and intensity model): FSCLightImporter::ApplyState puts another of its states on. */
     TSharedPtr<FJsonObject> Json;
+    /** Authored photometry before the active preset waveform is applied. */
+    UPROPERTY() double BaseCandela = 0;
+    UPROPERTY() FLinearColor BaseColor = FLinearColor::White;
+    UPROPERTY() int32 LightStyleId = 0;
+    UPROPERTY() double AnimationSpeed = 1;
+    UPROPERTY() double AnimationPhase = 0;
+    double StyleSampleSeconds = 0;
+    float WallLightScale = 1;
+    float FloorWashScale = 1;
 };

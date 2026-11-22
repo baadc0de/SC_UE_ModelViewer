@@ -329,7 +329,7 @@ public:
     /** World point of an option's centre on its face (scripted aim). */
     bool FloorPanelWorldPoint(int32 Panel, int32 Option, FVector& Out) const;
 
-    /** Tick while clips play or a lift has work. */
+    /** Tick while clips, lifts, pending door work, or light styles are active. */
     void UpdateTickEnabled();
 
     virtual void Tick(float DeltaSeconds) override;
@@ -338,6 +338,7 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<ULightComponent>> Lights;
     UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") TArray<FSCImportedLightState> LightStates;
+    TSet<int32> LoopingLights; // indices into LightStates; only time-varying, enabled presets
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") bool bMegaLightsActive = false;
     /** Refresh after changing the project/scalability ray-tracing settings at runtime. */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") void RefreshLightShadowPolicy();

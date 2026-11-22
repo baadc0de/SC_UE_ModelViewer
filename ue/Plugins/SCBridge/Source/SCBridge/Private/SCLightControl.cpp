@@ -71,7 +71,7 @@ int32 ASCVehicle::DeliverLightGroupTag(int32 Group, const FString& LinkingTag, F
         ++Members;
         if (FSCLightImporter::ApplyState(this, L, Key)) ++Changed;
         else ++Unauthored; // a state the light does not author (DisableOverride: the group keeps what it shows)
-        if (const ULightComponent* C = LightStates[L].Component) Candela += C->Intensity;
+        if (LightStates[L].bEnabled) Candela += LightStates[L].BaseCandela;
     }
     G.LightState = I->LightState;
     UE_LOG(LogSCLightControl, Display, TEXT("LIGHT_GROUP_STATE group=%s entity=%s tag=%s interaction=\"%s\" state=%s key=%s lights=%d changed=%d unauthored=%d candela_sum=%.1f"),
@@ -208,3 +208,46 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLightsGroups(
             }
         }
     }));
+
+#if WITH_DEV_AUTOMATION_TESTS
+// Inspect the active preset output over time. An optional state applies each
+// light's authored record using the same entry point as a light group.
+static FAutoConsoleCommandWithWorldAndArgs GSCLightStylesProbe(
+    TEXT("sc.Lights.StyleProbe"),
+    TEXT("sc.Lights.StyleProbe [Default|Emergency|Off] [index]: sample a ship light; optionally apply one state to all its lights"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        FName Key;
+        int32 RequestedIndex = INDEX_NONE;
+        for (const FString& Arg : Args)
+        {
+            if (Arg.Equals(TEXT("Default"), ESearchCase::IgnoreCase) ||
+                Arg.Equals(TEXT("Emergency"), ESearchCase::IgnoreCase) ||
+                Arg.Equals(TEXT("Off"), ESearchCase::IgnoreCase))
+                Key = LightStateKey(Arg);
+            else if (!LexTryParseString(RequestedIndex, *Arg))
+                return;
+        }
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+        {
+            ASCVehicle* Vehicle = *It;
+            if (Vehicle->Manifest.LightStyles.IsEmpty()) continue;
+            int32 Changed = 0;
+            if (!Key.IsNone())
+                for (int32 I = 0; I < Vehicle->LightStates.Num(); ++I)
+                    Changed += FSCLightImporter::ApplyState(Vehicle, I, Key);
+            const int32 Index = RequestedIndex != INDEX_NONE ? RequestedIndex
+                : (Vehicle->LoopingLights.IsEmpty() ? INDEX_NONE : *Vehicle->LoopingLights.begin());
+            UE_LOG(LogSCLightControl, Display, TEXT("LIGHT_STYLES ship=%s definitions=%d lights=%d loops=%d changed=%d"),
+                *Vehicle->Manifest.Root.EntityName, Vehicle->Manifest.LightStyles.Num(), Vehicle->LightStates.Num(),
+                Vehicle->LoopingLights.Num(), Changed);
+            if (!Vehicle->LightStates.IsValidIndex(Index)) continue;
+            const FSCImportedLightState& State = Vehicle->LightStates[Index];
+            if (!State.Component) continue;
+            const FLinearColor Color = State.Component->GetLightColor();
+            UE_LOG(LogSCLightControl, Display,
+                TEXT("LIGHT_STYLE_SAMPLE ship=%s index=%d state=%s style=%d speed=%.3f phase=%.3f time=%.5f cd=%.6f rgb=(%.4f,%.4f,%.4f)"),
+                *Vehicle->Manifest.Root.EntityName, Index, *State.ActiveState.ToString(), State.LightStyleId,
+                State.AnimationSpeed, State.AnimationPhase, World->GetTimeSeconds(), State.Component->Intensity, Color.R, Color.G, Color.B);
+        }
+    }));
+#endif
