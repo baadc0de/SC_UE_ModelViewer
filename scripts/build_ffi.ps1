@@ -9,7 +9,7 @@ $env:CARGO_TARGET_DIR = (Join-Path (Get-Location) 'target')
 $profileArgs = @(); $profile = 'debug'
 if ($Release) { $profileArgs = @('--release'); $profile = 'release' }
 function Invoke-Checked { & $args[0] $args[1..($args.Count - 1)]; if ($LASTEXITCODE -ne 0) { throw "failed: $args" } }
-$thirdParty = 'ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib'
+$thirdParty = 'plugins/SCBridge/Source/ThirdParty/SCBridgeLib'
 if ($CheckHeader) {
     Invoke-Checked cargo run --locked @profileArgs -p scbridge-ffi --example header -- --check
     if ((Get-FileHash crates/scbridge-ffi/include/scbridge.h).Hash -ne (Get-FileHash "$thirdParty/include/scbridge.h").Hash) {
@@ -30,7 +30,7 @@ Copy-Item "$out/scbridge.dll", "$out/scbridge.dll.lib" $lib
 if (Test-Path "$out/scbridge.pdb") { Copy-Item "$out/scbridge.pdb" $lib }
 # UBT copies the DLL into the binaries only when it builds; refresh stale copies so a launch without a rebuild
 # picks up the new exporter (and its cache identity).
-foreach ($bin in 'ue/SCViewer/Binaries/Win64', 'ue/Plugins/SCBridge/Binaries/Win64') {
+foreach ($bin in 'viewer/Binaries/Win64', 'plugins/SCBridge/Binaries/Win64') {
     if (Test-Path "$bin/scbridge.dll") { Copy-Item "$out/scbridge.dll" $bin }
 }
 Get-Item "$lib/scbridge.dll" | ForEach-Object { "{0}: {1} bytes" -f $_.FullName, $_.Length }

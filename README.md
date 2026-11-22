@@ -1,4 +1,9 @@
-# SC_UE_ModelViewer
+# UnrealCitizen
+
+> Formerly `SC_UE_ModelViewer`. The repository is being split into the StarBreaker core (`vendor/StarBreaker`,
+> `crates/`), the viewer (`viewer/`, with the shared plugin `plugins/SCBridge`) and the UnrealCitizen game
+> (`game/`); see [WP-O1](docs/work-packages/WP-O1-unrealcitizen-split.md). This page still describes the viewer as it
+> is today.
 
 An **Unreal Engine 5.9 viewer for Star Citizen game data**. Point it at a `Data.p4k` and it lists the entities inside
 and exports the chosen one in memory through Rust. It then builds real UE objects at run time and shows them under Nanite, Lumen
@@ -61,7 +66,7 @@ web or RTX-fork build.
 | Target | Engine / RHI | Notes |
 | --- | --- | --- |
 | Windows | UE 5.9 source fork, D3D12 SM6 | Optional NVIDIA DLSS (`scripts/install_dlss.ps1`, compiled against the fork; DLAA by default, TSR without it). |
-| Win64 showcase | Shipping package | One cooked ship and hangar at maximum Lumen quality with hardware ray tracing and DLAA, started as a player (`ue/scripts/package_showcase.ps1`). |
+| Win64 showcase | Shipping package | One cooked ship and hangar at maximum Lumen quality with hardware ray tracing and DLAA, started as a player (`viewer/scripts/package_showcase.ps1`). |
 
 ## Quick start
 
@@ -79,12 +84,12 @@ Windows (PowerShell):
 $UE = "$env:USERPROFILE\UnrealEngine-5.9-src"          # the UE 5.9 source fork
 powershell -File scripts/build_ffi.ps1               # scbridge.dll + import library
 & "$UE\Engine\Build\BatchFiles\Build.bat" SCViewerEditor Win64 Development `
-  "-Project=$PWD\ue\SCViewer\SCViewer.uproject" -WaitMutex
-& "$UE\Engine\Binaries\Win64\UnrealEditor.exe" "$PWD\ue\SCViewer\SCViewer.uproject" `
+  "-Project=$PWD\viewer\SCViewer.uproject" -WaitMutex
+& "$UE\Engine\Binaries\Win64\UnrealEditor.exe" "$PWD\viewer\SCViewer.uproject" `
   -game -windowed -resx=1920 -resy=1080
 ```
 
-The Linux shell scripts under `ue/scripts/` (and `scripts/build_ffi.sh`) default to `~/UnrealEngine-5.9-src` too; a
+The Linux shell scripts under `viewer/scripts/` (and `scripts/build_ffi.sh`) default to `~/UnrealEngine-5.9-src` too; a
 Linux build of the fork is not set up.
 
 Start the viewer from the repository root, so its cache goes to `./cache/`. Useful switches:
@@ -92,10 +97,10 @@ Start the viewer from the repository root, so its cache goes to `./cache/`. Usef
 - `-SCEnvironment=<socpak>`;
 - `-SCCamera=first`;
 - `-SCCargoScenario=hull_a_hangar` (or `c2_hangar`, `hull_a_multi`, `hull_a_space`);
-- `-SCScript=ue/scripts/routes/<route> -SCShotDir=<dir>`;
+- `-SCScript=viewer/scripts/routes/<route> -SCShotDir=<dir>`;
 - `-SCRpc`.
 
-The full list, keys and console commands are in [ue/README.md](ue/README.md).
+The full list, keys and console commands are in [viewer/README.md](viewer/README.md).
 
 Without Unreal, the CLI exercises the same Rust core:
 
@@ -108,12 +113,12 @@ scripts/starbreaker.sh entity export Gladius out/gladius.glb --lod 1 --mip 2   #
 Driving the app from scripts (Windows):
 
 ```powershell
-Import-Module ue/scripts/rpc/SCRpc.psm1
+Import-Module viewer/scripts/rpc/SCRpc.psm1
 $p = Start-SCViewer -Extra '-SCCargoScenario=hull_a_space'   # off screen; -Visible for a window
 Invoke-SC /wait @{ until = 'settled'; timeout_s = 900 }
 Invoke-SC /screenshot @{ name = 'space' }
 Stop-SCViewer $p
-ue/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # exploratory stability run
+viewer/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # exploratory stability run
 ```
 
 ## Layout
@@ -122,11 +127,11 @@ ue/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # explora
 crates/scviewer-core    Rust: session over p4k + DataCore, decomposed export (disk and in memory), clip catalogue, cache
 crates/scviewer-cli     CLI over the core, for verification and exports
 crates/scbridge-ffi     C-ABI library the Unreal plugin calls (scbridge.dll / libscbridge.so)
-ue/SCViewer             UE 5.9 project: game-mode app, Viewer map, cargo scenarios (Config/Cargo/*.json)
-ue/Plugins/SCBridge     Runtime module (FFI client, importer, vehicles, player, cargo, mobiGlas, RPC, UI),
+viewer             UE 5.9 project: game-mode app, Viewer map, cargo scenarios (Config/Cargo/*.json)
+plugins/SCBridge     Runtime module (FFI client, importer, vehicles, player, cargo, mobiGlas, RPC, UI),
                         optional Editor module (cooking, keep as assets), ThirdParty/SCBridgeLib
-ue/scripts              builds, cooks, packaging, material generation, routes/, rpc/ (RPC module, explorer)
-ue/verification         verification records and evidence per work package
+viewer/scripts              builds, cooks, packaging, material generation, routes/, rpc/ (RPC module, explorer)
+viewer/verification         verification records and evidence per work package
 scripts/                FFI and StarBreaker builds, DLSS install, export and verification helpers
 docs/                   analysis, plan, UE design, cargo research, work-package briefs
 vendor/StarBreaker      upstream toolkit (submodule, pinned)
@@ -142,7 +147,7 @@ out/, cache/            exports and the local cache (gitignored)
 | [docs/03-unreal-export-design.md](docs/03-unreal-export-design.md) | UE app design: hosts, view flow, object mapping, Nanite / Lumen rules, player modes, UI, FFI |
 | [docs/work-packages/](docs/work-packages/) | one brief per work package (goal, behaviour, data, tests, verification) |
 | [docs/cargo/](docs/cargo/) | cargo datamining and UI research |
-| [ue/README.md](ue/README.md) | engine setup, every build / package / cook command, switches, console commands, logs |
+| [viewer/README.md](viewer/README.md) | engine setup, every build / package / cook command, switches, console commands, logs |
 | [AGENTS.md](AGENTS.md) | working rules for contributors and agents (branches, build locks, game-data rules) |
 
 Open work is listed in the plan. It includes:

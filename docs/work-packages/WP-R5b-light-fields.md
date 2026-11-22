@@ -9,7 +9,7 @@ contract is mirrored. Follow `docs/work-packages/README.md` (common preamble) an
 ## Why
 
 The owner reports that the ships' own lights pool metres across the floor in the UE
-viewer, unlike in-game references. The WP-U3b analysis (`ue/verification/WP-U3b.md` §11,
+viewer, unlike in-game references. The WP-U3b analysis (`viewer/verification/WP-U3b.md` §11,
 read it first) traced it to two causes. One is the viewer scene (UE side, not this WP).
 The other is the exporter: it keeps `sizeParams.lightRadius` and the state intensities but
 drops the rest of the authored light component, so the UE importer cannot apply the
@@ -56,7 +56,7 @@ Scorpius lights). That is a policy bug: the default state is the truth for the d
    unit labels say what they are (`intensity_unit` stays the raw label; add
    `intensity_candela_proxy_model: "raw_x1500"`), and add a `TODO(WP-R5b)` on
    `LIGHT_AUTHORED_INTENSITY_SCALE` pointing at the UE-side measurement
-   (`ue/verification/WP-U3b.md` §11.2–11.3). Do not change the proxy maths in this WP.
+   (`viewer/verification/WP-U3b.md` §11.2–11.3). Do not change the proxy maths in this WP.
 5. **Schema/version.** The new fields are additive. Bump the sidecar/scene format version
    constant (or exporter identity, whichever the cache key in `scviewer-core` uses) so a
    layer-1 cache built before this change misses rather than returning stale packages;
@@ -208,7 +208,7 @@ vendor/StarBreaker/crates/starbreaker-3d/src/types.rs
 vendor/StarBreaker/docs/decomposed-export-contract.md
 ```
 
-TODO(WP-R5b): UE-side measurement in `ue/verification/WP-U3b.md` §11.2–11.3 must establish the physical intensity mapping. Legacy sparse-component defaults and old-package Blender sizing remain compatibility behavior; this WP does not recalibrate them.
+TODO(WP-R5b): UE-side measurement in `viewer/verification/WP-U3b.md` §11.2–11.3 must establish the physical intensity mapping. Legacy sparse-component defaults and old-package Blender sizing remain compatibility behavior; this WP does not recalibrate them.
 
 ## Cross-review (Opus 5.5)
 
@@ -262,7 +262,7 @@ no game-derived files, `//!` headers on both new `.rs` files, and red logs for e
    `vendor/StarBreaker/docs/decomposed-export-contract.md:252-299` names `WP-R5b`,
    `scviewer lights` / `sc_lights`, `scviewer-core::CACHE_FORMAT_VERSION` and `SCPackageReader`.
    None of these exist upstream, and WP-D1 will upstream this branch. The same applies to
-   `TODO(WP-R5b)` → `ue/verification/WP-U3b.md` at `socpak.rs:31` (the brief asked for it).
+   `TODO(WP-R5b)` → `viewer/verification/WP-U3b.md` at `socpak.rs:31` (the brief asked for it).
    **Fix:** keep the field table, enum and active-state text upstream. Move the cache, FFI and
    UE-reader paragraph to `docs/03-unreal-export-design.md`, which already has it. Reword the TODO
    to name the physical bulb-size calibration without a superproject path.

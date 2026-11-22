@@ -24,7 +24,7 @@ low-thrust plume shape needs a separate renderer change and a visual check.
 Export each ship with attachments. The first entry in the resulting tar is the scene manifest and contains the authored references. The helper reads just that entry. Pass the unique references to the existing SCFxBuild commandlet to generate the local Niagara assets.
 
 ~~~powershell
-$refs = @(./ue/scripts/thruster_fx_refs.ps1 -Package $packageTars)
+$refs = @(./viewer/scripts/thruster_fx_refs.ps1 -Package $packageTars)
 & $editorCmd $uproject '-run=SCFxBuild' "-Effects=$($refs -join ';')" '-unattended' '-NullRHI'
 ~~~
 

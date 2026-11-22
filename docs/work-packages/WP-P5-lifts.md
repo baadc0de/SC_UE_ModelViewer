@@ -25,8 +25,8 @@ Scope:
 
 ## Read first
 
-`AGENTS.md`; `ue/README.md` §First-person exploration (interactions are Mannequin fragments with an Open/Close tag pair,
-`sc.FP.Door`, `FP_DOOR_LIST`); `ue/verification/DOORS-1.md`; `docs/work-packages/WP-P4-moving-collision.md`;
+`AGENTS.md`; `viewer/README.md` §First-person exploration (interactions are Mannequin fragments with an Open/Close tag pair,
+`sc.FP.Door`, `FP_DOOR_LIST`); `viewer/verification/DOORS-1.md`; `docs/work-packages/WP-P4-moving-collision.md`;
 `docs/cargo/datamine.md` §Freight elevators; `docs/work-packages/WP-I1-door-and-lift-panels.md` §3, §5;
 `out/lifts-datamine/NOTES.md` (the findings log, with every file and command behind this brief).
 
@@ -473,7 +473,7 @@ typed calls), `OnCalled` (now `OnRequested`), `OnArrived`, `OnDeparted` and the 
   primary, "Lower Deck", "Exit Ship"). The HUD prompt lists them and the mouse wheel picks one, as the game does with
   several interactions on one point. When I1's prompt and selection exist, this falls back to theirs.
 
-**Done means** (`ue/verification/WP-P5.md`; route `ue/scripts/routes/c2-lift.txt`; `-SCLoad=CRUS_Starlifter_C2
+**Done means** (`viewer/verification/WP-P5.md`; route `viewer/scripts/routes/c2-lift.txt`; `-SCLoad=CRUS_Starlifter_C2
 -SCCamera=first`):
 
 1. `LIFT_LIST` shows one lift with three stops, z_cm −1465 / −787.5 / −50 (container frame) and names Exit Ship /
@@ -605,7 +605,7 @@ top deck and down through the belly hatch to the ground and back. Exporter on su
   gate and panel, landing doors, params, grid, ground buttons as interaction entities showing "Call Elevator", the floor
   panel's Top Deck / Lower Deck / Exit Ship, one carriage), `pipeline::interior_interactions::tests` (3).
 
-### Viewer (`ue/Plugins/SCBridge`)
+### Viewer (`plugins/SCBridge`)
 
 - `SCInteractionRecords.h`, `SCPackageReader.*`: the new fields (a lift without two stops or speeds is reported and
   left out).
@@ -625,9 +625,9 @@ top deck and down through the belly hatch to the ground and back. Exporter on su
 - `SCFirstPersonCharacter.*`, `UI/SSCViewportInput.cpp`: E on a lift panel sends its chosen interaction; the HUD lists
   the point's interactions and the mouse wheel picks one (replaced by the floor panel: "Result (floor panel)"); `LIFT_RIDE`; the character ticks after the vehicle.
 - `SCLiftCommands.cpp` (`sc.Lift.*`), `SCRpcSubsystem.cpp` (`/wait until=lift_idle`, `lifts[]` in `/state`),
-  `SCViewerAutomation.cpp` (`FP_PROBE … panel= choice=`), `ue/scripts/rpc/c2-lift.ps1` (the scripted run below). The
-  route runner has no "wait for the lift", so the run is an RPC driver rather than `ue/scripts/routes/c2-lift.txt`, and
-  the evidence is here rather than in `ue/verification/WP-P5.md`.
+  `SCViewerAutomation.cpp` (`FP_PROBE … panel= choice=`), `viewer/scripts/rpc/c2-lift.ps1` (the scripted run below). The
+  route runner has no "wait for the lift", so the run is an RPC driver rather than `viewer/scripts/routes/c2-lift.txt`, and
+  the evidence is here rather than in `viewer/verification/WP-P5.md`.
 - Tests: `SCBridge.Lift.Profile`, `.StopOrder`, `.QueueAndDoors`, `.Dispatch`, `SCBridge.Rig.FragmentPrefersOwnClip`.
 
 ### Tests
@@ -638,7 +638,7 @@ top deck and down through the belly hatch to the ground and back. Exporter on su
 | `cargo test -p scviewer-core` | 52 passed, 2 ignored |
 | `Automation RunTests SCBridge` (`P5_tests_full.log`) | 165 of 169 pass; the 4 failures are the known `Package.FolderTarImport`, `Player.KitRigAndWeapons`, `Materials.FamilyMapping`, `FirstPerson.SkeletalCollision`. New: `SCBridge.Lift.Profile`, `.StopOrder`, `.QueueAndDoors`, `.Faults`, `.Dispatch`, `SCBridge.Rig.FragmentPrefersOwnClip` (failed 5/16 and 7/16 before its fix) |
 
-### Scripted first-person run (C2 in `hangar_xltop_001`, `ue/scripts/rpc/c2-lift.ps1`)
+### Scripted first-person run (C2 in `hangar_xltop_001`, `viewer/scripts/rpc/c2-lift.ps1`)
 
 The final build's run is `P5_run6.log` (shots in `out/lifts/run4`, driver output `out/lifts/run4/driver.txt`); the run
 before the review fixes (`P5_run3.log`, shots `out/lifts/run3-before-review`) gave the same sequence and timings.
@@ -740,7 +740,7 @@ Hold ↔ top is unchanged: no surface lies under an upward leg, and the ship is 
 - the lift with a stub surface: hold → ground arrives on it (doors, `Arrived at 0`), ground → hold takes the shortened leg,
   hold → top is still 4.956 s.
 
-**Run** (`P5_ground_run2.log`, `ue/scripts/rpc/c2-lift.ps1`, shots and `driver.txt` in `out/lifts/ground`).
+**Run** (`P5_ground_run2.log`, `viewer/scripts/rpc/c2-lift.ps1`, shots and `driver.txt` in `out/lifts/ground`).
 `c2-lift.ps1` now stands the player in the middle of the carriage (`OnCarriage`) before "Exit Ship" and before the ride up
 from the ground. In run 1 (`P5_ground_run1.log`) the walk-in ended on the hold's lip (Y −763.8 instead of −784), and the
 player stayed in the hold when the carriage left.
@@ -900,7 +900,7 @@ its row the engine font, cased as the pads' label.
   `c2_lift_panel_style_from_game_data` on LIVE 4.10.2), `text::label_mask::tests` (3),
   `colour_roles::tests::role_names_are_the_enum_in_order`.
 
-### Viewer (`ue/Plugins/SCBridge`)
+### Viewer (`plugins/SCBridge`)
 
 - `SCFloorPanel.h/.cpp`:
   - `FSCScreenFaceGeometry`: the face's triangles and UV0 (captured from the mesh description while the importer still
@@ -943,7 +943,7 @@ its row the engine font, cased as the pads' label.
 | `cargo test -p scviewer-core` | 52 passed, 2 ignored |
 | `Automation RunTests SCBridge` (`out/lifts/floor-panel/fp_tests3.log`) | 172 of 176 pass; the 4 failures are the known `Package.FolderTarImport`, `Player.KitRigAndWeapons`, `Materials.FamilyMapping`, `FirstPerson.SkeletalCollision`. New: `SCBridge.FloorPanel.OptionsAndLayout` (options from the panel's links and the stops, row order, rects, `OptionAt` on rows, gaps, bar and margin), `.AimToOption` (the C2-like UV window mapped upright onto the image; rays at each row's centre -> UV -> that row; beside the face, from behind, beyond reach: no hit; the vehicle's aim highlights the row and nothing off the face), `.PressDispatches` (E on a row queues its stop with the panel's own interaction; an invalid row sends nothing; the view through a leg: no current floor, target, direction, then the new current floor), `.Colours` (the role assignment; white on black without a palette), `.FaceKeepsItsImageOverPaint` (failed before its fix); the review added E on a floor-select panel without a drawn face sending nothing, a row's own display name, and a reflected, stretched face |
 
-### First-person run (C2 in `hangar_xltop_001`, off-screen, port 8771; `ue/scripts/rpc/c2-floor-panel.ps1`)
+### First-person run (C2 in `hangar_xltop_001`, off-screen, port 8771; `viewer/scripts/rpc/c2-floor-panel.ps1`)
 
 Run 7, on the final build (`out/lifts/floor-panel/run7`: shots, `driver.txt`, `FP_run7.log`; run 6 before the review fixes gave the same sequence):
 
@@ -1070,7 +1070,7 @@ on the slab (1 cm higher) rather than on the carriage. In the game the carriage 
 - Trace: `LIFT_RIDE_TICK` each tick while riding (feet over the carriage anchor, floor distance, base) and `LIFT_RIDE_LEG
   samples rel_z_min_cm rel_z_max_cm spread_cm off_carriage` at the leg's end.
 
-**Result** (`out/c2-fixes/run3`, the final build, `ue/scripts/rpc/c2-fixes.ps1` steps 7–8, `c2fix-run3.log`; `run2` before the review fixes gave the same): nine legs, top → Exit Ship and
+**Result** (`out/c2-fixes/run3`, the final build, `viewer/scripts/rpc/c2-fixes.ps1` steps 7–8, `c2fix-run3.log`; `run2` before the review fixes gave the same): nine legs, top → Exit Ship and
 lower deck → Exit Ship from Y −700, X −204 / Y −764 and the centre, and back up: every one arrived with the player on the
 carriage (`LIFT_WHERE player base=Mesh_3193 lift=0 … Z=-1393.82` at the ground) and `LIFT_RIDE_LEG … rel_z −785.20 …
 −785.20 spread_cm=0.00 off_carriage=0` (452–681 samples per leg). Run 1, before the tick-order change, rode all legs too but

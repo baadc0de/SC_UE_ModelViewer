@@ -25,7 +25,7 @@ was not auto-discovered, loads a ship, and never sees the Unreal Editor.
   (WP-C1), p4k path, options defaults.
 - Cold start to the populated model list < 20 s (archive mmap + DataCore load
   through FFI, measured and shown in the footer).
-- `ue/README.md` "Running the viewer" section: prerequisites (engine path, built
+- `viewer/README.md` "Running the viewer" section: prerequisites (engine path, built
   `.so`), the two commands, known limitations (Development config only, no Shipping
   packaging; first Nanite build of a ship takes N s).
 

@@ -16,7 +16,7 @@ fn generated_header_matches() {
     );
     assert_eq!(
         std::fs::read(
-            root.join("../../ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h")
+            root.join("../../plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h")
         )
         .unwrap(),
         generated,

@@ -51,7 +51,7 @@ session notes): pad centre band UE 8,000–10,000 lux vs game 14,000–16,000 lu
 - Fixture: `shader_constants.forcedFalloffFraction` = 0.2 (`lightbeam.cfxb`) and the token hash of
   `GetLightForcedDistanceFade` (`ShadeLib.cfib`); `FSCStarEngine::ForcedFadeFraction` (domain 0 < f ≤ 1) and
   `LightRangeFade(d, R)`; the light probe (`FSCLightImporter::Probe`) uses it.
-- Engine shader patch (plan D14, then `ue/scripts/engine_patches.py`; since WP-E1 E1-2 the fork's `ELightRangeFade::SquaredLinearTail`,
+- Engine shader patch (plan D14, then `viewer/scripts/engine_patches.py`; since WP-E1 E1-2 the fork's `ELightRangeFade::SquaredLinearTail`,
   and the patch mechanism is removed, E1-7): `GetLocalLightAttenuation` and the light grid's
   `EstimateLocalLight` (`LightCulling.ush`, MegaLights sampling / culling) use `saturate((1 − d / R) / f)²`. Every
   shading path that calls `GetLocalLightAttenuation` follows (deferred, MegaLights, Lumen scene lighting,

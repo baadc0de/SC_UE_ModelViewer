@@ -11,8 +11,8 @@ the Lumen `Viewer` level with an orbit camera. All UI is in the **Runtime** modu
 
 ## Read first
 `docs/03-unreal-export-design.md` (§Hosts, §How a view happens, §In-game UI, §FFI),
-`ue/Plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h`,
-`ue/README.md` Decision section.
+`plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h`,
+`viewer/README.md` Decision section.
 
 ## Deliverables
 - `SCBridgeLib` third-party module (`.Build.cs`: runtime dependency on the `.so`,
@@ -41,7 +41,7 @@ the Lumen `Viewer` level with an orbit camera. All UI is in the **Runtime** modu
 - In the standalone host: cold load of Gladius (LOD 1, mip 2) < 30 s; Scorpius and
   Cutlass Black load; progress moves through all phases; loading a second ship
   frees the first (object counts).
-- Headless: `UnrealEditor-Cmd ue/SCViewer/SCViewer.uproject -run=pythonscript
+- Headless: `UnrealEditor-Cmd viewer/SCViewer.uproject -run=pythonscript
   -script=scripts/ue_load_gladius.py` drives `LoadEntity` (used by WP-Q1).
 - No UI hard-codes an entity or asset name.
 
@@ -52,10 +52,10 @@ the Lumen `Viewer` level with an orbit camera. All UI is in the **Runtime** modu
 - Async import: the importer's `TODO(WP-V1)` is resolved by `FSCImportJob` (phase
   progress, cancel, workers for parse/derive/collision); `FSCImporter::Import` wraps it.
   Static-mesh builds are still one game-thread step per mesh (parallel async compile
-  is a follow-up, see `ue/verification/WP-V1.md`).
+  is a follow-up, see `viewer/verification/WP-V1.md`).
 - Settings live in `GameUserSettings.ini` (UE 5.8 does not save arbitrary `Game.ini` sections).
 - The headless entry creates its own `UGameInstance` (`USCViewerSubsystem::CreateHeadless`)
-  because commandlets have none; the script is `ue/scripts/ue_load_gladius.py`.
+  because commandlets have none; the script is `viewer/scripts/ue_load_gladius.py`.
 - Keep saves textures, material instances (as constants), Nanite static meshes,
   skeletons, clips and the clip catalogue; runtime skeletal meshes are skipped (no
   editor source model; `TODO(WP-U3)`).

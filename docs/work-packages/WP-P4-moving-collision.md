@@ -103,7 +103,7 @@ gear bays are filled by items and gear doors.
 
 - Rust: `decomposed_physics` test `triangles_without_a_surface_become_a_no_surface_record`; `starbreaker-3d`
   physics tests; UE `SCBridge.GamePhysics` (class table).
-- C2 rear ramp, first person: `ue/scripts/routes/c2-ramp-walk-in.txt` (ramp open, start on the hangar floor behind the
+- C2 rear ramp, first person: `viewer/scripts/routes/c2-ramp-walk-in.txt` (ramp open, start on the hangar floor behind the
   ramp, walk up into the hold; `FP_GRID inside=1` and a position inside the hold).
 - Cutlass: `cutlass-ramp-to-cockpit` unchanged end to end.
 - Cargo: `cargo-c2.txt` with scenario `c2_hangar`: both jobs Done, no `CARGO_PATH ... found=0` on load legs, with
@@ -128,7 +128,7 @@ Positions are vehicle-relative centimetres (X forward), capsule centre.
   where the load leaves the lift room, 170 m from the ship, and nine replans from there found the start enclosed by
   hangar colliders. The hangar has no hull colliders and no `no_surface` record, so this WP does not change what is
   tested there; the same build also carries other uncommitted work (cargo subsystem edits, the C2 port-geometry
-  exporter fix, which lowers the hold's goal by 72 cm). Cause found afterwards (`ue/verification/WP-K1.md`, K1g): the
+  exporter fix, which lowers the hold's goal by 72 cm). Cause found afterwards (`viewer/verification/WP-K1.md`, K1g): the
   guard's look-ahead became a 5.6 m chord on the long frame of the route's camera cut; with this WP the searches are
   slower, so the first load is still among the stock at that moment. Fixed there, in the guard and the carry.
 - `cutlass-ramp-to-cockpit` (`P4_cutlassb.log`): end to end, cockpit stop X 1064.77 as in the baseline run

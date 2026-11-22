@@ -9,19 +9,19 @@ binaries in `Engine/Binaries/Linux/` (`UnrealEditor`, `UnrealEditor-Cmd`). GPU R
 `Saved/`, `Binaries/` bounded and never commit them.
 
 ## Goal
-The project `ue/SCViewer` exists, renders with Nanite + Lumen + HWRT on Vulkan, and
+The project `viewer` exists, renders with Nanite + Lumen + HWRT on Vulkan, and
 **the standalone build path is decided** (plan D3): can a game-mode window build
 Nanite meshes and cook complex collision at runtime, and if so from which target?
 
 ## Tasks
-1. `ue/README.md`: engine version, path, `df -h` headroom. `.claude/launch.json`
-   entries `ue-editor` (`UnrealEditor ue/SCViewer/SCViewer.uproject`) and
-   `ue-game` (`UnrealEditor ue/SCViewer/SCViewer.uproject -game -windowed -resx=1600 -resy=900`).
-2. Create `ue/SCViewer/SCViewer.uproject` (C++; targets `SCViewer` Game and
+1. `viewer/README.md`: engine version, path, `df -h` headroom. `.claude/launch.json`
+   entries `ue-editor` (`UnrealEditor viewer/SCViewer.uproject`) and
+   `ue-game` (`UnrealEditor viewer/SCViewer.uproject -game -windowed -resx=1600 -resy=900`).
+2. Create `viewer/SCViewer.uproject` (C++; targets `SCViewer` Game and
    `SCViewerEditor` Editor) with plugins `Interchange`, `InterchangeEditor`,
    `GeometryScripting`, `PythonScriptPlugin`, `EditorScriptingUtilities`. Settings:
    Nanite on, Lumen GI + reflections, HWRT on, VSM, Vulkan SM6 default RHI. Create the
-   empty plugin skeleton `ue/Plugins/SCBridge` with modules `SCBridge` (Runtime),
+   empty plugin skeleton `plugins/SCBridge` with modules `SCBridge` (Runtime),
    `SCBridgeEditor` (Editor), `SCBridgeLib` (ThirdParty, empty for now).
 3. Map `Content/Maps/Viewer`: sky light, directional light, neutral floor with
    collision, Nanite cubes, emissive sphere. Verify Nanite visualisation and Lumen
@@ -56,10 +56,10 @@ Nanite meshes and cook complex collision at runtime, and if so from which target
 9. Check Nanite skeletal mesh status in 5.8 (experimental? flag?) and record it.
 
 ## Done criteria
-- `ue/README.md` has a **Decision** section: chosen standalone path (A or B), with
+- `viewer/README.md` has a **Decision** section: chosen standalone path (A or B), with
   compile results, Nanite-at-runtime yes/no per host, collision-at-runtime yes/no,
   render-data round-trip yes/no per host, timings, and the exact launch command. `docs/02-implementation-plan.md` D3 and
   `docs/03-unreal-export-design.md` updated to say which path won.
-- `UnrealEditor-Cmd ue/SCViewer/SCViewer.uproject -run=pythonscript -script=<x>` works
+- `UnrealEditor-Cmd viewer/SCViewer.uproject -run=pythonscript -script=<x>` works
   headless (needed by WP-Q1).
-- `ue/SCViewer` and `ue/Plugins/SCBridge` committed without build products.
+- `viewer` and `plugins/SCBridge` committed without build products.

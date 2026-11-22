@@ -344,7 +344,7 @@ From the repository root, build once initially and use a fresh scratch cache for
 ```powershell
 $env:SC_SPIKE = '1'
 $engine = Join-Path $env:USERPROFILE 'UnrealEngine-5.9-src'
-$project = (Resolve-Path 'ue/SCViewer/SCViewer.uproject').Path
+$project = (Resolve-Path 'viewer/SCViewer.uproject').Path
 & "$engine/Engine/Build/BatchFiles/Build.bat" SCViewerEditor Win64 Development "-Project=$project" -WaitMutex
 $editor = "$engine/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
 $scratch = Join-Path (Get-Location) 'out/c1-probe'
@@ -363,7 +363,7 @@ Loading a model the second time performs no processing: no StarBreaker export
 actor is reconstructed from cached blobs in a few seconds.
 
 ## Read first
-`docs/03-unreal-export-design.md` §Local file cache; `ue/README.md` Decision section
+`docs/03-unreal-export-design.md` §Local file cache; `viewer/README.md` Decision section
 (which serialisation path round-tripped in the chosen host).
 
 ## Deliverables

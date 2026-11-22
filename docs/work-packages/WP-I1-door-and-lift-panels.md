@@ -43,7 +43,7 @@ and `forward_rendering` false. It has an authored `Glow` and a `BackColour`.
 3. `:700–705`: a screen without a `DiffuseMap` (every `$RenderToTexture` screen) gets `EmissiveStrength = 0`. The
    comment there says "Screens draw render-to-texture content bound per instance (ui_bindings, WP later); dark until
    then."
-4. `ue/scripts/create_materials.py:735` builds `M_SC_Emissive_Unlit` as `BLEND_ADDITIVE`, with emission = colour ×
+4. `viewer/scripts/create_materials.py:735` builds `M_SC_Emissive_Unlit` as `BLEND_ADDITIVE`, with emission = colour ×
    `EmissiveStrength`. With a strength of 0 it adds nothing, so the surface is fully transparent.
 5. `SCImportMaterials.cpp:128` `Invisible()` is the same description (EmissiveUnlit, Translucent, strength 0).
    `SCMaterialTests.cpp:499` pins the current behaviour.
@@ -228,13 +228,13 @@ WP-P5's to resolve. This WP does not add links.
    - **Interior placements:** bind all of the placement's `$RenderToTexture` slots.
    - **Caching:** use one material instance per (sidecar, submaterial, image) and load each PNG once per import.
    - **Logging:** log `SCREEN_BIND instances=<n> images=<m> skipped_mfd=<k>`.
-4. **Docs.** Update `ue/README.md` (materials and first-person sections) and `vendor/StarBreaker/docs/decomposed-export-contract.md`'s
+4. **Docs.** Update `viewer/README.md` (materials and first-person sections) and `vendor/StarBreaker/docs/decomposed-export-contract.md`'s
    consumer note through WP-D1 (the UE consumer now exists).
 
 **Done means:**
 
 - The C2 (`-SCLoad=CRUS_Starlifter_C2`) and the hangar (`-SCEnvironment=…/hightech_a/hangar_xltop_001.socpak`) show
-  every panel in the section 1 table. Evidence: first-person screenshots in `ue/verification/WP-I1.md` (`sc.FP.Spawn`
+  every panel in the section 1 table. Evidence: first-person screenshots in `viewer/verification/WP-I1.md` (`sc.FP.Spawn`
   plus `sc.FP.Look`) of:
   - the bridge door pads and bridge buttons;
   - a corridor ring pad;
@@ -1141,7 +1141,7 @@ Owner reports on the C2 in `hangar_xltop_001`: (1) the rear doors stand open at 
 closed before playing them open; (2) the front doors stand open too, with no ramp to the outside and no door panel beside
 the three light switches; (3) the light switches do not switch lights. Exporter on submodule branch `scviewer/c2-fixes`
 (`8b93175a` from `f39c62a4`; review fixes `f782be30`, `7e856af6`, `b1c338d7`, `c238e73c`), cache format 39. Datamine in `out/c2-fixes/datamine/{doors,lights}`, runs in
-`out/c2-fixes/run3` (final build; `run2` before the review fixes, same results) (`ue/scripts/rpc/c2-fixes.ps1`). Nothing committed in this repo.
+`out/c2-fixes/run3` (final build; `run2` before the review fixes, same results) (`viewer/scripts/rpc/c2-fixes.ps1`). Nothing committed in this repo.
 
 ### 1. The rear ramp open at spawn, the toggle snapping
 
@@ -1292,7 +1292,7 @@ Not fixed, with the reason:
 
 Owner report on the C2 in `hangar_xltop_001`: "going through a door once, the animation plays and the sound triggers;
 coming back, the doors appear closed, but near enough they instantly open: no animation, no sound." Runs in
-`out/doors-reopen/{before,after}` (`ue/scripts/rpc/c2-doors-reopen.ps1`, port 8771, off screen). Nothing committed.
+`out/doors-reopen/{before,after}` (`viewer/scripts/rpc/c2-doors-reopen.ps1`, port 8771, off screen). Nothing committed.
 
 **Reproduced** (`before/run.txt`, the a934c5b build). Each candidate door was first opened by its sensor once (the probe:
 `AUDIO_PLAY …Large_Door_Open` / `…Small_Door_Open`, the clip played); its close left no sound and finished at once. Every
@@ -1451,7 +1451,7 @@ panel's `AuxLightsButton` change; a node of another canvas changes nothing (not 
 - Console: `sc.FP.Prompt` (`FP_PROMPT_NOW`), `FP_PROMPT` / `FP_PROMPT_SELECT` on change; the wheel is
   `sc.FP.Key MouseScrollDown 1`; `sc.Panels.Hover` lists the hover faces (`PANEL_AIM`) and usables (`USABLE`).
 
-### Verification (C2 in `hangar_xltop_001`, first person, port 8772, `ue/scripts/rpc/interaction-feedback.ps1`)
+### Verification (C2 in `hangar_xltop_001`, first person, port 8772, `viewer/scripts/rpc/interaction-feedback.ps1`)
 
 - Export at cache format 43 (after review): hangar `SCREEN_STATES faces=20 hover_images=38`, `PANEL_HOVER_FACES
   aims=20`; C2 `faces=62 state_images=141 hover_images=169 usables=7`, `PANEL_HOVER_FACES aims=52

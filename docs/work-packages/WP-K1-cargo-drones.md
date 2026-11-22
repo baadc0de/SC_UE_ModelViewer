@@ -106,7 +106,7 @@ except for exporting packages: the cargo logic itself is plain C++.
   deploys grids whose owner has an Open/Close-family Mannequin fragment (by fragment tags, not by names) before
   access, retracts after. Console: `sc.Cargo.List`, `sc.Cargo.Transfer <from> <to> <commodity> <scu>`,
   `sc.Cargo.Cancel <id>`, `sc.Cargo.Debug 0|1`. Log markers `CARGO_JOB id=.. state=..`.
-- **Scenario** (content, not code): `ue/SCViewer/Config/Cargo/<name>.json` — ship, environment, stock per grid
+- **Scenario** (content, not code): `viewer/Config/Cargo/<name>.json` — ship, environment, stock per grid
   selector (environment/vehicle + grid index or nearest), container entity names and counts, dock count. Settings
   `CargoScenario` / `-SCCargoScenario=`.
 
@@ -133,7 +133,7 @@ downloads) in the type scale's sizes. Tokens in one style file (`SCMobiGlasStyle
 Drone (≈ 1 m class, four ducted lift fans, belly tractor emitter, nav lights, MISC/industrial hard-surface language
 matching SC content), drone dock (1.25 m footprint cradle holding the drones), tractor-beam material, grid slot
 highlight (flat lines, not a hologram). Built reproducibly by an editor Python script with Geometry Script
-(`ue/scripts/create_cargo_art.py`) into plugin content `ue/Plugins/SCBridge/Content/Cargo/` (`/SCBridge/Cargo/`; `/Game/SC/` is gitignored game-derived content); no game-derived files in git. Reference renders of SC
+(`viewer/scripts/create_cargo_art.py`) into plugin content `plugins/SCBridge/Content/Cargo/` (`/SCBridge/Cargo/`; `/Game/SC/` is gitignored game-derived content); no game-derived files in git. Reference renders of SC
 drone geometry (`AEGS_Reclaimer_Drone.cga`, `mining_drone_body_001_a.cga`, `ph_repairdrone.cgf`) may be exported to
 `out/` for study. Also an HTML/SVG mock of the mobiGlas Cargo app at 1920×1080 using the tokens.
 
@@ -141,9 +141,9 @@ drone geometry (`AEGS_Reclaimer_Drone.cga`, `mining_drone_body_001_a.cga`, `ph_r
 
 - `cargo test --workspace` green; K1a fields present for Hull A and the hangar elevator (excerpts in the PR).
 - UE Development Editor builds on Win64; cargo planner automation tests pass (`Automation RunTests SCBridge.Cargo`).
-- Route `ue/scripts/routes/cargo-hull-a.txt` (first person, hangar + Hull A): opens the mobiGlas, orders an
+- Route `viewer/scripts/routes/cargo-hull-a.txt` (first person, hangar + Hull A): opens the mobiGlas, orders an
   elevator → Hull A transfer, the 32 SCU box is refused with its reason, 16 SCU boxes are carried by drones and lock
-  on the grids, and back; shots at each stage via `-SCShotDir`. Shots and timings in `ue/verification/WP-K1.md`.
+  on the grids, and back; shots at each stage via `-SCShotDir`. Shots and timings in `viewer/verification/WP-K1.md`.
 - No asset-name branches; every game value comes from the package; docs updated.
 
 ## Out of scope

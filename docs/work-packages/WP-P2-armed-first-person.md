@@ -204,14 +204,14 @@ All in the Runtime module; no editor-only dependency.
    weapon attachment parent is the hand bone when armed and the stow bone when stowed;
    state machine ignores input mid-transition.
 
-Done when (GPU, screenshots in `ue/verification/WP-P2.md`): Cutlass Black loaded →
+Done when (GPU, screenshots in `viewer/verification/WP-P2.md`): Cutlass Black loaded →
 first person at the ramp: arms and P4-AR visible, idle; running forward and strafing
 with matching feet (third-person capture); mid-`select` and mid-`deselect` frames;
 stowed weapon on the backpack in third person; walk up the ramp, open the interior
 door with E while armed, reach the cockpit; frame time within 10 % of WP-P1; no asset
 or ship names in code.
 
-### P2b status (implemented; evidence in `ue/verification/WP-P2.md`)
+### P2b status (implemented; evidence in `viewer/verification/WP-P2.md`)
 
 Built as specified, with these deviations (each decided from the data, not by eye):
 
@@ -237,7 +237,7 @@ Built as specified, with these deviations (each decided from the data, not by ey
   pitch interim), frame cost within 10 % (see verification: the visible skinned body parts cost ~0.6 ms GPU and
   ~1 ms render thread).
 
-### P2b round 2 status (look and correctness; evidence in `ue/verification/WP-P2.md` "Round 2")
+### P2b round 2 status (look and correctness; evidence in `viewer/verification/WP-P2.md` "Round 2")
 
 - **Materials**: the white/checkered body and weapon were the engine's WorldGrid default material — the SC
   masters lacked the skeletal-mesh usage flag, which a `-game` session cannot add at runtime. All masters now

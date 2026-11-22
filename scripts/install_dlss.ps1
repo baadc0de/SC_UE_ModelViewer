@@ -1,4 +1,4 @@
-# Install NVIDIA's DLSS Unreal plugin into ue/Plugins/NVIDIA (gitignored: NVIDIA's license does not allow committing it)
+# Install NVIDIA's DLSS Unreal plugin into plugins/NVIDIA (gitignored: NVIDIA's license does not allow committing it)
 # from the zip downloaded at https://developer.nvidia.com/rtx/dlss, and make it compile on UE 5.9.
 #
 # Copies DLSS and its one dependency, StreamlineNGXCommon (the other plugins in the zip are not used), drops the
@@ -13,7 +13,7 @@
 param([Parameter(Mandatory = $true)][string]$Zip)
 $PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$dest = Join-Path $repo 'ue\Plugins\NVIDIA'
+$dest = Join-Path $repo 'plugins\NVIDIA'
 $work = Join-Path ([IO.Path]::GetTempPath()) ('dlss-' + [guid]::NewGuid().ToString('N'))
 
 Write-Host "Extracting $Zip"

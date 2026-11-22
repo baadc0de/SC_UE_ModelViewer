@@ -3,7 +3,7 @@
 ## Why
 
 The viewer collides the player against render meshes. At LOD 0 the Cutlass ramp's hinge lip stops the player at
-the top of the open ramp (`ue/verification/WP-T1.md`). Star Engine never collides movement against render
+the top of the open ramp (`viewer/verification/WP-T1.md`). Star Engine never collides movement against render
 meshes: every `.cga` / `.cgf` carries CryPhysics geometry in its `StatObjPhysics` chunk, simplified colliders
 authored per node (`$proxy_*` hull pieces, a 744-triangle walk proxy for the whole Cutlass cargo bay, the ramp's
 `PLAYER_ONLY_COLLISIONS` wedge across its hinge). StarBreaker does not decode the chunk yet.

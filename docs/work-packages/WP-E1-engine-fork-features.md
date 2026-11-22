@@ -60,10 +60,10 @@ No engine commit (project-side only).
   and the documented commands (`create_cargo_art.py`, `docs/cargo/art.md`, READMEs) default to
   `%USERPROFILE%\UnrealEngine-5.9-src` (`~/UnrealEngine-5.9-src`), overridable with `-Engine` / `UE_ENGINE_ROOT`; the
   PowerShell entry points fail early when no engine is there.
-- **Docs:** plan D17 (D9 and D14 marked superseded), `AGENTS.md`, `README.md`, `ue/README.md` (showcase cooking now
+- **Docs:** plan D17 (D9 and D14 marked superseded), `AGENTS.md`, `README.md`, `viewer/README.md` (showcase cooking now
   stands on its own), `docs/03-unreal-export-design.md`, WP-H1 / K1 / K4, the FFI README and the cargo JSON provenance.
   `ue/EnginePatches/README.md` says it is for the obsolete binary engine. No NvRTX / RTX-fork run configuration, ini
-  section or script remained; historical records (`ue/verification`, WP-U0 / U2 / U3b, WP-L3 / P4 "not verified" notes)
+  section or script remained; historical records (`viewer/verification`, WP-U0 / U2 / U3b, WP-L3 / P4 "not verified" notes)
   are left as they are.
 - **Kept:** the cooked-ship and cooked-hangar paths (`cook_ships.py`, `cook_hangars.py`, loading without an archive),
   which the Win64 showcase uses; the `RHI_RAYTRACING` and non-editor Nanite guards (correct for any cooked game);
@@ -107,7 +107,7 @@ Engine `ad613210a` (with the capabilities header `SCViewerEngineFeatures.h`).
   (`bIsLightFunctionAtlasCompatible`), so the first fork run logged 186 lights with light functions and 0 sampling the
   atlas. `create_light_material.py` now sets "Compatible With Light Function Atlas", and the asset is regenerated.
   This affected every engine since WP-L3: MegaLights drew no gobos, and deferred lights used the per-light pass.
-- **Runs** (source engine, `out/e1/E1-1/`, log `ue/SCViewer/Saved/Logs/E1-1-run2.log` and `E1-1-lrgtop.log`):
+- **Runs** (source engine, `out/e1/E1-1/`, log `viewer/Saved/Logs/E1-1-run2.log` and `E1-1-lrgtop.log`):
 
   | Hangar | lights with LF | sampling | material tiles | MaxLightCount 64 | MaxLightCount 255 |
   |---|---|---|---|---|---|
@@ -447,10 +447,10 @@ Engine `3079e8bc3` (`SCVIEWER_ENGINE_TONE_CURVE` 1).
   no UE lens vignette (the material had none; the game's vignetting map is not modelled), local exposure off), or clears
   every one of those overrides (`sc.Look.Display ue`: UE's tonemapper as the project and map set it, Filmic with UE's
   vignette). `Install` tags the volume (`SCViewerExposure::VolumeTag`) and no longer adds a blendable; the log line names
-  the curve. Removed: `M_SC_DisplayMapping.uasset`, `ue/scripts/create_display_mapping_material.py`, its `KEEP` entry in
+  the curve. Removed: `M_SC_DisplayMapping.uasset`, `viewer/scripts/create_display_mapping_material.py`, its `KEEP` entry in
   `create_materials.py`; the port's hash guard moved to `SCBridge.ViewerExposure.DisplayCurve` (fails when the fixture's
   `HuePreservingShoulder` / `GetLuminance` / `ToSRGB` hashes differ from the ones the engine port was written from);
-  `StarEngineRender.notes.md` and `ue/README.md` updated (WP-U3b §13.5 and WP-L3 are historical records and keep their
+  `StarEngineRender.notes.md` and `viewer/README.md` updated (WP-U3b §13.5 and WP-L3 are historical records and keep their
   wording). Tests: new `SCBridge.ViewerExposure.DisplayCurve` (parameter derivation, unsupported curve, game / UE settings,
   hash guard), `.Install` checks the tag, the method, the peak and no blendable; 17/17 with `SCBridge.ViewerExposure`,
   `.StarEngine`, `.Lights`, `.Rig.Lights`, `.Materials.MasterAssets` (log `E1-4-tests.log`).
@@ -903,7 +903,7 @@ Engine `e2ec17572` (`SCViewer: stateless spawn review fixes`; Terra `out/e1/E1-6
   loops do not fit (7.75 s at 0.25 s fits 32 exactly and keeps 0.25 s).
 - **Stale FX.** The generated contract is versioned: SCFxBuild writes the user parameter `SC.FxContract` = `SCFxRules::FxContractVersion` (2);
   the runtime (`SCFxContract::Check`, from `SCFxStrength::Set`, non-shipping) warns `SC_FX_STALE` once per system without it or with an older
-  one; `-run=SCFxBuild -VerifyContract` lists every system under `/Game/SC/FX` and fails on a stale one, and `ue/scripts/package_showcase.ps1`
+  one; `-run=SCFxBuild -VerifyContract` lists every system under `/Game/SC/FX` and fails on a stale one, and `viewer/scripts/package_showcase.ps1`
   runs it before cooking and refuses stale systems. The legacy setters (`SC.SV`, `SC.BR`, `SC.Scale2`) stay removed.
 - **Tests** (tests first for the builder rules: `out/e1/E1-6/review/testsfirst.log`, the new `SCBridge.Fx.ReviewRules` against the E1-6
   rules: the exact fit stretched to 0.25025 s, 33 / 33 / 34 bursts where 32 / 32 / 33 are alive, the step's later value
@@ -1012,8 +1012,8 @@ shader edits, `SCSSDO.ush` and the generated `SCSSDOParams.ush` are removed; no 
   ported hashes, UE default = no pass), `.Blend` (viewer over an opt-in map volume, half-weight lerp, install follows the setting), `.Rules`
   (`r.SSDO` modes, debug, unsupported view, clamps), `.LumenInterplay` (the rule; `DirectLightFactor` = the game's `CalculateSSDO` to
   < 1e-5 over 360 cases); `SCBridge.StarEngine.*` read and range-check the new fixture values. Removed: `ue/EnginePatches/`,
-  `ue/scripts/engine_patches.py`, every `r.GeneralPurposeTweak` use (routes `cutlass-ssdo*.txt`, `cutlass-look-iter1*.txt` now use
-  `sc.Look.SSDO` / `r.SSDO.Debug`); AGENTS.md, README, `ue/README.md`, plan D14, WP-L2, WP-L3, LOOK-1, the WP-L2 verification, the fixture
+  `viewer/scripts/engine_patches.py`, every `r.GeneralPurposeTweak` use (routes `cutlass-ssdo*.txt`, `cutlass-look-iter1*.txt` now use
+  `sc.Look.SSDO` / `r.SSDO.Debug`); AGENTS.md, README, `viewer/README.md`, plan D14, WP-L2, WP-L3, LOOK-1, the WP-L2 verification, the fixture
   notes and `DefaultScalability.ini` updated.
 - **Runs** (fork, medfrnt, 1920x1080, E1-5's poses; `out/e1/E1-7/`: `run-old.txt`, `run-new.txt`, `run-def.txt`, `shots/`,
   `pairstats*.txt`; logs `E1-7-old.log`, `E1-7-new.log`, `E1-7-def.log`). Baseline "old" = engine `e2ec17572` with the patch header's amounts
@@ -1185,7 +1185,7 @@ coordinator's triage): `SCVIEWER_ENGINE_TONE_CURVE` 5, `SCVIEWER_ENGINE_EXPOSURE
 
 ### E1-8 Refraction dispersion
 Today: UE's distortion pass (`DistortAccumulatePS` / `DistortApplyScreenPS`) moves the scene colour by one 2D offset per pixel.
-The viewer's glass refraction look (ue/verification/WP-U3b.md §14.10) moved into that pass to fix an embossing artefact, and the
+The viewer's glass refraction look (viewer/verification/WP-U3b.md §14.10) moved into that pass to fix an embossing artefact, and the
 owner's colour fringing (dispersion per profile: canopy 0.25, kit 0.25, default 0.5) needs per-channel offsets; taps of a
 scene-colour copy in the glass's own blend would bring the artefact back.
 - `r.Refraction.Dispersion` (read only, default 0 = UE): 1 adds a fourth accumulate target (`PF_G16R16F`, additive) holding each
@@ -1206,7 +1206,7 @@ Engine `848efefd8` (`DistortionRendering.cpp`, `DistortAccumulatePS.usf`, `Disto
   Every desktop Substrate accumulate shader declares the fourth output; with the cvar at 0 it is unbound and the image is UE's.
 - **Project.** `DefaultEngine.ini` `r.Refraction.Dispersion=1` (with `r.Refraction.Blur=0`, `r.Refraction.OffsetQuality=1`);
   `M_SC_Glass`'s guard node sets the spread `GlassDispersion × (2 − N·V)`; the owner's profiles carry the dispersion again
-  (ue/verification/WP-U3b.md §14.10).
+  (viewer/verification/WP-U3b.md §14.10).
 - **Verified** (WP-U3b.md §14.10): engine + project build; 159 / 163 `SCBridge` (the 4 known); C2 runs: fringing visible at the
   owner's values on the pod, cylinder, lift, lift2, canopy and optic, Astra "similar in strength and character" to the first
   version on the pod and lift and wider on stacked panes (cylinder, optic); `r.Refraction.Dispersion 0` (ini override) with the
@@ -1322,7 +1322,7 @@ Terra / Astra (`out/screen-exposure/review/terra-review.md`, `astra-code-review.
 | E1-5 | `cfe9d5032`, `cfc636921`, `03d211bcb`; review fixes 3 `9303fe332`; review fixes 4 `0fa9c692a` | fixture (+4 values, +3 hashes), `FSCExposureSettings` (game meter + two-stage adaptation, no LUT cvars, API instead of the copied rule), `DefaultEngine.ini` LUT domain policy, `sc.Look.Exposure`, `sc.Look.ExposureLog`, tests, notes / README | engine + project build, 21/21 tests, medfrnt runs before / UE / game with GPU cost, adaptation step vs the game model, LUT stale-domain run, Astra (Result (E1-5)); review fixes `0d847e519` (Terra T1–T7, Astra A1–A18; `sc.Look.Exposure ue` overrides, scoped cvar priority, fixture provenance): 25/25 tests, medfrnt before / after runs (E1-5 review fixes); review fixes 2 `3808c1160` (LUT task race, snapshot after view extensions, CPU-curve limits, incident weight / FP32 / unfloored, multi-view fallbacks, LUT policy API; trace without pre-exposure, isolated policy test): 137/141 `SCBridge`, E1-5 steady state and steps within 0.0005 stops (E1-5 review fixes 2); review fixes 3 (T2 / A10 incident producers and exact tiling, A14 collapsed rects, T6 UE rects, A11 histogram source, A12 ordered limits, A15 double LUT scale): tests first (`.ReviewRules3`), 148/152, steady state and steps within 0.0004 stops of `rv2` (E1-5 review fixes 3); review fixes 4 (per-view Reflected fallback input): rule test, 150/154, within 0.0002 stops of `rv3` (Review fixes 4) |
 | E1-6 | `ad5c402d9`, `05559963d`, `9f382da2b`, `c7a0e82f7`; review fixes 3 `41df91ebe`; review fixes 4 `0fa9c692a` | SCFxBuild: loop guard from the engine constant (`SCFxRules.h`), typed expressions, beam spawn-rate and count expressions, clamp-sum strength curves, owner-scale sprite sizes, `-LoopCapacity`; runtime contract reduced (`SCFxStrength.h`, `SCFxBeam.h`, cargo contacts, `sc.Fx.Spawn`); `bTreatAsEngineModule` kept (boundary); tests `SCBridge.Fx.*`; WP-K4 contract note | engine + project build, FX build errors=0, 25/25 tests, medfrnt overflow runs at 8 / 32, GPU cost, before / after frames, Astra (Result (E1-6)); review fixes `e2ec17572` (effective limit cvar, default 8, 32 in `DefaultEngine.ini`; expression validation; expression-aware filtering; collections; rate residual) and the builder / contract fixes (`SCFxContract.h`, `-VerifyContract`, package check): tests first, 137/141, FX build errors=0, verify stale=0, 0 overflows, PSNR as E1-6 (E1-6 review fixes); review fixes 3 (A1 captured limit, A2 runtime validation, A3 burst predicate, A4 UE timing, A5 collections, A8 counter, GreaterThan; builder T3-T5, A8, A9, contract 3): tests first, 148/152, FX build errors=0, verify stale=0 load_failures=0, 0 overflows, PSNR as before (E1-6 review fixes 3); review fixes 4 (collection lookup subclasses / discovery): 150/154, verify stale=0 (Review fixes 4) |
 | E1-7 | `6f5b30b63` (supersedes `b65d09ad1`, `9cad77abb`); review fixes `500fca6c0`; review fixes 4 `0fa9c692a` | fixture (+`DeriveSpecularOcclusion`), `FSCStarEngine` SSDO values, `FSCSSDOSettings`, `bStarEngineSSDO` (off, D15), `sc.Look.SSDO`, tests `SCBridge.ViewerExposure.SSDO.*`; `ue/EnginePatches`, `engine_patches.py`, `r.GeneralPurposeTweak` removed (routes, docs, AGENTS, READMEs) | engine + project build, 141/145 `SCBridge` (the 4 known), medfrnt old patch vs new feature off / on, SR-AO interplay, deferred-light run, GPU cost, Astra (Result (E1-7)); review fixes (partial replacement, short-range GI, deferred SSAO, DFAO, orthographic, game arc cosines, toon fallback; project null world, integral quality, shipped-default test): 148/152, pre / post interplay and GI runs, old vs new at noise, Astra pass (E1-7 review fixes); review fixes 4 (GI only where written, HWRT fallback, per-view AO downsample, GI resolution, bEnabled, ties-to-even): 150/154, post pairs unchanged, downsample-2 / irradiance-field / HWRT + RDG validation runs (Review fixes 4) |
-| E1-8 | `848efefd8` | `DefaultEngine.ini` (`r.Refraction.Dispersion=1`, `r.Refraction.Blur=0`, `r.Refraction.OffsetQuality=1`), `M_SC_Glass` on the distortion pass with the spread (`create_materials.py`), profiles with dispersion (`SCLook.h`), tests `SCBridge.Materials.*` | engine + project build, 159/163 `SCBridge` (the 4 known), C2 runs with fringing at the owner's values, cvar 0 vs pre-E1-8 at noise, GPU cost, Astra, Terra / Astra review (Result (E1-8); ue/verification/WP-U3b.md §14.10) |
+| E1-8 | `848efefd8` | `DefaultEngine.ini` (`r.Refraction.Dispersion=1`, `r.Refraction.Blur=0`, `r.Refraction.OffsetQuality=1`), `M_SC_Glass` on the distortion pass with the spread (`create_materials.py`), profiles with dispersion (`SCLook.h`), tests `SCBridge.Materials.*` | engine + project build, 159/163 `SCBridge` (the 4 known), C2 runs with fringing at the owner's values, cvar 0 vs pre-E1-8 at noise, GPU cost, Astra, Terra / Astra review (Result (E1-8); viewer/verification/WP-U3b.md §14.10) |
 | E1-9 | `01596d9c0`, review fixes `43b8d033b` | `M_SC_Screen` / `_Translucent` DBA from `EyeAdaptationUnclamped` (`create_materials.py`, regenerated), `FSCStarEngine::ScreenDBA`, compensation curve over the meter's reach (`FSCExposureSettings`), `sc.Look.ExposureLog unclamped=`, tests `SCBridge.Materials.ScreenDBA`, `.ScreenExposureNode`, `.ViewerExposure.Settings` | engine + project build, tests first, 198/202 `SCBridge` (the 4 known), C2 runs: lane = two-stage state, 56 pads constant, 6 pads below the clamp at the game's ratio, PSNR at noise, Astra CLOSER; Terra / Astra review (Result (E1-9), E1-9 review fixes) |
 
 ## Owner decisions (2026-11-20)

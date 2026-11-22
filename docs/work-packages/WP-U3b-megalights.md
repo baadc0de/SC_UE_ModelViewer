@@ -28,8 +28,8 @@ hardware ray tracing, which the Viewer level already uses (D8/D9, Vulkan HWRT).
 3. Check correctness: no light leaking through walls (stochastic shadows), gobo
    projection, emissive + Lumen interplay, and the candela-proxy intensities
    (`intensity_candela_proxy`) at the interior views against
-   `ue/verification/reference/gladius/*.webp` where applicable.
-4. Write the comparison and decision into `ue/verification/WP-U3b.md` (facts with
+   `viewer/verification/reference/gladius/*.webp` where applicable.
+4. Write the comparison and decision into `viewer/verification/WP-U3b.md` (facts with
    file/CVar references, a feature table, measured frame times, screenshots) and a
    10-line summary into this brief under "Decision". If MegaLights wins, enable it
    in the project and set the light importer's per-light flags accordingly
@@ -40,15 +40,15 @@ hardware ray tracing, which the Viewer level already uses (D8/D9, Vulkan HWRT).
    whose radius or intensity exceeds a data-derived threshold), never a per-ship list.
 
 ## Done criteria
-- `ue/verification/WP-U3b.md` has the status facts, the frame-time table for both
+- `viewer/verification/WP-U3b.md` has the status facts, the frame-time table for both
   ships under each configuration, the interior screenshots, and the decision.
 - With the chosen configuration the Cutlass Black interior renders all its lights
   without leaking at an interactive frame rate on the RTX 4090 (state the number),
   and the Gladius still matches its reference images.
-- Any new project setting is in `ue/SCViewer/Config/DefaultEngine.ini` with a comment
+- Any new project setting is in `viewer/Config/DefaultEngine.ini` with a comment
   pointing at the verification record.
 
-## Decision (2026-11-09, evidence in `ue/verification/WP-U3b.md`)
+## Decision (2026-11-09, evidence in `viewer/verification/WP-U3b.md`)
 1. MegaLights is enabled for the project (`r.MegaLights.EnableForProject=1`). It is still marked
    Experimental in 5.8.2 but supported on VULKAN_SM6 (SM6 + wave ops + HWRT), with Substrate.
 2. Cutlass bay, 153 lights: 10.0 → 7.0 ms GPU at 1600×900 and 28.8 → 16.9 ms at 3840×2160
@@ -72,7 +72,7 @@ hardware ray tracing, which the Viewer level already uses (D8/D9, Vulkan HWRT).
     balance (EV100 −1.1 bay), auto-exposure metering in the void, `attenuation_tweak` semantics.
 12. Game photometry (record §13, 2026-11-10): intensity, glow, exposure and the display curve now come from the
     installed game's renderer through an extracted, validated fixture
-    (`ue/Plugins/SCBridge/Resources/StarEngineRender.json`, `scripts/verify_star_engine_render.py`):
+    (`plugins/SCBridge/Resources/StarEngineRender.json`, `scripts/verify_star_engine_render.py`):
     scene unit 1000 cd/m², I = π·1000·intensity·(1 + bulb/tweak)² (replaces item 11's π·10⁴·intensity·bulb²),
     material glow 400·Glow² scene units, effect-system Glow as linear instance glow, the game's EV-compensation
     curve / multiplier clamp / pupil adaptation as UE histogram exposure, `HuePreservingShoulder` as a

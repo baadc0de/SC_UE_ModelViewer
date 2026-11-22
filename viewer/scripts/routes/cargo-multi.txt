@@ -1,0 +1,41 @@
+# WP-K1 cargo by drones, mixed ownership: three MISC Hull A (yours, Owner B's, Owner C's) in the large high-tech hangar
+# share its cargo lift, scenario viewer/Config/Cargo/hull_a_multi.json (the scenario spawns the two extra ships).
+# Each ship has its own dock (two drones that serve only their owner); the hangar's dock on the elevator is a shared pool
+# served in fair turns. The elevator holds 16 SCU boxes of all three owners (four of B's) and a 32 SCU box of B's.
+# First a preview of more than you own (refused with the other owners' boxes named), then three competing transfers
+# submitted within a second, each owner from the elevator to their own ship (B fills all three free plates); then a
+# second transfer of B's, queued behind the first (its cells are reserved by it: it waits rather than failing, and gets
+# its answer once the first is done). Logs: CARGO_JOB owner=..., CARGO_TEAM, CARGO_PICK, no box or
+# cell in two jobs (CARGO_PREVIEW_MOVE / reservations), fair turns (the jobs progress together).
+# Host: -SCCamera=first -SCLoad=MISC_Hull_A
+#   -SCEnvironment=Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_lrgtop_001.socpak
+#   -SCCargoScenario=hull_a_multi -SCShotDir=<dir>
+80 sc.Cargo.List
+0 sc.Cargo.Debug 1
+0 sc.FP.Noclip 1
+0 sc.Cargo.View MISC+elevator 70 40 120 free
+1 shot multi-hangar
+0 sc.Cargo.Preview elevator ship organic 96
+0 sc.Cargo.Preview elevator ship organic 32 --owner=b
+0 sc.Cargo.Transfer elevator ship organic 32
+0.3 sc.Cargo.Transfer elevator ship organic 48 --owner=b
+0.3 sc.Cargo.Transfer elevator ship organic 32 --owner=c
+0.3 sc.Cargo.Transfer elevator ship organic 16 --owner=b
+2 sc.Cargo.List
+10 sc.Cargo.View MISC+elevator 60 30 150 free
+0.5 shot multi-swarms-1
+8 sc.Cargo.View MISC+elevator 60 30 210 free
+0.5 shot multi-swarms-2
+8 sc.Cargo.ViewMoving 16 6 30
+0.5 shot multi-close-1
+10 sc.Cargo.View MISC+elevator 60 30 150 free
+0.5 shot multi-swarms-3
+10 sc.Cargo.List
+30 sc.Cargo.View MISC+elevator 60 30 150 free
+0.5 shot multi-swarms-4
+40 sc.Cargo.List
+40 sc.Cargo.View MISC+elevator 70 40 120 free
+0.5 shot multi-loaded
+0 sc.Cargo.List
+0 sc.Cargo.Debug 0
+1 quit

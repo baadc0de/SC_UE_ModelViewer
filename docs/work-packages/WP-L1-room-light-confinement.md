@@ -33,4 +33,4 @@ sampled vertices fall outside their component's room so the residual error is me
 - Unit tests: room colouring (chain, odd cycle, disjoint rooms) and the extended `SCBridge.Lights.AreaConfinement`
   (three rooms, per-room light and mesh channels, all-channel lights); `LIGHT_VERIFY` checks the authored shadows.
 - Headless importer and package suites green; GPU routes for the Cutlass, Gladius and Scorpius run; before/after
-  brightness and frame cost recorded in `ue/verification/WP-L1.md`, with the reach graph and conflict count per ship.
+  brightness and frame cost recorded in `viewer/verification/WP-L1.md`, with the reach graph and conflict count per ship.

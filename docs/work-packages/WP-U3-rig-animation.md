@@ -51,7 +51,7 @@ guarded by `WITH_EDITOR` with a runtime path kept working.
 
 ## Implementation findings / deviations (2026-11-09)
 
-See `ue/verification/WP-U3.md` for commands, measured results, and remaining gates.
+See `viewer/verification/WP-U3.md` for commands, measured results, and remaining gates.
 
 - GLB node hierarchies plus skins are sufficient for the supplied packages. The
   importer verifies that each skin inverse bind composed with its joint's node

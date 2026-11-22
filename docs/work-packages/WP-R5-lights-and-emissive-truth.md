@@ -338,7 +338,7 @@ Superproject files: `crates/scviewer-core/README.md`,
 This round starts at superproject `5ce4faa`, submodule `scviewer/lights`
 `98222214`, and supersedes the earlier review's statement that neutral Emissive
 without Glow/map always stays off. The read-only command
-`python3 -I ue/scripts/survey_materials.py out/dec-r5` reproduced **395**
+`python3 -I viewer/scripts/survey_materials.py out/dec-r5` reproduced **395**
 submaterials: **11** forward Illum cards with non-black Emissive/no Glow and
 **42** LayerBlend_V2 materials with non-black Emissive/no Glow/no forward flag.
 The design row's older count of 391 is historical; this agent did not edit it.
@@ -414,7 +414,7 @@ rustfmt --edition 2024 --check vendor/StarBreaker/crates/starbreaker-3d/src/mate
 target/debug/scviewer decomposed Gladius out/dec-r5 --lod 1 --mip 2
 target/debug/scviewer validate out/dec-r5
 python3 -I scripts/verify_wp_r5.py out/wp-r5-amended/before out/dec-r5 --expect-engine-glow present --glow-record out/wp-r5-amended/thruster-record.json
-python3 -I ue/scripts/survey_materials.py out/dec-r5
+python3 -I viewer/scripts/survey_materials.py out/dec-r5
 for entity in Gladius Scorpius Cutlass_Black Controller_Light; do
   target/debug/scviewer --no-cache lights "$entity" > "out/wp-r5-amended/${entity}-lights.json" 2> "out/wp-r5-amended/${entity}-lights.log" || exit
 done
@@ -454,9 +454,9 @@ using it. The structural gate is forward-rendered Illum/HardSurface
 capability. The authored node name still supplies the exact, case-insensitive
 DataCore → NMC join; source material IDs survive sidecar filtering.
 
-Evidence: [the in-game rear reference](../../ue/verification/reference/gladius/rear.webp)
+Evidence: [the in-game rear reference](../../viewer/verification/reference/gladius/rear.webp)
 shows a blue-white nozzle interior with a dark housing, while
-[the UE four-target Glow=50 capture](../../ue/verification/wp-u2/rear-engine-glow50.jpg)
+[the UE four-target Glow=50 capture](../../viewer/verification/wp-u2/rear-engine-glow50.jpg)
 lights the housing. Both images were inspected read-only. On that same node,
 `engine_a` / `engine_b` are deferred Illum, `details` is MeshDecal, and
 `text_decals` is deferred Illum with `%DECAL%DECAL_OPACITY_MAP`; none has an
