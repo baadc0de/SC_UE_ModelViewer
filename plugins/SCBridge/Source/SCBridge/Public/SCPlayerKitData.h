@@ -27,6 +27,35 @@ public:
     static bool ReadPayload(int32 Layout, const TArray<uint8>& Bytes, TSharedPtr<const FSCPlayerKit>& OutKit, TSharedPtr<const FSCPlayerClipMap>& OutClips);
 };
 
+/** WP-O1-4b-2b: a prepared scenario's traversal clips (the seat and ladder actions its vehicle and environment can ask for),
+ *  read once at prep against its player body; a run serves seats and ladders from them instead of the archive. Saved as
+ *  USCPlayerKitData saves its clips: one payload after the layout version, read whole. */
+UCLASS()
+class SCBRIDGE_API USCTraversalClipsData : public UObject
+{
+    GENERATED_BODY()
+public:
+    /** The player body level the clips were read against: their bone indices are its skeleton's. */
+    UPROPERTY() FString BodyLevel;
+    /** Set when loaded (empty when nothing was asked for); null when the payload does not read. */
+    TSharedPtr<const FSCPlayerClipMap> Clips;
+    virtual void Serialize(FArchive& Ar) override;
+};
+
+class ASCVehicle;
+class FSCPackageSource;
+namespace SCTraversal
+{
+/** Every traversal clip a first-person body can ask for on this vehicle or environment: each seat's actions (all of them, a
+ *  superset of what its routes use) and each ladder's. Unique, sorted. Read from saved records (a prepared level's too). */
+SCBRIDGE_API TArray<FString> ClipNames(const ASCVehicle& Vehicle);
+/** Read a player_clips package (FSCBridgeClient::ExportPlayerClips) for Gender: each of Names against Bones (body bone name
+ *  -> index). A name the package lacks or cannot read fails the read with Error, or with bSkipMissing is left out and listed
+ *  in Skipped. */
+SCBRIDGE_API bool ReadClips(const FSCPackageSource& Source, const FString& Gender, const TArray<FString>& Names, const TMap<FString, int32>& Bones,
+                            bool bSkipMissing, FSCPlayerClipMap& Out, TArray<FString>& Skipped, FString& Error);
+}
+
 // Field by field, in declaration order (SCPlayerKit.h, SCPlayerAnimator.h).
 SCBRIDGE_API FArchive& operator<<(FArchive& Ar, FSCItemPort& Port);
 SCBRIDGE_API FArchive& operator<<(FArchive& Ar, FSCFireAction& Action);

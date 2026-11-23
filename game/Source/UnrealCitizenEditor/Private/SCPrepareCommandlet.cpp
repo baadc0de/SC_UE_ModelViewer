@@ -11,6 +11,7 @@
 #include "SCPlayerKit.h"
 #include "SCPlayerKitData.h"
 #include "SCPrepareAudio.h"
+#include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "SCViewOptions.h"
 #include "SCViewerSubsystem.h"
@@ -28,6 +29,7 @@
 #include "Misc/OutputDeviceRedirector.h"
 #include "Misc/ScopeExit.h"
 #include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCPrepare, Log, All);
 
@@ -64,6 +66,8 @@ class FPrepare
 {
 public:
     bool bForce = false;
+    /** This run prepared a level (the traversal clips are read from the levels again). */
+    bool bPreparedLevel = false;
     USCViewerSubsystem* Viewer = nullptr;
 
     /** The archive, opened once on first need. */
@@ -141,6 +145,7 @@ public:
      *  pool stays), and its stamp is removed until the new one saves. */
     UWorld* NewLevel(const FString& Level, const FString& Root, FString& Error)
     {
+        bPreparedLevel = true;
         IFileManager& Files = IFileManager::Get();
         // The stamp goes first: from here until the new level saved, no record can run this level.
         Files.Delete(*StampFile(Level), false, true, true);
@@ -201,9 +206,15 @@ public:
             Error = TEXT("cannot save ") + Level;
             return false;
         }
-        // The stamp is published whole: written beside it first, then moved into place (a level counts as current only with
-        // a complete stamp, FUCPrepared::IsLevelCurrent).
-        const FString Stamp = StampFile(Level), Partial = Stamp + TEXT(".partial");
+        if (!WriteStamp(Level, Error)) return false;
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved level=%s audio_files=%d format=%d"), *Level, AudioFiles, FUCPrepared::FormatVersion);
+        return true;
+    }
+    /** The stamp is published whole: written beside it first, then moved into place (a level or asset counts as current only
+     *  with a complete stamp, FUCPrepared::IsLevelCurrent). */
+    bool WriteStamp(const FString& Package, FString& Error)
+    {
+        const FString Stamp = StampFile(Package), Partial = Stamp + TEXT(".partial");
         IFileManager& Files = IFileManager::Get();
         if (!FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\n%s\n"), FUCPrepared::FormatVersion, *Viewer->GetArchiveBuildId()), *Partial) ||
             !Files.Move(*Stamp, *Partial, true, true))
@@ -213,7 +224,6 @@ public:
             Error = TEXT("cannot write ") + Stamp;
             return false;
         }
-        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved level=%s audio_files=%d format=%d"), *Level, AudioFiles, FUCPrepared::FormatVersion);
         return true;
     }
 
@@ -362,6 +372,81 @@ public:
                *Kit->Gender, *Kit->Loadout, Kit->Weapons.Num(), Kit->States.Num(), Kit->BlendSpaces.Num(), Clips->Num(), FailedClips, Body->Rigs.Num(), Cookies);
         return Finish(Body, Level, TEXT("/Game/SC/Players/") + Name, TEXT("/Game/SC/Players/Shared"), *Source, Scene, Error);
     }
+
+    /** The scenario's traversal clips (WP-O1-4b-2b): every seat and ladder action its vehicle and environment can ask for
+     *  (read from their prepared levels' records), exported once and read against its prepared body's skeleton, saved as one
+     *  asset (USCTraversalClipsData) a run serves seats and ladders from. */
+    bool PrepareTraversal(const FUCPrepared& Record, FString& Error)
+    {
+        // The prepared levels' actors, as saved (a level this run prepared is the package it saved).
+        auto Actors = [](const FString& Level, TFunctionRef<void(ASCVehicle&)> Visit) {
+            UPackage* Package = Level.IsEmpty() ? nullptr : LoadPackage(nullptr, *Level, LOAD_None);
+            UWorld* World = Package ? UWorld::FindWorldInPackage(Package) : nullptr;
+            if (!World || !World->PersistentLevel) return false;
+            for (AActor* Actor : World->PersistentLevel->Actors)
+                if (ASCVehicle* Vehicle = Cast<ASCVehicle>(Actor)) Visit(*Vehicle);
+            return true;
+        };
+        TArray<FString> Names;
+        for (const FString& Level : {Record.VehicleLevel, Record.EnvironmentLevel})
+            if (!Level.IsEmpty() && !Actors(Level, [&](ASCVehicle& Vehicle) {
+                    for (const FString& Name : SCTraversal::ClipNames(Vehicle)) Names.AddUnique(Name);
+                }))
+            {
+                Error = TEXT("the traversal clips: cannot load ") + Level;
+                return false;
+            }
+        Names.Sort();
+        TMap<FString, int32> Bones;
+        FString Gender;
+        Actors(Record.PlayerLevel, [&](ASCVehicle& Vehicle) {
+            const USCRigComponent* Leader = Vehicle.PlayerKit && Vehicle.PlayerKit->HasData() ? USCPlayerBodyComponent::FindLeader(&Vehicle) : nullptr;
+            if (!Leader || !Bones.IsEmpty()) return;
+            Bones = USCPlayerBodyComponent::BoneMap(Leader);
+            Gender = Vehicle.PlayerKit->Kit->Gender;
+        });
+        if (Bones.IsEmpty())
+        {
+            Error = TEXT("the traversal clips: no player body in ") + Record.PlayerLevel;
+            return false;
+        }
+        FSCPlayerClipMap Clips;
+        TArray<FString> Skipped;
+        if (!Names.IsEmpty())
+        {
+            if (!OpenArchive(Error)) return false;
+            const TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
+            const TSharedPtr<FSCTarPackageSource> Source = Wait(Viewer->GetClient()->ExportPlayerClips(Gender, Names, Progress), TEXT("the traversal clips"), Progress, Error);
+            if (!Source) return false;
+            if (!SCTraversal::ReadClips(*Source, Gender, Names, Bones, /*bSkipMissing*/ true, Clips, Skipped, Error))
+            {
+                Error = TEXT("the traversal clips: ") + Error;
+                return false;
+            }
+        }
+        // A seat lists every action it has, some of which no route uses: one the archive does not supply is left out (a route
+        // that needs it reports it when it asks).
+        for (const FString& Why : Skipped) UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE traversal clip left out: %s"), *Why);
+        const FString& Path = Record.TraversalClips;
+        IFileManager::Get().Delete(*StampFile(Path), false, true, true);
+        UPackage* Package = CreatePackage(*Path);
+        USCTraversalClipsData* Data = NewObject<USCTraversalClipsData>(Package, *FPackageName::GetShortName(Path), RF_Public | RF_Standalone);
+        Data->BodyLevel = Record.PlayerLevel;
+        Data->Clips = MakeShared<FSCPlayerClipMap>(MoveTemp(Clips));
+        FSavePackageArgs Args;
+        Args.TopLevelFlags = RF_Public | RF_Standalone;
+        Args.SaveFlags = SAVE_NoError;
+        const FString File = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
+        if (!UPackage::SavePackage(Package, Data, *File, Args))
+        {
+            Error = TEXT("cannot save ") + Path;
+            return false;
+        }
+        if (!WriteStamp(Path, Error)) return false;
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved traversal=%s names=%d clips=%d left_out=%d gender=%s format=%d"), *Path, Names.Num(),
+               Data->Clips->Num(), Skipped.Num(), *Gender, FUCPrepared::FormatVersion);
+        return true;
+    }
 };
 
 int32 Failed(const FString& Id, const FString& Error)
@@ -441,9 +526,20 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     {
         return Failed(Id, Error);
     }
+    // The seat and ladder clips for that body: read again when this run prepared a level (their names come from the levels'
+    // records, their bones from the body).
+    Record.TraversalClips = USCViewerSubsystem::TraversalClipsPath(Record.PlayerLevel, Record.VehicleLevel, Record.EnvironmentLevel);
+    if (Current(Record.TraversalClips) && !Prepare.bForce && !Prepare.bPreparedLevel)
+    {
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Record.TraversalClips, FUCPrepared::FormatVersion);
+    }
+    else if (!Prepare.PrepareTraversal(Record, Error))
+    {
+        return Failed(Id, Error);
+    }
     // The archive builds the levels were prepared from (each level's stamp names its own).
     TArray<FString> Builds;
-    for (const FString& Level : {Record.EnvironmentLevel, Record.VehicleLevel, Record.PlayerLevel})
+    for (const FString& Level : {Record.EnvironmentLevel, Record.VehicleLevel, Record.PlayerLevel, Record.TraversalClips})
         if (const FString Build = FUCPrepared::LevelBuild(Level); !Level.IsEmpty()) Builds.AddUnique(Build.IsEmpty() ? FString(TEXT("unknown")) : Build);
     Record.Archive = FString::Join(Builds, TEXT(", "));
     Record.PreparedAt = FDateTime::UtcNow().ToIso8601();

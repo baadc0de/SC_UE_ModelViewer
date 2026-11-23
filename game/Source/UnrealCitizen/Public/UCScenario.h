@@ -75,8 +75,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  usables, seat records, light groups, the lights' authored state values and the room channels saved. 25: the
      *  manifest's interaction points saved (a seat route is pressed at one). 26: WP-O1-4b-2 the player body prepared (its own
      *  level: the kit actor with its rigs, its parsed kit and clips; the record names it, PlayerLevel). 27: its kit as one payload
-     *  read whole, its package audio staged. */
-    static constexpr int32 FormatVersion = 27;
+     *  read whole, its package audio staged. 28: WP-O1-4b-2b the traversal clips (seats, ladders) prepared for the body
+     *  (TraversalClips). */
+    static constexpr int32 FormatVersion = 28;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id
@@ -85,6 +86,7 @@ struct UNREALCITIZEN_API FUCPrepared
     FString EnvironmentLevel; // long package name; empty when the scenario has no environment
     FString VehicleLevel;     // long package name (the paint baked in)
     FString PlayerLevel;      // long package name of the player body's level (WP-O1-4b-2; shared by scenarios with the same body)
+    FString TraversalClips;   // package of the seat and ladder clips read for that body (WP-O1-4b-2b, TraversalClipsPath)
     FString Archive;          // the archive builds the levels were prepared from, comma-separated (information)
     FString PreparedAt;       // UTC, ISO 8601
 

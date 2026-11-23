@@ -292,8 +292,16 @@ data when it loads. In stages:
   exported, imported or parsed. Still at attach: the weapons' fire clips are parsed against their rigs (`FireClipJson`) and
   the torch's light function is made from its cookie. A scenario that fails releases its body with the rest of its scene.
   `golem_showcase` names the showcase's body (`StarMarine_Marine.xml`, `behr_rifle_ballistic_01`). Prep format 27.
-- **O1-4b-2b**: the traversal clips (seat entry and exit, ladders) a run still asks the archive for (`FSCTraversalClips`)
-  prepared with the scenario.
+- **O1-4b-2b** (traversal clips): the seat and ladder clips a run asked the archive for (`FSCTraversalClips`) are prepared
+  with the scenario. After its levels, the prep step reads from their saved records every action a seat or a ladder of the
+  vehicle and environment names (`SCTraversal::ClipNames`: each seat's actions, a superset of what its routes use, and each
+  ladder's), exports them once and reads them against the prepared body's skeleton (`SCTraversal::ReadClips`; an action
+  the archive does not supply is left out and logged). They are saved as one asset per body, vehicle and environment
+  (`/Game/SC/Players/Traversal/Traversal_<hash>`, `USCTraversalClipsData`: the body level and the clips, one payload as
+  the body's), read again whenever the run prepared a level, named by the record (`traversal_clips`) and always cooked
+  (`DirectoriesToAlwaysCook`). A run loads it in the background with the scenario's levels
+  (`SetPreparedTraversalClips`); a seat or ladder takes its clips from it, and an action it lacks fails that seat or ladder
+  as a missing clip did. Prep format 28.
 - **O1-4b-3**: cargo boxes and effects, music, the Garage's details prepared.
 
 #### O1-4a — Scenarios and the prep step

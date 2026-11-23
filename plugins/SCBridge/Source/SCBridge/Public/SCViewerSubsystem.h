@@ -328,6 +328,15 @@ public:
      *  flight is left to finish. A scenario that fails releases its body with the rest of its scene. */
     void ReleasePreparedPlayerKit();
     const FString& GetPreparedPlayerLevel() const { return PreparedPlayerLevel; }
+    /** WP-O1-4b-2b: a prepared scenario's traversal clips (an asset's package name, TraversalClipsPath); seats and ladders take
+     *  their clips from it, not the archive. Its load starts now. Empty: they ask the archive as before. */
+    void SetPreparedTraversalClips(const FString& Package);
+    bool UsesPreparedTraversalClips() const { return !PreparedTraversal.IsEmpty(); }
+    /** The prepared traversal clips (loaded now if their load has not finished); null when they do not load, or were read
+     *  for another body than the prepared one. */
+    TSharedPtr<const FSCPlayerClipMap> GetPreparedTraversalClips();
+    /** Where the prep step saves a scenario's traversal clips: one asset per (body, vehicle, environment) level set. */
+    static FString TraversalClipsPath(const FString& PlayerLevel, const FString& VehicleLevel, const FString& EnvironmentLevel);
     /** Starts the player-kit pipeline unless it is running or ready (a failed kit is retried). */
     bool RequestPlayerKit();
     EPlayerKitState GetPlayerKitState() const { return KitState; }
@@ -484,6 +493,9 @@ private:
     UE::Tasks::TTask<FKitClips> KitClipsTask;
     UPROPERTY() TObjectPtr<ASCVehicle> KitActor;
     FString PreparedPlayerLevel;
+    FString PreparedTraversal;
+    UPROPERTY() TObjectPtr<class USCTraversalClipsData> TraversalData;
+    bool bTraversalWarned = false;
     /** The prepared body's level instance while it streams and once it holds the body (KitActor is its actor). */
     UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> KitLevel;
     void StepPreparedPlayerKit(bool bBlocking);

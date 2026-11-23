@@ -55,9 +55,12 @@ if ($CargoName) {
 }
 if ((ConvertTo-Comparable $CargoText) -cne (ConvertTo-Comparable ([string]$Record.cargo_definition))) { throw "The cargo setup of scenario $Scenario changed since it was prepared: run $Prepare" }
 if (-not $Record.player_level) { throw "Scenario $Scenario's record names no player body level: run $Prepare" }
+if (-not $Record.traversal_clips) { throw "Scenario $Scenario's record names no traversal clips: run $Prepare" }
 $Levels = @($Record.vehicle_level, $Record.player_level) + @($Record.environment_level | Where-Object { $_ })
-foreach ($Level in $Levels) {
-    $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')
+# The levels are cooked as maps; the traversal clips (an asset under /Game/SC/Players/Traversal, always cooked) are checked alike.
+foreach ($Level in $Levels + @($Record.traversal_clips)) {
+    $Extension = if ($Level -eq $Record.traversal_clips) { '.uasset' } else { '.umap' }
+    $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + $Extension)
     if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
     $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
     # A complete stamp (FUCPrepared::IsLevelCurrent): the format on line 1, the archive build on line 2.
