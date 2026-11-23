@@ -1,6 +1,8 @@
 // Box package library (WP-K1): one decomposed package export per cargo-box entity through the viewer's FFI client and
 // FSCImportJob, imported once into a hidden template actor whose meshes every box of that entity reuses; the package's
-// root occupancy (dimensions, SCU, mass) comes with it. One export at a time, after the ship and environment loads.
+// root occupancy (dimensions, SCU, mass) comes with it. One export at a time, after the ship and environment loads. A
+// prepared scenario's box (WP-O1-4b-3, UUCSettings::ScenarioCargoLevels) streams its prepared level instead: its actor is
+// the template, nothing is exported or imported.
 #pragma once
 #include "CoreMinimal.h"
 #include "UObject/GCObject.h"
@@ -9,6 +11,7 @@
 #include "Cargo/SCCargoTypes.h"
 
 class ASCVehicle;
+class ULevelStreamingDynamic;
 class FSCImportJob;
 class FSCTarPackageSource;
 class USCViewerSubsystem;
@@ -16,13 +19,15 @@ class USCViewerSubsystem;
 class FSCCargoBoxLibrary : public FGCObject
 {
 public:
-    enum class EState : uint8 { Queued, Exporting, Parsing, Importing, Ready, Failed };
+    enum class EState : uint8 { Queued, Streaming, Exporting, Parsing, Importing, Ready, Failed };
     struct FEntry
     {
         EState State = EState::Queued;
         FString Error;
         FSCItemOccupancy Occupancy;
         TObjectPtr<ASCVehicle> Template;
+        /** A prepared box's level (its actor is the template). */
+        TObjectPtr<ULevelStreamingDynamic> Level;
         double Started = 0;
     };
 
@@ -41,6 +46,9 @@ public:
 
 private:
     void Fail(const FString& Entity, const FString& Error);
+    /** The template is ready: its occupancy checked, the entry Ready (From: how it came, for the log). */
+    void Adopt(ASCVehicle* Template, const TCHAR* From);
+    static void Unload(ULevelStreamingDynamic* Level);
     TMap<FString, FEntry> Entries;
     TArray<FString> Order;
     FString Running;

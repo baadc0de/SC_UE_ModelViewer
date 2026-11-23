@@ -100,6 +100,8 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioCargoName = Scenario.Cargo;
     Settings->ScenarioCargoJson = Scenario.CargoJson;
     Settings->ScenarioVehicle = Scenario.Vehicle;
+    Settings->ScenarioCargoLevels = Prepared.CargoLevels;
+    Settings->ScenarioTractorRecordJson = Prepared.TractorRecordJson;
     // The player body from its prepared level (WP-O1-4b-2), streamed with the vehicle's.
     Viewer->SetPreparedPlayerLevel(Prepared.PlayerLevel);
     // Its seat and ladder clips, read for that body at prep (WP-O1-4b-2b).
@@ -122,6 +124,8 @@ void UUCScenarioSubsystem::Deinitialize()
     Settings->ScenarioCargoName.Reset();
     Settings->ScenarioCargoJson.Reset();
     Settings->ScenarioVehicle.Reset();
+    Settings->ScenarioCargoLevels.Reset();
+    Settings->ScenarioTractorRecordJson.Reset();
     Super::Deinitialize();
 }
 

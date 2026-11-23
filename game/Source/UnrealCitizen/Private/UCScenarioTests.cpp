@@ -117,6 +117,8 @@ bool FUCPreparedTest::RunTest(const FString&)
     R.VehicleLevel = TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2");
     R.PlayerLevel = Source.PlayerLevel();
     R.TraversalClips = USCViewerSubsystem::TraversalClipsPath(R.PlayerLevel, R.VehicleLevel, R.EnvironmentLevel);
+    R.CargoLevels.Add(TEXT("Carryable_TBO_FL_16SCU"), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")));
+    R.TractorRecordJson = TEXT("{\"record\": \"tractor\"}");
     R.Archive = TEXT("build");
     R.PreparedAt = TEXT("2026-11-23T00:00:00.000Z");
 
@@ -127,6 +129,11 @@ bool FUCPreparedTest::RunTest(const FString&)
     TestEqual(TEXT("... its levels"), Back.VehicleLevel + Back.EnvironmentLevel + Back.PlayerLevel + Back.TraversalClips,
               R.VehicleLevel + R.EnvironmentLevel + R.PlayerLevel + R.TraversalClips);
     TestEqual(TEXT("... its format"), Back.Format, R.Format);
+    TestTrue(TEXT("... its cargo box levels"), Back.CargoLevels.Num() == 1 && Back.CargoLevels.FindRef(TEXT("Carryable_TBO_FL_16SCU")) == R.CargoLevels[TEXT("Carryable_TBO_FL_16SCU")]);
+    TestTrue(TEXT("... its tractor record as kept"), Back.TractorRecordJson.Equals(R.TractorRecordJson, ESearchCase::CaseSensitive));
+    TestEqual(TEXT("a box entity's level"), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")), FString(TEXT("/Game/SC/Cargo/Maps/Carryable_TBO_FL_16SCU")));
+    TestTrue(TEXT("a missing cargo box level"),
+             R.Problem(&Source, [&](const FString& L) { return L != R.CargoLevels[TEXT("Carryable_TBO_FL_16SCU")]; }).Contains(TEXT("cargo box")));
     TestFalse(TEXT("a record without a vehicle level does not read"), FUCPrepared::Parse(TEXT("{\"scenario\": \"t\", \"definition\": \"{}\"}"), Back, Error));
 
     auto All = [](const FString&) { return true; };
@@ -201,7 +208,9 @@ bool FUCPreparedTest::RunTest(const FString&)
     FUCPrepared NoEnvironment = R;
     NoEnvironment.EnvironmentLevel.Reset();
     TestEqual(TEXT("no environment: only the vehicle level is needed"),
-              NoEnvironment.Problem(nullptr, [&](const FString& L) { return L == R.VehicleLevel || L == R.PlayerLevel || L == R.TraversalClips; }), FString());
+              NoEnvironment.Problem(nullptr, [&](const FString& L) {
+                  return L == R.VehicleLevel || L == R.PlayerLevel || L == R.TraversalClips || L == R.CargoLevels[TEXT("Carryable_TBO_FL_16SCU")];
+              }), FString());
     return true;
 }
 
