@@ -139,10 +139,11 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft, const FLinearColor& Colour 
     // A rig component using it, its collision in the built vertex order (kept for the save on an editor host).
     USCRigComponent* Rig = NewObject<USCRigComponent>(GetTransientPackage());
     Rig->SetSkeletalMesh(Mesh);
-    if (bSoft && !Test.TestTrue(TEXT("rig collision: ") + Error, SCRigAssets::RefreshCollision(Rig, Error))) return;
-    // Saved in a pose (a hangar prepared open): the Arm 30 cm up.
+    // Saved in a pose (a hangar prepared open): the Arm 30 cm up; its collision baked in that pose.
     Rig->LocalPose = Mesh->GetRefSkeleton().GetRefBonePose();
     if (Rig->LocalPose.Num() == 3) Rig->LocalPose[2].AddToTranslation(FVector(0, 0, 30));
+    if (bSoft && !Test.TestTrue(TEXT("rig collision: ") + Error, SCRigAssets::RefreshCollision(Rig, Error))) return;
+    if (bSoft) Test.TestEqual(TEXT("its collision in the saved pose"), Rig->CollisionPose.Num(), 3);
 
     UPackage* SkeletonPackage = Persist(Skeleton, Folder + Name + TEXT("_Skeleton"));
     UPackage* MeshPackage = Persist(Mesh, Folder + Name);
@@ -221,6 +222,7 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft, const FLinearColor& Colour 
     if (!Test.TestTrue(TEXT("its mesh resolves from the file"), RigMesh && RigMesh != Mesh && RigMesh->GetName() == Name)) return;
     Opened.Add(RigMesh->GetPackage());
     Test.TestFalse(TEXT("no saved body"), LoadedRig->HasCollisionBody());
+    Test.TestEqual(TEXT("its skin bones loaded with it (Root, Arm)"), LoadedRig->GetSkinBones(), TArray<int32>({1, 2}));
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
     ON_SCOPE_EXIT
     {
@@ -234,7 +236,7 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft, const FLinearColor& Colour 
     const UBodySetup* Body = LoadedRig->GetBodySetup();
     Test.TestTrue(TEXT("one trimesh particle per render vertex"), Body && Body->TriMeshGeometries.Num() == 1 && Body->TriMeshGeometries[0] &&
                                                                Body->TriMeshGeometries[0]->Particles().Size() == LOD.GetNumVertices());
-    Test.TestEqual(TEXT("its skin bones saved, not scanned at load (Root, Arm)"), LoadedRig->GetSkinBones(), TArray<int32>({1, 2}));
+    Test.TestEqual(TEXT("nothing refit at load (the body was saved in the pose)"), LoadedRig->GetCollisionRefits(), 0);
     const FVector ArmAt = LoadedRig->GetSocketLocation(TEXT("Arm"));
     Test.TestTrue(FString::Printf(TEXT("the saved pose at registration: the Arm socket at %s"), *ArmAt.ToString()), ArmAt.Equals(FVector(100, 0, 30), 0.1));
     TArray<FVector3f> Saved;
@@ -272,19 +274,28 @@ bool FSCRigAssetsTest::RunTest(const FString&)
 #endif // WITH_DEV_AUTOMATION_TESTS
 
 #if WITH_DEV_AUTOMATION_TESTS
-// A float (HDR) texture, as an EXR projector gobo imports, keeps its pixels as a float source through a save and a load.
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCTextureSourceTest, "SCBridge.Prepare.TextureSource", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FSCTextureSourceTest::RunTest(const FString&)
+namespace
 {
+/** An EXR of 2x2 pixels (four channels or one, 16 or 32 bits) whose first value is 2.0, imported as a projector gobo is,
+ *  keeps that value in a float source through a save and a load. */
+void CheckFloatTexture(FAutomationTestBase& Test, ERGBFormat Format, int32 Bits)
+{
+    const int32 Channels = Format == ERGBFormat::GrayF ? 1 : 4;
+    const FString What = FString::Printf(TEXT("%d channels at %d bits: "), Channels, Bits);
+    TArray<float> Values;
+    for (int32 I = 0; I < 4 * Channels; ++I) Values.Add(I == 0 ? 2.f : 0.5f);
+    TArray<FFloat16> Halves;
+    for (float V : Values) Halves.Add(FFloat16(V));
     auto EXR = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper")).CreateImageWrapper(EImageFormat::EXR);
-    const float Pixels[] = {2, 1, 0.5, 1, 2, 1, 0.5, 1, 2, 1, 0.5, 1, 2, 1, 0.5, 1};
-    if (!TestTrue(TEXT("synthetic HDR encoder"), EXR && EXR->SetRaw(Pixels, sizeof(Pixels), 2, 2, ERGBFormat::RGBAF, 32))) return false;
+    const bool bEncoded = EXR && (Bits == 16 ? EXR->SetRaw(Halves.GetData(), Halves.Num() * sizeof(FFloat16), 2, 2, Format, 16)
+                                             : EXR->SetRaw(Values.GetData(), Values.Num() * sizeof(float), 2, 2, Format, 32));
+    if (!Test.TestTrue(What + TEXT("synthetic HDR encoder"), bEncoded)) return;
     const TArray64<uint8>& Compressed = EXR->GetCompressed();
     UTexture2D* Texture = FImageUtils::ImportBufferAsTexture2D(TArray<uint8>(Compressed.GetData(), int32(Compressed.Num())));
-    if (!TestNotNull(TEXT("the EXR imports"), Texture)) return false;
+    if (!Test.TestNotNull(What + TEXT("the EXR imports"), Texture)) return;
     FString Error;
-    if (!TestTrue(TEXT("a source: ") + Error, SCTextureSource::Add(Texture, Error))) return false;
-    TestTrue(TEXT("a float source, compressed as HDR"), Texture->Source.IsHDR(Texture->Source.GetFormat()) && Texture->CompressionSettings == TC_HDR);
+    if (!Test.TestTrue(What + TEXT("a source: ") + Error, SCTextureSource::Add(Texture, Error))) return;
+    Test.TestTrue(What + TEXT("a float source, kept float"), FTextureSource::IsHDR(Texture->Source.GetFormat()) && Texture->CompressionSettings != TC_Default);
 
     const FString PackageName = FString::Printf(TEXT("/Game/SCTests/Gobo_%s"), *FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8));
     const FString File = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
@@ -297,17 +308,27 @@ bool FSCTextureSourceTest::RunTest(const FString&)
         IFileManager::Get().Delete(*File, false, true, true);
         IFileManager::Get().DeleteDirectory(*FPaths::GetPath(File), false, false);
     };
-    if (!TestTrue(TEXT("saved"), Save(Package, Texture))) return false;
+    if (!Test.TestTrue(What + TEXT("saved"), Save(Package, Texture))) return;
     Forget(Package);
     UTexture2D* Reloaded = LoadObject<UTexture2D>(nullptr, *(PackageName + TEXT(".") + FPackageName::GetShortName(PackageName)));
-    if (!TestNotNull(TEXT("the texture loads"), Reloaded)) return false;
+    if (!Test.TestNotNull(What + TEXT("the texture loads"), Reloaded)) return;
     Loaded = Reloaded->GetPackage();
     TArray64<uint8> Mip;
-    if (!TestTrue(TEXT("its source reads"), Reloaded->Source.GetMipData(Mip, 0) && Reloaded->Source.IsHDR(Reloaded->Source.GetFormat()))) return false;
-    // The first pixel's red, 2.0, in the source's float layout.
-    const float Red = Reloaded->Source.GetFormat() == TSF_RGBA16F ? float(reinterpret_cast<const FFloat16*>(Mip.GetData())[0])
-                                                                   : reinterpret_cast<const float*>(Mip.GetData())[0];
-    TestEqual(TEXT("an HDR value survives"), Red, 2.f);
+    const ETextureSourceFormat Source = Reloaded->Source.GetFormat();
+    if (!Test.TestTrue(What + TEXT("its source reads"), Reloaded->Source.GetMipData(Mip, 0) && FTextureSource::IsHDR(Source))) return;
+    // The first value, 2.0, in the source's float layout (its first channel either way).
+    const bool bHalf = Source == TSF_RGBA16F || Source == TSF_R16F;
+    const float First = bHalf ? float(reinterpret_cast<const FFloat16*>(Mip.GetData())[0]) : reinterpret_cast<const float*>(Mip.GetData())[0];
+    Test.TestEqual(What + TEXT("an HDR value survives"), First, 2.f);
+}
+} // namespace
+
+// Float (HDR) textures, as EXR projector gobos import, keep their pixels as float sources through a save and a load.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCTextureSourceTest, "SCBridge.Prepare.TextureSource", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCTextureSourceTest::RunTest(const FString&)
+{
+    for (const ERGBFormat Format : {ERGBFormat::RGBAF, ERGBFormat::GrayF})
+        for (const int32 Bits : {16, 32}) CheckFloatTexture(*this, Format, Bits);
     return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS

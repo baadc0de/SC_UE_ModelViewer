@@ -28,8 +28,10 @@ USkeletalMesh* SavableCopy(const USkeletalMesh* Mesh, const FSCDerivedMesh* Soft
 /** The rig's collision trimesh (serialized Chaos bytes and their custom versions) from Mesh's LOD 0 render data, in its
  *  vertex order (USCRigComponent::RefitCollision skins those vertices): the engine's build may reorder or weld the
  *  vertices the runtime build laid out per corner. False with Error when there is no geometry or no CPU copy. */
-bool DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error);
-/** After MakeSavable: Rig's collision body derived again from its (built) mesh and put in place (saved with the rig), its
+bool DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error,
+                     const TArray<FTransform>* Pose = nullptr);
+/** After MakeSavable: Rig's collision body derived again from its (built) mesh, in the pose the rig holds (LocalPose:
+ *  USCRigComponent::CollisionPose, so a load of the saved rig refits nothing), and put in place (saved with the rig), its
  *  physics state recreated. A rig that had a body keeps its collision settings; one without (its import-time collision
  *  failed) gets the import's policy. False with Error when the mesh has no geometry or the body does not build. */
 bool RefreshCollision(USCRigComponent* Rig, FString& Error);

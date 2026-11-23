@@ -45,7 +45,23 @@ bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Err
 }
 bool USCRigComponent::InitializeCollision(const FSCDerivedMesh& Data)
 {
+    CollisionPose.Reset(); // the import's bytes are in the bind pose
     return InitializeCollision(Data.CollisionBytes, Data.CollisionVersions);
+}
+void USCRigComponent::ResetRefitPose()
+{
+    const auto& Ref = GetSkeletalMeshAsset()->GetRefSkeleton();
+    if (CollisionPose.Num() == Ref.GetNum())
+    {
+        RefitPose = CollisionPose;
+        return;
+    }
+    RefitPose.SetNum(Ref.GetNum());
+    for (int32 I = 0; I < Ref.GetNum(); ++I)
+    {
+        const int32 Parent = Ref.GetParentIndex(I);
+        RefitPose[I] = Parent == INDEX_NONE ? Ref.GetRefBonePose()[I] : Ref.GetRefBonePose()[I] * RefitPose[Parent];
+    }
 }
 void USCRigComponent::OnRegister()
 {
@@ -128,12 +144,7 @@ bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCus
         SkinBones.Reset();
         for (TConstSetBitIterator<> It(Used); It; ++It) SkinBones.Add(It.GetIndex());
     }
-    RefitPose.SetNum(Ref.GetNum());
-    for (int32 I = 0; I < Ref.GetNum(); ++I)
-    {
-        const int32 Parent = Ref.GetParentIndex(I);
-        RefitPose[I] = Parent == INDEX_NONE ? Ref.GetRefBonePose()[I] : Ref.GetRefBonePose()[I] * RefitPose[Parent];
-    }
+    ResetRefitPose();
     if (bConfigure)
     {
         bEnablePerPolyCollision = true;
@@ -218,15 +229,10 @@ void USCRigComponent::OnCreatePhysicsState()
 {
     if (!CollisionBody) { Super::OnCreatePhysicsState(); return; }
     // Use our worker-cooked body; the stock skeletal path would synchronously recook the mesh and
-    // discard the full-resolution BVH. A new body starts from the cooked bind pose: catch up.
+    // discard the full-resolution BVH. A new body starts from the pose its bytes are in (the bind pose, or the prep's
+    // saved pose: nothing to do when the rig still holds it): catch up.
     UPrimitiveComponent::OnCreatePhysicsState();
-    const auto& Ref = GetSkeletalMeshAsset()->GetRefSkeleton();
-    RefitPose.SetNum(Ref.GetNum());
-    for (int32 I = 0; I < Ref.GetNum(); ++I)
-    {
-        const int32 Parent = Ref.GetParentIndex(I);
-        RefitPose[I] = Parent == INDEX_NONE ? Ref.GetRefBonePose()[I] : Ref.GetRefBonePose()[I] * RefitPose[Parent];
-    }
+    ResetRefitPose();
     RefitCollision();
 }
 void USCRigComponent::OnUpdateTransform(EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport)

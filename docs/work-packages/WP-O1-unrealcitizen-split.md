@@ -223,9 +223,9 @@ data when it loads. In stages:
   their skeletons and of the clip sequences on them (a metadata-only sequence with a copy of its own skeleton), every
   texture with an editable source (`SCTextureSource`, block formats decoded by the bridge; a texture without one fails
   the Keep); the live rigs stay as they are. A rig with its own body never takes the engine's asynchronous physics
-  creation. A saved rig stands in its saved pose when it registers, and restores its body with the skin bones saved
-  beside it (no vertex scan; a game host then drops the bytes). Float (HDR) textures keep a float source. Prep format
-  16. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
+  creation. A saved rig stands in its saved pose when it registers, and restores its body, baked in that pose
+  (`USCRigComponent::CollisionPose`), with the skin bones saved beside it: no vertex scan and no refit at load (a game
+  host then drops the bytes). Float (HDR) textures, four channels or one, keep a float source. Prep format 17. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
   lifts, seats and ladders still need their interaction state (1b).
 - **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
   interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,

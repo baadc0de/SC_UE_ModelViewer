@@ -36,6 +36,12 @@ public:
     /** Particle positions of the live trimesh body (component space, external vertex order). */
     bool ReadCollisionVertices(TArray<FVector3f>& Out) const;
     int32 GetCollisionRefits() const { return CollisionRefits; }
+    /** The component-space pose the collision bytes are in (WP-O1-4b: the prep bakes them in the rig's saved pose, so a
+     *  load refits nothing); empty: the bind pose (the import's bytes). */
+    UPROPERTY() TArray<FTransform> CollisionPose;
+    /** LocalPose composed to component space, as RefreshBoneTransforms poses the bones; false without a mesh or with a
+     *  pose of another size. */
+    bool ComposeLocalPose(TArray<FTransform>& Out) const;
     virtual UBodySetup* GetBodySetup() override;
     virtual FBodyInstance* GetBodyInstance(FName BoneName = NAME_None, bool bGetWelded = true, int32 Index = INDEX_NONE) const override;
     virtual bool HasValidPhysicsState() const override;
@@ -56,6 +62,7 @@ protected:
     UPROPERTY(Transient) TObjectPtr<UBodySetup> CollisionBody;
 private:
     bool SkinPoseChanged() const;
+    void ResetRefitPose(); // RefitPose: CollisionPose, or the bind pose
     UPROPERTY() TArray<int32> SkinBones;  // bones with non-zero influence on the soft vertices (saved: a load does not scan)
     TArray<FTransform> RefitPose;         // component-space pose the body currently represents
     int32 CollisionRefits = 0;

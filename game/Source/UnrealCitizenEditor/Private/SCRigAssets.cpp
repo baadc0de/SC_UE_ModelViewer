@@ -184,7 +184,8 @@ USkeletalMesh* SCRigAssets::SavableCopy(const USkeletalMesh* Mesh, const FSCDeri
     return Copy;
 }
 
-bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error)
+bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error,
+                                  const TArray<FTransform>* Pose)
 {
     const FSkeletalMeshRenderData* Render = Mesh ? Mesh->GetResourceForRendering() : nullptr;
     if (!Render || Render->LODRenderData.IsEmpty())
@@ -207,10 +208,42 @@ bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutB
     Attributes.Register();
     TArray<FVertexID> Vertices;
     Vertices.Reserve(Positions.GetNumVertices());
+    // In Pose (component space per bone): each vertex skinned as the refit skins it (linear blend of its influences).
+    TArray<FMatrix44f> RefToPose;
+    if (Pose)
+    {
+        const TArray<FMatrix44f>& InvRef = Mesh->GetRefBasesInvMatrix();
+        if (Pose->Num() != InvRef.Num())
+        {
+            Error = TEXT("a pose of another skeleton");
+            return false;
+        }
+        RefToPose.SetNum(InvRef.Num());
+        for (int32 B = 0; B < InvRef.Num(); ++B) RefToPose[B] = InvRef[B] * FMatrix44f((*Pose)[B].ToMatrixWithScale());
+    }
+    TArray<FVector3f> Skinned;
+    Skinned.SetNumUninitialized(Positions.GetNumVertices());
+    for (uint32 I = 0; I < Positions.GetNumVertices(); ++I) Skinned[I] = Positions.VertexPosition(I);
+    if (Pose)
+        for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
+            for (uint32 V = Section.BaseVertexIndex; V < Section.BaseVertexIndex + Section.NumVertices; ++V)
+            {
+                const FSkinWeightInfo W = LOD.SkinWeightVertexBuffer.GetVertexSkinWeights(V);
+                FVector3f Sum = FVector3f::ZeroVector;
+                float Total = 0.f;
+                for (int32 K = 0; K < MAX_TOTAL_INFLUENCES; ++K)
+                    if (W.InfluenceWeights[K] && Section.BoneMap.IsValidIndex(W.InfluenceBones[K]))
+                    {
+                        const float Weight = W.InfluenceWeights[K] / 65535.f;
+                        Sum += RefToPose[Section.BoneMap[W.InfluenceBones[K]]].TransformPosition(Positions.VertexPosition(V)) * Weight;
+                        Total += Weight;
+                    }
+                if (Total > 0.f) Skinned[V] = Sum / Total;
+            }
     for (uint32 I = 0; I < Positions.GetNumVertices(); ++I)
     {
         const FVertexID V = Expanded.Description.CreateVertex();
-        Attributes.GetVertexPositions()[V] = Positions.VertexPosition(I);
+        Attributes.GetVertexPositions()[V] = Skinned[I];
         Vertices.Add(V);
     }
     TArray<uint32> Indices;
@@ -246,8 +279,12 @@ bool SCRigAssets::RefreshCollision(USCRigComponent* Rig, FString& Error)
     const USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr;
     TArray<uint8> Bytes;
     FCustomVersionContainer Versions;
-    if (!DeriveCollision(Mesh, Bytes, Versions, Error)) return false;
+    // In the rig's own pose when it holds one (the prep's presented state): its load then has nothing to refit.
+    TArray<FTransform> Pose;
+    const bool bPosed = Rig->ComposeLocalPose(Pose);
+    if (!DeriveCollision(Mesh, Bytes, Versions, Error, bPosed ? &Pose : nullptr)) return false;
     const bool bHadBody = Rig->HasCollisionBody();
+    Rig->CollisionPose = bPosed ? Pose : TArray<FTransform>();
     // The import sets the pawn response after its own collision step, whether that built a body or not (a rig with the
     // game's colliders ignores the pawn): a first body keeps it.
     const ECollisionResponse Pawn = Rig->GetCollisionResponseToChannel(ECC_Pawn);

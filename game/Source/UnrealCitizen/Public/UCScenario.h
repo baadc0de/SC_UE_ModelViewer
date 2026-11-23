@@ -56,8 +56,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  rig meshes with 16-bit skin weights, their source models carrying the bones, rig collision per material slot; the
      *  hangar's waypoint sources saved (a waypoint on a mechanism follows it). 15: rig meshes saved as copies (the
      *  import's stay as they are), the presented state saved (ASCVehicle::PresentedState), black vertex colours kept. 16: a rig's skin bones saved
-     *  with its collision (a load scans no vertices). */
-    static constexpr int32 FormatVersion = 16;
+     *  with its collision (a load scans no vertices). 17: rig collision baked in the rig's saved pose
+     *  (USCRigComponent::CollisionPose: a load refits nothing). */
+    static constexpr int32 FormatVersion = 17;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

@@ -12,15 +12,23 @@ bool SCTextureSource::Add(UTexture2D* Texture, FString& Error)
         Error = TEXT("no platform mips");
         return false;
     }
-    // Float (HDR) pixels, e.g. an EXR projector gobo: copied as they are, linear, into a float source of the same layout.
-    if (Platform->PixelFormat == PF_FloatRGBA || Platform->PixelFormat == PF_A32B32G32R32F)
+    // Float (HDR) pixels, e.g. an EXR projector gobo (four channels, or one): copied as they are, linear, into a float
+    // source of the same layout, kept float when the editor builds it.
+    struct FFloatLayout { EPixelFormat Pixel; ETextureSourceFormat Source; int32 Bytes; TextureCompressionSettings Compression; };
+    static const FFloatLayout Floats[] = {
+        {PF_FloatRGBA, TSF_RGBA16F, 8, TC_HDR},
+        {PF_A32B32G32R32F, TSF_RGBA32F, 16, TC_HDR},
+        {PF_R16F, TSF_R16F, 2, TC_HalfFloat},
+        {PF_R32_FLOAT, TSF_R32F, 4, TC_SingleFloat},
+    };
+    for (const FFloatLayout& Float : Floats)
     {
-        const bool bHalf = Platform->PixelFormat == PF_FloatRGBA;
+        if (Platform->PixelFormat != Float.Pixel) continue;
         FTexture2DMipMap& Mip = Platform->Mips[0];
-        const int64 Expected = int64(Mip.SizeX) * Mip.SizeY * (bHalf ? 8 : 16);
+        const int64 Expected = int64(Mip.SizeX) * Mip.SizeY * Float.Bytes;
         const uint8* Data = static_cast<const uint8*>(Mip.BulkData.LockReadOnly());
         const bool bOK = Data && Mip.BulkData.GetBulkDataSize() == Expected;
-        if (bOK) Texture->Source.Init(Mip.SizeX, Mip.SizeY, 1, 1, bHalf ? TSF_RGBA16F : TSF_RGBA32F, Data);
+        if (bOK) Texture->Source.Init(Mip.SizeX, Mip.SizeY, 1, 1, Float.Source, Data);
         Mip.BulkData.Unlock();
         if (!bOK)
         {
@@ -28,7 +36,7 @@ bool SCTextureSource::Add(UTexture2D* Texture, FString& Error)
             return false;
         }
         Texture->SRGB = false;
-        if (Texture->CompressionSettings == TC_Default) Texture->CompressionSettings = TC_HDR; // kept HDR when the editor builds it
+        if (Texture->CompressionSettings == TC_Default) Texture->CompressionSettings = Float.Compression;
         return true;
     }
     uint32 Dxgi = 0;
