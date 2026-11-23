@@ -50,8 +50,17 @@ bool USCRigComponent::InitializeCollision(const FSCDerivedMesh& Data)
 void USCRigComponent::OnRegister()
 {
     Super::OnRegister(); // physics state is created after registration: the body is in place by then
+    // A saved rig holds its pose (LocalPose, e.g. a hangar prepared open): the engine's registration may have set the
+    // reference pose without our RefreshBoneTransforms (no animation: ResetToRefPose), so it is applied here, before the
+    // body is created and catches up with it.
+    if (GetSkeletalMeshAsset() && LocalPose.Num() == GetSkeletalMeshAsset()->GetRefSkeleton().GetNum()) RefreshBoneTransforms();
     if (!CollisionBody && !SavedCollision.IsEmpty() && !RestoreSavedCollision())
         UE_LOG(LogTemp, Warning, TEXT("SKIN_COLLISION owner=%s: the saved collision does not restore"), *OwnerEntity);
+}
+void USCRigComponent::InitAnim(bool bForceReinit)
+{
+    Super::InitAnim(bForceReinit); // may reset to the reference pose (bUseRefPoseOnInitAnim, no init tick)
+    if (GetSkeletalMeshAsset() && LocalPose.Num() == GetSkeletalMeshAsset()->GetRefSkeleton().GetNum()) RefreshBoneTransforms();
 }
 bool USCRigComponent::AllowsAsyncPhysicsStateCreation() const
 {
@@ -66,9 +75,13 @@ bool USCRigComponent::RestoreSavedCollision()
     Versions.Serialize(Reader);
     TArray<uint8> Bytes;
     Reader << Bytes;
-    return !Reader.IsError() && InitializeCollision(Bytes, Versions, /*bConfigure*/ false);
+    // The saved skin bones stand (the cook found them): no vertex scan at load.
+    if (Reader.IsError() || !InitializeCollision(Bytes, Versions, /*bConfigure*/ false, /*bFindSkinBones*/ SkinBones.IsEmpty())) return false;
+    if (!GIsEditor) SavedCollision.Empty(); // a game host saves nothing: the bytes are spent (an editor keeps them for a save)
+    return true;
 }
-bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions, bool bConfigure)
+bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions, bool bConfigure,
+                                          bool bFindSkinBones)
 {
     if (Bytes.IsEmpty()) return false; // socket-only rigs have no surface
     const USkeletalMesh* Mesh = GetSkeletalMeshAsset();
@@ -97,20 +110,24 @@ bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCus
     CollisionBody->bCreatedPhysicsMeshes = true;
     CollisionBody->bHasCookedCollisionData = true;
     CollisionBody->bNeverNeedsCookedCollisionData = true;
-    // The cooked particles are the bind pose; only bones that weight a vertex can deform it.
+    // The cooked particles are the bind pose; only bones that weight a vertex can deform it (found once, saved with the
+    // rig).
     const FSkeletalMeshLODRenderData& LOD = Render->LODRenderData[0];
     const auto& Ref = Mesh->GetRefSkeleton();
-    TBitArray<> Used(false, Ref.GetNum());
-    for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
-        for (uint32 V = 0; V < Section.NumVertices; ++V)
-        {
-            const FSkinWeightInfo W = LOD.SkinWeightVertexBuffer.GetVertexSkinWeights(Section.BaseVertexIndex + V);
-            for (int32 K = 0; K < MAX_TOTAL_INFLUENCES; ++K)
-                if (W.InfluenceWeights[K] && Section.BoneMap.IsValidIndex(W.InfluenceBones[K]))
-                    Used[Section.BoneMap[W.InfluenceBones[K]]] = true;
-        }
-    SkinBones.Reset();
-    for (TConstSetBitIterator<> It(Used); It; ++It) SkinBones.Add(It.GetIndex());
+    if (bFindSkinBones)
+    {
+        TBitArray<> Used(false, Ref.GetNum());
+        for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
+            for (uint32 V = 0; V < Section.NumVertices; ++V)
+            {
+                const FSkinWeightInfo W = LOD.SkinWeightVertexBuffer.GetVertexSkinWeights(Section.BaseVertexIndex + V);
+                for (int32 K = 0; K < MAX_TOTAL_INFLUENCES; ++K)
+                    if (W.InfluenceWeights[K] && Section.BoneMap.IsValidIndex(W.InfluenceBones[K]))
+                        Used[Section.BoneMap[W.InfluenceBones[K]]] = true;
+            }
+        SkinBones.Reset();
+        for (TConstSetBitIterator<> It(Used); It; ++It) SkinBones.Add(It.GetIndex());
+    }
     RefitPose.SetNum(Ref.GetNum());
     for (int32 I = 0; I < Ref.GetNum(); ++I)
     {

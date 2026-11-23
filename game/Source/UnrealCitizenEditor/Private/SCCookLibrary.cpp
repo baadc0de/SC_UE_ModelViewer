@@ -214,9 +214,10 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
         for (USkeletalMesh* Mesh : Meshes)
         {
             const FString Name = SafeName(FPaths::GetBaseFilename(Mesh->GetPackage()->GetName()));
-            const TSharedPtr<const FSCDerivedMesh>* Source = Environment->RigSources.Find(Mesh);
+            // An owning copy: the map grows below (an element passed by reference into its own Add could be moved).
+            const TSharedPtr<const FSCDerivedMesh> Source = Environment->RigSources.FindRef(Mesh);
             FString Error;
-            USkeletalMesh* Copy = Source ? SCRigAssets::SavableCopy(Mesh, Source->Get(), Error) : nullptr;
+            USkeletalMesh* Copy = Source ? SCRigAssets::SavableCopy(Mesh, Source.Get(), Error) : nullptr;
             if (!Copy)
             {
                 Cook.Warnings.Add(Name + TEXT(": ") + (Source ? Error : FString(TEXT("no rig source (FSCImportOptions::bRetainRigSources)"))));
@@ -226,7 +227,7 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
             Cook.Persist(Copy->GetSkeleton(), Root / TEXT("Rigs"), Name + TEXT("_Skeleton"));
             Cook.Persist(Copy, Root / TEXT("Rigs"), Name);
             Copies.Add(Mesh, Copy);
-            if (Source) Environment->RigSources.Add(Copy, *Source);
+            Environment->RigSources.Add(Copy, Source);
             ++RigMeshes;
         }
         for (TObjectPtr<USkeletalMesh>& Mesh : Environment->SkeletalMeshes)
@@ -244,8 +245,8 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
             Rig->SetSkeletalMesh(*Copy, /*bReinitPose*/ false);
             Rig->RefreshBoneTransforms();
             if (!Environment->bCollisionBuilt) continue;
-            const TSharedPtr<const FSCDerivedMesh>* Source = Environment->RigSources.Find(*Copy);
-            if (Source && (*Source)->bHasGeometry)
+            const TSharedPtr<const FSCDerivedMesh> Source = Environment->RigSources.FindRef(*Copy);
+            if (Source && Source->bHasGeometry)
             {
                 FString Error;
                 if (!SCRigAssets::RefreshCollision(Rig, Error))

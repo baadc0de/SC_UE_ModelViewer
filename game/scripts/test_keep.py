@@ -33,7 +33,7 @@ def reload_from_disk(root):
             textures_with_source += asset.blueprint_get_size_x() > 0
         elif isinstance(asset, unreal.SkeletalMesh):
             # its kept skeleton, saved beside it (not the import's transient one)
-            rigs_ok += asset.skeleton is not None and asset.skeleton.get_path_name().startswith(root)
+            rigs_ok += asset.skeleton is not None and asset.skeleton.get_path_name().startswith(root.rstrip("/") + "/Rigs/")
     unreal.log("WP-V1 KEEP_DISK root=%s assets=%d failed=%d static_meshes=%d with_kept_materials=%d textures_sized=%d "
                "skeletal_with_skeleton=%d" % (root, len(assets), len(failed), meshes, bound, textures_with_source, rigs_ok))
     if failed or not assets:

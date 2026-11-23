@@ -23,10 +23,13 @@ public:
      *  render vertex order). An editor host keeps them in SavedCollision, so a saved rig restores its body when it
      *  registers after a load (no derivation at load). bConfigure: also the import's collision policy (BlockAll, query
      *  only, per-poly); false keeps the component's profile and channel responses (a restored or replaced body). */
-    bool InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions, bool bConfigure = true);
+    bool InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions, bool bConfigure = true,
+                             bool bFindSkinBones = true);
     /** The body from SavedCollision (OnRegister calls it); false when there is none or it does not read. */
     bool RestoreSavedCollision();
     bool HasCollisionBody() const { return CollisionBody != nullptr; }
+    /** The bones that weight a soft vertex (the ones that can deform the body). */
+    const TArray<int32>& GetSkinBones() const { return SkinBones; }
     /** CPU-skins LOD0 with the current pose and refits the per-instance triangle body. Independent of
      *  the render mesh object, so null-RHI and GPU hosts run the same path. Skips unchanged skin bones. */
     bool RefitCollision();
@@ -39,6 +42,9 @@ public:
     /** Never for a rig with its own body (saved or built): the engine's asynchronous path would create the stock body
      *  before OnRegister restores this one; OnCreatePhysicsState installs it. */
     virtual bool AllowsAsyncPhysicsStateCreation() const override;
+    /** The engine's anim init may set the reference pose (registration, InitializeComponent): the rig's own pose
+     *  (LocalPose, e.g. a hangar saved open) is applied again after it. */
+    virtual void InitAnim(bool bForceReinit) override;
     /** The collision bytes with their custom versions (WP-O1-4b: kept on editor hosts, saved with a prepared level). */
     UPROPERTY() TArray<uint8> SavedCollision;
 protected:
@@ -50,7 +56,7 @@ protected:
     UPROPERTY(Transient) TObjectPtr<UBodySetup> CollisionBody;
 private:
     bool SkinPoseChanged() const;
-    TArray<int32> SkinBones;              // bones with non-zero influence on the soft vertices
+    UPROPERTY() TArray<int32> SkinBones;  // bones with non-zero influence on the soft vertices (saved: a load does not scan)
     TArray<FTransform> RefitPose;         // component-space pose the body currently represents
     int32 CollisionRefits = 0;
     bool bRefitUnavailable = false;

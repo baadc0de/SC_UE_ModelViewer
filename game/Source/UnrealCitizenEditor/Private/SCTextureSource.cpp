@@ -12,6 +12,25 @@ bool SCTextureSource::Add(UTexture2D* Texture, FString& Error)
         Error = TEXT("no platform mips");
         return false;
     }
+    // Float (HDR) pixels, e.g. an EXR projector gobo: copied as they are, linear, into a float source of the same layout.
+    if (Platform->PixelFormat == PF_FloatRGBA || Platform->PixelFormat == PF_A32B32G32R32F)
+    {
+        const bool bHalf = Platform->PixelFormat == PF_FloatRGBA;
+        FTexture2DMipMap& Mip = Platform->Mips[0];
+        const int64 Expected = int64(Mip.SizeX) * Mip.SizeY * (bHalf ? 8 : 16);
+        const uint8* Data = static_cast<const uint8*>(Mip.BulkData.LockReadOnly());
+        const bool bOK = Data && Mip.BulkData.GetBulkDataSize() == Expected;
+        if (bOK) Texture->Source.Init(Mip.SizeX, Mip.SizeY, 1, 1, bHalf ? TSF_RGBA16F : TSF_RGBA32F, Data);
+        Mip.BulkData.Unlock();
+        if (!bOK)
+        {
+            Error = Data ? TEXT("float mip 0 has an unexpected size") : TEXT("mip 0 not CPU-resident");
+            return false;
+        }
+        Texture->SRGB = false;
+        if (Texture->CompressionSettings == TC_Default) Texture->CompressionSettings = TC_HDR; // kept HDR when the editor builds it
+        return true;
+    }
     uint32 Dxgi = 0;
     switch (Platform->PixelFormat)
     {
