@@ -235,9 +235,20 @@ data when it loads. In stages:
   (pre-existing, live rigs too): a refit rig body keeps the local bounds of the pose it was cooked in — Chaos's
   `FTriangleMeshImplicitObject::UpdateVertices` rebuilds the BVH without recomputing them — so a trace can miss a part
   moved outside them; the engine fix (recompute the bounds before the rebuild) is a WP-E1 follow-up.
-- **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
-  interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,
-  ship doors, sensors, the lift network, ladder anchors, usables, light groups and areas) become saved properties.
+- **O1-4b-1b — interaction state saved**: the runtime structures the import builds become saved properties, so a
+  prepared vehicle needs none of them rebuilt (the actor has no load-time rebuild of them). In three parts:
+  - **1b-1 — doors** (this PR): the door records (`FSCDoorRecord`: `FSCDoorTiming`, `FSCItemPortLink`), the door
+    interactions' tags, speed and links, the ship doors with their movement sweeps and ground probes (`FSCShipDoor`,
+    hoisted out of `ASCVehicle`), door controls and pad reach (`DoorForPanel`, `PanelReachOf`), door sensors, port
+    rigs, pad labels, the doors' fragment states (`FSCFragmentKey`), the lift-driven doors (`IsLiftDriven`: a lift gate
+    is never a door order) and the physics grid. Prep format 20. A prepared Golem has its ten ship doors as a live import
+    does, and Ship Link opens them. A pad's lock buttons (`DoorPanelLocks`, button panels) come with 1c; until then E on
+    a prepared pad operates its door.
+  - **1b-2 — lifts**: the lift network (`FSCLift`'s model and state saved; its hooks and delegates bound again when
+    the vehicle begins play), the interaction network, lift panels and paths.
+  - **1b-3 — seats, ladders, usables, light groups**: the manifest records seats and ladders read (`SeatEntrances`,
+    `Seat`, `Ladder`), ladder anchors, usable targets, light groups (with the light states' own data), light-room
+    channels and mesh samples.
 - **O1-4b-1c — panels and screens**: screen state materials constant, panel render targets baked.
 - **O1-4b-2 / 3**: the player body; cargo boxes and effects, music, the Garage's details prepared.
 

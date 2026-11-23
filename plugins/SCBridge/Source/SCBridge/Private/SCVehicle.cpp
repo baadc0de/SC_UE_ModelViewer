@@ -178,7 +178,7 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
             });
         }
         if (!bShares) continue;
-        const TPair<const USCRigComponent*, FName> Key(Rig, D.Fragment);
+        const FSCFragmentKey Key(Rig, D.Fragment);
         if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenClip == bEndsAtLast) ? D.OpenTag : D.CloseTag);
         else FragmentTargets.Remove(Key);
         bChanged = true;

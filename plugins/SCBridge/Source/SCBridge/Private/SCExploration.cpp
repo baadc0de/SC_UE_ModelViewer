@@ -219,7 +219,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig) return false;
     const USCShipLinkSubsystem* Link = USCShipLinkSubsystem::Get(this);
     const bool bOwnerCargoOpen = bOpen && bCargoAccess && Link &&
-        Link->RoleOf(AsActor, this) == ESCShipRole::Owner && !LiftDrivenRigs.Contains(Doors[Index].Rig.Get()) &&
+        Link->RoleOf(AsActor, this) == ESCShipRole::Owner && !IsLiftDriven(Doors[Index].Rig.Get()) &&
         !(ShipDoors.IsValidIndex(Index) && ShipDoors[Index].bSecurePending);
     if (!AsActor.IsNone() && !bOwnerCargoOpen &&
         !DoorOrderRefusal(Index, bOpen ? ESCShipDoorAction::Open : ESCShipDoorAction::Close, AsActor, LocalUse).IsEmpty()) return false;
@@ -281,16 +281,25 @@ int32 ASCVehicle::NearestDoor(FVector Position, float Reach) const
     for (int32 I = 0; I < Doors.Num(); ++I)
     {
         const auto& D = Doors[I];
-        if (!D.Rig || LiftDrivenRigs.Contains(D.Rig.Get())) continue;
+        if (!D.Rig || IsLiftDriven(D.Rig.Get())) continue;
         const double Candidate = FVector::DistSquared(Position, D.Rig->GetSocketLocation(D.Joint));
         if (Candidate <= Distance) { Distance = Candidate; Best = I; }
     }
     return Best;
 }
+USCRigComponent* ASCVehicle::DoorForPanel(const USceneComponent* Panel) const
+{
+    const TObjectPtr<USCRigComponent>* Rig = Panel ? DoorControls.Find(const_cast<USceneComponent*>(Panel)) : nullptr;
+    return Rig ? Rig->Get() : nullptr;
+}
+float ASCVehicle::PanelReachOf(const USceneComponent* Panel) const
+{
+    return Panel ? PanelReach.FindRef(const_cast<USceneComponent*>(Panel)) : 0.f;
+}
 void ASCVehicle::SetPanelReach(const USceneComponent* Panel, float Metres)
 {
     if (!Panel || !(Metres > 0)) return;
-    float& Reach = PanelReach.FindOrAdd(Panel);
+    float& Reach = PanelReach.FindOrAdd(const_cast<USceneComponent*>(Panel));
     Reach = FMath::Max(Reach, Metres * 100.f);
     MaxPanelReach = FMath::Max(MaxPanelReach, Reach);
 }
@@ -321,10 +330,10 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
         bool bCrossedRig = false;
         for (const USceneComponent* C = Hit.GetComponent(); C; C = C->GetAttachParent())
         {
-            if (const TWeakObjectPtr<USCRigComponent>* Door = DoorControls.Find(C))
+            if (USCRigComponent* Door = DoorForPanel(C))
             {
-                const float PadReach = bCrossedRig ? Reach : FMath::Max(Reach, PanelReach.FindRef(C));
-                const int32 Index = DoorForRig(Door->Get());
+                const float PadReach = bCrossedRig ? Reach : FMath::Max(Reach, PanelReachOf(C));
+                const int32 Index = DoorForRig(Door);
                 if (Index != INDEX_NONE && Hit.Distance <= PadReach)
                 {
                     Out.Via = TEXT("panel");
@@ -346,7 +355,7 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
             if (!Rig) Socket = C->GetAttachSocketName();
         }
         TArray<int32> OnRig;
-        for (int32 I = 0; Rig && !LiftDrivenRigs.Contains(Rig) && I < Doors.Num(); ++I)
+        for (int32 I = 0; Rig && !IsLiftDriven(Rig) && I < Doors.Num(); ++I)
             if (Doors[I].Rig == Rig) OnRig.AddUnique(I);
         if (OnRig.Num() == 1) { Out.Via = TEXT("rig"); return OnRig[0]; } // the entity is the interaction (a door, a seat)
         if (OnRig.Num() > 1)
@@ -412,7 +421,7 @@ void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
         {
             const int32 Door = DoorForRig(Rig.Get());
             // A lift's doors open and close with its carriage (WP-P5): a sensor reopening one would undo the handshake.
-            if (Door == INDEX_NONE || LiftDrivenRigs.Contains(Rig.Get())) continue;
+            if (Door == INDEX_NONE || IsLiftDriven(Rig.Get())) continue;
             FSensorDoorState& State = SensorDoorStates.FindOrAdd(Door);
             State.LastInside = Now;
             State.ExitDelay = FMath::Max(State.ExitDelay, Sensor.ExitDelay);

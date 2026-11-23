@@ -3,6 +3,7 @@
 // geometry-less entities and lift carriages with their stops. Container-local values are CryEngine metres.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCInteractionRecords.generated.h"
 
 /** `interaction_links[]`: when the entity's interaction SourceSlot fires, TargetSlot is delivered to TargetEntityId. */
 struct FSCInteractionLink
@@ -18,32 +19,37 @@ struct FSCParentAttachment
     FString AttachmentType, AttachmentTarget;
 };
 /** `door`: SCItemDoorParams timing and state (class value with instance overrides; on placements and, cache format 39,
- *  on loadout children). */
-struct FSCDoorTiming
+ *  on loadout children). Reflected: saved with a prepared level's door records (WP-O1-4b). */
+USTRUCT()
+struct SCBRIDGE_API FSCDoorTiming
 {
-    bool bValid = false;
-    bool bSpeedKnown = false; // animation_speed was exported (null: absent or not a number in the data)
-    float AnimationSpeed = 1.f;
-    bool bUseAutoCloseDelay = false;
-    float AutoCloseDelay = 0.f;
+    GENERATED_BODY()
+    UPROPERTY() bool bValid = false;
+    UPROPERTY() bool bSpeedKnown = false; // animation_speed was exported (null: absent or not a number in the data)
+    UPROPERTY() float AnimationSpeed = 1.f;
+    UPROPERTY() bool bUseAutoCloseDelay = false;
+    UPROPERTY() float AutoCloseDelay = 0.f;
     /** `is_opened` (IsOpened): the door's authored state at spawn; unset when the export has none. */
-    TOptional<bool> bIsOpened;
-    TOptional<bool> bIsLocked; // is_locked: absence leaves the door unlocked
+    UPROPERTY() TOptional<bool> bIsOpened;
+    UPROPERTY() TOptional<bool> bIsLocked; // is_locked: absence leaves the door unlocked
     /** `animation_params`: the AnimationParams struct (SCItemDoorSimpleOpenCloseParams, SCItemDoorSingleProceduralParams). */
-    FString AnimationParams;
+    UPROPERTY() FString AnimationParams;
     /** `transition_tag`: a single-procedural door's one transition (its fragment tag, "Open"): the door's state is that
      *  transition's time, closed at its start, open at its end, so it closes by playing it backwards. None otherwise. */
-    FName TransitionTag;
+    UPROPERTY() FName TransitionTag;
     /** `open_tag` / `close_tag`: an open/close door's two fragment tags. None when not authored. */
-    FName OpenTag, CloseTag;
+    UPROPERTY() FName OpenTag;
+    UPROPERTY() FName CloseTag;
 };
 /** `item_port_links[]` (cache format 39): when the entity's interaction SourceSlot fires, TargetSlot is delivered to the
  *  item in the vehicle's port TargetPort (`SInteractionLinkParams.vehicleItemPortInteractionLinks`). */
-struct FSCItemPortLink
+USTRUCT()
+struct SCBRIDGE_API FSCItemPortLink
 {
-    FName SourceSlot;
-    FString TargetPort;
-    FName TargetSlot;
+    GENERATED_BODY()
+    UPROPERTY() FName SourceSlot;
+    UPROPERTY() FString TargetPort;
+    UPROPERTY() FName TargetSlot;
 };
 /** `sendable_interactions[]` (cache format 39): a Sendable shared interaction and its `LinkingTag` (tag path). */
 struct FSCSendableInteraction

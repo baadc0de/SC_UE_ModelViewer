@@ -96,11 +96,76 @@ enum class ESCFragmentStart : uint8
     HoldFirst,   // held at the start of play (frame 0 forward, the last frame for a clip played backwards)
     HoldLast,    // held at the end of play (the last frame forward, frame 0 backwards)
 };
-/** A door's data (`door`, `item_port_links`) by its rig, collected at import (ASCVehicle::DoorRecords). */
+/** A door's data (`door`, `item_port_links`) by its rig, collected at import (ASCVehicle::DoorRecords); saved. */
+USTRUCT()
 struct FSCDoorRecord
 {
-    FSCDoorTiming Door;
-    TArray<FSCItemPortLink> PortLinks;
+    GENERATED_BODY()
+    UPROPERTY() FSCDoorTiming Door;
+    UPROPERTY() TArray<FSCItemPortLink> PortLinks;
+};
+/** The last tag played for a fragment on a rig instance (null: the untargeted orbit-UI toggle): a door's state
+ *  (ASCVehicle::IsDoorOpen), saved with a prepared level. */
+USTRUCT()
+struct FSCFragmentKey
+{
+    GENERATED_BODY()
+    UPROPERTY() TObjectPtr<USCRigComponent> Rig;
+    UPROPERTY() FName Fragment;
+    FSCFragmentKey() = default;
+    FSCFragmentKey(const USCRigComponent* InRig, FName InFragment) : Rig(const_cast<USCRigComponent*>(InRig)), Fragment(InFragment) {}
+    bool operator==(const FSCFragmentKey& Other) const { return Rig == Other.Rig && Fragment == Other.Fragment; }
+    friend uint32 GetTypeHash(const FSCFragmentKey& Key) { return HashCombine(GetTypeHash(Key.Rig.Get()), GetTypeHash(Key.Fragment)); }
+};
+/** A ship door's movement sample (ASCVehicle::FShipDoor). */
+USTRUCT()
+struct FSCShipDoorSample
+{
+    GENERATED_BODY()
+    UPROPERTY() FTransform Pose; // relative to the ship
+    UPROPERTY() double TravelCm = 0; // maximum point travel before the next sample
+};
+/** A collider a ship door moves, and its sweep (ASCVehicle::FShipDoor). */
+USTRUCT()
+struct FSCShipDoorCollider
+{
+    GENERATED_BODY()
+    using FSample = FSCShipDoorSample;
+    UPROPERTY() TWeakObjectPtr<UPrimitiveComponent> Component;
+    UPROPERTY() FName Socket;
+    UPROPERTY() FTransform ClosedPose; // relative to the ship
+    UPROPERTY() TArray<FSCShipDoorSample> Sweep;
+    UPROPERTY() FTransform GroundPose = FTransform::Identity;
+};
+/** A gangway's ground probes on one bone (ASCVehicle::FShipDoor). */
+USTRUCT()
+struct FSCShipDoorGroundProbes
+{
+    GENERATED_BODY()
+    UPROPERTY() int32 Bone = INDEX_NONE;
+    UPROPERTY() TArray<FVector> Points; // actual rigid collision surface points in the socket bone's frame
+};
+/** A ship door (Ship Link, cargo access): built from the door interactions and saved with a prepared level (its sweep
+ *  measured once, at import or prep). */
+USTRUCT()
+struct FSCShipDoor
+{
+    GENERATED_BODY()
+    using FMovementCollider = FSCShipDoorCollider;
+    using FGroundProbeSet = FSCShipDoorGroundProbes;
+    UPROPERTY() ESCShipDoorGroup Group = ESCShipDoorGroup::Other;
+    UPROPERTY() FName GroupSource;
+    UPROPERTY() FString Label;
+    UPROPERTY() FBox Aperture = FBox(ForceInit); // vehicle-local, at the authored closed pose when available
+    UPROPERTY() FBox MovementBounds = FBox(ForceInit);
+    UPROPERTY() TArray<FSCShipDoorCollider> MovementColliders;
+    UPROPERTY() bool bLocked = false;
+    UPROPERTY() bool bSecurePending = false;
+    UPROPERTY() bool bCargoRelock = false;
+    UPROPERTY() bool bActorOpenedWithoutAccess = false; // checked by the RPC state journal
+    UPROPERTY() bool bRamp = false;
+    UPROPERTY() TArray<FSCShipDoorGroundProbes> GroundProbes;
+    UPROPERTY() int32 GroundLastSample = INDEX_NONE; // only for an exact, reversible single-clip cargo sweep
 };
 /** A light group of an interior (`interiors[].entities[]`, kind `light_group`): what it receives and the lights it holds
  *  (FSCImportedLightState::GroupEntityId). */
@@ -138,41 +203,9 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
     TArray<FSCLadderAnchor> LadderAnchors;
-    struct FShipDoor
-    {
-        struct FMovementCollider
-        {
-            struct FSample
-            {
-                FTransform Pose; // relative to the ship
-                double TravelCm = 0; // maximum point travel before the next sample
-            };
-            TWeakObjectPtr<UPrimitiveComponent> Component;
-            FName Socket;
-            FTransform ClosedPose; // relative to the ship
-            TArray<FSample> Sweep;
-            FTransform GroundPose = FTransform::Identity;
-        };
-        ESCShipDoorGroup Group = ESCShipDoorGroup::Other;
-        FName GroupSource;
-        FString Label;
-        FBox Aperture = FBox(ForceInit); // vehicle-local, at the authored closed pose when available
-        FBox MovementBounds = FBox(ForceInit);
-        TArray<FMovementCollider> MovementColliders;
-        bool bLocked = false;
-        bool bSecurePending = false;
-        bool bCargoRelock = false;
-        bool bActorOpenedWithoutAccess = false; // checked by the RPC state journal
-        bool bRamp = false;
-        struct FGroundProbeSet
-        {
-            int32 Bone = INDEX_NONE;
-            TArray<FVector> Points; // actual rigid collision surface points in the socket bone's frame
-        };
-        TArray<FGroundProbeSet> GroundProbes;
-        int32 GroundLastSample = INDEX_NONE; // only for an exact, reversible single-clip cargo sweep
-    };
-    TArray<FShipDoor> ShipDoors;
+    using FShipDoor = FSCShipDoor;
+    UPROPERTY() TArray<FSCShipDoor> ShipDoors; // saved (WP-O1-4b): a prepared ship's doors are not measured again
+
     void BuildShipDoors();
     void BuildGangwayProbes(int32 Index);
     void GangwayStops(float Seconds, TMap<int32, double>& OutFractions) const;
@@ -196,7 +229,7 @@ public:
     void FinishSecureOrders();
     void RestoreCargoDoorLocks();
     TArray<FSCFloorPanel> DoorPanelLocks;
-    TMap<TWeakObjectPtr<const USCRigComponent>, FString> DoorPanelLabels;
+    UPROPERTY() TMap<TObjectPtr<USCRigComponent>, FString> DoorPanelLabels;
     void RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding);
     bool AimDoorPanelLock(const USceneComponent* Panel, const FVector& Eye, const FVector& Direction, double Reach, bool bLocked) const;
     // ------------------------------------------------------------------------- WP-I1-4 panel hover (SCPanelScreens.cpp)
@@ -256,14 +289,18 @@ public:
     bool IsDoorPlaying(int32 Index) const;
     /** Door control panels (the game's pads): a panel's anchor -> the rig of the door it operates (scene `links`, or
      *  the door whose loadout attached it). FindInteraction resolves a panel under the crosshair to its door. */
-    TMap<TWeakObjectPtr<const USceneComponent>, TWeakObjectPtr<USCRigComponent>> DoorControls;
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, TObjectPtr<USCRigComponent>> DoorControls;
     /** How far (cm) the player operates a door panel from: its UI's `interaction_distance` (the game's render-to-texture
      *  interactionDistance; the C2's ramp and hatch pads 15 m, high on the closed door). Panels without one are not here. */
-    TMap<TWeakObjectPtr<const USceneComponent>, float> PanelReach;
-    float MaxPanelReach = 0;
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, float> PanelReach;
+    UPROPERTY() float MaxPanelReach = 0;
+    /** The rig of the door panel Panel operates (DoorControls), else null. */
+    USCRigComponent* DoorForPanel(const USceneComponent* Panel) const;
+    /** Panel's operating distance in cm (PanelReach), else 0. */
+    float PanelReachOf(const USceneComponent* Panel) const;
     /** Record a panel's operating distance (metres, from its operating bindings; <= 0: none). */
     void SetPanelReach(const USceneComponent* Panel, float Metres);
-    TArray<FSCDoorSensor> DoorSensors;
+    UPROPERTY() TArray<FSCDoorSensor> DoorSensors;
     /** WP-I1 I1-3: operating-panel screen faces with state images (FSCScreenFace). */
     TArray<FSCScreenFace> ScreenFaces;
     /** Put each face's state image on it: a door pad follows its door (DoorControls) — moving, opened or closed — unless
@@ -302,9 +339,9 @@ public:
     static bool AppliesTo(const FSCClipPlayback& P, const USCRigComponent* Rig);
     // ------------------------------------------------------------------------------------- doors (data state, C2 fixes)
     /** Door data by rig (`door`, `item_port_links` of the instance that carries the rig), filled at import. */
-    TMap<TWeakObjectPtr<const USCRigComponent>, FSCDoorRecord> DoorRecords;
+    UPROPERTY() TMap<TObjectPtr<USCRigComponent>, FSCDoorRecord> DoorRecords; // saved
     /** Rigs of loadout items by port path (SCCargoRecords::PortKey): where `item_port_links` deliver. */
-    TMap<FString, TWeakObjectPtr<USCRigComponent>> PortRigs;
+    UPROPERTY() TMap<FString, TWeakObjectPtr<USCRigComponent>> PortRigs;
     /** Open (true) or close door Index through its own fragments, from the rig's current pose (never a snap): an open/close
      *  door plays its open or close tag; a single-procedural door plays its transition forwards to open and backwards to
      *  close. SpeedScale <= 0: the door's DoorAnimationSpeed. Then the door's `item_port_links` for that verb are delivered
@@ -340,7 +377,9 @@ public:
     TMap<TWeakObjectPtr<const USceneComponent>, FLiftPanel> LiftPanels;
     /** Doors a lift opens and closes itself (its gate and landing doors): not toggled by E (FindInteraction / NearestDoor),
      *  as the C2's lift doors offer the player no interaction of their own. sc.FP.Door still drives them. */
-    TSet<TWeakObjectPtr<const USCRigComponent>> LiftDrivenRigs;
+    UPROPERTY() TSet<TObjectPtr<USCRigComponent>> LiftDrivenRigs; // saved with the doors (WP-O1-4b-1b-1)
+    /** Whether Rig is a lift gate or landing door (LiftDrivenRigs): the lift drives it, never a door order. */
+    bool IsLiftDriven(const USCRigComponent* Rig) const { return Rig && LiftDrivenRigs.Contains(const_cast<USCRigComponent*>(Rig)); }
     /** WP-P5 §6: follow SourceEntityId's exported links whose source slot is Interaction and deliver each target slot to its
      *  target (a lift carriage or stop, or a door). Returns the deliveries handled. The first interior holding the id. */
     int32 SendInteraction(const FString& SourceEntityId, FName Interaction);
@@ -460,9 +499,9 @@ public:
     /** WP-P3: the physics grid's volume (DataCore `physicsGrid.physicsProxy`), a triangle soup in actor space (cm).
      *  Inside it the game's actors belong to the vehicle's grid, where the vehicle's own colliders (HullColliders,
      *  the root entity's game collision) do not block them; the interior's and the items' colliders do. */
-    TArray<FVector> PhysicsGridTriangles;
-    TArray<int32> PhysicsGridShapeEnds; // per shape, end (exclusive) in PhysicsGridTriangles; empty: one shape
-    FBox PhysicsGridBounds = FBox(ForceInit);
+    UPROPERTY() TArray<FVector> PhysicsGridTriangles;
+    UPROPERTY() TArray<int32> PhysicsGridShapeEnds; // per shape, end (exclusive) in PhysicsGridTriangles; empty: one shape
+    UPROPERTY() FBox PhysicsGridBounds = FBox(ForceInit);
     UPROPERTY() TArray<TObjectPtr<UPrimitiveComponent>> HullColliders;
     /** World point inside the physics-grid volume (ray parity); false without a volume. */
     bool IsInPhysicsGrid(const FVector& World) const;
@@ -504,8 +543,8 @@ private:
     void FireClipAudio(FSCClipPlayback& P, double Previous);
     void MarkDirty(int32 ClipIndex);
     TSet<USkeletalMesh*> DirtyMeshes;
-    // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle.
-    TMap<TPair<const USCRigComponent*, FName>, FName> FragmentTargets;
+    // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle. Saved: the doors' state.
+    UPROPERTY() TMap<FSCFragmentKey, FName> FragmentTargets;
     struct FSensorDoorState { double LastInside = -1; float ExitDelay = 0; bool bOpenedBySensor = false; };
     TMap<int32, FSensorDoorState> SensorDoorStates;
     struct FPendingSpawn

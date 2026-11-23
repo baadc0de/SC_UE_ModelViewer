@@ -65,16 +65,16 @@ struct SCBRIDGE_API FSCDoorInteraction
     /** From the door's `SCItemDoorParams` (FSCDoorTiming; the Mannequin Open / Close pair without door data). OpenTag
      *  opens; a single-procedural door (`transition_tag`) has no close fragment and closes by playing its transition
      *  backwards (bReverseClose); CloseTag is then only the recorded state. */
-    FName OpenTag = TEXT("Open");
-    FName CloseTag = TEXT("Close");
-    bool bReverseClose = false;
+    UPROPERTY() FName OpenTag = TEXT("Open");
+    UPROPERTY() FName CloseTag = TEXT("Close");
+    UPROPERTY() bool bReverseClose = false;
     /** `is_opened`: the door's state at spawn (closed when the data has none). */
-    bool bStartsOpen = false;
+    UPROPERTY() bool bStartsOpen = false;
     /** `animation_speed` (DoorAnimationSpeed): the clip-rate scale of the door's own presses. */
-    float Speed = 1.f;
+    UPROPERTY() float Speed = 1.f;
     /** `item_port_links`: interactions the door forwards to the items of vehicle ports (the C2's front hatch opens the
      *  front doors and the ramp). */
-    TArray<FSCItemPortLink> PortLinks;
+    UPROPERTY() TArray<FSCItemPortLink> PortLinks;
 };
 /** A door proximity sensor (the game's Door_Ship_Sensor): while the player stands in its box the doors it drives open;
  *  ExitDelay seconds after the player left every sensor of a door that a sensor opened, the door closes. */
@@ -87,10 +87,12 @@ struct FSCPaintSlot
     TWeakObjectPtr<class UMaterialInterface> Default;
     TArray<TWeakObjectPtr<class UMaterialInterface>> Paints;
 };
+USTRUCT()
 struct FSCDoorSensor
 {
-    TWeakObjectPtr<USceneComponent> Anchor; // the sensor's frame
-    FBox Box = FBox(ForceInit);             // anchor-local cm
-    float ExitDelay = 0;
-    TArray<TWeakObjectPtr<USCRigComponent>> Doors;
+    GENERATED_BODY()
+    UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor; // the sensor's frame
+    UPROPERTY() FBox Box = FBox(ForceInit);             // anchor-local cm
+    UPROPERTY() float ExitDelay = 0;
+    UPROPERTY() TArray<TWeakObjectPtr<USCRigComponent>> Doors;
 };

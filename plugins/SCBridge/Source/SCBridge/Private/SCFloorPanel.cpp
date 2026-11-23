@@ -722,7 +722,7 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
             FSCPanelAim Aim;
             Aim.Component = Component;
             Aim.Face = Face;
-            if (const float* Operated = PanelReach.Find(F.Panel)) Aim.Reach = *Operated;
+            Aim.Reach = PanelReachOf(F.Panel.Get());
             Aim.Geometry = F.Geometry.Scaled(Component->GetComponentScale());
             if (!Aim.Geometry.Build(Aim.Frame().InverseTransformVectorNoScale(GetActorUpVector()))) return;
             FBox Box(ForceInit);
@@ -742,7 +742,7 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
             else if (Nodes.Num() == 1) Aim.Fallback = F.Buttons[0].Node;
             PanelAims.Add(MoveTemp(Aim));
         };
-        if (DoorControls.Contains(F.Panel))
+        if (DoorForPanel(F.Panel.Get()))
         {
             AddAim(true);
             if (F.bHideDoorLockControl) continue;
