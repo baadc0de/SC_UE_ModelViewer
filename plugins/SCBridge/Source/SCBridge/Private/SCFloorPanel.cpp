@@ -523,7 +523,7 @@ void ASCVehicle::BuildFloorPanels(TArray<FSCBlankScreenFace>& Blank, TFunctionRe
         for (int32 R = 0; R < P.Layout.Options.Num(); ++R)
         {
             const FSCFloorPanelOption& O = P.Layout.Options[R];
-            Rows.Add(FString::Printf(TEXT("%d:%s(%s)%s"), O.Stop, *O.Label, *O.Interaction.ToString(), P.Masks[R].IsValid() ? TEXT("") : TEXT("[engine font]")));
+            Rows.Add(FString::Printf(TEXT("%d:%s(%s)%s"), O.Stop, *O.Label, *O.Interaction.ToString(), P.Masks[R] ? TEXT("") : TEXT("[engine font]")));
         }
         UE_LOG(LogSCFloorPanel, Display,
                TEXT("FLOOR_PANEL_BUILD panel=%s lift=%d face=%d component=%s slot=%d size_cm=%.1fx%.1f fit_error=%.4f target=%dx%d style=%s font=%s rows=%s"),
@@ -747,7 +747,7 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
             AddAim(true);
             if (F.bHideDoorLockControl) continue;
             FSCFloorPanel LockFace;
-            LockFace.Anchor = F.Panel;
+            LockFace.Anchor = const_cast<USceneComponent*>(F.Panel.Get());
             LockFace.Component = Component;
             LockFace.StateTypes = F.StateTypes;
             LockFace.Geometry = F.Geometry.Scaled(Component->GetComponentScale());
@@ -782,7 +782,7 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
         P.Kind = ESCPanelKind::Buttons;
         P.EntityId = F.EntityId;
         P.Interior = Interior;
-        P.Anchor = F.Panel;
+        P.Anchor = const_cast<USceneComponent*>(F.Panel.Get());
         P.Component = Component;
         P.Slot = F.Slot;
         P.Geometry = F.Geometry.Scaled(Component->GetComponentScale());
@@ -833,7 +833,7 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
             FSCScreenFace& Screen = ScreenFaces.AddDefaulted_GetRef();
             Screen.Component = Component;
             Screen.Slot = F.Slot;
-            Screen.Panel = F.Panel;
+            Screen.Panel = const_cast<USceneComponent*>(F.Panel.Get());
             Screen.Default = Component->GetMaterial(F.Slot);
             Screen.Image = F.DefaultImage;
             P.Face = ScreenFaces.Num() - 1;

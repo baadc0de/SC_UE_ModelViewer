@@ -10,13 +10,16 @@
 
 /** `ui_bindings[].state_images[]` (WP-I1 I1-3): the render of the UI owner in one other state of its interaction state
  *  machine (`StateType` / `State`: the game's names, `DoorOpenState` / `DoorOpened`). */
+USTRUCT()
 struct SCBRIDGE_API FSCUiStateImage
 {
-    FString StateType, State; // a single-state render; empty for a combined one
+    GENERATED_BODY()
+    UPROPERTY() FString StateType;
+    UPROPERTY() FString State; // a single-state render; empty for a combined one
     /** Every pinned state of the render, "<StateType>.<State>" (cache format 39 `states[]`: one for a single-state render,
      *  two for a combined one), sorted. */
-    TArray<FString> States;
-    FString ImagePath; // normalized package path
+    UPROPERTY() TArray<FString> States;
+    UPROPERTY() FString ImagePath; // normalized package path
     /** "<StateType>.<State>" for a single-state render (the key a screen face's state images are held by); the sorted
      *  states joined with "+" for a combined one. */
     FString Key() const { return States.Num() > 1 ? FString::Join(States, TEXT("+")) : StateType + TEXT(".") + State; }
@@ -24,11 +27,13 @@ struct SCBRIDGE_API FSCUiStateImage
 /** `ui_bindings[].hover_images[]` (cache format 43, WP-I1-4): the render with the cursor on one button (`Node`, a
  *  `buttons[].node`): the engine's hover tag on that node, so the button shows the game's hover look. `States`: the
  *  owner states the render pins, as in FSCUiStateImage (empty: the default render's). */
+USTRUCT()
 struct SCBRIDGE_API FSCUiHoverImage
 {
-    FString Node;
-    TArray<FString> States; // "<StateType>.<State>", sorted
-    FString ImagePath;      // normalized package path
+    GENERATED_BODY()
+    UPROPERTY() FString Node;
+    UPROPERTY() TArray<FString> States; // "<StateType>.<State>", sorted
+    UPROPERTY() FString ImagePath;      // normalized package path
     /** The state key of the render it is the hovered form of: "" for the default, else FSCUiStateImage::Key(). */
     FString StateKey() const { return FString::Join(States, TEXT("+")); }
     /** The key a screen face holds its hover instances by (FSCScreenFace::Hovers). */
@@ -36,22 +41,44 @@ struct SCBRIDGE_API FSCUiHoverImage
 };
 /** `ui_bindings[].buttons[]` (cache format 39): a clickable node of the default render, the owner interaction its
  *  left click sends, and its rectangle in the generated image's pixels. */
+USTRUCT()
 struct FSCUiButton
 {
-    FString Node;
-    FName Interaction;
-    FBox2D RectPx = FBox2D(ForceInit);
-    FString Label; // cache format 43: the button's caption ("Auxiliary"); "" without one
+    GENERATED_BODY()
+    UPROPERTY() FString Node;
+    UPROPERTY() FName Interaction;
+    UPROPERTY() FBox2D RectPx = FBox2D(ForceInit);
+    UPROPERTY() FString Label; // cache format 43: the button's caption ("Auxiliary"); "" without one
+};
+/** One transition of a UI state type (FSCUiStateType::Transitions). */
+USTRUCT()
+struct FSCUiTransition
+{
+    GENERATED_BODY()
+    UPROPERTY() FString From;
+    UPROPERTY() FName Interaction;
+    UPROPERTY() FString State;
+};
+/** A linked entity's state tag and the state it sets (FSCUiStateType::Linked). */
+USTRUCT()
+struct FSCUiLinkedState
+{
+    GENERATED_BODY()
+    UPROPERTY() FString Key;   // tag path
+    UPROPERTY() FString Value; // state
 };
 /** `ui_bindings[].state_types[]`: one state type of the UI owner's state machine, its default, the owner's own
  *  interactions that set a state (`transitions`) and the linked entities' state tags that set one (`linked`). */
+USTRUCT()
 struct FSCUiStateType
 {
-    FString Name, DefaultState;
-    TArray<FString> States;
+    GENERATED_BODY()
+    UPROPERTY() FString Name;
+    UPROPERTY() FString DefaultState;
+    UPROPERTY() TArray<FString> States;
     /** The owner's own interaction -> the state it sets, from state From ("" = from any state). */
-    struct FTransition { FString From; FName Interaction; FString State; };
-    TArray<FTransition> Transitions;
+    using FTransition = FSCUiTransition;
+    UPROPERTY() TArray<FSCUiTransition> Transitions;
     /** The state Interaction sets from Current (a transition from Current first, else one from any state); null without. */
     const FString* Next(FName Interaction, const FString& Current) const
     {
@@ -59,7 +86,7 @@ struct FSCUiStateType
         if (!T) T = Transitions.FindByPredicate([&](const FTransition& X) { return X.Interaction == Interaction && X.From.IsEmpty(); });
         return T ? &T->State : nullptr;
     }
-    TArray<TPair<FString, FString>> Linked; // tag path -> state
+    UPROPERTY() TArray<FSCUiLinkedState> Linked; // tag path -> state
 };
 /** `ui_bindings[]` of a child or placement (decomposed-export-contract "UI bindings"): a UI screen the entity carries,
  *  its game role and the exporter's render of its default state (WP-I1). */

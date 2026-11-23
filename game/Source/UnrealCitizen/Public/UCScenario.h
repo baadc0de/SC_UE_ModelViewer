@@ -62,8 +62,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  saved (door records and interactions with their tags, ship doors with their sweeps, door controls and pad reach,
      *  door sensors, port rigs, the doors' fragment states, the physics grid). 20: the lift-driven doors saved. 21:
      *  WP-O1-4b-1b-2 lifts saved (FSCSavedLift, made again at load), the interaction network and the lift panels. 22: the audio scene's entity emitters saved; parts
-     *  under an interaction anchor kept as components. */
-    static constexpr int32 FormatVersion = 22;
+     *  under an interaction anchor kept as components. 23: WP-O1-4b-1c screens and panels saved (screen faces with
+     *  constant renders, panel aims, drawn panels with their render targets as assets, drawn again at load). */
+    static constexpr int32 FormatVersion = 23;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

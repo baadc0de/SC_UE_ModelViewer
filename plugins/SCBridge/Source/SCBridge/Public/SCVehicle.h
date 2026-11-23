@@ -32,21 +32,24 @@ struct SCBRIDGE_API FSCInstanceHelpers
 /** WP-I1 I1-3: a screen face (one material slot of one component) showing an operating panel's image, and the exporter's
  *  renders of the panel owner's other states (`ui_bindings[].state_images[]`), one material instance each. The face swaps
  *  instances; any other material (a viewer-drawn render target, later) can be put on it with SetScreenFaceMaterial. */
+USTRUCT()
 struct FSCScreenFace
 {
-    TWeakObjectPtr<UMeshComponent> Component;
-    int32 Slot = INDEX_NONE;
-    TWeakObjectPtr<const USceneComponent> Panel; // the panel instance's anchor (the DoorControls key)
-    TWeakObjectPtr<UMaterialInterface> Default;  // the default render (a door pad: closed, unlocked, powered)
-    TMap<FString, TWeakObjectPtr<UMaterialInterface>> States; // FSCUiStateImage::Key() -> instance
-    FString Image;  // the default image (package path), for listings
-    FString Shown;  // the state key shown ("" = the default)
-    FString Pinned; // sc.Screens.States: a state held whatever the door does ("" = follow the door)
-    TWeakObjectPtr<UMaterialInterface> Custom; // SetScreenFaceMaterial: other content, kept until cleared
+    GENERATED_BODY()
+    UPROPERTY() TWeakObjectPtr<UMeshComponent> Component;
+    UPROPERTY() int32 Slot = INDEX_NONE;
+    UPROPERTY() TWeakObjectPtr<USceneComponent> Panel; // the panel instance's anchor (the DoorControls key)
+    /** The renders as materials (saved: a prepared face's instances are constants the cook made). */
+    UPROPERTY() TObjectPtr<UMaterialInterface> Default;  // the default render (a door pad: closed, unlocked, powered)
+    UPROPERTY() TMap<FString, TObjectPtr<UMaterialInterface>> States; // FSCUiStateImage::Key() -> instance
+    UPROPERTY() FString Image;  // the default image (package path), for listings
+    UPROPERTY() FString Shown;  // the state key shown ("" = the default)
+    UPROPERTY() FString Pinned; // sc.Screens.States: a state held whatever the door does ("" = follow the door)
+    UPROPERTY() TObjectPtr<UMaterialInterface> Custom; // SetScreenFaceMaterial: other content, kept until cleared
     /** WP-I1-4: the renders with the cursor on a button, by FSCUiHoverImage::FaceKey (node | state key), and the button
      *  node under the crosshair now ("" none: the face shows its state at rest). */
-    TMap<FString, TWeakObjectPtr<UMaterialInterface>> Hovers;
-    FString Hovered;
+    UPROPERTY() TMap<FString, TObjectPtr<UMaterialInterface>> Hovers;
+    UPROPERTY(Transient) FString Hovered;
 };
 /** WP-I1-4: one interaction point of a placed usable: where its helper is (anchor space, when the mesh names it), how
  *  near the player must be (its `radius`) and what it offers a standing player there (its interactions that start a use). */
@@ -68,20 +71,22 @@ struct FSCUsableTarget
 };
 /** WP-I1-4: an operating panel's face whose render has clickable nodes and that is not drawn as a FloorPanel (a door pad,
  *  a lift call panel, a kiosk): where its buttons are on the face, for the game's hover look under the crosshair. */
+USTRUCT()
 struct FSCPanelAim
 {
-    TWeakObjectPtr<UMeshComponent> Component;
-    int32 Face = INDEX_NONE;            // the ScreenFaces entry that shows the hover renders
-    FSCScreenFaceGeometry Geometry;     // in the component's frame, its scale applied (FSCScreenFaceGeometry::Scaled)
-    FVector2D UVBase = FVector2D::ZeroVector; // the integer UV cell the face samples the render in
-    TArray<FSCUiButton> Buttons;        // RectPx normalized to the render (0..1)
+    GENERATED_BODY()
+    UPROPERTY() TWeakObjectPtr<UMeshComponent> Component;
+    UPROPERTY() int32 Face = INDEX_NONE;            // the ScreenFaces entry that shows the hover renders
+    UPROPERTY() FSCScreenFaceGeometry Geometry;     // in the component's frame, its scale applied (FSCScreenFaceGeometry::Scaled)
+    UPROPERTY() FVector2D UVBase = FVector2D::ZeroVector; // the integer UV cell the face samples the render in
+    UPROPERTY() TArray<FSCUiButton> Buttons;        // RectPx normalized to the render (0..1)
     /** The node E acts on when the crosshair is on the face but off every button ("" none): a door pad's door button. */
-    FString Fallback;
+    UPROPERTY() FString Fallback;
     /** How far it is operated from (cm): its UI's interaction distance (ASCVehicle::PanelReach); 0 without one. */
-    double Reach = 0;
+    UPROPERTY() double Reach = 0;
     /** The face's bounding sphere in the component's frame: a face out of reach is skipped before its triangles. */
-    FVector Centre = FVector::ZeroVector;
-    double Radius = 0;
+    UPROPERTY() FVector Centre = FVector::ZeroVector;
+    UPROPERTY() double Radius = 0;
     FTransform Frame() const;
     /** A door pad's door button: the first whose interaction sets none of the pad's own states (`state_types[]`
      *  transitions): its open / close acts on the door, whose state comes back by link, while the lock and light buttons
@@ -250,13 +255,13 @@ public:
     TArray<FSCShipDoorResult> SecureShip(FName Actor);
     void FinishSecureOrders();
     void RestoreCargoDoorLocks();
-    TArray<FSCFloorPanel> DoorPanelLocks;
+    UPROPERTY() TArray<FSCFloorPanel> DoorPanelLocks; // saved (WP-O1-4b-1c)
     UPROPERTY() TMap<TObjectPtr<USCRigComponent>, FString> DoorPanelLabels;
     void RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding);
     bool AimDoorPanelLock(const USceneComponent* Panel, const FVector& Eye, const FVector& Direction, double Reach, bool bLocked) const;
     // ------------------------------------------------------------------------- WP-I1-4 panel hover (SCPanelScreens.cpp)
     /** Operating-panel faces with clickable nodes that are not FloorPanels (BuildButtonPanels). */
-    TArray<FSCPanelAim> PanelAims;
+    UPROPERTY() TArray<FSCPanelAim> PanelAims; // saved
     /** The PanelAims face under the view ray within Reach (its front; nothing that collides in front of it) and the button
      *  node under the crosshair there, else the face's Fallback. False without a face under the ray. */
     bool AimPanelButton(FVector Eye, FVector Direction, float Reach, const AActor* Ignore, int32& OutAim, FString& OutNode) const;
@@ -324,7 +329,7 @@ public:
     void SetPanelReach(const USceneComponent* Panel, float Metres);
     UPROPERTY() TArray<FSCDoorSensor> DoorSensors;
     /** WP-I1 I1-3: operating-panel screen faces with state images (FSCScreenFace). */
-    TArray<FSCScreenFace> ScreenFaces;
+    UPROPERTY() TArray<FSCScreenFace> ScreenFaces; // saved
     /** Put each face's state image on it: a door pad follows its door (DoorControls) — moving, opened or closed — unless
      *  a state is pinned; a face without a state image for the state shows its default. Returns the faces swapped. */
     int32 RefreshPanelScreens();
@@ -446,7 +451,7 @@ public:
     bool IsRigPlaying(const USCRigComponent* Rig) const;
     // ------------------------------------------------------------------------- WP-P5 floor panel (SCFloorPanel.h)
     /** Lift panels whose options are drawn on their screen face (the viewer's own floor-select UI). */
-    TArray<FSCFloorPanel> FloorPanels;
+    UPROPERTY() TArray<FSCFloorPanel> FloorPanels; // saved; drawn again at load
     /** The panels' render targets and screen instances: this actor's own (not in Materials, which an import shares). */
     UPROPERTY() TArray<TObjectPtr<UTextureRenderTarget2D>> FloorPanelTargets;
     UPROPERTY() TArray<TObjectPtr<UMaterialInterface>> FloorPanelMaterials;

@@ -454,6 +454,10 @@ void ASCVehicle::BeginPlay()
     FSCLightImporter::ResumeStyles(this);
     if (!CookedAudio.IsEmpty()) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
     if (!Lifts.IsEmpty()) UpdateTickEnabled(); // a prepared vehicle's lifts (RestoreLifts) tick with it
+    // A prepared vehicle's drawn panels (WP-O1-4b-1c): their render targets' pixels are not saved, so they are drawn now,
+    // whether or not anything else ticks the vehicle; the screen faces show their states.
+    if (!FloorPanels.IsEmpty() || !DoorPanelLocks.IsEmpty()) RefreshFloorPanels();
+    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
 }
 void ASCVehicle::PreSave(FObjectPreSaveContext SaveContext)
 {
