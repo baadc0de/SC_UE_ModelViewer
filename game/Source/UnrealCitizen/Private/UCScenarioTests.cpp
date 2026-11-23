@@ -1,5 +1,6 @@
 // WP-O1-4: scenario definitions, the prep step's records and when the game refuses to run one.
 #include "Misc/AutomationTest.h"
+#include "SCBridgeClient.h"
 #include "SCPackageReader.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
@@ -190,7 +191,9 @@ bool FUCPreparedLevelsTest::RunTest(const FString&)
     TestNotEqual(TEXT("... another loadout"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/M.xml"), {TEXT("a"), TEXT("b")}, true), Body);
     TestNotEqual(TEXT("... other weapons"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a")}, true), Body);
     TestNotEqual(TEXT("... without spares"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b")}, false), Body);
-    TestTrue(TEXT("... the exporter's gender"), USCViewerSubsystem::PlayerLevelPath(FString(), FString(), {}, true).StartsWith(TEXT("/Game/SC/Players/Maps/Player_default_")));
+    TestEqual(TEXT("... no gender: the one the export asks for"), USCViewerSubsystem::PlayerLevelPath(FString(), FString(), {}, true),
+              USCViewerSubsystem::PlayerLevelPath(FSCBridgeClient::DefaultPlayerGender, FString(), {}, true));
+    TestEqual(TEXT("... a weapon named twice"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b"), TEXT("A")}, true), Body);
     TestEqual(TEXT("a ship"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2")), FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2")));
     TestEqual(TEXT("a ship with a paint"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("crus.starlifter-pirate")),
               FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2__crus_starlifter_pirate")));

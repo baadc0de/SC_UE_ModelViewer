@@ -443,7 +443,7 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayer(const FString& G
                                                                bool bSpareAttachments, TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
 {
     TSharedRef<FJsonObject> Request = MakeShared<FJsonObject>();
-    Request->SetStringField(TEXT("gender"), Gender.IsEmpty() ? TEXT("male") : Gender);
+    Request->SetStringField(TEXT("gender"), Gender.IsEmpty() ? DefaultPlayerGender : *Gender);
     if (Loadout.IsEmpty()) Request->SetField(TEXT("loadout"), MakeShared<FJsonValueNull>());
     else Request->SetStringField(TEXT("loadout"), Loadout);
     if (Weapons.IsEmpty()) Request->SetField(TEXT("weapons"), MakeShared<FJsonValueNull>());

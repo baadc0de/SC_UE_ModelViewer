@@ -435,17 +435,18 @@ FString USCViewerSubsystem::ShipLevelPath(const FString& Entity, const FString& 
 }
 FString USCViewerSubsystem::PlayerLevelPath(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments)
 {
-    // Archive paths and entity classes ignore case; the exporter keeps the named weapons whatever their order.
+    // Archive paths and entity classes ignore case; the exporter keeps the named weapons whatever their order and however often
+    // one is named, and asks for the client's default gender when none is given: one body, one key.
     TArray<FString> Kept;
     for (const FString& Weapon : Weapons)
-        if (const FString W = Weapon.TrimStartAndEnd().ToLower(); !W.IsEmpty()) Kept.Add(W);
+        if (const FString W = Weapon.TrimStartAndEnd().ToLower(); !W.IsEmpty()) Kept.AddUnique(W);
     Kept.Sort();
+    const FString Sex = Gender.TrimStartAndEnd().IsEmpty() ? FString(FSCBridgeClient::DefaultPlayerGender) : Gender.TrimStartAndEnd().ToLower();
     // The exporter reads a loadout under Data/ whether or not the path names it: one loadout, one key.
     FString Path = Loadout.Replace(TEXT("\\"), TEXT("/")).TrimStartAndEnd().ToLower();
     if (!Path.IsEmpty() && !Path.StartsWith(TEXT("data/"))) Path = TEXT("data/") + Path;
-    const FString Key = FString::Printf(TEXT("%s|%s|%s|%d"), *Gender.TrimStartAndEnd().ToLower(), *Path, *FString::Join(Kept, TEXT(",")),
-                                        bSpareAttachments ? 1 : 0);
-    const FString Name = LevelName(Gender.TrimStartAndEnd().IsEmpty() ? FString(TEXT("default")) : Gender.TrimStartAndEnd().ToLower());
+    const FString Key = FString::Printf(TEXT("%s|%s|%s|%d"), *Sex, *Path, *FString::Join(Kept, TEXT(",")), bSpareAttachments ? 1 : 0);
+    const FString Name = LevelName(Sex);
     return FString::Printf(TEXT("/Game/SC/Players/Maps/Player_%s_%08x"), *Name, FCrc::StrCrc32(*Key));
 }
 bool USCViewerSubsystem::IsShipPaintLevel(const FString& Level)
