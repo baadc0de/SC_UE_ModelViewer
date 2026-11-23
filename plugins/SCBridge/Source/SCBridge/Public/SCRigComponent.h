@@ -36,6 +36,9 @@ public:
     virtual UBodySetup* GetBodySetup() override;
     virtual FBodyInstance* GetBodyInstance(FName BoneName = NAME_None, bool bGetWelded = true, int32 Index = INDEX_NONE) const override;
     virtual bool HasValidPhysicsState() const override;
+    /** Never for a rig with its own body (saved or built): the engine's asynchronous path would create the stock body
+     *  before OnRegister restores this one; OnCreatePhysicsState installs it. */
+    virtual bool AllowsAsyncPhysicsStateCreation() const override;
     /** The collision bytes with their custom versions (WP-O1-4b: kept on editor hosts, saved with a prepared level). */
     UPROPERTY() TArray<uint8> SavedCollision;
 protected:

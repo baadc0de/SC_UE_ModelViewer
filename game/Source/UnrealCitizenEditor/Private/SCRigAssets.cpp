@@ -40,8 +40,22 @@ bool SCRigAssets::MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, F
     // Vertex colours as the runtime build stores them (FLinearColor::ToFColorSRGB): the engine's build converts without
     // gamma (ToFColor(false)), so the description carries the sRGB bytes as linear values.
     TVertexInstanceAttributesRef<FVector4f> Colors = Attributes.GetVertexInstanceColors();
+    bool bAllBlack = true, bAllZero = true;
     for (const FVertexInstanceID Corner : Description.VertexInstances().GetElementIDs())
+    {
         Colors[Corner] = FVector4f(FLinearColor(Colors[Corner]).ToFColorSRGB().ReinterpretAsLinear());
+        bAllBlack &= FLinearColor(Colors[Corner]) == FLinearColor::Black;
+        bAllZero &= Colors[Corner].IsNearlyZero();
+    }
+    // The runtime build always keeps the colours. The engine keeps them only when a corner is not opaque black (its LOD
+    // build) and not near zero (its source model), and otherwise paints the mesh white: an all-black mask would light up.
+    // One corner's red raised by 0.001 passes both tests and still stores byte 0 (0.001 * 255 rounds to 0).
+    if (bAllBlack || bAllZero)
+        for (const FVertexInstanceID Corner : Description.VertexInstances().GetElementIDs())
+        {
+            Colors[Corner].X += 0.001f;
+            break;
+        }
     TPolygonGroupAttributesRef<FName> SlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
     for (const FPolygonGroupID Group : Description.PolygonGroups().GetElementIDs()) SlotNames[Group] = SlotName(Group.GetValue());
     FSkinWeightsVertexAttributesRef Weights = Attributes.GetVertexSkinWeights();
@@ -101,6 +115,7 @@ bool SCRigAssets::MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, F
     Info.BuildSettings.bUseFullPrecisionUVs = true;
     Info.BuildSettings.bRemoveDegenerates = false;
     Info.BuildSettings.bUseHighPrecisionSkinWeights = true; // the runtime build's 16-bit weights
+    Info.BuildSettings.BoneInfluenceLimit = 4;              // the runtime build's four influences, whatever the project default
     TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
     for (int32 Slot = 0; Slot < Materials.Num(); ++Slot)
     {

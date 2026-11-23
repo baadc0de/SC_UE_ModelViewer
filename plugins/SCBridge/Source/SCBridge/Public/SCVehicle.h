@@ -535,6 +535,9 @@ public:
     UPROPERTY(Transient) bool bThrusterPreviewActive = false;
     bool SetThrusterPreview(ESCThrusterPreviewMode Mode);
     UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USCClipCatalog> ClipCatalog;
+    /** The environment state its rigs were last posed in (FSCEnvironment::SetState: open, closed, bind); saved, so a
+     *  prepared level loaded for another state is posed again. */
+    UPROPERTY() FString PresentedState;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FSCSceneManifest Manifest;
     /** Anchors of instances that carry an id (player-kit items), by id. */
     UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> InstanceAnchors;

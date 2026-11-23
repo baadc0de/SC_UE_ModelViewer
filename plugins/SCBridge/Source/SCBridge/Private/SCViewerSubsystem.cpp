@@ -613,6 +613,10 @@ void USCViewerSubsystem::StepEnvironment()
         FSCDirt::Push(GetViewerWorld());
         if (!Environment->Lights.IsEmpty()) FSCEmissive::SetLumen(Environment.Get(), USCViewerSettings::Get()->bEmissiveInLumen);
         if (ASCViewerPawn* Pawn = GetViewerPawn()) Pawn->SetOrbitObstacle(Environment.Get());
+        // A state asked for while the level streamed in (the prep saved its own pose, open): posed now, its waypoints
+        // following.
+        const FString Wanted = EnvironmentState == TEXT("open") || EnvironmentState == TEXT("closed") ? EnvironmentState : FString(TEXT("bind"));
+        if (Environment->ClipCatalog && Environment->PresentedState != Wanted) SetEnvironmentState(EnvironmentState);
         UE_LOG(LogSCViewer, Display, TEXT("ENVIRONMENT_COOKED level=%s seconds=%.1f"), *EnvLevel->GetWorldAssetPackageName(), FPlatformTime::Seconds() - EnvStart);
         return;
     }

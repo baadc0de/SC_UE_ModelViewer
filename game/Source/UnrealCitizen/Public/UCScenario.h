@@ -54,8 +54,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  saved with the actor, rig collision saved on the rig; a level prepared before has its rigs baked static). 13: the
      *  held clip layers saved (ASCVehicle::HeldPlayback; a clip played after the load keeps the landing gear deployed). 14:
      *  rig meshes with 16-bit skin weights, their source models carrying the bones, rig collision per material slot; the
-     *  hangar's waypoint sources saved (a waypoint on a mechanism follows it). */
-    static constexpr int32 FormatVersion = 14;
+     *  hangar's waypoint sources saved (a waypoint on a mechanism follows it). 15: rig meshes saved as copies (the
+     *  import's stay as they are), the presented state saved (ASCVehicle::PresentedState), black vertex colours kept. */
+    static constexpr int32 FormatVersion = 15;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

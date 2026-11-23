@@ -204,19 +204,26 @@ data when it loads. In stages:
   (`SCRigAssets::MakeSavable`: LOD 0's skeletal mesh description from the rig's soft source data — triangles, normals,
   tangents, UVs, colours, per-vertex skin weights to `SC_RigRoot` + 1 + rig node — then the engine's skeletal mesh build;
   the reference skeleton, its bone order (what clip tracks index), the sockets and the material slots stay; LOD 0 keeps
-  CPU-readable vertices and 16-bit skin weights; the description carries the bones, so a socket-only rig's empty LOD
-  saves its source model too) and is saved with its skeleton under `<root>/Rigs` — every rig mesh the actor references
-  (its meshes, the clip bindings', the rigs'); a rig with soft collision gets its Chaos trimesh derived again in the built vertex order
+  CPU-readable vertices, 16-bit skin weights, four influences and its vertex colours, black ones too; the description
+  carries the bones, so a socket-only rig's empty LOD saves its source model too) and is saved with a copy of its
+  skeleton under `<root>/Rigs` — every rig mesh the actor references (its meshes, the clip bindings', the rigs'), as a
+  copy (`SCRigAssets::SavableCopy`) the actor is moved onto, the import's meshes left for other vehicles assembled from
+  them; a rig with soft collision gets its Chaos trimesh derived again in the built vertex order
   (`SCRigAssets::DeriveCollision`) and saved on the rig (`USCRigComponent::SavedCollision`, restored when the rig
   registers; the body itself is transient; the rig's collision settings stay); rig materials become constants; the clip
   catalog is saved with the actor without its editor-only sequences (playback reads the bone tracks); the held clip
   layers (`ASCVehicle::HeldPlayback`: the poses clips left, e.g. the landing gear deployed) are saved, so a clip played
   after the load composes with them; a prepared hangar saves its waypoint sources (`ASCVehicle::WaypointSources`, the
-  anchors its components), so a waypoint on a mechanism follows it after the load as it does live. The cook makes the
+  anchors its components), so a waypoint on a mechanism follows it after the load as it does live; the environment
+  saves the state it was posed in (`ASCVehicle::PresentedState`), and one asked for while its level streams in is
+  applied when it is in. The cook makes the
   collision ready only for an import that built it (`ASCVehicle::bCollisionBuilt`). The import keeps each rig's source
   data on editor hosts (`FSCImportOptions::bRetainRigSources`, `ASCVehicle::RigSources`). Keep as assets keeps copies
   (`SCRigAssets::SavableCopy`: a runtime mesh made savable on a new mesh, an asset duplicated and built) with copies of
-  their skeletons and of the clip sequences on them; the live rigs stay as they are. Prep format 14. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
+  their skeletons and of the clip sequences on them (a metadata-only sequence with a copy of its own skeleton), every
+  texture with an editable source (`SCTextureSource`, block formats decoded by the bridge; a texture without one fails
+  the Keep); the live rigs stay as they are. A rig with its own body never takes the engine's asynchronous physics
+  creation. Prep format 15. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
   lifts, seats and ladders still need their interaction state (1b).
 - **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
   interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,

@@ -4,6 +4,7 @@
 #include "SCMeshImporter.h"
 #include "SCRigAssets.h"
 #include "SCRigComponent.h"
+#include "SCTextureSource.h"
 #include "SCVehicle.h"
 #include "SCClipCatalog.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -65,23 +66,14 @@ struct FKeeper
         FAssetRegistryModule::AssetCreated(Object);
         return Object;
     }
-    /** Runtime textures carry only platform mips; give the asset an editable source from mip 0. */
+    /** Runtime textures carry only platform mips, which an editor package does not save: an editable source
+     *  (SCTextureSource), or the Keep fails (a saved texture without one has no pixels). */
     void AddTextureSource(UTexture2D* Texture)
     {
-        FTexturePlatformData* Platform = Texture->GetPlatformData();
-        if (!Platform || Platform->Mips.IsEmpty() || Platform->PixelFormat != PF_B8G8R8A8)
-        {
-            Warnings.Add(Texture->GetName() + TEXT(": no BGRA8 mip data; saved without source"));
-            return;
-        }
-        FTexture2DMipMap& Mip = Platform->Mips[0];
-        const int64 Expected = int64(Mip.SizeX) * Mip.SizeY * 4;
-        const void* Data = Mip.BulkData.LockReadOnly();
-        if (Data && Mip.BulkData.GetBulkDataSize() == Expected)
-            Texture->Source.Init(Mip.SizeX, Mip.SizeY, 1, 1, TSF_BGRA8, static_cast<const uint8*>(Data));
-        else
-            Warnings.Add(Texture->GetName() + TEXT(": mip 0 not CPU-resident; saved without source"));
-        Mip.BulkData.Unlock();
+        FString Error;
+        if (SCTextureSource::Add(Texture, Error)) return;
+        Warnings.Add(Texture->GetName() + TEXT(": ") + Error + TEXT("; saved without source"));
+        bFailed = true;
     }
     /** Constant copy of a dynamic instance: same parent, every overridden parameter. */
     UMaterialInterface* Constant(UMaterialInterface* Material)
@@ -187,20 +179,32 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
     {
         USCClipCatalog* Kept = DuplicateObject(Catalog, GetTransientPackage());
         // The editable sequences (one per binding timing, and the clip's primary): each a copy on the kept skeleton of its
-        // own, saved under Animations; one whose skeleton was not kept is left out.
+        // own, saved under Animations. A skeleton no kept rig mesh carries (a metadata-only sequence's own: a clip without
+        // receiving bones) is kept as a copy on its first use.
         TMap<const UAnimSequence*, UAnimSequence*> KeptSequences;
         auto KeepSequence = [&](UAnimSequence* Sequence, const FString& ClipName) -> UAnimSequence* {
             if (!Sequence) return nullptr;
             if (UAnimSequence** Found = KeptSequences.Find(Sequence)) return *Found;
+            USkeleton* Skeleton = nullptr;
+            if (USkeleton** Kept = KeptSkeletons.Find(Sequence->GetSkeleton())) Skeleton = *Kept;
+            else if (Sequence->GetSkeleton())
+            {
+                Skeleton = DuplicateObject(Sequence->GetSkeleton(), GetTransientPackage());
+                K.Move(Skeleton, TEXT("Rigs"), Sequence->GetSkeleton()->GetName());
+                KeptSkeletons.Add(Sequence->GetSkeleton(), Skeleton);
+            }
             UAnimSequence* Copy = nullptr;
-            if (USkeleton** Skeleton = KeptSkeletons.Find(Sequence->GetSkeleton()))
+            if (Skeleton)
             {
                 Copy = DuplicateObject(Sequence, GetTransientPackage());
-                Copy->SetSkeleton(*Skeleton);
+                Copy->SetSkeleton(Skeleton);
                 K.Move(Copy, TEXT("Animations"), ClipName);
             }
             else
-                K.Warnings.Add(Sequence->GetName() + TEXT(": sequence not kept (its rig mesh was not kept)"));
+            {
+                K.Warnings.Add(Sequence->GetName() + TEXT(": sequence not kept (no skeleton)"));
+                K.bFailed = true;
+            }
             KeptSequences.Add(Sequence, Copy);
             return Copy;
         };

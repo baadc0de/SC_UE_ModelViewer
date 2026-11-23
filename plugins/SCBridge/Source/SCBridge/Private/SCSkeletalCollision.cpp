@@ -53,6 +53,10 @@ void USCRigComponent::OnRegister()
     if (!CollisionBody && !SavedCollision.IsEmpty() && !RestoreSavedCollision())
         UE_LOG(LogTemp, Warning, TEXT("SKIN_COLLISION owner=%s: the saved collision does not restore"), *OwnerEntity);
 }
+bool USCRigComponent::AllowsAsyncPhysicsStateCreation() const
+{
+    return !CollisionBody && SavedCollision.IsEmpty() && Super::AllowsAsyncPhysicsStateCreation();
+}
 bool USCRigComponent::RestoreSavedCollision()
 {
     if (SavedCollision.IsEmpty()) return false;

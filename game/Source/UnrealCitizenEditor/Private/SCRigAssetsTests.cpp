@@ -31,9 +31,9 @@ namespace
 {
 const FLinearColor Tint(0.5f, 0.25f, 0.75f, 1.f);
 
-/** Two rig nodes (Root, Arm 100 cm along X) and, with bSoft, one triangle in Tint: a corner on Root, one on Arm and one
- *  weighted half to each. */
-FSCDerivedMesh SyntheticRig(bool bSoft)
+/** Two rig nodes (Root, Arm 100 cm along X) and, with bSoft, one triangle in Colour: a corner on Root, one on Arm and
+ *  one weighted half to each. */
+FSCDerivedMesh SyntheticRig(bool bSoft, const FLinearColor& Colour)
 {
     FSCDerivedMesh Data;
     FSCRigNode Root, Arm;
@@ -62,7 +62,7 @@ FSCDerivedMesh SyntheticRig(bool bSoft)
         A.GetVertexInstanceNormals()[C] = FVector3f(0, 0, 1);
         A.GetVertexInstanceTangents()[C] = FVector3f(1, 0, 0);
         A.GetVertexInstanceBinormalSigns()[C] = 1.f;
-        A.GetVertexInstanceColors()[C] = FVector4f(Tint);
+        A.GetVertexInstanceColors()[C] = FVector4f(Colour);
         Corners.Add(C);
         FSCVertexWeights W;
         for (int32& Joint : W.Joints) Joint = I == 2 ? 11 : 10; // weight 1 on the first, the rest unused
@@ -100,7 +100,7 @@ void Forget(UPackage* Package)
                     REN_DontCreateRedirectors | REN_NonTransactional);
 }
 
-void CheckRig(FAutomationTestBase& Test, bool bSoft)
+void CheckRig(FAutomationTestBase& Test, bool bSoft, const FLinearColor& Colour = Tint)
 {
     const FString Name = FString::Printf(TEXT("Rig_%s_%s"), bSoft ? TEXT("Soft") : TEXT("Sockets"), *FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8));
     const FString Folder = TEXT("/Game/SCTests/");
@@ -116,7 +116,7 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft)
         IFileManager::Get().DeleteDirectory(*FPaths::GetPath(Files[0]), false, false); // only when empty
     };
 
-    const FSCDerivedMesh Data = SyntheticRig(bSoft);
+    const FSCDerivedMesh Data = SyntheticRig(bSoft, Colour);
     USkeleton* RuntimeSkeleton = nullptr;
     USkeletalMesh* Runtime = FSCSkeletonBuilder::Build(Data, GetTransientPackage(), RuntimeSkeleton);
     FString Error;
@@ -159,7 +159,15 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft)
         Test.TestEqual(TEXT("bone 2 (clip tracks index it)"), Ref.GetBoneName(2), FName(TEXT("Arm")));
         Test.TestEqual(TEXT("the reference pose"), Ref.GetRefBonePose()[2].GetLocation(), FVector(100, 0, 0));
     }
-    Test.TestTrue(TEXT("sockets on the skeleton"), Loaded->GetSkeleton() && Loaded->GetSkeleton()->Sockets.Num() == 2);
+    // A socket per rig node, on its bone.
+    const USkeleton* LoadedSkeleton = Loaded->GetSkeleton();
+    for (const TCHAR* Node : {TEXT("Root"), TEXT("Arm")})
+    {
+        const TObjectPtr<USkeletalMeshSocket>* Socket = LoadedSkeleton ? LoadedSkeleton->Sockets.FindByPredicate([&](const USkeletalMeshSocket* S) {
+            return S && S->SocketName == Node;
+        }) : nullptr;
+        Test.TestTrue(FString::Printf(TEXT("socket %s on its bone"), Node), Socket && (*Socket)->BoneName == Node && Ref.FindBoneIndex(Node) != INDEX_NONE);
+    }
     const FSkeletalMeshRenderData* Render = Loaded->GetResourceForRendering();
     if (!Test.TestTrue(TEXT("LOD 0"), Render && Render->LODRenderData.Num() == 1)) return;
     const FSkeletalMeshLODRenderData& LOD = Render->LODRenderData[0];
@@ -169,8 +177,8 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft)
     Test.TestTrue(TEXT("skin weights readable on the CPU"), LOD.SkinWeightVertexBuffer.GetNeedsCPUAccess());
     Test.TestTrue(TEXT("the material slot"), Loaded->GetMaterials().Num() == 1 && Loaded->GetMaterials()[0].MaterialSlotName == TEXT("Slot_0"));
     // Each vertex weighted to its bones (the corner at X 100 to Arm, the one at Y 50 half to each, at 16-bit precision,
-    // the third to Root), in the runtime build's colours.
-    const FColor Expected = Tint.ToFColorSRGB();
+    // the third to Root), in the runtime build's colours (black ones too: the engine would paint an all-black mesh white).
+    const FColor Expected = Colour.ToFColorSRGB();
     int32 Blended = 0;
     for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
         for (uint32 V = Section.BaseVertexIndex; V < Section.BaseVertexIndex + Section.NumVertices; ++V)
@@ -236,6 +244,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCRigAssetsTest, "SCBridge.Prepare.RigAssets",
 bool FSCRigAssetsTest::RunTest(const FString&)
 {
     CheckRig(*this, true);
+    CheckRig(*this, true, FLinearColor::Black);              // an opaque black mask
+    CheckRig(*this, true, FLinearColor(0.f, 0.f, 0.f, 0.f)); // transparent black
     CheckRig(*this, false);
     return true;
 }
