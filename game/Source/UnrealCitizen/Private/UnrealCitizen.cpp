@@ -12,6 +12,7 @@
 #include "SCViewerShell.h"
 #include "SCViewerSubsystem.h"
 #include "UCRpcRoutes.h"
+#include "UCScenario.h"
 #include "Cargo/SCCargoSubsystem.h"
 #include "UI/Cargo/SCCargoViewSource.h"
 #include "UI/Cargo/SCMobiGlasModel.h"
@@ -76,6 +77,9 @@ class FUnrealCitizenModule final : public FDefaultGameModuleImpl
 #endif
         // WP-K1c: the mobiGlas (F1) and the world-space callouts above it share one model; both show in the showcase too.
         SCViewerShell::SetAppName(LOCTEXT("AppName", "UnrealCitizen"));
+        // WP-O1: a cooked level streams only when it was prepared in the current format, its stamp complete (also without a
+        // scenario: -SCLoad, -SCEnvironment, the Garage); else the load imports from the archive.
+        SCViewerShell::SetCookedLevelCheck([](const FString& Level) { return FUCPrepared::IsLevelCurrent(Level); });
         SCViewerShell::SetMenu(LOCTEXT("MobiGlas", "mobiGlas"));
         SCViewerShell::AddOverlay(TEXT("MobiGlas"), [](const FSCViewOverlayArgs& Args) -> TSharedRef<SWidget> {
             const TSharedRef<FSCMobiGlasModel> Model = MakeShared<FSCMobiGlasModel>(Args.Subsystem);
@@ -103,6 +107,7 @@ class FUnrealCitizenModule final : public FDefaultGameModuleImpl
         SCViewerShell::RemoveOverlay(TEXT("ScenarioNotice"));
         SCViewerShell::RemoveOverlay(TEXT("MobiGlas"));
         SCViewerShell::ClearMenu();
+        SCViewerShell::SetCookedLevelCheck(nullptr);
         FDefaultGameModuleImpl::ShutdownModule();
     }
 };

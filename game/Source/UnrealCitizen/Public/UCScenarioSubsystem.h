@@ -24,6 +24,9 @@ public:
     /** The switch of a command line that names another scene than a scenario's (-SCLoad=, -SCEnvironment=, -SCPackage=,
      *  -SCCargoScenario=, -SCPlayerDemo=<entity>) or turns prepared levels off (-SCNoCooked); empty when none does. */
     static FString ConflictingSwitch(const TCHAR* CommandLine);
+    /** The command line's automation puts the camera (-SCCamera=, -SCScript=, -SCPlayerDemo): the scenario then sets neither
+     *  its camera nor its start, so the two never switch the view under each other (a route starts once a vehicle is in). */
+    static bool AutomationOwnsCamera(const TCHAR* CommandLine);
 
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;

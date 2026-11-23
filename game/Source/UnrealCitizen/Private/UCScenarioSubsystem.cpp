@@ -54,6 +54,13 @@ FString UUCScenarioSubsystem::ConflictingSwitch(const TCHAR* CommandLine)
     return FString();
 }
 
+bool UUCScenarioSubsystem::AutomationOwnsCamera(const TCHAR* CommandLine)
+{
+    FString Ignored;
+    return FParse::Value(CommandLine, TEXT("SCCamera="), Ignored) || FParse::Value(CommandLine, TEXT("SCScript="), Ignored) ||
+           FParse::Param(CommandLine, TEXT("SCPlayerDemo"));
+}
+
 bool UUCScenarioSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
     return !IsRunningCommandlet(); // the prep step's headless viewer runs no scenario
@@ -203,6 +210,11 @@ bool UUCScenarioSubsystem::Tick(float)
 
 void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
 {
+    if (!bCameraSet && AutomationOwnsCamera(FCommandLine::Get()))
+    {
+        bCameraSet = bStartPlaced = true;
+        UE_LOG(LogUCScenario, Display, TEXT("SCENARIO camera and start left to the command line's automation (-SCCamera, -SCScript, -SCPlayerDemo)"));
+    }
     const bool bFirst = Scenario.Camera == TEXT("first");
     const bool bTimedOut = FPlatformTime::Seconds() - StartedAt > StartPlacementSeconds;
     if (!bCameraSet)

@@ -436,10 +436,11 @@ FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
         return FString(); // -SCNoCooked: as if none was cooked (StepEnvironment and IsBusy decide alike)
     const FString Level = EnvironmentLevelPath(Folder);
     if (Level.IsEmpty()) return FString();
-    if (FPackageName::DoesPackageExist(Level)) return Level;
+    // A level the app's check refuses (UnrealCitizen: not prepared in the current format) is not used.
+    if (FPackageName::DoesPackageExist(Level)) return SCViewerShell::PassesCookedLevelCheck(Level) ? Level : FString();
     // A level cooked before WP-O1-4 (named by the last two path parts only, without the path hash).
     const FString Legacy = Level.LeftChop(9);
-    return FPackageName::DoesPackageExist(Legacy) ? Legacy : FString();
+    return FPackageName::DoesPackageExist(Legacy) && SCViewerShell::PassesCookedLevelCheck(Legacy) ? Legacy : FString();
 }
 void USCViewerSubsystem::SetSpace(bool bInSpace)
 {
@@ -719,7 +720,7 @@ FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
 {
     if (Entity.IsEmpty() || !SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
     const FString Level = ShipLevelPath(Entity);
-    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) ? Level : FString();
+    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) && SCViewerShell::PassesCookedLevelCheck(Level) ? Level : FString();
 }
 bool USCViewerSubsystem::CanLoad(const FString& Entity) const
 {

@@ -260,6 +260,11 @@ A review of the series as a whole (Terra) found what the per-stage reviews could
 - The game stages its `Config/FX/effects.json` (the cargo effects' settings; only the viewer module staged its copy).
 - A scenario's staleness check ignores line ends (git's checkout turned `golem_showcase.json` into CRLF and the game
   refused it as changed); the packaging script compares alike.
+- A cooked level streams in the game only when it is current (`SCViewerShell::SetCookedLevelCheck`, registered as
+  `FUCPrepared::IsLevelCurrent`): also loads without a scenario (`-SCLoad`, `-SCEnvironment`, the Garage) skip an unfinished
+  or older preparation and import from the archive.
+- With automation that puts the camera (`-SCCamera`, `-SCScript`, `-SCPlayerDemo`) a scenario sets neither its camera nor its
+  start (`AutomationOwnsCamera`); `-SCCamera` also applies to a vehicle a scenario brought, so its route starts.
 - A paint request on a vehicle without paint slots (a prepared one, its paint baked in) is refused (`PAINT … refused`)
   instead of reported as applied and remembered; a prepared vehicle saves the paint it was prepared with
   (`ASCVehicle::ActivePaint`, prep format 11), so the Garage reports it and a request for it is no change.

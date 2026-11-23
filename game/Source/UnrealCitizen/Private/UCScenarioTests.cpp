@@ -192,6 +192,11 @@ bool FUCScenarioSwitchesTest::RunTest(const FString&)
     TestEqual(TEXT("-SCPlayerDemo=<entity> loads a vehicle"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo=DRAK_Golem")), FString(TEXT("-SCPlayerDemo")));
     TestEqual(TEXT("-SCPlayerDemo alone loads none"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo")), FString());
     TestEqual(TEXT("-SCNoCooked"), S::ConflictingSwitch(TEXT("-Scenario=x -SCNoCooked")), FString(TEXT("-SCNoCooked")));
+    // Automation that puts the camera: the scenario leaves the camera and the start to it.
+    TestFalse(TEXT("a scenario alone puts its camera"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCShowcase")));
+    TestTrue(TEXT("-SCCamera"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCCamera=orbit")));
+    TestTrue(TEXT("-SCScript"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCScript=route.txt")));
+    TestTrue(TEXT("-SCPlayerDemo"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCPlayerDemo")));
     return true;
 }
 
