@@ -426,9 +426,15 @@ FString USCViewerSubsystem::EnvironmentLevelPath(const FString& Folder)
 }
 FString USCViewerSubsystem::ShipLevelPath(const FString& Entity, const FString& Variant)
 {
-    const FString Name = LevelName(Entity);
+    // "__" separates the paint variant: an entity's own part never has it (IsShipPaintLevel).
+    FString Name = LevelName(Entity);
+    while (Name.Contains(TEXT("__"))) Name.ReplaceInline(TEXT("__"), TEXT("_"));
     if (Name.IsEmpty()) return FString();
     return TEXT("/Game/SC/Ships/Maps/") + Name + (Variant.IsEmpty() ? FString() : TEXT("__") + LevelName(Variant));
+}
+bool USCViewerSubsystem::IsShipPaintLevel(const FString& Level)
+{
+    return FPackageName::GetShortName(Level).Contains(TEXT("__"));
 }
 FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
 {

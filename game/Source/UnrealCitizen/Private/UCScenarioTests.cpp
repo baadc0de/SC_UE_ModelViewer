@@ -162,6 +162,10 @@ bool FUCPreparedLevelsTest::RunTest(const FString&)
     TestEqual(TEXT("a ship with a paint"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("crus.starlifter-pirate")),
               FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2__crus_starlifter_pirate")));
 
+    // "__" marks a paint variant only: an entity's own part never holds it (the Garage lists entities from level names).
+    TestFalse(TEXT("an entity's own level"), USCViewerSubsystem::IsShipPaintLevel(USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"))));
+    TestTrue(TEXT("a paint level"), USCViewerSubsystem::IsShipPaintLevel(USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("pirate_1234abcd"))));
+    TestFalse(TEXT("an entity name with a double underscore is no paint level"), USCViewerSubsystem::IsShipPaintLevel(USCViewerSubsystem::ShipLevelPath(TEXT("A__B"))));
     TArray<FSCPaintVariant> Paints;
     Paints.AddDefaulted(2);
     Paints[0].DisplayName = TEXT("Starlifter Pirate");

@@ -265,6 +265,8 @@ A review of the series as a whole (Terra) found what the per-stage reviews could
   or older preparation and import from the archive.
 - With automation that puts the camera (`-SCCamera`, `-SCScript`, `-SCPlayerDemo`) a scenario sets neither its camera nor its
   start (`AutomationOwnsCamera`); `-SCCamera` also applies to a vehicle a scenario brought, so its route starts.
+- The Garage lists an entity's own prepared level only: a paint variant's level (`<entity>__<variant>`,
+  `USCViewerSubsystem::IsShipPaintLevel`; an entity's own part never holds `__`) is not another ship.
 - A paint request on a vehicle without paint slots (a prepared one, its paint baked in) is refused (`PAINT … refused`)
   instead of reported as applied and remembered; a prepared vehicle saves the paint it was prepared with
   (`ASCVehicle::ActivePaint`, prep format 11), so the Garage reports it and a request for it is no change.
