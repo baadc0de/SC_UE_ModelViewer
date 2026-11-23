@@ -231,13 +231,13 @@ FString FUCPrepared::TraversalSources() const
 }
 FString FUCPrepared::CargoLevelPath(const FString& Entity)
 {
-    // Readable from the entity, told apart by a hash of its exact name (entity classes ignore case): names that differ only
-    // in characters a level name drops are other levels.
-    const FString Exact = Entity.TrimStartAndEnd();
-    FString Name = Exact;
+    // Readable from the entity, told apart by a hash of the name exactly as the setup writes it and the export is asked for
+    // (entity classes ignore case): names that differ only in characters a level name drops, spaces included, are other
+    // levels.
+    FString Name = Entity.TrimStartAndEnd();
     for (TCHAR& C : Name)
         if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
-    return Name.IsEmpty() ? FString() : FString::Printf(TEXT("/Game/SC/Cargo/Maps/%s_%08x"), *Name, FCrc::StrCrc32(*Exact.ToLower()));
+    return Name.IsEmpty() ? FString() : FString::Printf(TEXT("/Game/SC/Cargo/Maps/%s_%08x"), *Name, FCrc::StrCrc32(*Entity.ToLower()));
 }
 FString FUCPrepared::RecordedSources(const FString& TraversalClips)
 {

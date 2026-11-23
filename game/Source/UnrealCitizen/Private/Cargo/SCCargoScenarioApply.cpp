@@ -182,6 +182,9 @@ void USCCargoSubsystem::TryScenario()
         }
     }
     if (State->TractorLookup != FSCCargoState::ELookup::Done) return; // stock and drones wait for the lift values
+    // The effects ask the archive (MaterialEffects, the ships' records) and keep what they got for the session: not while it
+    // is still opening (a prepared tractor record needs no archive, so this can come first).
+    if (!State->Fx && Viewer->GetArchiveState() == ESCArchiveState::Opening) return;
     if (!State->Fx)
     {
         // The tractor's effects (WP-K4c), from the record just read (none without the archive: the beam mesh then).

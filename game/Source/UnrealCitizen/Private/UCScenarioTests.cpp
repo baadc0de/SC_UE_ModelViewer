@@ -134,6 +134,8 @@ bool FUCPreparedTest::RunTest(const FString&)
     TestTrue(TEXT("a box entity's level"), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")).StartsWith(TEXT("/Game/SC/Cargo/Maps/Carryable_TBO_FL_16SCU_")));
     TestNotEqual(TEXT("... another entity whose name only differs in a character a level name drops"),
                  FUCPrepared::CargoLevelPath(TEXT("Carryable-TBO_FL_16SCU")), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")));
+    TestNotEqual(TEXT("... or only in a trailing space (the export is asked for the name as written)"),
+                 FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU ")), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")));
     // Every box entity of the prepared setup has its level in the record.
     {
         FUCPrepared Stocked = R;
