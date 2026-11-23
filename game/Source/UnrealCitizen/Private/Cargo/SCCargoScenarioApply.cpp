@@ -106,7 +106,11 @@ void USCCargoSubsystem::TryScenario()
     // The tractor values from the game data (the record the scenario names); the scenario's copy without the archive.
     if (State->TractorLookup == FSCCargoState::ELookup::None)
     {
-        const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client = Viewer->GetClient();
+        // The client exists while the archive is still opening (a prepared scenario's ship can be in the scene first): a
+        // query then would answer "no archive" and the scenario's copy would stay for the session, so it waits.
+        if (Viewer->GetArchiveState() == ESCArchiveState::Opening) return;
+        const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client =
+            Viewer->GetArchiveState() == ESCArchiveState::Ready ? Viewer->GetClient() : nullptr;
         const FString Record = !S.Drone.TractorRecord.IsEmpty() ? S.Drone.TractorRecord : S.Drone.TractorRecordGuid;
         if (!Client || Record.IsEmpty())
         {

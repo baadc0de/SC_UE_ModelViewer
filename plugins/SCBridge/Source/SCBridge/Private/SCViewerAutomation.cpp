@@ -1,5 +1,6 @@
 // FSCViewerAutomation: drives LoadEntity from the command line / console; never names an entity itself.
 #include "SCViewerAutomation.h"
+#include "Interfaces/IPluginManager.h"
 #include "SCViewerSubsystem.h"
 #include "SCViewOptions.h"
 #include "SCViewerPawn.h"
@@ -70,9 +71,11 @@ FSCViewerAutomation::FSCViewerAutomation(USCViewerSubsystem& InOwner) : Owner(&I
     FString ScriptFile, DemoEntity;
     if (FParse::Param(Cmd, TEXT("SCPlayerDemo")) || FParse::Value(Cmd, TEXT("SCPlayerDemo="), DemoEntity))
     {
-        // Built-in demo route; the route itself names no ship (spawn kinds and relative moves only).
+        // Built-in demo route, shipped with the shared plugin (both apps; staged with a packaged build); the route itself
+        // names no ship (spawn kinds and relative moves only).
         if (!FParse::Value(Cmd, TEXT("SCScript="), ScriptFile))
-            ScriptFile = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("scripts/routes/player-demo.txt"));
+            if (const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("SCBridge")))
+                ScriptFile = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir() / TEXT("Resources/Routes/player-demo.txt"));
         if (!DemoEntity.IsEmpty() && Queue.IsEmpty())
         {
             Queue.Add(DemoEntity);

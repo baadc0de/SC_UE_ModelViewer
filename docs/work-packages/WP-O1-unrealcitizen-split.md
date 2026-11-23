@@ -246,6 +246,19 @@ Without a scenario the game behaves as before (the command line and the menus de
 its cargo setup and each level's stamp, cooks the scenario's levels and starts the build with `-Scenario=<name>`. Preparing and packaging
 still happen only on the owner's request.
 
+### Series review (O1-1 to O1-4a, this PR)
+
+A review of the series as a whole (Terra) found what the per-stage reviews could not see:
+
+- A cargo setup's tractor record lookup waits while the archive is still opening (a prepared scenario's ship can be in
+  the scene first); before, a lookup that ran first settled on the scenario's copy for the session.
+- `-SCPlayerDemo`'s built-in route moved from `viewer/scripts/routes` to the shared plugin
+  (`plugins/SCBridge/Resources/Routes/player-demo.txt`, staged as a runtime dependency): the game had none.
+- The Ship Link door-policy tests (`SCBridge.ShipLink.Access`, `.RoomClassification`) moved back to the plugin
+  (`SCShipLinkPolicyTests.cpp`): the policy is shared, so the viewer runs them too; the cargo-dependent ones stay in the game.
+- `viewer/README.md`: the showcase packaging takes a prepared scenario (`-Scenario`, `Play_UnrealCitizen.bat`); the cargo
+  RPC example launches the game (`Start-SCViewer -Game`), cargo routes are under `game/scripts/routes`.
+
 ## Verification
 
 Each stage: `scripts/build_ffi.ps1`, the editor build of each project that exists, the SCBridge automation tests

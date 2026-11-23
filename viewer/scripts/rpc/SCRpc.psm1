@@ -1,6 +1,6 @@
 # SCRpc: PowerShell client of the viewer's RPC harness (WP-H1; docs/work-packages/WP-H1-rpc-harness.md).
 #   Import-Module viewer/scripts/rpc/SCRpc.psm1
-#   $p = Start-SCViewer -Extra '-SCCargoScenario=c2_hangar'      # launches UnrealEditor -game with -SCRpc, waits for /health
+#   $p = Start-SCViewer -Game -Extra '-SCCargoScenario=c2_hangar'  # UnrealCitizen (cargo is the game's) with -SCRpc, waits for /health
 #   Invoke-SC /wait @{ until = 'settled'; timeout_s = 600 }
 #   Invoke-SC /cargo/transfer @{ from = 'elevator'; to = 'ship'; commodity = 'organic'; scu = 32 }
 #   Stop-SCViewer $p
