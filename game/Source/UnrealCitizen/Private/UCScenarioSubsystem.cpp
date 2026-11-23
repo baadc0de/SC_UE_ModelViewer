@@ -19,6 +19,9 @@ namespace
 // How long the run tries to put the player at the scenario's start (first person and the teleport destinations appear
 // once the levels' collision and the hangar's standing places are ready).
 constexpr double StartPlacementSeconds = 20.0;
+/** How long a scenario waits for its prepared cargo boxes once its levels are in (streamed levels, a few seconds each; a
+ *  runtime constant, not game data): past it the scenario fails. */
+constexpr double PreparedCargoSeconds = 120.0;
 // How long the prepared levels may take to stream in before the run fails (an extra-large hangar streams in well under a
 // minute from a local disk).
 constexpr double LoadingSeconds = 600.0;
@@ -274,8 +277,14 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
                    *FString::Join(Labels, TEXT(", ")));
         }
     }
-    // Running means the scene is in: the prepared cargo boxes too (their templates; a box that fails fails the scenario).
-    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance()->GetWorld()); Cargo && !Cargo->ArePreparedBoxesSettled() && !bTimedOut) return;
+    // Running means the scene is in: the prepared cargo boxes too (their templates; a box that fails fails the scenario, and
+    // so does one that has not come within PreparedCargoSeconds). Independent of the camera's placement timeout.
+    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance()->GetWorld()); Cargo && !Cargo->ArePreparedBoxesReady())
+    {
+        if (FPlatformTime::Seconds() - StartedAt > PreparedCargoSeconds)
+            Fail(FString::Printf(TEXT("the prepared cargo boxes did not come within %.0f s"), PreparedCargoSeconds));
+        return;
+    }
     bMusicPending = !Scenario.Music.IsEmpty();
     if (USCMusicSubsystem* Music = bMusicPending ? USCMusicSubsystem::Get(GetGameInstance()->GetWorld()) : nullptr) Music->RequestCatalogue();
     State = EState::Running;

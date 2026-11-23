@@ -64,13 +64,13 @@ void USCCargoSubsystem::DropScenario()
     State->Library.Reset();
 }
 
-bool USCCargoSubsystem::ArePreparedBoxesSettled() const
+bool USCCargoSubsystem::ArePreparedBoxesReady() const
 {
     if (!State || !State->bPreparedSetup) return true;
     for (const auto& [Entity, Level] : UUCSettings::Get()->ScenarioCargoLevels)
     {
         const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity);
-        if (!E || (E->State != FSCCargoBoxLibrary::EState::Ready && E->State != FSCCargoBoxLibrary::EState::Failed)) return false;
+        if (!E || E->State != FSCCargoBoxLibrary::EState::Ready) return false;
     }
     return true;
 }
@@ -233,9 +233,8 @@ void USCCargoSubsystem::TryScenario()
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loose=%s count=%d placed=%d%s"), *L.Entity, L.Count, Ids.Num(), Error.IsEmpty() ? TEXT("") : *(TEXT(" reason=\"") + Error + TEXT("\"")));
         }
     }
-    if (State->AppliedKinds == 3 || Viewer->IsBusy() || !State->Library.IsSettled()) return;
-    // A prepared scenario's box that did not come (its level missing or unreadable since the start) fails the scenario: its
-    // stock is not placed short.
+    // A prepared scenario's box that did not come (its level missing or unreadable since the start) fails the scenario at once
+    // (whatever else the library still has queued): its stock is not placed short.
     if (State->bPreparedSetup)
         for (const auto& [Entity, Level] : UUCSettings::Get()->ScenarioCargoLevels)
             if (const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity); E && E->State == FSCCargoBoxLibrary::EState::Failed)
@@ -244,6 +243,7 @@ void USCCargoSubsystem::TryScenario()
                     UUCSettings::Get()->ScenarioCargoProblem = FString::Printf(TEXT("the prepared cargo box %s (%s) did not load: %s"), *Entity, *Level, *E->Error);
                 return;
             }
+    if (State->AppliedKinds == 3 || Viewer->IsBusy() || !State->Library.IsSettled()) return;
     // Owners, and the scenario's other vehicles: more instances of its ship, spawned before any stock is placed.
     if (!State->bScenarioVehiclesRequested && Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))
     {
