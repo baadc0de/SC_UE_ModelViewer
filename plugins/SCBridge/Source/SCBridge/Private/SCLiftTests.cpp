@@ -16,8 +16,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
-#include "Serialization/ObjectReader.h"
-#include "Serialization/ObjectWriter.h"
+#include "UObject/ObjectSaveContext.h"
 
 namespace
 {
@@ -720,14 +719,13 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     FSCSceneManifest M;
     if (!ReadC2(*this, M)) return false;
     ASCVehicle* V = MakeC2Vehicle(M);
-    ASCVehicle* Loaded = NewObject<ASCVehicle>(GetTransientPackage());
-    Loaded->AddToRoot();
+    ASCVehicle* Loaded = nullptr;
     ON_SCOPE_EXIT
     {
         V->RemoveFromRoot();
-        Loaded->RemoveFromRoot();
+        if (Loaded) Loaded->RemoveFromRoot();
     };
-    USceneComponent* PanelAnchor = NewObject<USceneComponent>(V);
+    USceneComponent* PanelAnchor = NewObject<USceneComponent>(V, TEXT("PanelAnchor"));
     FSCLiftPanel Panel;
     Panel.Interior = 0;
     Panel.EntityId = TEXT("panel");
@@ -735,17 +733,26 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     Panel.Choices = {Choice(TEXT("RequestSurface"), TEXT("Exit Ship"), true)};
     V->LiftPanels.Add(PanelAnchor, Panel);
     FSCLift& Lift = *V->Lifts[0];
-    Lift.Gate.Add({TEXT("gate"), nullptr, 0.5f, 0.0});
+    // Its anchors and gate rig are the vehicle's components (saved with it, remapped to the loaded actor's own).
+    Lift.Anchor = NewObject<USceneComponent>(V, TEXT("LiftAnchor"));
+    Lift.CarriageAnchor = NewObject<USceneComponent>(V, TEXT("Carriage"));
+    USCRigComponent* GateRig = NewObject<USCRigComponent>(V, TEXT("Gate"));
+    Lift.Gate.Add({TEXT("gate"), GateRig, 0.5f, 0.0});
     Lift.CurrentStop = 2; // resting at the top deck
     Lift.S = Lift.Stops[2].S;
 
-    // A level save (PreSave: SaveLifts) and its load (PostLoad: RestoreLifts).
-    V->SaveLifts();
-    TArray<uint8> Bytes;
-    FObjectWriter(V, Bytes);
-    FObjectReader(Loaded, Bytes);
-    if (!TestEqual(TEXT("one lift made again"), Loaded->RestoreLifts(), 1)) return false;
+    // A level save (PreSave: SaveLifts) and a load of the copy (DuplicateObject: its components remapped, PostLoad run:
+    // RestoreLifts); the native lift list is not copied, so the loaded actor's lifts come from what was saved.
+    FObjectSaveContextData SaveData;
+    V->PreSave(FObjectPreSaveContext(SaveData));
+    Loaded = DuplicateObject(V, GetTransientPackage());
+    Loaded->AddToRoot();
+    if (!TestEqual(TEXT("one lift made again at load"), Loaded->Lifts.Num(), 1)) return false;
     const FSCLift& Made = *Loaded->Lifts[0];
+    TestTrue(TEXT("its anchors and gate are the loaded actor's components"),
+             Made.Anchor.IsValid() && Made.Anchor->GetOuter() == Loaded && Made.Anchor.Get() != Lift.Anchor.Get() &&
+                 Made.CarriageAnchor.IsValid() && Made.CarriageAnchor->GetOuter() == Loaded && Made.Gate.Num() == 1 &&
+                 Made.Gate[0].Rig.IsValid() && Made.Gate[0].Rig->GetOuter() == Loaded);
     TestTrue(TEXT("its model"), Made.EntityId == Lift.EntityId && Made.Stops.Num() == 3 && Made.Stops[2].Name == TEXT("Top Deck") &&
                                     Made.Stops[1].S == Lift.Stops[1].S && Made.MaxSpeed == Lift.MaxSpeed && Made.RestStop == Lift.RestStop &&
                                     Made.Gate.Num() == 1 && Made.Gate[0].Speed == 0.5f && Made.Id == 0 && Made.Interior == 0);
@@ -755,7 +762,8 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     const FSCInteractionNetwork::FEndpoint* Carriage = Loaded->Interactions.Find(0, TEXT("platform"));
     TestTrue(TEXT("the interaction network"), PanelLinks && PanelLinks->Links.Num() == 4 && PanelLinks->Links[3].TargetEntityId == TEXT("hatch") &&
                                                   Carriage && Carriage->Lift == 0 && Loaded->Interactions.Route(0, TEXT("panel"), TEXT("RequestSurface")).Num() == 2);
-    const FSCLiftPanel* SavedPanel = Loaded->LiftPanels.Find(PanelAnchor);
+    USceneComponent* LoadedPanelAnchor = FindObject<USceneComponent>(Loaded, TEXT("PanelAnchor"));
+    const FSCLiftPanel* SavedPanel = LoadedPanelAnchor ? Loaded->LiftPanels.Find(LoadedPanelAnchor) : nullptr;
     TestTrue(TEXT("the lift panel"), SavedPanel && SavedPanel->EntityId == TEXT("panel") && SavedPanel->Choices.Num() == 1 &&
                                          SavedPanel->Choices[0].DisplayName == TEXT("Exit Ship"));
     TestEqual(TEXT("a second restore makes nothing"), Loaded->RestoreLifts(), 0);

@@ -104,6 +104,18 @@ struct FSCDoorRecord
     UPROPERTY() FSCDoorTiming Door;
     UPROPERTY() TArray<FSCItemPortLink> PortLinks;
 };
+/** An entity whose class has sound effects, as placed (FSCAudioEntity): saved, so a prepared vehicle's cooked audio
+ *  scene plays its entities' effects (the lift carriage, its buttons, the doors). */
+USTRUCT()
+struct FSCSavedAudioEntity
+{
+    GENERATED_BODY()
+    UPROPERTY() FString Key; // "<interior>/<entity id>"
+    UPROPERTY() FString ClassGuid;
+    UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
+    UPROPERTY() TWeakObjectPtr<USCRigComponent> Rig;
+    UPROPERTY() int32 Interior = INDEX_NONE;
+};
 /** A panel that operates a lift (its links reach a carriage or a stop): the press path until WP-I1 has its own. Saved. */
 USTRUCT()
 struct FSCLiftPanel
@@ -377,6 +389,9 @@ public:
      *  them again when it loads (RestoreLifts). */
     TArray<TSharedPtr<FSCLift>> Lifts;
     UPROPERTY() TArray<FSCSavedLift> SavedLifts;
+    /** The audio scene's entity emitters as the import registered them (FSCAudioScene::Entities); a cooked scene takes
+     *  them from here (FSCAudioScene::LoadCooked). */
+    UPROPERTY() TArray<FSCSavedAudioEntity> AudioEntities;
     /** SavedLifts from Lifts (a level save: PreSave). */
     void SaveLifts();
     /** Lifts from SavedLifts when there are none (a loaded level: PostLoad), their hooks bound; returns the lifts made. */

@@ -248,10 +248,12 @@ data when it loads. In stages:
     `ASCVehicle::PreSave`); a loaded vehicle makes its lifts again from them (`RestoreLifts` in `PostLoad`: the model
     copied, its hooks into the vehicle and its sound events bound by `SCVehicleLifts::BindLift`, the code the import
     uses; nothing derived). The interaction network (`FSCInteractionNetwork`: `FSCInteractionInterior`,
-    `FSCInteractionEndpoint`, `FSCInteractionLink`) and the lift panels (`FSCLiftPanel`) are saved. The cook saves lifts at
+    `FSCInteractionEndpoint`, `FSCInteractionLink`) and the lift panels (`FSCLiftPanel`) are saved, and the audio
+    scene's entity emitters (`ASCVehicle::AudioEntities`: a cooked scene plays the carriage's and buttons' effects);
+    instancing keeps the parts under an interaction anchor (lift panel, door pad, kiosk) as components. The cook saves lifts at
     rest (`FSCLift::IsIdle`; one that is not fails it: its doors' clips are not saved); its power state and the doors it
     found no clip for are kept. The lift paths
-    stay a cache made on first use. Prep format 21. A carriage's floor-select screen (`FloorPanels`, drawn panels) comes
+    stay a cache made on first use. Prep format 22. A carriage's floor-select screen (`FloorPanels`, drawn panels) comes
     with 1c; until then a prepared lift is called and sent by its call buttons and links.
   - **1b-3 — seats, ladders, usables, light groups**: the manifest records seats and ladders read (`SeatEntrances`,
     `Seat`, `Ladder`), ladder anchors, usable targets, light groups (with the light states' own data), light-room
