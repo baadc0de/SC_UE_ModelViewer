@@ -257,7 +257,9 @@ public:
     static FString EnvironmentLevelPath(const FString& Folder);
     static FString ShipLevelPath(const FString& Entity, const FString& Variant = FString());
     /** WP-O1-4b-2: the prepared level of a player body (USCViewerSettings::ResolvePlayer*: the gender, the loadout, the weapons
-     *  kept, their spares): readable from the gender, told apart by a hash of the rest (case and the weapons' order aside). */
+     *  kept, their spares) as a definition names it: readable from the gender, told apart by a hash of the rest (case, the
+     *  weapons' order and repetition, the loadout's Data/ prefix and an unnamed gender aside). Not what the export resolves it
+     *  to: a named default loadout is another key than an omitted one. */
     static FString PlayerLevelPath(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments);
     /** A ship level with a paint baked in (<entity>__<variant>: an entity's own part never holds "__"), not the entity's own
      *  level: lists of entities (the Garage) leave it out. */

@@ -275,8 +275,11 @@ data when it loads. In stages:
   the light groups, which 1b-3 saves next; until then a prepared light panel changes its own state only.
 - **O1-4b-2a** (player body): the prep step prepares the scenario's player body as its own level
   (`/Game/SC/Players/Maps/Player_<gender>_<hash>`, `USCViewerSubsystem::PlayerLevelPath`; one per body, shared by the
-  scenarios that name the same one, whatever the case, order or repetition of its names, the loadout's `Data/` prefix or
-  a gender left to the export's default), and the record names it (`player_level`). The body is the definition's `"player"`
+  scenarios whose definitions name the same body, whatever the case, order or repetition of its names, the loadout's
+  `Data/` prefix or a gender left to the export's default). The key is the definition, not what the export resolves it to:
+  prep decides to keep a level without exporting, and a body does not change with the archive's default loadout. A
+  definition that names what another leaves to the export's defaults (the default loadout's path, every weapon it keeps)
+  is another level of the same body., and the record names it (`player_level`). The body is the definition's `"player"`
   block: `"gender"`, `"loadout"`, `"weapons"`, `"spares"`, typed as written (absent: the exporter's gender and loadout, all
   weapons, spares as the viewer's `bPlayerSpareAttachments`, true), so a changed body makes the record stale; a scenario run refuses `-SCPlayerGender`, `-SCPlayerLoadout`, `-SCPlayerWeapons`, `-SCPlayerSpares` and
   `-SCPlayerPackage`, and `package_showcase.ps1` no longer takes `-PlayerLoadout` / `-PlayerWeapons`. The level holds the kit
