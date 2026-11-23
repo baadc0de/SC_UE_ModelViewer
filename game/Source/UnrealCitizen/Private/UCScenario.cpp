@@ -152,6 +152,12 @@ bool FUCPrepared::IsLevelCurrent(const FString& Level)
     FString Text;
     return FFileHelper::LoadFileToString(Text, *StampFile(Level)) && FCString::Atoi(*Text.TrimStartAndEnd()) == FormatVersion;
 }
+FString FUCPrepared::LevelBuild(const FString& Level)
+{
+    TArray<FString> Lines;
+    if (Level.IsEmpty() || !FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) || Lines.Num() < 2) return FString();
+    return Lines[1].TrimStartAndEnd();
+}
 FString FUCPrepared::Directory()
 {
     return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectContentDir(), TEXT("SCPrepared")));

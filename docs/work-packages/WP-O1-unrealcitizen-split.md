@@ -208,9 +208,11 @@ source), imports each from the export
 in memory (`USCImportLibrary::ImportEnvironmentFrom` / `ImportVehicleFrom`) into a new level, presents it (the hangar's
 mechanisms open, the ship elevator under the origin, its ship capacity recorded in the hangar index; the ship on its
 landing gear on the floor with the scenario's paint on), stages its audio beside the level (`SCPrepareAudio`, the C++ form
-of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes and textures keyed by source path and archive build, constant
-materials) and
-stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`). Levels:
+of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes and textures keyed by source path and content — a mesh's
+committed source description id, a texture's first-mip bytes — so a changed asset at the same path is pooled anew;
+constant materials) and
+stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`) and the
+archive build it was prepared from; a hangar index that cannot be saved fails the run. Levels:
 `/Game/SC/Hangars/Maps/<style>_<name>_<hash>` (a hash of the whole container path, so containers whose last two parts
 make the same name stay apart) and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
 palette id, else its subgeometry tag, else its name, and a hash of all three; `USCViewerSubsystem::EnvironmentLevelPath` /

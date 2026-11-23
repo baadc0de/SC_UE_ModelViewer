@@ -60,7 +60,7 @@ foreach ($Level in $Levels) {
     $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')
     if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
     $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
-    $Have = if (Test-Path $Stamp) { [int](Get-Content -Raw $Stamp).Trim() } else { 0 }
+    $Have = if (Test-Path $Stamp) { [int](Get-Content $Stamp -TotalCount 1).Trim() } else { 0 } # line 1: format, line 2: archive build
     if ($Have -ne $Format) { throw "$Level is stale (format $Have, current $Format): run $Prepare -Force" }
 }
 $Maps = '/Game/Maps/Viewer+' + ($Levels -join '+')

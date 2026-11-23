@@ -1,6 +1,7 @@
 // USCPrepareCommandlet (SCPrepareCommandlet.h): a scenario's environment and vehicle prepared as levels.
 #include "SCPrepareCommandlet.h"
 #include "SCCookLibrary.h"
+#include "SCHangarIndex.h"
 #include "SCImporter.h"
 #include "SCPackageReader.h"
 #include "SCPackageSource.h"
@@ -183,7 +184,7 @@ public:
             Error = TEXT("cannot save ") + Level;
             return false;
         }
-        if (!FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\n"), FUCPrepared::FormatVersion), *StampFile(Level)))
+        if (!FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\n%s\n"), FUCPrepared::FormatVersion, *Viewer->GetArchiveBuildId()), *StampFile(Level)))
         {
             Error = TEXT("cannot write ") + StampFile(Level);
             return false;
@@ -214,7 +215,12 @@ public:
         Environment->SetActorLabel(TEXT("Environment ") + Name);
         const FVector Offset = USCImportLibrary::PresentEnvironment(Environment, TEXT("open"), FloorZ);
         const FString Path = Container.Replace(TEXT("\\"), TEXT("/"));
-        const bool bMeasured = USCCookLibrary::RecordHangarCapacity(Environment, FPaths::GetCleanFilename(FPaths::GetPath(Path)), FPaths::GetBaseFilename(Path));
+        bool bMeasured = false;
+        if (!USCCookLibrary::RecordHangarCapacity(Environment, FPaths::GetCleanFilename(FPaths::GetPath(Path)), FPaths::GetBaseFilename(Path), bMeasured))
+        {
+            Error = TEXT("cannot save the hangar index ") + FString(USCHangarIndex::AssetPath);
+            return false;
+        }
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE environment %s offset=%s capacity_recorded=%d"), *Container, *Offset.ToCompactString(), bMeasured);
         return Finish(Environment, Level, TEXT("/Game/SC/Hangars/") + Name, TEXT("/Game/SC/Hangars/Shared"), *Source, Scene, Error);
     }
@@ -316,10 +322,6 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
         if (Prepare.Viewer) USCViewerSubsystem::DestroyHeadless(Prepare.Viewer);
     };
     Prepare.bForce = FParse::Param(*Params, TEXT("Force"));
-    // The record this scenario had: the archive build it names is kept when nothing is exported this time.
-    FUCPrepared Previous;
-    FString PreviousError;
-    const bool bPrevious = FUCPrepared::Load(Id, Previous, PreviousError);
 
     FUCPrepared Record;
     Record.Format = FUCPrepared::FormatVersion;
@@ -351,7 +353,11 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     {
         return Failed(Id, Error);
     }
-    Record.Archive = Prepare.Viewer ? Prepare.Viewer->GetArchiveBuildId() : bPrevious ? Previous.Archive : FString();
+    // The archive builds the levels were prepared from (each level's stamp names its own).
+    TArray<FString> Builds;
+    for (const FString& Level : {Record.EnvironmentLevel, Record.VehicleLevel})
+        if (const FString Build = FUCPrepared::LevelBuild(Level); !Level.IsEmpty()) Builds.AddUnique(Build.IsEmpty() ? FString(TEXT("unknown")) : Build);
+    Record.Archive = FString::Join(Builds, TEXT(", "));
     Record.PreparedAt = FDateTime::UtcNow().ToIso8601();
     IFileManager::Get().MakeDirectory(*FUCPrepared::Directory(), true);
     if (!Record.Save(Error)) return Failed(Id, Error);

@@ -16,6 +16,8 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
 #include "Misc/SecureHash.h"
+#include "Engine/StaticMeshSourceData.h"
+#include "Hash/xxhash.h"
 #include "TextureResource.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
@@ -25,6 +27,33 @@ DEFINE_LOG_CATEGORY_STATIC(LogSCCook, Log, All);
 
 namespace
 {
+/** What a pooled asset is, beyond its source path (which an archive update or an exporter or importer fix keeps while
+ *  the content changes): a mesh's committed source description id (a hash of its content, CommitSource's
+ *  bUseHashAsGuid), a texture's first-mip bytes; Fallback when neither is there. */
+FString ContentId(const UObject* Object, const FString& Fallback)
+{
+    if (const auto* Mesh = Cast<UStaticMesh>(Object))
+    {
+        if (Mesh->GetNumSourceModels() > 0 && Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData &&
+            !Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().IsEmpty())
+            return Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().GetUnversionedIdString();
+        return Fallback;
+    }
+    if (const auto* Texture = Cast<UTexture2D>(Object))
+    {
+        FTexturePlatformData* Platform = const_cast<UTexture2D*>(Texture)->GetPlatformData();
+        if (!Platform || Platform->Mips.IsEmpty()) return Fallback;
+        FTexture2DMipMap& Mip = Platform->Mips[0];
+        const void* Data = Mip.BulkData.LockReadOnly();
+        const int64 Size = Mip.BulkData.GetBulkDataSize();
+        const FXxHash64 Hash = Data ? FXxHash64::HashBuffer(Data, uint64(Size)) : FXxHash64();
+        Mip.BulkData.Unlock();
+        if (!Data) return Fallback;
+        return FString::Printf(TEXT("%016llx_%dx%d_%d"), Hash.Hash, Mip.SizeX, Mip.SizeY, int32(Platform->PixelFormat));
+    }
+    return Fallback;
+}
+
 FString SafeName(FString Name)
 {
     for (TCHAR& C : Name)
@@ -157,9 +186,11 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     FCooker Cook;
     Cook.Root = Root;
     Cook.SharedRoot = SharedRoot;
-    const FString Build = SourceBuild.IsEmpty() ? FString() : TEXT("#build=") + SourceBuild;
+    // An asset without a content id is told apart by the archive build and the cook format at least.
+    const FString Fallback = FString::Printf(TEXT("build=%s;format=%d"), *SourceBuild, USCCookLibrary::FormatVersion);
     for (const auto& [Object, SourceKey] : Environment->SourcePaths)
-        if (const FString Key = SourceKey + Build; const auto* Mesh = Cast<UStaticMesh>(Object))
+        if (const FString Key = SourceKey + TEXT("#content=") + FMD5::HashAnsiString(*ContentId(Object, Fallback)).Left(12);
+            const auto* Mesh = Cast<UStaticMesh>(Object))
         {
             // The pool key carries the mesh's build (Nanite or conventional) and section topology (slot, triangles): a
             // source asset split or built differently (a screen or glass slot moved between the Nanite and the translucent
@@ -215,14 +246,15 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     return Saved == Cook.ToSave.Num();
 }
 
-bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name)
+bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name, bool& bOutMeasured)
 {
     FBox Bay;
     FString Elevator;
-    if (!FSCEnvironment::FindShipBay(Environment, Bay, &Elevator))
+    bOutMeasured = FSCEnvironment::FindShipBay(Environment, Bay, &Elevator);
+    if (!bOutMeasured)
     {
-        UE_LOG(LogSCCook, Warning, TEXT("HANGAR_CAPACITY %s/%s: no ship elevator"), *Style, *Name);
-        return false;
+        UE_LOG(LogSCCook, Warning, TEXT("HANGAR_CAPACITY %s/%s: no ship elevator (nothing recorded)"), *Style, *Name);
+        return true;
     }
     const double Clearance = FSCEnvironment::BayClearance(Environment, Bay);
     const FString PackageName = FPackageName::ObjectPathToPackageName(FString(USCHangarIndex::AssetPath));

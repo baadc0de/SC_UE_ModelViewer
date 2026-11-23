@@ -23,14 +23,15 @@ public:
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in
      *  SharedRoot (reused when an earlier environment already saved them) and materials as constants under Root, and
      *  makes the actor and its components persistent. The caller saves the level. Returns false on any failed save.
-     *  SourceBuild (the archive build the actor was exported from) is part of each pooled asset's key: the pool keys an
-     *  asset by its source path, which an archive update keeps while its content changes, so assets of another build are
-     *  never reused. */
+     *  A pooled asset's key is its source path and its content (a mesh's committed source description id, a texture's
+     *  first-mip bytes), so an archive update or an exporter or importer fix that keeps the path never reuses an older
+     *  pooled asset; SourceBuild (the archive build) and the cook format stand in for an asset without a content id. */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static bool CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot = TEXT("/Game/SC/Hangars/Shared"),
                                 const FString& SourceBuild = TEXT(""));
     /** Measures a presented environment (rigs alive: before CookEnvironment) and records its ship capacity under
-     *  Style/Name in the hangar index (USCHangarIndex::AssetPath), saving it. Returns false without a ship elevator. */
+     *  Style/Name in the hangar index (USCHangarIndex::AssetPath), saving it. bOutMeasured is false without a ship
+     *  elevator (nothing recorded); returns false when the index could not be saved. */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
-    static bool RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name);
+    static bool RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name, bool& bOutMeasured);
 };

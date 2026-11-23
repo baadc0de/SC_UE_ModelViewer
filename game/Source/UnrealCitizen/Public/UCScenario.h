@@ -57,11 +57,14 @@ struct UNREALCITIZEN_API FUCPrepared
     FString CargoDefinition; // its cargo setup as prepared (empty without one)
     FString EnvironmentLevel; // long package name; empty when the scenario has no environment
     FString VehicleLevel;     // long package name (the paint baked in)
-    FString Archive;          // the archive build the levels were prepared from (information)
+    FString Archive;          // the archive builds the levels were prepared from, comma-separated (information)
     FString PreparedAt;       // UTC, ISO 8601
 
-    /** <level>.cookformat beside a prepared level's .umap: the format it was prepared in, written once it saved. */
+    /** <level>.cookformat beside a prepared level's .umap: the format it was prepared in and the archive build it was
+     *  prepared from (one line each), written once it saved. */
     static FString StampFile(const FString& Level);
+    /** The archive build a level's stamp names (empty: none, e.g. a level stamped before WP-O1-4a's review). */
+    static FString LevelBuild(const FString& Level);
     /** The level exists and was prepared in this format (a packaged game, which has no stamps, only checks it exists: the
      *  packaging refuses unstamped levels). */
     static bool IsLevelCurrent(const FString& Level);
