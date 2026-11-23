@@ -83,9 +83,11 @@ bool FUCScenario::Parse(const FString& Id, const FString& Json, const FString& C
             for (const TSharedPtr<FJsonValue>& Weapon : WeaponsValue->AsArray())
             {
                 const FString Name = Weapon && Weapon->Type == EJson::String ? Weapon->AsString() : FString();
-                if (Name.TrimStartAndEnd().IsEmpty())
+                // One class name per entry: a list in one string ("a,b") names no class, and would share a body level's key
+                // with the two entries it stands for (USCViewerSubsystem::PlayerLevelPath).
+                if (Name.TrimStartAndEnd().IsEmpty() || Name.Contains(TEXT(",")) || Name.Contains(TEXT("|")))
                 {
-                    Error = TEXT("\"player.weapons\" holds something other than an entity class name");
+                    Error = TEXT("\"player.weapons\" holds something other than one entity class name per entry");
                     return false;
                 }
                 Out.PlayerWeapons.Add(Name.TrimStartAndEnd());

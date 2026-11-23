@@ -139,11 +139,16 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
 {
     State = EState::Failed;
     Problem = Why;
-    // What the run started stops and goes: a level still streaming, the environment, and the cargo setup not applied yet.
+    // What the run started stops and goes: a level still streaming, the environment, the player body and the cargo setup not
+    // applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();
     if (USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)) Cargo->DropScenario();
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
+        // The prepared body goes too, streaming or ready (a later first person exports one from the archive, as without a
+        // scenario).
+        Viewer->ReleasePreparedPlayerKit();
+        Viewer->SetPreparedPlayerLevel(FString());
         Viewer->CancelLoad();
         // A vehicle that loaded (another one in its place) goes once nothing loads; a load being cancelled finishes first
         // (Tick, state Failed).

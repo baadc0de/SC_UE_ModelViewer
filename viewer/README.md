@@ -69,7 +69,7 @@ level, the kit actor with its rigs, its parsed kit and clips; no archive at run 
 `PlayerGender`, `PlayerLoadout`, `PlayerWeapons`, `bPlayerSpareAttachments` and `-SCPlayerLoadout`, `-SCPlayerWeapons`, which a
 scenario run refuses) picks the game loadout, keeps only the named weapons and carries their spare magazines on the armour's
 storage ports (the exporter's `PlayerRequest.weapons` / `spare_attachments`, FFI `scbridge_export_player_request`). The
-showcase used `StarMarine_Marine.xml` with `behr_rifle_ballistic_01` (P4-AR).
+showcase (`golem_showcase.json`) uses `StarMarine_Marine.xml` with `behr_rifle_ballistic_01` (P4-AR).
 Firing (`FSCPlayerFire`) uses the weapon's first authored fire action: its rate (810 RPM rapid), the fragments of its
 enslavement ADB on the weapon's own rig (trigger, looping bolt; stop fragment on release) and its launch helper; flash,
 tracer, impact spark and view kick are viewer stand-ins (the game's particles and procedural recoil are not imported; a

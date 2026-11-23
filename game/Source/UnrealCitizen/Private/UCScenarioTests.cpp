@@ -47,6 +47,8 @@ bool FUCScenarioParseTest::RunTest(const FString&)
     TestEqual(TEXT("... weapons"), FString::Join(S.PlayerWeapons, TEXT(",")), FString(TEXT("behr_rifle_ballistic_01,gmni_lmg")));
     TestFalse(TEXT("... spares"), S.bPlayerSpares);
     TestFalse(TEXT("weapons that are no list"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": \"x\"}")), FString(), S, Error));
+    TestFalse(TEXT("two weapons in one entry"),
+              FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": [\"behr_smg_ballistic_01,behr_sniper_ballistic_01\"]}")), FString(), S, Error));
     TestFalse(TEXT("a weapon that is no name"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": [1]}")), FString(), S, Error));
     TestFalse(TEXT("a player block that is no object"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": [{\"gender\": \"female\"}]")), FString(), S, Error));
     TestFalse(TEXT("a loadout that is no string"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"loadout\": 3}")), FString(), S, Error));

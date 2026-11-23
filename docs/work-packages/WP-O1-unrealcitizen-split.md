@@ -286,7 +286,8 @@ data when it loads. In stages:
   like a vehicle's (`Content/SCAudio/<level>`: the weapons' fire and the torch play its triggers). A run streams the level alongside the
   vehicle's (`SetPreparedPlayerLevel`, `RequestPlayerKit`, state `Streaming`); first person attaches it as before; nothing is
   exported, imported or parsed. Still at attach: the weapons' fire clips are parsed against their rigs (`FireClipJson`) and
-  the torch's light function is made from its cookie. Prep format 26.
+  the torch's light function is made from its cookie. A scenario that fails releases its body with the rest of its scene.
+  `golem_showcase` names the showcase's body (`StarMarine_Marine.xml`, `behr_rifle_ballistic_01`). Prep format 27.
 - **O1-4b-2b**: the traversal clips (seat entry and exit, ladders) a run still asks the archive for (`FSCTraversalClips`)
   prepared with the scenario.
 - **O1-4b-3**: cargo boxes and effects, music, the Garage's details prepared.

@@ -74,8 +74,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  constant renders, panel aims, drawn panels with their render targets as assets, drawn again at load). 24: WP-O1-4b-1b-3 ladders,
      *  usables, seat records, light groups, the lights' authored state values and the room channels saved. 25: the
      *  manifest's interaction points saved (a seat route is pressed at one). 26: WP-O1-4b-2 the player body prepared (its own
-     *  level: the kit actor with its rigs, its parsed kit and clips; the record names it, PlayerLevel). */
-    static constexpr int32 FormatVersion = 26;
+     *  level: the kit actor with its rigs, its parsed kit and clips; the record names it, PlayerLevel). 27: its kit as one payload
+     *  read whole, its package audio staged. */
+    static constexpr int32 FormatVersion = 27;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

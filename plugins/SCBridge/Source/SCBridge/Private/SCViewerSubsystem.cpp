@@ -1436,6 +1436,17 @@ void USCViewerSubsystem::FailPlayerKit(const FString& Error)
     KitProgress.Reset();
     // A rejected kit leaves nothing behind: its actor (meshes, materials, textures) and parsed data go, so a
     // retry starts clean and repeated failures stay bounded.
+    ReleaseKitObjects();
+    int32 LiveVehicles = 0;
+    if (UWorld* World = GetViewerWorld())
+        for (TActorIterator<ASCVehicle> It(World); It; ++It) LiveVehicles += IsValid(*It) && !It->IsActorBeingDestroyed();
+    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_RELEASED live_vehicles=%d (the loaded ship counts one)"), LiveVehicles);
+    UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_KIT result=Failed seconds=%.3f error=\"%s\" (first person stays capsule-only)"),
+           FPlatformTime::Seconds() - KitStart, *Error);
+    if (FirstPerson) FirstPerson->BodyStatus = GetPlayerKitStatus();
+}
+void USCViewerSubsystem::ReleaseKitObjects()
+{
     if (KitActor && IsValid(KitActor))
     {
         if (FirstPerson && FirstPerson->Body->GetKit() == KitActor) FirstPerson->Body->Detach();
@@ -1446,12 +1457,15 @@ void USCViewerSubsystem::FailPlayerKit(const FString& Error)
     UnloadKitLevel(); // a prepared body goes with its level
     KitData.Reset();
     KitClips.Reset();
-    int32 LiveVehicles = 0;
-    if (UWorld* World = GetViewerWorld())
-        for (TActorIterator<ASCVehicle> It(World); It; ++It) LiveVehicles += IsValid(*It) && !It->IsActorBeingDestroyed();
-    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_RELEASED live_vehicles=%d (the loaded ship counts one)"), LiveVehicles);
-    UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_KIT result=Failed seconds=%.3f error=\"%s\" (first person stays capsule-only)"),
-           FPlatformTime::Seconds() - KitStart, *Error);
+}
+void USCViewerSubsystem::ReleasePreparedPlayerKit()
+{
+    if (KitState != EPlayerKitState::Streaming && KitState != EPlayerKitState::Ready && KitState != EPlayerKitState::Failed) return;
+    if (!KitLevel && KitState != EPlayerKitState::Failed && PreparedPlayerLevel.IsEmpty()) return; // a body from the archive stays
+    ReleaseKitObjects();
+    KitState = EPlayerKitState::None;
+    KitError.Reset();
+    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_RELEASED prepared=%s"), *PreparedPlayerLevel);
     if (FirstPerson) FirstPerson->BodyStatus = GetPlayerKitStatus();
 }
 FString USCViewerSubsystem::GetPlayerKitStatus() const
@@ -1522,6 +1536,14 @@ void USCViewerSubsystem::StepPreparedPlayerKit(bool bBlocking)
 void USCViewerSubsystem::UnloadKitLevel()
 {
     if (!KitLevel) return;
+    // A level that failed to load is past the streaming states a removal request is handled in: the world drops it now, else
+    // each retry would leave one more streaming level behind.
+    if (KitLevel->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+    {
+        if (UWorld* World = KitLevel->GetWorld()) World->RemoveStreamingLevel(KitLevel);
+        KitLevel = nullptr;
+        return;
+    }
     KitLevel->SetShouldBeLoaded(false);
     KitLevel->SetShouldBeVisible(false);
     KitLevel->SetIsRequestingUnloadAndRemoval(true);

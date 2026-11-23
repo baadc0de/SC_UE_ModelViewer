@@ -426,6 +426,51 @@ bool FSCSavedPlayerKitTest::RunTest(const FString&)
     Track.Pos = {FVector3f(1.f, 2.f, 3.f)};
     Clips->Add(Clip->Name, Clip);
     Clips->Add(TEXT("walk"), MakeShared<FSCPlayerClip>());
+    // Every other field a value of its own (the attach resolves weapons by child id, ports by owner and helper, ...).
+    Kit->Skeleton = TEXT("body.skel");
+    Hand.OwnerEntity = TEXT("body");
+    Hand.Attachment = TEXT("hand_attach");
+    Hand.ItemOffsetHelper = TEXT("offset");
+    Hand.SelectTag = TEXT("right");
+    Weapon.ChildId = TEXT("child_7");
+    Weapon.Subtype = TEXT("Rifle");
+    Weapon.ItemType = TEXT("WeaponPersonal");
+    Weapon.MannequinTags = {TEXT("rifle")};
+    Weapon.HandGripHelper = TEXT("grip");
+    Action.FireFragment = TEXT("fire");
+    Action.OneShotFragment = TEXT("shot");
+    Action.FireHelper = TEXT("barrel");
+    Action.MuzzleHelper = TEXT("muzzle");
+    Fire.Tags = {TEXT("rifle")};
+    Fire.FragTags = {TEXT("ADS")};
+    State.WeaponChildId = TEXT("child_7");
+    State.MoveSpeedTag = TEXT("walk");
+    State.Tags = {TEXT("stand")};
+    Idle.Tags = {TEXT("t")};
+    Idle.FragTags = {TEXT("f")};
+    Layer.bMissing = true;
+    Layer.bLoop = true;
+    Layer.Speed = 1.25f;
+    Layer.BlendIn = 0.125f;
+    Layer.Weight = 0.5f;
+    Layer.StartTime = 0.0625f;
+    Layer.ExitTime = 0.75f;
+    Layer.HasJointMask = true;
+    Dimension.Min = -1.f;
+    Dimension.AuthoredMax = 6.5f;
+    Example.PlaybackScale = 1.2f;
+    Example.bMissing = true;
+    Selector.bLocked = true;
+    Torch.Entity = TEXT("helmet");
+    Torch.Port = TEXT("Armor_Helmet");
+    Torch.DiffuseMult = 20.f;
+    Torch.BulbRadiusM = 0.005f;
+    Torch.DistanceM = 40.f;
+    Torch.Cookie = TEXT("textures/lights/cookie.tif");
+    Part.MeshAsset = TEXT("helmet.glb");
+    Clip->Fps = 60.f;
+    Clip->bAdditive = true;
+    Track.PosTimes = {7.f};
     USCPlayerKitData* Data = NewObject<USCPlayerKitData>(V, TEXT("PlayerKit"));
     Data->Kit = Kit;
     Data->Clips = Clips;
@@ -475,11 +520,47 @@ bool FSCSavedPlayerKitTest::RunTest(const FString&)
     TestTrue(TEXT("the body clips, root port, parts and diagnostics"),
              K.ClipSidecars.Num() == 1 && K.RootPort.Name == TEXT("body") && K.Parts.Num() == 1 && K.Parts[0].Id == TEXT("child_3") &&
                  K.Parts[0].Port.Types.Num() == 1 && K.Diagnostics.Num() == 1);
+    // Every other field as set.
+    {
+        const FSCItemPort& H = K.HandPorts[0];
+        const FSCPlayerWeapon& W = K.Weapons[0];
+        const FSCFireAction& A = W.FireActions[0];
+        const FSCWeaponFragment& F = W.FireFragments[0];
+        const FSCMotionState& M = K.States[0];
+        const FSCMotionFragment& I = M.Fragments[0];
+        const FSCMotionLayer& L = I.Layers[0];
+        const FSCBlendSpace& BS = K.BlendSpaces[TEXT("move2d")];
+        const FSCFlashlight& Fl = K.Flashlights[0];
+        TestTrue(TEXT("the port's owner, attachment, helper and tag"), K.Skeleton == TEXT("body.skel") && H.OwnerEntity == TEXT("body") &&
+                                                                          H.Attachment == TEXT("hand_attach") && H.ItemOffsetHelper == TEXT("offset") &&
+                                                                          H.SelectTag == TEXT("right") && K.Parts[0].Port.AttachBone == TEXT("RightHand"));
+        TestTrue(TEXT("the weapon's child id, types, tags and grip"), W.ChildId == TEXT("child_7") && W.Subtype == TEXT("Rifle") &&
+                                                                         W.ItemType == TEXT("WeaponPersonal") && W.MannequinTags.Num() == 1 &&
+                                                                         W.HandGripHelper == TEXT("grip"));
+        TestTrue(TEXT("the fire action's fragments and helpers"), A.Kind == TEXT("rapid") && A.FireFragment == TEXT("fire") && A.OneShotFragment == TEXT("shot") &&
+                                                                      A.FireHelper == TEXT("barrel") && A.MuzzleHelper == TEXT("muzzle"));
+        TestTrue(TEXT("the fire fragment's tags"), F.Fragment == TEXT("fire") && F.Tags.Num() == 1 && F.FragTags.Num() == 1 && F.Layers[0].Clip == TEXT("rifle_fire"));
+        TestTrue(TEXT("the state's weapon, speed tag and tags"), M.WeaponChildId == TEXT("child_7") && M.MoveSpeedTag == TEXT("walk") && M.Tags.Num() == 1 &&
+                                                                     I.Fragment == TEXT("MotionIdle") && I.Tags.Num() == 1 && I.FragTags.Num() == 1);
+        TestTrue(TEXT("the layer's timing and flags"), L.bMissing && L.bLoop && L.Speed == 1.25f && L.BlendIn == 0.125f && L.Weight == 0.5f &&
+                                                          L.StartTime == 0.0625f && L.ExitTime == 0.75f && L.HasJointMask);
+        TestTrue(TEXT("the blend space's ranges, example and selector"), BS.Id == TEXT("move2d") && BS.Dimensions[0].Name == TEXT("MoveSpeed") &&
+                                                                            BS.Dimensions[0].Min == -1.f && BS.Dimensions[0].AuthoredMax == 6.5f &&
+                                                                            BS.Examples[0].Clip == TEXT("walk") && BS.Examples[0].Params[0] == 1.5f &&
+                                                                            BS.Examples[0].PlaybackScale == 1.2f && BS.Examples[0].bMissing &&
+                                                                            BS.Selectors[0].Name == TEXT("Turn") && BS.Selectors[0].bLocked);
+        TestTrue(TEXT("the torch's item, port and light"), Fl.Entity == TEXT("helmet") && Fl.Port == TEXT("Armor_Helmet") && Fl.DiffuseMult == 20.f &&
+                                                              Fl.BulbRadiusM == 0.005f && Fl.DistanceM == 40.f && Fl.Cookie == TEXT("textures/lights/cookie.tif"));
+        TestTrue(TEXT("the part and the kit's clip"), K.Parts[0].EntityName == TEXT("helmet") && K.Parts[0].MeshAsset == TEXT("helmet.glb") &&
+                                                         K.ClipSidecars.FindRef(TEXT("idle")) == TEXT("Packages/body/idle.json"));
+    }
     if (!TestEqual(TEXT("the clips"), Back->Clips->Num(), 2)) return false;
     const TSharedPtr<const FSCPlayerClip> C = Back->Clips->FindRef(TEXT("idle"));
-    if (!TestTrue(TEXT("the idle clip"), C.IsValid() && C->Name == TEXT("idle") && C->bCyclic && C->Frames == 30.f && C->Tracks.Num() == 1)) return false;
+    if (!TestTrue(TEXT("the idle clip"), C.IsValid() && C->Name == TEXT("idle") && C->bCyclic && C->bAdditive && C->Fps == 60.f && C->Frames == 30.f &&
+                                             C->Duration == 1.f && C->Tracks.Num() == 1))
+        return false;
     const FSCPlayerClip::FTrack& T = C->Tracks[0];
-    TestTrue(TEXT("... its track"), T.Bone == 4 && T.RotTimes.Num() == 2 && T.Rot.Num() == 2 && T.Rot[1].Equals(Track.Rot[1], 0.f) && T.Pos.Num() == 1 &&
+    TestTrue(TEXT("... its track"), T.Bone == 4 && T.RotTimes.Num() == 2 && T.RotTimes[1] == 15.f && T.PosTimes.Num() == 1 && T.PosTimes[0] == 7.f && T.Rot.Num() == 2 && T.Rot[1].Equals(Track.Rot[1], 0.f) && T.Pos.Num() == 1 &&
                                        T.Pos[0] == FVector3f(1.f, 2.f, 3.f));
     // The loaded clip samples as the parsed one.
     TArray<FTransform> PoseA, PoseB;

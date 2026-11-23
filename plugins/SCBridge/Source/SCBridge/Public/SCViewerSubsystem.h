@@ -322,6 +322,9 @@ public:
     /** The body comes from this prepared level (PlayerLevelPath), not from the archive; empty: exported as before. A run of a
      *  prepared scenario sets it before the body is first requested. */
     void SetPreparedPlayerLevel(const FString& Level) { PreparedPlayerLevel = Level; }
+    /** Release a prepared body streaming or ready (detached, its actor and level gone; state None). An export or import in
+     *  flight is left to finish. A scenario that fails releases its body with the rest of its scene. */
+    void ReleasePreparedPlayerKit();
     const FString& GetPreparedPlayerLevel() const { return PreparedPlayerLevel; }
     /** Starts the player-kit pipeline unless it is running or ready (a failed kit is retried). */
     bool RequestPlayerKit();
@@ -483,6 +486,8 @@ private:
     UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> KitLevel;
     void StepPreparedPlayerKit(bool bBlocking);
     void UnloadKitLevel();
+    /** The kit's actor, level and data released (FailPlayerKit, ReleasePreparedPlayerKit). */
+    void ReleaseKitObjects();
     TSharedPtr<const FSCPlayerKit> KitData;
     TSharedPtr<const FSCPlayerClipMap> KitClips;
     TWeakObjectPtr<ASCViewerPawn> InspectionPawn;
