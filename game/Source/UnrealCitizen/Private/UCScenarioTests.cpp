@@ -121,6 +121,14 @@ bool FUCPreparedTest::RunTest(const FString&)
     Changed = Source;
     Changed.Json = Changed.Json.Replace(TEXT("\"T\""), TEXT("\"t\""), ESearchCase::CaseSensitive);
     TestTrue(TEXT("a definition changed only in case is stale"), R.Problem(&Changed, All).Contains(TEXT("changed")));
+    // A checkout that turns LF line ends into CRLF (git's autocrlf) changes no definition.
+    FUCPrepared Lf = R;
+    Lf.Definition = R.Definition + TEXT("\n\"\":\n1");
+    Lf.CargoDefinition = R.CargoDefinition + TEXT("\n");
+    Changed = Source;
+    Changed.Json = Lf.Definition.Replace(TEXT("\n"), TEXT("\r\n"));
+    Changed.CargoJson = Lf.CargoDefinition.Replace(TEXT("\n"), TEXT("\r\n"));
+    TestEqual(TEXT("CRLF for LF is no change"), Lf.Problem(&Changed, All), FString());
     Changed = Source;
     Changed.CargoJson.Reset();
     TestTrue(TEXT("a changed cargo setup is stale"), R.Problem(&Changed, All).Contains(TEXT("cargo setup")));

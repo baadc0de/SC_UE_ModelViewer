@@ -254,8 +254,14 @@ A review of the series as a whole (Terra) found what the per-stage reviews could
   the scene first); before, a lookup that ran first settled on the scenario's copy for the session.
 - `-SCPlayerDemo`'s built-in route moved from `viewer/scripts/routes` to the shared plugin
   (`plugins/SCBridge/Resources/Routes/player-demo.txt`, staged as a runtime dependency): the game had none.
-- The Ship Link door-policy tests (`SCBridge.ShipLink.Access`, `.RoomClassification`) moved back to the plugin
-  (`SCShipLinkPolicyTests.cpp`): the policy is shared, so the viewer runs them too; the cargo-dependent ones stay in the game.
+- The Ship Link door-policy tests (`SCBridge.ShipLink.Access`, `.RoomClassification`) and the package reader's cargo-field
+  test (`SCBridge.Cargo.ReaderFields`) moved back to the plugin (`SCShipLinkPolicyTests.cpp`, `Cargo/SCCargoReaderTests.cpp`):
+  what they test is shared, so the viewer runs them too; the cargo-dependent ones stay in the game.
+- The game stages its `Config/FX/effects.json` (the cargo effects' settings; only the viewer module staged its copy).
+- A scenario's staleness check ignores line ends (git's checkout turned `golem_showcase.json` into CRLF and the game
+  refused it as changed); the packaging script compares alike.
+- A paint request on a vehicle without paint slots (a prepared one, its paint baked in) is refused (`PAINT … refused`)
+  instead of reported as applied and remembered.
 - `viewer/README.md`: the showcase packaging takes a prepared scenario (`-Scenario`, `Play_UnrealCitizen.bat`); the cargo
   RPC example launches the game (`Start-SCViewer -Game`), cargo routes are under `game/scripts/routes`.
 
