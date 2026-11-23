@@ -1,0 +1,8 @@
+{
+  "name": "Crusader C2 Hercules in an extra-large high-tech hangar, with a cargo job ready",
+  "environment": "Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_xltop_001.socpak",
+  "vehicle": "CRUS_Starlifter_C2",
+  "skin": "default",
+  "player": { "camera": "first" },
+  "cargo": "c2_hangar"
+}

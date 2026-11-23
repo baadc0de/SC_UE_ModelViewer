@@ -78,14 +78,12 @@ LIVE helmets: diffuseMult 20 ≈ 63 500 cd, 40 m, 90°). Without a body or with 
 viewer's 40 000 cd cone (`FP_TORCH_LIGHT source=fallback`). It is Movable (a Stationary light does not follow the player)
 and sits ahead of the helmet (the game's `helperName` / `helperOffset` on `HeadCam` are not used). `viewer/scripts/routes/showcase-player.txt` checks torch, firing, aiming, third person and `Z`.
 
-Cooking the showcase content: export the ship and the hangar into one root (decomposed GLB + DDS, full resolution):
-`starbreaker entity export DRAK_Golem out/showcase/bake --kind decomposed --format glb --dds --lod 0 --mip 0 --skip-existing-assets`
-and `starbreaker socpak export 'hangar\hightech_a\hangar_smltop_001.socpak' out/showcase/bake <same options>`, then cook
-them in the editor (`UnrealEditor-Cmd SCViewer.uproject -run=pythonscript -AllowCommandletRendering -unattended -nop4
--SCCookRoot=<abs>/out/showcase/bake ...`): `-script=<abs>/game/scripts/cook_hangars.py -SCCookOnly=hightech_a_hangar_smltop_001`
-and `-script=<abs>/game/scripts/cook_ships.py -SCCookOnly=DRAK_Golem`. A cooked ship is `/Game/SC/Ships/Maps/<entity>`
-(gear down, on the viewer floor, rigs baked static, pool `/Game/SC/Ships/Shared`). `LoadEntity` streams it instead of
-exporting, with or without an archive (`-SCNoCooked` turns cooked ships and hangars off).
+Preparing the showcase content (WP-O1-4): UnrealCitizen's prep step imports a scenario's hangar and ship from the
+archive into the game project as levels: `UnrealEditor-Cmd game/UnrealCitizen.uproject -run=SCPrepare
+-Scenario=golem_showcase -AllowCommandletRendering -unattended` (`game/Config/Scenarios/golem_showcase.json`; see
+`SCPrepareCommandlet.h`). A prepared ship is `/Game/SC/Ships/Maps/<entity>[__<paint>]` (gear down, on the floor, rigs
+baked static, pool `/Game/SC/Ships/Shared`); the game runs the scenario from it (`-Scenario=<name>`) with or without an
+archive. The viewer itself never streams prepared levels (WP-O1-3).
 
 ## Decision
 
@@ -692,9 +690,10 @@ ambiguous=<a> unclassified=<u>` (only slots with triangles count). The HUD proje
 `geometry=unavailable`); `sc.Screens <index> [cm]` puts the (fly) camera in front of one and logs the first surface on the
 ray to it, so a screen covered by other geometry shows up. `sc.FP.Pads` checks that each door pad is hittable (the first
 visibility hit is the pad itself) and resolves to its door; `sc.FP.Pads negative` repeats it with the pads' collision off
-and must find none (`FP_PADS_NEGATIVE ok=1`). Cooked levels are stamped with `USCCookLibrary::FormatVersion`; an older
-cook is refused by `package_showcase.ps1` and reported STALE by the cook scripts, which also refuse to cook an export whose
-`ui_bindings` lack the screen-role fields; pooled meshes are keyed by their Nanite build and section topology.
+and must find none (`FP_PADS_NEGATIVE ok=1`). Prepared levels are stamped with `FUCPrepared::FormatVersion` (WP-O1-4); an
+older one is refused by `package_showcase.ps1` and the game and prepared again by the prep step (`-run=SCPrepare`, which
+exports through the bridge, so its `ui_bindings` carry the current fields); pooled meshes are keyed by their Nanite build
+and section topology.
 
 **Panel states and aspect (cache format 32, I1-5 / I1-3 / I1-2).** The exporter renders an interior panel at its face's
 texture-space aspect (`ui_texture_aspect_w_over_h`, measured on its `$RenderToTexture` faces), with the panel owner's user
@@ -948,8 +947,8 @@ world subsystem) plays it:
   the same tag name, the `InTransit` tag effect plays from `Start` to `Stop`. Panels: a top-level
   `ASCVehicle::SendInteraction` (a press) fires the source entity's `Activate` effects. Flashlight: the kit item's
   `Light_On_SFX` / `Light_Off_SFX`. Weapon: its `fireAudioTrigger` per shot.
-- **Cooked levels.** `game/scripts/cook_audio.py` (called by `cook_ships.py` / `cook_hangars.py`) copies the package's
-  audio beside the cooked level (`Content/SCAudio/<level>`, gitignored, staged as non-UFS files; a missing `audio.json`
+- **Cooked levels.** UnrealCitizen's prep step (`-run=SCPrepare`, `SCPrepareAudio.h`) copies the package's
+  audio beside the prepared level (`Content/SCAudio/<level>`, gitignored, staged as non-UFS files; a missing `audio.json`
   or payload stops that level's cook, cook format 7: levels staged before A1-2's bus effects are stale); `ASCVehicle::BeginPlay` loads it (`CookedAudio`). Cooked levels
   bake their rigs, so they carry the placed audio and the reverb; door, lift and panel sounds need a live import.
 

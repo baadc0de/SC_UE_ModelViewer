@@ -8,6 +8,7 @@
 #include "SCShipLinkRpc.h"
 #include "SCGarageRpc.h"
 #include "Cargo/SCCargoSubsystem.h"
+#include "UCScenarioSubsystem.h"
 #include "Engine/World.h"
 
 using namespace SCRpcJson;
@@ -287,6 +288,49 @@ public:
 };
 } // namespace
 
+/** The scenario (WP-O1-4): the "scenario" state section, its loading and start as activity, and /wait until=scenario
+ *  (reached once it runs, was refused or failed; the answer carries its state and problem). */
+class FScenarioRpc final : public ISCRpcExtension
+{
+public:
+    void Routes(TMap<FString, FRoute>& Out) override {}
+    static TSharedRef<FJsonObject> Section(const UUCScenarioSubsystem& S)
+    {
+        const TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+        O->SetStringField(TEXT("id"), S.GetId());
+        O->SetStringField(TEXT("state"), UUCScenarioSubsystem::StateName(S.GetState()));
+        O->SetStringField(TEXT("problem"), S.GetProblem());
+        O->SetStringField(TEXT("title"), S.GetScenario().Title);
+        O->SetStringField(TEXT("vehicle_level"), S.GetPrepared().VehicleLevel);
+        O->SetStringField(TEXT("environment_level"), S.GetPrepared().EnvironmentLevel);
+        return O;
+    }
+    void Snapshot(UWorld* World, FJsonObject& State) const override
+    {
+        if (const UUCScenarioSubsystem* S = UUCScenarioSubsystem::Get(World); S && S->GetState() != UUCScenarioSubsystem::EState::None)
+            State.SetObjectField(TEXT("scenario"), Section(*S));
+    }
+    void Activity(UWorld* World, TArray<FString>& Reasons, double&) const override
+    {
+        const UUCScenarioSubsystem* S = UUCScenarioSubsystem::Get(World);
+        if (S && (S->GetState() == UUCScenarioSubsystem::EState::Loading || S->GetState() == UUCScenarioSubsystem::EState::Starting))
+            Reasons.Add(TEXT("scenario"));
+    }
+    bool Wait(UWorld* World, const FString& Until, const TSharedPtr<FJsonObject>&, bool& bReached, FJsonObject& Out, FString& OutError) const override
+    {
+        if (Until != TEXT("scenario")) return false;
+        const UUCScenarioSubsystem* S = UUCScenarioSubsystem::Get(World);
+        if (!S || S->GetState() == UUCScenarioSubsystem::EState::None)
+        {
+            OutError = TEXT("no scenario runs (-Scenario=<name>)");
+            return true;
+        }
+        bReached = S->GetState() == UUCScenarioSubsystem::EState::Running || S->GetState() == UUCScenarioSubsystem::EState::Refused ||
+                   S->GetState() == UUCScenarioSubsystem::EState::Failed;
+        Out.SetObjectField(TEXT("scenario"), Section(*S));
+        return true;
+    }
+};
 #endif // SC_WITH_RPC
 
 namespace UCRpcRoutes
@@ -297,10 +341,11 @@ void Register()
     SCRpcExtensions::Add(TEXT("Cargo"), MakeShared<FCargoRpc>());
     SCRpcExtensions::Add(TEXT("ShipLink"), MakeShared<FShipLinkRpc>());
     SCRpcExtensions::Add(TEXT("Garage"), MakeShared<FGarageRpc>());
+    SCRpcExtensions::Add(TEXT("Scenario"), MakeShared<FScenarioRpc>());
 #endif
 }
 void Unregister()
 {
-    for (const TCHAR* Name : {TEXT("Cargo"), TEXT("ShipLink"), TEXT("Garage")}) SCRpcExtensions::Remove(Name);
+    for (const TCHAR* Name : {TEXT("Cargo"), TEXT("ShipLink"), TEXT("Garage"), TEXT("Scenario")}) SCRpcExtensions::Remove(Name);
 }
 } // namespace UCRpcRoutes

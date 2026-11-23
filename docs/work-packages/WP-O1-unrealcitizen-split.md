@@ -179,18 +179,75 @@ moved to `game/Content/SC`; the built effects (`/Game/SC/FX`, also ignored) are 
 
 ### O1-4 — The UnrealCitizen game
 
-- `game/UnrealCitizen.uproject` runs prepared assets only: the runtime importer becomes `SCBridgeImport` (FFI client,
-  package reader/source, import job, processed caches, `SCBridgeLib`), loaded by the viewer and by the game's editor
-  module, not by the packaged game. The plugin's cargo art moves to the game's content.
-- **Scenario definition**: an environment, a vehicle (and its skin), the player start, cargo setup and music —
-  what `-SCCargoScenario=` and the cooked showcase do today, as data the game runs.
-- **Prep step** (`UnrealCitizenEditor -run=SCPrepare -Scenario=<name>`): imports the scenario's environment and
-  vehicle from p4k into the project as assets (today's `cook_ships.py` / `cook_hangars.py` / `cook_audio.py`).
-  The game refuses to start a scenario whose prepared assets are missing and says to run prep.
-- The game is cooked and packaged like any Unreal project (`game/scripts/package_showcase.ps1`). Cooking and
-  packaging still happen only on the owner's request.
+The game runs prepared assets only. O1-4 lands in three changes:
+
+- **O1-4a** (this PR): scenarios and the prep step; the game runs a scenario from its prepared levels.
+- **O1-4b**: a prepared vehicle keeps its rigs, clips and the interactions they drive (doors, lifts, ramps, panels' animated
+  parts): the cook bakes rigs static and drops the clip catalogue (since WP-C1; WP-P5 "Not fixed: cooked builds"), so in
+  O1-4a a scenario's vehicle and hangar show their presented pose and their doors do not move. What a run still reads from
+  the archive at run time becomes prepared too: the player body and its clips,
+  the cargo boxes (the stock and live spawns), the tractor record and its effects, the soundtrack, extra instances of the
+  ship (a cargo setup with several owners), the Garage's vehicles. Until then a scenario run opens the archive for these
+  (as the game did before); without one they fall back as before (no body, the scenario's tractor values, no music).
+- **O1-4c**: the runtime importer becomes `SCBridgeImport` (FFI client, package reader/source, import job, processed
+  caches, `SCBridgeLib`), loaded by the viewer and by the game's editor module, not by the packaged game, which then has
+  no `scbridge` library; the plugin's cargo art moves to the game's content.
+
+#### O1-4a — Scenarios and the prep step (this PR)
+
+**A scenario** is `game/Config/Scenarios/<name>.json` (`FUCScenario`, `UCScenario.h`): `name`, `environment` (an object
+container path; none: the map's own hangar, or space when the cargo setup says so), `vehicle` (required), `skin`
+(`default`, an index or a part of a paint's name or palette id: `USCViewerSubsystem::ResolvePaint`, as `-SCSkin`), `player`
+(`camera`: `first` (default) / `orbit` / `fly`; `start`: a part of a first-person teleport destination's label), `cargo` (a
+cargo setup under `Config/Cargo`: its ship and environment, when it names them, must be the scenario's; one in space takes
+no environment) and `music` (a soundtrack cue's id or title). Two ship with the project: `c2_hangar` (the C2 in the XL
+high-tech hangar with the `c2_hangar` cargo setup) and `golem_showcase` (the showcase's Golem in the small one).
+
+**The prep step** is `UnrealEditor-Cmd game/UnrealCitizen.uproject -run=SCPrepare -Scenario=<name>
+-AllowCommandletRendering -unattended [-Force]` (`USCPrepareCommandlet`, `UnrealCitizenEditor`). It replaces
+`cook_ships.py`, `cook_hangars.py`, `cook_hangars.sh` and `cook_audio.py` (removed): it exports the scenario's environment
+and vehicle through the bridge (auto-discovered `Data.p4k`, full resolution: the shared pools key a texture by its
+source), imports each from the export
+in memory (`USCImportLibrary::ImportEnvironmentFrom` / `ImportVehicleFrom`) into a new level, presents it (the hangar's
+mechanisms open, the ship elevator under the origin, its ship capacity recorded in the hangar index; the ship on its
+landing gear on the floor with the scenario's paint on), stages its audio beside the level (`SCPrepareAudio`, the C++ form
+of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes and textures keyed by source path and content — a mesh's
+committed source description id and collision triangles, a texture's first-mip bytes — so a changed asset at the same path is pooled anew;
+constant materials) and
+stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`) and the
+archive build it was prepared from (written whole: a level counts as current only with a complete stamp); a hangar index that cannot be saved fails the run. Levels:
+`/Game/SC/Hangars/Maps/<style>_<name>_<hash>` (a hash of the whole container path, so containers whose last two parts
+make the same name stay apart) and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
+palette id, else its subgeometry tag, else its name, and a hash of all three; `USCViewerSubsystem::EnvironmentLevelPath` /
+`ShipLevelPath`); the skin is resolved against the paints as the import reads them (`FSCPackageReader`: a variant whose
+files are unavailable is left out), the same list `-SCSkin` uses. A level already prepared in this format is kept (shared by scenarios); `-Force`
+prepares it again. A level's stamp is removed before it is rebuilt and written only once it saved, so a run that fails
+part-way leaves a level no record can use (the game checks the stamps outside a packaged build; the packaging refuses
+unstamped levels). An archive that does not open within 15 minutes ends the run. Last it writes the scenario's record, `Content/SCPrepared/<name>.json`
+(`FUCPrepared`: the format, the levels, the archive build, the time, and the scenario's definition and cargo setup as
+prepared), gitignored and staged with a packaged game (`DirectoriesToAlwaysStageAsUFS`).
+
+**The game** plays `-Scenario=<name>` (or `UUCSettings::Scenario`; `-Scenario=none` turns it off) from the record only
+(`UUCScenarioSubsystem`): it refuses — nothing loads, a notice over the view (`SUCScenarioNotice`) and the log
+(`SCENARIO_REFUSED`) give the reason and the prep command — when the scenario has no record, the record's format is
+another, a level is missing or not finished (no current stamp), or (outside a packaged game, which has no definitions)
+the definition is missing or does not read or it or its cargo setup changed since prep. A level that does not stream in (or
+not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded (also a vehicle loaded in its
+place), space is left, and
+the cargo subsystem stops applying its cargo setup (`USCCargoSubsystem::DropScenario`). It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
+`-SCPackage`, `-SCCargoScenario`, `-SCPlayerDemo=<entity>`) or `-SCNoCooked` (`ConflictingSwitch`, tested): the notice says so, and those switches act as without a scenario. Otherwise it streams the environment's level, then the vehicle's (`LoadPreparedEntity`), sets the
+camera, puts the player at the start, asks for the music, and hands the cargo subsystem the prepared cargo setup
+(`UUCSettings::ScenarioCargoJson`; it then loads no ship or environment itself, and a setup that names no ship is for
+the scenario's vehicle). Log lines `SCENARIO start|loaded|
+running|start_at|music`, RPC `/state` section `scenario` (id, state, problem, levels) and `/wait until=scenario`.
+Without a scenario the game behaves as before (the command line and the menus decide).
+
+`game/scripts/package_showcase.ps1 -Scenario <name>` packages a prepared scenario: it checks the record, the definition,
+its cargo setup and each level's stamp, cooks the scenario's levels and starts the build with `-Scenario=<name>`. Preparing and packaging
+still happen only on the owner's request.
 
 ## Verification
 
 Each stage: `scripts/build_ffi.ps1`, the editor build of each project that exists, the SCBridge automation tests
-(baseline 231/234), and for O1-3/O1-4 a launch through the RPC driver (C2 in the XL hangar: doors, panels, popout).
+(baseline 231/234), and for O1-3/O1-4 a launch through the RPC driver (C2 in the XL hangar: doors, panels, popout; for
+O1-4a the game with `-Scenario=c2_hangar`, refused before prep and running after it).

@@ -37,6 +37,13 @@ FString UUCSettings::ResolveCargoScenario() const
     FParse::Value(FCommandLine::Get(), TEXT("SCCargoScenario="), Value);
     return ResolveCargoFile(Value);
 }
+FString UUCSettings::ResolveScenario() const
+{
+    FString Value = Scenario;
+    FParse::Value(FCommandLine::Get(), TEXT("Scenario="), Value);
+    Value.TrimStartAndEndInline();
+    return Value.Equals(TEXT("none"), ESearchCase::IgnoreCase) ? FString() : Value;
+}
 FString UUCSettings::ResolveCargoFleet() const
 {
     FString Value = CargoFleet;

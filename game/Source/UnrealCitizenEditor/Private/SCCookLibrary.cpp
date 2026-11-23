@@ -16,6 +16,12 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
 #include "Misc/SecureHash.h"
+#include "Engine/StaticMeshSourceData.h"
+#include "Hash/xxhash.h"
+#include "Chaos/ChaosArchive.h"
+#include "Chaos/TriangleMeshImplicitObject.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "Serialization/MemoryWriter.h"
 #include "TextureResource.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
@@ -25,6 +31,48 @@ DEFINE_LOG_CATEGORY_STATIC(LogSCCook, Log, All);
 
 namespace
 {
+/** A hash of a mesh's collision triangles (the importer derives them from the unsplit part, so they can change while the
+ *  render description stays: a window's triangles), empty without any. */
+FString CollisionId(const UStaticMesh& Mesh)
+{
+    UBodySetup* Body = Mesh.GetBodySetup();
+    if (!Body || Body->TriMeshGeometries.IsEmpty()) return FString();
+    TArray<uint8> Bytes;
+    FMemoryWriter Writer(Bytes);
+    Chaos::FChaosArchive Archive(Writer);
+    for (const Chaos::FTriangleMeshImplicitObjectPtr& Geometry : Body->TriMeshGeometries)
+        if (Geometry) Geometry->Serialize(Archive);
+    return FString::Printf(TEXT("%016llx"), FXxHash64::HashBuffer(Bytes.GetData(), uint64(Bytes.Num())).Hash);
+}
+
+/** What a pooled asset is, beyond its source path (which an archive update or an exporter or importer fix keeps while
+ *  the content changes): a mesh's committed source description id (a hash of its content, CommitSource's
+ *  bUseHashAsGuid) and its collision triangles, a texture's first-mip bytes; Fallback when there is no description or
+ *  no mip. */
+FString ContentId(const UObject* Object, const FString& Fallback)
+{
+    if (const auto* Mesh = Cast<UStaticMesh>(Object))
+    {
+        const bool bDescription = Mesh->GetNumSourceModels() > 0 && Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData &&
+                                  !Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().IsEmpty();
+        return (bDescription ? Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().GetUnversionedIdString() : Fallback) +
+               TEXT(";collision=") + CollisionId(*Mesh);
+    }
+    if (const auto* Texture = Cast<UTexture2D>(Object))
+    {
+        FTexturePlatformData* Platform = const_cast<UTexture2D*>(Texture)->GetPlatformData();
+        if (!Platform || Platform->Mips.IsEmpty()) return Fallback;
+        FTexture2DMipMap& Mip = Platform->Mips[0];
+        const void* Data = Mip.BulkData.LockReadOnly();
+        const int64 Size = Mip.BulkData.GetBulkDataSize();
+        const FXxHash64 Hash = Data ? FXxHash64::HashBuffer(Data, uint64(Size)) : FXxHash64();
+        Mip.BulkData.Unlock();
+        if (!Data) return Fallback;
+        return FString::Printf(TEXT("%016llx_%dx%d_%d"), Hash.Hash, Mip.SizeX, Mip.SizeY, int32(Platform->PixelFormat));
+    }
+    return Fallback;
+}
+
 FString SafeName(FString Name)
 {
     for (TCHAR& C : Name)
@@ -144,7 +192,7 @@ struct FCooker
 };
 } // namespace
 
-bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot)
+bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot, const FString& SourceBuild)
 {
     if (!Environment) return false;
     const double Start = FPlatformTime::Seconds();
@@ -157,8 +205,11 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     FCooker Cook;
     Cook.Root = Root;
     Cook.SharedRoot = SharedRoot;
-    for (const auto& [Object, Key] : Environment->SourcePaths)
-        if (const auto* Mesh = Cast<UStaticMesh>(Object))
+    // An asset without a content id is told apart by the archive build and the cook format at least.
+    const FString Fallback = FString::Printf(TEXT("build=%s;format=%d"), *SourceBuild, USCCookLibrary::FormatVersion);
+    for (const auto& [Object, SourceKey] : Environment->SourcePaths)
+        if (const FString Key = SourceKey + TEXT("#content=") + FMD5::HashAnsiString(*ContentId(Object, Fallback)).Left(12);
+            const auto* Mesh = Cast<UStaticMesh>(Object))
         {
             // The pool key carries the mesh's build (Nanite or conventional) and section topology (slot, triangles): a
             // source asset split or built differently (a screen or glass slot moved between the Nanite and the translucent
@@ -214,14 +265,24 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     return Saved == Cook.ToSave.Num();
 }
 
-bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name)
+bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name, bool& bOutMeasured)
 {
     FBox Bay;
     FString Elevator;
-    if (!FSCEnvironment::FindShipBay(Environment, Bay, &Elevator))
+    bOutMeasured = FSCEnvironment::FindShipBay(Environment, Bay, &Elevator);
+    if (!bOutMeasured)
     {
-        UE_LOG(LogSCCook, Warning, TEXT("HANGAR_CAPACITY %s/%s: no ship elevator"), *Style, *Name);
-        return false;
+        // No measurement describes this hangar now: an older entry goes (hangar fitting must not use it).
+        USCHangarIndex* Index = USCHangarIndex::Load();
+        const int32 Removed = Index ? Index->Hangars.RemoveAll([&](const FSCHangarCapacity& H) { return H.Style == Style && H.Name == Name; }) : 0;
+        UE_LOG(LogSCCook, Warning, TEXT("HANGAR_CAPACITY %s/%s: no ship elevator (nothing recorded, %d older entries removed)"), *Style, *Name, Removed);
+        if (!Removed) return true;
+        Index->GetPackage()->MarkPackageDirty();
+        FSavePackageArgs Args;
+        Args.TopLevelFlags = RF_Public | RF_Standalone;
+        Args.SaveFlags = SAVE_NoError;
+        const FString PackageName = Index->GetPackage()->GetName();
+        return UPackage::SavePackage(Index->GetPackage(), Index, *FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension()), Args);
     }
     const double Clearance = FSCEnvironment::BayClearance(Environment, Bay);
     const FString PackageName = FPackageName::ObjectPathToPackageName(FString(USCHangarIndex::AssetPath));

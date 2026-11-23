@@ -1,6 +1,7 @@
 // Cargo scenario (WP-K1, content): ship and environment it is meant for, the stock to put on grids (box entities,
 // counts, commodity), drone docks, and the drone definition (tractor-beam record values with provenance, flight limits).
-// Loaded from viewer/Config/Cargo/<name>.json via USCViewerSettings::CargoScenario / -SCCargoScenario=.
+// Loaded from game/Config/Cargo/<name>.json via UUCSettings::CargoScenario / -SCCargoScenario=, or a game scenario's
+// prepared copy (UCScenario.h: its "cargo").
 #pragma once
 #include "CoreMinimal.h"
 #include "Cargo/SCCargoTypes.h"

@@ -90,7 +90,7 @@ Self-contained briefs in `docs/work-packages/`, handed to agents verbatim.
 | WP-M1 | Ship Link ([brief](work-packages/WP-M1-ship-link.md)): implicit owner pairing on vehicle placement, shared door lock state and remote orders, modeled light-group interactions, and a mobiGlas app. | Codex | K1c, I1, P5, H1 | UE lock |
 | WP-M2 | Garage ([brief](work-packages/WP-M2-garage.md)): fleet, ship-bay retrieval, storage, paint, read-only loadout, and kiosk shortcut. | Codex | M1, K1f | UE lock |
 | WP-M3 | Music ([brief](work-packages/WP-M3-mobiglas-music.md)): named soundtrack cues from the local game archive and a play, pause and stop transport through UE audio. | Codex | A1, M2 | cargo + UE lock |
-| WP-O1 | Split into the StarBreaker core, the viewer and the UnrealCitizen game ([brief](work-packages/WP-O1-unrealcitizen-split.md)): O1-1 move (`plugins/SCBridge`, `viewer/`), O1-2 shared-plugin split and game skeleton, O1-3 viewer picker and F1 menu, O1-4 scenarios and the prep step. | Opus 5.5 | — | cargo + UE lock |
+| WP-O1 | Split into the StarBreaker core, the viewer and the UnrealCitizen game ([brief](work-packages/WP-O1-unrealcitizen-split.md)): O1-1 move (`plugins/SCBridge`, `viewer/`), O1-2 shared-plugin split and game skeleton, O1-3 viewer picker and F1 menu, O1-4 the game on prepared assets (4a scenarios and the prep step, 4b the remaining run-time archive reads prepared, 4c the `SCBridgeImport` module). | Opus 5.5 | — | cargo + UE lock |
 
 Critical path: U0 (spike) → U1 → V1 → P1 → S1, with R1 → R4 feeding V1 and C1 landing
 before S1. U0 and R1 start immediately in parallel; U2, U3 and C1 run in parallel

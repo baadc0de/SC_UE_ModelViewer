@@ -1,6 +1,7 @@
 // UnrealCitizen's game module (WP-O1-2): registers what the game adds to the shared viewer shell (SCViewerShell.h): the
-// mobiGlas as the F1 menu, the mobiGlas and the world callouts as view overlays, the garage kiosk as a first-person
-// interaction, and the cargo, Ship Link and Garage routes of the RPC harness.
+// mobiGlas as the F1 menu, the mobiGlas and the world callouts as view overlays, the scenario's notice (WP-O1-4: why it
+// does not run) as another, the garage kiosk as a first-person interaction, and the cargo, Ship Link, Garage and
+// scenario parts of the RPC harness.
 #include "CoreGlobals.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -16,6 +17,7 @@
 #include "UI/Cargo/SCMobiGlasModel.h"
 #include "UI/Cargo/SSCCalloutLayer.h"
 #include "UI/Cargo/SSCMobiGlas.h"
+#include "UI/SUCScenarioNotice.h"
 #include "Widgets/SOverlay.h"
 
 #define LOCTEXT_NAMESPACE "UnrealCitizen"
@@ -82,6 +84,9 @@ class FUnrealCitizenModule final : public FDefaultGameModuleImpl
                 + SOverlay::Slot()[SNew(SSCMobiGlas).Model(Model).OnClosed_Lambda([FocusView] { if (FocusView) FocusView(); })]
                 + SOverlay::Slot()[SNew(SSCCalloutLayer).Model(Model)];
         });
+        SCViewerShell::AddOverlay(TEXT("ScenarioNotice"), [](const FSCViewOverlayArgs& Args) -> TSharedRef<SWidget> {
+            return SNew(SUCScenarioNotice).Subsystem(Args.Subsystem);
+        });
         SCViewerShell::AddInteraction(TEXT("GarageKiosk"), MakeShared<FGarageKioskInteraction>());
         // WP-K1: a cargo job keeps the access doors it uses open.
         ASCVehicle::AddDoorUseQuery(TEXT("Cargo"), [](const ASCVehicle& Ship, int32 Door) -> FString {
@@ -95,6 +100,7 @@ class FUnrealCitizenModule final : public FDefaultGameModuleImpl
         UCRpcRoutes::Unregister();
         ASCVehicle::RemoveDoorUseQuery(TEXT("Cargo"));
         SCViewerShell::RemoveInteraction(TEXT("GarageKiosk"));
+        SCViewerShell::RemoveOverlay(TEXT("ScenarioNotice"));
         SCViewerShell::RemoveOverlay(TEXT("MobiGlas"));
         SCViewerShell::ClearMenu();
         FDefaultGameModuleImpl::ShutdownModule();

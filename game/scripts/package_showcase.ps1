@@ -1,21 +1,20 @@
-# Package the Win64 showcase: the viewer with one cooked hangar and one cooked ship, started with
-# -SCLoad=<ship> -SCEnvironment=<hangar>, which stream the cooked levels. Cook both first (game/scripts/cook_hangars.py,
-# game/scripts/cook_ships.py). A standalone directory (out/win64/<ship>): Nanite, Lumen GI and reflections with hardware
-# ray tracing at the viewer's -SCMaxQuality (Cinematic, hit lighting; SCLook::ApplyMaxQuality) and DLAA (the NVIDIA DLSS
-# plugin at 100 %, viewer/README.md). <Out>\Play_UnrealCitizen.bat starts it as the showcase (-SCShowcase: no viewer panels, first
-# person with the player character; C third person, Z orbit, T teleport, F torch, LMB fire, RMB aim). The player
-# character is exported from Data.p4k at start (an installed Star Citizen): -PlayerLoadout picks the game loadout,
-# -PlayerWeapons keeps only those of its weapons (entity class names), and the kept weapons' spare magazines are
-# carried on the armour.
+# Package the Win64 showcase: UnrealCitizen running one prepared scenario (game/Config/Scenarios/<name>.json), started
+# with -Scenario=<name>, which streams the scenario's prepared levels. Prepare it first (WP-O1-4, the prep step):
+#   UnrealEditor-Cmd game/UnrealCitizen.uproject -run=SCPrepare -Scenario=<name> -AllowCommandletRendering -unattended
+# A standalone directory (out/win64/<scenario>): Nanite, Lumen GI and reflections with hardware ray tracing at
+# -SCMaxQuality (Cinematic, hit lighting; SCLook::ApplyMaxQuality) and DLAA (the NVIDIA DLSS plugin at 100 %,
+# viewer/README.md). <Out>\Play_UnrealCitizen.bat starts it as the showcase (-SCShowcase: no viewer chrome; the scenario's
+# camera; C third person, Z orbit, T teleport, F torch, LMB fire, RMB aim). The player character is exported from Data.p4k
+# at start (an installed Star Citizen; WP-O1-4b prepares it): -PlayerLoadout picks the game loadout, -PlayerWeapons keeps
+# only those of its weapons (entity class names), and the kept weapons' spare magazines are carried on the armour.
 # The engine is the SCViewer fork of UE 5.9 built from source (plan D17): -Engine, else $env:UE_ENGINE_ROOT, else
 # %USERPROFILE%\UnrealEngine-5.9-src.
-# Usage: game/scripts/package_showcase.ps1 -Ship DRAK_Golem -Hangar hightech_a/hangar_smltop_001
+# Usage: game/scripts/package_showcase.ps1 -Scenario golem_showcase
 #        [-Config Development|Shipping] [-PlayerLoadout <p4k path>] [-PlayerWeapons <entity>,...]
 #        [-Out <dir>] [-Engine <UE 5.9 source fork>]
 param(
     [ValidateSet('Win64')][string]$Platform = 'Win64',
-    [Parameter(Mandatory = $true)][string]$Ship,
-    [Parameter(Mandatory = $true)][string]$Hangar,
+    [Parameter(Mandatory = $true)][string]$Scenario,
     [string]$Out = '',
     [string]$Engine = $(if ($env:UE_ENGINE_ROOT) { $env:UE_ENGINE_ROOT } else { Join-Path $env:USERPROFILE 'UnrealEngine-5.9-src' }),
     [string]$Config = 'Development',
@@ -25,7 +24,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $Project = Join-Path $Root 'game\UnrealCitizen.uproject'
-if (-not $Out) { $Out = Join-Path $Root "out\win64\$Ship" }
+if (-not $Out) { $Out = Join-Path $Root "out\win64\$Scenario" }
 if (-not (Test-Path (Join-Path $Engine 'Engine\Build\BatchFiles\RunUAT.bat'))) {
     throw "No UE 5.9 source fork at $Engine (pass -Engine or set UE_ENGINE_ROOT)."
 }
@@ -33,28 +32,43 @@ if (-not (Test-Path (Join-Path $Root 'plugins\NVIDIA\DLSS'))) {
     Write-Warning 'NVIDIA DLSS is not installed (scripts/install_dlss.ps1): the build anti-aliases with TSR instead of DLAA.'
 }
 
-# The cooked levels, named as the viewer looks them up (USCViewerSubsystem::CookedShipLevel / CookedEnvironmentLevel).
-$Style, $HangarName = $Hangar.Replace('\', '/').Split('/')
-$ShipLevel = '/Game/SC/Ships/Maps/' + ($Ship -replace '[^A-Za-z0-9_]', '_')
-$HangarLevel = "/Game/SC/Hangars/Maps/${Style}_$HangarName"
-$Extra = ' -SCMaxQuality'
-# A cooked level carries the cook format it was written with (<level>.cookformat beside the .umap, USCCookLibrary::FormatVersion):
-# an older cook keeps outdated screens and pooled meshes (WP-I1 review), so it is refused rather than packaged.
-$CookHeader = Join-Path $Root 'game\Source\UnrealCitizenEditor\Public\SCCookLibrary.h'
-$CookFormat = [int]([regex]::Match((Get-Content -Raw $CookHeader), 'FormatVersion = (\d+);').Groups[1].Value)
-if (-not $CookFormat) { throw "No FormatVersion in $CookHeader" }
-foreach ($Level in @($ShipLevel, $HangarLevel)) {
+# The scenario's record (FUCPrepared, Content/SCPrepared/<name>.json) names its prepared levels; it and each level carry the
+# prep format (FUCPrepared::FormatVersion; a level's <level>.cookformat beside its .umap). An older preparation keeps
+# outdated screens and pooled meshes, so it is refused rather than packaged.
+$Prepare = "UnrealEditor-Cmd game\UnrealCitizen.uproject -run=SCPrepare -Scenario=$Scenario -AllowCommandletRendering -unattended"
+$Header = Join-Path $Root 'game\Source\UnrealCitizen\Public\UCScenario.h'
+$Format = [int]([regex]::Match((Get-Content -Raw $Header), 'FormatVersion = (\d+);').Groups[1].Value)
+if (-not $Format) { throw "No FormatVersion in $Header" }
+$RecordFile = Join-Path $Root "game\Content\SCPrepared\$Scenario.json"
+if (-not (Test-Path $RecordFile)) { throw "Scenario $Scenario is not prepared (no $RecordFile): run $Prepare" }
+$Record = Get-Content -Raw $RecordFile | ConvertFrom-Json
+if ([int]$Record.format -ne $Format) { throw "Scenario $Scenario was prepared with format $($Record.format), current $Format`: run $Prepare" }
+$Definition = Join-Path $Root "game\Config\Scenarios\$Scenario.json"
+if (-not (Test-Path $Definition)) { throw "No scenario $Definition" }
+if ([IO.File]::ReadAllText($Definition) -cne $Record.definition) { throw "Scenario $Scenario changed since it was prepared: run $Prepare" }
+# Its cargo setup (Config/Cargo/<cargo>.json) as prepared: the packaged game has only the record's copy.
+$CargoName = (ConvertFrom-Json $Record.definition).cargo
+$CargoText = ''
+if ($CargoName) {
+    $CargoFile = Join-Path $Root "game\Config\Cargo\$CargoName.json"
+    if (-not (Test-Path $CargoFile)) { throw "Scenario $Scenario names the cargo setup $CargoName, but there is no $CargoFile" }
+    $CargoText = [IO.File]::ReadAllText($CargoFile)
+}
+if ($CargoText -cne [string]$Record.cargo_definition) { throw "The cargo setup of scenario $Scenario changed since it was prepared: run $Prepare" }
+$Levels = @($Record.vehicle_level) + @($Record.environment_level | Where-Object { $_ })
+foreach ($Level in $Levels) {
     $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')
-    if (-not (Test-Path $File)) { throw "$Level is not cooked ($File): run cook_ships.py / cook_hangars.py first." }
+    if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
     $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
-    $Have = if (Test-Path $Stamp) { [int](Get-Content -Raw $Stamp).Trim() } else { 0 }
-    if ($Have -ne $CookFormat) {
-        throw "$Level is stale (cook format $Have, current $CookFormat): delete $File and its folder under Content/SC, then re-run cook_ships.py / cook_hangars.py."
+    # A complete stamp (FUCPrepared::IsLevelCurrent): the format on line 1, the archive build on line 2.
+    $Lines = if (Test-Path $Stamp) { @(Get-Content $Stamp) } else { @() }
+    $Have = if ($Lines.Count -ge 1 -and $Lines[0].Trim() -match '^\d+$') { [int]$Lines[0].Trim() } else { 0 }
+    if ($Have -ne $Format -or $Lines.Count -lt 2 -or -not $Lines[1].Trim()) {
+        throw "$Level is stale or not finished (stamp format $Have, current $Format): run $Prepare -Force"
     }
 }
-# The environment argument is the hangar's object-container path; only its last two parts name the cooked level.
-$Environment = "Data/ObjectContainers/PU/loc/mod/common/hangar/$Style/$HangarName.socpak"
-$Maps = "/Game/Maps/Viewer+$ShipLevel+$HangarLevel"
+$Maps = '/Game/Maps/Viewer+' + ($Levels -join '+')
+$Extra = ' -SCMaxQuality'
 
 # The built FX must carry the current generated contract (WP-E1 E1-6 review): systems built for an older runtime contract load but
 # play with stale behaviour, so they are refused here (rebuild them with -run=SCFxBuild).
@@ -64,13 +78,12 @@ if ($LASTEXITCODE -ne 0) { throw "Stale FX under /Game/SC/FX (SC_FX_STALE in the
 
 & (Join-Path $Engine 'Engine\Build\BatchFiles\RunUAT.bat') BuildCookRun "-project=$Project" "-platform=$Platform" "-clientconfig=$Config" `
     -build -cook -stage -pak -iostore -package -archive "-archivedirectory=$Out" "-map=$Maps" -nocompileeditor -unattended -utf8output `
-    "-cmdline=-SCLoad=$Ship -SCEnvironment=$Environment$Extra"
+    "-cmdline=-Scenario=$Scenario$Extra"
 if ($LASTEXITCODE -ne 0) { throw "BuildCookRun failed ($LASTEXITCODE)" }
 # A Windows build does not read the staged command line (UECommandLine.txt): the launcher passes it.
-# UnrealCitizen.exe on its own (it opens Data.p4k when one is installed).
-$Player = ' -SCShowcase -SCCamera=first'
+$Player = ' -SCShowcase'
 if ($PlayerLoadout) { $Player += " -SCPlayerLoadout=$PlayerLoadout" }
 if ($PlayerWeapons.Count) { $Player += ' -SCPlayerWeapons=' + ($PlayerWeapons -join ',') }
-$Launcher = "@echo off`r`nrem UnrealCitizen showcase: $Ship in $Hangar ($Config).`r`nstart `"`" `"%~dp0UnrealCitizen.exe`" -SCLoad=$Ship -SCEnvironment=$Environment$Extra$Player %*`r`n"
+$Launcher = "@echo off`r`nrem UnrealCitizen showcase: scenario $Scenario ($Config).`r`nstart `"`" `"%~dp0UnrealCitizen.exe`" -Scenario=$Scenario$Extra$Player %*`r`n"
 [IO.File]::WriteAllText((Join-Path $Out 'Play_UnrealCitizen.bat'), $Launcher)
 Write-Output "PACKAGED $Out"

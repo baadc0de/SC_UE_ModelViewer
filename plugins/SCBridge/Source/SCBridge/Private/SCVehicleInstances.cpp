@@ -503,6 +503,12 @@ void FSCVehicleInstances::Tick()
 
 void FSCVehicleInstances::Start(FInstance& I)
 {
+    // An instance that must be exported waits, queued, while the archive is still opening (a primary streamed from a
+    // prepared level can be ready first); it fails only once the archive failed or is closed.
+    {
+        const TSharedPtr<FSCImportedAssets>* Set = AssetSets.Find(KeyFor(I.Info.Entity.IsEmpty() ? Viewer.GetLoadedEntity() : I.Info.Entity));
+        if (!(Set && *Set && ShareAssets()) && Viewer.GetArchiveState() == ESCArchiveState::Opening) return;
+    }
     UWorld* World = Viewer.GetGameInstance()->GetWorld();
     if (I.Info.Entity.IsEmpty()) I.Info.Entity = Viewer.GetLoadedEntity();
     I.Key = KeyFor(I.Info.Entity);
