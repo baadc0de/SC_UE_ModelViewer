@@ -60,8 +60,12 @@ foreach ($Level in $Levels) {
     $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')
     if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
     $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
-    $Have = if (Test-Path $Stamp) { [int](Get-Content $Stamp -TotalCount 1).Trim() } else { 0 } # line 1: format, line 2: archive build
-    if ($Have -ne $Format) { throw "$Level is stale (format $Have, current $Format): run $Prepare -Force" }
+    # A complete stamp (FUCPrepared::IsLevelCurrent): the format on line 1, the archive build on line 2.
+    $Lines = if (Test-Path $Stamp) { @(Get-Content $Stamp) } else { @() }
+    $Have = if ($Lines.Count -ge 1 -and $Lines[0].Trim() -match '^\d+$') { [int]$Lines[0].Trim() } else { 0 }
+    if ($Have -ne $Format -or $Lines.Count -lt 2 -or -not $Lines[1].Trim()) {
+        throw "$Level is stale or not finished (stamp format $Have, current $Format): run $Prepare -Force"
+    }
 }
 $Maps = '/Game/Maps/Viewer+' + ($Levels -join '+')
 $Extra = ' -SCMaxQuality'

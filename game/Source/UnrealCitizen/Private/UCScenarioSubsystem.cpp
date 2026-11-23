@@ -133,7 +133,9 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
         Viewer->CancelLoad();
-        if (Viewer->GetVehicle() && !Viewer->IsBusy()) Viewer->Unload(); // a vehicle that loaded (another one in its place)
+        // A vehicle that loaded (another one in its place) goes once nothing loads; a load being cancelled finishes first
+        // (Tick, state Failed).
+        bCleanupPending = true;
         if (Viewer->IsSpace()) Viewer->SetSpace(false); // a cargo setup in space took the world there: the map's hangar and gravity return
         Viewer->SetEnvironment(TEXT("none"));
     }
@@ -186,6 +188,13 @@ bool UUCScenarioSubsystem::Tick(float)
         return true;
     case EState::Running:
         StepMusic();
+        return true;
+    case EState::Failed:
+        if (bCleanupPending && !Viewer->IsBusy())
+        {
+            bCleanupPending = false;
+            if (Viewer->GetVehicle()) Viewer->Unload();
+        }
         return true;
     default:
         return true;

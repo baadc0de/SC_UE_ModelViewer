@@ -53,4 +53,5 @@ private:
     bool bCameraSet = false, bStartPlaced = false;
     double StartedAt = 0, LoadingSince = 0;
     bool bMusicPending = false;
+    bool bCleanupPending = false; // failed: a vehicle still in the scene goes once nothing loads
 };
