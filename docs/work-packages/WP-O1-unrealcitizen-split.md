@@ -298,10 +298,13 @@ data when it loads. In stages:
   ladder's), exports them once and reads them against the prepared body's skeleton (`SCTraversal::ReadClips`; an action
   the archive does not supply is left out and logged). They are saved as one asset per body, vehicle and environment
   (`/Game/SC/Players/Traversal/Traversal_<hash>`, `USCTraversalClipsData`: the body level and the clips, one payload as
-  the body's), read again whenever the run prepared a level, named by the record (`traversal_clips`) and always cooked
+  the body's), named by the record (`traversal_clips`) and always cooked
   (`DirectoriesToAlwaysCook`). A run loads it in the background with the scenario's levels
   (`SetPreparedTraversalClips`); a seat or ladder takes its clips from it, and an action it lacks fails that seat or ladder
-  as a missing clip did. Prep format 28.
+  as a missing clip did. Each prepared level's stamp names an id new with each save, and the clips' stamp names the ids of
+  the levels they were read from (`FUCPrepared::TraversalSources`): prep keeps the clips only while those agree, so a level
+  saved again (by this scenario's prep or another's sharing it) makes them stale for the scenario's run, its prep and its
+  packaging. Prep format 28.
 - **O1-4b-3**: cargo boxes and effects, music, the Garage's details prepared.
 
 #### O1-4a — Scenarios and the prep step

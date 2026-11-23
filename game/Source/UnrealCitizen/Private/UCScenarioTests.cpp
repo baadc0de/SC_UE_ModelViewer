@@ -1,5 +1,9 @@
 // WP-O1-4: scenario definitions, the prep step's records and when the game refuses to run one.
 #include "Misc/AutomationTest.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "SCBridgeClient.h"
 #include "SCPackageReader.h"
 #include "SCViewerSubsystem.h"
@@ -141,6 +145,25 @@ bool FUCPreparedTest::RunTest(const FString&)
     FUCPrepared NoTraversal = R;
     NoTraversal.TraversalClips.Reset();
     TestTrue(TEXT("a record that names no traversal clips"), NoTraversal.Problem(&Source, All).Contains(TEXT("traversal clips")));
+    // The clips follow the levels they were read from: a level saved again since (another id in its stamp) makes them stale.
+    {
+        const FString Body = TEXT("/Game/SCTest/Maps/Body_ids"), Clips = TEXT("/Game/SCTest/Traversal_ids");
+        const FString BodyStamp = FUCPrepared::StampFile(Body), ClipsStamp = FUCPrepared::StampFile(Clips);
+        ON_SCOPE_EXIT
+        {
+            IFileManager::Get().Delete(*BodyStamp, false, true, true);
+            IFileManager::Get().Delete(*ClipsStamp, false, true, true);
+            IFileManager::Get().DeleteDirectory(*FPaths::Combine(FPaths::ProjectContentDir(), TEXT("SCTest")), false, true);
+        };
+        FUCPrepared Ids;
+        Ids.PlayerLevel = Body;
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-1\n"), FUCPrepared::FormatVersion), *BodyStamp);
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-c\n%s\n"), FUCPrepared::FormatVersion, *Ids.TraversalSources()), *ClipsStamp);
+        TestEqual(TEXT("a level's id"), FUCPrepared::LevelId(Body), FString(TEXT("id-1")));
+        TestEqual(TEXT("the clips read from these levels"), FUCPrepared::RecordedSources(Clips), Ids.TraversalSources());
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-2\n"), FUCPrepared::FormatVersion), *BodyStamp);
+        TestNotEqual(TEXT("... no longer once the body saved again"), FUCPrepared::RecordedSources(Clips), Ids.TraversalSources());
+    }
     TestTrue(TEXT("the traversal clips are one asset per level set"),
              R.TraversalClips.StartsWith(TEXT("/Game/SC/Players/Traversal/Traversal_")) &&
                  USCViewerSubsystem::TraversalClipsPath(R.PlayerLevel, R.VehicleLevel, FString()) != R.TraversalClips &&

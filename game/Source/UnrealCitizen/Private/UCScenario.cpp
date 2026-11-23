@@ -216,6 +216,22 @@ FString FUCPrepared::LevelBuild(const FString& Level)
     if (Level.IsEmpty() || !FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) || Lines.Num() < 2) return FString();
     return Lines[1].TrimStartAndEnd();
 }
+FString FUCPrepared::LevelId(const FString& Level)
+{
+    TArray<FString> Lines;
+    if (Level.IsEmpty() || !FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) || Lines.Num() < 3) return FString();
+    return Lines[2].TrimStartAndEnd();
+}
+FString FUCPrepared::TraversalSources() const
+{
+    return FString::Printf(TEXT("%s|%s|%s"), *LevelId(PlayerLevel), *LevelId(VehicleLevel), *LevelId(EnvironmentLevel));
+}
+FString FUCPrepared::RecordedSources(const FString& TraversalClips)
+{
+    TArray<FString> Lines;
+    if (TraversalClips.IsEmpty() || !FFileHelper::LoadFileToStringArray(Lines, *StampFile(TraversalClips)) || Lines.Num() < 4) return FString();
+    return Lines[3].TrimStartAndEnd();
+}
 FString FUCPrepared::Directory()
 {
     return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectContentDir(), TEXT("SCPrepared")));
@@ -328,5 +344,9 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
 }
 FString FUCPrepared::Problem(const FUCScenario* Source) const
 {
-    return Problem(Source, [](const FString& Level) { return IsLevelCurrent(Level); });
+    // The traversal clips also follow the levels they were read from (a packaged game has no stamps: packaging checks it).
+    return Problem(Source, [this](const FString& Level) {
+        return IsLevelCurrent(Level) &&
+               (Level != TraversalClips || FPlatformProperties::RequiresCookedData() || RecordedSources(Level) == TraversalSources());
+    });
 }

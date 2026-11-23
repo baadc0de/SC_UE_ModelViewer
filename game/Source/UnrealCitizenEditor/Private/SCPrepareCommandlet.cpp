@@ -66,8 +66,6 @@ class FPrepare
 {
 public:
     bool bForce = false;
-    /** This run prepared a level (the traversal clips are read from the levels again). */
-    bool bPreparedLevel = false;
     USCViewerSubsystem* Viewer = nullptr;
 
     /** The archive, opened once on first need. */
@@ -145,7 +143,6 @@ public:
      *  pool stays), and its stamp is removed until the new one saves. */
     UWorld* NewLevel(const FString& Level, const FString& Root, FString& Error)
     {
-        bPreparedLevel = true;
         IFileManager& Files = IFileManager::Get();
         // The stamp goes first: from here until the new level saved, no record can run this level.
         Files.Delete(*StampFile(Level), false, true, true);
@@ -206,17 +203,21 @@ public:
             Error = TEXT("cannot save ") + Level;
             return false;
         }
-        if (!WriteStamp(Level, Error)) return false;
+        if (!WriteStamp(Level, Viewer->GetArchiveBuildId(), FString(), Error)) return false;
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved level=%s audio_files=%d format=%d"), *Level, AudioFiles, FUCPrepared::FormatVersion);
         return true;
     }
     /** The stamp is published whole: written beside it first, then moved into place (a level or asset counts as current only
-     *  with a complete stamp, FUCPrepared::IsLevelCurrent). */
-    bool WriteStamp(const FString& Package, FString& Error)
+     *  with a complete stamp, FUCPrepared::IsLevelCurrent). Its id is new with each save; Sources (the traversal clips'): the
+     *  ids of the levels it was made from. */
+    bool WriteStamp(const FString& Package, const FString& Build, const FString& Sources, FString& Error)
     {
         const FString Stamp = StampFile(Package), Partial = Stamp + TEXT(".partial");
         IFileManager& Files = IFileManager::Get();
-        if (!FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\n%s\n"), FUCPrepared::FormatVersion, *Viewer->GetArchiveBuildId()), *Partial) ||
+        const FString Text = FString::Printf(TEXT("%d\n%s\n%s\n"), FUCPrepared::FormatVersion, Build.IsEmpty() ? TEXT("unknown") : *Build,
+                                             *FGuid::NewGuid().ToString(EGuidFormats::Digits)) +
+            (Sources.IsEmpty() ? FString() : Sources + TEXT("\n"));
+        if (!FFileHelper::SaveStringToFile(Text, *Partial) ||
             !Files.Move(*Stamp, *Partial, true, true))
         {
             Files.Delete(*Partial, false, true, true);
@@ -378,6 +379,8 @@ public:
      *  asset (USCTraversalClipsData) a run serves seats and ladders from. */
     bool PrepareTraversal(const FUCPrepared& Record, FString& Error)
     {
+        // From here until the new clips saved, no record can use the older ones.
+        IFileManager::Get().Delete(*StampFile(Record.TraversalClips), false, true, true);
         // The prepared levels' actors, as saved (a level this run prepared is the package it saved).
         auto Actors = [](const FString& Level, TFunctionRef<void(ASCVehicle&)> Visit) {
             UPackage* Package = Level.IsEmpty() ? nullptr : LoadPackage(nullptr, *Level, LOAD_None);
@@ -428,7 +431,19 @@ public:
         // that needs it reports it when it asks).
         for (const FString& Why : Skipped) UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE traversal clip left out: %s"), *Why);
         const FString& Path = Record.TraversalClips;
-        IFileManager::Get().Delete(*StampFile(Path), false, true, true);
+        const FString File = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
+        // The older clips go by their file, as an older level does (NewLevel): nothing here has loaded them.
+        if (FindPackage(nullptr, *Path))
+        {
+            Error = FString::Printf(TEXT("the older %s is loaded: it cannot be replaced in this process"), *Path);
+            return false;
+        }
+        if (IFileManager::Get().FileExists(*File) && !IFileManager::Get().Delete(*File, false, true, true))
+        {
+            Error = FString::Printf(TEXT("cannot delete the older %s: delete it and run again"), *File);
+            return false;
+        }
+        IAssetRegistry::GetChecked().ScanModifiedAssetFiles({FPaths::ConvertRelativePathToFull(File)});
         UPackage* Package = CreatePackage(*Path);
         USCTraversalClipsData* Data = NewObject<USCTraversalClipsData>(Package, *FPackageName::GetShortName(Path), RF_Public | RF_Standalone);
         Data->BodyLevel = Record.PlayerLevel;
@@ -436,13 +451,14 @@ public:
         FSavePackageArgs Args;
         Args.TopLevelFlags = RF_Public | RF_Standalone;
         Args.SaveFlags = SAVE_NoError;
-        const FString File = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
-        if (!UPackage::SavePackage(Package, Data, *File, Args))
+        const FSavePackageResultStruct Saved = UPackage::Save(Package, Data, *File, Args);
+        if (Saved.Result != ESavePackageResult::Success)
         {
-            Error = TEXT("cannot save ") + Path;
+            Error = FString::Printf(TEXT("cannot save %s (result %d)"), *Path, int32(Saved.Result));
             return false;
         }
-        if (!WriteStamp(Path, Error)) return false;
+        // The archive build of the export, or (nothing asked of it) the body's.
+        if (!WriteStamp(Path, Viewer ? Viewer->GetArchiveBuildId() : FUCPrepared::LevelBuild(Record.PlayerLevel), Record.TraversalSources(), Error)) return false;
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved traversal=%s names=%d clips=%d left_out=%d gender=%s format=%d"), *Path, Names.Num(),
                Data->Clips->Num(), Skipped.Num(), *Gender, FUCPrepared::FormatVersion);
         return true;
@@ -526,10 +542,11 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     {
         return Failed(Id, Error);
     }
-    // The seat and ladder clips for that body: read again when this run prepared a level (their names come from the levels'
-    // records, their bones from the body).
+    // The seat and ladder clips for that body: read again unless they were read from these very levels (their stamps' ids:
+    // a level saved again since, by this run or another scenario's sharing it, makes them stale). Their names come from the
+    // levels' records, their bones from the body.
     Record.TraversalClips = USCViewerSubsystem::TraversalClipsPath(Record.PlayerLevel, Record.VehicleLevel, Record.EnvironmentLevel);
-    if (Current(Record.TraversalClips) && !Prepare.bForce && !Prepare.bPreparedLevel)
+    if (Current(Record.TraversalClips) && !Prepare.bForce && FUCPrepared::RecordedSources(Record.TraversalClips) == Record.TraversalSources())
     {
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Record.TraversalClips, FUCPrepared::FormatVersion);
     }
