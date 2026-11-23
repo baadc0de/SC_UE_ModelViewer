@@ -759,6 +759,21 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     TestTrue(TEXT("the lift panel"), SavedPanel && SavedPanel->EntityId == TEXT("panel") && SavedPanel->Choices.Num() == 1 &&
                                          SavedPanel->Choices[0].DisplayName == TEXT("Exit Ship"));
     TestEqual(TEXT("a second restore makes nothing"), Loaded->RestoreLifts(), 0);
+
+    // A lift saved between stops (in motion: no current stop), powered down, with a door it found no clip for: it rests at
+    // the stop nearest where it was, keeps its power state and does not wait for that door.
+    FSCSavedLift Moving = Lift.Save();
+    Moving.CurrentStop = INDEX_NONE;
+    Moving.S = Lift.Stops[1].S + 0.5; // just past the lower deck
+    Moving.State = ESCLiftState::Moving;
+    Moving.bPoweredUp = false;
+    USCRigComponent* Stuck = NewObject<USCRigComponent>(V);
+    Moving.Inert.Add(Stuck);
+    FSCLift Again;
+    Again.Restore(Moving);
+    TestTrue(TEXT("saved in motion: rests at its nearest stop, idle"), Again.CurrentStop == 1 && Again.S == Lift.Stops[1].S && Again.State == ESCLiftState::Idle);
+    const FSCSavedLift Resaved = Again.Save();
+    TestTrue(TEXT("its power state and the door without a clip kept"), !Resaved.bPoweredUp && Resaved.Inert.Num() == 1 && Resaved.Inert[0].Get() == Stuck);
     return true;
 }
 #endif

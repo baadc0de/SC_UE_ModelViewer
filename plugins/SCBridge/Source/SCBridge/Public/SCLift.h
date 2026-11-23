@@ -106,11 +106,14 @@ struct FSCSavedLift
     UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
     UPROPERTY() FVector AnchorBase = FVector::ZeroVector;
     UPROPERTY() TWeakObjectPtr<USceneComponent> CarriageAnchor;
-    /** Where it rests: its stop, path position and state (a lift saved in motion rests where it is, idle). */
+    /** Where it rests: its stop, path position and state (a lift saved between stops rests at its nearest stop, idle),
+     *  whether it is powered up, and the doors it found no clip for (not waited for). */
     UPROPERTY() ESCLiftState State = ESCLiftState::Idle;
     UPROPERTY() int32 CurrentStop = 0;
     UPROPERTY() double S = 0;
     UPROPERTY() bool bAtContact = false;
+    UPROPERTY() bool bPoweredUp = true;
+    UPROPERTY() TArray<TWeakObjectPtr<USCRigComponent>> Inert;
 };
 struct FSCLiftRequest
 {
