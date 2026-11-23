@@ -48,7 +48,7 @@ bool FSCShipLinkModel::SelectCallout(const FVector2D& Absolute)
 bool FSCShipLinkModel::Listed(const ASCVehicle* Value, int32 Door)
 {
     return Value && Value->Doors.IsValidIndex(Door) && Value->Doors[Door].Rig &&
-        !Value->LiftDrivenRigs.Contains(Value->Doors[Door].Rig.Get());
+        !Value->IsLiftDriven(Value->Doors[Door].Rig.Get());
 }
 
 FString FSCShipLinkModel::ShipLabel(const ASCVehicle* Value)

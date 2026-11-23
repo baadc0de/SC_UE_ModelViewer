@@ -1,6 +1,6 @@
 // WP-O1-4b-1b: a vehicle's interaction state is saved with a prepared level. Each structure the import builds (door
 // records, door interactions with their tags, ship doors with their sweeps, door controls and pad reach, door sensors,
-// port rigs, the doors' fragment states, the physics grid) survives the actor's property serialization — the path a
+// port rigs, the doors' fragment states, the lift-driven doors, the physics grid) survives the actor's property serialization — the path a
 // level save and load takes — so a prepared vehicle needs none of it rebuilt.
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
@@ -79,6 +79,9 @@ bool FSCSavedDoorStateTest::RunTest(const FString&)
     AddExpectedMessage(TEXT("DOOR_REST"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1); // door 0 has no clips
     Source->ApplyDoorRestPoses();
     TestTrue(TEXT("the second door's state reads open"), Source->IsDoorOpen(1));
+    // A lift gate: the lift drives it, never a door order.
+    USCRigComponent* Gate = NewObject<USCRigComponent>(Source);
+    Source->LiftDrivenRigs.Add(Gate);
 
     // Through the actor's property serialization (a level save and load).
     TArray<uint8> Bytes;
@@ -105,6 +108,7 @@ bool FSCSavedDoorStateTest::RunTest(const FString&)
     TestTrue(TEXT("the physics grid"), Loaded->PhysicsGridTriangles.Num() == 3 && Loaded->PhysicsGridShapeEnds == TArray<int32>({3}) &&
                                            Loaded->PhysicsGridBounds.Equals(FBox(FVector(0), FVector(1))));
     TestTrue(TEXT("the doors' fragment states"), Loaded->IsDoorOpen(1) && !Loaded->IsDoorOpen(0));
+    TestTrue(TEXT("the lift gate stays the lift's"), Loaded->IsLiftDriven(Gate) && !Loaded->IsLiftDriven(Rig));
     return !HasAnyErrors();
 }
 

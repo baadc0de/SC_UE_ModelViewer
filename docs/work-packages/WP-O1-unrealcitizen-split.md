@@ -240,8 +240,10 @@ data when it loads. In stages:
   - **1b-1 — doors** (this PR): the door records (`FSCDoorRecord`: `FSCDoorTiming`, `FSCItemPortLink`), the door
     interactions' tags, speed and links, the ship doors with their movement sweeps and ground probes (`FSCShipDoor`,
     hoisted out of `ASCVehicle`), door controls and pad reach (`DoorForPanel`, `PanelReachOf`), door sensors, port
-    rigs, pad labels, the doors' fragment states (`FSCFragmentKey`) and the physics grid. Prep format 19. A prepared
-    Golem has its ten ship doors as a live import does, and Ship Link opens them.
+    rigs, pad labels, the doors' fragment states (`FSCFragmentKey`), the lift-driven doors (`IsLiftDriven`: a lift gate
+    is never a door order) and the physics grid. Prep format 20. A prepared Golem has its ten ship doors as a live import
+    does, and Ship Link opens them. A pad's lock buttons (`DoorPanelLocks`, button panels) come with 1c; until then E on
+    a prepared pad operates its door.
   - **1b-2 — lifts**: the lift network (`FSCLift`'s model and state saved; its hooks and delegates bound again when
     the vehicle begins play), the interaction network, lift panels and paths.
   - **1b-3 — seats, ladders, usables, light groups**: the manifest records seats and ladders read (`SeatEntrances`,

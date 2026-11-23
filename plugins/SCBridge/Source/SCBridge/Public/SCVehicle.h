@@ -377,7 +377,9 @@ public:
     TMap<TWeakObjectPtr<const USceneComponent>, FLiftPanel> LiftPanels;
     /** Doors a lift opens and closes itself (its gate and landing doors): not toggled by E (FindInteraction / NearestDoor),
      *  as the C2's lift doors offer the player no interaction of their own. sc.FP.Door still drives them. */
-    TSet<TWeakObjectPtr<const USCRigComponent>> LiftDrivenRigs;
+    UPROPERTY() TSet<TObjectPtr<USCRigComponent>> LiftDrivenRigs; // saved with the doors (WP-O1-4b-1b-1)
+    /** Whether Rig is a lift gate or landing door (LiftDrivenRigs): the lift drives it, never a door order. */
+    bool IsLiftDriven(const USCRigComponent* Rig) const { return Rig && LiftDrivenRigs.Contains(const_cast<USCRigComponent*>(Rig)); }
     /** WP-P5 §6: follow SourceEntityId's exported links whose source slot is Interaction and deliver each target slot to its
      *  target (a lift carriage or stop, or a door). Returns the deliveries handled. The first interior holding the id. */
     int32 SendInteraction(const FString& SourceEntityId, FName Interaction);

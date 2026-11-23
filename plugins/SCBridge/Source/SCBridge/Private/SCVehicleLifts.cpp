@@ -215,7 +215,7 @@ FSCLiftHost::ELeg ASCVehicle::SweepLiftLeg(int32 LiftIndex, int32 From, int32 To
     for (const FSCDoorInteraction& D : Doors)
     {
         const USCRigComponent* Rig = D.Rig;
-        if (!Rig || Seen.Contains(Rig) || LiftDrivenRigs.Contains(Rig) || LiftCarrying(Rig) == LiftIndex) continue;
+        if (!Rig || Seen.Contains(Rig) || IsLiftDriven(Rig) || LiftCarrying(Rig) == LiftIndex) continue;
         Seen.Add(Rig);
         const FVector Origin = Frame.InverseTransformPosition(Rig->GetComponentLocation());
         if (!Path.IsInside(Origin) || Here.IsInside(Origin)) continue;
@@ -300,7 +300,7 @@ const TArray<TWeakObjectPtr<UPrimitiveComponent>>& ASCVehicle::LiftPathObstacles
         if (!C || (Holder && Holder->IsA<APawn>()) || C->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block || LiftCarrying(C) == LiftIndex) continue;
         bool bDoor = false; // doors stay what they are: the leg check waits for them or is blocked by them
         for (const USceneComponent* P = C; P && !bDoor; P = P->GetAttachParent())
-            if (const auto* Rig = Cast<USCRigComponent>(P)) bDoor = DoorForRig(Rig) != INDEX_NONE || LiftDrivenRigs.Contains(Rig);
+            if (const auto* Rig = Cast<USCRigComponent>(P)) bDoor = DoorForRig(Rig) != INDEX_NONE || IsLiftDriven(Rig);
         if (bDoor || Path.Obstacles.Contains(C)) continue;
         Path.Obstacles.Add(C);
         Names.Add(C->ComponentTags.IsEmpty() ? C->GetName() : FPaths::GetBaseFilename(C->ComponentTags[0].ToString()));
@@ -533,9 +533,9 @@ void SCVehicleLifts::BuildInteriorLifts(ASCVehicle* V, int32 InteriorIndex, cons
             V->LiftPanels.Add(Part->Anchor, MoveTemp(Panel));
             ++Panels;
         }
-        for (const FSCLiftDoor& D : Lift->Gate) V->LiftDrivenRigs.Add(D.Rig.Get());
+        for (const FSCLiftDoor& D : Lift->Gate) V->LiftDrivenRigs.Add(const_cast<USCRigComponent*>(D.Rig.Get()));
         for (const FSCLiftStop& S : Lift->Stops)
-            for (const FSCLiftDoor& D : S.LandingDoors) V->LiftDrivenRigs.Add(D.Rig.Get());
+            for (const FSCLiftDoor& D : S.LandingDoors) V->LiftDrivenRigs.Add(const_cast<USCRigComponent*>(D.Rig.Get()));
         V->Interactions.At(InteriorIndex, Record.EntityId).Lift = Lift->Id;
         for (const FSCLiftStop& S : Lift->Stops)
         {

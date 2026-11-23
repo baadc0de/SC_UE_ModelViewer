@@ -357,7 +357,7 @@ bool ASCVehicle::IsDoorLocked(int32 Index) const
 
 bool ASCVehicle::SetDoorLocked(int32 Index, bool bLocked)
 {
-    if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig || LiftDrivenRigs.Contains(Doors[Index].Rig.Get())) return false;
+    if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig || IsLiftDriven(Doors[Index].Rig.Get())) return false;
     if (!ShipDoors.IsValidIndex(Index)) ShipDoors.SetNum(Doors.Num());
     FShipDoor& Door = ShipDoors[Index];
     Door.bSecurePending = false;
@@ -377,7 +377,7 @@ FString ASCVehicle::DoorOrderRefusal(int32 Index, ESCShipDoorAction Action, FNam
 {
     if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig) return TEXT("No such door");
     const FShipDoor* Info = ShipDoors.IsValidIndex(Index) ? &ShipDoors[Index] : nullptr;
-    if (LiftDrivenRigs.Contains(Doors[Index].Rig.Get())) return TEXT("Lift-controlled door");
+    if (IsLiftDriven(Doors[Index].Rig.Get())) return TEXT("Lift-controlled door");
     const USCShipLinkSubsystem* ShipLink = USCShipLinkSubsystem::Get(this);
     const ESCShipRole ActorRole = ShipLink ? ShipLink->RoleOf(Actor, this) : ESCShipRole::None;
     const bool bLocalInside = LocalUse.IsSet() && IsInsideLightArea(LocalUse.GetValue());
@@ -410,7 +410,7 @@ TArray<FSCShipDoorResult> ASCVehicle::SecureShip(FName Actor)
     for (int32 Id = 0; Id < ShipDoors.Num(); ++Id)
     {
         FShipDoor& Door = ShipDoors[Id];
-        if (Door.Group != ESCShipDoorGroup::Exterior || LiftDrivenRigs.Contains(Doors[Id].Rig.Get())) continue;
+        if (Door.Group != ESCShipDoorGroup::Exterior || IsLiftDriven(Doors[Id].Rig.Get())) continue;
         FSCShipDoorResult& Result = Results.AddDefaulted_GetRef();
         Result.Door = Id;
         Result.Refusal = DoorOrderRefusal(Id, ESCShipDoorAction::Lock, Actor);

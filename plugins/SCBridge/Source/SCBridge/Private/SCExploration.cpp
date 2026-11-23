@@ -219,7 +219,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     if (!Doors.IsValidIndex(Index) || !Doors[Index].Rig) return false;
     const USCShipLinkSubsystem* Link = USCShipLinkSubsystem::Get(this);
     const bool bOwnerCargoOpen = bOpen && bCargoAccess && Link &&
-        Link->RoleOf(AsActor, this) == ESCShipRole::Owner && !LiftDrivenRigs.Contains(Doors[Index].Rig.Get()) &&
+        Link->RoleOf(AsActor, this) == ESCShipRole::Owner && !IsLiftDriven(Doors[Index].Rig.Get()) &&
         !(ShipDoors.IsValidIndex(Index) && ShipDoors[Index].bSecurePending);
     if (!AsActor.IsNone() && !bOwnerCargoOpen &&
         !DoorOrderRefusal(Index, bOpen ? ESCShipDoorAction::Open : ESCShipDoorAction::Close, AsActor, LocalUse).IsEmpty()) return false;
@@ -281,7 +281,7 @@ int32 ASCVehicle::NearestDoor(FVector Position, float Reach) const
     for (int32 I = 0; I < Doors.Num(); ++I)
     {
         const auto& D = Doors[I];
-        if (!D.Rig || LiftDrivenRigs.Contains(D.Rig.Get())) continue;
+        if (!D.Rig || IsLiftDriven(D.Rig.Get())) continue;
         const double Candidate = FVector::DistSquared(Position, D.Rig->GetSocketLocation(D.Joint));
         if (Candidate <= Distance) { Distance = Candidate; Best = I; }
     }
@@ -355,7 +355,7 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
             if (!Rig) Socket = C->GetAttachSocketName();
         }
         TArray<int32> OnRig;
-        for (int32 I = 0; Rig && !LiftDrivenRigs.Contains(Rig) && I < Doors.Num(); ++I)
+        for (int32 I = 0; Rig && !IsLiftDriven(Rig) && I < Doors.Num(); ++I)
             if (Doors[I].Rig == Rig) OnRig.AddUnique(I);
         if (OnRig.Num() == 1) { Out.Via = TEXT("rig"); return OnRig[0]; } // the entity is the interaction (a door, a seat)
         if (OnRig.Num() > 1)
@@ -421,7 +421,7 @@ void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
         {
             const int32 Door = DoorForRig(Rig.Get());
             // A lift's doors open and close with its carriage (WP-P5): a sensor reopening one would undo the handshake.
-            if (Door == INDEX_NONE || LiftDrivenRigs.Contains(Rig.Get())) continue;
+            if (Door == INDEX_NONE || IsLiftDriven(Rig.Get())) continue;
             FSensorDoorState& State = SensorDoorStates.FindOrAdd(Door);
             State.LastInside = Now;
             State.ExitDelay = FMath::Max(State.ExitDelay, Sensor.ExitDelay);
