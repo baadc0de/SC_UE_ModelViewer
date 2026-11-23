@@ -214,7 +214,7 @@ landing gear on the floor with the scenario's paint on), stages its audio beside
 of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes and textures keyed by source path and content — a mesh's
 committed source description id and collision triangles, a texture's first-mip bytes — so a changed asset at the same path is pooled anew;
 constant materials) and
-stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`) and the
+stamps it with the prep format (`FUCPrepared::FormatVersion`, 10 in O1-4a, 11 since the series review; it was `USCCookLibrary::FormatVersion`) and the
 archive build it was prepared from (written whole: a level counts as current only with a complete stamp); a hangar index that cannot be saved fails the run. Levels:
 `/Game/SC/Hangars/Maps/<style>_<name>_<hash>` (a hash of the whole container path, so containers whose last two parts
 make the same name stay apart) and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
@@ -261,7 +261,8 @@ A review of the series as a whole (Terra) found what the per-stage reviews could
 - A scenario's staleness check ignores line ends (git's checkout turned `golem_showcase.json` into CRLF and the game
   refused it as changed); the packaging script compares alike.
 - A paint request on a vehicle without paint slots (a prepared one, its paint baked in) is refused (`PAINT … refused`)
-  instead of reported as applied and remembered.
+  instead of reported as applied and remembered; a prepared vehicle saves the paint it was prepared with
+  (`ASCVehicle::ActivePaint`, prep format 11), so the Garage reports it and a request for it is no change.
 - `viewer/README.md`: the showcase packaging takes a prepared scenario (`-Scenario`, `Play_UnrealCitizen.bat`); the cargo
   RPC example launches the game (`Start-SCViewer -Game`), cargo routes are under `game/scripts/routes`.
 
