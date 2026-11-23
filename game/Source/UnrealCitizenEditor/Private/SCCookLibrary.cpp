@@ -1,6 +1,7 @@
 // USCCookLibrary: environment -> persistent level actor with pooled assets (WP-C1).
 #include "SCCookLibrary.h"
 #include "SCRigAssets.h"
+#include "SCLift.h"
 #include "SCRigComponent.h"
 #include "SCTextureSource.h"
 #include "SCMeshImporter.h"
@@ -194,6 +195,16 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     Cook.Root = Root;
     Cook.SharedRoot = SharedRoot;
     int32 RigMeshes = 0, RigCollisions = 0;
+    // A lift is saved at rest (WP-O1-4b-1b-2): its doors' poses and recorded states are saved, the clips moving them are
+    // not, so a lift mid-leg or mid-handshake would load with its doors and its state disagreeing. The prep step presents
+    // the vehicle at rest; a lift that is not fails the cook.
+    for (const TSharedPtr<FSCLift>& Lift : Environment->Lifts)
+        if (Lift && !Lift->IsIdle())
+        {
+            Cook.Warnings.Add(FString::Printf(TEXT("lift %d (%s) is not at rest (%s): a lift is saved idle at a stop"), Lift->Id, *Lift->EntityName,
+                                              *Lift->Describe()));
+            Cook.bFailed = true;
+        }
     if (!bKeepRigs) FSCEnvironment::BakeRigsStatic(Environment);
     else
     {

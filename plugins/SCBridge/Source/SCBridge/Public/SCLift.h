@@ -106,8 +106,9 @@ struct FSCSavedLift
     UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
     UPROPERTY() FVector AnchorBase = FVector::ZeroVector;
     UPROPERTY() TWeakObjectPtr<USceneComponent> CarriageAnchor;
-    /** Where it rests: its stop, path position and state (a lift saved between stops rests at its nearest stop, idle),
-     *  whether it is powered up, and the doors it found no clip for (not waited for). */
+    /** Where it rests: its stop, path position and state, whether it is powered up, and the doors it found no clip for
+     *  (not waited for). The prep step saves lifts at rest (FSCLift::IsIdle; USCCookLibrary refuses one that is not):
+     *  Restore's handling of another state (idle at the nearest stop) is a fallback, not a saved motion. */
     UPROPERTY() ESCLiftState State = ESCLiftState::Idle;
     UPROPERTY() int32 CurrentStop = 0;
     UPROPERTY() double S = 0;
