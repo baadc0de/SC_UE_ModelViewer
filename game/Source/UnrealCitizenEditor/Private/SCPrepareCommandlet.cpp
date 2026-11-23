@@ -179,7 +179,7 @@ public:
         return GEditor->GetEditorWorldContext().World();
     }
 
-    /** Audio staged (a player body's too: its weapons' fire and its torch play its package's triggers), the actor cooked, the
+    /** Audio staged (a player body's too, as its live import registers it: its items' audio actions), the actor cooked, the
      *  level saved and stamped. */
     bool Finish(ASCVehicle* Actor, const FString& Level, const FString& Root, const FString& Shared, const FSCPackageSource& Source,
                 const FString& Scene, FString& Error)

@@ -486,6 +486,9 @@ private:
     UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> KitLevel;
     void StepPreparedPlayerKit(bool bBlocking);
     void UnloadKitLevel();
+    /** Released body levels the world has not removed yet; one whose load failed meanwhile is removed here. */
+    UPROPERTY() TArray<TObjectPtr<ULevelStreamingDynamic>> ReleasedKitLevels;
+    void SweepReleasedKitLevels();
     /** The kit's actor, level and data released (FailPlayerKit, ReleasePreparedPlayerKit). */
     void ReleaseKitObjects();
     TSharedPtr<const FSCPlayerKit> KitData;

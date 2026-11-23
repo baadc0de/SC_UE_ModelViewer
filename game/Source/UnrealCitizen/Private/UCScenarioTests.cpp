@@ -185,6 +185,8 @@ bool FUCPreparedLevelsTest::RunTest(const FString&)
     TestTrue(TEXT("a player body: ") + Body, Body.StartsWith(TEXT("/Game/SC/Players/Maps/Player_female_")));
     TestEqual(TEXT("... the same body in other case, slashes and weapon order"),
               USCViewerSubsystem::PlayerLevelPath(TEXT("Female"), TEXT("data\\scripts\\l.xml"), {TEXT("B"), TEXT(" a")}, true), Body);
+    TestEqual(TEXT("... the loadout without its Data/ prefix (the exporter reads it there)"),
+              USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Scripts/L.xml"), {TEXT("a"), TEXT("b")}, true), Body);
     TestNotEqual(TEXT("... another loadout"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/M.xml"), {TEXT("a"), TEXT("b")}, true), Body);
     TestNotEqual(TEXT("... other weapons"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a")}, true), Body);
     TestNotEqual(TEXT("... without spares"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b")}, false), Body);

@@ -440,8 +440,10 @@ FString USCViewerSubsystem::PlayerLevelPath(const FString& Gender, const FString
     for (const FString& Weapon : Weapons)
         if (const FString W = Weapon.TrimStartAndEnd().ToLower(); !W.IsEmpty()) Kept.Add(W);
     Kept.Sort();
-    const FString Key = FString::Printf(TEXT("%s|%s|%s|%d"), *Gender.TrimStartAndEnd().ToLower(),
-                                        *Loadout.Replace(TEXT("\\"), TEXT("/")).TrimStartAndEnd().ToLower(), *FString::Join(Kept, TEXT(",")),
+    // The exporter reads a loadout under Data/ whether or not the path names it: one loadout, one key.
+    FString Path = Loadout.Replace(TEXT("\\"), TEXT("/")).TrimStartAndEnd().ToLower();
+    if (!Path.IsEmpty() && !Path.StartsWith(TEXT("data/"))) Path = TEXT("data/") + Path;
+    const FString Key = FString::Printf(TEXT("%s|%s|%s|%d"), *Gender.TrimStartAndEnd().ToLower(), *Path, *FString::Join(Kept, TEXT(",")),
                                         bSpareAttachments ? 1 : 0);
     const FString Name = LevelName(Gender.TrimStartAndEnd().IsEmpty() ? FString(TEXT("default")) : Gender.TrimStartAndEnd().ToLower());
     return FString::Printf(TEXT("/Game/SC/Players/Maps/Player_%s_%08x"), *Name, FCrc::StrCrc32(*Key));
@@ -1547,10 +1549,25 @@ void USCViewerSubsystem::UnloadKitLevel()
     KitLevel->SetShouldBeLoaded(false);
     KitLevel->SetShouldBeVisible(false);
     KitLevel->SetIsRequestingUnloadAndRemoval(true);
+    // Kept until the world removes it: a load still in flight that fails stops at FailedToLoad, where a removal request is no
+    // longer handled (SweepReleasedKitLevels removes it then).
+    ReleasedKitLevels.Add(KitLevel);
     KitLevel = nullptr;
+}
+void USCViewerSubsystem::SweepReleasedKitLevels()
+{
+    if (ReleasedKitLevels.IsEmpty()) return;
+    UWorld* World = GetViewerWorld();
+    ReleasedKitLevels.RemoveAll([World](const TObjectPtr<ULevelStreamingDynamic>& Level) {
+        if (!Level || !World || !World->GetStreamingLevels().Contains(Level)) return true; // the world removed it
+        if (Level->GetLevelStreamingState() != ELevelStreamingState::FailedToLoad) return false;
+        World->RemoveStreamingLevel(Level);
+        return true;
+    });
 }
 void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
 {
+    SweepReleasedKitLevels();
     if (KitState == EPlayerKitState::Streaming) StepPreparedPlayerKit(bBlocking);
     if (KitState == EPlayerKitState::Exporting)
     {
