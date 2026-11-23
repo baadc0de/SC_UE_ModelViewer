@@ -14,6 +14,8 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #include "Materials/Material.h"
+#include "SkinnedAssetCompiler.h"
+#include "Engine/SkinnedAsset.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
@@ -40,7 +42,7 @@ struct FKeeper
     TArray<UPackage*> Packages;
     TMap<UObject*, UObject*> Kept; // transient source -> asset (identity for renamed objects)
     TArray<FString> Warnings;
-    bool bFailed = false; // a kept asset left something live inconsistent (a rig body not rebuilt)
+    bool bFailed = false; // something asked for was not kept (a rig mesh without a source, or one that does not build)
 
     /** Move Object (and its subobjects) into its own package under Root/Folder, public + standalone. */
     UObject* Move(UObject* Object, const FString& Folder, const FString& PreferredName = FString())
@@ -146,53 +148,69 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
     }
     for (UStaticMesh* Mesh : Vehicle->Meshes)
         K.Move(Mesh, TEXT("Meshes"));
-    // Runtime skeletal meshes carry render data only (FSCSkeletalMeshImporter builds no editor source model): each gets
-    // one from the rig source the import kept (SCRigAssets, WP-O1-4b; the WP-U3 follow-up) and is kept with its skeleton.
+    // Rigs (WP-O1-4b; the WP-U3 follow-up): each rig mesh is kept as a copy with its skeleton — a runtime mesh given an
+    // editor source model from the rig source the import kept (SCRigAssets), a prepared one (already an asset) rebuilt
+    // from its own — its slots taking the rig components' current materials. The live meshes, skeletons and rig bodies
+    // stay as they are; the kept clip catalog is a copy bound to the kept meshes (its editor-only sequences left out:
+    // playback reads the bone tracks).
+    TMap<const USkeletalMesh*, USkeletalMesh*> KeptRigs;
     for (USkeletalMesh* Mesh : Vehicle->SkeletalMeshes)
-        if (Mesh)
-        {
-            const TSharedPtr<const FSCDerivedMesh>* Source = Vehicle->RigSources.Find(Mesh);
-            FString Error;
-            K.Move(Mesh->GetSkeleton(), TEXT("Rigs"));
-            if (!Source || !SCRigAssets::MakeSavable(Mesh, **Source, Error))
-            {
-                K.Warnings.Add(Mesh->GetName() + TEXT(": skeletal mesh not kept (") + (Source ? Error : FString(TEXT("no rig source"))) + TEXT(")"));
-                continue;
-            }
-            // As for static meshes: the first rig override of each slot becomes the asset's material.
-            for (USCRigComponent* Rig : Vehicle->Rigs)
-            {
-                if (!Rig || Rig->GetSkeletalMeshAsset() != Mesh) continue;
-                for (int32 Slot = 0; Slot < Mesh->GetMaterials().Num(); ++Slot)
-                {
-                    // The runtime build leaves the engine's default material in every slot; the first override replaces it.
-                    UMaterialInterface* Current = Mesh->GetMaterials()[Slot].MaterialInterface;
-                    UMaterialInterface* Override = Rig->OverrideMaterials.IsValidIndex(Slot) ? Rig->OverrideMaterials[Slot].Get() : nullptr;
-                    if (Override && (!Current || Current == UMaterial::GetDefaultMaterial(MD_Surface)))
-                        Mesh->GetMaterials()[Slot].MaterialInterface = K.Constant(Override);
-                }
-            }
-            // Every live rig using the rebuilt mesh (other vehicles assembled from the same retained assets too) follows its
-            // new vertex order; a body that does not rebuild fails the Keep.
-            for (TObjectIterator<USCRigComponent> It; It; ++It)
-                if (It->GetSkeletalMeshAsset() == Mesh && It->HasCollisionBody() && !SCRigAssets::RefreshCollision(*It, Error))
-                {
-                    K.Warnings.Add(It->OwnerEntity + TEXT(": rig collision not rebuilt (") + Error + TEXT(")"));
-                    K.bFailed = true;
-                }
-            K.Move(Mesh, TEXT("Rigs"));
-        }
-    if (USCClipCatalog* Catalog = Vehicle->ClipCatalog)
     {
-        for (FSCImportedClip& Clip : Catalog->Clips)
+        if (!Mesh) continue;
+        const TSharedPtr<const FSCDerivedMesh>* Source = Vehicle->RigSources.Find(Mesh);
+        const bool bAsset = Mesh->HasMeshDescription(0);
+        if (!Source && !bAsset)
         {
-            const FString ClipName = FPaths::GetBaseFilename(Clip.Name);
-            K.Move(Clip.Sequence, TEXT("Animations"), ClipName);
-            for (FSCClipBinding& Binding : Clip.Bindings)
-                for (TObjectPtr<UAnimSequence>& Sequence : Binding.Sequences)
-                    K.Move(Sequence, TEXT("Animations"), ClipName);
+            K.Warnings.Add(Mesh->GetName() + TEXT(": rig mesh not kept (no rig source and no source model)"));
+            K.bFailed = true;
+            continue;
         }
-        K.Move(Catalog, FString(), TEXT("Clips"));
+        USkeleton* Skeleton = DuplicateObject(Mesh->GetSkeleton(), GetTransientPackage());
+        USkeletalMesh* Copy = DuplicateObject(Mesh, GetTransientPackage());
+        Copy->SetSkeleton(Skeleton);
+        FString Error;
+        bool bBuilt = true;
+        if (Source) bBuilt = SCRigAssets::MakeSavable(Copy, **Source, Error);
+        else
+        {
+            Copy->Build();
+            FSkinnedAssetCompilingManager::Get().FinishCompilation(TArray<USkinnedAsset*>{Copy});
+        }
+        if (!bBuilt)
+        {
+            K.Warnings.Add(Mesh->GetName() + TEXT(": rig mesh not kept (") + Error + TEXT(")"));
+            K.bFailed = true;
+            continue;
+        }
+        // As for static meshes: the first rig override of each slot becomes the kept mesh's material.
+        TSet<int32> Assigned;
+        for (USCRigComponent* Rig : Vehicle->Rigs)
+            if (Rig && Rig->GetSkeletalMeshAsset() == Mesh)
+                for (int32 Slot = 0; Slot < Copy->GetMaterials().Num(); ++Slot)
+                    if (UMaterialInterface* Override = Rig->OverrideMaterials.IsValidIndex(Slot) ? Rig->OverrideMaterials[Slot].Get() : nullptr;
+                        Override && !Assigned.Contains(Slot))
+                    {
+                        Copy->GetMaterials()[Slot].MaterialInterface = K.Constant(Override);
+                        Assigned.Add(Slot);
+                    }
+        K.Move(Skeleton, TEXT("Rigs"), Mesh->GetSkeleton()->GetName());
+        K.Move(Copy, TEXT("Rigs"), Mesh->GetName());
+        KeptRigs.Add(Mesh, Copy);
+    }
+    if (const USCClipCatalog* Catalog = Vehicle->ClipCatalog)
+    {
+        USCClipCatalog* Kept = DuplicateObject(Catalog, GetTransientPackage());
+        for (FSCImportedClip& Clip : Kept->Clips)
+        {
+            Clip.Sequence = nullptr;
+            for (FSCClipBinding& Binding : Clip.Bindings)
+            {
+                Binding.Sequences.Reset();
+                USkeletalMesh* const* Mesh = KeptRigs.Find(Binding.Mesh.Get());
+                Binding.Mesh = Mesh ? *Mesh : nullptr;
+            }
+        }
+        K.Move(Kept, FString(), TEXT("Clips"));
     }
 
     int32 Saved = 0;

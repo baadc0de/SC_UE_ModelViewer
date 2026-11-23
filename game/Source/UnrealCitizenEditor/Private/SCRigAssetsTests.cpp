@@ -11,6 +11,7 @@
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
+#include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
@@ -29,7 +30,8 @@ namespace
 {
 const FLinearColor Tint(0.5f, 0.25f, 0.75f, 1.f);
 
-/** Two rig nodes (Root, Arm 100 cm along X) and, with bSoft, one triangle in Tint: two corners on Root, one on Arm. */
+/** Two rig nodes (Root, Arm 100 cm along X) and, with bSoft, one triangle in Tint: a corner on Root, one on Arm and one
+ *  weighted half to each. */
 FSCDerivedMesh SyntheticRig(bool bSoft)
 {
     FSCDerivedMesh Data;
@@ -63,6 +65,11 @@ FSCDerivedMesh SyntheticRig(bool bSoft)
         Corners.Add(C);
         FSCVertexWeights W;
         for (int32& Joint : W.Joints) Joint = I == 2 ? 11 : 10; // weight 1 on the first, the rest unused
+        if (I == 1)
+        {
+            W.Joints[1] = 11;
+            W.Weights[0] = W.Weights[1] = 0.5f;
+        }
         Data.SkinWeights.Add(V, W);
     }
     Data.Description.CreateTriangle(Group, Corners);
@@ -152,30 +159,62 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft)
 
     Test.TestTrue(TEXT("skin weights readable on the CPU"), LOD.SkinWeightVertexBuffer.GetNeedsCPUAccess());
     Test.TestTrue(TEXT("the material slot"), Loaded->GetMaterials().Num() == 1 && Loaded->GetMaterials()[0].MaterialSlotName == TEXT("Slot_0"));
-    // Each vertex weighted to its bone (the corner at X 100 to Arm, the others to Root), in the runtime build's colours.
+    // Each vertex weighted to its bones (the corner at X 100 to Arm, the one at Y 50 half to each, at 16-bit precision,
+    // the third to Root), in the runtime build's colours.
     const FColor Expected = Tint.ToFColorSRGB();
+    int32 Blended = 0;
     for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
         for (uint32 V = Section.BaseVertexIndex; V < Section.BaseVertexIndex + Section.NumVertices; ++V)
         {
             const FSkinWeightInfo W = LOD.SkinWeightVertexBuffer.GetVertexSkinWeights(V);
-            int32 Strongest = 0;
-            for (int32 K = 1; K < MAX_TOTAL_INFLUENCES; ++K)
-                if (W.InfluenceWeights[K] > W.InfluenceWeights[Strongest]) Strongest = K;
-            const int32 Bone = Section.BoneMap.IsValidIndex(W.InfluenceBones[Strongest]) ? Section.BoneMap[W.InfluenceBones[Strongest]] : INDEX_NONE;
-            const bool bArm = LOD.StaticVertexBuffers.PositionVertexBuffer.VertexPosition(V).X > 50.f;
-            Test.TestEqual(FString::Printf(TEXT("vertex %u's bone"), V), Bone, bArm ? 2 : 1);
+            TMap<int32, int32> Bones; // bone -> weight (of 65535)
+            for (int32 K = 0; K < MAX_TOTAL_INFLUENCES; ++K)
+                if (W.InfluenceWeights[K] && Section.BoneMap.IsValidIndex(W.InfluenceBones[K]))
+                    Bones.FindOrAdd(Section.BoneMap[W.InfluenceBones[K]]) += W.InfluenceWeights[K];
+            const FVector3f P = LOD.StaticVertexBuffers.PositionVertexBuffer.VertexPosition(V);
+            if (P.Y > 25.f)
+            {
+                ++Blended;
+                Test.TestTrue(FString::Printf(TEXT("vertex %u: half to Root, half to Arm at 16 bits"), V),
+                              Bones.Num() == 2 && FMath::Abs(Bones.FindRef(1) - 32768) <= 1 && FMath::Abs(Bones.FindRef(2) - 32768) <= 1);
+            }
+            else
+                Test.TestTrue(FString::Printf(TEXT("vertex %u's bone"), V), Bones.Num() == 1 && Bones.Contains(P.X > 50.f ? 2 : 1));
             Test.TestEqual(FString::Printf(TEXT("vertex %u's colour"), V), LOD.StaticVertexBuffers.ColorVertexBuffer.VertexColor(V), Expected);
         }
-    // The saved rig: its body is not saved, its collision bytes are; restored, one trimesh particle per render vertex.
+    Test.TestEqual(TEXT("one blended vertex"), Blended, 1);
+    // The saved rig, loaded through its own reference to the mesh (both packages out of memory, so they are read from
+    // their files) and registered in a world: its body is not saved, its collision bytes are; it restores them when it
+    // registers, and the body follows a posed bone.
+    Forget(MeshPackage);
+    Forget(RigPackage);
     USCRigComponent* LoadedRig = LoadObject<USCRigComponent>(nullptr, *FString::Printf(TEXT("%s%s_RigReload.%s_Rig"), *Folder, *Name, *Name));
     if (!Test.TestNotNull(TEXT("the rig loads"), LoadedRig)) return;
     Opened.Add(LoadedRig->GetPackage());
+    USkeletalMesh* RigMesh = LoadedRig->GetSkeletalMeshAsset();
+    if (!Test.TestTrue(TEXT("its mesh resolves from the file"), RigMesh && RigMesh != Mesh && RigMesh->GetName() == Name)) return;
+    Opened.Add(RigMesh->GetPackage());
     Test.TestFalse(TEXT("no saved body"), LoadedRig->HasCollisionBody());
-    LoadedRig->SetSkeletalMesh(Loaded);
-    Test.TestTrue(TEXT("its body restores from the saved bytes"), LoadedRig->RestoreSavedCollision());
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT
+    {
+        if (LoadedRig->IsRegistered()) LoadedRig->UnregisterComponent();
+        World->DestroyWorld(false);
+    };
+    LoadedRig->RegisterComponentWithWorld(World);
+    if (!Test.TestTrue(TEXT("its body restored when it registered"), LoadedRig->HasCollisionBody())) return;
     const UBodySetup* Body = LoadedRig->GetBodySetup();
     Test.TestTrue(TEXT("one trimesh particle per render vertex"), Body && Body->TriMeshGeometries.Num() == 1 && Body->TriMeshGeometries[0] &&
                                                                Body->TriMeshGeometries[0]->Particles().Size() == LOD.GetNumVertices());
+    TArray<FVector3f> Before, After;
+    LoadedRig->ResetPose();
+    if (!Test.TestTrue(TEXT("the live body reads"), LoadedRig->ReadCollisionVertices(Before))) return;
+    LoadedRig->LocalPose[2].AddToTranslation(FVector(0, 0, 30)); // Arm up 30 cm
+    LoadedRig->RefreshBoneTransforms();
+    LoadedRig->ReadCollisionVertices(After);
+    int32 Moved = 0;
+    for (int32 I = 0; I < Before.Num() && I < After.Num(); ++I) Moved += FMath::Abs(After[I].Z - Before[I].Z) > 1.f;
+    Test.TestEqual(TEXT("the Arm vertex and the blended one follow the bone"), Moved, 2);
 }
 } // namespace
 

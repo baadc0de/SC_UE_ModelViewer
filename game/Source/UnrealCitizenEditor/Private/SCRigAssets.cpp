@@ -87,6 +87,7 @@ bool SCRigAssets::MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, F
     Info.BuildSettings.bRecomputeTangents = false;
     Info.BuildSettings.bUseFullPrecisionUVs = true;
     Info.BuildSettings.bRemoveDegenerates = false;
+    Info.BuildSettings.bUseHighPrecisionSkinWeights = true; // the runtime build's 16-bit weights
     TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
     for (int32 Slot = 0; Slot < Materials.Num(); ++Slot)
     {
@@ -132,7 +133,8 @@ bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutB
         return false;
     }
     // One description vertex per render vertex, in render order; the triangles of every section as the index buffer has
-    // them. The derived trimesh then indexes the render vertices the refit skins.
+    // them, in a polygon group of the section's material slot (the trimesh keeps it per face: physical materials). The
+    // derived trimesh then indexes the render vertices the refit skins.
     FSCDerivedMesh Expanded;
     FStaticMeshAttributes Attributes(Expanded.Description);
     Attributes.Register();
@@ -146,8 +148,10 @@ bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutB
     }
     TArray<uint32> Indices;
     LOD.MultiSizeIndexContainer.GetIndexBuffer(Indices);
-    const FPolygonGroupID Group = Expanded.Description.CreatePolygonGroup();
     for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
+    {
+        const FPolygonGroupID Group(Section.MaterialIndex);
+        while (!Expanded.Description.IsPolygonGroupValid(Group)) Expanded.Description.CreatePolygonGroup();
         for (uint32 Triangle = 0; Triangle < Section.NumTriangles; ++Triangle)
         {
             TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
@@ -163,6 +167,7 @@ bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutB
             }
             Expanded.Description.CreateTriangle(Group, Corners);
         }
+    }
     if (!FSCMeshImporter::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
     OutBytes = MoveTemp(Expanded.CollisionBytes);
     OutVersions = Expanded.CollisionVersions;

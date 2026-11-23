@@ -264,6 +264,9 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
                 ++RigCollisions;
             }
         }
+        // Every soft rig has its body now (a failure failed the cook): the actor's collision is ready, also when the import's
+        // own rig collision had failed (first person explores only a ready vehicle).
+        if (!Cook.bFailed) Environment->bCollisionReady = true;
         // Playback reads the bone tracks; the sequences are editor-only views of them, built against transient skeletons.
         if (USCClipCatalog* Catalog = Environment->ClipCatalog)
             for (FSCImportedClip& Clip : Catalog->Clips)
