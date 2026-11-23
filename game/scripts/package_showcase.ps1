@@ -4,22 +4,19 @@
 # A standalone directory (out/win64/<scenario>): Nanite, Lumen GI and reflections with hardware ray tracing at
 # -SCMaxQuality (Cinematic, hit lighting; SCLook::ApplyMaxQuality) and DLAA (the NVIDIA DLSS plugin at 100 %,
 # viewer/README.md). <Out>\Play_UnrealCitizen.bat starts it as the showcase (-SCShowcase: no viewer chrome; the scenario's
-# camera; C third person, Z orbit, T teleport, F torch, LMB fire, RMB aim). The player character is exported from Data.p4k
-# at start (an installed Star Citizen; WP-O1-4b prepares it): -PlayerLoadout picks the game loadout, -PlayerWeapons keeps
-# only those of its weapons (entity class names), and the kept weapons' spare magazines are carried on the armour.
+# camera; C third person, Z orbit, T teleport, F torch, LMB fire, RMB aim). The player character is prepared with the
+# scenario (WP-O1-4b-2: its own level, named by the record): the definition's "player" block picks the gender, the game
+# loadout, the weapons kept (entity class names) and whether their spare magazines are carried on the armour.
 # The engine is the SCViewer fork of UE 5.9 built from source (plan D17): -Engine, else $env:UE_ENGINE_ROOT, else
 # %USERPROFILE%\UnrealEngine-5.9-src.
 # Usage: game/scripts/package_showcase.ps1 -Scenario golem_showcase
-#        [-Config Development|Shipping] [-PlayerLoadout <p4k path>] [-PlayerWeapons <entity>,...]
-#        [-Out <dir>] [-Engine <UE 5.9 source fork>]
+#        [-Config Development|Shipping] [-Out <dir>] [-Engine <UE 5.9 source fork>]
 param(
     [ValidateSet('Win64')][string]$Platform = 'Win64',
     [Parameter(Mandatory = $true)][string]$Scenario,
     [string]$Out = '',
     [string]$Engine = $(if ($env:UE_ENGINE_ROOT) { $env:UE_ENGINE_ROOT } else { Join-Path $env:USERPROFILE 'UnrealEngine-5.9-src' }),
-    [string]$Config = 'Development',
-    [string]$PlayerLoadout = '',
-    [string[]]$PlayerWeapons = @()
+    [string]$Config = 'Development'
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -57,7 +54,8 @@ if ($CargoName) {
     $CargoText = [IO.File]::ReadAllText($CargoFile)
 }
 if ((ConvertTo-Comparable $CargoText) -cne (ConvertTo-Comparable ([string]$Record.cargo_definition))) { throw "The cargo setup of scenario $Scenario changed since it was prepared: run $Prepare" }
-$Levels = @($Record.vehicle_level) + @($Record.environment_level | Where-Object { $_ })
+if (-not $Record.player_level) { throw "Scenario $Scenario's record names no player body level: run $Prepare" }
+$Levels = @($Record.vehicle_level, $Record.player_level) + @($Record.environment_level | Where-Object { $_ })
 foreach ($Level in $Levels) {
     $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')
     if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
@@ -83,9 +81,6 @@ if ($LASTEXITCODE -ne 0) { throw "Stale FX under /Game/SC/FX (SC_FX_STALE in the
     "-cmdline=-Scenario=$Scenario$Extra"
 if ($LASTEXITCODE -ne 0) { throw "BuildCookRun failed ($LASTEXITCODE)" }
 # A Windows build does not read the staged command line (UECommandLine.txt): the launcher passes it.
-$Player = ' -SCShowcase'
-if ($PlayerLoadout) { $Player += " -SCPlayerLoadout=$PlayerLoadout" }
-if ($PlayerWeapons.Count) { $Player += ' -SCPlayerWeapons=' + ($PlayerWeapons -join ',') }
-$Launcher = "@echo off`r`nrem UnrealCitizen showcase: scenario $Scenario ($Config).`r`nstart `"`" `"%~dp0UnrealCitizen.exe`" -Scenario=$Scenario$Extra$Player %*`r`n"
+$Launcher = "@echo off`r`nrem UnrealCitizen showcase: scenario $Scenario ($Config).`r`nstart `"`" `"%~dp0UnrealCitizen.exe`" -Scenario=$Scenario$Extra -SCShowcase %*`r`n"
 [IO.File]::WriteAllText((Join-Path $Out 'Play_UnrealCitizen.bat'), $Launcher)
 Write-Output "PACKAGED $Out"

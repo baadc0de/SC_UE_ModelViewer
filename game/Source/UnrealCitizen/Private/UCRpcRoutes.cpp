@@ -303,6 +303,7 @@ public:
         O->SetStringField(TEXT("title"), S.GetScenario().Title);
         O->SetStringField(TEXT("vehicle_level"), S.GetPrepared().VehicleLevel);
         O->SetStringField(TEXT("environment_level"), S.GetPrepared().EnvironmentLevel);
+        O->SetStringField(TEXT("player_level"), S.GetPrepared().PlayerLevel);
         return O;
     }
     void Snapshot(UWorld* World, FJsonObject& State) const override

@@ -1,7 +1,7 @@
 // WP-O1-4b-1b: a vehicle's interaction state is saved with a prepared level. Each structure the import builds (door
 // records, door interactions with their tags, ship doors with their sweeps, door controls and pad reach, door sensors,
 // port rigs, the doors' fragment states, the lift-driven doors, the physics grid) survives the actor's property serialization — the path a
-// level save and load takes — so a prepared vehicle needs none of it rebuilt.
+// level save and load takes — so a prepared vehicle needs none of it rebuilt. WP-O1-4b-2: a prepared player body's kit and clips.
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "SCRigComponent.h"
@@ -16,6 +16,8 @@
 #include "Materials/Material.h"
 #include "Components/PointLightComponent.h"
 #include "SCLightImporter.h"
+#include "SCPlayerKitData.h"
+#include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -324,6 +326,174 @@ bool FSCSavedInteractionsTest::RunTest(const FString&)
              Loaded->LightStates[0].BaseCandela == 250.0 && Loaded->LightStates[0].BaseColor == FLinearColor::Red && Loaded->LightStates[0].LightStyleId == 3 &&
                  Loaded->LightStates[0].ActiveState == TEXT("auxiliaryState"));
     TestFalse(TEXT("a state it does not author leaves it"), FSCLightImporter::ApplyState(Loaded, 0, TEXT("emergencyState")));
+    return !HasAnyErrors();
+}
+
+// WP-O1-4b-2: a prepared player body's parsed kit and body clips are saved with its actor, every field as parsed.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCSavedPlayerKitTest, "SCBridge.Prepare.SavedPlayerKit", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCSavedPlayerKitTest::RunTest(const FString&)
+{
+    ASCVehicle* V = NewObject<ASCVehicle>(GetTransientPackage());
+    V->AddToRoot();
+    ASCVehicle* Loaded = nullptr;
+    ON_SCOPE_EXIT
+    {
+        V->RemoveFromRoot();
+        if (Loaded) Loaded->RemoveFromRoot();
+    };
+    // What SCLoadPlayerKit parses, one value in every field kind.
+    const TSharedRef<FSCPlayerKit> Kit = MakeShared<FSCPlayerKit>();
+    Kit->Gender = TEXT("female");
+    Kit->Loadout = TEXT("Data/Scripts/L.xml");
+    Kit->CameraBone = TEXT("HeadCam");
+    Kit->RootMotionBone = TEXT("Locomotion");
+    FSCItemPort& Hand = Kit->HandPorts.AddDefaulted_GetRef();
+    Hand.Name = TEXT("weapon_attach_hand_right");
+    Hand.AttachBone = TEXT("RightHand");
+    Hand.Flags = {TEXT("invisible_fp")};
+    Hand.Types.Emplace(TEXT("WeaponPersonal"), TArray<FString>{TEXT("Small"), TEXT("Medium")});
+    Hand.Offset = FMatrix(FPlane(1, 0, 0, 0), FPlane(0, 0, 1, 0), FPlane(0, -1, 0, 0), FPlane(0.1, 0.2, 0.3, 1));
+    FSCPlayerWeapon& Weapon = Kit->Weapons.AddDefaulted_GetRef();
+    Weapon.Entity = TEXT("behr_rifle_ballistic_01");
+    Weapon.Size = 3;
+    Weapon.StowPort.Name = TEXT("wep_stocked_2");
+    Weapon.OffHandGripHelper = TEXT("grip_off");
+    FSCFireAction& Action = Weapon.FireActions.AddDefaulted_GetRef();
+    Action.Kind = TEXT("rapid");
+    Action.FireRate = 600.f;
+    Action.StopFragment = TEXT("stop");
+    Action.EffectHelpers = {TEXT("eject")};
+    FSCWeaponFragment& Fire = Weapon.FireFragments.AddDefaulted_GetRef();
+    Fire.Fragment = TEXT("fire");
+    FSCWeaponFragment::FLayer& FireLayer = Fire.Layers.AddDefaulted_GetRef();
+    FireLayer.Clip = TEXT("rifle_fire");
+    FireLayer.bLoop = true;
+    FireLayer.Speed = 1.5f;
+    Weapon.ClipSidecars.Add(TEXT("rifle_fire"), TEXT("Packages/rifle/fire.json"));
+    Weapon.FireClipJson.Add(TEXT("rifle_fire"), TEXT("{\"frames\": 3}"));
+    FSCMotionState& State = Kit->States.AddDefaulted_GetRef();
+    State.Stance = TEXT("stand");
+    State.bFirstPerson = true;
+    FSCMotionFragment& Idle = State.Fragments.AddDefaulted_GetRef();
+    Idle.Fragment = TEXT("MotionIdle");
+    Idle.QueryFragTags = {TEXT("ADS")};
+    FSCMotionLayer& Layer = Idle.Layers.AddDefaulted_GetRef();
+    Layer.Clip = TEXT("idle");
+    Layer.BlendSpace = TEXT("move2d");
+    Layer.bAdditive = true;
+    Layer.BlendOut = 0.25f;
+    Layer.Layer = 2;
+    Layer.bUnsupported = true;
+    FSCBlendSpace& Space = Kit->BlendSpaces.Add(TEXT("move2d"));
+    Space.Id = TEXT("move2d");
+    FSCBlendDimension& Dimension = Space.Dimensions.AddDefaulted_GetRef();
+    Dimension.Name = TEXT("MoveSpeed");
+    Dimension.Max = 7.f;
+    Dimension.AuthoredMin = 0.5f;
+    FSCBlendExample& Example = Space.Examples.AddDefaulted_GetRef();
+    Example.Clip = TEXT("walk");
+    Example.Params = {1.5f, std::numeric_limits<float>::quiet_NaN()};
+    Example.Component = 1;
+    Space.Faces = {{0, 1, 2}, {2, 3}};
+    Space.Components = {TEXT("a"), TEXT("b")};
+    FSCBlendSelector& Selector = Space.Selectors.AddDefaulted_GetRef();
+    Selector.Name = TEXT("Turn");
+    Selector.Dimension = 1;
+    Selector.bChooseBlendSpace = true;
+    Space.Unsupported = TEXT("two choosing selectors");
+    FSCFlashlight& Torch = Kit->Flashlights.AddDefaulted_GetRef();
+    Torch.Color = FColor(255, 230, 200);
+    Torch.FovDeg = 60.f;
+    Torch.ProjectorTexture = TEXT("Packages/helmet/cookie.png");
+    Kit->ClipSidecars.Add(TEXT("idle"), TEXT("Packages/body/idle.json"));
+    Kit->RootPort.Name = TEXT("body");
+    FSCPlayerKit::FPart& Part = Kit->Parts.AddDefaulted_GetRef();
+    Part.EntityName = TEXT("helmet");
+    Part.Id = TEXT("child_3");
+    Part.Port = Hand;
+    Kit->Diagnostics.Add(TEXT("a sequenced layer"));
+    const TSharedRef<FSCPlayerClipMap> Clips = MakeShared<FSCPlayerClipMap>();
+    const TSharedRef<FSCPlayerClip> Clip = MakeShared<FSCPlayerClip>();
+    Clip->Name = TEXT("idle");
+    Clip->Frames = 30;
+    Clip->Duration = 1.f;
+    Clip->bCyclic = true;
+    FSCPlayerClip::FTrack& Track = Clip->Tracks.AddDefaulted_GetRef();
+    Track.Bone = 4;
+    Track.RotTimes = {0.f, 15.f};
+    Track.Rot = {FQuat4f::Identity, FQuat4f(0.f, 0.f, 0.7071068f, 0.7071068f)};
+    Track.PosTimes = {0.f};
+    Track.Pos = {FVector3f(1.f, 2.f, 3.f)};
+    Clips->Add(Clip->Name, Clip);
+    Clips->Add(TEXT("walk"), MakeShared<FSCPlayerClip>());
+    USCPlayerKitData* Data = NewObject<USCPlayerKitData>(V, TEXT("PlayerKit"));
+    Data->Kit = Kit;
+    Data->Clips = Clips;
+    V->PlayerKit = Data;
+
+    // Saved and loaded with the actor (a DuplicateObject copy: the data object goes with it, its payload written and read).
+    Loaded = DuplicateObject(V, GetTransientPackage());
+    Loaded->AddToRoot();
+    const USCPlayerKitData* Back = Loaded->PlayerKit;
+    if (!TestTrue(TEXT("the loaded actor's own kit data"), Back && Back != Data && Back->GetOuter() == Loaded)) return false;
+    if (!TestTrue(TEXT("... with a kit and clips"), Back->HasData() && Back->Kit != Data->Kit)) return false;
+    const FSCPlayerKit& K = *Back->Kit;
+    TestTrue(TEXT("the kit's names"), K.Gender == Kit->Gender && K.Loadout == Kit->Loadout && K.CameraBone == Kit->CameraBone && K.RootMotionBone == Kit->RootMotionBone);
+    TestTrue(TEXT("a hand port: flags, types, offset"),
+             K.HandPorts.Num() == 1 && K.HandPorts[0].AttachBone == TEXT("RightHand") && K.HandPorts[0].Flags.Num() == 1 && K.HandPorts[0].Types.Num() == 1 &&
+                 K.HandPorts[0].Types[0].Value.Num() == 2 && K.HandPorts[0].Offset.Equals(Hand.Offset, 0.f));
+    if (TestEqual(TEXT("a weapon"), K.Weapons.Num(), 1))
+    {
+        const FSCPlayerWeapon& W = K.Weapons[0];
+        TestTrue(TEXT("... its entity, size, stow port and grip"), W.Entity == Weapon.Entity && W.Size == 3 && W.StowPort.Name == Weapon.StowPort.Name &&
+                                                                     W.OffHandGripHelper == TEXT("grip_off"));
+        TestTrue(TEXT("... its fire action"), W.FireActions.Num() == 1 && W.FireActions[0].FireRate == 600.f && W.FireActions[0].StopFragment == TEXT("stop") &&
+                                                 W.FireActions[0].EffectHelpers.Num() == 1);
+        TestTrue(TEXT("... its fire fragment"), W.FireFragments.Num() == 1 && W.FireFragments[0].Layers.Num() == 1 && W.FireFragments[0].Layers[0].bLoop &&
+                                                   W.FireFragments[0].Layers[0].Speed == 1.5f);
+        TestTrue(TEXT("... its clips"), W.ClipSidecars.FindRef(TEXT("rifle_fire")) == TEXT("Packages/rifle/fire.json") &&
+                                           W.FireClipJson.FindRef(TEXT("rifle_fire")) == TEXT("{\"frames\": 3}"));
+    }
+    if (TestTrue(TEXT("a motion state with a fragment and a layer"),
+                 K.States.Num() == 1 && K.States[0].Fragments.Num() == 1 && K.States[0].Fragments[0].Layers.Num() == 1))
+    {
+        const FSCMotionLayer& L = K.States[0].Fragments[0].Layers[0];
+        TestTrue(TEXT("... the state"), K.States[0].bFirstPerson && K.States[0].Stance == TEXT("stand") && K.States[0].Fragments[0].QueryFragTags.Num() == 1);
+        TestTrue(TEXT("... the layer"), L.Clip == TEXT("idle") && L.BlendSpace == TEXT("move2d") && L.bAdditive && L.BlendOut == 0.25f && L.Layer == 2 && L.bUnsupported);
+    }
+    if (const FSCBlendSpace* B = K.BlendSpaces.Find(TEXT("move2d")); TestNotNull(TEXT("the blend space"), B))
+    {
+        TestTrue(TEXT("... its dimension"), B->Dimensions.Num() == 1 && B->Dimensions[0].Max == 7.f && B->Dimensions[0].AuthoredMin == 0.5f);
+        TestTrue(TEXT("... its example, the unresolved parameter still NaN"), B->Examples.Num() == 1 && B->Examples[0].Params.Num() == 2 &&
+                                                                                FMath::IsNaN(B->Examples[0].Params[1]) && B->Examples[0].Component == 1);
+        TestTrue(TEXT("... its faces"), B->Faces.Num() == 2 && B->Faces[0].Num() == 3 && B->Faces[1].Num() == 2 && B->Faces[1][1] == 3);
+        TestTrue(TEXT("... its components and selector"), B->Components.Num() == 2 && B->Selectors.Num() == 1 && B->Selectors[0].bChooseBlendSpace &&
+                                                             B->Selectors[0].Dimension == 1 && B->Unsupported == Space.Unsupported);
+    }
+    TestTrue(TEXT("the torch"), K.Flashlights.Num() == 1 && K.Flashlights[0].Color == Torch.Color && K.Flashlights[0].FovDeg == 60.f &&
+                                   K.Flashlights[0].ProjectorTexture == Torch.ProjectorTexture);
+    TestTrue(TEXT("the body clips, root port, parts and diagnostics"),
+             K.ClipSidecars.Num() == 1 && K.RootPort.Name == TEXT("body") && K.Parts.Num() == 1 && K.Parts[0].Id == TEXT("child_3") &&
+                 K.Parts[0].Port.Types.Num() == 1 && K.Diagnostics.Num() == 1);
+    if (!TestEqual(TEXT("the clips"), Back->Clips->Num(), 2)) return false;
+    const TSharedPtr<const FSCPlayerClip> C = Back->Clips->FindRef(TEXT("idle"));
+    if (!TestTrue(TEXT("the idle clip"), C.IsValid() && C->Name == TEXT("idle") && C->bCyclic && C->Frames == 30.f && C->Tracks.Num() == 1)) return false;
+    const FSCPlayerClip::FTrack& T = C->Tracks[0];
+    TestTrue(TEXT("... its track"), T.Bone == 4 && T.RotTimes.Num() == 2 && T.Rot.Num() == 2 && T.Rot[1].Equals(Track.Rot[1], 0.f) && T.Pos.Num() == 1 &&
+                                       T.Pos[0] == FVector3f(1.f, 2.f, 3.f));
+    // The loaded clip samples as the parsed one.
+    TArray<FTransform> PoseA, PoseB;
+    PoseA.Init(FTransform::Identity, 5);
+    PoseB = PoseA;
+    Clip->Sample(0.25f, PoseA);
+    C->Sample(0.25f, PoseB);
+    TestTrue(TEXT("... it samples the same"), PoseA[4].Equals(PoseB[4], 0.0));
+
+    // A body without data stays without (no kit and no clips).
+    Data->Kit.Reset();
+    Data->Clips.Reset();
+    const USCPlayerKitData* Empty = DuplicateObject(Data, GetTransientPackage());
+    TestTrue(TEXT("no data loads as none"), Empty && !Empty->HasData() && !Empty->Kit && !Empty->Clips);
     return !HasAnyErrors();
 }
 

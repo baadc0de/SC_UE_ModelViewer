@@ -48,7 +48,10 @@ const TCHAR* UUCScenarioSubsystem::StateName(EState InState)
 FString UUCScenarioSubsystem::ConflictingSwitch(const TCHAR* CommandLine)
 {
     FString Ignored;
-    for (const TCHAR* Switch : {TEXT("SCLoad="), TEXT("SCEnvironment="), TEXT("SCPackage="), TEXT("SCCargoScenario="), TEXT("SCPlayerDemo=")})
+    // The player body is the scenario's (its definition's "player", prepared): the switches that pick another one conflict too.
+    for (const TCHAR* Switch : {TEXT("SCLoad="), TEXT("SCEnvironment="), TEXT("SCPackage="), TEXT("SCCargoScenario="), TEXT("SCPlayerDemo="),
+                                TEXT("SCPlayerPackage="), TEXT("SCPlayerGender="), TEXT("SCPlayerLoadout="), TEXT("SCPlayerWeapons="),
+                                TEXT("SCPlayerSpares=")})
         if (FParse::Value(CommandLine, Switch, Ignored)) return TEXT("-") + FString(Switch).LeftChop(1);
     if (FParse::Param(CommandLine, TEXT("SCNoCooked"))) return TEXT("-SCNoCooked");
     return FString();
@@ -97,12 +100,14 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioCargoName = Scenario.Cargo;
     Settings->ScenarioCargoJson = Scenario.CargoJson;
     Settings->ScenarioVehicle = Scenario.Vehicle;
+    // The player body from its prepared level, when first person first asks for it (WP-O1-4b-2).
+    Viewer->SetPreparedPlayerLevel(Prepared.PlayerLevel);
     // The environment before anything else is requested (it replaces a saved choice the viewer restored at start).
     Viewer->SetEnvironment(Scenario.Environment.IsEmpty() ? FString(TEXT("none")) : Scenario.Environment);
     State = EState::Loading;
     LoadingSince = FPlatformTime::Seconds();
-    UE_LOG(LogUCScenario, Display, TEXT("SCENARIO start id=%s title=\"%s\" vehicle=%s level=%s environment=%s cargo=%s music=%s camera=%s start=\"%s\" prepared=%s archive=%s"),
-           *Id, *Scenario.Title, *Scenario.Vehicle, *Prepared.VehicleLevel, Prepared.EnvironmentLevel.IsEmpty() ? TEXT("none") : *Prepared.EnvironmentLevel,
+    UE_LOG(LogUCScenario, Display, TEXT("SCENARIO start id=%s title=\"%s\" vehicle=%s level=%s player=%s environment=%s cargo=%s music=%s camera=%s start=\"%s\" prepared=%s archive=%s"),
+           *Id, *Scenario.Title, *Scenario.Vehicle, *Prepared.VehicleLevel, *Prepared.PlayerLevel, Prepared.EnvironmentLevel.IsEmpty() ? TEXT("none") : *Prepared.EnvironmentLevel,
            Scenario.Cargo.IsEmpty() ? TEXT("none") : *Scenario.Cargo, Scenario.Music.IsEmpty() ? TEXT("none") : *Scenario.Music, *Scenario.Camera,
            *Scenario.Start, *Prepared.PreparedAt, *Prepared.Archive);
 }

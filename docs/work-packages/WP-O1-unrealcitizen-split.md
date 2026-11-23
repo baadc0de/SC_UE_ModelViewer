@@ -273,7 +273,21 @@ data when it loads. In stages:
   refers to it) and points the panels' renders and label masks at their pooled textures. A loaded panel draws again
   when the vehicle begins play (a render target's pixels are not saved). Prep format 23. A light panel's buttons act on
   the light groups, which 1b-3 saves next; until then a prepared light panel changes its own state only.
-- **O1-4b-2 / 3**: the player body; cargo boxes and effects, music, the Garage's details prepared.
+- **O1-4b-2a** (player body): the prep step prepares the scenario's player body as its own level
+  (`/Game/SC/Players/Maps/Player_<gender>_<hash>`, `USCViewerSubsystem::PlayerLevelPath`; one per body, shared by the
+  scenarios that name the same one), and the record names it (`player_level`). The body is the definition's `"player"`
+  block: `"gender"`, `"loadout"`, `"weapons"`, `"spares"` (the exporter's defaults when absent), so a changed body makes the
+  record stale; a scenario run refuses `-SCPlayerGender`, `-SCPlayerLoadout`, `-SCPlayerWeapons`, `-SCPlayerSpares` and
+  `-SCPlayerPackage`, and `package_showcase.ps1` no longer takes `-PlayerLoadout` / `-PlayerWeapons`. The level holds the kit
+  actor as the viewer imports it, its rigs kept (O1-4b-1a), with the kit and body clips parsed once at prep
+  (`USCPlayerKitData`: `FSCPlayerKit` and `FSCPlayerClipMap` written field by field, SCPlayerKitData.cpp) and its
+  personal lights' cookies pooled (the cook now keeps `GoboTextures` on their pooled textures). A run streams the level when
+  first person first asks for the body (`SetPreparedPlayerLevel`, state `Streaming`) and attaches it as before; nothing is
+  exported, imported or parsed. Still at attach: the weapons' fire clips are parsed against their rigs (`FireClipJson`) and
+  the torch's light function is made from its cookie. Prep format 26.
+- **O1-4b-2b**: the traversal clips (seat entry and exit, ladders) a run still asks the archive for (`FSCTraversalClips`)
+  prepared with the scenario.
+- **O1-4b-3**: cargo boxes and effects, music, the Garage's details prepared.
 
 #### O1-4a — Scenarios and the prep step
 

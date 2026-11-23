@@ -38,6 +38,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Engine/StaticMeshActor.h"
 #include "SCPlayerKit.h"
+#include "SCPlayerKitData.h"
 #include "SCLightImporter.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -431,6 +432,19 @@ FString USCViewerSubsystem::ShipLevelPath(const FString& Entity, const FString& 
     while (Name.Contains(TEXT("__"))) Name.ReplaceInline(TEXT("__"), TEXT("_"));
     if (Name.IsEmpty()) return FString();
     return TEXT("/Game/SC/Ships/Maps/") + Name + (Variant.IsEmpty() ? FString() : TEXT("__") + LevelName(Variant));
+}
+FString USCViewerSubsystem::PlayerLevelPath(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments)
+{
+    // Archive paths and entity classes ignore case; the exporter keeps the named weapons whatever their order.
+    TArray<FString> Kept;
+    for (const FString& Weapon : Weapons)
+        if (const FString W = Weapon.TrimStartAndEnd().ToLower(); !W.IsEmpty()) Kept.Add(W);
+    Kept.Sort();
+    const FString Key = FString::Printf(TEXT("%s|%s|%s|%d"), *Gender.TrimStartAndEnd().ToLower(),
+                                        *Loadout.Replace(TEXT("\\"), TEXT("/")).TrimStartAndEnd().ToLower(), *FString::Join(Kept, TEXT(",")),
+                                        bSpareAttachments ? 1 : 0);
+    const FString Name = LevelName(Gender.TrimStartAndEnd().IsEmpty() ? FString(TEXT("default")) : Gender.TrimStartAndEnd().ToLower());
+    return FString::Printf(TEXT("/Game/SC/Players/Maps/Player_%s_%08x"), *Name, FCrc::StrCrc32(*Key));
 }
 bool USCViewerSubsystem::IsShipPaintLevel(const FString& Level)
 {
@@ -1366,6 +1380,23 @@ bool USCViewerSubsystem::RequestPlayerKit()
     if (KitState != EPlayerKitState::None && KitState != EPlayerKitState::Failed) return true; // running or ready
     KitError.Empty();
     KitStart = FPlatformTime::Seconds();
+    // A prepared body (WP-O1-4b-2): its level holds the kit actor with its rigs, kit and clips; nothing is exported or read.
+    if (!PreparedPlayerLevel.IsEmpty())
+    {
+        bool bOK = false;
+        UWorld* World = GetViewerWorld();
+        KitLevel = World ? ULevelStreamingDynamic::LoadLevelInstance(World, PreparedPlayerLevel, FVector::ZeroVector, FRotator::ZeroRotator, bOK)
+                         : nullptr;
+        if (!bOK || !KitLevel)
+        {
+            KitLevel = nullptr;
+            FailPlayerKit(TEXT("cannot stream the prepared player level ") + PreparedPlayerLevel);
+            return false;
+        }
+        KitState = EPlayerKitState::Streaming;
+        UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_START prepared=%s"), *PreparedPlayerLevel);
+        return true;
+    }
     // -SCPlayerPackage=<kit tar|export folder> reads a kit from disk (no archive needed: folder harness, tests).
     FString Package;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCPlayerPackage="), Package))
@@ -1412,6 +1443,7 @@ void USCViewerSubsystem::FailPlayerKit(const FString& Error)
         KitActor->Destroy();
     }
     KitActor = nullptr;
+    UnloadKitLevel(); // a prepared body goes with its level
     KitData.Reset();
     KitClips.Reset();
     int32 LiveVehicles = 0;
@@ -1434,6 +1466,7 @@ FString USCViewerSubsystem::GetPlayerKitStatus() const
     case EPlayerKitState::Parsing: return TEXT("Player body: reading package…");
     case EPlayerKitState::Importing: return TEXT("Player body: ") + (KitJob ? KitJob->GetPhase() : FString(TEXT("importing")));
     case EPlayerKitState::Clips: return TEXT("Player body: reading animations…");
+    case EPlayerKitState::Streaming: return TEXT("Player body: loading…");
     case EPlayerKitState::Ready: return TEXT("Player body ready");
     case EPlayerKitState::Failed: return TEXT("Player body unavailable (capsule only): ") + KitError;
     default: return FString();
@@ -1447,8 +1480,56 @@ bool USCViewerSubsystem::WaitForPlayerKit(float TimeoutSeconds)
         StepPlayerKit(true);
     return KitState == EPlayerKitState::Ready;
 }
+void USCViewerSubsystem::StepPreparedPlayerKit(bool bBlocking)
+{
+    if (!KitLevel || KitLevel->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+    {
+        FailPlayerKit(TEXT("the prepared player level did not load: ") + PreparedPlayerLevel);
+        return;
+    }
+    if (bBlocking && !KitLevel->IsLevelVisible())
+        if (UWorld* World = GetViewerWorld()) World->FlushLevelStreaming(EFlushLevelStreamingType::Full); // nothing ticks the world while it waits
+    ULevel* Level = KitLevel->GetLoadedLevel();
+    if (!Level || !KitLevel->IsLevelVisible()) return;
+    ASCVehicle* Body = nullptr;
+    for (AActor* Actor : Level->Actors)
+        if (ASCVehicle* Candidate = Cast<ASCVehicle>(Actor); Candidate && Candidate->PlayerKit)
+        {
+            Body = Candidate;
+            break;
+        }
+    if (!Body || !Body->PlayerKit->HasData())
+    {
+        FailPlayerKit(Body ? TEXT("the prepared player body's kit does not read: prepare the scenario again") : TEXT("the prepared player level holds no player body"));
+        return;
+    }
+    KitActor = Body;
+    KitActor->SetActorHiddenInGame(true); // unpublished until it is attached
+    if (!USCPlayerBodyComponent::FindLeader(KitActor))
+    {
+        FailPlayerKit(TEXT("the prepared player body has no body rig"));
+        return;
+    }
+    KitData = Body->PlayerKit->Kit;
+    KitClips = Body->PlayerKit->Clips;
+    KitState = EPlayerKitState::Ready;
+    for (const FString& D : KitData->Diagnostics) UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT_DIAGNOSTIC %s"), *D);
+    UE_LOG(LogSCViewer, Display, TEXT("PLAYER_KIT result=Ready prepared=1 seconds=%.3f gender=%s loadout=%s weapons=%d states=%d blend_spaces=%d clips=%d rigs=%d"),
+           FPlatformTime::Seconds() - KitStart, *KitData->Gender, *KitData->Loadout, KitData->Weapons.Num(), KitData->States.Num(), KitData->BlendSpaces.Num(),
+           KitClips->Num(), KitActor->Rigs.Num());
+    AttachPlayerKit();
+}
+void USCViewerSubsystem::UnloadKitLevel()
+{
+    if (!KitLevel) return;
+    KitLevel->SetShouldBeLoaded(false);
+    KitLevel->SetShouldBeVisible(false);
+    KitLevel->SetIsRequestingUnloadAndRemoval(true);
+    KitLevel = nullptr;
+}
 void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
 {
+    if (KitState == EPlayerKitState::Streaming) StepPreparedPlayerKit(bBlocking);
     if (KitState == EPlayerKitState::Exporting)
     {
         if (!KitExport.IsCompleted())
