@@ -361,9 +361,18 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
         FString CargoError;
         if (!FSCCargoScenario::Parse(CargoDefinition, Cargo, CargoError))
             return FString::Printf(TEXT("scenario %s: the prepared cargo setup does not read (%s)%s"), *Scenario, *CargoError, *Fix);
-        for (const FString& Entity : Cargo.Entities())
+        const TArray<FString> Entities = Cargo.Entities();
+        for (const FString& Entity : Entities)
             if (CargoLevels.FindRef(Entity) != CargoLevelPath(Entity))
                 return FString::Printf(TEXT("scenario %s: the cargo box %s has no prepared level in the record%s"), *Scenario, *Entity, *Fix);
+        // And nothing else: a mapping the setup does not name would serve a live spawn of that entity another box.
+        for (const auto& [Entity, Level] : CargoLevels)
+            if (!Entities.Contains(Entity))
+                return FString::Printf(TEXT("scenario %s: the record maps a cargo box %s its setup does not name%s"), *Scenario, *Entity, *Fix);
+    }
+    else if (!CargoLevels.IsEmpty())
+    {
+        return FString::Printf(TEXT("scenario %s: the record maps cargo boxes without a cargo setup%s"), *Scenario, *Fix);
     }
     for (const auto& [Entity, Level] : CargoLevels)
         if (!LevelCurrent(Level))
