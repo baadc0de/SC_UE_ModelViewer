@@ -177,7 +177,8 @@ bool UUCScenarioSubsystem::Tick(float)
     // A prepared cargo box that did not load (WP-O1-4b-3): the scenario does not run short of its stock.
     if ((State == EState::Loading || State == EState::Starting || State == EState::Running) && !UUCSettings::Get()->ScenarioCargoProblem.IsEmpty())
     {
-        Fail(UUCSettings::Get()->ScenarioCargoProblem + TEXT(": run ") + FUCPrepared::PrepareCommand(Id));
+        // Its level is there but does not hold a usable box: an ordinary prep would keep it.
+        Fail(UUCSettings::Get()->ScenarioCargoProblem + TEXT(": run ") + FUCPrepared::PrepareCommand(Id) + TEXT(" -Force"));
         return true;
     }
     switch (State)
@@ -273,6 +274,8 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
                    *FString::Join(Labels, TEXT(", ")));
         }
     }
+    // Running means the scene is in: the prepared cargo boxes too (their templates; a box that fails fails the scenario).
+    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance()->GetWorld()); Cargo && !Cargo->ArePreparedBoxesSettled() && !bTimedOut) return;
     bMusicPending = !Scenario.Music.IsEmpty();
     if (USCMusicSubsystem* Music = bMusicPending ? USCMusicSubsystem::Get(GetGameInstance()->GetWorld()) : nullptr) Music->RequestCatalogue();
     State = EState::Running;

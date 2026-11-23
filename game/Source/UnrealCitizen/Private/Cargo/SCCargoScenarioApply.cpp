@@ -64,6 +64,17 @@ void USCCargoSubsystem::DropScenario()
     State->Library.Reset();
 }
 
+bool USCCargoSubsystem::ArePreparedBoxesSettled() const
+{
+    if (!State || !State->bPreparedSetup) return true;
+    for (const auto& [Entity, Level] : UUCSettings::Get()->ScenarioCargoLevels)
+    {
+        const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity);
+        if (!E || (E->State != FSCCargoBoxLibrary::EState::Ready && E->State != FSCCargoBoxLibrary::EState::Failed)) return false;
+    }
+    return true;
+}
+
 void USCCargoSubsystem::TryScenario()
 {
     USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld());
