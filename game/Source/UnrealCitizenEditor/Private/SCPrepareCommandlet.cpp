@@ -179,19 +179,17 @@ public:
         return GEditor->GetEditorWorldContext().World();
     }
 
-    /** Audio staged (not for a player body: it plays none of its package's), the actor cooked, the level saved and stamped. */
+    /** Audio staged (a player body's too: its weapons' fire and its torch play its package's triggers), the actor cooked, the
+     *  level saved and stamped. */
     bool Finish(ASCVehicle* Actor, const FString& Level, const FString& Root, const FString& Shared, const FSCPackageSource& Source,
-                const FString& Scene, FString& Error, bool bAudio = true)
+                const FString& Scene, FString& Error)
     {
         const FString Name = FPackageName::GetShortName(Level);
         const FString AudioFolder = TEXT("SCAudio/") + Name;
         int32 AudioFiles = 0;
-        if (bAudio)
-        {
-            if (!SCPrepareAudio::Stage(Source, Scene, FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / AudioFolder), AudioFiles, Error)) return false;
-            Actor->CookedAudio = AudioFolder;
-            Actor->CookedAudioScene = Scene;
-        }
+        if (!SCPrepareAudio::Stage(Source, Scene, FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / AudioFolder), AudioFiles, Error)) return false;
+        Actor->CookedAudio = AudioFolder;
+        Actor->CookedAudioScene = Scene;
         if (!USCCookLibrary::CookEnvironment(Actor, Root, Shared, Viewer ? Viewer->GetArchiveBuildId() : FString(), /*bKeepRigs*/ true))
         {
             Error = TEXT("the cook of ") + Level + TEXT(" did not save every asset");
@@ -312,7 +310,8 @@ public:
     }
 
     /** The player body's level (WP-O1-4b-2): the kit actor as the viewer imports it, its rigs kept, with its kit and body clips
-     *  parsed once here (USCPlayerKitData) and its personal lights' cookies, so a run attaches it without the archive. */
+     *  parsed once here (USCPlayerKitData), its personal lights' cookies and its package audio, so a run attaches it without
+     *  the archive. */
     bool PreparePlayer(const FUCScenario& Scenario, const FString& Level, FString& Error)
     {
         const TSharedPtr<FSCTarPackageSource> Source = ExportPlayer(Scenario, Error);
@@ -361,7 +360,7 @@ public:
         Body->SetActorLabel(TEXT("Player ") + Name);
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE player gender=%s loadout=%s weapons=%d states=%d blend_spaces=%d clips=%d clip_failures=%d rigs=%d cookies=%d"),
                *Kit->Gender, *Kit->Loadout, Kit->Weapons.Num(), Kit->States.Num(), Kit->BlendSpaces.Num(), Clips->Num(), FailedClips, Body->Rigs.Num(), Cookies);
-        return Finish(Body, Level, TEXT("/Game/SC/Players/") + Name, TEXT("/Game/SC/Players/Shared"), *Source, Scene, Error, /*bAudio*/ false);
+        return Finish(Body, Level, TEXT("/Game/SC/Players/") + Name, TEXT("/Game/SC/Players/Shared"), *Source, Scene, Error);
     }
 };
 

@@ -282,8 +282,9 @@ data when it loads. In stages:
   actor as the viewer imports it, its rigs kept (O1-4b-1a), with the kit and body clips parsed once at prep
   (`USCPlayerKitData`: `FSCPlayerKit` and `FSCPlayerClipMap` written field by field into one payload after its layout
   version, SCPlayerKitData.cpp; a payload of another layout is read whole and skipped) and its
-  personal lights' cookies pooled (the cook now keeps `GoboTextures` on their pooled textures). A run streams the level when
-  first person first asks for the body (`SetPreparedPlayerLevel`, state `Streaming`) and attaches it as before; nothing is
+  personal lights' cookies pooled (the cook now keeps `GoboTextures` on their pooled textures); its package audio is staged
+  like a vehicle's (`Content/SCAudio/<level>`: the weapons' fire and the torch play its triggers). A run streams the level alongside the
+  vehicle's (`SetPreparedPlayerLevel`, `RequestPlayerKit`, state `Streaming`); first person attaches it as before; nothing is
   exported, imported or parsed. Still at attach: the weapons' fire clips are parsed against their rigs (`FireClipJson`) and
   the torch's light function is made from its cookie. Prep format 26.
 - **O1-4b-2b**: the traversal clips (seat entry and exit, ladders) a run still asks the archive for (`FSCTraversalClips`)

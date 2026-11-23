@@ -100,7 +100,7 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioCargoName = Scenario.Cargo;
     Settings->ScenarioCargoJson = Scenario.CargoJson;
     Settings->ScenarioVehicle = Scenario.Vehicle;
-    // The player body from its prepared level, when first person first asks for it (WP-O1-4b-2).
+    // The player body from its prepared level (WP-O1-4b-2), streamed with the vehicle's.
     Viewer->SetPreparedPlayerLevel(Prepared.PlayerLevel);
     // The environment before anything else is requested (it replaces a saved choice the viewer restored at start).
     Viewer->SetEnvironment(Scenario.Environment.IsEmpty() ? FString(TEXT("none")) : Scenario.Environment);
@@ -177,6 +177,8 @@ bool UUCScenarioSubsystem::Tick(float)
             }
             bVehicleRequested = Viewer->LoadPreparedEntity(Scenario.Vehicle, Prepared.VehicleLevel);
             if (!bVehicleRequested) Fail(FString::Printf(TEXT("the vehicle level %s did not start loading"), *Prepared.VehicleLevel));
+            // The player body's level streams alongside the vehicle's (WP-O1-4b-2): first person attaches it once it is in.
+            else Viewer->RequestPlayerKit();
             return true;
         }
         if (Viewer->GetLoadPhase() == ESCLoadPhase::Failed || Viewer->GetLoadPhase() == ESCLoadPhase::Cancelled)
