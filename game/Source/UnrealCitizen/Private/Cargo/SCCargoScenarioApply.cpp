@@ -10,6 +10,7 @@
 #include "Cargo/SCCargoGridComponent.h"
 #include "Cargo/SCCargoRecords.h"
 #include "SCCargoFx.h"
+#include "Cargo/SCCargoFxMapping.h"
 #include "SCViewerSettings.h"
 #include "SCViewerSubsystem.h"
 #include "SCShipLinkSubsystem.h"
@@ -199,13 +200,25 @@ void USCCargoSubsystem::TryScenario()
     // once it is no longer opening (a prepared tractor record needs no archive, so this can come first); the stock and the
     // drones do not wait for them (no effects yet: the beam mesh).
     const bool bNoFx = FParse::Param(FCommandLine::Get(), TEXT("SCNoCargoFx"));
-    if (!State->Fx && (bNoFx || Viewer->GetArchiveState() != ESCArchiveState::Opening))
+    // A prepared scenario's effects (WP-O1-4b-3b): resolved at prep for this box surface group; no archive needed.
+    FSCCargoFxMapping Prepared;
+    const bool bPreparedFx = State->bPreparedSetup && !UUCSettings::Get()->ScenarioCargoFxJson.IsEmpty() &&
+                             FSCCargoFxMapping::Parse(UUCSettings::Get()->ScenarioCargoFxJson, Prepared) &&
+                             Prepared.BoxGroup == FSCCargoFx::Runtime().BoxGroup;
+    // Effects started before the archive opened (a prepared mapping needs none) take its client once it is: a ship the mapping
+    // does not cover (one brought in later) resolves its contact from it.
+    if (State->Fx && !bNoFx && Viewer->GetArchiveState() == ESCArchiveState::Ready) State->Fx->UseClient(Viewer->GetClient());
+    if (!State->Fx && (bNoFx || bPreparedFx || Viewer->GetArchiveState() != ESCArchiveState::Opening))
     {
         // The tractor's effects (WP-K4c), from the record just read (none without the archive: the beam mesh then).
         State->Fx = MakeShared<FSCCargoFx>();
         if (bNoFx)
         {
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_FX off (-SCNoCargoFx): the beam mesh"));
+        }
+        else if (bPreparedFx)
+        {
+            State->Fx->StartPrepared(Viewer->GetArchiveState() == ESCArchiveState::Ready ? Viewer->GetClient() : nullptr, S.Drone, Prepared);
         }
         else
         {

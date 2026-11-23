@@ -283,6 +283,7 @@ bool FUCPrepared::Parse(const FString& Json, FUCPrepared& Out, FString& Error)
         for (const auto& [Entity, Value] : (*Cargo)->Values)
             if (FString Level; Value && Value->TryGetString(Level)) Out.CargoLevels.Add(FString(Entity), Level);
     Root->TryGetStringField(TEXT("tractor_record"), Out.TractorRecordJson);
+    Root->TryGetStringField(TEXT("cargo_fx"), Out.CargoFxJson);
     Out.Archive = Str(Root, TEXT("archive"));
     Out.PreparedAt = Str(Root, TEXT("prepared_at"));
     if (Out.Scenario.IsEmpty() || Out.Definition.IsEmpty() || Out.VehicleLevel.IsEmpty())
@@ -306,6 +307,7 @@ FString FUCPrepared::ToJson() const
     for (const auto& [Entity, Level] : CargoLevels) Cargo->SetStringField(Entity, Level);
     Root->SetObjectField(TEXT("cargo_levels"), Cargo);
     Root->SetStringField(TEXT("tractor_record"), TractorRecordJson);
+    Root->SetStringField(TEXT("cargo_fx"), CargoFxJson);
     Root->SetStringField(TEXT("archive"), Archive);
     Root->SetStringField(TEXT("prepared_at"), PreparedAt);
     Root->SetStringField(TEXT("definition"), Definition);

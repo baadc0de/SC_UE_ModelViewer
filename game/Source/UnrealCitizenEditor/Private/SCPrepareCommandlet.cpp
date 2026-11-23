@@ -17,6 +17,7 @@
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
 #include "Cargo/SCCargoScenario.h"
+#include "Cargo/SCCargoFxMapping.h"
 #include "Editor.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
@@ -421,9 +422,10 @@ public:
     /** The tractor record the cargo setup names, as DataCore answers it (WP-O1-4b-3): a run applies it instead of asking.
      *  Empty when the setup names none; a record that does not apply is reported and left out (the run then asks the
      *  archive, or keeps the setup's copy of the values). */
-    bool PrepareTractor(const FSCCargoScenario& Cargo, FString& OutJson, FString& Error)
+    bool PrepareTractor(const FSCCargoScenario& Cargo, FString& OutJson, FSCCargoDroneDefinition& OutDrone, FString& Error)
     {
         OutJson.Reset();
+        OutDrone = Cargo.Drone;
         const FString Record = !Cargo.Drone.TractorRecord.IsEmpty() ? Cargo.Drone.TractorRecord : Cargo.Drone.TractorRecordGuid;
         if (Record.IsEmpty()) return true;
         if (!OpenArchive(Error)) return false;
@@ -438,7 +440,32 @@ public:
             return true;
         }
         OutJson = R.Json;
+        OutDrone = Check;
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE tractor record=%s bytes=%d max_force=%.0f"), *Record, OutJson.Len(), Check.MaxForceN);
+        return true;
+    }
+
+    /** The cargo effects (WP-O1-4b-3b): the tractor's hit and the box contacts with the scenario's ship and its obstacles,
+     *  resolved as the run would from the archive (FSCCargoFxMapping). A read that fails fails the prep (kept as "none", a
+     *  prepared run would never look again). */
+    bool PrepareFx(const FSCCargoScenario& Cargo, const FSCCargoDroneDefinition& Drone, const FString& Vehicle, FString& OutJson, FString& Error)
+    {
+        OutJson.Reset();
+        if (!OpenArchive(Error)) return false;
+        TArray<FString> Entities = {Cargo.Ship.IsEmpty() ? Vehicle : Cargo.Ship};
+        for (const FSCCargoScenario::FObstacle& O : Cargo.Obstacles) Entities.AddUnique(O.Entity);
+        FSCCargoFxMapping Mapping;
+        FString Why;
+        if (!FSCCargoFxMapping::Resolve(*Viewer->GetClient(), Drone, Entities, Mapping, Why))
+        {
+            Error = TEXT("the cargo effects: ") + Why;
+            return false;
+        }
+        OutJson = Mapping.ToJson();
+        int32 Contacts = 0;
+        for (const auto& [Entity, E] : Mapping.Contacts) Contacts += !E.Reference.IsEmpty();
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE cargo effects box_group=%s hit=%s contacts=%d/%d"), *Mapping.BoxGroup,
+               Mapping.Hit.Reference.IsEmpty() ? TEXT("none") : *Mapping.Hit.Reference, Contacts, Mapping.Contacts.Num());
         return true;
     }
 
@@ -635,7 +662,9 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
                 return Failed(Id, Error);
             }
         }
-        if (!Prepare.PrepareTractor(Cargo, Record.TractorRecordJson, Error)) return Failed(Id, Error);
+        FSCCargoDroneDefinition Drone;
+        if (!Prepare.PrepareTractor(Cargo, Record.TractorRecordJson, Drone, Error)) return Failed(Id, Error);
+        if (!Prepare.PrepareFx(Cargo, Drone, Scenario.Vehicle, Record.CargoFxJson, Error)) return Failed(Id, Error);
     }
     // The seat and ladder clips for that body: read again unless they were read from these very levels (their stamps' ids:
     // a level saved again since, by this run or another scenario's sharing it, makes them stale). Their names come from the

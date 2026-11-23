@@ -51,6 +51,8 @@ public:
      *  exporting) and its tractor record as read at prep (the cargo setup applies it instead of asking DataCore). */
     TMap<FString, FString> ScenarioCargoLevels;
     FString ScenarioTractorRecordJson;
+    /** WP-O1-4b-3b: its cargo effects as resolved at prep (FSCCargoFxMapping JSON; empty: resolved from the archive). */
+    FString ScenarioCargoFxJson;
     /** Set by the cargo subsystem when a prepared box did not load: the scenario fails with it. */
     FString ScenarioCargoProblem;
 
