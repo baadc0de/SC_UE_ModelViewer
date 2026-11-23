@@ -55,6 +55,7 @@ void USCCargoSubsystem::DropScenario()
     Dropped.Drone = State->Scenario.Drone; // drones already docked keep their flight limits
     State->Scenario = MoveTemp(Dropped);   // no Path: IsSet() is false, TryScenario applies nothing more
     State->bScenarioTried = true;
+    State->bPreparedSetup = false;
     // Its box packages go too, queued, streaming (a prepared box's level) or ready: none was placed yet (the stock waits for
     // the vehicle), and a later live spawn requests its entity anew.
     State->Library.Reset();
@@ -80,6 +81,7 @@ void USCCargoSubsystem::TryScenario()
                 return;
             }
             State->Scenario.Path = TEXT("scenario:") + Settings->ScenarioCargoName;
+            State->bPreparedSetup = true;
             // A setup that names no ship is for the scenario's vehicle (its owners and extra instances wait for it).
             if (State->Scenario.Ship.IsEmpty()) State->Scenario.Ship = Settings->ScenarioVehicle;
         }
@@ -119,7 +121,7 @@ void USCCargoSubsystem::TryScenario()
     const FSCCargoScenario& S = State->Scenario;
     if (!S.IsSet()) return;
     // The tractor values from the game data (the record the scenario names); the scenario's copy without the archive.
-    if (State->TractorLookup == FSCCargoState::ELookup::None && UUCSettings::Get()->bScenarioOwnsScene)
+    if (State->TractorLookup == FSCCargoState::ELookup::None && State->bPreparedSetup)
     {
         // A prepared scenario (WP-O1-4b-3): the record as DataCore answered at prep, or none kept (none named, or the
         // archive's did not apply) and the setup's own values; nothing is asked of the archive either way.
