@@ -117,6 +117,13 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
 {
     State = EState::Failed;
     Problem = Why;
+    // What the run started stops and goes: a level still streaming, the environment, and the cargo setup not applied yet.
+    UUCSettings::Get()->ScenarioCargoJson.Reset();
+    if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
+    {
+        Viewer->CancelLoad();
+        Viewer->SetEnvironment(TEXT("none"));
+    }
     UE_LOG(LogUCScenario, Error, TEXT("SCENARIO_FAILED id=%s %s"), *Id, *Why);
 }
 

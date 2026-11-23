@@ -44,17 +44,19 @@ bool Current(const FString& Level)
     return FUCPrepared::IsLevelCurrent(Level);
 }
 
-/** A paint's level variant: its palette id, else its subgeometry tag, else its name; with the paint's index when another
- *  paint of the vehicle has the same one (USCViewerSubsystem::ShipLevelPath makes it a level name). */
-FString PaintVariant(const TArray<FSCPaintVariant>& Paints, int32 Index)
+/** The same paint in two lists (the package's paints.json and the imported manifest, which leaves out a variant whose
+ *  files are unavailable). */
+bool SamePaint(const FSCPaintVariant& A, const FSCPaintVariant& B)
 {
-    auto Identity = [](const FSCPaintVariant& P) {
-        return !P.PaletteId.IsEmpty() ? P.PaletteId : !P.SubgeometryTag.IsEmpty() ? P.SubgeometryTag : P.DisplayName;
-    };
-    const FString Own = Identity(Paints[Index]);
-    int32 Same = 0;
-    for (const FSCPaintVariant& P : Paints) Same += Identity(P).Equals(Own, ESearchCase::IgnoreCase) ? 1 : 0;
-    return Own.IsEmpty() || Same > 1 ? FString::Printf(TEXT("%s_paint%d"), *Own, Index) : Own;
+    return A.PaletteId == B.PaletteId && A.SubgeometryTag == B.SubgeometryTag && A.DisplayName == B.DisplayName;
+}
+/** A paint's level variant: its palette id (else its subgeometry tag, else its name) for reading, and a hash of all three,
+ *  so variants whose names differ only in characters a level name drops stay apart (USCViewerSubsystem::ShipLevelPath). */
+FString PaintVariant(const FSCPaintVariant& Paint)
+{
+    const FString Name = !Paint.PaletteId.IsEmpty() ? Paint.PaletteId : !Paint.SubgeometryTag.IsEmpty() ? Paint.SubgeometryTag : Paint.DisplayName;
+    const uint32 Hash = FCrc::StrCrc32(*(Paint.PaletteId + TEXT("|") + Paint.SubgeometryTag + TEXT("|") + Paint.DisplayName));
+    return FString::Printf(TEXT("%s_%08x"), *Name, Hash);
 }
 
 /** The paints a vehicle package offers (paints.json beside its scene.json; FSCPackageReader reads it the same way). */
@@ -151,7 +153,13 @@ public:
     UWorld* NewLevel(const FString& Level, const FString& Root, FString& Error)
     {
         IFileManager& Files = IFileManager::Get();
+        // The stamp goes first: from here until the new level saved, no record can run this level.
         Files.Delete(*StampFile(Level), false, true, true);
+        if (Files.FileExists(*StampFile(Level)))
+        {
+            Error = FString::Printf(TEXT("cannot delete %s: delete it and run again"), *StampFile(Level));
+            return nullptr;
+        }
         // The older level and its materials go by their files (nothing has loaded them: loading a level to delete it would
         // load its whole pool), then the asset registry forgets them (it lists what it scanned at start).
         if (FindPackage(nullptr, *Level))
@@ -261,7 +269,7 @@ public:
                                     Names.IsEmpty() ? TEXT("none") : *FString::Join(Names, TEXT(", ")));
             return false;
         }
-        Level = USCViewerSubsystem::ShipLevelPath(Scenario.Vehicle, Paint == INDEX_NONE ? FString() : PaintVariant(Paints, Paint));
+        Level = USCViewerSubsystem::ShipLevelPath(Scenario.Vehicle, Paint == INDEX_NONE ? FString() : PaintVariant(Paints[Paint]));
         if (Current(Level) && !bForce)
         {
             UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Level, FUCPrepared::FormatVersion);
@@ -277,9 +285,13 @@ public:
             return false;
         }
         Ship->SetActorLabel(TEXT("Ship ") + Name);
-        if (Paint != INDEX_NONE && (Ship->Manifest.Paints.Num() != Paints.Num() || !Ship->SetPaint(Paint)))
+        // The paint as the import validated it (it leaves out variants whose files are unavailable).
+        const int32 Imported = Paint == INDEX_NONE ? INDEX_NONE
+            : Ship->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return SamePaint(P, Paints[Paint]); });
+        if (Paint != INDEX_NONE && (Imported == INDEX_NONE || !Ship->SetPaint(Imported)))
         {
-            Error = FString::Printf(TEXT("%s: the paint \"%s\" did not go on"), *Scenario.Vehicle, *Scenario.Skin);
+            Error = FString::Printf(TEXT("%s: the paint \"%s\" (%s) did not go on: the import left it out"), *Scenario.Vehicle, *Scenario.Skin,
+                                    *Paints[Paint].Label());
             return false;
         }
         const int32 GearClips = USCImportLibrary::RestOnFloor(Ship, FloorZ);

@@ -14,7 +14,7 @@
 //
 // Levels: environments /Game/SC/Hangars/Maps/<style>_<name> (materials /Game/SC/Hangars/<style>_<name>, meshes and
 // textures /Game/SC/Hangars/Shared, the ship capacity in the hangar index); vehicles /Game/SC/Ships/Maps/<entity>[__<paint>]
-// (<paint>: the paint's palette id, else its subgeometry tag, else its name; with its index when two paints share it)
+// (<paint>: the paint's palette id, else its subgeometry tag, else its name, and a hash of all three)
 // (materials /Game/SC/Ships/<level name>, meshes and textures /Game/SC/Ships/Shared). All game-derived (gitignored).
 // Textures are prepared at full resolution (the shared pools key a texture by its source, so one resolution per pool).
 // Needs a renderer (-AllowCommandletRendering: runtime textures and Nanite builds). Exit code 0 when the record is written.
