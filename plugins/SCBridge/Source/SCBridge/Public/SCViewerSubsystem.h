@@ -256,6 +256,9 @@ public:
      *  outside [A-Za-z0-9_] become '_'. UnrealCitizen's prep step (-run=SCPrepare) writes them. */
     static FString EnvironmentLevelPath(const FString& Folder);
     static FString ShipLevelPath(const FString& Entity, const FString& Variant = FString());
+    /** A ship level with a paint baked in (<entity>__<variant>: an entity's own part never holds "__"), not the entity's own
+     *  level: lists of entities (the Garage) leave it out. */
+    static bool IsShipPaintLevel(const FString& Level);
     /** Load a prepared ship level (UnrealCitizen's scenario: its paint baked in) as the vehicle, archive or not; false
      *  (nothing started) as LoadEntity, or when the level does not exist. */
     bool LoadPreparedEntity(const FString& Entity, const FString& Level);

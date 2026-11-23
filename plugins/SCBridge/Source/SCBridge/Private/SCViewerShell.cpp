@@ -20,6 +20,7 @@ struct FShell
 {
     FText App;
     bool bCookedLevels = true;
+    TFunction<bool(const FString&)> CookedLevelCheck;
     TOptional<FText> Menu;
     bool bOpen = false; // the UI-level mirror of the open state (see IsMenuOpen)
     TWeakObjectPtr<ASCFirstPersonCharacter> Owner;
@@ -47,6 +48,8 @@ void SetAppName(const FText& Name) { Shell().App = Name; }
 FText AppName() { return Shell().App; }
 void SetCookedLevels(bool bUse) { Shell().bCookedLevels = bUse; }
 bool UsesCookedLevels() { return Shell().bCookedLevels; }
+void SetCookedLevelCheck(TFunction<bool(const FString& Level)> Check) { Shell().CookedLevelCheck = MoveTemp(Check); }
+bool PassesCookedLevelCheck(const FString& Level) { return !Shell().CookedLevelCheck || Shell().CookedLevelCheck(Level); }
 void SetMenu(const FText& Name) { Shell().Menu = Name; }
 void ClearMenu()
 {

@@ -48,13 +48,14 @@ GPU ms p50: 7.22 / 7.39 / 5.22). `install_dlss.ps1` also declares UE 5.9 in the 
 an unattended cook skips the plugin, and a packaged game then stops at start ("Missing global shader FVelocityCombineCS").
 The DLSS plugin is a project plugin, so UBT compiles it against the source fork with the project.
 
-**Win64 showcase (standalone directory):** one cooked ship and one cooked hangar, dynamic lighting:
+**Win64 showcase (standalone directory):** UnrealCitizen running one prepared scenario, dynamic lighting:
 Nanite, Lumen GI and reflections at Cinematic with hardware ray tracing and hit lighting for GI and reflections
-(`-SCMaxQuality`, `SCLook::ApplyMaxQuality`), DLAA. Cook at full resolution (`--lod 0 --mip 0` exports, the hangar-cook
-standard), then `powershell -File game/scripts/package_showcase.ps1 -Ship DRAK_Golem -Hangar
-hightech_a/hangar_smltop_001 -Config Shipping` writes `out/win64/<ship>`: run `Play_SCViewer.bat` there (a Windows build
-does not read the staged `UECommandLine.txt`, so the launcher passes `-SCLoad`, `-SCEnvironment` and `-SCMaxQuality`;
-`SCViewer.exe` alone is the plain viewer). Shipping keeps no log: `-SCQualityReport=<file>` writes the effective settings,
+(`-SCMaxQuality`, `SCLook::ApplyMaxQuality`), DLAA. Prepare the scenario (WP-O1-4a: `UnrealEditor-Cmd
+game/UnrealCitizen.uproject -run=SCPrepare -Scenario=golem_showcase -AllowCommandletRendering -unattended`, full
+resolution), then `powershell -File game/scripts/package_showcase.ps1 -Scenario golem_showcase -Config Shipping` writes
+`out/win64/<scenario>`: run `Play_UnrealCitizen.bat` there (a Windows build does not read the staged
+`UECommandLine.txt`, so the launcher passes `-Scenario`, `-SCShowcase` and `-SCMaxQuality`; `UnrealCitizen.exe` alone
+starts the game without a scenario). Preparing and packaging happen only on the owner's request. Shipping keeps no log: `-SCQualityReport=<file>` writes the effective settings,
 and `viewer/scripts/routes/showcase-max-quality.txt` takes a shot with and without hit lighting (`-SCScript=... -SCShotDir=...`).
 Golem, small hightech hangar (2026-11-14, RTX 4090, Shipping): 1.7 GB of content; the report reads
 `gi=4 reflections=4 lumen_hwrt=1 lighting_mode=1 hit_shadow_mode=2 probe_downsample=8 nanite=1 dlss=1 screen_percentage=100`.
@@ -417,7 +418,7 @@ Scenarios (`game/Config/Cargo/*.json`, `-SCCargoScenario=<name>`) set the stock,
 | `hull_a_multi` (3 Hull A, 3 owners) | as above | `cargo-multi.txt`, `mobiglas-multi.txt` |
 | `c2_hangar` | `-SCLoad=CRUS_Starlifter_C2 -SCEnvironment=…/hightech_a/hangar_xltop_001.socpak` | `cargo-c2.txt` |
 
-Add `-SCCamera=first` (and `-SCScript=viewer/scripts/routes/<route> -SCShotDir=<dir>` for a route). **F1** opens the
+Add `-SCCamera=first` (and `-SCScript=game/scripts/routes/<route> -SCShotDir=<dir>` for a route; run in UnrealCitizen). **F1** opens the
 mobiGlas Cargo app (Esc closes): every cargo grid in the level, nearest first (`CargoGridListRadiusM` > 0 limits it),
 grid detail, transfer composer (from, to, commodity, amount in whole boxes, fit preview with refusals), transfers in
 progress; the view becomes an orbit camera (drag, wheel) around the selected ship or elevator. World callouts label
@@ -552,7 +553,7 @@ Desktop non-Shipping builds only. The routes and records are in `docs/work-packa
 
 ```powershell
 Import-Module viewer/scripts/rpc/SCRpc.psm1
-$p = Start-SCViewer -Extra '-SCCargoScenario=c2_hangar'      # off screen (-AgentMode); -Visible for a window
+$p = Start-SCViewer -Game -Extra '-SCCargoScenario=c2_hangar'   # UnrealCitizen (cargo is the game's), off screen; -Visible for a window
 Invoke-SC /wait @{ until = 'settled'; timeout_s = 900 }
 Invoke-SC /cargo/transfer @{ from = 'elevator'; to = 'ship'; commodity = 'organic'; scu = 32 }
 Invoke-SC /screenshot @{ name = 'after' }
@@ -982,7 +983,7 @@ Options (settings in `GameUserSettings.ini`, command line overrides one run):
 | `PlayerLoadout` / `-SCPlayerLoadout=<p4k xml>` | e.g. `Data/Scripts/Loadouts/Player/DefaultLoadouts/PVE_medium_behr_rifle_gmni_rifle.xml` (P4-AR); empty = the exporter's default loadout |
 | `-SCPlayerPackage=<kit tar>` | read the kit from disk instead of exporting (no archive needed) |
 | `-SCPlayerWeapon=<slot\|none>`, `-SCPlayerView=fp\|tp[,yaw[,distance]]` | applied once the body is attached (for `capture_viewer.sh`) |
-| `-SCPlayerDemo[=<entity>]` | runs `viewer/scripts/routes/player-demo.txt` (loads `<entity>` if given, enters first person) |
+| `-SCPlayerDemo[=<entity>]` | runs the shared plugin's `plugins/SCBridge/Resources/Routes/player-demo.txt` (both apps; loads `<entity>` if given, enters first person) |
 
 Keys (same `KeyTable` for Slate and native input): `1`–`9` draw the stowed weapon in that slot
 (slots: stowed weapons with playable select/deselect, ordered by size, then stow-port name — the

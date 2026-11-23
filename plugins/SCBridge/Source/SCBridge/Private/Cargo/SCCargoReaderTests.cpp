@@ -1,0 +1,93 @@
+// Automation test of the K1a cargo fields in FSCPackageReader (SCBridge.Cargo.ReaderFields): a synthetic scene.json with
+// children port paths, vehicle and interior inventory containers and a root occupancy. Values are synthetic. (Back in the
+// shared plugin since the WP-O1 series review: the reader is shared, so the viewer runs it too.)
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "SCPackageReader.h"
+#include "SCPackageSource.h"
+
+namespace
+{
+class FCargoFixtureSource : public FSCPackageSource
+{
+public:
+    TMap<FString, FString> Files;
+    bool Exists(const FString& Path) const override { return Files.Contains(Path); }
+    bool ReadBytes(const FString& Path, TArray<uint8>& Out, FString& Error) const override
+    {
+        const FString* Text = Files.Find(Path);
+        if (!Text) { Error = TEXT("missing fixture ") + Path; return false; }
+        FTCHARToUTF8 Utf8(**Text);
+        Out.Reset();
+        Out.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+        return true;
+    }
+    TArray<FString> ListFiles(const FString& Prefix) const override
+    {
+        TArray<FString> R;
+        for (const auto& P : Files) if (Prefix.IsEmpty() || P.Key.StartsWith(Prefix)) R.Add(P.Key);
+        return R;
+    }
+};
+const TCHAR* SyntheticScene = TEXT(R"({"version":3,"export_kind":"Decomposed",
+  "root_entity":{"entity_name":"SyntheticBox","item_type":"Cargo","item_sub_type":"Synthetic","display_name":"Synthetic crate",
+    "inventory_occupancy":{"dimensions":[1.5,3,1.5],"volume":7,"volume_unit":"SyntheticUnit","local_bounds_min":[-0.75,-1.5,0],"local_bounds_max":[0.75,1.5,1.5]},"standard_cargo_units":7,"mass":1234},
+  "children":[
+    {"entity_name":"SyntheticPlate","parent_entity_name":"SyntheticBox","parent_node_name":"hp_plate_a","port_path":["hp_plate_a"],"source_transform_basis":"gltf_y_up"},
+    {"entity_name":"SyntheticPlate","parent_entity_name":"SyntheticBox","parent_node_name":"hp_plate_b","port_path":["hp_plate_b"],"source_transform_basis":"gltf_y_up"}],
+  "inventory_containers":[
+    {"entity_name":"SyntheticGrid","entity_class_guid":"00000000-0000-0000-0000-000000000001","port_path":["hp_plate_b","hp_grid"],
+     "parent_port_path":["hp_plate_b"],"parent_node_name":"hp_grid_node",
+     "local_transform_sc":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0.5,0,0,1]],
+     "container":{"record":"InventoryContainer.Synthetic","record_guid":"00000000-0000-0000-0000-000000000002","inventory_type":"InventoryOpenContainerType",
+       "interior_dimensions":[3,6,3],"grid_cell_size":0.01,"grid_pos_offset":[0,0,0],"min_permitted_item_size":{"x":1.5,"y":1.5,"z":1.5},
+       "max_permitted_item_size":[3,6,3],"is_external_container":true,"excluded_item_sub_types":["Excluded"],"capacity":0}}],
+  "interiors":[{"name":"SyntheticRoom","placements":[],
+    "inventory_containers":[{"entity_id":"42","entity_class":"SyntheticPlatformGrid","entity_class_guid":"00000000-0000-0000-0000-000000000003",
+      "transform":[[0,1,0,0],[-1,0,0,0],[0,0,1,0],[2,3,4,1]],"links":["41"],
+      "container":{"record":"InventoryContainer.SyntheticPlatform","interior_dimensions":[6,4.5,3],"min_permitted_item_size":[1.5,1.5,1.5],
+        "max_permitted_item_size":[0,0,0],"is_external_container":false}}]}]})");
+} // namespace
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoReaderTest, "SCBridge.Cargo.ReaderFields", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCCargoReaderTest::RunTest(const FString&)
+{
+    FCargoFixtureSource Source;
+    Source.Files.Add(TEXT("scene.json"), SyntheticScene);
+    FSCSceneManifest M;
+    FString Error;
+    TArray<FString> Warnings;
+    TestTrue(*Error, FSCPackageReader::Read(Source, M, Error, TEXT(""), &Warnings));
+    TestEqual(TEXT("children keep their port paths"), M.Children.Num(), 2);
+    if (M.Children.Num() == 2) TestEqual(TEXT("port path of the second plate"), M.Children[1].PortPath, TArray<FString>{TEXT("hp_plate_b")});
+    TestEqual(TEXT("one vehicle and one interior container"), M.InventoryContainers.Num(), 2);
+    if (M.InventoryContainers.Num() == 2)
+    {
+        const FSCInventoryContainerRecord& V = M.InventoryContainers[0];
+        TestEqual(TEXT("vehicle entry: no interior"), V.InteriorIndex, int32(INDEX_NONE));
+        TestEqual(TEXT("parent port path"), V.ParentPortPath, TArray<FString>{TEXT("hp_plate_b")});
+        TestEqual(TEXT("parent node"), V.ParentNodeName, FString(TEXT("hp_grid_node")));
+        TestEqual(TEXT("local transform (column-major, metres)"), V.LocalMatrix.GetOrigin(), FVector(0.5, 0, 0));
+        TestEqual(TEXT("interior dimensions"), V.Container.InteriorDimensions, FVector(3, 6, 3));
+        TestEqual(TEXT("min item size from an {x,y,z} object"), V.Container.MinPermittedItemSize, FVector(1.5));
+        TestTrue(TEXT("external"), V.Container.bExternalContainer);
+        TestEqual(TEXT("excluded sub types"), V.Container.ExcludedItemSubTypes, TArray<FString>{TEXT("Excluded")});
+        TestTrue(TEXT("unknown fields survive in the raw json"), V.Container.Json.Contains(TEXT("capacity")));
+        const FSCInventoryContainerRecord& I = M.InventoryContainers[1];
+        TestEqual(TEXT("interior entry index"), I.InteriorIndex, 0);
+        TestEqual(TEXT("entity id"), I.EntityId, FString(TEXT("42")));
+        TestEqual(TEXT("links"), I.Links, TArray<FString>{TEXT("41")});
+        TestEqual(TEXT("interior transform"), I.LocalMatrix.GetOrigin(), FVector(2, 3, 4));
+        TestEqual(TEXT("zero max item stays zero"), I.Container.MaxPermittedItemSize, FVector::ZeroVector);
+    }
+    TestTrue(TEXT("root occupancy"), M.RootOccupancy.bValid);
+    TestEqual(TEXT("occupancy dimensions"), M.RootOccupancy.Dimensions, FVector(1.5, 3, 1.5));
+    TestEqual(TEXT("standard cargo units"), M.RootOccupancy.StandardCargoUnits, 7);
+    TestEqual(TEXT("mass"), M.RootOccupancy.Mass, 1234.0);
+    TestEqual(TEXT("volume unit as authored"), M.RootOccupancy.VolumeUnit, FString(TEXT("SyntheticUnit")));
+    TestEqual(TEXT("volume"), M.RootOccupancy.Volume, 7.0);
+    TestEqual(TEXT("local bounds"), M.RootOccupancy.LocalBoundsMax, FVector(0.75, 1.5, 1.5));
+    TestEqual(TEXT("display name"), M.RootOccupancy.DisplayName, FString(TEXT("Synthetic crate")));
+    return true;
+}
+#endif

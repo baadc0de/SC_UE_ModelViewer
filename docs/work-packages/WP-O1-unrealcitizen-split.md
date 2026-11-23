@@ -214,7 +214,7 @@ landing gear on the floor with the scenario's paint on), stages its audio beside
 of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes and textures keyed by source path and content — a mesh's
 committed source description id and collision triangles, a texture's first-mip bytes — so a changed asset at the same path is pooled anew;
 constant materials) and
-stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`) and the
+stamps it with the prep format (`FUCPrepared::FormatVersion`, 10 in O1-4a, 11 since the series review; it was `USCCookLibrary::FormatVersion`) and the
 archive build it was prepared from (written whole: a level counts as current only with a complete stamp); a hangar index that cannot be saved fails the run. Levels:
 `/Game/SC/Hangars/Maps/<style>_<name>_<hash>` (a hash of the whole container path, so containers whose last two parts
 make the same name stay apart) and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
@@ -245,6 +245,36 @@ Without a scenario the game behaves as before (the command line and the menus de
 `game/scripts/package_showcase.ps1 -Scenario <name>` packages a prepared scenario: it checks the record, the definition,
 its cargo setup and each level's stamp, cooks the scenario's levels and starts the build with `-Scenario=<name>`. Preparing and packaging
 still happen only on the owner's request.
+
+### Series review (O1-1 to O1-4a, this PR)
+
+A review of the series as a whole (Terra) found what the per-stage reviews could not see:
+
+- A cargo setup's tractor record lookup waits while the archive is still opening (a prepared scenario's ship can be in
+  the scene first); before, a lookup that ran first settled on the scenario's copy for the session.
+- `-SCPlayerDemo`'s built-in route moved from `viewer/scripts/routes` to the shared plugin
+  (`plugins/SCBridge/Resources/Routes/player-demo.txt`, staged as a runtime dependency): the game had none.
+- The Ship Link door-policy tests (`SCBridge.ShipLink.Access`, `.RoomClassification`) and the package reader's cargo-field
+  test (`SCBridge.Cargo.ReaderFields`) moved back to the plugin (`SCShipLinkPolicyTests.cpp`, `Cargo/SCCargoReaderTests.cpp`):
+  what they test is shared, so the viewer runs them too; the cargo-dependent ones stay in the game.
+- The game stages its `Config/FX/effects.json` (the cargo effects' settings; only the viewer module staged its copy).
+- A scenario's staleness check ignores line ends (git's checkout turned `golem_showcase.json` into CRLF and the game
+  refused it as changed); the packaging script compares alike.
+- A cooked level streams in the game only when it is current (`SCViewerShell::SetCookedLevelCheck`, registered as
+  `FUCPrepared::IsLevelCurrent`): also loads without a scenario (`-SCLoad`, `-SCEnvironment`, the Garage) skip an unfinished
+  or older preparation and import from the archive.
+- With automation that puts the camera (`-SCCamera`, `-SCScript`, `-SCPlayerDemo`) a scenario sets neither its camera nor its
+  start (`AutomationOwnsCamera`); `-SCCamera` also applies to a vehicle a scenario brought, so its route starts.
+- A cargo setup run without a game scenario (`-SCCargoScenario`) requests the setup's environment as soon as it reads,
+  replacing the hangar the viewer restored at start, unless `-SCEnvironment` or `-SCLoad` names the scene
+  (`USCCargoSubsystem::TakesScenarioEnvironment`, `SCBridge.Cargo.ScenarioEnvironment`).
+- The Garage lists an entity's own prepared level only: a paint variant's level (`<entity>__<variant>`,
+  `USCViewerSubsystem::IsShipPaintLevel`; an entity's own part never holds `__`) is not another ship.
+- A paint request on a vehicle without paint slots (a prepared one, its paint baked in) is refused (`PAINT … refused`)
+  instead of reported as applied and remembered; a prepared vehicle saves the paint it was prepared with
+  (`ASCVehicle::ActivePaint`, prep format 11), so the Garage reports it and a request for it is no change.
+- `viewer/README.md`: the showcase packaging takes a prepared scenario (`-Scenario`, `Play_UnrealCitizen.bat`); the cargo
+  RPC example launches the game (`Start-SCViewer -Game`), cargo routes are under `game/scripts/routes`.
 
 ## Verification
 

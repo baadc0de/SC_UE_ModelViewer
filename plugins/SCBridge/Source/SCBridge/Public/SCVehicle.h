@@ -266,11 +266,14 @@ public:
      *  towards open / closed, else DoorOpened / DoorClosed. */
     static FString DoorOpenStateKey(bool bOpen, bool bMoving);
     /** Paints the vehicle can wear (Manifest.Paints) and the mesh slots they touch; SetPaint swaps those slots.
-     *  INDEX_NONE = the vehicle's own (default) paint. */
+     *  INDEX_NONE = the vehicle's own (default) paint. SetPaint is false for an index it lacks, and on a vehicle with
+     *  paints but no slots (a prepared one: its paint was baked in). */
     TArray<FSCPaintSlot> PaintSlots;
     UFUNCTION(BlueprintCallable, Category = "SC|Paint") bool SetPaint(int32 Index);
     UFUNCTION(BlueprintPure, Category = "SC|Paint") int32 GetPaint() const { return ActivePaint; }
-    int32 ActivePaint = INDEX_NONE;
+    /** The paint on the vehicle (Manifest.Paints index, INDEX_NONE: its own). Saved with a prepared level: the paint the prep
+     *  step baked in, which SetPaint cannot change there. */
+    UPROPERTY() int32 ActivePaint = INDEX_NONE;
     /** First-person tick: opens doors whose sensors hold the player, closes the ones a sensor opened after their delay. */
     void UpdateDoorSensors(const FVector& PlayerWorld, double Now);
     /** The door interaction driven by a rig (the first one; INDEX_NONE without). */

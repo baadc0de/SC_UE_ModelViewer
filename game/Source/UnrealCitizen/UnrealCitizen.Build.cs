@@ -10,9 +10,12 @@ public class UnrealCitizen : ModuleRules
         bUseUnity = false;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "SCBridge" });
         PrivateDependencyModuleNames.AddRange(new[] { "Json", "RenderCore", "RHI", "PhysicsCore", "Chaos", "ChaosCore", "GeometryCore", "Slate", "SlateCore", "InputCore", "ApplicationCore", "Niagara", "AudioMixer", "AudioExtensions", "Synthesis", "AssetRegistry", "XmlParser", "NiagaraShader", "StaticMeshDescription", "MeshDescription", "ImageWrapper" });
-        // Read at run time from Config (FSCCargoDroneArt, FSCCargoFx, the live-spawn default fleet): staged with a packaged build.
+        // Read at run time from Config (FSCCargoDroneArt, FSCCargoFx, the live-spawn default fleet, the effects' settings): staged
+        // with a packaged build.
         RuntimeDependencies.Add("$(ProjectDir)/Config/Cargo/drone_art.json", StagedFileType.UFS);
         RuntimeDependencies.Add("$(ProjectDir)/Config/Cargo/fleet.json", StagedFileType.UFS);
+        // The effects' runtime settings (FSCCargoFx: box contact effects, the tractor hit's surface group).
+        RuntimeDependencies.Add("$(ProjectDir)/Config/FX/effects.json", StagedFileType.UFS);
         // The RPC routes exist where the harness does (SCBridge.Build.cs: desktop, not Shipping).
         bool bRpc = Target.Configuration != UnrealTargetConfiguration.Shipping &&
                     (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Linux || Target.Platform == UnrealTargetPlatform.Mac);

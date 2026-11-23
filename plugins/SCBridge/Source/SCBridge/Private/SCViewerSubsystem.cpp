@@ -426,9 +426,15 @@ FString USCViewerSubsystem::EnvironmentLevelPath(const FString& Folder)
 }
 FString USCViewerSubsystem::ShipLevelPath(const FString& Entity, const FString& Variant)
 {
-    const FString Name = LevelName(Entity);
+    // "__" separates the paint variant: an entity's own part never has it (IsShipPaintLevel).
+    FString Name = LevelName(Entity);
+    while (Name.Contains(TEXT("__"))) Name.ReplaceInline(TEXT("__"), TEXT("_"));
     if (Name.IsEmpty()) return FString();
     return TEXT("/Game/SC/Ships/Maps/") + Name + (Variant.IsEmpty() ? FString() : TEXT("__") + LevelName(Variant));
+}
+bool USCViewerSubsystem::IsShipPaintLevel(const FString& Level)
+{
+    return FPackageName::GetShortName(Level).Contains(TEXT("__"));
 }
 FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
 {
@@ -436,10 +442,11 @@ FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
         return FString(); // -SCNoCooked: as if none was cooked (StepEnvironment and IsBusy decide alike)
     const FString Level = EnvironmentLevelPath(Folder);
     if (Level.IsEmpty()) return FString();
-    if (FPackageName::DoesPackageExist(Level)) return Level;
+    // A level the app's check refuses (UnrealCitizen: not prepared in the current format) is not used.
+    if (FPackageName::DoesPackageExist(Level)) return SCViewerShell::PassesCookedLevelCheck(Level) ? Level : FString();
     // A level cooked before WP-O1-4 (named by the last two path parts only, without the path hash).
     const FString Legacy = Level.LeftChop(9);
-    return FPackageName::DoesPackageExist(Legacy) ? Legacy : FString();
+    return FPackageName::DoesPackageExist(Legacy) && SCViewerShell::PassesCookedLevelCheck(Legacy) ? Legacy : FString();
 }
 void USCViewerSubsystem::SetSpace(bool bInSpace)
 {
@@ -719,7 +726,7 @@ FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
 {
     if (Entity.IsEmpty() || !SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
     const FString Level = ShipLevelPath(Entity);
-    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) ? Level : FString();
+    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) && SCViewerShell::PassesCookedLevelCheck(Level) ? Level : FString();
 }
 bool USCViewerSubsystem::CanLoad(const FString& Entity) const
 {

@@ -48,8 +48,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  it: Content/SCAudio/<level>). 7: WP-A1 A1-2 (the staged audio.json carries the bus effects). 8: hangar waypoints
      *  (ASCVehicle::Waypoints). 9: WP-I1-4 (a large button's background at its styled alpha; generated UI textures pooled
      *  under a key carrying this version). The hover renders, panel aims and usables are import-time records a prepared
-     *  level does not keep yet. 10: WP-O1-4 (the prep step; levels and records written by -run=SCPrepare). */
-    static constexpr int32 FormatVersion = 10;
+     *  level does not keep yet. 10: WP-O1-4 (the prep step; levels and records written by -run=SCPrepare). 11: the WP-O1
+     *  series review (a prepared vehicle saves the paint it was prepared with, ASCVehicle::ActivePaint). */
+    static constexpr int32 FormatVersion = 11;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

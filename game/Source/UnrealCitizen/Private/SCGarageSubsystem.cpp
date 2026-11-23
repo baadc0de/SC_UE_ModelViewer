@@ -93,7 +93,8 @@ void USCGarageSubsystem::RequestCatalog()
         TArray<FAssetData> LevelCandidates;
         Assets.GetAssetsByPath(FName(TEXT("/Game/SC/Ships/Maps")), LevelCandidates, false);
         for (const FAssetData& Level : LevelCandidates)
-            if (Level.AssetClassPath == UWorld::StaticClass()->GetClassPathName())
+            // An entity's own prepared level; a paint variant (a scenario's skin) is that entity's level too, not another ship.
+            if (Level.AssetClassPath == UWorld::StaticClass()->GetClassPathName() && !USCViewerSubsystem::IsShipPaintLevel(Level.PackageName.ToString()))
             {
                 const FString Entity = FPackageName::GetShortName(Level.PackageName);
                 if (!USCViewerSubsystem::CookedShipLevel(Entity).IsEmpty()) Cooked.AddUnique(Entity);

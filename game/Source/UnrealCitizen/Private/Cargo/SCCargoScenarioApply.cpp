@@ -40,6 +40,13 @@ USCCargoGridComponent* USCCargoSubsystem::SelectGrid(const FSCCargoGridSelector&
     return OfKind.IsValidIndex(Selector.Index) ? OfKind[Selector.Index] : nullptr;
 }
 
+bool USCCargoSubsystem::TakesScenarioEnvironment(const TCHAR* CommandLine, bool bGameScenario, const FSCCargoScenario& Scenario)
+{
+    FString Ignored;
+    return !bGameScenario && !Scenario.bSpace && !Scenario.Environment.IsEmpty() && !FParse::Value(CommandLine, TEXT("SCEnvironment="), Ignored) &&
+           !FParse::Value(CommandLine, TEXT("SCLoad="), Ignored);
+}
+
 void USCCargoSubsystem::DropScenario()
 {
     if (!State) return;
@@ -89,6 +96,11 @@ void USCCargoSubsystem::TryScenario()
             if (State->Scenario.SunLux >= 0) Viewer->SetSpaceSunLux(float(State->Scenario.SunLux));
             Viewer->SetSpace(true); // WP-K3: no hangar, no gravity, a sun
         }
+        else if (TakesScenarioEnvironment(FCommandLine::Get(), Settings->bScenarioOwnsScene, State->Scenario))
+        {
+            // Its environment, at once: it replaces the one the viewer restored at start (a saved or default hangar).
+            Viewer->SetEnvironment(State->Scenario.Environment);
+        }
         const FSCCargoDroneDefinition& D = State->Scenario.Drone;
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loaded=\"%s\" ship=%s environment=%s stock=%d docks=%d tractor=%s/%s max_force=%.0f full_strength_m=%.1f"),
                *State->Scenario.Name, *State->Scenario.Ship, *State->Scenario.Environment, State->Scenario.Stock.Num(), State->Scenario.Docks.Num(),
@@ -106,7 +118,11 @@ void USCCargoSubsystem::TryScenario()
     // The tractor values from the game data (the record the scenario names); the scenario's copy without the archive.
     if (State->TractorLookup == FSCCargoState::ELookup::None)
     {
-        const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client = Viewer->GetClient();
+        // The client exists while the archive is still opening (a prepared scenario's ship can be in the scene first): a
+        // query then would answer "no archive" and the scenario's copy would stay for the session, so it waits.
+        if (Viewer->GetArchiveState() == ESCArchiveState::Opening) return;
+        const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client =
+            Viewer->GetArchiveState() == ESCArchiveState::Ready ? Viewer->GetClient() : nullptr;
         const FString Record = !S.Drone.TractorRecord.IsEmpty() ? S.Drone.TractorRecord : S.Drone.TractorRecordGuid;
         if (!Client || Record.IsEmpty())
         {
@@ -158,7 +174,6 @@ void USCCargoSubsystem::TryScenario()
         !FParse::Value(FCommandLine::Get(), TEXT("SCLoad="), Ignored) && !Viewer->IsBusy() && Viewer->CanLoad(S.Ship))
     {
         State->bScenarioLoadRequested = true;
-        if (!S.Environment.IsEmpty() && Viewer->GetEnvironmentRequest().IsEmpty()) Viewer->SetEnvironment(S.Environment);
         Viewer->LoadEntity(S.Ship, Viewer->GetOptions());
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loading ship=%s environment=%s"), *S.Ship, *S.Environment);
     }

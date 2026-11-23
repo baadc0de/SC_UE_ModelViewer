@@ -121,6 +121,14 @@ bool FUCPreparedTest::RunTest(const FString&)
     Changed = Source;
     Changed.Json = Changed.Json.Replace(TEXT("\"T\""), TEXT("\"t\""), ESearchCase::CaseSensitive);
     TestTrue(TEXT("a definition changed only in case is stale"), R.Problem(&Changed, All).Contains(TEXT("changed")));
+    // A checkout that turns LF line ends into CRLF (git's autocrlf) changes no definition.
+    FUCPrepared Lf = R;
+    Lf.Definition = R.Definition + TEXT("\n\"\":\n1");
+    Lf.CargoDefinition = R.CargoDefinition + TEXT("\n");
+    Changed = Source;
+    Changed.Json = Lf.Definition.Replace(TEXT("\n"), TEXT("\r\n"));
+    Changed.CargoJson = Lf.CargoDefinition.Replace(TEXT("\n"), TEXT("\r\n"));
+    TestEqual(TEXT("CRLF for LF is no change"), Lf.Problem(&Changed, All), FString());
     Changed = Source;
     Changed.CargoJson.Reset();
     TestTrue(TEXT("a changed cargo setup is stale"), R.Problem(&Changed, All).Contains(TEXT("cargo setup")));
@@ -154,6 +162,10 @@ bool FUCPreparedLevelsTest::RunTest(const FString&)
     TestEqual(TEXT("a ship with a paint"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("crus.starlifter-pirate")),
               FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2__crus_starlifter_pirate")));
 
+    // "__" marks a paint variant only: an entity's own part never holds it (the Garage lists entities from level names).
+    TestFalse(TEXT("an entity's own level"), USCViewerSubsystem::IsShipPaintLevel(USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"))));
+    TestTrue(TEXT("a paint level"), USCViewerSubsystem::IsShipPaintLevel(USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("pirate_1234abcd"))));
+    TestFalse(TEXT("an entity name with a double underscore is no paint level"), USCViewerSubsystem::IsShipPaintLevel(USCViewerSubsystem::ShipLevelPath(TEXT("A__B"))));
     TArray<FSCPaintVariant> Paints;
     Paints.AddDefaulted(2);
     Paints[0].DisplayName = TEXT("Starlifter Pirate");
@@ -184,6 +196,11 @@ bool FUCScenarioSwitchesTest::RunTest(const FString&)
     TestEqual(TEXT("-SCPlayerDemo=<entity> loads a vehicle"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo=DRAK_Golem")), FString(TEXT("-SCPlayerDemo")));
     TestEqual(TEXT("-SCPlayerDemo alone loads none"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo")), FString());
     TestEqual(TEXT("-SCNoCooked"), S::ConflictingSwitch(TEXT("-Scenario=x -SCNoCooked")), FString(TEXT("-SCNoCooked")));
+    // Automation that puts the camera: the scenario leaves the camera and the start to it.
+    TestFalse(TEXT("a scenario alone puts its camera"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCShowcase")));
+    TestTrue(TEXT("-SCCamera"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCCamera=orbit")));
+    TestTrue(TEXT("-SCScript"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCScript=route.txt")));
+    TestTrue(TEXT("-SCPlayerDemo"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCPlayerDemo")));
     return true;
 }
 

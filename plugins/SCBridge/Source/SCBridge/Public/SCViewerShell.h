@@ -46,6 +46,11 @@ SCBRIDGE_API FText AppName();
  *  them (default) or always import from the archive through the local cache (the viewer: it does not cook). */
 SCBRIDGE_API void SetCookedLevels(bool bUse);
 SCBRIDGE_API bool UsesCookedLevels();
+/** What a cooked level must pass besides existing to be streamed (UnrealCitizen: prepared in the current format, its
+ *  stamp complete; FUCPrepared::IsLevelCurrent); none set: existing is enough. A level that fails it is not used: the load
+ *  imports from the archive instead. */
+SCBRIDGE_API void SetCookedLevelCheck(TFunction<bool(const FString& Level)> Check);
+SCBRIDGE_API bool PassesCookedLevelCheck(const FString& Level);
 
 /** The menu F1 opens, by the name help lines use; without one F1 does nothing. */
 SCBRIDGE_API void SetMenu(const FText& Name);

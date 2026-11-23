@@ -430,6 +430,13 @@ void ASCVehicle::UpdateDoorSensors(const FVector& PlayerWorld, double Now)
 bool ASCVehicle::SetPaint(int32 Index)
 {
     if (Index != INDEX_NONE && !Manifest.Paints.IsValidIndex(Index)) return false;
+    // A prepared (cooked) vehicle keeps no paint slots: its paint was baked in by the prep step (a scenario's skin).
+    if (PaintSlots.IsEmpty() && !Manifest.Paints.IsEmpty())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("PAINT index=%d refused: the vehicle has no paint slots (a prepared vehicle carries the paint it was prepared with)"),
+               Index);
+        return false;
+    }
     int32 Swapped = 0;
     for (const FSCPaintSlot& Entry : PaintSlots)
     {

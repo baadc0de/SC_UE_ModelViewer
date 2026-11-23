@@ -1,5 +1,7 @@
 // Paints (tint system): which instances a paint touches and what it puts on them (FSCSceneManifest::PaintTarget).
 #include "SCPackageReader.h"
+#include "SCVehicle.h"
+#include "UObject/Package.h"
 #include "Misc/AutomationTest.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPaintTarget, "SCBridge.Paint.Target", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -41,5 +43,24 @@ bool FSCPaintTarget::RunTest(const FString&)
     TestEqual(TEXT("panel file swaps"), Sidecar, Livery.ExteriorSidecar);
     TestEqual(TEXT("panel palette stays"), Palette, Panel.PaletteId);
     TestFalse(TEXT("no such paint"), M.PaintTarget(Hull, 2, Sidecar, Palette));
+    return true;
+}
+
+// A prepared (cooked) vehicle: no paint slots, the paint baked in and kept in ActivePaint (saved with the level). A paint
+// request cannot change it and must not be reported as applied (WP-O1 series review).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPaintPreparedVehicle, "SCBridge.Paint.PreparedVehicle", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCPaintPreparedVehicle::RunTest(const FString&)
+{
+    ASCVehicle* Ship = NewObject<ASCVehicle>(GetTransientPackage());
+    Ship->Manifest.Paints.AddDefaulted(2);
+    Ship->Manifest.Paints[1].PaletteId = TEXT("baked");
+    Ship->ActivePaint = 1; // as a level prepared with paint 1 loads
+    TestFalse(TEXT("the default cannot go on"), Ship->SetPaint(INDEX_NONE));
+    TestFalse(TEXT("another paint cannot go on"), Ship->SetPaint(0));
+    TestEqual(TEXT("the baked paint is reported"), Ship->GetPaint(), 1);
+    const FProperty* Saved = ASCVehicle::StaticClass()->FindPropertyByName(TEXT("ActivePaint"));
+    TestTrue(TEXT("the active paint is saved with the actor"), Saved && !Saved->HasAnyPropertyFlags(CPF_Transient));
+    ASCVehicle* Plain = NewObject<ASCVehicle>(GetTransientPackage());
+    TestTrue(TEXT("a vehicle without paints takes its own paint"), Plain->SetPaint(INDEX_NONE));
     return true;
 }
