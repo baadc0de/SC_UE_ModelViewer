@@ -35,6 +35,9 @@ struct SCBRIDGE_API FSCImportOptions
     /** Keep what the import built after success (FSCImportJob::GetRetainedAssets) so more actors of the package can be
      *  assembled from it without deriving or building again (extra vehicle instances). The package bytes are released. */
     bool bRetainAssets = false;
+    /** WP-O1-4b: keep each rig mesh's soft source data (ASCVehicle::RigSources) so an editor host can make the rig a
+     *  savable asset (the prep step, Keep as assets). Editor hosts only by default. */
+    bool bRetainRigSources = GIsEditor;
     /** Only a source associated with an identified archive build may use on-disk processed assets. */
     TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
     FString CacheArchiveBuild;

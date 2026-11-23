@@ -12,6 +12,7 @@
 #include "Chaos/ImplicitObjectScaled.h"
 #include "Chaos/ChaosArchive.h"
 #include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
 
 bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
 {
@@ -44,15 +45,41 @@ bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Err
 }
 bool USCRigComponent::InitializeCollision(const FSCDerivedMesh& Data)
 {
-    if (Data.CollisionBytes.IsEmpty()) return false; // socket-only rigs have no surface
+    return InitializeCollision(Data.CollisionBytes, Data.CollisionVersions);
+}
+void USCRigComponent::OnRegister()
+{
+    Super::OnRegister();
+    if (CollisionBody || SavedCollision.IsEmpty()) return;
+    // A saved rig (a prepared level): its body from the bytes saved with it.
+    FMemoryReader Reader(SavedCollision);
+    FCustomVersionContainer Versions;
+    Versions.Serialize(Reader);
+    TArray<uint8> Bytes;
+    Reader << Bytes;
+    if (Reader.IsError() || !InitializeCollision(Bytes, Versions))
+        UE_LOG(LogTemp, Warning, TEXT("SKIN_COLLISION owner=%s: the saved collision does not restore"), *OwnerEntity);
+}
+bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions)
+{
+    if (Bytes.IsEmpty()) return false; // socket-only rigs have no surface
     const USkeletalMesh* Mesh = GetSkeletalMeshAsset();
     const FSkeletalMeshRenderData* Render = Mesh ? Mesh->GetResourceForRendering() : nullptr;
     if (!Render || Render->LODRenderData.IsEmpty()) return false;
+    if (GIsEditor && SavedCollision.IsEmpty())
+    {
+        // Kept for a save (the prep step, Keep as assets); a runtime host keeps nothing extra.
+        FMemoryWriter Writer(SavedCollision);
+        FCustomVersionContainer Copy = Versions;
+        Copy.Serialize(Writer);
+        TArray<uint8> Payload = Bytes;
+        Writer << Payload;
+    }
     CollisionBody = NewObject<UBodySetup>(this, NAME_None, RF_Transient);
     CollisionBody->CollisionTraceFlag = CTF_UseComplexAsSimple;
     CollisionBody->bDoubleSidedGeometry = true;
-    FMemoryReader Reader(Data.CollisionBytes);
-    Reader.SetCustomVersions(Data.CollisionVersions);
+    FMemoryReader Reader(Bytes);
+    Reader.SetCustomVersions(Versions);
     Chaos::FChaosArchive Archive(Reader);
     Chaos::FTriangleMeshImplicitObjectPtr Geometry;
     Archive << Geometry;

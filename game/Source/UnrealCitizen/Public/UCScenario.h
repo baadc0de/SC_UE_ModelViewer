@@ -49,8 +49,10 @@ struct UNREALCITIZEN_API FUCPrepared
      *  (ASCVehicle::Waypoints). 9: WP-I1-4 (a large button's background at its styled alpha; generated UI textures pooled
      *  under a key carrying this version). The hover renders, panel aims and usables are import-time records a prepared
      *  level does not keep yet. 10: WP-O1-4 (the prep step; levels and records written by -run=SCPrepare). 11: the WP-O1
-     *  series review (a prepared vehicle saves the paint it was prepared with, ASCVehicle::ActivePaint). */
-    static constexpr int32 FormatVersion = 11;
+     *  series review (a prepared vehicle saves the paint it was prepared with, ASCVehicle::ActivePaint). 12: WP-O1-4b-1a
+     *  (rigs kept: rig meshes with editor source models and their skeletons saved under <root>/Rigs, the clip catalog
+     *  saved with the actor, rig collision saved on the rig; a level prepared before has its rigs baked static). */
+    static constexpr int32 FormatVersion = 12;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

@@ -1,0 +1,164 @@
+// SCRigAssets (SCRigAssets.h): a runtime rig mesh given an editor source model and the engine's build.
+#include "SCRigAssets.h"
+#include "SCMeshImporter.h"
+#include "Animation/Skeleton.h"
+#include "BoneWeights.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/SkinnedAssetCommon.h"
+#include "Rendering/SkeletalMeshLODModel.h"
+#include "Rendering/SkeletalMeshModel.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "SkeletalMeshAttributes.h"
+#include "SkeletalMeshOperations.h"
+#include "SkinnedAssetCompiler.h"
+#include "StaticMeshAttributes.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogSCRigAssets, Log, All);
+
+namespace
+{
+FName SlotName(int32 Slot)
+{
+    return FName(*FString::Printf(TEXT("Slot_%d"), Slot)); // FSCSkeletalMeshImporter's slot names
+}
+} // namespace
+
+bool SCRigAssets::MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, FString& Error)
+{
+    if (!Mesh)
+    {
+        Error = TEXT("no rig mesh");
+        return false;
+    }
+    const int32 Bones = Mesh->GetRefSkeleton().GetNum();
+    // LOD 0's source: the soft triangles as derived, with skeletal attributes (skin weights) on top. A socket-only rig has
+    // none: an empty description, its LOD keeps no geometry.
+    FMeshDescription Description = Soft.bHasGeometry ? Soft.Description : FMeshDescription();
+    FSkeletalMeshAttributes Attributes(Description);
+    Attributes.Register(true);
+    TPolygonGroupAttributesRef<FName> SlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
+    for (const FPolygonGroupID Group : Description.PolygonGroups().GetElementIDs()) SlotNames[Group] = SlotName(Group.GetValue());
+    FSkinWeightsVertexAttributesRef Weights = Attributes.GetVertexSkinWeights();
+    for (const FVertexID Vertex : Description.Vertices().GetElementIDs())
+    {
+        if (Description.GetVertexVertexInstanceIDs(Vertex).IsEmpty()) continue; // no triangle uses it
+        const FSCVertexWeights* W = Soft.SkinWeights.Find(Vertex);
+        if (!W)
+        {
+            Error = FString::Printf(TEXT("soft vertex %d has no weights"), Vertex.GetValue());
+            return false;
+        }
+        TArray<UE::AnimationCore::FBoneWeight, TInlineAllocator<4>> Influences;
+        for (int32 K = 0; K < 4; ++K)
+        {
+            if (W->Weights[K] <= 0.f) continue;
+            const int32* Rig = Soft.GltfToRig.Find(W->Joints[K]);
+            if (!Rig || *Rig + 1 >= Bones)
+            {
+                Error = FString::Printf(TEXT("soft vertex %d weights joint %d outside the skeleton"), Vertex.GetValue(), W->Joints[K]);
+                return false;
+            }
+            Influences.Add(UE::AnimationCore::FBoneWeight(FBoneIndexType(*Rig + 1), W->Weights[K])); // SC_RigRoot is bone 0
+        }
+        if (Influences.IsEmpty()) Influences.Add(UE::AnimationCore::FBoneWeight(FBoneIndexType(0), 1.f));
+        Weights.Set(Vertex, UE::AnimationCore::FBoneWeights::Create(Influences));
+    }
+    bool bInfluenceLimitHit = false;
+    FSkeletalMeshOperations::ValidateAndFixInfluences(Description, bInfluenceLimitHit);
+
+    // One imported LOD, built as authored: no reduction, no recomputed normals or tangents, full-precision UVs, and its
+    // vertices and skin weights readable on the CPU (the rig's collision refit skins them there).
+    FSkeletalMeshModel* Model = Mesh->GetImportedModel();
+    Model->LODModels.Empty();
+    Model->LODModels.Add(new FSkeletalMeshLODModel());
+    if (Mesh->GetLODNum() == 0) Mesh->AddLODInfo();
+    FSkeletalMeshLODInfo& Info = *Mesh->GetLODInfo(0);
+    Info.bAllowCPUAccess = true;
+    Info.ReductionSettings.NumOfTrianglesPercentage = 1.f;
+    Info.ReductionSettings.NumOfVertPercentage = 1.f;
+    Info.ReductionSettings.MaxDeviationPercentage = 0.f;
+    Info.BuildSettings.bRecomputeNormals = false;
+    Info.BuildSettings.bRecomputeTangents = false;
+    Info.BuildSettings.bUseFullPrecisionUVs = true;
+    Info.BuildSettings.bRemoveDegenerates = false;
+    TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
+    for (int32 Slot = 0; Slot < Materials.Num(); ++Slot)
+    {
+        Materials[Slot].MaterialSlotName = SlotName(Slot);
+        Materials[Slot].ImportedMaterialSlotName = SlotName(Slot);
+    }
+    Mesh->NeverStream = true;
+    Mesh->CreateMeshDescription(0, MoveTemp(Description));
+    USkeletalMesh::FCommitMeshDescriptionParams Commit;
+    Commit.bMarkPackageDirty = false;
+    Mesh->CommitMeshDescription(0, Commit);
+    Mesh->Build();
+    FSkinnedAssetCompilingManager::Get().FinishCompilation(TArray<USkinnedAsset*>{Mesh});
+    const FSkeletalMeshRenderData* Render = Mesh->GetResourceForRendering();
+    if (!Render || Render->LODRenderData.IsEmpty())
+    {
+        Error = TEXT("the engine's build left no LOD");
+        return false;
+    }
+    if (Mesh->GetRefSkeleton().GetNum() != Bones)
+    {
+        Error = FString::Printf(TEXT("the build changed the skeleton (%d bones, was %d): clip tracks index it"), Mesh->GetRefSkeleton().GetNum(), Bones);
+        return false;
+    }
+    UE_LOG(LogSCRigAssets, Display, TEXT("RIG_ASSET mesh=%s bones=%d vertices=%d sections=%d influence_limit_hit=%d"), *Mesh->GetName(), Bones,
+           Render->LODRenderData[0].GetNumVertices(), Render->LODRenderData[0].RenderSections.Num(), bInfluenceLimitHit);
+    return true;
+}
+
+bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error)
+{
+    const FSkeletalMeshRenderData* Render = Mesh ? Mesh->GetResourceForRendering() : nullptr;
+    if (!Render || Render->LODRenderData.IsEmpty())
+    {
+        Error = TEXT("no LOD 0");
+        return false;
+    }
+    const FSkeletalMeshLODRenderData& LOD = Render->LODRenderData[0];
+    const FPositionVertexBuffer& Positions = LOD.StaticVertexBuffers.PositionVertexBuffer;
+    if (!LOD.GetNumVertices() || !Positions.GetVertexData())
+    {
+        Error = TEXT("LOD 0 has no CPU-readable vertices");
+        return false;
+    }
+    // One description vertex per render vertex, in render order; the triangles of every section as the index buffer has
+    // them. The derived trimesh then indexes the render vertices the refit skins.
+    FSCDerivedMesh Expanded;
+    FStaticMeshAttributes Attributes(Expanded.Description);
+    Attributes.Register();
+    TArray<FVertexID> Vertices;
+    Vertices.Reserve(Positions.GetNumVertices());
+    for (uint32 I = 0; I < Positions.GetNumVertices(); ++I)
+    {
+        const FVertexID V = Expanded.Description.CreateVertex();
+        Attributes.GetVertexPositions()[V] = Positions.VertexPosition(I);
+        Vertices.Add(V);
+    }
+    TArray<uint32> Indices;
+    LOD.MultiSizeIndexContainer.GetIndexBuffer(Indices);
+    const FPolygonGroupID Group = Expanded.Description.CreatePolygonGroup();
+    for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
+        for (uint32 Triangle = 0; Triangle < Section.NumTriangles; ++Triangle)
+        {
+            TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
+            for (uint32 K = 0; K < 3; ++K)
+            {
+                const uint32 Index = Indices[Section.BaseIndex + Triangle * 3 + K];
+                if (!Vertices.IsValidIndex(int32(Index)))
+                {
+                    Error = TEXT("an index outside LOD 0's vertices");
+                    return false;
+                }
+                Corners.Add(Expanded.Description.CreateVertexInstance(Vertices[Index]));
+            }
+            Expanded.Description.CreateTriangle(Group, Corners);
+        }
+    if (!FSCMeshImporter::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
+    OutBytes = MoveTemp(Expanded.CollisionBytes);
+    OutVersions = Expanded.CollisionVersions;
+    return true;
+}

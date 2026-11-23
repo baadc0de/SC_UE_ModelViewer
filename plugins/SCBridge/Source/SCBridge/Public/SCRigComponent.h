@@ -19,6 +19,10 @@ public:
     virtual void RefreshBoneTransforms(FActorComponentTickFunction* TickFunction = nullptr) override;
     void ResetPose();
     bool InitializeCollision(const FSCDerivedMesh& Data);
+    /** The collision body from serialized Chaos trimesh bytes (FSCSkeletalMeshImporter::DeriveCollision's, in LOD 0's
+     *  render vertex order). An editor host keeps them in SavedCollision, so a saved rig restores its body when it
+     *  registers after a load (no derivation at load). */
+    bool InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions);
     /** CPU-skins LOD0 with the current pose and refits the per-instance triangle body. Independent of
      *  the render mesh object, so null-RHI and GPU hosts run the same path. Skips unchanged skin bones. */
     bool RefitCollision();
@@ -28,7 +32,10 @@ public:
     virtual UBodySetup* GetBodySetup() override;
     virtual FBodyInstance* GetBodyInstance(FName BoneName = NAME_None, bool bGetWelded = true, int32 Index = INDEX_NONE) const override;
     virtual bool HasValidPhysicsState() const override;
+    /** The collision bytes with their custom versions (WP-O1-4b: kept on editor hosts, saved with a prepared level). */
+    UPROPERTY() TArray<uint8> SavedCollision;
 protected:
+    virtual void OnRegister() override;
     virtual void OnCreatePhysicsState() override;
     virtual void OnUpdateTransform(EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport) override;
     UPROPERTY() TObjectPtr<UBodySetup> CollisionBody;

@@ -950,6 +950,7 @@ void FSCImportJob::FState::BeginBuild(FMeshSlot& Slot)
         return;
     }
     Vehicle->SkeletalMeshes.Add(RigMesh);
+    if (Options.bRetainRigSources) Vehicle->RigSources.Add(RigMesh, MakeShared<FSCDerivedMesh>(Slot.Soft));
     Vehicle->MeshSamples.Add(RigMesh, FSCLightAreas::Sample(Slot.Soft.Description));
     RigMeshes.Add(Path, RigMesh);
     for (auto& Pair : Slot.Bindings)

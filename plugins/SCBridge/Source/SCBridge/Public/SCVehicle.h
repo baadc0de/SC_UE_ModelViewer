@@ -409,6 +409,9 @@ public:
 
     virtual void Tick(float DeltaSeconds) override;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USkeletalMesh>> SkeletalMeshes;
+    /** WP-O1-4b: the soft source data each rig mesh was built from (FSCImportOptions::bRetainRigSources; editor hosts):
+     *  what gives it an editor source model when it is saved as an asset (SCRigAssets). Not saved. */
+    TMap<const USkeletalMesh*, TSharedPtr<const struct FSCDerivedMesh>> RigSources;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USCRigComponent>> Rigs;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<ULightComponent>> Lights;
     UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;

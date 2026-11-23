@@ -1,5 +1,11 @@
 // USCCookLibrary: environment -> persistent level actor with pooled assets (WP-C1).
 #include "SCCookLibrary.h"
+#include "SCRigAssets.h"
+#include "SCRigComponent.h"
+#include "SCMeshImporter.h"
+#include "Animation/Skeleton.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "SCBridgeClient.h" // scbridge.h: sc_texels_decode_bgra8
 #include "SCEnvironment.h"
 #include "SCHangarIndex.h"
@@ -132,6 +138,22 @@ struct FCooker
         else
             Warnings.Add(FString::Printf(TEXT("%s: decode failed (%s); saved without source"), *Texture->GetName(), UTF8_TO_TCHAR(sc_last_error(nullptr))));
     }
+    bool bFailed = false;
+    /** Object moved into a package of its own, Folder/Name (made unique), saved with the cook. */
+    void Persist(UObject* Object, const FString& Folder, const FString& Name)
+    {
+        if (!Object || Remap.Contains(Object)) return;
+        FString Unique = SafeName(Name);
+        const FString Base = Unique;
+        for (int32 Suffix = 2; FindPackage(nullptr, *(Folder / Unique)); ++Suffix) Unique = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
+        UPackage* Package = CreatePackage(*(Folder / Unique));
+        Object->Rename(*Unique, Package, REN_DontCreateRedirectors | REN_NonTransactional);
+        Object->SetFlags(RF_Public | RF_Standalone);
+        MakePersistent(Object);
+        Package->MarkPackageDirty();
+        ToSave.Add(Package);
+        Remap.Add(Object, Object);
+    }
     /** The pooled asset for a source key: an existing one (this run or on disk), else this object moved into the pool. */
     UObject* Pool(UObject* Object, const FString& Key, const FString& Folder)
     {
@@ -192,19 +214,69 @@ struct FCooker
 };
 } // namespace
 
-bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot, const FString& SourceBuild)
+bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot, const FString& SourceBuild,
+                                     bool bKeepRigs)
 {
     if (!Environment) return false;
     const double Start = FPlatformTime::Seconds();
-    FSCEnvironment::BakeRigsStatic(Environment);
+    FCooker Cook;
+    Cook.Root = Root;
+    Cook.SharedRoot = SharedRoot;
+    int32 RigMeshes = 0, RigCollisions = 0;
+    if (!bKeepRigs) FSCEnvironment::BakeRigsStatic(Environment);
+    else
+    {
+        // Each rig mesh (shared by the rigs that use it) becomes an asset with its skeleton; a rig with collision gets it
+        // again in the built vertex order.
+        TSet<USkeletalMesh*> Made;
+        for (USCRigComponent* Rig : Environment->Rigs)
+        {
+            USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr;
+            if (!Mesh) continue;
+            if (!Made.Contains(Mesh))
+            {
+                Made.Add(Mesh);
+                const TSharedPtr<const FSCDerivedMesh>* Source = Environment->RigSources.Find(Mesh);
+                FString Error;
+                if (!Source || !SCRigAssets::MakeSavable(Mesh, **Source, Error))
+                {
+                    Cook.Warnings.Add(Rig->MeshAsset + TEXT(": ") + (Source ? Error : FString(TEXT("no rig source (FSCImportOptions::bRetainRigSources)"))));
+                    Cook.bFailed = true;
+                    continue;
+                }
+                const FString Name = SafeName(FPaths::GetBaseFilename(Rig->MeshAsset));
+                Cook.Persist(Mesh->GetSkeleton(), Root / TEXT("Rigs"), Name + TEXT("_Skeleton"));
+                Cook.Persist(Mesh, Root / TEXT("Rigs"), Name);
+                ++RigMeshes;
+            }
+            if (!Rig->SavedCollision.IsEmpty())
+            {
+                TArray<uint8> Bytes;
+                FCustomVersionContainer Versions;
+                FString Error;
+                Rig->SavedCollision.Reset();
+                if (!SCRigAssets::DeriveCollision(Mesh, Bytes, Versions, Error) || !Rig->InitializeCollision(Bytes, Versions))
+                {
+                    Cook.Warnings.Add(Rig->OwnerEntity + TEXT(": rig collision: ") + Error);
+                    Cook.bFailed = true;
+                    continue;
+                }
+                ++RigCollisions;
+            }
+        }
+        // Playback reads the bone tracks; the sequences are editor-only views of them, built against transient skeletons.
+        if (USCClipCatalog* Catalog = Environment->ClipCatalog)
+            for (FSCImportedClip& Clip : Catalog->Clips)
+            {
+                Clip.Sequence = nullptr;
+                for (FSCClipBinding& Binding : Clip.Bindings) Binding.Sequences.Reset();
+            }
+    }
     const FSCInstancingStats Instancing = FSCInstancing::Consolidate(Environment); // pieces freed from the rigs
     // Runtime-only proxies (emissive Lumen copies with generated meshes) are rebuilt when the level loads.
     TArray<UActorComponent*> Proxies = Environment->GetComponentsByTag(UPrimitiveComponent::StaticClass(), TEXT("SCEmissiveExperiment"));
     for (UActorComponent* Proxy : Proxies) Proxy->DestroyComponent();
 
-    FCooker Cook;
-    Cook.Root = Root;
-    Cook.SharedRoot = SharedRoot;
     // An asset without a content id is told apart by the archive build and the cook format at least.
     const FString Fallback = FString::Printf(TEXT("build=%s;format=%d"), *SourceBuild, USCCookLibrary::FormatVersion);
     for (const auto& [Object, SourceKey] : Environment->SourcePaths)
@@ -235,6 +307,12 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
         for (int32 Slot = 0; Slot < C->OverrideMaterials.Num(); ++Slot)
             if (C->OverrideMaterials[Slot]) C->SetMaterial(Slot, Cook.Constant(C->OverrideMaterials[Slot]));
     }
+    // Kept rigs: their slot materials become constants as well.
+    TArray<USkeletalMeshComponent*> SkinnedComponents;
+    Environment->GetComponents(SkinnedComponents);
+    for (USkeletalMeshComponent* C : SkinnedComponents)
+        for (int32 Slot = 0; Slot < C->OverrideMaterials.Num(); ++Slot)
+            if (C->OverrideMaterials[Slot]) C->SetMaterial(Slot, Cook.Constant(C->OverrideMaterials[Slot]));
     TArray<ULightComponent*> Lights;
     Environment->GetComponents(Lights);
     for (ULightComponent* L : Lights)
@@ -242,8 +320,15 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     // The actor and its components persist with the level. Runtime-only objects the actor owns (clip animations of the
     // baked rigs, skeletal meshes, dynamic materials now replaced by constants) stay transient and are unreferenced, so
     // they are not saved (a saved clip without its skeleton fails to load).
-    Environment->ClipCatalog = nullptr;
-    Environment->SkeletalMeshes.Empty();
+    if (!bKeepRigs)
+    {
+        Environment->ClipCatalog = nullptr;
+        Environment->SkeletalMeshes.Empty();
+    }
+    else if (Environment->ClipCatalog)
+    {
+        Environment->ClipCatalog->ClearFlags(RF_Transient);
+    }
     Environment->Materials.Empty();
     Environment->EngineGlowMaterials.Empty();
     Environment->ClearFlags(RF_Transient);
@@ -260,9 +345,10 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
         else Cook.Warnings.Add(TEXT("save failed: ") + Package->GetName());
     }
     for (const FString& W : Cook.Warnings) UE_LOG(LogSCCook, Warning, TEXT("COOK_WARNING %s"), *W);
-    UE_LOG(LogSCCook, Display, TEXT("COOK root=%s pooled_new=%d pooled_reused=%d packages=%d saved=%d instanced=%d warnings=%d seconds=%.1f"), *Root,
-           Cook.Created, Cook.Reused, Cook.ToSave.Num(), Saved, Instancing.Instanced, Cook.Warnings.Num(), FPlatformTime::Seconds() - Start);
-    return Saved == Cook.ToSave.Num();
+    UE_LOG(LogSCCook, Display, TEXT("COOK root=%s pooled_new=%d pooled_reused=%d packages=%d saved=%d instanced=%d rigs_kept=%d rig_meshes=%d rig_collisions=%d warnings=%d seconds=%.1f"), *Root,
+           Cook.Created, Cook.Reused, Cook.ToSave.Num(), Saved, Instancing.Instanced, bKeepRigs ? Environment->Rigs.Num() : 0, RigMeshes, RigCollisions,
+           Cook.Warnings.Num(), FPlatformTime::Seconds() - Start);
+    return Saved == Cook.ToSave.Num() && !Cook.bFailed;
 }
 
 bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name, bool& bOutMeasured)

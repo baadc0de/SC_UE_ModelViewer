@@ -1,0 +1,23 @@
+// WP-O1-4b (the WP-U3 follow-up): a runtime rig mesh (FSCSkeletonBuilder + FSCSkeletalMeshImporter: render data only, no
+// editor source model) made into a skeletal mesh that saves and loads as an asset — the prep step keeps a vehicle's rigs
+// instead of baking them static, and Keep as assets keeps them.
+#pragma once
+#include "CoreMinimal.h"
+
+class USkeletalMesh;
+struct FSCDerivedMesh;
+
+namespace SCRigAssets
+{
+/** Give Mesh an editor source model (LOD 0's mesh description from Soft: its triangles, normals, tangents, UVs, colours,
+ *  and per-vertex skin weights to the rig's bones, SC_RigRoot + 1 + rig node like the runtime build) and rebuild it with
+ *  the engine's skeletal mesh build. The reference skeleton, sockets, material slots and bone order (what clip tracks
+ *  index) stay; LOD 0 keeps CPU-readable vertices and skin weights (USCRigComponent::RefitCollision). A socket-only rig
+ *  (no soft geometry) gets an empty LOD 0. False with Error when the soft data cannot be described (a vertex without
+ *  weights, a joint outside the skeleton) or the build leaves no LOD. */
+bool MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, FString& Error);
+/** The rig's collision trimesh (serialized Chaos bytes and their custom versions) from Mesh's LOD 0 render data, in its
+ *  vertex order (USCRigComponent::RefitCollision skins those vertices): the engine's build may reorder or weld the
+ *  vertices the runtime build laid out per corner. False with Error when there is no geometry or no CPU copy. */
+bool DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error);
+} // namespace SCRigAssets

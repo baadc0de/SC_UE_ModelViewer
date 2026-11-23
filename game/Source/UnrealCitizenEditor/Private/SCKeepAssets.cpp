@@ -1,6 +1,8 @@
 // SCKeepAssets: rename transient import objects into /Game packages (references between them stay intact),
 // convert dynamic material instances to constants, bake mesh slot materials from component overrides, save.
 #include "SCKeepAssets.h"
+#include "SCMeshImporter.h"
+#include "SCRigAssets.h"
 #include "SCVehicle.h"
 #include "SCClipCatalog.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -140,14 +142,18 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
     }
     for (UStaticMesh* Mesh : Vehicle->Meshes)
         K.Move(Mesh, TEXT("Meshes"));
-    // Runtime skeletal meshes carry render data only (FSCSkeletalMeshImporter builds no editor source model), and
-    // the editor's PostLoad requires one: keep their skeletons and clips, skip the meshes with a warning.
-    // TODO(WP-U3): build the editor ImportedModel for soft-skinned parts so Keep can persist rigs.
+    // Runtime skeletal meshes carry render data only (FSCSkeletalMeshImporter builds no editor source model): each gets
+    // one from the rig source the import kept (SCRigAssets, WP-O1-4b; the WP-U3 follow-up) and is kept with its skeleton.
     for (USkeletalMesh* Mesh : Vehicle->SkeletalMeshes)
         if (Mesh)
         {
+            const TSharedPtr<const FSCDerivedMesh>* Source = Vehicle->RigSources.Find(Mesh);
+            FString Error;
             K.Move(Mesh->GetSkeleton(), TEXT("Rigs"));
-            K.Warnings.Add(Mesh->GetName() + TEXT(": skeletal mesh not kept (no editor source model)"));
+            if (Source && SCRigAssets::MakeSavable(Mesh, **Source, Error))
+                K.Move(Mesh, TEXT("Rigs"));
+            else
+                K.Warnings.Add(Mesh->GetName() + TEXT(": skeletal mesh not kept (") + (Source ? Error : FString(TEXT("no rig source"))) + TEXT(")"));
         }
     if (USCClipCatalog* Catalog = Vehicle->ClipCatalog)
     {

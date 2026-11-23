@@ -181,7 +181,7 @@ moved to `game/Content/SC`; the built effects (`/Game/SC/FX`, also ignored) are 
 
 The game runs prepared assets only. O1-4 lands in three changes:
 
-- **O1-4a** (this PR): scenarios and the prep step; the game runs a scenario from its prepared levels.
+- **O1-4a** (merged, #43): scenarios and the prep step; the game runs a scenario from its prepared levels.
 - **O1-4b**: a prepared vehicle keeps its rigs, clips and the interactions they drive (doors, lifts, ramps, panels' animated
   parts): the cook bakes rigs static and drops the clip catalogue (since WP-C1; WP-P5 "Not fixed: cooked builds"), so in
   O1-4a a scenario's vehicle and hangar show their presented pose and their doors do not move. What a run still reads from
@@ -193,7 +193,32 @@ The game runs prepared assets only. O1-4 lands in three changes:
   caches, `SCBridgeLib`), loaded by the viewer and by the game's editor module, not by the packaged game, which then has
   no `scbridge` library; the plugin's cargo art moves to the game's content.
 
-#### O1-4a — Scenarios and the prep step (this PR)
+#### O1-4b — Prepared vehicles keep their moving parts; the remaining archive reads prepared
+
+Owner's direction (2026-11-23): a prepared level does next to zero building or post-processing at load — what it needs
+is saved as real assets and saved properties at prep time (the general fix WP-U3 left open), not rebuilt from derived
+data when it loads. In stages:
+
+- **O1-4b-1a — rigs as assets** (this PR). The prep step keeps rigs instead of baking them static
+  (`USCCookLibrary::CookEnvironment(..., bKeepRigs)`): each rig mesh gets an editor source model
+  (`SCRigAssets::MakeSavable`: LOD 0's skeletal mesh description from the rig's soft source data — triangles, normals,
+  tangents, UVs, colours, per-vertex skin weights to `SC_RigRoot` + 1 + rig node — then the engine's skeletal mesh build;
+  the reference skeleton, its bone order (what clip tracks index), the sockets and the material slots stay; LOD 0 keeps
+  CPU-readable vertices and skin weights; a socket-only rig gets an empty LOD) and is saved with its skeleton under
+  `<root>/Rigs`; a rig with soft collision gets its Chaos trimesh derived again in the built vertex order
+  (`SCRigAssets::DeriveCollision`) and saved on the rig (`USCRigComponent::SavedCollision`, restored when the rig
+  registers); rig materials become constants; the clip catalog is saved with the actor without its editor-only
+  sequences (playback reads the bone tracks). The import keeps each rig's source data on editor hosts
+  (`FSCImportOptions::bRetainRigSources`, `ASCVehicle::RigSources`). Keep as assets keeps rigs the same way. Prep format
+  12. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
+  lifts, seats and ladders still need their interaction state (1b).
+- **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
+  interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,
+  ship doors, sensors, the lift network, ladder anchors, usables, light groups and areas) become saved properties.
+- **O1-4b-1c — panels and screens**: screen state materials constant, panel render targets baked.
+- **O1-4b-2 / 3**: the player body; cargo boxes and effects, music, the Garage's details prepared.
+
+#### O1-4a — Scenarios and the prep step
 
 **A scenario** is `game/Config/Scenarios/<name>.json` (`FUCScenario`, `UCScenario.h`): `name`, `environment` (an object
 container path; none: the map's own hangar, or space when the cargo setup says so), `vehicle` (required), `skin`
