@@ -189,6 +189,9 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft, const FLinearColor& Colour 
     // Each vertex weighted to its bones (the corner at X 100 to Arm, the one at Y 50 half to each, at 16-bit precision,
     // the third to Root), in the runtime build's colours (black ones too: the engine would paint an all-black mesh white).
     const FColor Expected = Colour.ToFColorSRGB();
+    // A colour per vertex (the engine leaves the buffer unallocated when it drops the colours: reading it would crash).
+    const FColorVertexBuffer& ColourBuffer = LOD.StaticVertexBuffers.ColorVertexBuffer;
+    if (!Test.TestTrue(TEXT("a colour buffer of every vertex"), ColourBuffer.GetVertexData() && ColourBuffer.GetNumVertices() == LOD.GetNumVertices())) return;
     int32 Blended = 0;
     for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
         for (uint32 V = Section.BaseVertexIndex; V < Section.BaseVertexIndex + Section.NumVertices; ++V)

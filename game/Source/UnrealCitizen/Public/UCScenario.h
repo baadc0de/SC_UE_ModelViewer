@@ -57,8 +57,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  hangar's waypoint sources saved (a waypoint on a mechanism follows it). 15: rig meshes saved as copies (the
      *  import's stay as they are), the presented state saved (ASCVehicle::PresentedState), black vertex colours kept. 16: a rig's skin bones saved
      *  with its collision (a load scans no vertices). 17: rig collision baked in the rig's saved pose
-     *  (USCRigComponent::CollisionPose: a load refits nothing). */
-    static constexpr int32 FormatVersion = 17;
+     *  (USCRigComponent::CollisionPose: a load refits nothing). 18: the clip catalog's root
+     *  rig mesh saved (USCClipCatalog::RootMesh, placed or not). */
+    static constexpr int32 FormatVersion = 18;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

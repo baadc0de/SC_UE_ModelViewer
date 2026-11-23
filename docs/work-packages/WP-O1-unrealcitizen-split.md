@@ -226,7 +226,8 @@ data when it loads. In stages:
   creation. A saved rig stands in its saved pose when it registers, and restores its body, baked in that pose
   (`USCRigComponent::CollisionPose`), with the skin bones saved beside it: no vertex scan and no refit at load (a game
   host then drops the bytes). Float (HDR) textures, four channels or one, keep a float source; a texture that has a
-  source keeps it. Prep format 17. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`:
+  source keeps it. The clip catalog keeps the root rig mesh (`USCClipCatalog::RootMesh`, placed or not): Keep builds
+  the clips without receiving bones on its kept skeleton. Prep format 18. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`:
   `Entry_Door_Lower open=1`); door pads, lifts, seats and ladders still need their interaction state (1b).
   Known limit (an engine follow-up, WP-E1): a socket-only rig mesh (no triangles) is built again each time an editor
   host loads it — UE 5.9's `USkeletalMesh::IsInitialBuildDone` wants a LOD 0 section, so its render data skips the

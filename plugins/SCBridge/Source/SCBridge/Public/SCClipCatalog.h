@@ -79,4 +79,7 @@ class SCBRIDGE_API USCClipCatalog : public UDataAsset
     GENERATED_BODY()
 public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<FSCImportedClip> Clips;
+    /** The vehicle's root rig mesh (the manifest root's, built whether or not it was placed): the skeleton of its clips
+     *  without receiving bones (FSCAnimImporter::Finalize); Keep as assets builds them on it. Null without a root rig. */
+    UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USkeletalMesh> RootMesh;
 };

@@ -205,9 +205,12 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
         for (USkeletalMesh* Mesh : Environment->SkeletalMeshes)
             if (Mesh) Meshes.AddUnique(Mesh);
         if (const USCClipCatalog* Catalog = Environment->ClipCatalog)
+        {
             for (const FSCImportedClip& Clip : Catalog->Clips)
                 for (const FSCClipBinding& Binding : Clip.Bindings)
                     if (USkeletalMesh* Mesh = Binding.Mesh.Get()) Meshes.AddUnique(Mesh);
+            if (USkeletalMesh* Root = Catalog->RootMesh.Get()) Meshes.AddUnique(Root);
+        }
         for (const USCRigComponent* Rig : Environment->Rigs)
             if (USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr) Meshes.AddUnique(Mesh);
         TMap<const USkeletalMesh*, USkeletalMesh*> Copies;
@@ -233,9 +236,13 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
         for (TObjectPtr<USkeletalMesh>& Mesh : Environment->SkeletalMeshes)
             if (USkeletalMesh** Copy = Copies.Find(Mesh)) Mesh = *Copy;
         if (USCClipCatalog* Catalog = Environment->ClipCatalog) // the actor's own catalog (its clips copied at assembly)
+        {
             for (FSCImportedClip& Clip : Catalog->Clips)
                 for (FSCClipBinding& Binding : Clip.Bindings)
                     if (USkeletalMesh** Copy = Copies.Find(Binding.Mesh.Get())) Binding.Mesh = *Copy;
+            USkeletalMesh** Root = Copies.Find(Catalog->RootMesh.Get());
+            Catalog->RootMesh = Root ? *Root : nullptr;
+        }
         // Each rig on its copy, in the pose it holds (LocalPose); a soft rig of an import that built collision has a body:
         // again in the copy's vertex order, also when the import's own rig collision failed, so a saved rig never lacks it.
         for (USCRigComponent* Rig : Environment->Rigs)

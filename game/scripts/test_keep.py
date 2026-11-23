@@ -46,6 +46,10 @@ def check_kept_clip(root, name):
         name, sequence.get_path_name() if sequence else None, skeleton.get_path_name() if skeleton else None,
         mesh.get_path_name() if mesh else None, len(tracks), frames))
     primary = bindings[0].get_editor_property("sequences")[0] if bindings and bindings[0].get_editor_property("sequences") else None
+    root_mesh = catalog.get_editor_property("root_mesh")
+    unreal.log("WP-V1 KEEP_ROOT %s" % (root_mesh.get_path_name() if root_mesh else None))
+    if not root_mesh or not root_mesh.get_path_name().startswith(root.rstrip("/") + "/Rigs/"):
+        raise RuntimeError("the kept catalog's root rig mesh is not a kept one")
     if not sequence or sequence != primary or not mesh or skeleton != mesh.skeleton or not tracks or frames < 1:
         raise RuntimeError("kept clip %s: no primary sequence (its first binding's) on its mesh's skeleton with bone keys" % name)
 

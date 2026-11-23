@@ -277,7 +277,11 @@ public:
         RigSources = V->RigSources;
         GoboTextures = V->GoboTextures;
         Catalog = NewObject<USCClipCatalog>(GetTransientPackage(), NAME_None, RF_Transient);
-        if (V->ClipCatalog) Catalog->Clips = V->ClipCatalog->Clips;
+        if (V->ClipCatalog)
+        {
+            Catalog->Clips = V->ClipCatalog->Clips;
+            Catalog->RootMesh = V->ClipCatalog->RootMesh;
+        }
     }
     void CopyTo(ASCVehicle* V) const
     {
@@ -291,7 +295,11 @@ public:
         V->RigSources = RigSources;
         V->GoboTextures = GoboTextures;
         V->ClipCatalog = NewObject<USCClipCatalog>(V);
-        if (Catalog) V->ClipCatalog->Clips = Catalog->Clips;
+        if (Catalog)
+        {
+            V->ClipCatalog->Clips = Catalog->Clips;
+            V->ClipCatalog->RootMesh = Catalog->RootMesh;
+        }
     }
     /** Objects an assembly created on demand into the shared caches (a host-tinted variant first asked for by this
      *  actor) stay valid for the next one; returns how many were added. */
@@ -1158,10 +1166,11 @@ bool FSCImportJob::FState::StepMaterials(bool bBlocking)
 void FSCImportJob::FState::Assemble()
 {
     const double AssembleStart = FPlatformTime::Seconds();
+    Vehicle->ClipCatalog->RootMesh = RigMeshes.FindRef(Manifest.Root.MeshAsset);
     for (auto& Clip : Vehicle->ClipCatalog->Clips)
     {
         if (Clip.Bindings.IsEmpty()) Warn(Clip.Source, TEXT("No receiver bones in exported geometry"));
-        FSCAnimImporter::Finalize(RigMeshes.FindRef(Manifest.Root.MeshAsset), Vehicle, Clip);
+        FSCAnimImporter::Finalize(Vehicle->ClipCatalog->RootMesh, Vehicle, Clip);
     }
     const double FinalizeSeconds = FPlatformTime::Seconds() - AssembleStart;
     UE_LOG(LogSCImport, Display, TEXT("ANIMATIONS imported=%d indexed=%d"), Vehicle->ClipCatalog->Clips.Num(), Manifest.Clips.Num());

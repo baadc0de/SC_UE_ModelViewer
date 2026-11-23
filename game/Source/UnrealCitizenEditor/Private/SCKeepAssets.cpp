@@ -179,15 +179,11 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
     if (const USCClipCatalog* Catalog = Vehicle->ClipCatalog)
     {
         USCClipCatalog* Kept = DuplicateObject(Catalog, GetTransientPackage());
-        // The vehicle's root rig (the manifest root's mesh), kept: the skeleton of its clips without receiving bones.
-        USkeletalMesh* KeptRoot = nullptr;
-        for (const USCRigComponent* Rig : Vehicle->Rigs)
-            if (Rig && !Vehicle->Manifest.Root.MeshAsset.IsEmpty() && Rig->MeshAsset == Vehicle->Manifest.Root.MeshAsset)
-                if (USkeletalMesh* const* Copy = KeptRigs.Find(Rig->GetSkeletalMeshAsset()))
-                {
-                    KeptRoot = *Copy;
-                    break;
-                }
+        // The vehicle's root rig mesh (USCClipCatalog::RootMesh, placed or not), kept: the skeleton of its clips without
+        // receiving bones.
+        USkeletalMesh* const* KeptRootEntry = KeptRigs.Find(Catalog->RootMesh.Get());
+        USkeletalMesh* KeptRoot = KeptRootEntry ? *KeptRootEntry : nullptr;
+        Kept->RootMesh = KeptRoot;
         // The editable sequences (one per binding timing, and the clip's primary): each a copy on the kept skeleton of its
         // own, saved under Animations. A skeleton no kept rig mesh carries (a metadata-only sequence's own: a clip without
         // receiving bones) is kept as a copy on its first use.
