@@ -182,14 +182,15 @@ void USCCargoSubsystem::TryScenario()
         }
     }
     if (State->TractorLookup != FSCCargoState::ELookup::Done) return; // stock and drones wait for the lift values
-    // The effects ask the archive (MaterialEffects, the ships' records) and keep what they got for the session: not while it
-    // is still opening (a prepared tractor record needs no archive, so this can come first).
-    if (!State->Fx && Viewer->GetArchiveState() == ESCArchiveState::Opening) return;
-    if (!State->Fx)
+    // The effects ask the archive (MaterialEffects, the ships' records) and keep what they got for the session: they start
+    // once it is no longer opening (a prepared tractor record needs no archive, so this can come first); the stock and the
+    // drones do not wait for them (no effects yet: the beam mesh).
+    const bool bNoFx = FParse::Param(FCommandLine::Get(), TEXT("SCNoCargoFx"));
+    if (!State->Fx && (bNoFx || Viewer->GetArchiveState() != ESCArchiveState::Opening))
     {
         // The tractor's effects (WP-K4c), from the record just read (none without the archive: the beam mesh then).
         State->Fx = MakeShared<FSCCargoFx>();
-        if (FParse::Param(FCommandLine::Get(), TEXT("SCNoCargoFx")))
+        if (bNoFx)
         {
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_FX off (-SCNoCargoFx): the beam mesh"));
         }
@@ -222,6 +223,16 @@ void USCCargoSubsystem::TryScenario()
         }
     }
     if (State->AppliedKinds == 3 || Viewer->IsBusy() || !State->Library.IsSettled()) return;
+    // A prepared scenario's box that did not come (its level missing or unreadable since the start) fails the scenario: its
+    // stock is not placed short.
+    if (State->bPreparedSetup)
+        for (const auto& [Entity, Level] : UUCSettings::Get()->ScenarioCargoLevels)
+            if (const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity); E && E->State == FSCCargoBoxLibrary::EState::Failed)
+            {
+                if (UUCSettings::Get()->ScenarioCargoProblem.IsEmpty())
+                    UUCSettings::Get()->ScenarioCargoProblem = FString::Printf(TEXT("the prepared cargo box %s (%s) did not load: %s"), *Entity, *Level, *E->Error);
+                return;
+            }
     // Owners, and the scenario's other vehicles: more instances of its ship, spawned before any stock is placed.
     if (!State->bScenarioVehiclesRequested && Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))
     {

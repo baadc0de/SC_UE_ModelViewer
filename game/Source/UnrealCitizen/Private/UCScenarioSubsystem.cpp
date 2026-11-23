@@ -126,6 +126,7 @@ void UUCScenarioSubsystem::Deinitialize()
     Settings->ScenarioVehicle.Reset();
     Settings->ScenarioCargoLevels.Reset();
     Settings->ScenarioTractorRecordJson.Reset();
+    Settings->ScenarioCargoProblem.Reset();
     Super::Deinitialize();
 }
 
@@ -150,6 +151,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     UUCSettings::Get()->ScenarioCargoJson.Reset();
     UUCSettings::Get()->ScenarioCargoLevels.Reset(); // the box library releases its prepared levels (DropScenario)
     UUCSettings::Get()->ScenarioTractorRecordJson.Reset();
+    UUCSettings::Get()->ScenarioCargoProblem.Reset();
     if (USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)) Cargo->DropScenario();
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
@@ -172,6 +174,12 @@ bool UUCScenarioSubsystem::Tick(float)
 {
     USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr;
     if (!Viewer || !GetGameInstance()->GetWorld()) return true;
+    // A prepared cargo box that did not load (WP-O1-4b-3): the scenario does not run short of its stock.
+    if ((State == EState::Loading || State == EState::Starting || State == EState::Running) && !UUCSettings::Get()->ScenarioCargoProblem.IsEmpty())
+    {
+        Fail(UUCSettings::Get()->ScenarioCargoProblem + TEXT(": run ") + FUCPrepared::PrepareCommand(Id));
+        return true;
+    }
     switch (State)
     {
     case EState::Loading:
