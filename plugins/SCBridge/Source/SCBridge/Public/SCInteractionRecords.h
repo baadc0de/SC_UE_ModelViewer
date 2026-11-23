@@ -6,11 +6,13 @@
 #include "SCInteractionRecords.generated.h"
 
 /** `interaction_links[]`: when the entity's interaction SourceSlot fires, TargetSlot is delivered to TargetEntityId. */
-struct FSCInteractionLink
+USTRUCT()
+struct SCBRIDGE_API FSCInteractionLink
 {
-    FName SourceSlot;
-    FString TargetEntityId;
-    FName TargetSlot;
+    GENERATED_BODY()
+    UPROPERTY() FName SourceSlot;
+    UPROPERTY() FString TargetEntityId;
+    UPROPERTY() FName TargetSlot;
 };
 /** `parent_attachment`: the entity rides ParentEntityId, on its node AttachmentTarget. */
 struct FSCParentAttachment
@@ -66,11 +68,13 @@ struct FSCLightGroupInteraction
     FString LightState;
 };
 /** One interaction offered at an interaction point. */
-struct FSCPointInteraction
+USTRUCT()
+struct SCBRIDGE_API FSCPointInteraction
 {
-    FName Name;           // the shared interaction: the slot interaction_links name
-    FString DisplayName;  // English display name ("Top Deck"); empty when the data has none
-    bool bPrimary = false;
+    GENERATED_BODY()
+    UPROPERTY() FName Name;           // the shared interaction: the slot interaction_links name
+    UPROPERTY() FString DisplayName;  // English display name ("Top Deck"); empty when the data has none
+    UPROPERTY() bool bPrimary = false;
 };
 /** `interaction_points[]`: a helper the player aims at and what it offers there. */
 struct FSCInteractionPoint
@@ -118,24 +122,35 @@ struct FSCLiftStopRecord
     float AccessibleTimingInTransit = -1.f;
 };
 /** `lifts[].panel_style.labels[]`: a stop's name as a white glyph mask in the door pads' label font. */
-struct FSCLiftStopLabel
+USTRUCT()
+struct SCBRIDGE_API FSCLiftStopLabel
 {
-    int32 Stop = INDEX_NONE;
-    FString Text, Image; // Image: package path of the PNG (alpha = coverage)
-    int32 Width = 0, Height = 0;
-    float EmPx = 0.f;
+    GENERATED_BODY()
+    UPROPERTY() int32 Stop = INDEX_NONE;
+    UPROPERTY() FString Text;
+    UPROPERTY() FString Image; // package path of the PNG (alpha = coverage)
+    UPROPERTY() int32 Width = 0;
+    UPROPERTY() int32 Height = 0;
+    UPROPERTY() float EmPx = 0.f;
 };
 /** `lifts[].panel_style` (cache format 35): the door pads' look for a floor-select list the viewer draws itself (WP-P5
- *  floor panel). Empty (no labels, no palette) when the export has none. */
-struct FSCLiftPanelStyle
+ *  floor panel). Empty (no labels, no palette) when the export has none. Saved with a prepared lift. */
+USTRUCT()
+struct SCBRIDGE_API FSCLiftPanelStyle
 {
-    FString SourceEntityId, SourceCanvas, StyleRecord;
+    GENERATED_BODY()
+    UPROPERTY() FString SourceEntityId;
+    UPROPERTY() FString SourceCanvas;
+    UPROPERTY() FString StyleRecord;
     /** The pads' brand palette by BB_ColorStyle role name (sRGB). */
-    TMap<FString, FColor> Palette;
-    FString FontStyle, FontSymbol, LabelColourRole;
-    float FontSize = 0.f, LetterSpacing = 0.f;
-    bool bUpperCase = false;
-    TArray<FSCLiftStopLabel> Labels;
+    UPROPERTY() TMap<FString, FColor> Palette;
+    UPROPERTY() FString FontStyle;
+    UPROPERTY() FString FontSymbol;
+    UPROPERTY() FString LabelColourRole;
+    UPROPERTY() float FontSize = 0.f;
+    UPROPERTY() float LetterSpacing = 0.f;
+    UPROPERTY() bool bUpperCase = false;
+    UPROPERTY() TArray<FSCLiftStopLabel> Labels;
     bool IsValid() const { return !Labels.IsEmpty() && !Palette.IsEmpty(); }
     const FSCLiftStopLabel* LabelOf(int32 Stop) const { return Labels.FindByPredicate([Stop](const FSCLiftStopLabel& L) { return L.Stop == Stop; }); }
 };

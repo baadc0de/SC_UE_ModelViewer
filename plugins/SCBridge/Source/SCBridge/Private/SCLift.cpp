@@ -606,19 +606,109 @@ FString FSCLift::Describe() const
 }
 
 // ---------------------------------------------------------------------------------------------------------- network
+FSCSavedLift FSCLift::Save() const
+{
+    FSCSavedLift Out;
+    Out.EntityId = EntityId;
+    Out.EntityName = EntityName;
+    Out.ClassName = ClassName;
+    Out.Interior = Interior;
+    Out.Id = Id;
+    Out.MaxSpeed = MaxSpeed;
+    Out.EasingDistance = EasingDistance;
+    Out.OpenWaitTime = OpenWaitTime;
+    Out.QueueWaitTime = QueueWaitTime;
+    Out.IdlingPeriod = IdlingPeriod;
+    Out.OpenInnerDoor = OpenInnerDoor;
+    Out.OpenInnerDoorFinished = OpenInnerDoorFinished;
+    Out.CloseAllDoors = CloseAllDoors;
+    Out.CloseInnerDoorFinished = CloseInnerDoorFinished;
+    Out.Stops = Stops;
+    Out.Gate = Gate;
+    Out.GatewayDoors = GatewayDoors;
+    Out.Riders = Riders;
+    Out.RestStop = RestStop;
+    Out.PanelStyle = PanelStyle;
+    Out.Anchor = Anchor;
+    Out.AnchorBase = AnchorBase;
+    Out.CarriageAnchor = CarriageAnchor;
+    Out.State = State;
+    Out.CurrentStop = CurrentStop;
+    Out.S = S;
+    Out.bAtContact = bAtContact;
+    Out.bPoweredUp = bPoweredUp;
+    Out.Direction = Direction;
+    Out.IdleSeconds = FMath::Max(0.0, Clock - IdleSince);
+    for (const TWeakObjectPtr<const USCRigComponent>& Rig : Inert) Out.Inert.Add(const_cast<USCRigComponent*>(Rig.Get()));
+    return Out;
+}
+void FSCLift::Restore(const FSCSavedLift& Saved)
+{
+    EntityId = Saved.EntityId;
+    EntityName = Saved.EntityName;
+    ClassName = Saved.ClassName;
+    Interior = Saved.Interior;
+    Id = Saved.Id;
+    MaxSpeed = Saved.MaxSpeed;
+    EasingDistance = Saved.EasingDistance;
+    OpenWaitTime = Saved.OpenWaitTime;
+    QueueWaitTime = Saved.QueueWaitTime;
+    IdlingPeriod = Saved.IdlingPeriod;
+    OpenInnerDoor = Saved.OpenInnerDoor;
+    OpenInnerDoorFinished = Saved.OpenInnerDoorFinished;
+    CloseAllDoors = Saved.CloseAllDoors;
+    CloseInnerDoorFinished = Saved.CloseInnerDoorFinished;
+    Stops = Saved.Stops;
+    Gate = Saved.Gate;
+    GatewayDoors = Saved.GatewayDoors;
+    Riders = Saved.Riders;
+    RestStop = Saved.RestStop;
+    PanelStyle = Saved.PanelStyle;
+    Anchor = Saved.Anchor;
+    AnchorBase = Saved.AnchorBase;
+    CarriageAnchor = Saved.CarriageAnchor;
+    // At rest where it was saved (its anchor is saved in that pose): a lift saved at a stop stays there; one saved between
+    // stops (in motion: no current stop) rests at the stop nearest its path position, its carriage moved there. Mid-
+    // handshake states become idle; open and powered-down stay.
+    S = Saved.S;
+    V = 0;
+    bAtContact = Saved.bAtContact;
+    CurrentStop = Saved.CurrentStop;
+    if (!Stops.IsValidIndex(CurrentStop))
+    {
+        CurrentStop = RestStop;
+        for (int32 I = 0; I < Stops.Num(); ++I)
+            if (FMath::Abs(Stops[I].S - S) < FMath::Abs(Stops[CurrentStop].S - S)) CurrentStop = I;
+        bAtContact = false;
+        if (Stops.IsValidIndex(CurrentStop)) MoveTo(Stops[CurrentStop].S);
+    }
+    State = Saved.State == ESCLiftState::PoweredDown || Saved.State == ESCLiftState::Open ? Saved.State : ESCLiftState::Idle;
+    bPoweredUp = Saved.bPoweredUp && State != ESCLiftState::PoweredDown;
+    Direction = Saved.Direction;
+    Inert.Reset();
+    for (const TWeakObjectPtr<USCRigComponent>& Rig : Saved.Inert) Inert.Add(Rig.Get());
+    SpeedPhase = ESCLiftSpeedPhase::None;
+    TargetStop = FromStop = INDEX_NONE;
+    Queue.Reset();
+    Clock = LegTime = StateTime = 0;
+    OpenedAt = State == ESCLiftState::Open ? 0 : -1;
+    IdleSince = -Saved.IdleSeconds; // Clock restarts at 0: its idle time carries on
+    LegStartedAt = -1;
+    LegStartS = LegEndS = S;
+}
 FSCInteractionNetwork::FEndpoint& FSCInteractionNetwork::At(int32 Interior, const FString& EntityId)
 {
     if (!Interiors.IsValidIndex(Interior)) Interiors.SetNum(Interior + 1);
-    return Interiors[Interior].FindOrAdd(EntityId);
+    return Interiors[Interior].Entities.FindOrAdd(EntityId);
 }
 const FSCInteractionNetwork::FEndpoint* FSCInteractionNetwork::Find(int32 Interior, const FString& EntityId) const
 {
-    return Interiors.IsValidIndex(Interior) ? Interiors[Interior].Find(EntityId) : nullptr;
+    return Interiors.IsValidIndex(Interior) ? Interiors[Interior].Entities.Find(EntityId) : nullptr;
 }
 int32 FSCInteractionNetwork::InteriorOf(const FString& EntityId) const
 {
     for (int32 I = 0; I < Interiors.Num(); ++I)
-        if (Interiors[I].Contains(EntityId)) return I;
+        if (Interiors[I].Entities.Contains(EntityId)) return I;
     return INDEX_NONE;
 }
 TArray<FSCInteractionNetwork::FDelivery> FSCInteractionNetwork::Route(int32 Interior, const FString& SourceEntityId, FName Interaction) const

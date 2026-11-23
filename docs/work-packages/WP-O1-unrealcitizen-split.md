@@ -244,8 +244,18 @@ data when it loads. In stages:
     is never a door order) and the physics grid. Prep format 20. A prepared Golem has its ten ship doors as a live import
     does, and Ship Link opens them. A pad's lock buttons (`DoorPanelLocks`, button panels) come with 1c; until then E on
     a prepared pad operates its door.
-  - **1b-2 — lifts**: the lift network (`FSCLift`'s model and state saved; its hooks and delegates bound again when
-    the vehicle begins play), the interaction network, lift panels and paths.
+  - **1b-2 — lifts** (this PR): each lift's model and resting place are saved (`FSCSavedLift`, written by
+    `ASCVehicle::PreSave`); a loaded vehicle makes its lifts again from them (`RestoreLifts` in `PostLoad`: the model
+    copied, its hooks into the vehicle and its sound events bound by `SCVehicleLifts::BindLift`, the code the import
+    uses; nothing derived). The interaction network (`FSCInteractionNetwork`: `FSCInteractionInterior`,
+    `FSCInteractionEndpoint`, `FSCInteractionLink`) and the lift panels (`FSCLiftPanel`) are saved, and the audio
+    scene's entity emitters (`ASCVehicle::AudioEntities`: a cooked scene plays the carriage's and buttons' effects);
+    instancing keeps the parts under an interaction anchor (lift panel, door pad, kiosk) as components. The cook saves lifts at
+    rest (`FSCLift::IsIdle`; one that is not fails it before the actor changes: its doors' clips are not saved, and
+    another level save then keeps no lift); its power state, travel direction and the doors it found no clip for are
+    kept. A static cook (rigs baked) keeps no lifts. The lift paths
+    stay a cache made on first use. Prep format 22. A carriage's floor-select screen (`FloorPanels`, drawn panels) comes
+    with 1c; until then a prepared lift is called and sent by its call buttons and links.
   - **1b-3 — seats, ladders, usables, light groups**: the manifest records seats and ladders read (`SeatEntrances`,
     `Seat`, `Ladder`), ladder anchors, usable targets, light groups (with the light states' own data), light-room
     channels and mesh samples.

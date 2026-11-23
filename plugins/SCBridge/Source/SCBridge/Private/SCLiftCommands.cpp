@@ -3,6 +3,7 @@
 #include "SCViewerAutomation.h"
 #include "SCViewerSubsystem.h"
 #include "SCVehicle.h"
+#include "SCRigComponent.h"
 #include "SCLift.h"
 #include "SCFirstPersonCharacter.h"
 #include "Components/MeshComponent.h"
@@ -59,7 +60,7 @@ void FSCViewerAutomation::RegisterLiftCommands()
             TArray<FString> Choices;
             for (const FSCPointInteraction& C : Panel.Choices) Choices.Add(FString::Printf(TEXT("%s=%s"), *C.Name.ToString(), *C.DisplayName));
             UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_PANEL entity=%s label=\"%s\" choices=\"%s\" at=%s"), *Panel.EntityId, *Panel.Label,
-                   *FString::Join(Choices, TEXT(", ")), Anchor.IsValid() ? *V->GetActorTransform().InverseTransformPosition(Anchor->GetComponentLocation()).ToCompactString() : TEXT("-"));
+                   *FString::Join(Choices, TEXT(", ")), Anchor ? *V->GetActorTransform().InverseTransformPosition(Anchor->GetComponentLocation()).ToCompactString() : TEXT("-"));
         }
     });
     Add(TEXT("sc.Lift.Call"), TEXT("sc.Lift.Call <lift> <stop>: as a call button at that stop (Ascent/DescentRequest on its node)"),
@@ -96,7 +97,14 @@ void FSCViewerAutomation::RegisterLiftCommands()
         });
     Add(TEXT("sc.Lift.Where"), TEXT("sc.Lift.Where: log every lift's position and state (LIFT_WHERE) and the player's movement base"),
         [Weak](ASCVehicle* V, const TArray<FString>&) {
-            for (int32 I = 0; V && I < V->Lifts.Num(); ++I) UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE %s"), *V->Lifts[I]->Describe());
+            for (int32 I = 0; V && I < V->Lifts.Num(); ++I)
+            {
+                // Where the carriage itself is (vehicle frame, cm): it rides the lift's anchor when attached.
+                const USceneComponent* Carriage = V->Lifts[I]->CarriageAnchor.Get();
+                const USceneComponent* Gate = V->Lifts[I]->Gate.IsEmpty() ? nullptr : V->Lifts[I]->Gate[0].Rig.Get();
+                auto At = [V](const USceneComponent* C) { return C ? V->GetActorTransform().InverseTransformPosition(C->GetComponentLocation()).ToCompactString() : FString(TEXT("-")); };
+                UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE %s carriage=%s gate=%s"), *V->Lifts[I]->Describe(), *At(Carriage), *At(Gate));
+            }
             const ASCFirstPersonCharacter* C = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr;
             const UPrimitiveComponent* Base = C ? Cast<UPrimitiveComponent>(C->GetMovementBaseObject()) : nullptr;
             UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE player base=%s lift=%d pos=%s"), Base ? *Base->GetName() : TEXT("-"),

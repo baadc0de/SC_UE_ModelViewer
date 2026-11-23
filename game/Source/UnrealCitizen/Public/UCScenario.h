@@ -60,8 +60,10 @@ struct UNREALCITIZEN_API FUCPrepared
      *  (USCRigComponent::CollisionPose: a load refits nothing). 18: the clip catalog's root
      *  rig mesh saved (USCClipCatalog::RootMesh, placed or not). 19: WP-O1-4b-1b doors
      *  saved (door records and interactions with their tags, ship doors with their sweeps, door controls and pad reach,
-     *  door sensors, port rigs, the doors' fragment states, the physics grid). 20: the lift-driven doors saved. */
-    static constexpr int32 FormatVersion = 20;
+     *  door sensors, port rigs, the doors' fragment states, the physics grid). 20: the lift-driven doors saved. 21:
+     *  WP-O1-4b-1b-2 lifts saved (FSCSavedLift, made again at load), the interaction network and the lift panels. 22: the audio scene's entity emitters saved; parts
+     *  under an interaction anchor kept as components. */
+    static constexpr int32 FormatVersion = 22;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

@@ -339,8 +339,17 @@ void FSCAudioScene::LoadCooked(ASCVehicle* V)
             Scene->AddInterior(I, V->InteriorAnchors[K], bHelper, Texts(TEXT("audio_spots")), Texts(TEXT("audio_areas")), Warnings);
             if (bRooms) FSCLightAreas::Register(V, V->InteriorAnchors[K], Texts(TEXT("room_volumes")), bHelper, Warnings);
         }
+    // The entity emitters the import registered (the lift carriage and its buttons, the doors): saved with the vehicle.
+    int32 Entities = 0;
+    for (const FSCSavedAudioEntity& E : V->AudioEntities)
+        if (Scene->Manifest.Classes.Contains(E.ClassGuid))
+        {
+            Scene->Entities.Add(E.Key, {E.ClassGuid, E.Anchor, E.Rig, E.Interior});
+            ++Entities;
+        }
     for (const FString& W : Warnings) UE_LOG(LogSCAudio, Warning, TEXT("AUDIO_COOKED %s"), *W);
-    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_COOKED %s scene=%s media=%d rooms_registered=%d"), *Dir, *V->CookedAudioScene, Scene->MediaBytes.Num(), bRooms);
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_COOKED %s scene=%s media=%d rooms_registered=%d entities=%d"), *Dir, *V->CookedAudioScene,
+           Scene->MediaBytes.Num(), bRooms, Entities);
     if (USCAudioSubsystem* A = USCAudioSubsystem::Get(V)) A->AddScene(Scene.ToSharedRef());
 }
 

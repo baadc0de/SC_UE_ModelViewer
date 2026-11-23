@@ -1842,8 +1842,11 @@ void FSCImportJob::FState::Assemble()
             Audio->AddInterior(InteriorIndex, Container, bHelper, Interior.AudioSpotJson, Interior.AudioAreaJson, Result.Warnings);
             for (const auto& P : Interior.Placements)
                 if (const FEntity* Placed = ById.Find(P.EntityId); Placed && Audio->Manifest.Classes.Contains(P.EntityClassGuid))
-                    Audio->Entities.Add(FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower()),
-                                        {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
+                {
+                    const FString Key = FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower());
+                    Audio->Entities.Add(Key, {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
+                    V->AudioEntities.Add({Key, P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex}); // saved with a prepared level
+                }
         }
         // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel. A lift carriage links
         // its gate (a door) but operates it itself: an entity that is a lift is not a pad (WP-P5).

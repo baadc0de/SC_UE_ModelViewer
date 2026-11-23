@@ -1,6 +1,7 @@
 // USCCookLibrary: environment -> persistent level actor with pooled assets (WP-C1).
 #include "SCCookLibrary.h"
 #include "SCRigAssets.h"
+#include "SCLift.h"
 #include "SCRigComponent.h"
 #include "SCTextureSource.h"
 #include "SCMeshImporter.h"
@@ -194,7 +195,28 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     Cook.Root = Root;
     Cook.SharedRoot = SharedRoot;
     int32 RigMeshes = 0, RigCollisions = 0;
-    if (!bKeepRigs) FSCEnvironment::BakeRigsStatic(Environment);
+    // A lift is saved at rest (WP-O1-4b-1b-2): its doors' poses and recorded states are saved, the clips moving them are
+    // not, so a lift mid-leg or mid-handshake would load with its doors and its state disagreeing. The prep step presents
+    // the vehicle at rest; a lift that is not fails the cook before anything of the actor changes.
+    if (bKeepRigs)
+    {
+        if (!Environment->LiftsAtRest())
+        {
+            for (const TSharedPtr<FSCLift>& Lift : Environment->Lifts)
+                if (Lift) UE_LOG(LogSCCook, Error, TEXT("COOK_REFUSED lift %d (%s): %s"), Lift->Id, *Lift->EntityName, *Lift->Describe());
+            UE_LOG(LogSCCook, Error, TEXT("COOK_REFUSED the vehicle is not at rest (a lift moving, or a clip playing: %d): lifts are saved idle at a stop"),
+                   Environment->Playback.Num());
+            return false;
+        }
+    }
+    if (!bKeepRigs)
+    {
+        FSCEnvironment::BakeRigsStatic(Environment);
+        // Baked static: no rig moves, so no lift either (its doors and carriage are geometry now).
+        Environment->Lifts.Reset();
+        Environment->SavedLifts.Reset();
+        Environment->LiftPanels.Reset();
+    }
     else
     {
         // Each rig mesh the actor references (its meshes, the clip bindings', the rigs': one whose placement was skipped is

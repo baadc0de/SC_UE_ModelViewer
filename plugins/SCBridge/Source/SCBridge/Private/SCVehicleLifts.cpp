@@ -44,7 +44,7 @@ int32 ASCVehicle::SendInteraction(const FString& SourceEntityId, FName Interacti
 {
     const int32 Interior = Interactions.InteriorOf(SourceEntityId);
     int32 Holders = 0;
-    for (const auto& Ids : Interactions.Interiors) Holders += Ids.Contains(SourceEntityId);
+    for (const FSCInteractionInterior& Ids : Interactions.Interiors) Holders += Ids.Entities.Contains(SourceEntityId);
     if (Holders > 1) // ids are unique within one container: a container placed twice repeats them
         UE_LOG(LogSCLiftLinks, Warning, TEXT("LINK_SEND source=%s is in %d interiors; sending in the first (%d). Panels send in their own."),
                *SourceEntityId, Holders, Interior);
@@ -137,7 +137,7 @@ const ASCVehicle::FLiftPanel* ASCVehicle::FindLiftPanel(FVector Eye, FVector Dir
     {
         if (Hit.GetActor() == this)
             for (const USceneComponent* C = Hit.GetComponent(); C; C = C->GetAttachParent())
-                if (const FLiftPanel* Panel = LiftPanels.Find(C)) return Panel;
+                if (const FLiftPanel* Panel = LiftPanels.Find(const_cast<USceneComponent*>(C))) return Panel;
         Nearest = Hit.Distance;
     }
     // A panel part without collision (the C2's call and floor buttons have none) is found by the ray against the part's own
@@ -357,6 +357,85 @@ bool SCVehicleLifts::GroundContact(const ASCVehicle* V, int32 LiftIndex, int32 T
 }
 
 // ---------------------------------------------------------------------------------------------------------- assembly
+void SCVehicleLifts::BindLift(ASCVehicle* V, FSCLift& Lift)
+{
+    TWeakObjectPtr<ASCVehicle> Weak = V;
+    Lift.Host.PlayDoor = [Weak](USCRigComponent* Rig, bool bOpen, float Speed) { return Weak.IsValid() && Weak->PlayDoorRig(Rig, bOpen, Speed); };
+    Lift.Host.IsDoorOpen = [Weak](const USCRigComponent* Rig) { return Weak.IsValid() && Weak->IsRigOpen(Rig); };
+    Lift.Host.IsDoorMoving = [Weak](const USCRigComponent* Rig) { return Weak.IsValid() && Weak->IsRigPlaying(Rig); };
+    const int32 LinkInterior = Lift.Interior;
+    Lift.Host.Emit = [Weak, LinkInterior](const FString& Entity, FName Interaction) {
+        if (Weak.IsValid()) Weak->SendInteractionIn(LinkInterior, Entity, Interaction);
+    };
+    const int32 LiftId = Lift.Id;
+    Lift.Host.RedeliverDoors = [Weak, LinkInterior](const FString& Source, FName Interaction) {
+        return Weak.IsValid() ? Weak->RedeliverDoorLinks(LinkInterior, Source, Interaction) : 0;
+    };
+    Lift.Host.SweepLeg = [Weak, LiftId](int32 From, int32 To, FString& By) {
+        return Weak.IsValid() ? Weak->SweepLiftLeg(LiftId, From, To, By) : FSCLiftHost::ELeg::Clear;
+    };
+    Lift.Host.GroundContact = [Weak, LiftId](int32 To, double& Travel, FString& By) {
+        return Weak.IsValid() && SCVehicleLifts::GroundContact(Weak.Get(), LiftId, To, Travel, By);
+    };
+    // WP-A1: the carriage class's sound effects follow the lift's events: each phase fires the trigger effects of the
+    // same tag name (Start, RampUp, FullSpeed, RampDown, Stop, PowerUp, PowerDown), and the state tag InTransit is
+    // held from Start to Stop (the brief's mapping of FSCLift's events onto the game's elevator tags).
+    Lift.OnPhase.AddLambda([Weak, LinkInterior, Carriage = Lift.EntityId](FName Phase) {
+        USCAudioSubsystem* Audio = Weak.IsValid() ? USCAudioSubsystem::Get(Weak.Get()) : nullptr;
+        if (!Audio) return;
+        Audio->FireEntityTag(Weak.Get(), LinkInterior, Carriage, Phase.ToString());
+        if (Phase == TEXT("Start")) Audio->SetEntityTag(Weak.Get(), LinkInterior, Carriage, TEXT("InTransit"), true);
+        else if (Phase == TEXT("Stop")) Audio->SetEntityTag(Weak.Get(), LinkInterior, Carriage, TEXT("InTransit"), false);
+    });
+}
+bool ASCVehicle::LiftsAtRest() const
+{
+    if (!Playback.IsEmpty()) return false; // a clip moving any door (a lift's doors move by clips of any origin)
+    for (const TSharedPtr<FSCLift>& Lift : Lifts)
+        if (Lift && !Lift->IsIdle()) return false;
+    return true;
+}
+void ASCVehicle::SaveLifts()
+{
+    // Only lifts at rest are saved consistently (their doors' clips are not saved): otherwise none is, and the load drops
+    // their controls (the prep step refuses such a vehicle; another level save keeps the vehicle's lifts out of it).
+    SavedLifts.Reset();
+    bLiftsOmitted = false;
+    if (Lifts.IsEmpty()) return;
+    if (!LiftsAtRest())
+    {
+        bLiftsOmitted = true;
+        UE_LOG(LogSCLiftLinks, Warning, TEXT("LIFT_SAVE skipped: the vehicle is not at rest (a lift moving, or a clip playing); its lifts are not saved"));
+        return;
+    }
+    for (const TSharedPtr<FSCLift>& Lift : Lifts)
+        if (Lift) SavedLifts.Add(Lift->Save());
+}
+int32 ASCVehicle::RestoreLifts()
+{
+    if (!Lifts.IsEmpty()) return 0;
+    if (bLiftsOmitted)
+    {
+        // Saved without its lifts: no controller answers their panels and stops, so those are not offered.
+        LiftPanels.Reset();
+        for (FSCInteractionInterior& Interior : Interactions.Interiors)
+            for (auto& [Id, Endpoint] : Interior.Entities)
+                Endpoint.Lift = Endpoint.LiftOfNode = Endpoint.Stop = INDEX_NONE;
+        UE_LOG(LogSCLiftLinks, Warning, TEXT("LIFT_RESTORE none: the level was saved with its lifts left out"));
+        return 0;
+    }
+    for (const FSCSavedLift& Saved : SavedLifts)
+    {
+        TSharedPtr<FSCLift> Lift = MakeShared<FSCLift>();
+        Lift->Restore(Saved);
+        Lift->Id = Lifts.Num(); // the network's carriage and stop entries index Lifts
+        SCVehicleLifts::BindLift(this, *Lift);
+        Lifts.Add(MoveTemp(Lift));
+    }
+    if (!Lifts.IsEmpty())
+        UE_LOG(LogSCLiftLinks, Display, TEXT("LIFT_RESTORE lifts=%d panels=%d driven_doors=%d"), Lifts.Num(), LiftPanels.Num(), LiftDrivenRigs.Num());
+    return Lifts.Num();
+}
 TSet<FString> SCVehicleLifts::CarriageIds(const FSCInterior& Interior)
 {
     TSet<FString> Out;
@@ -483,7 +562,7 @@ void SCVehicleLifts::BuildInteriorLifts(ASCVehicle* V, int32 InteriorIndex, cons
             return E ? &E->Links : nullptr;
         };
         if (V->Interactions.Interiors.IsValidIndex(InteriorIndex))
-            for (const auto& [Id, Endpoint] : V->Interactions.Interiors[InteriorIndex])
+            for (const auto& [Id, Endpoint] : V->Interactions.Interiors[InteriorIndex].Entities)
                 if (Endpoint.Links.ContainsByPredicate([&](const FSCInteractionLink& L) { return LiftIds.Contains(L.TargetEntityId); })) Operators.Add(Id);
         // Gateway doors: doors a door verb of an operator's link drives (the C2 belly hatch), not a landing door or the gate.
         TSet<FString> Driven;
@@ -543,34 +622,8 @@ void SCVehicleLifts::BuildInteriorLifts(ASCVehicle* V, int32 InteriorIndex, cons
             E.LiftOfNode = Lift->Id;
             E.Stop = S.Index;
         }
-        Lift->Host.PlayDoor = [Weak](USCRigComponent* Rig, bool bOpen, float Speed) { return Weak.IsValid() && Weak->PlayDoorRig(Rig, bOpen, Speed); };
-        Lift->Host.IsDoorOpen = [Weak](const USCRigComponent* Rig) { return Weak.IsValid() && Weak->IsRigOpen(Rig); };
-        Lift->Host.IsDoorMoving = [Weak](const USCRigComponent* Rig) { return Weak.IsValid() && Weak->IsRigPlaying(Rig); };
-        const int32 LinkInterior = InteriorIndex;
-        Lift->Host.Emit = [Weak, LinkInterior](const FString& Entity, FName Interaction) {
-            if (Weak.IsValid()) Weak->SendInteractionIn(LinkInterior, Entity, Interaction);
-        };
-        const int32 LiftId = Lift->Id;
-        Lift->Host.RedeliverDoors = [Weak, LinkInterior](const FString& Source, FName Interaction) {
-            return Weak.IsValid() ? Weak->RedeliverDoorLinks(LinkInterior, Source, Interaction) : 0;
-        };
-        Lift->Host.SweepLeg = [Weak, LiftId](int32 From, int32 To, FString& By) {
-            return Weak.IsValid() ? Weak->SweepLiftLeg(LiftId, From, To, By) : FSCLiftHost::ELeg::Clear;
-        };
-        Lift->Host.GroundContact = [Weak, LiftId](int32 To, double& Travel, FString& By) {
-            return Weak.IsValid() && SCVehicleLifts::GroundContact(Weak.Get(), LiftId, To, Travel, By);
-        };
         Lift->CarriageAnchor = Carriage->Anchor;
-        // WP-A1: the carriage class's sound effects follow the lift's events: each phase fires the trigger effects of the
-        // same tag name (Start, RampUp, FullSpeed, RampDown, Stop, PowerUp, PowerDown), and the state tag InTransit is
-        // held from Start to Stop (the brief's mapping of FSCLift's events onto the game's elevator tags).
-        Lift->OnPhase.AddLambda([Weak, LinkInterior, Carriage = Record.EntityId](FName Phase) {
-            USCAudioSubsystem* Audio = Weak.IsValid() ? USCAudioSubsystem::Get(Weak.Get()) : nullptr;
-            if (!Audio) return;
-            Audio->FireEntityTag(Weak.Get(), LinkInterior, Carriage, Phase.ToString());
-            if (Phase == TEXT("Start")) Audio->SetEntityTag(Weak.Get(), LinkInterior, Carriage, TEXT("InTransit"), true);
-            else if (Phase == TEXT("Stop")) Audio->SetEntityTag(Weak.Get(), LinkInterior, Carriage, TEXT("InTransit"), false);
-        });
+        SCVehicleLifts::BindLift(V, *Lift);
         UE_LOG(LogSCLiftLinks, Display,
                TEXT("LIFT_BUILD lift=%d entity=%s class=%s stops=%d rest=%d riders=%d moved=%d lights=%d gate=%d gateways=%d panels=%d"), Lift->Id,
                *Record.EntityId, *Record.EntityClass, Lift->Stops.Num(), Lift->RestStop, Record.Riders.Num(), Moved, LightsMoved, Lift->Gate.Num(),

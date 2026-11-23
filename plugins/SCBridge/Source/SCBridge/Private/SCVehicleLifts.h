@@ -7,6 +7,7 @@
 class ASCVehicle;
 class USceneComponent;
 class USCRigComponent;
+class FSCLift;
 
 /** What the importer placed for one interior entity id. */
 struct FSCLiftBuildPart
@@ -21,6 +22,9 @@ namespace SCVehicleLifts
  *  riders re-parented under it, their doors, stop frames and names, the panels that operate it. */
 void BuildInteriorLifts(ASCVehicle* Vehicle, int32 InteriorIndex, const FSCInterior& Interior, USceneComponent* Container, bool bHelper,
                         const TMap<FString, FSCLiftBuildPart>& Parts);
+/** Lift's hooks into Vehicle (its doors, the interaction links, the leg sweep and ground contact) and its sound events
+ *  (the carriage class's effect triggers): at import, and when a prepared vehicle makes its lifts again at load. */
+void BindLift(ASCVehicle* Vehicle, FSCLift& Lift);
 /** The entity ids that are lift carriages (an entity that is a lift is not a door pad, DOORS-1). */
 TSet<FString> CarriageIds(const FSCInterior& Interior);
 /** WP-P5 ground stop: the first blocking surface under lift LiftIndex's carriage on its way down from where it stands to stop

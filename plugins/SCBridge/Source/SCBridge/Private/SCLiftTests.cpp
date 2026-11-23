@@ -16,6 +16,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "UObject/ObjectSaveContext.h"
 
 namespace
 {
@@ -707,6 +708,137 @@ bool FSCFloorPanelPaintTest::RunTest(const FString&)
     TestTrue(TEXT("set"), V->SetScreenFaceMaterial(0, Drawn));
     V->SetPaint(INDEX_NONE);
     TestEqual(TEXT("the face keeps the drawn image after a paint"), C->GetMaterial(0), Drawn);
+    return true;
+}
+
+// WP-O1-4b-1b-2: a prepared vehicle's lifts, interaction network and lift panels are saved with its level and made again
+// when it loads: the lift's model and where it rests copied from what was saved, its hooks into the vehicle bound again.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCSavedLiftsTest, "SCBridge.Prepare.SavedLifts", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCSavedLiftsTest::RunTest(const FString&)
+{
+    FSCSceneManifest M;
+    if (!ReadC2(*this, M)) return false;
+    ASCVehicle* V = MakeC2Vehicle(M);
+    ASCVehicle* Loaded = nullptr;
+    ON_SCOPE_EXIT
+    {
+        V->RemoveFromRoot();
+        if (Loaded) Loaded->RemoveFromRoot();
+    };
+    USceneComponent* PanelAnchor = NewObject<USceneComponent>(V, TEXT("PanelAnchor"));
+    FSCLiftPanel Panel;
+    Panel.Interior = 0;
+    Panel.EntityId = TEXT("panel");
+    Panel.Label = TEXT("Elevator panel");
+    Panel.Choices = {Choice(TEXT("RequestSurface"), TEXT("Exit Ship"), true)};
+    V->LiftPanels.Add(PanelAnchor, Panel);
+    FSCLift& Lift = *V->Lifts[0];
+    // Its anchors and gate rig are the vehicle's components (saved with it, remapped to the loaded actor's own).
+    Lift.Anchor = NewObject<USceneComponent>(V, TEXT("LiftAnchor"));
+    Lift.CarriageAnchor = NewObject<USceneComponent>(V, TEXT("Carriage"));
+    Lift.CarriageAnchor->SetupAttachment(Lift.Anchor.Get()); // the carriage rides the moving anchor, a rider the carriage
+    USceneComponent* Rider = NewObject<USceneComponent>(V, TEXT("Rider"));
+    Rider->SetupAttachment(Lift.CarriageAnchor.Get());
+    // The actor's components, as the import adds them (a level saves an actor's instance components).
+    for (UActorComponent* Part : TArray<UActorComponent*>{Lift.Anchor.Get(), Lift.CarriageAnchor.Get(), Rider, PanelAnchor}) V->AddInstanceComponent(Part);
+    USCRigComponent* GateRig = NewObject<USCRigComponent>(V, TEXT("Gate"));
+    V->AddInstanceComponent(GateRig);
+    Lift.Gate.Add({TEXT("gate"), GateRig, 0.5f, 0.0});
+    Lift.CurrentStop = 2; // resting at the top deck, its anchor in that pose
+    Lift.S = Lift.Stops[2].S;
+    Lift.Anchor->SetRelativeLocation(Lift.AnchorBase + Lift.Stops[2].Local - Lift.Stops[Lift.RestStop].Local);
+    Rider->SetRelativeLocation(FVector(10, 20, 30));
+
+    // A level save (PreSave: SaveLifts) and a load of the copy (DuplicateObject: its components remapped, PostLoad run:
+    // RestoreLifts); the native lift list is not copied, so the loaded actor's lifts come from what was saved.
+    FObjectSaveContextData SaveData;
+    V->PreSave(FObjectPreSaveContext(SaveData));
+    Loaded = DuplicateObject(V, GetTransientPackage());
+    Loaded->AddToRoot();
+    if (!TestEqual(TEXT("one lift made again at load"), Loaded->Lifts.Num(), 1)) return false;
+    const FSCLift& Made = *Loaded->Lifts[0];
+    TestTrue(TEXT("its anchors and gate are the loaded actor's components"),
+             Made.Anchor.IsValid() && Made.Anchor->GetOuter() == Loaded && Made.Anchor.Get() != Lift.Anchor.Get() &&
+                 Made.CarriageAnchor.IsValid() && Made.CarriageAnchor->GetOuter() == Loaded && Made.Gate.Num() == 1 &&
+                 Made.Gate[0].Rig.IsValid() && Made.Gate[0].Rig->GetOuter() == Loaded);
+    TestTrue(TEXT("its model"), Made.EntityId == Lift.EntityId && Made.Stops.Num() == 3 && Made.Stops[2].Name == TEXT("Top Deck") &&
+                                    Made.Stops[1].S == Lift.Stops[1].S && Made.MaxSpeed == Lift.MaxSpeed && Made.RestStop == Lift.RestStop &&
+                                    Made.Gate.Num() == 1 && Made.Gate[0].Speed == 0.5f && Made.Id == 0 && Made.Interior == 0);
+    TestTrue(TEXT("where it rests, idle"), Made.CurrentStop == 2 && Made.S == Lift.Stops[2].S && Made.State == ESCLiftState::Idle && Made.Queue.IsEmpty());
+    TestTrue(TEXT("its hooks bound"), bool(Made.Host.PlayDoor) && bool(Made.Host.Emit) && bool(Made.Host.SweepLeg) && bool(Made.Host.GroundContact));
+    const FSCInteractionNetwork::FEndpoint* PanelLinks = Loaded->Interactions.Find(0, TEXT("panel"));
+    const FSCInteractionNetwork::FEndpoint* Carriage = Loaded->Interactions.Find(0, TEXT("platform"));
+    TestTrue(TEXT("the interaction network"), PanelLinks && PanelLinks->Links.Num() == 4 && PanelLinks->Links[3].TargetEntityId == TEXT("hatch") &&
+                                                  Carriage && Carriage->Lift == 0 && Loaded->Interactions.Route(0, TEXT("panel"), TEXT("RequestSurface")).Num() == 2);
+    USceneComponent* LoadedPanelAnchor = FindObject<USceneComponent>(Loaded, TEXT("PanelAnchor"));
+    const FSCLiftPanel* SavedPanel = LoadedPanelAnchor ? Loaded->LiftPanels.Find(LoadedPanelAnchor) : nullptr;
+    TestTrue(TEXT("the lift panel"), SavedPanel && SavedPanel->EntityId == TEXT("panel") && SavedPanel->Choices.Num() == 1 &&
+                                         SavedPanel->Choices[0].DisplayName == TEXT("Exit Ship"));
+    TestEqual(TEXT("a second restore makes nothing"), Loaded->RestoreLifts(), 0);
+
+    // The loaded carriage still rides the lift's anchor and its rider the carriage; driven to the exit stop (doors stubbed,
+    // no gateway), the anchor moves by the legs' displacement, the carriage and rider with it.
+    const USceneComponent* LoadedRider = FindObject<USceneComponent>(Loaded, TEXT("Rider"));
+    TestTrue(FString::Printf(TEXT("the carriage rides the anchor (%s under %s)"), *GetPathNameSafe(Made.CarriageAnchor.Get()),
+                             *GetPathNameSafe(Made.CarriageAnchor->GetAttachParent())), Made.CarriageAnchor->GetAttachParent() == Made.Anchor.Get());
+    TestTrue(FString::Printf(TEXT("the rider rides the carriage (%s under %s)"), *GetPathNameSafe(LoadedRider),
+                             *GetPathNameSafe(LoadedRider ? LoadedRider->GetAttachParent() : nullptr)),
+             LoadedRider && LoadedRider->GetAttachParent() == Made.CarriageAnchor.Get());
+    FSCLift& Drive = *Loaded->Lifts[0];
+    FStubDoors Doors;
+    Doors.Doors.Add(Drive.Gate[0].Rig.Get(), {false, -1, 0.5});
+    Doors.Names.Add(Drive.Gate[0].Rig.Get(), TEXT("gate"));
+    Doors.Bind(Drive);
+    Drive.Host.Emit = [](const FString&, FName) {};
+    Drive.Host.RedeliverDoors = [](const FString&, FName) { return 0; };
+    Drive.Host.SweepLeg = {};
+    Drive.Host.GroundContact = {};
+    // The rider's place in the vehicle through its attachment chain (rider -> carriage -> anchor; the fixture has no world).
+    auto InVehicle = [](const USceneComponent* C) {
+        FTransform T = FTransform::Identity;
+        for (; C; C = C->GetAttachParent()) T = T * C->GetRelativeTransform();
+        return T.GetLocation();
+    };
+    const FVector RiderBefore = InVehicle(LoadedRider);
+    TestTrue(TEXT("the loaded lift takes a request"), Drive.RequestStop(0, TEXT("test"), TEXT("RequestSurface")));
+    Run(Drive, 40);
+    const FVector Leg = Drive.Stops[0].Local - Drive.Stops[2].Local; // top deck -> exit stop
+    TestTrue(FString::Printf(TEXT("arrived at the exit stop, the rider moved by the leg (%s, expected %s)"),
+                             *(InVehicle(LoadedRider) - RiderBefore).ToCompactString(), *Leg.ToCompactString()),
+             Drive.CurrentStop == 0 && (InVehicle(LoadedRider) - RiderBefore).Equals(Leg, 0.5) && Leg.Size() > 100);
+
+    // A lift saved between stops (in motion: no current stop), powered down, with a door it found no clip for: it rests at
+    // the stop nearest where it was, keeps its power state and does not wait for that door.
+    FSCSavedLift Moving = Lift.Save();
+    Moving.CurrentStop = INDEX_NONE;
+    Moving.S = Lift.Stops[1].S + 0.5; // just past the lower deck
+    Moving.State = ESCLiftState::Moving;
+    Moving.bPoweredUp = false;
+    USCRigComponent* Stuck = NewObject<USCRigComponent>(V);
+    Moving.Inert.Add(Stuck);
+    FSCLift Again;
+    Again.Restore(Moving);
+    TestTrue(TEXT("saved in motion: rests at its nearest stop, idle"), Again.CurrentStop == 1 && Again.S == Lift.Stops[1].S && Again.State == ESCLiftState::Idle);
+    const FSCSavedLift Resaved = Again.Save();
+    TestTrue(TEXT("its power state and the door without a clip kept"), !Resaved.bPoweredUp && Resaved.Inert.Num() == 1 && Resaved.Inert[0].Get() == Stuck);
+    FSCSavedLift Idling = Lift.Save();
+    Idling.IdleSeconds = 100;
+    FSCLift Resting;
+    Resting.Restore(Idling);
+    TestEqual(TEXT("its idle time carries on"), Resting.Save().IdleSeconds, 100.0);
+
+    // A vehicle saved while a clip plays (a door a lift drives may be moving): its lifts are left out, and so are their
+    // controls on load.
+    ASCVehicle* Busy = MakeC2Vehicle(M);
+    ON_SCOPE_EXIT { Busy->RemoveFromRoot(); };
+    Busy->LiftPanels.Add(NewObject<USceneComponent>(Busy), Panel);
+    Busy->Playback.AddDefaulted();
+    TestFalse(TEXT("not at rest while a clip plays"), Busy->LiftsAtRest());
+    Busy->SaveLifts();
+    Busy->Lifts.Reset();
+    TestTrue(TEXT("its lifts left out, and their controls on load"),
+             Busy->bLiftsOmitted && Busy->SavedLifts.IsEmpty() && Busy->RestoreLifts() == 0 && Busy->LiftPanels.IsEmpty() &&
+                 Busy->Interactions.Find(0, TEXT("platform"))->Lift == INDEX_NONE);
     return true;
 }
 #endif

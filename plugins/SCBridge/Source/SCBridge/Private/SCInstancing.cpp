@@ -55,6 +55,18 @@ bool FSCInstancing::UnderRig(const USceneComponent* C)
     return false;
 }
 
+bool FSCInstancing::UnderInteraction(const ASCVehicle* Vehicle, const USceneComponent* C)
+{
+    // A press finds its panel by walking up from the part it hits (FindLiftPanel, FindInteraction, the Garage kiosks): a
+    // part under a lift panel's, a door pad's or a kiosk's anchor must stay a component there.
+    for (const USceneComponent* P = C->GetAttachParent(); Vehicle && P; P = P->GetAttachParent())
+    {
+        USceneComponent* Key = const_cast<USceneComponent*>(P);
+        if (Vehicle->LiftPanels.Contains(Key) || Vehicle->DoorControls.Contains(Key) || Vehicle->GarageKiosks.Contains(Key)) return true;
+    }
+    return false;
+}
+
 FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle, TConstArrayView<UStaticMeshComponent*> Deferred)
 {
     FSCInstancingStats Stats;
@@ -67,7 +79,8 @@ FSCInstancingStats FSCInstancing::Consolidate(ASCVehicle* Vehicle, TConstArrayVi
     {
         // Only plain, rigid leaf components. An import can supply fully configured pieces before registration.
         if (!C || C->GetClass() != UStaticMeshComponent::StaticClass() || (!C->IsRegistered() && !Pending.Contains(C)) || !C->GetStaticMesh() ||
-            !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || Emissive(C) || C->ComponentHasTag(FSCInstancing::KeepTag))
+            !C->GetAttachChildren().IsEmpty() || FSCInstancing::UnderRig(C) || FSCInstancing::UnderInteraction(Vehicle, C) || Emissive(C) ||
+            C->ComponentHasTag(FSCInstancing::KeepTag))
             continue;
         ++Stats.Components;
         TArray<TArray<UStaticMeshComponent*>>& Bucket = Groups.FindOrAdd(SetupHash(C));
