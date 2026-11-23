@@ -3,6 +3,7 @@
 #include "SCPackageReader.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
+#include "UCScenarioSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -167,6 +168,22 @@ bool FUCPreparedLevelsTest::RunTest(const FString&)
     TestTrue(TEXT("a part of the palette id"), USCViewerSubsystem::ResolvePaint(Paints, TEXT("pirate"), Index) && Index == 0);
     TestFalse(TEXT("an index past the paints"), USCViewerSubsystem::ResolvePaint(Paints, TEXT("2"), Index));
     TestFalse(TEXT("a name of none"), USCViewerSubsystem::ResolvePaint(Paints, TEXT("Wikelo"), Index));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUCScenarioSwitchesTest, "SCBridge.Scenario.ConflictingSwitches",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FUCScenarioSwitchesTest::RunTest(const FString&)
+{
+    using S = UUCScenarioSubsystem;
+    TestEqual(TEXT("a scenario alone"), S::ConflictingSwitch(TEXT("-Scenario=golem_showcase -SCShowcase -SCMaxQuality")), FString());
+    TestEqual(TEXT("-SCLoad"), S::ConflictingSwitch(TEXT("-Scenario=x -SCLoad=DRAK_Golem")), FString(TEXT("-SCLoad")));
+    TestEqual(TEXT("-SCEnvironment"), S::ConflictingSwitch(TEXT("-Scenario=x -SCEnvironment=a.socpak")), FString(TEXT("-SCEnvironment")));
+    TestEqual(TEXT("-SCPackage"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPackage=out/p")), FString(TEXT("-SCPackage")));
+    TestEqual(TEXT("-SCCargoScenario"), S::ConflictingSwitch(TEXT("-Scenario=x -SCCargoScenario=c2_hangar")), FString(TEXT("-SCCargoScenario")));
+    TestEqual(TEXT("-SCPlayerDemo=<entity> loads a vehicle"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo=DRAK_Golem")), FString(TEXT("-SCPlayerDemo")));
+    TestEqual(TEXT("-SCPlayerDemo alone loads none"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo")), FString());
+    TestEqual(TEXT("-SCNoCooked"), S::ConflictingSwitch(TEXT("-Scenario=x -SCNoCooked")), FString(TEXT("-SCNoCooked")));
     return true;
 }
 

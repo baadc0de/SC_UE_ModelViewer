@@ -231,7 +231,7 @@ another, a level is missing or not finished (no current stamp), or (outside a pa
 the definition is missing or does not read or it or its cargo setup changed since prep. A level that does not stream in (or
 not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded, space is left, and
 the cargo subsystem stops applying its cargo setup (`USCCargoSubsystem::DropScenario`). It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
-`-SCPackage`, `-SCCargoScenario`) or `-SCNoCooked`: the notice says so, and those switches act as without a scenario. Otherwise it streams the environment's level, then the vehicle's (`LoadPreparedEntity`), sets the
+`-SCPackage`, `-SCCargoScenario`, `-SCPlayerDemo=<entity>`) or `-SCNoCooked` (`ConflictingSwitch`, tested): the notice says so, and those switches act as without a scenario. Otherwise it streams the environment's level, then the vehicle's (`LoadPreparedEntity`), sets the
 camera, puts the player at the start, asks for the music, and hands the cargo subsystem the prepared cargo setup
 (`UUCSettings::ScenarioCargoJson`; it then loads no ship or environment itself, and a setup that names no ship is for
 the scenario's vehicle). Log lines `SCENARIO start|loaded|

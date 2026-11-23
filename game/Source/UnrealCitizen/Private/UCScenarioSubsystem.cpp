@@ -45,6 +45,15 @@ const TCHAR* UUCScenarioSubsystem::StateName(EState InState)
     return TEXT("none");
 }
 
+FString UUCScenarioSubsystem::ConflictingSwitch(const TCHAR* CommandLine)
+{
+    FString Ignored;
+    for (const TCHAR* Switch : {TEXT("SCLoad="), TEXT("SCEnvironment="), TEXT("SCPackage="), TEXT("SCCargoScenario="), TEXT("SCPlayerDemo=")})
+        if (FParse::Value(CommandLine, Switch, Ignored)) return TEXT("-") + FString(Switch).LeftChop(1);
+    if (FParse::Param(CommandLine, TEXT("SCNoCooked"))) return TEXT("-SCNoCooked");
+    return FString();
+}
+
 bool UUCScenarioSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
     return !IsRunningCommandlet(); // the prep step's headless viewer runs no scenario
@@ -57,15 +66,10 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Id = UUCSettings::Get()->ResolveScenario();
     if (Id.IsEmpty() || !Viewer) return;
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UUCScenarioSubsystem::Tick));
-    // A scenario puts its own scene in the world: with a switch that names another one it does not run (not mixed in), and
-    // the switches act as they do without a scenario.
-    const TCHAR* Cmd = FCommandLine::Get();
-    FString Ignored;
-    for (const TCHAR* Switch : {TEXT("SCLoad="), TEXT("SCEnvironment="), TEXT("SCPackage="), TEXT("SCCargoScenario=")})
-        if (FParse::Value(Cmd, Switch, Ignored))
-            return Refuse(FString::Printf(TEXT("-Scenario=%s runs alone: drop -%s"), *Id, *FString(Switch).LeftChop(1)), false);
-    if (FParse::Param(Cmd, TEXT("SCNoCooked"))) // a scenario runs from its prepared (cooked) levels only
-        return Refuse(FString::Printf(TEXT("-Scenario=%s runs from prepared levels: drop -SCNoCooked"), *Id), false);
+    // A scenario puts its own scene in the world from its prepared levels: with a switch that names another scene (or turns
+    // prepared levels off) it does not run (not mixed in), and the switches act as they do without a scenario.
+    if (const FString Switch = ConflictingSwitch(FCommandLine::Get()); !Switch.IsEmpty())
+        return Refuse(FString::Printf(TEXT("-Scenario=%s runs alone from its prepared levels: drop %s"), *Id, *Switch), false);
     // The definition on disk, when there is one (not in a packaged game): its title names a refused run, and a change since
     // prep makes the record stale.
     FUCScenario Source;
@@ -166,6 +170,11 @@ bool UUCScenarioSubsystem::Tick(float)
             return true;
         }
         if (Viewer->GetLoadPhase() != ESCLoadPhase::Succeeded || Viewer->IsBusy()) return true;
+        if (!Viewer->GetLoadedEntity().Equals(Scenario.Vehicle, ESearchCase::IgnoreCase)) // something else loaded over it
+        {
+            Fail(FString::Printf(TEXT("another vehicle (%s) loaded instead of %s"), *Viewer->GetLoadedEntity(), *Scenario.Vehicle));
+            return true;
+        }
         State = EState::Starting;
         StartedAt = FPlatformTime::Seconds();
         UE_LOG(LogUCScenario, Display, TEXT("SCENARIO loaded id=%s vehicle=%s environment=%s"), *Id, *Viewer->GetLoadedEntity(),

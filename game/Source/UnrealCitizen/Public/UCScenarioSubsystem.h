@@ -21,6 +21,9 @@ public:
     enum class EState : uint8 { None, Refused, Loading, Starting, Running, Failed };
     static UUCScenarioSubsystem* Get(const UObject* WorldContext);
     static const TCHAR* StateName(EState State);
+    /** The switch of a command line that names another scene than a scenario's (-SCLoad=, -SCEnvironment=, -SCPackage=,
+     *  -SCCargoScenario=, -SCPlayerDemo=<entity>) or turns prepared levels off (-SCNoCooked); empty when none does. */
+    static FString ConflictingSwitch(const TCHAR* CommandLine);
 
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
