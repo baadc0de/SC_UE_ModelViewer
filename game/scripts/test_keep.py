@@ -7,7 +7,8 @@ UnrealEditor-Cmd game/UnrealCitizen.uproject -run=pythonscript -script=game/scri
 -SCPrepared: the entity has a current prepared level, which must be what loads (its clip bindings carry tracks and no
 sequences), e.g. -SCEntity=DRAK_Golem after the golem_showcase prep; its rigs and clip sequences are checked instead of
 static meshes. -SCClip=<name>: that clip (in the Keep run and the -SCKeepReload run) resolves through the kept catalog
-to its primary sequence, on its binding mesh's own skeleton, with bone keys.
+(its catalog id, exactly) to its primary sequence (its first binding's), on its binding mesh's own skeleton, with bone
+keys.
 """
 import shlex
 
@@ -21,11 +22,12 @@ clip_name = options.get("SCClip")
 
 
 def find_clip(catalog, name):
-    """The catalog's clip whose name or id carries `name` (case-insensitive), or None."""
-    for clip in catalog.get_editor_property("clips"):
-        if name.lower() in str(clip.get_editor_property("name")).lower() or name.lower() in str(clip.get_editor_property("id")).lower():
-            return clip
-    return None
+    """The catalog's clip whose id is `name` exactly (an item's clips carry an owner prefix: item_<hash>__door_open); None
+    when there is none; an error when several match."""
+    found = [clip for clip in catalog.get_editor_property("clips") if str(clip.get_editor_property("id")) == name]
+    if len(found) > 1:
+        raise RuntimeError("clip id %s is ambiguous (%d clips)" % (name, len(found)))
+    return found[0] if found else None
 
 
 def check_kept_clip(root, name):
@@ -43,8 +45,9 @@ def check_kept_clip(root, name):
     unreal.log("WP-V1 KEEP_CLIP %s sequence=%s skeleton=%s mesh=%s tracks=%d frames=%d" % (
         name, sequence.get_path_name() if sequence else None, skeleton.get_path_name() if skeleton else None,
         mesh.get_path_name() if mesh else None, len(tracks), frames))
-    if not sequence or not mesh or skeleton != mesh.skeleton or not tracks or frames < 1:
-        raise RuntimeError("kept clip %s: no sequence on its mesh's skeleton with bone keys" % name)
+    primary = bindings[0].get_editor_property("sequences")[0] if bindings and bindings[0].get_editor_property("sequences") else None
+    if not sequence or sequence != primary or not mesh or skeleton != mesh.skeleton or not tracks or frames < 1:
+        raise RuntimeError("kept clip %s: no primary sequence (its first binding's) on its mesh's skeleton with bone keys" % name)
 
 
 def reload_from_disk(root):

@@ -230,7 +230,10 @@ data when it loads. In stages:
   `Entry_Door_Lower open=1`); door pads, lifts, seats and ladders still need their interaction state (1b).
   Known limit (an engine follow-up, WP-E1): a socket-only rig mesh (no triangles) is built again each time an editor
   host loads it — UE 5.9's `USkeletalMesh::IsInitialBuildDone` wants a LOD 0 section, so its render data skips the
-  derived-data cache. The builds are short, and a packaged game loads cooked render data and builds nothing.
+  derived-data cache. The builds are short, and a packaged game loads cooked render data and builds nothing. And
+  (pre-existing, live rigs too): a refit rig body keeps the local bounds of the pose it was cooked in — Chaos's
+  `FTriangleMeshImplicitObject::UpdateVertices` rebuilds the BVH without recomputing them — so a trace can miss a part
+  moved outside them; the engine fix (recompute the bounds before the rebuild) is a WP-E1 follow-up.
 - **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
   interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,
   ship doors, sensors, the lift network, ladder anchors, usables, light groups and areas) become saved properties.
