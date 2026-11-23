@@ -276,11 +276,12 @@ data when it loads. In stages:
 - **O1-4b-2a** (player body): the prep step prepares the scenario's player body as its own level
   (`/Game/SC/Players/Maps/Player_<gender>_<hash>`, `USCViewerSubsystem::PlayerLevelPath`; one per body, shared by the
   scenarios that name the same one), and the record names it (`player_level`). The body is the definition's `"player"`
-  block: `"gender"`, `"loadout"`, `"weapons"`, `"spares"` (the exporter's defaults when absent), so a changed body makes the
-  record stale; a scenario run refuses `-SCPlayerGender`, `-SCPlayerLoadout`, `-SCPlayerWeapons`, `-SCPlayerSpares` and
+  block: `"gender"`, `"loadout"`, `"weapons"`, `"spares"`, typed as written (absent: the exporter's gender and loadout, all
+  weapons, spares as the viewer's `bPlayerSpareAttachments`, true), so a changed body makes the record stale; a scenario run refuses `-SCPlayerGender`, `-SCPlayerLoadout`, `-SCPlayerWeapons`, `-SCPlayerSpares` and
   `-SCPlayerPackage`, and `package_showcase.ps1` no longer takes `-PlayerLoadout` / `-PlayerWeapons`. The level holds the kit
   actor as the viewer imports it, its rigs kept (O1-4b-1a), with the kit and body clips parsed once at prep
-  (`USCPlayerKitData`: `FSCPlayerKit` and `FSCPlayerClipMap` written field by field, SCPlayerKitData.cpp) and its
+  (`USCPlayerKitData`: `FSCPlayerKit` and `FSCPlayerClipMap` written field by field into one payload after its layout
+  version, SCPlayerKitData.cpp; a payload of another layout is read whole and skipped) and its
   personal lights' cookies pooled (the cook now keeps `GoboTextures` on their pooled textures). A run streams the level when
   first person first asks for the body (`SetPreparedPlayerLevel`, state `Streaming`) and attaches it as before; nothing is
   exported, imported or parsed. Still at attach: the weapons' fire clips are parsed against their rigs (`FireClipJson`) and

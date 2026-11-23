@@ -20,7 +20,7 @@ struct UNREALCITIZEN_API FUCScenario
      *  (first person; empty: where first person puts the player by default), and the body the prep step prepares
      *  (WP-O1-4b-2): "gender" (empty: the exporter's), "loadout" (a p4k loadout path; empty: the exporter's default),
      *  "weapons" (entity class names the loadout's weapons are kept to; empty: all), "spares" (the kept weapons' spare
-     *  magazines on the armour; default true)}. */
+     *  magazines on the armour; default true, as the viewer's bPlayerSpareAttachments)}. Each typed as written. */
     FString Camera = TEXT("first");
     FString Start;
     FString PlayerGender, PlayerLoadout;

@@ -13,14 +13,18 @@ class SCBRIDGE_API USCPlayerKitData : public UObject
     GENERATED_BODY()
 public:
     /** Layout of what Serialize writes: a field added to the kit or clip structs is written in SCPlayerKitData.cpp and bumps
-     *  this; data of another layout loads as none (the body is then unavailable, and the prep step's format refuses the
-     *  level before that). */
+     *  this; data of another layout loads as none, read to its end and skipped (the body is then unavailable, and the prep
+     *  step's format refuses the level before that). */
     static constexpr int32 Version = 1;
     /** Both set, or neither (nothing prepared, or data of another layout). */
     TSharedPtr<const FSCPlayerKit> Kit;
     TSharedPtr<const FSCPlayerClipMap> Clips;
     bool HasData() const { return Kit.IsValid() && Clips.IsValid(); }
     virtual void Serialize(FArchive& Ar) override;
+    /** The payload Serialize carries as one byte array (names as text). */
+    static void WritePayload(const FSCPlayerKit& Kit, const FSCPlayerClipMap& Clips, TArray<uint8>& Out);
+    /** Parse a payload of Layout: false (both reset) for another layout, or bytes that are not exactly one payload. */
+    static bool ReadPayload(int32 Layout, const TArray<uint8>& Bytes, TSharedPtr<const FSCPlayerKit>& OutKit, TSharedPtr<const FSCPlayerClipMap>& OutClips);
 };
 
 // Field by field, in declaration order (SCPlayerKit.h, SCPlayerAnimator.h).

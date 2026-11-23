@@ -1,6 +1,8 @@
 // USCPlayerKitData (SCPlayerKitData.h): a prepared player body's kit and clips, written and read field by field.
 #include "SCPlayerKitData.h"
 #include "Serialization/Archive.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCPlayerKitData, Log, All);
 
@@ -76,56 +78,68 @@ FArchive& operator<<(FArchive& Ar, FSCPlayerClip& C)
     return Ar << C.Name << C.Fps << C.Frames << C.Duration << C.bAdditive << C.bCyclic << C.Tracks;
 }
 
-void USCPlayerKitData::Serialize(FArchive& Ar)
+void USCPlayerKitData::WritePayload(const FSCPlayerKit& Kit, const FSCPlayerClipMap& Clips, TArray<uint8>& Out)
 {
-    Super::Serialize(Ar);
-    // Only a save or a load carries the data (it holds no object references for other archives to visit).
-    if (!Ar.IsSaving() && !Ar.IsLoading()) return;
-    int32 Layout = Version;
-    bool bData = HasData();
-    Ar << Layout << bData;
-    if (Ar.IsLoading())
-    {
-        Kit.Reset();
-        Clips.Reset();
-        if (!bData) return;
-        if (Layout != Version)
-        {
-            // What follows is in another layout: it cannot be read field by field, and nothing after it in this object is.
-            UE_LOG(LogSCPlayerKitData, Warning, TEXT("PLAYER_KIT_DATA %s holds layout %d, this build reads %d: no player body (prepare it again)"),
-                   *GetPathName(), Layout, Version);
-            Ar.SetError();
-            return;
-        }
-        const TSharedRef<FSCPlayerKit> LoadedKit = MakeShared<FSCPlayerKit>();
-        Ar << *LoadedKit;
-        int32 Count = 0;
-        Ar << Count;
-        const TSharedRef<FSCPlayerClipMap> LoadedClips = MakeShared<FSCPlayerClipMap>();
-        LoadedClips->Reserve(FMath::Max(Count, 0));
-        for (int32 I = 0; I < Count && !Ar.IsError(); ++I)
-        {
-            FName Key;
-            const TSharedRef<FSCPlayerClip> Clip = MakeShared<FSCPlayerClip>();
-            Ar << Key << *Clip;
-            LoadedClips->Add(Key, Clip);
-        }
-        if (Ar.IsError()) return;
-        Kit = LoadedKit;
-        Clips = LoadedClips;
-        return;
-    }
-    if (!bData) return;
+    Out.Reset();
+    FMemoryWriter Ar(Out);
     // Written from the shared, read-only data: the operators take references but do not change what they save.
-    Ar << const_cast<FSCPlayerKit&>(*Kit);
+    Ar << const_cast<FSCPlayerKit&>(Kit);
     // The clip map leaves out clips it could not read (no null entries); a null one is skipped here as well.
     int32 Count = 0;
-    for (const auto& [Key, Clip] : *Clips) Count += Clip.IsValid();
+    for (const auto& [Key, Clip] : Clips) Count += Clip.IsValid();
     Ar << Count;
-    for (const auto& [Key, Clip] : *Clips)
+    for (const auto& [Key, Clip] : Clips)
         if (Clip)
         {
             FName Name = Key;
             Ar << Name << const_cast<FSCPlayerClip&>(*Clip);
         }
+}
+bool USCPlayerKitData::ReadPayload(int32 Layout, const TArray<uint8>& Bytes, TSharedPtr<const FSCPlayerKit>& OutKit, TSharedPtr<const FSCPlayerClipMap>& OutClips)
+{
+    OutKit.Reset();
+    OutClips.Reset();
+    if (Layout != Version) return false; // another layout cannot be read field by field
+    FMemoryReader Ar(Bytes);
+    const TSharedRef<FSCPlayerKit> Kit = MakeShared<FSCPlayerKit>();
+    Ar << *Kit;
+    int32 Count = 0;
+    Ar << Count;
+    const TSharedRef<FSCPlayerClipMap> Clips = MakeShared<FSCPlayerClipMap>();
+    for (int32 I = 0; I < Count && !Ar.IsError(); ++I)
+    {
+        FName Key;
+        const TSharedRef<FSCPlayerClip> Clip = MakeShared<FSCPlayerClip>();
+        Ar << Key << *Clip;
+        Clips->Add(Key, Clip);
+    }
+    // All of it, exactly: a short or a long payload is not this layout either.
+    if (Ar.IsError() || Count < 0 || Ar.Tell() != Bytes.Num()) return false;
+    OutKit = Kit;
+    OutClips = Clips;
+    return true;
+}
+
+void USCPlayerKitData::Serialize(FArchive& Ar)
+{
+    Super::Serialize(Ar);
+    // Only a save or a load carries the data (it holds no object references for other archives to visit).
+    if (!Ar.IsSaving() && !Ar.IsLoading()) return;
+    // The payload is one byte array after its layout: a load reads all of it whatever the layout (a package's export is read
+    // to its end), and only a payload of this layout is parsed.
+    int32 Layout = Version;
+    TArray<uint8> Bytes;
+    if (Ar.IsSaving() && HasData()) WritePayload(*Kit, *Clips, Bytes);
+    Ar << Layout << Bytes;
+    if (!Ar.IsLoading()) return;
+    if (Bytes.IsEmpty())
+    {
+        Kit.Reset();
+        Clips.Reset();
+    }
+    else if (!ReadPayload(Layout, Bytes, Kit, Clips))
+    {
+        UE_LOG(LogSCPlayerKitData, Warning, TEXT("PLAYER_KIT_DATA %s holds layout %d (%d bytes) this build (layout %d) does not read: no player body (prepare it again)"),
+               *GetPathName(), Layout, Bytes.Num(), Version);
+    }
 }

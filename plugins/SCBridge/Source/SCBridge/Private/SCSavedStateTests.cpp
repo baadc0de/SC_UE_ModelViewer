@@ -489,6 +489,17 @@ bool FSCSavedPlayerKitTest::RunTest(const FString&)
     C->Sample(0.25f, PoseB);
     TestTrue(TEXT("... it samples the same"), PoseA[4].Equals(PoseB[4], 0.0));
 
+    // A payload of another layout, or not exactly one payload, reads as none (a load skips it whole).
+    TArray<uint8> Payload;
+    USCPlayerKitData::WritePayload(*Kit, *Clips, Payload);
+    TSharedPtr<const FSCPlayerKit> ReadKit;
+    TSharedPtr<const FSCPlayerClipMap> ReadClips;
+    TestTrue(TEXT("this layout reads"), USCPlayerKitData::ReadPayload(USCPlayerKitData::Version, Payload, ReadKit, ReadClips) && ReadKit && ReadClips);
+    TestFalse(TEXT("another layout does not"), USCPlayerKitData::ReadPayload(USCPlayerKitData::Version + 1, Payload, ReadKit, ReadClips) || ReadKit || ReadClips);
+    TArray<uint8> Longer = Payload;
+    Longer.Add(0);
+    TestFalse(TEXT("nor a payload with more after it"), USCPlayerKitData::ReadPayload(USCPlayerKitData::Version, Longer, ReadKit, ReadClips));
+
     // A body without data stays without (no kit and no clips).
     Data->Kit.Reset();
     Data->Clips.Reset();

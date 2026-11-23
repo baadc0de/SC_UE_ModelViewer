@@ -52,15 +52,28 @@ bool FUCScenario::Parse(const FString& Id, const FString& Json, const FString& C
     Out.Skin = Str(Root, TEXT("skin"));
     Out.Cargo = Str(Root, TEXT("cargo"));
     Out.Music = Str(Root, TEXT("music"));
-    const TSharedPtr<FJsonObject>* Player = nullptr;
-    if (Root->TryGetObjectField(TEXT("player"), Player))
+    // The player block typed as written: the JSON reader's conversions would take a list for no block, a number for a name or a
+    // string for true, and prepare another body than the definition names.
+    const TSharedPtr<FJsonValue> PlayerValue = Root->TryGetField(TEXT("player"));
+    if (PlayerValue && PlayerValue->Type != EJson::Object)
     {
-        if (const FString Camera = Str(*Player, TEXT("camera")).ToLower(); !Camera.IsEmpty()) Out.Camera = Camera;
-        Out.Start = Str(*Player, TEXT("start"));
-        Out.PlayerGender = Str(*Player, TEXT("gender"));
-        Out.PlayerLoadout = NormalPath(Str(*Player, TEXT("loadout")));
-        // Typed as written: the JSON reader's conversions would take a number for a name or a string for true.
-        const TSharedPtr<FJsonValue> WeaponsValue = (*Player)->TryGetField(TEXT("weapons"));
+        Error = TEXT("\"player\" is no object");
+        return false;
+    }
+    if (PlayerValue)
+    {
+        const TSharedPtr<FJsonObject> Player = PlayerValue->AsObject();
+        for (const TCHAR* Field : {TEXT("camera"), TEXT("start"), TEXT("gender"), TEXT("loadout")})
+            if (const TSharedPtr<FJsonValue> Value = Player->TryGetField(Field); Value && Value->Type != EJson::String)
+            {
+                Error = FString::Printf(TEXT("\"player.%s\" is no string"), Field);
+                return false;
+            }
+        if (const FString Camera = Str(Player, TEXT("camera")).ToLower(); !Camera.IsEmpty()) Out.Camera = Camera;
+        Out.Start = Str(Player, TEXT("start"));
+        Out.PlayerGender = Str(Player, TEXT("gender"));
+        Out.PlayerLoadout = NormalPath(Str(Player, TEXT("loadout")));
+        const TSharedPtr<FJsonValue> WeaponsValue = Player->TryGetField(TEXT("weapons"));
         if (WeaponsValue && WeaponsValue->Type != EJson::Array)
         {
             Error = TEXT("\"player.weapons\" is no list of entity class names");
@@ -77,7 +90,7 @@ bool FUCScenario::Parse(const FString& Id, const FString& Json, const FString& C
                 }
                 Out.PlayerWeapons.Add(Name.TrimStartAndEnd());
             }
-        if (const TSharedPtr<FJsonValue> Spares = (*Player)->TryGetField(TEXT("spares")))
+        if (const TSharedPtr<FJsonValue> Spares = Player->TryGetField(TEXT("spares")))
         {
             if (Spares->Type != EJson::Boolean)
             {

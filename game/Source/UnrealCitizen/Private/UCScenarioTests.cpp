@@ -48,6 +48,9 @@ bool FUCScenarioParseTest::RunTest(const FString&)
     TestFalse(TEXT("... spares"), S.bPlayerSpares);
     TestFalse(TEXT("weapons that are no list"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": \"x\"}")), FString(), S, Error));
     TestFalse(TEXT("a weapon that is no name"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": [1]}")), FString(), S, Error));
+    TestFalse(TEXT("a player block that is no object"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": [{\"gender\": \"female\"}]")), FString(), S, Error));
+    TestFalse(TEXT("a loadout that is no string"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"loadout\": 3}")), FString(), S, Error));
+    TestFalse(TEXT("a gender that is no string"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"gender\": true}")), FString(), S, Error));
     TestFalse(TEXT("spares that are no boolean"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"spares\": \"no\"}")), FString(), S, Error));
 
     TestFalse(TEXT("no vehicle"), FUCScenario::Parse(TEXT("t"), TEXT("{\"name\": \"x\"}"), FString(), S, Error));
