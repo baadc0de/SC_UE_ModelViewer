@@ -390,7 +390,16 @@ void SCVehicleLifts::BindLift(ASCVehicle* V, FSCLift& Lift)
 }
 void ASCVehicle::SaveLifts()
 {
+    // Only lifts at rest are saved consistently (their doors' clips are not saved): with one in motion or mid-handshake,
+    // none is (the prep step refuses such a vehicle; another save keeps the vehicle's lifts out of the level).
     SavedLifts.Reset();
+    for (const TSharedPtr<FSCLift>& Lift : Lifts)
+        if (Lift && !Lift->IsIdle())
+        {
+            UE_LOG(LogSCLiftLinks, Warning, TEXT("LIFT_SAVE skipped: lift %d is not at rest (%s); the vehicle's lifts are not saved"), Lift->Id,
+                   *Lift->Describe());
+            return;
+        }
     for (const TSharedPtr<FSCLift>& Lift : Lifts)
         if (Lift) SavedLifts.Add(Lift->Save());
 }

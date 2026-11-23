@@ -637,6 +637,7 @@ FSCSavedLift FSCLift::Save() const
     Out.S = S;
     Out.bAtContact = bAtContact;
     Out.bPoweredUp = bPoweredUp;
+    Out.Direction = Direction;
     for (const TWeakObjectPtr<const USCRigComponent>& Rig : Inert) Out.Inert.Add(const_cast<USCRigComponent*>(Rig.Get()));
     return Out;
 }
@@ -682,6 +683,7 @@ void FSCLift::Restore(const FSCSavedLift& Saved)
     }
     State = Saved.State == ESCLiftState::PoweredDown || Saved.State == ESCLiftState::Open ? Saved.State : ESCLiftState::Idle;
     bPoweredUp = Saved.bPoweredUp && State != ESCLiftState::PoweredDown;
+    Direction = Saved.Direction;
     Inert.Reset();
     for (const TWeakObjectPtr<USCRigComponent>& Rig : Saved.Inert) Inert.Add(Rig.Get());
     SpeedPhase = ESCLiftSpeedPhase::None;

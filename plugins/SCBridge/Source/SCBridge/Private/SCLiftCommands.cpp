@@ -3,6 +3,7 @@
 #include "SCViewerAutomation.h"
 #include "SCViewerSubsystem.h"
 #include "SCVehicle.h"
+#include "SCRigComponent.h"
 #include "SCLift.h"
 #include "SCFirstPersonCharacter.h"
 #include "Components/MeshComponent.h"
@@ -100,8 +101,9 @@ void FSCViewerAutomation::RegisterLiftCommands()
             {
                 // Where the carriage itself is (vehicle frame, cm): it rides the lift's anchor when attached.
                 const USceneComponent* Carriage = V->Lifts[I]->CarriageAnchor.Get();
-                UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE %s carriage=%s"), *V->Lifts[I]->Describe(),
-                       Carriage ? *V->GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).ToCompactString() : TEXT("-"));
+                const USceneComponent* Gate = V->Lifts[I]->Gate.IsEmpty() ? nullptr : V->Lifts[I]->Gate[0].Rig.Get();
+                auto At = [V](const USceneComponent* C) { return C ? V->GetActorTransform().InverseTransformPosition(C->GetComponentLocation()).ToCompactString() : FString(TEXT("-")); };
+                UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE %s carriage=%s gate=%s"), *V->Lifts[I]->Describe(), *At(Carriage), *At(Gate));
             }
             const ASCFirstPersonCharacter* C = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr;
             const UPrimitiveComponent* Base = C ? Cast<UPrimitiveComponent>(C->GetMovementBaseObject()) : nullptr;

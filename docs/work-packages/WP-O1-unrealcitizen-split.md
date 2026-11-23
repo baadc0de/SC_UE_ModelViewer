@@ -251,8 +251,9 @@ data when it loads. In stages:
     `FSCInteractionEndpoint`, `FSCInteractionLink`) and the lift panels (`FSCLiftPanel`) are saved, and the audio
     scene's entity emitters (`ASCVehicle::AudioEntities`: a cooked scene plays the carriage's and buttons' effects);
     instancing keeps the parts under an interaction anchor (lift panel, door pad, kiosk) as components. The cook saves lifts at
-    rest (`FSCLift::IsIdle`; one that is not fails it: its doors' clips are not saved); its power state and the doors it
-    found no clip for are kept. The lift paths
+    rest (`FSCLift::IsIdle`; one that is not fails it before the actor changes: its doors' clips are not saved, and
+    another level save then keeps no lift); its power state, travel direction and the doors it found no clip for are
+    kept. A static cook (rigs baked) keeps no lifts. The lift paths
     stay a cache made on first use. Prep format 22. A carriage's floor-select screen (`FloorPanels`, drawn panels) comes
     with 1c; until then a prepared lift is called and sent by its call buttons and links.
   - **1b-3 — seats, ladders, usables, light groups**: the manifest records seats and ladders read (`SeatEntrances`,

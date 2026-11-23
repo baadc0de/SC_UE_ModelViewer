@@ -197,15 +197,27 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     int32 RigMeshes = 0, RigCollisions = 0;
     // A lift is saved at rest (WP-O1-4b-1b-2): its doors' poses and recorded states are saved, the clips moving them are
     // not, so a lift mid-leg or mid-handshake would load with its doors and its state disagreeing. The prep step presents
-    // the vehicle at rest; a lift that is not fails the cook.
-    for (const TSharedPtr<FSCLift>& Lift : Environment->Lifts)
-        if (Lift && !Lift->IsIdle())
-        {
-            Cook.Warnings.Add(FString::Printf(TEXT("lift %d (%s) is not at rest (%s): a lift is saved idle at a stop"), Lift->Id, *Lift->EntityName,
-                                              *Lift->Describe()));
-            Cook.bFailed = true;
-        }
-    if (!bKeepRigs) FSCEnvironment::BakeRigsStatic(Environment);
+    // the vehicle at rest; a lift that is not fails the cook before anything of the actor changes.
+    if (bKeepRigs)
+    {
+        bool bAtRest = true;
+        for (const TSharedPtr<FSCLift>& Lift : Environment->Lifts)
+            if (Lift && !Lift->IsIdle())
+            {
+                UE_LOG(LogSCCook, Error, TEXT("COOK_REFUSED lift %d (%s) is not at rest (%s): a lift is saved idle at a stop"), Lift->Id,
+                       *Lift->EntityName, *Lift->Describe());
+                bAtRest = false;
+            }
+        if (!bAtRest) return false;
+    }
+    if (!bKeepRigs)
+    {
+        FSCEnvironment::BakeRigsStatic(Environment);
+        // Baked static: no rig moves, so no lift either (its doors and carriage are geometry now).
+        Environment->Lifts.Reset();
+        Environment->SavedLifts.Reset();
+        Environment->LiftPanels.Reset();
+    }
     else
     {
         // Each rig mesh the actor references (its meshes, the clip bindings', the rigs': one whose placement was skipped is

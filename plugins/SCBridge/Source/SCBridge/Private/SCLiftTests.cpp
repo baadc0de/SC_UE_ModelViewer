@@ -744,8 +744,10 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     USCRigComponent* GateRig = NewObject<USCRigComponent>(V, TEXT("Gate"));
     V->AddInstanceComponent(GateRig);
     Lift.Gate.Add({TEXT("gate"), GateRig, 0.5f, 0.0});
-    Lift.CurrentStop = 2; // resting at the top deck
+    Lift.CurrentStop = 2; // resting at the top deck, its anchor in that pose
     Lift.S = Lift.Stops[2].S;
+    Lift.Anchor->SetRelativeLocation(Lift.AnchorBase + Lift.Stops[2].Local - Lift.Stops[Lift.RestStop].Local);
+    Rider->SetRelativeLocation(FVector(10, 20, 30));
 
     // A level save (PreSave: SaveLifts) and a load of the copy (DuplicateObject: its components remapped, PostLoad run:
     // RestoreLifts); the native lift list is not copied, so the loaded actor's lifts come from what was saved.
@@ -791,13 +793,19 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     Drive.Host.RedeliverDoors = [](const FString&, FName) { return 0; };
     Drive.Host.SweepLeg = {};
     Drive.Host.GroundContact = {};
+    // The rider's place in the vehicle through its attachment chain (rider -> carriage -> anchor; the fixture has no world).
+    auto InVehicle = [](const USceneComponent* C) {
+        FTransform T = FTransform::Identity;
+        for (; C; C = C->GetAttachParent()) T = T * C->GetRelativeTransform();
+        return T.GetLocation();
+    };
+    const FVector RiderBefore = InVehicle(LoadedRider);
     TestTrue(TEXT("the loaded lift takes a request"), Drive.RequestStop(0, TEXT("test"), TEXT("RequestSurface")));
     Run(Drive, 40);
-    const FVector Expected = Drive.AnchorBase + Drive.Stops[0].Local - Drive.Stops[Drive.RestStop].Local;
-    TestTrue(FString::Printf(TEXT("arrived at the exit stop with its anchor moved (%s, expected %s)"), *Drive.Anchor->GetRelativeLocation().ToCompactString(),
-                             *Expected.ToCompactString()),
-             Drive.CurrentStop == 0 && Drive.Anchor->GetRelativeLocation().Equals(Expected, 0.5) &&
-                 !Drive.Stops[0].Local.Equals(Drive.Stops[Drive.RestStop].Local, 1.0));
+    const FVector Leg = Drive.Stops[0].Local - Drive.Stops[2].Local; // top deck -> exit stop
+    TestTrue(FString::Printf(TEXT("arrived at the exit stop, the rider moved by the leg (%s, expected %s)"),
+                             *(InVehicle(LoadedRider) - RiderBefore).ToCompactString(), *Leg.ToCompactString()),
+             Drive.CurrentStop == 0 && (InVehicle(LoadedRider) - RiderBefore).Equals(Leg, 0.5) && Leg.Size() > 100);
 
     // A lift saved between stops (in motion: no current stop), powered down, with a door it found no clip for: it rests at
     // the stop nearest where it was, keeps its power state and does not wait for that door.

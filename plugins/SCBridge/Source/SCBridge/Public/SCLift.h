@@ -115,6 +115,7 @@ struct FSCSavedLift
     UPROPERTY() bool bAtContact = false;
     UPROPERTY() bool bPoweredUp = true;
     UPROPERTY() TArray<TWeakObjectPtr<USCRigComponent>> Inert;
+    UPROPERTY() int32 Direction = 0; // the last leg's (ChooseTarget prefers stops ahead)
 };
 struct FSCLiftRequest
 {
