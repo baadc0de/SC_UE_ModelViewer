@@ -92,6 +92,10 @@ public:
      *  with its top at FloorZ. Returns the offset applied. */
     UFUNCTION(BlueprintCallable, Category="SC")
     static FVector PresentEnvironment(ASCVehicle* Environment, const FString& State = TEXT("open"), double FloorZ = -5.0);
+    /** ImportFolder and ImportEnvironment over any package source (WP-O1-4: the game's prep step imports the archive's
+     *  export as it comes, without writing it to disk). */
+    static ASCVehicle* ImportVehicleFrom(UWorld* World, FSCPackageSource& Source, bool bBuildCollision = true, const FString& ScenePath = TEXT(""));
+    static ASCVehicle* ImportEnvironmentFrom(UWorld* World, FSCPackageSource& Source, const FString& ScenePath);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static bool VerifyPackage(UObject* WorldContext, const FString& Folder, const FString& Tar);
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))

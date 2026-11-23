@@ -142,6 +142,8 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveError() const { return ArchiveError.ToString(); }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetArchiveLabel() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetCacheDir() const { return CacheDir; }
+    /** The open archive's build id (empty before it is open). */
+    FString GetArchiveBuildId() const { return ArchiveBuildId; }
     FSCCacheStats GetProcessedCacheStats() const;
     void ConfigureProcessedImport(FSCImportOptions& Options, bool bFolderPackage = false) const;
     bool PrepareGeometryForCapture();
@@ -240,13 +242,25 @@ public:
         return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
                (EnvLevel && !Environment.IsValid());
     }
-    /** The cooked level for an object container path (…/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name>),
-     *  empty when none was cooked, the app does not use cooked levels, or -SCNoCooked. */
+    /** The cooked level for an object container path (EnvironmentLevelPath), empty when none was cooked, the app does not
+     *  use cooked levels, or -SCNoCooked. */
     static FString CookedEnvironmentLevel(const FString& Folder);
-    /** The cooked level of a ship (Content/SC/Ships/Maps/<entity>, viewer/scripts/cook_ships.py), empty when none was cooked.
-     *  LoadEntity streams it instead of exporting from the archive, so it also works without one (a showcase
-     *  package on a machine without Star Citizen). */
+    /** The cooked level of a ship (ShipLevelPath without a variant), empty when none was cooked. LoadEntity streams it
+     *  instead of exporting from the archive, so it also works without one (a game build on a machine without Star
+     *  Citizen). */
     static FString CookedShipLevel(const FString& Entity);
+    /** WP-O1-4: where a prepared (cooked) level lives, whether or not it exists: an object container
+     *  …/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name> (empty for anything else); a ship
+     *  /Game/SC/Ships/Maps/<entity>, with a variant (a paint baked in) /Game/SC/Ships/Maps/<entity>__<variant>. Characters
+     *  outside [A-Za-z0-9_] become '_'. UnrealCitizen's prep step (-run=SCPrepare) writes them. */
+    static FString EnvironmentLevelPath(const FString& Folder);
+    static FString ShipLevelPath(const FString& Entity, const FString& Variant = FString());
+    /** Load a prepared ship level (UnrealCitizen's scenario: its paint baked in) as the vehicle, archive or not; false
+     *  (nothing started) as LoadEntity, or when the level does not exist. */
+    bool LoadPreparedEntity(const FString& Entity, const FString& Level);
+    /** The paint a skin names among a vehicle's Paints (Manifest.Paints): "default" or empty (INDEX_NONE), an index, or the first
+     *  paint whose label or palette id contains it. False when it names none. (-SCSkin, a scenario's skin.) */
+    static bool ResolvePaint(const TArray<struct FSCPaintVariant>& Paints, const FString& Skin, int32& OutIndex);
     /** LoadEntity can run now: the archive is open, or the entity has a cooked level. */
     bool CanLoad(const FString& Entity) const;
     float GetEnvironmentProgress() const;      // 0..1 over export, parse, import and placement
@@ -334,6 +348,8 @@ public:
 
 private:
     bool Tick(float DeltaSeconds);
+    /** LoadEntity's body: Cooked, when set, is the level streamed instead of an export from the archive. */
+    bool StartLoad(const FString& Entity, USCViewOptions* InOptions, const FString& Cooked);
     void StepLoad(bool bBlocking);
     void StartImport();
     void FinishLoad(ESCLoadPhase Result, const FString& Error);

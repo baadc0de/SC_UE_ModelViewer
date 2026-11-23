@@ -404,14 +404,34 @@ void USCViewerSubsystem::UnloadEnvironmentLevel()
     EnvLevel->SetIsRequestingUnloadAndRemoval(true);
     EnvLevel = nullptr;
 }
-FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
+namespace
+{
+FString LevelName(FString Name)
+{
+    Name.TrimStartAndEndInline();
+    for (TCHAR& C : Name)
+        if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
+    return Name;
+}
+} // namespace
+FString USCViewerSubsystem::EnvironmentLevelPath(const FString& Folder)
 {
     const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
-    if (!SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")) ||
-        !Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase))
+    if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
+    return TEXT("/Game/SC/Hangars/Maps/") + LevelName(FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path));
+}
+FString USCViewerSubsystem::ShipLevelPath(const FString& Entity, const FString& Variant)
+{
+    const FString Name = LevelName(Entity);
+    if (Name.IsEmpty()) return FString();
+    return TEXT("/Game/SC/Ships/Maps/") + Name + (Variant.IsEmpty() ? FString() : TEXT("__") + LevelName(Variant));
+}
+FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
+{
+    if (!SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")))
         return FString(); // -SCNoCooked: as if none was cooked (StepEnvironment and IsBusy decide alike)
-    const FString Level = TEXT("/Game/SC/Hangars/Maps/") + FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path);
-    return FPackageName::DoesPackageExist(Level) ? Level : FString();
+    const FString Level = EnvironmentLevelPath(Folder);
+    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
 void USCViewerSubsystem::SetSpace(bool bInSpace)
 {
@@ -684,11 +704,8 @@ void USCViewerSubsystem::SetEnvironmentState(const FString& State)
 FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
 {
     if (Entity.IsEmpty() || !SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
-    FString Name = Entity.TrimStartAndEnd();
-    for (TCHAR& C : Name)
-        if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
-    const FString Level = TEXT("/Game/SC/Ships/Maps/") + Name;
-    return FPackageName::DoesPackageExist(Level) ? Level : FString();
+    const FString Level = ShipLevelPath(Entity);
+    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) ? Level : FString();
 }
 bool USCViewerSubsystem::CanLoad(const FString& Entity) const
 {
@@ -697,7 +714,19 @@ bool USCViewerSubsystem::CanLoad(const FString& Entity) const
 
 bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOptions)
 {
-    const FString Cooked = CookedShipLevel(Entity);
+    return StartLoad(Entity, InOptions, CookedShipLevel(Entity));
+}
+bool USCViewerSubsystem::LoadPreparedEntity(const FString& Entity, const FString& Level)
+{
+    if (Level.IsEmpty() || !FPackageName::DoesPackageExist(Level))
+    {
+        UE_LOG(LogSCViewer, Warning, TEXT("LoadPreparedEntity(%s) refused: no level %s"), *Entity, *Level);
+        return false;
+    }
+    return StartLoad(Entity, nullptr, Level);
+}
+bool USCViewerSubsystem::StartLoad(const FString& Entity, USCViewOptions* InOptions, const FString& Cooked)
+{
     if (Entity.IsEmpty() || IsBusy() || (ArchiveState != ESCArchiveState::Ready && Cooked.IsEmpty()))
     {
         UE_LOG(LogSCViewer, Warning, TEXT("LoadEntity(%s) refused: %s"), *Entity,
@@ -712,6 +741,7 @@ bool USCViewerSubsystem::LoadEntity(const FString& Entity, USCViewOptions* InOpt
     PendingEntity = Entity;
     Report.ArchiveGeneration = int32(ArchiveGeneration);
     PendingKey = FString::Printf(TEXT("%u|%s|%s"), ArchiveGeneration, *Entity.ToLower(), *LoadOptions->GetHash());
+    if (!Cooked.IsEmpty()) PendingKey += TEXT("|") + Cooked; // another level of the entity (a prepared paint) is another load
     LoadStart = FPlatformTime::Seconds();
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_LOAD_START entity=%s options=\"%s\""), *Entity, *Report.Options);
     if (!bRebuildProcessed && PendingKey == LoadedKey && Vehicle.IsValid())
@@ -1510,12 +1540,18 @@ void USCViewerSubsystem::ApplyStartSkin()
     FString Skin;
     if (bStartSkinApplied || !Vehicle.IsValid() || !FParse::Value(FCommandLine::Get(), TEXT("SCSkin="), Skin)) return;
     bStartSkinApplied = true;
-    const TArray<FSCPaintVariant>& Paints = Vehicle->Manifest.Paints;
-    const bool bDefault = Skin.Equals(TEXT("default"), ESearchCase::IgnoreCase);
-    const int32 Index = Skin.IsNumeric() ? FCString::Atoi(*Skin) : bDefault ? INDEX_NONE
-        : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Skin) || P.PaletteId.Contains(Skin); });
-    if ((Index == INDEX_NONE && !bDefault) || !SetPaint(Index))
+    int32 Index = INDEX_NONE;
+    if (!ResolvePaint(Vehicle->Manifest.Paints, Skin, Index) || !SetPaint(Index))
         UE_LOG(LogSCViewer, Warning, TEXT("PAINT no paint \"%s\" for -SCSkin (sc.Paint lists them)"), *Skin);
+}
+bool USCViewerSubsystem::ResolvePaint(const TArray<FSCPaintVariant>& Paints, const FString& InSkin, int32& OutIndex)
+{
+    const FString Skin = InSkin.TrimStartAndEnd();
+    OutIndex = INDEX_NONE;
+    if (Skin.IsEmpty() || Skin.Equals(TEXT("default"), ESearchCase::IgnoreCase)) return true;
+    OutIndex = Skin.IsNumeric() ? FCString::Atoi(*Skin)
+        : Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.Label().Contains(Skin) || P.PaletteId.Contains(Skin); });
+    return Paints.IsValidIndex(OutIndex);
 }
 
 // ---------------------------------------------------------------- camera and inspection

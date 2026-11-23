@@ -34,6 +34,18 @@ public:
     UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Cargo") FString CargoBoxSearch = TEXT("Carryable_TBO_");
     FString ResolveCargoFleet() const;
 
+    /** WP-O1-4: the scenario a run plays (Config/Scenarios/<name>.json, prepared by -run=SCPrepare; UUCScenarioSubsystem);
+     *  empty = none (the command line and the menus decide). -Scenario=<name> overrides it for one run, -Scenario=none
+     *  turns it off. */
+    UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "SC|Scenario") FString Scenario;
+    /** The scenario's name for this run (empty: none). */
+    FString ResolveScenario() const;
+    /** Set while a scenario runs (or was refused): it owns the scene, so the cargo subsystem loads no ship or environment
+     *  of its own and takes the scenario's prepared cargo setup (ScenarioCargoJson, none when empty) instead of
+     *  CargoScenario. Not saved. */
+    bool bScenarioOwnsScene = false;
+    FString ScenarioCargoName, ScenarioCargoJson;
+
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static UUCSettings* Get();
     UFUNCTION(BlueprintCallable, Category = "SC|Settings") void Save();
 };

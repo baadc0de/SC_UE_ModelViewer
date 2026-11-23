@@ -57,8 +57,9 @@ inherit for all Rust that touches the vendored crates).
 - Win64, D3D12 SM6 (`viewer/Config/Windows/WindowsEngine.ini`): build with
   `C:\Users\bojan\UnrealEngine-5.9-src\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs uproject> -WaitMutex`;
   FFI via `scripts/build_ffi.ps1` (every build links it); NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored
-  download, compiled against the fork) — see `viewer/README.md`. Standalone showcase: `game/scripts/package_showcase.ps1`
-  (one cooked ship and hangar from `game/scripts/cook_ships.py` / `cook_hangars.py`; Shipping, `-SCMaxQuality`).
+  download, compiled against the fork) — see `viewer/README.md`. Standalone showcase: `game/scripts/package_showcase.ps1
+  -Scenario <name>` (one scenario prepared by the prep step, `UnrealCitizenEditor -run=SCPrepare -Scenario=<name>`;
+  Shipping, `-SCMaxQuality`). Preparing and packaging happen only on the owner's request.
 
 ## Working rules
 

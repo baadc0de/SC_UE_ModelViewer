@@ -3,6 +3,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "UCScenario.h"
 #include "SCCookLibrary.generated.h"
 
 class ASCVehicle;
@@ -12,25 +13,11 @@ class UNREALCITIZENEDITOR_API USCCookLibrary : public UBlueprintFunctionLibrary
 {
     GENERATED_BODY()
 public:
-    /** Version of what a cook writes: the level, the pooled meshes' section topology and the material constants. The cook
-     *  scripts stamp each cooked level with it (<level>.cookformat beside the .umap); a level with an older or no stamp is
-     *  stale: the cook scripts report it with a recook instruction and package_showcase.ps1 refuses to package it.
-     *  2: WP-I1 review (screens: M_SC_Screen / _Translucent masters and per-face panel images; pooled meshes keyed by
-     *  their section topology, so a changed glass / screen split never reuses an older pooled mesh).
-     *  3: WP-I1 I1-5 (panel renders at their face aspect with owner values; state images swapped per face).
-     *  4: WP-I1 fix pass (screens: the DisplayScreenPS emission with the DBA multiplier and new instance constants; the
-     *  panel renders' layout, owner defaults and brand).
-     *  5: WP-I1 fix pass 2 (panel renders: button glyphs, standard styles, square canvas units, own shape colours).
-     *  6: WP-A1 (the level's package audio staged beside it: Content/SCAudio/<level>, ASCVehicle::CookedAudio).
-     *  7: WP-A1 A1-2 (the staged audio.json carries the bus effects: meters and side-chains, EQs, effect RTPCs; a level
-     *  staged before plays the A1-1 mix).
-     *  8: hangar waypoints (ASCVehicle::Waypoints, built by present_environment before the rigs are baked; a hangar cooked
-     *  before has none: the first-person teleport menu's Hangar section would be empty).
-     *  9: WP-I1-4 (panel renders: a large button's background at its styled alpha, so a level cooked before shows the
-     *  old, full-strength pads; generated UI textures are pooled under a key that carries this version, so a recook
-     *  never reuses a render of an older format by its unchanged path). The hover renders, panel aims and usables are
-     *  import-time records a cooked level does not keep yet. */
-    static constexpr int32 FormatVersion = 9;
+    /** Version of what a cook writes (the level, the pooled meshes' section topology and the material constants): the
+     *  prep step's format, FUCPrepared::FormatVersion (its history is there). Each prepared level is stamped with it
+     *  (<level>.cookformat beside the .umap); a level with an older or no stamp is stale: the prep step prepares it again
+     *  and package_showcase.ps1 refuses to package it. */
+    static constexpr int32 FormatVersion = FUCPrepared::FormatVersion;
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in

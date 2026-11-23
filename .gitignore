@@ -53,9 +53,11 @@ __pycache__/
 # Cooked environments and kept assets are game-derived (WP-C1, Keep as assets)
 viewer/Content/SC/
 game/Content/SC/
-# WP-A1: cooked levels' audio (game-derived, viewer/scripts/cook_audio.py)
+# WP-A1: prepared levels' audio (game-derived, UnrealCitizen's prep step -run=SCPrepare)
 viewer/Content/SCAudio/
 game/Content/SCAudio/
+# WP-O1-4: the prep step's scenario records (they name game entities and the archive build)
+game/Content/SCPrepared/
 
 # The layout before WP-O1-1 (ue/SCViewer, ue/Plugins): a checkout or worktree that moved to the new layout keeps its
 # old ignored build output and game-derived content there until it is moved or deleted; keep it ignored.

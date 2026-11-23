@@ -49,8 +49,12 @@ void FSCImporter::Unload(UWorld* World)
 ASCVehicle* USCImportLibrary::ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision, const FString& ScenePath)
 {
     FSCFolderPackageSource Source(Folder);
+    return ImportVehicleFrom(GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull), Source, bBuildCollision, ScenePath);
+}
+ASCVehicle* USCImportLibrary::ImportVehicleFrom(UWorld* World, FSCPackageSource& Source, bool bBuildCollision, const FString& ScenePath)
+{
     FSCImportOptions Options;
-    Options.World = GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull);
+    Options.World = World;
     Options.ScenePath = ScenePath;
     Options.bBuildCollision = bBuildCollision;
     Options.bImportMaterials = !FParse::Param(FCommandLine::Get(), TEXT("SCNoMaterials")); // timing baseline
@@ -78,8 +82,12 @@ int32 USCImportLibrary::RestOnFloor(ASCVehicle* Vehicle, double FloorZ)
 ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath)
 {
     FSCFolderPackageSource Source(Folder);
+    return ImportEnvironmentFrom(GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull), Source, ScenePath);
+}
+ASCVehicle* USCImportLibrary::ImportEnvironmentFrom(UWorld* World, FSCPackageSource& Source, const FString& ScenePath)
+{
     FSCImportOptions Options;
-    Options.World = GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull);
+    Options.World = World;
     Options.ScenePath = ScenePath;
     Options.bHideEffectOnlyPlacements = true;
     Options.bInstanceRepeatedParts = true;

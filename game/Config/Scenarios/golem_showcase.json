@@ -1,0 +1,6 @@
+{
+  "name": "Drake Golem in a small high-tech hangar",
+  "environment": "Data/ObjectContainers/PU/loc/mod/common/hangar/hightech_a/hangar_smltop_001.socpak",
+  "vehicle": "DRAK_Golem",
+  "player": { "camera": "first" }
+}

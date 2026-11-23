@@ -47,13 +47,29 @@ void USCCargoSubsystem::TryScenario()
     if (!State->bScenarioTried)
     {
         State->bScenarioTried = true;
-        const FString File = UUCSettings::Get()->ResolveCargoScenario();
-        if (File.IsEmpty()) return;
+        const UUCSettings* Settings = UUCSettings::Get();
         FString Error;
-        if (!FSCCargoScenario::Load(File, State->Scenario, Error))
+        if (Settings->bScenarioOwnsScene)
         {
-            UE_LOG(LogSCCargo, Error, TEXT("CARGO_SCENARIO failed: %s"), *Error);
-            return;
+            // WP-O1-4: a scenario's cargo setup, as it was prepared (none when the scenario names none or was refused).
+            if (Settings->ScenarioCargoJson.IsEmpty()) return;
+            if (!FSCCargoScenario::Parse(Settings->ScenarioCargoJson, State->Scenario, Error))
+            {
+                UE_LOG(LogSCCargo, Error, TEXT("CARGO_SCENARIO failed: the scenario's cargo setup %s: %s"), *Settings->ScenarioCargoName, *Error);
+                State->Scenario = FSCCargoScenario();
+                return;
+            }
+            State->Scenario.Path = TEXT("scenario:") + Settings->ScenarioCargoName;
+        }
+        else
+        {
+            const FString File = Settings->ResolveCargoScenario();
+            if (File.IsEmpty()) return;
+            if (!FSCCargoScenario::Load(File, State->Scenario, Error))
+            {
+                UE_LOG(LogSCCargo, Error, TEXT("CARGO_SCENARIO failed: %s"), *Error);
+                return;
+            }
         }
         for (const FString& Entity : State->Scenario.Entities()) State->Library.Request(Entity);
         if (State->Scenario.bSpace)
@@ -124,9 +140,9 @@ void USCCargoSubsystem::TryScenario()
             State->Fx->Contact(S.Ship, MinScale, MaxScale); // resolved ahead, so the first knock plays too
         }
     }
-    // Nothing loaded and no -SCLoad: the scenario's own ship and environment.
+    // Nothing loaded and no -SCLoad: the scenario's own ship and environment (not under a game scenario: it loads them).
     FString Ignored;
-    if (!State->bScenarioLoadRequested && !S.Ship.IsEmpty() && Viewer->GetLoadedEntity().IsEmpty() && Viewer->GetPendingEntity().IsEmpty() &&
+    if (!State->bScenarioLoadRequested && !UUCSettings::Get()->bScenarioOwnsScene && !S.Ship.IsEmpty() && Viewer->GetLoadedEntity().IsEmpty() && Viewer->GetPendingEntity().IsEmpty() &&
         !FParse::Value(FCommandLine::Get(), TEXT("SCLoad="), Ignored) && !Viewer->IsBusy() && Viewer->CanLoad(S.Ship))
     {
         State->bScenarioLoadRequested = true;

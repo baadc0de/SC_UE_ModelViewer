@@ -427,7 +427,7 @@ public:
     UPROPERTY() TArray<bool> InteriorHelperFrames;
     /** WP-A1: per interior anchor, its index in the scene's `interiors[]` (an interior without a parent has no anchor). */
     UPROPERTY() TArray<int32> InteriorSceneIndex;
-    /** WP-A1: a cooked level's audio (viewer/scripts/cook_audio.py): its folder under the content directory and the package
+    /** WP-A1: a cooked level's audio (UnrealCitizen's prep step, SCPrepareAudio.h): its folder under the content directory and the package
      *  scene path inside it; BeginPlay loads it. Empty for a live import (its audio comes from the package). */
     UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudio;
     UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudioScene;
