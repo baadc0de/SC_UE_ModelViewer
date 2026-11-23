@@ -131,7 +131,19 @@ bool FUCPreparedTest::RunTest(const FString&)
     TestEqual(TEXT("... its format"), Back.Format, R.Format);
     TestTrue(TEXT("... its cargo box levels"), Back.CargoLevels.Num() == 1 && Back.CargoLevels.FindRef(TEXT("Carryable_TBO_FL_16SCU")) == R.CargoLevels[TEXT("Carryable_TBO_FL_16SCU")]);
     TestTrue(TEXT("... its tractor record as kept"), Back.TractorRecordJson.Equals(R.TractorRecordJson, ESearchCase::CaseSensitive));
-    TestEqual(TEXT("a box entity's level"), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")), FString(TEXT("/Game/SC/Cargo/Maps/Carryable_TBO_FL_16SCU")));
+    TestTrue(TEXT("a box entity's level"), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")).StartsWith(TEXT("/Game/SC/Cargo/Maps/Carryable_TBO_FL_16SCU_")));
+    TestNotEqual(TEXT("... another entity whose name only differs in a character a level name drops"),
+                 FUCPrepared::CargoLevelPath(TEXT("Carryable-TBO_FL_16SCU")), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")));
+    // Every box entity of the prepared setup has its level in the record.
+    {
+        FUCPrepared Stocked = R;
+        Stocked.CargoDefinition = R.CargoDefinition.LeftChop(1) +
+            TEXT(", \"stock\": [{\"grid\": {\"owner\": \"environment\", \"index\": 0}, \"boxes\": [{\"entity\": \"Box_A\", \"commodity\": \"organic\"}]}]}");
+        auto Every = [](const FString&) { return true; };
+        TestTrue(TEXT("a box entity the record has no level for"), Stocked.Problem(nullptr, Every).Contains(TEXT("Box_A")));
+        Stocked.CargoLevels.Add(TEXT("Box_A"), FUCPrepared::CargoLevelPath(TEXT("Box_A")));
+        TestEqual(TEXT("... with its level: runs"), Stocked.Problem(nullptr, Every), FString());
+    }
     TestTrue(TEXT("a missing cargo box level"),
              R.Problem(&Source, [&](const FString& L) { return L != R.CargoLevels[TEXT("Carryable_TBO_FL_16SCU")]; }).Contains(TEXT("cargo box")));
     TestFalse(TEXT("a record without a vehicle level does not read"), FUCPrepared::Parse(TEXT("{\"scenario\": \"t\", \"definition\": \"{}\"}"), Back, Error));

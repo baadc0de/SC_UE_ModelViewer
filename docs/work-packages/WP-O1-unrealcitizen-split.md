@@ -308,11 +308,11 @@ data when it loads. In stages:
   saved again (by this scenario's prep or another's sharing it) makes them stale for the scenario's run, its prep and its
   packaging. Prep format 28.
 - **O1-4b-3a** (cargo boxes, tractor record): the prep step prepares each box entity the cargo setup names as a level of
-  its own (`/Game/SC/Cargo/Maps/<entity>`, `FUCPrepared::CargoLevelPath`, shared by scenarios): the box as the box
+  its own (`/Game/SC/Cargo/Maps/<entity>_<hash of its name>`, `FUCPrepared::CargoLevelPath`, shared by scenarios): the box as the box
   library imports it (no collision, no clips), hidden, its parts not instanced (each box copies them;
   `USCCookLibrary::CookEnvironment(..., bInstanceParts)`). The tractor record the setup names is kept as DataCore answered
   it (`tractor_record`; one that does not apply is left out and reported). The record names the box levels
-  (`cargo_levels`), which must be current; packaging stages them as maps. A run streams a box's level and takes its actor
+  (`cargo_levels`), which must cover every box entity of the setup and be current; packaging stages them as maps. A run streams a box's level and takes its actor
   as the template (`FSCCargoBoxLibrary`, state `Streaming`, `CARGO_BOX_PACKAGE source=prepared`) and applies the kept
   record (`CARGO_TRACTOR source=prepared`; none kept: the setup's own values); nothing is exported or asked. A scenario
   that fails releases its boxes with the rest of its scene. Boxes spawned live (console, RPC) of other entities still

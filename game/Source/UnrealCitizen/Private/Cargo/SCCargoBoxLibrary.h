@@ -48,7 +48,10 @@ private:
     void Fail(const FString& Entity, const FString& Error);
     /** The template is ready: its occupancy checked, the entry Ready (From: how it came, for the log). */
     void Adopt(ASCVehicle* Template, const TCHAR* From);
-    static void Unload(ULevelStreamingDynamic* Level);
+    /** Releases a prepared box's level; kept until the world removes it (one whose load fails meanwhile is removed then). */
+    void Unload(ULevelStreamingDynamic* Level);
+    void SweepReleased(UWorld* World);
+    TArray<TObjectPtr<ULevelStreamingDynamic>> Released;
     TMap<FString, FEntry> Entries;
     TArray<FString> Order;
     FString Running;

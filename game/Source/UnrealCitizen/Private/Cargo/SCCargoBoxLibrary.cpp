@@ -63,6 +63,17 @@ void FSCCargoBoxLibrary::Unload(ULevelStreamingDynamic* Level)
     Level->SetShouldBeLoaded(false);
     Level->SetShouldBeVisible(false);
     Level->SetIsRequestingUnloadAndRemoval(true);
+    Released.Add(Level); // a load still in flight that fails stops where a removal request is no longer handled
+}
+
+void FSCCargoBoxLibrary::SweepReleased(UWorld* World)
+{
+    Released.RemoveAll([World](const TObjectPtr<ULevelStreamingDynamic>& Level) {
+        if (!Level || !World || !World->GetStreamingLevels().Contains(Level)) return true; // the world removed it
+        if (Level->GetLevelStreamingState() != ELevelStreamingState::FailedToLoad) return false;
+        World->RemoveStreamingLevel(Level);
+        return true;
+    });
 }
 
 void FSCCargoBoxLibrary::Fail(const FString& Entity, const FString& Error)
@@ -83,6 +94,7 @@ void FSCCargoBoxLibrary::Fail(const FString& Entity, const FString& Error)
 void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
 {
     if (!Viewer || !World) return;
+    SweepReleased(World);
     if (Running.IsEmpty())
     {
         // Next queued entity once the archive is open and the ship / environment loads are done.
@@ -210,4 +222,5 @@ void FSCCargoBoxLibrary::AddReferencedObjects(FReferenceCollector& Collector)
         Collector.AddReferencedObject(Pair.Value.Template);
         Collector.AddReferencedObject(Pair.Value.Level);
     }
+    Collector.AddReferencedObjects(Released);
 }

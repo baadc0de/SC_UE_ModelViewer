@@ -56,6 +56,9 @@ void USCCargoSubsystem::DropScenario()
     State->Scenario = MoveTemp(Dropped);   // no Path: IsSet() is false, TryScenario applies nothing more
     State->bScenarioTried = true;
     State->bPreparedSetup = false;
+    // Its tractor values and effects too: a fleet loaded later (a live spawn) looks its own up.
+    State->TractorLookup = FSCCargoState::ELookup::None;
+    State->Fx.Reset();
     // Its box packages go too, queued, streaming (a prepared box's level) or ready: none was placed yet (the stock waits for
     // the vehicle), and a later live spawn requests its entity anew.
     State->Library.Reset();

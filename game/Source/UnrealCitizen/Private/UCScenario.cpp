@@ -231,10 +231,13 @@ FString FUCPrepared::TraversalSources() const
 }
 FString FUCPrepared::CargoLevelPath(const FString& Entity)
 {
-    FString Name = Entity.TrimStartAndEnd();
+    // Readable from the entity, told apart by a hash of its exact name (entity classes ignore case): names that differ only
+    // in characters a level name drops are other levels.
+    const FString Exact = Entity.TrimStartAndEnd();
+    FString Name = Exact;
     for (TCHAR& C : Name)
         if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
-    return Name.IsEmpty() ? FString() : TEXT("/Game/SC/Cargo/Maps/") + Name;
+    return Name.IsEmpty() ? FString() : FString::Printf(TEXT("/Game/SC/Cargo/Maps/%s_%08x"), *Name, FCrc::StrCrc32(*Exact.ToLower()));
 }
 FString FUCPrepared::RecordedSources(const FString& TraversalClips)
 {
@@ -351,6 +354,17 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
     if (PlayerLevel.IsEmpty() || !LevelCurrent(PlayerLevel))
         return FString::Printf(TEXT("scenario %s: the prepared player body level %s is missing or not finished%s"), *Scenario,
                                PlayerLevel.IsEmpty() ? TEXT("(none named)") : *PlayerLevel, *Fix);
+    // Every box entity of the prepared cargo setup has its level (a record missing one would send those boxes to the archive).
+    if (!CargoDefinition.IsEmpty())
+    {
+        FSCCargoScenario Cargo;
+        FString CargoError;
+        if (!FSCCargoScenario::Parse(CargoDefinition, Cargo, CargoError))
+            return FString::Printf(TEXT("scenario %s: the prepared cargo setup does not read (%s)%s"), *Scenario, *CargoError, *Fix);
+        for (const FString& Entity : Cargo.Entities())
+            if (CargoLevels.FindRef(Entity) != CargoLevelPath(Entity))
+                return FString::Printf(TEXT("scenario %s: the cargo box %s has no prepared level in the record%s"), *Scenario, *Entity, *Fix);
+    }
     for (const auto& [Entity, Level] : CargoLevels)
         if (!LevelCurrent(Level))
             return FString::Printf(TEXT("scenario %s: the prepared cargo box level %s (%s) is missing or not finished%s"), *Scenario, *Level, *Entity, *Fix);
