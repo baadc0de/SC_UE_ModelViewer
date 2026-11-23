@@ -40,6 +40,13 @@ USCCargoGridComponent* USCCargoSubsystem::SelectGrid(const FSCCargoGridSelector&
     return OfKind.IsValidIndex(Selector.Index) ? OfKind[Selector.Index] : nullptr;
 }
 
+bool USCCargoSubsystem::TakesScenarioEnvironment(const TCHAR* CommandLine, bool bGameScenario, const FSCCargoScenario& Scenario)
+{
+    FString Ignored;
+    return !bGameScenario && !Scenario.bSpace && !Scenario.Environment.IsEmpty() && !FParse::Value(CommandLine, TEXT("SCEnvironment="), Ignored) &&
+           !FParse::Value(CommandLine, TEXT("SCLoad="), Ignored);
+}
+
 void USCCargoSubsystem::DropScenario()
 {
     if (!State) return;
@@ -88,6 +95,11 @@ void USCCargoSubsystem::TryScenario()
         {
             if (State->Scenario.SunLux >= 0) Viewer->SetSpaceSunLux(float(State->Scenario.SunLux));
             Viewer->SetSpace(true); // WP-K3: no hangar, no gravity, a sun
+        }
+        else if (TakesScenarioEnvironment(FCommandLine::Get(), Settings->bScenarioOwnsScene, State->Scenario))
+        {
+            // Its environment, at once: it replaces the one the viewer restored at start (a saved or default hangar).
+            Viewer->SetEnvironment(State->Scenario.Environment);
         }
         const FSCCargoDroneDefinition& D = State->Scenario.Drone;
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loaded=\"%s\" ship=%s environment=%s stock=%d docks=%d tractor=%s/%s max_force=%.0f full_strength_m=%.1f"),
@@ -162,7 +174,6 @@ void USCCargoSubsystem::TryScenario()
         !FParse::Value(FCommandLine::Get(), TEXT("SCLoad="), Ignored) && !Viewer->IsBusy() && Viewer->CanLoad(S.Ship))
     {
         State->bScenarioLoadRequested = true;
-        if (!S.Environment.IsEmpty() && Viewer->GetEnvironmentRequest().IsEmpty()) Viewer->SetEnvironment(S.Environment);
         Viewer->LoadEntity(S.Ship, Viewer->GetOptions());
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loading ship=%s environment=%s"), *S.Ship, *S.Environment);
     }

@@ -265,6 +265,9 @@ A review of the series as a whole (Terra) found what the per-stage reviews could
   or older preparation and import from the archive.
 - With automation that puts the camera (`-SCCamera`, `-SCScript`, `-SCPlayerDemo`) a scenario sets neither its camera nor its
   start (`AutomationOwnsCamera`); `-SCCamera` also applies to a vehicle a scenario brought, so its route starts.
+- A cargo setup run without a game scenario (`-SCCargoScenario`) requests the setup's environment as soon as it reads,
+  replacing the hangar the viewer restored at start, unless `-SCEnvironment` or `-SCLoad` names the scene
+  (`USCCargoSubsystem::TakesScenarioEnvironment`, `SCBridge.Cargo.ScenarioEnvironment`).
 - The Garage lists an entity's own prepared level only: a paint variant's level (`<entity>__<variant>`,
   `USCViewerSubsystem::IsShipPaintLevel`; an entity's own part never holds `__`) is not another ship.
 - A paint request on a vehicle without paint slots (a prepared one, its paint baked in) is refused (`PAINT … refused`)

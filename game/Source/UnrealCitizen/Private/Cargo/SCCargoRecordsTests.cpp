@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Cargo/SCCargoScenario.h"
+#include "Cargo/SCCargoSubsystem.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoTractorRecordTest, "SCBridge.Cargo.TractorRecord", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCCargoTractorRecordTest::RunTest(const FString&)
@@ -35,6 +36,23 @@ bool FSCCargoTractorRecordTest::RunTest(const FString&)
     Missing.MaxForceN = 5;
     TestFalse(TEXT("an action the record lacks is an error"), Missing.ApplyTractorRecord(Record, Error));
     TestEqual(TEXT("the scenario's values stand"), Missing.MaxForceN, 5.0);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCCargoScenarioEnvironmentTest, "SCBridge.Cargo.ScenarioEnvironment", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCCargoScenarioEnvironmentTest::RunTest(const FString&)
+{
+    FSCCargoScenario S;
+    S.Environment = TEXT("Data/x/hangar_xltop_001.socpak");
+    using C = USCCargoSubsystem;
+    TestTrue(TEXT("a setup's hangar replaces the restored one"), C::TakesScenarioEnvironment(TEXT("-SCCargoScenario=c2_hangar"), false, S));
+    TestFalse(TEXT("-SCEnvironment names the hangar"), C::TakesScenarioEnvironment(TEXT("-SCCargoScenario=c2_hangar -SCEnvironment=y.socpak"), false, S));
+    TestFalse(TEXT("-SCLoad names the scene"), C::TakesScenarioEnvironment(TEXT("-SCCargoScenario=c2_hangar -SCLoad=X"), false, S));
+    TestFalse(TEXT("a game scenario owns the scene"), C::TakesScenarioEnvironment(TEXT("-Scenario=c2_hangar"), true, S));
+    FSCCargoScenario Space = S;
+    Space.bSpace = true;
+    TestFalse(TEXT("a setup in space"), C::TakesScenarioEnvironment(TEXT("-SCCargoScenario=hull_a_space"), false, Space));
+    FSCCargoScenario None;
+    TestFalse(TEXT("a setup without an environment"), C::TakesScenarioEnvironment(TEXT("-SCCargoScenario=x"), false, None));
     return true;
 }
 #endif
