@@ -14,6 +14,8 @@
 #include "Engine/Texture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Materials/Material.h"
+#include "Components/PointLightComponent.h"
+#include "SCLightImporter.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -221,6 +223,107 @@ bool FSCSavedPanelsTest::RunTest(const FString&)
                  P.StateImages[0].Key() == TEXT("LightState.LightsAux") && P.UiState.FindRef(TEXT("LightState")) == TEXT("LightsAux") &&
                  P.Images.FindRef(TEXT("UI/aux.png")) == Image && P.Sendables.Num() == 1 && P.ImageForState() == TEXT("UI/aux.png"));
     TestFalse(TEXT("drawn again at load (what it showed is not saved)"), P.bDrawn);
+    return !HasAnyErrors();
+}
+
+// WP-O1-4b-1b-3: a vehicle's ladders, usables, seat records, light groups, its lights' authored states and its room
+// channels are saved with a prepared level; a loaded light takes another of its states from what was saved (no JSON).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCSavedInteractionsTest, "SCBridge.Prepare.SavedInteractions", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCSavedInteractionsTest::RunTest(const FString&)
+{
+    ASCVehicle* V = NewObject<ASCVehicle>(GetTransientPackage());
+    V->AddToRoot();
+    ASCVehicle* Loaded = nullptr;
+    ON_SCOPE_EXIT
+    {
+        V->RemoveFromRoot();
+        if (Loaded) Loaded->RemoveFromRoot();
+    };
+    USceneComponent* LadderFrame = NewObject<USceneComponent>(V, TEXT("Ladder"));
+    USceneComponent* Bed = NewObject<USceneComponent>(V, TEXT("Bed"));
+    UPointLightComponent* Lamp = NewObject<UPointLightComponent>(V, TEXT("Lamp"));
+    for (UActorComponent* Part : TArray<UActorComponent*>{LadderFrame, Bed, Lamp}) V->AddInstanceComponent(Part);
+
+    FSCLadderAnchor Ladder;
+    Ladder.Anchor = LadderFrame;
+    Ladder.EntityId = TEXT("ladder-1");
+    Ladder.Data.Height = 3.5f;
+    Ladder.Data.Top.RemountDelay = 0.75f;
+    Ladder.Data.TopExits = FIntVector(1, 0, 1);
+    Ladder.Data.Actions.Add(TEXT("ClimbUp"), {TEXT("ladder_climb_up"), 1.2f, 0.2f, 0.f});
+    V->LadderAnchors.Add(Ladder);
+    FSCUsableTarget Usable;
+    Usable.Interior = 0;
+    Usable.EntityId = TEXT("bed-1");
+    Usable.Label = TEXT("Bed");
+    FSCUsablePoint& Point = Usable.Points.AddDefaulted_GetRef();
+    Point.Helper = TEXT("use_lie");
+    Point.bLocated = true;
+    Point.RadiusCm = 120;
+    Point.Options.Add({TEXT("LieDown"), TEXT("Lie down"), true});
+    V->UsableTargets.Add(Bed, Usable);
+    V->LightGroups.Add({0, TEXT("group-1"), TEXT("Cabin lights"), {TEXT("panel-1")}, {{TEXT("Auxiliary"), TEXT("/State/LightGroup/Auxiliary"), TEXT("auxiliaryState")}}, FString()});
+    V->LightRoomChannels.Add(TEXT("room-a"), 2);
+    FSCImportedLightState Light;
+    Light.Component = Lamp;
+    Light.Name = TEXT("lamp");
+    Light.AuthoredStates.Add(TEXT("defaultState"), {1000.0, FLinearColor::White, 0});
+    Light.AuthoredStates.Add(TEXT("auxiliaryState"), {250.0, FLinearColor::Red, 3});
+    Light.WallLightScale = 0.5f;
+    V->LightStates.Add(Light);
+    FSCSceneInstance Seat;
+    Seat.EntityName = TEXT("pilot_seat");
+    Seat.PortPath = {TEXT("hardpoint_seat_pilot")};
+    FSCSeatDefinition Definition;
+    Definition.Role = ESCSeatRole::Driver;
+    Definition.Attachment = TEXT("Seat_Attach");
+    Definition.MinYaw = -60.0;
+    Seat.Seat = Definition;
+    FSCSeatEntrance Entrance;
+    Entrance.Name = TEXT("pilot");
+    Entrance.SeatPortPath = {TEXT("hardpoint_seat_pilot")};
+    Entrance.Enter.Interaction = TEXT("Enter");
+    Entrance.Gateways.AddDefaulted_GetRef().Conditions.Add(TEXT("Hatch"), TEXT("Open"));
+    Seat.SeatEntrances.Add(Entrance);
+    FSCInteractionPoint& Press = Seat.InteractionPoints.AddDefaulted_GetRef();
+    Press.HelperName = TEXT("use_enter");
+    Press.Radius = 1.5f;
+    Press.bHasHelperTransform = true;
+    Press.ViewAngleLimit = 90.f;
+    Press.Interactions.Add({TEXT("Enter"), TEXT("Sit"), true});
+    V->Manifest.Children.Add(Seat);
+
+    // Saved and loaded (a DuplicateObject copy: components remapped, PostLoad run).
+    Loaded = DuplicateObject(V, GetTransientPackage());
+    Loaded->AddToRoot();
+    const USceneComponent* LoadedLadder = FindObject<USceneComponent>(Loaded, TEXT("Ladder"));
+    USceneComponent* LoadedBed = FindObject<USceneComponent>(Loaded, TEXT("Bed"));
+    TestTrue(TEXT("the ladder on the loaded anchor, with its data"),
+             Loaded->LadderAnchors.Num() == 1 && LoadedLadder && Loaded->LadderAnchors[0].Anchor.Get() == LoadedLadder &&
+                 Loaded->LadderAnchors[0].Data.Height == 3.5f && Loaded->LadderAnchors[0].Data.Top.RemountDelay == 0.75f &&
+                 Loaded->LadderAnchors[0].Data.TopExits == FIntVector(1, 0, 1) && Loaded->LadderAnchors[0].Data.Actions.Contains(TEXT("ClimbUp")));
+    const FSCUsableTarget* LoadedUsable = LoadedBed ? Loaded->UsableTargets.Find(LoadedBed) : nullptr;
+    TestTrue(TEXT("the usable on the loaded anchor"), LoadedUsable && LoadedUsable->Points.Num() == 1 && LoadedUsable->Points[0].RadiusCm == 120 &&
+                                                         LoadedUsable->Points[0].Options.Num() == 1 && LoadedUsable->Points[0].Options[0].bPrimary);
+    TestTrue(TEXT("the light group"), Loaded->LightGroups.Num() == 1 && Loaded->LightGroups[0].Interactions.Num() == 1 &&
+                                          Loaded->LightGroups[0].Interactions[0].LightState == TEXT("auxiliaryState") &&
+                                          Loaded->LightGroupsLinkedBy(0, {TEXT("group-1")}).Num() == 1);
+    TestEqual(TEXT("the room channels"), Loaded->LightRoomChannels.FindRef(TEXT("room-a")), 2);
+    const FSCSceneInstance* LoadedSeat = Loaded->Manifest.Children.FindByPredicate([](const FSCSceneInstance& I) { return I.EntityName == TEXT("pilot_seat"); });
+    TestTrue(TEXT("the seat records"), LoadedSeat && LoadedSeat->Seat.IsSet() && LoadedSeat->Seat->Role == ESCSeatRole::Driver &&
+                                           LoadedSeat->Seat->MinYaw.Get(0) == -60.0 && LoadedSeat->SeatEntrances.Num() == 1 &&
+                                           LoadedSeat->SeatEntrances[0].Enter.Interaction == TEXT("Enter") &&
+                                           LoadedSeat->SeatEntrances[0].Gateways.Num() == 1 && LoadedSeat->InteractionPoints.Num() == 1 &&
+                                           LoadedSeat->InteractionPoints[0].bHasHelperTransform && LoadedSeat->InteractionPoints[0].ViewAngleLimit.Get(0) == 90.f &&
+                                           LoadedSeat->InteractionPoints[0].Interactions.Num() == 1);
+    // Another authored state on the loaded light, from what was saved.
+    if (!TestEqual(TEXT("the light"), Loaded->LightStates.Num(), 1)) return false;
+    TestTrue(TEXT("its state values and wall scale"), Loaded->LightStates[0].AuthoredStates.Num() == 2 && Loaded->LightStates[0].WallLightScale == 0.5f);
+    TestTrue(TEXT("a loaded light takes another authored state"), FSCLightImporter::ApplyState(Loaded, 0, TEXT("auxiliaryState")));
+    TestTrue(TEXT("its candela, colour and style from the saved values"),
+             Loaded->LightStates[0].BaseCandela == 250.0 && Loaded->LightStates[0].BaseColor == FLinearColor::Red && Loaded->LightStates[0].LightStyleId == 3 &&
+                 Loaded->LightStates[0].ActiveState == TEXT("auxiliaryState"));
+    TestFalse(TEXT("a state it does not author leaves it"), FSCLightImporter::ApplyState(Loaded, 0, TEXT("emergencyState")));
     return !HasAnyErrors();
 }
 

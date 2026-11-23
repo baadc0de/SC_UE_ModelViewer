@@ -44,8 +44,13 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
 {
     Host = &Vehicle;
     Routes.Reset();
+    // What the vehicle offers and why an entrance makes no route (SEAT_ROUTES): the seat records are the manifest's.
+    int32 Accesses = 0, Entrances = 0, Seats = 0, Unsupported = 0, NoSeat = 0;
+    for (const FSCSceneInstance& I : Vehicle.Manifest.Children) Seats += I.Seat.IsSet();
     for (const FSCSceneInstance& Access : Vehicle.Manifest.Children)
     {
+        Accesses += !Access.SeatEntrances.IsEmpty();
+        Entrances += Access.SeatEntrances.Num();
         if (Access.SeatEntrances.IsEmpty()) continue;
         USceneComponent* Anchor = Vehicle.PortAnchors.FindRef(SCCargoRecords::PortKey(Access.PortPath));
         if (!Anchor)
@@ -58,13 +63,17 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
             if (Entrance.bUnsupportedSequence || Entrance.Enter.Interaction.IsNone() || Entrance.Exit.Interaction.IsNone() ||
                 (Entrance.Enter.SkipState != TEXT("SkipDeploy") && !Entrance.Enter.SkipState.IsNone()) ||
                 (Entrance.Exit.SkipState != TEXT("SkipRetract") && !Entrance.Exit.SkipState.IsNone()))
+            {
+                ++Unsupported;
                 continue;
+            }
             const FString Key = SCCargoRecords::PortKey(Entrance.SeatPortPath);
             const FSCSceneInstance* Child = Vehicle.Manifest.Children.FindByPredicate([&](const FSCSceneInstance& I) {
                 return I.Seat.IsSet() && I.PortPath == Entrance.SeatPortPath;
             });
             USceneComponent* SeatAnchor = Vehicle.PortAnchors.FindRef(Key);
             USCRigComponent* Rig = Vehicle.PortRigs.FindRef(Key).Get();
+            NoSeat += !Child || !SeatAnchor;
             if (!Child || !SeatAnchor || Child->Seat->Attachment.IsNone() ||
                 (!Entrance.Enter.Attachment.IsNone() && Child->Seat->Attachment != Entrance.Enter.Attachment) ||
                 (!Entrance.Exit.Attachment.IsNone() && Child->Seat->Attachment != Entrance.Exit.Attachment))
@@ -170,7 +179,8 @@ void FSCSeatRuntime::Setup(ASCVehicle& Vehicle)
             }
         }
     }
-    UE_LOG(LogSCSeat, Display, TEXT("SEAT_ROUTES ready=%d"), Routes.Num());
+    UE_LOG(LogSCSeat, Display, TEXT("SEAT_ROUTES ready=%d seats=%d accesses=%d entrances=%d unsupported=%d no_seat_or_anchor=%d"), Routes.Num(), Seats,
+           Accesses, Entrances, Unsupported, NoSeat);
 }
 
 int32 FSCSeatRuntime::Focus(const ASCFirstPersonCharacter& Character) const
