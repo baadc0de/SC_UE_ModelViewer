@@ -242,8 +242,8 @@ public:
         return bEnvironmentPending || EnvJob.IsValid() || EnvExport.IsValid() || EnvParse.IsValid() || EnvPlaceInTicks > 0 ||
                (EnvLevel && !Environment.IsValid());
     }
-    /** The cooked level for an object container path (EnvironmentLevelPath), empty when none was cooked, the app does not
-     *  use cooked levels, or -SCNoCooked. */
+    /** The cooked level for an object container path (EnvironmentLevelPath, else a level cooked before WP-O1-4 under the
+     *  name without the path hash), empty when none was cooked, the app does not use cooked levels, or -SCNoCooked. */
     static FString CookedEnvironmentLevel(const FString& Folder);
     /** The cooked level of a ship (ShipLevelPath without a variant), empty when none was cooked. LoadEntity streams it
      *  instead of exporting from the archive, so it also works without one (a game build on a machine without Star

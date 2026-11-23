@@ -435,7 +435,11 @@ FString USCViewerSubsystem::CookedEnvironmentLevel(const FString& Folder)
     if (!SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked")))
         return FString(); // -SCNoCooked: as if none was cooked (StepEnvironment and IsBusy decide alike)
     const FString Level = EnvironmentLevelPath(Folder);
-    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) ? Level : FString();
+    if (Level.IsEmpty()) return FString();
+    if (FPackageName::DoesPackageExist(Level)) return Level;
+    // A level cooked before WP-O1-4 (named by the last two path parts only, without the path hash).
+    const FString Legacy = Level.LeftChop(9);
+    return FPackageName::DoesPackageExist(Legacy) ? Legacy : FString();
 }
 void USCViewerSubsystem::SetSpace(bool bInSpace)
 {

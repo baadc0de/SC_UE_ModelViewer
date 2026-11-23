@@ -97,8 +97,8 @@ bool FUCPreparedTest::RunTest(const FString&)
 
     FUCPrepared Back;
     TestTrue(TEXT("the record round-trips"), FUCPrepared::Parse(R.ToJson(), Back, Error));
-    TestEqual(TEXT("... its definition byte for byte"), Back.Definition, R.Definition);
-    TestEqual(TEXT("... its cargo setup"), Back.CargoDefinition, R.CargoDefinition);
+    TestTrue(TEXT("... its definition byte for byte"), Back.Definition.Equals(R.Definition, ESearchCase::CaseSensitive));
+    TestTrue(TEXT("... its cargo setup"), Back.CargoDefinition.Equals(R.CargoDefinition, ESearchCase::CaseSensitive));
     TestEqual(TEXT("... its levels"), Back.VehicleLevel + Back.EnvironmentLevel, R.VehicleLevel + R.EnvironmentLevel);
     TestEqual(TEXT("... its format"), Back.Format, R.Format);
     TestFalse(TEXT("a record without a vehicle level does not read"), FUCPrepared::Parse(TEXT("{\"scenario\": \"t\", \"definition\": \"{}\"}"), Back, Error));
@@ -118,8 +118,14 @@ bool FUCPreparedTest::RunTest(const FString&)
     Changed.Json += TEXT(" ");
     TestTrue(TEXT("a changed definition is stale"), R.Problem(&Changed, All).Contains(TEXT("changed")));
     Changed = Source;
+    Changed.Json = Changed.Json.Replace(TEXT("\"T\""), TEXT("\"t\""), ESearchCase::CaseSensitive);
+    TestTrue(TEXT("a definition changed only in case is stale"), R.Problem(&Changed, All).Contains(TEXT("changed")));
+    Changed = Source;
     Changed.CargoJson.Reset();
     TestTrue(TEXT("a changed cargo setup is stale"), R.Problem(&Changed, All).Contains(TEXT("cargo setup")));
+    Changed = Source;
+    Changed.CargoJson = Changed.CargoJson.Replace(TEXT("\"c\""), TEXT("\"C\""), ESearchCase::CaseSensitive);
+    TestTrue(TEXT("a cargo setup changed only in case is stale"), R.Problem(&Changed, All).Contains(TEXT("cargo setup")));
     FUCPrepared NoEnvironment = R;
     NoEnvironment.EnvironmentLevel.Reset();
     TestEqual(TEXT("no environment: only the vehicle level is needed"),

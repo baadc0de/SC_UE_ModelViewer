@@ -22,9 +22,13 @@ public:
     static int32 CookFormatVersion() { return FormatVersion; }
     /** Bakes rigs static (presented pose), re-instances, drops runtime-only proxies, keeps meshes/textures in
      *  SharedRoot (reused when an earlier environment already saved them) and materials as constants under Root, and
-     *  makes the actor and its components persistent. The caller saves the level. Returns false on any failed save. */
+     *  makes the actor and its components persistent. The caller saves the level. Returns false on any failed save.
+     *  SourceBuild (the archive build the actor was exported from) is part of each pooled asset's key: the pool keys an
+     *  asset by its source path, which an archive update keeps while its content changes, so assets of another build are
+     *  never reused. */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
-    static bool CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot = TEXT("/Game/SC/Hangars/Shared"));
+    static bool CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot = TEXT("/Game/SC/Hangars/Shared"),
+                                const FString& SourceBuild = TEXT(""));
     /** Measures a presented environment (rigs alive: before CookEnvironment) and records its ship capacity under
      *  Style/Name in the hangar index (USCHangarIndex::AssetPath), saving it. Returns false without a ship elevator. */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")

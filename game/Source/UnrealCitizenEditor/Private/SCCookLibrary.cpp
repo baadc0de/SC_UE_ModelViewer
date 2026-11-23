@@ -144,7 +144,7 @@ struct FCooker
 };
 } // namespace
 
-bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot)
+bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot, const FString& SourceBuild)
 {
     if (!Environment) return false;
     const double Start = FPlatformTime::Seconds();
@@ -157,8 +157,9 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     FCooker Cook;
     Cook.Root = Root;
     Cook.SharedRoot = SharedRoot;
-    for (const auto& [Object, Key] : Environment->SourcePaths)
-        if (const auto* Mesh = Cast<UStaticMesh>(Object))
+    const FString Build = SourceBuild.IsEmpty() ? FString() : TEXT("#build=") + SourceBuild;
+    for (const auto& [Object, SourceKey] : Environment->SourcePaths)
+        if (const FString Key = SourceKey + Build; const auto* Mesh = Cast<UStaticMesh>(Object))
         {
             // The pool key carries the mesh's build (Nanite or conventional) and section topology (slot, triangles): a
             // source asset split or built differently (a screen or glass slot moved between the Nanite and the translucent

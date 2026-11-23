@@ -245,9 +245,10 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
         return FString::Printf(TEXT("scenario %s: the prepared vehicle level %s is missing or not finished%s"), *Scenario, *VehicleLevel, *Fix);
     if (!EnvironmentLevel.IsEmpty() && !LevelCurrent(EnvironmentLevel))
         return FString::Printf(TEXT("scenario %s: the prepared environment level %s is missing or not finished%s"), *Scenario, *EnvironmentLevel, *Fix);
-    if (Source && Source->Json != Definition)
+    // Byte for byte (FString's == ignores case): any edit since prep makes the record stale.
+    if (Source && !Source->Json.Equals(Definition, ESearchCase::CaseSensitive))
         return FString::Printf(TEXT("scenario %s changed since it was prepared%s"), *Scenario, *Fix);
-    if (Source && Source->CargoJson != CargoDefinition)
+    if (Source && !Source->CargoJson.Equals(CargoDefinition, ESearchCase::CaseSensitive))
         return FString::Printf(TEXT("the cargo setup of scenario %s changed since it was prepared%s"), *Scenario, *Fix);
     return FString();
 }
