@@ -147,17 +147,24 @@ bool FUCPreparedTest::RunTest(const FString&)
     TestTrue(TEXT("a record that names no traversal clips"), NoTraversal.Problem(&Source, All).Contains(TEXT("traversal clips")));
     // The clips follow the levels they were read from: a level saved again since (another id in its stamp) makes them stale.
     {
-        const FString Body = TEXT("/Game/SCTest/Maps/Body_ids"), Clips = TEXT("/Game/SCTest/Traversal_ids");
+        // A folder of this run's own, removed afterwards with only what it wrote.
+        const FString Folder = TEXT("SCTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+        const FString Body = TEXT("/Game/") + Folder + TEXT("/Body_ids"), Clips = TEXT("/Game/") + Folder + TEXT("/Traversal_ids");
         const FString BodyStamp = FUCPrepared::StampFile(Body), ClipsStamp = FUCPrepared::StampFile(Clips);
         ON_SCOPE_EXIT
         {
             IFileManager::Get().Delete(*BodyStamp, false, true, true);
             IFileManager::Get().Delete(*ClipsStamp, false, true, true);
-            IFileManager::Get().DeleteDirectory(*FPaths::Combine(FPaths::ProjectContentDir(), TEXT("SCTest")), false, true);
+            IFileManager::Get().DeleteDirectory(*FPaths::Combine(FPaths::ProjectContentDir(), Folder), false, false); // empty now
         };
         FUCPrepared Ids;
         Ids.PlayerLevel = Body;
+        Ids.VehicleLevel = Body; // one stamp stands for both named levels here
+        TestEqual(TEXT("no ids, no sources"), Ids.TraversalSources(), FString());
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\n"), FUCPrepared::FormatVersion), *BodyStamp);
+        TestEqual(TEXT("a level stamped without an id: no sources"), Ids.TraversalSources(), FString());
         FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-1\n"), FUCPrepared::FormatVersion), *BodyStamp);
+        TestEqual(TEXT("ids for the named levels, the absent environment empty"), Ids.TraversalSources(), FString(TEXT("id-1|id-1|")));
         FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-c\n%s\n"), FUCPrepared::FormatVersion, *Ids.TraversalSources()), *ClipsStamp);
         TestEqual(TEXT("a level's id"), FUCPrepared::LevelId(Body), FString(TEXT("id-1")));
         TestEqual(TEXT("the clips read from these levels"), FUCPrepared::RecordedSources(Clips), Ids.TraversalSources());

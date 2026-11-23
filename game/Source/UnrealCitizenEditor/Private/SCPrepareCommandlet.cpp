@@ -404,13 +404,14 @@ public:
         FString Gender;
         Actors(Record.PlayerLevel, [&](ASCVehicle& Vehicle) {
             const USCRigComponent* Leader = Vehicle.PlayerKit && Vehicle.PlayerKit->HasData() ? USCPlayerBodyComponent::FindLeader(&Vehicle) : nullptr;
-            if (!Leader || !Bones.IsEmpty()) return;
+            // A body whose rig mesh did not load (a partial copy of the prepared content) has no skeleton to read against.
+            if (!Leader || !Leader->GetSkeletalMeshAsset() || !Bones.IsEmpty()) return;
             Bones = USCPlayerBodyComponent::BoneMap(Leader);
             Gender = Vehicle.PlayerKit->Kit->Gender;
         });
         if (Bones.IsEmpty())
         {
-            Error = TEXT("the traversal clips: no player body in ") + Record.PlayerLevel;
+            Error = TEXT("the traversal clips: no player body with its body rig's mesh in ") + Record.PlayerLevel + TEXT(" (prepare it with -Force)");
             return false;
         }
         FSCPlayerClipMap Clips;
@@ -455,6 +456,11 @@ public:
         if (Saved.Result != ESavePackageResult::Success)
         {
             Error = FString::Printf(TEXT("cannot save %s (result %d)"), *Path, int32(Saved.Result));
+            return false;
+        }
+        if (Record.TraversalSources().IsEmpty())
+        {
+            Error = TEXT("the traversal clips: a level of the record has no id in its stamp (prepare it with -Force)");
             return false;
         }
         // The archive build of the export, or (nothing asked of it) the body's.
@@ -546,7 +552,8 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     // a level saved again since, by this run or another scenario's sharing it, makes them stale). Their names come from the
     // levels' records, their bones from the body.
     Record.TraversalClips = USCViewerSubsystem::TraversalClipsPath(Record.PlayerLevel, Record.VehicleLevel, Record.EnvironmentLevel);
-    if (Current(Record.TraversalClips) && !Prepare.bForce && FUCPrepared::RecordedSources(Record.TraversalClips) == Record.TraversalSources())
+    if (Current(Record.TraversalClips) && !Prepare.bForce && !Record.TraversalSources().IsEmpty() &&
+        FUCPrepared::RecordedSources(Record.TraversalClips) == Record.TraversalSources())
     {
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Record.TraversalClips, FUCPrepared::FormatVersion);
     }

@@ -205,10 +205,10 @@ bool FUCPrepared::IsLevelCurrent(const FString& Level)
 {
     if (Level.IsEmpty() || !FPackageName::DoesPackageExist(Level)) return false;
     if (FPlatformProperties::RequiresCookedData()) return true;
-    // A complete stamp: the format on its first line and the archive build on its second.
+    // A complete stamp: the format on its first line, the archive build on its second and the save's id on its third.
     TArray<FString> Lines;
-    return FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) && Lines.Num() >= 2 && Lines[0].TrimStartAndEnd().IsNumeric() &&
-           FCString::Atoi(*Lines[0]) == FormatVersion && !Lines[1].TrimStartAndEnd().IsEmpty();
+    return FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) && Lines.Num() >= 3 && Lines[0].TrimStartAndEnd().IsNumeric() &&
+           FCString::Atoi(*Lines[0]) == FormatVersion && !Lines[1].TrimStartAndEnd().IsEmpty() && !Lines[2].TrimStartAndEnd().IsEmpty();
 }
 FString FUCPrepared::LevelBuild(const FString& Level)
 {
@@ -224,7 +224,10 @@ FString FUCPrepared::LevelId(const FString& Level)
 }
 FString FUCPrepared::TraversalSources() const
 {
-    return FString::Printf(TEXT("%s|%s|%s"), *LevelId(PlayerLevel), *LevelId(VehicleLevel), *LevelId(EnvironmentLevel));
+    // Every level the record names has an id (only an absent environment leaves its field empty); else there are none.
+    const FString Body = LevelId(PlayerLevel), Vehicle = LevelId(VehicleLevel), Environment = LevelId(EnvironmentLevel);
+    if (Body.IsEmpty() || Vehicle.IsEmpty() || (!EnvironmentLevel.IsEmpty() && Environment.IsEmpty())) return FString();
+    return FString::Printf(TEXT("%s|%s|%s"), *Body, *Vehicle, *Environment);
 }
 FString FUCPrepared::RecordedSources(const FString& TraversalClips)
 {
@@ -346,7 +349,9 @@ FString FUCPrepared::Problem(const FUCScenario* Source) const
 {
     // The traversal clips also follow the levels they were read from (a packaged game has no stamps: packaging checks it).
     return Problem(Source, [this](const FString& Level) {
-        return IsLevelCurrent(Level) &&
-               (Level != TraversalClips || FPlatformProperties::RequiresCookedData() || RecordedSources(Level) == TraversalSources());
+        if (!IsLevelCurrent(Level)) return false;
+        if (Level != TraversalClips || FPlatformProperties::RequiresCookedData()) return true;
+        const FString Sources = TraversalSources();
+        return !Sources.IsEmpty() && RecordedSources(Level) == Sources;
     });
 }

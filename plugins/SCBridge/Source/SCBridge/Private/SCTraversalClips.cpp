@@ -39,20 +39,7 @@ bool FSCTraversalClips::Start(const USCPlayerBodyComponent& Body, USCViewerSubsy
     if (Viewer && Viewer->UsesPreparedTraversalClips())
     {
         const TSharedPtr<const FSCPlayerClipMap> Set = Viewer->GetPreparedTraversalClips();
-        if (!Set) Prepared.Error = TEXT("the prepared traversal clips do not load for this body (prepare the scenario again)");
-        for (const FString& Name : Names)
-        {
-            const TSharedPtr<const FSCPlayerClip>* Clip = Set ? Set->Find(FName(*Name)) : nullptr;
-            if (Clip && *Clip)
-            {
-                Prepared.Clips.Add(FName(*Name), *Clip);
-                continue;
-            }
-            if (Prepared.Error.IsEmpty()) Prepared.Error = TEXT("Traversal animation ") + Name + TEXT(" was not prepared");
-            Prepared.Clips.Reset();
-            break;
-        }
-        bPrepared = Prepared.Error.IsEmpty() || Viewer->GetArchiveState() != ESCArchiveState::Ready;
+        bPrepared = ServeFromPrepared(Set.Get(), Names, Viewer->GetArchiveState() == ESCArchiveState::Ready, Prepared);
     }
     const bool bFixture = !bPrepared && FParse::Value(FCommandLine::Get(), FixtureOption, File);
     UE_LOG(LogSCTraversal, Display, TEXT("TRAVERSAL_CLIPS_SOURCE source=%s names=%d%s"), bPrepared ? TEXT("prepared") : bFixture ? TEXT("fixture") : TEXT("archive"),
@@ -169,6 +156,29 @@ TArray<FString> SCTraversal::ClipNames(const ASCVehicle& Vehicle)
             if (!Action.Clip.IsNone()) Names.AddUnique(Action.Clip.ToString());
     Names.Sort();
     return Names;
+}
+
+bool FSCTraversalClips::ServeFromPrepared(const FSCPlayerClipMap* Set, const TArray<FString>& Names, bool bArchive, FResult& Out)
+{
+    Out = FResult();
+    if (!Set)
+    {
+        Out.Error = TEXT("the prepared traversal clips do not load for this body (prepare the scenario again)");
+        return true;
+    }
+    for (const FString& Name : Names)
+    {
+        const TSharedPtr<const FSCPlayerClip>* Clip = Set->Find(FName(*Name));
+        if (Clip && *Clip)
+        {
+            Out.Clips.Add(FName(*Name), *Clip);
+            continue;
+        }
+        Out.Clips.Reset();
+        Out.Error = TEXT("Traversal animation ") + Name + TEXT(" was not prepared");
+        return !bArchive;
+    }
+    return true;
 }
 
 TOptional<FSCTraversalClips::FResult> FSCTraversalClips::Take()

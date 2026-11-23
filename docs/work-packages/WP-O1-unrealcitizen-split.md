@@ -301,8 +301,10 @@ data when it loads. In stages:
   the body's), named by the record (`traversal_clips`) and always cooked
   (`DirectoriesToAlwaysCook`). A run loads it in the background with the scenario's levels
   (`SetPreparedTraversalClips`); a seat or ladder takes its clips from it. A request it does not cover (a vehicle brought
-  in later, the Garage's) asks the archive when it is open, else fails as a missing clip did. Each prepared level's stamp names an id new with each save, and the clips' stamp names the ids of
-  the levels they were read from (`FUCPrepared::TraversalSources`): prep keeps the clips only while those agree, so a level
+  in later, the Garage's) asks the archive when it is open, else fails as a missing clip did; a set that does not load
+  (another body, a payload it does not read) fails the request. Each prepared level's stamp names an id new with each save, and the clips' stamp names the ids of
+  the levels they were read from (`FUCPrepared::TraversalSources`; a stamp without an id is not current): prep keeps the
+  clips only while those agree, so a level
   saved again (by this scenario's prep or another's sharing it) makes them stale for the scenario's run, its prep and its
   packaging. Prep format 28.
 - **O1-4b-3**: cargo boxes and effects, music, the Garage's details prepared.

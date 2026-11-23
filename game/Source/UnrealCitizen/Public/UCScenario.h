@@ -99,12 +99,13 @@ struct UNREALCITIZEN_API FUCPrepared
     /** The id a level's stamp names (new with each save; empty: none). */
     static FString LevelId(const FString& Level);
     /** The ids of the levels the traversal clips were read from (body|vehicle|environment), from the levels' stamps now
-     *  (Sources: what to write in the clips' stamp) or from the clips' stamp (Recorded). The clips are current only while the
-     *  two agree: a level saved again since (by this scenario's prep or another's sharing it) makes them stale. */
+     *  (Sources: what to write in the clips' stamp; empty when a level the record names has none) or from the clips' stamp
+     *  (Recorded). The clips are current only while the two agree and are not empty: a level saved again since (by this
+     *  scenario's prep or another's sharing it) makes them stale. */
     FString TraversalSources() const;
     static FString RecordedSources(const FString& TraversalClips);
-    /** The level exists and was prepared in this format (a packaged game, which has no stamps, only checks it exists: the
-     *  packaging refuses unstamped levels). */
+    /** The level exists and was prepared in this format, its stamp complete (format, build, the save's id) (a packaged game,
+     *  which has no stamps, only checks it exists: the packaging refuses unstamped levels). */
     static bool IsLevelCurrent(const FString& Level);
     /** <project>/Content/SCPrepared, and the record of a scenario in it. */
     static FString Directory();

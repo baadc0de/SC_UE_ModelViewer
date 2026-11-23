@@ -63,10 +63,10 @@ foreach ($Level in $Levels + @($Record.traversal_clips)) {
     $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + $Extension)
     if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
     $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
-    # A complete stamp (FUCPrepared::IsLevelCurrent): the format on line 1, the archive build on line 2.
+    # A complete stamp (FUCPrepared::IsLevelCurrent): the format on line 1, the archive build on line 2, the save's id on line 3.
     $Lines = if (Test-Path $Stamp) { @(Get-Content $Stamp) } else { @() }
     $Have = if ($Lines.Count -ge 1 -and $Lines[0].Trim() -match '^\d+$') { [int]$Lines[0].Trim() } else { 0 }
-    if ($Have -ne $Format -or $Lines.Count -lt 2 -or -not $Lines[1].Trim()) {
+    if ($Have -ne $Format -or $Lines.Count -lt 3 -or -not $Lines[1].Trim() -or -not $Lines[2].Trim()) {
         throw "$Level is stale or not finished (stamp format $Have, current $Format): run $Prepare -Force"
     }
 }
