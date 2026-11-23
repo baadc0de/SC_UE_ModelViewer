@@ -576,6 +576,12 @@ void USCViewerSubsystem::StepEnvironment()
     }
     if (EnvLevel && !Environment.IsValid())
     {
+        if (EnvLevel->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+        {
+            UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: the cooked level %s did not load"), *EnvLevel->GetWorldAssetPackageName());
+            UnloadEnvironmentLevel();
+            return;
+        }
         ULevel* Level = EnvLevel->GetLoadedLevel();
         if (!Level || !EnvLevel->IsLevelVisible()) return;
         for (AActor* Actor : Level->Actors)
@@ -1168,6 +1174,13 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
 void USCViewerSubsystem::StepCookedShip()
 {
     if (Phase == ESCLoadPhase::Cancelled || Phase == ESCLoadPhase::Failed) return;
+    if (ShipLevel->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+    {
+        const FString Name = ShipLevel->GetWorldAssetPackageName();
+        UnloadShipLevel();
+        FinishLoad(ESCLoadPhase::Failed, TEXT("the cooked ship level did not load: ") + Name);
+        return;
+    }
     ULevel* Level = ShipLevel->GetLoadedLevel();
     if (!Level || !ShipLevel->IsLevelVisible()) return;
     ASCVehicle* Cooked = nullptr;

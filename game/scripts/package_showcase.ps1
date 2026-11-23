@@ -44,9 +44,17 @@ if (-not (Test-Path $RecordFile)) { throw "Scenario $Scenario is not prepared (n
 $Record = Get-Content -Raw $RecordFile | ConvertFrom-Json
 if ([int]$Record.format -ne $Format) { throw "Scenario $Scenario was prepared with format $($Record.format), current $Format`: run $Prepare" }
 $Definition = Join-Path $Root "game\Config\Scenarios\$Scenario.json"
-if ((Test-Path $Definition) -and ([IO.File]::ReadAllText($Definition) -ne $Record.definition)) {
-    throw "Scenario $Scenario changed since it was prepared: run $Prepare"
+if (-not (Test-Path $Definition)) { throw "No scenario $Definition" }
+if ([IO.File]::ReadAllText($Definition) -ne $Record.definition) { throw "Scenario $Scenario changed since it was prepared: run $Prepare" }
+# Its cargo setup (Config/Cargo/<cargo>.json) as prepared: the packaged game has only the record's copy.
+$CargoName = (ConvertFrom-Json $Record.definition).cargo
+$CargoText = ''
+if ($CargoName) {
+    $CargoFile = Join-Path $Root "game\Config\Cargo\$CargoName.json"
+    if (-not (Test-Path $CargoFile)) { throw "Scenario $Scenario names the cargo setup $CargoName, but there is no $CargoFile" }
+    $CargoText = [IO.File]::ReadAllText($CargoFile)
 }
+if ($CargoText -ne [string]$Record.cargo_definition) { throw "The cargo setup of scenario $Scenario changed since it was prepared: run $Prepare" }
 $Levels = @($Record.vehicle_level) + @($Record.environment_level | Where-Object { $_ })
 foreach ($Level in $Levels) {
     $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')

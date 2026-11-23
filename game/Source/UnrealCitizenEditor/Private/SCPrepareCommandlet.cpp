@@ -23,6 +23,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Misc/OutputDeviceRedirector.h"
 #include "Misc/ScopeExit.h"
 #include "UObject/Package.h"
 
@@ -33,20 +34,27 @@ namespace
 constexpr double FloorZ = -5.0;             // USCViewerSubsystem's floor: the prepared levels stream in at the origin
 constexpr float ArchiveTimeoutSeconds = 900.f; // a first open builds the archive's index
 
-/** <level>.cookformat beside the level's .umap. */
 FString StampFile(const FString& Level)
 {
-    return FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / Level.RightChop(FString(TEXT("/Game/")).Len()) + TEXT(".cookformat"));
+    return FUCPrepared::StampFile(Level);
 }
-int32 Stamped(const FString& Level)
-{
-    FString Text;
-    return FFileHelper::LoadFileToString(Text, *StampFile(Level)) ? FCString::Atoi(*Text.TrimStartAndEnd()) : 0;
-}
-/** The level exists and was prepared in the current format. */
+/** The level exists and was prepared in the current format (its stamp is written only once it saved). */
 bool Current(const FString& Level)
 {
-    return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) && Stamped(Level) == FUCPrepared::FormatVersion;
+    return FUCPrepared::IsLevelCurrent(Level);
+}
+
+/** A paint's level variant: its palette id, else its subgeometry tag, else its name; with the paint's index when another
+ *  paint of the vehicle has the same one (USCViewerSubsystem::ShipLevelPath makes it a level name). */
+FString PaintVariant(const TArray<FSCPaintVariant>& Paints, int32 Index)
+{
+    auto Identity = [](const FSCPaintVariant& P) {
+        return !P.PaletteId.IsEmpty() ? P.PaletteId : !P.SubgeometryTag.IsEmpty() ? P.SubgeometryTag : P.DisplayName;
+    };
+    const FString Own = Identity(Paints[Index]);
+    int32 Same = 0;
+    for (const FSCPaintVariant& P : Paints) Same += Identity(P).Equals(Own, ESearchCase::IgnoreCase) ? 1 : 0;
+    return Own.IsEmpty() || Same > 1 ? FString::Printf(TEXT("%s_paint%d"), *Own, Index) : Own;
 }
 
 /** The paints a vehicle package offers (paints.json beside its scene.json; FSCPackageReader reads it the same way). */
@@ -77,7 +85,6 @@ class FPrepare
 {
 public:
     bool bForce = false;
-    uint32 Mip = 0;
     USCViewerSubsystem* Viewer = nullptr;
 
     /** The archive, opened once on first need. */
@@ -94,6 +101,13 @@ public:
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE opening the archive (%s)"), *Viewer->GetArchiveLabel());
         if (!Viewer->WaitForArchive(ArchiveTimeoutSeconds))
         {
+            if (Viewer->GetArchiveState() == ESCArchiveState::Opening)
+            {
+                // The open cannot be cancelled and the viewer's teardown waits for it: leave the process at once.
+                UE_LOG(LogSCPrepare, Error, TEXT("SC_PREPARE_FAILED the archive did not open within %.0f s"), ArchiveTimeoutSeconds);
+                GLog->Flush();
+                FPlatformMisc::RequestExitWithStatus(true, 1);
+            }
             Error = TEXT("the archive did not open: ") + Viewer->GetArchiveError();
             return false;
         }
@@ -109,7 +123,7 @@ public:
         sc_options Ffi;
         Options->ToFfi(Ffi);
         Ffi.lod = 0;
-        Ffi.mip = Mip;
+        Ffi.mip = 0; // full resolution: the shared texture pool keys a texture by its source, not by a resolution
         const TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
         const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client = Viewer->GetClient();
         UE::Tasks::TTask<FSCExportResult> Task = bEnvironment ? Client->ExportEnvironment(What, Ffi, Progress) : Client->ExportDecomposed(What, Ffi, Progress);
@@ -247,7 +261,7 @@ public:
                                     Names.IsEmpty() ? TEXT("none") : *FString::Join(Names, TEXT(", ")));
             return false;
         }
-        Level = USCViewerSubsystem::ShipLevelPath(Scenario.Vehicle, Paint == INDEX_NONE ? FString() : Paints[Paint].PaletteId);
+        Level = USCViewerSubsystem::ShipLevelPath(Scenario.Vehicle, Paint == INDEX_NONE ? FString() : PaintVariant(Paints, Paint));
         if (Current(Level) && !bForce)
         {
             UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Level, FUCPrepared::FormatVersion);
@@ -311,14 +325,10 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
         if (Prepare.Viewer) USCViewerSubsystem::DestroyHeadless(Prepare.Viewer);
     };
     Prepare.bForce = FParse::Param(*Params, TEXT("Force"));
-    FParse::Value(*Params, TEXT("Mip="), Prepare.Mip);
-    // The record this scenario had: its vehicle level is reused when the vehicle and the paint are the same and it is
-    // current (a named paint's level is known only from the package otherwise).
+    // The record this scenario had: the archive build it names is kept when nothing is exported this time.
     FUCPrepared Previous;
     FString PreviousError;
-    FUCScenario PreviousScenario;
-    const bool bPrevious = FUCPrepared::Load(Id, Previous, PreviousError) &&
-                           FUCScenario::Parse(Id, Previous.Definition, Previous.CargoDefinition, PreviousScenario, PreviousError);
+    const bool bPrevious = FUCPrepared::Load(Id, Previous, PreviousError);
 
     FUCPrepared Record;
     Record.Format = FUCPrepared::FormatVersion;
@@ -338,17 +348,18 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
             return Failed(Id, Error);
         }
     }
+    // A named paint's level is known only from the package's paints (PrepareVehicle exports it, then keeps a current level).
     const bool bDefaultPaint = Scenario.Skin.IsEmpty() || Scenario.Skin.Equals(TEXT("default"), ESearchCase::IgnoreCase);
-    FString Known = bDefaultPaint ? USCViewerSubsystem::ShipLevelPath(Scenario.Vehicle) : FString();
-    if (Known.IsEmpty() && bPrevious && PreviousScenario.Vehicle.Equals(Scenario.Vehicle, ESearchCase::IgnoreCase) && PreviousScenario.Skin == Scenario.Skin)
-        Known = Previous.VehicleLevel;
+    const FString Known = bDefaultPaint ? USCViewerSubsystem::ShipLevelPath(Scenario.Vehicle) : FString();
     if (Current(Known) && !Prepare.bForce)
     {
         Record.VehicleLevel = Known;
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Known, FUCPrepared::FormatVersion);
     }
     else if (!Prepare.PrepareVehicle(Scenario, Record.VehicleLevel, Error))
+    {
         return Failed(Id, Error);
+    }
     Record.Archive = Prepare.Viewer ? Prepare.Viewer->GetArchiveBuildId() : bPrevious ? Previous.Archive : FString();
     Record.PreparedAt = FDateTime::UtcNow().ToIso8601();
     IFileManager::Get().MakeDirectory(*FUCPrepared::Directory(), true);

@@ -48,6 +48,6 @@ private:
     FUCPrepared Prepared;
     bool bVehicleRequested = false;
     bool bCameraSet = false, bStartPlaced = false;
-    double StartedAt = 0;
+    double StartedAt = 0, LoadingSince = 0;
     bool bMusicPending = false;
 };

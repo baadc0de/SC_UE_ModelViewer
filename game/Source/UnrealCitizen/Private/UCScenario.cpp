@@ -101,6 +101,11 @@ bool FUCScenario::Parse(const FString& Id, const FString& Json, const FString& C
     return true;
 }
 
+bool FUCScenario::Exists(const FString& Id)
+{
+    return !Id.IsEmpty() && FPaths::FileExists(FPaths::Combine(Directory(), Id + TEXT(".json")));
+}
+
 bool FUCScenario::Load(const FString& Id, FUCScenario& Out, FString& Error)
 {
     if (Id.IsEmpty() || Id.Contains(TEXT("/")) || Id.Contains(TEXT("\\")) || Id.Contains(TEXT("..")))
@@ -136,6 +141,17 @@ bool FUCScenario::Load(const FString& Id, FUCScenario& Out, FString& Error)
     return true;
 }
 
+FString FUCPrepared::StampFile(const FString& Level)
+{
+    return FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / Level.RightChop(FString(TEXT("/Game/")).Len()) + TEXT(".cookformat"));
+}
+bool FUCPrepared::IsLevelCurrent(const FString& Level)
+{
+    if (Level.IsEmpty() || !FPackageName::DoesPackageExist(Level)) return false;
+    if (FPlatformProperties::RequiresCookedData()) return true;
+    FString Text;
+    return FFileHelper::LoadFileToString(Text, *StampFile(Level)) && FCString::Atoi(*Text.TrimStartAndEnd()) == FormatVersion;
+}
 FString FUCPrepared::Directory()
 {
     return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectContentDir(), TEXT("SCPrepared")));
@@ -220,15 +236,15 @@ bool FUCPrepared::Save(FString& Error) const
     return true;
 }
 
-FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelExists) const
+FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelCurrent) const
 {
     const FString Fix = TEXT(": run ") + PrepareCommand(Scenario);
     if (Format != FormatVersion)
         return FString::Printf(TEXT("scenario %s was prepared with format %d, the game reads %d%s"), *Scenario, Format, FormatVersion, *Fix);
-    if (!LevelExists(VehicleLevel))
-        return FString::Printf(TEXT("scenario %s: the prepared vehicle level %s is missing%s"), *Scenario, *VehicleLevel, *Fix);
-    if (!EnvironmentLevel.IsEmpty() && !LevelExists(EnvironmentLevel))
-        return FString::Printf(TEXT("scenario %s: the prepared environment level %s is missing%s"), *Scenario, *EnvironmentLevel, *Fix);
+    if (!LevelCurrent(VehicleLevel))
+        return FString::Printf(TEXT("scenario %s: the prepared vehicle level %s is missing or not finished%s"), *Scenario, *VehicleLevel, *Fix);
+    if (!EnvironmentLevel.IsEmpty() && !LevelCurrent(EnvironmentLevel))
+        return FString::Printf(TEXT("scenario %s: the prepared environment level %s is missing or not finished%s"), *Scenario, *EnvironmentLevel, *Fix);
     if (Source && Source->Json != Definition)
         return FString::Printf(TEXT("scenario %s changed since it was prepared%s"), *Scenario, *Fix);
     if (Source && Source->CargoJson != CargoDefinition)
@@ -237,5 +253,5 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
 }
 FString FUCPrepared::Problem(const FUCScenario* Source) const
 {
-    return Problem(Source, [](const FString& Level) { return FPackageName::DoesPackageExist(Level); });
+    return Problem(Source, [](const FString& Level) { return IsLevelCurrent(Level); });
 }

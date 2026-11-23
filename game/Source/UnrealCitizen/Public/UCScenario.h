@@ -32,6 +32,8 @@ struct UNREALCITIZEN_API FUCScenario
     static bool Parse(const FString& Id, const FString& Json, const FString& CargoJson, FUCScenario& Out, FString& Error);
     /** Read Config/Scenarios/<Id>.json and the cargo setup it names (Config/Cargo/<cargo>.json). */
     static bool Load(const FString& Id, FUCScenario& Out, FString& Error);
+    /** The definition file is there (a packaged game has none: it runs from the record alone). */
+    static bool Exists(const FString& Id);
 };
 
 /** What the prep step prepared for a scenario: Content/SCPrepared/<id>.json, staged with a packaged game. */
@@ -58,6 +60,11 @@ struct UNREALCITIZEN_API FUCPrepared
     FString Archive;          // the archive build the levels were prepared from (information)
     FString PreparedAt;       // UTC, ISO 8601
 
+    /** <level>.cookformat beside a prepared level's .umap: the format it was prepared in, written once it saved. */
+    static FString StampFile(const FString& Level);
+    /** The level exists and was prepared in this format (a packaged game, which has no stamps, only checks it exists: the
+     *  packaging refuses unstamped levels). */
+    static bool IsLevelCurrent(const FString& Level);
     /** <project>/Content/SCPrepared, and the record of a scenario in it. */
     static FString Directory();
     static FString File(const FString& Id);
@@ -66,10 +73,10 @@ struct UNREALCITIZEN_API FUCPrepared
     /** False with Error when the scenario has no record (not prepared) or it does not read. */
     static bool Load(const FString& Id, FUCPrepared& Out, FString& Error);
     bool Save(FString& Error) const;
-    /** Why the game cannot run the scenario from this record (empty: it can): another format, a level that does not
-     *  exist, or — when Source (the definition on disk) is given — a definition or cargo setup changed since it was
-     *  prepared. Each answer ends with what to do. */
-    FString Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelExists) const;
+    /** Why the game cannot run the scenario from this record (empty: it can): another format, a level that is not current
+     *  (missing, or a preparation that did not finish: no stamp), or — when Source (the definition on disk) is given — a
+     *  definition or cargo setup changed since it was prepared. Each answer ends with what to do. */
+    FString Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelCurrent) const;
     FString Problem(const FUCScenario* Source) const;
     /** The command that prepares the scenario. */
     static FString PrepareCommand(const FString& Id);

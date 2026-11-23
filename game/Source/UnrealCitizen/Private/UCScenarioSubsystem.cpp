@@ -18,6 +18,9 @@ namespace
 // How long the run tries to put the player at the scenario's start (first person and the teleport destinations appear
 // once the levels' collision and the hangar's standing places are ready).
 constexpr double StartPlacementSeconds = 20.0;
+// How long the prepared levels may take to stream in before the run fails (an extra-large hangar streams in well under a
+// minute from a local disk).
+constexpr double LoadingSeconds = 600.0;
 } // namespace
 
 UUCScenarioSubsystem* UUCScenarioSubsystem::Get(const UObject* WorldContext)
@@ -60,12 +63,15 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     for (const TCHAR* Switch : {TEXT("SCLoad="), TEXT("SCEnvironment="), TEXT("SCPackage="), TEXT("SCCargoScenario=")})
         if (FParse::Value(Cmd, Switch, Ignored))
             return Refuse(FString::Printf(TEXT("-Scenario=%s runs alone: drop -%s"), *Id, *FString(Switch).LeftChop(1)), false);
+    if (FParse::Param(Cmd, TEXT("SCNoCooked"))) // a scenario runs from its prepared (cooked) levels only
+        return Refuse(FString::Printf(TEXT("-Scenario=%s runs from prepared levels: drop -SCNoCooked"), *Id), false);
     // The definition on disk, when there is one (not in a packaged game): its title names a refused run, and a change since
     // prep makes the record stale.
     FUCScenario Source;
     FString Error, SourceError;
     const bool bSource = FUCScenario::Load(Id, Source, SourceError);
     if (bSource) Scenario.Title = Source.Title;
+    else if (FUCScenario::Exists(Id)) return Refuse(SourceError + TEXT(": fix the definition, then run ") + FUCPrepared::PrepareCommand(Id));
     if (!FUCPrepared::Load(Id, Prepared, Error)) return Refuse(Error);
     if (const FString Why = Prepared.Problem(bSource ? &Source : nullptr); !Why.IsEmpty()) return Refuse(Why);
     if (!FUCScenario::Parse(Id, Prepared.Definition, Prepared.CargoDefinition, Scenario, Error))
@@ -78,6 +84,7 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     // The environment before anything else is requested (it replaces a saved choice the viewer restored at start).
     Viewer->SetEnvironment(Scenario.Environment.IsEmpty() ? FString(TEXT("none")) : Scenario.Environment);
     State = EState::Loading;
+    LoadingSince = FPlatformTime::Seconds();
     UE_LOG(LogUCScenario, Display, TEXT("SCENARIO start id=%s title=\"%s\" vehicle=%s level=%s environment=%s cargo=%s music=%s camera=%s start=\"%s\" prepared=%s archive=%s"),
            *Id, *Scenario.Title, *Scenario.Vehicle, *Prepared.VehicleLevel, Prepared.EnvironmentLevel.IsEmpty() ? TEXT("none") : *Prepared.EnvironmentLevel,
            Scenario.Cargo.IsEmpty() ? TEXT("none") : *Scenario.Cargo, Scenario.Music.IsEmpty() ? TEXT("none") : *Scenario.Music, *Scenario.Camera,
@@ -120,6 +127,11 @@ bool UUCScenarioSubsystem::Tick(float)
     switch (State)
     {
     case EState::Loading:
+        if (FPlatformTime::Seconds() - LoadingSince > LoadingSeconds)
+        {
+            Fail(FString::Printf(TEXT("the prepared levels did not load within %.0f s"), LoadingSeconds));
+            return true;
+        }
         // The environment streams first (a load waits for it: IsBusy), then the vehicle's prepared level.
         if (!bVehicleRequested)
         {
