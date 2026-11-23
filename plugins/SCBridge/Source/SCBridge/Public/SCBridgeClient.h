@@ -124,6 +124,8 @@ public:
     /** Player kit (scbridge_export_player_request, PlayerRequest JSON): empty Gender = male, empty Loadout = the
      *  exporter's default loadout, empty Weapons = every loadout weapon; bSpareAttachments puts each kept weapon's
      *  default attachments (its magazine) into the wearer's empty storage ports. */
+    /** The gender ExportPlayer asks for when none is given. */
+    static constexpr const TCHAR* DefaultPlayerGender = TEXT("male");
     UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments,
                                                   TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
     /** The archive's authored soundtrack catalogue and one selected Ogg cue. */

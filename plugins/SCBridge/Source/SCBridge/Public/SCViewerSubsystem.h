@@ -256,6 +256,11 @@ public:
      *  outside [A-Za-z0-9_] become '_'. UnrealCitizen's prep step (-run=SCPrepare) writes them. */
     static FString EnvironmentLevelPath(const FString& Folder);
     static FString ShipLevelPath(const FString& Entity, const FString& Variant = FString());
+    /** WP-O1-4b-2: the prepared level of a player body (USCViewerSettings::ResolvePlayer*: the gender, the loadout, the weapons
+     *  kept, their spares) as a definition names it: readable from the gender, told apart by a hash of the rest (case, the
+     *  weapons' order and repetition, the loadout's Data/ prefix and an unnamed gender aside). Not what the export resolves it
+     *  to: a named default loadout is another key than an omitted one. */
+    static FString PlayerLevelPath(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments);
     /** A ship level with a paint baked in (<entity>__<variant>: an entity's own part never holds "__"), not the entity's own
      *  level: lists of entities (the Garage) leave it out. */
     static bool IsShipPaintLevel(const FString& Level);
@@ -313,8 +318,16 @@ public:
     const FSCCacheStats& GetCacheStats() const { return CacheStats; }
 
     // Player body (WP-P2): the kit is exported, imported and its clips read asynchronously the first time first
-    // person is entered, then kept for every later first-person session. Capsule-only first person meanwhile.
-    enum class EPlayerKitState : uint8 { None, Exporting, Parsing, Importing, Clips, Ready, Failed };
+    // person is entered, then kept for every later first-person session. Capsule-only first person meanwhile. A prepared
+    // body (WP-O1-4b-2, SetPreparedPlayerLevel) is streamed instead: its level holds the kit actor with its kit and clips.
+    enum class EPlayerKitState : uint8 { None, Exporting, Parsing, Importing, Clips, Streaming, Ready, Failed };
+    /** The body comes from this prepared level (PlayerLevelPath), not from the archive; empty: exported as before. A run of a
+     *  prepared scenario sets it before the body is first requested. */
+    void SetPreparedPlayerLevel(const FString& Level) { PreparedPlayerLevel = Level; }
+    /** Release a prepared body streaming or ready (detached, its actor and level gone; state None). An export or import in
+     *  flight is left to finish. A scenario that fails releases its body with the rest of its scene. */
+    void ReleasePreparedPlayerKit();
+    const FString& GetPreparedPlayerLevel() const { return PreparedPlayerLevel; }
     /** Starts the player-kit pipeline unless it is running or ready (a failed kit is retried). */
     bool RequestPlayerKit();
     EPlayerKitState GetPlayerKitState() const { return KitState; }
@@ -470,6 +483,16 @@ private:
     struct FKitClips { TSharedPtr<FSCPlayerKit> Kit; TSharedPtr<FSCPlayerClipMap> Clips; FString Error; int32 Failed = 0; };
     UE::Tasks::TTask<FKitClips> KitClipsTask;
     UPROPERTY() TObjectPtr<ASCVehicle> KitActor;
+    FString PreparedPlayerLevel;
+    /** The prepared body's level instance while it streams and once it holds the body (KitActor is its actor). */
+    UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> KitLevel;
+    void StepPreparedPlayerKit(bool bBlocking);
+    void UnloadKitLevel();
+    /** Released body levels the world has not removed yet; one whose load failed meanwhile is removed here. */
+    UPROPERTY() TArray<TObjectPtr<ULevelStreamingDynamic>> ReleasedKitLevels;
+    void SweepReleasedKitLevels();
+    /** The kit's actor, level and data released (FailPlayerKit, ReleasePreparedPlayerKit). */
+    void ReleaseKitObjects();
     TSharedPtr<const FSCPlayerKit> KitData;
     TSharedPtr<const FSCPlayerClipMap> KitClips;
     TWeakObjectPtr<ASCViewerPawn> InspectionPawn;

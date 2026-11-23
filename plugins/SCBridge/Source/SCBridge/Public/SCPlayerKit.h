@@ -1,5 +1,6 @@
 // WP-P2b: the `player` block of a character package's scene.json (contract "Player kits"), parsed into plain
 // structs: ports, stowed weapons, resolved Mannequin motion states and blend spaces. No UObjects, no game names.
+// A prepared player body saves them field by field (SCPlayerKitData.cpp): a field added here is added there too.
 #pragma once
 #include "CoreMinimal.h"
 

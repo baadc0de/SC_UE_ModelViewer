@@ -1,11 +1,15 @@
-// USCPrepareCommandlet (SCPrepareCommandlet.h): a scenario's environment and vehicle prepared as levels.
+// USCPrepareCommandlet (SCPrepareCommandlet.h): a scenario's environment, vehicle and player body prepared as levels.
 #include "SCPrepareCommandlet.h"
 #include "SCCookLibrary.h"
 #include "SCHangarIndex.h"
 #include "SCImporter.h"
+#include "SCLightImporter.h"
 #include "SCPackageReader.h"
 #include "SCPackageSource.h"
+#include "SCPlayerAnimator.h"
+#include "SCPlayerBody.h"
 #include "SCPlayerKit.h"
+#include "SCPlayerKitData.h"
 #include "SCPrepareAudio.h"
 #include "SCVehicle.h"
 #include "SCViewOptions.h"
@@ -101,7 +105,19 @@ public:
         Ffi.mip = 0; // full resolution: the shared texture pool keys a texture by its source, not by a resolution
         const TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
         const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client = Viewer->GetClient();
-        UE::Tasks::TTask<FSCExportResult> Task = bEnvironment ? Client->ExportEnvironment(What, Ffi, Progress) : Client->ExportDecomposed(What, Ffi, Progress);
+        return Wait(bEnvironment ? Client->ExportEnvironment(What, Ffi, Progress) : Client->ExportDecomposed(What, Ffi, Progress), What, Progress, Error);
+    }
+    /** The scenario's player body (its definition's "player"), as the viewer exports one (USCViewerSubsystem::RequestPlayerKit). */
+    TSharedPtr<FSCTarPackageSource> ExportPlayer(const FUCScenario& Scenario, FString& Error)
+    {
+        if (!OpenArchive(Error)) return nullptr;
+        const TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
+        return Wait(Viewer->GetClient()->ExportPlayer(Scenario.PlayerGender, Scenario.PlayerLoadout, Scenario.PlayerWeapons, Scenario.bPlayerSpares, Progress),
+                    TEXT("the player body"), Progress, Error);
+    }
+    TSharedPtr<FSCTarPackageSource> Wait(UE::Tasks::TTask<FSCExportResult> Task, const FString& What,
+                                         const TSharedRef<FSCExportProgress, ESPMode::ThreadSafe>& Progress, FString& Error)
+    {
         while (!Task.Wait(FTimespan::FromSeconds(15)))
             UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE exporting %s: %s %.0f%%"), *What, *Progress->GetPhase(), Progress->GetFraction() * 100.f);
         FSCExportResult Result = MoveTemp(Task.GetResult());
@@ -163,7 +179,8 @@ public:
         return GEditor->GetEditorWorldContext().World();
     }
 
-    /** Audio staged, the actor cooked, the level saved and stamped. */
+    /** Audio staged (a player body's too, as its live import registers it: its items' audio actions), the actor cooked, the
+     *  level saved and stamped. */
     bool Finish(ASCVehicle* Actor, const FString& Level, const FString& Root, const FString& Shared, const FSCPackageSource& Source,
                 const FString& Scene, FString& Error)
     {
@@ -291,6 +308,60 @@ public:
                Paint == INDEX_NONE ? TEXT("default") : *Paints[Paint].Label(), GearClips);
         return Finish(Ship, Level, TEXT("/Game/SC/Ships/") + Name, TEXT("/Game/SC/Ships/Shared"), *Source, Scene, Error);
     }
+
+    /** The player body's level (WP-O1-4b-2): the kit actor as the viewer imports it, its rigs kept, with its kit and body clips
+     *  parsed once here (USCPlayerKitData), its personal lights' cookies and its package audio, so a run attaches it without
+     *  the archive. */
+    bool PreparePlayer(const FUCScenario& Scenario, const FString& Level, FString& Error)
+    {
+        const TSharedPtr<FSCTarPackageSource> Source = ExportPlayer(Scenario, Error);
+        if (!Source) return false;
+        const FString Scene = FSCPlayerKit::FindRootScene(*Source);
+        if (Scene.IsEmpty())
+        {
+            Error = TEXT("the player body: no single root scene.json in the export");
+            return false;
+        }
+        const FString Name = FPackageName::GetShortName(Level);
+        UWorld* World = NewLevel(Level, TEXT("/Game/SC/Players/") + Name, Error);
+        if (!World) return false;
+        FSCImportResult Result;
+        if (!FSCImporter::Import(*Source, USCPlayerBodyComponent::KitImportOptions(World, Scene), Result) || !Result.Vehicle.Get())
+        {
+            Error = TEXT("the player body: the import failed: ") + Result.Error;
+            return false;
+        }
+        ASCVehicle* Body = Result.Vehicle.Get();
+        const USCRigComponent* Leader = USCPlayerBodyComponent::FindLeader(Body);
+        if (!Leader)
+        {
+            Error = TEXT("the player body: the package has no body rig");
+            return false;
+        }
+        TSharedPtr<FSCPlayerKit> Kit;
+        TSharedPtr<FSCPlayerClipMap> Clips;
+        int32 FailedClips = 0;
+        if (!SCLoadPlayerKit(*Source, Body->Manifest.ScenePath, USCPlayerBodyComponent::BoneMap(Leader), Kit, Clips, FailedClips, Error))
+        {
+            Error = TEXT("the player body: ") + Error;
+            return false;
+        }
+        int32 Cookies = 0;
+        for (const FSCFlashlight& Light : Kit->Flashlights)
+        {
+            if (FSCLightImporter::LoadGobo(*Source, Body, Light.ProjectorTexture)) ++Cookies;
+            else UE_LOG(LogSCPrepare, Warning, TEXT("SC_PREPARE player light %s: cookie %s unavailable (%s)"), *Light.Entity, *Light.Cookie, *Light.ProjectorTexture);
+        }
+        USCPlayerKitData* Data = NewObject<USCPlayerKitData>(Body, TEXT("PlayerKit"));
+        Data->Kit = Kit;
+        Data->Clips = Clips;
+        Body->PlayerKit = Data;
+        Body->SetActorHiddenInGame(true); // unpublished until a run attaches it
+        Body->SetActorLabel(TEXT("Player ") + Name);
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE player gender=%s loadout=%s weapons=%d states=%d blend_spaces=%d clips=%d clip_failures=%d rigs=%d cookies=%d"),
+               *Kit->Gender, *Kit->Loadout, Kit->Weapons.Num(), Kit->States.Num(), Kit->BlendSpaces.Num(), Clips->Num(), FailedClips, Body->Rigs.Num(), Cookies);
+        return Finish(Body, Level, TEXT("/Game/SC/Players/") + Name, TEXT("/Game/SC/Players/Shared"), *Source, Scene, Error);
+    }
 };
 
 int32 Failed(const FString& Id, const FString& Error)
@@ -360,16 +431,26 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     {
         return Failed(Id, Error);
     }
+    // The player body: one level per body (its definition's "player"), shared by the scenarios that name the same one.
+    Record.PlayerLevel = Scenario.PlayerLevel();
+    if (Current(Record.PlayerLevel) && !Prepare.bForce)
+    {
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Record.PlayerLevel, FUCPrepared::FormatVersion);
+    }
+    else if (!Prepare.PreparePlayer(Scenario, Record.PlayerLevel, Error))
+    {
+        return Failed(Id, Error);
+    }
     // The archive builds the levels were prepared from (each level's stamp names its own).
     TArray<FString> Builds;
-    for (const FString& Level : {Record.EnvironmentLevel, Record.VehicleLevel})
+    for (const FString& Level : {Record.EnvironmentLevel, Record.VehicleLevel, Record.PlayerLevel})
         if (const FString Build = FUCPrepared::LevelBuild(Level); !Level.IsEmpty()) Builds.AddUnique(Build.IsEmpty() ? FString(TEXT("unknown")) : Build);
     Record.Archive = FString::Join(Builds, TEXT(", "));
     Record.PreparedAt = FDateTime::UtcNow().ToIso8601();
     IFileManager::Get().MakeDirectory(*FUCPrepared::Directory(), true);
     if (!Record.Save(Error)) return Failed(Id, Error);
-    UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE_DONE scenario=%s environment=%s vehicle=%s record=%s seconds=%.0f"), *Id,
-           Record.EnvironmentLevel.IsEmpty() ? TEXT("none") : *Record.EnvironmentLevel, *Record.VehicleLevel, *FUCPrepared::File(Id),
+    UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE_DONE scenario=%s environment=%s vehicle=%s player=%s record=%s seconds=%.0f"), *Id,
+           Record.EnvironmentLevel.IsEmpty() ? TEXT("none") : *Record.EnvironmentLevel, *Record.VehicleLevel, *Record.PlayerLevel, *FUCPrepared::File(Id),
            FPlatformTime::Seconds() - Start);
     return 0;
 }

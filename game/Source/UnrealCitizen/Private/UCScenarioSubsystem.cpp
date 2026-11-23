@@ -48,7 +48,10 @@ const TCHAR* UUCScenarioSubsystem::StateName(EState InState)
 FString UUCScenarioSubsystem::ConflictingSwitch(const TCHAR* CommandLine)
 {
     FString Ignored;
-    for (const TCHAR* Switch : {TEXT("SCLoad="), TEXT("SCEnvironment="), TEXT("SCPackage="), TEXT("SCCargoScenario="), TEXT("SCPlayerDemo=")})
+    // The player body is the scenario's (its definition's "player", prepared): the switches that pick another one conflict too.
+    for (const TCHAR* Switch : {TEXT("SCLoad="), TEXT("SCEnvironment="), TEXT("SCPackage="), TEXT("SCCargoScenario="), TEXT("SCPlayerDemo="),
+                                TEXT("SCPlayerPackage="), TEXT("SCPlayerGender="), TEXT("SCPlayerLoadout="), TEXT("SCPlayerWeapons="),
+                                TEXT("SCPlayerSpares=")})
         if (FParse::Value(CommandLine, Switch, Ignored)) return TEXT("-") + FString(Switch).LeftChop(1);
     if (FParse::Param(CommandLine, TEXT("SCNoCooked"))) return TEXT("-SCNoCooked");
     return FString();
@@ -97,12 +100,14 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioCargoName = Scenario.Cargo;
     Settings->ScenarioCargoJson = Scenario.CargoJson;
     Settings->ScenarioVehicle = Scenario.Vehicle;
+    // The player body from its prepared level (WP-O1-4b-2), streamed with the vehicle's.
+    Viewer->SetPreparedPlayerLevel(Prepared.PlayerLevel);
     // The environment before anything else is requested (it replaces a saved choice the viewer restored at start).
     Viewer->SetEnvironment(Scenario.Environment.IsEmpty() ? FString(TEXT("none")) : Scenario.Environment);
     State = EState::Loading;
     LoadingSince = FPlatformTime::Seconds();
-    UE_LOG(LogUCScenario, Display, TEXT("SCENARIO start id=%s title=\"%s\" vehicle=%s level=%s environment=%s cargo=%s music=%s camera=%s start=\"%s\" prepared=%s archive=%s"),
-           *Id, *Scenario.Title, *Scenario.Vehicle, *Prepared.VehicleLevel, Prepared.EnvironmentLevel.IsEmpty() ? TEXT("none") : *Prepared.EnvironmentLevel,
+    UE_LOG(LogUCScenario, Display, TEXT("SCENARIO start id=%s title=\"%s\" vehicle=%s level=%s player=%s environment=%s cargo=%s music=%s camera=%s start=\"%s\" prepared=%s archive=%s"),
+           *Id, *Scenario.Title, *Scenario.Vehicle, *Prepared.VehicleLevel, *Prepared.PlayerLevel, Prepared.EnvironmentLevel.IsEmpty() ? TEXT("none") : *Prepared.EnvironmentLevel,
            Scenario.Cargo.IsEmpty() ? TEXT("none") : *Scenario.Cargo, Scenario.Music.IsEmpty() ? TEXT("none") : *Scenario.Music, *Scenario.Camera,
            *Scenario.Start, *Prepared.PreparedAt, *Prepared.Archive);
 }
@@ -134,11 +139,16 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
 {
     State = EState::Failed;
     Problem = Why;
-    // What the run started stops and goes: a level still streaming, the environment, and the cargo setup not applied yet.
+    // What the run started stops and goes: a level still streaming, the environment, the player body and the cargo setup not
+    // applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();
     if (USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)) Cargo->DropScenario();
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
+        // The prepared body goes too, streaming or ready (a later first person exports one from the archive, as without a
+        // scenario).
+        Viewer->ReleasePreparedPlayerKit();
+        Viewer->SetPreparedPlayerLevel(FString());
         Viewer->CancelLoad();
         // A vehicle that loaded (another one in its place) goes once nothing loads; a load being cancelled finishes first
         // (Tick, state Failed).
@@ -172,6 +182,8 @@ bool UUCScenarioSubsystem::Tick(float)
             }
             bVehicleRequested = Viewer->LoadPreparedEntity(Scenario.Vehicle, Prepared.VehicleLevel);
             if (!bVehicleRequested) Fail(FString::Printf(TEXT("the vehicle level %s did not start loading"), *Prepared.VehicleLevel));
+            // The player body's level streams alongside the vehicle's (WP-O1-4b-2): first person attaches it once it is in.
+            else Viewer->RequestPlayerKit();
             return true;
         }
         if (Viewer->GetLoadPhase() == ESCLoadPhase::Failed || Viewer->GetLoadPhase() == ESCLoadPhase::Cancelled)

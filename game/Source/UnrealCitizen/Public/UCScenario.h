@@ -17,9 +17,17 @@ struct UNREALCITIZEN_API FUCScenario
      *  (USCViewerSubsystem::ResolvePaint). The prep step bakes it into the vehicle's level. */
     FString Skin;
     /** "player": {"camera": "first" | "orbit" | "fly" (default first), "start": a part of a teleport destination's label
-     *  (first person; empty: where first person puts the player by default)}. */
+     *  (first person; empty: where first person puts the player by default), and the body the prep step prepares
+     *  (WP-O1-4b-2): "gender" (empty: the exporter's), "loadout" (a p4k loadout path; empty: the exporter's default),
+     *  "weapons" (entity class names the loadout's weapons are kept to; empty: all), "spares" (the kept weapons' spare
+     *  magazines on the armour; default true, as the viewer's bPlayerSpareAttachments)}. Each typed as written. */
     FString Camera = TEXT("first");
     FString Start;
+    FString PlayerGender, PlayerLoadout;
+    TArray<FString> PlayerWeapons;
+    bool bPlayerSpares = true;
+    /** The prepared level of the scenario's player body (USCViewerSubsystem::PlayerLevelPath). */
+    FString PlayerLevel() const;
     FString Cargo;       // "cargo": a cargo setup under Config/Cargo (its name); empty: none
     FString Music;       // "music": a soundtrack cue (its id or title); empty: none
     FString Json;        // the definition as read
@@ -65,8 +73,10 @@ struct UNREALCITIZEN_API FUCPrepared
      *  under an interaction anchor kept as components. 23: WP-O1-4b-1c screens and panels saved (screen faces with
      *  constant renders, panel aims, drawn panels with their render targets as assets, drawn again at load). 24: WP-O1-4b-1b-3 ladders,
      *  usables, seat records, light groups, the lights' authored state values and the room channels saved. 25: the
-     *  manifest's interaction points saved (a seat route is pressed at one). */
-    static constexpr int32 FormatVersion = 25;
+     *  manifest's interaction points saved (a seat route is pressed at one). 26: WP-O1-4b-2 the player body prepared (its own
+     *  level: the kit actor with its rigs, its parsed kit and clips; the record names it, PlayerLevel). 27: its kit as one payload
+     *  read whole, its package audio staged. */
+    static constexpr int32 FormatVersion = 27;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id
@@ -74,6 +84,7 @@ struct UNREALCITIZEN_API FUCPrepared
     FString CargoDefinition; // its cargo setup as prepared (empty without one)
     FString EnvironmentLevel; // long package name; empty when the scenario has no environment
     FString VehicleLevel;     // long package name (the paint baked in)
+    FString PlayerLevel;      // long package name of the player body's level (WP-O1-4b-2; shared by scenarios with the same body)
     FString Archive;          // the archive builds the levels were prepared from, comma-separated (information)
     FString PreparedAt;       // UTC, ISO 8601
 

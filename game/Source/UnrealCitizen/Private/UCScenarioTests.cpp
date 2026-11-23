@@ -1,5 +1,6 @@
 // WP-O1-4: scenario definitions, the prep step's records and when the game refuses to run one.
 #include "Misc/AutomationTest.h"
+#include "SCBridgeClient.h"
 #include "SCPackageReader.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
@@ -37,6 +38,23 @@ bool FUCScenarioParseTest::RunTest(const FString&)
     TestEqual(TEXT("start"), S.Start, FString(TEXT("Pilot")));
     TestEqual(TEXT("music"), S.Music, FString(TEXT("m1")));
     TestEqual(TEXT("camera defaults to first"), (FUCScenario::Parse(TEXT("t"), Definition(TEXT("")), FString(), S, Error), S.Camera), FString(TEXT("first")));
+    TestTrue(TEXT("... the body defaults to the exporter's, all weapons, spares"),
+             S.PlayerGender.IsEmpty() && S.PlayerLoadout.IsEmpty() && S.PlayerWeapons.IsEmpty() && S.bPlayerSpares);
+    TestTrue(TEXT("a body"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"gender\": \"female\", \"loadout\": \"Data\\\\Scripts\\\\L.xml\", ")
+                                                                    TEXT("\"weapons\": [\"behr_rifle_ballistic_01\", \" gmni_lmg \"], \"spares\": false}")),
+                                                 FString(), S, Error));
+    TestEqual(TEXT("... gender"), S.PlayerGender, FString(TEXT("female")));
+    TestEqual(TEXT("... loadout, slashes normalised"), S.PlayerLoadout, FString(TEXT("Data/Scripts/L.xml")));
+    TestEqual(TEXT("... weapons"), FString::Join(S.PlayerWeapons, TEXT(",")), FString(TEXT("behr_rifle_ballistic_01,gmni_lmg")));
+    TestFalse(TEXT("... spares"), S.bPlayerSpares);
+    TestFalse(TEXT("weapons that are no list"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": \"x\"}")), FString(), S, Error));
+    TestFalse(TEXT("two weapons in one entry"),
+              FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": [\"behr_smg_ballistic_01,behr_sniper_ballistic_01\"]}")), FString(), S, Error));
+    TestFalse(TEXT("a weapon that is no name"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"weapons\": [1]}")), FString(), S, Error));
+    TestFalse(TEXT("a player block that is no object"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": [{\"gender\": \"female\"}]")), FString(), S, Error));
+    TestFalse(TEXT("a loadout that is no string"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"loadout\": 3}")), FString(), S, Error));
+    TestFalse(TEXT("a gender that is no string"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"gender\": true}")), FString(), S, Error));
+    TestFalse(TEXT("spares that are no boolean"), FUCScenario::Parse(TEXT("t"), Definition(TEXT(", \"player\": {\"spares\": \"no\"}")), FString(), S, Error));
 
     TestFalse(TEXT("no vehicle"), FUCScenario::Parse(TEXT("t"), TEXT("{\"name\": \"x\"}"), FString(), S, Error));
     TestFalse(TEXT("an environment that is no object container"),
@@ -93,6 +111,7 @@ bool FUCPreparedTest::RunTest(const FString&)
     R.CargoDefinition = Source.CargoJson;
     R.EnvironmentLevel = USCViewerSubsystem::EnvironmentLevelPath(Hangar);
     R.VehicleLevel = TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2");
+    R.PlayerLevel = Source.PlayerLevel();
     R.Archive = TEXT("build");
     R.PreparedAt = TEXT("2026-11-23T00:00:00.000Z");
 
@@ -100,7 +119,7 @@ bool FUCPreparedTest::RunTest(const FString&)
     TestTrue(TEXT("the record round-trips"), FUCPrepared::Parse(R.ToJson(), Back, Error));
     TestTrue(TEXT("... its definition byte for byte"), Back.Definition.Equals(R.Definition, ESearchCase::CaseSensitive));
     TestTrue(TEXT("... its cargo setup"), Back.CargoDefinition.Equals(R.CargoDefinition, ESearchCase::CaseSensitive));
-    TestEqual(TEXT("... its levels"), Back.VehicleLevel + Back.EnvironmentLevel, R.VehicleLevel + R.EnvironmentLevel);
+    TestEqual(TEXT("... its levels"), Back.VehicleLevel + Back.EnvironmentLevel + Back.PlayerLevel, R.VehicleLevel + R.EnvironmentLevel + R.PlayerLevel);
     TestEqual(TEXT("... its format"), Back.Format, R.Format);
     TestFalse(TEXT("a record without a vehicle level does not read"), FUCPrepared::Parse(TEXT("{\"scenario\": \"t\", \"definition\": \"{}\"}"), Back, Error));
 
@@ -115,6 +134,10 @@ bool FUCPreparedTest::RunTest(const FString&)
              R.Problem(&Source, [&](const FString& L) { return L != R.VehicleLevel; }).Contains(R.VehicleLevel));
     TestTrue(TEXT("a missing environment level"),
              R.Problem(&Source, [&](const FString& L) { return L != R.EnvironmentLevel; }).Contains(R.EnvironmentLevel));
+    TestTrue(TEXT("a missing player body level"), R.Problem(&Source, [&](const FString& L) { return L != R.PlayerLevel; }).Contains(R.PlayerLevel));
+    FUCPrepared NoPlayer = R;
+    NoPlayer.PlayerLevel.Reset();
+    TestTrue(TEXT("a record that names no player body level"), NoPlayer.Problem(&Source, All).Contains(TEXT("player body")));
     FUCScenario Changed = Source;
     Changed.Json += TEXT(" ");
     TestTrue(TEXT("a changed definition is stale"), R.Problem(&Changed, All).Contains(TEXT("changed")));
@@ -138,7 +161,7 @@ bool FUCPreparedTest::RunTest(const FString&)
     FUCPrepared NoEnvironment = R;
     NoEnvironment.EnvironmentLevel.Reset();
     TestEqual(TEXT("no environment: only the vehicle level is needed"),
-              NoEnvironment.Problem(nullptr, [&](const FString& L) { return L == R.VehicleLevel; }), FString());
+              NoEnvironment.Problem(nullptr, [&](const FString& L) { return L == R.VehicleLevel || L == R.PlayerLevel; }), FString());
     return true;
 }
 
@@ -158,6 +181,19 @@ bool FUCPreparedLevelsTest::RunTest(const FString&)
     TestNotEqual(TEXT("the same last two parts in another tree"), USCViewerSubsystem::EnvironmentLevelPath(TEXT("Data/x/a/b.socpak")),
                  USCViewerSubsystem::EnvironmentLevelPath(TEXT("Data/y/a/b.socpak")));
     TestEqual(TEXT("no object container"), USCViewerSubsystem::EnvironmentLevelPath(TEXT("out/hangars/x")), FString());
+    // A player body's level: one per body, whatever writes it the same way.
+    const FString Body = USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b")}, true);
+    TestTrue(TEXT("a player body: ") + Body, Body.StartsWith(TEXT("/Game/SC/Players/Maps/Player_female_")));
+    TestEqual(TEXT("... the same body in other case, slashes and weapon order"),
+              USCViewerSubsystem::PlayerLevelPath(TEXT("Female"), TEXT("data\\scripts\\l.xml"), {TEXT("B"), TEXT(" a")}, true), Body);
+    TestEqual(TEXT("... the loadout without its Data/ prefix (the exporter reads it there)"),
+              USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Scripts/L.xml"), {TEXT("a"), TEXT("b")}, true), Body);
+    TestNotEqual(TEXT("... another loadout"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/M.xml"), {TEXT("a"), TEXT("b")}, true), Body);
+    TestNotEqual(TEXT("... other weapons"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a")}, true), Body);
+    TestNotEqual(TEXT("... without spares"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b")}, false), Body);
+    TestEqual(TEXT("... no gender: the one the export asks for"), USCViewerSubsystem::PlayerLevelPath(FString(), FString(), {}, true),
+              USCViewerSubsystem::PlayerLevelPath(FSCBridgeClient::DefaultPlayerGender, FString(), {}, true));
+    TestEqual(TEXT("... a weapon named twice"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b"), TEXT("A")}, true), Body);
     TestEqual(TEXT("a ship"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2")), FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2")));
     TestEqual(TEXT("a ship with a paint"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("crus.starlifter-pirate")),
               FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2__crus_starlifter_pirate")));
@@ -196,6 +232,9 @@ bool FUCScenarioSwitchesTest::RunTest(const FString&)
     TestEqual(TEXT("-SCPlayerDemo=<entity> loads a vehicle"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo=DRAK_Golem")), FString(TEXT("-SCPlayerDemo")));
     TestEqual(TEXT("-SCPlayerDemo alone loads none"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerDemo")), FString());
     TestEqual(TEXT("-SCNoCooked"), S::ConflictingSwitch(TEXT("-Scenario=x -SCNoCooked")), FString(TEXT("-SCNoCooked")));
+    TestEqual(TEXT("-SCPlayerLoadout: the body is the scenario's"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerLoadout=Data/L.xml")), FString(TEXT("-SCPlayerLoadout")));
+    TestEqual(TEXT("-SCPlayerWeapons"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerWeapons=a,b")), FString(TEXT("-SCPlayerWeapons")));
+    TestEqual(TEXT("-SCPlayerPackage"), S::ConflictingSwitch(TEXT("-Scenario=x -SCPlayerPackage=kit.tar")), FString(TEXT("-SCPlayerPackage")));
     // Automation that puts the camera: the scenario leaves the camera and the start to it.
     TestFalse(TEXT("a scenario alone puts its camera"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCShowcase")));
     TestTrue(TEXT("-SCCamera"), S::AutomationOwnsCamera(TEXT("-Scenario=x -SCCamera=orbit")));

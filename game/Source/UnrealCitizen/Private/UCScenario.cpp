@@ -1,6 +1,7 @@
 // FUCScenario and FUCPrepared (UCScenario.h): reading scenario definitions and the prep step's records.
 #include "UCScenario.h"
 #include "Cargo/SCCargoScenario.h"
+#include "SCViewerSubsystem.h"
 #include "Dom/JsonObject.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -51,11 +52,55 @@ bool FUCScenario::Parse(const FString& Id, const FString& Json, const FString& C
     Out.Skin = Str(Root, TEXT("skin"));
     Out.Cargo = Str(Root, TEXT("cargo"));
     Out.Music = Str(Root, TEXT("music"));
-    const TSharedPtr<FJsonObject>* Player = nullptr;
-    if (Root->TryGetObjectField(TEXT("player"), Player))
+    // The player block typed as written: the JSON reader's conversions would take a list for no block, a number for a name or a
+    // string for true, and prepare another body than the definition names.
+    const TSharedPtr<FJsonValue> PlayerValue = Root->TryGetField(TEXT("player"));
+    if (PlayerValue && PlayerValue->Type != EJson::Object)
     {
-        if (const FString Camera = Str(*Player, TEXT("camera")).ToLower(); !Camera.IsEmpty()) Out.Camera = Camera;
-        Out.Start = Str(*Player, TEXT("start"));
+        Error = TEXT("\"player\" is no object");
+        return false;
+    }
+    if (PlayerValue)
+    {
+        const TSharedPtr<FJsonObject> Player = PlayerValue->AsObject();
+        for (const TCHAR* Field : {TEXT("camera"), TEXT("start"), TEXT("gender"), TEXT("loadout")})
+            if (const TSharedPtr<FJsonValue> Value = Player->TryGetField(Field); Value && Value->Type != EJson::String)
+            {
+                Error = FString::Printf(TEXT("\"player.%s\" is no string"), Field);
+                return false;
+            }
+        if (const FString Camera = Str(Player, TEXT("camera")).ToLower(); !Camera.IsEmpty()) Out.Camera = Camera;
+        Out.Start = Str(Player, TEXT("start"));
+        Out.PlayerGender = Str(Player, TEXT("gender"));
+        Out.PlayerLoadout = NormalPath(Str(Player, TEXT("loadout")));
+        const TSharedPtr<FJsonValue> WeaponsValue = Player->TryGetField(TEXT("weapons"));
+        if (WeaponsValue && WeaponsValue->Type != EJson::Array)
+        {
+            Error = TEXT("\"player.weapons\" is no list of entity class names");
+            return false;
+        }
+        if (WeaponsValue)
+            for (const TSharedPtr<FJsonValue>& Weapon : WeaponsValue->AsArray())
+            {
+                const FString Name = Weapon && Weapon->Type == EJson::String ? Weapon->AsString() : FString();
+                // One class name per entry: a list in one string ("a,b") names no class, and would share a body level's key
+                // with the two entries it stands for (USCViewerSubsystem::PlayerLevelPath).
+                if (Name.TrimStartAndEnd().IsEmpty() || Name.Contains(TEXT(",")) || Name.Contains(TEXT("|")))
+                {
+                    Error = TEXT("\"player.weapons\" holds something other than one entity class name per entry");
+                    return false;
+                }
+                Out.PlayerWeapons.Add(Name.TrimStartAndEnd());
+            }
+        if (const TSharedPtr<FJsonValue> Spares = Player->TryGetField(TEXT("spares")))
+        {
+            if (Spares->Type != EJson::Boolean)
+            {
+                Error = TEXT("\"player.spares\" is no true or false");
+                return false;
+            }
+            Out.bPlayerSpares = Spares->AsBool();
+        }
     }
     if (Out.Title.IsEmpty()) Out.Title = Id;
     if (Out.Vehicle.IsEmpty())
@@ -105,6 +150,11 @@ bool FUCScenario::Parse(const FString& Id, const FString& Json, const FString& C
         return false;
     }
     return true;
+}
+
+FString FUCScenario::PlayerLevel() const
+{
+    return USCViewerSubsystem::PlayerLevelPath(PlayerGender, PlayerLoadout, PlayerWeapons, bPlayerSpares);
 }
 
 bool FUCScenario::Exists(const FString& Id)
@@ -197,6 +247,7 @@ bool FUCPrepared::Parse(const FString& Json, FUCPrepared& Out, FString& Error)
     Root->TryGetStringField(TEXT("cargo_definition"), Out.CargoDefinition);
     Out.EnvironmentLevel = Str(Root, TEXT("environment_level"));
     Out.VehicleLevel = Str(Root, TEXT("vehicle_level"));
+    Out.PlayerLevel = Str(Root, TEXT("player_level"));
     Out.Archive = Str(Root, TEXT("archive"));
     Out.PreparedAt = Str(Root, TEXT("prepared_at"));
     if (Out.Scenario.IsEmpty() || Out.Definition.IsEmpty() || Out.VehicleLevel.IsEmpty())
@@ -214,6 +265,7 @@ FString FUCPrepared::ToJson() const
     Root->SetStringField(TEXT("scenario"), Scenario);
     Root->SetStringField(TEXT("environment_level"), EnvironmentLevel);
     Root->SetStringField(TEXT("vehicle_level"), VehicleLevel);
+    Root->SetStringField(TEXT("player_level"), PlayerLevel);
     Root->SetStringField(TEXT("archive"), Archive);
     Root->SetStringField(TEXT("prepared_at"), PreparedAt);
     Root->SetStringField(TEXT("definition"), Definition);
@@ -259,6 +311,9 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
         return FString::Printf(TEXT("scenario %s: the prepared vehicle level %s is missing or not finished%s"), *Scenario, *VehicleLevel, *Fix);
     if (!EnvironmentLevel.IsEmpty() && !LevelCurrent(EnvironmentLevel))
         return FString::Printf(TEXT("scenario %s: the prepared environment level %s is missing or not finished%s"), *Scenario, *EnvironmentLevel, *Fix);
+    if (PlayerLevel.IsEmpty() || !LevelCurrent(PlayerLevel))
+        return FString::Printf(TEXT("scenario %s: the prepared player body level %s is missing or not finished%s"), *Scenario,
+                               PlayerLevel.IsEmpty() ? TEXT("(none named)") : *PlayerLevel, *Fix);
     // Character for character (FString's == ignores case), line ends aside: any edit since prep makes the record stale.
     if (Source && !Comparable(Source->Json).Equals(Comparable(Definition), ESearchCase::CaseSensitive))
         return FString::Printf(TEXT("scenario %s changed since it was prepared%s"), *Scenario, *Fix);

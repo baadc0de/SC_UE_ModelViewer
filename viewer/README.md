@@ -63,12 +63,13 @@ Golem, small hightech hangar (2026-11-14, RTX 4090, Shipping): 1.7 GB of content
 The launcher starts the showcase as a player (`-SCShowcase -SCCamera=first`): no viewer top bar, footer or panels; the
 first-person HUD and its teleport menu stay. Keys: WASD/Shift/Space/Ctrl move, `C` first/third person, `Z` held orbits
 the third-person camera around the player (double-tap: behind again), `T` teleport menu, `F` torch, `1`.. draw a weapon,
-right mouse aims down sights, left mouse fires. The player character is exported from Data.p4k at start (so the build
-needs an installed Star Citizen; a cooked player kit is a follow-up): `package_showcase.ps1 -PlayerLoadout <p4k path>
--PlayerWeapons <entity>[,...]` (launcher `-SCPlayerLoadout`, `-SCPlayerWeapons`; settings `PlayerLoadout`,
-`PlayerWeapons`, `bPlayerSpareAttachments`) picks the game loadout, keeps only the named weapons and carries their spare
-magazines on the armour's storage ports (the exporter's `PlayerRequest.weapons` / `spare_attachments`, FFI
-`scbridge_export_player_request`). The showcase uses `StarMarine_Marine.xml` with `behr_rifle_ballistic_01` (P4-AR).
+right mouse aims down sights, left mouse fires. The player character is prepared with the scenario (WP-O1-4b-2: its own
+level, the kit actor with its rigs, its parsed kit and clips; no archive at run time): the definition's `"player"` block
+(`"gender"`, `"loadout"` a p4k loadout path, `"weapons"` entity class names, `"spares"`; in the viewer the settings
+`PlayerGender`, `PlayerLoadout`, `PlayerWeapons`, `bPlayerSpareAttachments` and `-SCPlayerLoadout`, `-SCPlayerWeapons`, which a
+scenario run refuses) picks the game loadout, keeps only the named weapons and carries their spare magazines on the armour's
+storage ports (the exporter's `PlayerRequest.weapons` / `spare_attachments`, FFI `scbridge_export_player_request`). The
+showcase (`golem_showcase.json`) uses `StarMarine_Marine.xml` with `behr_rifle_ballistic_01` (P4-AR).
 Firing (`FSCPlayerFire`) uses the weapon's first authored fire action: its rate (810 RPM rapid), the fragments of its
 enslavement ADB on the weapon's own rig (trigger, looping bolt; stop fragment on release) and its launch helper; flash,
 tracer, impact spark and view kick are viewer stand-ins (the game's particles and procedural recoil are not imported; a

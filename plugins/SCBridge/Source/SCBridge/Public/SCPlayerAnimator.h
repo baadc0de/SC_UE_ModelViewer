@@ -8,7 +8,8 @@
 
 struct FReferenceSkeleton;
 
-/** One body clip, keys converted to UE local space: absolute locals, or deltas for additive clips. */
+/** One body clip, keys converted to UE local space: absolute locals, or deltas for additive clips. A prepared player body
+ *  saves it field by field (SCPlayerKitData.cpp): a field added here is added there too. */
 struct SCBRIDGE_API FSCPlayerClip
 {
     struct FTrack

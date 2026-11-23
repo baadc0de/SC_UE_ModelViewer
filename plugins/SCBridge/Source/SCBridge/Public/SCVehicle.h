@@ -17,6 +17,7 @@ class UMaterialInstanceDynamic;
 class UTextureRenderTarget2D;
 
 class USCRigComponent;
+class USCPlayerKitData;
 class USkeletalMesh;
 class ULightComponent;
 class UPrimitiveComponent;
@@ -506,6 +507,8 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USCRigComponent>> Rigs;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<ULightComponent>> Lights;
     UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;
+    /** WP-O1-4b-2: a prepared player body's parsed kit and clips (the prep step sets it; null on every other actor). */
+    UPROPERTY() TObjectPtr<USCPlayerKitData> PlayerKit;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") TArray<FSCImportedLightState> LightStates;
     TSet<int32> LoopingLights; // indices into LightStates; only time-varying, enabled presets
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") bool bMegaLightsActive = false;

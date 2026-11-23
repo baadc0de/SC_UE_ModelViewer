@@ -273,7 +273,28 @@ data when it loads. In stages:
   refers to it) and points the panels' renders and label masks at their pooled textures. A loaded panel draws again
   when the vehicle begins play (a render target's pixels are not saved). Prep format 23. A light panel's buttons act on
   the light groups, which 1b-3 saves next; until then a prepared light panel changes its own state only.
-- **O1-4b-2 / 3**: the player body; cargo boxes and effects, music, the Garage's details prepared.
+- **O1-4b-2a** (player body): the prep step prepares the scenario's player body as its own level
+  (`/Game/SC/Players/Maps/Player_<gender>_<hash>`, `USCViewerSubsystem::PlayerLevelPath`; one per body, shared by the
+  scenarios whose definitions name the same body, whatever the case, order or repetition of its names, the loadout's
+  `Data/` prefix or a gender left to the export's default). The key is the definition, not what the export resolves it to:
+  prep decides to keep a level without exporting, and a body does not change with the archive's default loadout. A
+  definition that names what another leaves to the export's defaults (the default loadout's path, every weapon it keeps)
+  is another level of the same body., and the record names it (`player_level`). The body is the definition's `"player"`
+  block: `"gender"`, `"loadout"`, `"weapons"`, `"spares"`, typed as written (absent: the exporter's gender and loadout, all
+  weapons, spares as the viewer's `bPlayerSpareAttachments`, true), so a changed body makes the record stale; a scenario run refuses `-SCPlayerGender`, `-SCPlayerLoadout`, `-SCPlayerWeapons`, `-SCPlayerSpares` and
+  `-SCPlayerPackage`, and `package_showcase.ps1` no longer takes `-PlayerLoadout` / `-PlayerWeapons`. The level holds the kit
+  actor as the viewer imports it, its rigs kept (O1-4b-1a), with the kit and body clips parsed once at prep
+  (`USCPlayerKitData`: `FSCPlayerKit` and `FSCPlayerClipMap` written field by field into one payload after its layout
+  version, SCPlayerKitData.cpp; a payload of another layout is read whole and skipped) and its
+  personal lights' cookies pooled (the cook now keeps `GoboTextures` on their pooled textures); its package audio is staged
+  like a vehicle's (`Content/SCAudio/<level>`: the scene its live import registers, its items' audio actions). A run streams the level alongside the
+  vehicle's (`SetPreparedPlayerLevel`, `RequestPlayerKit`, state `Streaming`); first person attaches it as before; nothing is
+  exported, imported or parsed. Still at attach: the weapons' fire clips are parsed against their rigs (`FireClipJson`) and
+  the torch's light function is made from its cookie. A scenario that fails releases its body with the rest of its scene.
+  `golem_showcase` names the showcase's body (`StarMarine_Marine.xml`, `behr_rifle_ballistic_01`). Prep format 27.
+- **O1-4b-2b**: the traversal clips (seat entry and exit, ladders) a run still asks the archive for (`FSCTraversalClips`)
+  prepared with the scenario.
+- **O1-4b-3**: cargo boxes and effects, music, the Garage's details prepared.
 
 #### O1-4a — Scenarios and the prep step
 
