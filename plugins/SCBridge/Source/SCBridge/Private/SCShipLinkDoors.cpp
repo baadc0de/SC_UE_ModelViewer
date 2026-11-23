@@ -278,7 +278,8 @@ bool ASCVehicle::DoorwayOccupied(int32 Index) const
 
 void ASCVehicle::RememberDoorPanelLabel(const USCRigComponent* Rig, const FSCUiBinding& Binding)
 {
-    if (Rig && !Binding.DoorLabel.IsEmpty() && !DoorPanelLabels.Contains(Rig)) DoorPanelLabels.Add(Rig, Binding.DoorLabel);
+    USCRigComponent* Key = const_cast<USCRigComponent*>(Rig);
+    if (Rig && !Binding.DoorLabel.IsEmpty() && !DoorPanelLabels.Contains(Key)) DoorPanelLabels.Add(Key, Binding.DoorLabel);
 }
 
 void ASCVehicle::BuildShipDoors()

@@ -287,10 +287,19 @@ int32 ASCVehicle::NearestDoor(FVector Position, float Reach) const
     }
     return Best;
 }
+USCRigComponent* ASCVehicle::DoorForPanel(const USceneComponent* Panel) const
+{
+    const TObjectPtr<USCRigComponent>* Rig = Panel ? DoorControls.Find(const_cast<USceneComponent*>(Panel)) : nullptr;
+    return Rig ? Rig->Get() : nullptr;
+}
+float ASCVehicle::PanelReachOf(const USceneComponent* Panel) const
+{
+    return Panel ? PanelReach.FindRef(const_cast<USceneComponent*>(Panel)) : 0.f;
+}
 void ASCVehicle::SetPanelReach(const USceneComponent* Panel, float Metres)
 {
     if (!Panel || !(Metres > 0)) return;
-    float& Reach = PanelReach.FindOrAdd(Panel);
+    float& Reach = PanelReach.FindOrAdd(const_cast<USceneComponent*>(Panel));
     Reach = FMath::Max(Reach, Metres * 100.f);
     MaxPanelReach = FMath::Max(MaxPanelReach, Reach);
 }
@@ -321,10 +330,10 @@ int32 ASCVehicle::FindInteraction(FVector Eye, FVector Direction, float Reach, c
         bool bCrossedRig = false;
         for (const USceneComponent* C = Hit.GetComponent(); C; C = C->GetAttachParent())
         {
-            if (const TWeakObjectPtr<USCRigComponent>* Door = DoorControls.Find(C))
+            if (USCRigComponent* Door = DoorForPanel(C))
             {
-                const float PadReach = bCrossedRig ? Reach : FMath::Max(Reach, PanelReach.FindRef(C));
-                const int32 Index = DoorForRig(Door->Get());
+                const float PadReach = bCrossedRig ? Reach : FMath::Max(Reach, PanelReachOf(C));
+                const int32 Index = DoorForRig(Door);
                 if (Index != INDEX_NONE && Hit.Distance <= PadReach)
                 {
                     Out.Via = TEXT("panel");

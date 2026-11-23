@@ -11,6 +11,7 @@ class USCViewerSubsystem;
 
 enum class ESCShipRole : uint8 { None, Owner, Crew, Guest };
 enum class ESCShipDoorAction : uint8 { Open, Close, Lock, Unlock };
+UENUM()
 enum class ESCShipDoorGroup : uint8 { Exterior, Interior, Other };
 
 struct SCBRIDGE_API FSCShipDoorPolicy

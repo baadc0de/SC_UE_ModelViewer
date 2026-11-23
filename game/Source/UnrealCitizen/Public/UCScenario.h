@@ -58,8 +58,10 @@ struct UNREALCITIZEN_API FUCPrepared
      *  import's stay as they are), the presented state saved (ASCVehicle::PresentedState), black vertex colours kept. 16: a rig's skin bones saved
      *  with its collision (a load scans no vertices). 17: rig collision baked in the rig's saved pose
      *  (USCRigComponent::CollisionPose: a load refits nothing). 18: the clip catalog's root
-     *  rig mesh saved (USCClipCatalog::RootMesh, placed or not). */
-    static constexpr int32 FormatVersion = 18;
+     *  rig mesh saved (USCClipCatalog::RootMesh, placed or not). 19: WP-O1-4b-1b doors
+     *  saved (door records and interactions with their tags, ship doors with their sweeps, door controls and pad reach,
+     *  door sensors, port rigs, the doors' fragment states, the physics grid). */
+    static constexpr int32 FormatVersion = 19;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

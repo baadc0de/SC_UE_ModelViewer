@@ -76,7 +76,7 @@ FObj SCShipLinkRpc::Snapshot(UWorld* World)
                 D->SetBoolField(TEXT("cargo_access"), Info && Info->bCargoRelock);
                 TArray<FString> PadStates;
                 for (const FSCScreenFace& Face : Ship->ScreenFaces)
-                    if (const auto* Rig = Ship->DoorControls.Find(Face.Panel); Rig && Rig->Get() == Door.Rig.Get())
+                    if (const USCRigComponent* Rig = Ship->DoorForPanel(Face.Panel.Get()); Rig && Rig == Door.Rig.Get())
                         PadStates.AddUnique(Face.Shown);
                 D->SetField(TEXT("pads"), Strings(PadStates));
                 Doors.Add(MakeShared<FJsonValueObject>(D));
@@ -209,9 +209,9 @@ void SCShipLinkRpc::Scan(UWorld* World, TSet<FString>& Found)
         for (const FSCScreenFace& Face : Ship->ScreenFaces)
         {
             if (!Face.Pinned.IsEmpty() || Face.Custom.IsValid() || !Face.Component.IsValid()) continue;
-            const auto* Rig = Ship->DoorControls.Find(Face.Panel);
-            if (!Rig || !Rig->IsValid()) continue;
-            const int32 Door = Ship->DoorForRig(Rig->Get());
+            const USCRigComponent* Rig = Ship->DoorForPanel(Face.Panel.Get());
+            if (!Rig) continue;
+            const int32 Door = Ship->DoorForRig(Rig);
             const FString Locked = TEXT("DoorLockState.DoorLocked");
             if (Face.States.Contains(Locked) && Face.Shown.Contains(Locked) != Ship->IsDoorLocked(Door))
                 Found.Add(FString::Printf(TEXT("pad_lock_mismatch:%d:%d"), Viewer->GetVehicleInstanceId(Ship), Door));

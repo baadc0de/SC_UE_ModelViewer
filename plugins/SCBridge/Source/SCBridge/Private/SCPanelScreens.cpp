@@ -34,8 +34,7 @@ int32 ASCVehicle::RefreshPanelScreens()
         FString Key = Face.Pinned;
         if (Key.IsEmpty())
         {
-            const TWeakObjectPtr<USCRigComponent>* Door = DoorControls.Find(Face.Panel);
-            const USCRigComponent* Rig = Door ? Door->Get() : nullptr;
+            const USCRigComponent* Rig = DoorForPanel(Face.Panel.Get());
             if (!Rig) Key = FString(); // a panel without a door shows its default (a released pin included)
             else
             {
@@ -194,11 +193,11 @@ static FAutoConsoleCommandWithWorldAndArgs GSCScreensStates(
                     TArray<FString> Keys;
                     F.States.GetKeys(Keys);
                     Keys.Sort();
-                    const TWeakObjectPtr<USCRigComponent>* Door = V->DoorControls.Find(F.Panel);
+                    const USCRigComponent* Door = V->DoorForPanel(F.Panel.Get());
                     UE_LOG(LogSCPanelScreens, Display, TEXT("SCREEN_STATE index=%d component=%s slot=%d image=%s states=%s shown=%s pinned=%s door=%s door_index=%d"),
                            Index, *GetNameSafe(F.Component.Get()), F.Slot, *FPaths::GetBaseFilename(F.Image), *FString::Join(Keys, TEXT(",")),
                            F.Shown.IsEmpty() ? TEXT("default") : *F.Shown, F.Pinned.IsEmpty() ? TEXT("-") : *F.Pinned,
-                           Door && Door->IsValid() ? *(*Door)->OwnerEntity : TEXT("-"), Door ? V->DoorForRig(Door->Get()) : INDEX_NONE);
+                           Door ? *Door->OwnerEntity : TEXT("-"), Door ? V->DoorForRig(Door) : INDEX_NONE);
                 }
             }
             Base += V->ScreenFaces.Num();
