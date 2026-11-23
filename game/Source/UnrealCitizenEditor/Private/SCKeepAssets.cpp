@@ -91,7 +91,7 @@ struct FKeeper
         if (UObject** Found = Kept.Find(MID)) return Cast<UMaterialInterface>(*Found);
         const FString Base = SafeName(TEXT("MI_") + MID->GetName());
         FString Name = Base;
-        for (int32 Suffix = 2; FindPackage(nullptr, *(Root / TEXT("Materials") / Name)); ++Suffix)
+        for (int32 Suffix = 2; FindPackage(nullptr, *(Root / TEXT("Materials") / Name)) || FPackageName::DoesPackageExist(Root / TEXT("Materials") / Name); ++Suffix)
             Name = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
         UPackage* Package = CreatePackage(*(Root / TEXT("Materials") / Name));
         auto* MIC = NewObject<UMaterialInstanceConstant>(Package, *Name, RF_Public | RF_Standalone);
@@ -148,40 +148,25 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
     }
     for (UStaticMesh* Mesh : Vehicle->Meshes)
         K.Move(Mesh, TEXT("Meshes"));
-    // Rigs (WP-O1-4b; the WP-U3 follow-up): each rig mesh is kept as a copy with its skeleton — a runtime mesh given an
-    // editor source model from the rig source the import kept (SCRigAssets), a prepared one (already an asset) rebuilt
-    // from its own — its slots taking the rig components' current materials. The live meshes, skeletons and rig bodies
-    // stay as they are; the kept clip catalog is a copy bound to the kept meshes (its editor-only sequences left out:
-    // playback reads the bone tracks).
+    // Rigs (WP-O1-4b; the WP-U3 follow-up): each rig mesh is kept as a copy with its skeleton (SCRigAssets::SavableCopy:
+    // a runtime mesh made from the rig source the import kept, a prepared one rebuilt from its own source model), its
+    // slots taking the rig components' current materials. The live meshes, skeletons and rig bodies stay as they are;
+    // the kept clip catalog is a copy bound to the kept meshes, its sequences copies on the kept skeletons.
     TMap<const USkeletalMesh*, USkeletalMesh*> KeptRigs;
+    TMap<const USkeleton*, USkeleton*> KeptSkeletons;
     for (USkeletalMesh* Mesh : Vehicle->SkeletalMeshes)
     {
         if (!Mesh) continue;
         const TSharedPtr<const FSCDerivedMesh>* Source = Vehicle->RigSources.Find(Mesh);
-        const bool bAsset = Mesh->HasMeshDescription(0);
-        if (!Source && !bAsset)
-        {
-            K.Warnings.Add(Mesh->GetName() + TEXT(": rig mesh not kept (no rig source and no source model)"));
-            K.bFailed = true;
-            continue;
-        }
-        USkeleton* Skeleton = DuplicateObject(Mesh->GetSkeleton(), GetTransientPackage());
-        USkeletalMesh* Copy = DuplicateObject(Mesh, GetTransientPackage());
-        Copy->SetSkeleton(Skeleton);
         FString Error;
-        bool bBuilt = true;
-        if (Source) bBuilt = SCRigAssets::MakeSavable(Copy, **Source, Error);
-        else
-        {
-            Copy->Build();
-            FSkinnedAssetCompilingManager::Get().FinishCompilation(TArray<USkinnedAsset*>{Copy});
-        }
-        if (!bBuilt)
+        USkeletalMesh* Copy = SCRigAssets::SavableCopy(Mesh, Source ? Source->Get() : nullptr, Error);
+        if (!Copy)
         {
             K.Warnings.Add(Mesh->GetName() + TEXT(": rig mesh not kept (") + Error + TEXT(")"));
             K.bFailed = true;
             continue;
         }
+        USkeleton* Skeleton = Copy->GetSkeleton();
         // As for static meshes: the first rig override of each slot becomes the kept mesh's material.
         TSet<int32> Assigned;
         for (USCRigComponent* Rig : Vehicle->Rigs)
@@ -196,16 +181,36 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
         K.Move(Skeleton, TEXT("Rigs"), Mesh->GetSkeleton()->GetName());
         K.Move(Copy, TEXT("Rigs"), Mesh->GetName());
         KeptRigs.Add(Mesh, Copy);
+        KeptSkeletons.Add(Mesh->GetSkeleton(), Skeleton);
     }
     if (const USCClipCatalog* Catalog = Vehicle->ClipCatalog)
     {
         USCClipCatalog* Kept = DuplicateObject(Catalog, GetTransientPackage());
+        // The editable sequences (one per binding timing, and the clip's primary): each a copy on the kept skeleton of its
+        // own, saved under Animations; one whose skeleton was not kept is left out.
+        TMap<const UAnimSequence*, UAnimSequence*> KeptSequences;
+        auto KeepSequence = [&](UAnimSequence* Sequence, const FString& ClipName) -> UAnimSequence* {
+            if (!Sequence) return nullptr;
+            if (UAnimSequence** Found = KeptSequences.Find(Sequence)) return *Found;
+            UAnimSequence* Copy = nullptr;
+            if (USkeleton** Skeleton = KeptSkeletons.Find(Sequence->GetSkeleton()))
+            {
+                Copy = DuplicateObject(Sequence, GetTransientPackage());
+                Copy->SetSkeleton(*Skeleton);
+                K.Move(Copy, TEXT("Animations"), ClipName);
+            }
+            else
+                K.Warnings.Add(Sequence->GetName() + TEXT(": sequence not kept (its rig mesh was not kept)"));
+            KeptSequences.Add(Sequence, Copy);
+            return Copy;
+        };
         for (FSCImportedClip& Clip : Kept->Clips)
         {
-            Clip.Sequence = nullptr;
+            const FString ClipName = FPaths::GetBaseFilename(Clip.Name);
+            Clip.Sequence = KeepSequence(Clip.Sequence, ClipName);
             for (FSCClipBinding& Binding : Clip.Bindings)
             {
-                Binding.Sequences.Reset();
+                for (TObjectPtr<UAnimSequence>& Sequence : Binding.Sequences) Sequence = KeepSequence(Sequence, ClipName);
                 USkeletalMesh* const* Mesh = KeptRigs.Find(Binding.Mesh.Get());
                 Binding.Mesh = Mesh ? *Mesh : nullptr;
             }

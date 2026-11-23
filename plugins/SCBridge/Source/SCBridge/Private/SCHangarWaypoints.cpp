@@ -94,8 +94,8 @@ int32 ASCVehicle::BuildWaypoints()
     FBox Bay(ForceInit);
     FString BayName;
     const bool bBay = FSCEnvironment::FindShipBay(this, Bay, &BayName);
-    // A cooked environment has no import sources: it keeps the waypoints its cook saved; with its rigs kept (WP-O1-4b) only
-    // the ship-pad entry follows the elevator.
+    // An environment cooked before its sources were saved (or one without waypoint records): it keeps the waypoints its
+    // cook saved; with its rigs kept (WP-O1-4b) the ship-pad entry follows the elevator.
     if (WaypointSources.IsEmpty())
     {
         const FName ShipPad = SCHangarWaypoints::SourceName(ESCWaypointSource::ShipPad);

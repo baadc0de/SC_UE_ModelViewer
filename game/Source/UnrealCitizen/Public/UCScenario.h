@@ -52,8 +52,10 @@ struct UNREALCITIZEN_API FUCPrepared
      *  series review (a prepared vehicle saves the paint it was prepared with, ASCVehicle::ActivePaint). 12: WP-O1-4b-1a
      *  (rigs kept: rig meshes with editor source models and their skeletons saved under <root>/Rigs, the clip catalog
      *  saved with the actor, rig collision saved on the rig; a level prepared before has its rigs baked static). 13: the
-     *  held clip layers saved (ASCVehicle::HeldPlayback; a clip played after the load keeps the landing gear deployed). */
-    static constexpr int32 FormatVersion = 13;
+     *  held clip layers saved (ASCVehicle::HeldPlayback; a clip played after the load keeps the landing gear deployed). 14:
+     *  rig meshes with 16-bit skin weights, their source models carrying the bones, rig collision per material slot; the
+     *  hangar's waypoint sources saved (a waypoint on a mechanism follows it). */
+    static constexpr int32 FormatVersion = 14;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

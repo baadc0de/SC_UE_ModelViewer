@@ -33,13 +33,16 @@ struct SCBRIDGE_API FSCSpawnPoint
     /** Hangar waypoints: why the record is one (SCHangarWaypoints::SourceName); None for vehicle spawns. */
     UPROPERTY(BlueprintReadOnly) FName Source;
 };
-/** A record the environment import chose as a waypoint: its anchor and the standing hint in the anchor's frame (cm). */
+/** A record the environment import chose as a waypoint: its anchor and the standing hint in the anchor's frame (cm). Saved
+ *  with a prepared level (WP-O1-4b), so a waypoint on a mechanism (a kiosk on the ship elevator) follows it there too. */
+USTRUCT()
 struct FSCWaypointSource
 {
-    ESCWaypointSource Source = ESCWaypointSource::Panel;
-    FString Label;
-    TWeakObjectPtr<USceneComponent> Anchor;
-    FVector Local = FVector::ZeroVector;
+    GENERATED_BODY()
+    UPROPERTY() ESCWaypointSource Source = ESCWaypointSource::Panel;
+    UPROPERTY() FString Label;
+    UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
+    UPROPERTY() FVector Local = FVector::ZeroVector;
 };
 /** How ASCVehicle::FindInteraction found its interaction (the E-press log). */
 struct FSCInteractionPick

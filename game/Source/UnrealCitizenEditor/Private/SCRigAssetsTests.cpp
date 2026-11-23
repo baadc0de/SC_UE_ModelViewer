@@ -11,6 +11,7 @@
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
+#include "Engine/SkeletalMeshSourceModel.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "Misc/Guid.h"
@@ -116,11 +117,19 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft)
     };
 
     const FSCDerivedMesh Data = SyntheticRig(bSoft);
-    USkeleton* Skeleton = nullptr;
-    USkeletalMesh* Mesh = FSCSkeletonBuilder::Build(Data, GetTransientPackage(), Skeleton);
+    USkeleton* RuntimeSkeleton = nullptr;
+    USkeletalMesh* Runtime = FSCSkeletonBuilder::Build(Data, GetTransientPackage(), RuntimeSkeleton);
     FString Error;
-    if (!Test.TestTrue(TEXT("runtime build: ") + Error, FSCSkeletalMeshImporter::Build(Data, Mesh, Error))) return;
-    if (!Test.TestTrue(TEXT("made savable: ") + Error, SCRigAssets::MakeSavable(Mesh, Data, Error))) return;
+    if (!Test.TestTrue(TEXT("runtime build: ") + Error, FSCSkeletalMeshImporter::Build(Data, Runtime, Error))) return;
+    // Keep as assets' path: a savable copy of the runtime mesh (MakeSavable on a new mesh), the runtime one untouched.
+    USkeletalMesh* Mesh = SCRigAssets::SavableCopy(Runtime, &Data, Error);
+    if (!Test.TestNotNull(TEXT("savable copy: ") + Error, Mesh)) return;
+    USkeleton* Skeleton = Mesh->GetSkeleton();
+    Test.TestTrue(TEXT("a copy, on a copy of the skeleton"), Mesh != Runtime && Skeleton && Skeleton != RuntimeSkeleton);
+    Test.TestFalse(TEXT("the runtime mesh keeps no mesh description"), Runtime->HasMeshDescription(0));
+    // The source model is saved as written (a description with the bones even without geometry), never recovered at load.
+    const FMeshDescriptionBulkData* Bulk = Mesh->GetNumSourceModels() ? Mesh->GetSourceModel(0).GetMeshDescriptionBulkData() : nullptr;
+    Test.TestTrue(TEXT("LOD 0's source model has a payload"), Bulk && !Bulk->IsEmpty());
     // A rig component using it, its collision in the built vertex order (kept for the save on an editor host).
     USCRigComponent* Rig = NewObject<USCRigComponent>(GetTransientPackage());
     Rig->SetSkeletalMesh(Mesh);
@@ -212,9 +221,14 @@ void CheckRig(FAutomationTestBase& Test, bool bSoft)
     LoadedRig->LocalPose[2].AddToTranslation(FVector(0, 0, 30)); // Arm up 30 cm
     LoadedRig->RefreshBoneTransforms();
     LoadedRig->ReadCollisionVertices(After);
-    int32 Moved = 0;
-    for (int32 I = 0; I < Before.Num() && I < After.Num(); ++I) Moved += FMath::Abs(After[I].Z - Before[I].Z) > 1.f;
-    Test.TestEqual(TEXT("the Arm vertex and the blended one follow the bone"), Moved, 2);
+    // Each particle, known by its bind position, where its weights put it: the Arm corner up 30 cm, the blended one 15,
+    // the Root one where it was.
+    if (!Test.TestEqual(TEXT("the posed body has every particle"), After.Num(), Before.Num())) return;
+    for (int32 I = 0; I < Before.Num(); ++I)
+    {
+        const FVector3f Rise(0, 0, Before[I].X > 50.f ? 30.f : Before[I].Y > 25.f ? 15.f : 0.f);
+        Test.TestTrue(FString::Printf(TEXT("particle at %s posed"), *Before[I].ToString()), After[I].Equals(Before[I] + Rise, 0.1f));
+    }
 }
 } // namespace
 

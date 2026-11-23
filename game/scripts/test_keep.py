@@ -46,6 +46,8 @@ if "SCKeepReload" in options:
 viewer = unreal.SCViewerSubsystem.create_headless()
 if not viewer.wait_for_archive(900.0):
     raise RuntimeError(viewer.get_archive_error())
+# The viewer may start with its environment (the hangar setting), a load that refuses another: Keep needs no hangar.
+viewer.set_environment("none")
 view = unreal.SCViewOptions()
 view.reset_to_defaults()
 if not viewer.load_entity(entity, view) or not viewer.wait_for_load(1800.0):

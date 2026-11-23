@@ -145,7 +145,9 @@ struct FCooker
         if (!Object || Remap.Contains(Object)) return;
         FString Unique = SafeName(Name);
         const FString Base = Unique;
-        for (int32 Suffix = 2; FindPackage(nullptr, *(Folder / Unique)); ++Suffix) Unique = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
+        // Not a package in memory or on disk (another level cooked to the same root in an earlier session).
+        for (int32 Suffix = 2; FindPackage(nullptr, *(Folder / Unique)) || FPackageName::DoesPackageExist(Folder / Unique); ++Suffix)
+            Unique = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
         UPackage* Package = CreatePackage(*(Folder / Unique));
         Object->Rename(*Unique, Package, REN_DontCreateRedirectors | REN_NonTransactional);
         Object->SetFlags(RF_Public | RF_Standalone);
@@ -190,7 +192,8 @@ struct FCooker
         if (UObject** Found = Remap.Find(MID)) return Cast<UMaterialInterface>(*Found);
         FString Name = SafeName(TEXT("MI_") + MID->GetName());
         const FString Base = Name;
-        for (int32 Suffix = 2; FindPackage(nullptr, *(Root / TEXT("Materials") / Name)); ++Suffix) Name = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
+        for (int32 Suffix = 2; FindPackage(nullptr, *(Root / TEXT("Materials") / Name)) || FPackageName::DoesPackageExist(Root / TEXT("Materials") / Name); ++Suffix)
+            Name = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
         UPackage* Package = CreatePackage(*(Root / TEXT("Materials") / Name));
         auto* MIC = NewObject<UMaterialInstanceConstant>(Package, *Name, RF_Public | RF_Standalone);
         MIC->SetParentEditorOnly(Constant(MID->Parent));
@@ -226,31 +229,40 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     if (!bKeepRigs) FSCEnvironment::BakeRigsStatic(Environment);
     else
     {
-        // Each rig mesh (shared by the rigs that use it) becomes an asset with its skeleton; a rig with collision gets it
-        // again in the built vertex order.
-        TSet<USkeletalMesh*> Made;
+        // Each rig mesh the actor references (its meshes, the clip bindings', the rigs': one whose placement was skipped is
+        // still bound to clips) becomes an asset with its skeleton, named after its source (the import's package).
+        TArray<USkeletalMesh*> Meshes;
+        for (USkeletalMesh* Mesh : Environment->SkeletalMeshes)
+            if (Mesh) Meshes.AddUnique(Mesh);
+        if (const USCClipCatalog* Catalog = Environment->ClipCatalog)
+            for (const FSCImportedClip& Clip : Catalog->Clips)
+                for (const FSCClipBinding& Binding : Clip.Bindings)
+                    if (USkeletalMesh* Mesh = Binding.Mesh.Get()) Meshes.AddUnique(Mesh);
+        for (const USCRigComponent* Rig : Environment->Rigs)
+            if (USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr) Meshes.AddUnique(Mesh);
+        TSet<const USkeletalMesh*> Unsaved;
+        for (USkeletalMesh* Mesh : Meshes)
+        {
+            const FString Name = SafeName(FPaths::GetBaseFilename(Mesh->GetPackage()->GetName()));
+            const TSharedPtr<const FSCDerivedMesh>* Source = Environment->RigSources.Find(Mesh);
+            FString Error;
+            if (!Source || !SCRigAssets::MakeSavable(Mesh, **Source, Error))
+            {
+                Cook.Warnings.Add(Name + TEXT(": ") + (Source ? Error : FString(TEXT("no rig source (FSCImportOptions::bRetainRigSources)"))));
+                Cook.bFailed = true;
+                Unsaved.Add(Mesh);
+                continue;
+            }
+            Cook.Persist(Mesh->GetSkeleton(), Root / TEXT("Rigs"), Name + TEXT("_Skeleton"));
+            Cook.Persist(Mesh, Root / TEXT("Rigs"), Name);
+            ++RigMeshes;
+        }
+        // A soft rig of an import that built collision has a body: again in the built vertex order, also when the import's
+        // own rig collision failed, so a saved rig never lacks it.
         for (USCRigComponent* Rig : Environment->Rigs)
         {
             USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr;
-            if (!Mesh) continue;
-            if (!Made.Contains(Mesh))
-            {
-                Made.Add(Mesh);
-                const TSharedPtr<const FSCDerivedMesh>* Source = Environment->RigSources.Find(Mesh);
-                FString Error;
-                if (!Source || !SCRigAssets::MakeSavable(Mesh, **Source, Error))
-                {
-                    Cook.Warnings.Add(Rig->MeshAsset + TEXT(": ") + (Source ? Error : FString(TEXT("no rig source (FSCImportOptions::bRetainRigSources)"))));
-                    Cook.bFailed = true;
-                    continue;
-                }
-                const FString Name = SafeName(FPaths::GetBaseFilename(Rig->MeshAsset));
-                Cook.Persist(Mesh->GetSkeleton(), Root / TEXT("Rigs"), Name + TEXT("_Skeleton"));
-                Cook.Persist(Mesh, Root / TEXT("Rigs"), Name);
-                ++RigMeshes;
-            }
-            // A soft rig has collision (the prep import builds it): again in the built vertex order, also when the import's
-            // own collision failed, so a saved rig never lacks it.
+            if (!Mesh || Unsaved.Contains(Mesh) || !Environment->bCollisionBuilt) continue;
             const TSharedPtr<const FSCDerivedMesh>* Source = Environment->RigSources.Find(Mesh);
             if (Source && (*Source)->bHasGeometry)
             {
@@ -264,9 +276,9 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
                 ++RigCollisions;
             }
         }
-        // Every soft rig has its body now (a failure failed the cook): the actor's collision is ready, also when the import's
-        // own rig collision had failed (first person explores only a ready vehicle).
-        if (!Cook.bFailed) Environment->bCollisionReady = true;
+        // Every soft rig has its body now (a failure failed the cook): the collision of an import that built it is ready,
+        // also when the import's own rig collision had failed (first person explores only a ready vehicle).
+        if (!Cook.bFailed && Environment->bCollisionBuilt) Environment->bCollisionReady = true;
         // Playback reads the bone tracks; the sequences are editor-only views of them, built against transient skeletons.
         if (USCClipCatalog* Catalog = Environment->ClipCatalog)
             for (FSCImportedClip& Clip : Catalog->Clips)
@@ -327,6 +339,7 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     {
         Environment->ClipCatalog = nullptr;
         Environment->SkeletalMeshes.Empty();
+        Environment->WaypointSources.Reset(); // nothing moves: the waypoints saved in the baked pose stay
     }
     else if (Environment->ClipCatalog)
     {

@@ -71,6 +71,19 @@ bool SCRigAssets::MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, F
     }
     bool bInfluenceLimitHit = false;
     FSkeletalMeshOperations::ValidateAndFixInfluences(Description, bInfluenceLimitHit);
+    // The bones, as the engine's conversion from a LOD model writes them (the raw reference skeleton in order).
+    const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+    Attributes.ReserveNewBones(Ref.GetRawBoneNum());
+    FSkeletalMeshAttributes::FBoneNameAttributesRef BoneNames = Attributes.GetBoneNames();
+    FSkeletalMeshAttributes::FBoneParentIndexAttributesRef BoneParents = Attributes.GetBoneParentIndices();
+    FSkeletalMeshAttributes::FBonePoseAttributesRef BonePoses = Attributes.GetBonePoses();
+    for (int32 Bone = 0; Bone < Ref.GetRawBoneNum(); ++Bone)
+    {
+        const FBoneID Id = Attributes.CreateBone();
+        BoneNames.Set(Id, Ref.GetRawRefBoneInfo()[Bone].Name);
+        BoneParents.Set(Id, Ref.GetRawRefBoneInfo()[Bone].ParentIndex);
+        BonePoses.Set(Id, Ref.GetRawRefBonePose()[Bone]);
+    }
 
     // One imported LOD, built as authored: no reduction, no recomputed normals or tangents, full-precision UVs, and its
     // vertices and skin weights readable on the CPU (the rig's collision refit skins them there).
@@ -115,6 +128,45 @@ bool SCRigAssets::MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, F
     UE_LOG(LogSCRigAssets, Display, TEXT("RIG_ASSET mesh=%s bones=%d vertices=%d sections=%d influence_limit_hit=%d"), *Mesh->GetName(), Bones,
            Render->LODRenderData[0].GetNumVertices(), Render->LODRenderData[0].RenderSections.Num(), bInfluenceLimitHit);
     return true;
+}
+
+USkeletalMesh* SCRigAssets::SavableCopy(const USkeletalMesh* Mesh, const FSCDerivedMesh* Soft, FString& Error)
+{
+    if (!Mesh || !Mesh->GetSkeleton())
+    {
+        Error = TEXT("no rig mesh or skeleton");
+        return nullptr;
+    }
+    USkeleton* Skeleton = DuplicateObject(Mesh->GetSkeleton(), GetTransientPackage());
+    USkeletalMesh* Copy = nullptr;
+    if (Soft)
+    {
+        Copy = NewObject<USkeletalMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+        Copy->SetRefSkeleton(Mesh->GetRefSkeleton());
+        Copy->SetSkeleton(Skeleton);
+        Copy->GetMaterials() = Mesh->GetMaterials();
+        Copy->SetHasVertexColors(Mesh->GetHasVertexColors());
+        Copy->SetImportedBounds(Mesh->GetImportedBounds());
+        Copy->CalculateInvRefMatrices();
+        if (!MakeSavable(Copy, *Soft, Error)) return nullptr;
+        return Copy;
+    }
+    if (!Mesh->HasMeshDescription(0))
+    {
+        Error = TEXT("no rig source and no source model");
+        return nullptr;
+    }
+    Copy = DuplicateObject(Mesh, GetTransientPackage());
+    Copy->SetSkeleton(Skeleton);
+    Copy->Build();
+    FSkinnedAssetCompilingManager::Get().FinishCompilation(TArray<USkinnedAsset*>{Copy});
+    const FSkeletalMeshRenderData* Render = Copy->GetResourceForRendering();
+    if (!Render || Render->LODRenderData.IsEmpty())
+    {
+        Error = TEXT("the engine's build left no LOD");
+        return nullptr;
+    }
+    return Copy;
 }
 
 bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error)

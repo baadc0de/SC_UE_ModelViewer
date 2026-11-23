@@ -226,12 +226,17 @@ public:
     bool AimGarageKiosk(const FVector& Eye, const FVector& Direction, float Reach, const AActor* Ignore) const;
     /** A drawn operating panel that is a vehicle kiosk: a console use and the vehicle list / retrieval states (WP-M2). */
     static bool IsGarageKiosk(const FSCUiBinding& Binding);
-    /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; transient. */
-    TArray<FSCWaypointSource> WaypointSources;
-    /** Waypoints from WaypointSources and the ship pad in the current pose; a cooked environment (no sources, no rigs)
-     *  keeps the waypoints it was saved with. Returns the waypoints. */
+    /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; saved with a prepared
+     *  level (its anchors are the actor's components). */
+    UPROPERTY() TArray<FSCWaypointSource> WaypointSources;
+    /** Waypoints from WaypointSources and the ship pad in the current pose; an environment without sources (cooked before
+     *  they were saved) keeps the waypoints it was saved with, its ship-pad entry following the bay. Returns the
+     *  waypoints. */
     int32 BuildWaypoints();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") bool bCollisionReady = false;
+    /** The import built collision (FSCImportOptions::bBuildCollision): without it nothing blocks the player, so a cook that
+     *  completes the rigs' bodies never makes the vehicle ready. */
+    UPROPERTY() bool bCollisionBuilt = false;
     /** Incremented whenever SpawnPoints changes (UI lists rebuild on change). */
     int32 SpawnRevision = 0;
     void AddSpawnPoint(FName Kind, const FString& Label, const FTransform& WorldTransform);

@@ -1169,6 +1169,7 @@ void FSCImportJob::FState::Assemble()
     TMap<FString, FEntity> Entities, EntitiesById;
     double AnchorSeconds = 0, BindSeconds = 0;
     V->bCollisionReady = Options.bBuildCollision;
+    V->bCollisionBuilt = Options.bBuildCollision;
     auto NewAnchor = [&](const FString& Label, USceneComponent* Parent, const FMatrix& Relative) {
         const double AnchorStart = FPlatformTime::Seconds();
         ON_SCOPE_EXIT { AnchorSeconds += FPlatformTime::Seconds() - AnchorStart; };
