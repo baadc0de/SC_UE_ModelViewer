@@ -133,6 +133,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
         Viewer->CancelLoad();
+        if (Viewer->GetVehicle() && !Viewer->IsBusy()) Viewer->Unload(); // a vehicle that loaded (another one in its place)
         if (Viewer->IsSpace()) Viewer->SetSpace(false); // a cargo setup in space took the world there: the map's hangar and gravity return
         Viewer->SetEnvironment(TEXT("none"));
     }

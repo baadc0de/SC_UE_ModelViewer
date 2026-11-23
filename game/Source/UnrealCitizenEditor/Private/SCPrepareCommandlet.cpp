@@ -184,9 +184,16 @@ public:
             Error = TEXT("cannot save ") + Level;
             return false;
         }
-        if (!FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\n%s\n"), FUCPrepared::FormatVersion, *Viewer->GetArchiveBuildId()), *StampFile(Level)))
+        // The stamp is published whole: written beside it first, then moved into place (a level counts as current only with
+        // a complete stamp, FUCPrepared::IsLevelCurrent).
+        const FString Stamp = StampFile(Level), Partial = Stamp + TEXT(".partial");
+        IFileManager& Files = IFileManager::Get();
+        if (!FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\n%s\n"), FUCPrepared::FormatVersion, *Viewer->GetArchiveBuildId()), *Partial) ||
+            !Files.Move(*Stamp, *Partial, true, true))
         {
-            Error = TEXT("cannot write ") + StampFile(Level);
+            Files.Delete(*Partial, false, true, true);
+            Files.Delete(*Stamp, false, true, true);
+            Error = TEXT("cannot write ") + Stamp;
             return false;
         }
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved level=%s audio_files=%d format=%d"), *Level, AudioFiles, FUCPrepared::FormatVersion);

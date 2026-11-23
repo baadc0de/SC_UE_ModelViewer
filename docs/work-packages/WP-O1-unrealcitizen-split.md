@@ -182,7 +182,10 @@ moved to `game/Content/SC`; the built effects (`/Game/SC/FX`, also ignored) are 
 The game runs prepared assets only. O1-4 lands in three changes:
 
 - **O1-4a** (this PR): scenarios and the prep step; the game runs a scenario from its prepared levels.
-- **O1-4b**: what a run still reads from the archive at run time becomes prepared too: the player body and its clips,
+- **O1-4b**: a prepared vehicle keeps its rigs, clips and the interactions they drive (doors, lifts, ramps, panels' animated
+  parts): the cook bakes rigs static and drops the clip catalogue (since WP-C1; WP-P5 "Not fixed: cooked builds"), so in
+  O1-4a a scenario's vehicle and hangar show their presented pose and their doors do not move. What a run still reads from
+  the archive at run time becomes prepared too: the player body and its clips,
   the cargo boxes (the stock and live spawns), the tractor record and its effects, the soundtrack, extra instances of the
   ship (a cargo setup with several owners), the Garage's vehicles. Until then a scenario run opens the archive for these
   (as the game did before); without one they fall back as before (no body, the scenario's tractor values, no music).
@@ -212,7 +215,7 @@ of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes 
 committed source description id and collision triangles, a texture's first-mip bytes — so a changed asset at the same path is pooled anew;
 constant materials) and
 stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`) and the
-archive build it was prepared from; a hangar index that cannot be saved fails the run. Levels:
+archive build it was prepared from (written whole: a level counts as current only with a complete stamp); a hangar index that cannot be saved fails the run. Levels:
 `/Game/SC/Hangars/Maps/<style>_<name>_<hash>` (a hash of the whole container path, so containers whose last two parts
 make the same name stay apart) and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
 palette id, else its subgeometry tag, else its name, and a hash of all three; `USCViewerSubsystem::EnvironmentLevelPath` /
@@ -229,7 +232,8 @@ prepared), gitignored and staged with a packaged game (`DirectoriesToAlwaysStage
 (`SCENARIO_REFUSED`) give the reason and the prep command — when the scenario has no record, the record's format is
 another, a level is missing or not finished (no current stamp), or (outside a packaged game, which has no definitions)
 the definition is missing or does not read or it or its cargo setup changed since prep. A level that does not stream in (or
-not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded, space is left, and
+not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded (also a vehicle loaded in its
+place), space is left, and
 the cargo subsystem stops applying its cargo setup (`USCCargoSubsystem::DropScenario`). It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
 `-SCPackage`, `-SCCargoScenario`, `-SCPlayerDemo=<entity>`) or `-SCNoCooked` (`ConflictingSwitch`, tested): the notice says so, and those switches act as without a scenario. Otherwise it streams the environment's level, then the vehicle's (`LoadPreparedEntity`), sets the
 camera, puts the player at the start, asks for the music, and hands the cargo subsystem the prepared cargo setup

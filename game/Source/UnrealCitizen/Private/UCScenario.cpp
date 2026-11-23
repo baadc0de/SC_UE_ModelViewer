@@ -149,8 +149,10 @@ bool FUCPrepared::IsLevelCurrent(const FString& Level)
 {
     if (Level.IsEmpty() || !FPackageName::DoesPackageExist(Level)) return false;
     if (FPlatformProperties::RequiresCookedData()) return true;
-    FString Text;
-    return FFileHelper::LoadFileToString(Text, *StampFile(Level)) && FCString::Atoi(*Text.TrimStartAndEnd()) == FormatVersion;
+    // A complete stamp: the format on its first line and the archive build on its second.
+    TArray<FString> Lines;
+    return FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) && Lines.Num() >= 2 && Lines[0].TrimStartAndEnd().IsNumeric() &&
+           FCString::Atoi(*Lines[0]) == FormatVersion && !Lines[1].TrimStartAndEnd().IsEmpty();
 }
 FString FUCPrepared::LevelBuild(const FString& Level)
 {
