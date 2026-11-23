@@ -6,6 +6,9 @@
 #include "SCVehicle.h"
 #include "SCViewOptions.h"
 #include "SCViewerSubsystem.h"
+#include "UCSettings.h"
+#include "Engine/Level.h"
+#include "Engine/LevelStreamingDynamic.h"
 #include "scbridge.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCCargoBoxes, Log, All);
@@ -36,7 +39,10 @@ void FSCCargoBoxLibrary::Reset()
     if (Parse.IsValid()) Parse.Wait();
     if (Job) Job->Cancel();
     for (auto& Pair : Entries)
+    {
         if (Pair.Value.Template && IsValid(Pair.Value.Template)) Pair.Value.Template->Destroy();
+        Unload(Pair.Value.Level); // a prepared box goes with its level
+    }
     Entries.Reset();
     Order.Reset();
     Running.Reset();
@@ -46,12 +52,38 @@ void FSCCargoBoxLibrary::Reset()
     Job.Reset();
 }
 
+void FSCCargoBoxLibrary::Unload(ULevelStreamingDynamic* Level)
+{
+    if (!Level) return;
+    if (Level->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+    {
+        if (UWorld* World = Level->GetWorld()) World->RemoveStreamingLevel(Level); // past the states a removal request is handled in
+        return;
+    }
+    Level->SetShouldBeLoaded(false);
+    Level->SetShouldBeVisible(false);
+    Level->SetIsRequestingUnloadAndRemoval(true);
+    Released.Add(Level); // a load still in flight that fails stops where a removal request is no longer handled
+}
+
+void FSCCargoBoxLibrary::SweepReleased(UWorld* World)
+{
+    Released.RemoveAll([World](const TObjectPtr<ULevelStreamingDynamic>& Level) {
+        if (!Level || !World || !World->GetStreamingLevels().Contains(Level)) return true; // the world removed it
+        if (Level->GetLevelStreamingState() != ELevelStreamingState::FailedToLoad) return false;
+        World->RemoveStreamingLevel(Level);
+        return true;
+    });
+}
+
 void FSCCargoBoxLibrary::Fail(const FString& Entity, const FString& Error)
 {
     if (FEntry* E = Entries.Find(Entity))
     {
         E->State = EState::Failed;
         E->Error = Error;
+        Unload(E->Level);
+        E->Level = nullptr;
     }
     UE_LOG(LogSCCargoBoxes, Warning, TEXT("CARGO_BOX_PACKAGE entity=%s ok=0 error=\"%s\""), *Entity, *Error);
     Running.Reset();
@@ -62,11 +94,29 @@ void FSCCargoBoxLibrary::Fail(const FString& Entity, const FString& Error)
 void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
 {
     if (!Viewer || !World) return;
+    SweepReleased(World);
     if (Running.IsEmpty())
     {
         // Next queued entity once the archive is open and the ship / environment loads are done.
         const FString* Next = Order.FindByPredicate([&](const FString& E) { return Entries[E].State == EState::Queued; });
         if (!Next || Viewer->IsBusy()) return;
+        if (const FString* Prepared = UUCSettings::Get()->ScenarioCargoLevels.Find(*Next))
+        {
+            // A prepared scenario's box: its level, streamed (no archive).
+            Running = *Next;
+            FEntry& E = Entries[Running];
+            E.Started = FPlatformTime::Seconds();
+            bool bOK = false;
+            E.Level = ULevelStreamingDynamic::LoadLevelInstance(World, *Prepared, FVector::ZeroVector, FRotator::ZeroRotator, bOK);
+            if (!bOK || !E.Level)
+            {
+                E.Level = nullptr;
+                Fail(Running, TEXT("cannot stream the prepared box level ") + *Prepared);
+                return;
+            }
+            E.State = EState::Streaming;
+            return;
+        }
         if (Viewer->GetArchiveState() == ESCArchiveState::Failed || (Viewer->GetArchiveState() == ESCArchiveState::Ready && !Viewer->GetClient()))
         {
             Fail(*Next, TEXT("the archive is not available (box packages are exported from Data.p4k)"));
@@ -84,6 +134,26 @@ void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
         return;
     }
     FEntry& E = Entries[Running];
+    if (E.State == EState::Streaming)
+    {
+        if (E.Level->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+        {
+            Fail(Running, TEXT("the prepared box level did not load: ") + E.Level->GetWorldAssetPackageName());
+            return;
+        }
+        ULevel* Level = E.Level->GetLoadedLevel();
+        if (!Level || !E.Level->IsLevelVisible()) return;
+        ASCVehicle* Template = nullptr;
+        for (AActor* Actor : Level->Actors)
+            if ((Template = Cast<ASCVehicle>(Actor)) != nullptr) break;
+        if (!Template)
+        {
+            Fail(Running, TEXT("the prepared box level holds no box"));
+            return;
+        }
+        Adopt(Template, TEXT("prepared"));
+        return;
+    }
     if (E.State == EState::Exporting)
     {
         if (!Export.IsCompleted()) return;
@@ -120,26 +190,37 @@ void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
         if (!Job->Tick(false, ImportBudgetSeconds)) return;
         ASCVehicle* Template = Job->GetStage() == ESCImportStage::Succeeded ? Job->GetResult().Vehicle.Get() : nullptr;
         if (!Template) { Fail(Running, Job->GetResult().Error); return; }
-        Template->SetActorHiddenInGame(true);
-        Template->SetActorEnableCollision(false);
-        E.Template = Template;
-        E.Occupancy = Template->Manifest.RootOccupancy;
-        if (!E.Occupancy.bValid || E.Occupancy.StandardCargoUnits <= 0)
-        {
-            Fail(Running, TEXT("the package's root is not a standard cargo unit item (root_entity.inventory_occupancy / standard_cargo_units)"));
-            return;
-        }
-        E.State = EState::Ready;
-        UE_LOG(LogSCCargoBoxes, Display, TEXT("CARGO_BOX_PACKAGE entity=%s ok=1 seconds=%.2f size_m=%s scu=%d mass=%.0f meshes=%d"), *Running,
-               FPlatformTime::Seconds() - E.Started, *E.Occupancy.Dimensions.ToString(), E.Occupancy.StandardCargoUnits, E.Occupancy.Mass,
-               Template->Meshes.Num());
-        Running.Reset();
-        Source.Reset();
-        Job.Reset();
+        Adopt(Template, TEXT("archive"));
     }
+}
+
+void FSCCargoBoxLibrary::Adopt(ASCVehicle* Template, const TCHAR* From)
+{
+    FEntry& E = Entries[Running];
+    Template->SetActorHiddenInGame(true);
+    Template->SetActorEnableCollision(false);
+    E.Template = Template;
+    E.Occupancy = Template->Manifest.RootOccupancy;
+    if (!E.Occupancy.bValid || E.Occupancy.StandardCargoUnits <= 0)
+    {
+        Fail(Running, TEXT("the package's root is not a standard cargo unit item (root_entity.inventory_occupancy / standard_cargo_units)"));
+        return;
+    }
+    E.State = EState::Ready;
+    UE_LOG(LogSCCargoBoxes, Display, TEXT("CARGO_BOX_PACKAGE entity=%s ok=1 source=%s seconds=%.2f size_m=%s scu=%d mass=%.0f meshes=%d"), *Running, From,
+           FPlatformTime::Seconds() - E.Started, *E.Occupancy.Dimensions.ToString(), E.Occupancy.StandardCargoUnits, E.Occupancy.Mass,
+           Template->Meshes.Num());
+    Running.Reset();
+    Source.Reset();
+    Job.Reset();
 }
 
 void FSCCargoBoxLibrary::AddReferencedObjects(FReferenceCollector& Collector)
 {
-    for (auto& Pair : Entries) Collector.AddReferencedObject(Pair.Value.Template);
+    for (auto& Pair : Entries)
+    {
+        Collector.AddReferencedObject(Pair.Value.Template);
+        Collector.AddReferencedObject(Pair.Value.Level);
+    }
+    Collector.AddReferencedObjects(Released);
 }

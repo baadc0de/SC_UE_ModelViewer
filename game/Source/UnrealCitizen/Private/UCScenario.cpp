@@ -229,6 +229,16 @@ FString FUCPrepared::TraversalSources() const
     if (Body.IsEmpty() || Vehicle.IsEmpty() || (!EnvironmentLevel.IsEmpty() && Environment.IsEmpty())) return FString();
     return FString::Printf(TEXT("%s|%s|%s"), *Body, *Vehicle, *Environment);
 }
+FString FUCPrepared::CargoLevelPath(const FString& Entity)
+{
+    // Readable from the entity, told apart by a hash of the name exactly as the setup writes it and the export is asked for
+    // (entity classes ignore case): names that differ only in characters a level name drops, spaces included, are other
+    // levels.
+    FString Name = Entity.TrimStartAndEnd();
+    for (TCHAR& C : Name)
+        if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
+    return Name.IsEmpty() ? FString() : FString::Printf(TEXT("/Game/SC/Cargo/Maps/%s_%08x"), *Name, FCrc::StrCrc32(*Entity.ToLower()));
+}
 FString FUCPrepared::RecordedSources(const FString& TraversalClips)
 {
     TArray<FString> Lines;
@@ -268,6 +278,11 @@ bool FUCPrepared::Parse(const FString& Json, FUCPrepared& Out, FString& Error)
     Out.VehicleLevel = Str(Root, TEXT("vehicle_level"));
     Out.PlayerLevel = Str(Root, TEXT("player_level"));
     Out.TraversalClips = Str(Root, TEXT("traversal_clips"));
+    const TSharedPtr<FJsonObject>* Cargo = nullptr;
+    if (Root->TryGetObjectField(TEXT("cargo_levels"), Cargo))
+        for (const auto& [Entity, Value] : (*Cargo)->Values)
+            if (FString Level; Value && Value->TryGetString(Level)) Out.CargoLevels.Add(FString(Entity), Level);
+    Root->TryGetStringField(TEXT("tractor_record"), Out.TractorRecordJson);
     Out.Archive = Str(Root, TEXT("archive"));
     Out.PreparedAt = Str(Root, TEXT("prepared_at"));
     if (Out.Scenario.IsEmpty() || Out.Definition.IsEmpty() || Out.VehicleLevel.IsEmpty())
@@ -287,6 +302,10 @@ FString FUCPrepared::ToJson() const
     Root->SetStringField(TEXT("vehicle_level"), VehicleLevel);
     Root->SetStringField(TEXT("player_level"), PlayerLevel);
     Root->SetStringField(TEXT("traversal_clips"), TraversalClips);
+    const TSharedRef<FJsonObject> Cargo = MakeShared<FJsonObject>();
+    for (const auto& [Entity, Level] : CargoLevels) Cargo->SetStringField(Entity, Level);
+    Root->SetObjectField(TEXT("cargo_levels"), Cargo);
+    Root->SetStringField(TEXT("tractor_record"), TractorRecordJson);
     Root->SetStringField(TEXT("archive"), Archive);
     Root->SetStringField(TEXT("prepared_at"), PreparedAt);
     Root->SetStringField(TEXT("definition"), Definition);
@@ -335,6 +354,29 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
     if (PlayerLevel.IsEmpty() || !LevelCurrent(PlayerLevel))
         return FString::Printf(TEXT("scenario %s: the prepared player body level %s is missing or not finished%s"), *Scenario,
                                PlayerLevel.IsEmpty() ? TEXT("(none named)") : *PlayerLevel, *Fix);
+    // Every box entity of the prepared cargo setup has its level (a record missing one would send those boxes to the archive).
+    if (!CargoDefinition.IsEmpty())
+    {
+        FSCCargoScenario Cargo;
+        FString CargoError;
+        if (!FSCCargoScenario::Parse(CargoDefinition, Cargo, CargoError))
+            return FString::Printf(TEXT("scenario %s: the prepared cargo setup does not read (%s)%s"), *Scenario, *CargoError, *Fix);
+        const TArray<FString> Entities = Cargo.Entities();
+        for (const FString& Entity : Entities)
+            if (CargoLevels.FindRef(Entity) != CargoLevelPath(Entity))
+                return FString::Printf(TEXT("scenario %s: the cargo box %s has no prepared level in the record%s"), *Scenario, *Entity, *Fix);
+        // And nothing else: a mapping the setup does not name would serve a live spawn of that entity another box.
+        for (const auto& [Entity, Level] : CargoLevels)
+            if (!Entities.Contains(Entity))
+                return FString::Printf(TEXT("scenario %s: the record maps a cargo box %s its setup does not name%s"), *Scenario, *Entity, *Fix);
+    }
+    else if (!CargoLevels.IsEmpty())
+    {
+        return FString::Printf(TEXT("scenario %s: the record maps cargo boxes without a cargo setup%s"), *Scenario, *Fix);
+    }
+    for (const auto& [Entity, Level] : CargoLevels)
+        if (!LevelCurrent(Level))
+            return FString::Printf(TEXT("scenario %s: the prepared cargo box level %s (%s) is missing or not finished%s"), *Scenario, *Level, *Entity, *Fix);
     if (TraversalClips.IsEmpty() || !LevelCurrent(TraversalClips))
         return FString::Printf(TEXT("scenario %s: the prepared traversal clips %s are missing or not finished%s"), *Scenario,
                                TraversalClips.IsEmpty() ? TEXT("(none named)") : *TraversalClips, *Fix);

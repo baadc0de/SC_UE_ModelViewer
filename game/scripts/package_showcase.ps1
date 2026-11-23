@@ -57,6 +57,8 @@ if ((ConvertTo-Comparable $CargoText) -cne (ConvertTo-Comparable ([string]$Recor
 if (-not $Record.player_level) { throw "Scenario $Scenario's record names no player body level: run $Prepare" }
 if (-not $Record.traversal_clips) { throw "Scenario $Scenario's record names no traversal clips: run $Prepare" }
 $Levels = @($Record.vehicle_level, $Record.player_level) + @($Record.environment_level | Where-Object { $_ })
+# The cargo setup's prepared boxes (WP-O1-4b-3): a level per box entity, streamed as the box's template.
+if ($Record.cargo_levels) { $Levels += @($Record.cargo_levels.PSObject.Properties | ForEach-Object { $_.Value }) }
 # The levels are cooked as maps; the traversal clips (an asset under /Game/SC/Players/Traversal, always cooked) are checked alike.
 foreach ($Level in $Levels + @($Record.traversal_clips)) {
     $Extension = if ($Level -eq $Record.traversal_clips) { '.uasset' } else { '.umap' }

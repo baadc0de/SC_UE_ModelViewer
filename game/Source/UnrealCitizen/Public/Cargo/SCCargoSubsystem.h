@@ -107,6 +107,9 @@ public:
      *  or docked, and no setup is read from the settings afterwards. What is already placed stays with its grids (the
      *  failed scenario unloads them); the drone definition stays for drones already out. */
     void DropScenario();
+    /** WP-O1-4b-3: every box the prepared cargo setup names has come (its template ready); true without one. The scenario
+     *  reports running only then (a box that failed fails it: UUCSettings::ScenarioCargoProblem). */
+    bool ArePreparedBoxesReady() const;
     /** A cargo setup's environment is requested when it is read (replacing the one the viewer restored at start) unless a
      *  game scenario owns the scene, the setup is in space or names none, or the command line names the scene
      *  (-SCEnvironment=, -SCLoad=). */

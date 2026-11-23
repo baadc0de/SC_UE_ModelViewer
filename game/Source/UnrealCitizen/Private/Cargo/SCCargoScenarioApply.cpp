@@ -55,6 +55,26 @@ void USCCargoSubsystem::DropScenario()
     Dropped.Drone = State->Scenario.Drone; // drones already docked keep their flight limits
     State->Scenario = MoveTemp(Dropped);   // no Path: IsSet() is false, TryScenario applies nothing more
     State->bScenarioTried = true;
+    State->bPreparedSetup = false;
+    // Its tractor values and effects too: a fleet loaded later (a live spawn) looks its own up.
+    State->TractorLookup = FSCCargoState::ELookup::None;
+    State->Fx.Reset();
+    // Its box packages go too, queued, streaming (a prepared box's level) or ready: none was placed yet (the stock waits for
+    // the vehicle), and a later live spawn requests its entity anew.
+    State->Library.Reset();
+}
+
+bool USCCargoSubsystem::ArePreparedBoxesReady() const
+{
+    if (!State || !State->bPreparedSetup) return true;
+    // The setup's own boxes (what it requests), each with a prepared level: a record's other mappings are not waited for.
+    for (const FString& Entity : State->Scenario.Entities())
+    {
+        if (!UUCSettings::Get()->ScenarioCargoLevels.Contains(Entity)) continue;
+        const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity);
+        if (!E || E->State != FSCCargoBoxLibrary::EState::Ready) return false;
+    }
+    return true;
 }
 
 void USCCargoSubsystem::TryScenario()
@@ -77,6 +97,7 @@ void USCCargoSubsystem::TryScenario()
                 return;
             }
             State->Scenario.Path = TEXT("scenario:") + Settings->ScenarioCargoName;
+            State->bPreparedSetup = true;
             // A setup that names no ship is for the scenario's vehicle (its owners and extra instances wait for it).
             if (State->Scenario.Ship.IsEmpty()) State->Scenario.Ship = Settings->ScenarioVehicle;
         }
@@ -116,6 +137,27 @@ void USCCargoSubsystem::TryScenario()
     const FSCCargoScenario& S = State->Scenario;
     if (!S.IsSet()) return;
     // The tractor values from the game data (the record the scenario names); the scenario's copy without the archive.
+    if (State->TractorLookup == FSCCargoState::ELookup::None && State->bPreparedSetup)
+    {
+        // A prepared scenario (WP-O1-4b-3): the record as DataCore answered at prep, or none kept (none named, or the
+        // archive's did not apply) and the setup's own values; nothing is asked of the archive either way.
+        FSCCargoDroneDefinition& D = State->Scenario.Drone;
+        FString Error;
+        if (!UUCSettings::Get()->ScenarioTractorRecordJson.IsEmpty() && D.ApplyTractorRecord(UUCSettings::Get()->ScenarioTractorRecordJson, Error))
+        {
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_TRACTOR source=prepared action=%s max_force=%.0f min_distance_m=%.2f max_distance_m=%.1f full_strength_m=%.1f max_volume=%.1f volume_force_coefficient=%.2f max_angle=%.0f"),
+                   *D.TractorAction, D.MaxForceN, D.MinDistanceM, D.MaxDistanceM, D.FullStrengthDistanceM, D.MaxVolume, D.VolumeForceCoefficient, D.MaxAngleDeg);
+        }
+        else if (UUCSettings::Get()->ScenarioTractorRecordJson.IsEmpty())
+        {
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_TRACTOR source=scenario reason=\"no record kept at prep\" max_force=%.0f"), D.MaxForceN);
+        }
+        else
+        {
+            UE_LOG(LogSCCargo, Warning, TEXT("CARGO_TRACTOR source=scenario reason=\"the prepared record: %s\" max_force=%.0f"), *Error, D.MaxForceN);
+        }
+        State->TractorLookup = FSCCargoState::ELookup::Done;
+    }
     if (State->TractorLookup == FSCCargoState::ELookup::None)
     {
         // The client exists while the archive is still opening (a prepared scenario's ship can be in the scene first): a
@@ -153,11 +195,15 @@ void USCCargoSubsystem::TryScenario()
         }
     }
     if (State->TractorLookup != FSCCargoState::ELookup::Done) return; // stock and drones wait for the lift values
-    if (!State->Fx)
+    // The effects ask the archive (MaterialEffects, the ships' records) and keep what they got for the session: they start
+    // once it is no longer opening (a prepared tractor record needs no archive, so this can come first); the stock and the
+    // drones do not wait for them (no effects yet: the beam mesh).
+    const bool bNoFx = FParse::Param(FCommandLine::Get(), TEXT("SCNoCargoFx"));
+    if (!State->Fx && (bNoFx || Viewer->GetArchiveState() != ESCArchiveState::Opening))
     {
         // The tractor's effects (WP-K4c), from the record just read (none without the archive: the beam mesh then).
         State->Fx = MakeShared<FSCCargoFx>();
-        if (FParse::Param(FCommandLine::Get(), TEXT("SCNoCargoFx")))
+        if (bNoFx)
         {
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_FX off (-SCNoCargoFx): the beam mesh"));
         }
@@ -189,6 +235,16 @@ void USCCargoSubsystem::TryScenario()
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loose=%s count=%d placed=%d%s"), *L.Entity, L.Count, Ids.Num(), Error.IsEmpty() ? TEXT("") : *(TEXT(" reason=\"") + Error + TEXT("\"")));
         }
     }
+    // A prepared scenario's box that did not come (its level missing or unreadable since the start) fails the scenario at once
+    // (whatever else the library still has queued): its stock is not placed short.
+    if (State->bPreparedSetup)
+        for (const auto& [Entity, Level] : UUCSettings::Get()->ScenarioCargoLevels)
+            if (const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity); E && E->State == FSCCargoBoxLibrary::EState::Failed)
+            {
+                if (UUCSettings::Get()->ScenarioCargoProblem.IsEmpty())
+                    UUCSettings::Get()->ScenarioCargoProblem = FString::Printf(TEXT("the prepared cargo box %s (%s) did not load: %s"), *Entity, *Level, *E->Error);
+                return;
+            }
     if (State->AppliedKinds == 3 || Viewer->IsBusy() || !State->Library.IsSettled()) return;
     // Owners, and the scenario's other vehicles: more instances of its ship, spawned before any stock is placed.
     if (!State->bScenarioVehiclesRequested && Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))

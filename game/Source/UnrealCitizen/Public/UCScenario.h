@@ -76,8 +76,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  manifest's interaction points saved (a seat route is pressed at one). 26: WP-O1-4b-2 the player body prepared (its own
      *  level: the kit actor with its rigs, its parsed kit and clips; the record names it, PlayerLevel). 27: its kit as one payload
      *  read whole, its package audio staged. 28: WP-O1-4b-2b the traversal clips (seats, ladders) prepared for the body
-     *  (TraversalClips). */
-    static constexpr int32 FormatVersion = 28;
+     *  (TraversalClips). 29: WP-O1-4b-3 the cargo setup's boxes prepared (a level per box entity, CargoLevels) and its
+     *  tractor record kept (TractorRecordJson). */
+    static constexpr int32 FormatVersion = 29;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id
@@ -87,6 +88,12 @@ struct UNREALCITIZEN_API FUCPrepared
     FString VehicleLevel;     // long package name (the paint baked in)
     FString PlayerLevel;      // long package name of the player body's level (WP-O1-4b-2; shared by scenarios with the same body)
     FString TraversalClips;   // package of the seat and ladder clips read for that body (WP-O1-4b-2b, TraversalClipsPath)
+    /** WP-O1-4b-3: the cargo setup's box entities and their prepared levels (CargoLevelPath; shared by scenarios), and the
+     *  tractor record the setup names as DataCore answered at prep (empty: none named, or the archive had none). */
+    TMap<FString, FString> CargoLevels;
+    FString TractorRecordJson;
+    /** Where the prep step saves a cargo box entity's level. */
+    static FString CargoLevelPath(const FString& Entity);
     FString Archive;          // the archive builds the levels were prepared from, comma-separated (information)
     FString PreparedAt;       // UTC, ISO 8601
 

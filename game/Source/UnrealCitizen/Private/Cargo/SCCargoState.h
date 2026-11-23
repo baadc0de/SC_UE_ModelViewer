@@ -393,6 +393,9 @@ struct FSCCargoState
     TArray<FSCCargoJob> Jobs;
     FSCCargoScenario Scenario;
     bool bScenarioTried = false, bScenarioLoadRequested = false;
+    /** The cargo setup is a prepared scenario's (WP-O1-4b-3): its tractor record is the one kept at prep (none kept: the
+     *  setup's own values). Not the default fleet a live spawn loads under a scenario without a setup. */
+    bool bPreparedSetup = false;
     uint8 AppliedKinds = 0; // bit per ESCCargoGridKind whose scenario stock and docks are placed
     bool bScenarioPlaced = false; // both kinds placed once (later re-placement after a ship is lost is not waited on)
     bool bLoosePlaced = false;   // the scenario's loose stock is down (WP-K2)

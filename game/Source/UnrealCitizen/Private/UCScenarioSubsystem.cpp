@@ -19,6 +19,9 @@ namespace
 // How long the run tries to put the player at the scenario's start (first person and the teleport destinations appear
 // once the levels' collision and the hangar's standing places are ready).
 constexpr double StartPlacementSeconds = 20.0;
+/** How long a scenario waits for its prepared cargo boxes once its levels are in (streamed levels, a few seconds each; a
+ *  runtime constant, not game data): past it the scenario fails. */
+constexpr double PreparedCargoSeconds = 120.0;
 // How long the prepared levels may take to stream in before the run fails (an extra-large hangar streams in well under a
 // minute from a local disk).
 constexpr double LoadingSeconds = 600.0;
@@ -100,6 +103,8 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioCargoName = Scenario.Cargo;
     Settings->ScenarioCargoJson = Scenario.CargoJson;
     Settings->ScenarioVehicle = Scenario.Vehicle;
+    Settings->ScenarioCargoLevels = Prepared.CargoLevels;
+    Settings->ScenarioTractorRecordJson = Prepared.TractorRecordJson;
     // The player body from its prepared level (WP-O1-4b-2), streamed with the vehicle's.
     Viewer->SetPreparedPlayerLevel(Prepared.PlayerLevel);
     // Its seat and ladder clips, read for that body at prep (WP-O1-4b-2b).
@@ -122,6 +127,9 @@ void UUCScenarioSubsystem::Deinitialize()
     Settings->ScenarioCargoName.Reset();
     Settings->ScenarioCargoJson.Reset();
     Settings->ScenarioVehicle.Reset();
+    Settings->ScenarioCargoLevels.Reset();
+    Settings->ScenarioTractorRecordJson.Reset();
+    Settings->ScenarioCargoProblem.Reset();
     Super::Deinitialize();
 }
 
@@ -144,6 +152,9 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     // What the run started stops and goes: a level still streaming, the environment, the player body and the cargo setup not
     // applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();
+    UUCSettings::Get()->ScenarioCargoLevels.Reset(); // the box library releases its prepared levels (DropScenario)
+    UUCSettings::Get()->ScenarioTractorRecordJson.Reset();
+    UUCSettings::Get()->ScenarioCargoProblem.Reset();
     if (USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)) Cargo->DropScenario();
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
@@ -166,6 +177,13 @@ bool UUCScenarioSubsystem::Tick(float)
 {
     USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr;
     if (!Viewer || !GetGameInstance()->GetWorld()) return true;
+    // A prepared cargo box that did not load (WP-O1-4b-3): the scenario does not run short of its stock.
+    if ((State == EState::Loading || State == EState::Starting || State == EState::Running) && !UUCSettings::Get()->ScenarioCargoProblem.IsEmpty())
+    {
+        // Its level is there but does not hold a usable box: an ordinary prep would keep it.
+        Fail(UUCSettings::Get()->ScenarioCargoProblem + TEXT(": run ") + FUCPrepared::PrepareCommand(Id) + TEXT(" -Force"));
+        return true;
+    }
     switch (State)
     {
     case EState::Loading:
@@ -202,6 +220,7 @@ bool UUCScenarioSubsystem::Tick(float)
         }
         State = EState::Starting;
         StartedAt = FPlatformTime::Seconds();
+        CargoWaitSince = GetGameInstance()->GetWorld()->GetAudioTimeSeconds(); // the boxes' deadline runs from here
         UE_LOG(LogUCScenario, Display, TEXT("SCENARIO loaded id=%s vehicle=%s environment=%s"), *Id, *Viewer->GetLoadedEntity(),
                Viewer->GetEnvironment() ? *Viewer->GetEnvironment()->GetName() : TEXT("none"));
         return true;
@@ -238,6 +257,7 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
         bCameraSet = Viewer.SetCameraMode(Mode) && (!bFirst || Viewer.GetFirstPerson());
         if (!bCameraSet && !bTimedOut) return; // first person waits for the vehicle's collision
         if (!bCameraSet) UE_LOG(LogUCScenario, Warning, TEXT("SCENARIO camera %s did not take"), *Scenario.Camera);
+        bCameraSet = true; // taken, or given up on: not tried again while the cargo is still coming
     }
     ASCFirstPersonCharacter* Character = bFirst ? Viewer.GetFirstPerson() : nullptr;
     if (!bStartPlaced && Character && !Scenario.Start.IsEmpty())
@@ -257,7 +277,21 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
             for (const FSCTeleportRow& Row : Rows) Labels.Add(Character->DestinationLabel(Row));
             UE_LOG(LogUCScenario, Warning, TEXT("SCENARIO start \"%s\" names no teleport destination (%s): the default start"), *Scenario.Start,
                    *FString::Join(Labels, TEXT(", ")));
+            bStartPlaced = true; // the default start stays: not tried again while the cargo is still coming
         }
+    }
+    // Placement ends at its timeout whatever the view (no first-person character now: none later either).
+    if (bTimedOut) bStartPlaced = true;
+    // Running means the scene is in: the prepared cargo boxes too (their templates; a box that fails fails the scenario, and
+    // so does one that has not come within PreparedCargoSeconds). Independent of the camera's placement timeout.
+    // Counted in the world's audio time: a pause stops the box streaming and the deadline alike, and a time dilation
+    // (slomo) does not shorten it.
+    UWorld* World = GetGameInstance()->GetWorld();
+    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(World); Cargo && !Cargo->ArePreparedBoxesReady())
+    {
+        if (World->GetAudioTimeSeconds() - CargoWaitSince > PreparedCargoSeconds)
+            Fail(FString::Printf(TEXT("the prepared cargo boxes did not come within %.0f s"), PreparedCargoSeconds));
+        return;
     }
     bMusicPending = !Scenario.Music.IsEmpty();
     if (USCMusicSubsystem* Music = bMusicPending ? USCMusicSubsystem::Get(GetGameInstance()->GetWorld()) : nullptr) Music->RequestCatalogue();

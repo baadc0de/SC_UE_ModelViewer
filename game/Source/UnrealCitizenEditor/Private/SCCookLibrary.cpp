@@ -188,7 +188,7 @@ struct FCooker
 } // namespace
 
 bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot, const FString& SourceBuild,
-                                     bool bKeepRigs)
+                                     bool bKeepRigs, bool bInstanceParts)
 {
     if (!Environment) return false;
     const double Start = FPlatformTime::Seconds();
@@ -299,7 +299,7 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
                 for (FSCClipBinding& Binding : Clip.Bindings) Binding.Sequences.Reset();
             }
     }
-    const FSCInstancingStats Instancing = FSCInstancing::Consolidate(Environment); // pieces freed from the rigs
+    const FSCInstancingStats Instancing = bInstanceParts ? FSCInstancing::Consolidate(Environment) : FSCInstancingStats(); // pieces freed from the rigs
     // Runtime-only proxies (emissive Lumen copies with generated meshes) are rebuilt when the level loads.
     TArray<UActorComponent*> Proxies = Environment->GetComponentsByTag(UPrimitiveComponent::StaticClass(), TEXT("SCEmissiveExperiment"));
     for (UActorComponent* Proxy : Proxies) Proxy->DestroyComponent();

@@ -30,10 +30,11 @@ public:
      *  each rig mesh gets an editor source model (SCRigAssets) and is saved with its skeleton under Root/Rigs, its
      *  collision derived again in the built vertex order and saved on the rig, its materials constant; the clip catalog is
      *  saved with the actor (its editor-only sequences left out: playback reads the bone tracks). Needs the import's rig
-     *  sources (FSCImportOptions::bRetainRigSources). */
+     *  sources (FSCImportOptions::bRetainRigSources). bInstanceParts: repeated plain parts become instanced components (off
+     *  for a cargo box template, whose parts each box copies one by one, WP-O1-4b-3). */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static bool CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot = TEXT("/Game/SC/Hangars/Shared"),
-                                const FString& SourceBuild = TEXT(""), bool bKeepRigs = false);
+                                const FString& SourceBuild = TEXT(""), bool bKeepRigs = false, bool bInstanceParts = true);
     /** Measures a presented environment (rigs alive: before CookEnvironment) and records its ship capacity under
      *  Style/Name in the hangar index (USCHangarIndex::AssetPath), saving it. bOutMeasured is false without a ship
      *  elevator (nothing recorded, an older entry for the hangar removed); returns false when the index could not be saved. */

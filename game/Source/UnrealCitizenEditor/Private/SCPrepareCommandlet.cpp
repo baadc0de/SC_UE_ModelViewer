@@ -16,6 +16,7 @@
 #include "SCViewOptions.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
+#include "Cargo/SCCargoScenario.h"
 #include "Editor.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
@@ -184,7 +185,7 @@ public:
     /** Audio staged (a player body's too, as its live import registers it: its items' audio actions), the actor cooked, the
      *  level saved and stamped. */
     bool Finish(ASCVehicle* Actor, const FString& Level, const FString& Root, const FString& Shared, const FSCPackageSource& Source,
-                const FString& Scene, FString& Error)
+                const FString& Scene, FString& Error, bool bInstanceParts = true)
     {
         const FString Name = FPackageName::GetShortName(Level);
         const FString AudioFolder = TEXT("SCAudio/") + Name;
@@ -192,7 +193,7 @@ public:
         if (!SCPrepareAudio::Stage(Source, Scene, FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / AudioFolder), AudioFiles, Error)) return false;
         Actor->CookedAudio = AudioFolder;
         Actor->CookedAudioScene = Scene;
-        if (!USCCookLibrary::CookEnvironment(Actor, Root, Shared, Viewer ? Viewer->GetArchiveBuildId() : FString(), /*bKeepRigs*/ true))
+        if (!USCCookLibrary::CookEnvironment(Actor, Root, Shared, Viewer ? Viewer->GetArchiveBuildId() : FString(), /*bKeepRigs*/ true, bInstanceParts))
         {
             Error = TEXT("the cook of ") + Level + TEXT(" did not save every asset");
             return false;
@@ -374,6 +375,73 @@ public:
         return Finish(Body, Level, TEXT("/Game/SC/Players/") + Name, TEXT("/Game/SC/Players/Shared"), *Source, Scene, Error);
     }
 
+    /** A cargo box entity's level (WP-O1-4b-3): the box as the box library imports it (no collision: the box body collides;
+     *  no clips), hidden, its parts not instanced (each box copies them); a run streams it as the box's template. */
+    bool PrepareBox(const FString& Entity, const FString& Level, FString& Error)
+    {
+        const TSharedPtr<FSCTarPackageSource> Source = Export(false, Entity, Error);
+        if (!Source) return false;
+        const FString Scene = FSCPlayerKit::FindRootScene(*Source);
+        if (Scene.IsEmpty())
+        {
+            Error = Entity + TEXT(": no single root scene.json in the export");
+            return false;
+        }
+        const FString Name = FPackageName::GetShortName(Level);
+        UWorld* World = NewLevel(Level, TEXT("/Game/SC/Cargo/") + Name, Error);
+        if (!World) return false;
+        FSCImportOptions Options;
+        Options.World = World;
+        Options.ScenePath = Scene;
+        Options.bBuildCollision = false;
+        Options.bPublish = false;
+        Options.bReplacePrevious = false;
+        Options.bImportClips = false;
+        FSCImportResult Result;
+        if (!FSCImporter::Import(*Source, Options, Result) || !Result.Vehicle.Get())
+        {
+            Error = Entity + TEXT(": the import failed: ") + Result.Error;
+            return false;
+        }
+        ASCVehicle* Box = Result.Vehicle.Get();
+        const FSCItemOccupancy& Occupancy = Box->Manifest.RootOccupancy;
+        if (!Occupancy.bValid || Occupancy.StandardCargoUnits <= 0)
+        {
+            Error = Entity + TEXT(": the package's root is not a standard cargo unit item");
+            return false;
+        }
+        Box->SetActorHiddenInGame(true);
+        Box->SetActorEnableCollision(false);
+        Box->SetActorLabel(TEXT("Box ") + Name);
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE box %s scu=%d size_m=%s mass=%.0f"), *Entity, Occupancy.StandardCargoUnits,
+               *Occupancy.Dimensions.ToString(), Occupancy.Mass);
+        return Finish(Box, Level, TEXT("/Game/SC/Cargo/") + Name, TEXT("/Game/SC/Cargo/Shared"), *Source, Scene, Error, /*bInstanceParts*/ false);
+    }
+
+    /** The tractor record the cargo setup names, as DataCore answers it (WP-O1-4b-3): a run applies it instead of asking.
+     *  Empty when the setup names none; a record that does not apply is reported and left out (the run then asks the
+     *  archive, or keeps the setup's copy of the values). */
+    bool PrepareTractor(const FSCCargoScenario& Cargo, FString& OutJson, FString& Error)
+    {
+        OutJson.Reset();
+        const FString Record = !Cargo.Drone.TractorRecord.IsEmpty() ? Cargo.Drone.TractorRecord : Cargo.Drone.TractorRecordGuid;
+        if (Record.IsEmpty()) return true;
+        if (!OpenArchive(Error)) return false;
+        UE::Tasks::TTask<FSCTextResult> Task = Viewer->GetClient()->DataCoreRecord(Record);
+        Task.Wait();
+        const FSCTextResult& R = Task.GetResult();
+        FSCCargoDroneDefinition Check = Cargo.Drone;
+        FString Why = R.Error.ToString();
+        if (!R.bOK || !Check.ApplyTractorRecord(R.Json, Why))
+        {
+            UE_LOG(LogSCPrepare, Warning, TEXT("SC_PREPARE tractor record %s left out: %s"), *Record, *Why);
+            return true;
+        }
+        OutJson = R.Json;
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE tractor record=%s bytes=%d max_force=%.0f"), *Record, OutJson.Len(), Check.MaxForceN);
+        return true;
+    }
+
     /** The scenario's traversal clips (WP-O1-4b-2b): every seat and ladder action its vehicle and environment can ask for
      *  (read from their prepared levels' records), exported once and read against its prepared body's skeleton, saved as one
      *  asset (USCTraversalClipsData) a run serves seats and ladders from. */
@@ -548,6 +616,27 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     {
         return Failed(Id, Error);
     }
+    // The cargo setup's boxes (a level per box entity, shared by scenarios) and its tractor record (WP-O1-4b-3).
+    if (!Scenario.Cargo.IsEmpty())
+    {
+        FSCCargoScenario Cargo;
+        if (!FSCCargoScenario::Parse(Scenario.CargoJson, Cargo, Error)) return Failed(Id, TEXT("cargo setup ") + Scenario.Cargo + TEXT(": ") + Error);
+        for (const FString& Entity : Cargo.Entities())
+        {
+            const FString Level = FUCPrepared::CargoLevelPath(Entity);
+            if (Level.IsEmpty()) return Failed(Id, TEXT("cargo box entity \"") + Entity + TEXT("\" names no level"));
+            Record.CargoLevels.Add(Entity, Level);
+            if (Current(Level) && !Prepare.bForce)
+            {
+                UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Level, FUCPrepared::FormatVersion);
+            }
+            else if (!Prepare.PrepareBox(Entity, Level, Error))
+            {
+                return Failed(Id, Error);
+            }
+        }
+        if (!Prepare.PrepareTractor(Cargo, Record.TractorRecordJson, Error)) return Failed(Id, Error);
+    }
     // The seat and ladder clips for that body: read again unless they were read from these very levels (their stamps' ids:
     // a level saved again since, by this run or another scenario's sharing it, makes them stale). Their names come from the
     // levels' records, their bones from the body.
@@ -563,7 +652,9 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     }
     // The archive builds the levels were prepared from (each level's stamp names its own).
     TArray<FString> Builds;
-    for (const FString& Level : {Record.EnvironmentLevel, Record.VehicleLevel, Record.PlayerLevel, Record.TraversalClips})
+    TArray<FString> Prepared = {Record.EnvironmentLevel, Record.VehicleLevel, Record.PlayerLevel, Record.TraversalClips};
+    for (const auto& [Entity, Level] : Record.CargoLevels) Prepared.Add(Level);
+    for (const FString& Level : Prepared)
         if (const FString Build = FUCPrepared::LevelBuild(Level); !Level.IsEmpty()) Builds.AddUnique(Build.IsEmpty() ? FString(TEXT("unknown")) : Build);
     Record.Archive = FString::Join(Builds, TEXT(", "));
     Record.PreparedAt = FDateTime::UtcNow().ToIso8601();
