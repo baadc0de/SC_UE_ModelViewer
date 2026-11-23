@@ -220,6 +220,7 @@ bool UUCScenarioSubsystem::Tick(float)
         }
         State = EState::Starting;
         StartedAt = FPlatformTime::Seconds();
+        CargoWaitSince = GetGameInstance()->GetWorld()->GetAudioTimeSeconds(); // the boxes' deadline runs from here
         UE_LOG(LogUCScenario, Display, TEXT("SCENARIO loaded id=%s vehicle=%s environment=%s"), *Id, *Viewer->GetLoadedEntity(),
                Viewer->GetEnvironment() ? *Viewer->GetEnvironment()->GetName() : TEXT("none"));
         return true;
@@ -288,7 +289,6 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
     UWorld* World = GetGameInstance()->GetWorld();
     if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(World); Cargo && !Cargo->ArePreparedBoxesReady())
     {
-        if (CargoWaitSince < 0) CargoWaitSince = World->GetAudioTimeSeconds();
         if (World->GetAudioTimeSeconds() - CargoWaitSince > PreparedCargoSeconds)
             Fail(FString::Printf(TEXT("the prepared cargo boxes did not come within %.0f s"), PreparedCargoSeconds));
         return;

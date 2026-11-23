@@ -67,8 +67,10 @@ void USCCargoSubsystem::DropScenario()
 bool USCCargoSubsystem::ArePreparedBoxesReady() const
 {
     if (!State || !State->bPreparedSetup) return true;
-    for (const auto& [Entity, Level] : UUCSettings::Get()->ScenarioCargoLevels)
+    // The setup's own boxes (what it requests), each with a prepared level: a record's other mappings are not waited for.
+    for (const FString& Entity : State->Scenario.Entities())
     {
+        if (!UUCSettings::Get()->ScenarioCargoLevels.Contains(Entity)) continue;
         const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity);
         if (!E || E->State != FSCCargoBoxLibrary::EState::Ready) return false;
     }
