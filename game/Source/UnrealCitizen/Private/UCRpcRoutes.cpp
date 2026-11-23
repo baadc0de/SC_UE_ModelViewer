@@ -304,6 +304,7 @@ public:
         O->SetStringField(TEXT("vehicle_level"), S.GetPrepared().VehicleLevel);
         O->SetStringField(TEXT("environment_level"), S.GetPrepared().EnvironmentLevel);
         O->SetStringField(TEXT("player_level"), S.GetPrepared().PlayerLevel);
+        O->SetStringField(TEXT("traversal_clips"), S.GetPrepared().TraversalClips);
         return O;
     }
     void Snapshot(UWorld* World, FJsonObject& State) const override

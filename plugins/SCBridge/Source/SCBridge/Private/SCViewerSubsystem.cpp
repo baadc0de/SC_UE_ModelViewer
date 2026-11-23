@@ -449,6 +449,38 @@ FString USCViewerSubsystem::PlayerLevelPath(const FString& Gender, const FString
     const FString Name = LevelName(Sex);
     return FString::Printf(TEXT("/Game/SC/Players/Maps/Player_%s_%08x"), *Name, FCrc::StrCrc32(*Key));
 }
+FString USCViewerSubsystem::TraversalClipsPath(const FString& PlayerLevel, const FString& VehicleLevel, const FString& EnvironmentLevel)
+{
+    const FString Key = FString::Printf(TEXT("%s|%s|%s"), *PlayerLevel.ToLower(), *VehicleLevel.ToLower(), *EnvironmentLevel.ToLower());
+    return FString::Printf(TEXT("/Game/SC/Players/Traversal/Traversal_%08x"), FCrc::StrCrc32(*Key));
+}
+void USCViewerSubsystem::SetPreparedTraversalClips(const FString& Package)
+{
+    PreparedTraversal = Package;
+    TraversalData = nullptr;
+    bTraversalWarned = false;
+    if (Package.IsEmpty()) return;
+    // Loaded in the background while the scenario's levels stream; a request before it finished loads it at once.
+    TWeakObjectPtr<USCViewerSubsystem> Weak(this);
+    LoadPackageAsync(Package, FLoadPackageAsyncDelegate::CreateLambda([Weak, Package](const FName&, UPackage* Loaded, EAsyncLoadingResult::Type) {
+        if (!Weak.IsValid() || Weak->PreparedTraversal != Package || Weak->TraversalData || !Loaded) return;
+        Weak->TraversalData = FindObject<USCTraversalClipsData>(Loaded, *FPackageName::GetShortName(Package));
+    }));
+}
+TSharedPtr<const FSCPlayerClipMap> USCViewerSubsystem::GetPreparedTraversalClips()
+{
+    if (PreparedTraversal.IsEmpty()) return nullptr;
+    if (!TraversalData)
+        TraversalData = LoadObject<USCTraversalClipsData>(nullptr, *(PreparedTraversal + TEXT(".") + FPackageName::GetShortName(PreparedTraversal)));
+    const TCHAR* Problem = !TraversalData ? TEXT("does not load")
+        : !TraversalData->Clips ? TEXT("does not read")
+        : TraversalData->BodyLevel != PreparedPlayerLevel ? TEXT("was read for another body") : nullptr;
+    if (!Problem) return TraversalData->Clips;
+    if (!bTraversalWarned)
+        UE_LOG(LogSCViewer, Warning, TEXT("TRAVERSAL_CLIPS %s %s (body %s)"), *PreparedTraversal, Problem, *PreparedPlayerLevel);
+    bTraversalWarned = true;
+    return nullptr;
+}
 bool USCViewerSubsystem::IsShipPaintLevel(const FString& Level)
 {
     return FPackageName::GetShortName(Level).Contains(TEXT("__"));

@@ -1,6 +1,11 @@
 // Asynchronous request and sidecar validation for an authored body action set.
 #include "SCTraversalClips.h"
+#include "SCPackageReader.h"
 #include "SCPackageSource.h"
+#include "SCLadderRecords.h"
+#include "SCPlayerKitData.h"
+#include "SCSeatRecords.h"
+#include "SCVehicle.h"
 #include "SCPlayerBody.h"
 #include "SCRigComponent.h"
 #include "SCViewerSubsystem.h"
@@ -13,6 +18,8 @@
 #include "Misc/Parse.h"
 #include "Engine/SkeletalMesh.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogSCTraversal, Log, All);
+
 bool FSCTraversalClips::Start(const USCPlayerBodyComponent& Body, USCViewerSubsystem* Viewer,
     TArray<FString> Names, const TCHAR* FixtureOption)
 {
@@ -24,7 +31,24 @@ bool FSCTraversalClips::Start(const USCPlayerBodyComponent& Body, USCViewerSubsy
     for (int32 Index = 0; Index < Ref.GetNum(); ++Index) Bones.Add(Ref.GetBoneName(Index).ToString(), Index);
 
     FString File;
-    if (FParse::Value(FCommandLine::Get(), FixtureOption, File))
+    // A prepared scenario (WP-O1-4b-2b): its clips were read for its body at prep and serve every seat and ladder of its
+    // vehicle and environment. A request they do not cover (a vehicle brought in after the start, the Garage's) asks the
+    // archive when it is open, as without a scenario; else it fails as a missing clip.
+    FResult Prepared;
+    bool bPrepared = false;
+    if (Viewer && Viewer->UsesPreparedTraversalClips())
+    {
+        const TSharedPtr<const FSCPlayerClipMap> Set = Viewer->GetPreparedTraversalClips();
+        bPrepared = ServeFromPrepared(Set.Get(), Names, Viewer->GetArchiveState() == ESCArchiveState::Ready, Prepared);
+    }
+    const bool bFixture = !bPrepared && FParse::Value(FCommandLine::Get(), FixtureOption, File);
+    UE_LOG(LogSCTraversal, Display, TEXT("TRAVERSAL_CLIPS_SOURCE source=%s names=%d%s"), bPrepared ? TEXT("prepared") : bFixture ? TEXT("fixture") : TEXT("archive"),
+           Names.Num(), Viewer && Viewer->UsesPreparedTraversalClips() && !bPrepared ? TEXT(" (not in the prepared set)") : TEXT(""));
+    if (bPrepared)
+    {
+        Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Result = MoveTemp(Prepared)]() mutable { return MoveTemp(Result); });
+    }
+    else if (bFixture)
     {
         Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [File, Gender, Names = MoveTemp(Names), Bones = MoveTemp(Bones)] {
             TArray64<uint8> Tar;
@@ -52,14 +76,18 @@ FSCTraversalClips::FResult FSCTraversalClips::Read(TArray64<uint8>&& Tar, const 
 {
     FSCTarPackageSource Source(MoveTemp(Tar));
     FResult Result;
-    if (!Source.IsValid())
-    {
-        Result.Error = Source.GetError();
-        return Result;
-    }
-    auto ReadText = [&](const FString& Path, FString& Json) {
+    TArray<FString> Skipped;
+    if (!Source.IsValid()) Result.Error = Source.GetError();
+    else if (!SCTraversal::ReadClips(Source, Gender, Names, Bones, false, Result.Clips, Skipped, Result.Error)) Result.Clips.Reset();
+    return Result;
+}
+
+bool SCTraversal::ReadClips(const FSCPackageSource& Source, const FString& Gender, const TArray<FString>& Names, const TMap<FString, int32>& Bones,
+                            bool bSkipMissing, FSCPlayerClipMap& Out, TArray<FString>& Skipped, FString& Error)
+{
+    auto ReadText = [&](const FString& Path, FString& Json, FString& ReadError) {
         TArray<uint8> Bytes;
-        if (!Source.ReadBytes(Path, Bytes, Result.Error)) return false;
+        if (!Source.ReadBytes(Path, Bytes, ReadError)) return false;
         Json = FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(Bytes.GetData()), Bytes.Num()));
         return true;
     };
@@ -69,14 +97,14 @@ FSCTraversalClips::FResult FSCTraversalClips::Read(TArray64<uint8>&& Tar, const 
     const TSharedPtr<FJsonObject>* ClipSet = nullptr;
     const TArray<TSharedPtr<FJsonValue>>* Records = nullptr;
     FString PackageGender;
-    if (!ReadText(TEXT("Packages/player_clips/scene.json"), Json) ||
+    if (!ReadText(TEXT("Packages/player_clips/scene.json"), Json, Error) ||
         !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Scene) || !Scene ||
         !Scene->TryGetObjectField(TEXT("root_entity"), Root) || !(*Root)->TryGetArrayField(TEXT("animations"), Records) ||
         !Scene->TryGetObjectField(TEXT("player_clips"), ClipSet) || !(*ClipSet)->TryGetStringField(TEXT("gender"), PackageGender) ||
         !PackageGender.Equals(Gender, ESearchCase::IgnoreCase))
     {
-        if (Result.Error.IsEmpty()) Result.Error = TEXT("Invalid traversal clip manifest");
-        return Result;
+        if (Error.IsEmpty()) Error = TEXT("Invalid traversal clip manifest");
+        return false;
     }
     TMap<FName, FString> Paths;
     for (const auto& Value : *Records)
@@ -91,23 +119,66 @@ FSCTraversalClips::FResult FSCTraversalClips::Read(TArray64<uint8>&& Tar, const 
     {
         const FString* Path = Paths.Find(FName(*Name));
         const auto Clip = MakeShared<FSCPlayerClip>();
-        if (!Path)
+        FString ClipError;
+        if (!Path) ClipError = TEXT("Missing traversal animation ") + Name;
+        else if (!ReadText(FString(TEXT("Packages/player_clips/")) + *Path, Json, ClipError) ||
+                 !FSCPlayerClip::Parse(Json,
+                     [&](const FString& Bone) { const int32* Index = Bones.Find(Bone); return Index ? *Index : INDEX_NONE; },
+                     *Clip, ClipError) || Clip->bAdditive ||
+                 Clip->Tracks.IsEmpty() || !FMath::IsFinite(Clip->Duration) || Clip->Duration <= 0.f)
         {
-            Result.Error = TEXT("Missing traversal animation ") + Name;
-            return Result;
+            if (ClipError.IsEmpty()) ClipError = TEXT("Unreadable traversal animation ") + Name;
         }
-        if (!ReadText(FString(TEXT("Packages/player_clips/")) + *Path, Json) ||
-            !FSCPlayerClip::Parse(Json,
-                [&](const FString& Bone) { const int32* Index = Bones.Find(Bone); return Index ? *Index : INDEX_NONE; },
-                *Clip, Result.Error) || Clip->bAdditive ||
-            Clip->Tracks.IsEmpty() || !FMath::IsFinite(Clip->Duration) || Clip->Duration <= 0.f)
+        if (ClipError.IsEmpty())
         {
-            if (Result.Error.IsEmpty()) Result.Error = TEXT("Unreadable traversal animation ") + Name;
-            return Result;
+            Out.Add(FName(*Name), Clip);
+            continue;
         }
-        Result.Clips.Add(FName(*Name), Clip);
+        if (!bSkipMissing)
+        {
+            Error = ClipError;
+            return false;
+        }
+        Skipped.Add(Name + TEXT(": ") + ClipError);
     }
-    return Result;
+    return true;
+}
+
+TArray<FString> SCTraversal::ClipNames(const ASCVehicle& Vehicle)
+{
+    TArray<FString> Names;
+    for (const FSCSceneInstance& Child : Vehicle.Manifest.Children)
+        if (Child.Seat.IsSet())
+            for (const FSCSeatAction& Action : Child.Seat->Actions)
+                if (!Action.Animation.IsNone()) Names.AddUnique(Action.Animation.ToString());
+    for (const FSCLadderAnchor& Ladder : Vehicle.LadderAnchors)
+        for (const auto& [State, Action] : Ladder.Data.Actions)
+            if (!Action.Clip.IsNone()) Names.AddUnique(Action.Clip.ToString());
+    Names.Sort();
+    return Names;
+}
+
+bool FSCTraversalClips::ServeFromPrepared(const FSCPlayerClipMap* Set, const TArray<FString>& Names, bool bArchive, FResult& Out)
+{
+    Out = FResult();
+    if (!Set)
+    {
+        Out.Error = TEXT("the prepared traversal clips do not load for this body (prepare the scenario again)");
+        return true;
+    }
+    for (const FString& Name : Names)
+    {
+        const TSharedPtr<const FSCPlayerClip>* Clip = Set->Find(FName(*Name));
+        if (Clip && *Clip)
+        {
+            Out.Clips.Add(FName(*Name), *Clip);
+            continue;
+        }
+        Out.Clips.Reset();
+        Out.Error = TEXT("Traversal animation ") + Name + TEXT(" was not prepared");
+        return !bArchive;
+    }
+    return true;
 }
 
 TOptional<FSCTraversalClips::FResult> FSCTraversalClips::Take()

@@ -205,16 +205,35 @@ bool FUCPrepared::IsLevelCurrent(const FString& Level)
 {
     if (Level.IsEmpty() || !FPackageName::DoesPackageExist(Level)) return false;
     if (FPlatformProperties::RequiresCookedData()) return true;
-    // A complete stamp: the format on its first line and the archive build on its second.
+    // A complete stamp: the format on its first line, the archive build on its second and the save's id on its third.
     TArray<FString> Lines;
-    return FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) && Lines.Num() >= 2 && Lines[0].TrimStartAndEnd().IsNumeric() &&
-           FCString::Atoi(*Lines[0]) == FormatVersion && !Lines[1].TrimStartAndEnd().IsEmpty();
+    return FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) && Lines.Num() >= 3 && Lines[0].TrimStartAndEnd().IsNumeric() &&
+           FCString::Atoi(*Lines[0]) == FormatVersion && !Lines[1].TrimStartAndEnd().IsEmpty() && !Lines[2].TrimStartAndEnd().IsEmpty();
 }
 FString FUCPrepared::LevelBuild(const FString& Level)
 {
     TArray<FString> Lines;
     if (Level.IsEmpty() || !FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) || Lines.Num() < 2) return FString();
     return Lines[1].TrimStartAndEnd();
+}
+FString FUCPrepared::LevelId(const FString& Level)
+{
+    TArray<FString> Lines;
+    if (Level.IsEmpty() || !FFileHelper::LoadFileToStringArray(Lines, *StampFile(Level)) || Lines.Num() < 3) return FString();
+    return Lines[2].TrimStartAndEnd();
+}
+FString FUCPrepared::TraversalSources() const
+{
+    // Every level the record names has an id (only an absent environment leaves its field empty); else there are none.
+    const FString Body = LevelId(PlayerLevel), Vehicle = LevelId(VehicleLevel), Environment = LevelId(EnvironmentLevel);
+    if (Body.IsEmpty() || Vehicle.IsEmpty() || (!EnvironmentLevel.IsEmpty() && Environment.IsEmpty())) return FString();
+    return FString::Printf(TEXT("%s|%s|%s"), *Body, *Vehicle, *Environment);
+}
+FString FUCPrepared::RecordedSources(const FString& TraversalClips)
+{
+    TArray<FString> Lines;
+    if (TraversalClips.IsEmpty() || !FFileHelper::LoadFileToStringArray(Lines, *StampFile(TraversalClips)) || Lines.Num() < 4) return FString();
+    return Lines[3].TrimStartAndEnd();
 }
 FString FUCPrepared::Directory()
 {
@@ -248,6 +267,7 @@ bool FUCPrepared::Parse(const FString& Json, FUCPrepared& Out, FString& Error)
     Out.EnvironmentLevel = Str(Root, TEXT("environment_level"));
     Out.VehicleLevel = Str(Root, TEXT("vehicle_level"));
     Out.PlayerLevel = Str(Root, TEXT("player_level"));
+    Out.TraversalClips = Str(Root, TEXT("traversal_clips"));
     Out.Archive = Str(Root, TEXT("archive"));
     Out.PreparedAt = Str(Root, TEXT("prepared_at"));
     if (Out.Scenario.IsEmpty() || Out.Definition.IsEmpty() || Out.VehicleLevel.IsEmpty())
@@ -266,6 +286,7 @@ FString FUCPrepared::ToJson() const
     Root->SetStringField(TEXT("environment_level"), EnvironmentLevel);
     Root->SetStringField(TEXT("vehicle_level"), VehicleLevel);
     Root->SetStringField(TEXT("player_level"), PlayerLevel);
+    Root->SetStringField(TEXT("traversal_clips"), TraversalClips);
     Root->SetStringField(TEXT("archive"), Archive);
     Root->SetStringField(TEXT("prepared_at"), PreparedAt);
     Root->SetStringField(TEXT("definition"), Definition);
@@ -314,6 +335,9 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
     if (PlayerLevel.IsEmpty() || !LevelCurrent(PlayerLevel))
         return FString::Printf(TEXT("scenario %s: the prepared player body level %s is missing or not finished%s"), *Scenario,
                                PlayerLevel.IsEmpty() ? TEXT("(none named)") : *PlayerLevel, *Fix);
+    if (TraversalClips.IsEmpty() || !LevelCurrent(TraversalClips))
+        return FString::Printf(TEXT("scenario %s: the prepared traversal clips %s are missing or not finished%s"), *Scenario,
+                               TraversalClips.IsEmpty() ? TEXT("(none named)") : *TraversalClips, *Fix);
     // Character for character (FString's == ignores case), line ends aside: any edit since prep makes the record stale.
     if (Source && !Comparable(Source->Json).Equals(Comparable(Definition), ESearchCase::CaseSensitive))
         return FString::Printf(TEXT("scenario %s changed since it was prepared%s"), *Scenario, *Fix);
@@ -323,5 +347,11 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
 }
 FString FUCPrepared::Problem(const FUCScenario* Source) const
 {
-    return Problem(Source, [](const FString& Level) { return IsLevelCurrent(Level); });
+    // The traversal clips also follow the levels they were read from (a packaged game has no stamps: packaging checks it).
+    return Problem(Source, [this](const FString& Level) {
+        if (!IsLevelCurrent(Level)) return false;
+        if (Level != TraversalClips || FPlatformProperties::RequiresCookedData()) return true;
+        const FString Sources = TraversalSources();
+        return !Sources.IsEmpty() && RecordedSources(Level) == Sources;
+    });
 }

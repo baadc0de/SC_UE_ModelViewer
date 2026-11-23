@@ -75,8 +75,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  usables, seat records, light groups, the lights' authored state values and the room channels saved. 25: the
      *  manifest's interaction points saved (a seat route is pressed at one). 26: WP-O1-4b-2 the player body prepared (its own
      *  level: the kit actor with its rigs, its parsed kit and clips; the record names it, PlayerLevel). 27: its kit as one payload
-     *  read whole, its package audio staged. */
-    static constexpr int32 FormatVersion = 27;
+     *  read whole, its package audio staged. 28: WP-O1-4b-2b the traversal clips (seats, ladders) prepared for the body
+     *  (TraversalClips). */
+    static constexpr int32 FormatVersion = 28;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id
@@ -85,16 +86,26 @@ struct UNREALCITIZEN_API FUCPrepared
     FString EnvironmentLevel; // long package name; empty when the scenario has no environment
     FString VehicleLevel;     // long package name (the paint baked in)
     FString PlayerLevel;      // long package name of the player body's level (WP-O1-4b-2; shared by scenarios with the same body)
+    FString TraversalClips;   // package of the seat and ladder clips read for that body (WP-O1-4b-2b, TraversalClipsPath)
     FString Archive;          // the archive builds the levels were prepared from, comma-separated (information)
     FString PreparedAt;       // UTC, ISO 8601
 
-    /** <level>.cookformat beside a prepared level's .umap: the format it was prepared in and the archive build it was
-     *  prepared from (one line each), written once it saved. */
+    /** <level>.cookformat beside a prepared level's .umap (or asset's .uasset): the format it was prepared in, the archive
+     *  build it was prepared from, an id new with each save (WP-O1-4b-2b) and, for the traversal clips, the ids of the levels
+     *  they were read from (one line each), written once it saved. */
     static FString StampFile(const FString& Level);
     /** The archive build a level's stamp names (empty: none, e.g. a level stamped before WP-O1-4a's review). */
     static FString LevelBuild(const FString& Level);
-    /** The level exists and was prepared in this format (a packaged game, which has no stamps, only checks it exists: the
-     *  packaging refuses unstamped levels). */
+    /** The id a level's stamp names (new with each save; empty: none). */
+    static FString LevelId(const FString& Level);
+    /** The ids of the levels the traversal clips were read from (body|vehicle|environment), from the levels' stamps now
+     *  (Sources: what to write in the clips' stamp; empty when a level the record names has none) or from the clips' stamp
+     *  (Recorded). The clips are current only while the two agree and are not empty: a level saved again since (by this
+     *  scenario's prep or another's sharing it) makes them stale. */
+    FString TraversalSources() const;
+    static FString RecordedSources(const FString& TraversalClips);
+    /** The level exists and was prepared in this format, its stamp complete (format, build, the save's id) (a packaged game,
+     *  which has no stamps, only checks it exists: the packaging refuses unstamped levels). */
     static bool IsLevelCurrent(const FString& Level);
     /** <project>/Content/SCPrepared, and the record of a scenario in it. */
     static FString Directory();

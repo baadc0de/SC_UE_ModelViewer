@@ -102,6 +102,8 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioVehicle = Scenario.Vehicle;
     // The player body from its prepared level (WP-O1-4b-2), streamed with the vehicle's.
     Viewer->SetPreparedPlayerLevel(Prepared.PlayerLevel);
+    // Its seat and ladder clips, read for that body at prep (WP-O1-4b-2b).
+    Viewer->SetPreparedTraversalClips(Prepared.TraversalClips);
     // The environment before anything else is requested (it replaces a saved choice the viewer restored at start).
     Viewer->SetEnvironment(Scenario.Environment.IsEmpty() ? FString(TEXT("none")) : Scenario.Environment);
     State = EState::Loading;
@@ -149,6 +151,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
         // scenario).
         Viewer->ReleasePreparedPlayerKit();
         Viewer->SetPreparedPlayerLevel(FString());
+        Viewer->SetPreparedTraversalClips(FString());
         Viewer->CancelLoad();
         // A vehicle that loaded (another one in its place) goes once nothing loads; a load being cancelled finishes first
         // (Tick, state Failed).

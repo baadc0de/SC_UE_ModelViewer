@@ -17,6 +17,7 @@
 #include "Components/PointLightComponent.h"
 #include "SCLightImporter.h"
 #include "SCPlayerKitData.h"
+#include "SCTraversalClips.h"
 #include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -586,6 +587,66 @@ bool FSCSavedPlayerKitTest::RunTest(const FString&)
     Data->Clips.Reset();
     const USCPlayerKitData* Empty = DuplicateObject(Data, GetTransientPackage());
     TestTrue(TEXT("no data loads as none"), Empty && !Empty->HasData() && !Empty->Kit && !Empty->Clips);
+    return !HasAnyErrors();
+}
+
+// WP-O1-4b-2b: the traversal clips a prepared scenario keeps: every seat and ladder action its records name, and the clips
+// read for them saved and loaded.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCSavedTraversalClipsTest, "SCBridge.Prepare.SavedTraversalClips", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCSavedTraversalClipsTest::RunTest(const FString&)
+{
+    ASCVehicle* V = NewObject<ASCVehicle>(GetTransientPackage());
+    V->AddToRoot();
+    ON_SCOPE_EXIT { V->RemoveFromRoot(); };
+    // Two seats (one action named by both, one without an animation) and a ladder.
+    for (const TArray<FName>& Animations : {TArray<FName>{TEXT("seat_enter"), TEXT("seat_idle")}, TArray<FName>{TEXT("seat_idle"), NAME_None}})
+    {
+        FSCSceneInstance& Child = V->Manifest.Children.AddDefaulted_GetRef();
+        FSCSeatDefinition Seat;
+        for (const FName Animation : Animations)
+        {
+            FSCSeatAction& Action = Seat.Actions.AddDefaulted_GetRef();
+            Action.State = TEXT("Enter");
+            Action.Animation = Animation;
+        }
+        Child.Seat = Seat;
+    }
+    V->Manifest.Children.AddDefaulted(); // no seat
+    FSCLadderAnchor& Ladder = V->LadderAnchors.AddDefaulted_GetRef();
+    Ladder.Data.Actions.Add(TEXT("ClimbUp")).Clip = TEXT("ladder_up");
+    Ladder.Data.Actions.Add(TEXT("Exit")).Clip = TEXT("ladder_exit_top");
+    TestEqual(TEXT("every seat and ladder action, once, sorted"), FString::Join(SCTraversal::ClipNames(*V), TEXT(",")),
+              FString(TEXT("ladder_exit_top,ladder_up,seat_enter,seat_idle")));
+
+    USCTraversalClipsData* Data = NewObject<USCTraversalClipsData>(GetTransientPackage());
+    Data->BodyLevel = TEXT("/Game/SC/Players/Maps/Player_male_x");
+    const TSharedRef<FSCPlayerClipMap> Clips = MakeShared<FSCPlayerClipMap>();
+    const TSharedRef<FSCPlayerClip> Clip = MakeShared<FSCPlayerClip>();
+    Clip->Name = TEXT("ladder_up");
+    Clip->Duration = 2.f;
+    Clip->Tracks.AddDefaulted_GetRef().Bone = 3;
+    Clips->Add(Clip->Name, Clip);
+    Data->Clips = Clips;
+    const USCTraversalClipsData* Back = DuplicateObject(Data, GetTransientPackage());
+    TestTrue(TEXT("saved and loaded: the body and the clips"),
+             Back && Back->BodyLevel == Data->BodyLevel && Back->Clips && Back->Clips != Data->Clips && Back->Clips->Num() == 1 &&
+                 Back->Clips->FindRef(TEXT("ladder_up")) && Back->Clips->FindRef(TEXT("ladder_up"))->Duration == 2.f &&
+                 Back->Clips->FindRef(TEXT("ladder_up"))->Tracks.Num() == 1 && Back->Clips->FindRef(TEXT("ladder_up"))->Tracks[0].Bone == 3);
+    // Which source serves a request in a prepared scenario.
+    FSCTraversalClips::FResult Served;
+    TestTrue(TEXT("the set covers the request: served"), FSCTraversalClips::ServeFromPrepared(&Clips.Get(), {TEXT("ladder_up")}, true, Served) &&
+                                                             Served.Error.IsEmpty() && Served.Clips.Num() == 1);
+    TestFalse(TEXT("a loaded set lacking a name, the archive open: the archive serves it"),
+              FSCTraversalClips::ServeFromPrepared(&Clips.Get(), {TEXT("ladder_up"), TEXT("seat_enter")}, true, Served));
+    TestTrue(TEXT("... the archive closed: the missing clip"),
+             FSCTraversalClips::ServeFromPrepared(&Clips.Get(), {TEXT("seat_enter")}, false, Served) && Served.Error.Contains(TEXT("seat_enter")) &&
+                 Served.Clips.IsEmpty());
+    TestTrue(TEXT("a set that does not load, even with the archive open: its error, no fallback"),
+             FSCTraversalClips::ServeFromPrepared(nullptr, {TEXT("ladder_up")}, true, Served) && !Served.Error.IsEmpty());
+
+    Data->Clips = MakeShared<FSCPlayerClipMap>();
+    const USCTraversalClipsData* None = DuplicateObject(Data, GetTransientPackage());
+    TestTrue(TEXT("a scenario with no seat or ladder: an empty set, not none"), None && None->Clips && None->Clips->IsEmpty());
     return !HasAnyErrors();
 }
 

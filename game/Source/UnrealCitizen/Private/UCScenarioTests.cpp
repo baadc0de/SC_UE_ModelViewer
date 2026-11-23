@@ -1,5 +1,9 @@
 // WP-O1-4: scenario definitions, the prep step's records and when the game refuses to run one.
 #include "Misc/AutomationTest.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "SCBridgeClient.h"
 #include "SCPackageReader.h"
 #include "SCViewerSubsystem.h"
@@ -112,6 +116,7 @@ bool FUCPreparedTest::RunTest(const FString&)
     R.EnvironmentLevel = USCViewerSubsystem::EnvironmentLevelPath(Hangar);
     R.VehicleLevel = TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2");
     R.PlayerLevel = Source.PlayerLevel();
+    R.TraversalClips = USCViewerSubsystem::TraversalClipsPath(R.PlayerLevel, R.VehicleLevel, R.EnvironmentLevel);
     R.Archive = TEXT("build");
     R.PreparedAt = TEXT("2026-11-23T00:00:00.000Z");
 
@@ -119,7 +124,8 @@ bool FUCPreparedTest::RunTest(const FString&)
     TestTrue(TEXT("the record round-trips"), FUCPrepared::Parse(R.ToJson(), Back, Error));
     TestTrue(TEXT("... its definition byte for byte"), Back.Definition.Equals(R.Definition, ESearchCase::CaseSensitive));
     TestTrue(TEXT("... its cargo setup"), Back.CargoDefinition.Equals(R.CargoDefinition, ESearchCase::CaseSensitive));
-    TestEqual(TEXT("... its levels"), Back.VehicleLevel + Back.EnvironmentLevel + Back.PlayerLevel, R.VehicleLevel + R.EnvironmentLevel + R.PlayerLevel);
+    TestEqual(TEXT("... its levels"), Back.VehicleLevel + Back.EnvironmentLevel + Back.PlayerLevel + Back.TraversalClips,
+              R.VehicleLevel + R.EnvironmentLevel + R.PlayerLevel + R.TraversalClips);
     TestEqual(TEXT("... its format"), Back.Format, R.Format);
     TestFalse(TEXT("a record without a vehicle level does not read"), FUCPrepared::Parse(TEXT("{\"scenario\": \"t\", \"definition\": \"{}\"}"), Back, Error));
 
@@ -135,6 +141,40 @@ bool FUCPreparedTest::RunTest(const FString&)
     TestTrue(TEXT("a missing environment level"),
              R.Problem(&Source, [&](const FString& L) { return L != R.EnvironmentLevel; }).Contains(R.EnvironmentLevel));
     TestTrue(TEXT("a missing player body level"), R.Problem(&Source, [&](const FString& L) { return L != R.PlayerLevel; }).Contains(R.PlayerLevel));
+    TestTrue(TEXT("missing traversal clips"), R.Problem(&Source, [&](const FString& L) { return L != R.TraversalClips; }).Contains(R.TraversalClips));
+    FUCPrepared NoTraversal = R;
+    NoTraversal.TraversalClips.Reset();
+    TestTrue(TEXT("a record that names no traversal clips"), NoTraversal.Problem(&Source, All).Contains(TEXT("traversal clips")));
+    // The clips follow the levels they were read from: a level saved again since (another id in its stamp) makes them stale.
+    {
+        // A folder of this run's own, removed afterwards with only what it wrote.
+        const FString Folder = TEXT("SCTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+        const FString Body = TEXT("/Game/") + Folder + TEXT("/Body_ids"), Clips = TEXT("/Game/") + Folder + TEXT("/Traversal_ids");
+        const FString BodyStamp = FUCPrepared::StampFile(Body), ClipsStamp = FUCPrepared::StampFile(Clips);
+        ON_SCOPE_EXIT
+        {
+            IFileManager::Get().Delete(*BodyStamp, false, true, true);
+            IFileManager::Get().Delete(*ClipsStamp, false, true, true);
+            IFileManager::Get().DeleteDirectory(*FPaths::Combine(FPaths::ProjectContentDir(), Folder), false, false); // empty now
+        };
+        FUCPrepared Ids;
+        Ids.PlayerLevel = Body;
+        Ids.VehicleLevel = Body; // one stamp stands for both named levels here
+        TestEqual(TEXT("no ids, no sources"), Ids.TraversalSources(), FString());
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\n"), FUCPrepared::FormatVersion), *BodyStamp);
+        TestEqual(TEXT("a level stamped without an id: no sources"), Ids.TraversalSources(), FString());
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-1\n"), FUCPrepared::FormatVersion), *BodyStamp);
+        TestEqual(TEXT("ids for the named levels, the absent environment empty"), Ids.TraversalSources(), FString(TEXT("id-1|id-1|")));
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-c\n%s\n"), FUCPrepared::FormatVersion, *Ids.TraversalSources()), *ClipsStamp);
+        TestEqual(TEXT("a level's id"), FUCPrepared::LevelId(Body), FString(TEXT("id-1")));
+        TestEqual(TEXT("the clips read from these levels"), FUCPrepared::RecordedSources(Clips), Ids.TraversalSources());
+        FFileHelper::SaveStringToFile(FString::Printf(TEXT("%d\nb\nid-2\n"), FUCPrepared::FormatVersion), *BodyStamp);
+        TestNotEqual(TEXT("... no longer once the body saved again"), FUCPrepared::RecordedSources(Clips), Ids.TraversalSources());
+    }
+    TestTrue(TEXT("the traversal clips are one asset per level set"),
+             R.TraversalClips.StartsWith(TEXT("/Game/SC/Players/Traversal/Traversal_")) &&
+                 USCViewerSubsystem::TraversalClipsPath(R.PlayerLevel, R.VehicleLevel, FString()) != R.TraversalClips &&
+                 USCViewerSubsystem::TraversalClipsPath(R.PlayerLevel, R.VehicleLevel, R.EnvironmentLevel) == R.TraversalClips);
     FUCPrepared NoPlayer = R;
     NoPlayer.PlayerLevel.Reset();
     TestTrue(TEXT("a record that names no player body level"), NoPlayer.Problem(&Source, All).Contains(TEXT("player body")));
@@ -161,7 +201,7 @@ bool FUCPreparedTest::RunTest(const FString&)
     FUCPrepared NoEnvironment = R;
     NoEnvironment.EnvironmentLevel.Reset();
     TestEqual(TEXT("no environment: only the vehicle level is needed"),
-              NoEnvironment.Problem(nullptr, [&](const FString& L) { return L == R.VehicleLevel || L == R.PlayerLevel; }), FString());
+              NoEnvironment.Problem(nullptr, [&](const FString& L) { return L == R.VehicleLevel || L == R.PlayerLevel || L == R.TraversalClips; }), FString());
     return true;
 }
 

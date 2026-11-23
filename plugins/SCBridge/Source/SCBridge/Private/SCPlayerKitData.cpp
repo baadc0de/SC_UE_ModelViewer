@@ -78,13 +78,11 @@ FArchive& operator<<(FArchive& Ar, FSCPlayerClip& C)
     return Ar << C.Name << C.Fps << C.Frames << C.Duration << C.bAdditive << C.bCyclic << C.Tracks;
 }
 
-void USCPlayerKitData::WritePayload(const FSCPlayerKit& Kit, const FSCPlayerClipMap& Clips, TArray<uint8>& Out)
+namespace
 {
-    Out.Reset();
-    FMemoryWriter Ar(Out);
-    // Written from the shared, read-only data: the operators take references but do not change what they save.
-    Ar << const_cast<FSCPlayerKit&>(Kit);
-    // The clip map leaves out clips it could not read (no null entries); a null one is skipped here as well.
+/** A clip map as its count and (name, clip) pairs; a null entry (none are made) is left out. */
+void WriteClips(FArchive& Ar, const FSCPlayerClipMap& Clips)
+{
     int32 Count = 0;
     for (const auto& [Key, Clip] : Clips) Count += Clip.IsValid();
     Ar << Count;
@@ -92,8 +90,33 @@ void USCPlayerKitData::WritePayload(const FSCPlayerKit& Kit, const FSCPlayerClip
         if (Clip)
         {
             FName Name = Key;
+            // Written from the shared, read-only data: the operators take references but do not change what they save.
             Ar << Name << const_cast<FSCPlayerClip&>(*Clip);
         }
+}
+TSharedRef<FSCPlayerClipMap> ReadClipMap(FArchive& Ar)
+{
+    int32 Count = 0;
+    Ar << Count;
+    const TSharedRef<FSCPlayerClipMap> Clips = MakeShared<FSCPlayerClipMap>();
+    if (Count < 0) Ar.SetError();
+    for (int32 I = 0; I < Count && !Ar.IsError(); ++I)
+    {
+        FName Key;
+        const TSharedRef<FSCPlayerClip> Clip = MakeShared<FSCPlayerClip>();
+        Ar << Key << *Clip;
+        Clips->Add(Key, Clip);
+    }
+    return Clips;
+}
+} // namespace
+
+void USCPlayerKitData::WritePayload(const FSCPlayerKit& Kit, const FSCPlayerClipMap& Clips, TArray<uint8>& Out)
+{
+    Out.Reset();
+    FMemoryWriter Ar(Out);
+    Ar << const_cast<FSCPlayerKit&>(Kit);
+    WriteClips(Ar, Clips);
 }
 bool USCPlayerKitData::ReadPayload(int32 Layout, const TArray<uint8>& Bytes, TSharedPtr<const FSCPlayerKit>& OutKit, TSharedPtr<const FSCPlayerClipMap>& OutClips)
 {
@@ -103,18 +126,9 @@ bool USCPlayerKitData::ReadPayload(int32 Layout, const TArray<uint8>& Bytes, TSh
     FMemoryReader Ar(Bytes);
     const TSharedRef<FSCPlayerKit> Kit = MakeShared<FSCPlayerKit>();
     Ar << *Kit;
-    int32 Count = 0;
-    Ar << Count;
-    const TSharedRef<FSCPlayerClipMap> Clips = MakeShared<FSCPlayerClipMap>();
-    for (int32 I = 0; I < Count && !Ar.IsError(); ++I)
-    {
-        FName Key;
-        const TSharedRef<FSCPlayerClip> Clip = MakeShared<FSCPlayerClip>();
-        Ar << Key << *Clip;
-        Clips->Add(Key, Clip);
-    }
+    const TSharedRef<FSCPlayerClipMap> Clips = ReadClipMap(Ar);
     // All of it, exactly: a short or a long payload is not this layout either.
-    if (Ar.IsError() || Count < 0 || Ar.Tell() != Bytes.Num()) return false;
+    if (Ar.IsError() || Ar.Tell() != Bytes.Num()) return false;
     OutKit = Kit;
     OutClips = Clips;
     return true;
@@ -142,4 +156,35 @@ void USCPlayerKitData::Serialize(FArchive& Ar)
         UE_LOG(LogSCPlayerKitData, Warning, TEXT("PLAYER_KIT_DATA %s holds layout %d (%d bytes) this build (layout %d) does not read: no player body (prepare it again)"),
                *GetPathName(), Layout, Bytes.Num(), Version);
     }
+}
+
+void USCTraversalClipsData::Serialize(FArchive& Ar)
+{
+    Super::Serialize(Ar);
+    if (!Ar.IsSaving() && !Ar.IsLoading()) return;
+    // As USCPlayerKitData: the clips as one payload after the layout, read whole whatever the layout.
+    int32 Layout = USCPlayerKitData::Version;
+    TArray<uint8> Bytes;
+    if (Ar.IsSaving() && Clips)
+    {
+        FMemoryWriter Writer(Bytes);
+        WriteClips(Writer, *Clips);
+    }
+    Ar << Layout << Bytes;
+    if (!Ar.IsLoading()) return;
+    Clips.Reset();
+    if (Layout != USCPlayerKitData::Version)
+    {
+        UE_LOG(LogSCPlayerKitData, Warning, TEXT("TRAVERSAL_CLIPS_DATA %s holds layout %d, this build reads %d: none (prepare it again)"), *GetPathName(),
+               Layout, USCPlayerKitData::Version);
+        return;
+    }
+    FMemoryReader Reader(Bytes);
+    const TSharedRef<FSCPlayerClipMap> Loaded = ReadClipMap(Reader);
+    if (Reader.IsError() || Reader.Tell() != Bytes.Num())
+    {
+        UE_LOG(LogSCPlayerKitData, Warning, TEXT("TRAVERSAL_CLIPS_DATA %s does not read (%d bytes): none (prepare it again)"), *GetPathName(), Bytes.Num());
+        return;
+    }
+    Clips = Loaded;
 }

@@ -55,18 +55,31 @@ if ($CargoName) {
 }
 if ((ConvertTo-Comparable $CargoText) -cne (ConvertTo-Comparable ([string]$Record.cargo_definition))) { throw "The cargo setup of scenario $Scenario changed since it was prepared: run $Prepare" }
 if (-not $Record.player_level) { throw "Scenario $Scenario's record names no player body level: run $Prepare" }
+if (-not $Record.traversal_clips) { throw "Scenario $Scenario's record names no traversal clips: run $Prepare" }
 $Levels = @($Record.vehicle_level, $Record.player_level) + @($Record.environment_level | Where-Object { $_ })
-foreach ($Level in $Levels) {
-    $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + '.umap')
+# The levels are cooked as maps; the traversal clips (an asset under /Game/SC/Players/Traversal, always cooked) are checked alike.
+foreach ($Level in $Levels + @($Record.traversal_clips)) {
+    $Extension = if ($Level -eq $Record.traversal_clips) { '.uasset' } else { '.umap' }
+    $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + $Extension)
     if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
     $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
-    # A complete stamp (FUCPrepared::IsLevelCurrent): the format on line 1, the archive build on line 2.
+    # A complete stamp (FUCPrepared::IsLevelCurrent): the format on line 1, the archive build on line 2, the save's id on line 3.
     $Lines = if (Test-Path $Stamp) { @(Get-Content $Stamp) } else { @() }
     $Have = if ($Lines.Count -ge 1 -and $Lines[0].Trim() -match '^\d+$') { [int]$Lines[0].Trim() } else { 0 }
-    if ($Have -ne $Format -or $Lines.Count -lt 2 -or -not $Lines[1].Trim()) {
+    if ($Have -ne $Format -or $Lines.Count -lt 3 -or -not $Lines[1].Trim() -or -not $Lines[2].Trim()) {
         throw "$Level is stale or not finished (stamp format $Have, current $Format): run $Prepare -Force"
     }
 }
+# The traversal clips were read from these very levels (FUCPrepared::TraversalSources): their stamp's fourth line names the
+# ids (third lines) of the body, vehicle and environment levels; a level saved again since makes them stale.
+function Get-StampLine([string]$Package, [int]$Index) {
+    if (-not $Package) { return '' }
+    $Stamp = Join-Path $Root ('game\Content' + $Package.Substring(5).Replace('/', '\') + '.cookformat')
+    $Lines = if (Test-Path $Stamp) { @(Get-Content $Stamp) } else { @() }
+    if ($Lines.Count -gt $Index) { $Lines[$Index].Trim() } else { '' }
+}
+$Sources = (Get-StampLine $Record.player_level 2) + '|' + (Get-StampLine $Record.vehicle_level 2) + '|' + (Get-StampLine $Record.environment_level 2)
+if ((Get-StampLine $Record.traversal_clips 3) -cne $Sources) { throw "The traversal clips $($Record.traversal_clips) were read from other levels than the record's: run $Prepare" }
 $Maps = '/Game/Maps/Viewer+' + ($Levels -join '+')
 $Extra = ' -SCMaxQuality'
 
