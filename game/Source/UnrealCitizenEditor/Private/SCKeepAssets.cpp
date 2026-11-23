@@ -21,6 +21,7 @@
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectHash.h"
+#include "UObject/UObjectIterator.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCKeep, Log, All);
 
@@ -39,6 +40,7 @@ struct FKeeper
     TArray<UPackage*> Packages;
     TMap<UObject*, UObject*> Kept; // transient source -> asset (identity for renamed objects)
     TArray<FString> Warnings;
+    bool bFailed = false; // a kept asset left something live inconsistent (a rig body not rebuilt)
 
     /** Move Object (and its subobjects) into its own package under Root/Folder, public + standalone. */
     UObject* Move(UObject* Object, const FString& Folder, const FString& PreferredName = FString())
@@ -157,8 +159,7 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
                 K.Warnings.Add(Mesh->GetName() + TEXT(": skeletal mesh not kept (") + (Source ? Error : FString(TEXT("no rig source"))) + TEXT(")"));
                 continue;
             }
-            // As for static meshes: the first rig override of each slot becomes the asset's material; the rigs' bodies
-            // follow the rebuilt vertices.
+            // As for static meshes: the first rig override of each slot becomes the asset's material.
             for (USCRigComponent* Rig : Vehicle->Rigs)
             {
                 if (!Rig || Rig->GetSkeletalMeshAsset() != Mesh) continue;
@@ -170,9 +171,15 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
                     if (Override && (!Current || Current == UMaterial::GetDefaultMaterial(MD_Surface)))
                         Mesh->GetMaterials()[Slot].MaterialInterface = K.Constant(Override);
                 }
-                if ((*Source)->bHasGeometry && Rig->HasCollisionBody() && !SCRigAssets::RefreshCollision(Rig, Error))
-                    K.Warnings.Add(Rig->OwnerEntity + TEXT(": rig collision not rebuilt (") + Error + TEXT(")"));
             }
+            // Every live rig using the rebuilt mesh (other vehicles assembled from the same retained assets too) follows its
+            // new vertex order; a body that does not rebuild fails the Keep.
+            for (TObjectIterator<USCRigComponent> It; It; ++It)
+                if (It->GetSkeletalMeshAsset() == Mesh && It->HasCollisionBody() && !SCRigAssets::RefreshCollision(*It, Error))
+                {
+                    K.Warnings.Add(It->OwnerEntity + TEXT(": rig collision not rebuilt (") + Error + TEXT(")"));
+                    K.bFailed = true;
+                }
             K.Move(Mesh, TEXT("Rigs"));
         }
     if (USCClipCatalog* Catalog = Vehicle->ClipCatalog)
@@ -207,7 +214,7 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
            K.Warnings.Num(), FPlatformTime::Seconds() - Start);
     Result.Root = K.Root;
     Result.Saved = Saved;
-    Result.bOK = Saved == K.Packages.Num() && Saved > 0;
+    Result.bOK = Saved == K.Packages.Num() && Saved > 0 && !K.bFailed;
     Result.Message = FString::Printf(TEXT("Kept %d assets under %s%s"), Saved, *K.Root,
                                      K.Warnings.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (%d warnings, see log)"), K.Warnings.Num()));
     return Result;

@@ -207,10 +207,13 @@ data when it loads. In stages:
   CPU-readable vertices and skin weights; a socket-only rig gets an empty LOD) and is saved with its skeleton under
   `<root>/Rigs`; a rig with soft collision gets its Chaos trimesh derived again in the built vertex order
   (`SCRigAssets::DeriveCollision`) and saved on the rig (`USCRigComponent::SavedCollision`, restored when the rig
-  registers); rig materials become constants; the clip catalog is saved with the actor without its editor-only
-  sequences (playback reads the bone tracks). The import keeps each rig's source data on editor hosts
+  registers; the body itself is transient; the rig's collision settings stay); rig materials become constants; the clip
+  catalog is saved with the actor without its editor-only sequences (playback reads the bone tracks); the held clip
+  layers (`ASCVehicle::HeldPlayback`: the poses clips left, e.g. the landing gear deployed) are saved, so a clip played
+  after the load composes with them; a prepared hangar keeps its saved waypoints (its ship-pad entry follows the
+  elevator). Keep as assets rebuilds every live rig body using a rebuilt mesh and fails when one does not rebuild. The import keeps each rig's source data on editor hosts
   (`FSCImportOptions::bRetainRigSources`, `ASCVehicle::RigSources`). Keep as assets keeps rigs the same way. Prep format
-  12. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
+  13. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
   lifts, seats and ladders still need their interaction state (1b).
 - **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
   interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,

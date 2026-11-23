@@ -112,18 +112,22 @@ struct FSCLightGroup
     TArray<FSCLightGroupInteraction> Interactions;
     FString LightState; // the light state the group was last set to ("" = as imported)
 };
+/** A clip layer on the vehicle's rigs. A USTRUCT so the held layers (the poses clips left, e.g. landing gear deployed)
+ *  are saved with a prepared level (WP-O1-4b): a clip played after a load composes with them as it would live. */
+USTRUCT()
 struct FSCClipPlayback
 {
-    TWeakObjectPtr<USCRigComponent> TargetRig;
-    int32 Clip = INDEX_NONE;
-    double Frame = 0;
-    float Speed = 1;
-    bool bPlaying = true;
-    uint64 Order = 0;
-    TArray<FName> Scopes;
-    bool bAudioFresh = true; // WP-A1: the first advance plays the start-of-play events (they sit at t = 0.0001 / 0.9999)
-    bool bTargeted = false;  // started for one rig (TargetRig): once that rig is gone the entry poses nothing
-    int32 OpeningGangway = INDEX_NONE;
+    GENERATED_BODY()
+    UPROPERTY() TWeakObjectPtr<USCRigComponent> TargetRig;
+    UPROPERTY() int32 Clip = INDEX_NONE;
+    UPROPERTY() double Frame = 0;
+    UPROPERTY() float Speed = 1;
+    UPROPERTY() bool bPlaying = true;
+    UPROPERTY() uint64 Order = 0;
+    UPROPERTY() TArray<FName> Scopes;
+    UPROPERTY() bool bAudioFresh = true; // WP-A1: the first advance plays the start-of-play events (they sit at t = 0.0001 / 0.9999)
+    UPROPERTY() bool bTargeted = false;  // started for one rig (TargetRig): once that rig is gone the entry poses nothing
+    UPROPERTY() int32 OpeningGangway = INDEX_NONE;
 };
 UCLASS(BlueprintType)
 class SCBRIDGE_API ASCVehicle : public AActor
@@ -473,8 +477,8 @@ public:
     bool ToggleClip(FName Fragment, FName OpenTag = "Open", FName CloseTag = "Close");
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") void ResetPose();
     void EvaluateClips();
-    TArray<FSCClipPlayback> Playback;     // active entries only
-    TArray<FSCClipPlayback> HeldPlayback; // bounded by catalogue size; no idle evaluation
+    UPROPERTY(Transient) TArray<FSCClipPlayback> Playback; // active entries only
+    UPROPERTY() TArray<FSCClipPlayback> HeldPlayback;      // bounded by catalogue size; no idle evaluation; saved (a prepared level)
     uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
     /** WP-A1 diagnostics: clip audio events crossed by playback (posted to the audio scene when there is one), and the
      *  last one's trigger. */
@@ -506,7 +510,7 @@ private:
         TWeakObjectPtr<USceneComponent> Anchor;
     };
     TArray<FPendingSpawn> PendingItemSpawns;
-    uint64 NextOrder = 0;
+    UPROPERTY() uint64 NextOrder = 0; // saved with the held layers it orders
     FRandomStream FragmentRandom{0x5343};
 
 public:

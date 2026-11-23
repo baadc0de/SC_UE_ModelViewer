@@ -176,12 +176,16 @@ bool SCRigAssets::RefreshCollision(USCRigComponent* Rig, FString& Error)
     FCustomVersionContainer Versions;
     if (!DeriveCollision(Mesh, Bytes, Versions, Error)) return false;
     const bool bHadBody = Rig->HasCollisionBody();
+    // The import sets the pawn response after its own collision step, whether that built a body or not (a rig with the
+    // game's colliders ignores the pawn): a first body keeps it.
+    const ECollisionResponse Pawn = Rig->GetCollisionResponseToChannel(ECC_Pawn);
     Rig->SavedCollision.Reset();
     if (!Rig->InitializeCollision(Bytes, Versions, /*bConfigure*/ !bHadBody))
     {
         Error = TEXT("the collision body does not build");
         return false;
     }
+    if (!bHadBody && Pawn == ECR_Ignore) Rig->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
     if (Rig->IsRegistered()) Rig->RecreatePhysicsState();
     return true;
 }
