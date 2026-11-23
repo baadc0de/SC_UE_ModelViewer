@@ -40,6 +40,16 @@ USCCargoGridComponent* USCCargoSubsystem::SelectGrid(const FSCCargoGridSelector&
     return OfKind.IsValidIndex(Selector.Index) ? OfKind[Selector.Index] : nullptr;
 }
 
+void USCCargoSubsystem::DropScenario()
+{
+    if (!State) return;
+    if (State->Scenario.IsSet()) UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO dropped \"%s\""), *State->Scenario.Name);
+    FSCCargoScenario Dropped;
+    Dropped.Drone = State->Scenario.Drone; // drones already docked keep their flight limits
+    State->Scenario = MoveTemp(Dropped);   // no Path: IsSet() is false, TryScenario applies nothing more
+    State->bScenarioTried = true;
+}
+
 void USCCargoSubsystem::TryScenario()
 {
     USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld());

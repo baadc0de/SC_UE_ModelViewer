@@ -103,6 +103,10 @@ public:
     bool RemoveBox(int32 BoxId, bool bForce, TArray<int32>& OutRemoved, FString& OutError);
     /** A drone dock with Drones drones on the grid; false (OutError) when it does not fit. */
     bool AddDock(int32 GridId, int32 Drones, FString& OutError);
+    /** WP-O1-4: stop applying the scenario's cargo setup (a game scenario that failed): nothing more of it is placed, loaded
+     *  or docked, and no setup is read from the settings afterwards. What is already placed stays with its grids (the
+     *  failed scenario unloads them); the drone definition stays for drones already out. */
+    void DropScenario();
     /** Verification (sc.Cargo.Interrupt): the first load in flight (of JobId; any job when INDEX_NONE) fails as a lost route
      *  would; false when none is in flight. */
     bool InterruptLoad(int32 JobId);

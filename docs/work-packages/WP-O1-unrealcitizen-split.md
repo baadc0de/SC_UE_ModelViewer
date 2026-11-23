@@ -212,7 +212,8 @@ of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes 
 stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`). Levels:
 `/Game/SC/Hangars/Maps/<style>_<name>` and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
 palette id, else its subgeometry tag, else its name, and a hash of all three; `USCViewerSubsystem::EnvironmentLevelPath` /
-`ShipLevelPath`); the paint put on is the imported manifest's (a variant whose files are unavailable fails the run). A level already prepared in this format is kept (shared by scenarios); `-Force`
+`ShipLevelPath`); the skin is resolved against the paints as the import reads them (`FSCPackageReader`: a variant whose
+files are unavailable is left out), the same list `-SCSkin` uses. A level already prepared in this format is kept (shared by scenarios); `-Force`
 prepares it again. A level's stamp is removed before it is rebuilt and written only once it saved, so a run that fails
 part-way leaves a level no record can use (the game checks the stamps outside a packaged build; the packaging refuses
 unstamped levels). An archive that does not open within 15 minutes ends the run. Last it writes the scenario's record, `Content/SCPrepared/<name>.json`
@@ -224,8 +225,8 @@ prepared), gitignored and staged with a packaged game (`DirectoriesToAlwaysStage
 (`SCENARIO_REFUSED`) give the reason and the prep command — when the scenario has no record, the record's format is
 another, a level is missing or not finished (no current stamp), or (where the definition is on disk, i.e. not a packaged
 game) the definition does not read or it or its cargo setup changed since prep. A level that does not stream in (or
-not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded, and its cargo setup
-is not applied. It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
+not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded, and the cargo
+subsystem stops applying its cargo setup (`USCCargoSubsystem::DropScenario`). It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
 `-SCPackage`, `-SCCargoScenario`) or `-SCNoCooked`: the notice says so, and those switches act as without a scenario. Otherwise it streams the environment's level, then the vehicle's (`LoadPreparedEntity`), sets the
 camera, puts the player at the start, asks for the music, and hands the cargo subsystem the prepared cargo setup
 (`UUCSettings::ScenarioCargoJson`; it then loads no ship or environment itself). Log lines `SCENARIO start|loaded|

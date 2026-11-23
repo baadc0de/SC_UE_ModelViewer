@@ -10,7 +10,6 @@
 #include "SCViewOptions.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
-#include "Dom/JsonObject.h"
 #include "Editor.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
@@ -20,8 +19,6 @@
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
-#include "Serialization/JsonReader.h"
-#include "Serialization/JsonSerializer.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "Misc/ScopeExit.h"
@@ -44,8 +41,7 @@ bool Current(const FString& Level)
     return FUCPrepared::IsLevelCurrent(Level);
 }
 
-/** The same paint in two lists (the package's paints.json and the imported manifest, which leaves out a variant whose
- *  files are unavailable). */
+/** The same paint in two manifests (the package read before the import and the imported actor's). */
 bool SamePaint(const FSCPaintVariant& A, const FSCPaintVariant& B)
 {
     return A.PaletteId == B.PaletteId && A.SubgeometryTag == B.SubgeometryTag && A.DisplayName == B.DisplayName;
@@ -57,30 +53,6 @@ FString PaintVariant(const FSCPaintVariant& Paint)
     const FString Name = !Paint.PaletteId.IsEmpty() ? Paint.PaletteId : !Paint.SubgeometryTag.IsEmpty() ? Paint.SubgeometryTag : Paint.DisplayName;
     const uint32 Hash = FCrc::StrCrc32(*(Paint.PaletteId + TEXT("|") + Paint.SubgeometryTag + TEXT("|") + Paint.DisplayName));
     return FString::Printf(TEXT("%s_%08x"), *Name, Hash);
-}
-
-/** The paints a vehicle package offers (paints.json beside its scene.json; FSCPackageReader reads it the same way). */
-TArray<FSCPaintVariant> PackagePaints(const FSCPackageSource& Source, const FString& Scene)
-{
-    TArray<FSCPaintVariant> Paints;
-    TArray<uint8> Bytes;
-    FString Error, Text;
-    if (!Source.ReadBytes(FPaths::GetPath(Scene) / TEXT("paints.json"), Bytes, Error)) return Paints;
-    FFileHelper::BufferToString(Text, Bytes.GetData(), Bytes.Num());
-    TSharedPtr<FJsonObject> Root;
-    const TArray<TSharedPtr<FJsonValue>>* Variants = nullptr;
-    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root || !Root->TryGetArrayField(TEXT("paint_variants"), Variants))
-        return Paints;
-    for (const TSharedPtr<FJsonValue>& V : *Variants)
-    {
-        if (V->Type != EJson::Object) continue;
-        FSCPaintVariant Paint;
-        V->AsObject()->TryGetStringField(TEXT("display_name"), Paint.DisplayName);
-        V->AsObject()->TryGetStringField(TEXT("palette_id"), Paint.PaletteId);
-        V->AsObject()->TryGetStringField(TEXT("subgeometry_tag"), Paint.SubgeometryTag);
-        Paints.Add(MoveTemp(Paint));
-    }
-    return Paints;
 }
 
 class FPrepare
@@ -259,7 +231,15 @@ public:
             Error = Scenario.Vehicle + TEXT(": no single root scene.json in the export");
             return false;
         }
-        const TArray<FSCPaintVariant> Paints = PackagePaints(*Source, Scene);
+        // The paints as the import reads them (FSCPackageReader leaves out a variant whose files are unavailable): a skin
+        // names the same paint here as -SCSkin does on the imported vehicle.
+        FSCSceneManifest Manifest;
+        if (!FSCPackageReader::Read(*Source, Manifest, Error, Scene))
+        {
+            Error = Scenario.Vehicle + TEXT(": ") + Error;
+            return false;
+        }
+        const TArray<FSCPaintVariant>& Paints = Manifest.Paints;
         int32 Paint = INDEX_NONE;
         if (!USCViewerSubsystem::ResolvePaint(Paints, Scenario.Skin, Paint))
         {
@@ -285,13 +265,12 @@ public:
             return false;
         }
         Ship->SetActorLabel(TEXT("Ship ") + Name);
-        // The paint as the import validated it (it leaves out variants whose files are unavailable).
+        // The same paint on the imported actor.
         const int32 Imported = Paint == INDEX_NONE ? INDEX_NONE
             : Ship->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return SamePaint(P, Paints[Paint]); });
         if (Paint != INDEX_NONE && (Imported == INDEX_NONE || !Ship->SetPaint(Imported)))
         {
-            Error = FString::Printf(TEXT("%s: the paint \"%s\" (%s) did not go on: the import left it out"), *Scenario.Vehicle, *Scenario.Skin,
-                                    *Paints[Paint].Label());
+            Error = FString::Printf(TEXT("%s: the paint \"%s\" (%s) did not go on"), *Scenario.Vehicle, *Scenario.Skin, *Paints[Paint].Label());
             return false;
         }
         const int32 GearClips = USCImportLibrary::RestOnFloor(Ship, FloorZ);

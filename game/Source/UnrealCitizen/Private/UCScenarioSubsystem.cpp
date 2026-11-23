@@ -5,6 +5,7 @@
 #include "SCVehicle.h"
 #include "SCViewerSubsystem.h"
 #include "UCSettings.h"
+#include "Cargo/SCCargoSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
@@ -119,6 +120,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     Problem = Why;
     // What the run started stops and goes: a level still streaming, the environment, and the cargo setup not applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();
+    if (USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)) Cargo->DropScenario();
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
         Viewer->CancelLoad();
