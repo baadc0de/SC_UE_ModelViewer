@@ -45,6 +45,8 @@ public:
      *  CargoScenario. Not saved. */
     bool bScenarioOwnsScene = false;
     FString ScenarioCargoName, ScenarioCargoJson;
+    /** The running scenario's vehicle: the ship of its cargo setup when the setup names none. */
+    FString ScenarioVehicle;
 
     UFUNCTION(BlueprintPure, Category = "SC|Settings") static UUCSettings* Get();
     UFUNCTION(BlueprintCallable, Category = "SC|Settings") void Save();

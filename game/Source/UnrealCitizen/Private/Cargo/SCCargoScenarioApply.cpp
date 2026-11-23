@@ -70,6 +70,8 @@ void USCCargoSubsystem::TryScenario()
                 return;
             }
             State->Scenario.Path = TEXT("scenario:") + Settings->ScenarioCargoName;
+            // A setup that names no ship is for the scenario's vehicle (its owners and extra instances wait for it).
+            if (State->Scenario.Ship.IsEmpty()) State->Scenario.Ship = Settings->ScenarioVehicle;
         }
         else
         {

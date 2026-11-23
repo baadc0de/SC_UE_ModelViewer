@@ -209,7 +209,7 @@ in memory (`USCImportLibrary::ImportEnvironmentFrom` / `ImportVehicleFrom`) into
 mechanisms open, the ship elevator under the origin, its ship capacity recorded in the hangar index; the ship on its
 landing gear on the floor with the scenario's paint on), stages its audio beside the level (`SCPrepareAudio`, the C++ form
 of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes and textures keyed by source path and content — a mesh's
-committed source description id, a texture's first-mip bytes — so a changed asset at the same path is pooled anew;
+committed source description id and collision triangles, a texture's first-mip bytes — so a changed asset at the same path is pooled anew;
 constant materials) and
 stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`) and the
 archive build it was prepared from; a hangar index that cannot be saved fails the run. Levels:
@@ -233,7 +233,8 @@ not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is can
 the cargo subsystem stops applying its cargo setup (`USCCargoSubsystem::DropScenario`). It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
 `-SCPackage`, `-SCCargoScenario`) or `-SCNoCooked`: the notice says so, and those switches act as without a scenario. Otherwise it streams the environment's level, then the vehicle's (`LoadPreparedEntity`), sets the
 camera, puts the player at the start, asks for the music, and hands the cargo subsystem the prepared cargo setup
-(`UUCSettings::ScenarioCargoJson`; it then loads no ship or environment itself). Log lines `SCENARIO start|loaded|
+(`UUCSettings::ScenarioCargoJson`; it then loads no ship or environment itself, and a setup that names no ship is for
+the scenario's vehicle). Log lines `SCENARIO start|loaded|
 running|start_at|music`, RPC `/state` section `scenario` (id, state, problem, levels) and `/wait until=scenario`.
 Without a scenario the game behaves as before (the command line and the menus decide).
 

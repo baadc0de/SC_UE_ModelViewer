@@ -18,6 +18,10 @@
 #include "Misc/SecureHash.h"
 #include "Engine/StaticMeshSourceData.h"
 #include "Hash/xxhash.h"
+#include "Chaos/ChaosArchive.h"
+#include "Chaos/TriangleMeshImplicitObject.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "Serialization/MemoryWriter.h"
 #include "TextureResource.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
@@ -27,17 +31,32 @@ DEFINE_LOG_CATEGORY_STATIC(LogSCCook, Log, All);
 
 namespace
 {
+/** A hash of a mesh's collision triangles (the importer derives them from the unsplit part, so they can change while the
+ *  render description stays: a window's triangles), empty without any. */
+FString CollisionId(const UStaticMesh& Mesh)
+{
+    UBodySetup* Body = Mesh.GetBodySetup();
+    if (!Body || Body->TriMeshGeometries.IsEmpty()) return FString();
+    TArray<uint8> Bytes;
+    FMemoryWriter Writer(Bytes);
+    Chaos::FChaosArchive Archive(Writer);
+    for (const Chaos::FTriangleMeshImplicitObjectPtr& Geometry : Body->TriMeshGeometries)
+        if (Geometry) Geometry->Serialize(Archive);
+    return FString::Printf(TEXT("%016llx"), FXxHash64::HashBuffer(Bytes.GetData(), uint64(Bytes.Num())).Hash);
+}
+
 /** What a pooled asset is, beyond its source path (which an archive update or an exporter or importer fix keeps while
  *  the content changes): a mesh's committed source description id (a hash of its content, CommitSource's
- *  bUseHashAsGuid), a texture's first-mip bytes; Fallback when neither is there. */
+ *  bUseHashAsGuid) and its collision triangles, a texture's first-mip bytes; Fallback when there is no description or
+ *  no mip. */
 FString ContentId(const UObject* Object, const FString& Fallback)
 {
     if (const auto* Mesh = Cast<UStaticMesh>(Object))
     {
-        if (Mesh->GetNumSourceModels() > 0 && Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData &&
-            !Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().IsEmpty())
-            return Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().GetUnversionedIdString();
-        return Fallback;
+        const bool bDescription = Mesh->GetNumSourceModels() > 0 && Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData &&
+                                  !Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().IsEmpty();
+        return (bDescription ? Mesh->GetSourceModel(0).StaticMeshDescriptionBulkData->GetBulkData().GetUnversionedIdString() : Fallback) +
+               TEXT(";collision=") + CollisionId(*Mesh);
     }
     if (const auto* Texture = Cast<UTexture2D>(Object))
     {
@@ -253,8 +272,17 @@ bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString
     bOutMeasured = FSCEnvironment::FindShipBay(Environment, Bay, &Elevator);
     if (!bOutMeasured)
     {
-        UE_LOG(LogSCCook, Warning, TEXT("HANGAR_CAPACITY %s/%s: no ship elevator (nothing recorded)"), *Style, *Name);
-        return true;
+        // No measurement describes this hangar now: an older entry goes (hangar fitting must not use it).
+        USCHangarIndex* Index = USCHangarIndex::Load();
+        const int32 Removed = Index ? Index->Hangars.RemoveAll([&](const FSCHangarCapacity& H) { return H.Style == Style && H.Name == Name; }) : 0;
+        UE_LOG(LogSCCook, Warning, TEXT("HANGAR_CAPACITY %s/%s: no ship elevator (nothing recorded, %d older entries removed)"), *Style, *Name, Removed);
+        if (!Removed) return true;
+        Index->GetPackage()->MarkPackageDirty();
+        FSavePackageArgs Args;
+        Args.TopLevelFlags = RF_Public | RF_Standalone;
+        Args.SaveFlags = SAVE_NoError;
+        const FString PackageName = Index->GetPackage()->GetName();
+        return UPackage::SavePackage(Index->GetPackage(), Index, *FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension()), Args);
     }
     const double Clearance = FSCEnvironment::BayClearance(Environment, Bay);
     const FString PackageName = FPackageName::ObjectPathToPackageName(FString(USCHangarIndex::AssetPath));

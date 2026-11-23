@@ -85,6 +85,7 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->bScenarioOwnsScene = true;
     Settings->ScenarioCargoName = Scenario.Cargo;
     Settings->ScenarioCargoJson = Scenario.CargoJson;
+    Settings->ScenarioVehicle = Scenario.Vehicle;
     // The environment before anything else is requested (it replaces a saved choice the viewer restored at start).
     Viewer->SetEnvironment(Scenario.Environment.IsEmpty() ? FString(TEXT("none")) : Scenario.Environment);
     State = EState::Loading;
@@ -102,6 +103,7 @@ void UUCScenarioSubsystem::Deinitialize()
     Settings->bScenarioOwnsScene = false;
     Settings->ScenarioCargoName.Reset();
     Settings->ScenarioCargoJson.Reset();
+    Settings->ScenarioVehicle.Reset();
     Super::Deinitialize();
 }
 
