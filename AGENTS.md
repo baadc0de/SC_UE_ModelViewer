@@ -58,8 +58,8 @@ inherit for all Rust that touches the vendored crates).
   `C:\Users\bojan\UnrealEngine-5.9-src\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs uproject> -WaitMutex`;
   FFI via `scripts/build_ffi.ps1` (every build links it); NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored
   download, compiled against the fork) — see `viewer/README.md`. Standalone showcase: `game/scripts/package_showcase.ps1
-  -Scenario <name>` (one scenario prepared by the prep step, `UnrealCitizenEditor -run=SCPrepare -Scenario=<name>`;
-  Shipping, `-SCMaxQuality`). Preparing and packaging happen only on the owner's request.
+  -Scenario <name> -Config Shipping` (one scenario prepared by the prep step, `UnrealCitizenEditor -run=SCPrepare
+  -Scenario=<name>`; `-SCMaxQuality`; the script's default is Development). Preparing and packaging happen only on the owner's request.
 
 ## Working rules
 

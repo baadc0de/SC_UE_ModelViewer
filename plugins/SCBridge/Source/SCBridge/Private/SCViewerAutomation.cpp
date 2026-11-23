@@ -794,25 +794,31 @@ void FSCViewerAutomation::Tick()
     TickScript(*S);
     ApplyPlayerOptions(*S);
     if (S->IsBusy()) return;
+    // -SCCamera once a vehicle is in the scene: after the queue's load, or one brought another way (a game scenario, a
+    // menu, the folder harness) when the queue has none; a camera that cannot take yet (first person before the
+    // vehicle's collision) is asked again.
+    auto ApplyCamera = [this, S] {
+        const ESCCameraMode Mode = Camera.Equals(TEXT("fly"), ESearchCase::IgnoreCase) ? ESCCameraMode::Fly
+                                   : Camera.Equals(TEXT("first"), ESearchCase::IgnoreCase) ? ESCCameraMode::FirstPerson : ESCCameraMode::Orbit;
+        bCameraApplied = S->SetCameraMode(Mode);
+        if (!bCameraApplied) return;
+        TArray<FString> V;
+        ASCViewerPawn* Pawn = S->GetViewerPawn();
+        if (Pawn && S->GetVehicle() && FlyView.ParseIntoArray(V, TEXT(",")) == 5)
+        {
+            const FVector Centre = S->GetVehicle()->GetComponentsBoundingBox(true).GetCenter();
+            Pawn->SetView(Centre + FVector(FCString::Atod(*V[0]), FCString::Atod(*V[1]), FCString::Atod(*V[2])),
+                          FRotator(FCString::Atof(*V[3]), FCString::Atof(*V[4]), 0));
+        }
+    };
+    const bool bLoaded = bWaiting; // the queue's load just finished
     if (bWaiting)
     {
         bWaiting = false;
         bAllSucceeded &= S->GetLoadPhase() == ESCLoadPhase::Succeeded;
         NextAt = FPlatformTime::Seconds() + Hold;
-        if (!bCameraApplied && !Camera.IsEmpty())
-        {
-            bCameraApplied = true;
-            S->SetCameraMode(Camera.Equals(TEXT("fly"), ESearchCase::IgnoreCase) ? ESCCameraMode::Fly : Camera.Equals(TEXT("first"), ESearchCase::IgnoreCase) ? ESCCameraMode::FirstPerson : ESCCameraMode::Orbit);
-            TArray<FString> V;
-            ASCViewerPawn* Pawn = S->GetViewerPawn();
-            if (Pawn && S->GetVehicle() && FlyView.ParseIntoArray(V, TEXT(",")) == 5)
-            {
-                const FVector Centre = S->GetVehicle()->GetComponentsBoundingBox(true).GetCenter();
-                Pawn->SetView(Centre + FVector(FCString::Atod(*V[0]), FCString::Atod(*V[1]), FCString::Atod(*V[2])),
-                              FRotator(FCString::Atof(*V[3]), FCString::Atof(*V[4]), 0));
-            }
-        }
     }
+    if (!bCameraApplied && !Camera.IsEmpty() && S->GetVehicle() && (bLoaded || Queue.IsEmpty())) ApplyCamera();
     // A cooked ship loads without the archive.
     const bool bCookedNext = !Queue.IsEmpty() && !USCViewerSubsystem::CookedShipLevel(Queue[0].TrimStartAndEnd()).IsEmpty();
     if (S->GetArchiveState() == ESCArchiveState::Failed && !Queue.IsEmpty() && !bCookedNext)
