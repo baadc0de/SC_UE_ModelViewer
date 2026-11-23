@@ -96,7 +96,13 @@ void FSCViewerAutomation::RegisterLiftCommands()
         });
     Add(TEXT("sc.Lift.Where"), TEXT("sc.Lift.Where: log every lift's position and state (LIFT_WHERE) and the player's movement base"),
         [Weak](ASCVehicle* V, const TArray<FString>&) {
-            for (int32 I = 0; V && I < V->Lifts.Num(); ++I) UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE %s"), *V->Lifts[I]->Describe());
+            for (int32 I = 0; V && I < V->Lifts.Num(); ++I)
+            {
+                // Where the carriage itself is (vehicle frame, cm): it rides the lift's anchor when attached.
+                const USceneComponent* Carriage = V->Lifts[I]->CarriageAnchor.Get();
+                UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE %s carriage=%s"), *V->Lifts[I]->Describe(),
+                       Carriage ? *V->GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).ToCompactString() : TEXT("-"));
+            }
             const ASCFirstPersonCharacter* C = Weak.IsValid() ? Weak->GetFirstPerson() : nullptr;
             const UPrimitiveComponent* Base = C ? Cast<UPrimitiveComponent>(C->GetMovementBaseObject()) : nullptr;
             UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_WHERE player base=%s lift=%d pos=%s"), Base ? *Base->GetName() : TEXT("-"),

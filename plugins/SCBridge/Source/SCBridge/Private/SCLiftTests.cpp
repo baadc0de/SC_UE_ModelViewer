@@ -736,7 +736,13 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     // Its anchors and gate rig are the vehicle's components (saved with it, remapped to the loaded actor's own).
     Lift.Anchor = NewObject<USceneComponent>(V, TEXT("LiftAnchor"));
     Lift.CarriageAnchor = NewObject<USceneComponent>(V, TEXT("Carriage"));
+    Lift.CarriageAnchor->SetupAttachment(Lift.Anchor.Get()); // the carriage rides the moving anchor, a rider the carriage
+    USceneComponent* Rider = NewObject<USceneComponent>(V, TEXT("Rider"));
+    Rider->SetupAttachment(Lift.CarriageAnchor.Get());
+    // The actor's components, as the import adds them (a level saves an actor's instance components).
+    for (UActorComponent* Part : TArray<UActorComponent*>{Lift.Anchor.Get(), Lift.CarriageAnchor.Get(), Rider, PanelAnchor}) V->AddInstanceComponent(Part);
     USCRigComponent* GateRig = NewObject<USCRigComponent>(V, TEXT("Gate"));
+    V->AddInstanceComponent(GateRig);
     Lift.Gate.Add({TEXT("gate"), GateRig, 0.5f, 0.0});
     Lift.CurrentStop = 2; // resting at the top deck
     Lift.S = Lift.Stops[2].S;
@@ -767,6 +773,31 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     TestTrue(TEXT("the lift panel"), SavedPanel && SavedPanel->EntityId == TEXT("panel") && SavedPanel->Choices.Num() == 1 &&
                                          SavedPanel->Choices[0].DisplayName == TEXT("Exit Ship"));
     TestEqual(TEXT("a second restore makes nothing"), Loaded->RestoreLifts(), 0);
+
+    // The loaded carriage still rides the lift's anchor and its rider the carriage; driven to the exit stop (doors stubbed,
+    // no gateway), the anchor moves by the legs' displacement, the carriage and rider with it.
+    const USceneComponent* LoadedRider = FindObject<USceneComponent>(Loaded, TEXT("Rider"));
+    TestTrue(FString::Printf(TEXT("the carriage rides the anchor (%s under %s)"), *GetPathNameSafe(Made.CarriageAnchor.Get()),
+                             *GetPathNameSafe(Made.CarriageAnchor->GetAttachParent())), Made.CarriageAnchor->GetAttachParent() == Made.Anchor.Get());
+    TestTrue(FString::Printf(TEXT("the rider rides the carriage (%s under %s)"), *GetPathNameSafe(LoadedRider),
+                             *GetPathNameSafe(LoadedRider ? LoadedRider->GetAttachParent() : nullptr)),
+             LoadedRider && LoadedRider->GetAttachParent() == Made.CarriageAnchor.Get());
+    FSCLift& Drive = *Loaded->Lifts[0];
+    FStubDoors Doors;
+    Doors.Doors.Add(Drive.Gate[0].Rig.Get(), {false, -1, 0.5});
+    Doors.Names.Add(Drive.Gate[0].Rig.Get(), TEXT("gate"));
+    Doors.Bind(Drive);
+    Drive.Host.Emit = [](const FString&, FName) {};
+    Drive.Host.RedeliverDoors = [](const FString&, FName) { return 0; };
+    Drive.Host.SweepLeg = {};
+    Drive.Host.GroundContact = {};
+    TestTrue(TEXT("the loaded lift takes a request"), Drive.RequestStop(0, TEXT("test"), TEXT("RequestSurface")));
+    Run(Drive, 40);
+    const FVector Expected = Drive.AnchorBase + Drive.Stops[0].Local - Drive.Stops[Drive.RestStop].Local;
+    TestTrue(FString::Printf(TEXT("arrived at the exit stop with its anchor moved (%s, expected %s)"), *Drive.Anchor->GetRelativeLocation().ToCompactString(),
+                             *Expected.ToCompactString()),
+             Drive.CurrentStop == 0 && Drive.Anchor->GetRelativeLocation().Equals(Expected, 0.5) &&
+                 !Drive.Stops[0].Local.Equals(Drive.Stops[Drive.RestStop].Local, 1.0));
 
     // A lift saved between stops (in motion: no current stop), powered down, with a door it found no clip for: it rests at
     // the stop nearest where it was, keeps its power state and does not wait for that door.
