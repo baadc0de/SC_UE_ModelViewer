@@ -300,8 +300,8 @@ data when it loads. In stages:
   (`/Game/SC/Players/Traversal/Traversal_<hash>`, `USCTraversalClipsData`: the body level and the clips, one payload as
   the body's), named by the record (`traversal_clips`) and always cooked
   (`DirectoriesToAlwaysCook`). A run loads it in the background with the scenario's levels
-  (`SetPreparedTraversalClips`); a seat or ladder takes its clips from it, and an action it lacks fails that seat or ladder
-  as a missing clip did. Each prepared level's stamp names an id new with each save, and the clips' stamp names the ids of
+  (`SetPreparedTraversalClips`); a seat or ladder takes its clips from it. A request it does not cover (a vehicle brought
+  in later, the Garage's) asks the archive when it is open, else fails as a missing clip did. Each prepared level's stamp names an id new with each save, and the clips' stamp names the ids of
   the levels they were read from (`FUCPrepared::TraversalSources`): prep keeps the clips only while those agree, so a level
   saved again (by this scenario's prep or another's sharing it) makes them stale for the scenario's run, its prep and its
   packaging. Prep format 28.

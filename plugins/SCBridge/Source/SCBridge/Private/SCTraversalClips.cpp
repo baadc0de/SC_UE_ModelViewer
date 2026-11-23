@@ -31,28 +31,35 @@ bool FSCTraversalClips::Start(const USCPlayerBodyComponent& Body, USCViewerSubsy
     for (int32 Index = 0; Index < Ref.GetNum(); ++Index) Bones.Add(Ref.GetBoneName(Index).ToString(), Index);
 
     FString File;
-    const bool bPrepared = Viewer && Viewer->UsesPreparedTraversalClips();
-    const bool bFixture = !bPrepared && FParse::Value(FCommandLine::Get(), FixtureOption, File);
-    UE_LOG(LogSCTraversal, Display, TEXT("TRAVERSAL_CLIPS_SOURCE source=%s names=%d"), bPrepared ? TEXT("prepared") : bFixture ? TEXT("fixture") : TEXT("archive"), Names.Num());
-    if (bPrepared)
+    // A prepared scenario (WP-O1-4b-2b): its clips were read for its body at prep and serve every seat and ladder of its
+    // vehicle and environment. A request they do not cover (a vehicle brought in after the start, the Garage's) asks the
+    // archive when it is open, as without a scenario; else it fails as a missing clip.
+    FResult Prepared;
+    bool bPrepared = false;
+    if (Viewer && Viewer->UsesPreparedTraversalClips())
     {
-        // A prepared scenario (WP-O1-4b-2b): its clips were read for its body at prep; nothing is asked of the archive.
-        FResult Result;
-        const TSharedPtr<const FSCPlayerClipMap> Prepared = Viewer->GetPreparedTraversalClips();
-        if (!Prepared) Result.Error = TEXT("the prepared traversal clips do not load for this body (prepare the scenario again)");
+        const TSharedPtr<const FSCPlayerClipMap> Set = Viewer->GetPreparedTraversalClips();
+        if (!Set) Prepared.Error = TEXT("the prepared traversal clips do not load for this body (prepare the scenario again)");
         for (const FString& Name : Names)
         {
-            const TSharedPtr<const FSCPlayerClip>* Clip = Prepared ? Prepared->Find(FName(*Name)) : nullptr;
+            const TSharedPtr<const FSCPlayerClip>* Clip = Set ? Set->Find(FName(*Name)) : nullptr;
             if (Clip && *Clip)
             {
-                Result.Clips.Add(FName(*Name), *Clip);
+                Prepared.Clips.Add(FName(*Name), *Clip);
                 continue;
             }
-            if (Result.Error.IsEmpty()) Result.Error = TEXT("Traversal animation ") + Name + TEXT(" was not prepared");
-            Result.Clips.Reset();
+            if (Prepared.Error.IsEmpty()) Prepared.Error = TEXT("Traversal animation ") + Name + TEXT(" was not prepared");
+            Prepared.Clips.Reset();
             break;
         }
-        Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Result = MoveTemp(Result)]() mutable { return MoveTemp(Result); });
+        bPrepared = Prepared.Error.IsEmpty() || Viewer->GetArchiveState() != ESCArchiveState::Ready;
+    }
+    const bool bFixture = !bPrepared && FParse::Value(FCommandLine::Get(), FixtureOption, File);
+    UE_LOG(LogSCTraversal, Display, TEXT("TRAVERSAL_CLIPS_SOURCE source=%s names=%d%s"), bPrepared ? TEXT("prepared") : bFixture ? TEXT("fixture") : TEXT("archive"),
+           Names.Num(), Viewer && Viewer->UsesPreparedTraversalClips() && !bPrepared ? TEXT(" (not in the prepared set)") : TEXT(""));
+    if (bPrepared)
+    {
+        Parse = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Result = MoveTemp(Prepared)]() mutable { return MoveTemp(Result); });
     }
     else if (bFixture)
     {
