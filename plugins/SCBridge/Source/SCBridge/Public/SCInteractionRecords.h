@@ -54,10 +54,12 @@ struct SCBRIDGE_API FSCItemPortLink
     UPROPERTY() FName TargetSlot;
 };
 /** `sendable_interactions[]` (cache format 39): a Sendable shared interaction and its `LinkingTag` (tag path). */
-struct FSCSendableInteraction
+USTRUCT()
+struct SCBRIDGE_API FSCSendableInteraction
 {
-    FName Name;
-    FString LinkingTag;
+    GENERATED_BODY()
+    UPROPERTY() FName Name;
+    UPROPERTY() FString LinkingTag;
 };
 /** `light_group.interactions[]` of a light-group entity: the interaction it receives, its linking tag, and the light
  *  state the group ends in (Default, Auxiliary, Emergency, Off, ...). */

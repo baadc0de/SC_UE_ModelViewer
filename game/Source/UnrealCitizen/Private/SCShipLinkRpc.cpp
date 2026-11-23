@@ -208,7 +208,7 @@ void SCShipLinkRpc::Scan(UWorld* World, TSet<FString>& Found)
                 Found.Add(FString::Printf(TEXT("door_open_while_locked_by_actor:%d:%d"), Viewer->GetVehicleInstanceId(Ship), Door));
         for (const FSCScreenFace& Face : Ship->ScreenFaces)
         {
-            if (!Face.Pinned.IsEmpty() || Face.Custom.IsValid() || !Face.Component.IsValid()) continue;
+            if (!Face.Pinned.IsEmpty() || Face.Custom || !Face.Component.IsValid()) continue;
             const USCRigComponent* Rig = Ship->DoorForPanel(Face.Panel.Get());
             if (!Rig) continue;
             const int32 Door = Ship->DoorForRig(Rig);

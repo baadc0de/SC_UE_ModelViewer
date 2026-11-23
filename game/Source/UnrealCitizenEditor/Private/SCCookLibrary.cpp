@@ -20,6 +20,7 @@
 #include "Engine/StaticMesh.h"
 #include "StaticMeshResources.h"
 #include "Engine/Texture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
@@ -339,6 +340,37 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     for (USkeletalMeshComponent* C : SkinnedComponents)
         for (int32 Slot = 0; Slot < C->OverrideMaterials.Num(); ++Slot)
             if (C->OverrideMaterials[Slot]) C->SetMaterial(Slot, Cook.Constant(C->OverrideMaterials[Slot]));
+    // Panels and screens (WP-O1-4b-1c). A drawn panel's render target is an asset of its own (a constant material in its
+    // own package refers to it; what it shows is drawn again at load); the screen faces' state, hover and custom renders
+    // become constants; the panels' renders and label masks are their pooled textures.
+    int32 PanelTargets = 0;
+    for (const TObjectPtr<UTextureRenderTarget2D>& Target : Environment->FloorPanelTargets)
+        if (Target)
+        {
+            Cook.Persist(Target, Root / TEXT("Panels"), Target->GetName());
+            ++PanelTargets;
+        }
+    for (TObjectPtr<UMaterialInterface>& Material : Environment->FloorPanelMaterials)
+        if (Material) Material = Cook.Constant(Material);
+    auto MakeConstant = [&Cook](TObjectPtr<UMaterialInterface>& Material) {
+        if (Material) Material = Cook.Constant(Material);
+    };
+    for (FSCScreenFace& Face : Environment->ScreenFaces)
+    {
+        MakeConstant(Face.Default);
+        MakeConstant(Face.Custom);
+        for (auto& [Key, Material] : Face.States) MakeConstant(Material);
+        for (auto& [Key, Material] : Face.Hovers) MakeConstant(Material);
+    }
+    auto Pooled = [&Cook](TObjectPtr<UTexture2D>& Texture) {
+        if (UObject** Asset = Texture ? Cook.Remap.Find(Texture) : nullptr) Texture = Cast<UTexture2D>(*Asset);
+    };
+    for (TArray<FSCFloorPanel>* Panels : {&Environment->FloorPanels, &Environment->DoorPanelLocks})
+        for (FSCFloorPanel& Panel : *Panels)
+        {
+            for (TObjectPtr<UTexture2D>& Mask : Panel.Masks) Pooled(Mask);
+            for (auto& [Path, Image] : Panel.Images) Pooled(Image);
+        }
     TArray<ULightComponent*> Lights;
     Environment->GetComponents(Lights);
     for (ULightComponent* L : Lights)

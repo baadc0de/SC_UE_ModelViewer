@@ -30,7 +30,7 @@ int32 ASCVehicle::RefreshPanelScreens()
     {
         FSCScreenFace& Face = ScreenFaces[Index];
         UMeshComponent* C = Face.Component.Get();
-        if (!C || Face.Custom.IsValid()) continue; // a face given other content keeps it
+        if (!C || Face.Custom) continue; // a face given other content keeps it
         FString Key = Face.Pinned;
         if (Key.IsEmpty())
         {
@@ -52,12 +52,12 @@ int32 ASCVehicle::RefreshPanelScreens()
                 }
             }
         }
-        const TWeakObjectPtr<UMaterialInterface>* State = Face.States.Find(Key);
-        UMaterialInterface* Material = State && State->IsValid() ? State->Get() : Face.Default.Get();
-        FString Shown = State && State->IsValid() ? Key : FString();
+        const TObjectPtr<UMaterialInterface>* State = Face.States.Find(Key);
+        UMaterialInterface* Material = State && *State ? State->Get() : Face.Default.Get();
+        FString Shown = State && *State ? Key : FString();
         // The cursor on a button: that state's render with the button hovered, when the export has it.
-        if (const TWeakObjectPtr<UMaterialInterface>* Hover = Face.Hovered.IsEmpty() ? nullptr : Face.Hovers.Find(FSCUiHoverImage::FaceKey(Face.Hovered, Shown));
-            Hover && Hover->IsValid())
+        if (const TObjectPtr<UMaterialInterface>* Hover = Face.Hovered.IsEmpty() ? nullptr : Face.Hovers.Find(FSCUiHoverImage::FaceKey(Face.Hovered, Shown));
+            Hover && *Hover)
         {
             Material = Hover->Get();
             Shown += TEXT("|hover:") + Face.Hovered;

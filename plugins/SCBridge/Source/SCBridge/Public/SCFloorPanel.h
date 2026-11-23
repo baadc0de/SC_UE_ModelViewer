@@ -18,6 +18,7 @@
 #include "MeshDescription.h"
 #include "SCInteractionRecords.h"
 #include "SCPackageReader.h"
+#include "SCFloorPanel.generated.h"
 
 class FSCLift;
 class UMeshComponent;
@@ -29,21 +30,29 @@ class UMaterialInterface;
 /** A screen face (one material slot of one mesh) in its component's space (cm): triangles, UV0, and the image frame.
  *  Image coordinates ("content"): x to the right, y down, 0..1 over the face's extent, as seen from the face's front
  *  (its vertex normals) with "up" the hint given to Build (the vehicle's up). */
+USTRUCT()
 struct SCBRIDGE_API FSCScreenFaceGeometry
 {
-    TArray<FVector3f> Positions; // three per triangle
-    TArray<FVector2f> UVs;       // UV0, per corner
-    TArray<FVector3f> Fronts;    // per triangle: its corners' summed vertex normals
-    TArray<int32> Nodes;         // per triangle: the rig node that owns it (INDEX_NONE without)
-    TArray<bool> Soft;           // per triangle: skinned (drawn by the rig component), else rigid
-    // Build's results.
-    FVector Normal = FVector::ZeroVector, Right = FVector::ZeroVector, Up = FVector::ZeroVector;
-    double RightMin = 0, UpMax = 0, Plane = 0;
-    double Width = 0, Height = 0; // cm
+    GENERATED_BODY()
+    UPROPERTY() TArray<FVector3f> Positions; // three per triangle
+    UPROPERTY() TArray<FVector2f> UVs;       // UV0, per corner
+    UPROPERTY() TArray<FVector3f> Fronts;    // per triangle: its corners' summed vertex normals
+    UPROPERTY() TArray<int32> Nodes;         // per triangle: the rig node that owns it (INDEX_NONE without)
+    UPROPERTY() TArray<bool> Soft;           // per triangle: skinned (drawn by the rig component), else rigid
+    // Build's results (saved: a prepared panel's face is not measured again).
+    UPROPERTY() FVector Normal = FVector::ZeroVector;
+    UPROPERTY() FVector Right = FVector::ZeroVector;
+    UPROPERTY() FVector Up = FVector::ZeroVector;
+    UPROPERTY() double RightMin = 0;
+    UPROPERTY() double UpMax = 0;
+    UPROPERTY() double Plane = 0;
+    UPROPERTY() double Width = 0; // cm
+    UPROPERTY() double Height = 0; // cm
     /** Content from UV: x = X.X u + X.Y v + X.Z, y = Y.X u + Y.Y v + Y.Z (least squares over the corners). */
-    FVector X = FVector(1, 0, 0), Y = FVector(0, 1, 0);
+    UPROPERTY() FVector X = FVector(1, 0, 0);
+    UPROPERTY() FVector Y = FVector(0, 1, 0);
     /** The largest content-space residual of that fit (0 for a planar, affine unwrap). */
-    double FitError = 0;
+    UPROPERTY() double FitError = 0;
 
     /** The triangles of material slot Slot of Description, each with its owning node (NodeOf). The mesh build drops the
      *  description, so the importer captures its screen slots while it still has it. */
@@ -67,20 +76,24 @@ struct SCBRIDGE_API FSCScreenFaceGeometry
 
 /** One option: a panel interaction that asks the carriage for a stop, labelled with that interaction's display name (else
  *  the stop's). Rect in content coordinates. */
+USTRUCT()
 struct FSCFloorPanelOption
 {
-    int32 Stop = INDEX_NONE;
-    FName Interaction;
-    FString Label;
-    FBox2D Rect = FBox2D(ForceInit);
-    FString Node; // a Buttons panel: the render's node (`buttons[].node`), whose hover render shows it aimed at
+    GENERATED_BODY()
+    UPROPERTY() int32 Stop = INDEX_NONE;
+    UPROPERTY() FName Interaction;
+    UPROPERTY() FString Label;
+    UPROPERTY() FBox2D Rect = FBox2D(ForceInit);
+    UPROPERTY() FString Node; // a Buttons panel: the render's node (`buttons[].node`), whose hover render shows it aimed at
 };
 
 /** Our layout: the rows top to bottom in the order given, over the face above a thin status bar. */
+USTRUCT()
 struct SCBRIDGE_API FSCFloorPanelLayout
 {
-    TArray<FSCFloorPanelOption> Options;
-    FBox2D Status = FBox2D(ForceInit);
+    GENERATED_BODY()
+    UPROPERTY() TArray<FSCFloorPanelOption> Options;
+    UPROPERTY() FBox2D Status = FBox2D(ForceInit);
     /** Margin (fraction of the face's shorter side), status bar and gap (fractions of its height): our UI. */
     static constexpr double Margin = 0.07;
     static constexpr double StatusHeight = 0.09;
@@ -92,16 +105,18 @@ struct SCBRIDGE_API FSCFloorPanelLayout
 };
 
 /** What a panel shows. */
+USTRUCT()
 struct SCBRIDGE_API FSCFloorPanelView
 {
-    int32 Highlight = INDEX_NONE; // option under the crosshair
-    FString Image;                // a button panel: the state image under the highlight (package path)
-    int32 Current = INDEX_NONE;   // the stop the carriage stands at; INDEX_NONE while it travels
-    int32 Target = INDEX_NONE;    // the stop of the leg chosen or in progress
-    TArray<int32> Requested;      // stops queued (sorted)
-    int8 Direction = 0;           // +1 up, -1 down: the leg's direction
-    bool bBlink = false;          // the target's marker phase
-    bool bHoverImage = false;     // a button panel: the export's hover look applies to the highlighted node (no frame)
+    GENERATED_BODY()
+    UPROPERTY() int32 Highlight = INDEX_NONE; // option under the crosshair
+    UPROPERTY() FString Image;                // a button panel: the state image under the highlight (package path)
+    UPROPERTY() int32 Current = INDEX_NONE;   // the stop the carriage stands at; INDEX_NONE while it travels
+    UPROPERTY() int32 Target = INDEX_NONE;    // the stop of the leg chosen or in progress
+    UPROPERTY() TArray<int32> Requested;      // stops queued (sorted)
+    UPROPERTY() int8 Direction = 0;           // +1 up, -1 down: the leg's direction
+    UPROPERTY() bool bBlink = false;          // the target's marker phase
+    UPROPERTY() bool bHoverImage = false;     // a button panel: the export's hover look applies to the highlighted node (no frame)
     /** Our blink rate for the target's marker (Hz). */
     static constexpr double BlinkHz = 1.5;
     static FSCFloorPanelView Of(const FSCLift& Lift, int32 Highlight, double Time);
@@ -115,10 +130,20 @@ struct SCBRIDGE_API FSCFloorPanelView
 
 /** Which palette role colours what: our choice over the pads' palette (linear colours). Without a palette (an export
  *  before cache format 35) a neutral white-on-black set stands in (absence of data, logged). */
+USTRUCT()
 struct SCBRIDGE_API FSCFloorPanelColours
 {
-    FLinearColor Field, Row, RowHighlight, Label, LabelHighlight, Current, Requested, Status, Arrow;
-    bool bFromData = false;
+    GENERATED_BODY()
+    UPROPERTY() FLinearColor Field = FLinearColor::Black;
+    UPROPERTY() FLinearColor Row = FLinearColor::Black;
+    UPROPERTY() FLinearColor RowHighlight = FLinearColor::Black;
+    UPROPERTY() FLinearColor Label = FLinearColor::White;
+    UPROPERTY() FLinearColor LabelHighlight = FLinearColor::White;
+    UPROPERTY() FLinearColor Current = FLinearColor::White;
+    UPROPERTY() FLinearColor Requested = FLinearColor::White;
+    UPROPERTY() FLinearColor Status = FLinearColor::White;
+    UPROPERTY() FLinearColor Arrow = FLinearColor::White;
+    UPROPERTY() bool bFromData = false;
     static FSCFloorPanelColours From(const FSCLiftPanelStyle& Style);
 };
 
@@ -126,50 +151,56 @@ struct SCBRIDGE_API FSCFloorPanelColours
  *  - FloorSelect: our own floor list on a lift panel's blank face (options in content coordinates).
  *  - Buttons: the game's own panel UI (a light panel, `ui_bindings[].buttons[]`): the exporter's render of the owner's
  *    current state drawn on the face, its clickable nodes the options (in image coordinates: 0..1 over the render). */
+UENUM()
 enum class ESCPanelKind : uint8 { FloorSelect, Buttons };
 
 /** One drawn operable panel (ASCVehicle::FloorPanels): the crosshair highlights the option under it, E sends that
- *  option's interaction. */
+ *  option's interaction. Saved with a prepared level (WP-O1-4b-1c): its face, layout, colours, render target and images;
+ *  what it shows is drawn again when it loads (a render target's pixels are not saved). */
+USTRUCT()
 struct FSCFloorPanel
 {
-    ESCPanelKind Kind = ESCPanelKind::FloorSelect;
-    int32 Lift = INDEX_NONE, Interior = INDEX_NONE, Face = INDEX_NONE;
-    FString EntityId;
-    TWeakObjectPtr<const USceneComponent> Anchor;
-    TWeakObjectPtr<UMeshComponent> Component;
-    int32 Slot = INDEX_NONE;
-    FSCScreenFaceGeometry Geometry;
-    FSCFloorPanelLayout Layout;
-    FSCFloorPanelColours Colours;
-    TWeakObjectPtr<UTextureRenderTarget2D> Target;
+    GENERATED_BODY()
+    UPROPERTY() ESCPanelKind Kind = ESCPanelKind::FloorSelect;
+    UPROPERTY() int32 Lift = INDEX_NONE;
+    UPROPERTY() int32 Interior = INDEX_NONE;
+    UPROPERTY() int32 Face = INDEX_NONE;
+    UPROPERTY() FString EntityId;
+    UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
+    UPROPERTY() TWeakObjectPtr<UMeshComponent> Component;
+    UPROPERTY() int32 Slot = INDEX_NONE;
+    UPROPERTY() FSCScreenFaceGeometry Geometry;
+    UPROPERTY() FSCFloorPanelLayout Layout;
+    UPROPERTY() FSCFloorPanelColours Colours;
+    UPROPERTY() TObjectPtr<UTextureRenderTarget2D> Target;
     /** Per row: the label's mask in the pads' font and its em (none: drawn in the engine font). */
-    TArray<TWeakObjectPtr<UTexture2D>> Masks;
-    TArray<float> MaskEm;
+    UPROPERTY() TArray<TObjectPtr<UTexture2D>> Masks;
+    UPROPERTY() TArray<float> MaskEm;
     /** How a label is cased: the pads' label case (capitals when the export has no label style: the owner's style). */
-    bool bUpperCase = true;
-    int32 Highlight = INDEX_NONE;
-    FSCFloorPanelView Shown;
-    bool bDrawn = false;
+    UPROPERTY() bool bUpperCase = true;
+    UPROPERTY() int32 Highlight = INDEX_NONE;
+    UPROPERTY(Transient) FSCFloorPanelView Shown;
+    UPROPERTY(Transient) bool bDrawn = false; // a loaded panel draws again (its render target's pixels are not saved)
     /** The face's frame: the component's rotation and location (its scale is in Geometry, FSCScreenFaceGeometry::Scaled). */
     FTransform Frame() const;
 
     // Buttons panels (Kind == Buttons).
     /** The integer UV cell the face samples the render in (the render is 0..1 over it). */
-    FVector2D UVBase = FVector2D::ZeroVector;
+    UPROPERTY() FVector2D UVBase = FVector2D::ZeroVector;
     /** The owner's state types (defaults, transitions, linked tags) and its state images, from its UI binding. */
-    TArray<FSCUiStateType> StateTypes;
-    TArray<FSCUiStateImage> StateImages;
-    FString DefaultImage;
+    UPROPERTY() TArray<FSCUiStateType> StateTypes;
+    UPROPERTY() TArray<FSCUiStateImage> StateImages;
+    UPROPERTY() FString DefaultImage;
     /** WP-I1-4: the renders with the cursor on a node (`hover_images[]`). */
-    TArray<FSCUiHoverImage> HoverImages;
+    UPROPERTY() TArray<FSCUiHoverImage> HoverImages;
     /** The owner's current state per state type (its default until something sets it). */
-    TMap<FString, FString> UiState;
+    UPROPERTY() TMap<FString, FString> UiState;
     /** Decoded renders by package path (the default and every state image). */
-    TMap<FString, TWeakObjectPtr<UTexture2D>> Images;
+    UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> Images;
     /** The owner's Sendable interactions with their linking tags, and its EntityLinks. */
-    TArray<FSCSendableInteraction> Sendables;
-    TArray<FString> Links;
-    FLinearColor HighlightColour = FLinearColor::White;
+    UPROPERTY() TArray<FSCSendableInteraction> Sendables;
+    UPROPERTY() TArray<FString> Links;
+    UPROPERTY() FLinearColor HighlightColour = FLinearColor::White;
     /** Options live in content coordinates (FloorSelect) or image coordinates (Buttons): the point of each from a hit on
      *  the face (its content point and UV), and the content point of an option point. */
     FVector2D OptionPoint(const FVector2D& Content, const FVector2f& UV) const

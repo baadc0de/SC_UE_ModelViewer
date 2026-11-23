@@ -83,7 +83,7 @@ int32 ASCVehicle::DeliverLightGroupTag(int32 Group, const FString& LinkingTag, F
     for (FSCFloorPanel& P : FloorPanels)
         if (P.Kind == ESCPanelKind::Buttons && LightGroupsLinkedBy(P.Interior, P.Links).Contains(Group))
             for (const FSCUiStateType& T : P.StateTypes)
-                for (const TPair<FString, FString>& L : T.Linked)
+                for (const FSCUiLinkedState& L : T.Linked)
                     if (L.Key == Linked) P.UiState.Add(T.Name, L.Value);
     RefreshFloorPanels();
     return Changed;
