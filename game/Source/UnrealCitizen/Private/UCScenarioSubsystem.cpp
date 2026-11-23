@@ -279,14 +279,17 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
             bStartPlaced = true; // the default start stays: not tried again while the cargo is still coming
         }
     }
+    // Placement ends at its timeout whatever the view (no first-person character now: none later either).
+    if (bTimedOut) bStartPlaced = true;
     // Running means the scene is in: the prepared cargo boxes too (their templates; a box that fails fails the scenario, and
     // so does one that has not come within PreparedCargoSeconds). Independent of the camera's placement timeout.
-    // Counted in world time: a pause stops the box streaming and the deadline alike.
+    // Counted in the world's audio time: a pause stops the box streaming and the deadline alike, and a time dilation
+    // (slomo) does not shorten it.
     UWorld* World = GetGameInstance()->GetWorld();
     if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(World); Cargo && !Cargo->ArePreparedBoxesReady())
     {
-        if (CargoWaitSince < 0) CargoWaitSince = World->GetTimeSeconds();
-        if (World->GetTimeSeconds() - CargoWaitSince > PreparedCargoSeconds)
+        if (CargoWaitSince < 0) CargoWaitSince = World->GetAudioTimeSeconds();
+        if (World->GetAudioTimeSeconds() - CargoWaitSince > PreparedCargoSeconds)
             Fail(FString::Printf(TEXT("the prepared cargo boxes did not come within %.0f s"), PreparedCargoSeconds));
         return;
     }

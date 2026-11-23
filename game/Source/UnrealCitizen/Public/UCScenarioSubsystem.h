@@ -55,7 +55,8 @@ private:
     bool bVehicleRequested = false;
     bool bCameraSet = false, bStartPlaced = false;
     double StartedAt = 0, LoadingSince = 0;
-    /** World time (stops while the game is paused) the scenario started waiting for its prepared cargo boxes; < 0: not yet. */
+    /** World audio time (stops while the game is paused, not dilated) the scenario started waiting for its prepared cargo
+     *  boxes; < 0: not yet. */
     double CargoWaitSince = -1;
     bool bMusicPending = false;
     bool bCleanupPending = false; // failed: a vehicle still in the scene goes once nothing loads
