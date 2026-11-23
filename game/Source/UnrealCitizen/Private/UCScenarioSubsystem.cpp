@@ -256,6 +256,7 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
         bCameraSet = Viewer.SetCameraMode(Mode) && (!bFirst || Viewer.GetFirstPerson());
         if (!bCameraSet && !bTimedOut) return; // first person waits for the vehicle's collision
         if (!bCameraSet) UE_LOG(LogUCScenario, Warning, TEXT("SCENARIO camera %s did not take"), *Scenario.Camera);
+        bCameraSet = true; // taken, or given up on: not tried again while the cargo is still coming
     }
     ASCFirstPersonCharacter* Character = bFirst ? Viewer.GetFirstPerson() : nullptr;
     if (!bStartPlaced && Character && !Scenario.Start.IsEmpty())
@@ -275,13 +276,17 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
             for (const FSCTeleportRow& Row : Rows) Labels.Add(Character->DestinationLabel(Row));
             UE_LOG(LogUCScenario, Warning, TEXT("SCENARIO start \"%s\" names no teleport destination (%s): the default start"), *Scenario.Start,
                    *FString::Join(Labels, TEXT(", ")));
+            bStartPlaced = true; // the default start stays: not tried again while the cargo is still coming
         }
     }
     // Running means the scene is in: the prepared cargo boxes too (their templates; a box that fails fails the scenario, and
     // so does one that has not come within PreparedCargoSeconds). Independent of the camera's placement timeout.
-    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance()->GetWorld()); Cargo && !Cargo->ArePreparedBoxesReady())
+    // Counted in world time: a pause stops the box streaming and the deadline alike.
+    UWorld* World = GetGameInstance()->GetWorld();
+    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(World); Cargo && !Cargo->ArePreparedBoxesReady())
     {
-        if (FPlatformTime::Seconds() - StartedAt > PreparedCargoSeconds)
+        if (CargoWaitSince < 0) CargoWaitSince = World->GetTimeSeconds();
+        if (World->GetTimeSeconds() - CargoWaitSince > PreparedCargoSeconds)
             Fail(FString::Printf(TEXT("the prepared cargo boxes did not come within %.0f s"), PreparedCargoSeconds));
         return;
     }
