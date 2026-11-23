@@ -402,6 +402,11 @@ bool FSCAnimImporter::Bind(const FObj& Json, const FSCDerivedMesh& Rig, const FS
 void FSCAnimImporter::AttachBinding(USkeletalMesh* Mesh, UObject* Outer, FSCImportedClip& Clip, FSCClipBinding Binding)
 {
     Binding.Mesh = Mesh;
+    BuildSequences(Mesh, Outer, Binding);
+    Clip.Bindings.Add(MoveTemp(Binding));
+}
+void FSCAnimImporter::BuildSequences(USkeletalMesh* Mesh, UObject* Outer, FSCClipBinding& Binding)
+{
     // A sequence has one rate and one length; the tracks of a merged clip keep their own animation's. Tracks that
     // share a timing share a sequence, so every key is stored as authored and each sequence can be played from its
     // own end, as the runtime plays its tracks.
@@ -444,7 +449,6 @@ void FSCAnimImporter::AttachBinding(USkeletalMesh* Mesh, UObject* Outer, FSCImpo
         Controller.CloseBracket(false);
 #endif
     }
-    Clip.Bindings.Add(MoveTemp(Binding));
 }
 FTransform FSCAnimImporter::Sample(const FSCBoneTrack& Track, double Frame)
 {
@@ -468,7 +472,7 @@ void FSCAnimImporter::Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImpor
 {
     if (!Clip.Bindings.IsEmpty())
     {
-        Clip.Sequence = Clip.Bindings[0].Sequences[0];
+        Clip.Sequence = Clip.Bindings[0].Sequences.IsEmpty() ? nullptr : Clip.Bindings[0].Sequences[0];
         return;
     }
     Clip.bBoomerang = false;

@@ -7,6 +7,7 @@
 #include "SCTextureSource.h"
 #include "SCVehicle.h"
 #include "SCClipCatalog.h"
+#include "SCAnimImporter.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
@@ -217,6 +218,25 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
                 for (TObjectPtr<UAnimSequence>& Sequence : Binding.Sequences) Sequence = KeepSequence(Sequence, ClipName);
                 USkeletalMesh* const* Mesh = KeptRigs.Find(Binding.Mesh.Get());
                 Binding.Mesh = Mesh ? *Mesh : nullptr;
+                // A prepared vehicle's bindings keep only their bone tracks (prep drops the editor sequences): built here,
+                // on the kept mesh's skeleton, from the tracks playback reads.
+                if (Binding.Sequences.IsEmpty() && !Binding.Tracks.IsEmpty() && Binding.Mesh)
+                {
+                    FSCAnimImporter::BuildSequences(Binding.Mesh, GetTransientPackage(), Binding);
+                    for (const TObjectPtr<UAnimSequence>& Sequence : Binding.Sequences) K.Move(Sequence, TEXT("Animations"), ClipName);
+                }
+            }
+            // The clip's primary sequence: its first binding's, or (no binding: a clip without receiving bones) a
+            // metadata-only one of its rate and length, as the import makes it.
+            if (!Clip.Sequence)
+            {
+                FSCAnimImporter::Finalize(nullptr, GetTransientPackage(), Clip);
+                if (Clip.Bindings.IsEmpty()) Clip.Sequence = KeepSequence(Clip.Sequence, ClipName);
+            }
+            if (!Clip.Sequence)
+            {
+                K.Warnings.Add(Clip.Name + TEXT(": no sequence kept"));
+                K.bFailed = true;
             }
         }
         K.Move(Kept, FString(), TEXT("Clips"));

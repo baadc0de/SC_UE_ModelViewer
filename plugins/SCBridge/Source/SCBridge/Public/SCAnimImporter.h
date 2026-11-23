@@ -19,6 +19,11 @@ public:
     static bool DeriveBinding(const TSharedPtr<FJsonObject>& Json, const FSCDerivedMesh& Rig, const FString& Path, FSCImportedClip& Clip,
                               FSCClipBinding& Binding, FString& Error);
     static void AttachBinding(USkeletalMesh* Mesh, UObject* Outer, FSCImportedClip& Clip, FSCClipBinding Binding);
+    /** Binding's editor sequences from its bone tracks on Mesh's skeleton, one per timing (rate and key count), added to
+     *  Binding.Sequences (transient, in Outer). The import builds them as it binds; Keep as assets builds them for a
+     *  prepared vehicle, whose bindings keep only the tracks. Editor builds only (a sequence without a data model
+     *  otherwise). */
+    static void BuildSequences(USkeletalMesh* Mesh, UObject* Outer, FSCClipBinding& Binding);
     static bool Bind(const TSharedPtr<FJsonObject>& Json, const FSCDerivedMesh& Rig, const FString& Path, USkeletalMesh* Mesh,
                      UObject* Outer, FSCImportedClip& Clip, FString& Error);
     static void Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImportedClip& Clip);
