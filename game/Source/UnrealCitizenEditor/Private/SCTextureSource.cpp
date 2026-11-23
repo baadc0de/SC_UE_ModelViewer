@@ -6,6 +6,9 @@
 
 bool SCTextureSource::Add(UTexture2D* Texture, FString& Error)
 {
+    // A texture with a source already (a prepared one, its source made at prep from the uploaded pixels) keeps it: a
+    // decode of its platform mips would replace it with the block-compressed approximation.
+    if (Texture && Texture->Source.IsValid()) return true;
     FTexturePlatformData* Platform = Texture ? Texture->GetPlatformData() : nullptr;
     if (!Platform || Platform->Mips.IsEmpty())
     {

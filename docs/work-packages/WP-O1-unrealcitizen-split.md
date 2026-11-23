@@ -225,8 +225,12 @@ data when it loads. In stages:
   the Keep); the live rigs stay as they are. A rig with its own body never takes the engine's asynchronous physics
   creation. A saved rig stands in its saved pose when it registers, and restores its body, baked in that pose
   (`USCRigComponent::CollisionPose`), with the skin bones saved beside it: no vertex scan and no refit at load (a game
-  host then drops the bytes). Float (HDR) textures, four channels or one, keep a float source. Prep format 17. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`: `Entry_Door_Lower open=1`); door pads,
-  lifts, seats and ladders still need their interaction state (1b).
+  host then drops the bytes). Float (HDR) textures, four channels or one, keep a float source; a texture that has a
+  source keeps it. Prep format 17. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`:
+  `Entry_Door_Lower open=1`); door pads, lifts, seats and ladders still need their interaction state (1b).
+  Known limit (an engine follow-up, WP-E1): a socket-only rig mesh (no triangles) is built again each time an editor
+  host loads it — UE 5.9's `USkeletalMesh::IsInitialBuildDone` wants a LOD 0 section, so its render data skips the
+  derived-data cache. The builds are short, and a packaged game loads cooked render data and builds nothing.
 - **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
   interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,
   ship doors, sensors, the lift network, ladder anchors, usables, light groups and areas) become saved properties.

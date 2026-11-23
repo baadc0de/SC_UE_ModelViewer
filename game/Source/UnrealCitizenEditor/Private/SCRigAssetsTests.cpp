@@ -329,6 +329,23 @@ bool FSCTextureSourceTest::RunTest(const FString&)
 {
     for (const ERGBFormat Format : {ERGBFormat::RGBAF, ERGBFormat::GrayF})
         for (const int32 Bits : {16, 32}) CheckFloatTexture(*this, Format, Bits);
+
+    // A texture with a source (a prepared one) keeps it byte for byte: its platform pixels (here 2.0) are not decoded
+    // over it.
+    auto EXR = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper")).CreateImageWrapper(EImageFormat::EXR);
+    const float Pixels[] = {2, 1, 0.5, 1, 2, 1, 0.5, 1, 2, 1, 0.5, 1, 2, 1, 0.5, 1};
+    if (!TestTrue(TEXT("synthetic HDR encoder"), EXR && EXR->SetRaw(Pixels, sizeof(Pixels), 2, 2, ERGBFormat::RGBAF, 32))) return false;
+    const TArray64<uint8>& Compressed = EXR->GetCompressed();
+    UTexture2D* Texture = FImageUtils::ImportBufferAsTexture2D(TArray<uint8>(Compressed.GetData(), int32(Compressed.Num())));
+    if (!TestNotNull(TEXT("the EXR imports"), Texture)) return false;
+    const float Authored[] = {7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7};
+    Texture->Source.Init(2, 2, 1, 1, TSF_RGBA32F, reinterpret_cast<const uint8*>(Authored));
+    TArray64<uint8> Before, After;
+    Texture->Source.GetMipData(Before, 0);
+    FString Error;
+    TestTrue(TEXT("a texture with a source: ") + Error, SCTextureSource::Add(Texture, Error));
+    Texture->Source.GetMipData(After, 0);
+    TestTrue(TEXT("its source kept byte for byte"), Before == After && Texture->Source.GetFormat() == TSF_RGBA32F);
     return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS
