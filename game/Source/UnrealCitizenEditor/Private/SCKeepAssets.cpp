@@ -179,6 +179,15 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
     if (const USCClipCatalog* Catalog = Vehicle->ClipCatalog)
     {
         USCClipCatalog* Kept = DuplicateObject(Catalog, GetTransientPackage());
+        // The vehicle's root rig (the manifest root's mesh), kept: the skeleton of its clips without receiving bones.
+        USkeletalMesh* KeptRoot = nullptr;
+        for (const USCRigComponent* Rig : Vehicle->Rigs)
+            if (Rig && !Vehicle->Manifest.Root.MeshAsset.IsEmpty() && Rig->MeshAsset == Vehicle->Manifest.Root.MeshAsset)
+                if (USkeletalMesh* const* Copy = KeptRigs.Find(Rig->GetSkeletalMeshAsset()))
+                {
+                    KeptRoot = *Copy;
+                    break;
+                }
         // The editable sequences (one per binding timing, and the clip's primary): each a copy on the kept skeleton of its
         // own, saved under Animations. A skeleton no kept rig mesh carries (a metadata-only sequence's own: a clip without
         // receiving bones) is kept as a copy on its first use.
@@ -227,11 +236,16 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
                 }
             }
             // The clip's primary sequence: its first binding's, or (no binding: a clip without receiving bones) a
-            // metadata-only one of its rate and length, as the import makes it.
+            // metadata-only one of its rate and length, as the import makes it: on the root rig's kept skeleton (the
+            // vehicle's own rig), a skeleton of its own only for a vehicle without one.
             if (!Clip.Sequence)
             {
-                FSCAnimImporter::Finalize(nullptr, GetTransientPackage(), Clip);
-                if (Clip.Bindings.IsEmpty()) Clip.Sequence = KeepSequence(Clip.Sequence, ClipName);
+                FSCAnimImporter::Finalize(KeptRoot, GetTransientPackage(), Clip);
+                if (Clip.Bindings.IsEmpty() && Clip.Sequence)
+                {
+                    if (KeptRoot) K.Move(Clip.Sequence, TEXT("Animations"), ClipName);
+                    else Clip.Sequence = KeepSequence(Clip.Sequence, ClipName);
+                }
             }
             if (!Clip.Sequence)
             {
