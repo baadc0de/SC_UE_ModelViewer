@@ -14,6 +14,7 @@
 #include "NiagaraSystem.h"
 #include "UObject/StrongObjectPtr.h"
 class FSCBridgeClient;
+struct FSCCargoFxMapping;
 
 class FSCCargoFx : public TSharedFromThis<FSCCargoFx>
 {
@@ -30,6 +31,9 @@ public:
 
     /** Resolve the tractor's effects (once per definition): Beam / Muzzle at once, Hit through MaterialEffects. */
     void Start(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone);
+    /** WP-O1-4b-3b: a prepared scenario's effects: the beam and muzzle as Start sets them, the hit and the contacts from
+     *  the mapping the prep step resolved (FSCCargoFxMapping); InClient (may be null) for ships it does not cover. */
+    void StartPrepared(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone, const FSCCargoFxMapping& Mapping);
     UNiagaraSystem* Beam() const { return BeamSystem.Get(); }
     UNiagaraSystem* Muzzle() const { return MuzzleSystem.Get(); }
     UNiagaraSystem* Hit() const { return HitSystem.Get(); }

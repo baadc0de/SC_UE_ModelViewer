@@ -8,6 +8,7 @@
 #include "SCPackageReader.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
+#include "Cargo/SCCargoFxMapping.h"
 #include "UCScenarioSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -118,6 +119,7 @@ bool FUCPreparedTest::RunTest(const FString&)
     R.PlayerLevel = Source.PlayerLevel();
     R.TraversalClips = USCViewerSubsystem::TraversalClipsPath(R.PlayerLevel, R.VehicleLevel, R.EnvironmentLevel);
     R.TractorRecordJson = TEXT("{\"record\": \"tractor\"}");
+    R.CargoFxJson = TEXT("{\"box_group\": \"metal\"}");
     R.Archive = TEXT("build");
     R.PreparedAt = TEXT("2026-11-23T00:00:00.000Z");
 
@@ -129,6 +131,7 @@ bool FUCPreparedTest::RunTest(const FString&)
               R.VehicleLevel + R.EnvironmentLevel + R.PlayerLevel + R.TraversalClips);
     TestEqual(TEXT("... its format"), Back.Format, R.Format);
     TestTrue(TEXT("... its tractor record as kept"), Back.TractorRecordJson.Equals(R.TractorRecordJson, ESearchCase::CaseSensitive));
+    TestTrue(TEXT("... its cargo effects as kept"), Back.CargoFxJson.Equals(R.CargoFxJson, ESearchCase::CaseSensitive));
     TestTrue(TEXT("a box entity's level"), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")).StartsWith(TEXT("/Game/SC/Cargo/Maps/Carryable_TBO_FL_16SCU_")));
     TestNotEqual(TEXT("... another entity whose name only differs in a character a level name drops"),
                  FUCPrepared::CargoLevelPath(TEXT("Carryable-TBO_FL_16SCU")), FUCPrepared::CargoLevelPath(TEXT("Carryable_TBO_FL_16SCU")));
@@ -236,6 +239,40 @@ bool FUCPreparedTest::RunTest(const FString&)
                   return L == R.VehicleLevel || L == R.PlayerLevel || L == R.TraversalClips;
               }), FString());
     return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUCCargoFxMappingTest, "SCBridge.Scenario.CargoFxMapping",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FUCCargoFxMappingTest::RunTest(const FString&)
+{
+    // MaterialEffects.xml's custom effects: an entry per surface group, "default" when the group has none.
+    TMap<FString, TMap<FString, FString>> Custom;
+    TestTrue(TEXT("custom effects read"), FSCCargoFxMapping::ParseCustomEffects(
+        TEXT("<MaterialEffects><CustomEffects><Effect name=\"Ship_Hit\"><SurfaceTypeGroup name=\"Metal\" fx=\"lib:metal_hit\"/>")
+        TEXT("<SurfaceTypeGroup name=\"default\" fx=\"lib:any_hit\"/></Effect></CustomEffects></MaterialEffects>"), Custom));
+    TestEqual(TEXT("the group's entry"), FSCCargoFxMapping::EntryFor(Custom, TEXT("ship_hit"), TEXT("metal")), FString(TEXT("lib:metal_hit")));
+    TestEqual(TEXT("the default entry"), FSCCargoFxMapping::EntryFor(Custom, TEXT("Ship_Hit"), TEXT("glass")), FString(TEXT("lib:any_hit")));
+    TestEqual(TEXT("an unknown custom effect"), FSCCargoFxMapping::EntryFor(Custom, TEXT("other"), TEXT("metal")), FString());
+    TestFalse(TEXT("no CustomEffects"), FSCCargoFxMapping::ParseCustomEffects(TEXT("<MaterialEffects/>"), Custom));
+    // An FXLib entry's first particle and its scale range; a ship record's contact custom effect.
+    const FSCCargoFxMapping::FEffect E = FSCCargoFxMapping::ParseEntry(
+        TEXT("{\"particles\": [{\"reference\": \"guid|lib/fx.impact\", \"attributes\": {\"minscale\": \"0.5\", \"maxscale\": \"2\"}}]}"));
+    TestTrue(TEXT("an entry's particle and scales"), E.Reference == TEXT("guid|lib/fx.impact") && E.MinScale == 0.5f && E.MaxScale == 2.f);
+    TestEqual(TEXT("a record's contact custom effect"),
+              FSCCargoFxMapping::ContactCustomEffect(TEXT("{\"Components\": [{\"__type\": \"CollisionMFXEntityParams\", \"customEffect\": \"Ship_Hit\"}]}")),
+              FString(TEXT("Ship_Hit")));
+    // The mapping a record keeps.
+    FSCCargoFxMapping M;
+    M.BoxGroup = TEXT("metal");
+    M.Hit = E;
+    M.Contacts.Add(TEXT("CRUS_Starlifter_C2"), E);
+    M.Contacts.Add(TEXT("AsteroidETypeMineableRock"), FSCCargoFxMapping::FEffect());
+    FSCCargoFxMapping Back;
+    TestTrue(TEXT("the mapping round-trips"), FSCCargoFxMapping::Parse(M.ToJson(), Back) && Back.BoxGroup == M.BoxGroup && Back.Hit.Reference == E.Reference &&
+                                                 Back.Hit.MaxScale == 2.f && Back.Contacts.Num() == 2 &&
+                                                 Back.Contacts[TEXT("CRUS_Starlifter_C2")].MinScale == 0.5f &&
+                                                 Back.Contacts[TEXT("AsteroidETypeMineableRock")].Reference.IsEmpty());
+    return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUCPreparedLevelsTest, "SCBridge.Scenario.LevelNamesAndPaints",

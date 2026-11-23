@@ -77,8 +77,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  level: the kit actor with its rigs, its parsed kit and clips; the record names it, PlayerLevel). 27: its kit as one payload
      *  read whole, its package audio staged. 28: WP-O1-4b-2b the traversal clips (seats, ladders) prepared for the body
      *  (TraversalClips). 29: WP-O1-4b-3 the cargo setup's boxes prepared (a level per box entity, CargoLevels) and its
-     *  tractor record kept (TractorRecordJson). */
-    static constexpr int32 FormatVersion = 29;
+     *  tractor record kept (TractorRecordJson). 30: WP-O1-4b-3b the tractor's hit and the box contacts' effects resolved
+     *  (CargoFxJson). */
+    static constexpr int32 FormatVersion = 30;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id
@@ -92,6 +93,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  tractor record the setup names as DataCore answered at prep (empty: none named, or the archive had none). */
     TMap<FString, FString> CargoLevels;
     FString TractorRecordJson;
+    /** WP-O1-4b-3b: the tractor's hit and the box contacts with the scenario's ship and obstacles, resolved at prep
+     *  (FSCCargoFxMapping as JSON; empty: none resolved). */
+    FString CargoFxJson;
     /** Where the prep step saves a cargo box entity's level. */
     static FString CargoLevelPath(const FString& Entity);
     FString Archive;          // the archive builds the levels were prepared from, comma-separated (information)

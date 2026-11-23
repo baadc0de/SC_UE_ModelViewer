@@ -1,5 +1,9 @@
 // FSCCargoFx: the tractor's and the box contacts' effects resolved from the data at run time (header: SCCargoFx.h).
 #include "SCCargoFx.h"
+#include "Cargo/SCCargoFxMapping.h"
+#include "Async/TaskGraphInterfaces.h"
+#include "HAL/PlatformProcess.h"
+#include "Serialization/JsonWriter.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoSubsystem.h"
 #include "SCBridgeClient.h"
@@ -48,7 +52,151 @@ FObj FindType(const TSharedPtr<FJsonValue>& V, const FString& Type)
         if (FObj F = FindType(Pair.Value, Type)) return F;
     return nullptr;
 }
+/** The record name of a ship or obstacle entity. */
+FString EntityRecord(const FString& Entity)
+{
+    return Entity.Contains(TEXT(".")) ? Entity : TEXT("EntityClassDefinition.") + Entity;
+}
+/** A callback answer of the client, waited for on the game thread (a commandlet: its answers are posted there). */
+FSCTextResult WaitForAnswer(TFunctionRef<void(TFunction<void(const FSCTextResult&)>)> Ask)
+{
+    const TSharedRef<TOptional<FSCTextResult>> Answer = MakeShared<TOptional<FSCTextResult>>();
+    Ask([Answer](const FSCTextResult& R) { *Answer = R; });
+    while (!Answer->IsSet())
+    {
+        FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        FPlatformProcess::Sleep(0.005f);
+    }
+    return Answer->GetValue();
+}
 } // namespace
+
+// ---------------------------------------------------------------------------------------------------- the mapping (WP-O1-4b-3b)
+
+bool FSCCargoFxMapping::ParseCustomEffects(const FString& Xml, TMap<FString, TMap<FString, FString>>& Out)
+{
+    Out.Reset();
+    FXmlFile File(Xml, EConstructMethod::ConstructFromBuffer);
+    const FXmlNode* Root = File.IsValid() ? File.GetRootNode() : nullptr;
+    const FXmlNode* Customs = Root ? Root->FindChildNode(TEXT("CustomEffects")) : nullptr;
+    if (!Customs) return false;
+    for (const FXmlNode* C : Customs->GetChildrenNodes())
+    {
+        TMap<FString, FString>& Groups = Out.FindOrAdd(C->GetAttribute(TEXT("name")).ToLower());
+        for (const FXmlNode* G : C->GetChildrenNodes())
+            if (G->GetTag() == TEXT("SurfaceTypeGroup")) Groups.Add(G->GetAttribute(TEXT("name")).ToLower(), G->GetAttribute(TEXT("fx")));
+    }
+    return true;
+}
+FString FSCCargoFxMapping::EntryFor(const TMap<FString, TMap<FString, FString>>& Custom, const FString& CustomName, const FString& Group)
+{
+    const TMap<FString, FString>* Groups = Custom.Find(CustomName.ToLower());
+    if (!Groups) return FString();
+    if (const FString* Fx = Groups->Find(Group.ToLower())) return *Fx;
+    const FString* Default = Groups->Find(TEXT("default"));
+    return Default ? *Default : FString();
+}
+FSCCargoFxMapping::FEffect FSCCargoFxMapping::ParseEntry(const FString& EntryJson)
+{
+    FEffect Out;
+    const FObj O = ParseObject(EntryJson);
+    const TArray<TSharedPtr<FJsonValue>>* Particles;
+    if (O && O->TryGetArrayField(TEXT("particles"), Particles) && !Particles->IsEmpty())
+        if (const FObj P = (*Particles)[0]->AsObject())
+        {
+            P->TryGetStringField(TEXT("reference"), Out.Reference);
+            const TSharedPtr<FJsonObject>* Attributes;
+            if (P->TryGetObjectField(TEXT("attributes"), Attributes))
+            {
+                FString S;
+                if ((*Attributes)->TryGetStringField(TEXT("minscale"), S)) Out.MinScale = FCString::Atof(*S);
+                if ((*Attributes)->TryGetStringField(TEXT("maxscale"), S)) Out.MaxScale = FCString::Atof(*S);
+            }
+        }
+    Out.MaxScale = FMath::Max(Out.MinScale, Out.MaxScale);
+    return Out;
+}
+FString FSCCargoFxMapping::ContactCustomEffect(const FString& RecordJson)
+{
+    TSharedPtr<FJsonValue> V;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(RecordJson), V);
+    FString CustomName;
+    if (const FObj Params = FindType(V, TEXT("CollisionMFXEntityParams"))) Params->TryGetStringField(TEXT("customEffect"), CustomName);
+    return CustomName;
+}
+FString FSCCargoFxMapping::ToJson() const
+{
+    auto Effect = [](const FEffect& E) {
+        const TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+        O->SetStringField(TEXT("reference"), E.Reference);
+        O->SetNumberField(TEXT("min_scale"), E.MinScale);
+        O->SetNumberField(TEXT("max_scale"), E.MaxScale);
+        return O;
+    };
+    const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+    Root->SetStringField(TEXT("box_group"), BoxGroup);
+    Root->SetObjectField(TEXT("hit"), Effect(Hit));
+    const TSharedRef<FJsonObject> Ships = MakeShared<FJsonObject>();
+    for (const auto& [Entity, E] : Contacts) Ships->SetObjectField(Entity, Effect(E));
+    Root->SetObjectField(TEXT("contacts"), Ships);
+    FString Out;
+    FJsonSerializer::Serialize(Root, TJsonWriterFactory<>::Create(&Out));
+    return Out;
+}
+bool FSCCargoFxMapping::Parse(const FString& Json, FSCCargoFxMapping& Out)
+{
+    Out = FSCCargoFxMapping();
+    const FObj Root = ParseObject(Json);
+    if (!Root) return false;
+    auto Effect = [](const FObj& O, FEffect& E) {
+        if (!O) return;
+        O->TryGetStringField(TEXT("reference"), E.Reference);
+        double Min = 1, Max = 1;
+        O->TryGetNumberField(TEXT("min_scale"), Min);
+        O->TryGetNumberField(TEXT("max_scale"), Max);
+        E.MinScale = float(Min);
+        E.MaxScale = float(Max);
+    };
+    Root->TryGetStringField(TEXT("box_group"), Out.BoxGroup);
+    const TSharedPtr<FJsonObject>* Hit = nullptr;
+    if (Root->TryGetObjectField(TEXT("hit"), Hit)) Effect(*Hit, Out.Hit);
+    const TSharedPtr<FJsonObject>* Ships = nullptr;
+    if (Root->TryGetObjectField(TEXT("contacts"), Ships))
+        for (const auto& [Entity, Value] : (*Ships)->Values)
+            if (Value && Value->Type == EJson::Object) Effect(Value->AsObject(), Out.Contacts.Add(FString(Entity)));
+    return true;
+}
+bool FSCCargoFxMapping::Resolve(FSCBridgeClient& Client, const FSCCargoDroneDefinition& Drone, const TArray<FString>& Entities, FSCCargoFxMapping& Out,
+                                FString& Error)
+{
+    Out = FSCCargoFxMapping();
+    Out.BoxGroup = FSCCargoFx::Runtime().BoxGroup;
+    const FSCTextResult Xml = WaitForAnswer([&](TFunction<void(const FSCTextResult&)> Done) {
+        Client.P4kReadXml(TEXT("Data/Libs/MaterialEffects/MaterialEffects.xml"), MoveTemp(Done));
+    });
+    TMap<FString, TMap<FString, FString>> Custom;
+    if (!Xml.bOK || !ParseCustomEffects(Xml.Json, Custom))
+    {
+        Error = TEXT("MaterialEffects.xml: ") + (Xml.bOK ? FString(TEXT("no CustomEffects")) : Xml.Error.ToString());
+        return false;
+    }
+    auto Resolved = [&](const FString& CustomName) {
+        const FString Entry = EntryFor(Custom, CustomName, Out.BoxGroup);
+        if (Entry.IsEmpty()) return FEffect();
+        const FSCTextResult R = WaitForAnswer([&](TFunction<void(const FSCTextResult&)> Done) { Client.MaterialEffect(Entry, MoveTemp(Done)); });
+        return R.bOK ? ParseEntry(R.Json) : FEffect();
+    };
+    if (!Drone.HitEffectName.IsEmpty()) Out.Hit = Resolved(Drone.HitEffectName);
+    for (const FString& Entity : Entities)
+    {
+        if (Entity.IsEmpty() || Out.Contacts.Contains(Entity)) continue;
+        UE::Tasks::TTask<FSCTextResult> Record = Client.DataCoreRecord(EntityRecord(Entity));
+        Record.Wait();
+        const FString CustomName = Record.GetResult().bOK ? ContactCustomEffect(Record.GetResult().Json) : FString();
+        Out.Contacts.Add(Entity, CustomName.IsEmpty() ? FEffect() : Resolved(CustomName));
+    }
+    return true;
+}
 
 const FSCCargoFx::FRuntime& FSCCargoFx::Runtime()
 {
@@ -133,28 +281,47 @@ void FSCCargoFx::Start(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& I
     });
 }
 
+void FSCCargoFx::StartPrepared(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone,
+                               const FSCCargoFxMapping& Mapping)
+{
+    // The beam and the muzzle as Start sets them (the tractor record's references), the hit and the contacts from the mapping;
+    // nothing is asked of the archive. A ship the mapping does not cover asks it later (Contact), when it is open.
+    FSCCargoDroneDefinition NoHit = Drone;
+    NoHit.HitEffectName.Reset();
+    Start(nullptr, NoHit);
+    StartedFor = Drone.BeamEffect + Drone.MuzzleEffect + Drone.HitEffectName;
+    Client = InClient;
+    HitSystem.Reset(Load(Mapping.Hit.Reference, TEXT("hit")));
+    for (const auto& [Entity, E] : Mapping.Contacts)
+    {
+        FContact& C = Contacts.FindOrAdd(Entity);
+        C.bDone = true;
+        C.System.Reset(Load(E.Reference, TEXT("contact")));
+        C.MinScale = E.MinScale;
+        C.MaxScale = E.MaxScale;
+    }
+    UE_LOG(LogSCCargoFx, Display, TEXT("CARGO_FX source=prepared hit=%s contacts=%d box_group=%s"), Mapping.Hit.Reference.IsEmpty() ? TEXT("none") : *Mapping.Hit.Reference,
+           Mapping.Contacts.Num(), *Mapping.BoxGroup);
+}
+
 UNiagaraSystem* FSCCargoFx::Contact(const FString& ShipEntity, float& OutMinScale, float& OutMaxScale)
 {
-    if (ShipEntity.IsEmpty() || !Client) return nullptr;
+    if (ShipEntity.IsEmpty()) return nullptr;
+    // Known first: a prepared mapping's contacts answer without the archive.
     if (FContact* Known = Contacts.Find(ShipEntity))
     {
         OutMinScale = Known->MinScale;
         OutMaxScale = Known->MaxScale;
         return Known->bDone ? Known->System.Get() : nullptr;
     }
+    if (!Client) return nullptr;
     Contacts.Add(ShipEntity);
     TWeakPtr<FSCCargoFx> Weak = AsShared();
-    const FString Record = ShipEntity.Contains(TEXT(".")) ? ShipEntity : TEXT("EntityClassDefinition.") + ShipEntity;
+    const FString Record = EntityRecord(ShipEntity);
     Client->DataCoreRecord(Record, [Weak, ShipEntity, Record](const FSCTextResult& R) {
         TSharedPtr<FSCCargoFx> Self = Weak.Pin();
         if (!Self) return;
-        FString CustomName;
-        if (R.bOK)
-        {
-            TSharedPtr<FJsonValue> V;
-            FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(R.Json), V);
-            if (const FObj Params = FindType(V, TEXT("CollisionMFXEntityParams"))) Params->TryGetStringField(TEXT("customEffect"), CustomName);
-        }
+        const FString CustomName = R.bOK ? FSCCargoFxMapping::ContactCustomEffect(R.Json) : FString();
         if (CustomName.IsEmpty())
         {
             Self->Contacts.FindOrAdd(ShipEntity).bDone = true;
@@ -205,18 +372,9 @@ void FSCCargoFx::WithMaterialEffects(TFunction<void()> Then)
             UE_LOG(LogSCCargoFx, Warning, TEXT("CARGO_FX MaterialEffects.xml: %s"), *R.Error.ToString());
             return;
         }
-        FXmlFile File(R.Json, EConstructMethod::ConstructFromBuffer);
-        const FXmlNode* Root = File.IsValid() ? File.GetRootNode() : nullptr;
-        const FXmlNode* Customs = Root ? Root->FindChildNode(TEXT("CustomEffects")) : nullptr;
-        if (Customs)
-            for (const FXmlNode* C : Customs->GetChildrenNodes())
-            {
-                TMap<FString, FString>& Groups = Self->Custom.FindOrAdd(C->GetAttribute(TEXT("name")).ToLower());
-                for (const FXmlNode* G : C->GetChildrenNodes())
-                    if (G->GetTag() == TEXT("SurfaceTypeGroup")) Groups.Add(G->GetAttribute(TEXT("name")).ToLower(), G->GetAttribute(TEXT("fx")));
-            }
-        Self->Xml = Customs ? EXml::Ready : EXml::Failed;
-        UE_LOG(LogSCCargoFx, Display, TEXT("CARGO_FX MaterialEffects.xml custom_effects=%d%s"), Self->Custom.Num(), Customs ? TEXT("") : TEXT(" (no CustomEffects)"));
+        const bool bCustoms = FSCCargoFxMapping::ParseCustomEffects(R.Json, Self->Custom);
+        Self->Xml = bCustoms ? EXml::Ready : EXml::Failed;
+        UE_LOG(LogSCCargoFx, Display, TEXT("CARGO_FX MaterialEffects.xml custom_effects=%d%s"), Self->Custom.Num(), bCustoms ? TEXT("") : TEXT(" (no CustomEffects)"));
         TArray<TFunction<void()>> Run = MoveTemp(Self->AfterXml);
         if (Self->Xml == EXml::Ready)
             for (TFunction<void()>& F : Run) F();
@@ -225,39 +383,15 @@ void FSCCargoFx::WithMaterialEffects(TFunction<void()> Then)
 
 FString FSCCargoFx::CustomEntry(const FString& CustomName) const
 {
-    const TMap<FString, FString>* Groups = Custom.Find(CustomName.ToLower());
-    if (!Groups) return FString();
-    if (const FString* Fx = Groups->Find(Runtime().BoxGroup.ToLower())) return *Fx;
-    const FString* Default = Groups->Find(TEXT("default"));
-    return Default ? *Default : FString();
+    return FSCCargoFxMapping::EntryFor(Custom, CustomName, Runtime().BoxGroup);
 }
 
 void FSCCargoFx::ResolveEntry(const FString& Entry, TFunction<void(const FString&, float, float)> Done)
 {
     Client->MaterialEffect(Entry, [Entry, Done = MoveTemp(Done)](const FSCTextResult& R) {
-        FString Reference;
-        float Min = 1, Max = 1;
-        if (const FObj O = R.bOK ? ParseObject(R.Json) : nullptr)
-        {
-            const TArray<TSharedPtr<FJsonValue>>* Particles;
-            if (O->TryGetArrayField(TEXT("particles"), Particles) && !Particles->IsEmpty())
-                if (const FObj P = (*Particles)[0]->AsObject())
-                {
-                    P->TryGetStringField(TEXT("reference"), Reference);
-                    const TSharedPtr<FJsonObject>* Attributes;
-                    if (P->TryGetObjectField(TEXT("attributes"), Attributes))
-                    {
-                        FString S;
-                        if ((*Attributes)->TryGetStringField(TEXT("minscale"), S)) Min = FCString::Atof(*S);
-                        if ((*Attributes)->TryGetStringField(TEXT("maxscale"), S)) Max = FCString::Atof(*S);
-                    }
-                }
-        }
-        else
-        {
-            UE_LOG(LogSCCargoFx, Warning, TEXT("CARGO_FX entry %s: %s"), *Entry, *R.Error.ToString());
-        }
-        Done(Reference, Min, FMath::Max(Min, Max));
+        if (!R.bOK) UE_LOG(LogSCCargoFx, Warning, TEXT("CARGO_FX entry %s: %s"), *Entry, *R.Error.ToString());
+        const FSCCargoFxMapping::FEffect E = R.bOK ? FSCCargoFxMapping::ParseEntry(R.Json) : FSCCargoFxMapping::FEffect();
+        Done(E.Reference, E.MinScale, E.MaxScale);
     });
 }
 

@@ -105,6 +105,7 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioVehicle = Scenario.Vehicle;
     Settings->ScenarioCargoLevels = Prepared.CargoLevels;
     Settings->ScenarioTractorRecordJson = Prepared.TractorRecordJson;
+    Settings->ScenarioCargoFxJson = Prepared.CargoFxJson;
     // The player body from its prepared level (WP-O1-4b-2), streamed with the vehicle's.
     Viewer->SetPreparedPlayerLevel(Prepared.PlayerLevel);
     // Its seat and ladder clips, read for that body at prep (WP-O1-4b-2b).
@@ -129,6 +130,7 @@ void UUCScenarioSubsystem::Deinitialize()
     Settings->ScenarioVehicle.Reset();
     Settings->ScenarioCargoLevels.Reset();
     Settings->ScenarioTractorRecordJson.Reset();
+    Settings->ScenarioCargoFxJson.Reset();
     Settings->ScenarioCargoProblem.Reset();
     Super::Deinitialize();
 }
@@ -154,6 +156,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     UUCSettings::Get()->ScenarioCargoJson.Reset();
     UUCSettings::Get()->ScenarioCargoLevels.Reset(); // the box library releases its prepared levels (DropScenario)
     UUCSettings::Get()->ScenarioTractorRecordJson.Reset();
+    UUCSettings::Get()->ScenarioCargoFxJson.Reset();
     UUCSettings::Get()->ScenarioCargoProblem.Reset();
     if (USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)) Cargo->DropScenario();
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
