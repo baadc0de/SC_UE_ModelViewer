@@ -314,8 +314,9 @@ data when it loads. In stages:
   it (`tractor_record`; one that does not apply is left out and reported). The record names the box levels
   (`cargo_levels`), which must be current; packaging stages them as maps. A run streams a box's level and takes its actor
   as the template (`FSCCargoBoxLibrary`, state `Streaming`, `CARGO_BOX_PACKAGE source=prepared`) and applies the kept
-  record (`CARGO_TRACTOR source=prepared`); nothing is exported or asked. Boxes spawned live (console, RPC) of other
-  entities still export. Prep format 29.
+  record (`CARGO_TRACTOR source=prepared`; none kept: the setup's own values); nothing is exported or asked. A scenario
+  that fails releases its boxes with the rest of its scene. Boxes spawned live (console, RPC) of other entities still
+  export. Prep format 29.
 - **O1-4b-3b..**: the tractor's effect mapping (MaterialEffects, the ships' contact effects), extra ship instances (a
   prepared level instance at a transform), music, the Garage's details.
 

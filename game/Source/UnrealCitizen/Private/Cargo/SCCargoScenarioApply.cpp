@@ -55,6 +55,9 @@ void USCCargoSubsystem::DropScenario()
     Dropped.Drone = State->Scenario.Drone; // drones already docked keep their flight limits
     State->Scenario = MoveTemp(Dropped);   // no Path: IsSet() is false, TryScenario applies nothing more
     State->bScenarioTried = true;
+    // Its box packages go too, queued, streaming (a prepared box's level) or ready: none was placed yet (the stock waits for
+    // the vehicle), and a later live spawn requests its entity anew.
+    State->Library.Reset();
 }
 
 void USCCargoSubsystem::TryScenario()
@@ -116,16 +119,20 @@ void USCCargoSubsystem::TryScenario()
     const FSCCargoScenario& S = State->Scenario;
     if (!S.IsSet()) return;
     // The tractor values from the game data (the record the scenario names); the scenario's copy without the archive.
-    if (State->TractorLookup == FSCCargoState::ELookup::None && UUCSettings::Get()->bScenarioOwnsScene &&
-        !UUCSettings::Get()->ScenarioTractorRecordJson.IsEmpty())
+    if (State->TractorLookup == FSCCargoState::ELookup::None && UUCSettings::Get()->bScenarioOwnsScene)
     {
-        // A prepared scenario (WP-O1-4b-3): the record as DataCore answered at prep; nothing is asked of the archive.
+        // A prepared scenario (WP-O1-4b-3): the record as DataCore answered at prep, or none kept (none named, or the
+        // archive's did not apply) and the setup's own values; nothing is asked of the archive either way.
         FSCCargoDroneDefinition& D = State->Scenario.Drone;
         FString Error;
-        if (D.ApplyTractorRecord(UUCSettings::Get()->ScenarioTractorRecordJson, Error))
+        if (!UUCSettings::Get()->ScenarioTractorRecordJson.IsEmpty() && D.ApplyTractorRecord(UUCSettings::Get()->ScenarioTractorRecordJson, Error))
         {
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_TRACTOR source=prepared action=%s max_force=%.0f min_distance_m=%.2f max_distance_m=%.1f full_strength_m=%.1f max_volume=%.1f volume_force_coefficient=%.2f max_angle=%.0f"),
                    *D.TractorAction, D.MaxForceN, D.MinDistanceM, D.MaxDistanceM, D.FullStrengthDistanceM, D.MaxVolume, D.VolumeForceCoefficient, D.MaxAngleDeg);
+        }
+        else if (UUCSettings::Get()->ScenarioTractorRecordJson.IsEmpty())
+        {
+            UE_LOG(LogSCCargo, Display, TEXT("CARGO_TRACTOR source=scenario reason=\"no record kept at prep\" max_force=%.0f"), D.MaxForceN);
         }
         else
         {

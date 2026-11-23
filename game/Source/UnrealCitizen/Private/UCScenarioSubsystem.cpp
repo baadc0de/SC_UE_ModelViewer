@@ -148,6 +148,8 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     // What the run started stops and goes: a level still streaming, the environment, the player body and the cargo setup not
     // applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();
+    UUCSettings::Get()->ScenarioCargoLevels.Reset(); // the box library releases its prepared levels (DropScenario)
+    UUCSettings::Get()->ScenarioTractorRecordJson.Reset();
     if (USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr)) Cargo->DropScenario();
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
