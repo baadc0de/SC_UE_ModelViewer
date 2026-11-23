@@ -13,6 +13,20 @@ void USCRigComponent::ResetPose()
     if (GetSkeletalMeshAsset()) LocalPose = GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose();
     RefreshBoneTransforms();
 }
+bool USCRigComponent::ComposeLocalPose(TArray<FTransform>& Out) const
+{
+    const USkeletalMesh* Mesh = GetSkeletalMeshAsset();
+    if (!Mesh || LocalPose.Num() != Mesh->GetRefSkeleton().GetNum()) return false;
+    const auto& Ref = Mesh->GetRefSkeleton();
+    Out.SetNum(LocalPose.Num());
+    for (int32 I = 0; I < Out.Num(); ++I)
+    {
+        const int32 Parent = Ref.GetParentIndex(I);
+        Out[I] = Parent == INDEX_NONE ? LocalPose[I] : LocalPose[I] * Out[Parent];
+        Out[I].NormalizeRotation();
+    }
+    return true;
+}
 void USCRigComponent::RefreshBoneTransforms(FActorComponentTickFunction*)
 {
     const USkeletalMesh* Mesh = GetSkeletalMeshAsset();

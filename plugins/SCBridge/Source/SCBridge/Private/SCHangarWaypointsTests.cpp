@@ -127,7 +127,14 @@ bool FSCHangarWaypointRule::RunTest(const FString&)
              Env->Waypoints.Num() == 2 && Env->Waypoints[1].Transform.GetLocation().Equals(FVector(0, 200, 10), 0.01) &&
              Env->Waypoints[0].DisplayName == TEXT("Kiosk #1") && Env->Waypoints[1].Kind == FSCSpawnKind::Hangar &&
              Env->Waypoints[0].Source == FName(TEXT("panel")));
-    // A cooked environment: no sources, no rigs (no ship pad to find): the saved waypoints stay.
+    // A waypoint on a mechanism (a kiosk riding the ship elevator) follows its anchor; the sources are saved with a
+    // prepared level, so it does there too.
+    Env->WaypointSources[1].Anchor.Get()->SetRelativeLocation(FVector(0, 200, -500));
+    Env->BuildWaypoints();
+    TestTrue(TEXT("a moved anchor moves its waypoint"), Env->Waypoints.Num() == 2 && Env->Waypoints[1].Transform.GetLocation().Equals(FVector(0, 200, -490), 0.01));
+    const FProperty* Saved = FindFProperty<FProperty>(ASCVehicle::StaticClass(), TEXT("WaypointSources"));
+    TestTrue(TEXT("the sources are saved"), Saved && !Saved->HasAnyPropertyFlags(CPF_Transient));
+    // An environment cooked before its sources were saved: no sources, no rigs (no ship pad to find): the saved waypoints stay.
     Env->WaypointSources.Reset();
     const int32 Revision = Env->WaypointRevision;
     TestTrue(TEXT("a cooked environment keeps its waypoints"), Env->BuildWaypoints() == 2 && Env->WaypointRevision == Revision);

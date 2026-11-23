@@ -181,7 +181,7 @@ moved to `game/Content/SC`; the built effects (`/Game/SC/FX`, also ignored) are 
 
 The game runs prepared assets only. O1-4 lands in three changes:
 
-- **O1-4a** (this PR): scenarios and the prep step; the game runs a scenario from its prepared levels.
+- **O1-4a** (merged, #43): scenarios and the prep step; the game runs a scenario from its prepared levels.
 - **O1-4b**: a prepared vehicle keeps its rigs, clips and the interactions they drive (doors, lifts, ramps, panels' animated
   parts): the cook bakes rigs static and drops the clip catalogue (since WP-C1; WP-P5 "Not fixed: cooked builds"), so in
   O1-4a a scenario's vehicle and hangar show their presented pose and their doors do not move. What a run still reads from
@@ -193,7 +193,55 @@ The game runs prepared assets only. O1-4 lands in three changes:
   caches, `SCBridgeLib`), loaded by the viewer and by the game's editor module, not by the packaged game, which then has
   no `scbridge` library; the plugin's cargo art moves to the game's content.
 
-#### O1-4a — Scenarios and the prep step (this PR)
+#### O1-4b — Prepared vehicles keep their moving parts; the remaining archive reads prepared
+
+Owner's direction (2026-11-23): a prepared level does next to zero building or post-processing at load — what it needs
+is saved as real assets and saved properties at prep time (the general fix WP-U3 left open), not rebuilt from derived
+data when it loads. In stages:
+
+- **O1-4b-1a — rigs as assets** (this PR). The prep step keeps rigs instead of baking them static
+  (`USCCookLibrary::CookEnvironment(..., bKeepRigs)`): each rig mesh gets an editor source model
+  (`SCRigAssets::MakeSavable`: LOD 0's skeletal mesh description from the rig's soft source data — triangles, normals,
+  tangents, UVs, colours, per-vertex skin weights to `SC_RigRoot` + 1 + rig node — then the engine's skeletal mesh build;
+  the reference skeleton, its bone order (what clip tracks index), the sockets and the material slots stay; LOD 0 keeps
+  CPU-readable vertices, 16-bit skin weights, four influences and its vertex colours, black ones too; the description
+  carries the bones, so a socket-only rig's empty LOD saves its source model too) and is saved with a copy of its
+  skeleton under `<root>/Rigs` — every rig mesh the actor references (its meshes, the clip bindings', the rigs'), as a
+  copy (`SCRigAssets::SavableCopy`) the actor is moved onto, the import's meshes left for other vehicles assembled from
+  them; a rig with soft collision gets its Chaos trimesh derived again in the built vertex order
+  (`SCRigAssets::DeriveCollision`) and saved on the rig (`USCRigComponent::SavedCollision`, restored when the rig
+  registers; the body itself is transient; the rig's collision settings stay); rig materials become constants; the clip
+  catalog is saved with the actor without its editor-only sequences (playback reads the bone tracks); the held clip
+  layers (`ASCVehicle::HeldPlayback`: the poses clips left, e.g. the landing gear deployed) are saved, so a clip played
+  after the load composes with them; a prepared hangar saves its waypoint sources (`ASCVehicle::WaypointSources`, the
+  anchors its components), so a waypoint on a mechanism follows it after the load as it does live; the environment
+  saves the state it was posed in (`ASCVehicle::PresentedState`), and one asked for while its level streams in is
+  applied when it is in. The cook makes the
+  collision ready only for an import that built it (`ASCVehicle::bCollisionBuilt`). The import keeps each rig's source
+  data on editor hosts (`FSCImportOptions::bRetainRigSources`, `ASCVehicle::RigSources`). Keep as assets keeps copies
+  (`SCRigAssets::SavableCopy`: a runtime mesh made savable on a new mesh, an asset duplicated and built) with copies of
+  their skeletons and of the clip sequences on them (a metadata-only sequence with a copy of its own skeleton), every
+  texture with an editable source (`SCTextureSource`, block formats decoded by the bridge; a texture without one fails
+  the Keep); the live rigs stay as they are. A rig with its own body never takes the engine's asynchronous physics
+  creation. A saved rig stands in its saved pose when it registers, and restores its body, baked in that pose
+  (`USCRigComponent::CollisionPose`), with the skin bones saved beside it: no vertex scan and no refit at load (a game
+  host then drops the bytes). Float (HDR) textures, four channels or one, keep a float source; a texture that has a
+  source keeps it. The clip catalog keeps the root rig mesh (`USCClipCatalog::RootMesh`, placed or not): Keep builds
+  the clips without receiving bones on its kept skeleton. Prep format 18. In a prepared Golem the entry door opens (`sc.Vehicle.Clip 0 door_open`:
+  `Entry_Door_Lower open=1`); door pads, lifts, seats and ladders still need their interaction state (1b).
+  Known limit (an engine follow-up, WP-E1): a socket-only rig mesh (no triangles) is built again each time an editor
+  host loads it — UE 5.9's `USkeletalMesh::IsInitialBuildDone` wants a LOD 0 section, so its render data skips the
+  derived-data cache. The builds are short, and a packaged game loads cooked render data and builds nothing. And
+  (pre-existing, live rigs too): a refit rig body keeps the local bounds of the pose it was cooked in — Chaos's
+  `FTriangleMeshImplicitObject::UpdateVertices` rebuilds the BVH without recomputing them — so a trace can miss a part
+  moved outside them; the engine fix (recompute the bounds before the rebuild) is a WP-E1 follow-up.
+- **O1-4b-1b — interaction state saved**: the records the saved manifest drops (door timing, seats, ladders,
+  interaction points, usables, UI bindings, sensors, lifts) and the runtime structures built from them (door records,
+  ship doors, sensors, the lift network, ladder anchors, usables, light groups and areas) become saved properties.
+- **O1-4b-1c — panels and screens**: screen state materials constant, panel render targets baked.
+- **O1-4b-2 / 3**: the player body; cargo boxes and effects, music, the Garage's details prepared.
+
+#### O1-4a — Scenarios and the prep step
 
 **A scenario** is `game/Config/Scenarios/<name>.json` (`FUCScenario`, `UCScenario.h`): `name`, `environment` (an object
 container path; none: the map's own hangar, or space when the cargo setup says so), `vehicle` (required), `skin`

@@ -12,6 +12,7 @@
 #include "Chaos/ImplicitObjectScaled.h"
 #include "Chaos/ChaosArchive.h"
 #include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
 
 bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
 {
@@ -44,15 +45,78 @@ bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Err
 }
 bool USCRigComponent::InitializeCollision(const FSCDerivedMesh& Data)
 {
-    if (Data.CollisionBytes.IsEmpty()) return false; // socket-only rigs have no surface
+    CollisionPose.Reset(); // the import's bytes are in the bind pose
+    return InitializeCollision(Data.CollisionBytes, Data.CollisionVersions);
+}
+void USCRigComponent::ResetRefitPose()
+{
+    const auto& Ref = GetSkeletalMeshAsset()->GetRefSkeleton();
+    if (CollisionPose.Num() == Ref.GetNum())
+    {
+        RefitPose = CollisionPose;
+        return;
+    }
+    RefitPose.SetNum(Ref.GetNum());
+    for (int32 I = 0; I < Ref.GetNum(); ++I)
+    {
+        const int32 Parent = Ref.GetParentIndex(I);
+        RefitPose[I] = Parent == INDEX_NONE ? Ref.GetRefBonePose()[I] : Ref.GetRefBonePose()[I] * RefitPose[Parent];
+    }
+}
+void USCRigComponent::OnRegister()
+{
+    Super::OnRegister(); // physics state is created after registration: the body is in place by then
+    // A saved rig holds its pose (LocalPose, e.g. a hangar prepared open): the engine's registration may have set the
+    // reference pose without our RefreshBoneTransforms (no animation: ResetToRefPose), so it is applied here, before the
+    // body is created and catches up with it.
+    if (GetSkeletalMeshAsset() && LocalPose.Num() == GetSkeletalMeshAsset()->GetRefSkeleton().GetNum()) RefreshBoneTransforms();
+    if (!CollisionBody && !SavedCollision.IsEmpty() && !RestoreSavedCollision())
+        UE_LOG(LogTemp, Warning, TEXT("SKIN_COLLISION owner=%s: the saved collision does not restore"), *OwnerEntity);
+}
+void USCRigComponent::InitAnim(bool bForceReinit)
+{
+    Super::InitAnim(bForceReinit); // may reset to the reference pose (bUseRefPoseOnInitAnim, no init tick)
+    if (GetSkeletalMeshAsset() && LocalPose.Num() == GetSkeletalMeshAsset()->GetRefSkeleton().GetNum()) RefreshBoneTransforms();
+}
+bool USCRigComponent::AllowsAsyncPhysicsStateCreation() const
+{
+    return !CollisionBody && SavedCollision.IsEmpty() && Super::AllowsAsyncPhysicsStateCreation();
+}
+bool USCRigComponent::RestoreSavedCollision()
+{
+    if (SavedCollision.IsEmpty()) return false;
+    // A saved rig (a prepared level): its body from the bytes saved with it; its saved collision settings stay.
+    FMemoryReader Reader(SavedCollision);
+    FCustomVersionContainer Versions;
+    Versions.Serialize(Reader);
+    TArray<uint8> Bytes;
+    Reader << Bytes;
+    // The saved skin bones stand (the cook found them): no vertex scan at load.
+    if (Reader.IsError() || !InitializeCollision(Bytes, Versions, /*bConfigure*/ false, /*bFindSkinBones*/ SkinBones.IsEmpty())) return false;
+    if (!GIsEditor) SavedCollision.Empty(); // a game host saves nothing: the bytes are spent (an editor keeps them for a save)
+    return true;
+}
+bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions, bool bConfigure,
+                                          bool bFindSkinBones)
+{
+    if (Bytes.IsEmpty()) return false; // socket-only rigs have no surface
     const USkeletalMesh* Mesh = GetSkeletalMeshAsset();
     const FSkeletalMeshRenderData* Render = Mesh ? Mesh->GetResourceForRendering() : nullptr;
     if (!Render || Render->LODRenderData.IsEmpty()) return false;
+    if (GIsEditor && SavedCollision.IsEmpty())
+    {
+        // Kept for a save (the prep step, Keep as assets); a runtime host keeps nothing extra.
+        FMemoryWriter Writer(SavedCollision);
+        FCustomVersionContainer Copy = Versions;
+        Copy.Serialize(Writer);
+        TArray<uint8> Payload = Bytes;
+        Writer << Payload;
+    }
     CollisionBody = NewObject<UBodySetup>(this, NAME_None, RF_Transient);
     CollisionBody->CollisionTraceFlag = CTF_UseComplexAsSimple;
     CollisionBody->bDoubleSidedGeometry = true;
-    FMemoryReader Reader(Data.CollisionBytes);
-    Reader.SetCustomVersions(Data.CollisionVersions);
+    FMemoryReader Reader(Bytes);
+    Reader.SetCustomVersions(Versions);
     Chaos::FChaosArchive Archive(Reader);
     Chaos::FTriangleMeshImplicitObjectPtr Geometry;
     Archive << Geometry;
@@ -62,29 +126,31 @@ bool USCRigComponent::InitializeCollision(const FSCDerivedMesh& Data)
     CollisionBody->bCreatedPhysicsMeshes = true;
     CollisionBody->bHasCookedCollisionData = true;
     CollisionBody->bNeverNeedsCookedCollisionData = true;
-    // The cooked particles are the bind pose; only bones that weight a vertex can deform it.
+    // The cooked particles are the bind pose; only bones that weight a vertex can deform it (found once, saved with the
+    // rig).
     const FSkeletalMeshLODRenderData& LOD = Render->LODRenderData[0];
     const auto& Ref = Mesh->GetRefSkeleton();
-    TBitArray<> Used(false, Ref.GetNum());
-    for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
-        for (uint32 V = 0; V < Section.NumVertices; ++V)
-        {
-            const FSkinWeightInfo W = LOD.SkinWeightVertexBuffer.GetVertexSkinWeights(Section.BaseVertexIndex + V);
-            for (int32 K = 0; K < MAX_TOTAL_INFLUENCES; ++K)
-                if (W.InfluenceWeights[K] && Section.BoneMap.IsValidIndex(W.InfluenceBones[K]))
-                    Used[Section.BoneMap[W.InfluenceBones[K]]] = true;
-        }
-    SkinBones.Reset();
-    for (TConstSetBitIterator<> It(Used); It; ++It) SkinBones.Add(It.GetIndex());
-    RefitPose.SetNum(Ref.GetNum());
-    for (int32 I = 0; I < Ref.GetNum(); ++I)
+    if (bFindSkinBones)
     {
-        const int32 Parent = Ref.GetParentIndex(I);
-        RefitPose[I] = Parent == INDEX_NONE ? Ref.GetRefBonePose()[I] : Ref.GetRefBonePose()[I] * RefitPose[Parent];
+        TBitArray<> Used(false, Ref.GetNum());
+        for (const FSkelMeshRenderSection& Section : LOD.RenderSections)
+            for (uint32 V = 0; V < Section.NumVertices; ++V)
+            {
+                const FSkinWeightInfo W = LOD.SkinWeightVertexBuffer.GetVertexSkinWeights(Section.BaseVertexIndex + V);
+                for (int32 K = 0; K < MAX_TOTAL_INFLUENCES; ++K)
+                    if (W.InfluenceWeights[K] && Section.BoneMap.IsValidIndex(W.InfluenceBones[K]))
+                        Used[Section.BoneMap[W.InfluenceBones[K]]] = true;
+            }
+        SkinBones.Reset();
+        for (TConstSetBitIterator<> It(Used); It; ++It) SkinBones.Add(It.GetIndex());
     }
-    bEnablePerPolyCollision = true;
-    SetCollisionProfileName(TEXT("BlockAll"));
-    SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    ResetRefitPose();
+    if (bConfigure)
+    {
+        bEnablePerPolyCollision = true;
+        SetCollisionProfileName(TEXT("BlockAll"));
+        SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    }
     UE_LOG(LogTemp, Display, TEXT("SKIN_COLLISION owner=%s vertices=%u skin_bones=%d"), *OwnerEntity, LOD.GetNumVertices(), SkinBones.Num());
     return true;
 }
@@ -163,15 +229,10 @@ void USCRigComponent::OnCreatePhysicsState()
 {
     if (!CollisionBody) { Super::OnCreatePhysicsState(); return; }
     // Use our worker-cooked body; the stock skeletal path would synchronously recook the mesh and
-    // discard the full-resolution BVH. A new body starts from the cooked bind pose: catch up.
+    // discard the full-resolution BVH. A new body starts from the pose its bytes are in (the bind pose, or the prep's
+    // saved pose: nothing to do when the rig still holds it): catch up.
     UPrimitiveComponent::OnCreatePhysicsState();
-    const auto& Ref = GetSkeletalMeshAsset()->GetRefSkeleton();
-    RefitPose.SetNum(Ref.GetNum());
-    for (int32 I = 0; I < Ref.GetNum(); ++I)
-    {
-        const int32 Parent = Ref.GetParentIndex(I);
-        RefitPose[I] = Parent == INDEX_NONE ? Ref.GetRefBonePose()[I] : Ref.GetRefBonePose()[I] * RefitPose[Parent];
-    }
+    ResetRefitPose();
     RefitCollision();
 }
 void USCRigComponent::OnUpdateTransform(EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport)

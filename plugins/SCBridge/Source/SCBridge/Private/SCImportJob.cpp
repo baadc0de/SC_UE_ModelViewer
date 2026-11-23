@@ -261,6 +261,7 @@ public:
     TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials, EngineGlowMaterials;
     TMap<TObjectPtr<UObject>, FString> SourcePaths;           // keys are in the arrays above
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
+    TMap<const USkeletalMesh*, TSharedPtr<const FSCDerivedMesh>> RigSources; // editor hosts (bRetainRigSources)
     TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;       // values are in Textures
     TObjectPtr<USCClipCatalog> Catalog;                       // the clips with their bindings and sequences
 
@@ -273,9 +274,14 @@ public:
         EngineGlowMaterials = V->EngineGlowMaterials;
         SourcePaths = V->SourcePaths;
         MeshSamples = V->MeshSamples;
+        RigSources = V->RigSources;
         GoboTextures = V->GoboTextures;
         Catalog = NewObject<USCClipCatalog>(GetTransientPackage(), NAME_None, RF_Transient);
-        if (V->ClipCatalog) Catalog->Clips = V->ClipCatalog->Clips;
+        if (V->ClipCatalog)
+        {
+            Catalog->Clips = V->ClipCatalog->Clips;
+            Catalog->RootMesh = V->ClipCatalog->RootMesh;
+        }
     }
     void CopyTo(ASCVehicle* V) const
     {
@@ -286,9 +292,14 @@ public:
         V->EngineGlowMaterials = EngineGlowMaterials;
         V->SourcePaths = SourcePaths;
         V->MeshSamples = MeshSamples;
+        V->RigSources = RigSources;
         V->GoboTextures = GoboTextures;
         V->ClipCatalog = NewObject<USCClipCatalog>(V);
-        if (Catalog) V->ClipCatalog->Clips = Catalog->Clips;
+        if (Catalog)
+        {
+            V->ClipCatalog->Clips = Catalog->Clips;
+            V->ClipCatalog->RootMesh = Catalog->RootMesh;
+        }
     }
     /** Objects an assembly created on demand into the shared caches (a host-tinted variant first asked for by this
      *  actor) stay valid for the next one; returns how many were added. */
@@ -950,6 +961,7 @@ void FSCImportJob::FState::BeginBuild(FMeshSlot& Slot)
         return;
     }
     Vehicle->SkeletalMeshes.Add(RigMesh);
+    if (Options.bRetainRigSources) Vehicle->RigSources.Add(RigMesh, MakeShared<FSCDerivedMesh>(Slot.Soft));
     Vehicle->MeshSamples.Add(RigMesh, FSCLightAreas::Sample(Slot.Soft.Description));
     RigMeshes.Add(Path, RigMesh);
     for (auto& Pair : Slot.Bindings)
@@ -1154,10 +1166,11 @@ bool FSCImportJob::FState::StepMaterials(bool bBlocking)
 void FSCImportJob::FState::Assemble()
 {
     const double AssembleStart = FPlatformTime::Seconds();
+    Vehicle->ClipCatalog->RootMesh = RigMeshes.FindRef(Manifest.Root.MeshAsset);
     for (auto& Clip : Vehicle->ClipCatalog->Clips)
     {
         if (Clip.Bindings.IsEmpty()) Warn(Clip.Source, TEXT("No receiver bones in exported geometry"));
-        FSCAnimImporter::Finalize(RigMeshes.FindRef(Manifest.Root.MeshAsset), Vehicle, Clip);
+        FSCAnimImporter::Finalize(Vehicle->ClipCatalog->RootMesh, Vehicle, Clip);
     }
     const double FinalizeSeconds = FPlatformTime::Seconds() - AssembleStart;
     UE_LOG(LogSCImport, Display, TEXT("ANIMATIONS imported=%d indexed=%d"), Vehicle->ClipCatalog->Clips.Num(), Manifest.Clips.Num());
@@ -1165,6 +1178,7 @@ void FSCImportJob::FState::Assemble()
     TMap<FString, FEntity> Entities, EntitiesById;
     double AnchorSeconds = 0, BindSeconds = 0;
     V->bCollisionReady = Options.bBuildCollision;
+    V->bCollisionBuilt = Options.bBuildCollision;
     auto NewAnchor = [&](const FString& Label, USceneComponent* Parent, const FMatrix& Relative) {
         const double AnchorStart = FPlatformTime::Seconds();
         ON_SCOPE_EXIT { AnchorSeconds += FPlatformTime::Seconds() - AnchorStart; };

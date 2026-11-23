@@ -47,6 +47,7 @@ int32 FSCEnvironment::SetState(ASCVehicle* Environment, const FString& State)
     if (!Environment || !Environment->ClipCatalog) return 0;
     Environment->ResetPose(); // every rig to its bind pose, every held clip layer dropped
     const FString Lower = State.ToLower();
+    Environment->PresentedState = Lower == TEXT("open") || Lower == TEXT("closed") ? Lower : FString(TEXT("bind"));
     if (Lower != TEXT("open") && Lower != TEXT("closed"))
     {
         UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_STATE bind"));

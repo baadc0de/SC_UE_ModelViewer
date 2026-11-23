@@ -26,9 +26,14 @@ public:
      *  A pooled asset's key is its source path and its content (a mesh's committed source description id and collision
      *  triangles, a texture's first-mip bytes), so an archive update or an exporter or importer fix that keeps the path never reuses an older
      *  pooled asset; SourceBuild (the archive build) and the cook format stand in for an asset without a content id. */
+    /** bKeepRigs (WP-O1-4b): the rigs stay (doors, lifts, ramps move in the saved level) instead of being baked static:
+     *  each rig mesh gets an editor source model (SCRigAssets) and is saved with its skeleton under Root/Rigs, its
+     *  collision derived again in the built vertex order and saved on the rig, its materials constant; the clip catalog is
+     *  saved with the actor (its editor-only sequences left out: playback reads the bone tracks). Needs the import's rig
+     *  sources (FSCImportOptions::bRetainRigSources). */
     UFUNCTION(BlueprintCallable, Category = "SC|Cook")
     static bool CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot = TEXT("/Game/SC/Hangars/Shared"),
-                                const FString& SourceBuild = TEXT(""));
+                                const FString& SourceBuild = TEXT(""), bool bKeepRigs = false);
     /** Measures a presented environment (rigs alive: before CookEnvironment) and records its ship capacity under
      *  Style/Name in the hangar index (USCHangarIndex::AssetPath), saving it. bOutMeasured is false without a ship
      *  elevator (nothing recorded, an older entry for the hangar removed); returns false when the index could not be saved. */

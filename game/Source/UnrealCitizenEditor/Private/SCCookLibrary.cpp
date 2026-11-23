@@ -1,5 +1,12 @@
 // USCCookLibrary: environment -> persistent level actor with pooled assets (WP-C1).
 #include "SCCookLibrary.h"
+#include "SCRigAssets.h"
+#include "SCRigComponent.h"
+#include "SCTextureSource.h"
+#include "SCMeshImporter.h"
+#include "Animation/Skeleton.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "SCBridgeClient.h" // scbridge.h: sc_texels_decode_bgra8
 #include "SCEnvironment.h"
 #include "SCHangarIndex.h"
@@ -93,44 +100,29 @@ struct FCooker
         Object->ClearFlags(RF_Transient);
         ForEachObjectWithOuter(Object, [](UObject* Inner) { Inner->ClearFlags(RF_Transient); });
     }
-    /** Runtime textures carry only platform mips (the package's DDS blocks as uploaded, or BGRA8 from PNG): an editable
-     *  BGRA8 source from mip 0, block formats decoded by the bridge (sc_texels_decode_bgra8). */
+    /** Runtime textures carry only platform mips: an editable source (SCTextureSource). */
     void AddTextureSource(UTexture2D* Texture)
     {
-        FTexturePlatformData* Platform = Texture->GetPlatformData();
-        if (!Platform || Platform->Mips.IsEmpty())
-        {
-            Warnings.Add(Texture->GetName() + TEXT(": no platform mips; saved without source"));
-            return;
-        }
-        uint32 Dxgi = 0;
-        switch (Platform->PixelFormat)
-        {
-        case PF_B8G8R8A8: Dxgi = 87; break;
-        case PF_R8G8B8A8: Dxgi = 28; break;
-        case PF_G8: Dxgi = 61; break;
-        case PF_DXT1: Dxgi = 71; break;
-        case PF_DXT3: Dxgi = 74; break;
-        case PF_DXT5: Dxgi = 77; break;
-        case PF_BC4: Dxgi = 80; break;
-        case PF_BC5: Dxgi = 83; break;
-        case PF_BC7: Dxgi = 98; break;
-        default:
-            Warnings.Add(FString::Printf(TEXT("%s: pixel format %s has no source decode; saved without source"), *Texture->GetName(),
-                                         GPixelFormats[Platform->PixelFormat].Name));
-            return;
-        }
-        FTexture2DMipMap& Mip = Platform->Mips[0];
-        const uint8* Data = static_cast<const uint8*>(Mip.BulkData.LockReadOnly());
-        TArray64<uint8> Bgra;
-        Bgra.SetNumUninitialized(int64(Mip.SizeX) * Mip.SizeY * 4);
-        const bool bOK = Data && sc_texels_decode_bgra8(Data, size_t(Mip.BulkData.GetBulkDataSize()), Dxgi, uint32(Mip.SizeX), uint32(Mip.SizeY),
-                                                        Bgra.GetData(), size_t(Bgra.Num())) == SC_STATUS_OK;
-        Mip.BulkData.Unlock();
-        if (bOK)
-            Texture->Source.Init(Mip.SizeX, Mip.SizeY, 1, 1, TSF_BGRA8, Bgra.GetData());
-        else
-            Warnings.Add(FString::Printf(TEXT("%s: decode failed (%s); saved without source"), *Texture->GetName(), UTF8_TO_TCHAR(sc_last_error(nullptr))));
+        FString Error;
+        if (!SCTextureSource::Add(Texture, Error)) Warnings.Add(Texture->GetName() + TEXT(": ") + Error + TEXT("; saved without source"));
+    }
+    bool bFailed = false;
+    /** Object moved into a package of its own, Folder/Name (made unique), saved with the cook. */
+    void Persist(UObject* Object, const FString& Folder, const FString& Name)
+    {
+        if (!Object || Remap.Contains(Object)) return;
+        FString Unique = SafeName(Name);
+        const FString Base = Unique;
+        // Not a package in memory or on disk (another level cooked to the same root in an earlier session).
+        for (int32 Suffix = 2; FindPackage(nullptr, *(Folder / Unique)) || FPackageName::DoesPackageExist(Folder / Unique); ++Suffix)
+            Unique = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
+        UPackage* Package = CreatePackage(*(Folder / Unique));
+        Object->Rename(*Unique, Package, REN_DontCreateRedirectors | REN_NonTransactional);
+        Object->SetFlags(RF_Public | RF_Standalone);
+        MakePersistent(Object);
+        Package->MarkPackageDirty();
+        ToSave.Add(Package);
+        Remap.Add(Object, Object);
     }
     /** The pooled asset for a source key: an existing one (this run or on disk), else this object moved into the pool. */
     UObject* Pool(UObject* Object, const FString& Key, const FString& Folder)
@@ -168,7 +160,8 @@ struct FCooker
         if (UObject** Found = Remap.Find(MID)) return Cast<UMaterialInterface>(*Found);
         FString Name = SafeName(TEXT("MI_") + MID->GetName());
         const FString Base = Name;
-        for (int32 Suffix = 2; FindPackage(nullptr, *(Root / TEXT("Materials") / Name)); ++Suffix) Name = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
+        for (int32 Suffix = 2; FindPackage(nullptr, *(Root / TEXT("Materials") / Name)) || FPackageName::DoesPackageExist(Root / TEXT("Materials") / Name); ++Suffix)
+            Name = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
         UPackage* Package = CreatePackage(*(Root / TEXT("Materials") / Name));
         auto* MIC = NewObject<UMaterialInstanceConstant>(Package, *Name, RF_Public | RF_Standalone);
         MIC->SetParentEditorOnly(Constant(MID->Parent));
@@ -192,19 +185,102 @@ struct FCooker
 };
 } // namespace
 
-bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot, const FString& SourceBuild)
+bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Root, const FString& SharedRoot, const FString& SourceBuild,
+                                     bool bKeepRigs)
 {
     if (!Environment) return false;
     const double Start = FPlatformTime::Seconds();
-    FSCEnvironment::BakeRigsStatic(Environment);
+    FCooker Cook;
+    Cook.Root = Root;
+    Cook.SharedRoot = SharedRoot;
+    int32 RigMeshes = 0, RigCollisions = 0;
+    if (!bKeepRigs) FSCEnvironment::BakeRigsStatic(Environment);
+    else
+    {
+        // Each rig mesh the actor references (its meshes, the clip bindings', the rigs': one whose placement was skipped is
+        // still bound to clips) is saved as a savable copy with a copy of its skeleton, named after its source (the import's
+        // package), and the actor is moved onto the copies: the import's meshes stay as they are for other vehicles
+        // assembled from the same retained assets (a rebuilt mesh would no longer match their collision).
+        TArray<USkeletalMesh*> Meshes;
+        for (USkeletalMesh* Mesh : Environment->SkeletalMeshes)
+            if (Mesh) Meshes.AddUnique(Mesh);
+        if (const USCClipCatalog* Catalog = Environment->ClipCatalog)
+        {
+            for (const FSCImportedClip& Clip : Catalog->Clips)
+                for (const FSCClipBinding& Binding : Clip.Bindings)
+                    if (USkeletalMesh* Mesh = Binding.Mesh.Get()) Meshes.AddUnique(Mesh);
+            if (USkeletalMesh* Root = Catalog->RootMesh.Get()) Meshes.AddUnique(Root);
+        }
+        for (const USCRigComponent* Rig : Environment->Rigs)
+            if (USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr) Meshes.AddUnique(Mesh);
+        TMap<const USkeletalMesh*, USkeletalMesh*> Copies;
+        for (USkeletalMesh* Mesh : Meshes)
+        {
+            const FString Name = SafeName(FPaths::GetBaseFilename(Mesh->GetPackage()->GetName()));
+            // An owning copy: the map grows below (an element passed by reference into its own Add could be moved).
+            const TSharedPtr<const FSCDerivedMesh> Source = Environment->RigSources.FindRef(Mesh);
+            FString Error;
+            USkeletalMesh* Copy = Source ? SCRigAssets::SavableCopy(Mesh, Source.Get(), Error) : nullptr;
+            if (!Copy)
+            {
+                Cook.Warnings.Add(Name + TEXT(": ") + (Source ? Error : FString(TEXT("no rig source (FSCImportOptions::bRetainRigSources)"))));
+                Cook.bFailed = true;
+                continue;
+            }
+            Cook.Persist(Copy->GetSkeleton(), Root / TEXT("Rigs"), Name + TEXT("_Skeleton"));
+            Cook.Persist(Copy, Root / TEXT("Rigs"), Name);
+            Copies.Add(Mesh, Copy);
+            Environment->RigSources.Add(Copy, Source);
+            ++RigMeshes;
+        }
+        for (TObjectPtr<USkeletalMesh>& Mesh : Environment->SkeletalMeshes)
+            if (USkeletalMesh** Copy = Copies.Find(Mesh)) Mesh = *Copy;
+        if (USCClipCatalog* Catalog = Environment->ClipCatalog) // the actor's own catalog (its clips copied at assembly)
+        {
+            for (FSCImportedClip& Clip : Catalog->Clips)
+                for (FSCClipBinding& Binding : Clip.Bindings)
+                    if (USkeletalMesh** Copy = Copies.Find(Binding.Mesh.Get())) Binding.Mesh = *Copy;
+            USkeletalMesh** Root = Copies.Find(Catalog->RootMesh.Get());
+            Catalog->RootMesh = Root ? *Root : nullptr;
+        }
+        // Each rig on its copy, in the pose it holds (LocalPose); a soft rig of an import that built collision has a body:
+        // again in the copy's vertex order, also when the import's own rig collision failed, so a saved rig never lacks it.
+        for (USCRigComponent* Rig : Environment->Rigs)
+        {
+            USkeletalMesh** Copy = Rig ? Copies.Find(Rig->GetSkeletalMeshAsset()) : nullptr;
+            if (!Copy) continue;
+            Rig->SetSkeletalMesh(*Copy, /*bReinitPose*/ false);
+            Rig->RefreshBoneTransforms();
+            if (!Environment->bCollisionBuilt) continue;
+            const TSharedPtr<const FSCDerivedMesh> Source = Environment->RigSources.FindRef(*Copy);
+            if (Source && Source->bHasGeometry)
+            {
+                FString Error;
+                if (!SCRigAssets::RefreshCollision(Rig, Error))
+                {
+                    Cook.Warnings.Add(Rig->OwnerEntity + TEXT(": rig collision: ") + Error);
+                    Cook.bFailed = true;
+                    continue;
+                }
+                ++RigCollisions;
+            }
+        }
+        // Every soft rig has its body now (a failure failed the cook): the collision of an import that built it is ready,
+        // also when the import's own rig collision had failed (first person explores only a ready vehicle).
+        if (!Cook.bFailed && Environment->bCollisionBuilt) Environment->bCollisionReady = true;
+        // Playback reads the bone tracks; the sequences are editor-only views of them, built against transient skeletons.
+        if (USCClipCatalog* Catalog = Environment->ClipCatalog)
+            for (FSCImportedClip& Clip : Catalog->Clips)
+            {
+                Clip.Sequence = nullptr;
+                for (FSCClipBinding& Binding : Clip.Bindings) Binding.Sequences.Reset();
+            }
+    }
     const FSCInstancingStats Instancing = FSCInstancing::Consolidate(Environment); // pieces freed from the rigs
     // Runtime-only proxies (emissive Lumen copies with generated meshes) are rebuilt when the level loads.
     TArray<UActorComponent*> Proxies = Environment->GetComponentsByTag(UPrimitiveComponent::StaticClass(), TEXT("SCEmissiveExperiment"));
     for (UActorComponent* Proxy : Proxies) Proxy->DestroyComponent();
 
-    FCooker Cook;
-    Cook.Root = Root;
-    Cook.SharedRoot = SharedRoot;
     // An asset without a content id is told apart by the archive build and the cook format at least.
     const FString Fallback = FString::Printf(TEXT("build=%s;format=%d"), *SourceBuild, USCCookLibrary::FormatVersion);
     for (const auto& [Object, SourceKey] : Environment->SourcePaths)
@@ -235,6 +311,12 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
         for (int32 Slot = 0; Slot < C->OverrideMaterials.Num(); ++Slot)
             if (C->OverrideMaterials[Slot]) C->SetMaterial(Slot, Cook.Constant(C->OverrideMaterials[Slot]));
     }
+    // Kept rigs: their slot materials become constants as well.
+    TArray<USkeletalMeshComponent*> SkinnedComponents;
+    Environment->GetComponents(SkinnedComponents);
+    for (USkeletalMeshComponent* C : SkinnedComponents)
+        for (int32 Slot = 0; Slot < C->OverrideMaterials.Num(); ++Slot)
+            if (C->OverrideMaterials[Slot]) C->SetMaterial(Slot, Cook.Constant(C->OverrideMaterials[Slot]));
     TArray<ULightComponent*> Lights;
     Environment->GetComponents(Lights);
     for (ULightComponent* L : Lights)
@@ -242,8 +324,16 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     // The actor and its components persist with the level. Runtime-only objects the actor owns (clip animations of the
     // baked rigs, skeletal meshes, dynamic materials now replaced by constants) stay transient and are unreferenced, so
     // they are not saved (a saved clip without its skeleton fails to load).
-    Environment->ClipCatalog = nullptr;
-    Environment->SkeletalMeshes.Empty();
+    if (!bKeepRigs)
+    {
+        Environment->ClipCatalog = nullptr;
+        Environment->SkeletalMeshes.Empty();
+        Environment->WaypointSources.Reset(); // nothing moves: the waypoints saved in the baked pose stay
+    }
+    else if (Environment->ClipCatalog)
+    {
+        Environment->ClipCatalog->ClearFlags(RF_Transient);
+    }
     Environment->Materials.Empty();
     Environment->EngineGlowMaterials.Empty();
     Environment->ClearFlags(RF_Transient);
@@ -260,9 +350,10 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
         else Cook.Warnings.Add(TEXT("save failed: ") + Package->GetName());
     }
     for (const FString& W : Cook.Warnings) UE_LOG(LogSCCook, Warning, TEXT("COOK_WARNING %s"), *W);
-    UE_LOG(LogSCCook, Display, TEXT("COOK root=%s pooled_new=%d pooled_reused=%d packages=%d saved=%d instanced=%d warnings=%d seconds=%.1f"), *Root,
-           Cook.Created, Cook.Reused, Cook.ToSave.Num(), Saved, Instancing.Instanced, Cook.Warnings.Num(), FPlatformTime::Seconds() - Start);
-    return Saved == Cook.ToSave.Num();
+    UE_LOG(LogSCCook, Display, TEXT("COOK root=%s pooled_new=%d pooled_reused=%d packages=%d saved=%d instanced=%d rigs_kept=%d rig_meshes=%d rig_collisions=%d warnings=%d seconds=%.1f"), *Root,
+           Cook.Created, Cook.Reused, Cook.ToSave.Num(), Saved, Instancing.Instanced, bKeepRigs ? Environment->Rigs.Num() : 0, RigMeshes, RigCollisions,
+           Cook.Warnings.Num(), FPlatformTime::Seconds() - Start);
+    return Saved == Cook.ToSave.Num() && !Cook.bFailed;
 }
 
 bool USCCookLibrary::RecordHangarCapacity(ASCVehicle* Environment, const FString& Style, const FString& Name, bool& bOutMeasured)

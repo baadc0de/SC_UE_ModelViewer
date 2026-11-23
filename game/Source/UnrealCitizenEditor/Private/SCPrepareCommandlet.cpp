@@ -173,7 +173,7 @@ public:
         if (!SCPrepareAudio::Stage(Source, Scene, FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / AudioFolder), AudioFiles, Error)) return false;
         Actor->CookedAudio = AudioFolder;
         Actor->CookedAudioScene = Scene;
-        if (!USCCookLibrary::CookEnvironment(Actor, Root, Shared, Viewer ? Viewer->GetArchiveBuildId() : FString()))
+        if (!USCCookLibrary::CookEnvironment(Actor, Root, Shared, Viewer ? Viewer->GetArchiveBuildId() : FString(), /*bKeepRigs*/ true))
         {
             Error = TEXT("the cook of ") + Level + TEXT(" did not save every asset");
             return false;

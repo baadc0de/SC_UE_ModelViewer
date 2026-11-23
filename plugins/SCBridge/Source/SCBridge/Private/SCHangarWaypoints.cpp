@@ -94,9 +94,25 @@ int32 ASCVehicle::BuildWaypoints()
     FBox Bay(ForceInit);
     FString BayName;
     const bool bBay = FSCEnvironment::FindShipBay(this, Bay, &BayName);
-    // A cooked environment has neither the import's sources nor rigs: it keeps the waypoints its cook saved.
-    if (WaypointSources.IsEmpty() && !bBay)
+    // An environment cooked before its sources were saved (or one without waypoint records): it keeps the waypoints its
+    // cook saved; with its rigs kept (WP-O1-4b) the ship-pad entry follows the elevator.
+    if (WaypointSources.IsEmpty())
     {
+        const FName ShipPad = SCHangarWaypoints::SourceName(ESCWaypointSource::ShipPad);
+        if (bBay)
+        {
+            FSCSpawnPoint* Pad = Waypoints.FindByPredicate([&](const FSCSpawnPoint& P) { return P.Source == ShipPad; });
+            if (!Pad)
+            {
+                // The ship pad is the only waypoint the data has (nothing was saved for it): it is the bay's.
+                Pad = &Waypoints.AddDefaulted_GetRef();
+                Pad->Kind = FSCSpawnKind::Hangar;
+                Pad->Source = ShipPad;
+                Pad->DisplayName = SCHangarWaypoints::CleanLabel(BayName);
+            }
+            Pad->Transform = FTransform(GetActorTransform().InverseTransformPosition(FVector(Bay.GetCenter().X, Bay.GetCenter().Y, Bay.Max.Z)));
+            ++WaypointRevision;
+        }
         UE_LOG(LogTemp, Display, TEXT("HANGAR_WAYPOINTS kept=%d (no sources: a cooked environment, or no waypoints in the data)"), Waypoints.Num());
         return Waypoints.Num();
     }

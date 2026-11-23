@@ -112,18 +112,22 @@ struct FSCLightGroup
     TArray<FSCLightGroupInteraction> Interactions;
     FString LightState; // the light state the group was last set to ("" = as imported)
 };
+/** A clip layer on the vehicle's rigs. A USTRUCT so the held layers (the poses clips left, e.g. landing gear deployed)
+ *  are saved with a prepared level (WP-O1-4b): a clip played after a load composes with them as it would live. */
+USTRUCT()
 struct FSCClipPlayback
 {
-    TWeakObjectPtr<USCRigComponent> TargetRig;
-    int32 Clip = INDEX_NONE;
-    double Frame = 0;
-    float Speed = 1;
-    bool bPlaying = true;
-    uint64 Order = 0;
-    TArray<FName> Scopes;
-    bool bAudioFresh = true; // WP-A1: the first advance plays the start-of-play events (they sit at t = 0.0001 / 0.9999)
-    bool bTargeted = false;  // started for one rig (TargetRig): once that rig is gone the entry poses nothing
-    int32 OpeningGangway = INDEX_NONE;
+    GENERATED_BODY()
+    UPROPERTY() TWeakObjectPtr<USCRigComponent> TargetRig;
+    UPROPERTY() int32 Clip = INDEX_NONE;
+    UPROPERTY() double Frame = 0;
+    UPROPERTY() float Speed = 1;
+    UPROPERTY() bool bPlaying = true;
+    UPROPERTY() uint64 Order = 0;
+    UPROPERTY() TArray<FName> Scopes;
+    UPROPERTY() bool bAudioFresh = true; // WP-A1: the first advance plays the start-of-play events (they sit at t = 0.0001 / 0.9999)
+    UPROPERTY() bool bTargeted = false;  // started for one rig (TargetRig): once that rig is gone the entry poses nothing
+    UPROPERTY() int32 OpeningGangway = INDEX_NONE;
 };
 UCLASS(BlueprintType)
 class SCBRIDGE_API ASCVehicle : public AActor
@@ -222,12 +226,17 @@ public:
     bool AimGarageKiosk(const FVector& Eye, const FVector& Direction, float Reach, const AActor* Ignore) const;
     /** A drawn operating panel that is a vehicle kiosk: a console use and the vehicle list / retrieval states (WP-M2). */
     static bool IsGarageKiosk(const FSCUiBinding& Binding);
-    /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; transient. */
-    TArray<FSCWaypointSource> WaypointSources;
-    /** Waypoints from WaypointSources and the ship pad in the current pose; a cooked environment (no sources, no rigs)
-     *  keeps the waypoints it was saved with. Returns the waypoints. */
+    /** The records the import chose as waypoints (SCHangarWaypoints::Select) with their anchors; saved with a prepared
+     *  level (its anchors are the actor's components). */
+    UPROPERTY() TArray<FSCWaypointSource> WaypointSources;
+    /** Waypoints from WaypointSources and the ship pad in the current pose; an environment without sources (cooked before
+     *  they were saved) keeps the waypoints it was saved with, its ship-pad entry following the bay. Returns the
+     *  waypoints. */
     int32 BuildWaypoints();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") bool bCollisionReady = false;
+    /** The import built collision (FSCImportOptions::bBuildCollision): without it nothing blocks the player, so a cook that
+     *  completes the rigs' bodies never makes the vehicle ready. */
+    UPROPERTY() bool bCollisionBuilt = false;
     /** Incremented whenever SpawnPoints changes (UI lists rebuild on change). */
     int32 SpawnRevision = 0;
     void AddSpawnPoint(FName Kind, const FString& Label, const FTransform& WorldTransform);
@@ -409,6 +418,9 @@ public:
 
     virtual void Tick(float DeltaSeconds) override;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USkeletalMesh>> SkeletalMeshes;
+    /** WP-O1-4b: the soft source data each rig mesh was built from (FSCImportOptions::bRetainRigSources; editor hosts):
+     *  what gives it an editor source model when it is saved as an asset (SCRigAssets). Not saved. */
+    TMap<const USkeletalMesh*, TSharedPtr<const struct FSCDerivedMesh>> RigSources;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<USCRigComponent>> Rigs;
     UPROPERTY(BlueprintReadOnly, Category = "SC") TArray<TObjectPtr<ULightComponent>> Lights;
     UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;
@@ -470,8 +482,8 @@ public:
     bool ToggleClip(FName Fragment, FName OpenTag = "Open", FName CloseTag = "Close");
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") void ResetPose();
     void EvaluateClips();
-    TArray<FSCClipPlayback> Playback;     // active entries only
-    TArray<FSCClipPlayback> HeldPlayback; // bounded by catalogue size; no idle evaluation
+    UPROPERTY(Transient) TArray<FSCClipPlayback> Playback; // active entries only
+    UPROPERTY() TArray<FSCClipPlayback> HeldPlayback;      // bounded by catalogue size; no idle evaluation; saved (a prepared level)
     uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
     /** WP-A1 diagnostics: clip audio events crossed by playback (posted to the audio scene when there is one), and the
      *  last one's trigger. */
@@ -503,7 +515,7 @@ private:
         TWeakObjectPtr<USceneComponent> Anchor;
     };
     TArray<FPendingSpawn> PendingItemSpawns;
-    uint64 NextOrder = 0;
+    UPROPERTY() uint64 NextOrder = 0; // saved with the held layers it orders
     FRandomStream FragmentRandom{0x5343};
 
 public:
@@ -523,6 +535,9 @@ public:
     UPROPERTY(Transient) bool bThrusterPreviewActive = false;
     bool SetThrusterPreview(ESCThrusterPreviewMode Mode);
     UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USCClipCatalog> ClipCatalog;
+    /** The environment state its rigs were last posed in (FSCEnvironment::SetState: open, closed, bind); saved, so a
+     *  prepared level loaded for another state is posed again. */
+    UPROPERTY() FString PresentedState;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FSCSceneManifest Manifest;
     /** Anchors of instances that carry an id (player-kit items), by id. */
     UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> InstanceAnchors;

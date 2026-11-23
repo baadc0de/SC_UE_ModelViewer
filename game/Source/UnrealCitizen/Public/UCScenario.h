@@ -49,8 +49,17 @@ struct UNREALCITIZEN_API FUCPrepared
      *  (ASCVehicle::Waypoints). 9: WP-I1-4 (a large button's background at its styled alpha; generated UI textures pooled
      *  under a key carrying this version). The hover renders, panel aims and usables are import-time records a prepared
      *  level does not keep yet. 10: WP-O1-4 (the prep step; levels and records written by -run=SCPrepare). 11: the WP-O1
-     *  series review (a prepared vehicle saves the paint it was prepared with, ASCVehicle::ActivePaint). */
-    static constexpr int32 FormatVersion = 11;
+     *  series review (a prepared vehicle saves the paint it was prepared with, ASCVehicle::ActivePaint). 12: WP-O1-4b-1a
+     *  (rigs kept: rig meshes with editor source models and their skeletons saved under <root>/Rigs, the clip catalog
+     *  saved with the actor, rig collision saved on the rig; a level prepared before has its rigs baked static). 13: the
+     *  held clip layers saved (ASCVehicle::HeldPlayback; a clip played after the load keeps the landing gear deployed). 14:
+     *  rig meshes with 16-bit skin weights, their source models carrying the bones, rig collision per material slot; the
+     *  hangar's waypoint sources saved (a waypoint on a mechanism follows it). 15: rig meshes saved as copies (the
+     *  import's stay as they are), the presented state saved (ASCVehicle::PresentedState), black vertex colours kept. 16: a rig's skin bones saved
+     *  with its collision (a load scans no vertices). 17: rig collision baked in the rig's saved pose
+     *  (USCRigComponent::CollisionPose: a load refits nothing). 18: the clip catalog's root
+     *  rig mesh saved (USCClipCatalog::RootMesh, placed or not). */
+    static constexpr int32 FormatVersion = 18;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id
