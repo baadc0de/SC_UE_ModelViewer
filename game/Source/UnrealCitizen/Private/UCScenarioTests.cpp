@@ -90,7 +90,7 @@ bool FUCPreparedTest::RunTest(const FString&)
     R.Scenario = TEXT("t");
     R.Definition = Source.Json;
     R.CargoDefinition = Source.CargoJson;
-    R.EnvironmentLevel = TEXT("/Game/SC/Hangars/Maps/hightech_a_hangar_xltop_001");
+    R.EnvironmentLevel = USCViewerSubsystem::EnvironmentLevelPath(Hangar);
     R.VehicleLevel = TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2");
     R.Archive = TEXT("build");
     R.PreparedAt = TEXT("2026-11-23T00:00:00.000Z");
@@ -132,9 +132,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUCPreparedLevelsTest, "SCBridge.Scenario.Level
 bool FUCPreparedLevelsTest::RunTest(const FString&)
 {
     // Where the prep step writes and the game looks (USCViewerSubsystem::EnvironmentLevelPath / ShipLevelPath).
-    TestEqual(TEXT("an object container"), USCViewerSubsystem::EnvironmentLevelPath(Hangar), FString(TEXT("/Game/SC/Hangars/Maps/hightech_a_hangar_xltop_001")));
-    TestEqual(TEXT("... with backslashes"), USCViewerSubsystem::EnvironmentLevelPath(FString(Hangar).Replace(TEXT("/"), TEXT("\\"))),
-              FString(TEXT("/Game/SC/Hangars/Maps/hightech_a_hangar_xltop_001")));
+    const FString Level = USCViewerSubsystem::EnvironmentLevelPath(Hangar);
+    TestTrue(TEXT("an object container: ") + Level, Level.StartsWith(TEXT("/Game/SC/Hangars/Maps/hightech_a_hangar_xltop_001_")) && Level.Len() == 
+             FString(TEXT("/Game/SC/Hangars/Maps/hightech_a_hangar_xltop_001_")).Len() + 8);
+    TestEqual(TEXT("... with backslashes"), USCViewerSubsystem::EnvironmentLevelPath(FString(Hangar).Replace(TEXT("/"), TEXT("\\"))), Level);
+    TestEqual(TEXT("... in other case (archive paths ignore it)"), USCViewerSubsystem::EnvironmentLevelPath(FString(Hangar).ToUpper()), Level);
+    // Containers whose last two parts make the same name are other levels.
+    TestNotEqual(TEXT("a_b/c and a/b_c"), USCViewerSubsystem::EnvironmentLevelPath(TEXT("Data/x/a_b/c.socpak")),
+                 USCViewerSubsystem::EnvironmentLevelPath(TEXT("Data/x/a/b_c.socpak")));
+    TestNotEqual(TEXT("the same last two parts in another tree"), USCViewerSubsystem::EnvironmentLevelPath(TEXT("Data/x/a/b.socpak")),
+                 USCViewerSubsystem::EnvironmentLevelPath(TEXT("Data/y/a/b.socpak")));
     TestEqual(TEXT("no object container"), USCViewerSubsystem::EnvironmentLevelPath(TEXT("out/hangars/x")), FString());
     TestEqual(TEXT("a ship"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2")), FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2")));
     TestEqual(TEXT("a ship with a paint"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("crus.starlifter-pirate")),

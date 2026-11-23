@@ -416,9 +416,13 @@ FString LevelName(FString Name)
 } // namespace
 FString USCViewerSubsystem::EnvironmentLevelPath(const FString& Folder)
 {
-    const FString Path = Folder.Replace(TEXT("\\"), TEXT("/"));
+    const FString Path = Folder.Replace(TEXT("\\"), TEXT("/")).TrimStartAndEnd();
     if (!Path.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase)) return FString();
-    return TEXT("/Game/SC/Hangars/Maps/") + LevelName(FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path));
+    // Readable from the last two parts, told apart by a hash of the whole path (archive paths ignore case): containers
+    // whose last two parts make the same name are other levels.
+    const uint32 Hash = FCrc::StrCrc32(*Path.ToLower());
+    return FString::Printf(TEXT("/Game/SC/Hangars/Maps/%s_%08x"),
+                           *LevelName(FPaths::GetCleanFilename(FPaths::GetPath(Path)) + TEXT("_") + FPaths::GetBaseFilename(Path)), Hash);
 }
 FString USCViewerSubsystem::ShipLevelPath(const FString& Entity, const FString& Variant)
 {

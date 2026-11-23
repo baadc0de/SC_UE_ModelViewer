@@ -210,7 +210,8 @@ mechanisms open, the ship elevator under the origin, its ship capacity recorded 
 landing gear on the floor with the scenario's paint on), stages its audio beside the level (`SCPrepareAudio`, the C++ form
 of `cook_audio.py`), cooks it (`USCCookLibrary::CookEnvironment`: pooled meshes and textures, constant materials) and
 stamps it with the prep format (`FUCPrepared::FormatVersion`, now 10; it was `USCCookLibrary::FormatVersion`). Levels:
-`/Game/SC/Hangars/Maps/<style>_<name>` and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
+`/Game/SC/Hangars/Maps/<style>_<name>_<hash>` (a hash of the whole container path, so containers whose last two parts
+make the same name stay apart) and `/Game/SC/Ships/Maps/<entity>`, with a paint `<entity>__<paint>_<hash>` (its
 palette id, else its subgeometry tag, else its name, and a hash of all three; `USCViewerSubsystem::EnvironmentLevelPath` /
 `ShipLevelPath`); the skin is resolved against the paints as the import reads them (`FSCPackageReader`: a variant whose
 files are unavailable is left out), the same list `-SCSkin` uses. A level already prepared in this format is kept (shared by scenarios); `-Force`

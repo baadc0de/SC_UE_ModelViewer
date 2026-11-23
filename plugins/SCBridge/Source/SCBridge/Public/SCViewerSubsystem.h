@@ -250,7 +250,8 @@ public:
      *  Citizen). */
     static FString CookedShipLevel(const FString& Entity);
     /** WP-O1-4: where a prepared (cooked) level lives, whether or not it exists: an object container
-     *  …/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name> (empty for anything else); a ship
+     *  …/<style>/<name>.socpak -> /Game/SC/Hangars/Maps/<style>_<name>_<hash of the whole path, case-insensitive> (empty for
+     *  anything else); a ship
      *  /Game/SC/Ships/Maps/<entity>, with a variant (a paint baked in) /Game/SC/Ships/Maps/<entity>__<variant>. Characters
      *  outside [A-Za-z0-9_] become '_'. UnrealCitizen's prep step (-run=SCPrepare) writes them. */
     static FString EnvironmentLevelPath(const FString& Folder);
