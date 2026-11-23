@@ -194,10 +194,12 @@ struct SCBRIDGE_API FSCSceneInstance
     TArray<FSCInteractionLink> InteractionLinks;
     FSCParentAttachment Parent;
     FSCDoorTiming Door; // placements and (cache format 39) loadout children
-    TArray<FSCInteractionPoint> InteractionPoints;
-    TOptional<FSCSeatDefinition> Seat;
+    /** Saved (WP-O1-4b-1b-3), as the seat records below: a seat route is pressed at its access's interaction point. */
+    UPROPERTY() TArray<FSCInteractionPoint> InteractionPoints;
+    /** Saved (WP-O1-4b-1b-3): a prepared vehicle's seat routes are made from them (FSCSeatRuntime::Setup). */
+    UPROPERTY() TOptional<FSCSeatDefinition> Seat;
     TOptional<FSCLadderDefinition> Ladder;
-    TArray<FSCSeatEntrance> SeatEntrances;
+    UPROPERTY() TArray<FSCSeatEntrance> SeatEntrances;
     /** Cache format 39: interactions forwarded to the items of vehicle ports, and the Sendable interactions with tags. */
     TArray<FSCItemPortLink> ItemPortLinks;
     TArray<FSCSendableInteraction> SendableInteractions;

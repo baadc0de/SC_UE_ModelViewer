@@ -53,21 +53,26 @@ struct FSCScreenFace
 };
 /** WP-I1-4: one interaction point of a placed usable: where its helper is (anchor space, when the mesh names it), how
  *  near the player must be (its `radius`) and what it offers a standing player there (its interactions that start a use). */
+USTRUCT()
 struct FSCUsablePoint
 {
-    FString Helper;
-    FVector Local = FVector::ZeroVector;
-    bool bLocated = false;
-    float RadiusCm = 0; // 0: not authored (no limit)
-    float ViewAngleLimit = 0; // degrees: the point is used only within half this of the view; 0 (or >= 180): any
-    TArray<FSCPointInteraction> Options;
+    GENERATED_BODY()
+    UPROPERTY() FString Helper;
+    UPROPERTY() FVector Local = FVector::ZeroVector;
+    UPROPERTY() bool bLocated = false;
+    UPROPERTY() float RadiusCm = 0; // 0: not authored (no limit)
+    UPROPERTY() float ViewAngleLimit = 0; // degrees: the point is used only within half this of the view; 0 (or >= 180): any
+    UPROPERTY() TArray<FSCPointInteraction> Options;
 };
 /** WP-I1-4: a placed usable (a bed, a sofa, a chair: `usable_interactions[]`) and its points. */
+USTRUCT()
 struct FSCUsableTarget
 {
-    int32 Interior = INDEX_NONE;
-    FString EntityId, Label;
-    TArray<FSCUsablePoint> Points;
+    GENERATED_BODY()
+    UPROPERTY() int32 Interior = INDEX_NONE;
+    UPROPERTY() FString EntityId;
+    UPROPERTY() FString Label;
+    UPROPERTY() TArray<FSCUsablePoint> Points;
 };
 /** WP-I1-4: an operating panel's face whose render has clickable nodes and that is not drawn as a FloorPanel (a door pad,
  *  a lift call panel, a kiosk): where its buttons are on the face, for the game's hover look under the crosshair. */
@@ -196,13 +201,16 @@ struct FSCShipDoor
 };
 /** A light group of an interior (`interiors[].entities[]`, kind `light_group`): what it receives and the lights it holds
  *  (FSCImportedLightState::GroupEntityId). */
+USTRUCT()
 struct FSCLightGroup
 {
-    int32 Interior = INDEX_NONE;
-    FString EntityId, Name;
-    TArray<FString> Links;
-    TArray<FSCLightGroupInteraction> Interactions;
-    FString LightState; // the light state the group was last set to ("" = as imported)
+    GENERATED_BODY()
+    UPROPERTY() int32 Interior = INDEX_NONE;
+    UPROPERTY() FString EntityId;
+    UPROPERTY() FString Name;
+    UPROPERTY() TArray<FString> Links;
+    UPROPERTY() TArray<FSCLightGroupInteraction> Interactions;
+    UPROPERTY() FString LightState; // the light state the group was last set to ("" = as imported)
 };
 /** A clip layer on the vehicle's rigs. A USTRUCT so the held layers (the poses clips left, e.g. landing gear deployed)
  *  are saved with a prepared level (WP-O1-4b): a clip played after a load composes with them as it would live. */
@@ -229,7 +237,7 @@ public:
     ASCVehicle();
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCSpawnPoint> SpawnPoints;
     UPROPERTY(BlueprintReadOnly, Category = "SC|Exploration") TArray<FSCDoorInteraction> Doors;
-    TArray<FSCLadderAnchor> LadderAnchors;
+    UPROPERTY() TArray<FSCLadderAnchor> LadderAnchors; // saved (WP-O1-4b-1b-3)
     using FShipDoor = FSCShipDoor;
     UPROPERTY() TArray<FSCShipDoor> ShipDoors; // saved (WP-O1-4b): a prepared ship's doors are not measured again
 
@@ -271,7 +279,7 @@ public:
     /** The world point at the centre of button Node on aim Aim's face (the interaction popout's anchor). */
     bool PanelButtonWorldPoint(int32 Aim, const FString& Node, FVector& Out) const;
     // ------------------------------------------------------------------------- WP-I1-4 usables
-    TMap<TWeakObjectPtr<const USceneComponent>, FSCUsableTarget> UsableTargets;
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, FSCUsableTarget> UsableTargets; // saved
     /** The usable whose geometry the view ray meets first within Reach (by its anchor) and the point the player uses
      *  there (OutPoint): of its located points within their radius of the eye, the one nearest where the ray hits; a
      *  usable whose mesh names none of its helpers offers its first point. Null when no point is in reach. */
@@ -380,7 +388,7 @@ public:
      *  end; a closed one keeps the bind pose (the start of its open fragment). Also after ResetPose. Returns the doors posed. */
     int32 ApplyDoorRestPoses();
     // -------------------------------------------------------------------------------------- light groups (C2 fixes)
-    TArray<FSCLightGroup> LightGroups;
+    UPROPERTY() TArray<FSCLightGroup> LightGroups; // saved
     /** The light groups an entity of Interior with these EntityLinks drives: a group it links, or one that links an entity
      *  it links too (the chipset both a panel and its group name). */
     TArray<int32> LightGroupsLinkedBy(int32 Interior, const TArray<FString>& Links) const;
@@ -532,7 +540,7 @@ public:
     /** Lighting channel of the world point: 0 outside, else its room's channel (set by FSCLightAreas::Apply). */
     UFUNCTION(BlueprintCallable, Category = "SC|Lights") int32 LightChannelAt(const FVector& World) const;
     /** Room GUID -> lighting channel 1 or 2 (WP-L1), filled by FSCLightAreas::Apply. */
-    TMap<FString, int32> LightRoomChannels;
+    UPROPERTY() TMap<FString, int32> LightRoomChannels; // saved
     /** WP-P3: the physics grid's volume (DataCore `physicsGrid.physicsProxy`), a triangle soup in actor space (cm).
      *  Inside it the game's actors belong to the vehicle's grid, where the vehicle's own colliders (HullColliders,
      *  the root entity's game collision) do not block them; the interior's and the items' colliders do. */

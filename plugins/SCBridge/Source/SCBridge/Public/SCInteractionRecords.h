@@ -63,11 +63,13 @@ struct SCBRIDGE_API FSCSendableInteraction
 };
 /** `light_group.interactions[]` of a light-group entity: the interaction it receives, its linking tag, and the light
  *  state the group ends in (Default, Auxiliary, Emergency, Off, ...). */
-struct FSCLightGroupInteraction
+USTRUCT()
+struct SCBRIDGE_API FSCLightGroupInteraction
 {
-    FName Name;
-    FString LinkingTag;
-    FString LightState;
+    GENERATED_BODY()
+    UPROPERTY() FName Name;
+    UPROPERTY() FString LinkingTag;
+    UPROPERTY() FString LightState;
 };
 /** One interaction offered at an interaction point. */
 USTRUCT()
@@ -79,14 +81,17 @@ struct SCBRIDGE_API FSCPointInteraction
     UPROPERTY() bool bPrimary = false;
 };
 /** `interaction_points[]`: a helper the player aims at and what it offers there. */
-struct FSCInteractionPoint
+USTRUCT()
+struct SCBRIDGE_API FSCInteractionPoint
 {
-    FString HelperName;
-    float Radius = 0.f;          // metres, 0 when not authored
-    TOptional<float> AngleRange, ViewAngleLimit; // degrees
-    bool bHasHelperTransform = false;
-    FMatrix HelperTransform = FMatrix::Identity; // entity-local metres (geometry-less entities)
-    TArray<FSCPointInteraction> Interactions;
+    GENERATED_BODY()
+    UPROPERTY() FString HelperName;
+    UPROPERTY() float Radius = 0.f;          // metres, 0 when not authored
+    UPROPERTY() TOptional<float> AngleRange; // degrees
+    UPROPERTY() TOptional<float> ViewAngleLimit; // degrees
+    UPROPERTY() bool bHasHelperTransform = false;
+    UPROPERTY() FMatrix HelperTransform = FMatrix::Identity; // entity-local metres (geometry-less entities)
+    UPROPERTY() TArray<FSCPointInteraction> Interactions;
 };
 /** `traversal_links[]`: an interaction link the game builds at run time from the entity's traversal tree. */
 struct FSCTraversalLink

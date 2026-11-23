@@ -256,9 +256,14 @@ data when it loads. In stages:
     kept. A static cook (rigs baked) keeps no lifts. The lift paths
     stay a cache made on first use. Prep format 22. A carriage's floor-select screen (`FloorPanels`, drawn panels) comes
     with 1c; until then a prepared lift is called and sent by its call buttons and links.
-  - **1b-3 — seats, ladders, usables, light groups**: the manifest records seats and ladders read (`SeatEntrances`,
-    `Seat`, `Ladder`), ladder anchors, usable targets, light groups (with the light states' own data), light-room
-    channels and mesh samples.
+  - **1b-3 — seats, ladders, usables, light groups** (this PR): the manifest records seats read (`Seat`,
+    `SeatEntrances`, `InteractionPoints`: `FSCSeatDefinition`, `FSCSeatEntrance`, `FSCInteractionPoint` reflected; a
+    character makes its seat routes from them), the ladder anchors (`FSCLadderAnchor`), the usable targets
+    (`FSCUsableTarget`), the light groups (`FSCLightGroup`) and the room channels are saved; each light's authored
+    states are computed at import (`FSCLightImporter::AuthorStates`: intensity, colour, style per state) and saved, so a
+    light group or panel changes a prepared light's state without its JSON record. Light areas come back from the
+    cooked audio at load as before. Prep format 25. The prepared C2 has the live import's ladder, 7 usables, 52 panel
+    aims, 16 light groups and 2 seat routes.
 - **O1-4b-1c — panels and screens** (this PR; before 1b-3): the screen faces (`FSCScreenFace`: default, state, hover
   and custom renders), the panel aims (`FSCPanelAim`) and the drawn panels (`FloorPanels`: the lifts' floor select and
   the button panels; `DoorPanelLocks`: a pad's lock buttons) are saved, with their faces (`FSCScreenFaceGeometry`),

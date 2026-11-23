@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "SCPackageReader.h"
 class ASCVehicle;
+struct FSCImportedLightState;
 class USceneComponent;
 class FJsonObject;
 class ULightComponent;
@@ -16,6 +17,9 @@ public:
     /** Put the light's authored state StateKey (`defaultState`, `auxiliaryState`, `emergencyState`, ...) on light Index of
      *  Vehicle->LightStates: intensity (StateCandela), colour and style. False when the light authors no such state. */
     static bool ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey);
+    /** State.AuthoredStates from its light record (State.Json): each authored state's intensity, colour and style, as
+     *  ApplyState puts it on. The import calls it; a prepared level saves the result. */
+    static void AuthorStates(FSCImportedLightState& State);
     static void TickStyles(ASCVehicle* Vehicle);
     static void ResumeStyles(ASCVehicle* Vehicle);
     /** Set one look adjustment on a package light, returning false for legacy components. */

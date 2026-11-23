@@ -274,7 +274,8 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         State.Component = Light;
         State.Name = Name;
         State.OwnerEntity = Instance.EntityName;
-        State.Json = J; // the record ApplyState reads another state from
+        State.Json = J;
+        AuthorStates(State); // each authored state as ApplyState puts it on, saved with a prepared level
         State.AnimationSpeed = LightNumber(J, TEXT("animation_speed"), 1);
         State.AnimationPhase = FMath::Clamp(LightNumber(J, TEXT("animation_phase")), 0., 255.);
         bool bRandomPhase = false;
@@ -432,6 +433,22 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
     }
 }
 
+void FSCLightImporter::AuthorStates(FSCImportedLightState& State)
+{
+    State.AuthoredStates.Reset();
+    const TSharedPtr<FJsonObject>& J = State.Json;
+    const FLightJson* States = nullptr;
+    if (!J || !J->TryGetObjectField(TEXT("states"), States)) return;
+    for (const auto& [Key, Value] : (*States)->Values)
+        if (const TSharedPtr<FJsonObject> Selected = Value.IsValid() ? Value->AsObject() : nullptr)
+        {
+            FSCLightStateValues& V = State.AuthoredStates.Add(FName(*Key));
+            V.Candela = StateCandela(J, Selected);
+            const FVector Color = LightVector(Selected, TEXT("color"), LightVector(J, TEXT("color"), FVector(1)));
+            V.Color = FLinearColor(Color.X, Color.Y, Color.Z);
+            V.LightStyleId = int32(FMath::Clamp(LightNumber(Selected, TEXT("light_style")), 0., double(MAX_int32)));
+        }
+}
 bool FSCLightImporter::ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateKey)
 {
     // Another of the light's authored states (`states.<key>`): its intensity by the same model as at import (StateCandela)
@@ -439,16 +456,13 @@ bool FSCLightImporter::ApplyState(ASCVehicle* Vehicle, int32 Index, FName StateK
     if (!Vehicle || !Vehicle->LightStates.IsValidIndex(Index)) return false;
     FSCImportedLightState& S = Vehicle->LightStates[Index];
     ULightComponent* Light = S.Component;
-    const FLightJson* States = nullptr;
-    const FLightJson* Selected = nullptr;
-    if (!Light || !S.Json || !S.Json->TryGetObjectField(TEXT("states"), States) || !(*States)->TryGetObjectField(StateKey.ToString(), Selected))
-        return false;
-    S.BaseCandela = StateCandela(S.Json, *Selected);
+    const FSCLightStateValues* Selected = S.AuthoredStates.Find(StateKey); // computed at import (saved with a prepared level)
+    if (!Light || !Selected) return false;
+    S.BaseCandela = Selected->Candela;
     S.ActiveState = StateKey;
     S.bEnabled = StateKey != FName(TEXT("offState")) && S.BaseCandela > 0;
-    const FVector Color = LightVector(*Selected, TEXT("color"), LightVector(S.Json, TEXT("color"), FVector(1)));
-    S.BaseColor = FLinearColor(Color.X, Color.Y, Color.Z);
-    S.LightStyleId = int32(FMath::Clamp(LightNumber(*Selected, TEXT("light_style")), 0., double(MAX_int32)));
+    S.BaseColor = Selected->Color;
+    S.LightStyleId = Selected->LightStyleId;
     ApplyStyle(Vehicle, Index);
     return true;
 }

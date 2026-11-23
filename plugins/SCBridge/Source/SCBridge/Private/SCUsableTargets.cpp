@@ -14,7 +14,7 @@ const FSCUsableTarget* ASCVehicle::FindUsableTarget(FVector Eye, FVector Directi
     if (!GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Direction.GetSafeNormal() * Reach, ECC_Visibility, Params) || Hit.GetActor() != this)
         return nullptr;
     for (const USceneComponent* C = Hit.GetComponent(); C; C = C->GetAttachParent())
-        if (const FSCUsableTarget* Target = UsableTargets.Find(C))
+        if (const FSCUsableTarget* Target = UsableTargets.Find(const_cast<USceneComponent*>(C)))
         {
             // The point: located ones within their radius of the eye, nearest the hit; none located: the first.
             int32 Best = INDEX_NONE;

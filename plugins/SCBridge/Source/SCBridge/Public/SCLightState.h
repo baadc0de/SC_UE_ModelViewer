@@ -5,6 +5,16 @@
 class ULightComponent;
 class FJsonObject;
 
+/** One authored state of a light (`states.<key>`): its intensity by the import's model, colour and style. Computed at
+ *  import from the light record, saved with a prepared level, so changing a light's state reads no JSON. */
+USTRUCT()
+struct SCBRIDGE_API FSCLightStateValues
+{
+    GENERATED_BODY()
+    UPROPERTY() double Candela = 0;
+    UPROPERTY() FLinearColor Color = FLinearColor::White;
+    UPROPERTY() int32 LightStyleId = 0;
+};
 USTRUCT(BlueprintType)
 struct SCBRIDGE_API FSCImportedLightState
 {
@@ -32,8 +42,10 @@ struct SCBRIDGE_API FSCImportedLightState
     /** The interior (scene `interiors[]` index) whose container the light came from; INDEX_NONE for the root and items. Group
      *  ids are unique within one container only. */
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") int32 Interior = INDEX_NONE;
-    /** The light record (its states and intensity model): FSCLightImporter::ApplyState puts another of its states on. */
+    /** The light record (its states and intensity model), at import only. */
     TSharedPtr<FJsonObject> Json;
+    /** Its authored states by key (FSCLightStateValues): FSCLightImporter::ApplyState puts one on. Saved. */
+    UPROPERTY() TMap<FName, FSCLightStateValues> AuthoredStates;
     /** Authored photometry before the active preset waveform is applied. */
     UPROPERTY() double BaseCandela = 0;
     UPROPERTY() FLinearColor BaseColor = FLinearColor::White;
@@ -41,6 +53,6 @@ struct SCBRIDGE_API FSCImportedLightState
     UPROPERTY() double AnimationSpeed = 1;
     UPROPERTY() double AnimationPhase = 0;
     double StyleSampleSeconds = 0;
-    float WallLightScale = 1;
-    float FloorWashScale = 1;
+    UPROPERTY() float WallLightScale = 1;
+    UPROPERTY() float FloorWashScale = 1;
 };

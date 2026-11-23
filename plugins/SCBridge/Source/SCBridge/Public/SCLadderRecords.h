@@ -2,40 +2,63 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SCLadderRecords.generated.h"
 
 class FJsonObject;
 class USceneComponent;
 
+USTRUCT()
 struct FSCLadderEnd
 {
-    FVector2D WalkRunRadius = FVector2D::ZeroVector;
-    float RadiusOffset = 0, ApproachAngle = 0, FacingAngle = 0, RemountDelay = 0;
+    GENERATED_BODY()
+    UPROPERTY() FVector2D WalkRunRadius = FVector2D::ZeroVector;
+    UPROPERTY() float RadiusOffset = 0;
+    UPROPERTY() float ApproachAngle = 0;
+    UPROPERTY() float FacingAngle = 0;
+    UPROPERTY() float RemountDelay = 0;
 };
 
+USTRUCT()
 struct FSCLadderAction
 {
-    FName Clip;
-    float Speed = 0, Blend = 0, PositionAdjust = 0;
+    GENERATED_BODY()
+    UPROPERTY() FName Clip;
+    UPROPERTY() float Speed = 0;
+    UPROPERTY() float Blend = 0;
+    UPROPERTY() float PositionAdjust = 0;
 };
 
+/** Saved with a prepared level (ASCVehicle::LadderAnchors, WP-O1-4b-1b-3). */
+USTRUCT()
 struct FSCLadderDefinition
 {
-    float Height = 0, HorizontalOffset = 0, TravelInRungs = 0;
-    float MountBottom = 0, StopBottom = 0;
-    FVector StopTop = FVector::ZeroVector; // back, left, right
-    FVector2D SpeedUpDown = FVector2D::ZeroVector;
-    float Acceleration = 0, InertiaDecay = 0, HorizontalView = 0, UpView = 0;
-    FSCLadderEnd Bottom, Top;
-    bool bAutoMount = false, bIgnoreStaticCollision = false;
-    FIntVector TopExits = FIntVector::ZeroValue; // back, left, right
-    TMap<FName, FSCLadderAction> Actions;
+    GENERATED_BODY()
+    UPROPERTY() float Height = 0;
+    UPROPERTY() float HorizontalOffset = 0;
+    UPROPERTY() float TravelInRungs = 0;
+    UPROPERTY() float MountBottom = 0;
+    UPROPERTY() float StopBottom = 0;
+    UPROPERTY() FVector StopTop = FVector::ZeroVector; // back, left, right
+    UPROPERTY() FVector2D SpeedUpDown = FVector2D::ZeroVector;
+    UPROPERTY() float Acceleration = 0;
+    UPROPERTY() float InertiaDecay = 0;
+    UPROPERTY() float HorizontalView = 0;
+    UPROPERTY() float UpView = 0;
+    UPROPERTY() FSCLadderEnd Bottom;
+    UPROPERTY() FSCLadderEnd Top;
+    UPROPERTY() bool bAutoMount = false;
+    UPROPERTY() bool bIgnoreStaticCollision = false;
+    UPROPERTY() FIntVector TopExits = FIntVector::ZeroValue; // back, left, right
+    UPROPERTY() TMap<FName, FSCLadderAction> Actions;
 
     static TOptional<FSCLadderDefinition> Read(const FJsonObject& Placement);
 };
 
+USTRUCT()
 struct FSCLadderAnchor
 {
-    TWeakObjectPtr<USceneComponent> Anchor;
-    FString EntityId;
-    FSCLadderDefinition Data;
+    GENERATED_BODY()
+    UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
+    UPROPERTY() FString EntityId;
+    UPROPERTY() FSCLadderDefinition Data;
 };
