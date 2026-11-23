@@ -8,15 +8,19 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "SCInteractionRecords.h"
+#include "SCLift.generated.h"
 
 class USceneComponent;
 class USCRigComponent;
 
 /** Speed phases of a leg (the carriage class's effect triggers RampUp / FullSpeed / RampDown). */
+UENUM()
 enum class ESCLiftSpeedPhase : uint8 { None, RampUp, FullSpeed, RampDown };
 /** Lift logic states (WP-P5 §5). */
+UENUM()
 enum class ESCLiftState : uint8 { PoweredDown, Idle, Closing, WaitingForGateway, Moving, Opening, Open };
 /** A door's state as the lift sees it. */
+UENUM()
 enum class ESCLiftDoorState : uint8 { Closed, Opening, Open, Closing };
 SCBRIDGE_API const TCHAR* LexToString(ESCLiftState State);
 SCBRIDGE_API const TCHAR* LexToString(ESCLiftSpeedPhase Phase);
@@ -50,22 +54,63 @@ struct SCBRIDGE_API FSCLiftLegPlan
 };
 
 /** A door the lift drives: its rig and the clip rate (door timing `animation_speed`). */
+USTRUCT()
 struct FSCLiftDoor
 {
-    FString EntityId;
-    TWeakObjectPtr<USCRigComponent> Rig;
-    float Speed = 1.f;
-    double ZCm = 0; // container frame (gateway doors: where the leg must pass it)
+    GENERATED_BODY()
+    UPROPERTY() FString EntityId;
+    UPROPERTY() TWeakObjectPtr<USCRigComponent> Rig;
+    UPROPERTY() float Speed = 1.f;
+    UPROPERTY() double ZCm = 0; // container frame (gateway doors: where the leg must pass it)
 };
+USTRUCT()
 struct FSCLiftStop
 {
-    int32 Index = 0;
-    FString NodeId, NodeName;
-    FString Name;          // the floor-panel interaction routed to the stop ("Top Deck"), else the index
-    FVector Local = FVector::ZeroVector; // UE container-local cm
-    double S = 0;          // metres along the path from stop 0
-    double ZCm = 0;        // container frame (CryEngine z, cm)
-    TArray<FSCLiftDoor> LandingDoors;
+    GENERATED_BODY()
+    UPROPERTY() int32 Index = 0;
+    UPROPERTY() FString NodeId;
+    UPROPERTY() FString NodeName;
+    UPROPERTY() FString Name;          // the floor-panel interaction routed to the stop ("Top Deck"), else the index
+    UPROPERTY() FVector Local = FVector::ZeroVector; // UE container-local cm
+    UPROPERTY() double S = 0;          // metres along the path from stop 0
+    UPROPERTY() double ZCm = 0;        // container frame (CryEngine z, cm)
+    UPROPERTY() TArray<FSCLiftDoor> LandingDoors;
+};
+/** A lift as a prepared level saves it (WP-O1-4b-1b-2): its model (FSCLift's data, its anchors among the vehicle's saved
+ *  components) and where it rests. ASCVehicle saves one per lift and makes the lifts again from them when it loads: the
+ *  model copied, the hooks into the vehicle bound again; nothing is derived. */
+USTRUCT()
+struct FSCSavedLift
+{
+    GENERATED_BODY()
+    UPROPERTY() FString EntityId;
+    UPROPERTY() FString EntityName;
+    UPROPERTY() FString ClassName;
+    UPROPERTY() int32 Interior = INDEX_NONE;
+    UPROPERTY() int32 Id = INDEX_NONE;
+    UPROPERTY() float MaxSpeed = 0;
+    UPROPERTY() float EasingDistance = 0;
+    UPROPERTY() float OpenWaitTime = 0;
+    UPROPERTY() float QueueWaitTime = 0;
+    UPROPERTY() float IdlingPeriod = 0;
+    UPROPERTY() FName OpenInnerDoor;
+    UPROPERTY() FName OpenInnerDoorFinished;
+    UPROPERTY() FName CloseAllDoors;
+    UPROPERTY() FName CloseInnerDoorFinished;
+    UPROPERTY() TArray<FSCLiftStop> Stops;
+    UPROPERTY() TArray<FSCLiftDoor> Gate;
+    UPROPERTY() TArray<FSCLiftDoor> GatewayDoors;
+    UPROPERTY() TArray<FString> Riders;
+    UPROPERTY() int32 RestStop = 0;
+    UPROPERTY() FSCLiftPanelStyle PanelStyle;
+    UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
+    UPROPERTY() FVector AnchorBase = FVector::ZeroVector;
+    UPROPERTY() TWeakObjectPtr<USceneComponent> CarriageAnchor;
+    /** Where it rests: its stop, path position and state (a lift saved in motion rests where it is, idle). */
+    UPROPERTY() ESCLiftState State = ESCLiftState::Idle;
+    UPROPERTY() int32 CurrentStop = 0;
+    UPROPERTY() double S = 0;
+    UPROPERTY() bool bAtContact = false;
 };
 struct FSCLiftRequest
 {
@@ -144,6 +189,9 @@ public:
 
     /** Build from a package record. StopLocal: a stop's container-local metres -> UE container-local cm. */
     void Init(const FSCLiftRecord& Record, TFunctionRef<FVector(const FVector&)> StopLocal);
+    /** The lift as a prepared level saves it, and made again from that (its hooks and events are the caller's). */
+    FSCSavedLift Save() const;
+    void Restore(const FSCSavedLift& Saved);
     int32 StopOfNode(const FString& NodeId) const;
     /** Inputs (WP-P5 §6). Sources are the sending entity and interaction, for the events and logs. */
     bool RequestStop(int32 Stop, const FString& Source, FName Interaction);
@@ -194,25 +242,42 @@ private:
     int32 Direction = 0;
 };
 
-/** The exported interaction links of a vehicle and what each entity is (a door rig, a lift carriage, a lift's stop). */
+/** An entity of the interaction network: its links and what it is (a door rig, a lift carriage, a lift's stop). */
+USTRUCT()
+struct SCBRIDGE_API FSCInteractionEndpoint
+{
+    GENERATED_BODY()
+    UPROPERTY() TArray<FSCInteractionLink> Links;
+    UPROPERTY() TWeakObjectPtr<USCRigComponent> DoorRig;
+    UPROPERTY() float DoorSpeed = 1.f;
+    UPROPERTY() int32 Lift = INDEX_NONE; // carriage of lift
+    UPROPERTY() int32 LiftOfNode = INDEX_NONE;
+    UPROPERTY() int32 Stop = INDEX_NONE;
+    UPROPERTY() FString Name;
+};
+/** One interior's entities of the interaction network, by entity id. */
+USTRUCT()
+struct SCBRIDGE_API FSCInteractionInterior
+{
+    GENERATED_BODY()
+    UPROPERTY() TMap<FString, FSCInteractionEndpoint> Entities;
+};
+/** One delivery of a routed interaction. */
+struct FSCInteractionDelivery
+{
+    int32 Interior = INDEX_NONE;
+    FString Source, Target;
+    FName SourceSlot, TargetSlot;
+};
+/** The exported interaction links of a vehicle and what each entity is (a door rig, a lift carriage, a lift's stop).
+ *  Saved with a prepared level (WP-O1-4b-1b-2). */
+USTRUCT()
 struct SCBRIDGE_API FSCInteractionNetwork
 {
-    struct FEndpoint
-    {
-        TArray<FSCInteractionLink> Links;
-        TWeakObjectPtr<USCRigComponent> DoorRig;
-        float DoorSpeed = 1.f;
-        int32 Lift = INDEX_NONE; // carriage of lift
-        int32 LiftOfNode = INDEX_NONE, Stop = INDEX_NONE;
-        FString Name;
-    };
-    struct FDelivery
-    {
-        int32 Interior = INDEX_NONE;
-        FString Source, Target;
-        FName SourceSlot, TargetSlot;
-    };
-    TArray<TMap<FString, FEndpoint>> Interiors;
+    GENERATED_BODY()
+    using FEndpoint = FSCInteractionEndpoint;
+    using FDelivery = FSCInteractionDelivery;
+    UPROPERTY() TArray<FSCInteractionInterior> Interiors;
     FEndpoint& At(int32 Interior, const FString& EntityId);
     const FEndpoint* Find(int32 Interior, const FString& EntityId) const;
     /** The interior an entity id belongs to (the first that has it), INDEX_NONE without. */

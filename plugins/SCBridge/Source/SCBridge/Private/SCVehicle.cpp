@@ -1,6 +1,7 @@
 // Vehicle parameters and on-demand evaluation of sparse, ordered animation layers.
 #include "SCVehicle.h"
 #include "SCAudioSystem.h"
+#include "UObject/ObjectSaveContext.h"
 #include "Components/SceneComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SCMaterialBuilder.h"
@@ -452,6 +453,17 @@ void ASCVehicle::BeginPlay()
     Super::BeginPlay();
     FSCLightImporter::ResumeStyles(this);
     if (!CookedAudio.IsEmpty()) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
+    if (!Lifts.IsEmpty()) UpdateTickEnabled(); // a prepared vehicle's lifts (RestoreLifts) tick with it
+}
+void ASCVehicle::PreSave(FObjectPreSaveContext SaveContext)
+{
+    Super::PreSave(SaveContext);
+    SaveLifts(); // WP-O1-4b-1b-2: the lifts as a prepared level keeps them
+}
+void ASCVehicle::PostLoad()
+{
+    Super::PostLoad();
+    RestoreLifts(); // a prepared vehicle's lifts, from what its level saved
 }
 
 void ASCVehicle::FireClipAudio(FSCClipPlayback& P, double Previous)

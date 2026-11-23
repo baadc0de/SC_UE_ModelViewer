@@ -16,6 +16,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Serialization/ObjectReader.h"
+#include "Serialization/ObjectWriter.h"
 
 namespace
 {
@@ -707,6 +709,56 @@ bool FSCFloorPanelPaintTest::RunTest(const FString&)
     TestTrue(TEXT("set"), V->SetScreenFaceMaterial(0, Drawn));
     V->SetPaint(INDEX_NONE);
     TestEqual(TEXT("the face keeps the drawn image after a paint"), C->GetMaterial(0), Drawn);
+    return true;
+}
+
+// WP-O1-4b-1b-2: a prepared vehicle's lifts, interaction network and lift panels are saved with its level and made again
+// when it loads: the lift's model and where it rests copied from what was saved, its hooks into the vehicle bound again.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCSavedLiftsTest, "SCBridge.Prepare.SavedLifts", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCSavedLiftsTest::RunTest(const FString&)
+{
+    FSCSceneManifest M;
+    if (!ReadC2(*this, M)) return false;
+    ASCVehicle* V = MakeC2Vehicle(M);
+    ASCVehicle* Loaded = NewObject<ASCVehicle>(GetTransientPackage());
+    Loaded->AddToRoot();
+    ON_SCOPE_EXIT
+    {
+        V->RemoveFromRoot();
+        Loaded->RemoveFromRoot();
+    };
+    USceneComponent* PanelAnchor = NewObject<USceneComponent>(V);
+    FSCLiftPanel Panel;
+    Panel.Interior = 0;
+    Panel.EntityId = TEXT("panel");
+    Panel.Label = TEXT("Elevator panel");
+    Panel.Choices = {Choice(TEXT("RequestSurface"), TEXT("Exit Ship"), true)};
+    V->LiftPanels.Add(PanelAnchor, Panel);
+    FSCLift& Lift = *V->Lifts[0];
+    Lift.Gate.Add({TEXT("gate"), nullptr, 0.5f, 0.0});
+    Lift.CurrentStop = 2; // resting at the top deck
+    Lift.S = Lift.Stops[2].S;
+
+    // A level save (PreSave: SaveLifts) and its load (PostLoad: RestoreLifts).
+    V->SaveLifts();
+    TArray<uint8> Bytes;
+    FObjectWriter(V, Bytes);
+    FObjectReader(Loaded, Bytes);
+    if (!TestEqual(TEXT("one lift made again"), Loaded->RestoreLifts(), 1)) return false;
+    const FSCLift& Made = *Loaded->Lifts[0];
+    TestTrue(TEXT("its model"), Made.EntityId == Lift.EntityId && Made.Stops.Num() == 3 && Made.Stops[2].Name == TEXT("Top Deck") &&
+                                    Made.Stops[1].S == Lift.Stops[1].S && Made.MaxSpeed == Lift.MaxSpeed && Made.RestStop == Lift.RestStop &&
+                                    Made.Gate.Num() == 1 && Made.Gate[0].Speed == 0.5f && Made.Id == 0 && Made.Interior == 0);
+    TestTrue(TEXT("where it rests, idle"), Made.CurrentStop == 2 && Made.S == Lift.Stops[2].S && Made.State == ESCLiftState::Idle && Made.Queue.IsEmpty());
+    TestTrue(TEXT("its hooks bound"), bool(Made.Host.PlayDoor) && bool(Made.Host.Emit) && bool(Made.Host.SweepLeg) && bool(Made.Host.GroundContact));
+    const FSCInteractionNetwork::FEndpoint* PanelLinks = Loaded->Interactions.Find(0, TEXT("panel"));
+    const FSCInteractionNetwork::FEndpoint* Carriage = Loaded->Interactions.Find(0, TEXT("platform"));
+    TestTrue(TEXT("the interaction network"), PanelLinks && PanelLinks->Links.Num() == 4 && PanelLinks->Links[3].TargetEntityId == TEXT("hatch") &&
+                                                  Carriage && Carriage->Lift == 0 && Loaded->Interactions.Route(0, TEXT("panel"), TEXT("RequestSurface")).Num() == 2);
+    const FSCLiftPanel* SavedPanel = Loaded->LiftPanels.Find(PanelAnchor);
+    TestTrue(TEXT("the lift panel"), SavedPanel && SavedPanel->EntityId == TEXT("panel") && SavedPanel->Choices.Num() == 1 &&
+                                         SavedPanel->Choices[0].DisplayName == TEXT("Exit Ship"));
+    TestEqual(TEXT("a second restore makes nothing"), Loaded->RestoreLifts(), 0);
     return true;
 }
 #endif

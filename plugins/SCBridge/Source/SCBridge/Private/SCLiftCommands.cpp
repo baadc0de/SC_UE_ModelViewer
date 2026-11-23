@@ -59,7 +59,7 @@ void FSCViewerAutomation::RegisterLiftCommands()
             TArray<FString> Choices;
             for (const FSCPointInteraction& C : Panel.Choices) Choices.Add(FString::Printf(TEXT("%s=%s"), *C.Name.ToString(), *C.DisplayName));
             UE_LOG(LogSCLiftCmd, Display, TEXT("LIFT_PANEL entity=%s label=\"%s\" choices=\"%s\" at=%s"), *Panel.EntityId, *Panel.Label,
-                   *FString::Join(Choices, TEXT(", ")), Anchor.IsValid() ? *V->GetActorTransform().InverseTransformPosition(Anchor->GetComponentLocation()).ToCompactString() : TEXT("-"));
+                   *FString::Join(Choices, TEXT(", ")), Anchor ? *V->GetActorTransform().InverseTransformPosition(Anchor->GetComponentLocation()).ToCompactString() : TEXT("-"));
         }
     });
     Add(TEXT("sc.Lift.Call"), TEXT("sc.Lift.Call <lift> <stop>: as a call button at that stop (Ascent/DescentRequest on its node)"),

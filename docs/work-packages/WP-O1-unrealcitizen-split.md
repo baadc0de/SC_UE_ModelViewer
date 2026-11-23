@@ -244,8 +244,12 @@ data when it loads. In stages:
     is never a door order) and the physics grid. Prep format 20. A prepared Golem has its ten ship doors as a live import
     does, and Ship Link opens them. A pad's lock buttons (`DoorPanelLocks`, button panels) come with 1c; until then E on
     a prepared pad operates its door.
-  - **1b-2 — lifts**: the lift network (`FSCLift`'s model and state saved; its hooks and delegates bound again when
-    the vehicle begins play), the interaction network, lift panels and paths.
+  - **1b-2 — lifts** (this PR): each lift's model and resting place are saved (`FSCSavedLift`, written by
+    `ASCVehicle::PreSave`); a loaded vehicle makes its lifts again from them (`RestoreLifts` in `PostLoad`: the model
+    copied, its hooks into the vehicle and its sound events bound by `SCVehicleLifts::BindLift`, the code the import
+    uses; nothing derived). The interaction network (`FSCInteractionNetwork`: `FSCInteractionInterior`,
+    `FSCInteractionEndpoint`, `FSCInteractionLink`) and the lift panels (`FSCLiftPanel`) are saved. A lift saved in
+    motion rests where it was, idle. The lift paths stay a cache made on first use. Prep format 21.
   - **1b-3 — seats, ladders, usables, light groups**: the manifest records seats and ladders read (`SeatEntrances`,
     `Seat`, `Ladder`), ladder anchors, usable targets, light groups (with the light states' own data), light-room
     channels and mesh samples.

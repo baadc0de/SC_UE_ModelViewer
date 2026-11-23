@@ -104,6 +104,16 @@ struct FSCDoorRecord
     UPROPERTY() FSCDoorTiming Door;
     UPROPERTY() TArray<FSCItemPortLink> PortLinks;
 };
+/** A panel that operates a lift (its links reach a carriage or a stop): the press path until WP-I1 has its own. Saved. */
+USTRUCT()
+struct FSCLiftPanel
+{
+    GENERATED_BODY()
+    UPROPERTY() int32 Interior = INDEX_NONE;
+    UPROPERTY() FString EntityId;
+    UPROPERTY() FString Label;
+    UPROPERTY() TArray<FSCPointInteraction> Choices; // the interaction point's interactions that send a link, in authored order
+};
 /** The last tag played for a fragment on a rig instance (null: the untargeted orbit-UI toggle): a door's state
  *  (ASCVehicle::IsDoorOpen), saved with a prepared level. */
 USTRUCT()
@@ -363,18 +373,18 @@ public:
     int32 DeliverLightGroupTag(int32 Group, const FString& LinkingTag, FString* OutState = nullptr);
 
     // ------------------------------------------------------------------------------------------ WP-P5 lifts and links
-    /** One lift per package `lifts[]` record, ticked by the vehicle. */
+    /** One lift per package `lifts[]` record, ticked by the vehicle. A prepared level saves them as SavedLifts and makes
+     *  them again when it loads (RestoreLifts). */
     TArray<TSharedPtr<FSCLift>> Lifts;
-    /** Exported interaction links by interior, and what each entity is (door, carriage, stop). */
-    FSCInteractionNetwork Interactions;
-    /** A panel that operates a lift (its links reach a carriage or a stop): the press path until WP-I1 has its own. */
-    struct FLiftPanel
-    {
-        int32 Interior = INDEX_NONE;
-        FString EntityId, Label;
-        TArray<FSCPointInteraction> Choices; // the interaction point's interactions that send a link, in authored order
-    };
-    TMap<TWeakObjectPtr<const USceneComponent>, FLiftPanel> LiftPanels;
+    UPROPERTY() TArray<FSCSavedLift> SavedLifts;
+    /** SavedLifts from Lifts (a level save: PreSave). */
+    void SaveLifts();
+    /** Lifts from SavedLifts when there are none (a loaded level: PostLoad), their hooks bound; returns the lifts made. */
+    int32 RestoreLifts();
+    /** Exported interaction links by interior, and what each entity is (door, carriage, stop). Saved. */
+    UPROPERTY() FSCInteractionNetwork Interactions;
+    using FLiftPanel = FSCLiftPanel;
+    UPROPERTY() TMap<TObjectPtr<USceneComponent>, FSCLiftPanel> LiftPanels;
     /** Doors a lift opens and closes itself (its gate and landing doors): not toggled by E (FindInteraction / NearestDoor),
      *  as the C2's lift doors offer the player no interaction of their own. sc.FP.Door still drives them. */
     UPROPERTY() TSet<TObjectPtr<USCRigComponent>> LiftDrivenRigs; // saved with the doors (WP-O1-4b-1b-1)
@@ -486,6 +496,8 @@ public:
     UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudio;
     UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudioScene;
     virtual void BeginPlay() override;
+    virtual void PreSave(FObjectPreSaveContext SaveContext) override;
+    virtual void PostLoad() override;
     /** Vertex samples per imported mesh asset (mesh-local cm): the input of the inside/outside vote. */
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
     /** World point inside any room volume of this vehicle (the game's "not the root clip volume"). */
