@@ -821,6 +821,24 @@ bool FSCSavedLiftsTest::RunTest(const FString&)
     TestTrue(TEXT("saved in motion: rests at its nearest stop, idle"), Again.CurrentStop == 1 && Again.S == Lift.Stops[1].S && Again.State == ESCLiftState::Idle);
     const FSCSavedLift Resaved = Again.Save();
     TestTrue(TEXT("its power state and the door without a clip kept"), !Resaved.bPoweredUp && Resaved.Inert.Num() == 1 && Resaved.Inert[0].Get() == Stuck);
+    FSCSavedLift Idling = Lift.Save();
+    Idling.IdleSeconds = 100;
+    FSCLift Resting;
+    Resting.Restore(Idling);
+    TestEqual(TEXT("its idle time carries on"), Resting.Save().IdleSeconds, 100.0);
+
+    // A vehicle saved while a clip plays (a door a lift drives may be moving): its lifts are left out, and so are their
+    // controls on load.
+    ASCVehicle* Busy = MakeC2Vehicle(M);
+    ON_SCOPE_EXIT { Busy->RemoveFromRoot(); };
+    Busy->LiftPanels.Add(NewObject<USceneComponent>(Busy), Panel);
+    Busy->Playback.AddDefaulted();
+    TestFalse(TEXT("not at rest while a clip plays"), Busy->LiftsAtRest());
+    Busy->SaveLifts();
+    Busy->Lifts.Reset();
+    TestTrue(TEXT("its lifts left out, and their controls on load"),
+             Busy->bLiftsOmitted && Busy->SavedLifts.IsEmpty() && Busy->RestoreLifts() == 0 && Busy->LiftPanels.IsEmpty() &&
+                 Busy->Interactions.Find(0, TEXT("platform"))->Lift == INDEX_NONE);
     return true;
 }
 #endif

@@ -388,24 +388,42 @@ void SCVehicleLifts::BindLift(ASCVehicle* V, FSCLift& Lift)
         else if (Phase == TEXT("Stop")) Audio->SetEntityTag(Weak.Get(), LinkInterior, Carriage, TEXT("InTransit"), false);
     });
 }
+bool ASCVehicle::LiftsAtRest() const
+{
+    if (!Playback.IsEmpty()) return false; // a clip moving any door (a lift's doors move by clips of any origin)
+    for (const TSharedPtr<FSCLift>& Lift : Lifts)
+        if (Lift && !Lift->IsIdle()) return false;
+    return true;
+}
 void ASCVehicle::SaveLifts()
 {
-    // Only lifts at rest are saved consistently (their doors' clips are not saved): with one in motion or mid-handshake,
-    // none is (the prep step refuses such a vehicle; another save keeps the vehicle's lifts out of the level).
+    // Only lifts at rest are saved consistently (their doors' clips are not saved): otherwise none is, and the load drops
+    // their controls (the prep step refuses such a vehicle; another level save keeps the vehicle's lifts out of it).
     SavedLifts.Reset();
-    for (const TSharedPtr<FSCLift>& Lift : Lifts)
-        if (Lift && !Lift->IsIdle())
-        {
-            UE_LOG(LogSCLiftLinks, Warning, TEXT("LIFT_SAVE skipped: lift %d is not at rest (%s); the vehicle's lifts are not saved"), Lift->Id,
-                   *Lift->Describe());
-            return;
-        }
+    bLiftsOmitted = false;
+    if (Lifts.IsEmpty()) return;
+    if (!LiftsAtRest())
+    {
+        bLiftsOmitted = true;
+        UE_LOG(LogSCLiftLinks, Warning, TEXT("LIFT_SAVE skipped: the vehicle is not at rest (a lift moving, or a clip playing); its lifts are not saved"));
+        return;
+    }
     for (const TSharedPtr<FSCLift>& Lift : Lifts)
         if (Lift) SavedLifts.Add(Lift->Save());
 }
 int32 ASCVehicle::RestoreLifts()
 {
     if (!Lifts.IsEmpty()) return 0;
+    if (bLiftsOmitted)
+    {
+        // Saved without its lifts: no controller answers their panels and stops, so those are not offered.
+        LiftPanels.Reset();
+        for (FSCInteractionInterior& Interior : Interactions.Interiors)
+            for (auto& [Id, Endpoint] : Interior.Entities)
+                Endpoint.Lift = Endpoint.LiftOfNode = Endpoint.Stop = INDEX_NONE;
+        UE_LOG(LogSCLiftLinks, Warning, TEXT("LIFT_RESTORE none: the level was saved with its lifts left out"));
+        return 0;
+    }
     for (const FSCSavedLift& Saved : SavedLifts)
     {
         TSharedPtr<FSCLift> Lift = MakeShared<FSCLift>();

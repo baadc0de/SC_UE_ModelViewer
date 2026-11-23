@@ -200,15 +200,14 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     // the vehicle at rest; a lift that is not fails the cook before anything of the actor changes.
     if (bKeepRigs)
     {
-        bool bAtRest = true;
-        for (const TSharedPtr<FSCLift>& Lift : Environment->Lifts)
-            if (Lift && !Lift->IsIdle())
-            {
-                UE_LOG(LogSCCook, Error, TEXT("COOK_REFUSED lift %d (%s) is not at rest (%s): a lift is saved idle at a stop"), Lift->Id,
-                       *Lift->EntityName, *Lift->Describe());
-                bAtRest = false;
-            }
-        if (!bAtRest) return false;
+        if (!Environment->LiftsAtRest())
+        {
+            for (const TSharedPtr<FSCLift>& Lift : Environment->Lifts)
+                if (Lift) UE_LOG(LogSCCook, Error, TEXT("COOK_REFUSED lift %d (%s): %s"), Lift->Id, *Lift->EntityName, *Lift->Describe());
+            UE_LOG(LogSCCook, Error, TEXT("COOK_REFUSED the vehicle is not at rest (a lift moving, or a clip playing: %d): lifts are saved idle at a stop"),
+                   Environment->Playback.Num());
+            return false;
+        }
     }
     if (!bKeepRigs)
     {

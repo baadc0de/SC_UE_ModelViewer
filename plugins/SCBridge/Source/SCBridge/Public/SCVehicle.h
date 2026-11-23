@@ -392,8 +392,13 @@ public:
     /** The audio scene's entity emitters as the import registered them (FSCAudioScene::Entities); a cooked scene takes
      *  them from here (FSCAudioScene::LoadCooked). */
     UPROPERTY() TArray<FSCSavedAudioEntity> AudioEntities;
-    /** SavedLifts from Lifts (a level save: PreSave). */
+    /** SavedLifts from Lifts (a level save: PreSave), when LiftsAtRest; else none, and the load drops the lifts' controls
+     *  (bLiftsOmitted). */
     void SaveLifts();
+    /** Every lift idle at a stop and no clip playing on the vehicle (a door a lift drives may move by any clip): what a
+     *  save keeps consistently, as their doors' clips are not saved. */
+    bool LiftsAtRest() const;
+    UPROPERTY() bool bLiftsOmitted = false;
     /** Lifts from SavedLifts when there are none (a loaded level: PostLoad), their hooks bound; returns the lifts made. */
     int32 RestoreLifts();
     /** Exported interaction links by interior, and what each entity is (door, carriage, stop). Saved. */

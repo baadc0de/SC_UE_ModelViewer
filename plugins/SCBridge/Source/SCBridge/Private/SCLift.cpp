@@ -638,6 +638,7 @@ FSCSavedLift FSCLift::Save() const
     Out.bAtContact = bAtContact;
     Out.bPoweredUp = bPoweredUp;
     Out.Direction = Direction;
+    Out.IdleSeconds = FMath::Max(0.0, Clock - IdleSince);
     for (const TWeakObjectPtr<const USCRigComponent>& Rig : Inert) Out.Inert.Add(const_cast<USCRigComponent*>(Rig.Get()));
     return Out;
 }
@@ -691,7 +692,7 @@ void FSCLift::Restore(const FSCSavedLift& Saved)
     Queue.Reset();
     Clock = LegTime = StateTime = 0;
     OpenedAt = State == ESCLiftState::Open ? 0 : -1;
-    IdleSince = 0;
+    IdleSince = -Saved.IdleSeconds; // Clock restarts at 0: its idle time carries on
     LegStartedAt = -1;
     LegStartS = LegEndS = S;
 }

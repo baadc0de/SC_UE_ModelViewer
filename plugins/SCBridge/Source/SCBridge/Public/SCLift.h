@@ -116,6 +116,7 @@ struct FSCSavedLift
     UPROPERTY() bool bPoweredUp = true;
     UPROPERTY() TArray<TWeakObjectPtr<USCRigComponent>> Inert;
     UPROPERTY() int32 Direction = 0; // the last leg's (ChooseTarget prefers stops ahead)
+    UPROPERTY() double IdleSeconds = 0; // how long it had idled (its power-down comes after IdlingPeriod)
 };
 struct FSCLiftRequest
 {
