@@ -249,13 +249,13 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
                 Cook.Persist(Mesh, Root / TEXT("Rigs"), Name);
                 ++RigMeshes;
             }
-            if (!Rig->SavedCollision.IsEmpty())
+            // A soft rig has collision (the prep import builds it): again in the built vertex order, also when the import's
+            // own collision failed, so a saved rig never lacks it.
+            const TSharedPtr<const FSCDerivedMesh>* Source = Environment->RigSources.Find(Mesh);
+            if (Source && (*Source)->bHasGeometry)
             {
-                TArray<uint8> Bytes;
-                FCustomVersionContainer Versions;
                 FString Error;
-                Rig->SavedCollision.Reset();
-                if (!SCRigAssets::DeriveCollision(Mesh, Bytes, Versions, Error) || !Rig->InitializeCollision(Bytes, Versions))
+                if (!SCRigAssets::RefreshCollision(Rig, Error))
                 {
                     Cook.Warnings.Add(Rig->OwnerEntity + TEXT(": rig collision: ") + Error);
                     Cook.bFailed = true;

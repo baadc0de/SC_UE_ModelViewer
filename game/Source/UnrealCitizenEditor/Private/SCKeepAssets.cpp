@@ -3,6 +3,7 @@
 #include "SCKeepAssets.h"
 #include "SCMeshImporter.h"
 #include "SCRigAssets.h"
+#include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "SCClipCatalog.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -12,6 +13,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
@@ -150,10 +152,28 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
             const TSharedPtr<const FSCDerivedMesh>* Source = Vehicle->RigSources.Find(Mesh);
             FString Error;
             K.Move(Mesh->GetSkeleton(), TEXT("Rigs"));
-            if (Source && SCRigAssets::MakeSavable(Mesh, **Source, Error))
-                K.Move(Mesh, TEXT("Rigs"));
-            else
+            if (!Source || !SCRigAssets::MakeSavable(Mesh, **Source, Error))
+            {
                 K.Warnings.Add(Mesh->GetName() + TEXT(": skeletal mesh not kept (") + (Source ? Error : FString(TEXT("no rig source"))) + TEXT(")"));
+                continue;
+            }
+            // As for static meshes: the first rig override of each slot becomes the asset's material; the rigs' bodies
+            // follow the rebuilt vertices.
+            for (USCRigComponent* Rig : Vehicle->Rigs)
+            {
+                if (!Rig || Rig->GetSkeletalMeshAsset() != Mesh) continue;
+                for (int32 Slot = 0; Slot < Mesh->GetMaterials().Num(); ++Slot)
+                {
+                    // The runtime build leaves the engine's default material in every slot; the first override replaces it.
+                    UMaterialInterface* Current = Mesh->GetMaterials()[Slot].MaterialInterface;
+                    UMaterialInterface* Override = Rig->OverrideMaterials.IsValidIndex(Slot) ? Rig->OverrideMaterials[Slot].Get() : nullptr;
+                    if (Override && (!Current || Current == UMaterial::GetDefaultMaterial(MD_Surface)))
+                        Mesh->GetMaterials()[Slot].MaterialInterface = K.Constant(Override);
+                }
+                if ((*Source)->bHasGeometry && Rig->HasCollisionBody() && !SCRigAssets::RefreshCollision(Rig, Error))
+                    K.Warnings.Add(Rig->OwnerEntity + TEXT(": rig collision not rebuilt (") + Error + TEXT(")"));
+            }
+            K.Move(Mesh, TEXT("Rigs"));
         }
     if (USCClipCatalog* Catalog = Vehicle->ClipCatalog)
     {

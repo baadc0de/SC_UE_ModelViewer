@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 
 class USkeletalMesh;
+class USCRigComponent;
 struct FSCDerivedMesh;
 
 namespace SCRigAssets
@@ -20,4 +21,8 @@ bool MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, FString& Error
  *  vertex order (USCRigComponent::RefitCollision skins those vertices): the engine's build may reorder or weld the
  *  vertices the runtime build laid out per corner. False with Error when there is no geometry or no CPU copy. */
 bool DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutBytes, FCustomVersionContainer& OutVersions, FString& Error);
+/** After MakeSavable: Rig's collision body derived again from its (built) mesh and put in place (saved with the rig), its
+ *  physics state recreated. A rig that had a body keeps its collision settings; one without (its import-time collision
+ *  failed) gets the import's policy. False with Error when the mesh has no geometry or the body does not build. */
+bool RefreshCollision(USCRigComponent* Rig, FString& Error);
 } // namespace SCRigAssets

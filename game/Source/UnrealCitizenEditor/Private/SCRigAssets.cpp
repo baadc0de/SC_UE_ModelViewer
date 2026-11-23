@@ -1,6 +1,7 @@
 // SCRigAssets (SCRigAssets.h): a runtime rig mesh given an editor source model and the engine's build.
 #include "SCRigAssets.h"
 #include "SCMeshImporter.h"
+#include "SCRigComponent.h"
 #include "Animation/Skeleton.h"
 #include "BoneWeights.h"
 #include "Engine/SkeletalMesh.h"
@@ -36,6 +37,11 @@ bool SCRigAssets::MakeSavable(USkeletalMesh* Mesh, const FSCDerivedMesh& Soft, F
     FMeshDescription Description = Soft.bHasGeometry ? Soft.Description : FMeshDescription();
     FSkeletalMeshAttributes Attributes(Description);
     Attributes.Register(true);
+    // Vertex colours as the runtime build stores them (FLinearColor::ToFColorSRGB): the engine's build converts without
+    // gamma (ToFColor(false)), so the description carries the sRGB bytes as linear values.
+    TVertexInstanceAttributesRef<FVector4f> Colors = Attributes.GetVertexInstanceColors();
+    for (const FVertexInstanceID Corner : Description.VertexInstances().GetElementIDs())
+        Colors[Corner] = FVector4f(FLinearColor(Colors[Corner]).ToFColorSRGB().ReinterpretAsLinear());
     TPolygonGroupAttributesRef<FName> SlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
     for (const FPolygonGroupID Group : Description.PolygonGroups().GetElementIDs()) SlotNames[Group] = SlotName(Group.GetValue());
     FSkinWeightsVertexAttributesRef Weights = Attributes.GetVertexSkinWeights();
@@ -160,5 +166,22 @@ bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutB
     if (!FSCMeshImporter::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
     OutBytes = MoveTemp(Expanded.CollisionBytes);
     OutVersions = Expanded.CollisionVersions;
+    return true;
+}
+
+bool SCRigAssets::RefreshCollision(USCRigComponent* Rig, FString& Error)
+{
+    const USkeletalMesh* Mesh = Rig ? Rig->GetSkeletalMeshAsset() : nullptr;
+    TArray<uint8> Bytes;
+    FCustomVersionContainer Versions;
+    if (!DeriveCollision(Mesh, Bytes, Versions, Error)) return false;
+    const bool bHadBody = Rig->HasCollisionBody();
+    Rig->SavedCollision.Reset();
+    if (!Rig->InitializeCollision(Bytes, Versions, /*bConfigure*/ !bHadBody))
+    {
+        Error = TEXT("the collision body does not build");
+        return false;
+    }
+    if (Rig->IsRegistered()) Rig->RecreatePhysicsState();
     return true;
 }

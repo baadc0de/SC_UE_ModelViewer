@@ -261,6 +261,7 @@ public:
     TArray<TObjectPtr<UMaterialInstanceDynamic>> Materials, EngineGlowMaterials;
     TMap<TObjectPtr<UObject>, FString> SourcePaths;           // keys are in the arrays above
     TMap<TObjectKey<UObject>, TArray<FVector3f>> MeshSamples;
+    TMap<const USkeletalMesh*, TSharedPtr<const FSCDerivedMesh>> RigSources; // editor hosts (bRetainRigSources)
     TMap<FString, TObjectPtr<UTexture2D>> GoboTextures;       // values are in Textures
     TObjectPtr<USCClipCatalog> Catalog;                       // the clips with their bindings and sequences
 
@@ -273,6 +274,7 @@ public:
         EngineGlowMaterials = V->EngineGlowMaterials;
         SourcePaths = V->SourcePaths;
         MeshSamples = V->MeshSamples;
+        RigSources = V->RigSources;
         GoboTextures = V->GoboTextures;
         Catalog = NewObject<USCClipCatalog>(GetTransientPackage(), NAME_None, RF_Transient);
         if (V->ClipCatalog) Catalog->Clips = V->ClipCatalog->Clips;
@@ -286,6 +288,7 @@ public:
         V->EngineGlowMaterials = EngineGlowMaterials;
         V->SourcePaths = SourcePaths;
         V->MeshSamples = MeshSamples;
+        V->RigSources = RigSources;
         V->GoboTextures = GoboTextures;
         V->ClipCatalog = NewObject<USCClipCatalog>(V);
         if (Catalog) V->ClipCatalog->Clips = Catalog->Clips;

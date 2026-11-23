@@ -49,18 +49,22 @@ bool USCRigComponent::InitializeCollision(const FSCDerivedMesh& Data)
 }
 void USCRigComponent::OnRegister()
 {
-    Super::OnRegister();
-    if (CollisionBody || SavedCollision.IsEmpty()) return;
-    // A saved rig (a prepared level): its body from the bytes saved with it.
+    Super::OnRegister(); // physics state is created after registration: the body is in place by then
+    if (!CollisionBody && !SavedCollision.IsEmpty() && !RestoreSavedCollision())
+        UE_LOG(LogTemp, Warning, TEXT("SKIN_COLLISION owner=%s: the saved collision does not restore"), *OwnerEntity);
+}
+bool USCRigComponent::RestoreSavedCollision()
+{
+    if (SavedCollision.IsEmpty()) return false;
+    // A saved rig (a prepared level): its body from the bytes saved with it; its saved collision settings stay.
     FMemoryReader Reader(SavedCollision);
     FCustomVersionContainer Versions;
     Versions.Serialize(Reader);
     TArray<uint8> Bytes;
     Reader << Bytes;
-    if (Reader.IsError() || !InitializeCollision(Bytes, Versions))
-        UE_LOG(LogTemp, Warning, TEXT("SKIN_COLLISION owner=%s: the saved collision does not restore"), *OwnerEntity);
+    return !Reader.IsError() && InitializeCollision(Bytes, Versions, /*bConfigure*/ false);
 }
-bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions)
+bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions, bool bConfigure)
 {
     if (Bytes.IsEmpty()) return false; // socket-only rigs have no surface
     const USkeletalMesh* Mesh = GetSkeletalMeshAsset();
@@ -109,9 +113,12 @@ bool USCRigComponent::InitializeCollision(const TArray<uint8>& Bytes, const FCus
         const int32 Parent = Ref.GetParentIndex(I);
         RefitPose[I] = Parent == INDEX_NONE ? Ref.GetRefBonePose()[I] : Ref.GetRefBonePose()[I] * RefitPose[Parent];
     }
-    bEnablePerPolyCollision = true;
-    SetCollisionProfileName(TEXT("BlockAll"));
-    SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    if (bConfigure)
+    {
+        bEnablePerPolyCollision = true;
+        SetCollisionProfileName(TEXT("BlockAll"));
+        SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    }
     UE_LOG(LogTemp, Display, TEXT("SKIN_COLLISION owner=%s vertices=%u skin_bones=%d"), *OwnerEntity, LOD.GetNumVertices(), SkinBones.Num());
     return true;
 }
