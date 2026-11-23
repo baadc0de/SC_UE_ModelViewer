@@ -266,7 +266,8 @@ data when it loads. In stages:
   `FSCUiStateImage`, `FSCUiHoverImage`, `FSCUiButton`, `FSCSendableInteraction`). The cook makes the screens' render
   instances constants, saves each drawn panel's render target as an asset (`<root>/Panels`: a constant in its own package
   refers to it) and points the panels' renders and label masks at their pooled textures. A loaded panel draws again
-  (a render target's pixels are not saved). Prep format 23.
+  when the vehicle begins play (a render target's pixels are not saved). Prep format 23. A light panel's buttons act on
+  the light groups, which 1b-3 saves next; until then a prepared light panel changes its own state only.
 - **O1-4b-2 / 3**: the player body; cargo boxes and effects, music, the Garage's details prepared.
 
 #### O1-4a — Scenarios and the prep step
