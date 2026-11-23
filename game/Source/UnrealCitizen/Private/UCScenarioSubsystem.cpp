@@ -72,7 +72,10 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     FString Error, SourceError;
     const bool bSource = FUCScenario::Load(Id, Source, SourceError);
     if (bSource) Scenario.Title = Source.Title;
-    else if (FUCScenario::Exists(Id)) return Refuse(SourceError + TEXT(": fix the definition, then run ") + FUCPrepared::PrepareCommand(Id));
+    // Only a packaged game runs without its definition (Config/Scenarios is not staged); anywhere else a definition that
+    // is missing or does not read is refused, as packaging refuses it.
+    else if (!FPlatformProperties::RequiresCookedData() || FUCScenario::Exists(Id))
+        return Refuse(SourceError + TEXT(": fix the definition, then run ") + FUCPrepared::PrepareCommand(Id));
     if (!FUCPrepared::Load(Id, Prepared, Error)) return Refuse(Error);
     if (const FString Why = Prepared.Problem(bSource ? &Source : nullptr); !Why.IsEmpty()) return Refuse(Why);
     if (!FUCScenario::Parse(Id, Prepared.Definition, Prepared.CargoDefinition, Scenario, Error))
@@ -124,6 +127,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
         Viewer->CancelLoad();
+        if (Viewer->IsSpace()) Viewer->SetSpace(false); // a cargo setup in space took the world there: the map's hangar and gravity return
         Viewer->SetEnvironment(TEXT("none"));
     }
     UE_LOG(LogUCScenario, Error, TEXT("SCENARIO_FAILED id=%s %s"), *Id, *Why);

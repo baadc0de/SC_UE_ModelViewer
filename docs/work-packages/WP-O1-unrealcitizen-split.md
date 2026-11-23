@@ -223,10 +223,10 @@ prepared), gitignored and staged with a packaged game (`DirectoriesToAlwaysStage
 **The game** plays `-Scenario=<name>` (or `UUCSettings::Scenario`; `-Scenario=none` turns it off) from the record only
 (`UUCScenarioSubsystem`): it refuses — nothing loads, a notice over the view (`SUCScenarioNotice`) and the log
 (`SCENARIO_REFUSED`) give the reason and the prep command — when the scenario has no record, the record's format is
-another, a level is missing or not finished (no current stamp), or (where the definition is on disk, i.e. not a packaged
-game) the definition does not read or it or its cargo setup changed since prep. A level that does not stream in (or
-not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded, and the cargo
-subsystem stops applying its cargo setup (`USCCargoSubsystem::DropScenario`). It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
+another, a level is missing or not finished (no current stamp), or (outside a packaged game, which has no definitions)
+the definition is missing or does not read or it or its cargo setup changed since prep. A level that does not stream in (or
+not within 10 minutes) fails the run (`SCENARIO_FAILED`): what it started is cancelled and unloaded, space is left, and
+the cargo subsystem stops applying its cargo setup (`USCCargoSubsystem::DropScenario`). It does not run either when the command line names another scene (`-SCLoad`, `-SCEnvironment`,
 `-SCPackage`, `-SCCargoScenario`) or `-SCNoCooked`: the notice says so, and those switches act as without a scenario. Otherwise it streams the environment's level, then the vehicle's (`LoadPreparedEntity`), sets the
 camera, puts the player at the start, asks for the music, and hands the cargo subsystem the prepared cargo setup
 (`UUCSettings::ScenarioCargoJson`; it then loads no ship or environment itself). Log lines `SCENARIO start|loaded|
