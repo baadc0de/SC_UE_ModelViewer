@@ -180,20 +180,33 @@ bool FSCCargoFxMapping::Resolve(FSCBridgeClient& Client, const FSCCargoDroneDefi
         Error = TEXT("MaterialEffects.xml: ") + (Xml.bOK ? FString(TEXT("no CustomEffects")) : Xml.Error.ToString());
         return false;
     }
-    auto Resolved = [&](const FString& CustomName) {
+    // A read that fails is an error, not "no effect": kept as none, a prepared run would never look again.
+    auto Resolved = [&](const FString& CustomName, FEffect& Effect) {
         const FString Entry = EntryFor(Custom, CustomName, Out.BoxGroup);
-        if (Entry.IsEmpty()) return FEffect();
+        if (Entry.IsEmpty()) return true; // the data names none for this surface group
         const FSCTextResult R = WaitForAnswer([&](TFunction<void(const FSCTextResult&)> Done) { Client.MaterialEffect(Entry, MoveTemp(Done)); });
-        return R.bOK ? ParseEntry(R.Json) : FEffect();
+        if (!R.bOK)
+        {
+            Error = FString::Printf(TEXT("the FXLib entry %s (%s): %s"), *Entry, *CustomName, *R.Error.ToString());
+            return false;
+        }
+        Effect = ParseEntry(R.Json);
+        return true;
     };
-    if (!Drone.HitEffectName.IsEmpty()) Out.Hit = Resolved(Drone.HitEffectName);
+    if (!Drone.HitEffectName.IsEmpty() && !Resolved(Drone.HitEffectName, Out.Hit)) return false;
     for (const FString& Entity : Entities)
     {
         if (Entity.IsEmpty() || Out.Contacts.Contains(Entity)) continue;
         UE::Tasks::TTask<FSCTextResult> Record = Client.DataCoreRecord(EntityRecord(Entity));
         Record.Wait();
-        const FString CustomName = Record.GetResult().bOK ? ContactCustomEffect(Record.GetResult().Json) : FString();
-        Out.Contacts.Add(Entity, CustomName.IsEmpty() ? FEffect() : Resolved(CustomName));
+        if (!Record.GetResult().bOK)
+        {
+            Error = FString::Printf(TEXT("the record of %s: %s"), *Entity, *Record.GetResult().Error.ToString());
+            return false;
+        }
+        FEffect& Effect = Out.Contacts.Add(Entity);
+        const FString CustomName = ContactCustomEffect(Record.GetResult().Json);
+        if (!CustomName.IsEmpty() && !Resolved(CustomName, Effect)) return false;
     }
     return true;
 }

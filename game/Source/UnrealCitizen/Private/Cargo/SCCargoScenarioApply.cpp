@@ -205,6 +205,9 @@ void USCCargoSubsystem::TryScenario()
     const bool bPreparedFx = State->bPreparedSetup && !UUCSettings::Get()->ScenarioCargoFxJson.IsEmpty() &&
                              FSCCargoFxMapping::Parse(UUCSettings::Get()->ScenarioCargoFxJson, Prepared) &&
                              Prepared.BoxGroup == FSCCargoFx::Runtime().BoxGroup;
+    // Effects started before the archive opened (a prepared mapping needs none) take its client once it is: a ship the mapping
+    // does not cover (one brought in later) resolves its contact from it.
+    if (State->Fx && !bNoFx && Viewer->GetArchiveState() == ESCArchiveState::Ready) State->Fx->UseClient(Viewer->GetClient());
     if (!State->Fx && (bNoFx || bPreparedFx || Viewer->GetArchiveState() != ESCArchiveState::Opening))
     {
         // The tractor's effects (WP-K4c), from the record just read (none without the archive: the beam mesh then).

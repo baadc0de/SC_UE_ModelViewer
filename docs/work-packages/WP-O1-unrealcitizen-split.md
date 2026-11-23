@@ -320,7 +320,7 @@ data when it loads. In stages:
 - **O1-4b-3b** (cargo effects): the prep step resolves the tractor's hit and the box contacts with the scenario's ship and
   its obstacles as a run would from the archive (MaterialEffects.xml's custom effect for the boxes' surface group, the
   FXLib entry's particle and scale range, the ship's CollisionMFXEntityParams.customEffect) and keeps them in the record
-  (`cargo_fx`, `FSCCargoFxMapping`, with the surface group it was resolved for). A run plays them from there
+  (`cargo_fx`, `FSCCargoFxMapping`, with the surface group it was resolved for; a read that fails fails the prep). A run plays them from there
   (`FSCCargoFx::StartPrepared`, `CARGO_FX source=prepared`; the beam and muzzle come from the kept tractor record), asking
   the archive only for a ship it does not cover. Prep format 30.
 - **O1-4b-3c..**: extra ship instances (a prepared level instance at a transform), music, the Garage's details.

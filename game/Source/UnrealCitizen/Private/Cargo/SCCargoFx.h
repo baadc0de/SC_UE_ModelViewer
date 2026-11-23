@@ -34,6 +34,11 @@ public:
     /** WP-O1-4b-3b: a prepared scenario's effects: the beam and muzzle as Start sets them, the hit and the contacts from
      *  the mapping the prep step resolved (FSCCargoFxMapping); InClient (may be null) for ships it does not cover. */
     void StartPrepared(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone, const FSCCargoFxMapping& Mapping);
+    /** The archive's client once it is open, when the effects started without one: a ship nothing resolved yet asks it. */
+    void UseClient(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient)
+    {
+        if (!Client && InClient) Client = InClient;
+    }
     UNiagaraSystem* Beam() const { return BeamSystem.Get(); }
     UNiagaraSystem* Muzzle() const { return MuzzleSystem.Get(); }
     UNiagaraSystem* Hit() const { return HitSystem.Get(); }

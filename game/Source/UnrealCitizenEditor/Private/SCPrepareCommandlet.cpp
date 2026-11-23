@@ -446,8 +446,8 @@ public:
     }
 
     /** The cargo effects (WP-O1-4b-3b): the tractor's hit and the box contacts with the scenario's ship and its obstacles,
-     *  resolved as the run would from the archive (FSCCargoFxMapping). MaterialEffects.xml unreadable: none kept (the run
-     *  then resolves them from the archive when it is open). */
+     *  resolved as the run would from the archive (FSCCargoFxMapping). A read that fails fails the prep (kept as "none", a
+     *  prepared run would never look again). */
     bool PrepareFx(const FSCCargoScenario& Cargo, const FSCCargoDroneDefinition& Drone, const FString& Vehicle, FString& OutJson, FString& Error)
     {
         OutJson.Reset();
@@ -458,8 +458,8 @@ public:
         FString Why;
         if (!FSCCargoFxMapping::Resolve(*Viewer->GetClient(), Drone, Entities, Mapping, Why))
         {
-            UE_LOG(LogSCPrepare, Warning, TEXT("SC_PREPARE cargo effects left out: %s"), *Why);
-            return true;
+            Error = TEXT("the cargo effects: ") + Why;
+            return false;
         }
         OutJson = Mapping.ToJson();
         int32 Contacts = 0;
