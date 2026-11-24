@@ -78,7 +78,7 @@ struct FSCUsableTarget
 /** WP-I1-4: an operating panel's face whose render has clickable nodes and that is not drawn as a FloorPanel (a door pad,
  *  a lift call panel, a kiosk): where its buttons are on the face, for the game's hover look under the crosshair. */
 USTRUCT()
-struct FSCPanelAim
+struct SCBRIDGE_API FSCPanelAim
 {
     GENERATED_BODY()
     UPROPERTY() TWeakObjectPtr<UMeshComponent> Component;

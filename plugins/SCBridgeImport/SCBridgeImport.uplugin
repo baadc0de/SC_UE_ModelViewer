@@ -1,0 +1,38 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.0.1",
+  "FriendlyName": "SC Bridge Import",
+  "Description": "Importing from the Star Citizen archive (Data.p4k) through the scbridge library: the archive client, package reading, the import pipeline and its caches, the Ogg decoder, the effects builder (WP-O1-4c). The viewer and the game's editor load it; a packaged game does not.",
+  "Category": "Importers",
+  "CanContainContent": false,
+  "Modules": [
+    {
+      "Name": "SCBridgeImport",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "SCBridgeFx",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "SCBridge",
+      "Enabled": true
+    },
+    {
+      "Name": "Niagara",
+      "Enabled": true
+    },
+    {
+      "Name": "Interchange",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
+    }
+  ]
+}

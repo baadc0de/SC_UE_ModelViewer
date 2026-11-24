@@ -9,8 +9,8 @@ public class SCBridge : ModuleRules
         // batching would merge them into one translation unit, and the batches differ by platform (MSVC on Win64
         // hit Arr/SafeName redefinitions that the Linux grouping did not).
         bUseUnity = false;
-        // SCBridgeLib is public: SCBridgeClient.h exposes sc_options from scbridge.h.
-        PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "MeshDescription", "SCBridgeLib" });
+        // No archive library (WP-O1-4c): the importer and scbridge are the SCBridgeImport plugin's.
+        PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "MeshDescription" });
         // Extracted Star Engine render constants (FSCStarEngine); staged with the plugin.
         RuntimeDependencies.Add("$(PluginDir)/Resources/StarEngineRender.json");
         // -SCPlayerDemo's built-in route (SCViewerAutomation), in both apps.

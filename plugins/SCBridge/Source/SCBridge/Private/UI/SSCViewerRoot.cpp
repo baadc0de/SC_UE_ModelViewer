@@ -262,7 +262,10 @@ TSharedRef<SWidget> SSCViewerRoot::MakeArchiveOverlay()
 {
     return SNew(SBorder)
         .Visibility_Lambda([this] {
-            return Subsystem.IsValid() && !Subsystem->GetVehicle() && Subsystem->GetArchiveState() != ESCArchiveState::Ready ? EVisibility::Visible : EVisibility::Collapsed;
+            // Opening or failed; a closed archive (none asked for, or no archive reader in this build) shows nothing.
+            const ESCArchiveState State = Subsystem.IsValid() ? Subsystem->GetArchiveState() : ESCArchiveState::Closed;
+            return Subsystem.IsValid() && !Subsystem->GetVehicle() && (State == ESCArchiveState::Opening || State == ESCArchiveState::Failed)
+                ? EVisibility::Visible : EVisibility::Collapsed;
         })
         .BorderImage(Fill()).BorderBackgroundColor(Bar()).Padding(24)
         [

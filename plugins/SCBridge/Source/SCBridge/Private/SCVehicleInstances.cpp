@@ -276,6 +276,8 @@ int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTrans
     I.bGarageFloor = bGarageFloor;
     UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_QUEUE idx=%d entity=%s placement=%s"), I.Info.Id, I.Info.Entity.IsEmpty() ? TEXT("<loaded>") : *I.Info.Entity,
            bAuto ? TEXT("auto") : *FString::Printf(TEXT("at=%s yaw=%.0f rest=%d"), *Metres(World.GetLocation()), World.Rotator().Yaw, bRest));
+    // Every instance is imported (one sharing a retained set too): without the importer (a packaged game) none can start.
+    if (!ISCImporting::Get()) Fail(I, TEXT("this build has no importer (the SCBridgeImport plugin)"));
     return I.Info.Id;
 }
 
@@ -444,7 +446,7 @@ bool FSCVehicleInstances::Destroy(int32 Id)
     if (bLastOfKey)
         if (TSharedPtr<FSCImportedAssets> Set = AssetSets.FindRef(I.Key))
         {
-            Released = ISCImporting::Get()->CountRetainedObjects(*Set);
+            if (const ISCImporting* const Importer = ISCImporting::Get()) Released = Importer->CountRetainedObjects(*Set);
             AssetSets.Remove(I.Key);
             SetSessions.Remove(I.Key);
         }
@@ -518,7 +520,7 @@ void FSCVehicleInstances::Start(FInstance& I)
     Options.ActorTransform = I.Info.bAutoPlaced ? FTransform::Identity : I.Requested;
     Options.bPublish = false; // not the world's current import: the viewer's vehicle slot stays the loaded one
     Options.bReplacePrevious = false;
-    if (const TSharedPtr<FSCImportedAssets>* Set = AssetSets.Find(I.Key); Set && *Set && ShareAssets())
+    if (const TSharedPtr<FSCImportedAssets>* Set = AssetSets.Find(I.Key); Set && *Set && ShareAssets() && ISCImporting::Get())
     {
         // TODO(WP-K1): the assembly is one game-thread step (~5 s for a Hull A); split FSCImportJob's Assemble into budgeted steps.
         I.Info.bShared = true;
@@ -583,7 +585,13 @@ void FSCVehicleInstances::StepRunning()
         Options.bReplacePrevious = false;
         Options.bRetainAssets = ShareAssets();
         Viewer.ConfigureProcessedImport(Options);
-        Job = ISCImporting::Get()->NewJob(*Source, Options, Source);
+        ISCImporting* const Importer = ISCImporting::Get();
+        if (!Importer)
+        {
+            Fail(*I, TEXT("this build has no importer (the SCBridgeImport plugin)"));
+            return;
+        }
+        Job = Importer->NewJob(*Source, Options, Source);
         I->Info.State = ESCVehicleInstanceState::Importing;
         return;
     }

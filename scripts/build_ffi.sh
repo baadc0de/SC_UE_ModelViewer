@@ -21,7 +21,7 @@ esac
 ffi_target="target/$ffi_profile"
 if $check_header; then
     cargo run --locked "${profile_args[@]}" -p scbridge-ffi --example header -- --check
-    cmp crates/scbridge-ffi/include/scbridge.h plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h
+    cmp crates/scbridge-ffi/include/scbridge.h plugins/SCBridgeImport/Source/ThirdParty/SCBridgeLib/include/scbridge.h
     exit
 fi
 echo "Building SCBridge FFI profile: $ffi_profile"
@@ -29,12 +29,12 @@ cargo run --locked "${profile_args[@]}" -p scbridge-ffi --example header
 cargo build --locked "${profile_args[@]}" -p scbridge-ffi --example discover
 # Build consumers together: a stale CLI embeds a different exporter/cache identity.
 cargo build --locked "${profile_args[@]}" -p scbridge-ffi -p scviewer-cli
-third_party=plugins/SCBridge/Source/ThirdParty/SCBridgeLib
+third_party=plugins/SCBridgeImport/Source/ThirdParty/SCBridgeLib
 install -Dm644 crates/scbridge-ffi/include/scbridge.h "$third_party/include/scbridge.h"
 install -Dm755 "$ffi_target/libscbridge.so" "$third_party/lib/Linux/libscbridge.so"
 # UBT copies the library into the project binaries only when it builds; refresh a stale copy
 # so a game launch without a rebuild picks up the new exporter (and its cache identity).
-for bin in viewer/Binaries/Linux plugins/SCBridge/Binaries/Linux; do
+for bin in viewer/Binaries/Linux game/Binaries/Linux plugins/SCBridgeImport/Binaries/Linux; do
     [[ -f "$bin/libscbridge.so" ]] && install -m755 "$ffi_target/libscbridge.so" "$bin/libscbridge.so"
 done
 stat -c '%n: %s bytes' "$ffi_target/libscbridge.so"

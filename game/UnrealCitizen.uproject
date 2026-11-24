@@ -24,6 +24,13 @@
       "Enabled": true
     },
     {
+      "Name": "SCBridgeImport",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
+    },
+    {
       "Name": "Interchange",
       "Enabled": true
     },

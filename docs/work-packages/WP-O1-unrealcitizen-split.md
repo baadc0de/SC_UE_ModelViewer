@@ -383,7 +383,21 @@ library of ours. In stages:
     library's floor placement, the FFI options type.
   - **O1-4c-3b**: the archive goes behind an interface the viewer subsystem uses. The new `SCBridgeImport` plugin
     implements it: the FFI client, package reader, import job, processed caches, texture decoding, the Ogg source and
-    `SCBridgeLib`. The viewer enables it; the game enables it in editor targets only.
+    `SCBridgeLib`. The viewer enables it; the game enables it in editor targets only. Three steps:
+    - step 1: the archive behind `ISCArchive` (`SCArchive.h`: `Create` / `SetFactory`, `FSCExportOptions` and the
+      result types); `FSCBridgeClient` implements it.
+    - step 2: the import pipeline behind `ISCImporting` (`SCImport.h`: jobs, retained asset sets, unloading, gobos, the
+      processed cache and geometry streaming, each only usable with the importer that made it) and the Ogg decoder
+      behind `SetOggSourceFactory`.
+    - step 3: the plugin. `plugins/SCBridgeImport/` holds the module `SCBridgeImport` (the client, package reader, import
+      job and importers, caches, Ogg decoder, the `-SCImport...` harness, `sc.Import`, the tests that import), the
+      editor module `SCBridgeFx` and `ThirdParty/SCBridgeLib`. Its module registers the three factories at startup.
+      `SCBridge` no longer links `SCBridgeLib`; `USCImportLibrary` is `/Script/SCBridgeImport.SCImportLibrary`
+      (Python reaches it by name, `unreal.SCImportLibrary`). Without the plugin (a packaged game) the subsystem has no
+      archive client and no importer: no archive opens (`VIEWER_ARCHIVE_UNAVAILABLE` if one is asked for, the state stays
+      closed), an import, environment, extra instance, cargo box or player kit fails with "this build has no importer",
+      unloading a prepared vehicle has nothing to unload. The Game target's modules are `UnrealCitizen` and `SCBridge`
+      (`Build.bat UnrealCitizen Win64 Development -Mode=JsonExport`).
   - **O1-4c-3c**: the game's archive features go behind that interface: live cargo spawns, the Garage's retrieval,
     music, and the cargo effects' and boxes' archive fallbacks. A packaged game reports them unavailable. The plugin's
     cargo art moves to the game's content.

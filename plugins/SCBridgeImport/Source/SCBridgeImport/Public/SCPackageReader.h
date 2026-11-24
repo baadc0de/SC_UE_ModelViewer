@@ -4,7 +4,7 @@
 #include "SCPackageSource.h"
 #include "SCSceneManifest.h"
 
-class SCBRIDGE_API FSCPackageReader
+class SCBRIDGEIMPORT_API FSCPackageReader
 {
 public:
     // Empty ScenePath selects the sole manifest; shared roots with multiple scenes require an explicit path.

@@ -92,15 +92,18 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Super::Initialize(Collection);
     Options = NewObject<USCViewOptions>(this, TEXT("ViewOptions"));
     LoadOptions = NewObject<USCViewOptions>(this, TEXT("LoadOptions"));
+    // Both are the importer plugin's (SCBridgeImport); a build without it (a packaged game) has neither and plays
+    // prepared content only: no archive opens, nothing imports.
     Client = ISCArchive::Create();
+    ISCImporting* const Importer = ISCImporting::Get();
     CacheDir = USCViewerSettings::Get()->ResolveCacheDir();
-    if (!CacheDir.IsEmpty())
-        ProcessedCache = ISCImporting::Get()->NewProcessedCache(CacheDir / TEXT("processed"),
+    if (!CacheDir.IsEmpty() && Importer)
+        ProcessedCache = Importer->NewProcessedCache(CacheDir / TEXT("processed"),
             int64(USCViewerSettings::Get()->ProcessedCacheMiB) * (1ll << 20));
 #if WITH_EDITOR
-    if (!GIsEditor && !FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality")) &&
+    if (Importer && !GIsEditor && !FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality")) &&
         FParse::Param(FCommandLine::Get(), TEXT("SCStreamGeometry")))
-        GeometryStreaming = ISCImporting::Get()->NewGeometryStreaming();
+        GeometryStreaming = Importer->NewGeometryStreaming();
 #endif
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
@@ -109,7 +112,14 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     bShowcase = FParse::Param(FCommandLine::Get(), TEXT("SCShowcase"));
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
     FString HarnessPackage;
-    if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage)) OpenArchive(FString());
+    const bool bHarness = FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), HarnessPackage);
+    if (!bHarness && Client) OpenArchive(FString());
+    if (bHarness && !Importer)
+    {
+        // The harness is the importer plugin's: without it nothing would import, verify or exit.
+        UE_LOG(LogSCViewer, Error, TEXT("SC_IMPORT_UNAVAILABLE -SCPackage=%s: this build has no importer (the SCBridgeImport plugin)"), *HarnessPackage);
+        FPlatformMisc::RequestExitWithStatus(true, 1); // forced: a graceful request exits 0 from GuardedMain
+    }
     // Environment: -SCEnvironment wins; -SCDefaults (reproducible review routes) keeps the procedural hangar; else
     // the saved choice.
     FString EnvironmentArg;
@@ -223,6 +233,12 @@ void USCViewerSubsystem::OpenArchive(const FString& P4kPath)
     if (ArchiveState == ESCArchiveState::Opening || IsBusy())
     {
         UE_LOG(LogSCViewer, Warning, TEXT("OpenArchive ignored: an open or load is in progress"));
+        return;
+    }
+    if (!Client)
+    {
+        // The archive stays closed: no reader in this build (ISCArchive::Create, the importer plugin's).
+        UE_LOG(LogSCViewer, Warning, TEXT("VIEWER_ARCHIVE_UNAVAILABLE this build has no archive reader (the SCBridgeImport plugin)"));
         return;
     }
     ArchivePath = P4kPath.IsEmpty() ? USCViewerSettings::Get()->ResolveArchivePath() : P4kPath;
@@ -604,7 +620,14 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
     EnvOptions.bHideEffectOnlyPlacements = true;
     EnvOptions.bInstanceRepeatedParts = true;
     ConfigureProcessedImport(EnvOptions, !EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase));
-    EnvJob = ISCImporting::Get()->NewJob(*EnvSource, EnvOptions, EnvSource);
+    ISCImporting* const Importer = ISCImporting::Get();
+    if (!Importer)
+    {
+        UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s"), TEXT("this build has no importer (the SCBridgeImport plugin)"));
+        EnvSource.Reset();
+        return;
+    }
+    EnvJob = Importer->NewJob(*EnvSource, EnvOptions, EnvSource);
 }
 
 void USCViewerSubsystem::StepEnvironment()
@@ -687,7 +710,14 @@ void USCViewerSubsystem::StepEnvironment()
         }
         if (EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase))
         {
-            if (ArchiveState != ESCArchiveState::Ready || !Client) return; // wait for the archive
+            if (!Client)
+            {
+                // No archive reader in this build (a packaged game): only a prepared environment can show; nothing to wait for.
+                bEnvironmentPending = false;
+                UE_LOG(LogSCViewer, Error, TEXT("ENVIRONMENT failed: %s is not prepared and this build has no archive reader"), *EnvironmentFolder);
+                return;
+            }
+            if (ArchiveState != ESCArchiveState::Ready) return; // wait for the archive
             bEnvironmentPending = false;
             FSCExportOptions Ffi;
             LoadOptions->ToExportOptions(Ffi);
@@ -1140,7 +1170,13 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         ImportOptions.bRetainAssets = FSCVehicleInstances::ShareAssets(); // extra instances of it are assembled from them
         ConfigureProcessedImport(ImportOptions);
         ImportOptions.bRebuildProcessed = bRebuildProcessed;
-        Job = ISCImporting::Get()->NewJob(*Source, ImportOptions, Source);
+        ISCImporting* const Importer = ISCImporting::Get();
+        if (!Importer)
+        {
+            FinishLoad(ESCLoadPhase::Failed, TEXT("this build has no importer (the SCBridgeImport plugin)"));
+            return;
+        }
+        Job = Importer->NewJob(*Source, ImportOptions, Source);
         ImportStart = FPlatformTime::Seconds();
         Phase = ESCLoadPhase::Importing;
     }
@@ -1317,7 +1353,8 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
             ? FString() : Previous->SessionPath;
         TrackSession(Previous, Session, Tracked);
         UWorld* World = Previous->GetWorld();
-        if (World) ISCImporting::Get()->Unload(World);
+        // Without an importer nothing was imported: a prepared vehicle has nothing of its to unload.
+        if (ISCImporting* const Importer = ISCImporting::Get(); World && Importer) Importer->Unload(World);
         // During engine exit the world tears its actors down itself.
         if (IsValid(Previous) && !Previous->IsActorBeingDestroyed() && World && !World->bIsTearingDown) Previous->Destroy();
     }
@@ -1642,7 +1679,13 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
             FailPlayerKit(TEXT("the package has no single root scene.json"));
             return;
         }
-        KitJob = ISCImporting::Get()->NewJob(*KitSource, USCPlayerBodyComponent::KitImportOptions(GetViewerWorld(), Scene), KitSource);
+        ISCImporting* const Importer = ISCImporting::Get();
+        if (!Importer)
+        {
+            FailPlayerKit(TEXT("this build has no importer (the SCBridgeImport plugin)"));
+            return;
+        }
+        KitJob = Importer->NewJob(*KitSource, USCPlayerBodyComponent::KitImportOptions(GetViewerWorld(), Scene), KitSource);
         KitState = EPlayerKitState::Importing;
     }
     if (KitState == EPlayerKitState::Importing)
@@ -1683,9 +1726,9 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
         FKitClips Result = KitClipsTask.GetResult();
         KitClipsTask = {};
         // The personal lights' cookies (gobos) are built while the package is open; the body's torch takes them at attach.
-        if (Result.Kit && KitSource && KitActor)
+        if (ISCImporting* const Importer = ISCImporting::Get(); Result.Kit && KitSource && KitActor && Importer)
             for (const FSCFlashlight& Light : Result.Kit->Flashlights)
-                if (!ISCImporting::Get()->LoadGobo(*KitSource, KitActor, Light.ProjectorTexture))
+                if (!Importer->LoadGobo(*KitSource, KitActor, Light.ProjectorTexture))
                     UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_FLASHLIGHT gobo unavailable entity=%s cookie=%s package=%s"), *Light.Entity, *Light.Cookie,
                            *Light.ProjectorTexture);
         KitSource.Reset(); // the package bytes are no longer needed: meshes, textures, gobos and clips are built

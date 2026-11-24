@@ -17,7 +17,7 @@ public class SCBridgeFx : ModuleRules
             "Niagara", "NiagaraCore", "NiagaraShader", "XmlParser",
             // SCBridgeLib directly: the commandlet calls the FFI (sc_particle_effect, sc_p4k_read_dds, ...); Win64 DLLs
             // link the import library themselves (see SCBridgeEditor).
-            "SCBridge", "SCBridgeLib",
+            "SCBridge", "SCBridgeImport", "SCBridgeLib",
         });
     }
 }

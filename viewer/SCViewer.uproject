@@ -19,6 +19,10 @@
       "Enabled": true
     },
     {
+      "Name": "SCBridgeImport",
+      "Enabled": true
+    },
+    {
       "Name": "Interchange",
       "Enabled": true
     },

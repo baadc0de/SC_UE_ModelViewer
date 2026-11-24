@@ -22,6 +22,11 @@ $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $Project = Join-Path $Root 'game\UnrealCitizen.uproject'
 if (-not $Out) { $Out = Join-Path $Root "out\win64\$Scenario" }
+# Absolute here: UAT resolves a relative -archivedirectory against the engine root, not this directory.
+$Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
+# The archive directory is UAT's (DeploymentContext): -Out itself when a part of its path starts with the platform's name
+# (Windows / Win64), else -Out\Windows.
+$ArchiveDir = if ($Out.Split('\', [StringSplitOptions]::RemoveEmptyEntries) | Where-Object { $_ -like 'Windows*' -or $_ -like 'Win64*' }) { $Out } else { Join-Path $Out 'Windows' }
 if (-not (Test-Path (Join-Path $Engine 'Engine\Build\BatchFiles\RunUAT.bat'))) {
     throw "No UE 5.9 source fork at $Engine (pass -Engine or set UE_ENGINE_ROOT)."
 }
@@ -95,7 +100,14 @@ if ($LASTEXITCODE -ne 0) { throw "Stale FX under /Game/SC/FX (SC_FX_STALE in the
     -build -cook -stage -pak -iostore -package -archive "-archivedirectory=$Out" "-map=$Maps" -nocompileeditor -unattended -utf8output `
     "-cmdline=-Scenario=$Scenario$Extra"
 if ($LASTEXITCODE -ne 0) { throw "BuildCookRun failed ($LASTEXITCODE)" }
+# The game has no archive library since WP-O1-4c-3b; archiving leaves files of an earlier package in place, so a
+# scbridge.dll / .pdb from before the split would still ship: remove them from this game's binaries only (-Out may be
+# shared with other packages, which need theirs).
+foreach ($Stale in 'scbridge.dll', 'scbridge.pdb') {
+    $Path = Join-Path $ArchiveDir "UnrealCitizen\Binaries\Win64\$Stale"
+    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force; Write-Output "REMOVED_STALE $Path" }
+}
 # A Windows build does not read the staged command line (UECommandLine.txt): the launcher passes it.
 $Launcher = "@echo off`r`nrem UnrealCitizen showcase: scenario $Scenario ($Config).`r`nstart `"`" `"%~dp0UnrealCitizen.exe`" -Scenario=$Scenario$Extra -SCShowcase %*`r`n"
-[IO.File]::WriteAllText((Join-Path $Out 'Play_UnrealCitizen.bat'), $Launcher)
-Write-Output "PACKAGED $Out"
+[IO.File]::WriteAllText((Join-Path $ArchiveDir 'Play_UnrealCitizen.bat'), $Launcher)
+Write-Output "PACKAGED $ArchiveDir"

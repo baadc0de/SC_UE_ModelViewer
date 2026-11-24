@@ -6,13 +6,13 @@ class USkeleton;
 class USkeletalMesh;
 
 /** GLB node hierarchy is the reference pose; skin inverse binds must agree with it. */
-class SCBRIDGE_API FSCSkeletonBuilder
+class SCBRIDGEIMPORT_API FSCSkeletonBuilder
 {
 public:
     static USkeletalMesh* Build(const FSCDerivedMesh& Data, UObject* Outer, USkeleton*& Skeleton);
     static FName BoneName(const FSCDerivedMesh& Data, int32 Node);
 };
-class SCBRIDGE_API FSCSkeletalMeshImporter
+class SCBRIDGEIMPORT_API FSCSkeletalMeshImporter
 {
 public:
     static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error);

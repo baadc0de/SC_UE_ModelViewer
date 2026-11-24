@@ -13,9 +13,12 @@ inherit for all Rust that touches the vendored crates).
 - `crates/` — our Rust (`scviewer-core`, `scviewer-cli`, `scbridge-ffi`).
 - The repository (GitHub `baadc0de/UnrealCitizen`, formerly `SC_UE_ModelViewer`) is being split into the
   StarBreaker core, the viewer and the UnrealCitizen game: `docs/work-packages/WP-O1-unrealcitizen-split.md`.
-- `plugins/SCBridge/` — the shared Unreal plugin: Runtime module (FFI client, importer, ships and places, doors and
-  panels, player, HUD, RPC harness, the viewer shell and its extension points `SCViewerShell.h` / `SCRpcExtension.h`),
-  `SCBridgeFx` (effects build, editor), `ThirdParty/SCBridgeLib`. It never depends on game code.
+- `plugins/SCBridge/` — the shared Unreal plugin: Runtime module (ships and places, doors and panels, player, HUD, RPC
+  harness, the viewer shell and its extension points `SCViewerShell.h` / `SCRpcExtension.h`, the archive and importer
+  interfaces `SCArchive.h` / `SCImport.h`). No archive library: a packaged game ships it alone. It never depends on game code.
+- `plugins/SCBridgeImport/` — importing from the archive: module `SCBridgeImport` (FFI client, package reader, import
+  job and importers, processed caches, Ogg decoder, the tests that import), `SCBridgeFx` (effects build, editor),
+  `ThirdParty/SCBridgeLib`. The viewer enables it; the game in editor targets only.
 - `viewer/` — the viewer Unreal project (`SCViewer.uproject`; game-mode app, Viewer level), its `scripts/`
   (RPC driver in `scripts/rpc/`, `Start-SCViewer -Game` launches UnrealCitizen) and `verification/` records.
 - `game/` — the UnrealCitizen Unreal project (`UnrealCitizen.uproject`): module `UnrealCitizen` (cargo, mobiGlas,
@@ -56,7 +59,7 @@ inherit for all Rust that touches the vendored crates).
   module; editor-only dependencies stay behind `WITH_EDITOR` with a runtime path kept working.
 - Win64, D3D12 SM6 (`viewer/Config/Windows/WindowsEngine.ini`): build with
   `C:\Users\bojan\UnrealEngine-5.9-src\Engine\Build\BatchFiles\Build.bat SCViewerEditor Win64 Development -Project=<abs uproject> -WaitMutex`;
-  FFI via `scripts/build_ffi.ps1` (every build links it); NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored
+  FFI via `scripts/build_ffi.ps1` (the viewer and the editor targets link it, through `SCBridgeImport`; the packaged game does not); NVIDIA DLSS / DLAA via `scripts/install_dlss.ps1` (gitignored
   download, compiled against the fork) — see `viewer/README.md`. Standalone showcase: `game/scripts/package_showcase.ps1
   -Scenario <name> -Config Shipping` (one scenario prepared by the prep step, `UnrealCitizenEditor -run=SCPrepare
   -Scenario=<name>`; `-SCMaxQuality`; the script's default is Development). Preparing and packaging happen only on the owner's request.

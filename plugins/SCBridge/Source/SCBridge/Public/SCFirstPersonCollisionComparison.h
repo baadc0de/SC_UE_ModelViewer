@@ -3,4 +3,4 @@
 #include "CoreMinimal.h"
 class ASCVehicle;
 class USCRigComponent;
-bool SCCompareDoorCollision(ASCVehicle* Vehicle, USCRigComponent* Rig, FName Joint);
+SCBRIDGE_API bool SCCompareDoorCollision(ASCVehicle* Vehicle, USCRigComponent* Rig, FName Joint);
