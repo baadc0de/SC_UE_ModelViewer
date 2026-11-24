@@ -45,4 +45,3 @@ double FSCClipSampling::TrackFrame(const FSCImportedClip& Clip, const FSCBoneTra
     const double Scale = Track.Fps / Clip.Fps;
     return bFromEnd ? FMath::Max(0., Last - (Clip.LastFrame - ClipFrame) * Scale) : FMath::Min(Last, ClipFrame * Scale);
 }
-

@@ -1,6 +1,7 @@
 // Synthetic animation basis, routing, skin buffer, and projector regressions.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCMeshes.h"
 #include "SCClipCatalog.h"
 #include "SCAnimImporter.h"
 #include "SCSkeletonBuilder.h"
@@ -24,10 +25,10 @@ bool FSCRigMath::RunTest(const FString&)
     // Independent native Y-up fixture: the exporter swaps native (x,y,z) to (x,-z,y).
     const FVector Native(2, 3, 4);
     TestTrue(TEXT("sidecar undoes exporter swap before GLB conversion"),
-             FSCClipSampling::SidecarPosition(FVector(2, -4, 3)).Equals(FSCMeshImporter::Position(Native), 1.e-8));
+             FSCClipSampling::SidecarPosition(FVector(2, -4, 3)).Equals(FSCMeshes::Position(Native), 1.e-8));
     const FQuat NativeQ(FVector(1, 2, 3).GetSafeNormal(), 0.7);
     const FQuat SidecarQ(NativeQ.X, -NativeQ.Z, NativeQ.Y, NativeQ.W);
-    const FQuat ExpectedQ(FSCMeshImporter::Transform(FTransform(NativeQ).ToMatrixWithScale()));
+    const FQuat ExpectedQ(FSCMeshes::Transform(FTransform(NativeQ).ToMatrixWithScale()));
     TestTrue(TEXT("sidecar rotation agrees with independent native GLB matrix"),
              FSCClipSampling::SidecarRotation(SidecarQ).AngularDistance(ExpectedQ) < 1.e-7);
     TestTrue(TEXT("rotation and position bases agree"), FSCClipSampling::SidecarRotation(Q)

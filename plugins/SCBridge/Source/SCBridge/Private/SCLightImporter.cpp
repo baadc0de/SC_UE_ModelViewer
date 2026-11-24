@@ -5,7 +5,7 @@
 #include "SCViewerSettings.h"
 #include "SCStarEngine.h"
 #include "SCVehicle.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCImporter.h"
 #include "SCTextureImporter.h"
 #include "SCPlayerKit.h"
@@ -270,4 +270,3 @@ void FSCLightImporter::Build(const FSCPackageSource& Source, const FSCSceneInsta
         Light->RegisterComponent();
     }
 }
-

@@ -5,7 +5,6 @@
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "SCLights.h"
-#include "SCImporter.h"
 #include "Sound/SoundWave.h"
 #include "AudioDevice.h"
 #include "AudioMixerBlueprintLibrary.h"

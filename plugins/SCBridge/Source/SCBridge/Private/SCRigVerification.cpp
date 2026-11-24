@@ -1,9 +1,9 @@
 // Headless rig invariants, source-based regressions, and the quarantined WP-R6 pose-export comparison.
 #include "SCImporter.h"
+#include "SCMeshImporter.h"
 #include "SCClipCatalog.h"
 #include "SCVehicle.h"
 #include "SCRigComponent.h"
-#include "SCAnimImporter.h"
 #include "SCLights.h"
 #include "Engine/SkeletalMesh.h"
 #include "Animation/AnimSequence.h"

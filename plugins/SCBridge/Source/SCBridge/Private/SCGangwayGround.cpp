@@ -2,7 +2,6 @@
 #include "SCGangwayGround.h"
 #include "SCClipCatalog.h"
 #include "SCVehicle.h"
-#include "SCAnimImporter.h"
 #include "SCRigComponent.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Components/StaticMeshComponent.h"

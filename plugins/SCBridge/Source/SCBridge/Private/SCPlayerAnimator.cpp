@@ -3,7 +3,6 @@
 // vocabulary is Mannequin's (fragment ids, stance tags, blend-space parameter names).
 #include "SCPlayerAnimator.h"
 #include "SCClipCatalog.h"
-#include "SCAnimImporter.h"
 #include "ReferenceSkeleton.h"
 #include "Algo/BinarySearch.h"
 #include "Dom/JsonObject.h"

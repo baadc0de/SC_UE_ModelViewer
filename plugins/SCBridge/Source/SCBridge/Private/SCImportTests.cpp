@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCMeshes.h"
 #include "SCPackageSource.h"
 #include "SCPackageReader.h"
 #include "SCMeshImporter.h"
@@ -225,8 +226,8 @@ bool FSCBasis::RunTest(const FString&)
     if (!TestTrue(TEXT("derive triangle"), FSCMeshImporter::Derive(Source, TEXT("triangle.glb"), D, Error))) { AddError(Error); return false; }
     FStaticMeshConstAttributes A(D.Description);
     TestEqual(TEXT("triangles"), D.Description.Triangles().Num(), 1);
-    TestTrue(TEXT("forward -Z becomes +X centimetres"), FSCMeshImporter::Position(FVector(0,0,-2)).Equals(FVector(200,0,0)));
-    TestTrue(TEXT("up +Y becomes +Z"), FSCMeshImporter::Position(FVector(0,3,0)).Equals(FVector(0,0,300)));
+    TestTrue(TEXT("forward -Z becomes +X centimetres"), FSCMeshes::Position(FVector(0,0,-2)).Equals(FVector(200,0,0)));
+    TestTrue(TEXT("up +Y becomes +Z"), FSCMeshes::Position(FVector(0,3,0)).Equals(FVector(0,0,300)));
     TestEqual(TEXT("UV channels"), A.GetVertexInstanceUVs().GetNumChannels(), 2);
     const FVertexInstanceID VI(0);
     TestTrue(TEXT("normal"), A.GetVertexInstanceNormals()[VI].Equals(FVector3f(-1,0,0)));
@@ -234,19 +235,19 @@ bool FSCBasis::RunTest(const FString&)
     TestEqual(TEXT("binormal sign"), A.GetVertexInstanceBinormalSigns()[VI], 1.0f);
     TestTrue(TEXT("UV1"), A.GetVertexInstanceUVs().Get(VI,1).Equals(FVector2f(0.2f,0.3f)));
     TestTrue(TEXT("colour"), A.GetVertexInstanceColors()[VI].Equals(FVector4f(1,0,0,1)));
-    const FMatrix W = FSCMeshImporter::CryToGltf();
+    const FMatrix W = FSCMeshes::CryToGltf();
     const FMatrix HelperMatrix = FTranslationMatrix(FVector(0,5,1)) * W;
-    const FMatrix Child = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(0,2,0)), W, true, false);
-    const FMatrix ChildWorld = FSCMeshImporter::Transform(W) * Child * FSCMeshImporter::Transform(HelperMatrix);
+    const FMatrix Child = FSCMeshes::InstanceTransform(FTranslationMatrix(FVector(0,2,0)), W, true, false);
+    const FMatrix ChildWorld = FSCMeshes::Transform(W) * Child * FSCMeshes::Transform(HelperMatrix);
     TestTrue(TEXT("Resolved child offsets are relative to source helper, one wrapper only"), FVector(ChildWorld.TransformPosition(FVector::ZeroVector)).Equals(FVector(700,0,100), 0.001));
-    const FMatrix Container = FSCMeshImporter::Transform(FTranslationMatrix(FVector(0,1,0)));
-    const FMatrix Placement = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(2,3,4)), W, true, true);
-    const FMatrix InteriorWorld = FSCMeshImporter::Transform(W) * Placement * Container * FSCMeshImporter::Transform(HelperMatrix);
+    const FMatrix Container = FSCMeshes::Transform(FTranslationMatrix(FVector(0,1,0)));
+    const FMatrix Placement = FSCMeshes::InstanceTransform(FTranslationMatrix(FVector(2,3,4)), W, true, true);
+    const FMatrix InteriorWorld = FSCMeshes::Transform(W) * Placement * Container * FSCMeshes::Transform(HelperMatrix);
     TestTrue(TEXT("Interior placement composes in source helper frame"), FVector(InteriorWorld.TransformPosition(FVector::ZeroVector)).Equals(FVector(900,200,500), 0.001));
     // An object container's root-level entity (the hangar's ship elevator, 72 m below the roof hatch) stays below its parent.
-    const FMatrix RootChild = FSCMeshImporter::InstanceTransform(FTranslationMatrix(FVector(0,0,-72)), W, false, FSCMeshImporter::InCryFrame(TEXT("gltf_y_up"), false));
+    const FMatrix RootChild = FSCMeshes::InstanceTransform(FTranslationMatrix(FVector(0,0,-72)), W, false, FSCMeshes::InCryFrame(TEXT("gltf_y_up"), false));
     TestTrue(TEXT("Child on its parent entity is in the CryEngine frame"), FVector(RootChild.GetOrigin()).Equals(FVector(0,0,-7200), 0.001));
-    TestFalse(TEXT("Child at a helper keeps the glTF frame"), FSCMeshImporter::InCryFrame(TEXT("gltf_y_up"), true));
+    TestFalse(TEXT("Child at a helper keeps the glTF frame"), FSCMeshes::InCryFrame(TEXT("gltf_y_up"), true));
     auto& Bytes = Source.Files[TEXT("triangle.glb")];
     FFileHelper::SaveArrayToFile(Bytes, *(FPaths::ProjectSavedDir() / TEXT("Import/synthetic.glb")));
     auto JsonOnly = [](const TCHAR* Json) {
@@ -513,13 +514,13 @@ bool FSCGamePhysicsFailedCollider::RunTest(const FString&)
     FSCDerivedMesh Good, Broken, Damage;
     TestTrue(TEXT("box derives"), Derived(*FString::Printf(TEXT("[%s]"), Box), Good));
     TestEqual(TEXT("one collider"), Good.PhysicsShapes, 1);
-    TestTrue(TEXT("complete game physics replaces render collision"), FSCMeshImporter::GamePhysicsReplacesRender(Good));
+    TestTrue(TEXT("complete game physics replaces render collision"), FSCMeshes::GamePhysicsReplacesRender(Good));
     TestTrue(TEXT("box + broken trimesh derives"), Derived(*FString::Printf(TEXT(R"([%s,{"part":1,"kind":"trimesh","mesh":7}])"), Box), Broken));
     TestEqual(TEXT("the box still builds"), Broken.PhysicsShapes, 1);
     TestEqual(TEXT("the broken collider is counted"), Broken.PhysicsFailedShapes, 1);
-    TestFalse(TEXT("incomplete game physics keeps render collision"), FSCMeshImporter::GamePhysicsReplacesRender(Broken));
+    TestFalse(TEXT("incomplete game physics keeps render collision"), FSCMeshes::GamePhysicsReplacesRender(Broken));
     TestTrue(TEXT("damage-only derives"), Derived(TEXT(R"([{"part":1,"kind":"damage_mesh","bytes":8}])"), Damage));
-    TestTrue(TEXT("damage-only physics: no collider, as in the game"), Damage.bHasGamePhysics && Damage.PhysicsShapes == 0 && FSCMeshImporter::GamePhysicsReplacesRender(Damage));
+    TestTrue(TEXT("damage-only physics: no collider, as in the game"), Damage.bHasGamePhysics && Damage.PhysicsShapes == 0 && FSCMeshes::GamePhysicsReplacesRender(Damage));
     return true;
 }
 #endif

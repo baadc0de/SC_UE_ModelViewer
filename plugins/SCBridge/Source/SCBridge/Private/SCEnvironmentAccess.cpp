@@ -3,7 +3,6 @@
 // component-space transforms, and the rig's collidable parts carried along by their bones.
 #include "SCEnvironmentAccess.h"
 #include "Cargo/SCCargoGridComponent.h"
-#include "SCAnimImporter.h"
 #include "SCClipCatalog.h"
 #include "SCEnvironment.h"
 #include "SCRigComponent.h"

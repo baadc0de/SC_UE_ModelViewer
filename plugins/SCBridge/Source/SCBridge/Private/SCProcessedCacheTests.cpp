@@ -2,7 +2,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "SCProcessedCache.h"
 #include "SCProcessedMeshCache.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCLightAreas.h"
 #include "StaticMeshAttributes.h"
 #include "SCProcessedTextureCache.h"
@@ -160,7 +160,7 @@ bool FSCProcessedCacheLightSamplesTest::RunTest(const FString&)
         const FTriangleID Triangle = Source.Description.CreateTriangle(Group, Corners);
         if (I % 3 != 0) Selection.Insert(Triangle, 0); // split and reverse the original order
     }
-    const FSCDerivedMesh Copied = FSCMeshImporter::Select(Source, Selection);
+    const FSCDerivedMesh Copied = FSCMeshes::Select(Source, Selection);
     const TArray<FVector3f> Expected = FSCLightAreas::Sample(Copied.Description);
     TestEqual(TEXT("Fixture exceeds the sample budget"), Expected.Num(), FSCLightAreas::MaxSamples);
     TestTrue(TEXT("Deferred geometry keeps the same room-light samples as a full copied description"),

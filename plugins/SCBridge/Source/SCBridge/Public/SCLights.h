@@ -4,7 +4,9 @@
 // module (SCBridgeImport, O1-4c-3).
 #pragma once
 #include "CoreMinimal.h"
+class AActor;
 class ASCVehicle;
+class UWorld;
 struct FSCImportedLightState;
 class FJsonObject;
 class ULightComponent;

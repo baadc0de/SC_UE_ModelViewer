@@ -363,9 +363,30 @@ library of ours. In stages:
   - Two prepared C2 runs each, before and after: every bus's peak and RMS, every meter's range and the side-chain gain
     agree within the runs' own spread (`AUDIO_METER`, `AUDIO_MIX_TRACE`). The Rust kernels stay in scbridge until
     O1-4c-3 reworks its surface.
-- **O1-4c-3** (`SCBridgeImport`): the runtime importer becomes its own module (FFI client, package reader / source, import
-  job, processed caches, the Ogg source, `SCBridgeLib`), loaded by the viewer and the game's editor module, not by the
-  packaged game; the plugin's cargo art moves to the game's content.
+- **O1-4c-3** (`SCBridgeImport`): the importer leaves the runtime module. Owner's decision (2026-11-24): the full
+  module split, not only an optional library. Today the importer and the runtime depend on each other:
+  - the viewer subsystem hosts the archive pipeline;
+  - the game's runtime asks the archive for live cargo spawns, the Garage, music and cargo effects;
+  - runtime code calls light, clip and mesh helpers that live on the importer classes.
+
+  So it lands in stages:
+  - **O1-4c-3a** (no behaviour change): the runtime halves of the importer classes become runtime classes.
+    - `FSCLights` (`SCLights.h`), from `FSCLightImporter`: the lights' states, styles, shadows, look scales,
+      flashlight, gobo light functions, container basis, verification and probes. `FSCLightImporter` keeps `Build` and
+      `LoadGobo`; their JSON helpers are `SCLightJson.h`.
+    - `FSCClipSampling` (`SCClipCatalog.h`), from `FSCAnimImporter`: bone hashes, the sidecar basis, sampling, track
+      frames. `FSCAnimImporter` keeps reading and binding clips.
+    - `FSCMeshes` (`SCMeshes.h`), from `FSCMeshImporter`: the derived mesh data, building static meshes and collision
+      from it, the game colliders, the space conversions. `FSCMeshImporter` keeps `Derive`.
+
+    Further 3a steps do the same for the remaining runtime uses: the scene manifest's types, texture keys, the import
+    library's floor placement, the FFI options type.
+  - **O1-4c-3b**: the archive goes behind an interface the viewer subsystem uses. The new `SCBridgeImport` plugin
+    implements it: the FFI client, package reader, import job, processed caches, texture decoding, the Ogg source and
+    `SCBridgeLib`. The viewer enables it; the game enables it in editor targets only.
+  - **O1-4c-3c**: the game's archive features go behind that interface: live cargo spawns, the Garage's retrieval,
+    music, and the cargo effects' and boxes' archive fallbacks. A packaged game reports them unavailable. The plugin's
+    cargo art moves to the game's content.
 
 #### O1-4a — Scenarios and the prep step
 

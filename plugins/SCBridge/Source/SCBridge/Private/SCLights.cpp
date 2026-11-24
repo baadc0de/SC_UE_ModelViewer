@@ -1,15 +1,13 @@
 // WP-O1-4c-3a: the runtime half of the lights (SCLights.h), split from SCLightImporter.cpp.
 #include "SCLights.h"
 #include "SCLightJson.h"
+#include "Dom/JsonObject.h"
 #include "EngineUtils.h"
 #include "SCViewerSettings.h"
 #include "SCStarEngine.h"
 #include "SCVehicle.h"
-#include "SCMeshImporter.h"
-#include "SCImporter.h"
-#include "SCTextureImporter.h"
+#include "SCMeshes.h"
 #include "SCPlayerKit.h"
-#include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -17,17 +15,60 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/Texture2D.h"
-#include "ImageUtils.h"
-#include "IImageWrapperModule.h"
-#include "IImageWrapper.h"
-#include "Modules/ModuleManager.h"
-#include "Misc/Paths.h"
 #include "HAL/IConsoleManager.h"
-#include "Misc/ScopeExit.h"
 #include "RenderUtils.h"
 #include "RHI.h"
 #include "SceneManagement.h"
 using namespace SCLightJson;
+FString SCLightJson::LightString(const FLightJson& J, const TCHAR* K)
+{
+    FString S;
+    J->TryGetStringField(K, S);
+    return S;
+}
+double SCLightJson::LightNumber(const FLightJson& J, const TCHAR* K, double Default)
+{
+    double V;
+    return J->TryGetNumberField(K, V) && FMath::IsFinite(V) ? V : Default;
+}
+FVector SCLightJson::LightVector(const FLightJson& J, const TCHAR* K, FVector Default)
+{
+    const TArray<TSharedPtr<FJsonValue>>* A;
+    if (!J->TryGetArrayField(K, A) || A->Num() != 3) return Default;
+    return FVector((*A)[0]->AsNumber(), (*A)[1]->AsNumber(), (*A)[2]->AsNumber());
+}
+FQuat SCLightJson::LightRotation(const FLightJson& J, const TCHAR* K)
+{
+    const TArray<TSharedPtr<FJsonValue>>* A;
+    if (!J->TryGetArrayField(K, A) || A->Num() != 4) return FQuat::Identity;
+    return FQuat((*A)[1]->AsNumber(), (*A)[2]->AsNumber(), (*A)[3]->AsNumber(), (*A)[0]->AsNumber()).GetNormalized();
+}
+FVector SCLightJson::LightBasis(FVector V)
+{
+    return FVector(V.Y, V.X, V.Z);
+}
+bool SCLightJson::ConsoleEnabled(const TCHAR* Name)
+{
+    const auto* CVar = IConsoleManager::Get().FindConsoleVariable(Name);
+    return CVar && CVar->GetInt() != 0;
+}
+bool SCLightJson::MegaLightsActive()
+{
+    // Project-level Viewer policy; the Viewer PPV does not override MegaLights.
+    // Match scalability, shader-platform and tracing gates, not just the project preference.
+    if (GUsingNullRHI || !ConsoleEnabled(TEXT("r.MegaLights.EnableForProject")) || !ConsoleEnabled(TEXT("r.MegaLights.Allowed")) ||
+        !ShouldCompileMegaLightsShaders(GMaxRHIShaderPlatform))
+        return false;
+    const bool Hardware =
+        IsRayTracingEnabled() && ConsoleEnabled(TEXT("r.MegaLights.HardwareRayTracing")) &&
+        (GRHISupportsRayTracingShaders || (GRHISupportsInlineRayTracing && ConsoleEnabled(TEXT("r.MegaLights.HardwareRayTracing.Inline"))));
+    const bool Software = ConsoleEnabled(TEXT("r.MegaLights.SoftwareRayTracing.Allow")) && DoesProjectSupportDistanceFields();
+    return Hardware || Software;
+}
+bool SCLightJson::HasAuthoredModel(const FLightJson& J)
+{
+    return J->HasField(TEXT("bulb_radius_m"));
+}
 namespace
 {
 // One light-function MID per gobo texture: the light function atlas (deferred lighting, MegaLights, Lumen)
@@ -134,7 +175,7 @@ void FSCLights::ApplyFlashlight(USpotLightComponent* Spot, const FSCFlashlight& 
 
 FVector FSCLights::ContainerBasis(const FVector& Cry, bool bHelperFrame)
 {
-    return bHelperFrame ? FSCMeshImporter::Position(Cry) / 100. : LightBasis(Cry);
+    return bHelperFrame ? FSCMeshes::Position(Cry) / 100. : LightBasis(Cry);
 }
 
 void FSCLights::AuthorStates(FSCImportedLightState& State)

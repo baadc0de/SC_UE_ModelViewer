@@ -246,7 +246,7 @@ void FSCGeometryStreaming::BeginPromotion(int32 Index)
         return;
     }
     InFlight->Started = FPlatformTime::Seconds();
-    InFlight->Mesh.Reset(FSCMeshImporter::PrepareFineBuild(Item.Fine, *Proxy,
+    InFlight->Mesh.Reset(FSCMeshes::PrepareFineBuild(Item.Fine, *Proxy,
         MakeUniqueObjectName(Proxy->GetOuter(), UStaticMesh::StaticClass(), TEXT("Fine")), Item.bCollision,
         InFlight->Stats, InFlight->SourceCommit));
     UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_PREPARE path=%s ms=%.2f"),
@@ -261,7 +261,7 @@ void FSCGeometryStreaming::SubmitPromotion()
     const double Start = FPlatformTime::Seconds();
     check(!Build.SourceCommit.IsValid() || Build.SourceCommit.IsCompleted());
     Build.SourceCommit = {};
-    FSCMeshImporter::SubmitFineBuild(Build.Mesh.Get(), Build.Item.Fine);
+    FSCMeshes::SubmitFineBuild(Build.Mesh.Get(), Build.Item.Fine);
     Build.bSubmitted = true;
     Build.Stats.BuildSeconds = FPlatformTime::Seconds() - Start;
     UE_LOG(LogSCImport, Display, TEXT("GEOMETRY_STREAM_SUBMIT path=%s ms=%.2f compiling=%d"),
@@ -287,7 +287,7 @@ void FSCGeometryStreaming::FinishPromotion(bool bWait)
     if (!Owner || !Proxy) return;
     UStaticMesh* Fine = Build.Mesh.Get();
     FString Error;
-    if (!FSCMeshImporter::FinishFineBuild(Fine, Item.Fine, Proxy, Item.bCollision, bWait, Build.Stats, Error))
+    if (!FSCMeshes::FinishFineBuild(Fine, Item.Fine, Proxy, Item.bCollision, bWait, Build.Stats, Error))
     {
         ++Failed;
         UE_LOG(LogSCImport, Warning, TEXT("GEOMETRY_STREAM_FAILED path=%s error=%s"), *Item.Label, *Error);
@@ -366,7 +366,7 @@ void FSCGeometryStreaming::Tick(UWorld* World)
         {
             if (!InFlight->SourceCommit.IsValid() || InFlight->SourceCommit.IsCompleted()) SubmitPromotion();
         }
-        else if (FSCMeshImporter::IsFineBuildReady(InFlight->Mesh.Get()))
+        else if (FSCMeshes::IsFineBuildReady(InFlight->Mesh.Get()))
             FinishPromotion(false);
         return;
     }

@@ -2,7 +2,6 @@
 // structs: ports, stowed weapons, resolved Mannequin motion states and blend spaces. No UObjects, no game names.
 // A prepared player body saves them field by field (SCPlayerKitData.cpp): a field added here is added there too.
 #pragma once
-#include "SCLights.h"
 #include "CoreMinimal.h"
 
 class FJsonObject;

@@ -16,7 +16,7 @@
 // flow, distortion, extras, erosion) switches the WP-K4c fidelity rules off for before/after comparisons.
 //
 // Units and axes. Game values are metres / seconds; UE centimetres (x100). Game vectors map like the importer's
-// (FSCMeshImporter::Position, LightBasis): game (x, y, z) -> UE (y, x, z). The emitter's forward, CryEngine's +Y (the
+// (FSCMeshes::Position, LightBasis): game (x, y, z) -> UE (y, x, z). The emitter's forward, CryEngine's +Y (the
 // focus / emit axis), is therefore the system's +X.
 //
 // Runtime contract (User parameters; the SC_FX_SYSTEM line lists the ones a system has):
@@ -244,7 +244,7 @@ FJson Parse(const FString& Text)
 }
 FString Join(const TArray<FString>& A) { return TEXT("[") + FString::Join(A, TEXT(",")) + TEXT("]"); }
 
-/** game (x, y, z) -> UE (y, x, z), metres -> cm (FSCMeshImporter::Position / LightBasis). */
+/** game (x, y, z) -> UE (y, x, z), metres -> cm (FSCMeshes::Position / LightBasis). */
 FVector3f Basis(const TArray<double>& V)
 {
     auto C = [&V](int32 i) { return V.IsValidIndex(i) ? float(V[i]) : 0.f; };

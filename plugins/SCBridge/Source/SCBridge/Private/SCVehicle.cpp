@@ -1,12 +1,12 @@
 // Vehicle parameters and on-demand evaluation of sparse, ordered animation layers.
 #include "SCVehicle.h"
+#include "SCMeshes.h"
 #include "SCClipCatalog.h"
 #include "SCAudioSystem.h"
 #include "UObject/ObjectSaveContext.h"
 #include "Components/SceneComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SCMaterialBuilder.h"
-#include "SCAnimImporter.h"
 #include "SCLights.h"
 #include "SCRigComponent.h"
 #include "Materials/MaterialInterface.h"
@@ -15,7 +15,6 @@
 #include "Components/StaticMeshComponent.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "PhysicsEngine/BodySetup.h"
-#include "SCMeshImporter.h"
 #include "Engine/SkeletalMesh.h"
 ASCVehicle::ASCVehicle()
 {
@@ -30,7 +29,7 @@ bool ASCVehicle::PortRelative(const FString& Id, const FString& Helper, const FM
     const FTransform* Frame = Helpers ? Helpers->Frames.Find(Helper) : nullptr;
     if (!Frame) return false;
     // The helper (anchor space) lands on the joint frame plus the port offset; offset axes are the joint's own.
-    Out = Frame->Inverse() * FTransform(FSCMeshImporter::Transform(Offset));
+    Out = Frame->Inverse() * FTransform(FSCMeshes::Transform(Offset));
     return true;
 }
 void ASCVehicle::SetEngineGlow(float Strength)

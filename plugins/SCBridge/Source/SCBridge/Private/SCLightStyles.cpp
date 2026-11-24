@@ -1,5 +1,5 @@
 // Playback of the renderer's periodic, sampled light style presets.
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCVehicle.h"
 #include "Components/LightComponent.h"
 #include "Engine/World.h"

@@ -1,8 +1,5 @@
 // Static mesh partitioning, worker-thread Chaos derivation, and game-thread UObject construction.
-#include "SCMeshImporter.h"
-#include "SCPackageReader.h"
-#include "Dom/JsonObject.h"
-#include "Serialization/JsonSerializer.h"
+#include "SCMeshes.h"
 #include "Engine/StaticMesh.h"
 #include "StaticMeshAttributes.h"
 #include "StaticMeshOperations.h"
@@ -22,7 +19,7 @@
 #include "MeshCardBuild.h"
 #endif
 
-FSCDerivedMesh FSCMeshImporter::Select(const FSCDerivedMesh& Data, const TArray<FTriangleID>& Triangles)
+FSCDerivedMesh FSCMeshes::Select(const FSCDerivedMesh& Data, const TArray<FTriangleID>& Triangles)
 {
     FSCDerivedMesh Result;
     Result.MaterialNames = Data.MaterialNames;
@@ -78,7 +75,7 @@ FSCDerivedMesh FSCMeshImporter::Select(const FSCDerivedMesh& Data, const TArray<
     Result.bHasGeometry = !Triangles.IsEmpty();
     return Result;
 }
-void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent)
+void FSCMeshes::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent)
 {
     TArray<FTriangleID> Opaque, Blend;
     for (auto T : Data.Description.Triangles().GetElementIDs())
@@ -102,7 +99,7 @@ void FSCMeshImporter::SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& 
     Data.SkinWeights = MoveTemp(OpaqueData.SkinWeights);
     // CollisionBytes retain the independently derived full-source triangle BVH.
 }
-bool FSCMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap)
+bool FSCMeshes::DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap)
 {
     const double Start = FPlatformTime::Seconds();
     Data.CollisionBytes.Reset();
@@ -277,7 +274,7 @@ bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollis
             SetCollisionReady(*Body);
             Stats.CollisionTriangles = Body->TriMeshGeometries[0]->Elements().GetNumTriangles();
         }
-        else if (!FSCMeshImporter::InstallCollision(Body, Data.CollisionBytes, Data.CollisionVersions, Stats.CollisionTriangles, Error))
+        else if (!FSCMeshes::InstallCollision(Body, Data.CollisionBytes, Data.CollisionVersions, Stats.CollisionTriangles, Error))
             return false;
         Stats.CollisionSeconds = Data.CollisionDeriveSeconds;
         Stats.bCollision = true;
@@ -303,7 +300,7 @@ bool FinishMesh(UStaticMesh* Mesh, const FSCDerivedMesh& Data, bool bBuildCollis
 }
 } // namespace
 
-bool FSCMeshImporter::InstallCollision(UBodySetup* Body, const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions,
+bool FSCMeshes::InstallCollision(UBodySetup* Body, const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions,
                                       int32& TriangleCount, FString& Error)
 {
     if (!Body || Bytes.IsEmpty())
@@ -328,7 +325,7 @@ bool FSCMeshImporter::InstallCollision(UBodySetup* Body, const TArray<uint8>& By
     return true;
 }
 
-UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision,
+UStaticMesh* FSCMeshes::Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name, bool bBuildCollision,
                                           UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error, bool bCoarseProxy)
 {
     UStaticMesh* Mesh = ConfigureMesh(Data, Outer, Name, bBuildCollision, Material, Stats, bCoarseProxy);
@@ -349,7 +346,7 @@ UStaticMesh* FSCMeshImporter::Instantiate(const FSCDerivedMesh& Data, UObject* O
     return FinishMesh(Mesh, Data, bBuildCollision, Stats, Error) ? Mesh : nullptr;
 }
 
-UStaticMesh* FSCMeshImporter::PrepareFineBuild(FSCDerivedMesh& Data, const UStaticMesh& Proxy, FName Name,
+UStaticMesh* FSCMeshes::PrepareFineBuild(FSCDerivedMesh& Data, const UStaticMesh& Proxy, FName Name,
     bool bBuildCollision, FSCMeshBuildStats& Stats, UE::Tasks::FTask& SourceCommit)
 {
     UStaticMesh* Mesh = ConfigureMesh(Data, Proxy.GetOuter(), Name, bBuildCollision, nullptr, Stats, false, &Data.Description);
@@ -363,7 +360,7 @@ UStaticMesh* FSCMeshImporter::PrepareFineBuild(FSCDerivedMesh& Data, const UStat
     return Mesh;
 }
 
-void FSCMeshImporter::SubmitFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data)
+void FSCMeshes::SubmitFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data)
 {
     check(IsInGameThread());
 #if WITH_EDITOR
@@ -373,7 +370,7 @@ void FSCMeshImporter::SubmitFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& D
 #endif
 }
 
-bool FSCMeshImporter::IsFineBuildReady(const UStaticMesh* Mesh)
+bool FSCMeshes::IsFineBuildReady(const UStaticMesh* Mesh)
 {
 #if WITH_EDITOR
     // Keep the mesh unbound until all three engine compilers have applied their results. The
@@ -386,7 +383,7 @@ bool FSCMeshImporter::IsFineBuildReady(const UStaticMesh* Mesh)
 #endif
 }
 
-bool FSCMeshImporter::FinishFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data, UStaticMesh* Proxy,
+bool FSCMeshes::FinishFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data, UStaticMesh* Proxy,
     bool bBuildCollision, bool bWait, FSCMeshBuildStats& Stats, FString& Error)
 {
 #if WITH_EDITOR
@@ -402,7 +399,7 @@ bool FSCMeshImporter::FinishFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& D
     return FinishMesh(Mesh, Data, bBuildCollision, Stats, Error, bBuildCollision ? Proxy->GetBodySetup() : nullptr);
 }
 
-TArray<UStaticMesh*> FSCMeshImporter::InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,
+TArray<UStaticMesh*> FSCMeshes::InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,
                                                        TArray<FString>& Errors)
 {
     TArray<UStaticMesh*> Meshes, ToBuild;
@@ -462,16 +459,16 @@ bool FSCFineBuildTest::RunTest(const FString&)
     }
     Data.Description.CreateTriangle(Group, Corners);
     FString Error;
-    if (!TestTrue(*Error, FSCMeshImporter::DeriveCollision(Data, Error))) return false;
+    if (!TestTrue(*Error, FSCMeshes::DeriveCollision(Data, Error))) return false;
     FSCMeshBuildStats ProxyStats, FineStats;
-    UStaticMesh* Proxy = FSCMeshImporter::Instantiate(Data, GetTransientPackage(), NAME_None, true, nullptr, ProxyStats, Error, true);
+    UStaticMesh* Proxy = FSCMeshes::Instantiate(Data, GetTransientPackage(), NAME_None, true, nullptr, ProxyStats, Error, true);
     if (!TestNotNull(*Error, Proxy)) return false;
     UE::Tasks::FTask SourceCommit;
-    UStaticMesh* Fine = FSCMeshImporter::PrepareFineBuild(Data, *Proxy, NAME_None, true, FineStats, SourceCommit);
+    UStaticMesh* Fine = FSCMeshes::PrepareFineBuild(Data, *Proxy, NAME_None, true, FineStats, SourceCommit);
     SourceCommit.Wait();
-    FSCMeshImporter::SubmitFineBuild(Fine, Data);
-    if (!TestTrue(*Error, FSCMeshImporter::FinishFineBuild(Fine, Data, Proxy, true, true, FineStats, Error))) return false;
-    TestTrue(TEXT("capture waits for all fine work"), FSCMeshImporter::IsFineBuildReady(Fine));
+    FSCMeshes::SubmitFineBuild(Fine, Data);
+    if (!TestTrue(*Error, FSCMeshes::FinishFineBuild(Fine, Data, Proxy, true, true, FineStats, Error))) return false;
+    TestTrue(TEXT("capture waits for all fine work"), FSCMeshes::IsFineBuildReady(Fine));
     TestEqual(TEXT("fine render triangles"), FineStats.Triangles, 1);
     auto* FineBody = Fine->GetBodySetup();
     auto* ProxyBody = Proxy->GetBodySetup();

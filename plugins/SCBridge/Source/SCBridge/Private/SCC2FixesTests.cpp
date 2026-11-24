@@ -26,7 +26,7 @@
 #include "SCLights.h"
 #include "SCLift.h"
 #include "SCRigComponent.h"
-#include "SCAnimImporter.h"
+#include "SCClipCatalog.h"
 #include "SCSkeletonBuilder.h"
 #include "SCPackageReader.h"
 #include "SCPackageSource.h"

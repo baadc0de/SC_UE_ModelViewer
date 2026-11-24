@@ -1,6 +1,5 @@
 // Blueprint-visible authored/default state and fallback-shadow metadata for each imported light.
 #pragma once
-#include "SCLights.h"
 #include "CoreMinimal.h"
 #include "SCLightState.generated.h"
 class ULightComponent;

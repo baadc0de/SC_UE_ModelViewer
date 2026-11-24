@@ -1,0 +1,118 @@
+// WP-O1-4c-3a: meshes at run time — the derived mesh data (FSCDerivedMesh, rig nodes, skin weights), building static
+// meshes and their collision from it (the import's and the Lumen proxies', SCEmissiveLights), the game colliders'
+// selection, and the glTF / CryEngine -> UE space conversions. Split from FSCMeshImporter, which keeps reading a package's
+// meshes (Derive), so the importer can leave the runtime module (SCBridgeImport, O1-4c-3).
+#pragma once
+#include "CoreMinimal.h"
+#include "Tasks/Task.h"
+#include "MeshDescription.h"
+#include "Serialization/CustomVersion.h"
+
+class UStaticMesh;
+class UMaterialInterface;
+class UBodySetup;
+struct SCBRIDGE_API FSCRigNode
+{
+    FString SourceName;
+    int32 Parent = INDEX_NONE;
+    int32 GltfIndex = INDEX_NONE;
+    FTransform Local = FTransform::Identity;
+    FMatrix World = FMatrix::Identity;
+    bool bAnimate = true;
+};
+struct SCBRIDGE_API FSCVertexWeights
+{
+    int32 Joints[4] = {0,0,0,0}; // GLB node indices until skeleton remap
+    float Weights[4] = {1,0,0,0};
+};
+/** Pure CPU data: safe to derive on a worker, cache without retaining UObjects. */
+struct SCBRIDGE_API FSCDerivedMesh
+{
+    FMeshDescription Description;
+    TArray<FSCRigNode> RigNodes; // parent-first, includes the coordinate wrapper
+    TMap<int32, int32> GltfToRig;
+    TMap<FTriangleID, int32> TriangleNodes;
+    TMap<FVertexID, FSCVertexWeights> SkinWeights;
+    int32 SocketNode = INDEX_NONE; // split meshes retain world-baked vertices, inverse bind on component
+
+    TArray<FString> MaterialNames;
+    TArray<FString> MaterialSourceNames, MaterialFamilies, Warnings;
+    TSet<int32> BlendedSlots;
+    bool bEnableNanite = true;
+    bool bHasGeometry = false;
+    TMap<FString, FMatrix> Nodes; // glTF world matrices, before host conversion
+    FMatrix RootMatrix = FMatrix::Identity;
+    FMatrix AttachmentRootMatrix = FMatrix::Identity;
+    FString ContentHash;
+    TArray<uint8> CollisionBytes; // Serialized Chaos BVH, no UObject references.
+    FCustomVersionContainer CollisionVersions;
+    double CollisionDeriveSeconds = 0;
+    int32 DegenerateTriangles = 0;
+    bool bHasTangents = true;
+    bool bHasSkins = false;
+    /** The game's own collision (WP-P3): the GLB carries the source's CryPhysics geometry (glTF node
+     *  `extras.sc_physics`). Then first-person movement collides with those colliders, except the node-name classes
+     *  that are no obstacle for an actor (`class` interaction / tires_only / grid_volume / no_surface), never with render triangles. Triangles in UE space like Description's; one rig node per triangle. */
+    bool bHasGamePhysics = false;
+    TArray<FVector3f> PhysicsPositions;
+    TArray<FIntVector> PhysicsTriangles;
+    TArray<int32> PhysicsTriangleNodes;
+    int32 PhysicsShapes = 0, PhysicsFilteredShapes = 0; // colliders used / non-obstacle classes left out
+    int32 PhysicsFailedShapes = 0; // blocking colliders that could not be built (malformed record, degenerate node)
+};
+struct SCBRIDGE_API FSCMeshBuildStats
+{
+    bool bNaniteEnabled = false;
+    FString NaniteReason;
+    int32 Triangles = 0, FallbackTriangles = 0, CollisionTriangles = 0, Clusters = 0, Cards = 0;
+    bool bMeshCards = false, bDistanceField = false, bRayTracingGeometry = false, bCollision = false;
+    double BuildSeconds = 0, RepresentationSeconds = 0, CollisionSeconds = 0;
+};
+class SCBRIDGE_API FSCMeshes
+{
+public:
+    static FSCDerivedMesh Select(const FSCDerivedMesh& Data, const TArray<FTriangleID>& Triangles);
+    /** Collision-only mesh of the game colliders owned by Owner (INDEX_NONE: all), non-Nanite, one slot. */
+    static FSCDerivedMesh SelectPhysics(const FSCDerivedMesh& Data, int32 Owner);
+    /** Triangles of one `extras.sc_physics` record in its node frame (glTF units), outward-wound for the convex
+     *  primitives; false with Error for a malformed record. Trimeshes resolve their glTF mesh through MeshTriangles. */
+    static bool PhysicsShapeTriangles(const TSharedPtr<class FJsonObject>& Shape, TArray<FVector>& Out,
+        TFunctionRef<bool(int32 Mesh, TArray<FVector>& Out)> MeshTriangles, FString& Error);
+    /** Whether an `extras.sc_physics` record blocks an actor: every part does, except node-name classes that are no
+     *  physical obstacle (`class` interaction, tires_only, grid_volume; see the StarBreaker `physics_class` table) and a collider's caps
+     *  over its openings (`no_surface`, WP-P4: what fills the opening blocks with its own colliders, in its pose). */
+    static bool PhysicsBlocksActor(const TSharedPtr<class FJsonObject>& Shape);
+    /** The game's colliders stand in for the render mesh's movement collision only when every blocking collider was
+     *  built; otherwise the render mesh keeps blocking the pawn (a failed collider must not open a hole). */
+    static bool GamePhysicsReplacesRender(const FSCDerivedMesh& Data) { return Data.bHasGamePhysics && Data.PhysicsFailedShapes == 0; }
+    static void SplitTranslucent(FSCDerivedMesh& Data, const TSet<int32>& Slots, FSCDerivedMesh& Translucent);
+    /** Worker-thread Chaos BVH. bVertexIndexMap stores the identity external->particle map that
+     *  FTriangleMeshImplicitObject::UpdateVertices requires (refittable skinned collision only). */
+    static bool DeriveCollision(FSCDerivedMesh& Data, FString& Error, bool bVertexIndexMap = false);
+    /** Restore the exact collision derived for this variant, including translucent sections deliberately omitted from its render mesh. */
+    static bool InstallCollision(UBodySetup* Body, const TArray<uint8>& Bytes, const FCustomVersionContainer& Versions,
+        int32& TriangleCount, FString& Error);
+    static UStaticMesh* Instantiate(const FSCDerivedMesh& Data, UObject* Outer, FName Name,
+        bool bBuildCollision, UMaterialInterface* Material, FSCMeshBuildStats& Stats, FString& Error, bool bCoarseProxy = false);
+    static UStaticMesh* PrepareFineBuild(FSCDerivedMesh& Data, const UStaticMesh& Proxy, FName Name,
+        bool bBuildCollision, FSCMeshBuildStats& Stats, UE::Tasks::FTask& SourceCommit);
+    static void SubmitFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data);
+    static bool IsFineBuildReady(const UStaticMesh* Mesh);
+    static bool FinishFineBuild(UStaticMesh* Mesh, const FSCDerivedMesh& Data, UStaticMesh* Proxy,
+        bool bBuildCollision, bool bWait, FSCMeshBuildStats& Stats, FString& Error);
+    /** Instantiate for many meshes without collision or material (slots get the default material): every mesh is
+     *  configured first and the editor builds them together. A null entry failed (its Errors entry says why). */
+    static TArray<UStaticMesh*> InstantiateBatch(const TArray<const FSCDerivedMesh*>& Data, UObject* Outer, TArray<FSCMeshBuildStats>& Stats,
+                                                 TArray<FString>& Errors);
+    // glTF (right, up, backward), metres -> UE (forward, right, up), centimetres.
+    static FVector Position(const FVector& V) { return FVector(-V.Z, V.X, V.Y) * 100.0; }
+    static FMatrix Transform(const FMatrix& Gltf);
+    static FMatrix CryToGltf();
+    static FMatrix InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis);
+    // The exporter builds every child node inside the CryEngine_Z_up root, so a child placed on its parent entity itself
+    // (no helper, e.g. an object container's root-level entities) carries a matrix in that entity's CryEngine frame.
+    static bool InCryFrame(const FString& Basis, bool bAtHelper)
+    {
+        return Basis == TEXT("cryengine_z_up") || (!bAtHelper && Basis == TEXT("gltf_y_up"));
+    }
+};

@@ -1,7 +1,6 @@
 // Collision-aware first-person exploration, shared by Slate, native input, console automation and
 // headless verification.
 #pragma once
-#include "SCLights.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Camera/CameraComponent.h"

@@ -10,7 +10,6 @@
 // has no direction signal for these clips (Hull A's are Chrparams clips without Mannequin fragments).
 #include "Cargo/SCCargoGridComponent.h"
 #include "SCCargoState.h"
-#include "SCAnimImporter.h"
 #include "SCClipCatalog.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"

@@ -19,7 +19,7 @@
 #include "Misc/Paths.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Rendering/NaniteResources.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "Private/SCProcessedCache.h"
 #include "Private/SCProcessedMeshCache.h"
 #include "Serialization/MemoryReader.h"
@@ -179,14 +179,14 @@ static UStaticMesh* Build(UWorld* World)
         FString Error;
         FSCMeshBuildStats Stats;
         ++CookCalls;
-        if (!FSCMeshImporter::DeriveCollision(Input, Error))
+        if (!FSCMeshes::DeriveCollision(Input, Error))
         {
             UE_LOG(LogSCSpike, Error, TEXT("Cannot derive production collision: %s"), *Error);
             bPassed = false;
             return nullptr;
         }
         ++BuildCalls;
-        UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Input, GetTransientPackage(), NAME_None, true, nullptr, Stats, Error);
+        UStaticMesh* Mesh = FSCMeshes::Instantiate(Input, GetTransientPackage(), NAME_None, true, nullptr, Stats, Error);
         if (!Mesh)
         {
             UE_LOG(LogSCSpike, Error, TEXT("Cannot build production mesh: %s"), *Error);

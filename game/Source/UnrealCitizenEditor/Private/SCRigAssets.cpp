@@ -1,6 +1,6 @@
 // SCRigAssets (SCRigAssets.h): a runtime rig mesh given an editor source model and the engine's build.
 #include "SCRigAssets.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCRigComponent.h"
 #include "Animation/Skeleton.h"
 #include "BoneWeights.h"
@@ -268,7 +268,7 @@ bool SCRigAssets::DeriveCollision(const USkeletalMesh* Mesh, TArray<uint8>& OutB
             Expanded.Description.CreateTriangle(Group, Corners);
         }
     }
-    if (!FSCMeshImporter::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
+    if (!FSCMeshes::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
     OutBytes = MoveTemp(Expanded.CollisionBytes);
     OutVersions = Expanded.CollisionVersions;
     return true;

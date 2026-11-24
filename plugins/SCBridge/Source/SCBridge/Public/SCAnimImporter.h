@@ -2,7 +2,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "SCClipCatalog.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCPackageReader.h"
 class SCBRIDGE_API FSCAnimImporter
 {

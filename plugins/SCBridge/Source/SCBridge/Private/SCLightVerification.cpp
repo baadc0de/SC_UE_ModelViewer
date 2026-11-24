@@ -1,5 +1,5 @@
 // Package-level light invariants: counts are derived from the manifest, never ship-name expectations.
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCStarEngine.h"
 #include "SCViewerSettings.h"
 #include "SCVehicle.h"

@@ -5,7 +5,7 @@
 #include "SCLift.h"
 #include "SCRigComponent.h"
 #include "SCTextureSource.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "Animation/Skeleton.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"

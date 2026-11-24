@@ -1,6 +1,5 @@
 // Imported vehicle ownership and sparse clip/fragment playback API.
 #pragma once
-#include "SCLights.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "SCPackageReader.h"

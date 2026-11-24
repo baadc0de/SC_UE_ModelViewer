@@ -2,13 +2,13 @@
 // alignment, first-person head hiding (shadows kept), eye at the camera joint and the third-person orbit; aim down
 // sights (the arms bring the weapon's sight helper onto the view axis) and the camera's depth of field.
 #include "SCPlayerBody.h"
+#include "SCMeshes.h"
 #include "SCPlayerFire.h"
 #include "HAL/IConsoleManager.h"
 #include "SCFirstPersonCharacter.h"
 #include "SCRigComponent.h"
-#include "SCMeshImporter.h"
 #include "SCVehicle.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -691,8 +691,8 @@ FTransform USCPlayerBodyComponent::SightAxes()
 {
     // A direction d in the helper's own (game) axes is d * basis in the imported frame: a translation through the
     // importer's transform carries it.
-    const FVector Along = FSCMeshImporter::Transform(FTranslationMatrix(FVector(0, 1, 0))).GetOrigin();
-    const FVector Up = FSCMeshImporter::Transform(FTranslationMatrix(FVector(0, 0, 1))).GetOrigin();
+    const FVector Along = FSCMeshes::Transform(FTranslationMatrix(FVector(0, 1, 0))).GetOrigin();
+    const FVector Up = FSCMeshes::Transform(FTranslationMatrix(FVector(0, 0, 1))).GetOrigin();
     return FTransform(FRotationMatrix::MakeFromXZ(Along, Up).ToQuat());
 }
 FTransform USCPlayerBodyComponent::AimTarget(const FTransform& Sight, const FVector& Eye, const FQuat& View, float Relief, float Alpha)

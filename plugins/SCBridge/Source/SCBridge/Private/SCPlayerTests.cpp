@@ -3,6 +3,7 @@
 // weapon re-parenting between stow and hand ports.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCMeshes.h"
 #include "SCClipCatalog.h"
 #include "HAL/IConsoleManager.h"
 #include "SCPlayerAnimator.h"
@@ -26,8 +27,6 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
-#include "SCAnimImporter.h"
-#include "SCMeshImporter.h"
 #include "SCSkeletonBuilder.h"
 
 namespace
@@ -360,7 +359,7 @@ bool FSCPlayerAimPose::RunTest(const FString&)
     // toward a point straight ahead of it, Z toward a point straight above it.
     {
         const FMatrix CryUp(FPlane(1, 0, 0, 0), FPlane(0, 0, -1, 0), FPlane(0, 1, 0, 0), FPlane(0, 0, 0, 1));
-        auto Imported = [&](const FVector& P) { return FTransform(FSCMeshImporter::Transform(FTranslationMatrix(P) * CryUp)); };
+        auto Imported = [&](const FVector& P) { return FTransform(FSCMeshes::Transform(FTranslationMatrix(P) * CryUp)); };
         const FTransform Helper = Imported(FVector(0, -0.0118, 0.1765));
         const FTransform Line = B::SightAxes() * Helper;
         const FVector Ahead = Imported(FVector(0, 0.3, 0.1765)).GetLocation(), Above = Imported(FVector(0, -0.0118, 0.3)).GetLocation();

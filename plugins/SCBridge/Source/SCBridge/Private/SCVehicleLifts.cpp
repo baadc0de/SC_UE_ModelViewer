@@ -1,8 +1,8 @@
 // WP-P5: lifts and the interaction-link dispatcher of ASCVehicle, and their assembly at import.
 #include "SCVehicleLifts.h"
+#include "SCMeshes.h"
 #include "SCVehicle.h"
 #include "SCLift.h"
-#include "SCMeshImporter.h"
 #include "SCRigComponent.h"
 #include "SCLights.h"
 #include "SCAudioSystem.h"
@@ -498,7 +498,7 @@ void SCVehicleLifts::BuildInteriorLifts(ASCVehicle* V, int32 InteriorIndex, cons
         Lift->Init(Record, [&](const FVector& Metres) {
             FMatrix M = FMatrix::Identity;
             M.M[3][0] = Metres.X; M.M[3][1] = Metres.Y; M.M[3][2] = Metres.Z;
-            return FSCMeshImporter::InstanceTransform(M, FMatrix::Identity, bHelper, FSCMeshImporter::InCryFrame(TEXT("cryengine_z_up"), bHelper)).GetOrigin();
+            return FSCMeshes::InstanceTransform(M, FMatrix::Identity, bHelper, FSCMeshes::InCryFrame(TEXT("cryengine_z_up"), bHelper)).GetOrigin();
         });
         // The moving anchor: identity under the container; the carriage and its riders keep their world transforms below it.
         USceneComponent* Anchor = NewObject<USceneComponent>(

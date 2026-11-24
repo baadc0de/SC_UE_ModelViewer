@@ -247,7 +247,7 @@ TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description)
 
 TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description, TConstArrayView<FTriangleID> Triangles)
 {
-    // FSCMeshImporter::Select inserts vertices in first-use order while walking the selected triangle corners.
+    // FSCMeshes::Select inserts vertices in first-use order while walking the selected triangle corners.
     TBitArray<> Seen(false, Description.Vertices().GetArraySize());
     TArray<FVertexID> Order;
     Order.Reserve(Triangles.Num());

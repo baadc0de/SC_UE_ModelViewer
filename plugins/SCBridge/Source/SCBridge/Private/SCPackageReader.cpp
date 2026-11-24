@@ -1,5 +1,5 @@
 #include "SCPackageReader.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "Cargo/SCCargoRecords.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
@@ -86,7 +86,7 @@ void ReadThrusters(const FReaderObject& O, FSCSceneInstance& Instance)
         const FQuat Y(FVector::YAxisVector, FMath::DegreesToRadians(Angles.Y));
         const FQuat Z(FVector::ZAxisVector, FMath::DegreesToRadians(Angles.Z));
         const FMatrix Local = FTransform(X * Y * Z, Position).ToMatrixWithScale();
-        Source.Offset = FTransform(FSCMeshImporter::InstanceTransform(Local, FMatrix::Identity, false, true));
+        Source.Offset = FTransform(FSCMeshes::InstanceTransform(Local, FMatrix::Identity, false, true));
         Instance.ThrusterEffects.Add(MoveTemp(Source));
     }
 }
@@ -763,14 +763,14 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
                 TArray<FVector> Tris;
                 FString ShapeError;
                 const auto Shape = Object(Value);
-                if (!Shape || !FSCMeshImporter::PhysicsShapeTriangles(Shape, Tris, [](int32, TArray<FVector>&) { return false; }, ShapeError))
+                if (!Shape || !FSCMeshes::PhysicsShapeTriangles(Shape, Tris, [](int32, TArray<FVector>&) { return false; }, ShapeError))
                 {
                     Warn(TEXT("physics_grid"), ShapeError.IsEmpty() ? TEXT("malformed shape") : ShapeError);
                     Out.PhysicsGrid.Reset();
                     Out.PhysicsGridShapeEnds.Reset();
                     break;
                 }
-                for (const FVector& P : Tris) Out.PhysicsGrid.Add(FSCMeshImporter::Position(FSCMeshImporter::CryToGltf().TransformPosition(P)));
+                for (const FVector& P : Tris) Out.PhysicsGrid.Add(FSCMeshes::Position(FSCMeshes::CryToGltf().TransformPosition(P)));
                 Out.PhysicsGridShapeEnds.Add(Out.PhysicsGrid.Num());
             }
     }
