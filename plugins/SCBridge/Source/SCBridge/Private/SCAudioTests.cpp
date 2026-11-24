@@ -384,3 +384,130 @@ bool FSCAudioBusFxInstanceTest::RunTest(const FString&)
     USoundEffectPreset::UnregisterInstance(Fx);
     return true;
 }
+
+#include "SCAudioBusKernels.h"
+/** WP-O1-4c-2: the bus limiter (FSCBusLimiter, the C++ of scbridge's sc_limiter) with the game's master parameters
+ *  (threshold -0.1 dB, ratio 40, look-ahead 10 ms, release 50 ms), the cases its Rust tests covered: a +20 dB step and
+ *  single-sample clicks over a loud bed at three buffer sizes never exceed the ceiling; a signal under the threshold passes
+ *  as it is, delayed by the look-ahead less one; unlinked channels limit apart; an LFE left out passes at unity; invalid
+ *  parameters pass the input. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioLimiterKernelTest, "SCBridge.Audio.LimiterKernel", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioLimiterKernelTest::RunTest(const FString&)
+{
+    constexpr float Rate = 48000.f, ThrDb = -0.1f, Ratio = 40.f;
+    const float Thr = FMath::Pow(10.f, ThrDb / 20.f);
+    auto Ceiling = [&](float Peak) { return Peak <= Thr ? Peak : Thr * FMath::Pow(Peak / Thr, 1.f / Ratio); };
+    auto Run = [&](TArray<float>& Signal, int32 Block, float InPeak, float& OverDb, float& OverShare) {
+        FSCBusLimiter L(Rate, 2, ThrDb, Ratio, 0.010f, 0.050f, 0.f, true, INDEX_NONE);
+        int32 Blocks = 0, Over = 0;
+        float Peak = 0.f;
+        for (int32 F = 0; F + Block <= Signal.Num() / 2; F += Block)
+        {
+            FSCBusLimiter::FStats S;
+            L.Process(Signal.GetData() + F * 2, Block, S);
+            float BlockPeak = 0.f;
+            for (int32 I = 0; I < Block * 2; ++I) BlockPeak = FMath::Max(BlockPeak, FMath::Abs(Signal[F * 2 + I]));
+            Peak = FMath::Max(Peak, BlockPeak);
+            ++Blocks;
+            Over += BlockPeak > Ceiling(InPeak) * 1.0001f;
+        }
+        OverDb = 20.f * FMath::LogX(10.f, FMath::Max(Peak, 1e-9f) / Ceiling(InPeak));
+        OverShare = Blocks ? float(Over) / Blocks : 0.f;
+    };
+    for (const int32 Block : {64, 480, 1024})
+    {
+        // A +20 dB step: silence, then a 1 kHz tone at ten times the threshold.
+        TArray<float> Step;
+        Step.SetNumZeroed(48000 * 2);
+        for (int32 F = 24000; F < 48000; ++F) Step[F * 2] = Step[F * 2 + 1] = 10.f * Thr * FMath::Sin(2 * PI * 1000.f * F / Rate);
+        float OverDb, Share;
+        Run(Step, Block, 10.f * Thr, OverDb, Share);
+        AddInfo(FString::Printf(TEXT("step +20 dB, %d-frame blocks: %.3f dB from the ceiling, %.0f %% of blocks over"), Block, OverDb, Share * 100.f));
+        TestTrue(FString::Printf(TEXT("step: never over the ceiling (%d)"), Block), Share == 0.f);
+        // Clicks: one sample at +12 dB every 1000 frames over a bed at -10 dBFS.
+        TArray<float> Clicks;
+        Clicks.SetNumUninitialized(48000 * 2);
+        for (int32 F = 0; F < 48000; ++F) Clicks[F * 2] = Clicks[F * 2 + 1] = (F % 1000 == 500 ? 4.f : 0.316f * FMath::Sin(2 * PI * 200.f * F / Rate));
+        Run(Clicks, Block, 4.f, OverDb, Share);
+        AddInfo(FString::Printf(TEXT("clicks +12 dB, %d-frame blocks: %.3f dB from the ceiling, %.0f %% of blocks over"), Block, OverDb, Share * 100.f));
+        TestTrue(FString::Printf(TEXT("clicks: never over the ceiling (%d)"), Block), Share == 0.f);
+    }
+    // Under the threshold the signal passes unchanged, delayed by the look-ahead less one (479 frames).
+    TArray<float> Quiet;
+    Quiet.SetNumUninitialized(4800 * 2);
+    for (int32 F = 0; F < 4800; ++F) Quiet[F * 2] = Quiet[F * 2 + 1] = 0.5f * FMath::Sin(2 * PI * 300.f * F / Rate);
+    const TArray<float> Original = Quiet;
+    FSCBusLimiter L(Rate, 2, ThrDb, Ratio, 0.010f, 0.050f, 0.f, true, INDEX_NONE);
+    TestEqual(TEXT("latency"), L.Latency(), 479);
+    FSCBusLimiter::FStats S;
+    L.Process(Quiet.GetData(), 4800, S);
+    float MaxErr = 0.f;
+    for (int32 F = 479; F < 4800; ++F) MaxErr = FMath::Max(MaxErr, FMath::Abs(Quiet[F * 2] - Original[(F - 479) * 2]));
+    TestTrue(FString::Printf(TEXT("under the threshold: unchanged, delayed (max error %.6f)"), MaxErr), MaxErr < 1e-6f);
+    TestEqual(TEXT("under the threshold: no gain reduction"), S.GainMinDb, 0.f);
+    // Channel link: a loud left and a quiet right channel. Linked, the right is reduced with the left; unlinked, not.
+    for (const bool bLink : {true, false})
+    {
+        TArray<float> Two;
+        Two.SetNumUninitialized(9600 * 2);
+        for (int32 F = 0; F < 9600; ++F)
+        {
+            Two[F * 2] = 4.f * FMath::Sin(2 * PI * 500.f * F / Rate);
+            Two[F * 2 + 1] = 0.1f * FMath::Sin(2 * PI * 700.f * F / Rate);
+        }
+        FSCBusLimiter Lk(Rate, 2, ThrDb, Ratio, 0.010f, 0.050f, 0.f, bLink, INDEX_NONE);
+        Lk.Process(Two.GetData(), 9600, S);
+        float Right = 0.f;
+        for (int32 F = 4800; F < 9600; ++F) Right = FMath::Max(Right, FMath::Abs(Two[F * 2 + 1]));
+        if (bLink) TestTrue(FString::Printf(TEXT("linked: the quiet channel follows the loud one's gain (%.4f)"), Right), Right < 0.05f);
+        else TestTrue(FString::Printf(TEXT("unlinked: the quiet channel keeps its level (%.4f)"), Right), FMath::IsNearlyEqual(Right, 0.1f, 1e-3f));
+    }
+    // 5.1 with a loud LFE (index 3) left out: the other channels keep their level, the LFE passes at unity (delayed).
+    TArray<float> Six;
+    Six.SetNumUninitialized(4800 * 6);
+    for (int32 F = 0; F < 4800; ++F)
+        for (int32 C = 0; C < 6; ++C) Six[F * 6 + C] = (C == 3 ? 4.f : 0.1f) * FMath::Sin(2 * PI * 100.f * F / Rate);
+    const TArray<float> SixIn = Six;
+    FSCBusLimiter L6(Rate, 6, ThrDb, Ratio, 0.010f, 0.050f, 0.f, true, 3);
+    L6.Process(Six.GetData(), 4800, S);
+    float LfeErr = 0.f, FrontErr = 0.f;
+    for (int32 F = 479; F < 4800; ++F)
+    {
+        LfeErr = FMath::Max(LfeErr, FMath::Abs(Six[F * 6 + 3] - SixIn[(F - 479) * 6 + 3]));
+        FrontErr = FMath::Max(FrontErr, FMath::Abs(Six[F * 6] - SixIn[(F - 479) * 6]));
+    }
+    TestTrue(FString::Printf(TEXT("an LFE left out passes at unity (error %.6f)"), LfeErr), LfeErr < 1e-6f);
+    TestTrue(FString::Printf(TEXT("... and does not reduce the others (error %.6f)"), FrontErr), FrontErr < 1e-6f);
+    // Invalid parameters (ratio below 1): the input passes.
+    TArray<float> Loud;
+    Loud.Init(2.f, 480 * 2);
+    FSCBusLimiter Bad(Rate, 2, ThrDb, 0.5f, 0.010f, 0.050f, 0.f, true, INDEX_NONE);
+    Bad.Process(Loud.GetData(), 480, S);
+    TestTrue(TEXT("invalid parameters pass the input"), Loud[0] == 2.f && Loud.Last() == 2.f);
+    return true;
+}
+
+/** WP-O1-4c-2: the bus meter (FSCBusMeter) measures as sc_meter did: 10 ms blocks by integer division of the rate (220
+ *  frames at 22050 Hz), carried across buffers of any size; an attack of 1 s rises 1 - exp(-1) of a step in 1 s. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioMeterKernelTest, "SCBridge.Audio.MeterKernel", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioMeterKernelTest::RunTest(const FString&)
+{
+    {
+        FSCBusMeter M(22050.f, 2, 0.f, 0.f, 0.f, -60.f, 0.f, false, false);
+        TArray<float> Half;
+        Half.Init(0.5f, 300 * 2);
+        M.Process(Half.GetData(), 100);
+        TestEqual(TEXT("219 frames: no block yet"), M.Process(Half.GetData(), 119), -60.f);
+        TestTrue(TEXT("the 220th frame closes the block"), FMath::IsNearlyEqual(M.Process(Half.GetData(), 1), -6.02f, 0.01f));
+    }
+    {
+        FSCBusMeter M(48000.f, 1, 1.f, 1.f, 0.f, -60.f, 0.f, false, false);
+        TArray<float> Full;
+        Full.Init(1.f, 480);
+        float V = 0.f;
+        for (int32 B = 0; B < 100; ++B) V = M.Process(Full.GetData(), 480); // 1 s of blocks at 0 dBFS
+        const float Expected = -60.f + 60.f * (1.f - FMath::Exp(-1.f));
+        TestTrue(FString::Printf(TEXT("1 s attack after 1 s: %.3f (expected %.3f)"), V, Expected), FMath::IsNearlyEqual(V, Expected, 0.01f));
+    }
+    return true;
+}

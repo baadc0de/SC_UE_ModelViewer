@@ -845,8 +845,8 @@ USoundSubmix* USCAudioSubsystem::BusSubmix(FSCAudioScene& S, uint32 Bus)
     {
         // The bus's own effects in slot order (Gain, EQ, meters, the Peak Limiter) and its side-chain gains, from the data
         // (SCAudioBusFx.h). The Peak Limiter is the game's: its look-ahead is the attack, its ratio is applied as
-        // authored, and its output holds threshold * (peak / threshold)^(1 / ratio) (scbridge sc_limiter). A meter that
-        // applies the downstream volume measures after this bus's and its parents' static levels.
+        // authored, and its output holds threshold * (peak / threshold)^(1 / ratio) (FSCBusLimiter, SCAudioBusKernels.h).
+        // A meter that applies the downstream volume measures after this bus's and its parents' static levels.
         if (!RtpcBank) RtpcBank = MakeShared<FSCRtpcBank>();
         float DownstreamDb = 0.f;
         for (const FSCAudioBus* C : S.Manifest.BusChain(Bus)) DownstreamDb += C->MixDb();
@@ -867,7 +867,7 @@ USoundSubmix* USCAudioSubsystem::BusSubmix(FSCAudioScene& S, uint32 Bus)
             UE_LOG(LogSCAudio, Display, TEXT("AUDIO_BUSFX bus=%u%s"), Bus, *Dsp->Describe());
         }
         if (B->Limiter.bOn)
-            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_LIMITER bus=%u threshold_db=%.2f ratio=%.1f look_ahead_ms=%.1f release_ms=%.1f output_db=%.2f channel_link=%d port=sc_limiter"),
+            UE_LOG(LogSCAudio, Display, TEXT("AUDIO_LIMITER bus=%u threshold_db=%.2f ratio=%.1f look_ahead_ms=%.1f release_ms=%.1f output_db=%.2f channel_link=%d port=sc_limiter_cpp"),
                    Bus, B->Limiter.ThresholdDb, B->Limiter.Ratio, B->Limiter.LookAheadS * 1000.f, B->Limiter.ReleaseS * 1000.f, B->Limiter.OutputDb,
                    B->Limiter.bChannelLink);
     }
