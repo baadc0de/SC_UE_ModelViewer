@@ -7,6 +7,9 @@
 #include "Components/BoxComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCGarageStorePolicyTest, "SCBridge.Garage.StorePolicy",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -105,6 +108,60 @@ bool FSCGarageFloorSearchTest::RunTest(const FString&)
     TestFalse(TEXT("the ship may not occupy the overhead obstruction"), Blocked.bFound);
     TestTrue(TEXT("an obstruction is distinguished from missing floor"), Blocked.Reason.Contains(TEXT("0 without flat floor")));
     TestTrue(TEXT("the clearance check reports the blocked spot"), Blocked.Reason.Contains(TEXT("1 blocked")));
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCGaragePreparedDetailsTest, "SCBridge.Garage.PreparedDetails",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCGaragePreparedDetailsTest::RunTest(const FString&)
+{
+    // The records as DataCore answers them (WP-O1-4b-3c: the prep step reads them as the Garage does).
+    FSCGarageShipDetails D;
+    FString Maker;
+    TestTrue(TEXT("a class record reads"), USCGarageSubsystem::ReadClassDetails(
+        TEXT("{\"vehicleRole\": \"Heavy Freight\", \"Components\": [{\"Other\": 1}, {\"AttachDef\": {\"Manufacturer\": \"SCItemManufacturer.CRUS\", \"Size\": 6}}]}"),
+        D, Maker));
+    TestEqual(TEXT("... its role"), D.Role, FString(TEXT("Heavy Freight")));
+    TestEqual(TEXT("... its size (the first AttachDef's)"), D.Size, FString(TEXT("6")));
+    TestEqual(TEXT("... its manufacturer reference"), Maker, FString(TEXT("SCItemManufacturer.CRUS")));
+    FSCGarageShipDetails Keyed;
+    USCGarageSubsystem::ReadClassDetails(TEXT("{\"vehicleRole\": \"@vehicle_role_key\"}"), Keyed, Maker);
+    TestTrue(TEXT("a localisation key is no role"), Keyed.Role.IsEmpty());
+    TestTrue(TEXT("... and no manufacturer"), Maker.IsEmpty());
+    TestFalse(TEXT("a record that does not read"), USCGarageSubsystem::ReadClassDetails(TEXT("not json"), Keyed, Maker));
+    TestEqual(TEXT("a manufacturer's code"), USCGarageSubsystem::ReadManufacturerCode(TEXT("{\"Code\": \"CRUS\"}")), FString(TEXT("CRUS")));
+    TestTrue(TEXT("... none"), USCGarageSubsystem::ReadManufacturerCode(TEXT("{}")).IsEmpty());
+
+    // The table round-trips (a scratch file, not the prepared one).
+    const FString File = FPaths::ProjectSavedDir() / TEXT("Temp") / TEXT("garage_details_test.json");
+    ON_SCOPE_EXIT { IFileManager::Get().Delete(*File); };
+    TMap<FString, FSCGarageShipDetails> Table;
+    D.Manufacturer = TEXT("CRUS");
+    Table.Add(TEXT("CRUS_Starlifter_C2"), D);
+    FString Error;
+    TestTrue(TEXT("the table saves"), USCGarageSubsystem::SavePreparedDetails(Table, Error, File));
+    TMap<FString, FSCGarageShipDetails> Back;
+    TestTrue(TEXT("... and loads"), USCGarageSubsystem::LoadPreparedDetails(Back, File));
+    const FSCGarageShipDetails* Row = Back.Find(TEXT("CRUS_Starlifter_C2"));
+    TestTrue(TEXT("... the ship's row"), Row && Row->Manufacturer == TEXT("CRUS") && Row->Role == TEXT("Heavy Freight") && Row->Size == TEXT("6"));
+    FFileHelper::SaveStringToFile(TEXT("{\"DRAK_Golem\": {}}"), *File);
+    TestFalse(TEXT("a row without its fields does not read"), USCGarageSubsystem::LoadPreparedDetails(Back, File));
+    FFileHelper::SaveStringToFile(TEXT("{\"DRAK_Golem\": {\"manufacturer\": \"DRAK\", \"role\": \"\", \"size\": 2}}"), *File);
+    TestFalse(TEXT("... nor one with a number for a string"), USCGarageSubsystem::LoadPreparedDetails(Back, File));
+    FFileHelper::SaveStringToFile(TEXT("{\"DRAK_Golem\": {\"manufacturer\": \"DRAK\", \"role\": \"\", \"size\": \"2\", \"fleet\": 0}}"), *File);
+    TestFalse(TEXT("... nor one with a number for the fleet flag"), USCGarageSubsystem::LoadPreparedDetails(Back, File));
+    FFileHelper::SaveStringToFile(TEXT("{\"DRAK_Golem\": 3}"), *File);
+    TestFalse(TEXT("... nor one that is no object"), USCGarageSubsystem::LoadPreparedDetails(Back, File));
+    // A save that did not finish: the table set aside is read, and the next save keeps its rows.
+    IFileManager::Get().Delete(*File);
+    FFileHelper::SaveStringToFile(TEXT("{\"DRAK_Golem\": {\"manufacturer\": \"DRAK\", \"role\": \"\", \"size\": \"2\"}}"), *(File + TEXT(".older")));
+    ON_SCOPE_EXIT { IFileManager::Get().Delete(*(File + TEXT(".older"))); };
+    TestTrue(TEXT("the set-aside table reads"), USCGarageSubsystem::LoadPreparedDetails(Back, File) && Back.Contains(TEXT("DRAK_Golem")));
+    Back.Add(TEXT("CRUS_Starlifter_C2"), D);
+    TestTrue(TEXT("... a save after it"), USCGarageSubsystem::SavePreparedDetails(Back, Error, File));
+    TestTrue(TEXT("... keeps its rows"), USCGarageSubsystem::LoadPreparedDetails(Back, File) && Back.Contains(TEXT("DRAK_Golem")) &&
+                                         Back.Contains(TEXT("CRUS_Starlifter_C2")) && !IFileManager::Get().FileExists(*(File + TEXT(".older"))));
+    TMap<FString, FSCGarageShipDetails> None;
+    TestFalse(TEXT("no table: nothing"), USCGarageSubsystem::LoadPreparedDetails(None, File + TEXT(".missing")) || !None.IsEmpty());
     return !HasAnyErrors();
 }
 #endif

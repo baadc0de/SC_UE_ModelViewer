@@ -159,8 +159,9 @@ bool FSCCargoScenario::Parse(const FString& Json, FSCCargoScenario& Out, FString
         for (const auto& V : *Things)
         {
             const TOptional<FTransform> At = Pose(V->AsObject());
-            if (Str(V->AsObject(), TEXT("entity")).IsEmpty() || !At) { Error = TEXT("obstacles need entity and at"); return false; }
-            Out.Obstacles.Add({Str(V->AsObject(), TEXT("entity")), *At});
+            const FString Entity = Str(V->AsObject(), TEXT("entity")).TrimStartAndEnd(); // as spawned, prepared and recorded
+            if (Entity.IsEmpty() || !At) { Error = TEXT("obstacles need entity and at"); return false; }
+            Out.Obstacles.Add({Entity, *At});
         }
     if (Root->TryGetArrayField(TEXT("loose"), Things))
         for (const auto& V : *Things)

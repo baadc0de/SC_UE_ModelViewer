@@ -15,6 +15,17 @@ struct FSCUiBinding;
 enum class ESCGarageStatus : uint8 { Stored, Retrieving, InHangar, Unavailable };
 enum class ESCGaragePlacement : uint8 { Bay, Floor };
 
+/** A ship's Garage details (the fleet table's columns), from its EntityClassDefinition and manufacturer records. */
+struct UNREALCITIZEN_API FSCGarageShipDetails
+{
+    FString Manufacturer, Role, Size;
+    /** A ship of the fleet (a scenario's vehicle); false: prepared only as something else (a cargo setup's obstacle, e.g. an
+     *  asteroid), so its prepared level is no Garage ship. */
+    bool bFleet = true;
+    /** The archive build the row was read from (the ship's prepared level's, at prep); empty: unknown. */
+    FString Build;
+};
+
 struct FSCGarageRow
 {
     FString Entity, DisplayName, Manufacturer, Role, Size, Paint, Error;
@@ -63,6 +74,18 @@ public:
     FString Paint(int32 Ship, const FString& Palette);
     FString PaintEntity(const FString& Entity, const FString& Palette);
 
+    /** The details in an EntityClassDefinition record (role, size) and the reference of its manufacturer record (empty:
+     *  none). False when the record does not read. */
+    static bool ReadClassDetails(const FString& ClassJson, FSCGarageShipDetails& Out, FString& OutManufacturerRef);
+    /** A manufacturer record's code (empty when it has none or does not read). */
+    static FString ReadManufacturerCode(const FString& Json);
+    /** WP-O1-4b-3c: the prepared ships' details, read at prep (Content/SCPrepared/Shared/garage_details.json, entity ->
+     *  details; beside the records, apart from them: no scenario name can be it):
+     *  a ship listed there needs no archive for its row. */
+    static FString PreparedDetailsFile();
+    static bool LoadPreparedDetails(TMap<FString, FSCGarageShipDetails>& Out, const FString& File = PreparedDetailsFile());
+    static bool SavePreparedDetails(const TMap<FString, FSCGarageShipDetails>& Details, FString& Error, const FString& File = PreparedDetailsFile());
+
 private:
     USCViewerSubsystem* Viewer() const;
     static FString Canonical(FString Entity);
@@ -79,8 +102,9 @@ private:
     TMap<FString, FString> Failures;
     int32 RequestedGeneration = INDEX_NONE;
     bool bScannedCooked = false;
-    struct FDetails { FString Manufacturer, Role, Size; };
+    using FDetails = FSCGarageShipDetails;
     TMap<FName, FDetails> Details;
+    TMap<FString, FSCGarageShipDetails> PreparedDetails; // read once with the prepared ships (RequestCatalog)
     TMap<FString, FString> ManufacturerCodes;
     TArray<FString> DetailsQueue;
     bool bDetailsReading = false;

@@ -43,7 +43,7 @@ $Format = [int]([regex]::Match((Get-Content -Raw $Header), 'FormatVersion = (\d+
 if (-not $Format) { throw "No FormatVersion in $Header" }
 $RecordFile = Join-Path $Root "game\Content\SCPrepared\$Scenario.json"
 if (-not (Test-Path $RecordFile)) { throw "Scenario $Scenario is not prepared (no $RecordFile): run $Prepare" }
-$Record = Get-Content -Raw $RecordFile | ConvertFrom-Json
+$Record = [IO.File]::ReadAllText($RecordFile) | ConvertFrom-Json
 if ([int]$Record.format -ne $Format) { throw "Scenario $Scenario was prepared with format $($Record.format), current $Format`: run $Prepare" }
 $Definition = Join-Path $Root "game\Config\Scenarios\$Scenario.json"
 if (-not (Test-Path $Definition)) { throw "No scenario $Definition" }
@@ -64,9 +64,14 @@ if (-not $Record.traversal_clips) { throw "Scenario $Scenario's record names no 
 $Levels = @($Record.vehicle_level, $Record.player_level) + @($Record.environment_level | Where-Object { $_ })
 # The cargo setup's prepared boxes (WP-O1-4b-3): a level per box entity, streamed as the box's template.
 if ($Record.cargo_levels) { $Levels += @($Record.cargo_levels.PSObject.Properties | ForEach-Object { $_.Value }) }
-# The levels are cooked as maps; the traversal clips (an asset under /Game/SC/Players/Traversal, always cooked) are checked alike.
-foreach ($Level in $Levels + @($Record.traversal_clips)) {
-    $Extension = if ($Level -eq $Record.traversal_clips) { '.uasset' } else { '.umap' }
+# Its obstacles' prepared levels (WP-O1-4b-3c): streamed as extra instances.
+if ($Record.obstacle_levels) { $Levels += @($Record.obstacle_levels.PSObject.Properties | ForEach-Object { $_.Value }) | Where-Object { $Levels -notcontains $_ } }
+# The levels are cooked as maps; the traversal clips (an asset under /Game/SC/Players/Traversal, always cooked) and the music
+# waves (assets under /Game/SC/Music, always cooked; WP-O1-4b-3c) are checked alike.
+$Assets = @($Record.traversal_clips)
+if ($Record.music_waves) { $Assets += @($Record.music_waves.PSObject.Properties | ForEach-Object { $_.Value }) }
+foreach ($Level in $Levels + $Assets) {
+    $Extension = if ($Assets -contains $Level) { '.uasset' } else { '.umap' }
     $File = Join-Path $Root ('game\Content' + $Level.Substring(5).Replace('/', '\') + $Extension)
     if (-not (Test-Path $File)) { throw "$Level is not prepared ($File): run $Prepare" }
     $Stamp = [IO.Path]::ChangeExtension($File, '.cookformat')
@@ -95,6 +100,9 @@ $Extra = ' -SCMaxQuality'
 $Editor = Join-Path $Engine 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 & $Editor $Project -run=SCFxBuild -VerifyContract -unattended -nosplash -nopause
 if ($LASTEXITCODE -ne 0) { throw "Stale FX under /Game/SC/FX (SC_FX_STALE in the log): rebuild them with -run=SCFxBuild first." }
+# The record runs as the game decides it (FUCPrepared::Problem: every level, box, obstacle, music wave and Garage detail).
+& $Editor $Project -run=SCPrepare "-Scenario=$Scenario" -Check -unattended -nosplash -nopause
+if ($LASTEXITCODE -ne 0) { throw "Scenario $Scenario's prepared record is stale (SC_PREPARE_CHECK in the log): run $Prepare" }
 
 & (Join-Path $Engine 'Engine\Build\BatchFiles\RunUAT.bat') BuildCookRun "-project=$Project" "-platform=$Platform" "-clientconfig=$Config" `
     -build -cook -stage -pak -iostore -package -archive "-archivedirectory=$Out" "-map=$Maps" -nocompileeditor -unattended -utf8output `

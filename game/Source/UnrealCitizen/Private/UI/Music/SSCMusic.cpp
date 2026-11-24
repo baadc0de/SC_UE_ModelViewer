@@ -158,7 +158,8 @@ void SSCMusic::Tick(const FGeometry& Geometry, double Time, float Delta)
         Player->RequestCatalogue();
     }
     const auto& Catalogue = Player->GetCues();
-    if (!bNewArchive && Rows.Num() == Catalogue.Num()) return;
+    if (!bNewArchive && Player->GetCuesRevision() == CuesRevision) return;
+    CuesRevision = Player->GetCuesRevision();
     Rows.Reset();
     TMap<FString, int32> TitleCounts;
     TMap<FString, int32> Variants;
@@ -191,10 +192,11 @@ FText SSCMusic::LibraryStatus() const
 {
     const auto* Viewer = Model->GetViewer();
     const auto* Player = Music();
-    if (Viewer && !Viewer->CanReadArchive())
+    const bool bLoaded = Player && Player->HasCatalogue(); // the archive's, or a prepared scenario's (WP-O1-4b-3c)
+    if (Viewer && !Viewer->CanReadArchive() && !bLoaded)
         return LOCTEXT("NoArchiveReader", "The soundtrack library is unavailable in this build.");
-    if (!Viewer || !Player || Viewer->GetArchiveState() == ESCArchiveState::Closed ||
-        Viewer->GetArchiveState() == ESCArchiveState::Failed)
+    if (!bLoaded && (!Viewer || !Player || Viewer->GetArchiveState() == ESCArchiveState::Closed ||
+        Viewer->GetArchiveState() == ESCArchiveState::Failed))
         return LOCTEXT("NeedsArchive", "Open Star Citizen’s game archive to browse the soundtrack.");
     if (!Player->HasCatalogue() && !Player->GetError().IsEmpty())
         return LOCTEXT("Unavailable", "The soundtrack library is unavailable.");

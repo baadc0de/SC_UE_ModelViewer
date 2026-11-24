@@ -12,6 +12,9 @@
 #include "SCViewerSubsystem.h"
 #include "Cargo/SCCargoTypes.h"
 #include "Engine/World.h"
+#include "Engine/LevelStreamingDynamic.h"
+#include "Engine/Level.h"
+#include "SCDirt.h"
 #include "Engine/StaticMeshActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "EngineUtils.h"
@@ -264,7 +267,7 @@ double FSCVehicleInstances::FloorZ() const
     return 0;
 }
 
-int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest, bool bGarageFloor)
+int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest, bool bGarageFloor, const FString& Level)
 {
     FInstance& I = Instances.AddDefaulted_GetRef();
     I.Info.Id = NextId++;
@@ -274,11 +277,21 @@ int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTrans
     I.Requested = World;
     I.bRest = bRest;
     I.bGarageFloor = bGarageFloor;
+    I.LevelOverride = Level;
     UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_QUEUE idx=%d entity=%s placement=%s"), I.Info.Id, I.Info.Entity.IsEmpty() ? TEXT("<loaded>") : *I.Info.Entity,
            bAuto ? TEXT("auto") : *FString::Printf(TEXT("at=%s yaw=%.0f rest=%d"), *Metres(World.GetLocation()), World.Rotator().Yaw, bRest));
-    // Every instance is imported (one sharing a retained set too): without the importer (a packaged game) none can start.
-    if (!ISCImporting::Get()) Fail(I, TEXT("this build has no importer (the SCBridgeImport plugin)"));
-    return I.Info.Id;
+    // Without the importer (a packaged game) only an entity with a prepared level can come (one sharing a retained set
+    // is assembled by the importer too).
+    // ("loaded", or the ship being loaded now (its level may be a paint's), is decided when the instance starts.)
+    const bool bPendingShip = (I.Info.Entity.IsEmpty() && Viewer.GetLoadedEntity().IsEmpty()) ||
+                              (!I.Info.Entity.IsEmpty() && Viewer.IsShipLoading() &&
+                               USCViewerSubsystem::EntityName(I.Info.Entity).Equals(USCViewerSubsystem::EntityName(Viewer.GetPendingEntity()), ESearchCase::IgnoreCase));
+    I.bAwaitsPending = bPendingShip;
+    const int32 Id = I.Info.Id; // by value: Fail's listeners may change the list
+    if (const FString Wanted = I.Info.Entity.IsEmpty() ? Viewer.GetLoadedEntity() : I.Info.Entity;
+        !bPendingShip && !Wanted.IsEmpty() && !ISCImporting::Get() && Level.IsEmpty() && Viewer.PreparedShipLevelFor(Wanted).IsEmpty())
+        Fail(I, TEXT("the ship is not prepared and this build has no importer (the SCBridgeImport plugin)"));
+    return Id;
 }
 
 FSCVehicleInstances::FInstance* FSCVehicleInstances::FindInstance(int32 Id)
@@ -388,11 +401,14 @@ void FSCVehicleInstances::Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool b
         if (ASCVehicle* V = I.Info.Actor.Get(/*bEvenIfPendingKill*/ true))
         {
             Viewer.ForgetGeometry(V);
-            Actors.Add(V);
+            if (!I.Level.IsValid()) Actors.Add(V); // a streamed copy goes with its level, after this collection
             // The viewer tracks the loaded vehicle's session (shared by its instances) itself.
             if (!Primary.IsValid() || V->SessionPath != Primary->SessionPath) Sessions.AddUnique(V->SessionPath);
-            if (bWorldAlive && IsValid(V) && !V->IsActorBeingDestroyed() && V->GetWorld() && !V->GetWorld()->bIsTearingDown) V->Destroy();
+            if (bWorldAlive && !I.Level.IsValid() && IsValid(V) && !V->IsActorBeingDestroyed() && V->GetWorld() && !V->GetWorld()->bIsTearingDown)
+                V->Destroy();
         }
+    if (bWorldAlive)
+        for (FInstance& I : Instances) UnloadLevel(I); // prepared instances: their levels (and vehicles) go
     if (Tracked) Track(Actors, Sessions, *Tracked);
     if (!Instances.IsEmpty() || !AssetSets.IsEmpty())
         UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_RESET instances=%d asset_sets=%d tracked_objects=%d"), Instances.Num(), AssetSets.Num(),
@@ -437,9 +453,14 @@ bool FSCVehicleInstances::Destroy(int32 Id)
     if (ASCVehicle* V = I.Info.Actor.Get())
     {
         Viewer.ForgetGeometry(V);
-        Actors.Add(V);
-        V->Destroy();
+        // A prepared one goes with its level (asynchronously: not counted in this collection).
+        if (!I.Level.IsValid())
+        {
+            Actors.Add(V);
+            V->Destroy();
+        }
     }
+    UnloadLevel(I);
     // The last instance of an entity other than the loaded one takes its asset set (and session objects) along.
     const bool bLastOfKey = !I.Key.IsEmpty() && I.Key != PrimaryKey && !Instances.ContainsByPredicate([&](const FInstance& X) { return X.Key == I.Key; });
     int32 Released = 0;
@@ -462,8 +483,9 @@ bool FSCVehicleInstances::Destroy(int32 Id)
     TArray<TWeakObjectPtr<UObject>> Tracked;
     Track(Actors, Sessions, Tracked);
     const int32 Alive = CollectAndCount(Tracked);
-    UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_DESTROY idx=%d entity=%s tracked=%d alive_after_gc=%d asset_set_released=%d shared_objects=%d"), Id,
-           *I.Info.Entity, Tracked.Num(), Alive, bLastOfKey && Released > 0, Released);
+    // A prepared instance's objects go when its level has unloaded (asynchronously, after this count).
+    UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_DESTROY idx=%d entity=%s prepared=%d tracked=%d alive_after_gc=%d asset_set_released=%d shared_objects=%d"), Id,
+           *I.Info.Entity, I.Info.bPrepared, Tracked.Num(), Alive, bLastOfKey && Released > 0, Released);
     Changed();
     return true;
 }
@@ -496,25 +518,71 @@ void FSCVehicleInstances::Tick()
         return;
     }
     if (Viewer.IsBusy()) return;
+    // More of "the loaded ship", or of the ship that was being loaded at the request, with no ship loaded or loading (its
+    // load failed or was cancelled): none can come.
+    // One per tick: Fail's listeners may change the list.
+    if (!Primary.IsValid() && Viewer.GetLoadedEntity().IsEmpty())
+        if (FInstance* Waiting = Instances.FindByPredicate([](const FInstance& I) {
+                return I.Info.State == ESCVehicleInstanceState::Queued && !I.bGarageFloor && (I.Info.Entity.IsEmpty() || I.bAwaitsPending);
+            }))
+        {
+            Fail(*Waiting, TEXT("no ship is loaded"));
+            return;
+        }
+    // One that must be exported waits while the archive is still opening (Start leaves it queued); a prepared one, or one
+    // assembled from a retained import, need not: the first that can start now does.
+    const auto CanStartNow = [&](const FInstance& I) {
+        const FString Entity = I.Info.Entity.IsEmpty() ? Viewer.GetLoadedEntity() : I.Info.Entity;
+        if (!I.LevelOverride.IsEmpty() || !Viewer.PreparedShipLevelFor(Entity).IsEmpty()) return true;
+        const TSharedPtr<FSCImportedAssets>* Set = AssetSets.Find(KeyFor(Entity));
+        return (Set && *Set && ShareAssets()) || Viewer.GetArchiveState() != ESCArchiveState::Opening;
+    };
     if (FInstance* Next = Instances.FindByPredicate([&](const FInstance& I) {
-        return I.Info.State == ESCVehicleInstanceState::Queued && (Primary.IsValid() || (I.bGarageFloor && !I.Info.Entity.IsEmpty()));
+        // A named one starts without a loaded ship too (none is loading here): its own prepared level or import; "loaded"
+        // waits for the loaded ship.
+        return I.Info.State == ESCVehicleInstanceState::Queued && (Primary.IsValid() || !I.Info.Entity.IsEmpty()) && CanStartNow(I);
     }))
         Start(*Next);
 }
 
 void FSCVehicleInstances::Start(FInstance& I)
 {
+    const FString Entity = I.Info.Entity.IsEmpty() ? Viewer.GetLoadedEntity() : I.Info.Entity;
+    // A prepared entity streams its level: nothing to export or import (WP-O1-4b-3c). More of the loaded ship stream the
+    // level it came from (a scenario's paint); another entity its own prepared level.
+    const FString Prepared = !I.LevelOverride.IsEmpty() ? I.LevelOverride : Viewer.PreparedShipLevelFor(Entity);
     // An instance that must be exported waits, queued, while the archive is still opening (a primary streamed from a
     // prepared level can be ready first); it fails only once the archive failed or is closed.
+    if (Prepared.IsEmpty())
     {
-        const TSharedPtr<FSCImportedAssets>* Set = AssetSets.Find(KeyFor(I.Info.Entity.IsEmpty() ? Viewer.GetLoadedEntity() : I.Info.Entity));
+        const TSharedPtr<FSCImportedAssets>* Set = AssetSets.Find(KeyFor(Entity));
         if (!(Set && *Set && ShareAssets()) && Viewer.GetArchiveState() == ESCArchiveState::Opening) return;
     }
     UWorld* World = Viewer.GetGameInstance()->GetWorld();
-    if (I.Info.Entity.IsEmpty()) I.Info.Entity = Viewer.GetLoadedEntity();
+    I.Info.Entity = Entity;
     I.Key = KeyFor(I.Info.Entity);
     I.Started = FPlatformTime::Seconds();
     Running = I.Info.Id;
+    if (!Prepared.IsEmpty())
+    {
+        // A copy of the loaded ship's level: the loaded ship's key, so both use one measured envelope when placing.
+        if (Prepared == Viewer.GetLoadedShipLevel() && !PrimaryKey.IsEmpty()) I.Key = PrimaryKey;
+        // Its own instance of the level, at the origin and not visible: the vehicle is hidden first, then placed.
+        ULevelStreamingDynamic::FLoadLevelInstanceParams Params(World, Prepared, FTransform::Identity);
+        Params.bInitiallyVisible = false;
+        bool bOK = false;
+        ULevelStreamingDynamic* Level = ULevelStreamingDynamic::LoadLevelInstance(Params, bOK);
+        if (!bOK || !Level)
+        {
+            Fail(I, TEXT("cannot stream the prepared level ") + Prepared);
+            return;
+        }
+        I.Level = Level;
+        I.Info.bPrepared = true;
+        I.Info.State = ESCVehicleInstanceState::Importing;
+        UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_PREPARED idx=%d entity=%s level=%s streaming"), I.Info.Id, *Entity, *Prepared);
+        return;
+    }
     FSCImportOptions Options;
     Options.World = World;
     Options.ActorTransform = I.Info.bAutoPlaced ? FTransform::Identity : I.Requested;
@@ -540,12 +608,91 @@ void FSCVehicleInstances::Start(FInstance& I)
     I.Info.State = ESCVehicleInstanceState::Exporting;
 }
 
+void FSCVehicleInstances::UnloadLevel(FInstance& I)
+{
+    // Its vehicle out of sight and collision now (placement of the next ship, the player): the level unloads later.
+    if (ASCVehicle* V = I.Streamed.Get(); V && I.Level.IsValid() && IsValid(V) && V->GetWorld() && !V->GetWorld()->bIsTearingDown)
+    {
+        V->SetActorHiddenInGame(true);
+        V->SetActorEnableCollision(false);
+    }
+    Viewer.ReleaseLevel(I.Level.Get());
+    I.Level.Reset();
+    I.Streamed.Reset();
+}
+
+void FSCVehicleInstances::StepStreaming(FInstance& I)
+{
+    ULevelStreamingDynamic* Level = I.Level.Get();
+    if (!Level || Level->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+    {
+        const FString Name = Level ? Level->GetWorldAssetPackageName() : FString();
+        UnloadLevel(I);
+        Fail(I, TEXT("the prepared level did not load: ") + Name);
+        return;
+    }
+    ULevel* Loaded = Level->GetLoadedLevel();
+    if (!Loaded) return;
+    if (!I.Streamed.IsValid())
+    {
+        // Loaded, not yet visible: its vehicle is hidden before it can be drawn at the origin.
+        ASCVehicle* Found = nullptr;
+        for (AActor* Actor : Loaded->Actors)
+            if ((Found = Cast<ASCVehicle>(Actor)) != nullptr) break;
+        if (!Found)
+        {
+            UnloadLevel(I);
+            Fail(I, TEXT("the prepared level holds no vehicle actor"));
+            return;
+        }
+        // The entity asked for (a level name drops characters: another entity's level can answer a mistyped name).
+        const FString Held = USCViewerSubsystem::EntityName(Found->Manifest.Root.EntityName); // as an entity is asked for
+        if (const FString Wanted = USCViewerSubsystem::EntityName(I.Info.Entity); Held.IsEmpty() || !Held.Equals(Wanted, ESearchCase::IgnoreCase))
+        {
+            UnloadLevel(I);
+            Fail(I, FString::Printf(TEXT("the prepared level %s holds %s, not %s"), *Level->GetWorldAssetPackageName(),
+                                    Held.IsEmpty() ? TEXT("no named entity") : *Held, *I.Info.Entity));
+            return;
+        }
+        I.Info.Entity = Held; // published by its entity's name (whatever spelling asked for it): what effects and owners key on
+        Found->SetActorHiddenInGame(true);
+        Found->bDeferCookedAudio = true; // its audio once it is placed (BeginPlay runs at the origin)
+        // Its colliders register with the level at the origin: none until it is placed (a player or a box there).
+        I.bStreamedCollision = Found->GetActorEnableCollision();
+        Found->SetActorEnableCollision(false);
+        // Its own panel targets before its first draw (the level's saved ones are the other copies' too).
+        Found->IsolateDrawnPanels();
+        I.Streamed = Found;
+        Level->SetShouldBeVisible(true);
+        return;
+    }
+    if (!Level->IsLevelVisible()) return;
+    ASCVehicle* Actor = I.Streamed.Get();
+    // Runtime-only state the prepared level does not keep (as for the loaded vehicle's): shadows, dirt.
+    Actor->RefreshLightShadowPolicy();
+    FSCDirt::Push(Actor->GetWorld());
+    if (!I.Info.bAutoPlaced) Actor->SetActorTransform(I.Requested, false, nullptr, ETeleportType::TeleportPhysics);
+    // The level was saved resting on the floor (gear deployed, RestOnFloor at prep): one that does not rest (in space) takes
+    // its authored pose, as an imported one has.
+    if (!I.Info.bAutoPlaced && !I.bRest)
+        Actor->ResetPose(); // (its doors' rest poses and open lifts' doors with it)
+    I.ImportSeconds = FPlatformTime::Seconds() - I.Started;
+    UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_PREPARED idx=%d entity=%s visible stream_s=%.2f"), I.Info.Id, *I.Info.Entity, I.ImportSeconds);
+    Running = INDEX_NONE;
+    Finish(I, Actor); // (the last use of I: its listeners may change the instance list)
+}
+
 void FSCVehicleInstances::StepRunning()
 {
     FInstance* I = FindInstance(Running);
     if (!I)
     {
         Running = INDEX_NONE;
+        return;
+    }
+    if (I->Info.bPrepared)
+    {
+        StepStreaming(*I);
         return;
     }
     if (Export.IsValid())
@@ -620,6 +767,7 @@ void FSCVehicleInstances::StepRunning()
 
 void FSCVehicleInstances::Fail(FInstance& I, const FString& Error)
 {
+    UnloadLevel(I); // a prepared instance's level goes with it
     I.Info.State = ESCVehicleInstanceState::Failed;
     I.Info.Error = Error;
     if (Running == I.Info.Id) Running = INDEX_NONE;
@@ -721,23 +869,40 @@ void FSCVehicleInstances::Finish(FInstance& I, ASCVehicle* Actor)
     FString Error;
     if (!Place(I, {}, Error))
     {
-        Actor->Destroy();
+        if (!I.Level.IsValid()) Actor->Destroy(); // a prepared one goes with its level (Fail)
         I.Info.Actor = nullptr;
         Fail(I, Error);
         return;
     }
-    Actor->BuildExploration();
+    if (!I.Info.bPrepared) Actor->BuildExploration(); // a prepared level keeps its own (built at prep, actor-relative)
     Actor->SetActorHiddenInGame(false);
     PlacedIn = Viewer.GetEnvironment();
     SCLook::UpdateShortRangeAO(Actor->GetWorld());
     SCLook::RefreshGlassRefraction(Actor->GetWorld());
+    if (I.Info.bPrepared)
+    {
+        // A streamed copy, placed: its audio, and its collision back, before anyone hears it is ready. Components
+        // registered while it was off may have skipped their bodies (an instanced part creates none then): made now.
+        Actor->StartCookedAudio();
+        Actor->SetActorEnableCollision(I.bStreamedCollision);
+        int32 Remade = 0;
+        TArray<UPrimitiveComponent*> Primitives;
+        Actor->GetComponents(Primitives);
+        for (UPrimitiveComponent* C : Primitives)
+            if (C->IsRegistered() && C->IsCollisionEnabled() && !C->IsPhysicsStateCreated())
+            {
+                C->RecreatePhysicsState();
+                ++Remade;
+            }
+        UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_PREPARED idx=%d collision=%d bodies_made=%d"), I.Info.Id, I.bStreamedCollision, Remade);
+    }
     I.Info.State = ESCVehicleInstanceState::Ready;
     I.Info.Seconds = FPlatformTime::Seconds() - I.Started;
     const FBox Bounds = FSCEnvironment::SolidBounds(Actor);
     UE_LOG(LogSCVehicles, Display,
-           TEXT("VEHICLE_SPAWN idx=%d entity=%s ok=1 at=%s yaw=%.0f auto=%d shared=%d export_s=%.2f import_s=%.2f place_s=%.2f total_s=%.2f bounds_m=%s..%s "
+           TEXT("VEHICLE_SPAWN idx=%d entity=%s ok=1 at=%s yaw=%.0f auto=%d shared=%d prepared=%d export_s=%.2f import_s=%.2f place_s=%.2f total_s=%.2f bounds_m=%s..%s "
                 "rigs=%d lights=%d meshes=%d spawns=%d doors=%d"),
-           I.Info.Id, *I.Info.Entity, *Metres(Actor->GetActorLocation()), Actor->GetActorRotation().Yaw, I.Info.bAutoPlaced, I.Info.bShared, I.ExportSeconds,
+           I.Info.Id, *I.Info.Entity, *Metres(Actor->GetActorLocation()), Actor->GetActorRotation().Yaw, I.Info.bAutoPlaced, I.Info.bShared, I.Info.bPrepared, I.ExportSeconds,
            I.ImportSeconds, FPlatformTime::Seconds() - PlaceStart, I.Info.Seconds, *Metres(Bounds.Min), *Metres(Bounds.Max), Actor->Rigs.Num(),
            Actor->Lights.Num(), Actor->Meshes.Num(), Actor->SpawnPoints.Num(), Actor->Doors.Num());
     Changed();

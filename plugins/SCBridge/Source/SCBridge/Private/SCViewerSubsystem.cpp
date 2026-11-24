@@ -414,9 +414,7 @@ void USCViewerSubsystem::RequestEnvironment(const FString& Folder)
 void USCViewerSubsystem::UnloadEnvironmentLevel()
 {
     if (!EnvLevel) return;
-    EnvLevel->SetShouldBeLoaded(false);
-    EnvLevel->SetShouldBeVisible(false);
-    EnvLevel->SetIsRequestingUnloadAndRemoval(true);
+    ReleaseLevel(EnvLevel);
     EnvLevel = nullptr;
 }
 namespace
@@ -808,11 +806,25 @@ void USCViewerSubsystem::SetEnvironmentState(const FString& State)
     FSCEnvironment::SetState(Environment.Get(), EnvironmentState);
     if (Environment.IsValid()) Environment->BuildWaypoints(); // the new pose moves pads and kiosks riding a mechanism
 }
-FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
+FString USCViewerSubsystem::CookedShipLevel(const FString& EntityOrRecord)
 {
+    // A record's name (an adopted package's manifest: EntityClassDefinition.<entity>) is its entity's level.
+    const FString Entity = EntityName(EntityOrRecord);
     if (Entity.IsEmpty() || !SCViewerShell::UsesCookedLevels() || FParse::Param(FCommandLine::Get(), TEXT("SCNoCooked"))) return FString();
     const FString Level = ShipLevelPath(Entity);
     return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) && SCViewerShell::PassesCookedLevelCheck(Level) ? Level : FString();
+}
+FString USCViewerSubsystem::EntityName(const FString& EntityOrRecord)
+{
+    FString Name = EntityOrRecord.TrimStartAndEnd();
+    Name.RemoveFromStart(TEXT("EntityClassDefinition."), ESearchCase::IgnoreCase);
+    return Name;
+}
+FString USCViewerSubsystem::PreparedShipLevelFor(const FString& Entity) const
+{
+    const FString Asked = EntityName(Entity), Loaded = EntityName(LoadedEntity);
+    if (!LoadedShipLevel.IsEmpty() && Asked.Equals(Loaded, ESearchCase::IgnoreCase)) return LoadedShipLevel;
+    return CookedShipLevel(Asked);
 }
 void USCViewerSubsystem::CancelPendingScript(bool bSceneGoing)
 {
@@ -853,10 +865,13 @@ bool USCViewerSubsystem::StartLoad(const FString& Entity, USCViewOptions* InOpti
     Report = FSCLoadReport();
     Report.Entity = Entity;
     Report.Options = LoadOptions->Describe();
-    PendingEntity = Entity;
+    // A prepared ship by its entity's name (any spelling naming the same level is the same ship: one key, one loaded name).
+    const FString Name = Cooked.IsEmpty() ? Entity : EntityName(Entity);
+    PendingEntity = Name;
     Report.ArchiveGeneration = int32(ArchiveGeneration);
-    PendingKey = FString::Printf(TEXT("%u|%s|%s"), ArchiveGeneration, *Entity.ToLower(), *LoadOptions->GetHash());
+    PendingKey = FString::Printf(TEXT("%u|%s|%s"), ArchiveGeneration, *Name.ToLower(), *LoadOptions->GetHash());
     if (!Cooked.IsEmpty()) PendingKey += TEXT("|") + Cooked; // another level of the entity (a prepared paint) is another load
+    PendingShipLevel = Cooked;
     LoadStart = FPlatformTime::Seconds();
     UE_LOG(LogSCViewer, Display, TEXT("VIEWER_LOAD_START entity=%s options=\"%s\""), *Entity, *Report.Options);
     if (!bRebuildProcessed && PendingKey == LoadedKey && Vehicle.IsValid())
@@ -1217,6 +1232,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
             Vehicle = Result.Vehicle;
             USCPlacementLibrary::RestOnFloor(Vehicle.Get(), ViewerFloorZ);
             LoadedEntity = PendingEntity;
+            LoadedShipLevel = PendingShipLevel;
             LoadedKey = PendingKey;
             if (VehicleInstances) VehicleInstances->SetPrimary(Vehicle.Get(), Job->GetRetainedAssets(), LoadedKey);
             Job.Reset();
@@ -1311,23 +1327,30 @@ void USCViewerSubsystem::StepCookedShip()
         FinishLoad(ESCLoadPhase::Failed, TEXT("the cooked ship level holds no vehicle actor"));
         return;
     }
+    // The entity asked for (a level name drops characters: another entity's level can answer a mistyped name).
+    const FString Held = EntityName(Cooked->Manifest.Root.EntityName), Wanted = EntityName(PendingEntity);
+    if (Held.IsEmpty() || !Held.Equals(Wanted, ESearchCase::IgnoreCase))
+    {
+        UnloadShipLevel();
+        FinishLoad(ESCLoadPhase::Failed, FString::Printf(TEXT("the cooked ship level holds %s, not %s"), Held.IsEmpty() ? TEXT("no named entity") : *Held, *Wanted));
+        return;
+    }
     // Runtime-only state the cook does not keep (as for a cooked environment): the light shadow policy, dirt parameters.
     Vehicle = Cooked;
     Cooked->RefreshLightShadowPolicy();
     FSCDirt::Push(GetViewerWorld());
     Report.ImportSeconds = FPlatformTime::Seconds() - ImportStart;
     LoadedEntity = PendingEntity;
+    LoadedShipLevel = PendingShipLevel;
     LoadedKey = PendingKey;
-    // TODO(WP-K1): extra instances of a cooked ship (another level instance at a transform); none retained here.
+    // Extra instances of it stream their own instance of the level (FSCVehicleInstances, WP-O1-4b-3c): none retained here.
     if (VehicleInstances) VehicleInstances->SetPrimary(Cooked, nullptr, LoadedKey);
     FinishLoad(ESCLoadPhase::Succeeded, FString());
 }
 void USCViewerSubsystem::UnloadShipLevel()
 {
     if (!ShipLevel) return;
-    ShipLevel->SetShouldBeLoaded(false);
-    ShipLevel->SetShouldBeVisible(false);
-    ShipLevel->SetIsRequestingUnloadAndRemoval(true);
+    ReleaseLevel(ShipLevel);
     ShipLevel = nullptr;
 }
 
@@ -1374,6 +1397,7 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
     Vehicle = nullptr;
     LoadedEntity.Empty();
     LoadedKey.Empty();
+    LoadedShipLevel.Empty();
     if (!bCollect || Tracked.IsEmpty()) return;
     const int32 Alive = CollectAndCount(Tracked);
     Report.PreviousObjects = Tracked.Num();
@@ -1618,21 +1642,25 @@ void USCViewerSubsystem::StepPreparedPlayerKit(bool bBlocking)
 void USCViewerSubsystem::UnloadKitLevel()
 {
     if (!KitLevel) return;
+    ReleaseLevel(KitLevel);
+    KitLevel = nullptr;
+}
+void USCViewerSubsystem::ReleaseLevel(ULevelStreamingDynamic* Level)
+{
+    if (!Level) return;
     // A level that failed to load is past the streaming states a removal request is handled in: the world drops it now, else
     // each retry would leave one more streaming level behind.
-    if (KitLevel->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
+    if (Level->GetLevelStreamingState() == ELevelStreamingState::FailedToLoad)
     {
-        if (UWorld* World = KitLevel->GetWorld()) World->RemoveStreamingLevel(KitLevel);
-        KitLevel = nullptr;
+        if (UWorld* World = Level->GetWorld()) World->RemoveStreamingLevel(Level);
         return;
     }
-    KitLevel->SetShouldBeLoaded(false);
-    KitLevel->SetShouldBeVisible(false);
-    KitLevel->SetIsRequestingUnloadAndRemoval(true);
+    Level->SetShouldBeLoaded(false);
+    Level->SetShouldBeVisible(false);
+    Level->SetIsRequestingUnloadAndRemoval(true);
     // Kept until the world removes it: a load still in flight that fails stops at FailedToLoad, where a removal request is no
     // longer handled (SweepReleasedKitLevels removes it then).
-    ReleasedKitLevels.Add(KitLevel);
-    KitLevel = nullptr;
+    ReleasedKitLevels.Add(Level);
 }
 void USCViewerSubsystem::SweepReleasedKitLevels()
 {
@@ -1804,6 +1832,7 @@ void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
     if (!Imported || Imported->GetWorld() != GetViewerWorld()) return;
     Vehicle = Imported;
     LoadedEntity = Imported->Manifest.Root.EntityName;
+    LoadedShipLevel.Empty();
     Report.Entity = LoadedEntity;
     Phase = Report.Result = ESCLoadPhase::Succeeded;
     if (VehicleInstances) VehicleInstances->SetPrimary(Imported, nullptr, FString()); // folder harness: instances import fresh
@@ -1817,9 +1846,9 @@ int32 USCViewerSubsystem::SpawnVehicleInstance(const FString& Entity)
 {
     return VehicleInstances ? VehicleInstances->Spawn(Entity, true, FTransform::Identity, true) : INDEX_NONE;
 }
-int32 USCViewerSubsystem::SpawnVehicleInstance(const FString& Entity, const FTransform& World, bool bRest)
+int32 USCViewerSubsystem::SpawnVehicleInstance(const FString& Entity, const FTransform& World, bool bRest, const FString& Level)
 {
-    return VehicleInstances ? VehicleInstances->Spawn(Entity, false, World, bRest) : INDEX_NONE;
+    return VehicleInstances ? VehicleInstances->Spawn(Entity, false, World, bRest, false, Level) : INDEX_NONE;
 }
 bool USCViewerSubsystem::DestroyVehicleInstance(int32 Id) { return VehicleInstances && VehicleInstances->Destroy(Id); }
 TArray<ASCVehicle*> USCViewerSubsystem::GetVehicles() const

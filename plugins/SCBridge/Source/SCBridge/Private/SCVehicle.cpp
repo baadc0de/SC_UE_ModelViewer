@@ -6,6 +6,7 @@
 #include "UObject/ObjectSaveContext.h"
 #include "Components/SceneComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "SCMaterialBuilder.h"
 #include "SCLights.h"
 #include "SCRigComponent.h"
@@ -452,12 +453,23 @@ void ASCVehicle::BeginPlay()
 {
     Super::BeginPlay();
     FSCLights::ResumeStyles(this);
-    if (!CookedAudio.IsEmpty()) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
+    if (!CookedAudio.IsEmpty() && !bDeferCookedAudio) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
     if (!Lifts.IsEmpty()) UpdateTickEnabled(); // a prepared vehicle's lifts (RestoreLifts) tick with it
     // A prepared vehicle's drawn panels (WP-O1-4b-1c): their render targets' pixels are not saved, so they are drawn now,
     // whether or not anything else ticks the vehicle; the screen faces show their states.
     if (!FloorPanels.IsEmpty() || !DoorPanelLocks.IsEmpty()) RefreshFloorPanels();
     if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
+}
+void ASCVehicle::EndPlay(const EEndPlayReason::Type Reason)
+{
+    if (USCAudioSubsystem* Audio = USCAudioSubsystem::Get(this)) Audio->RemoveScene(this);
+    Super::EndPlay(Reason);
+}
+void ASCVehicle::StartCookedAudio()
+{
+    if (!bDeferCookedAudio) return;
+    bDeferCookedAudio = false;
+    if (!CookedAudio.IsEmpty() && HasActorBegunPlay()) FSCAudioScene::LoadCooked(this);
 }
 void ASCVehicle::PreSave(FObjectPreSaveContext SaveContext)
 {
@@ -669,14 +681,23 @@ double ASCVehicle::LowestVisibleZ(FString* OutPart) const
         bool bVertices = false;
         if (UBodySetup* Body = const_cast<UPrimitiveComponent*>(C)->GetBodySetup())
         {
-            const FTransform& World = C->GetComponentTransform();
-            for (const Chaos::FTriangleMeshImplicitObjectPtr& Mesh : Body->TriMeshGeometries)
+            // An instanced part (repeated rigid parts consolidated at prep): its mesh at every instance.
+            TArray<FTransform, TInlineAllocator<1>> Placements;
+            if (const auto* Instanced = Cast<UInstancedStaticMeshComponent>(C))
             {
-                if (!Mesh) continue;
-                const auto& Particles = Mesh->Particles();
-                for (uint32 I = 0; I < Particles.Size(); ++I) TakeAt(World.TransformPosition(FVector(Particles.GetX(I))), C);
-                bVertices |= Particles.Size() > 0;
+                for (int32 Index = 0; Index < Instanced->GetInstanceCount(); ++Index)
+                    if (FTransform T; Instanced->GetInstanceTransform(Index, T, /*bWorldSpace*/ true)) Placements.Add(T);
             }
+            else
+                Placements.Add(C->GetComponentTransform());
+            for (const FTransform& World : Placements)
+                for (const Chaos::FTriangleMeshImplicitObjectPtr& Mesh : Body->TriMeshGeometries)
+                {
+                    if (!Mesh) continue;
+                    const auto& Particles = Mesh->Particles();
+                    for (uint32 I = 0; I < Particles.Size(); ++I) TakeAt(World.TransformPosition(FVector(Particles.GetX(I))), C);
+                    bVertices |= Particles.Size() > 0;
+                }
         }
         if (!bVertices) Take(Box.Min.Z, C);
     }

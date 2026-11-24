@@ -46,6 +46,8 @@ public:
     TArray<FSCCargoBeaconView> GetBeacons(const FVector& Viewer, float RadiusM) const;
     bool GetBeacon(int32 BeaconId, FSCCargoBeaconView& Out) const;
     bool IsBeacon(int32 LocationId) const;
+    /** A vehicle instance the cargo setup placed as an obstacle (an asteroid): no ship of anyone's fleet. */
+    bool IsObstacleInstance(int32 Id) const;
     /** A location's name for people: a grid's "group · grid", a beacon's name. */
     FText LocationLabel(int32 LocationId) const;
     /** Puts Count boxes of a ready package down loose: at At (each further one a box length aside), or each at a free
@@ -112,6 +114,9 @@ public:
     /** WP-O1-4b-3: every box the prepared cargo setup names has come (its template ready); true without one. The scenario
      *  reports running only then (a box that failed fails it: UUCSettings::ScenarioCargoProblem). */
     bool ArePreparedBoxesReady() const;
+    /** WP-O1-4b-3c: a prepared setup's extra vehicles and obstacles are placed (Ready); true without any. One that fails
+     *  fails the setup (FailScenario, the scenario with it). */
+    bool ArePreparedInstancesReady(int32* OutReady = nullptr, bool* OutLoading = nullptr) const;
     /** A cargo setup's environment is requested when it is read (replacing the one the viewer restored at start) unless a
      *  game scenario owns the scene, the setup is in space or names none, or the command line names the scene
      *  (-SCEnvironment=, -SCLoad=). */

@@ -30,4 +30,5 @@ private:
     TSharedPtr<SListView<TSharedPtr<FSCMusicCue>>> List;
     TSharedPtr<FSCMusicCue> Selected;
     int32 Generation = INDEX_NONE;
+    int32 CuesRevision = INDEX_NONE;
 };

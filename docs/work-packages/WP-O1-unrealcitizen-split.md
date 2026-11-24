@@ -324,7 +324,37 @@ data when it loads. In stages:
   (`cargo_fx`, `FSCCargoFxMapping`, with the surface group it was resolved for; a read that fails fails the prep). A run plays them from there
   (`FSCCargoFx::StartPrepared`, `CARGO_FX source=prepared`; the beam and muzzle come from the kept tractor record), asking
   the archive only for a ship it does not cover. Prep format 30.
-- **O1-4b-3c..**: extra ship instances (a prepared level instance at a transform), music, the Garage's details.
+- **O1-4b-3c** (extra instances, music, the Garage's details):
+  - Extra ship instances of an entity with a prepared level stream their own instance of it
+    (`FSCVehicleInstances`: `ULevelStreamingDynamic::LoadLevelInstance` at the origin, not visible; its vehicle hidden,
+    then the level made visible, the vehicle placed as before and shown; `VEHICLE_PREPARED`, `VEHICLE_SPAWN prepared=1`).
+    More of the loaded ship stream the level it came from (a scenario's paint: `USCViewerSubsystem::GetLoadedShipLevel`,
+    `PreparedShipLevelFor`); another entity its default-paint level. Destroying an instance, a failure or a reset unloads
+    its level. Nothing is exported or imported, so a packaged game has extra ships (the Garage's floor spots, a cargo
+    setup's owners). The prep step prepares the cargo setup's obstacles as ship levels too (`obstacle_levels` in the
+    record, checked like the boxes; packaging stages them). Example: a second Golem in `golem_showcase` streamed in 1.6 s.
+  - Music: the prep step keeps the soundtrack catalogue in the record (`music_catalogue`) and saves the cue the scenario
+    names (its id or title) as a SoundWave asset (`/Game/SC/Music/M_<cue>_<hash>`, `FUCPrepared::MusicWavePath`;
+    decoded once, as the levels' media: `SCPrepareAudio::SaveWave`; `music_waves`, stamped, always cooked). The music
+    player plays a prepared cue from its wave (`MUSIC_PLAY prepared=1`); without an archive reader its catalogue is the
+    prepared one, listing only the cues it can play. A record of a scenario that names music without its cue is stale.
+  - The Garage's details (manufacturer code, role, size) of the prepared ships (the scenario's vehicle and obstacles) are
+    read at prep as the Garage reads them (`USCGarageSubsystem::ReadClassDetails` / `ReadManufacturerCode`) into a
+    table shared by the scenarios (`Content/SCPrepared/Shared/garage_details.json`, staged with the records; rows typed,
+    with "fleet" — an obstacle's level is no Garage ship — and the archive build read from; written whole, a save that
+    did not finish recovered); the Garage takes a listed ship's details from it, without the archive.
+  - A streamed copy, before it shows: its vehicle is the entity asked for (`USCViewerSubsystem::EntityName`: trimmed,
+    without `EntityClassDefinition.`; the loaded ship's prepared level is checked the same way), its panels draw into
+    render targets of its own (`ASCVehicle::IsolateDrawnPanels`), its collision is off and its audio waits
+    (`bDeferCookedAudio`) until it is placed, its saved exploration is kept, a non-resting copy takes its authored pose.
+    A released copy is hidden and collision-free at once; its level is released (`USCViewerSubsystem::ReleaseLevel`, a
+    failed one removed) and its audio scene goes at `EndPlay`.
+  - A prepared scenario reports Running only once its cargo setup's extra ships and obstacles are placed
+    (`ArePreparedInstancesReady`; the deadline runs while one of them loads); one that fails, or a ship unloaded while it
+    starts, fails it, and a dropped setup takes its own extras with it.
+  - The record is checked as the game checks it before packaging: `-run=SCPrepare -Scenario=<name> -Check`
+    (`FUCPrepared::Problem`: obstacle levels exactly the setup's, the music cue resolved in the kept catalogue with its
+    own wave and that wave's save id, the Garage rows of its ships); `package_showcase.ps1` calls it before UAT.
 
 #### O1-4c — The packaged game without the archive library
 

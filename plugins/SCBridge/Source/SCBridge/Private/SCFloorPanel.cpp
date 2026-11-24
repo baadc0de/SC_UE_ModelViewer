@@ -857,3 +857,72 @@ void ASCVehicle::BuildButtonPanels(TArray<FSCButtonFace>& Faces, TFunctionRef<UT
                PanelAims.Num(), FloorPanels.FilterByPredicate([](const FSCFloorPanel& P) { return !P.HoverImages.IsEmpty(); }).Num());
     RefreshFloorPanels();
 }
+
+int32 ASCVehicle::IsolateDrawnPanels()
+{
+    TMap<UTextureRenderTarget2D*, UTextureRenderTarget2D*> Copies;
+    auto CopyOf = [&](UTextureRenderTarget2D* Old) -> UTextureRenderTarget2D* {
+        if (UTextureRenderTarget2D** Found = Copies.Find(Old)) return *Found;
+        UTextureRenderTarget2D* New = NewObject<UTextureRenderTarget2D>(this, NAME_None, RF_Transient);
+        New->RenderTargetFormat = Old->RenderTargetFormat;
+        New->ClearColor = Old->ClearColor;
+        New->AddressX = Old->AddressX;
+        New->AddressY = Old->AddressY;
+        New->InitAutoFormat(FMath::Max(Old->SizeX, 16), FMath::Max(Old->SizeY, 16));
+        New->UpdateResourceImmediate(true);
+        Copies.Add(Old, New);
+        return New;
+    };
+    for (TArray<FSCFloorPanel>* Panels : {&FloorPanels, &DoorPanelLocks})
+        for (FSCFloorPanel& P : *Panels)
+            if (UTextureRenderTarget2D* Old = P.Target.Get())
+            {
+                P.Target = CopyOf(Old);
+                P.bDrawn = false; // drawn again into its own target
+            }
+    if (Copies.IsEmpty()) return 0;
+    for (TObjectPtr<UTextureRenderTarget2D>& Target : FloorPanelTargets)
+        if (UTextureRenderTarget2D* const* New = Target ? Copies.Find(Target.Get()) : nullptr) Target = *New;
+    // Every material sampling an old target: one per-actor instance of it, sampling the copy (the same instance wherever the
+    // material is used).
+    TMap<UMaterialInterface*, UMaterialInterface*> Swapped;
+    auto Swap = [&](UMaterialInterface* Material) -> UMaterialInterface* {
+        if (!Material) return nullptr;
+        if (UMaterialInterface* const* Done = Swapped.Find(Material)) return *Done;
+        UMaterialInterface* Result = Material;
+        if (UMaterialInstance* Instance = Cast<UMaterialInstance>(Material))
+        {
+            UMaterialInstanceDynamic* Own = nullptr;
+            for (const FTextureParameterValue& Value : Instance->TextureParameterValues)
+                if (UTextureRenderTarget2D* const* New = Copies.Find(Cast<UTextureRenderTarget2D>(Value.ParameterValue)))
+                {
+                    if (!Own) Own = UMaterialInstanceDynamic::Create(Instance, this);
+                    Own->SetTextureParameterValueByInfo(Value.ParameterInfo, *New);
+                }
+            if (Own) Result = Own;
+        }
+        Swapped.Add(Material, Result);
+        return Result;
+    };
+    for (TObjectPtr<UMaterialInterface>& Material : FloorPanelMaterials) Material = Swap(Material);
+    for (FSCScreenFace& Face : ScreenFaces)
+    {
+        Face.Default = Swap(Face.Default);
+        Face.Custom = Swap(Face.Custom);
+        for (auto& [Key, Material] : Face.States) Material = Swap(Material);
+        for (auto& [Key, Material] : Face.Hovers) Material = Swap(Material);
+    }
+    TArray<UMeshComponent*> MeshComponents;
+    GetComponents(MeshComponents);
+    int32 Slots = 0;
+    for (UMeshComponent* Mesh : MeshComponents)
+        for (int32 Slot = 0; Slot < Mesh->GetNumMaterials(); ++Slot)
+            if (UMaterialInterface* Current = Mesh->GetMaterial(Slot))
+                if (UMaterialInterface* Own = Swap(Current); Own != Current)
+                {
+                    Mesh->SetMaterial(Slot, Own);
+                    ++Slots;
+                }
+    UE_LOG(LogSCFloorPanel, Display, TEXT("FLOOR_PANEL_ISOLATE actor=%s targets=%d slots=%d"), *GetName(), Copies.Num(), Slots);
+    return Copies.Num();
+}
