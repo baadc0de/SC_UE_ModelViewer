@@ -3,63 +3,10 @@
 #include "SCPackageSource.h"
 #include "SCMeshes.h"
 #include "SCImportLog.h"
+#include "SCImport.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "SCImporter.generated.h"
 class ASCVehicle;
-class FSCProcessedCache;
-class FSCGeometryStreaming;
-struct SCBRIDGE_API FSCImportOptions
-{
-    UWorld* World = nullptr;
-    FString ScenePath;
-    bool bBuildCollision = true;
-    bool bImportMaterials = true; // false keeps WP-U1's placeholder (timing baseline / geometry-only checks)
-    bool bReplacePrevious = true;
-    /** false: the actor is neither registered as the world's current import nor given exploration data
-     *  (player kits are owned by the viewer subsystem, not the vehicle slot). */
-    bool bPublish = true;
-    /** true: the package is an environment (a hangar): its waypoints are chosen (SCHangarWaypoints::Select) and anchored
-     *  for ASCVehicle::BuildWaypoints. */
-    bool bEnvironment = false;
-    /** true: every mesh with skin weights becomes a rig even without a binding clip (player kits are posed by
-     *  USCPlayerBodyComponent, not by the clip catalogue). */
-    bool bRigSkinnedMeshes = false;
-    /** false: clip sidecars are not read or bound (player kits sample body clips themselves). */
-    bool bImportClips = true;
-    /** Environments: placements drawn only with VFX shaders (e.g. a hangar's landing hologram) are runtime state
-     *  effects in the game (shown while a ship is delivered); they are not placed. */
-    bool bHideEffectOnlyPlacements = false;
-    /** Environments: identical rigid static parts (same mesh, materials, shadow/lighting flags, collision, channels and
-     *  custom data, not under a rig) are drawn as one instanced component each; the render thread's per-primitive
-     *  visibility cost dominated a hangar's frame (LOOK-6). Ships keep per-part components (hierarchy, focus). */
-    bool bInstanceRepeatedParts = false;
-    /** Keep what the import built after success (FSCImportJob::GetRetainedAssets) so more actors of the package can be
-     *  assembled from it without deriving or building again (extra vehicle instances). The package bytes are released. */
-    bool bRetainAssets = false;
-    /** WP-O1-4b: keep each rig mesh's soft source data (ASCVehicle::RigSources) so an editor host can make the rig a
-     *  savable asset (the prep step, Keep as assets). Editor hosts only by default. */
-    bool bRetainRigSources = GIsEditor;
-    /** Only a source associated with an identified archive build may use on-disk processed assets. */
-    TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
-    FString CacheArchiveBuild;
-    bool bRebuildProcessed = false;
-    TSharedPtr<FSCGeometryStreaming> GeometryStreaming;
-    FTransform ActorTransform = FTransform::Identity;
-};
-struct SCBRIDGE_API FSCImportResult
-{
-    TWeakObjectPtr<ASCVehicle> Vehicle;
-    FString Error;
-    TArray<FString> Warnings; // Each recoverable diagnostic includes its asset/instance path.
-    TMap<FString, FSCMeshBuildStats> MeshStats;
-    TMap<FString, FString> ContentHashes;
-    double TotalSeconds = 0, MaterialSeconds = 0;
-    int32 MeshCount = 0, InstanceCount = 0, TextureCount = 0, MaterialCount = 0;
-    int32 CachedMeshes = 0, MeshBuilds = 0, CollisionBuilds = 0;
-    /** WP-I1 SCREEN_BIND: instances with a bound screen face; screen slots (with triangles) bound / dark / dark because
-     *  faces of different outcomes share them. */
-    int32 ScreenBoundInstances = 0, ScreenBoundSlots = 0, ScreenDarkSlots = 0, ScreenAmbiguousSlots = 0;
-};
 class SCBRIDGE_API FSCImporter
 {
 public:

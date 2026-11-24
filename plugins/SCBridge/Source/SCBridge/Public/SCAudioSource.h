@@ -88,6 +88,9 @@ SCBRIDGE_API void FillSoundWave(USoundWave* Wave, const float* Decoded, int64 De
                                 uint64 LoopStart, uint64 LoopEnd);
 #endif
 
-/** A package's Ogg Vorbis media (loop points from its LoopStart / LoopEnd comments), decoded by scbridge. Nothing is
- *  decoded until a voice opens it (a scene registers its media without reading them). */
+/** A package's Ogg Vorbis media (loop points from its LoopStart / LoopEnd comments), decoded by the importer's decoder
+ *  (scbridge). Nothing is decoded until a voice opens it (a scene registers its media without reading them). Null with
+ *  Error in a build without the importer. */
 SCBRIDGE_API FSCAudioSourcePtr MakeOggSource(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, FString& Error);
+/** The importer registers its Ogg decoder (game thread; an empty function unregisters). */
+SCBRIDGE_API void SetOggSourceFactory(TFunction<FSCAudioSourcePtr(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>&, FString&)> Factory);

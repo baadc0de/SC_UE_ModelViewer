@@ -1,6 +1,7 @@
 // Coarse render meshes and the view-driven queue for their full-detail replacements.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCImport.h"
 #include "SCMeshes.h"
 #include "UObject/StrongObjectPtrTemplates.h"
 #include "UObject/WeakObjectPtrTemplates.h"
@@ -11,10 +12,10 @@ class FSCProcessedCache;
 class UStaticMeshComponent;
 class UWorld;
 
-class FSCGeometryStreaming
+class FSCGeometryStreaming : public ISCGeometryStreaming
 {
 public:
-    ~FSCGeometryStreaming();
+    virtual ~FSCGeometryStreaming() override;
     /** Pure worker operation. Failure means the caller uses the exact variant as usual. */
     bool Reduce(const FSCDerivedMesh& Fine, FSCDerivedMesh& Coarse, double& Deviation) const;
     bool CanDefer(const FSCDerivedMesh& Fine) const;
@@ -23,13 +24,14 @@ public:
     void Attach(ASCVehicle* Owner);
     void QueueWrite(ASCVehicle* Owner, UStaticMesh* Mesh, const FSCDerivedMesh& Data, const FSCMeshBuildStats& Stats,
         TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> Cache, const FString& Key);
-    void Forget(ASCVehicle* Owner);
-    void Tick(UWorld* World);
-    void FlushForCapture(UWorld* World);
-    void FinishWrites(UWorld* World);
-    void PublishWrites();
-    void DropWrites();
-    void LogStatus(UWorld* World) const;
+    virtual void Forget(ASCVehicle* Owner) override;
+    virtual void Tick(UWorld* World) override;
+    virtual void FlushForCapture(UWorld* World) override;
+    virtual void FinishWrites(UWorld* World) override;
+    virtual void PublishWrites() override;
+    virtual void DropWrites() override;
+    virtual void LogStatus(UWorld* World) const override;
+    virtual const ISCImporting* GetImporter() const override;
 
     /** Relative to the horizontal FOV. The room's own meshes can prefetch behind the player. */
     static double Priority(const FBox& Bounds, const FVector& Eye, const FVector& Forward,

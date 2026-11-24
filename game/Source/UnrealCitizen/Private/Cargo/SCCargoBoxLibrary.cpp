@@ -1,6 +1,6 @@
 // FSCCargoBoxLibrary: export -> tar parse -> import of cargo-box packages into hidden, shared template actors.
 #include "SCCargoBoxLibrary.h"
-#include "SCImportJob.h"
+#include "SCImport.h"
 #include "SCPackageSource.h"
 #include "SCPlayerKit.h"
 #include "SCVehicle.h"
@@ -180,7 +180,7 @@ void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
         Options.bPublish = false;
         Options.bReplacePrevious = false;
         Options.bImportClips = false;
-        Job = MakeShared<FSCImportJob>(*Source, Options, Source);
+        Job = ISCImporting::Get()->NewJob(*Source, Options, Source);
         E.State = EState::Importing;
         return;
     }

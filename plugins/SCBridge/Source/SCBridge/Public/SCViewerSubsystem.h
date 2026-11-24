@@ -3,6 +3,7 @@
 // focus/isolate and object-reuse by entity + options hash. Blueprint/Python-callable; UI polls it every frame.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCImport.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Containers/Ticker.h"
 #include "Tasks/Task.h"
@@ -16,10 +17,6 @@ class ASCVehicle;
 class ASCViewerPawn;
 class ASCFirstPersonCharacter;
 class USCViewOptions;
-class FSCImportJob;
-struct FSCImportOptions;
-class FSCProcessedCache;
-class FSCGeometryStreaming;
 class FSCFolderPackageSource;
 class FSCPackageSource;
 class FSCTarPackageSource;
@@ -404,8 +401,8 @@ private:
     UE::Tasks::TTask<FSCOpenResult> OpenTask;
     double OpenSeconds = 0;
     FSCCacheStats CacheStats;
-    TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
-    TSharedPtr<FSCGeometryStreaming> GeometryStreaming;
+    TSharedPtr<ISCProcessedCache, ESPMode::ThreadSafe> ProcessedCache;
+    TSharedPtr<ISCGeometryStreaming> GeometryStreaming;
     bool bGeometryCapturePrepared = false;
 
     struct FPendingSearch
@@ -428,7 +425,7 @@ private:
     TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> ExportProgress;
     UE::Tasks::TTask<FSCExportResult> ExportTask;
     UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> ParseTask;
-    TSharedPtr<FSCImportJob> Job;
+    TSharedPtr<ISCImportJob> Job;
     TWeakObjectPtr<ASCVehicle> Vehicle;
 
     UPROPERTY() TObjectPtr<ASCFirstPersonCharacter> FirstPerson;
@@ -469,7 +466,7 @@ private:
      *  (Retry, automation's archive-failure exit); it starts when an archive is ready. */
     bool EnvironmentAwaitsArchive() const;
     mutable bool bCatalogWanted = false;
-    TSharedPtr<FSCImportJob> EnvJob;
+    TSharedPtr<ISCImportJob> EnvJob;
     // WP-C1: a cooked environment level (Content/SC/Hangars/Maps) streamed in instead of the export/import pipeline.
     UPROPERTY() TObjectPtr<class ULevelStreamingDynamic> EnvLevel;
     void UnloadEnvironmentLevel();
@@ -488,7 +485,7 @@ private:
     UE::Tasks::TTask<FSCExportResult> KitExport;
     UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> KitParse;
     TSharedPtr<FSCTarPackageSource> KitSource;
-    TSharedPtr<FSCImportJob> KitJob;
+    TSharedPtr<ISCImportJob> KitJob;
     struct FKitClips { TSharedPtr<FSCPlayerKit> Kit; TSharedPtr<FSCPlayerClipMap> Clips; FString Error; int32 Failed = 0; };
     UE::Tasks::TTask<FKitClips> KitClipsTask;
     UPROPERTY() TObjectPtr<ASCVehicle> KitActor;

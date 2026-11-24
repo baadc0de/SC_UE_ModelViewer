@@ -1,7 +1,7 @@
 // FSCPlayerKit: lossless-enough parse of the player block; fragment/option choice rules live here so the
 // animator and tests share them. Rules are structural (fewest query tags, explicit port type) - no names.
 #include "SCPlayerKit.h"
-#include "SCPackageReader.h"
+#include "SCMeshes.h"
 #include "SCPackageSource.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
@@ -148,7 +148,7 @@ FSCItemPort FSCPlayerKit::ParsePort(const FObj& O)
     for (const auto& V : Arr(O, TEXT("types")))
         if (V->Type == EJson::Object)
             P.Types.Emplace(Str(V->AsObject(), TEXT("Type")), Strings(V->AsObject(), TEXT("SubTypes")));
-    P.Offset = FSCPackageReader::PortOffset(O);
+    P.Offset = FSCMeshes::PortOffset(O);
     return P;
 }
 bool FSCPlayerKit::Parse(const FString& SceneJson, const FString& PackageDir, FSCPlayerKit& Out, FString& Error)

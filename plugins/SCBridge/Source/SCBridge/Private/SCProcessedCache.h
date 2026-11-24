@@ -3,19 +3,21 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SCImport.h"
 #include "HAL/CriticalSection.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 
-class FSCProcessedCache
+class FSCProcessedCache : public ISCProcessedCache
 {
 public:
-    struct FStats { int64 Bytes = 0; int32 Entries = 0; };
+    using FStats = FSCProcessedCacheStats;
     static constexpr const TCHAR* PayloadName = TEXT("data.bin");
 
     FSCProcessedCache(FString InRoot, int64 InCapBytes);
-    ~FSCProcessedCache();
+    virtual ~FSCProcessedCache() override;
 
-    bool IsEnabled() const { return bEnabled && GetCapBytes() > 0; }
+    virtual bool IsEnabled() const override { return bEnabled && GetCapBytes() > 0; }
+    virtual const ISCImporting* GetImporter() const override;
     const FString& GetRoot() const { return Root; }
     FString PackageName(const FString& Directory, const FString& Asset) const;
     static FString Key(const FString& Namespace, const FString& Input);
@@ -49,10 +51,10 @@ public:
     bool CommitWrite(const FString& Key, const FString& Directory);
     void AbortWrite(const FString& Directory);
 
-    FStats Stats() const;
-    int64 GetCapBytes() const;
-    void SetCapBytes(int64 Bytes);
-    void Clear();
+    virtual FStats Stats() const override;
+    virtual int64 GetCapBytes() const override;
+    virtual void SetCapBytes(int64 Bytes) override;
+    virtual void Clear() override;
     bool Flush();
 
 private:

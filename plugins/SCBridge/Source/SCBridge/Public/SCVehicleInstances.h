@@ -5,6 +5,7 @@
 // Auto-placed instances stand on free hangar floor (FSCVehiclePlacement); the set is cleared with the loaded vehicle.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCImport.h"
 #include "SCPackageSource.h"
 #include "Tasks/Task.h"
 #include "SCArchive.h"
@@ -12,7 +13,6 @@
 class AActor;
 class UWorld;
 class ASCVehicle;
-class FSCImportJob;
 class FSCImportedAssets;
 class FSCTarPackageSource;
 class USCViewerSubsystem;
@@ -164,5 +164,5 @@ private:
     TSharedPtr<FSCExportProgress, ESPMode::ThreadSafe> Progress;
     UE::Tasks::TTask<FSCExportResult> Export;
     UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> Parse;
-    TSharedPtr<FSCImportJob> Job;
+    TSharedPtr<ISCImportJob> Job;
 };

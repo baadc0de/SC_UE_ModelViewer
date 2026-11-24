@@ -54,6 +54,26 @@
 #include "Animation/AnimSequence.h"
 #include <atomic>
 
+ISCImporting& SCImportingInstance();
+namespace
+{
+/** The cache and streaming an import was given, as this importer's own classes; one another importer made is not
+ *  used (FSCImportOptions: the same-importer rule). */
+TSharedPtr<FSCProcessedCache, ESPMode::ThreadSafe> ProcessedCacheOf(const FSCImportOptions& O)
+{
+    if (!O.ProcessedCache) return nullptr;
+    if (!ensureMsgf(O.ProcessedCache->GetImporter() == &SCImportingInstance(), TEXT("an import was given another importer's processed cache")))
+        return nullptr;
+    return StaticCastSharedPtr<FSCProcessedCache>(O.ProcessedCache);
+}
+TSharedPtr<FSCGeometryStreaming> GeometryStreamingOf(const FSCImportOptions& O)
+{
+    if (!O.GeometryStreaming) return nullptr;
+    if (!ensureMsgf(O.GeometryStreaming->GetImporter() == &SCImportingInstance(), TEXT("an import was given another importer's geometry streaming")))
+        return nullptr;
+    return StaticCastSharedPtr<FSCGeometryStreaming>(O.GeometryStreaming);
+}
+} // namespace
 namespace
 {
 // Unique assets whose derivation may run ahead of the game-thread build: one per worker thread, at most MaxDeriveLookAhead
@@ -217,7 +237,7 @@ struct FSCImportJob::FState
     }
     void DestroyPartial()
     {
-        if (Options.GeometryStreaming) Options.GeometryStreaming->Forget(Vehicle);
+        if (GeometryStreamingOf(Options)) GeometryStreamingOf(Options)->Forget(Vehicle);
         if (Vehicle && IsValid(Vehicle) && Vehicle->GetWorld() && !Vehicle->IsActorBeingDestroyed()) Vehicle->Destroy();
         Vehicle = nullptr;
     }
@@ -594,7 +614,7 @@ bool FSCImportJob::FState::StepRead(bool bBlocking)
 void FSCImportJob::FState::Begin()
 {
     Session = TEXT("/Temp/SC/") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
-    if (Options.ProcessedCache && Options.ProcessedCache->IsEnabled() && !Options.CacheArchiveBuild.IsEmpty())
+    if (ProcessedCacheOf(Options) && ProcessedCacheOf(Options)->IsEnabled() && !Options.CacheArchiveBuild.IsEmpty())
         MeshCacheNamespace = FSCProcessedCache::Key(Options.CacheArchiveBuild, SCProcessedMeshCache::RenderFormat());
 #if WITH_DEV_AUTOMATION_TESTS
     // Compare the same valid warm packages with and without rebuilding CPU descriptions.
@@ -628,7 +648,7 @@ void FSCImportJob::FState::Begin()
         FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
         MaterialPrep = Async(EAsyncExecution::ThreadPool, [this] {
             Materials.Describe(Manifest);
-            const FSCTextureCacheRequest Cache{Options.ProcessedCache.Get(), Options.CacheArchiveBuild, Options.bRebuildProcessed};
+            const FSCTextureCacheRequest Cache{ProcessedCacheOf(Options).Get(), Options.CacheArchiveBuild, Options.bRebuildProcessed};
             Materials.Decode(*Source, &Cache);
         });
     }
@@ -665,7 +685,7 @@ void FSCImportJob::FState::LaunchDerives()
 void FSCImportJob::FState::ProbeMeshCache(FPart::FCacheVariant& Variant, const FString& Key)
 {
     Variant.Key = FSCProcessedCache::Key(MeshCacheNamespace, Key);
-    if (!Options.bRebuildProcessed) Variant.Pin = Options.ProcessedCache->PinEntry(Variant.Key);
+    if (!Options.bRebuildProcessed) Variant.Pin = ProcessedCacheOf(Options)->PinEntry(Variant.Key);
 }
 
 bool FSCImportJob::FState::DeferCachedRigidPart(FPart& Part, const FSCDerivedMesh& Data, TArray<FTriangleID>& Triangles,
@@ -833,13 +853,13 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             FSCMeshes::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
             if (Part.Translucent.bHasGeometry && !BaseKey.IsEmpty() && Part.TranslucentCache.Key.IsEmpty())
                 ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
-            if (Options.GeometryStreaming && !Options.bRebuildProcessed && ScreenSlots.IsEmpty())
+            if (GeometryStreamingOf(Options) && !Options.bRebuildProcessed && ScreenSlots.IsEmpty())
             {
                 auto PrepareCoarse = [&](FPart::FCacheVariant& Cache, const FSCDerivedMesh& Variant) {
                     if (Cache.Pin || !Variant.bHasGeometry ||
                         Variant.Description.Triangles().Num() > PerVehicleTriangleBudget - FineTrianglesDeferred) return;
                     auto Coarse = MakeUnique<FSCDerivedMesh>();
-                    if (Options.GeometryStreaming->Reduce(Variant, *Coarse, Cache.Deviation))
+                    if (GeometryStreamingOf(Options)->Reduce(Variant, *Coarse, Cache.Deviation))
                         Cache.Coarse = MoveTemp(Coarse);
                 };
                 PrepareCoarse(Part.OpaqueCache, Part.Mesh);
@@ -986,7 +1006,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
     FSCMeshBuildStats Stats;
     FString AssetError;
     bool bUsesCoarse = false;
-    UStaticMesh* Mesh = Cached.Pin ? SCProcessedMeshCache::Load(*Options.ProcessedCache, *Cached.Pin, Stats) : nullptr;
+    UStaticMesh* Mesh = Cached.Pin ? SCProcessedMeshCache::Load(*ProcessedCacheOf(Options), *Cached.Pin, Stats) : nullptr;
     Cached.Pin.Reset();
     if (Mesh)
     {
@@ -1030,7 +1050,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         const FName Name(*(SafeName(FPaths::GetBaseFilename(Path)) + Suffix));
         FName ExactName = Name;
         if (Cached.Coarse && Variant.Description.Triangles().Num() <= PerVehicleTriangleBudget - FineTrianglesDeferred &&
-            Options.GeometryStreaming->CanDefer(Variant))
+            GeometryStreamingOf(Options)->CanDefer(Variant))
         {
             Mesh = FSCMeshes::Instantiate(*Cached.Coarse, Slot.Package, Name,
                 bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError, true);
@@ -1050,10 +1070,10 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
                 bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
         if (Mesh && !Cached.Key.IsEmpty())
         {
-            if (!bUsesCoarse && Options.GeometryStreaming)
-                Options.GeometryStreaming->QueueWrite(Vehicle, Mesh, Variant, Stats, Options.ProcessedCache, Cached.Key);
+            if (!bUsesCoarse && GeometryStreamingOf(Options))
+                GeometryStreamingOf(Options)->QueueWrite(Vehicle, Mesh, Variant, Stats, ProcessedCacheOf(Options), Cached.Key);
             else if (!bUsesCoarse)
-                SCProcessedMeshCache::Store(*Options.ProcessedCache, Cached.Key, *Mesh, Variant, Stats);
+                SCProcessedMeshCache::Store(*ProcessedCacheOf(Options), Cached.Key, *Mesh, Variant, Stats);
         }
     }
     if (!Mesh)
@@ -1074,8 +1094,8 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         {
             if (Variant.bEnableNanite) OpaqueProxies.Add(Mesh);
             FineTrianglesDeferred += Variant.Description.Triangles().Num();
-            Options.GeometryStreaming->Defer(Vehicle, Mesh, MoveTemp(Variant), Path + Suffix, Cached.Deviation,
-                bNeedsCollision, Options.ProcessedCache, Cached.Key);
+            GeometryStreamingOf(Options)->Defer(Vehicle, Mesh, MoveTemp(Variant), Path + Suffix, Cached.Deviation,
+                bNeedsCollision, ProcessedCacheOf(Options), Cached.Key);
         }
         UE_LOG(LogSCImport, Display,
                TEXT("MESH path=%s%s triangles=%d nanite=%s clusters=%d fallback=%d cards=%d collision=%d build_s=%.4f"), *Path, *Suffix,
@@ -2013,14 +2033,14 @@ void FSCImportJob::FState::Assemble()
         V->BuildExploration();
         FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
     }
-    if (Options.GeometryStreaming) Options.GeometryStreaming->Attach(V);
+    if (GeometryStreamingOf(Options)) GeometryStreamingOf(Options)->Attach(V);
     Result.Vehicle = V;
     Result.MeshCount = Meshes.Num();
     Result.TotalSeconds = FPlatformTime::Seconds() - Start;
     Timings.Assemble = FPlatformTime::Seconds() - AssembleStart;
     if (!MeshCacheNamespace.IsEmpty())
     {
-        const bool bCommitted = Options.ProcessedCache->Flush();
+        const bool bCommitted = ProcessedCacheOf(Options)->Flush();
         UE_LOG(LogSCImport, Display, TEXT("PROCESSED_CACHE meshes_hit=%d mesh_builds=%d collision_builds=%d manifest_written=%d nanite_streamable=%d nanite_demand_paged=%d"),
             Result.CachedMeshes, Result.MeshBuilds, Result.CollisionBuilds, bCommitted, CachedNaniteStreamable, CachedNaniteDemandPaged);
     }

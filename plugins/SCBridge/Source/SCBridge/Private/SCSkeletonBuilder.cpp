@@ -1,5 +1,12 @@
 // Build skeletons and named sockets from exported GLB reference hierarchies.
 #include "SCSkeletonBuilder.h"
+#include "Chaos/TriangleMeshImplicitObject.h"
+#include "Chaos/ChaosArchive.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/MemoryReader.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "Physics/PhysicsInterfaceCore.h"
+#include "Chaos/ImplicitObjectScaled.h"
 #include "Animation/Skeleton.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
@@ -159,5 +166,34 @@ bool FSCSkeletalMeshImporter::Build(const FSCDerivedMesh& Data, USkeletalMesh* M
     Mesh->SetHasVertexColors(true);
     Mesh->SetImportedBounds(Bounds.IsValid ? FBoxSphereBounds(Bounds) : FBoxSphereBounds(FVector::ZeroVector, FVector(1), 1));
     Mesh->InitResources();
+    return true;
+}
+bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
+{
+    // The skeletal builder emits one vertex per corner, grouped by material. Chaos vertex
+    // indices must match ComputeSkinnedPositions exactly, including duplicate positions.
+    FSCDerivedMesh Expanded;
+    FStaticMeshAttributes Dst(Expanded.Description);
+    Dst.Register();
+    FStaticMeshConstAttributes Src(Data.Description);
+    for (auto Group : Data.Description.PolygonGroups().GetElementIDs())
+    {
+        const auto G = Expanded.Description.CreatePolygonGroup();
+        for (auto Triangle : Data.Description.GetPolygonGroupTriangles(Group))
+        {
+            TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
+            for (auto Corner : Data.Description.GetTriangleVertexInstances(Triangle))
+            {
+                const auto V = Expanded.Description.CreateVertex();
+                Dst.GetVertexPositions()[V] = Src.GetVertexPositions()[Data.Description.GetVertexInstanceVertex(Corner)];
+                Corners.Add(Expanded.Description.CreateVertexInstance(V));
+            }
+            Expanded.Description.CreateTriangle(G, Corners);
+        }
+    }
+    if (!FSCMeshes::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
+    Data.CollisionBytes = MoveTemp(Expanded.CollisionBytes);
+    Data.CollisionVersions = Expanded.CollisionVersions;
+    Data.CollisionDeriveSeconds = Expanded.CollisionDeriveSeconds;
     return true;
 }

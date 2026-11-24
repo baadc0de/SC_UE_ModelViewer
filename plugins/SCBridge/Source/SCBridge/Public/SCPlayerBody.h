@@ -6,9 +6,9 @@
 // third person keeps the player character in focus.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCImport.h"
 #include "Components/ActorComponent.h"
 #include "SCPlayerAnimator.h"
-#include "SCImporter.h"
 #include "Templates/PimplPtr.h"
 #include "SCPlayerBody.generated.h"
 
