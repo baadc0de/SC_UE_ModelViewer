@@ -143,7 +143,8 @@ void USCMusicSubsystem::StartVoice(const FSCMusicBytesResult& Result)
         return;
     }
     USCAudioWave* Sound = NewObject<USCAudioWave>(this);
-    if (!Sound->Init(Result.Ogg, 1))
+    FString DecodeError;
+    if (!Sound->Init(MakeOggSource(Result.Ogg, DecodeError), 1))
     {
         RequestedId.Reset();
         Error = LOCTEXT("InvalidAudio", "Could not decode this cue.");

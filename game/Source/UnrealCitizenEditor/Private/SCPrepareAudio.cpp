@@ -1,11 +1,18 @@
 // SCPrepareAudio (SCPrepareAudio.h): a package's audio staged beside its prepared level.
 #include "SCPrepareAudio.h"
 #include "SCPackageSource.h"
+#include "SCAudioSource.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Sound/SoundWave.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -39,14 +46,7 @@ bool SCPrepareAudio::Stage(const FSCPackageSource& Source, const FString& Scene,
     }
     TSharedPtr<FJsonObject> Manifest;
     if (!ReadJson(Source, AudioJson, Manifest, Error)) return false;
-    TSet<FString> Files;
-    const TSharedPtr<FJsonObject>* Media = nullptr;
-    if (Manifest->TryGetObjectField(TEXT("media"), Media))
-        for (const auto& [Id, Value] : (*Media)->Values)
-        {
-            FString File;
-            if (Value->Type == EJson::Object && Value->AsObject()->TryGetStringField(TEXT("file"), File) && !File.IsEmpty()) Files.Add(File);
-        }
+    TSet<FString> Files; // the media are SoundWave assets (MakeWaves)
     const TSharedPtr<FJsonObject>* Environments = nullptr;
     if (Manifest->TryGetObjectField(TEXT("environments"), Environments))
         for (const auto& [Id, Value] : (*Environments)->Values)
@@ -123,6 +123,113 @@ bool SCPrepareAudio::Stage(const FSCPackageSource& Source, const FString& Scene,
     {
         Error = FString::Printf(TEXT("cannot move %s to %s"), *Staging, *Target);
         return false;
+    }
+    return true;
+}
+
+namespace
+{
+/** The audio decoders' modules, as FAudioDeviceManager::RegisterAudioInfoFactories loads them (a commandlet has no audio
+ *  device, so nothing registered the codecs a saved wave is checked with): Engine.ini's Audio:AudioInfoModules, or
+ *  UE's built-in list. */
+void LoadAudioDecoders()
+{
+    TArray<FString> Modules;
+    if (!GConfig->GetArray(TEXT("Audio"), TEXT("AudioInfoModules"), Modules, GEngineIni))
+        Modules = {TEXT("OpusAudioDecoder"), TEXT("VorbisAudioDecoder"), TEXT("AdpcmAudioDecoder"), TEXT("BinkAudioDecoder"), TEXT("RadAudioDecoder")};
+    for (const FString& Module : Modules) FModuleManager::Get().LoadModule(*Module);
+}
+} // namespace
+
+bool SCPrepareAudio::MakeWaves(const FSCPackageSource& Source, const FString& Scene, const FString& Folder, TMap<uint32, TObjectPtr<USoundWave>>& Out,
+                               FString& Error)
+{
+    Out.Reset();
+    LoadAudioDecoders();
+    TSharedPtr<FJsonObject> Manifest;
+    if (!ReadJson(Source, FPaths::GetPath(Scene) / TEXT("audio.json"), Manifest, Error)) return false;
+    const TSharedPtr<FJsonObject>* Media = nullptr;
+    if (!Manifest->TryGetObjectField(TEXT("media"), Media)) return true;
+    TArray<TPair<FString, TSharedPtr<FJsonValue>>> Entries;
+    for (const auto& [IdText, Value] : (*Media)->Values) Entries.Emplace(IdText, Value);
+    Entries.Sort([](const auto& A, const auto& B) { return A.Key < B.Key; });
+    TArray<float> Decoded;
+    for (const auto& [IdText, Value] : Entries)
+    {
+        FString File;
+        if (Value->Type != EJson::Object || !Value->AsObject()->TryGetStringField(TEXT("file"), File) || File.IsEmpty()) continue;
+        const uint32 Id = uint32(FCString::Strtoui64(*IdText, nullptr, 10));
+        TArray<uint8> Bytes;
+        if (!Source.ReadBytes(File, Bytes, Error)) return false;
+        FString E;
+        const FSCAudioSourcePtr Ogg = MakeOggSource(MakeShared<const TArray<uint8>, ESPMode::ThreadSafe>(MoveTemp(Bytes)), E);
+        FSCAudioStream Stream;
+        if (!Ogg || !Stream.Open(Ogg, 1) || Stream.Channels <= 0 || Stream.Rate <= 0)
+        {
+            Error = FString::Printf(TEXT("%s: %s"), *File, E.IsEmpty() ? TEXT("does not decode") : *E);
+            return false;
+        }
+        // A surround wave needs UE's per-channel source layout (USoundFactory's); no prepared media has more than two.
+        if (Stream.Channels > 2)
+        {
+            Error = FString::Printf(TEXT("%s: %d channels (a prepared media is mono or stereo)"), *File, Stream.Channels);
+            return false;
+        }
+        // One pass: the whole media, in blocks (the length the media states is not trusted for the allocation). The
+        // samples, padded, and their 16-bit bytes must fit UE's 32-bit array counts.
+        const int32 Ch = Stream.Channels, Block = 4096;
+        constexpr int64 MaxSamples = (int64(MAX_int32) - 1024) / 2;
+        Decoded.Reset();
+        int64 Frames = 0;
+        for (;;)
+        {
+            if ((Frames + Block) * Ch > MaxSamples)
+            {
+                Error = File + TEXT(": too long");
+                return false;
+            }
+            if (int64(Decoded.Num()) < (Frames + Block) * Ch) Decoded.SetNumUninitialized(FMath::Min((Frames + Block) * Ch * 2, MaxSamples));
+            const int64 Got = Stream.Read(Decoded.GetData() + Frames * Ch, Block);
+            if (Got < 0)
+            {
+                Error = File + TEXT(": a decoding error");
+                return false;
+            }
+            if (Got == 0) break;
+            Frames += Got;
+        }
+        if (Frames <= 0)
+        {
+            Error = File + TEXT(": no audio");
+            return false;
+        }
+        const FString Path = Folder / (TEXT("M_") + IdText);
+        UPackage* Package = CreatePackage(*Path);
+        USoundWave* Wave = NewObject<USoundWave>(Package, *FPackageName::GetShortName(Path), RF_Public | RF_Standalone);
+        FillSoundWave(Wave, Decoded.GetData(), Frames, Ch, Stream.Rate, Stream.Frames, Stream.LoopStart, Stream.LoopEnd);
+        // The running platform's compressed audio now (the derived-data cache), not when a prepared run first loads it,
+        // and it must play: the source a run makes of it opens a decoder and decodes its first frames.
+        Wave->CachePlatformData(false);
+        const FSCAudioSourcePtr Played = MakeSoundWaveSource(Wave, E);
+        FSCAudioStream Check;
+        TArray<float> First;
+        First.SetNumZeroed(256 * Ch);
+        if (!Played || !Check.Open(Played, 1) || Check.Read(First.GetData(), 256) <= 0)
+        {
+            Error = FString::Printf(TEXT("%s: the saved wave does not play (%s)"), *File, E.IsEmpty() ? TEXT("no decoder or no frames") : *E);
+            return false;
+        }
+        FAssetRegistryModule::AssetCreated(Wave);
+        FSavePackageArgs Args;
+        Args.TopLevelFlags = RF_Public | RF_Standalone;
+        Args.SaveFlags = SAVE_NoError;
+        const FString PackageFile = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
+        if (UPackage::Save(Package, Wave, *PackageFile, Args).Result != ESavePackageResult::Success)
+        {
+            Error = TEXT("cannot save ") + Path;
+            return false;
+        }
+        Out.Add(Id, Wave);
     }
     return true;
 }

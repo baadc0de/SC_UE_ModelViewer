@@ -510,8 +510,9 @@ shapes; `$AnimEventDatabase` audio events on clip sources; the package post-pass
 plugins, e.g. the hatch's `Play_Silence`) and 2 `not_in_atl`; the C2 package carries 184 triggers (177 playable), 581
 media, 37 buses, 3 environments, 9 rooms and 14 entity classes with effects.
 
-**Player (Phase 2).** `USCAudioWave` (Ogg streamed through `sc_audio_*`, lewton), `USCAudioSubsystem` (containers,
-curves, RTPCs, spots, areas, rooms, hooks). Run `out/audio/run7` (`viewer/scripts/rpc/c2-audio.ps1`, C2 in
+**Player (Phase 2).** `USCAudioWave` (Ogg streamed through `sc_audio_*`, lewton; since WP-O1-4c-1 a source of
+`SCAudioSource.h`: the passes in C++ over scbridge's Ogg decoder, or over UE's decoder for a prepared level's SoundWave
+assets), `USCAudioSubsystem` (containers, curves, RTPCs, spots, areas, rooms, hooks). Run `out/audio/run7` (`viewer/scripts/rpc/c2-audio.ps1`, C2 in
 `hangar_xltop_001`, first person, port 8771; log `viewer/Saved/Logs/a1-run7.log`):
 - `AUDIO_EMITTERS`: `top_deck_c2` 246 spots + 318 extra positions, 1 area; the C2 has 610 spots and 8 areas in the
   loaded interiors (the 9th `.soc` area is in `armoury`, a layer the C2 does not load); the hangar 224 spots, 3 areas.
@@ -547,7 +548,8 @@ every room (−32.6 dBFS RMS); wet tails after the sound ends, to the 16-bit flo
 **Cook (Phase 5).** `game/scripts/cook_audio.py` stages `audio.json`, `audio_interiors.json` (spots, areas, room volumes
 per interior) and every payload under `Content/SCAudio/<level>` (gitignored, non-UFS staging); a missing manifest or
 payload stops that level (cook format 6, so earlier cooked levels report stale); `ASCVehicle::BeginPlay` loads it,
-mapping anchors to interiors by their recorded scene index. Verified: the staging step against the C2 export outside UE
+mapping anchors to interiors by their recorded scene index. (Since WP-O1-4c-1 the media are SoundWave assets the
+prepared actor references, `SCPrepareAudio::MakeWaves`; the staging keeps the manifest, impulse responses and interiors.) Verified: the staging step against the C2 export outside UE
 (582 files, 8 interiors, 610 spots, 8 areas, 12 room volumes). Not verified: a C2 cook and a packaged showcase run
 (cooking the C2 into `Content/SC/Ships/Maps` replaces the level the owner's demo loads; left to the owner's next
 `cook_ships.py` / `package_showcase.ps1`). Cooked levels bake their rigs, so they carry ambience and reverb; door, lift

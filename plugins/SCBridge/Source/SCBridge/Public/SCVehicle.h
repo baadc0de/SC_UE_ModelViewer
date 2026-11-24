@@ -531,6 +531,8 @@ public:
      *  scene path inside it; BeginPlay loads it. Empty for a live import (its audio comes from the package). */
     UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudio;
     UPROPERTY(EditAnywhere, Category = "SC|Audio") FString CookedAudioScene;
+    /** WP-O1-4c-1: a cooked level's media, SoundWave assets by their audio.json media id (SCPrepareAudio::MakeWaves). */
+    UPROPERTY() TMap<uint32, TObjectPtr<class USoundWave>> CookedAudioMedia;
     virtual void BeginPlay() override;
     virtual void PreSave(FObjectPreSaveContext SaveContext) override;
     virtual void PostLoad() override;

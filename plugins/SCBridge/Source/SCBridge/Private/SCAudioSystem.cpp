@@ -6,7 +6,7 @@
 #include "SCVehicle.h"
 #include "SCLightImporter.h"
 #include "SCImporter.h"
-#include "scbridge.h"
+#include "Sound/SoundWave.h"
 #include "AudioDevice.h"
 #include "AudioMixerBlueprintLibrary.h"
 #include "Components/AudioComponent.h"
@@ -136,29 +136,25 @@ double ShapeDistance(const FSCRoomVolume& V, const FVector& P, FVector& Nearest)
 } // namespace
 
 // ============================================================================================================ wave
-bool USCAudioWave::Init(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, int32 Loops, bool bWholeFileLoops)
+bool USCAudioWave::Init(const FSCAudioSourcePtr& Source, int32 Loops, bool bWholeFileLoops)
 {
-    if (!Ogg || Ogg->IsEmpty()) return false;
-    uint32 Ch = 0, R = 0;
-    bWholeFile = bWholeFileLoops;
-    Bytes = Ogg;
-    // The whole-file mode opens one pass at a time and reopens at the end (the pre-fix behaviour); otherwise the
-    // stream plays every pass itself, over the media's loop region.
-    const uint32 Passes = bWholeFile ? 1u : uint32(FMath::Max(Loops, 0));
-    if (sc_audio_open(Ogg->GetData(), Ogg->Num(), Passes, &Stream, &Ch, &R) != SC_STATUS_OK || !Stream) return false;
-    sc_audio_loop_region(Stream, &LoopStart, &LoopEnd, &MediaFrames);
-    Channels = int32(Ch);
-    Rate = int32(R);
+    // The whole-file mode loops the whole media (the pre-fix behaviour); otherwise every pass after the first plays the
+    // media's loop region.
+    if (!Stream.Open(Source, uint32(FMath::Max(Loops, 0)), bWholeFileLoops)) return false;
+    LoopStart = Stream.LoopStart;
+    LoopEnd = FMath::Min(Stream.LoopEnd, Stream.Frames);
+    MediaFrames = Stream.Frames;
+    Channels = Stream.Channels;
+    Rate = Stream.Rate;
     NumChannels = Channels;
     SetSampleRate(Rate);
     Duration = INDEFINITELY_LOOPING_DURATION;
     bLooping = false;
-    LoopsLeft = Loops == 0 ? INDEX_NONE : Loops - 1;
     // Stopping fades the source out over the mixer's stop fade instead of cutting it (UE stops a procedural source
     // without a fade unless asked).
     bRequiresStopFade = (GLegacy & 4) == 0;
-    if (Loops > 0 && Rate > 0)
-        PlaySeconds = bWholeFile ? double(MediaFrames) * Loops / Rate : double(MediaFrames + uint64(Loops - 1) * (LoopEnd - LoopStart)) / Rate;
+    // The passes the stream will play: a media that never reaches its loop region ends after one, even when looping.
+    if (Stream.PlayFrames() >= 0 && Rate > 0) PlaySeconds = double(Stream.PlayFrames()) / Rate;
     return true;
 }
 
@@ -199,11 +195,11 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
         // Place the stream on the audio clock: its play time 0 falls at ScheduledClock. Every procedural voice is pulled
         // the same way, so voices scheduled together come out sample for sample together.
         bAligned = true;
-        if (ClockDevice && ScheduledClock >= 0.0 && Rate > 0 && Stream && (GLegacy & 8) == 0)
+        if (ClockDevice && ScheduledClock >= 0.0 && Rate > 0 && Stream.IsOpen() && (GLegacy & 8) == 0)
         {
             const double Late = (ClockDevice->GetAudioTime() - ScheduledClock) * Rate * Pitch;
             if (Late < 0.0) LeadSilence = FMath::Min(int64(-Late + 0.5), int64(Rate) * 30);
-            else if (bSeek && Late >= 1.0 && sc_audio_seek(Stream, uint64(Late + 0.5)) == SC_STATUS_OK) PlayFrame = int64(Late + 0.5);
+            else if (bSeek && Late >= 1.0 && Stream.SeekPlay(uint64(Late + 0.5))) PlayFrame = int64(Late + 0.5);
             PlayFrame -= LeadSilence;
         }
     }
@@ -221,23 +217,10 @@ int32 USCAudioWave::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples
         Done = N; // already zero
         LeadSilence -= N;
     }
-    bool bReopened = false; // whole-file mode: a stream that yields nothing right after reopening has no audio
-    while (Stream && !bEnded && Done < Frames)
+    while (Stream.IsOpen() && !bEnded && Done < Frames)
     {
-        const int64 Got = sc_audio_read(Stream, Out + Done * Ch, size_t(Frames - Done));
-        if (Got > 0) { Done += int32(Got); bReopened = false; continue; }
-        if (Got == 0 && bWholeFile && !bReopened && LoopsLeft != 0)
-        {
-            sc_audio_close(Stream);
-            Stream = nullptr;
-            uint32 C = 0, R = 0;
-            if (sc_audio_open(Bytes->GetData(), Bytes->Num(), 1, &Stream, &C, &R) == SC_STATUS_OK && Stream)
-            {
-                if (LoopsLeft > 0) --LoopsLeft;
-                bReopened = true;
-                continue;
-            }
-        }
+        const int64 Got = Stream.Read(Out + Done * Ch, Frames - Done);
+        if (Got > 0) { Done += int32(Got); continue; }
         bEnded = true;
     }
     // A pull that finds the stream already ended means the mixer has consumed all of its audio: the voice is done.
@@ -259,14 +242,14 @@ void USCAudioWave::BeginDestroy()
 {
     {
         FScopeLock Guard(&Lock);
-        sc_audio_close(Stream);
-        Stream = nullptr;
+        Stream = FSCAudioStream();
     }
     Super::BeginDestroy();
 }
 
 // ============================================================================================================ scene
-TSharedPtr<FSCAudioScene> FSCAudioScene::Load(const FSCPackageSource& Source, const FString& ScenePath, FString& Error)
+TSharedPtr<FSCAudioScene> FSCAudioScene::Load(const FSCPackageSource& Source, const FString& ScenePath, FString& Error,
+                                              const TMap<uint32, TObjectPtr<USoundWave>>* Waves)
 {
     const FString Path = FPaths::GetPath(ScenePath) / TEXT("audio.json");
     if (!Source.Exists(Path))
@@ -283,12 +266,20 @@ TSharedPtr<FSCAudioScene> FSCAudioScene::Load(const FSCPackageSource& Source, co
     for (const auto& [Id, Media] : Scene->Manifest.Media)
     {
         if (Media.File.IsEmpty()) continue;
-        TArray<uint8> Ogg;
         FString E;
-        if (Source.ReadBytes(Media.File, Ogg, E))
-            Scene->MediaBytes.Add(Id, MakeShared<const TArray<uint8>, ESPMode::ThreadSafe>(MoveTemp(Ogg)));
+        FSCAudioSourcePtr Played;
+        if (Waves)
+        {
+            const TObjectPtr<USoundWave>* Wave = Waves->Find(Id);
+            Played = Wave ? MakeSoundWaveSource(Wave->Get(), E) : nullptr;
+        }
         else
-            ++Scene->MediaMissing;
+        {
+            TArray<uint8> Ogg;
+            if (Source.ReadBytes(Media.File, Ogg, E)) Played = MakeOggSource(MakeShared<const TArray<uint8>, ESPMode::ThreadSafe>(MoveTemp(Ogg)), E);
+        }
+        if (Played) Scene->Sources.Add(Id, Played);
+        else ++Scene->MediaMissing;
     }
     for (const auto& [Name, Env] : Scene->Manifest.Environments)
     {
@@ -307,7 +298,9 @@ void FSCAudioScene::LoadCooked(ASCVehicle* V)
     const FString Dir = FPaths::ProjectContentDir() / V->CookedAudio;
     FSCFolderPackageSource Source(Dir);
     FString Error;
-    TSharedPtr<FSCAudioScene> Scene = Load(Source, V->CookedAudioScene, Error);
+    const double LoadStart = FPlatformTime::Seconds();
+    TSharedPtr<FSCAudioScene> Scene = Load(Source, V->CookedAudioScene, Error, &V->CookedAudioMedia);
+    const double LoadMs = (FPlatformTime::Seconds() - LoadStart) * 1000.0;
     TArray<uint8> Bytes;
     FObj Sidecar;
     if (Scene && Source.ReadBytes(FPaths::GetPath(V->CookedAudioScene) / TEXT("audio_interiors.json"), Bytes, Error))
@@ -348,8 +341,8 @@ void FSCAudioScene::LoadCooked(ASCVehicle* V)
             ++Entities;
         }
     for (const FString& W : Warnings) UE_LOG(LogSCAudio, Warning, TEXT("AUDIO_COOKED %s"), *W);
-    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_COOKED %s scene=%s media=%d rooms_registered=%d entities=%d"), *Dir, *V->CookedAudioScene,
-           Scene->MediaBytes.Num(), bRooms, Entities);
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_COOKED %s scene=%s media=%d missing=%d load_ms=%.1f rooms_registered=%d entities=%d"), *Dir,
+           *V->CookedAudioScene, Scene->Sources.Num(), Scene->MediaMissing, LoadMs, bRooms, Entities);
     if (USCAudioSubsystem* A = USCAudioSubsystem::Get(V)) A->AddScene(Scene.ToSharedRef());
 }
 
@@ -772,7 +765,7 @@ void USCAudioSubsystem::LogScene(const FSCAudioScene& S) const
         Governed += Spot.Area != INDEX_NONE;
     }
     UE_LOG(LogSCAudio, Display, TEXT("AUDIO_SCENE %s triggers=%d playable=%d nodes=%d media=%d media_missing=%d buses=%d environments=%d rooms=%d classes=%d"),
-           *S.Name, S.Manifest.Triggers.Num(), Playable, S.Manifest.Nodes.Num(), S.MediaBytes.Num(), S.MediaMissing, S.Manifest.Buses.Num(),
+           *S.Name, S.Manifest.Triggers.Num(), Playable, S.Manifest.Nodes.Num(), S.Sources.Num(), S.MediaMissing, S.Manifest.Buses.Num(),
            S.Manifest.Environments.Num(), S.Manifest.Rooms.Num(), S.Manifest.Classes.Num());
     TMap<int32, TPair<int32, int32>> PerInterior;
     for (const auto& Spot : S.Spots) ++PerInterior.FindOrAdd(Spot.Interior).Key;
@@ -1144,9 +1137,9 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(SCAudioStartVoice);
     const FSCAudioNode& Leaf = S.Manifest.Nodes[Path.Last()];
-    const auto* Bytes = S.MediaBytes.Find(Leaf.Media);
+    const FSCAudioSourcePtr* Played = S.Sources.Find(Leaf.Media);
     const FSCAudioMedia* Media = S.Manifest.Media.Find(Leaf.Media);
-    if (!Leaf.Media || !Bytes || !Media || Media->Seconds <= 0) return T0;
+    if (!Leaf.Media || !Played || !Media || Media->Seconds <= 0) return T0;
     FVoice V;
     V.Leaf = Path.Last();
     V.bSpatial = Leaf.bSpatial && !I.Place.bListener;
@@ -1186,7 +1179,7 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     V.StaticAux = Gain.GameAuxDb;
     const float PitchRatio = FMath::Pow(2.f, (Gain.PitchCents + BusCents + I.Place.PitchCents) / 1200.f);
     USCAudioWave* Wave = NewObject<USCAudioWave>(this);
-    if (!Wave->Init(*Bytes, Leaf.LoopCount, (GLegacy & 1) != 0)) return T0;
+    if (!Wave->Init(*Played, Leaf.LoopCount, (GLegacy & 1) != 0)) return T0;
     Wave->Pitch = PitchRatio;
     // Sample-aligned timing: a voice that loops forever in a placed loop keeps the scene's timeline (the game posts a
     // zone's spots together and its virtual voices resume from elapsed time: `virtual_queue_behavior` 1 in the banks);
@@ -1203,6 +1196,8 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
     const double Seconds = Wave->PlaySeconds >= 0 ? Wave->PlaySeconds : Media->Seconds * Leaf.LoopCount;
     V.Start = T0;
     V.FadeInEnd = T0 + FadeIn;
+    // A voice that loops for ever stays until stopped, as the containers and placed loops expect (also a media that ends
+    // before its loop region and so plays once: none of the game's media does).
     V.End = Leaf.LoopCount == 0 ? kForever : T0 + Seconds / FMath::Max(PitchRatio, 0.01f);
     V.FadeOutStart = V.FadeOutEnd = V.End;
 
