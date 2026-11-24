@@ -104,12 +104,12 @@ public:
         if (!OpenArchive(Error)) return nullptr;
         USCViewOptions* Options = NewObject<USCViewOptions>(GetTransientPackage());
         Options->ResetToDefaults();
-        sc_options Ffi;
-        Options->ToFfi(Ffi);
-        Ffi.lod = 0;
-        Ffi.mip = 0; // full resolution: the shared texture pool keys a texture by its source, not by a resolution
+        FSCExportOptions Ffi;
+        Options->ToExportOptions(Ffi);
+        Ffi.Lod = 0;
+        Ffi.Mip = 0; // full resolution: the shared texture pool keys a texture by its source, not by a resolution
         const TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
-        const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client = Viewer->GetClient();
+        const TSharedPtr<ISCArchive, ESPMode::ThreadSafe> Client = Viewer->GetClient();
         return Wait(bEnvironment ? Client->ExportEnvironment(What, Ffi, Progress) : Client->ExportDecomposed(What, Ffi, Progress), What, Progress, Error);
     }
     /** The scenario's player body (its definition's "player"), as the viewer exports one (USCViewerSubsystem::RequestPlayerKit). */

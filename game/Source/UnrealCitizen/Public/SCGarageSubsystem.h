@@ -3,7 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "SCSceneManifest.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "Subsystems/WorldSubsystem.h"
 
 #include "SCGarageSubsystem.generated.h"

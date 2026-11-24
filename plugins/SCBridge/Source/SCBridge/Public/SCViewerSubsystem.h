@@ -6,7 +6,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Containers/Ticker.h"
 #include "Tasks/Task.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "SCViewerCatalog.h"
 #include "SCPlayerAnimator.h"
 #include "SCVehicleInstances.h"
@@ -313,7 +313,7 @@ public:
     /** Folder harness adopts the imported actor without opening an archive. */
     void AdoptPackageVehicle(ASCVehicle* Imported);
     /** The FFI client (null before OpenArchive): WP-K1 exports cargo box packages through it. */
-    TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> GetClient() const { return Client; }
+    TSharedPtr<ISCArchive, ESPMode::ThreadSafe> GetClient() const { return Client; }
     /** Cache statistics as of the last export/open (no FFI call). */
     const FSCCacheStats& GetCacheStats() const { return CacheStats; }
 
@@ -391,7 +391,7 @@ private:
     static int32 CollectAndCount(const TArray<TWeakObjectPtr<UObject>>& Tracked);
     UWorld* GetViewerWorld() const;
 
-    TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client;
+    TSharedPtr<ISCArchive, ESPMode::ThreadSafe> Client;
     FTSTicker::FDelegateHandle TickHandle;
     TSharedPtr<FSCViewerAutomation> Automation; // shared: type-erased deleter, the class stays private
     TSharedPtr<FSCVehicleInstances> VehicleInstances;

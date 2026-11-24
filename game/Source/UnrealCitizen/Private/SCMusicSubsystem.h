@@ -2,7 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SCMusicSubsystem.generated.h"
 

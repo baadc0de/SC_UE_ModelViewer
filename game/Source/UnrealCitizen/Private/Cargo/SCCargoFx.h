@@ -13,7 +13,7 @@
 #include "Cargo/SCCargoScenario.h"
 #include "NiagaraSystem.h"
 #include "UObject/StrongObjectPtr.h"
-class FSCBridgeClient;
+class ISCArchive;
 struct FSCCargoFxMapping;
 
 class FSCCargoFx : public TSharedFromThis<FSCCargoFx>
@@ -30,12 +30,12 @@ public:
     static const FRuntime& Runtime();
 
     /** Resolve the tractor's effects (once per definition): Beam / Muzzle at once, Hit through MaterialEffects. */
-    void Start(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone);
+    void Start(const TSharedPtr<ISCArchive, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone);
     /** WP-O1-4b-3b: a prepared scenario's effects: the beam and muzzle as Start sets them, the hit and the contacts from
      *  the mapping the prep step resolved (FSCCargoFxMapping); InClient (may be null) for ships it does not cover. */
-    void StartPrepared(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone, const FSCCargoFxMapping& Mapping);
+    void StartPrepared(const TSharedPtr<ISCArchive, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone, const FSCCargoFxMapping& Mapping);
     /** The archive's client once it is open, when the effects started without one: a ship nothing resolved yet asks it. */
-    void UseClient(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient)
+    void UseClient(const TSharedPtr<ISCArchive, ESPMode::ThreadSafe>& InClient)
     {
         if (!Client && InClient) Client = InClient;
     }
@@ -50,7 +50,7 @@ public:
     FString Missing() const { return Why; }
 
 private:
-    TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client;
+    TSharedPtr<ISCArchive, ESPMode::ThreadSafe> Client;
     FString StartedFor;
     TStrongObjectPtr<UNiagaraSystem> BeamSystem, MuzzleSystem, HitSystem;
     FSCCargoDroneDefinition::FStrengths StrengthValues;

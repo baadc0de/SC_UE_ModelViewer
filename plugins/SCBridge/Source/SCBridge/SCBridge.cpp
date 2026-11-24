@@ -1,5 +1,6 @@
 #include "Modules/ModuleManager.h"
 #include "SCImporter.h"
+#include "SCBridgeClient.h"
 #include "Private/SCImportHarness.h"
 #include "HAL/IConsoleManager.h"
 #include "EngineUtils.h"
@@ -30,9 +31,12 @@ public:
                 if (!Args.IsEmpty()) for (TActorIterator<ASCVehicle> It(World); It; ++It) It->SetEngineGlow(FCString::Atof(*Args[0]));
             }));
         Harness.Start();
+        // The archive the runtime asks for (ISCArchive::Create): the library's client.
+        ISCArchive::SetFactory([] { return TSharedPtr<ISCArchive, ESPMode::ThreadSafe>(MakeShared<FSCBridgeClient, ESPMode::ThreadSafe>()); });
     }
     virtual void ShutdownModule() override
     {
+        ISCArchive::SetFactory(nullptr);
         Harness.Stop(); ImportCommand.Reset(); GlowCommand.Reset();
 #if SC_SPIKE && WITH_EDITOR
         SCSpike::Stop();

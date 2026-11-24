@@ -8,7 +8,7 @@
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoGridComponent.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "SCViewerSettings.h"
 #include "SCViewerSubsystem.h"
 #include "Engine/World.h"
@@ -42,7 +42,7 @@ FText CatalogNote(const FSCCargoState& S)
     default: return LOCTEXT("CatalogNone", "The game's box records are not read yet");
     }
 }
-FSCCargoCatalogResult ReadCatalog(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& Client, const FString& Term, const TSharedPtr<FSCCargoCatalogProgress>& Progress)
+FSCCargoCatalogResult ReadCatalog(const TSharedPtr<ISCArchive, ESPMode::ThreadSafe>& Client, const FString& Term, const TSharedPtr<FSCCargoCatalogProgress>& Progress)
 {
     FSCCargoCatalogResult R;
     const double Start = FPlatformTime::Seconds();

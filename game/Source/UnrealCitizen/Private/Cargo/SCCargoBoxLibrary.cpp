@@ -9,7 +9,6 @@
 #include "UCSettings.h"
 #include "Engine/Level.h"
 #include "Engine/LevelStreamingDynamic.h"
-#include "scbridge.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCCargoBoxes, Log, All);
 
@@ -127,8 +126,8 @@ void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
         FEntry& E = Entries[Running];
         E.State = EState::Exporting;
         E.Started = FPlatformTime::Seconds();
-        sc_options Ffi = FSCBridgeClient::DefaultOptions();
-        if (Viewer->GetOptions()) Viewer->GetOptions()->ToFfi(Ffi);
+        FSCExportOptions Ffi;
+        if (Viewer->GetOptions()) Viewer->GetOptions()->ToExportOptions(Ffi);
         Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
         Export = Viewer->GetClient()->ExportDecomposed(Running, Ffi, Progress.ToSharedRef());
         return;

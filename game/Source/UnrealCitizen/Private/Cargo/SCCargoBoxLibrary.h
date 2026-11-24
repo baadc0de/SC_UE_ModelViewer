@@ -8,7 +8,7 @@
 #include "SCPackageSource.h"
 #include "UObject/GCObject.h"
 #include "Tasks/Task.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "Cargo/SCCargoTypes.h"
 
 class ASCVehicle;

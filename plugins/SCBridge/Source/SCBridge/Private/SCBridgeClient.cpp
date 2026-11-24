@@ -21,25 +21,6 @@ FText StatusText(sc_status Status, const char* Message)
 }
 } // namespace
 
-void FSCExportProgress::Report(const char* InPhase, uint64 Done, uint64 Total)
-{
-    Permille = uint32(Total ? FMath::Min<uint64>(1000, Done * 1000 / Total) : 0);
-    FScopeLock Guard(&Lock);
-    Phase = UTF8_TO_TCHAR(InPhase ? InPhase : "");
-}
-FString FSCExportProgress::GetPhase() const
-{
-    FScopeLock Guard(&Lock);
-    return Phase;
-}
-int FSCExportProgress::Callback(const char* Phase, uint64_t Done, uint64_t Total, void* User)
-{
-    // May run on rayon threads; must not unwind (no throwing code here).
-    auto* Progress = static_cast<FSCExportProgress*>(User);
-    Progress->Report(Phase, Done, Total);
-    return Progress->IsCancelRequested() ? 1 : 0;
-}
-
 FSCBridgeClient::~FSCBridgeClient()
 {
     FScopeLock Guard(&HandleLock);
@@ -50,6 +31,22 @@ bool FSCBridgeClient::IsOpen() const
 {
     FScopeLock Guard(&HandleLock);
     return Handle != nullptr;
+}
+sc_options FSCBridgeClient::ToFfi(const FSCExportOptions& O)
+{
+    sc_options Out;
+    FMemory::Memzero(Out);
+    Out.lod = O.Lod;
+    Out.mip = O.Mip;
+    Out.material_mode = O.MaterialMode;
+    Out.attachments = O.Attachments;
+    Out.interior = O.Interior;
+    Out.lights = O.Lights;
+    Out.shields = O.Shields;
+    Out.animations = O.Animations;
+    Out.default_pose = O.DefaultPose;
+    Out.collision_reserved = 0;
+    return Out;
 }
 sc_options FSCBridgeClient::DefaultOptions()
 {
@@ -90,7 +87,7 @@ bool FSCBridgeClient::TakePanic(FText& OutError)
 
 UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const FString& CacheDir)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), P4k, CacheDir] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), P4k, CacheDir] {
         FSCOpenResult Result;
         const double Start = FPlatformTime::Seconds();
         FScopeLock Guard(&Self->HandleLock);
@@ -142,7 +139,7 @@ UE::Tasks::TTask<FSCOpenResult> FSCBridgeClient::Open(const FString& P4k, const 
 
 UE::Tasks::TTask<FSCSearchResult> FSCBridgeClient::Search(const FString& Query, int32 Limit)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Query, Limit] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), Query, Limit] {
         FSCSearchResult Result;
         Result.Query = Query;
         char* Json = nullptr;
@@ -188,7 +185,7 @@ UE::Tasks::TTask<FSCSearchResult> FSCBridgeClient::Search(const FString& Query, 
 
 UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::ClipCatalogue(const FString& Entity)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Entity] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), Entity] {
         FSCTextResult Result;
         FScopeLock Guard(&Self->HandleLock);
         char* Json = nullptr;
@@ -205,10 +202,11 @@ UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::ClipCatalogue(const FString& En
     });
 }
 
-UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportDecomposed(const FString& Entity, const sc_options& Options,
+UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportDecomposed(const FString& Entity, const FSCExportOptions& InOptions,
                                                                    TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Entity, Options, Progress] {
+    const sc_options Options = ToFfi(InOptions);
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), Entity, Options, Progress] {
         FSCExportResult Result;
         const double Start = FPlatformTime::Seconds();
         FScopeLock Guard(&Self->HandleLock); // held for the whole export: search/close/last_error wait
@@ -245,10 +243,11 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportDecomposed(const FStrin
     }, UE::Tasks::ETaskPriority::BackgroundNormal);
 }
 
-UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportEnvironment(const FString& Socpak, const sc_options& Options,
+UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportEnvironment(const FString& Socpak, const FSCExportOptions& InOptions,
                                                                    TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Socpak, Options, Progress] {
+    const sc_options Options = ToFfi(InOptions);
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), Socpak, Options, Progress] {
         FSCExportResult Result;
         const double Start = FPlatformTime::Seconds();
         FScopeLock Guard(&Self->HandleLock); // held for the whole export: search/close/last_error wait
@@ -287,7 +286,7 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportEnvironment(const FStri
 
 UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::SearchEnvironments(const FString& Query, int32 Limit)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Query, Limit] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), Query, Limit] {
         FSCTextResult Result;
         FScopeLock Guard(&Self->HandleLock);
         char* Json = nullptr;
@@ -307,7 +306,7 @@ UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::SearchEnvironments(const FStrin
 
 UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::ViewerCatalog()
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Expected = Session.load()] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), Expected = Session.load()] {
         FSCTextResult Result;
         FScopeLock Guard(&Self->HandleLock);
         if (Self->Session != Expected)
@@ -331,7 +330,7 @@ UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::ViewerCatalog()
 
 UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::DataCoreRecord(const FString& NameOrGuid)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), NameOrGuid] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), NameOrGuid] {
         FSCTextResult Result;
         FScopeLock Guard(&Self->HandleLock);
         char* Json = nullptr;
@@ -358,7 +357,7 @@ void FSCBridgeClient::DataCoreRecord(const FString& NameOrGuid, TFunction<void(c
 
 void FSCBridgeClient::TextCall(const FString& Argument, sc_status (*Call)(sc_handle*, const char*, char**), TFunction<void(const FSCTextResult&)> OnDone)
 {
-    UE::Tasks::TTask<FSCTextResult> Task = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), Argument, Call] {
+    UE::Tasks::TTask<FSCTextResult> Task = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), Argument, Call] {
         FSCTextResult Result;
         FScopeLock Guard(&Self->HandleLock);
         char* Text = nullptr;
@@ -390,7 +389,7 @@ void FSCBridgeClient::MaterialEffect(const FString& LibraryAndEffect, TFunction<
 
 UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::MusicCatalogue()
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared()] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this)] {
         FSCTextResult Result;
         FScopeLock Guard(&Self->HandleLock);
         char* Json = nullptr;
@@ -411,7 +410,7 @@ UE::Tasks::TTask<FSCTextResult> FSCBridgeClient::MusicCatalogue()
 
 UE::Tasks::TTask<FSCMusicBytesResult> FSCBridgeClient::MusicRead(const FString& CueId)
 {
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), CueId] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), CueId] {
         FSCMusicBytesResult Result;
         FScopeLock Guard(&Self->HandleLock);
         sc_blob Blob{};
@@ -473,7 +472,7 @@ UE::Tasks::TTask<FSCExportResult> FSCBridgeClient::ExportPlayerJson(const TShare
 {
     FString RequestJson;
     FJsonSerializer::Serialize(Request, TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&RequestJson));
-    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = AsShared(), RequestJson, Progress, Export] {
+    return UE::Tasks::Launch(UE_SOURCE_LOCATION, [Self = SharedThis(this), RequestJson, Progress, Export] {
         FSCExportResult Result;
         const double Start = FPlatformTime::Seconds();
         FScopeLock Guard(&Self->HandleLock);
