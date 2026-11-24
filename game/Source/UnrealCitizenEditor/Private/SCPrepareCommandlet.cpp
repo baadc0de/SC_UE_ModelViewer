@@ -192,6 +192,8 @@ public:
         const FString AudioFolder = TEXT("SCAudio/") + Name;
         int32 AudioFiles = 0;
         if (!SCPrepareAudio::Stage(Source, Scene, FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / AudioFolder), AudioFiles, Error)) return false;
+        // The media: SoundWave assets in the level's folder (deleted with an older level, NewLevel).
+        if (!SCPrepareAudio::MakeWaves(Source, Scene, Root / TEXT("Audio"), Actor->CookedAudioMedia, Error)) return false;
         Actor->CookedAudio = AudioFolder;
         Actor->CookedAudioScene = Scene;
         if (!USCCookLibrary::CookEnvironment(Actor, Root, Shared, Viewer ? Viewer->GetArchiveBuildId() : FString(), /*bKeepRigs*/ true, bInstanceParts))
@@ -206,7 +208,7 @@ public:
             return false;
         }
         if (!WriteStamp(Level, Viewer->GetArchiveBuildId(), FString(), Error)) return false;
-        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved level=%s audio_files=%d format=%d"), *Level, AudioFiles, FUCPrepared::FormatVersion);
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE saved level=%s audio_files=%d audio_media=%d format=%d"), *Level, AudioFiles, Actor->CookedAudioMedia.Num(), FUCPrepared::FormatVersion);
         return true;
     }
     /** The stamp is published whole: written beside it first, then moved into place (a level or asset counts as current only

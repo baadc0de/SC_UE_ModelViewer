@@ -78,8 +78,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  read whole, its package audio staged. 28: WP-O1-4b-2b the traversal clips (seats, ladders) prepared for the body
      *  (TraversalClips). 29: WP-O1-4b-3 the cargo setup's boxes prepared (a level per box entity, CargoLevels) and its
      *  tractor record kept (TractorRecordJson). 30: WP-O1-4b-3b the tractor's hit and the box contacts' effects resolved
-     *  (CargoFxJson). */
-    static constexpr int32 FormatVersion = 30;
+     *  (CargoFxJson). 31: WP-O1-4c-1 the levels' media saved as SoundWave assets (ASCVehicle::CookedAudioMedia; UE decodes
+     *  them), no longer staged as Ogg files. */
+    static constexpr int32 FormatVersion = 31;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

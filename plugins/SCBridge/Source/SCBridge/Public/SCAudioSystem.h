@@ -1,8 +1,9 @@
 // WP-A1: the viewer's audio player. Plays the game's sounds from a package's audio manifest (SCAudio.h) through UE audio:
-// - USCAudioWave: a procedural sound wave that decodes a package's Ogg media on the audio render thread as the mixer
-//   pulls it (scbridge sc_audio_*: pull-driven, so a game-thread hitch cannot starve it), looping over the media's loop
-//   region as Wwise does, and reporting its own end and render health (FSCAudioWaveHealth);
-// - FSCAudioScene: one imported vehicle or environment's audio — manifest, media bytes, impulse responses, the placed
+// - USCAudioWave: a procedural sound wave that decodes its media on the audio render thread as the mixer pulls it
+//   (FSCAudioStream over a package's Ogg or a prepared level's SoundWave asset, SCAudioSource.h: pull-driven, so a
+//   game-thread hitch cannot starve it), looping over the media's loop region as Wwise does, and reporting its own end
+//   and render health (FSCAudioWaveHealth);
+// - FSCAudioScene: one imported vehicle or environment's audio — manifest, media sources, impulse responses, the placed
 //   spots and areas, and the entities whose class has sound effects;
 // - USCAudioSubsystem: posts triggers (the game's container logic over time: random / sequence, step / continuous with
 //   crossfades, blends, loops), drives each voice's gain, pitch and reverb send every frame (props, random draws, RTPC
@@ -18,6 +19,7 @@
 #include <atomic>
 #include "CoreMinimal.h"
 #include "Sound/SoundWaveProcedural.h"
+#include "SCAudioSource.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "SCAudio.h"
 #include "SCLightAreas.h"
@@ -33,7 +35,6 @@ class FSCLimiterTrace;
 class FSCRtpcBank;
 class FAudioDevice;
 class FSCBusDsp;
-struct sc_audio_stream;
 
 /** A voice's render-side health, written on the audio render thread as the mixer pulls the wave and read on the game
  *  thread (AUDIO_HEALTH): a gap is a pull later than the audio it was last given lasts (the voice starved or paused);
@@ -58,10 +59,10 @@ class SCBRIDGE_API USCAudioWave : public USoundWaveProcedural
 {
     GENERATED_BODY()
 public:
-    /** Stream Ogg (shared, not copied per voice beyond the decoder's own copy) for `Loops` passes (0 = forever) over its
-     *  loop region. `bWholeFileLoops` replays the whole media from its start instead (the pre-fix behaviour, kept for
-     *  A/B measurement: sc.Audio.Legacy). */
-    bool Init(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, int32 Loops, bool bWholeFileLoops = false);
+    /** Play Source (FSCAudioStream: a decoder of its own) for `Loops` passes (0 = forever) over its loop region.
+     *  `bWholeFileLoops` replays the whole media from its start instead (the pre-fix behaviour, kept for A/B
+     *  measurement: sc.Audio.Legacy). */
+    bool Init(const FSCAudioSourcePtr& Source, int32 Loops, bool bWholeFileLoops = false);
     virtual int32 OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples) override;
     virtual Audio::EAudioMixerStreamDataFormat::Type GetGeneratedPCMDataFormat() const override
     {
@@ -87,10 +88,7 @@ public:
 
 private:
     FCriticalSection Lock;
-    sc_audio_stream* Stream = nullptr;
-    TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Bytes; // reopened per pass in the whole-file mode
-    int32 LoopsLeft = 0;        // whole-file mode: remaining plays after the current one; INDEX_NONE = forever
-    bool bWholeFile = false;
+    FSCAudioStream Stream;
     bool bEnded = false;
     bool bAligned = false;     // the first pull placed the stream on the audio clock
     int64 LeadSilence = 0;     // frames of silence before the audio (a start scheduled after the first pull)
@@ -131,7 +129,8 @@ struct SCBRIDGE_API FSCAudioScene
     TWeakObjectPtr<ASCVehicle> Vehicle;
     FString Name;
     FSCAudioManifest Manifest;
-    TMap<uint32, TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>> MediaBytes;
+    /** The media by id: a package's Ogg or a prepared level's SoundWave assets. */
+    TMap<uint32, FSCAudioSourcePtr> Sources;
     TMap<FString, TArray<float>> Ir; // environment -> interleaved samples
     TArray<TWeakObjectPtr<USceneComponent>> InteriorAnchors;
     TArray<FMatrix> AnchorToContainer; // per interior: anchor-local cm -> container-local metres
@@ -142,8 +141,10 @@ struct SCBRIDGE_API FSCAudioScene
     /** The audio-clock time the scene's placed loops began (all at once, as the game posts a zone's spots on entering
      *  it); < 0 until the subsystem sets it. */
     double EpochClock = -1.0;
-    /** Read audio.json beside ScenePath and every media file and impulse response it lists. */
-    static TSharedPtr<FSCAudioScene> Load(const FSCPackageSource& Source, const FString& ScenePath, FString& Error);
+    /** Read audio.json beside ScenePath, every impulse response it lists and its media: the files it lists, or with Waves
+     *  (a prepared level's, ASCVehicle::CookedAudioMedia) those assets. */
+    static TSharedPtr<FSCAudioScene> Load(const FSCPackageSource& Source, const FString& ScenePath, FString& Error,
+                                          const TMap<uint32, TObjectPtr<USoundWave>>* Waves = nullptr);
     /** A cooked level's audio (ASCVehicle::CookedAudio): load it from its loose files and register the scene. */
     static void LoadCooked(ASCVehicle* Vehicle);
     /** Add one interior's spots and areas (scene JSON arrays as text). */

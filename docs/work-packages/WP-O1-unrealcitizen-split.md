@@ -189,9 +189,10 @@ The game runs prepared assets only. O1-4 lands in three changes:
   the cargo boxes (the stock and live spawns), the tractor record and its effects, the soundtrack, extra instances of the
   ship (a cargo setup with several owners), the Garage's vehicles. Until then a scenario run opens the archive for these
   (as the game did before); without one they fall back as before (no body, the scenario's tractor values, no music).
-- **O1-4c**: the runtime importer becomes `SCBridgeImport` (FFI client, package reader/source, import job, processed
-  caches, `SCBridgeLib`), loaded by the viewer and by the game's editor module, not by the packaged game, which then has
-  no `scbridge` library; the plugin's cargo art moves to the game's content.
+- **O1-4c**: the packaged game without the `scbridge` library: its audio on UE sound assets and UE's DSP, then the
+  runtime importer as its own module, `SCBridgeImport` (FFI client, package reader/source, import job, processed caches,
+  `SCBridgeLib`), loaded by the viewer and by the game's editor module, not by the packaged game; the plugin's cargo art
+  moves to the game's content. Stages below.
 
 #### O1-4b — Prepared vehicles keep their moving parts; the remaining archive reads prepared
 
@@ -324,6 +325,36 @@ data when it loads. In stages:
   (`FSCCargoFx::StartPrepared`, `CARGO_FX source=prepared`; the beam and muzzle come from the kept tractor record), asking
   the archive only for a ship it does not cover. Prep format 30.
 - **O1-4b-3c..**: extra ship instances (a prepared level instance at a transform), music, the Garage's details.
+
+#### O1-4c — The packaged game without the archive library
+
+The packaged game loads no `scbridge` library. Besides the importer, the game used it at play time for audio: the A1 player
+decoded the Ogg media with it (`sc_audio_*`) and ran the bus effects' DSP kernels from it (`sc_eq`, `sc_limiter`,
+`sc_meter`). Owner's decision (2026-11-24): the game's audio comes from UE sound assets and UE's own DSP, not from a
+library of ours. In stages:
+
+- **O1-4c-1** (media as SoundWave assets): the prep step saves each media a prepared level's audio.json lists as a
+  SoundWave asset (`<level root>/Audio/M_<media id>`, `SCPrepareAudio::MakeWaves` -> `FillSoundWave`): the Ogg decoded
+  once to PCM raw data, Bink Audio at quality 80 (the media are already lossy), inline (loaded with the level: a streamed
+  wave's first decode returned silence while its chunk loaded), and as cue points the media's Wwise loop region as given
+  and its exact lengths (its own and where its decoding ends: UE keeps a wave's length as seconds times rate, which can
+  lose a frame; 64 frames of silence pad the raw data so that never cuts audio). The prep step fails on a media that is
+  missing, does not decode, has more than two channels (a surround wave needs UE's per-channel source layout; none of the
+  game's media has more than two) or whose saved wave does not play. The prepared actor references the waves
+  (`ASCVehicle::CookedAudioMedia`), so cooking takes them; the loose staging keeps audio.json, the impulse responses and
+  the interiors' records, no media. A voice plays a source (`SCAudioSource.h`): its passes over the loop region
+  (`FSCAudioStream`, the Wwise looping of the Rust stream, now in C++ over any decoder) read through UE's decoder
+  (`FSoundWaveProxyPlayer`, which seeks a Bink wave to the frame) for a prepared level and scbridge's Ogg decoder for an
+  imported package (the viewer, the live import, the music until it is prepared; an Ogg's format is read when a voice
+  first opens it). Wraps and seeks land at lag 0 (`SCBridge.Audio.SoundWaveSource`), so voices of one media still play in
+  step. A prepared wave knows where its decoding ends, so a pass and a seek use it from the start; the Ogg finds it while
+  decoding, as before. A voice that loops for ever stays until stopped also when its media ends before its loop region
+  (none of the 1084 prepared media does; 268 have loop points). Prep format 31.
+- **O1-4c-2** (bus DSP on UE): the bus EQ, Peak Limiter and Meter on UE's signal processing (`Audio::FBiquadFilter`,
+  `Audio::FDynamicsProcessor`, an envelope follower) in place of the Rust kernels.
+- **O1-4c-3** (`SCBridgeImport`): the runtime importer becomes its own module (FFI client, package reader / source, import
+  job, processed caches, the Ogg source, `SCBridgeLib`), loaded by the viewer and the game's editor module, not by the
+  packaged game; the plugin's cargo art moves to the game's content.
 
 #### O1-4a — Scenarios and the prep step
 
