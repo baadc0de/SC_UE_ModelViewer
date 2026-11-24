@@ -141,6 +141,80 @@ void LoadAudioDecoders()
 }
 } // namespace
 
+USoundWave* SCPrepareAudio::SaveWave(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, const FString& Path, const FString& What, FString& Error)
+{
+    LoadAudioDecoders();
+    TArray<float> Decoded;
+    FString E;
+    const FSCAudioSourcePtr Source = MakeOggSource(Ogg, E);
+    FSCAudioStream Stream;
+    if (!Source || !Stream.Open(Source, 1) || Stream.Channels <= 0 || Stream.Rate <= 0)
+    {
+        Error = FString::Printf(TEXT("%s: %s"), *What, E.IsEmpty() ? TEXT("does not decode") : *E);
+        return nullptr;
+    }
+    // A surround wave needs UE's per-channel source layout (USoundFactory's); no prepared media has more than two.
+    if (Stream.Channels > 2)
+    {
+        Error = FString::Printf(TEXT("%s: %d channels (a prepared media is mono or stereo)"), *What, Stream.Channels);
+        return nullptr;
+    }
+    // One pass: the whole media, in blocks (the length the media states is not trusted for the allocation). The
+    // samples, padded, and their 16-bit bytes must fit UE's 32-bit array counts.
+    const int32 Ch = Stream.Channels, Block = 4096;
+    constexpr int64 MaxSamples = (int64(MAX_int32) - 1024) / 2;
+    Decoded.Reset();
+    int64 Frames = 0;
+    for (;;)
+    {
+        if ((Frames + Block) * Ch > MaxSamples)
+        {
+            Error = What + TEXT(": too long");
+            return nullptr;
+        }
+        if (int64(Decoded.Num()) < (Frames + Block) * Ch) Decoded.SetNumUninitialized(FMath::Min((Frames + Block) * Ch * 2, MaxSamples));
+        const int64 Got = Stream.Read(Decoded.GetData() + Frames * Ch, Block);
+        if (Got < 0)
+        {
+            Error = What + TEXT(": a decoding error");
+            return nullptr;
+        }
+        if (Got == 0) break;
+        Frames += Got;
+    }
+    if (Frames <= 0)
+    {
+        Error = What + TEXT(": no audio");
+        return nullptr;
+    }
+    UPackage* Package = CreatePackage(*Path);
+    USoundWave* Wave = NewObject<USoundWave>(Package, *FPackageName::GetShortName(Path), RF_Public | RF_Standalone);
+    FillSoundWave(Wave, Decoded.GetData(), Frames, Ch, Stream.Rate, Stream.Frames, Stream.LoopStart, Stream.LoopEnd);
+    // The running platform's compressed audio now (the derived-data cache), not when a prepared run first loads it,
+    // and it must play: the source a run makes of it opens a decoder and decodes its first frames.
+    Wave->CachePlatformData(false);
+    const FSCAudioSourcePtr Played = MakeSoundWaveSource(Wave, E);
+    FSCAudioStream Check;
+    TArray<float> First;
+    First.SetNumZeroed(256 * Ch);
+    if (!Played || !Check.Open(Played, 1) || Check.Read(First.GetData(), 256) <= 0)
+    {
+        Error = FString::Printf(TEXT("%s: the saved wave does not play (%s)"), *What, E.IsEmpty() ? TEXT("no decoder or no frames") : *E);
+        return nullptr;
+    }
+    FAssetRegistryModule::AssetCreated(Wave);
+    FSavePackageArgs Args;
+    Args.TopLevelFlags = RF_Public | RF_Standalone;
+    Args.SaveFlags = SAVE_NoError;
+    const FString PackageFile = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
+    if (UPackage::Save(Package, Wave, *PackageFile, Args).Result != ESavePackageResult::Success)
+    {
+        Error = TEXT("cannot save ") + Path;
+        return nullptr;
+    }
+    return Wave;
+}
+
 bool SCPrepareAudio::MakeWaves(const FSCPackageSource& Source, const FString& Scene, const FString& Folder, TMap<uint32, TObjectPtr<USoundWave>>& Out,
                                FString& Error)
 {
@@ -153,7 +227,6 @@ bool SCPrepareAudio::MakeWaves(const FSCPackageSource& Source, const FString& Sc
     TArray<TPair<FString, TSharedPtr<FJsonValue>>> Entries;
     for (const auto& [IdText, Value] : (*Media)->Values) Entries.Emplace(IdText, Value);
     Entries.Sort([](const auto& A, const auto& B) { return A.Key < B.Key; });
-    TArray<float> Decoded;
     for (const auto& [IdText, Value] : Entries)
     {
         FString File;
@@ -161,74 +234,8 @@ bool SCPrepareAudio::MakeWaves(const FSCPackageSource& Source, const FString& Sc
         const uint32 Id = uint32(FCString::Strtoui64(*IdText, nullptr, 10));
         TArray<uint8> Bytes;
         if (!Source.ReadBytes(File, Bytes, Error)) return false;
-        FString E;
-        const FSCAudioSourcePtr Ogg = MakeOggSource(MakeShared<const TArray<uint8>, ESPMode::ThreadSafe>(MoveTemp(Bytes)), E);
-        FSCAudioStream Stream;
-        if (!Ogg || !Stream.Open(Ogg, 1) || Stream.Channels <= 0 || Stream.Rate <= 0)
-        {
-            Error = FString::Printf(TEXT("%s: %s"), *File, E.IsEmpty() ? TEXT("does not decode") : *E);
-            return false;
-        }
-        // A surround wave needs UE's per-channel source layout (USoundFactory's); no prepared media has more than two.
-        if (Stream.Channels > 2)
-        {
-            Error = FString::Printf(TEXT("%s: %d channels (a prepared media is mono or stereo)"), *File, Stream.Channels);
-            return false;
-        }
-        // One pass: the whole media, in blocks (the length the media states is not trusted for the allocation). The
-        // samples, padded, and their 16-bit bytes must fit UE's 32-bit array counts.
-        const int32 Ch = Stream.Channels, Block = 4096;
-        constexpr int64 MaxSamples = (int64(MAX_int32) - 1024) / 2;
-        Decoded.Reset();
-        int64 Frames = 0;
-        for (;;)
-        {
-            if ((Frames + Block) * Ch > MaxSamples)
-            {
-                Error = File + TEXT(": too long");
-                return false;
-            }
-            if (int64(Decoded.Num()) < (Frames + Block) * Ch) Decoded.SetNumUninitialized(FMath::Min((Frames + Block) * Ch * 2, MaxSamples));
-            const int64 Got = Stream.Read(Decoded.GetData() + Frames * Ch, Block);
-            if (Got < 0)
-            {
-                Error = File + TEXT(": a decoding error");
-                return false;
-            }
-            if (Got == 0) break;
-            Frames += Got;
-        }
-        if (Frames <= 0)
-        {
-            Error = File + TEXT(": no audio");
-            return false;
-        }
-        const FString Path = Folder / (TEXT("M_") + IdText);
-        UPackage* Package = CreatePackage(*Path);
-        USoundWave* Wave = NewObject<USoundWave>(Package, *FPackageName::GetShortName(Path), RF_Public | RF_Standalone);
-        FillSoundWave(Wave, Decoded.GetData(), Frames, Ch, Stream.Rate, Stream.Frames, Stream.LoopStart, Stream.LoopEnd);
-        // The running platform's compressed audio now (the derived-data cache), not when a prepared run first loads it,
-        // and it must play: the source a run makes of it opens a decoder and decodes its first frames.
-        Wave->CachePlatformData(false);
-        const FSCAudioSourcePtr Played = MakeSoundWaveSource(Wave, E);
-        FSCAudioStream Check;
-        TArray<float> First;
-        First.SetNumZeroed(256 * Ch);
-        if (!Played || !Check.Open(Played, 1) || Check.Read(First.GetData(), 256) <= 0)
-        {
-            Error = FString::Printf(TEXT("%s: the saved wave does not play (%s)"), *File, E.IsEmpty() ? TEXT("no decoder or no frames") : *E);
-            return false;
-        }
-        FAssetRegistryModule::AssetCreated(Wave);
-        FSavePackageArgs Args;
-        Args.TopLevelFlags = RF_Public | RF_Standalone;
-        Args.SaveFlags = SAVE_NoError;
-        const FString PackageFile = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
-        if (UPackage::Save(Package, Wave, *PackageFile, Args).Result != ESavePackageResult::Success)
-        {
-            Error = TEXT("cannot save ") + Path;
-            return false;
-        }
+        USoundWave* Wave = SaveWave(MakeShared<const TArray<uint8>, ESPMode::ThreadSafe>(MoveTemp(Bytes)), Folder / (TEXT("M_") + IdText), File, Error);
+        if (!Wave) return false;
         Out.Add(Id, Wave);
     }
     return true;

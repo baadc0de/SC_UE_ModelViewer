@@ -43,7 +43,45 @@ void USCMusicSubsystem::ResetArchive()
     ReadTask = {};
     ReadingId.Reset();
     Cues.Reset();
+    LibraryCues.Reset();
+    ++CuesRevision;
     bCatalogueLoaded = false;
+    CatalogueError = FText::GetEmpty();
+}
+
+void USCMusicSubsystem::RebuildCues()
+{
+    // The prepared rows of the cues a wave plays (the recording that plays; the archive's row may be a newer one's).
+    TArray<FSCMusicCue> PreparedRows;
+    if (!PreparedWaves.IsEmpty())
+    {
+        TArray<TSharedPtr<FJsonValue>> Kept;
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(PreparedCatalogue), Kept);
+        for (const TSharedPtr<FJsonValue>& Value : Kept)
+        {
+            const TSharedPtr<FJsonObject>* Row = nullptr;
+            FSCMusicCue Cue;
+            if (Value && Value->TryGetObject(Row) && Row && *Row && ReadCue(**Row, Cue) && PreparedWaves.Contains(Cue.Id) &&
+                !PreparedRows.ContainsByPredicate([&Cue](const FSCMusicCue& Known) { return Known.Id == Cue.Id; }))
+                PreparedRows.Add(MoveTemp(Cue));
+        }
+    }
+    Cues.Reset();
+    for (const FSCMusicCue& Cue : LibraryCues)
+    {
+        const FSCMusicCue* Prepared = PreparedRows.FindByPredicate([&Cue](const FSCMusicCue& P) { return P.Id == Cue.Id; });
+        Cues.Add(Prepared ? *Prepared : Cue);
+    }
+    for (const FSCMusicCue& Prepared : PreparedRows)
+        if (!Cues.ContainsByPredicate([&Prepared](const FSCMusicCue& Known) { return Known.Id == Prepared.Id; })) Cues.Add(Prepared);
+    ++CuesRevision;
+}
+
+bool USCMusicSubsystem::ReadCue(const FJsonObject& Row, FSCMusicCue& Cue)
+{
+    return Row.TryGetStringField(TEXT("id"), Cue.Id) && !Cue.Id.IsEmpty() && Row.TryGetStringField(TEXT("title"), Cue.Title) &&
+           !Cue.Title.IsEmpty() && Row.TryGetStringField(TEXT("authored_name"), Cue.AuthoredName) &&
+           Row.TryGetNumberField(TEXT("seconds"), Cue.Seconds) && FMath::IsFinite(Cue.Seconds) && Cue.Seconds > 0;
 }
 
 void USCMusicSubsystem::RequestCatalogue()
@@ -51,10 +89,52 @@ void USCMusicSubsystem::RequestCatalogue()
     bWantCatalogue = true;
 }
 
+void USCMusicSubsystem::SetPrepared(const FString& CatalogueJson, const TMap<FString, FString>& Waves)
+{
+    PreparedCatalogue = CatalogueJson;
+    PreparedWaves = Waves;
+    if (bCatalogueLoaded) RebuildCues(); // the library already listed: its prepared cues now as they play
+    // A cue being read from the archive now has a wave: the read is dropped, the wave plays (Tick).
+    if (ReadTask.IsValid() && PreparedWaves.Contains(ReadingId))
+    {
+        ReadTask = {};
+        ReadingId.Reset();
+    }
+}
+
+void USCMusicSubsystem::SetPreparedCatalogue()
+{
+    // The prepared rows, the cues without a wave left out (nothing could play them).
+    TArray<TSharedPtr<FJsonValue>> Rows, Kept;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(PreparedCatalogue), Rows);
+    for (const TSharedPtr<FJsonValue>& Value : Rows)
+    {
+        const TSharedPtr<FJsonObject>* Row = nullptr;
+        FString Id;
+        if (Value && Value->TryGetObject(Row) && Row && *Row && (*Row)->TryGetStringField(TEXT("id"), Id) && PreparedWaves.Contains(Id)) Kept.Add(Value);
+    }
+    FSCTextResult Result;
+    Result.bOK = true;
+    const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Result.Json);
+    FJsonSerializer::Serialize(Kept, Writer);
+    SetCatalogue(Result);
+}
+
 bool USCMusicSubsystem::Play(const FString& Id)
 {
+    // A prepared cue plays from its wave whatever catalogue is loaded (WP-O1-4b-3c); one the loaded catalogue lacks joins it
+    // from the prepared one (the app lists what plays).
     if (!Cues.ContainsByPredicate([&Id](const FSCMusicCue& Cue) { return Cue.Id == Id; }))
-        return false;
+    {
+        if (!PreparedWaves.Contains(Id)) return false;
+        RebuildCues(); // the prepared cues join the list (before or without a library)
+    }
+    // The same cue playing from the archive while it has a prepared wave: replaced by the wave (Tick plays it).
+    if (Id == RequestedId && Component && !bPreparedVoice && PreparedWaves.Contains(Id))
+    {
+        ReleaseVoice();
+        return true;
+    }
     if (Id == RequestedId)
     {
         if (bPaused) TogglePause();
@@ -106,31 +186,28 @@ void USCMusicSubsystem::SetCatalogue(const FSCTextResult& Result)
 {
     if (!Result.bOK)
     {
-        Error = Result.Error;
+        CatalogueError = Result.Error;
         return;
     }
     TArray<TSharedPtr<FJsonValue>> Rows;
     if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Result.Json), Rows))
     {
-        Error = LOCTEXT("InvalidCatalogue", "Could not read the music library.");
+        CatalogueError = LOCTEXT("InvalidCatalogue", "Could not read the music library.");
         return;
     }
+    // The library's rows in its order, one per cue (RebuildCues lists them with the prepared ones).
+    LibraryCues.Reset();
     for (const auto& Value : Rows)
     {
         const TSharedPtr<FJsonObject>* Row = nullptr;
         if (!Value || !Value->TryGetObject(Row) || !Row || !*Row)
             continue;
-        FSCMusicCue Cue;
-        if ((*Row)->TryGetStringField(TEXT("id"), Cue.Id) && !Cue.Id.IsEmpty() &&
-            (*Row)->TryGetStringField(TEXT("title"), Cue.Title) && !Cue.Title.IsEmpty() &&
-            (*Row)->TryGetStringField(TEXT("authored_name"), Cue.AuthoredName) &&
-            (*Row)->TryGetNumberField(TEXT("seconds"), Cue.Seconds) &&
-            FMath::IsFinite(Cue.Seconds) && Cue.Seconds > 0)
-        {
-            Cues.Add(MoveTemp(Cue));
-        }
+        if (FSCMusicCue Cue; ReadCue(**Row, Cue) && !LibraryCues.ContainsByPredicate([&Cue](const FSCMusicCue& Known) { return Known.Id == Cue.Id; }))
+            LibraryCues.Add(MoveTemp(Cue));
     }
     bCatalogueLoaded = true;
+    CatalogueError = FText::GetEmpty();
+    RebuildCues();
     UE_LOG(LogSCMusic, Display, TEXT("MUSIC_CATALOGUE cues=%d"), Cues.Num());
 }
 
@@ -142,9 +219,14 @@ void USCMusicSubsystem::StartVoice(const FSCMusicBytesResult& Result)
         Error = Result.Error;
         return;
     }
-    USCAudioWave* Sound = NewObject<USCAudioWave>(this);
     FString DecodeError;
-    if (!Sound->Init(MakeOggSource(Result.Ogg, DecodeError), 1))
+    StartVoiceFrom(MakeOggSource(Result.Ogg, DecodeError), Result.Ogg->Num());
+}
+
+void USCMusicSubsystem::StartVoiceFrom(const FSCAudioSourcePtr& Source, int64 Bytes)
+{
+    USCAudioWave* Sound = NewObject<USCAudioWave>(this);
+    if (!Sound->Init(Source, 1))
     {
         RequestedId.Reset();
         Error = LOCTEXT("InvalidAudio", "Could not decode this cue.");
@@ -160,9 +242,10 @@ void USCMusicSubsystem::StartVoice(const FSCMusicBytesResult& Result)
         return;
     }
     Wave = Sound;
+    bPreparedVoice = Bytes == 0;
     Component->Play();
-    UE_LOG(LogSCMusic, Display, TEXT("MUSIC_PLAY id=%s bytes=%d channels=%d rate=%d duration=%.3f"),
-        *RequestedId, Result.Ogg->Num(), Wave->Channels, Wave->Rate, Wave->PlaySeconds);
+    UE_LOG(LogSCMusic, Display, TEXT("MUSIC_PLAY id=%s bytes=%lld prepared=%d channels=%d rate=%d duration=%.3f"),
+        *RequestedId, Bytes, Bytes == 0, Wave->Channels, Wave->Rate, Wave->PlaySeconds);
 }
 
 void USCMusicSubsystem::Tick(float DeltaTime)
@@ -176,10 +259,43 @@ void USCMusicSubsystem::Tick(float DeltaTime)
         ResetArchive();
     }
     const auto Client = Viewer->GetClient();
-    // No archive reader in this build (WP-O1-4c): the library never comes; a request (the app, a scenario's music) ends
-    // with that reason instead of waiting.
-    if (!Viewer->CanReadArchive() && bWantCatalogue && !bCatalogueLoaded && Error.IsEmpty())
-        Error = LOCTEXT("NoArchiveReader", "The soundtrack library is unavailable in this build.");
+    if (Wave && Wave->Health.bFinished.load(std::memory_order_relaxed))
+        Stop();
+    // No archive reader in this build (WP-O1-4c): the prepared catalogue (WP-O1-4b-3c), else the library never comes and a
+    // request (the app, a scenario's music) ends with that reason instead of waiting.
+    // With a reader whose archive is closed or failed, the prepared catalogue too (an archive opened later is a new
+    // generation: its full catalogue replaces it when asked for again).
+    const ESCArchiveState Archive = Viewer->GetArchiveState();
+    const bool bArchiveUnavailable = !Viewer->CanReadArchive() || Archive == ESCArchiveState::Closed || Archive == ESCArchiveState::Failed;
+    if (bArchiveUnavailable && bWantCatalogue && !bCatalogueLoaded)
+    {
+        if (!PreparedCatalogue.IsEmpty())
+        {
+            bWantCatalogue = false;
+            SetPreparedCatalogue();
+        }
+        else if (!Viewer->CanReadArchive() && CatalogueError.IsEmpty())
+            CatalogueError = LOCTEXT("NoArchiveReader", "The soundtrack library is unavailable in this build.");
+    }
+    // A prepared cue plays from its wave, archive or not.
+    // (An archive read of another cue still in flight is not waited for: its result is dropped when it completes.)
+    if (!RequestedId.IsEmpty() && !Component)
+        if (const FString* Path = PreparedWaves.Find(RequestedId))
+        {
+            const FString Asset = *Path + TEXT(".") + FPackageName::GetShortName(*Path);
+            USoundWave* Prepared = LoadObject<USoundWave>(nullptr, *Asset);
+            FString SourceError;
+            const FSCAudioSourcePtr Source = Prepared ? MakeSoundWaveSource(Prepared, SourceError) : nullptr;
+            if (Source)
+                StartVoiceFrom(Source, 0);
+            else
+            {
+                Error = LOCTEXT("InvalidPrepared", "Could not play this prepared cue.");
+                UE_LOG(LogSCMusic, Warning, TEXT("MUSIC_PREPARED id=%s wave=%s unavailable: %s"), *RequestedId, *Asset,
+                       Prepared ? *SourceError : TEXT("not found"));
+                RequestedId.Reset();
+            }
+        }
     if (!Client || Viewer->GetArchiveState() != ESCArchiveState::Ready) return;
 
     if (CatalogueTask.IsValid() && CatalogueTask.IsCompleted())
@@ -192,22 +308,20 @@ void USCMusicSubsystem::Tick(float DeltaTime)
         bWantCatalogue = false;
         if (!bCatalogueLoaded && !CatalogueTask.IsValid())
         {
-            Error = FText::GetEmpty();
+            CatalogueError = FText::GetEmpty();
             CatalogueTask = Client->MusicCatalogue();
         }
     }
-    if (Wave && Wave->Health.bFinished.load(std::memory_order_relaxed))
-        Stop();
-
     if (ReadTask.IsValid() && ReadTask.IsCompleted())
     {
-        if (ReadingId == RequestedId)
+        if (ReadingId == RequestedId && !PreparedWaves.Contains(ReadingId)) // a prepared wave serves it (Tick, above)
             StartVoice(ReadTask.GetResult());
         ReadTask = {};
         ReadingId.Reset();
     }
-    // While a read is in flight, rapid clicks coalesce to the latest cue.
-    if (!RequestedId.IsEmpty() && !Component && !ReadTask.IsValid())
+    // While a read is in flight, rapid clicks coalesce to the latest cue. A prepared cue plays from its wave (above, next
+    // tick), never from the archive.
+    if (!RequestedId.IsEmpty() && !Component && !ReadTask.IsValid() && !PreparedWaves.Contains(RequestedId))
     {
         ReadingId = RequestedId;
         ReadTask = Client->MusicRead(ReadingId);

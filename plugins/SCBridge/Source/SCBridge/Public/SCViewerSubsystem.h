@@ -314,6 +314,22 @@ public:
     /** Whether this build reads Star Citizen's archive at all: the importer plugin (SCBridgeImport) registers the reader;
      *  a packaged game has none and plays prepared content only (WP-O1-4c). */
     bool CanReadArchive() const { return Client.IsValid(); }
+    /** A ship load is in flight (exported, parsed, imported or its prepared level streaming); a hangar loading is not one. */
+    bool IsShipLoading() const
+    {
+        return Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
+    }
+    /** The prepared level the loaded ship was streamed from (a scenario's paint variant too); empty when it was imported.
+     *  Extra instances of the loaded ship stream it as well (FSCVehicleInstances). */
+    const FString& GetLoadedShipLevel() const { return LoadedShipLevel; }
+    /** The prepared level an extra instance of Entity streams (WP-O1-4b-3c): the loaded ship's level for more of the
+     *  loaded ship, else the entity's own (CookedShipLevel); empty when it has none (it is imported). */
+    FString PreparedShipLevelFor(const FString& Entity) const;
+    /** An entity's name as entities compare: a record's name (EntityClassDefinition.<entity>) without its prefix. */
+    static FString EntityName(const FString& EntityOrRecord);
+    /** A streamed level instance this subsystem or its extra instances no longer want: unloaded and removed; one that failed
+     *  to load is removed at once, one still loading is kept until the world removed it (or it failed: then removed). */
+    void ReleaseLevel(ULevelStreamingDynamic* Level);
     /** The scene's owner (a game scenario, a cargo setup) failed before its ship came, in a build without an archive
      *  reader: an unstarted -SCScript route is ended, so it does not run against a ship loaded later. */
     /** bSceneGoing: the owner removes its ship too (a failed scenario), so a ship loaded or loading now does not keep the
@@ -361,7 +377,8 @@ public:
     int32 SpawnVehicleInstance(const FString& Entity);
     /** Queue an instance at World: landing gear rested and its lowest visible point on World's Z (bRest false: World
      *  is the actor transform as given). */
-    int32 SpawnVehicleInstance(const FString& Entity, const FTransform& World, bool bRest = true);
+    /** Level: a prepared level to stream for it (an obstacle's, as its record names it); empty: PreparedShipLevelFor. */
+    int32 SpawnVehicleInstance(const FString& Entity, const FTransform& World, bool bRest = true, const FString& Level = FString());
     /** Remove an extra instance (queued, loading or ready); id 0 (the loaded vehicle) is refused. */
     bool DestroyVehicleInstance(int32 Id);
     /** The loaded vehicle first, then every ready extra instance by id. */
@@ -427,6 +444,8 @@ private:
     ESCLoadPhase Phase = ESCLoadPhase::Idle;
     FSCLoadReport Report;
     FString PendingEntity, PendingKey, LoadedEntity, LoadedKey;
+    /** The prepared level the pending / loaded ship streams from (empty: imported). */
+    FString PendingShipLevel, LoadedShipLevel;
     bool bRebuildProcessed = false;
     double LoadStart = 0, ParseStart = 0, ImportStart = 0;
     FString LastPhaseKey;

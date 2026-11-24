@@ -28,4 +28,9 @@ bool Stage(const FSCPackageSource& Source, const FString& Scene, const FString& 
  *  does not save. */
 bool MakeWaves(const FSCPackageSource& Source, const FString& Scene, const FString& Folder, TMap<uint32, TObjectPtr<USoundWave>>& Out,
                FString& Error);
+
+/** One Ogg saved as the SoundWave asset Path (its object named as the package): decoded once, FillSoundWave, checked to
+ *  play. What names it in an error. Null with Error when it does not decode, is not mono or stereo, does not play or does
+ *  not save (WP-O1-4b-3c: a scenario's music cue too). */
+USoundWave* SaveWave(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, const FString& Path, const FString& What, FString& Error);
 } // namespace SCPrepareAudio

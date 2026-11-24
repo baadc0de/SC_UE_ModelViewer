@@ -58,6 +58,19 @@ void USCCargoSubsystem::DropScenario()
     State->Scenario = MoveTemp(Dropped);   // no Path: IsSet() is false, TryScenario applies nothing more
     State->bScenarioTried = true;
     State->bPreparedSetup = false;
+    // Its own extra vehicles and obstacles go with it, placed or still coming (not the loaded ship, nor instances it did
+    // not ask for); and they are not the next setup's (a live spawn's fleet) to wait for.
+    if (USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld()))
+    {
+        TArray<int32> Own = State->ScenarioVehicleIds;
+        Own.Append(State->ObstacleIds);
+        for (const int32 Id : Own)
+            if (Id != 0) Viewer->DestroyVehicleInstance(Id);
+    }
+    State->bScenarioVehiclesRequested = false;
+    State->bScenarioInstancesPlaced = false;
+    State->ScenarioVehicleIds.Reset();
+    State->ObstacleIds.Reset();
     // Its tractor values and effects too: a fleet loaded later (a live spawn) looks its own up.
     State->TractorLookup = FSCCargoState::ELookup::None;
     State->Fx.Reset();
@@ -75,6 +88,43 @@ void USCCargoSubsystem::FailScenario(const FString& Problem)
     if (!UUCSettings::Get()->bScenarioOwnsScene && !State->bScenarioLoadRequested && !FParse::Value(FCommandLine::Get(), TEXT("SCLoad="), Ignored))
         State->ShipOfFailedSetup = State->Scenario.Ship;
     DropScenario();
+}
+
+bool USCCargoSubsystem::IsObstacleInstance(int32 Id) const
+{
+    return State && Id != INDEX_NONE && State->ObstacleIds.Contains(Id);
+}
+
+bool USCCargoSubsystem::ArePreparedInstancesReady(int32* OutReady, bool* OutLoading) const
+{
+    if (OutReady) *OutReady = 0;
+    if (OutLoading) *OutLoading = false;
+    if (!State || !State->bPreparedSetup) return true;
+    const FSCCargoScenario& S = State->Scenario;
+    if (S.VehicleOwners.Num() <= 1 && S.Obstacles.IsEmpty()) return true;
+    if (!State->bScenarioVehiclesRequested) return false;
+    const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld());
+    if (!Viewer) return false;
+    const TArray<FSCVehicleInstanceInfo> Infos = Viewer->GetVehicleInstances();
+    TArray<int32> Expected = State->ScenarioVehicleIds;
+    Expected.Append(State->ObstacleIds);
+    if (State->bScenarioInstancesPlaced) return true; // all came; one removed since is the player's doing
+    bool bAll = true;
+    for (const int32 Id : Expected)
+        if (Id != 0)
+        {
+            const FSCVehicleInstanceInfo* Info = Infos.FindByPredicate([Id](const FSCVehicleInstanceInfo& X) { return X.Id == Id; });
+            if (Info && Info->State == ESCVehicleInstanceState::Ready)
+            {
+                if (OutReady) ++*OutReady;
+                continue;
+            }
+            bAll = false;
+            if (OutLoading && Info && (Info->State == ESCVehicleInstanceState::Exporting || Info->State == ESCVehicleInstanceState::Importing))
+                *OutLoading = true;
+        }
+    if (bAll) State->bScenarioInstancesPlaced = true;
+    return bAll;
 }
 
 bool USCCargoSubsystem::ArePreparedBoxesReady() const
@@ -327,14 +377,23 @@ void USCCargoSubsystem::TryScenario()
             }
     }
     // Owners, and the scenario's other vehicles: more instances of its ship, spawned before any stock is placed.
-    if (!State->bScenarioVehiclesRequested && Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))
+    if (!State->bScenarioVehiclesRequested && USCViewerSubsystem::EntityName(Viewer->GetLoadedEntity()).Equals(USCViewerSubsystem::EntityName(S.Ship), ESearchCase::IgnoreCase))
     {
-        // Extra instances and obstacles are imported (not prepared yet: WP-O1-4b-3c): without an archive reader the setup
-        // would run short of them, or wait for ever on a grid of one. (Its ship loaded as before, so a route runs on it.)
-        if (!Viewer->CanReadArchive() && (S.VehicleOwners.Num() > 1 || !S.Obstacles.IsEmpty()))
+        // Extra instances and obstacles of an entity with no prepared level are imported: without an archive reader the
+        // setup would run short of them, or wait for ever on a grid of one. (Its ship loaded as before, so a route runs on it.)
+        if (!Viewer->CanReadArchive())
         {
-            FailScenario(TEXT("the cargo setup's extra vehicles and obstacles are unavailable in this build"));
-            return;
+            FString Missing;
+            if (S.VehicleOwners.Num() > 1 && Viewer->PreparedShipLevelFor(S.Ship).IsEmpty()) Missing = S.Ship;
+            for (const FSCCargoScenario::FObstacle& O : S.Obstacles)
+                if (Missing.IsEmpty() && !(State->bPreparedSetup && UUCSettings::Get()->ScenarioObstacleLevels.Contains(O.Entity)) &&
+                    Viewer->PreparedShipLevelFor(O.Entity).IsEmpty())
+                    Missing = O.Entity;
+            if (!Missing.IsEmpty())
+            {
+                FailScenario(FString::Printf(TEXT("the cargo setup's extra vehicle or obstacle %s is not prepared and this build reads no archive"), *Missing));
+                return;
+            }
         }
 
         State->bScenarioVehiclesRequested = true;
@@ -359,7 +418,9 @@ void USCCargoSubsystem::TryScenario()
         // Obstacles (asteroids in space): entities placed as they are; drones and loads keep clear of them like any geometry.
         for (const FSCCargoScenario::FObstacle& O : S.Obstacles)
         {
-            const int32 Id = Viewer->SpawnVehicleInstance(O.Entity, O.Pose, /*bRest=*/false);
+            // A prepared scenario's obstacle streams the level its record names (the default paint), not the loaded ship's.
+            const FString* Recorded = State->bPreparedSetup ? UUCSettings::Get()->ScenarioObstacleLevels.Find(O.Entity) : nullptr;
+            const int32 Id = Viewer->SpawnVehicleInstance(O.Entity, O.Pose, /*bRest=*/false, Recorded ? *Recorded : FString());
             State->ObstacleIds.Add(Id);
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO obstacle=%s instance=%d at=%s"), *O.Entity, Id, *(O.Pose.GetLocation() / 100).ToCompactString());
         }
@@ -368,8 +429,30 @@ void USCCargoSubsystem::TryScenario()
             if (USCCargoGridComponent* G = Pair.Value.Get(); G && G->Kind == ESCCargoGridKind::Vehicle)
                 G->Owner = ShipLink ? ShipLink->GetOwner(G->OwnerVehicle.Get()) : State->Player;
     }
-    if (Viewer->IsSpawningVehicles()) return;
-    if (!S.Ship.IsEmpty() && !Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))
+    // Its extra vehicles and obstacles came, or the setup cannot run (an owner's ship with no free floor, a prepared level
+    // without its vehicle): it fails rather than run short or wait on a grid that is not coming.
+    // Once all of them were Ready together (bScenarioInstancesPlaced) one removed later is the player's doing.
+    if (State->bScenarioVehiclesRequested && !State->bScenarioPlaced && !State->bScenarioInstancesPlaced)
+    {
+        const TArray<FSCVehicleInstanceInfo> Infos = Viewer->GetVehicleInstances();
+        TArray<int32> Expected = State->ScenarioVehicleIds;
+        Expected.Append(State->ObstacleIds);
+        bool bAllReady = true;
+        for (const int32 Id : Expected)
+        {
+            if (Id == 0) continue; // the loaded vehicle
+            const FSCVehicleInstanceInfo* Info = Infos.FindByPredicate([Id](const FSCVehicleInstanceInfo& X) { return X.Id == Id; });
+            bAllReady &= Info && Info->State == ESCVehicleInstanceState::Ready;
+            if (Info && Info->State != ESCVehicleInstanceState::Failed) continue;
+            FailScenario(FString::Printf(TEXT("the cargo setup's %s (instance %d) did not come: %s"),
+                                         State->ObstacleIds.Contains(Id) ? TEXT("obstacle") : TEXT("vehicle"), Id,
+                                         Info ? *Info->Error : TEXT("it was removed")));
+            return;
+        }
+        if (bAllReady) State->bScenarioInstancesPlaced = true;
+    }
+    if (Viewer->IsSpawningVehicles()) return; // (its own failures are seen above, whatever else is queued)
+    if (!S.Ship.IsEmpty() && !USCViewerSubsystem::EntityName(Viewer->GetLoadedEntity()).Equals(USCViewerSubsystem::EntityName(S.Ship), ESearchCase::IgnoreCase))
     {
         if (!UUCSettings::Get()->bScenarioOwnsScene && !Viewer->CanReadArchive() && USCViewerSubsystem::CookedShipLevel(S.Ship).IsEmpty())
         {

@@ -161,6 +161,62 @@ bool FUCPreparedTest::RunTest(const FString&)
         NoSetup.CargoDefinition.Reset();
         TestTrue(TEXT("box levels without a cargo setup"), NoSetup.Problem(nullptr, Every).Contains(TEXT("without a cargo setup")));
     }
+    // WP-O1-4b-3c: every obstacle entity of the prepared setup has its (ship) level in the record.
+    {
+        FUCPrepared Rocky = R;
+        Rocky.CargoDefinition = R.CargoDefinition.LeftChop(1) + TEXT(", \"obstacles\": [{\"entity\": \"Rock_A\", \"at\": [10, 0, 5]}]}");
+        auto Every = [](const FString&) { return true; };
+        TestTrue(TEXT("an obstacle the record has no level for"), Rocky.Problem(nullptr, Every).Contains(TEXT("Rock_A")));
+        Rocky.ObstacleLevels.Add(TEXT("Rock_A"), USCViewerSubsystem::ShipLevelPath(TEXT("Rock_A")));
+        TestEqual(TEXT("... with its level: runs"), Rocky.Problem(nullptr, Every), FString());
+        FUCPrepared RockyBack;
+        TestTrue(TEXT("... its obstacle levels round-trip"), FUCPrepared::Parse(Rocky.ToJson(), RockyBack, Error) &&
+                                                                 RockyBack.ObstacleLevels.FindRef(TEXT("Rock_A")) == Rocky.ObstacleLevels[TEXT("Rock_A")]);
+        TestTrue(TEXT("... a missing obstacle level"),
+                 Rocky.Problem(nullptr, [&](const FString& L) { return L != Rocky.ObstacleLevels[TEXT("Rock_A")]; }).Contains(TEXT("obstacle")));
+        FUCPrepared NoSetup = Rocky;
+        NoSetup.CargoDefinition.Reset();
+        TestTrue(TEXT("obstacle levels without a cargo setup"), NoSetup.Problem(nullptr, Every).Contains(TEXT("without a cargo setup")));
+        TestTrue(TEXT("... the obstacle's Garage details not prepared"),
+                 Rocky.Problem(nullptr, Every, [](const FString& Ship, bool) { return Ship != TEXT("Rock_A"); }).Contains(TEXT("Garage details of Rock_A")));
+        TestTrue(TEXT("... the vehicle's"),
+                 Rocky.Problem(nullptr, Every, [](const FString& Ship, bool) { return Ship != TEXT("CRUS_Starlifter_C2"); }).Contains(TEXT("Garage details")));
+        TestTrue(TEXT("... the vehicle's row only an obstacle's"),
+                 Rocky.Problem(nullptr, Every, [](const FString& Ship, bool bFleetShip) { return !bFleetShip; }).Contains(TEXT("Garage details")));
+        FUCPrepared Stray = Rocky;
+        Stray.ObstacleLevels.Add(TEXT("Rock_B"), USCViewerSubsystem::ShipLevelPath(TEXT("Rock_B")));
+        TestTrue(TEXT("an obstacle mapping the setup does not name"), Stray.Problem(nullptr, Every).Contains(TEXT("Rock_B")));
+        FUCPrepared Elsewhere = Rocky;
+        Elsewhere.ObstacleLevels[TEXT("Rock_A")] = USCViewerSubsystem::ShipLevelPath(TEXT("Rock_B"));
+        TestTrue(TEXT("an obstacle mapped to another level"), Elsewhere.Problem(nullptr, Every).Contains(TEXT("Rock_A")));
+    }
+    // WP-O1-4b-3c: a scenario's music is its cue in the kept catalogue, with that cue's wave.
+    {
+        const FString Catalogue = TEXT("[{\"id\": \"bank:1\", \"title\": \"Arrival\", \"authored_name\": \"a\", \"seconds\": 90}, ")
+                                  TEXT("{\"id\": \"bank:2\", \"title\": \"Departure\", \"authored_name\": \"d\", \"seconds\": 60}, ")
+                                  TEXT("{\"id\": \"bank:3\", \"title\": \"Broken\"}]");
+        TestTrue(TEXT("... a row the player leaves out (no length) is no cue"), FUCPrepared::ResolveMusicCue(Catalogue, TEXT("Broken")).IsEmpty());
+        TestEqual(TEXT("a cue by id"), FUCPrepared::ResolveMusicCue(Catalogue, TEXT("bank:2")), FString(TEXT("bank:2")));
+        TestEqual(TEXT("... by title, ignoring case"), FUCPrepared::ResolveMusicCue(Catalogue, TEXT("arrival")), FString(TEXT("bank:1")));
+        TestTrue(TEXT("... none"), FUCPrepared::ResolveMusicCue(Catalogue, TEXT("Nothing")).IsEmpty());
+        TestNotEqual(TEXT("cue waves apart"), FUCPrepared::MusicWavePath(TEXT("bank:1")), FUCPrepared::MusicWavePath(TEXT("bank_1")));
+        FUCPrepared Tuned = R;
+        Tuned.Definition = R.Definition.TrimEnd().LeftChop(1) + TEXT(", \"music\": \"Arrival\"}");
+        auto Every = [](const FString&) { return true; };
+        TestTrue(TEXT("music not prepared"), Tuned.Problem(nullptr, Every).Contains(TEXT("music")));
+        Tuned.MusicCatalogueJson = Catalogue;
+        Tuned.MusicWaves.Add(TEXT("bank:2"), FUCPrepared::MusicWavePath(TEXT("bank:2")));
+        TestTrue(TEXT("... another cue's wave"), Tuned.Problem(nullptr, Every).Contains(TEXT("music")));
+        Tuned.MusicWaves.Add(TEXT("bank:1"), FUCPrepared::MusicWavePath(TEXT("bank:1")));
+        TestEqual(TEXT("... its cue's wave: runs"), Tuned.Problem(nullptr, Every), FString());
+        FUCPrepared Crossed = Tuned;
+        Crossed.MusicWaves[TEXT("bank:2")] = FUCPrepared::MusicWavePath(TEXT("bank:1"));
+        TestTrue(TEXT("... a cue mapped to another cue's wave"), Crossed.Problem(nullptr, Every).Contains(TEXT("bank:2")));
+        FUCPrepared TunedBack;
+        TestTrue(TEXT("... the music round-trips"), FUCPrepared::Parse(Tuned.ToJson(), TunedBack, Error) &&
+                                                        TunedBack.MusicCatalogueJson == Catalogue &&
+                                                        TunedBack.MusicWaves.FindRef(TEXT("bank:1")) == Tuned.MusicWaves[TEXT("bank:1")]);
+    }
     TestFalse(TEXT("a record without a vehicle level does not read"), FUCPrepared::Parse(TEXT("{\"scenario\": \"t\", \"definition\": \"{}\"}"), Back, Error));
 
     auto All = [](const FString&) { return true; };

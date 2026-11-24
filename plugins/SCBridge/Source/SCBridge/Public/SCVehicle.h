@@ -468,6 +468,12 @@ public:
      *  screen face gets a drawn floor list there (the face joins ScreenFaces, its material set by SetScreenFaceMaterial).
      *  Texture: a decoded package image by path (the label masks). */
     void BuildFloorPanels(TArray<FSCBlankScreenFace>& Blank, TFunctionRef<UTexture2D*(const FString&)> Texture);
+    /** WP-O1-4b-3c: a copy of a prepared vehicle (another instance of its level) shares the level's saved panel render
+     *  targets: each panel gets a target of its own (same size and format), and every material of this actor that samples
+     *  an old target (its mesh slots, the panel materials, the screen faces' renders) a per-actor instance sampling the new
+     *  one. The panels draw again on the next refresh. Before the actor's first draw (the level not yet visible). Returns
+     *  the targets replaced. */
+    int32 IsolateDrawnPanels();
     /** C2 fixes, the same mechanism for the game's own panel UIs: a face showing an operating panel's render whose binding
      *  has clickable nodes (a light panel) becomes a Buttons panel of FloorPanels: the render of the owner's current state
      *  drawn into a render target on the face, the node under the crosshair framed, E sends its interaction. */
@@ -534,6 +540,8 @@ public:
     /** WP-O1-4c-1: a cooked level's media, SoundWave assets by their audio.json media id (SCPrepareAudio::MakeWaves). */
     UPROPERTY() TMap<uint32, TObjectPtr<class USoundWave>> CookedAudioMedia;
     virtual void BeginPlay() override;
+    /** Its audio scene goes with it (a copy whose level unloads ends play before it is collected). */
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void PreSave(FObjectPreSaveContext SaveContext) override;
     virtual void PostLoad() override;
     /** Vertex samples per imported mesh asset (mesh-local cm): the input of the inside/outside vote. */
@@ -572,6 +580,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") void ResetPose();
     void EvaluateClips();
     UPROPERTY(Transient) TArray<FSCClipPlayback> Playback; // active entries only
+    /** WP-O1-4b-3c: a copy streamed from a prepared level registers its level audio (CookedAudio) once it is placed, not at
+     *  BeginPlay (it begins play at the level's origin, hidden): StartCookedAudio then. */
+    UPROPERTY(Transient) bool bDeferCookedAudio = false;
+    void StartCookedAudio();
     UPROPERTY() TArray<FSCClipPlayback> HeldPlayback;      // bounded by catalogue size; no idle evaluation; saved (a prepared level)
     uint64 PoseEvaluations = 0;           // diagnostic: number of rigs refreshed by playback
     /** WP-A1 diagnostics: clip audio events crossed by playback (posted to the audio scene when there is one), and the

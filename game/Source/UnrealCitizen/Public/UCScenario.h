@@ -97,6 +97,22 @@ struct UNREALCITIZEN_API FUCPrepared
     /** WP-O1-4b-3b: the tractor's hit and the box contacts with the scenario's ship and obstacles, resolved at prep
      *  (FSCCargoFxMapping as JSON; empty: none resolved). */
     FString CargoFxJson;
+    /** WP-O1-4b-3c: the cargo setup's obstacle entities and their prepared levels (the default-paint ship level,
+     *  USCViewerSubsystem::ShipLevelPath; an extra instance streams it). Extra instances of the scenario's own ship stream
+     *  its vehicle level. */
+    TMap<FString, FString> ObstacleLevels;
+    /** WP-O1-4b-3c: the soundtrack catalogue as read at prep (JSON rows, as the archive answers) and the scenario's cue
+     *  saved as a SoundWave asset (cue id -> MusicWavePath); empty when the scenario names no music. */
+    FString MusicCatalogueJson;
+    TMap<FString, FString> MusicWaves;
+    /** The save id (stamp) of each wave as this prep left it: a wave another scenario's prep saved again (a newer archive's
+     *  recording) makes this record stale. */
+    TMap<FString, FString> MusicWaveIds;
+    /** Where the prep step saves a music cue's wave. */
+    static FString MusicWavePath(const FString& CueId);
+    /** The cue a scenario's music names in a catalogue (its id, else its title ignoring case; as the run and the prep step
+     *  find it); empty when none does. */
+    static FString ResolveMusicCue(const FString& CatalogueJson, const FString& Music);
     /** Where the prep step saves a cargo box entity's level. */
     static FString CargoLevelPath(const FString& Entity);
     FString Archive;          // the archive builds the levels were prepared from, comma-separated (information)
@@ -130,7 +146,11 @@ struct UNREALCITIZEN_API FUCPrepared
     /** Why the game cannot run the scenario from this record (empty: it can): another format, a level that is not current
      *  (missing, or a preparation that did not finish: no stamp), or — when Source (the definition on disk) is given — a
      *  definition or cargo setup changed since it was prepared. Each answer ends with what to do. */
+    FString Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelCurrent,
+                    TFunctionRef<bool(const FString& Ship, bool bFleetShip)> HasGarageDetails) const;
+    /** As above, the Garage details taken as prepared (tests of the other rules). */
     FString Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelCurrent) const;
+    /** The game's and the packaging's answer: the levels' stamps and the shared Garage details table. */
     FString Problem(const FUCScenario* Source) const;
     /** The command that prepares the scenario. */
     static FString PrepareCommand(const FString& Id);

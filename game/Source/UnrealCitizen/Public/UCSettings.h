@@ -50,6 +50,8 @@ public:
     /** WP-O1-4b-3: the running scenario's prepared cargo boxes (entity -> level: the box library streams them instead of
      *  exporting) and its tractor record as read at prep (the cargo setup applies it instead of asking DataCore). */
     TMap<FString, FString> ScenarioCargoLevels;
+    /** WP-O1-4b-3c: its obstacles' prepared levels (entity -> level), as the record names them. */
+    TMap<FString, FString> ScenarioObstacleLevels;
     FString ScenarioTractorRecordJson;
     /** WP-O1-4b-3b: its cargo effects as resolved at prep (FSCCargoFxMapping JSON; empty: resolved from the archive). */
     FString ScenarioCargoFxJson;

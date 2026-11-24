@@ -17,6 +17,7 @@
 #include "SCViewOptions.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
+#include "SCGarageSubsystem.h"
 #include "Cargo/SCCargoScenario.h"
 #include "Cargo/SCCargoFxMapping.h"
 #include "Editor.h"
@@ -472,6 +473,168 @@ public:
         return true;
     }
 
+    /** The Garage's details of prepared ships (WP-O1-4b-3c): their EntityClassDefinition and manufacturer records read as
+     *  the Garage reads them (USCGarageSubsystem::ReadClassDetails), kept in the shared table (garage_details.json) a run
+     *  takes them from. A ship already there is kept unless -Force. */
+    /** A ship whose Garage row the prep step keeps: its entity, whether it is a fleet ship, and its prepared level (whose
+     *  archive build the row must be read from; empty: not prepared yet). */
+    struct FGarageShip
+    {
+        FString Entity;
+        bool bFleet = true;
+        FString Level;
+    };
+    bool PrepareGarageDetails(const TArray<FGarageShip>& Ships, FString& Error)
+    {
+        if (!IFileManager::Get().MakeDirectory(*FPaths::GetPath(USCGarageSubsystem::PreparedDetailsFile()), true))
+        {
+            Error = TEXT("cannot create ") + FPaths::GetPath(USCGarageSubsystem::PreparedDetailsFile());
+            return false;
+        }
+        // The other scenarios' rows stay: a table that is there but does not read stops the prep (rewriting it would lose
+        // them). (Preps run one at a time: the UE lock.)
+        TMap<FString, FSCGarageShipDetails> Table;
+        const FString TableFile = USCGarageSubsystem::PreparedDetailsFile();
+        if (!USCGarageSubsystem::LoadPreparedDetails(Table) &&
+            (IFileManager::Get().FileExists(*TableFile) || IFileManager::Get().FileExists(*(TableFile + TEXT(".older")))))
+        {
+            Error = USCGarageSubsystem::PreparedDetailsFile() + TEXT(" does not read: repair or delete it, then prepare every scenario again");
+            return false;
+        }
+        bool bChanged = false;
+        for (const FGarageShip& Want : Ships)
+        {
+            const FString& Ship = Want.Entity;
+            const bool bFleet = Want.bFleet;
+            const FString Build = Want.Level.IsEmpty() ? FString() : FUCPrepared::LevelBuild(Want.Level);
+            // A fleet ship stays one (another scenario's vehicle may be this one's obstacle). A row read from another
+            // archive build than the ship's prepared level is read again.
+            if (FSCGarageShipDetails* Known = Table.Find(Ship); Known && !bForce && (Build.IsEmpty() || Known->Build == Build))
+            {
+                if (bFleet && !Known->bFleet)
+                {
+                    Known->bFleet = true;
+                    bChanged = true;
+                }
+                continue;
+            }
+            if (!OpenArchive(Error)) return false;
+            auto Class = Viewer->GetClient()->DataCoreRecord(TEXT("EntityClassDefinition.") + Ship);
+            Class.Wait();
+            FSCGarageShipDetails Details;
+            FString ManufacturerRef;
+            if (!Class.GetResult().bOK || !USCGarageSubsystem::ReadClassDetails(Class.GetResult().Json, Details, ManufacturerRef))
+            {
+                Error = FString::Printf(TEXT("the Garage details of %s: %s"), *Ship, *Class.GetResult().Error.ToString());
+                return false;
+            }
+            if (!ManufacturerRef.IsEmpty())
+            {
+                auto Maker = Viewer->GetClient()->DataCoreRecord(ManufacturerRef);
+                Maker.Wait();
+                if (!Maker.GetResult().bOK)
+                {
+                    Error = FString::Printf(TEXT("the Garage details of %s: its manufacturer %s: %s"), *Ship, *ManufacturerRef,
+                                            *Maker.GetResult().Error.ToString());
+                    return false;
+                }
+                Details.Manufacturer = USCGarageSubsystem::ReadManufacturerCode(Maker.GetResult().Json);
+            }
+            UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE garage details %s manufacturer=%s role=%s size=%s"), *Ship, *Details.Manufacturer,
+                   *Details.Role, *Details.Size);
+            const FSCGarageShipDetails* Before = Table.Find(Ship);
+            Details.bFleet = bFleet || (Before && Before->bFleet);
+            Details.Build = Viewer->GetArchiveBuildId(); // the build queried (a kept level may be an older one's: read again next time)
+            Table.Add(Ship, Details);
+            bChanged = true;
+        }
+        return !bChanged || USCGarageSubsystem::SavePreparedDetails(Table, Error);
+    }
+
+    /** The scenario's music (WP-O1-4b-3c): the catalogue as the archive answers it, kept in the record, and the cue the
+     *  scenario names (its id, else its title, as a run finds it) saved as a SoundWave asset (MusicWavePath). */
+    bool PrepareMusic(const FString& Music, FUCPrepared& Record, FString& Error)
+    {
+        Record.MusicCatalogueJson.Reset();
+        Record.MusicWaves.Reset();
+        Record.MusicWaveIds.Reset();
+        if (Music.IsEmpty()) return true;
+        if (!OpenArchive(Error)) return false;
+        auto Catalogue = Viewer->GetClient()->MusicCatalogue();
+        Catalogue.Wait();
+        const FSCTextResult& Rows = Catalogue.GetResult();
+        if (!Rows.bOK)
+        {
+            Error = TEXT("the soundtrack catalogue: ") + Rows.Error.ToString();
+            return false;
+        }
+        TArray<TSharedPtr<FJsonValue>> Values;
+        if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Rows.Json), Values))
+        {
+            Error = TEXT("the soundtrack catalogue does not read");
+            return false;
+        }
+        const FString CueId = FUCPrepared::ResolveMusicCue(Rows.Json, Music);
+        FString Title;
+        for (const TSharedPtr<FJsonValue>& Value : Values)
+        {
+            const TSharedPtr<FJsonObject>* Row = nullptr;
+            FString Id;
+            if (Value && Value->TryGetObject(Row) && Row && *Row && (*Row)->TryGetStringField(TEXT("id"), Id) && Id == CueId)
+                (*Row)->TryGetStringField(TEXT("title"), Title);
+        }
+        if (CueId.IsEmpty())
+        {
+            Error = FString::Printf(TEXT("the music \"%s\" is no cue of the soundtrack (an id or a title)"), *Music);
+            return false;
+        }
+        Record.MusicCatalogueJson = Rows.Json;
+        const FString Path = FUCPrepared::MusicWavePath(CueId);
+        // Kept only when made from this archive build (the catalogue just read describes it: an update may change a cue's
+        // recording under the same id).
+        if (Current(Path) && !bForce && FUCPrepared::LevelBuild(Path) == Viewer->GetArchiveBuildId())
+        {
+            UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Path, FUCPrepared::FormatVersion);
+        }
+        else
+        {
+            // From here until the new wave saved, no record can use an older one.
+            IFileManager::Get().Delete(*StampFile(Path), false, true, true);
+            if (IFileManager::Get().FileExists(*StampFile(Path)))
+            {
+                Error = FString::Printf(TEXT("cannot delete %s: delete it and run again"), *StampFile(Path));
+                return false;
+            }
+            auto Read = Viewer->GetClient()->MusicRead(CueId);
+            Read.Wait();
+            const FSCMusicBytesResult& Bytes = Read.GetResult();
+            if (!Bytes.Ogg)
+            {
+                Error = FString::Printf(TEXT("the music %s: %s"), *CueId, *Bytes.Error.ToString());
+                return false;
+            }
+            // The older wave goes by its file (as the traversal clips do): nothing here has loaded it.
+            const FString File = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
+            if (FindPackage(nullptr, *Path))
+            {
+                Error = FString::Printf(TEXT("the older %s is loaded: it cannot be replaced in this process"), *Path);
+                return false;
+            }
+            if (IFileManager::Get().FileExists(*File) && !IFileManager::Get().Delete(*File, false, true, true))
+            {
+                Error = FString::Printf(TEXT("cannot delete the older %s: delete it and run again"), *File);
+                return false;
+            }
+            IAssetRegistry::GetChecked().ScanModifiedAssetFiles({FPaths::ConvertRelativePathToFull(File)});
+            if (!SCPrepareAudio::SaveWave(Bytes.Ogg, Path, TEXT("the music ") + CueId, Error)) return false;
+            if (!WriteStamp(Path, Viewer->GetArchiveBuildId(), FString(), Error)) return false;
+            UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE music id=%s title=\"%s\" wave=%s bytes=%d"), *CueId, *Title, *Path, Bytes.Ogg->Num());
+        }
+        Record.MusicWaves.Add(CueId, Path);
+        Record.MusicWaveIds.Add(CueId, FUCPrepared::LevelId(Path)); // this save's (or the kept one's) id
+        return true;
+    }
+
     /** The scenario's traversal clips (WP-O1-4b-2b): every seat and ladder action its vehicle and environment can ask for
      *  (read from their prepared levels' records), exported once and read against its prepared body's skeleton, saved as one
      *  asset (USCTraversalClipsData) a run serves seats and ladders from. */
@@ -596,6 +759,22 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     FUCScenario Scenario;
     FString Error;
     if (!FUCScenario::Load(Id, Scenario, Error)) return Failed(Id, Error);
+    // -Check: only whether the prepared record runs, as the game decides it (FUCPrepared::Problem against the definition on
+    // disk); the packaging asks it (WP-O1-4b-3c).
+    if (FParse::Param(*Params, TEXT("Check")))
+    {
+        FUCPrepared Prepared;
+        FString Why;
+        if (!FUCPrepared::Load(Id, Prepared, Why)) Why += TEXT(": run ") + FUCPrepared::PrepareCommand(Id);
+        else Why = Prepared.Problem(&Scenario);
+        if (!Why.IsEmpty())
+        {
+            UE_LOG(LogSCPrepare, Error, TEXT("SC_PREPARE_CHECK scenario=%s stale: %s"), *Id, *Why);
+            return 1;
+        }
+        UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE_CHECK scenario=%s current"), *Id);
+        return 0;
+    }
     if (!IsAllowCommandletRendering())
         return Failed(Id, TEXT("the prep step needs a renderer for runtime textures and Nanite builds: add -AllowCommandletRendering"));
     FPrepare Prepare;
@@ -665,10 +844,39 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
                 return Failed(Id, Error);
             }
         }
+        // Its obstacles (WP-O1-4b-3c): each entity's ship level, default paint (an extra instance streams it).
+        for (const FSCCargoScenario::FObstacle& O : Cargo.Obstacles)
+        {
+            if (Record.ObstacleLevels.Contains(O.Entity)) continue;
+            // Its Garage row first ("fleet": false unless it is a fleet ship already): its level, once stamped, is not taken
+            // for a fleet ship whatever fails later.
+            if (O.Entity != Scenario.Vehicle && !Prepare.PrepareGarageDetails({{O.Entity, false, FString()}}, Error)) return Failed(Id, Error);
+            FUCScenario Obstacle;
+            Obstacle.Vehicle = O.Entity;
+            FString Level = USCViewerSubsystem::ShipLevelPath(O.Entity);
+            if (Current(Level) && !Prepare.bForce)
+            {
+                UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE kept %s (prepared in format %d)"), *Level, FUCPrepared::FormatVersion);
+            }
+            else if (!Prepare.PrepareVehicle(Obstacle, Level, Error))
+            {
+                return Failed(Id, TEXT("obstacle ") + O.Entity + TEXT(": ") + Error);
+            }
+            Record.ObstacleLevels.Add(O.Entity, Level);
+        }
         FSCCargoDroneDefinition Drone;
         if (!Prepare.PrepareTractor(Cargo, Record.TractorRecordJson, Drone, Error)) return Failed(Id, Error);
         if (!Prepare.PrepareFx(Cargo, Drone, Scenario.Vehicle, Record.CargoFxJson, Error)) return Failed(Id, Error);
     }
+    // The Garage's details of its prepared ships (WP-O1-4b-3c): the vehicle and the obstacles, in the shared table.
+    {
+        TArray<FPrepare::FGarageShip> Ships = {{Scenario.Vehicle, true, Record.VehicleLevel}};
+        for (const auto& [Entity, Level] : Record.ObstacleLevels)
+            if (Entity != Scenario.Vehicle) Ships.Add({Entity, false, Level});
+        if (!Prepare.PrepareGarageDetails(Ships, Error)) return Failed(Id, Error);
+    }
+    // Its music (WP-O1-4b-3c): the catalogue kept, its cue saved as a wave.
+    if (!Prepare.PrepareMusic(Scenario.Music, Record, Error)) return Failed(Id, Error);
     // The seat and ladder clips for that body: read again unless they were read from these very levels (their stamps' ids:
     // a level saved again since, by this run or another scenario's sharing it, makes them stale). Their names come from the
     // levels' records, their bones from the body.
@@ -686,6 +894,8 @@ int32 USCPrepareCommandlet::Main(const FString& Params)
     TArray<FString> Builds;
     TArray<FString> Prepared = {Record.EnvironmentLevel, Record.VehicleLevel, Record.PlayerLevel, Record.TraversalClips};
     for (const auto& [Entity, Level] : Record.CargoLevels) Prepared.Add(Level);
+    for (const auto& [Entity, Level] : Record.ObstacleLevels) Prepared.AddUnique(Level);
+    for (const auto& [Cue, Wave] : Record.MusicWaves) Prepared.Add(Wave);
     for (const FString& Level : Prepared)
         if (const FString Build = FUCPrepared::LevelBuild(Level); !Level.IsEmpty()) Builds.AddUnique(Build.IsEmpty() ? FString(TEXT("unknown")) : Build);
     Record.Archive = FString::Join(Builds, TEXT(", "));

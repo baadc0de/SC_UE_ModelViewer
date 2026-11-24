@@ -58,6 +58,9 @@ private:
     /** World audio time (stops while the game is paused, not dilated) the scenario entered Starting: its prepared cargo
      *  boxes' deadline runs from there. */
     double CargoWaitSince = 0;
+    /** The cargo setup's extra vehicles (WP-O1-4b-3c): the deadline runs from the last one placed (or the boxes' arrival). */
+    double InstancesWaitSince = 0;
+    int32 InstancesReadySeen = INDEX_NONE;
     bool bMusicPending = false;
     bool bCleanupPending = false; // failed: a vehicle still in the scene goes once nothing loads
 };

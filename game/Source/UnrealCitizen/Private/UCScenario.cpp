@@ -1,5 +1,7 @@
 // FUCScenario and FUCPrepared (UCScenario.h): reading scenario definitions and the prep step's records.
 #include "UCScenario.h"
+#include "SCMusicSubsystem.h"
+#include "SCGarageSubsystem.h"
 #include "Cargo/SCCargoScenario.h"
 #include "SCViewerSubsystem.h"
 #include "Dom/JsonObject.h"
@@ -239,6 +241,28 @@ FString FUCPrepared::CargoLevelPath(const FString& Entity)
         if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
     return Name.IsEmpty() ? FString() : FString::Printf(TEXT("/Game/SC/Cargo/Maps/%s_%08x"), *Name, FCrc::StrCrc32(*Entity.ToLower()));
 }
+FString FUCPrepared::MusicWavePath(const FString& CueId)
+{
+    // Readable from the cue id (<bank>:<segment>), told apart by a hash of it as the archive names it.
+    FString Name = CueId.TrimStartAndEnd();
+    for (TCHAR& C : Name)
+        if (!FChar::IsAlnum(C) && C != TEXT('_')) C = TEXT('_');
+    return Name.IsEmpty() ? FString() : FString::Printf(TEXT("/Game/SC/Music/M_%s_%08x"), *Name, FCrc::StrCrc32(*CueId));
+}
+FString FUCPrepared::ResolveMusicCue(const FString& CatalogueJson, const FString& Music)
+{
+    TArray<TSharedPtr<FJsonValue>> Rows;
+    if (Music.IsEmpty() || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(CatalogueJson), Rows)) return FString();
+    // Only a row the player takes (USCMusicSubsystem::ReadCue): one it leaves out could never play.
+    for (const TSharedPtr<FJsonValue>& Value : Rows)
+    {
+        const TSharedPtr<FJsonObject>* Row = nullptr;
+        FSCMusicCue Cue;
+        if (!Value || !Value->TryGetObject(Row) || !Row || !*Row || !USCMusicSubsystem::ReadCue(**Row, Cue)) continue;
+        if (Cue.Id == Music || Cue.Title.Equals(Music, ESearchCase::IgnoreCase)) return Cue.Id;
+    }
+    return FString();
+}
 FString FUCPrepared::RecordedSources(const FString& TraversalClips)
 {
     TArray<FString> Lines;
@@ -282,6 +306,19 @@ bool FUCPrepared::Parse(const FString& Json, FUCPrepared& Out, FString& Error)
     if (Root->TryGetObjectField(TEXT("cargo_levels"), Cargo))
         for (const auto& [Entity, Value] : (*Cargo)->Values)
             if (FString Level; Value && Value->TryGetString(Level)) Out.CargoLevels.Add(FString(Entity), Level);
+    const TSharedPtr<FJsonObject>* Obstacles = nullptr;
+    if (Root->TryGetObjectField(TEXT("obstacle_levels"), Obstacles))
+        for (const auto& [Entity, Value] : (*Obstacles)->Values)
+            if (FString Level; Value && Value->TryGetString(Level)) Out.ObstacleLevels.Add(FString(Entity), Level);
+    Root->TryGetStringField(TEXT("music_catalogue"), Out.MusicCatalogueJson);
+    const TSharedPtr<FJsonObject>* Waves = nullptr;
+    if (Root->TryGetObjectField(TEXT("music_waves"), Waves))
+        for (const auto& [Cue, Value] : (*Waves)->Values)
+            if (FString Wave; Value && Value->TryGetString(Wave)) Out.MusicWaves.Add(FString(Cue), Wave);
+    const TSharedPtr<FJsonObject>* WaveIds = nullptr;
+    if (Root->TryGetObjectField(TEXT("music_wave_ids"), WaveIds))
+        for (const auto& [Cue, Value] : (*WaveIds)->Values)
+            if (FString SaveId; Value && Value->TryGetString(SaveId)) Out.MusicWaveIds.Add(FString(Cue), SaveId);
     Root->TryGetStringField(TEXT("tractor_record"), Out.TractorRecordJson);
     Root->TryGetStringField(TEXT("cargo_fx"), Out.CargoFxJson);
     Out.Archive = Str(Root, TEXT("archive"));
@@ -306,6 +343,16 @@ FString FUCPrepared::ToJson() const
     const TSharedRef<FJsonObject> Cargo = MakeShared<FJsonObject>();
     for (const auto& [Entity, Level] : CargoLevels) Cargo->SetStringField(Entity, Level);
     Root->SetObjectField(TEXT("cargo_levels"), Cargo);
+    const TSharedRef<FJsonObject> Obstacles = MakeShared<FJsonObject>();
+    for (const auto& [Entity, Level] : ObstacleLevels) Obstacles->SetStringField(Entity, Level);
+    Root->SetObjectField(TEXT("obstacle_levels"), Obstacles);
+    Root->SetStringField(TEXT("music_catalogue"), MusicCatalogueJson);
+    const TSharedRef<FJsonObject> Waves = MakeShared<FJsonObject>();
+    for (const auto& [Cue, Wave] : MusicWaves) Waves->SetStringField(Cue, Wave);
+    Root->SetObjectField(TEXT("music_waves"), Waves);
+    const TSharedRef<FJsonObject> WaveIds = MakeShared<FJsonObject>();
+    for (const auto& [Cue, SaveId] : MusicWaveIds) WaveIds->SetStringField(Cue, SaveId);
+    Root->SetObjectField(TEXT("music_wave_ids"), WaveIds);
     Root->SetStringField(TEXT("tractor_record"), TractorRecordJson);
     Root->SetStringField(TEXT("cargo_fx"), CargoFxJson);
     Root->SetStringField(TEXT("archive"), Archive);
@@ -346,6 +393,11 @@ bool FUCPrepared::Save(FString& Error) const
 
 FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelCurrent) const
 {
+    return Problem(Source, LevelCurrent, [](const FString&, bool) { return true; });
+}
+FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const FString& Level)> LevelCurrent,
+                             TFunctionRef<bool(const FString& Ship, bool bFleetShip)> HasGarageDetails) const
+{
     const FString Fix = TEXT(": run ") + PrepareCommand(Scenario);
     if (Format != FormatVersion)
         return FString::Printf(TEXT("scenario %s was prepared with format %d, the game reads %d%s"), *Scenario, Format, FormatVersion, *Fix);
@@ -371,14 +423,55 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
         for (const auto& [Entity, Level] : CargoLevels)
             if (!Entities.Contains(Entity))
                 return FString::Printf(TEXT("scenario %s: the record maps a cargo box %s its setup does not name%s"), *Scenario, *Entity, *Fix);
+        // Every obstacle entity has its level (WP-O1-4b-3c; a record from before has none: prepare again).
+        for (const FSCCargoScenario::FObstacle& O : Cargo.Obstacles)
+            if (ObstacleLevels.FindRef(O.Entity) != USCViewerSubsystem::ShipLevelPath(O.Entity))
+                return FString::Printf(TEXT("scenario %s: the obstacle %s has no prepared level in the record%s"), *Scenario, *O.Entity, *Fix);
+        // And nothing else (packaging would cook it).
+        for (const auto& [Entity, Level] : ObstacleLevels)
+            if (!Cargo.Obstacles.ContainsByPredicate([&](const FSCCargoScenario::FObstacle& O) { return O.Entity == Entity; }))
+                return FString::Printf(TEXT("scenario %s: the record maps an obstacle %s its setup does not name%s"), *Scenario, *Entity, *Fix);
     }
-    else if (!CargoLevels.IsEmpty())
+    else if (!CargoLevels.IsEmpty() || !ObstacleLevels.IsEmpty())
     {
-        return FString::Printf(TEXT("scenario %s: the record maps cargo boxes without a cargo setup%s"), *Scenario, *Fix);
+        return FString::Printf(TEXT("scenario %s: the record maps cargo boxes or obstacles without a cargo setup%s"), *Scenario, *Fix);
     }
     for (const auto& [Entity, Level] : CargoLevels)
         if (!LevelCurrent(Level))
             return FString::Printf(TEXT("scenario %s: the prepared cargo box level %s (%s) is missing or not finished%s"), *Scenario, *Level, *Entity, *Fix);
+    for (const auto& [Entity, Level] : ObstacleLevels)
+        if (!LevelCurrent(Level))
+            return FString::Printf(TEXT("scenario %s: the prepared obstacle level %s (%s) is missing or not finished%s"), *Scenario, *Level, *Entity, *Fix);
+    // The scenario's music (WP-O1-4b-3c): named in the definition, its cue saved (a record from before has none). And its
+    // ships' Garage details in the shared table (the vehicle's, the obstacles').
+    {
+        FUCScenario Defined;
+        FString DefinitionError;
+        const bool bDefined = FUCScenario::Parse(Scenario, Definition, CargoDefinition, Defined, DefinitionError);
+        const bool bMusic = bDefined && !Defined.Music.IsEmpty();
+        // The vehicle's row a fleet ship's (another scenario's obstacle row for it would leave it out of the Garage).
+        if (bDefined && !HasGarageDetails(Defined.Vehicle, true))
+            return FString::Printf(TEXT("scenario %s: the Garage details of %s are not prepared%s"), *Scenario, *Defined.Vehicle, *Fix);
+        for (const auto& [Entity, Level] : ObstacleLevels)
+            if (!HasGarageDetails(Entity, false))
+                return FString::Printf(TEXT("scenario %s: the Garage details of %s are not prepared%s"), *Scenario, *Entity, *Fix);
+        // Its cue, as the run resolves it in the kept catalogue, with the wave the prep step saves for it.
+        const FString Named = bMusic ? ResolveMusicCue(MusicCatalogueJson, Defined.Music) : FString();
+        if (bMusic && (Named.IsEmpty() || MusicWaves.FindRef(Named) != MusicWavePath(Named)))
+            return FString::Printf(TEXT("scenario %s: its music %s is not prepared in the record%s"), *Scenario, *Defined.Music, *Fix);
+        for (const auto& [Cue, Wave] : MusicWaves)
+            if (Wave != MusicWavePath(Cue) || ResolveMusicCue(MusicCatalogueJson, Cue) != Cue)
+                return FString::Printf(TEXT("scenario %s: the record maps the music %s to %s, not its own prepared cue%s"), *Scenario, *Cue, *Wave, *Fix);
+        // The wave this prep saved (its save id), not one another scenario's prep saved again since (a packaged game has no
+        // stamps: the packaging checked it).
+        if (!FPlatformProperties::RequiresCookedData())
+            for (const auto& [Cue, Wave] : MusicWaves)
+                if (const FString Saved = LevelId(Wave); !Saved.IsEmpty() && Saved != MusicWaveIds.FindRef(Cue))
+                    return FString::Printf(TEXT("scenario %s: the music %s was saved again since it was prepared%s"), *Scenario, *Cue, *Fix);
+        for (const auto& [Cue, Wave] : MusicWaves)
+            if (!LevelCurrent(Wave))
+                return FString::Printf(TEXT("scenario %s: the prepared music %s (%s) is missing or not finished%s"), *Scenario, *Wave, *Cue, *Fix);
+    }
     if (TraversalClips.IsEmpty() || !LevelCurrent(TraversalClips))
         return FString::Printf(TEXT("scenario %s: the prepared traversal clips %s are missing or not finished%s"), *Scenario,
                                TraversalClips.IsEmpty() ? TEXT("(none named)") : *TraversalClips, *Fix);
@@ -392,10 +485,18 @@ FString FUCPrepared::Problem(const FUCScenario* Source, TFunctionRef<bool(const 
 FString FUCPrepared::Problem(const FUCScenario* Source) const
 {
     // The traversal clips also follow the levels they were read from (a packaged game has no stamps: packaging checks it).
-    return Problem(Source, [this](const FString& Level) {
-        if (!IsLevelCurrent(Level)) return false;
-        if (Level != TraversalClips || FPlatformProperties::RequiresCookedData()) return true;
-        const FString Sources = TraversalSources();
-        return !Sources.IsEmpty() && RecordedSources(Level) == Sources;
-    });
+    TMap<FString, FSCGarageShipDetails> Details;
+    USCGarageSubsystem::LoadPreparedDetails(Details);
+    return Problem(
+        Source,
+        [this](const FString& Level) {
+            if (!IsLevelCurrent(Level)) return false;
+            if (Level != TraversalClips || FPlatformProperties::RequiresCookedData()) return true;
+            const FString Sources = TraversalSources();
+            return !Sources.IsEmpty() && RecordedSources(Level) == Sources;
+        },
+        [&Details](const FString& Ship, bool bFleetShip) {
+            const FSCGarageShipDetails* Row = Details.Find(Ship);
+            return Row && (!bFleetShip || Row->bFleet);
+        });
 }

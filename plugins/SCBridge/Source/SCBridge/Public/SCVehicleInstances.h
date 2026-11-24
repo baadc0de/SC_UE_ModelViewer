@@ -3,6 +3,8 @@
 // an entity already imported are assembled from that import's retained assets (FSCImportedAssets: shared meshes, rigs,
 // textures, material instances), others are exported (package cache) and imported once, then shared the same way.
 // Auto-placed instances stand on free hangar floor (FSCVehiclePlacement); the set is cleared with the loaded vehicle.
+// An entity with a prepared level (USCViewerSubsystem::CookedShipLevel) streams its own instance of that level instead
+// (WP-O1-4b-3c): no archive and no importer, so a packaged game has extra ships too.
 #pragma once
 #include "CoreMinimal.h"
 #include "SCImport.h"
@@ -16,6 +18,7 @@ class ASCVehicle;
 class FSCImportedAssets;
 class FSCTarPackageSource;
 class USCViewerSubsystem;
+class ULevelStreamingDynamic;
 
 enum class ESCVehicleInstanceState : uint8
 {
@@ -38,6 +41,8 @@ struct SCBRIDGE_API FSCVehicleInstanceInfo
     bool bAutoPlaced = false;
     /** Assembled from retained assets (no export, derivation or mesh/texture build). */
     bool bShared = false;
+    /** Streamed from the entity's prepared level (its own level instance), not imported. */
+    bool bPrepared = false;
     /** Wall seconds from start to ready (queue wait excluded). */
     double Seconds = 0;
     float Progress = 0.f;
@@ -104,7 +109,7 @@ public:
 
     /** Queue an instance. bAuto: free floor next to the loaded vehicle; else World (bRest: landing gear rested and the
      *  lowest visible point on World's Z). Entity empty or "loaded": the loaded vehicle's entity. Returns its id. */
-    int32 Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest, bool bGarageFloor = false);
+    int32 Spawn(const FString& Entity, bool bAuto, const FTransform& World, bool bRest, bool bGarageFloor = false, const FString& Level = FString());
     bool Destroy(int32 Id);
     /** The loaded vehicle first, then every ready instance by id. */
     TArray<ASCVehicle*> GetVehicles() const;
@@ -135,7 +140,19 @@ private:
         bool bRest = true;
         bool bGarageFloor = false;
         double Started = 0, ExportSeconds = 0, ImportSeconds = 0;
+        /** A prepared instance's level instance (unloaded with it) and its vehicle, found once the level loaded (made
+         *  visible only after the vehicle is hidden, so it is never drawn before it is placed). */
+        TWeakObjectPtr<ULevelStreamingDynamic> Level;
+        TWeakObjectPtr<ASCVehicle> Streamed;
+        bool bStreamedCollision = true; // its saved collision setting, off until it is placed
+        bool bAwaitsPending = false;    // its entity is the ship being loaded at the request (decided when that load ends)
+        FString LevelOverride;          // a prepared level to stream, named by the caller (empty: PreparedShipLevelFor)
     };
+    /** A prepared instance's level: released (USCViewerSubsystem::ReleaseLevel: unloaded and removed, a failed one too); its
+     *  vehicle goes with it. */
+    void UnloadLevel(FInstance& I);
+    /** Step a prepared instance's level until its vehicle is visible; then placed (Finish). */
+    void StepStreaming(FInstance& I);
     FInstance* FindInstance(int32 Id);
     void Start(FInstance& I);
     void StepRunning();

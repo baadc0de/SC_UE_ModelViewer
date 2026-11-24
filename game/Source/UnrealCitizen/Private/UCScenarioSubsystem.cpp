@@ -104,6 +104,7 @@ void UUCScenarioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Settings->ScenarioCargoJson = Scenario.CargoJson;
     Settings->ScenarioVehicle = Scenario.Vehicle;
     Settings->ScenarioCargoLevels = Prepared.CargoLevels;
+    Settings->ScenarioObstacleLevels = Prepared.ObstacleLevels;
     Settings->ScenarioTractorRecordJson = Prepared.TractorRecordJson;
     Settings->ScenarioCargoFxJson = Prepared.CargoFxJson;
     // The player body from its prepared level (WP-O1-4b-2), streamed with the vehicle's.
@@ -129,6 +130,7 @@ void UUCScenarioSubsystem::Deinitialize()
     Settings->ScenarioCargoJson.Reset();
     Settings->ScenarioVehicle.Reset();
     Settings->ScenarioCargoLevels.Reset();
+    Settings->ScenarioObstacleLevels.Reset();
     Settings->ScenarioTractorRecordJson.Reset();
     Settings->ScenarioCargoFxJson.Reset();
     Settings->ScenarioCargoProblem.Reset();
@@ -162,6 +164,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     // applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();
     UUCSettings::Get()->ScenarioCargoLevels.Reset(); // the box library releases its prepared levels (DropScenario)
+    UUCSettings::Get()->ScenarioObstacleLevels.Reset();
     UUCSettings::Get()->ScenarioTractorRecordJson.Reset();
     UUCSettings::Get()->ScenarioCargoFxJson.Reset();
     UUCSettings::Get()->ScenarioCargoProblem.Reset();
@@ -232,6 +235,7 @@ bool UUCScenarioSubsystem::Tick(float)
         State = EState::Starting;
         StartedAt = FPlatformTime::Seconds();
         CargoWaitSince = GetGameInstance()->GetWorld()->GetAudioTimeSeconds(); // the boxes' deadline runs from here
+        InstancesReadySeen = INDEX_NONE;
         UE_LOG(LogUCScenario, Display, TEXT("SCENARIO loaded id=%s vehicle=%s environment=%s"), *Id, *Viewer->GetLoadedEntity(),
                Viewer->GetEnvironment() ? *Viewer->GetEnvironment()->GetName() : TEXT("none"));
         return true;
@@ -298,14 +302,44 @@ void UUCScenarioSubsystem::StepStart(USCViewerSubsystem& Viewer)
     // Counted in the world's audio time: a pause stops the box streaming and the deadline alike, and a time dilation
     // (slomo) does not shorten it.
     UWorld* World = GetGameInstance()->GetWorld();
-    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(World); Cargo && !Cargo->ArePreparedBoxesReady())
+    // Its ship unloaded or replaced while starting: what waits for it (the cargo setup's extra ships) never comes. A ship
+    // load in flight (another ship replacing it) is waited out first.
+    if (Viewer.IsShipLoading()) return;
+    if (!Viewer.GetLoadedEntity().Equals(Scenario.Vehicle, ESearchCase::IgnoreCase) || Viewer.GetLoadedShipLevel() != Prepared.VehicleLevel)
+    {
+        Fail(TEXT("the scenario's ship (its prepared level) was unloaded or replaced while it started"));
+        return;
+    }
+    const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(World);
+    if (Cargo && !Cargo->ArePreparedBoxesReady())
     {
         if (World->GetAudioTimeSeconds() - CargoWaitSince > PreparedCargoSeconds)
             Fail(FString::Printf(TEXT("the prepared cargo boxes did not come within %.0f s"), PreparedCargoSeconds));
         return;
     }
+    // And its cargo setup's extra ships and obstacles placed (WP-O1-4b-3c; one that fails fails the scenario): they come one
+    // at a time, behind any other vehicle request, so the deadline runs only while one of them is loading, from its start.
+    int32 Ready = 0;
+    if (bool bLoading = false; Cargo && !Cargo->ArePreparedInstancesReady(&Ready, &bLoading))
+    {
+        const double Now = World->GetAudioTimeSeconds();
+        if (!bLoading || Ready != InstancesReadySeen)
+        {
+            InstancesReadySeen = Ready;
+            InstancesWaitSince = Now;
+        }
+        if (Now - InstancesWaitSince > PreparedCargoSeconds)
+            Fail(FString::Printf(TEXT("a cargo setup's extra vehicle did not come within %.0f s"), PreparedCargoSeconds));
+        return;
+    }
     bMusicPending = !Scenario.Music.IsEmpty();
-    if (USCMusicSubsystem* Music = bMusicPending ? USCMusicSubsystem::Get(GetGameInstance()->GetWorld()) : nullptr) Music->RequestCatalogue();
+    if (USCMusicSubsystem* Music = bMusicPending ? USCMusicSubsystem::Get(GetGameInstance()->GetWorld()) : nullptr)
+    {
+        Music->SetPrepared(Prepared.MusicCatalogueJson, Prepared.MusicWaves); // WP-O1-4b-3c
+        // A prepared cue plays from its wave (StepMusic): the archive's library only when the scenario's cue is not prepared.
+        const FString Cue = FUCPrepared::ResolveMusicCue(Prepared.MusicCatalogueJson, Scenario.Music);
+        if (Cue.IsEmpty() || !Prepared.MusicWaves.Contains(Cue)) Music->RequestCatalogue();
+    }
     State = EState::Running;
     UE_LOG(LogUCScenario, Display, TEXT("SCENARIO running id=%s camera=%d seconds=%.1f"), *Id, int32(Viewer.GetCameraMode()), FPlatformTime::Seconds() - StartedAt);
 }
@@ -315,6 +349,21 @@ void UUCScenarioSubsystem::StepMusic()
     if (!bMusicPending) return;
     USCMusicSubsystem* Music = USCMusicSubsystem::Get(GetGameInstance()->GetWorld());
     if (!Music) return;
+    // Its prepared cue (resolved in the catalogue kept at prep): played from its wave, whatever the archive has now.
+    if (const FString Cue = FUCPrepared::ResolveMusicCue(Prepared.MusicCatalogueJson, Scenario.Music);
+        !Cue.IsEmpty() && Prepared.MusicWaves.Contains(Cue))
+    {
+        bMusicPending = false;
+        if (Music->Play(Cue))
+        {
+            UE_LOG(LogUCScenario, Display, TEXT("SCENARIO music id=%s prepared"), *Cue);
+        }
+        else
+        {
+            UE_LOG(LogUCScenario, Warning, TEXT("SCENARIO music %s: the prepared cue %s does not play"), *Scenario.Music, *Cue);
+        }
+        return;
+    }
     if (!Music->GetError().IsEmpty() && !Music->HasCatalogue())
     {
         bMusicPending = false;

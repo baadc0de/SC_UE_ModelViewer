@@ -381,6 +381,8 @@ struct FSCCargoState
     int32 SeenVehiclesRevision = INDEX_NONE;
     TArray<int32> ScenarioVehicleIds;   // scenario vehicle index -> instance id (0 = the loaded vehicle)
     bool bScenarioVehiclesRequested = false;
+    /** Every extra vehicle and obstacle the setup asked for was Ready at once (ArePreparedInstancesReady stays true). */
+    bool bScenarioInstancesPlaced = false;
     // Owners: the player and the others the scenario names (labels); the shared drone pool served fairly.
     FName Player = TEXT("you");
     TMap<FName, FText> OwnerLabels;

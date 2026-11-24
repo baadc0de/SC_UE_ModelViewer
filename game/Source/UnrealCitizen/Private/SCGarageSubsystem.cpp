@@ -18,6 +18,10 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+#include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
+#include "UCScenario.h"
 
 FString FSCGaragePolicy::StoreRefusal(bool bOwned, bool bAboard, bool bTransfer)
 {
@@ -89,7 +93,18 @@ void USCGarageSubsystem::RequestCatalog()
     if (!bScannedCooked)
     {
         bScannedCooked = true;
+        LoadPreparedDetails(PreparedDetails); // their details as read at prep (none: from the archive, as before)
         IAssetRegistry& Assets = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+        // The prepared ships' levels by level name, as ShipLevelPath names them from their entity (which drops characters): a
+        // level is listed as the entity the table knows it by, and an obstacle's (an asteroid's) not at all.
+        TSet<FString> ObstacleLevels;
+        TMap<FString, FString> EntityOfLevel;
+        for (const auto& [Entity, Known] : PreparedDetails)
+        {
+            const FString LevelName = FPackageName::GetShortName(USCViewerSubsystem::ShipLevelPath(Entity));
+            if (!Known.bFleet) ObstacleLevels.Add(LevelName);
+            else EntityOfLevel.Add(LevelName, Entity);
+        }
         TArray<FAssetData> LevelCandidates;
         Assets.GetAssetsByPath(FName(TEXT("/Game/SC/Ships/Maps")), LevelCandidates, false);
         for (const FAssetData& Level : LevelCandidates)
@@ -97,7 +112,11 @@ void USCGarageSubsystem::RequestCatalog()
             if (Level.AssetClassPath == UWorld::StaticClass()->GetClassPathName() && !USCViewerSubsystem::IsShipPaintLevel(Level.PackageName.ToString()))
             {
                 const FString Entity = FPackageName::GetShortName(Level.PackageName);
-                if (!USCViewerSubsystem::CookedShipLevel(Entity).IsEmpty()) Cooked.AddUnique(Entity);
+                // An obstacle's level (an asteroid) is no fleet ship (WP-O1-4b-3c).
+                if (ObstacleLevels.Contains(Entity)) continue;
+                const FString* Known = EntityOfLevel.Find(Entity);
+                const FString Listed = Known ? *Known : Entity;
+                if (!USCViewerSubsystem::CookedShipLevel(Listed).IsEmpty()) Cooked.AddUnique(Listed);
             }
     }
     USCViewerSubsystem* V = Viewer();
@@ -122,10 +141,150 @@ void USCGarageSubsystem::RequestDetails(const FString& Name)
 {
     const FString Entity = Canonical(Name);
     if (Entity.IsEmpty() || Details.Contains(FName(*Entity))) return;
+    // A prepared ship's details were read at prep (WP-O1-4b-3c): no archive read.
+    if (const FSCGarageShipDetails* Prepared = PreparedDetails.Find(Entity))
+    {
+        Details.Add(FName(*Entity), *Prepared);
+        return;
+    }
     // The details are DataCore records: without an archive reader (a packaged game) none can be read.
     if (const USCViewerSubsystem* V = Viewer(); V && !V->CanReadArchive()) return;
     Details.Add(FName(*Entity));
     DetailsQueue.Add(Entity);
+}
+
+bool USCGarageSubsystem::ReadClassDetails(const FString& ClassJson, FSCGarageShipDetails& Item, FString& ManufacturerRef)
+{
+    ManufacturerRef.Reset();
+    TSharedPtr<FJsonObject> Class;
+    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(ClassJson), Class) || !Class) return false;
+    Class->TryGetStringField(TEXT("vehicleRole"), Item.Role);
+    if (Item.Role.StartsWith(TEXT("@"))) Item.Role.Reset(); // the live record carries the key only
+    const TArray<TSharedPtr<FJsonValue>>* Components = nullptr;
+    if (Class->TryGetArrayField(TEXT("Components"), Components) && Components)
+        for (const auto& Value : *Components)
+        {
+            const TSharedPtr<FJsonObject>* Component = nullptr;
+            const TSharedPtr<FJsonObject>* Attach = nullptr;
+            if (!Value || !Value->TryGetObject(Component) || !Component || !*Component ||
+                !(*Component)->TryGetObjectField(TEXT("AttachDef"), Attach) || !Attach || !*Attach) continue;
+            (*Attach)->TryGetStringField(TEXT("Manufacturer"), ManufacturerRef);
+            double Size = 0;
+            if ((*Attach)->TryGetNumberField(TEXT("Size"), Size) && Size > 0) Item.Size = FString::FromInt(int32(Size));
+            break;
+        }
+    return true;
+}
+
+FString USCGarageSubsystem::ReadManufacturerCode(const FString& Json)
+{
+    FString Code;
+    TSharedPtr<FJsonObject> Result;
+    if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Result) && Result) Result->TryGetStringField(TEXT("Code"), Code);
+    return Code;
+}
+
+FString USCGarageSubsystem::PreparedDetailsFile()
+{
+    return FUCPrepared::Directory() / TEXT("Shared") / TEXT("garage_details.json");
+}
+
+bool USCGarageSubsystem::LoadPreparedDetails(TMap<FString, FSCGarageShipDetails>& Out, const FString& File)
+{
+    Out.Reset();
+    // A save that did not finish (moved aside, not yet replaced) left the last table beside it: that one is read.
+    const FString Older = File + TEXT(".older");
+    const FString& Read = !IFileManager::Get().FileExists(*File) && IFileManager::Get().FileExists(*Older) ? Older : File;
+    FString Text;
+    TSharedPtr<FJsonObject> Root;
+    if (!FFileHelper::LoadFileToString(Text, *Read) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root)
+        return false;
+    // Every row as the writer writes it (three strings, empty allowed; "fleet" a bool, true when a table from before has
+    // none): anything else fails the read, so no prep rewrites the table without it and no record passes on it.
+    for (const auto& [Entity, Value] : Root->Values)
+    {
+        const TSharedPtr<FJsonObject>* Row = nullptr;
+        FSCGarageShipDetails D;
+        // The JSON types themselves (TryGet*Field converts a number to a string or a bool).
+        auto Typed = [&](const TCHAR* Name, EJson Type) {
+            const TSharedPtr<FJsonValue> Field = (*Row)->TryGetField(Name);
+            return Field && Field->Type == Type;
+        };
+        if (!Value || !Value->TryGetObject(Row) || !Row || !*Row || !Typed(TEXT("manufacturer"), EJson::String) ||
+            !Typed(TEXT("role"), EJson::String) || !Typed(TEXT("size"), EJson::String) ||
+            ((*Row)->HasField(TEXT("fleet")) && !Typed(TEXT("fleet"), EJson::Boolean)))
+        {
+            Out.Reset();
+            return false;
+        }
+        D.Manufacturer = (*Row)->GetStringField(TEXT("manufacturer"));
+        D.Role = (*Row)->GetStringField(TEXT("role"));
+        D.Size = (*Row)->GetStringField(TEXT("size"));
+        if ((*Row)->HasField(TEXT("fleet"))) D.bFleet = (*Row)->GetBoolField(TEXT("fleet"));
+        if ((*Row)->HasField(TEXT("build")))
+        {
+            if (!Typed(TEXT("build"), EJson::String))
+            {
+                Out.Reset();
+                return false;
+            }
+            D.Build = (*Row)->GetStringField(TEXT("build"));
+        }
+        Out.Add(Canonical(FString(Entity)), MoveTemp(D));
+    }
+    return true;
+}
+
+bool USCGarageSubsystem::SavePreparedDetails(const TMap<FString, FSCGarageShipDetails>& Details, FString& Error, const FString& File)
+{
+    const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+    TArray<FString> Entities;
+    Details.GetKeys(Entities);
+    Entities.Sort(); // stable file for a stable set
+    for (const FString& Entity : Entities)
+    {
+        const FSCGarageShipDetails& D = Details[Entity];
+        const TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+        Row->SetStringField(TEXT("manufacturer"), D.Manufacturer);
+        Row->SetStringField(TEXT("role"), D.Role);
+        Row->SetStringField(TEXT("size"), D.Size);
+        Row->SetBoolField(TEXT("fleet"), D.bFleet);
+        Row->SetStringField(TEXT("build"), D.Build);
+        Root->SetObjectField(Entity, Row);
+    }
+    FString Text;
+    FJsonSerializer::Serialize(Root, TJsonWriterFactory<>::Create(&Text));
+    // Written beside it, then moved into place; the older table is set aside first and put back if the move fails, so one
+    // of them always exists (a reader never sees half a table).
+    IFileManager& Files = IFileManager::Get();
+    Files.MakeDirectory(*FPaths::GetPath(File), true);
+    const FString Partial = File + TEXT(".partial"), Older = File + TEXT(".older");
+    if (!FFileHelper::SaveStringToFile(Text, *Partial))
+    {
+        Files.Delete(*Partial, false, true, true);
+        Error = TEXT("cannot write ") + Partial;
+        return false;
+    }
+    // The table set aside (a .older left by a save that did not finish is that table already: kept, as the reader takes it).
+    if (Files.FileExists(*File))
+    {
+        Files.Delete(*Older, false, true, true);
+        if (!Files.Move(*Older, *File, false, true))
+        {
+            Files.Delete(*Partial, false, true, true);
+            Error = TEXT("cannot set aside ") + File;
+            return false;
+        }
+    }
+    if (!Files.Move(*File, *Partial, false, true))
+    {
+        if (Files.FileExists(*Older)) Files.Move(*File, *Older, false, true); // the older table back
+        Files.Delete(*Partial, false, true, true);
+        Error = TEXT("cannot write ") + File;
+        return false;
+    }
+    Files.Delete(*Older, false, true, true);
+    return true;
 }
 
 void USCGarageSubsystem::ReadNextDetail()
@@ -143,38 +302,22 @@ void USCGarageSubsystem::ReadNextDetail()
         USCGarageSubsystem* G = Weak.Get();
         if (!G || !G->Viewer() || G->Viewer()->GetArchiveGeneration() != Generation) return;
         const auto Finish = [&] { G->bDetailsReading = false; };
-        TSharedPtr<FJsonObject> Class;
-        if (!Record.bOK || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Record.Json), Class) || !Class)
+        FDetails Read;
+        FString ManufacturerRef;
+        if (!Record.bOK || !ReadClassDetails(Record.Json, Read, ManufacturerRef))
         {
             Finish();
             return;
         }
         FDetails& Item = G->Details.FindOrAdd(Key);
-        Class->TryGetStringField(TEXT("vehicleRole"), Item.Role);
-        if (Item.Role.StartsWith(TEXT("@"))) Item.Role.Reset(); // the live record carries the key only
-        FString ManufacturerRef;
-        const TArray<TSharedPtr<FJsonValue>>* Components = nullptr;
-        if (Class->TryGetArrayField(TEXT("Components"), Components) && Components)
-            for (const auto& Value : *Components)
-            {
-                const TSharedPtr<FJsonObject>* Component = nullptr;
-                const TSharedPtr<FJsonObject>* Attach = nullptr;
-                if (!Value || !Value->TryGetObject(Component) || !Component || !*Component ||
-                    !(*Component)->TryGetObjectField(TEXT("AttachDef"), Attach) || !Attach || !*Attach) continue;
-                (*Attach)->TryGetStringField(TEXT("Manufacturer"), ManufacturerRef);
-                double Size = 0;
-                if ((*Attach)->TryGetNumberField(TEXT("Size"), Size) && Size > 0) Item.Size = FString::FromInt(int32(Size));
-                break;
-            }
+        Item.Role = Read.Role;
+        Item.Size = Read.Size;
         if (ManufacturerRef.IsEmpty() || !G->Viewer()->GetClient()) { Finish(); return; }
         if (const FString* Code = G->ManufacturerCodes.Find(ManufacturerRef)) { Item.Manufacturer = *Code; Finish(); return; }
         G->Viewer()->GetClient()->DataCoreRecord(ManufacturerRef, [Weak, Key, Generation, ManufacturerRef](const FSCTextResult& Manufacturer) {
             USCGarageSubsystem* Garage = Weak.Get();
             if (!Garage || !Garage->Viewer() || Garage->Viewer()->GetArchiveGeneration() != Generation) return;
-            FString Code;
-            TSharedPtr<FJsonObject> Result;
-            if (Manufacturer.bOK && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Manufacturer.Json), Result) && Result)
-                Result->TryGetStringField(TEXT("Code"), Code);
+            FString Code = Manufacturer.bOK ? ReadManufacturerCode(Manufacturer.Json) : FString();
             Garage->ManufacturerCodes.Add(ManufacturerRef, Code);
             Garage->Details.FindOrAdd(Key).Manufacturer = MoveTemp(Code);
             Garage->bDetailsReading = false;
@@ -200,9 +343,11 @@ TArray<FSCGarageRow> USCGarageSubsystem::Rows(const FString& EntityFilter, bool 
     }
     const TArray<FSCVehicleInstanceInfo> Instances = V ? V->GetVehicleInstances() : TArray<FSCVehicleInstanceInfo>();
     TMap<FName, const FSCVehicleInstanceInfo*> Paired;
+    const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetWorld());
     if (Link)
         for (const auto& Info : Instances)
-            if (Link->RoleOf(Link->GetPlayer(), Info.Actor.Get()) == ESCShipRole::Owner)
+            // (A cargo setup's obstacle, an asteroid, is no fleet ship whoever it is paired with.)
+            if (Link->RoleOf(Link->GetPlayer(), Info.Actor.Get()) == ESCShipRole::Owner && !(Cargo && Cargo->IsObstacleInstance(Info.Id)))
             {
                 const FString Name = Canonical(Info.Entity);
                 const FName Key(*Name);
@@ -307,27 +452,38 @@ FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacem
     const auto* Row = Fleet.FindByPredicate([&](const FSCGarageRow& R) { return R.Entity.Equals(Entity, ESearchCase::IgnoreCase); });
     if (!Row) return Refuse(TEXT("This ship is not in your fleet"));
     if (Row->Status == ESCGarageStatus::InHangar) return Refuse(TEXT("This ship is already in the hangar"));
-    if (!V->CanLoad(Entity)) return Refuse(TEXT("The ship is unavailable in this build"));
-
     FBox Bay(ForceInit);
     const bool bHasBay = At == ESCGaragePlacement::Bay && FSCEnvironment::FindShipBay(V->GetEnvironment(), Bay);
+    // The bay's occupant (stored below, once the retrieval can go ahead).
+    ASCVehicle* Occupant = nullptr;
     if (At == ESCGaragePlacement::Bay)
-        for (ASCVehicle* Occupant : V->GetVehicles())
+        for (ASCVehicle* Candidate : V->GetVehicles())
         {
-            const FBox Current = FSCEnvironment::SolidBounds(Occupant);
+            const FBox Current = FSCEnvironment::SolidBounds(Candidate);
             const bool bOccupies = bHasBay
                 ? Current.IsValid && Current.IntersectXY(Bay) && FMath::IsNearlyEqual(Current.Min.Z, Bay.Max.Z, 100.0)
-                : Occupant == V->GetVehicle();
+                : Candidate == V->GetVehicle();
             if (!bOccupies) continue;
-            Result.Occupant = V->GetVehicleInstanceId(Occupant);
-            const bool bOwned = Link->RoleOf(Link->GetPlayer(), Occupant) == ESCShipRole::Owner;
-            const bool bConfirmedThisShip = bConfirmStore && (ConfirmedOccupant == INDEX_NONE || ConfirmedOccupant == Result.Occupant);
-            const FString BlockingReason = FSCGaragePolicy::BayRefusal(bOwned, bConfirmedThisShip, Result.bConfirmStore);
-            if (!BlockingReason.IsEmpty()) return Refuse(BlockingReason);
-            const FString Stored = Store(Result.Occupant);
-            if (!Stored.IsEmpty()) return Refuse(Stored);
+            Occupant = Candidate;
             break;
         }
+    // The loaded ship's slot is free once the occupant is stored (it is the loaded ship, or there is none): then this
+    // retrieval loads the loaded ship (CanLoad: its prepared level, or the archive); else it is an extra copy (its prepared
+    // level - the loaded ship's paint for more of it - or the archive).
+    const bool bLoadsPrimary = At == ESCGaragePlacement::Bay && (!V->GetVehicle() || Occupant == V->GetVehicle());
+    if (bLoadsPrimary ? !V->CanLoad(Entity)
+                      : V->PreparedShipLevelFor(Entity).IsEmpty() && !(V->CanReadArchive() && V->GetArchiveState() == ESCArchiveState::Ready))
+        return Refuse(V->CanReadArchive() ? TEXT("The ship is unavailable until the archive is open") : TEXT("The ship is unavailable in this build"));
+    if (Occupant)
+    {
+        Result.Occupant = V->GetVehicleInstanceId(Occupant);
+        const bool bOwned = Link->RoleOf(Link->GetPlayer(), Occupant) == ESCShipRole::Owner;
+        const bool bConfirmedThisShip = bConfirmStore && (ConfirmedOccupant == INDEX_NONE || ConfirmedOccupant == Result.Occupant);
+        const FString BlockingReason = FSCGaragePolicy::BayRefusal(bOwned, bConfirmedThisShip, Result.bConfirmStore);
+        if (!BlockingReason.IsEmpty()) return Refuse(BlockingReason);
+        const FString Stored = Store(Result.Occupant);
+        if (!Stored.IsEmpty()) return Refuse(Stored);
+    }
 
     if (At == ESCGaragePlacement::Bay && !V->GetVehicle())
     {
@@ -336,8 +492,6 @@ FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacem
     }
     else
     {
-        if (!V->CanReadArchive()) return Refuse(TEXT("Extra ships are unavailable in this build"));
-        if (V->GetArchiveState() != ESCArchiveState::Ready) return Refuse(TEXT("Extra instances require an open archive"));
         if (bHasBay)
         {
             FVector Top = Bay.GetCenter();
@@ -358,6 +512,8 @@ FString USCGarageSubsystem::Store(int32 Id)
     USCShipLinkSubsystem* Link = USCShipLinkSubsystem::Get(this);
     ASCVehicle* Ship = Link ? Link->FindShip(Id) : nullptr;
     if (!Ship || !V) return TEXT("No such ship");
+    if (const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetWorld()); Cargo && Cargo->IsObstacleInstance(Id))
+        return TEXT("Not a ship");
     const bool bOwned = Link->RoleOf(Link->GetPlayer(), Ship) == ESCShipRole::Owner;
     const ASCFirstPersonCharacter* Player = V->GetFirstPerson();
     bool bAboard = false;
