@@ -19,6 +19,9 @@ class FSCViewerAutomation
 public:
     explicit FSCViewerAutomation(USCViewerSubsystem& InOwner);
     void Tick();
+    /** A -SCScript route that has not started is ended (its ship is not coming: the -SCLoad queue, or the scene's owner,
+     *  ended without one). */
+    void CancelUnstartedScript();
 
 private:
     struct FStep

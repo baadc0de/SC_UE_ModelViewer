@@ -144,13 +144,20 @@ void UUCScenarioSubsystem::Refuse(const FString& Why, bool bClearScene)
     // Nothing loads instead: not the environment the viewer restored at start, nor a ship a cargo setting names.
     UUCSettings::Get()->bScenarioOwnsScene = true;
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
+    {
         Viewer->SetEnvironment(TEXT("none"));
+        Viewer->CancelPendingScript(); // no ship comes: a -SCScript route does not run against one loaded later
+    }
 }
 
 void UUCScenarioSubsystem::Fail(const FString& Why)
 {
     State = EState::Failed;
     Problem = Why;
+    // A -SCScript route waiting for the scenario's ship does not run against one loaded later (the scenario's own ship,
+    // loaded or loading, goes with it).
+    if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
+        Viewer->CancelPendingScript(/*bSceneGoing=*/true);
     // What the run started stops and goes: a level still streaming, the environment, the player body and the cargo setup not
     // applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();
@@ -183,8 +190,9 @@ bool UUCScenarioSubsystem::Tick(float)
     // A prepared cargo box that did not load (WP-O1-4b-3): the scenario does not run short of its stock.
     if ((State == EState::Loading || State == EState::Starting || State == EState::Running) && !UUCSettings::Get()->ScenarioCargoProblem.IsEmpty())
     {
-        // Its level is there but does not hold a usable box: an ordinary prep would keep it.
-        Fail(UUCSettings::Get()->ScenarioCargoProblem + TEXT(": run ") + FUCPrepared::PrepareCommand(Id) + TEXT(" -Force"));
+        // The problem says what to do (a box level that does not hold a usable box: prepare again; a part this build
+        // cannot provide: none).
+        Fail(FString(UUCSettings::Get()->ScenarioCargoProblem)); // a copy: Fail resets the setting before it logs
         return true;
     }
     switch (State)

@@ -107,6 +107,8 @@ public:
      *  or docked, and no setup is read from the settings afterwards. What is already placed stays with its grids (the
      *  failed scenario unloads them); the drone definition stays for drones already out. */
     void DropScenario();
+    /** The setup cannot run (a part this build cannot provide): logged, the game scenario fails with it, dropped. */
+    void FailScenario(const FString& Problem);
     /** WP-O1-4b-3: every box the prepared cargo setup names has come (its template ready); true without one. The scenario
      *  reports running only then (a box that failed fails it: UUCSettings::ScenarioCargoProblem). */
     bool ArePreparedBoxesReady() const;

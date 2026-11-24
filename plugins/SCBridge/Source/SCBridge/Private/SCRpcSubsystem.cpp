@@ -813,7 +813,10 @@ private:
         USCViewerSubsystem* V = Viewer();
         const FString Entity = Str(B, TEXT("entity"));
         if (!V || Entity.IsEmpty()) return Respond(Done, Error(TEXT("entity is needed")));
-        if (!V->CanLoad(Entity)) return Respond(Done, Error(TEXT("cannot load now (archive not ready)")));
+        if (!V->CanLoad(Entity))
+            return Respond(Done, Error(V->CanReadArchive() || !USCViewerSubsystem::CookedShipLevel(Entity).IsEmpty()
+                                           ? TEXT("cannot load now (archive not ready, or a load is running)")
+                                           : TEXT("the ship is not prepared and this build reads no archive")));
         if (!V->LoadEntity(Entity, nullptr)) return Respond(Done, Error(TEXT("load refused (one is running?)")));
         Respond(Done, Ok());
     }

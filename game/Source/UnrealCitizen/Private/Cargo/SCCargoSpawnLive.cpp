@@ -117,6 +117,14 @@ ESCCargoCatalogState USCCargoSubsystem::RequestSpawnCatalog(FText* OutNote)
 {
     if (!State) return ESCCargoCatalogState::Failed;
     State->bCatalogWanted = true;
+    // No archive reader in this build: the records never come (asking again would only start over).
+    if (const USCViewerSubsystem* Viewer = USCViewerSubsystem::Get(GetWorld()); Viewer && !Viewer->CanReadArchive())
+    {
+        State->CatalogState = ESCCargoCatalogState::Failed;
+        State->CatalogError = TEXT("live spawns are unavailable in this build (box records are read from Data.p4k)");
+        if (OutNote) *OutNote = CatalogNote(*State);
+        return State->CatalogState;
+    }
     // Not read yet, or failed before (the archive may be open now): read when the archive allows.
     if (State->CatalogState == ESCCargoCatalogState::None || (State->CatalogState == ESCCargoCatalogState::Failed && !State->CatalogTask.IsValid()))
     {
@@ -205,7 +213,8 @@ void USCCargoSubsystem::TickCatalog()
     {
         // No archive (failed, or none opened: a package-only session): asked again later, read then.
         State->CatalogState = ESCCargoCatalogState::Failed;
-        State->CatalogError = TEXT("the archive is not open (box records are read from Data.p4k)");
+        State->CatalogError = Viewer->CanReadArchive() ? TEXT("the archive is not open (box records are read from Data.p4k)")
+                                                       : TEXT("live spawns are unavailable in this build (box records are read from Data.p4k)");
         UE_LOG(LogSCCargo, Warning, TEXT("CARGO_CATALOG failed reason=\"%s\""), *State->CatalogError);
         return;
     }

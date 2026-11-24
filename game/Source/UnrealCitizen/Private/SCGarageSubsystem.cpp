@@ -122,6 +122,8 @@ void USCGarageSubsystem::RequestDetails(const FString& Name)
 {
     const FString Entity = Canonical(Name);
     if (Entity.IsEmpty() || Details.Contains(FName(*Entity))) return;
+    // The details are DataCore records: without an archive reader (a packaged game) none can be read.
+    if (const USCViewerSubsystem* V = Viewer(); V && !V->CanReadArchive()) return;
     Details.Add(FName(*Entity));
     DetailsQueue.Add(Entity);
 }
@@ -334,6 +336,7 @@ FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacem
     }
     else
     {
+        if (!V->CanReadArchive()) return Refuse(TEXT("Extra ships are unavailable in this build"));
         if (V->GetArchiveState() != ESCArchiveState::Ready) return Refuse(TEXT("Extra instances require an open archive"));
         if (bHasBay)
         {

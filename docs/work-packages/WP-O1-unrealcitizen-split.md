@@ -88,8 +88,8 @@ out), no garage prompt and no cargo, Ship Link or Garage routes. `Start-SCViewer
 
 The runtime importer's own module (`SCBridgeImport`) moves to O1-4: until the game runs prepared assets it imports at
 run time like the viewer, so the split has nothing to leave out yet, and O1-4 shows which code a cooked game needs.
-The plugin's cargo art (`/SCBridge/Cargo`) stays in the plugin until it can move with the editor's redirectors
-(O1-4); the game cooks it (`DirectoriesToAlwaysCook`), the viewer no longer does.
+The cargo art was the plugin's (`/SCBridge/Cargo`) until O1-4c-3c moved it to the game (`/Game/Cargo`); the game cooks
+it (`DirectoriesToAlwaysCook`), the viewer no longer does.
 
 ### O1-3 — The viewer app (this PR)
 
@@ -401,6 +401,25 @@ library of ours. In stages:
   - **O1-4c-3c**: the game's archive features go behind that interface: live cargo spawns, the Garage's retrieval,
     music, and the cargo effects' and boxes' archive fallbacks. A packaged game reports them unavailable. The plugin's
     cargo art moves to the game's content.
+    - `USCViewerSubsystem::CanReadArchive()`: whether this build has an archive reader (the importer plugin's). Without
+      one the features say so instead of asking for the archive: the Garage refuses extra ships ("Extra ships are
+      unavailable in this build"; a ship with no prepared level was already "unavailable in this build"), the music app's
+      library ("The soundtrack library is unavailable in this build"), live spawns' box catalogue and a box with no
+      prepared level fail with the same reason, as does the first-person body when it is not prepared. A cargo setup
+      fails (`USCCargoSubsystem::FailScenario`: logged, the game scenario fails with it, the setup is dropped) only where
+      it can never run, instead of running short or waiting for ever: without a reader when it needs extra vehicles or
+      obstacles, or its own ship, hangar or a box is not prepared; in any build when it is in space with docks or stock
+      on environment grids. Everything else (a hangar or ship the caller may still bring) waits, as before; a setup that
+      fails before its ship was asked for still loads the ship. Without a reader an unprepared `-SCLoad` entry is skipped
+      and the rest load (with `-SCQuitAfterLoad` the run ends there with status 1), and an unstarted `-SCScript` route ends when its ship can no longer come (the queue ended with no
+      ship, a game scenario failed or was refused, a failed setup's ship is not prepared); with a reader a later load may
+      still bring one, so the route waits as before. The cargo effects already report "no archive (FFI)" and play the
+      built systems. O1-4b-3c makes extra instances, music and
+      the Garage's details prepared.
+    - The cargo art (17 assets: the drone, dock, rotor, tractor beam and grid slot meshes and their materials) moves from
+      `/SCBridge/Cargo` to `/Game/Cargo` in one AssetTools rename (nothing outside the folder referenced it, so no
+      redirectors are left); `ASCCargoDrone` finds the meshes at `/Game/Cargo/Meshes`, the game cooks `/Game/Cargo`, and
+      `game/scripts/create_cargo_art.py` writes there.
 
 #### O1-4a — Scenarios and the prep step
 

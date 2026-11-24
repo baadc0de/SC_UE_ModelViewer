@@ -727,6 +727,14 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
         GEngine->Exec(World, *Step.Command);
 }
 
+void FSCViewerAutomation::CancelUnstartedScript()
+{
+    if (Script.IsEmpty() || StepIndex != INDEX_NONE) return;
+    // A ship still queued (-SCLoad, -SCPlayerDemo) or loading may yet come: the route waits for it.
+    if (!Queue.IsEmpty() || bWaiting) return;
+    UE_LOG(LogSCViewerAutomation, Error, TEXT("SCRIPT_CANCELLED its ship is not coming (the -SCLoad queue or the scene's owner ended without one)"));
+    StepIndex = Script.Num(); // done: it does not run against a ship loaded later
+}
 void FSCViewerAutomation::TickScript(USCViewerSubsystem& S)
 {
     if (Script.IsEmpty() || StepIndex >= Script.Num()) return;
@@ -821,11 +829,22 @@ void FSCViewerAutomation::Tick()
     if (!bCameraApplied && !Camera.IsEmpty() && S->GetVehicle() && (bLoaded || Queue.IsEmpty())) ApplyCamera();
     // A cooked ship loads without the archive.
     const bool bCookedNext = !Queue.IsEmpty() && !USCViewerSubsystem::CookedShipLevel(Queue[0].TrimStartAndEnd()).IsEmpty();
-    // No archive reader in this build (a packaged game): the archive never opens, an unprepared ship cannot load.
-    if ((S->GetArchiveState() == ESCArchiveState::Failed || !S->GetClient()) && !Queue.IsEmpty() && !bCookedNext)
+    // No archive reader in this build (a packaged game): an unprepared ship cannot load; it is skipped and the queue goes on
+    // (the prepared ones load).
+    if (!S->GetClient() && !Queue.IsEmpty() && !bCookedNext)
     {
-        UE_LOG(LogSCViewerAutomation, Error, TEXT("AUTOMATION archive failed: %s"),
-               S->GetClient() ? *S->GetArchiveError() : TEXT("this build has no archive reader and the ship is not prepared"));
+        UE_LOG(LogSCViewerAutomation, Error, TEXT("AUTOMATION skipped %s: this build has no archive reader and the ship is not prepared"),
+               *Queue[0].TrimStartAndEnd());
+        Queue.RemoveAt(0);
+        bAllSucceeded = false;
+        // A -SCQuitAfterLoad run has failed: it ends now, with status 1 (forced: a graceful request exits 0, and a route's
+        // own quit must not end it first).
+        if (bQuit) FPlatformMisc::RequestExitWithStatus(true, 1);
+        return;
+    }
+    if (S->GetArchiveState() == ESCArchiveState::Failed && !Queue.IsEmpty() && !bCookedNext)
+    {
+        UE_LOG(LogSCViewerAutomation, Error, TEXT("AUTOMATION archive failed: %s"), *S->GetArchiveError());
         Queue.Empty();
         bAllSucceeded = false;
         if (bQuit) FPlatformMisc::RequestExitWithStatus(true, 1); // forced: a graceful request exits 0 from GuardedMain
@@ -841,6 +860,9 @@ void FSCViewerAutomation::Tick()
         {
             bQueued = false;
             UE_LOG(LogSCViewerAutomation, Display, TEXT("AUTOMATION_DONE all_succeeded=%d"), bAllSucceeded);
+            // Without an archive reader a ship that did not load never will (with one, a retry or a later load may still
+            // bring it, as before): the route does not wait for it.
+            if (!bAllSucceeded && !S->GetVehicle() && !S->CanReadArchive()) CancelUnstartedScript();
             // A failure is forced: a graceful request exits 0 from GuardedMain whatever the status.
             if (bQuit) FPlatformMisc::RequestExitWithStatus(!bAllSucceeded, bAllSucceeded ? 0 : 1);
         }

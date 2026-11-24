@@ -273,7 +273,8 @@ void USCViewerSubsystem::SearchAsync(const FString& Query, int32 Limit, TFunctio
     {
         FSCSearchResult Result;
         Result.Query = Query;
-        Result.Error = NSLOCTEXT("SCViewer", "ArchiveNotReady", "The archive is not open yet");
+        Result.Error = CanReadArchive() ? NSLOCTEXT("SCViewer", "ArchiveNotReady", "The archive is not open yet")
+                                        : NSLOCTEXT("SCViewer", "NoArchiveReader", "This build reads no archive");
         Callback(Result);
         return;
     }
@@ -324,7 +325,7 @@ FString USCViewerSubsystem::GetCatalogError() const
     if (Catalog.bReady) return FString();
     if (!Catalog.Error.IsEmpty()) return Catalog.Error;
     if (ArchiveState == ESCArchiveState::Failed) return ArchiveError.ToString();
-    if (ArchiveState == ESCArchiveState::Closed) return TEXT("No archive is open");
+    if (ArchiveState == ESCArchiveState::Closed) return CanReadArchive() ? TEXT("No archive is open") : TEXT("This build reads no archive");
     return FString(); // opening, or listing
 }
 
@@ -813,6 +814,13 @@ FString USCViewerSubsystem::CookedShipLevel(const FString& Entity)
     const FString Level = ShipLevelPath(Entity);
     return !Level.IsEmpty() && FPackageName::DoesPackageExist(Level) && SCViewerShell::PassesCookedLevelCheck(Level) ? Level : FString();
 }
+void USCViewerSubsystem::CancelPendingScript(bool bSceneGoing)
+{
+    // Not while a ship is loaded or loading (whoever asked for it): the route runs on that one.
+    const bool bShipLoading = Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
+    // Only without an archive reader is that final (with one, a later load may still bring a ship, as before).
+    if (Automation && !CanReadArchive() && (bSceneGoing || (!Vehicle.IsValid() && !bShipLoading))) Automation->CancelUnstartedScript();
+}
 bool USCViewerSubsystem::CanLoad(const FString& Entity) const
 {
     return !IsBusy() && (ArchiveState == ESCArchiveState::Ready || !CookedShipLevel(Entity).IsEmpty());
@@ -836,7 +844,8 @@ bool USCViewerSubsystem::StartLoad(const FString& Entity, USCViewOptions* InOpti
     if (Entity.IsEmpty() || IsBusy() || (ArchiveState != ESCArchiveState::Ready && Cooked.IsEmpty()))
     {
         UE_LOG(LogSCViewer, Warning, TEXT("LoadEntity(%s) refused: %s"), *Entity,
-               Entity.IsEmpty() ? TEXT("no entity") : IsBusy() ? TEXT("a load is running") : TEXT("archive not open"));
+               Entity.IsEmpty() ? TEXT("no entity") : IsBusy() ? TEXT("a load is running")
+               : CanReadArchive() ? TEXT("archive not open") : TEXT("the ship is not prepared and this build reads no archive"));
         return false;
     }
     LoadOptions->CopyFrom(InOptions ? InOptions : Options.Get());
@@ -1026,7 +1035,10 @@ bool USCViewerSubsystem::WaitForPhase(ESCLoadPhase Target, float TimeoutSeconds)
         // Advance one phase at a time: the import job is created on entering Importing and not stepped here.
         const ESCLoadPhase Before = Phase;
         if (Phase == ESCLoadPhase::Importing)
-            Job->Tick(false, ImportBudgetSeconds);
+        {
+            if (Job) Job->Tick(false, ImportBudgetSeconds);
+            else StepLoad(true); // a prepared level streams: no import job
+        }
         else if (Phase == ESCLoadPhase::Exporting && !ExportTask.IsCompleted())
             ExportTask.Wait();
         else if (Phase == ESCLoadPhase::Parsing && !ParseTask.IsCompleted())
@@ -1042,6 +1054,7 @@ bool USCViewerSubsystem::WaitForImportedMeshes(int32 MinMeshes, float TimeoutSec
     if (Phase != ESCLoadPhase::Importing && !WaitForPhase(ESCLoadPhase::Importing, TimeoutSeconds)) return false;
     while (Phase == ESCLoadPhase::Importing && FPlatformTime::Seconds() < Deadline)
     {
+        if (!Job) return false; // a prepared level streams: no mesh workers to observe
         if (Job->GetResult().MeshStats.Num() >= MinMeshes && Job->HasPendingWorkers()) return true;
         if (Job->IsFinished())
         {
@@ -1096,7 +1109,7 @@ FString USCViewerSubsystem::GetLoadPhaseText() const
         return Step.IsEmpty() ? TEXT("Export: starting") : TEXT("Export: ") + Step;
     }
     case ESCLoadPhase::Parsing: return TEXT("Reading package");
-    case ESCLoadPhase::Importing: return TEXT("Import: ") + (Job ? Job->GetPhase() : FString());
+    case ESCLoadPhase::Importing: return Job ? TEXT("Import: ") + Job->GetPhase() : FString(TEXT("Loading cooked level"));
     case ESCLoadPhase::Succeeded: return Report.bReused ? TEXT("Reused loaded objects") : TEXT("Loaded");
     case ESCLoadPhase::Failed: return TEXT("Failed: ") + Report.Error;
     case ESCLoadPhase::Cancelled: return TEXT("Cancelled");
@@ -1482,7 +1495,7 @@ bool USCViewerSubsystem::RequestPlayerKit()
     }
     if (ArchiveState != ESCArchiveState::Ready)
     {
-        FailPlayerKit(TEXT("the archive is not open"));
+        FailPlayerKit(CanReadArchive() ? TEXT("the archive is not open") : TEXT("the player body is not prepared and this build reads no archive"));
         return false;
     }
     const USCViewerSettings* Settings = USCViewerSettings::Get();

@@ -1,6 +1,6 @@
 # Cargo art — WP-K1d
 
-Original procedural stand-ins for the cargo vertical slice. The geometry, palette and dimensions are authored for this task, not copied game constants. All saved assets are under `/SCBridge/Cargo`. No extracted mesh, texture, font or game material is incorporated into these assets.
+Original procedural stand-ins for the cargo vertical slice. The geometry, palette and dimensions are authored for this task, not copied game constants. All saved assets are under `/Game/Cargo` (the game's content; the shared plugin's `/SCBridge/Cargo` until WP-O1-4c-3c). No extracted mesh, texture, font or game material is incorporated into these assets.
 
 ## Reference study
 
@@ -28,7 +28,7 @@ The MISC-like yellow / graphite / silver palette is an original interpretation o
 
 ## Mesh contract
 
-Paths are `/SCBridge/Cargo/Meshes/<name>.<name>`. Units are **cm**, scale **1**, X forward, Y starboard, Z up. The five body/dock/rotor slots, in order, are **Paint, Trim, Metal, Emitter, Lights**. Rotor and dock retain unused slots so indices remain stable.
+Paths are `/Game/Cargo/Meshes/<name>.<name>`. Units are **cm**, scale **1**, X forward, Y starboard, Z up. The five body/dock/rotor slots, in order, are **Paint, Trim, Metal, Emitter, Lights**. Rotor and dock retain unused slots so indices remain stable.
 
 | Mesh | Local bounds / pivot | Triangles |
 |---|---|---:|
@@ -72,7 +72,7 @@ Grid outlines use the mesh, not debug lines, so they can ship/cook. Set scale to
 
 ## Material contract
 
-Masters and matching `MI_*` instances live in `/SCBridge/Cargo/Materials`. All graphs connect explicit **Substrate BSDFs to Front Material**. No legacy-only surface inputs are relied upon.
+Masters and matching `MI_*` instances live in `/Game/Cargo/Materials`. All graphs connect explicit **Substrate BSDFs to Front Material**. No legacy-only surface inputs are relied upon.
 
 | Master | Parameters | Behaviour |
 |---|---|---|
@@ -87,13 +87,13 @@ Colour values are **linear RGB**, not 8-bit sRGB. Runtime may create MIDs. The L
 
 ## Rebuild and verification
 
-`game/scripts/create_cargo_art.py` updates existing assets in place and replaces its named sockets. It scans the plugin asset directory before reusing assets, so commandlet registry startup does not create duplicate packages. It never saves the preview level or modifies the project/engine configuration. Geometry Scripting and Python must be enabled; the current project already enables both.
+`game/scripts/create_cargo_art.py` updates existing assets in place and replaces its named sockets. It scans its asset directory (`/Game/Cargo`) before reusing assets, so commandlet registry startup does not create duplicate packages. It never saves the preview level or modifies the project/engine configuration. Geometry Scripting and Python must be enabled; the current project already enables both.
 
 Take the shared UE lock **before** either launch, retry an occupied lock at 60-second intervals for at most 45 minutes, and release it in `finally`. Do not remove another worker's lock. The launch flags below keep shader scratch in the workspace and use this repository's filesystem DDC:
 
 ```powershell
 $editor = "$env:USERPROFILE/UnrealEngine-5.9-src/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
-$project = "$PWD/viewer/SCViewer.uproject"
+$project = "$PWD/game/UnrealCitizen.uproject"
 $script = "$PWD/game/scripts/create_cargo_art.py"
 # Build-only/headless path; acquire the shared UE lock first.
 & $editor $project -run=pythonscript "-script=$script" -unattended -nop4 -nosplash `
