@@ -268,7 +268,7 @@ bool Instance(const FReaderObject& O, FSCSceneInstance& Out, FString& Error, con
             Out.SourceTransformBasis = TEXT("gltf_y_up");
             Out.PortHelper = String(*Port, TEXT("item_offset_helper"));
             if (Out.ParentNodeName.IsEmpty()) Out.ParentNodeName = String(*Port, TEXT("attach_bone"));
-            Out.PortOffset = FSCPackageReader::PortOffset(*Port);
+            Out.PortOffset = FSCMeshes::PortOffset(*Port);
         }
     }
     return Matrix(O, MatrixKey, Out.LocalMatrix, Error);
@@ -600,30 +600,6 @@ void ReadLiftRecords(const FReaderObject& O, FSCInterior& I, FWarn&& Warn)
         I.Lifts.Add(MoveTemp(Lift));
     }
 }
-}
-FMatrix FSCPackageReader::PortOffset(const TSharedPtr<FJsonObject>& Port)
-{
-    // Native SC axes: position in metres, Ang3 Euler degrees (x pitch, y roll, z yaw), Matrix33::CreateRotationXYZ
-    // = Rz * Ry * Rx for column vectors, i.e. Rx * Ry * Rz in this row-vector convention.
-    FVector P = FVector::ZeroVector, R = FVector::ZeroVector;
-    const FReaderObject* Offset;
-    if (Port && Port->TryGetObjectField(TEXT("offset"), Offset))
-    {
-        const auto& Pos = ReaderArray(*Offset, TEXT("position"));
-        const auto& Rot = ReaderArray(*Offset, TEXT("rotation_degrees"));
-        if (Pos.Num() == 3) P = FVector(Pos[0]->AsNumber(), Pos[1]->AsNumber(), Pos[2]->AsNumber());
-        if (Rot.Num() == 3) R = FVector(Rot[0]->AsNumber(), Rot[1]->AsNumber(), Rot[2]->AsNumber());
-    }
-    auto Axis = [](int32 A, double Degrees) {
-        const double S = FMath::Sin(FMath::DegreesToRadians(Degrees)), C = FMath::Cos(FMath::DegreesToRadians(Degrees));
-        FMatrix M = FMatrix::Identity;
-        const int32 U = (A + 1) % 3, V = (A + 2) % 3;
-        M.M[U][U] = C; M.M[U][V] = S; M.M[V][U] = -S; M.M[V][V] = C; // row-vector rotation about axis A
-        return M;
-    };
-    FMatrix M = Axis(0, R.X) * Axis(1, R.Y) * Axis(2, R.Z);
-    M.SetOrigin(P);
-    return M;
 }
 FString FSCPackageReader::Hash(const TArray<uint8>& Bytes)
 {

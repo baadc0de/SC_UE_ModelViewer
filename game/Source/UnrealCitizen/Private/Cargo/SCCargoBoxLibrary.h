@@ -5,6 +5,7 @@
 // the template, nothing is exported or imported.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCImport.h"
 #include "SCPackageSource.h"
 #include "UObject/GCObject.h"
 #include "Tasks/Task.h"
@@ -13,7 +14,6 @@
 
 class ASCVehicle;
 class ULevelStreamingDynamic;
-class FSCImportJob;
 class FSCTarPackageSource;
 class USCViewerSubsystem;
 
@@ -60,5 +60,5 @@ private:
     UE::Tasks::TTask<FSCExportResult> Export;
     UE::Tasks::TTask<TSharedPtr<FSCTarPackageSource>> Parse;
     TSharedPtr<FSCTarPackageSource> Source;
-    TSharedPtr<FSCImportJob> Job;
+    TSharedPtr<ISCImportJob> Job;
 };

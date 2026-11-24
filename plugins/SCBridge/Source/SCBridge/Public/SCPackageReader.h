@@ -10,6 +10,4 @@ public:
     // Empty ScenePath selects the sole manifest; shared roots with multiple scenes require an explicit path.
     static bool Read(const FSCPackageSource& Source, FSCSceneManifest& Out, FString& Error, const FString& ScenePath = TEXT(""), TArray<FString>* Warnings = nullptr);
     static FString Hash(const TArray<uint8>& Bytes);
-    /** `port.offset` as a native-SC-axes row-vector matrix (metres). */
-    static FMatrix PortOffset(const TSharedPtr<class FJsonObject>& Port);
 };

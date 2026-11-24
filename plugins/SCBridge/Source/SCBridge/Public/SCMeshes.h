@@ -109,6 +109,8 @@ public:
     static FMatrix Transform(const FMatrix& Gltf);
     static FMatrix CryToGltf();
     static FMatrix InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis);
+    /** `port.offset` as a native-SC-axes row-vector matrix (metres). */
+    static FMatrix PortOffset(const TSharedPtr<class FJsonObject>& Port);
     // The exporter builds every child node inside the CryEngine_Z_up root, so a child placed on its parent entity itself
     // (no helper, e.g. an object container's root-level entities) carries a matrix in that entity's CryEngine frame.
     static bool InCryFrame(const FString& Basis, bool bAtHelper)

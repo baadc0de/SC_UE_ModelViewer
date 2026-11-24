@@ -1,6 +1,10 @@
 #include "Modules/ModuleManager.h"
 #include "SCImporter.h"
 #include "SCBridgeClient.h"
+#include "SCImport.h"
+#include "SCAudioSource.h"
+ISCImporting& SCImportingInstance();
+FSCAudioSourcePtr MakeImporterOggSource(const TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe>& Ogg, FString& Error);
 #include "Private/SCImportHarness.h"
 #include "HAL/IConsoleManager.h"
 #include "EngineUtils.h"
@@ -33,9 +37,13 @@ public:
         Harness.Start();
         // The archive the runtime asks for (ISCArchive::Create): the library's client.
         ISCArchive::SetFactory([] { return TSharedPtr<ISCArchive, ESPMode::ThreadSafe>(MakeShared<FSCBridgeClient, ESPMode::ThreadSafe>()); });
+        ISCImporting::Set(&SCImportingInstance());
+        SetOggSourceFactory(&MakeImporterOggSource);
     }
     virtual void ShutdownModule() override
     {
+        SetOggSourceFactory(nullptr);
+        ISCImporting::Set(nullptr);
         ISCArchive::SetFactory(nullptr);
         Harness.Stop(); ImportCommand.Reset(); GlowCommand.Reset();
 #if SC_SPIKE && WITH_EDITOR

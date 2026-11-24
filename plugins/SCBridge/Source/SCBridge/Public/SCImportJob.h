@@ -6,32 +6,10 @@
 #include "SCImporter.h"
 
 class ASCVehicle;
-/** What a finished import built (meshes, rigs and their collision data, clips, textures, material instances, the
- *  assembly inputs), kept to assemble more actors of the same package (FSCImportOptions::bRetainAssets). Opaque; it
- *  holds the shared objects for the garbage collector until the last holder lets go. */
-class FSCImportedAssets;
 
-enum class ESCImportStage : uint8
-{
-    Reading,
-    Meshes,
-    Materials,
-    Assembling,
-    Succeeded,
-    Failed,
-    Cancelled
-};
 
-/** Phase wall durations. Derive and Prepare sum worker durations and may overlap other phases.
- *  DeriveWait and PrepareWait measure how long each required result holds up the game-thread import cursor. */
-struct SCBRIDGE_API FSCImportTimings
-{
-    double Read = 0, Derive = 0, DeriveWait = 0, Prepare = 0, PrepareWait = 0;
-    double Collision = 0, Build = 0, Materials = 0, Assemble = 0;
-    int32 DeferredRigidParts = 0;
-};
 
-class SCBRIDGE_API FSCImportJob : public FGCObject
+class SCBRIDGE_API FSCImportJob : public ISCImportJob, public FGCObject
 {
 public:
     /** Source must outlive the job unless SourceOwner keeps it alive. Options.World is required. */
@@ -44,33 +22,33 @@ public:
     FSCImportJob(TSharedRef<FSCImportedAssets> Assets, FSCImportOptions Options);
     virtual ~FSCImportJob() override;
     /** After success with Options.bRetainAssets (or an assembly from assets): the asset set; null otherwise. */
-    TSharedPtr<FSCImportedAssets> GetRetainedAssets() const { return Assets; }
+    virtual TSharedPtr<FSCImportedAssets> GetRetainedAssets() const override { return Assets; }
     /** Shared objects an asset set holds (meshes, rigs, textures, material instances); for logs. */
     static int32 CountRetainedObjects(const FSCImportedAssets& Assets);
 
     /** Game thread. Non-blocking ticks return when a worker result is pending or Budget seconds are spent (checked
      *  after every step; a step is at most one static-mesh variant build); blocking ticks wait for workers and run to
      *  completion. Returns true once Succeeded, Failed or Cancelled. */
-    bool Tick(bool bBlocking, double BudgetSeconds = 0.05);
+    virtual bool Tick(bool bBlocking, double BudgetSeconds = 0.05) override;
     /** Takes effect at the next step boundary: workers are drained and the partial actor is destroyed. */
-    void Cancel();
+    virtual void Cancel() override;
 
-    ESCImportStage GetStage() const;
-    bool IsFinished() const;
+    virtual ESCImportStage GetStage() const override;
+    virtual bool IsFinished() const override;
     /** Human-readable current step, e.g. "Building mesh 3/45". */
-    FString GetPhase() const;
+    virtual FString GetPhase() const override;
     /** 0..1 over the whole import. */
-    float GetFraction() const;
-    const FSCImportTimings& GetTimings() const;
+    virtual float GetFraction() const override;
+    virtual const FSCImportTimings& GetTimings() const override;
     /** Filled progressively; Vehicle is set only on success. */
-    const FSCImportResult& GetResult() const;
-    FSCImportResult& GetResult();
+    virtual const FSCImportResult& GetResult() const override;
+    virtual FSCImportResult& GetResult() override;
     /** Package root of this import's transient objects (/Temp/SC/<guid>); empty before Reading completes. */
-    FString GetSessionPath() const;
+    virtual FString GetSessionPath() const override;
     /** The actor spawned for this import, even after a cancel destroyed it (until GC); for leak accounting. */
-    ASCVehicle* GetSpawnedVehicle() const;
+    virtual ASCVehicle* GetSpawnedVehicle() const override;
     /** True while any worker (read, derive, prepare, material decode) has not completed. */
-    bool HasPendingWorkers() const;
+    virtual bool HasPendingWorkers() const override;
 
     virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
     virtual FString GetReferencerName() const override { return TEXT("FSCImportJob"); }

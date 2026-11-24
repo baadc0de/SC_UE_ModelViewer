@@ -1,10 +1,9 @@
 // FSCVehicleInstances: extra vehicle instances (queue -> export/parse or retained assets -> import/assembly -> envelope,
 // free-floor placement, rest on the landing gear), their console commands and the free-floor placement helper.
 #include "SCVehicleInstances.h"
+#include "SCImport.h"
 #include "SCPlacement.h"
 #include "SCEnvironment.h"
-#include "SCImportJob.h"
-#include "SCImporter.h"
 #include "SCLook.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
@@ -445,7 +444,7 @@ bool FSCVehicleInstances::Destroy(int32 Id)
     if (bLastOfKey)
         if (TSharedPtr<FSCImportedAssets> Set = AssetSets.FindRef(I.Key))
         {
-            Released = FSCImportJob::CountRetainedObjects(*Set);
+            Released = ISCImporting::Get()->CountRetainedObjects(*Set);
             AssetSets.Remove(I.Key);
             SetSessions.Remove(I.Key);
         }
@@ -524,7 +523,7 @@ void FSCVehicleInstances::Start(FInstance& I)
         // TODO(WP-K1): the assembly is one game-thread step (~5 s for a Hull A); split FSCImportJob's Assemble into budgeted steps.
         I.Info.bShared = true;
         I.Info.State = ESCVehicleInstanceState::Importing;
-        Job = MakeShared<FSCImportJob>(Set->ToSharedRef(), Options);
+        Job = ISCImporting::Get()->NewJob(Set->ToSharedRef(), Options);
         return;
     }
     if (Viewer.GetArchiveState() != ESCArchiveState::Ready || !Viewer.GetClient())
@@ -584,7 +583,7 @@ void FSCVehicleInstances::StepRunning()
         Options.bReplacePrevious = false;
         Options.bRetainAssets = ShareAssets();
         Viewer.ConfigureProcessedImport(Options);
-        Job = MakeShared<FSCImportJob>(*Source, Options, Source);
+        Job = ISCImporting::Get()->NewJob(*Source, Options, Source);
         I->Info.State = ESCVehicleInstanceState::Importing;
         return;
     }

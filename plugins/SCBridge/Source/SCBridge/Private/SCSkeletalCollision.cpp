@@ -1,6 +1,6 @@
 // Worker-thread full-resolution collision in the same vertex order as the CPU skin buffer, and its
 // per-instance refit from the CPU skinned pose.
-#include "SCSkeletonBuilder.h"
+#include "SCMeshes.h"
 #include "SCRigComponent.h"
 #include "StaticMeshAttributes.h"
 #include "Engine/SkeletalMesh.h"
@@ -14,35 +14,6 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 
-bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Error)
-{
-    // The skeletal builder emits one vertex per corner, grouped by material. Chaos vertex
-    // indices must match ComputeSkinnedPositions exactly, including duplicate positions.
-    FSCDerivedMesh Expanded;
-    FStaticMeshAttributes Dst(Expanded.Description);
-    Dst.Register();
-    FStaticMeshConstAttributes Src(Data.Description);
-    for (auto Group : Data.Description.PolygonGroups().GetElementIDs())
-    {
-        const auto G = Expanded.Description.CreatePolygonGroup();
-        for (auto Triangle : Data.Description.GetPolygonGroupTriangles(Group))
-        {
-            TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
-            for (auto Corner : Data.Description.GetTriangleVertexInstances(Triangle))
-            {
-                const auto V = Expanded.Description.CreateVertex();
-                Dst.GetVertexPositions()[V] = Src.GetVertexPositions()[Data.Description.GetVertexInstanceVertex(Corner)];
-                Corners.Add(Expanded.Description.CreateVertexInstance(V));
-            }
-            Expanded.Description.CreateTriangle(G, Corners);
-        }
-    }
-    if (!FSCMeshes::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
-    Data.CollisionBytes = MoveTemp(Expanded.CollisionBytes);
-    Data.CollisionVersions = Expanded.CollisionVersions;
-    Data.CollisionDeriveSeconds = Expanded.CollisionDeriveSeconds;
-    return true;
-}
 bool USCRigComponent::InitializeCollision(const FSCDerivedMesh& Data)
 {
     CollisionPose.Reset(); // the import's bytes are in the bind pose

@@ -1,6 +1,7 @@
 // USCViewerSubsystem: archive open, async search, the load pipeline with phase progress and cancel, unload with
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
+#include "SCImport.h"
 #include "SCPlacement.h"
 #include "SCLook.h"
 #include "SCHangarIndex.h"
@@ -22,10 +23,6 @@
 #include "Camera/CameraComponent.h"
 #include "SCViewOptions.h"
 #include "SCViewerSettings.h"
-#include "SCImportJob.h"
-#include "SCImporter.h"
-#include "SCProcessedCache.h"
-#include "SCGeometryStreaming.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
 #include "Dom/JsonValue.h"
@@ -40,7 +37,6 @@
 #include "Engine/StaticMeshActor.h"
 #include "SCPlayerKit.h"
 #include "SCPlayerKitData.h"
-#include "SCLightImporter.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -99,12 +95,12 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Client = ISCArchive::Create();
     CacheDir = USCViewerSettings::Get()->ResolveCacheDir();
     if (!CacheDir.IsEmpty())
-        ProcessedCache = MakeShared<FSCProcessedCache, ESPMode::ThreadSafe>(CacheDir / TEXT("processed"),
+        ProcessedCache = ISCImporting::Get()->NewProcessedCache(CacheDir / TEXT("processed"),
             int64(USCViewerSettings::Get()->ProcessedCacheMiB) * (1ll << 20));
 #if WITH_EDITOR
     if (!GIsEditor && !FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality")) &&
         FParse::Param(FCommandLine::Get(), TEXT("SCStreamGeometry")))
-        GeometryStreaming = MakeShared<FSCGeometryStreaming>();
+        GeometryStreaming = ISCImporting::Get()->NewGeometryStreaming();
 #endif
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
@@ -608,7 +604,7 @@ void USCViewerSubsystem::BeginEnvironmentImport(TSharedPtr<FSCPackageSource> Sou
     EnvOptions.bHideEffectOnlyPlacements = true;
     EnvOptions.bInstanceRepeatedParts = true;
     ConfigureProcessedImport(EnvOptions, !EnvironmentFolder.EndsWith(TEXT(".socpak"), ESearchCase::IgnoreCase));
-    EnvJob = MakeShared<FSCImportJob>(*EnvSource, EnvOptions, EnvSource);
+    EnvJob = ISCImporting::Get()->NewJob(*EnvSource, EnvOptions, EnvSource);
 }
 
 void USCViewerSubsystem::StepEnvironment()
@@ -882,7 +878,7 @@ FSCCacheStats USCViewerSubsystem::GetProcessedCacheStats() const
         Stats.bEnabled = ProcessedCache->IsEnabled();
         Stats.CapBytes = uint64(ProcessedCache->GetCapBytes());
         Stats.bLastHit = Report.CachedMeshes > 0 && Report.MeshBuilds == 0;
-        const FSCProcessedCache::FStats Disk = ProcessedCache->Stats();
+        const FSCProcessedCacheStats Disk = ProcessedCache->Stats();
         Stats.Bytes = uint64(Disk.Bytes);
         Stats.Entries = uint64(Disk.Entries);
     }
@@ -1144,7 +1140,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         ImportOptions.bRetainAssets = FSCVehicleInstances::ShareAssets(); // extra instances of it are assembled from them
         ConfigureProcessedImport(ImportOptions);
         ImportOptions.bRebuildProcessed = bRebuildProcessed;
-        Job = MakeShared<FSCImportJob>(*Source, ImportOptions, Source);
+        Job = ISCImporting::Get()->NewJob(*Source, ImportOptions, Source);
         ImportStart = FPlatformTime::Seconds();
         Phase = ESCLoadPhase::Importing;
     }
@@ -1321,7 +1317,7 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
             ? FString() : Previous->SessionPath;
         TrackSession(Previous, Session, Tracked);
         UWorld* World = Previous->GetWorld();
-        if (World) FSCImporter::Unload(World);
+        if (World) ISCImporting::Get()->Unload(World);
         // During engine exit the world tears its actors down itself.
         if (IsValid(Previous) && !Previous->IsActorBeingDestroyed() && World && !World->bIsTearingDown) Previous->Destroy();
     }
@@ -1646,7 +1642,7 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
             FailPlayerKit(TEXT("the package has no single root scene.json"));
             return;
         }
-        KitJob = MakeShared<FSCImportJob>(*KitSource, USCPlayerBodyComponent::KitImportOptions(GetViewerWorld(), Scene), KitSource);
+        KitJob = ISCImporting::Get()->NewJob(*KitSource, USCPlayerBodyComponent::KitImportOptions(GetViewerWorld(), Scene), KitSource);
         KitState = EPlayerKitState::Importing;
     }
     if (KitState == EPlayerKitState::Importing)
@@ -1689,7 +1685,7 @@ void USCViewerSubsystem::StepPlayerKit(bool bBlocking)
         // The personal lights' cookies (gobos) are built while the package is open; the body's torch takes them at attach.
         if (Result.Kit && KitSource && KitActor)
             for (const FSCFlashlight& Light : Result.Kit->Flashlights)
-                if (!FSCLightImporter::LoadGobo(*KitSource, KitActor, Light.ProjectorTexture))
+                if (!ISCImporting::Get()->LoadGobo(*KitSource, KitActor, Light.ProjectorTexture))
                     UE_LOG(LogSCViewer, Warning, TEXT("PLAYER_FLASHLIGHT gobo unavailable entity=%s cookie=%s package=%s"), *Light.Entity, *Light.Cookie,
                            *Light.ProjectorTexture);
         KitSource.Reset(); // the package bytes are no longer needed: meshes, textures, gobos and clips are built
