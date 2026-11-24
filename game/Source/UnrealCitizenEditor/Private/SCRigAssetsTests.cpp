@@ -3,7 +3,7 @@
 // vertex is weighted to, its vertex colours and CPU-readable skin weights; a rig component's collision, saved with it,
 // restores into a body with one trimesh particle per render vertex.
 #include "Misc/AutomationTest.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCRigAssets.h"
 #include "SCTextureSource.h"
 #include "IImageWrapper.h"

@@ -155,21 +155,21 @@ bool FSCLightStylePlayback::RunTest(const FString&)
         TestEqual(TEXT("speed survives import"), Vehicle->LightStates[0].AnimationSpeed, 0.5);
         TestTrue(TEXT("dark sample has black render color"), Light->GetLightColor().Equals(FLinearColor::Black));
         TestTrue(TEXT("dark sample preserves component visibility"), Light->IsVisible());
-        TestTrue(TEXT("emergency selects its own style"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("emergencyState")));
+        TestTrue(TEXT("emergency selects its own style"), FSCLights::ApplyState(Vehicle, 0, TEXT("emergencyState")));
         TestTrue(TEXT("constant emergency style uses no loop tick"), Vehicle->LoopingLights.IsEmpty());
         TestEqual(TEXT("emergency intensity"), Light->Intensity, 80.f);
         TestTrue(TEXT("emergency style multiplies the light color"), Light->GetLightColor().Equals(FLinearColor(0, 0.5f, 1), 0.005f));
         TestTrue(TEXT("wall and floor tuning reach the waveform"),
-                 FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::Wall, 0.5f) &&
-                 FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::FloorWash, 0.5f));
+                 FSCLights::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::Wall, 0.5f) &&
+                 FSCLights::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::FloorWash, 0.5f));
         TestEqual(TEXT("look scales compose with the authored style"), Light->Intensity, 20.f);
-        FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::FloorWash, 1.f);
+        FSCLights::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::FloorWash, 1.f);
         TestEqual(TEXT("restoring floor wash preserves the wall adjustment"), Light->Intensity, 40.f);
-        FSCLightImporter::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::Wall, 1.f);
-        TestTrue(TEXT("off stops the light"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("offState")));
+        FSCLights::SetIntensityScale(Vehicle, Light, ESCLightIntensityScale::Wall, 1.f);
+        TestTrue(TEXT("off stops the light"), FSCLights::ApplyState(Vehicle, 0, TEXT("offState")));
         TestFalse(TEXT("off hides the component"), Light->IsVisible());
         TestEqual(TEXT("off zeroes the intensity"), Light->Intensity, 0.f);
-        TestTrue(TEXT("reselecting default restores the loop"), FSCLightImporter::ApplyState(Vehicle, 0, TEXT("defaultState")) &&
+        TestTrue(TEXT("reselecting default restores the loop"), FSCLights::ApplyState(Vehicle, 0, TEXT("defaultState")) &&
                  Vehicle->LoopingLights.Contains(0));
 
         // The saved component is still on the dark key. Serialize through the
@@ -186,7 +186,7 @@ bool FSCLightStylePlayback::RunTest(const FString&)
             TestEqual(TEXT("phase survives serialization"), Vehicle->LightStates[0].AnimationPhase, 64.0);
             TestEqual(TEXT("speed survives serialization"), Vehicle->LightStates[0].AnimationSpeed, 0.5);
             TestEqual(TEXT("the waveform table survives serialization"), Vehicle->Manifest.LightStyles.Num(), 2);
-            FSCLightImporter::ResumeStyles(Vehicle);
+            FSCLights::ResumeStyles(Vehicle);
             TestTrue(TEXT("the reloaded light registers its loop"), Vehicle->LoopingLights.Contains(0));
             TestTrue(TEXT("the reloaded light updates its previously black color"), Light->GetLightColor().Equals(FLinearColor::White));
             TestEqual(TEXT("the reloaded light samples its authored phase and candela"), Light->Intensity, 30.f * 254.f / 255.f, 0.0001f);
@@ -469,18 +469,18 @@ bool FSCLightVerifier::RunTest(const FString&)
     FSCLightImporter::Build(Source, Instance, Vehicle, Vehicle->GetRootComponent(), Helper, Warnings);
     TestEqual(TEXT("four lights are built"), Vehicle->Lights.Num(), 4);
     TestEqual(TEXT("the unknown kind and the foreign basis warn"), Warnings.Num(), 2);
-    TestTrue(TEXT("the verifier accepts what the importer built"), FSCLightImporter::Verify(Vehicle));
+    TestTrue(TEXT("the verifier accepts what the importer built"), FSCLights::Verify(Vehicle));
     if (Vehicle->Lights.Num() == 4)
     {
         auto* Light = Cast<ULocalLightComponent>(Vehicle->Lights[0]);
         const float Built = Light->Intensity;
         Light->SetIntensity(Built * 2);
-        TestFalse(TEXT("a light at twice its rule intensity is refused"), FSCLightImporter::Verify(Vehicle));
+        TestFalse(TEXT("a light at twice its rule intensity is refused"), FSCLights::Verify(Vehicle));
         Light->SetIntensity(Built);
         Light->IntensityUnits = ELightUnits::Lumens;
-        TestFalse(TEXT("a light in another unit is refused"), FSCLightImporter::Verify(Vehicle));
+        TestFalse(TEXT("a light in another unit is refused"), FSCLights::Verify(Vehicle));
         Light->IntensityUnits = ELightUnits::Candelas;
-        TestTrue(TEXT("restored, it passes again"), FSCLightImporter::Verify(Vehicle));
+        TestTrue(TEXT("restored, it passes again"), FSCLights::Verify(Vehicle));
     }
     Vehicle->Destroy();
     World->DestroyWorld(false);
@@ -752,7 +752,7 @@ double EngineEstimateLocalLight(double DistSq, double Power, double InvRadius, d
 }
 double ProbeLux(const UWorld* World, const FVector& Point)
 {
-    const TArray<FString> Lines = FSCLightImporter::Probe(World, Point, nullptr, 0);
+    const TArray<FString> Lines = FSCLights::Probe(World, Point, nullptr, 0);
     double Lux = -1;
     if (Lines.Num()) FParse::Value(*Lines[0], TEXT("lux_unshadowed="), Lux);
     return Lux;
@@ -895,7 +895,7 @@ bool FSCLightFlashlightMapping::RunTest(const FString&)
 
     // Light model: pi * unit * diffuseMult * (1 + bulb)^2 (no attenuation tweak), radius = distance, half-FOV = fov / 2.
     const double Unit = UE_DOUBLE_PI * FSCStarEngine::Get().SceneUnitNits;
-    const FSCLightImporter::FFlashlightSettings S = FSCLightImporter::FlashlightSettings(Light);
+    const FSCLights::FFlashlightSettings S = FSCLights::FlashlightSettings(Light);
     TestEqual(TEXT("candela: the game's point model over the attenuation bulb"), S.Candela, Unit * 3.0 * FMath::Square(1.02), Unit * 1e-6);
     TestEqual(TEXT("radius: distance (cm)"), S.RadiusCm, 1200.0, 1e-3);
     TestEqual(TEXT("bulb (cm)"), S.BulbCm, 2.0, 1e-4);
@@ -909,10 +909,10 @@ bool FSCLightFlashlightMapping::RunTest(const FString&)
     // One light-function material per cookie texture, shared with ship projectors (GoboLightFunction).
     auto* Kitless = World->SpawnActor<ASCVehicle>();
     UTexture2D* Cookie = UTexture2D::CreateTransient(4, 4);
-    UMaterialInterface* Function = FSCLightImporter::GoboLightFunction(Kitless, Cookie);
+    UMaterialInterface* Function = FSCLights::GoboLightFunction(Kitless, Cookie);
     if (!TestNotNull(TEXT("cookie light function"), Function)) return false;
-    TestTrue(TEXT("the cookie's material is shared"), FSCLightImporter::GoboLightFunction(Kitless, Cookie) == Function);
-    TestNull(TEXT("no texture: no light function"), FSCLightImporter::GoboLightFunction(Kitless, nullptr));
+    TestTrue(TEXT("the cookie's material is shared"), FSCLights::GoboLightFunction(Kitless, Cookie) == Function);
+    TestNull(TEXT("no texture: no light function"), FSCLights::GoboLightFunction(Kitless, nullptr));
 
     // The character's torch takes it, keeps its on / off state, and falls back to the viewer beam without a game light.
     auto* Character = World->SpawnActor<ASCFirstPersonCharacter>();

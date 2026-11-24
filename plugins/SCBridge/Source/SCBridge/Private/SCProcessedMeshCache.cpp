@@ -184,7 +184,7 @@ UStaticMesh* SCProcessedMeshCache::Load(FSCProcessedCache& Cache, const FSCProce
     {
         FString Error;
         int32 Triangles = 0;
-        if (!FSCMeshImporter::InstallCollision(Mesh->GetBodySetup(), Record.Collision, Record.Versions, Triangles, Error) ||
+        if (!FSCMeshes::InstallCollision(Mesh->GetBodySetup(), Record.Collision, Record.Versions, Triangles, Error) ||
             Triangles != Record.Stats.CollisionTriangles) return nullptr;
     }
     Stats = MoveTemp(Record.Stats);

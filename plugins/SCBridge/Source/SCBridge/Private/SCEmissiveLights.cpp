@@ -28,7 +28,7 @@
 #include "Materials/Material.h"
 #include "StaticMeshResources.h"
 #include "SCInstancing.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "StaticMeshAttributes.h"
 #include "UObject/Package.h"
 #if WITH_EDITOR
@@ -384,7 +384,7 @@ void SetLumenProxies(ASCVehicle* Vehicle, bool bOn, double MinNits)
         for (const FSCDerivedMesh& D : Derived) ToBuild.Add(&D);
         TArray<FSCMeshBuildStats> BuildStats;
         TArray<FString> Errors;
-        const TArray<UStaticMesh*> ProxyMeshes = FSCMeshImporter::InstantiateBatch(ToBuild, GetTransientPackage(), BuildStats, Errors);
+        const TArray<UStaticMesh*> ProxyMeshes = FSCMeshes::InstantiateBatch(ToBuild, GetTransientPackage(), BuildStats, Errors);
         for (int32 I = 0; I < ProxyMeshes.Num(); ++I)
         {
             if (!ProxyMeshes[I]) { UE_LOG(LogSCEmissive, Warning, TEXT("EMISSIVE_LUMEN proxy %d: %s"), I, *Errors[I]); continue; }

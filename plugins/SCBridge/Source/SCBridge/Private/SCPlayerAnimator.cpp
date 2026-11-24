@@ -2,7 +2,7 @@
 // root-motion pin, spine pitch and off-hand two-bone IK. Every name it uses comes from the player block; the only
 // vocabulary is Mannequin's (fragment ids, stance tags, blend-space parameter names).
 #include "SCPlayerAnimator.h"
-#include "SCAnimImporter.h"
+#include "SCClipCatalog.h"
 #include "ReferenceSkeleton.h"
 #include "Algo/BinarySearch.h"
 #include "Dom/JsonObject.h"
@@ -188,7 +188,7 @@ bool FSCPlayerClip::Parse(const FString& Text, TFunctionRef<int32(const FString&
             {
                 const auto& Q = K->AsArray();
                 if (Q.Num() != 4) continue;
-                Track.Rot.Add(FQuat4f(FSCAnimImporter::SidecarRotation(
+                Track.Rot.Add(FQuat4f(FSCClipSampling::SidecarRotation(
                     FQuat(Q[1]->AsNumber(), Q[2]->AsNumber(), Q[3]->AsNumber(), Q[0]->AsNumber()).GetNormalized())));
             }
         if (HP)
@@ -196,7 +196,7 @@ bool FSCPlayerClip::Parse(const FString& Text, TFunctionRef<int32(const FString&
             {
                 const auto& P = K->AsArray();
                 if (P.Num() != 3) continue;
-                Track.Pos.Add(FVector3f(FSCAnimImporter::SidecarPosition(FVector(P[0]->AsNumber(), P[1]->AsNumber(), P[2]->AsNumber()))));
+                Track.Pos.Add(FVector3f(FSCClipSampling::SidecarPosition(FVector(P[0]->AsNumber(), P[1]->AsNumber(), P[2]->AsNumber()))));
             }
         Times(TEXT("rotation_time"), Track.Rot.Num(), Track.RotTimes);
         Times(TEXT("position_time"), Track.Pos.Num(), Track.PosTimes);
@@ -446,7 +446,7 @@ bool FSCPlayerAnimator::Init(const FSCPlayerKit& InKit, const FReferenceSkeleton
     // Facing: native +Y of the root-motion joint (CryEngine character forward), in component space.
     TArray<FTransform> CS;
     ComputeCS(RefPose, Parents, CS);
-    ForwardCS = CS[RootMotion].TransformVectorNoScale(FSCAnimImporter::SidecarPosition(FVector(0, 0, 1)) / 100.0);
+    ForwardCS = CS[RootMotion].TransformVectorNoScale(FSCClipSampling::SidecarPosition(FVector(0, 0, 1)) / 100.0);
     ForwardCS.Z = 0;
     ForwardCS = ForwardCS.GetSafeNormal();
     Pose = RefPose;

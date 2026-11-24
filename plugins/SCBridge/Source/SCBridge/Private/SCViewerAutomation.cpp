@@ -8,7 +8,7 @@
 #include "SCFirstPersonCharacter.h"
 #include "SCPlayerBody.h"
 #include "SCRigComponent.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -688,7 +688,7 @@ void FSCViewerAutomation::RunStep(USCViewerSubsystem& S, const FStep& Step)
             if (C->GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + C->GetViewRotation().Vector() * 3000, ECC_Visibility, Q) && Hit.GetComponent())
                 Points.Add({TEXT("view"), Hit.ImpactPoint + Hit.ImpactNormal * 3, Bits(Hit.GetComponent()->LightingChannels)});
             for (const FPoint& Point : Points)
-                for (const FString& Line : FSCLightImporter::Probe(C->GetWorld(), Point.At, C, 10, Point.Channels))
+                for (const FString& Line : FSCLights::Probe(C->GetWorld(), Point.At, C, 10, Point.Channels))
                     UE_LOG(LogSCViewerAutomation, Display, TEXT("LIGHT_PROBE tag=%s at=%s %s"), Words.IsValidIndex(1) ? *Words[1] : TEXT("shot"), Point.Name, *Line);
         }
         StepAt = Now + (Words.IsValidIndex(2) ? FCString::Atod(*Words[2]) : 3.0);

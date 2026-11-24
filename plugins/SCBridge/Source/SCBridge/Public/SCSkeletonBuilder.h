@@ -1,7 +1,7 @@
 // Runtime skeleton and soft-skinned mesh builders for exported GLB geometry.
 #pragma once
 #include "CoreMinimal.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 class USkeleton;
 class USkeletalMesh;
 

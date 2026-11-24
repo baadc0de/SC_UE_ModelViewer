@@ -1,5 +1,8 @@
 // Package regressions use the original GLB bind and raw sidecars, never clip_final_pose exports.
 #include "SCImporter.h"
+#include "SCMeshImporter.h"
+#include "SCMeshes.h"
+#include "SCClipCatalog.h"
 #include "SCVehicle.h"
 #include "SCAnimImporter.h"
 #include "SCRigComponent.h"
@@ -61,7 +64,7 @@ bool SCVerifySourcePose(ASCVehicle* Vehicle)
                        Angle);
             }
             if (!Scorpius || !Track.bPosition) continue;
-            const auto Entry = Bones->TryGetField(FString::Printf(TEXT("0x%X"), FSCAnimImporter::BoneHash(Node.SourceName)));
+            const auto Entry = Bones->TryGetField(FString::Printf(TEXT("0x%X"), FSCClipSampling::BoneHash(Node.SourceName)));
             if (!Entry)
             {
                 OK = false;
@@ -99,7 +102,7 @@ bool SCVerifySourcePose(ASCVehicle* Vehicle)
             const auto& Last = Samples.Last()->AsArray();
             const FVector NativeLast(Last[0]->AsNumber(), Last[2]->AsNumber(), -Last[1]->AsNumber());
             const FVector NativeDelta = NativeLast - NativeBind;
-            const FVector Expected = Node.Local.GetTranslation() + FSCMeshImporter::Transform(FTranslationMatrix(NativeDelta)).GetOrigin();
+            const FVector Expected = Node.Local.GetTranslation() + FSCMeshes::Transform(FTranslationMatrix(NativeDelta)).GetOrigin();
             const double Distance = FVector::Distance(Pose.GetTranslation(), Expected);
             MaxPosition = FMath::Max(MaxPosition, Distance);
             ++Positions;

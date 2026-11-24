@@ -38,7 +38,7 @@ struct SCBRIDGE_API FSCClipAudioEvent
     GENERATED_BODY()
     UPROPERTY() double Frame = 0;   // clip frame (the clip's rate) of the event's normalised time in its own animation
     /** The clip frame of the same moment when the clip plays backward: reverse playback aligns a shorter source's end
-     *  with the clip's end (FSCAnimImporter::TrackFrame); -1 = the same as Frame. */
+     *  with the clip's end (FSCClipSampling::TrackFrame); -1 = the same as Frame. */
     UPROPERTY() double FrameReverse = -1;
     UPROPERTY() int8 Direction = 1; // 1 forward, -1 reverse, 0 both
     UPROPERTY() FString Trigger;
@@ -82,4 +82,19 @@ public:
     /** The vehicle's root rig mesh (the manifest root's, built whether or not it was placed): the skeleton of its clips
      *  without receiving bones (FSCAnimImporter::Finalize); Keep as assets builds them on it. Null without a root rig. */
     UPROPERTY(BlueprintReadOnly, Category = "SC") TObjectPtr<USkeletalMesh> RootMesh;
+};
+
+/** WP-O1-4c-3a: sampling the clips at run time (split from FSCAnimImporter, which reads and binds them at import). */
+struct SCBRIDGE_API FSCClipSampling
+{
+    /** Standard CRC32 of a bone name's case-sensitive UTF-8 (the clips' bone keys). */
+    static uint32 BoneHash(const FString& Name);
+    /** Sidecar Blender basis -> raw GLB-node basis -> UE. Wrapper remains a bone, applied once. */
+    static FVector SidecarPosition(const FVector& V);
+    static FQuat SidecarRotation(const FQuat& Q);
+    static FQuat LinearRotation(FQuat A, FQuat B, double Alpha);
+    static FTransform Sample(const FSCBoneTrack& Track, double Frame);
+    /** Clip frame -> the track's own frame. Each rig plays its own animation of the clip's name: forward they start
+     *  together, backward each starts at its own end. */
+    static double TrackFrame(const FSCImportedClip& Clip, const FSCBoneTrack& Track, double ClipFrame, bool bFromEnd);
 };

@@ -2,7 +2,7 @@
 // (StatObjPhysics chunk) as glTF node `extras.sc_physics`; this file turns one record into triangles in the
 // node's frame and builds the collision-only mesh of an owner. Convex primitives are tessellated (UE's character
 // sweeps run against the same trimesh path as the game's walk proxies).
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "StaticMeshAttributes.h"
 #include "Dom/JsonObject.h"
 
@@ -53,13 +53,13 @@ void Revolve(TArray<FVector>& T, const FVector& C, const FVector& Axis, const TA
 }
 }
 
-bool FSCMeshImporter::PhysicsBlocksActor(const TSharedPtr<FJsonObject>& Shape)
+bool FSCMeshes::PhysicsBlocksActor(const TSharedPtr<FJsonObject>& Shape)
 {
     FString Class;
     if (Shape) Shape->TryGetStringField(TEXT("class"), Class);
     return Class != TEXT("interaction") && Class != TEXT("tires_only") && Class != TEXT("grid_volume") && Class != TEXT("no_surface");
 }
-bool FSCMeshImporter::PhysicsShapeTriangles(const TSharedPtr<FJsonObject>& Shape, TArray<FVector>& Out,
+bool FSCMeshes::PhysicsShapeTriangles(const TSharedPtr<FJsonObject>& Shape, TArray<FVector>& Out,
     TFunctionRef<bool(int32, TArray<FVector>&)> MeshTriangles, FString& Error)
 {
     FString Kind;
@@ -143,7 +143,7 @@ bool FSCMeshImporter::PhysicsShapeTriangles(const TSharedPtr<FJsonObject>& Shape
     return true;
 }
 
-FSCDerivedMesh FSCMeshImporter::SelectPhysics(const FSCDerivedMesh& Data, int32 Owner)
+FSCDerivedMesh FSCMeshes::SelectPhysics(const FSCDerivedMesh& Data, int32 Owner)
 {
     FSCDerivedMesh Result;
     Result.MaterialNames = {TEXT("GamePhysics")};

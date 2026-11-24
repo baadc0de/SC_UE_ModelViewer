@@ -5,7 +5,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCRigComponent.h"
 #include "SCShipLinkSubsystem.h"
 #include "SCVehicle.h"
@@ -133,8 +133,8 @@ bool FSCShipLinkDoorObstructionTest::RunTest(const FString&)
     Data.Description.CreateTriangle(Group, Corners);
     FSCMeshBuildStats Stats;
     FString Error;
-    if (!TestTrue(*Error, FSCMeshImporter::DeriveCollision(Data, Error))) return false;
-    UStaticMesh* Mesh = FSCMeshImporter::Instantiate(Data, Ship, NAME_None, true, nullptr, Stats, Error);
+    if (!TestTrue(*Error, FSCMeshes::DeriveCollision(Data, Error))) return false;
+    UStaticMesh* Mesh = FSCMeshes::Instantiate(Data, Ship, NAME_None, true, nullptr, Stats, Error);
     if (!TestNotNull(*Error, Mesh) || !TestTrue(TEXT("created complex-as-simple collision"), Stats.bCollision)) return false;
     Collider->DestroyComponent();
     UStaticMeshComponent* Triangle = NewObject<UStaticMeshComponent>(Ship);

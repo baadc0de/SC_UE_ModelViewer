@@ -1,12 +1,13 @@
 // Vehicle parameters and on-demand evaluation of sparse, ordered animation layers.
 #include "SCVehicle.h"
+#include "SCMeshes.h"
+#include "SCClipCatalog.h"
 #include "SCAudioSystem.h"
 #include "UObject/ObjectSaveContext.h"
 #include "Components/SceneComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "SCMaterialBuilder.h"
-#include "SCAnimImporter.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCRigComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/StaticMesh.h"
@@ -14,7 +15,6 @@
 #include "Components/StaticMeshComponent.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "PhysicsEngine/BodySetup.h"
-#include "SCMeshImporter.h"
 #include "Engine/SkeletalMesh.h"
 ASCVehicle::ASCVehicle()
 {
@@ -29,7 +29,7 @@ bool ASCVehicle::PortRelative(const FString& Id, const FString& Helper, const FM
     const FTransform* Frame = Helpers ? Helpers->Frames.Find(Helper) : nullptr;
     if (!Frame) return false;
     // The helper (anchor space) lands on the joint frame plus the port offset; offset axes are the joint's own.
-    Out = Frame->Inverse() * FTransform(FSCMeshImporter::Transform(Offset));
+    Out = Frame->Inverse() * FTransform(FSCMeshes::Transform(Offset));
     return true;
 }
 void ASCVehicle::SetEngineGlow(float Strength)
@@ -57,7 +57,7 @@ double ASCVehicle::ClipPoseCost(const FSCImportedClip& Clip, const FSCClipBindin
     for (const FSCBoneTrack& T : Binding.Tracks)
     {
         if (!Local.IsValidIndex(T.Bone)) continue;
-        const FTransform S = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(Clip, T, Frame, bBackward));
+        const FTransform S = FSCClipSampling::Sample(T, FSCClipSampling::TrackFrame(Clip, T, Frame, bBackward));
         if (T.bRotation) Cost += Local[T.Bone].GetRotation().AngularDistance(S.GetRotation());
         if (T.bPosition) Cost += FVector::Dist(Local[T.Bone].GetTranslation(), S.GetTranslation()) / 100.0;
     }
@@ -401,7 +401,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     if (DeltaSeconds <= 0) return;
-    FSCLightImporter::TickStyles(this);
+    FSCLights::TickStyles(this);
     // Lifts first (pre-physics, before the riders' movement: FSCLift moves the carriage anchor, doors start here).
     for (const TSharedPtr<FSCLift>& Lift : Lifts) Lift->Tick(DeltaSeconds);
     if (!FloorPanels.IsEmpty()) RefreshFloorPanels(); // WP-P5 floor panel: the lift's state on its panels
@@ -451,7 +451,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
 void ASCVehicle::BeginPlay()
 {
     Super::BeginPlay();
-    FSCLightImporter::ResumeStyles(this);
+    FSCLights::ResumeStyles(this);
     if (!CookedAudio.IsEmpty()) FSCAudioScene::LoadCooked(this); // WP-A1: a cooked level's audio
     if (!Lifts.IsEmpty()) UpdateTickEnabled(); // a prepared vehicle's lifts (RestoreLifts) tick with it
     // A prepared vehicle's drawn panels (WP-O1-4b-1c): their render targets' pixels are not saved, so they are drawn now,
@@ -535,7 +535,7 @@ void ASCVehicle::EvaluateClips()
                     for (const auto& T : B.Tracks)
                     {
                         const FTransform Sample =
-                            FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(ClipCatalog->Clips[P.Clip], T, P.Frame, P.Speed < 0));
+                            FSCClipSampling::Sample(T, FSCClipSampling::TrackFrame(ClipCatalog->Clips[P.Clip], T, P.Frame, P.Speed < 0));
                         if (T.bRotation) Pose[T.Bone].SetRotation(Sample.GetRotation());
                         if (T.bPosition) Pose[T.Bone].SetTranslation(Sample.GetTranslation());
                     }
@@ -552,7 +552,7 @@ void ASCVehicle::EvaluateClips()
 
 void ASCVehicle::RefreshLightShadowPolicy()
 {
-    FSCLightImporter::RefreshShadows(this);
+    FSCLights::RefreshShadows(this);
 }
 
 bool ASCVehicle::IsInsideLightArea(const FVector& World) const

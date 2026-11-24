@@ -1,6 +1,7 @@
 // Regression coverage for playback lifetime, sparse rig refresh, scope arbitration, and cyclic positions.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCClipCatalog.h"
 #include "SCVehicle.h"
 #include "SCRigComponent.h"
 #include "SCAnimImporter.h"
@@ -221,7 +222,7 @@ bool FSCRigCyclic::RunTest(const FString&)
     Node.Local = FTransform(FVector(10, 20, 30));
     Data.RigNodes.Add(Node);
     const FString Text =
-        FString::Printf(TEXT("{\"bones\":{\"0x%X\":{\"position\":[[1,2,3],[2,4,6],[1,2,3]]}}}"), FSCAnimImporter::BoneHash(TEXT("Bone")));
+        FString::Printf(TEXT("{\"bones\":{\"0x%X\":{\"position\":[[1,2,3],[2,4,6],[1,2,3]]}}}"), FSCClipSampling::BoneHash(TEXT("Bone")));
     TSharedPtr<FJsonObject> Json;
     FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json);
     FSCImportedClip Clip;

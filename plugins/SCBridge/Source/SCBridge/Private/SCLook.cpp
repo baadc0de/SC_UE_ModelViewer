@@ -14,7 +14,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "SCVehicle.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCPlayerBody.h"
 #include "SCViewerPawn.h"
 #include "SCViewerSubsystem.h"
@@ -122,7 +122,7 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLookWallLights(
         {
             if (!Light || !(Light->IsA<USpotLightComponent>() || Light->IsA<URectLightComponent>())) continue;
             if (FMath::Abs(Light->GetForwardVector().Z) >= 0.5) { ++Other; continue; } // aimed down (or up): not a wall wash
-            if (!FSCLightImporter::SetIntensityScale(Env, Light, ESCLightIntensityScale::Wall, Scale))
+            if (!FSCLights::SetIntensityScale(Env, Light, ESCLightIntensityScale::Wall, Scale))
             {
                 const float Base = GSavedWallIntensity.FindOrAdd(Light, Light->Intensity);
                 Light->SetIntensity(Base * Scale);

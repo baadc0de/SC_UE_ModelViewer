@@ -6,20 +6,6 @@
 #include "StaticMeshOperations.h"
 #include "Util/ColorConstants.h"
 
-FMatrix FSCMeshImporter::CryToGltf()
-{
-    return FMatrix(FPlane(1, 0, 0, 0), FPlane(0, 0, -1, 0), FPlane(0, 1, 0, 0), FPlane(0, 0, 0, 1));
-}
-FMatrix FSCMeshImporter::Transform(const FMatrix& Gltf)
-{
-    const FMatrix Basis(FPlane(0, 100, 0, 0), FPlane(0, 0, 100, 0), FPlane(-100, 0, 0, 0), FPlane(0, 0, 0, 1));
-    return Basis.Inverse() * Gltf * Basis;
-}
-FMatrix FSCMeshImporter::InstanceTransform(const FMatrix& Local, const FMatrix& AssetRoot, bool bSourceFrame, bool bCryBasis)
-{
-    if (bSourceFrame) return Transform((AssetRoot.Determinant() != 0 ? AssetRoot.Inverse() : FMatrix::Identity) * Local);
-    return Transform(bCryBasis ? CryToGltf().Inverse() * Local * CryToGltf() : Local);
-}
 bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path, FSCDerivedMesh& Out, FString& Error)
 {
     Out = FSCDerivedMesh();
@@ -118,11 +104,11 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
             }
             if (Kind == TEXT("damage_mesh") || Kind == TEXT("sdf")) continue; // damage physics, not a collider
             // Every part collides (`part` is a per-node index), except node-name classes that are no obstacle for an actor.
-            if (!PhysicsBlocksActor(Shape)) { ++Out.PhysicsFilteredShapes; continue; }
+            if (!FSCMeshes::PhysicsBlocksActor(Shape)) { ++Out.PhysicsFilteredShapes; continue; }
             if (bDegenerate) { Out.Warnings.Add(TEXT("Degenerate node: collider skipped: ") + NodeName); ++Out.PhysicsFailedShapes; continue; }
             TArray<FVector> Tris;
             FString ShapeError;
-            if (!PhysicsShapeTriangles(Shape, Tris, MeshTriangles, ShapeError))
+            if (!FSCMeshes::PhysicsShapeTriangles(Shape, Tris, MeshTriangles, ShapeError))
             {
                 Out.Warnings.Add(NodeName + TEXT(": collider skipped: ") + ShapeError);
                 ++Out.PhysicsFailedShapes;
@@ -132,7 +118,7 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
             for (int32 T = 0; T + 2 < Tris.Num(); T += 3)
             {
                 FVector3f P[3];
-                for (int32 K = 0; K < 3; ++K) P[K] = FVector3f(Position(World.TransformPosition(Tris[T + K])));
+                for (int32 K = 0; K < 3; ++K) P[K] = FVector3f(FSCMeshes::Position(World.TransformPosition(Tris[T + K])));
                 if (World.Determinant() < 0) Swap(P[1], P[2]);
                 if (P[0].ContainsNaN() || P[1].ContainsNaN() || P[2].ContainsNaN()) { Error = TEXT("Non-finite collider on ") + NodeName; return false; }
                 if (FVector3f::CrossProduct(P[2] - P[0], P[1] - P[0]).IsNearlyZero()) continue;
@@ -173,7 +159,7 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
         RigNode.SourceName = NodeName.IsEmpty() ? FString::Printf(TEXT("Node_%d"), Index) : NodeName;
         RigNode.Parent = ParentRig;
         RigNode.GltfIndex = Index;
-        RigNode.Local = FTransform(Transform(Local));
+        RigNode.Local = FTransform(FSCMeshes::Transform(Local));
         RigNode.World = World;
         // Exported skin helper aliases are identity children of an identically named owner.
         // Only that owner receives channels; driving both would apply the rotation twice.
@@ -304,7 +290,7 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
                             return false;
                         }
                         Id[K] = int32(Raw);
-                        Pos[K] = Position(World.TransformPosition(P.Vector(Id[K])));
+                        Pos[K] = FSCMeshes::Position(World.TransformPosition(P.Vector(Id[K])));
                         if (Pos[K].ContainsNaN())
                         {
                             Error = TEXT("Non-finite vertex");
@@ -366,10 +352,10 @@ bool FSCMeshImporter::Derive(const FSCPackageSource& Source, const FString& Path
                         }
                         const FVertexInstanceID VI = Out.Description.CreateVertexInstance(Vertex);
                         Corners.Add(VI);
-                        const FVector Normal = N.Data ? Position(NormalMatrix.TransformVector(N.Vector(J))).GetSafeNormal() : FaceNormal;
+                        const FVector Normal = N.Data ? FSCMeshes::Position(NormalMatrix.TransformVector(N.Vector(J))).GetSafeNormal() : FaceNormal;
                         Normals[VI] = FVector3f(Normal);
                         Tangents[VI] =
-                            T.Data ? FVector3f(Position(World.TransformVector(T.Vector(J))).GetSafeNormal()) : FVector3f::ZeroVector;
+                            T.Data ? FVector3f(FSCMeshes::Position(World.TransformVector(T.Vector(J))).GetSafeNormal()) : FVector3f::ZeroVector;
                         Signs[VI] = T.Data ? float(FMath::Sign(World.Determinant()) * T.Get(J, 3)) : 1;
                         Colors[VI] = C.Data ? FVector4f(C.Get(J, 0), C.Get(J, 1), C.Get(J, 2), C.Components == 4 ? C.Get(J, 3) : 1)
                                             : FVector4f(1, 1, 1, 1);

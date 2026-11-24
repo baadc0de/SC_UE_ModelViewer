@@ -37,7 +37,7 @@ bool FSCSkeletalMeshImporter::DeriveCollision(FSCDerivedMesh& Data, FString& Err
             Expanded.Description.CreateTriangle(G, Corners);
         }
     }
-    if (!FSCMeshImporter::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
+    if (!FSCMeshes::DeriveCollision(Expanded, Error, /*bVertexIndexMap*/ true)) return false;
     Data.CollisionBytes = MoveTemp(Expanded.CollisionBytes);
     Data.CollisionVersions = Expanded.CollisionVersions;
     Data.CollisionDeriveSeconds = Expanded.CollisionDeriveSeconds;

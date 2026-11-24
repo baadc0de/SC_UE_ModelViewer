@@ -129,7 +129,7 @@ struct SCBRIDGE_API FSCBlendSpace
 };
 
 /** The game's personal light (`player.flashlights[]`: a loadout item's SCItemFlashlightParams; the worn helmet in LIVE): the
- *  split the local player sees (`localPlayerParams`), as authored in native units. FSCLightImporter::FlashlightSettings maps it. */
+ *  split the local player sees (`localPlayerParams`), as authored in native units. FSCLights::FlashlightSettings maps it. */
 struct SCBRIDGE_API FSCFlashlight
 {
     FString Entity, Port;

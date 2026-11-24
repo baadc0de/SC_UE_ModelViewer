@@ -23,6 +23,7 @@
 class FSCLift;
 class UMeshComponent;
 class USceneComponent;
+class UTexture;
 class UTexture2D;
 class UTextureRenderTarget2D;
 class UMaterialInterface;

@@ -1,9 +1,10 @@
 // Headless rig invariants, source-based regressions, and the quarantined WP-R6 pose-export comparison.
 #include "SCImporter.h"
+#include "SCMeshImporter.h"
+#include "SCClipCatalog.h"
 #include "SCVehicle.h"
 #include "SCRigComponent.h"
-#include "SCAnimImporter.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "Engine/SkeletalMesh.h"
 #include "Animation/AnimSequence.h"
 #include "Components/LightComponent.h"
@@ -75,8 +76,8 @@ bool USCImportLibrary::VerifyRig(ASCVehicle* Vehicle, const FString& PoseReferen
                         {
                             FTransform* X = Expected.Find(T.Bone);
                             if (!X) X = &Expected.Add(T.Bone, Rig->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose()[T.Bone]);
-                            const auto Sample = FSCAnimImporter::Sample(
-                                T, FSCAnimImporter::TrackFrame(Vehicle->ClipCatalog->Clips[Play.Clip], T, Play.Frame, Play.Speed < 0));
+                            const auto Sample = FSCClipSampling::Sample(
+                                T, FSCClipSampling::TrackFrame(Vehicle->ClipCatalog->Clips[Play.Clip], T, Play.Frame, Play.Speed < 0));
                             if (T.bRotation) X->SetRotation(Sample.GetRotation());
                             if (T.bPosition) X->SetTranslation(Sample.GetTranslation());
                         }
@@ -88,7 +89,7 @@ bool USCImportLibrary::VerifyRig(ASCVehicle* Vehicle, const FString& PoseReferen
     UE_LOG(LogSCImport, Display, TEXT("RIG_VERIFY passed=%d clips=%d bound=%d sequences=%d tracks=%d rigs=%d soft_triangles=%d lights=%d"),
            OK, Vehicle->ClipCatalog->Clips.Num(), Bound, Sequences, Tracks, Vehicle->Rigs.Num(), SoftTriangles, Vehicle->Lights.Num());
     OK &= SCVerifySourcePose(Vehicle);
-    OK &= FSCLightImporter::Verify(Vehicle);
+    OK &= FSCLights::Verify(Vehicle);
     if (!PoseReference.IsEmpty())
     {
         FSCFolderPackageSource Source(FPaths::GetPath(PoseReference));

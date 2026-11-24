@@ -1,7 +1,7 @@
 // WP-G1: stop opening gangways where their moving collision surface meets supporting ground.
 #include "SCGangwayGround.h"
+#include "SCClipCatalog.h"
 #include "SCVehicle.h"
-#include "SCAnimImporter.h"
 #include "SCRigComponent.h"
 #include "Chaos/TriangleMeshImplicitObject.h"
 #include "Components/StaticMeshComponent.h"
@@ -100,7 +100,7 @@ void ASCVehicle::GangwayStops(float Seconds, TMap<int32, double>& OutFractions) 
                 for (const FSCBoneTrack& Track : Layer.Binding->Tracks)
                 {
                     if (!Bones.IsValidIndex(Track.Bone)) continue;
-                    const auto Key = FSCAnimImporter::Sample(Track, FSCAnimImporter::TrackFrame(*Layer.Clip, Track, Frame, Layer.Play->Speed < 0));
+                    const auto Key = FSCClipSampling::Sample(Track, FSCClipSampling::TrackFrame(*Layer.Clip, Track, Frame, Layer.Play->Speed < 0));
                     if (Track.bRotation) Bones[Track.Bone].SetRotation(Key.GetRotation());
                     if (Track.bPosition) Bones[Track.Bone].SetTranslation(Key.GetTranslation());
                 }

@@ -3,6 +3,8 @@
 // prepare incl. collision BVH, game-thread UObject build) -> Materials (worker decode overlapped with meshes,
 // game-thread textures/MIDs) -> Assembling (components, lights, publish).
 #include "SCImportJob.h"
+#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCInstancing.h"
 #include "SCVehicleLifts.h"
 #include "SCVehicle.h"
@@ -780,7 +782,7 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
         Slot.RigidGroups = Rigid.Num();
         if (Slot.bAnimated)
         {
-            Slot.Soft = FSCMeshImporter::Select(Data, Soft);
+            Slot.Soft = FSCMeshes::Select(Data, Soft);
             Slot.Soft.GltfToRig = Data.GltfToRig;
         }
         if (Options.bBuildCollision && Slot.Soft.bHasGeometry)
@@ -816,11 +818,11 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                 Slot.Parts.Add(MoveTemp(Part));
                 continue;
             }
-            Part.Mesh = FSCMeshImporter::Select(Data, Rigid[Owner]);
+            Part.Mesh = FSCMeshes::Select(Data, Rigid[Owner]);
             Part.Mesh.SocketNode = Owner;
             // Collision includes all triangles of this owner, including glass/decal split, as in U1.
             FString Error;
-            if (Options.bBuildCollision && !Part.OpaqueCache.Pin && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
+            if (Options.bBuildCollision && !Part.OpaqueCache.Pin && !FSCMeshes::DeriveCollision(Part.Mesh, Error))
             {
                 Slot.PrepareWarnings.Emplace(Path, Error);
                 continue;
@@ -828,7 +830,7 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
             if (Options.bBuildCollision && Part.OpaqueCache.Pin)
                 Part.CollisionTriangles = MoveTemp(Rigid[Owner]);
             Slot.CollisionSeconds += Part.Mesh.CollisionDeriveSeconds;
-            FSCMeshImporter::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
+            FSCMeshes::SplitTranslucent(Part.Mesh, TranslucentSlots, Part.Translucent);
             if (Part.Translucent.bHasGeometry && !BaseKey.IsEmpty() && Part.TranslucentCache.Key.IsEmpty())
                 ProbeMeshCache(Part.TranslucentCache, BaseKey + TEXT("|translucent"));
             if (Options.GeometryStreaming && !Options.bRebuildProcessed && ScreenSlots.IsEmpty())
@@ -860,13 +862,13 @@ void FSCImportJob::FState::LaunchPrepare(FMeshSlot& Slot)
                 FPart Part;
                 Part.Owner = Owner;
                 Part.bGamePhysics = true;
-                Part.Mesh = FSCMeshImporter::SelectPhysics(Data, Owner);
+                Part.Mesh = FSCMeshes::SelectPhysics(Data, Owner);
                 if (!Part.Mesh.bHasGeometry) continue;
                 if (!MeshCacheNamespace.IsEmpty() && !Data.ContentHash.IsEmpty())
                     ProbeMeshCache(Part.OpaqueCache, FSCProcessedCache::Key(Path,
                         FString::Printf(TEXT("%s|physics=%d|animated=%d"), *Data.ContentHash, Owner, Slot.bAnimated)));
                 FString Error;
-                if (!Part.OpaqueCache.Pin && !FSCMeshImporter::DeriveCollision(Part.Mesh, Error))
+                if (!Part.OpaqueCache.Pin && !FSCMeshes::DeriveCollision(Part.Mesh, Error))
                 {
                     Slot.PrepareWarnings.Emplace(Path, Error);
                     Slot.bGamePhysicsFailed = true;
@@ -1001,7 +1003,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         if (Part.bDeferredGeometry)
         {
             const auto& Triangles = Cached.SplitTriangles.IsEmpty() ? Part.CollisionTriangles : Cached.SplitTriangles;
-            Variant = FSCMeshImporter::Select(*Slot.Data, Triangles);
+            Variant = FSCMeshes::Select(*Slot.Data, Triangles);
             Variant.SocketNode = Part.Owner;
             Variant.bEnableNanite &= !Cached.bDisableNanite;
         }
@@ -1010,11 +1012,11 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
             // The package failed to load despite valid disk checksums. Re-create
             // collision from the same unsplit triangles used on a regular miss.
             if (Part.bGamePhysics || (Part.bDeferredGeometry && Cached.SplitTriangles.IsEmpty()))
-                FSCMeshImporter::DeriveCollision(Variant, AssetError);
+                FSCMeshes::DeriveCollision(Variant, AssetError);
             else
             {
-                FSCDerivedMesh Unsplit = FSCMeshImporter::Select(*Slot.Data, Part.CollisionTriangles);
-                if (FSCMeshImporter::DeriveCollision(Unsplit, AssetError))
+                FSCDerivedMesh Unsplit = FSCMeshes::Select(*Slot.Data, Part.CollisionTriangles);
+                if (FSCMeshes::DeriveCollision(Unsplit, AssetError))
                 {
                     Variant.CollisionBytes = MoveTemp(Unsplit.CollisionBytes);
                     Variant.CollisionVersions = MoveTemp(Unsplit.CollisionVersions);
@@ -1030,7 +1032,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         if (Cached.Coarse && Variant.Description.Triangles().Num() <= PerVehicleTriangleBudget - FineTrianglesDeferred &&
             Options.GeometryStreaming->CanDefer(Variant))
         {
-            Mesh = FSCMeshImporter::Instantiate(*Cached.Coarse, Slot.Package, Name,
+            Mesh = FSCMeshes::Instantiate(*Cached.Coarse, Slot.Package, Name,
                 bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError, true);
             bUsesCoarse = Mesh != nullptr;
             if (bUsesCoarse)
@@ -1044,7 +1046,7 @@ void FSCImportJob::FState::BuildNextVariant(FMeshSlot& Slot)
         }
         Cached.Coarse.Reset();
         if (!Mesh)
-            Mesh = FSCMeshImporter::Instantiate(Variant, Slot.Package, ExactName,
+            Mesh = FSCMeshes::Instantiate(Variant, Slot.Package, ExactName,
                 bNeedsCollision, UMaterial::GetDefaultMaterial(MD_Surface), Stats, AssetError);
         if (Mesh && !Cached.Key.IsEmpty())
         {
@@ -1111,7 +1113,7 @@ void FSCImportJob::FState::FinishBuild(FMeshSlot& Slot)
     {
         GamePhysicsVariants.Add(Path, MoveTemp(Slot.GamePhysicsVariants));
         // A collider that could not be built must not open a hole: then the render mesh keeps blocking the pawn too.
-        const bool bReplaces = FSCMeshImporter::GamePhysicsReplacesRender(*Slot.Data) && !Slot.bGamePhysicsFailed;
+        const bool bReplaces = FSCMeshes::GamePhysicsReplacesRender(*Slot.Data) && !Slot.bGamePhysicsFailed;
         if (bReplaces) GamePhysicsReplacesRender.Add(Path);
         else Warn(Path, TEXT("Game collision incomplete: render geometry keeps blocking movement"));
         UE_LOG(LogSCImport, Display, TEXT("GAME_COLLISION path=%s colliders=%d filtered=%d failed=%d triangles=%d parts=%d replaces_render=%d"), *Path,
@@ -1227,7 +1229,7 @@ void FSCImportJob::FState::Assemble()
             Warn(EntityName, TEXT("Unresolved parent helper: ") + ParentName + TEXT("/") + NodeName);
             return nullptr;
         }
-        auto* Helper = NewAnchor(NodeName, E->Anchor, FSCMeshImporter::Transform(*Node));
+        auto* Helper = NewAnchor(NodeName, E->Anchor, FSCMeshes::Transform(*Node));
         E->Helpers.Add(NodeName, Helper);
         bHelper = true;
         return Helper;
@@ -1406,14 +1408,14 @@ void FSCImportJob::FState::Assemble()
             }
             return Screen;
         };
-        FMatrix Relative = FSCMeshImporter::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
-                                                              bAtHelper, FSCMeshImporter::InCryFrame(I.SourceTransformBasis, bAtHelper));
+        FMatrix Relative = FSCMeshes::InstanceTransform(I.LocalMatrix, E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity,
+                                                              bAtHelper, FSCMeshes::InCryFrame(I.SourceTransformBasis, bAtHelper));
         // Helper frames in anchor space ("" = the item's source frame) for port alignment, now and at run time.
         auto AddHelpers = [&E](FSCInstanceHelpers& Helpers) {
-            Helpers.Frames.Add(FString(), FTransform(FSCMeshImporter::Transform(E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity)));
+            Helpers.Frames.Add(FString(), FTransform(FSCMeshes::Transform(E.Mesh ? E.Mesh->RootMatrix : FMatrix::Identity)));
             if (E.Mesh)
                 for (const auto& Node : E.Mesh->Nodes)
-                    if (!Node.Key.IsEmpty() && !Helpers.Frames.Contains(Node.Key)) Helpers.Frames.Add(Node.Key, FTransform(FSCMeshImporter::Transform(Node.Value)));
+                    if (!Node.Key.IsEmpty() && !Helpers.Frames.Contains(Node.Key)) Helpers.Frames.Add(Node.Key, FTransform(FSCMeshes::Transform(Node.Value)));
         };
         if (!I.Id.IsEmpty()) AddHelpers(V->InstanceHelpers.FindOrAdd(I.Id));
         if (I.bBonePort && bAtHelper && !I.Id.IsEmpty())
@@ -1452,7 +1454,7 @@ void FSCImportJob::FState::Assemble()
                 if (!Node && E.Mesh) Node = E.Mesh->Nodes.Find(Point.HelperName.Replace(TEXT("$"), TEXT("")));
                 if (Node)
                 {
-                    P.Local = FTransform(FSCMeshImporter::Transform(*Node)).GetLocation();
+                    P.Local = FTransform(FSCMeshes::Transform(*Node)).GetLocation();
                     P.bLocated = true;
                 }
                 Usable.Points.Add(MoveTemp(P));
@@ -1516,7 +1518,7 @@ void FSCImportJob::FState::Assemble()
                 if (E.Rig && E.Mesh->RigNodes.IsValidIndex(Node))
                 {
                     C->SetupAttachment(E.Rig, FSCSkeletonBuilder::BoneName(*E.Mesh, Node));
-                    C->SetRelativeTransform(FTransform(FSCMeshImporter::Transform(E.Mesh->RigNodes[Node].World).Inverse()));
+                    C->SetRelativeTransform(FTransform(FSCMeshes::Transform(E.Mesh->RigNodes[Node].World).Inverse()));
                 }
                 C->ComponentTags.Add(FName(*I.MeshAsset));
                 const bool bCollides = Options.bBuildCollision && (*Variants)[Variant]->GetBodySetup() &&
@@ -1642,7 +1644,7 @@ void FSCImportJob::FState::Assemble()
             if (E.Mesh && !Source.bParent)
                 for (const auto& Node : E.Mesh->Nodes)
                     if (Node.Key.MatchesWildcard(Source.Bone, ESearchCase::IgnoreCase) && !Animated.Contains(FName(*Node.Key)))
-                        BindEmitter(Anchor, NAME_None, Source.Offset * FTransform(FSCMeshImporter::Transform(Node.Value)));
+                        BindEmitter(Anchor, NAME_None, Source.Offset * FTransform(FSCMeshes::Transform(Node.Value)));
             if (Thruster.Emitters.Num() == Before)
                 Warn(I.EntityName, TEXT("Thruster attachment not found: ") + Source.Bone);
         }
@@ -1669,7 +1671,7 @@ void FSCImportJob::FState::Assemble()
                 if (E.Mesh)
                     for (const auto& Node : E.Mesh->Nodes)
                         if (Node.Key.Equals(Name, ESearchCase::IgnoreCase))
-                            return NewAnchor(Name + TEXT("_LightAnchor"), E.Anchor, FSCMeshImporter::Transform(Node.Value));
+                            return NewAnchor(Name + TEXT("_LightAnchor"), E.Anchor, FSCMeshes::Transform(Node.Value));
                 return nullptr;
             },
             Result.Warnings);
@@ -1750,9 +1752,9 @@ void FSCImportJob::FState::Assemble()
     // (following that item's rig); an interior grid on its container (below).
     V->InventoryAnchors.SetNum(Manifest.InventoryContainers.Num());
     V->InventoryOwnerRigs.SetNum(Manifest.InventoryContainers.Num());
-    const FMatrix CryToGltf = FSCMeshImporter::CryToGltf();
+    const FMatrix CryToGltf = FSCMeshes::CryToGltf();
     auto ContainerFrame = [&](const FMatrix& Local, bool bHelper) {
-        return bHelper ? FSCMeshImporter::Transform(CryToGltf.Inverse() * Local) : FSCMeshImporter::InstanceTransform(Local, FMatrix::Identity, false, true);
+        return bHelper ? FSCMeshes::Transform(CryToGltf.Inverse() * Local) : FSCMeshes::InstanceTransform(Local, FMatrix::Identity, false, true);
     };
     for (int32 C = 0; C < Manifest.InventoryContainers.Num(); ++C)
     {
@@ -1784,10 +1786,10 @@ void FSCImportJob::FState::Assemble()
         bool bHelper;
         auto* Parent = FindParent(Interior.Container, bHelper);
         if (!Parent) continue;
-        const FMatrix W = FSCMeshImporter::CryToGltf();
+        const FMatrix W = FSCMeshes::CryToGltf();
         auto* Container = NewAnchor(
             Interior.Container.EntityName, Parent,
-            FSCMeshImporter::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
+            FSCMeshes::Transform(bHelper ? Interior.Container.LocalMatrix : W.Inverse() * Interior.Container.LocalMatrix * W));
         V->InteriorAnchors.Add(Container);
         V->InteriorHelperFrames.Add(bHelper);
         V->InteriorSceneIndex.Add(InteriorIndex);
@@ -1903,8 +1905,8 @@ void FSCImportJob::FState::Assemble()
                 if (const FEntity* Linked = ById.Find(Target); Linked && Linked->Rig) Door.Doors.Add(Linked->Rig);
             if (Door.Doors.IsEmpty()) continue;
             Door.Anchor = NewAnchor(Sensor.EntityClass, Container,
-                                    FSCMeshImporter::InstanceTransform(Sensor.LocalMatrix, FMatrix::Identity, bHelper,
-                                                                       FSCMeshImporter::InCryFrame(TEXT("cryengine_z_up"), bHelper)));
+                                    FSCMeshes::InstanceTransform(Sensor.LocalMatrix, FMatrix::Identity, bHelper,
+                                                                       FSCMeshes::InCryFrame(TEXT("cryengine_z_up"), bHelper)));
             const FVector Centre = FVector(Sensor.Offset.Y, Sensor.Offset.X, Sensor.Offset.Z) * 100.0;
             const FVector Half = FVector(Sensor.Extent.Y, Sensor.Extent.X, Sensor.Extent.Z).GetAbs() * 100.0;
             Door.Box = FBox(Centre - Half, Centre + Half);

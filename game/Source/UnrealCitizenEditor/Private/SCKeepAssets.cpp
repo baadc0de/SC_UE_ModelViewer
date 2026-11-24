@@ -1,7 +1,7 @@
 // SCKeepAssets: rename transient import objects into /Game packages (references between them stay intact),
 // convert dynamic material instances to constants, bake mesh slot materials from component overrides, save.
 #include "SCKeepAssets.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCRigAssets.h"
 #include "SCRigComponent.h"
 #include "SCTextureSource.h"

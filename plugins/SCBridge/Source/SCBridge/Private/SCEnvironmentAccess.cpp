@@ -3,7 +3,6 @@
 // component-space transforms, and the rig's collidable parts carried along by their bones.
 #include "SCEnvironmentAccess.h"
 #include "Cargo/SCCargoGridComponent.h"
-#include "SCAnimImporter.h"
 #include "SCClipCatalog.h"
 #include "SCEnvironment.h"
 #include "SCRigComponent.h"
@@ -166,7 +165,7 @@ FSCAccessResult Apply(ASCVehicle* Vehicle, FName Key, const FRequest& R)
             for (const FSCBoneTrack& T : C.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; })->Tracks)
             {
                 if (!Current.IsValidIndex(T.Bone)) continue;
-                const FTransform Sample = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(C, T, ClosedFrame, false));
+                const FTransform Sample = FSCClipSampling::Sample(T, FSCClipSampling::TrackFrame(C, T, ClosedFrame, false));
                 if (T.bRotation) Current[T.Bone].SetRotation(Sample.GetRotation());
                 if (T.bPosition) Current[T.Bone].SetTranslation(Sample.GetTranslation());
             }
@@ -208,7 +207,7 @@ FSCAccessResult Apply(ASCVehicle* Vehicle, FName Key, const FRequest& R)
             for (const FSCBoneTrack& T : Clip.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; })->Tracks)
             {
                 if (!Pose.IsValidIndex(T.Bone)) continue;
-                const FTransform Sample = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(Clip, T, Clip.LastFrame, false));
+                const FTransform Sample = FSCClipSampling::Sample(T, FSCClipSampling::TrackFrame(Clip, T, Clip.LastFrame, false));
                 if (T.bRotation) Pose[T.Bone].SetRotation(Sample.GetRotation());
                 if (T.bPosition) Pose[T.Bone].SetTranslation(Sample.GetTranslation());
             }

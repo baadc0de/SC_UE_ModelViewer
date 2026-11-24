@@ -200,7 +200,7 @@ public:
     /** Two Orbit presses closer than this reset the third-person orbit (viewer input constant, s). */
     static constexpr float DoubleTapSeconds = 0.3f;
     /** The torch is the game's personal light: the player kit's first flashlight (FSCFlashlight, an item's
-     *  SCItemFlashlightParams) with its cookie's light function (FSCLightImporter::ApplyFlashlight). Null Game: the viewer's
+     *  SCItemFlashlightParams) with its cookie's light function (FSCLights::ApplyFlashlight). Null Game: the viewer's
      *  fallback beam below (no player body, or a loadout without a flashlight). Keeps the on / off state. */
     void SetTorchLight(const struct FSCFlashlight* Game, class UMaterialInterface* LightFunction);
     /** WP-A1: the kit and the item whose Light_On_SFX / Light_Off_SFX the torch plays (empty item: none). */

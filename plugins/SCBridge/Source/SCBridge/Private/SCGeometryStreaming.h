@@ -1,7 +1,7 @@
 // Coarse render meshes and the view-driven queue for their full-detail replacements.
 #pragma once
 #include "CoreMinimal.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "UObject/StrongObjectPtrTemplates.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 #include <atomic>

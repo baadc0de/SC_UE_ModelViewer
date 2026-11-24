@@ -3,6 +3,8 @@
 // weapon re-parenting between stow and hand ports.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCMeshes.h"
+#include "SCClipCatalog.h"
 #include "HAL/IConsoleManager.h"
 #include "SCPlayerAnimator.h"
 #include "SCPlayerBody.h"
@@ -25,8 +27,6 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
-#include "SCAnimImporter.h"
-#include "SCMeshImporter.h"
 #include "SCSkeletonBuilder.h"
 
 namespace
@@ -210,7 +210,7 @@ bool FSCPlayerAdditive::RunTest(const FString&)
     TestTrue(TEXT("first frame changes the base"), !Pose[1].GetRotation().Equals(Base[1].GetRotation(), 1e-3));
     TestTrue(TEXT("translation adds"), FVector::Dist(Pose[1].GetTranslation(), Base[1].GetTranslation()) > 50);
     TestTrue(TEXT("delta composes in the parent's frame (delta * base)"),
-             Pose[1].GetRotation().Equals((FQuat(FSCAnimImporter::SidecarRotation(FQuat(S, 0, 0, C))) * Base[1].GetRotation()).GetNormalized(), 1e-4));
+             Pose[1].GetRotation().Equals((FQuat(FSCClipSampling::SidecarRotation(FQuat(S, 0, 0, C))) * Base[1].GetRotation()).GetNormalized(), 1e-4));
     Pose = Base;
     Clip.ApplyAdditive(0, 0, Pose);
     TestTrue(TEXT("zero weight is a no-op"), Pose[1].Equals(Base[1], 1e-6));
@@ -225,7 +225,7 @@ bool FSCPlayerAdditive::RunTest(const FString&)
         TestTrue(TEXT("parse terminal"), FSCPlayerClip::Parse(Json2, [](const FString& N) { return N == TEXT("b") ? 1 : INDEX_NONE; }, Terminal, Error));
         Pose = Base;
         Terminal.ApplyAdditive(Terminal.Duration, 1, Pose);
-        const FQuat Delta = FSCAnimImporter::SidecarRotation(FQuat(S2, 0, 0, C2));
+        const FQuat Delta = FSCClipSampling::SidecarRotation(FQuat(S2, 0, 0, C2));
         const FVector Axis = Delta.GetRotationAxis();
         TestTrue(TEXT("terminal delta is 20 degrees"), FMath::IsNearlyEqual(FMath::RadiansToDegrees(Delta.GetAngle()), 20.0, 1e-3));
         const FQuat Expected = (FQuat(Axis, FMath::DegreesToRadians(20.0)) * Base[1].GetRotation()).GetNormalized();
@@ -359,7 +359,7 @@ bool FSCPlayerAimPose::RunTest(const FString&)
     // toward a point straight ahead of it, Z toward a point straight above it.
     {
         const FMatrix CryUp(FPlane(1, 0, 0, 0), FPlane(0, 0, -1, 0), FPlane(0, 1, 0, 0), FPlane(0, 0, 0, 1));
-        auto Imported = [&](const FVector& P) { return FTransform(FSCMeshImporter::Transform(FTranslationMatrix(P) * CryUp)); };
+        auto Imported = [&](const FVector& P) { return FTransform(FSCMeshes::Transform(FTranslationMatrix(P) * CryUp)); };
         const FTransform Helper = Imported(FVector(0, -0.0118, 0.1765));
         const FTransform Line = B::SightAxes() * Helper;
         const FVector Ahead = Imported(FVector(0, 0.3, 0.1765)).GetLocation(), Above = Imported(FVector(0, -0.0118, 0.3)).GetLocation();

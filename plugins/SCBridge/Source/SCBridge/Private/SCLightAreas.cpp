@@ -4,7 +4,7 @@
 #include "SCViewerSettings.h"
 #include "SCVehicle.h"
 #include "SCImporter.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCRigComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -247,7 +247,7 @@ TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description)
 
 TArray<FVector3f> FSCLightAreas::Sample(const FMeshDescription& Description, TConstArrayView<FTriangleID> Triangles)
 {
-    // FSCMeshImporter::Select inserts vertices in first-use order while walking the selected triangle corners.
+    // FSCMeshes::Select inserts vertices in first-use order while walking the selected triangle corners.
     TBitArray<> Seen(false, Description.Vertices().GetArraySize());
     TArray<FVertexID> Order;
     Order.Reserve(Triangles.Num());
@@ -274,9 +274,9 @@ void FSCLightAreas::Register(ASCVehicle* Vehicle, USceneComponent* Anchor, const
     FSCLightArea Area;
     Area.Anchor = Anchor;
     // The same container -> anchor mapping the light importer applies to light positions (metres -> cm).
-    const FVector X = FSCLightImporter::ContainerBasis(FVector(1, 0, 0), bHelperFrame) * 100;
-    const FVector Y = FSCLightImporter::ContainerBasis(FVector(0, 1, 0), bHelperFrame) * 100;
-    const FVector Z = FSCLightImporter::ContainerBasis(FVector(0, 0, 1), bHelperFrame) * 100;
+    const FVector X = FSCLights::ContainerBasis(FVector(1, 0, 0), bHelperFrame) * 100;
+    const FVector Y = FSCLights::ContainerBasis(FVector(0, 1, 0), bHelperFrame) * 100;
+    const FVector Z = FSCLights::ContainerBasis(FVector(0, 0, 1), bHelperFrame) * 100;
     Area.AnchorToContainer = FMatrix(FPlane(X, 0), FPlane(Y, 0), FPlane(Z, 0), FPlane(0, 0, 0, 1)).Inverse();
     for (const FString& Text : VolumeJson)
     {

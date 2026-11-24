@@ -1,6 +1,6 @@
 // WP-P3 headless tests: collider classes, inline grid shapes, the physics-grid volume test. Synthetic fixtures only.
 #include "Misc/AutomationTest.h"
-#include "SCMeshImporter.h"
+#include "SCMeshes.h"
 #include "SCPackageReader.h"
 #include "SCPackageSource.h"
 #include "SCVehicle.h"
@@ -39,12 +39,12 @@ const TCHAR* ShiftedCubeShape = TEXT(R"({"kind":"trimesh","part":1,"vertices":[[
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCGamePhysicsClasses, "SCBridge.GamePhysics.Classes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCGamePhysicsClasses::RunTest(const FString&)
 {
-    TestTrue(TEXT("Part 0 without a class blocks"), FSCMeshImporter::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0})"))));
-    TestTrue(TEXT("Player-only blocks"), FSCMeshImporter::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0,"class":"player_only"})"))));
-    TestTrue(TEXT("No-terrain blocks"), FSCMeshImporter::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0,"class":"no_terrain"})"))));
+    TestTrue(TEXT("Part 0 without a class blocks"), FSCMeshes::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0})"))));
+    TestTrue(TEXT("Player-only blocks"), FSCMeshes::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0,"class":"player_only"})"))));
+    TestTrue(TEXT("No-terrain blocks"), FSCMeshes::PhysicsBlocksActor(Parse(TEXT(R"({"kind":"box","part":0,"class":"no_terrain"})"))));
     for (const TCHAR* Class : {TEXT("interaction"), TEXT("tires_only"), TEXT("grid_volume"), TEXT("no_surface")})
         TestFalse(FString::Printf(TEXT("%s does not block"), Class),
-                  FSCMeshImporter::PhysicsBlocksActor(Parse(FString::Printf(TEXT(R"({"kind":"box","part":1,"class":"%s"})"), Class))));
+                  FSCMeshes::PhysicsBlocksActor(Parse(FString::Printf(TEXT(R"({"kind":"box","part":1,"class":"%s"})"), Class))));
     return true;
 }
 
@@ -53,9 +53,9 @@ bool FSCGamePhysicsGrid::RunTest(const FString&)
 {
     TArray<FVector> Tris;
     FString Error;
-    TestTrue(TEXT("Inline trimesh tessellates"), FSCMeshImporter::PhysicsShapeTriangles(Parse(CubeShape), Tris, [](int32, TArray<FVector>&) { return false; }, Error));
+    TestTrue(TEXT("Inline trimesh tessellates"), FSCMeshes::PhysicsShapeTriangles(Parse(CubeShape), Tris, [](int32, TArray<FVector>&) { return false; }, Error));
     TestEqual(TEXT("Twelve triangles"), Tris.Num(), 36);
-    TestFalse(TEXT("Out-of-range index rejected"), FSCMeshImporter::PhysicsShapeTriangles(
+    TestFalse(TEXT("Out-of-range index rejected"), FSCMeshes::PhysicsShapeTriangles(
         Parse(TEXT(R"({"kind":"trimesh","vertices":[[0,0,0]],"triangles":[[0,0,1]]})")), Tris, [](int32, TArray<FVector>&) { return false; }, Error));
 
     const FSceneSource Source(FString(TEXT(R"({"version":2,"export_kind":"Decomposed","root_entity":{"entity_name":"Synthetic","physics_grid":{"source_path":"g.cgf","shapes":[)"))
