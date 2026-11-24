@@ -12,7 +12,7 @@ Commandlet generation (immediate captures; no warm frames):
     "-script=$PWD/game/scripts/create_cargo_art.py" -unattended -nop4 -nosplash `
     -AllowCommandletRendering -EnablePlugins=GeometryScripting -ddc=SCViewerDDC `
     "-ShaderWorkingDir=$PWD/out/k1d/shaders"
-Only /SCBridge/Cargo assets are saved. Preview world is transient; images and
+Only /Game/Cargo assets are saved. Preview world is transient; images and
 validation report go to out/k1d. Re-runs update existing assets in place.
 No game geometry/textures are used. Dimensions and palette are original art.
 """
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import unreal as u
 
-ROOT = "/SCBridge/Cargo"
+ROOT = "/Game/Cargo"
 OUT = Path(__file__).resolve().parents[2] / "out/k1d"
 OUT.mkdir(parents=True, exist_ok=True)
 EAL, MEL = u.EditorAssetLibrary, u.MaterialEditingLibrary

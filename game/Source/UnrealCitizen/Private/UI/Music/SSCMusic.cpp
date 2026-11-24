@@ -191,6 +191,8 @@ FText SSCMusic::LibraryStatus() const
 {
     const auto* Viewer = Model->GetViewer();
     const auto* Player = Music();
+    if (Viewer && !Viewer->CanReadArchive())
+        return LOCTEXT("NoArchiveReader", "The soundtrack library is unavailable in this build.");
     if (!Viewer || !Player || Viewer->GetArchiveState() == ESCArchiveState::Closed ||
         Viewer->GetArchiveState() == ESCArchiveState::Failed)
         return LOCTEXT("NeedsArchive", "Open Star Citizen’s game archive to browse the soundtrack.");

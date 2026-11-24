@@ -35,7 +35,7 @@ namespace
 // K1d art by soft path; the engine shape when the asset is missing (warned once per asset).
 UStaticMesh* Art(const TCHAR* Name, const TCHAR* Fallback)
 {
-    const FString Path = FString::Printf(TEXT("/SCBridge/Cargo/Meshes/%s.%s"), Name, Name);
+    const FString Path = FString::Printf(TEXT("/Game/Cargo/Meshes/%s.%s"), Name, Name);
     if (UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet)) return Mesh;
     static TSet<FString> Warned;
     if (!Warned.Contains(Path))

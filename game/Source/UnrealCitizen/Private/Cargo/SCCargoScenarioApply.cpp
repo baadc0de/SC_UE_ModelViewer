@@ -4,6 +4,7 @@
 // resolving the game's effects the drones and boxes play (FSCCargoFx).
 #include "Cargo/SCCargoSubsystem.h"
 #include "UCSettings.h"
+#include "UCScenario.h"
 #include "SCCargoState.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoDrone.h"
@@ -65,6 +66,17 @@ void USCCargoSubsystem::DropScenario()
     State->Library.Reset();
 }
 
+void USCCargoSubsystem::FailScenario(const FString& Problem)
+{
+    UE_LOG(LogSCCargo, Error, TEXT("CARGO_SCENARIO failed: %s"), *Problem);
+    // A game scenario fails with it; the setup applies nothing more either way.
+    if (UUCSettings::Get()->bScenarioOwnsScene && UUCSettings::Get()->ScenarioCargoProblem.IsEmpty()) UUCSettings::Get()->ScenarioCargoProblem = Problem;
+    FString Ignored;
+    if (!UUCSettings::Get()->bScenarioOwnsScene && !State->bScenarioLoadRequested && !FParse::Value(FCommandLine::Get(), TEXT("SCLoad="), Ignored))
+        State->ShipOfFailedSetup = State->Scenario.Ship;
+    DropScenario();
+}
+
 bool USCCargoSubsystem::ArePreparedBoxesReady() const
 {
     if (!State || !State->bPreparedSetup) return true;
@@ -112,6 +124,14 @@ void USCCargoSubsystem::TryScenario()
                 return;
             }
         }
+        // A setup in space with docks or stock on environment grids cannot run: refused before it changes the scene.
+        if (State->Scenario.bSpace &&
+            (State->Scenario.Docks.ContainsByPredicate([](const FSCCargoDockSpec& D) { return D.Grid.Kind == ESCCargoGridKind::Environment; }) ||
+             State->Scenario.Stock.ContainsByPredicate([](const FSCCargoStock& St) { return St.Grid.Kind == ESCCargoGridKind::Environment; })))
+        {
+            FailScenario(TEXT("the cargo setup is in space and has docks or stock on environment grids"));
+            return;
+        }
         for (const FString& Entity : State->Scenario.Entities()) State->Library.Request(Entity);
         if (State->Scenario.bSpace)
         {
@@ -120,6 +140,15 @@ void USCCargoSubsystem::TryScenario()
         }
         else if (TakesScenarioEnvironment(FCommandLine::Get(), Settings->bScenarioOwnsScene, State->Scenario))
         {
+            // A hangar with no prepared level never comes without an archive reader (an archive hangar needs the reader, a
+            // package folder the importer; a build has both or neither): its grids would be waited for.
+            if (!Viewer->CanReadArchive() && !State->Scenario.Environment.Equals(TEXT("none"), ESearchCase::IgnoreCase) &&
+                USCViewerSubsystem::CookedEnvironmentLevel(State->Scenario.Environment).IsEmpty())
+            {
+                FailScenario(FString::Printf(TEXT("the cargo setup's environment %s is not prepared and this build reads no archive"),
+                                             *State->Scenario.Environment));
+                return;
+            }
             // Its environment, at once: it replaces the one the viewer restored at start (a saved or default hangar).
             Viewer->SetEnvironment(State->Scenario.Environment);
         }
@@ -134,6 +163,27 @@ void USCCargoSubsystem::TryScenario()
     {
         State->bFleetTried = true;
         LoadFleet();
+    }
+    // A failed standalone setup's ship loads as it would have: once nothing else is loaded or loading and it can load (an
+    // archive still opening, or failed and retried, is waited for as the setup would). One that never can (not prepared,
+    // no archive reader) ends a -SCScript route waiting for it.
+    if (!State->ShipOfFailedSetup.IsEmpty() && !Viewer->IsBusy())
+    {
+        const FString& Ship = State->ShipOfFailedSetup;
+        if (!Viewer->GetLoadedEntity().IsEmpty() || !Viewer->GetPendingEntity().IsEmpty())
+        {
+            State->ShipOfFailedSetup.Reset(); // another ship is here: the route runs on it
+        }
+        else if (Viewer->CanLoad(Ship))
+        {
+            if (Viewer->LoadEntity(Ship, Viewer->GetOptions())) UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loading ship=%s (the failed setup's)"), *Ship);
+            State->ShipOfFailedSetup.Reset();
+        }
+        else if (!Viewer->CanReadArchive() && USCViewerSubsystem::CookedShipLevel(Ship).IsEmpty())
+        {
+            State->ShipOfFailedSetup.Reset();
+            Viewer->CancelPendingScript();
+        }
     }
     const FSCCargoScenario& S = State->Scenario;
     if (!S.IsSet()) return;
@@ -254,14 +304,39 @@ void USCCargoSubsystem::TryScenario()
         for (const auto& [Entity, Level] : UUCSettings::Get()->ScenarioCargoLevels)
             if (const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity); E && E->State == FSCCargoBoxLibrary::EState::Failed)
             {
+                // Its level is there but does not hold a usable box: an ordinary prep would keep it.
                 if (UUCSettings::Get()->ScenarioCargoProblem.IsEmpty())
-                    UUCSettings::Get()->ScenarioCargoProblem = FString::Printf(TEXT("the prepared cargo box %s (%s) did not load: %s"), *Entity, *Level, *E->Error);
+                    UUCSettings::Get()->ScenarioCargoProblem = FString::Printf(TEXT("the prepared cargo box %s (%s) did not load: %s: run %s -Force"), *Entity,
+                        *Level, *E->Error, *FUCPrepared::PrepareCommand(UUCSettings::Get()->ResolveScenario()));
                 return;
             }
     if (State->AppliedKinds == 3 || Viewer->IsBusy() || !State->Library.IsSettled()) return;
+    // Without an archive reader a box with no prepared level never comes (a prepared setup's boxes are checked above): a
+    // setup that places one (a count above zero) fails rather than run short.
+    if (!State->bPreparedSetup && !Viewer->CanReadArchive())
+    {
+        TSet<FString> Placed;
+        for (const FSCCargoStock& St : S.Stock)
+            for (const FSCCargoStockEntry& B : St.Boxes) if (B.Count > 0) Placed.Add(B.Entity);
+        for (const FSCCargoScenario::FLoose& L : S.Loose) if (L.Count > 0) Placed.Add(L.Entity);
+        for (const FString& Entity : Placed)
+            if (const FSCCargoBoxLibrary::FEntry* E = State->Library.Find(Entity); E && E->State == FSCCargoBoxLibrary::EState::Failed)
+            {
+                FailScenario(FString::Printf(TEXT("the cargo setup's box %s: %s"), *Entity, *E->Error));
+                return;
+            }
+    }
     // Owners, and the scenario's other vehicles: more instances of its ship, spawned before any stock is placed.
     if (!State->bScenarioVehiclesRequested && Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))
     {
+        // Extra instances and obstacles are imported (not prepared yet: WP-O1-4b-3c): without an archive reader the setup
+        // would run short of them, or wait for ever on a grid of one. (Its ship loaded as before, so a route runs on it.)
+        if (!Viewer->CanReadArchive() && (S.VehicleOwners.Num() > 1 || !S.Obstacles.IsEmpty()))
+        {
+            FailScenario(TEXT("the cargo setup's extra vehicles and obstacles are unavailable in this build"));
+            return;
+        }
+
         State->bScenarioVehiclesRequested = true;
         State->Player = S.Player;
         for (const auto& [Id, Label] : S.Owners) State->OwnerLabels.Add(Id, Label);
@@ -296,6 +371,11 @@ void USCCargoSubsystem::TryScenario()
     if (Viewer->IsSpawningVehicles()) return;
     if (!S.Ship.IsEmpty() && !Viewer->GetLoadedEntity().Equals(S.Ship, ESearchCase::IgnoreCase))
     {
+        if (!UUCSettings::Get()->bScenarioOwnsScene && !Viewer->CanReadArchive() && USCViewerSubsystem::CookedShipLevel(S.Ship).IsEmpty())
+        {
+            FailScenario(FString::Printf(TEXT("the cargo setup's ship %s is not prepared and this build reads no archive"), *S.Ship));
+            return;
+        }
         if (GetWorld()->GetTimeSeconds() - State->LastScenarioWait > 30)
         {
             State->LastScenarioWait = GetWorld()->GetTimeSeconds();

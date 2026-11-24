@@ -6,7 +6,7 @@
 // hull's bounds and slid along what it meets; what it still ends in is counted (Overlaps).
 // Its look (WP-K4a): the art Config/Cargo/drone_art.json names (FSCCargoDroneArt: a skeletal mesh at native size, its
 // centre bone on the actor origin, turned by its yaw offset to face +X, the beam from its beam bone, clips by motion),
-// else the K1d stand-in (/SCBridge/Cargo meshes by soft path, engine basic shapes when missing; logged once). Its
+// else the K1d stand-in (/Game/Cargo meshes by soft path, engine basic shapes when missing; logged once). Its
 // heading is its own (FSCCargoHeading): its bay's in its dock's corridor, else where it (or, carrying as a team, its
 // load) travels, kept while hovering; turning is visual and moves the hull about the emitter, its collision shape
 // covers every heading. Its clips follow its velocity in its own frame (FSCCargoDroneMotion). Its attitude (round 4) is

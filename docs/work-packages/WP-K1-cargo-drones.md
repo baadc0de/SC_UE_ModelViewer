@@ -133,7 +133,7 @@ downloads) in the type scale's sizes. Tokens in one style file (`SCMobiGlasStyle
 Drone (≈ 1 m class, four ducted lift fans, belly tractor emitter, nav lights, MISC/industrial hard-surface language
 matching SC content), drone dock (1.25 m footprint cradle holding the drones), tractor-beam material, grid slot
 highlight (flat lines, not a hologram). Built reproducibly by an editor Python script with Geometry Script
-(`game/scripts/create_cargo_art.py`) into plugin content `plugins/SCBridge/Content/Cargo/` (`/SCBridge/Cargo/`; `/Game/SC/` is gitignored game-derived content); no game-derived files in git. Reference renders of SC
+(`game/scripts/create_cargo_art.py`) into the game's content `game/Content/Cargo/` (`/Game/Cargo/`; the shared plugin's `/SCBridge/Cargo/` until WP-O1-4c-3c; `/Game/SC/` is gitignored game-derived content); no game-derived files in git. Reference renders of SC
 drone geometry (`AEGS_Reclaimer_Drone.cga`, `mining_drone_body_001_a.cga`, `ph_repairdrone.cgf`) may be exported to
 `out/` for study. Also an HTML/SVG mock of the mobiGlas Cargo app at 1920×1080 using the tokens.
 

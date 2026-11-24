@@ -119,7 +119,8 @@ void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
         // No archive reader in this build (a packaged game) fails too: the archive never opens, waiting would hold the queue.
         if (Viewer->GetArchiveState() == ESCArchiveState::Failed || !Viewer->GetClient())
         {
-            Fail(*Next, TEXT("the archive is not available (box packages are exported from Data.p4k)"));
+            Fail(*Next, Viewer->CanReadArchive() ? TEXT("the archive is not available (box packages are exported from Data.p4k)")
+                                                 : TEXT("the box is not prepared and this build reads no archive"));
             return;
         }
         if (Viewer->GetArchiveState() != ESCArchiveState::Ready) return;

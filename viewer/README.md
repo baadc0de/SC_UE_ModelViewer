@@ -410,7 +410,7 @@ SpawnVehicleInstance / DestroyVehicleInstance / GetVehicles / GetVehicleInstance
 
 **Cargo by drones** (WP-K1, [brief](../docs/work-packages/WP-K1-cargo-drones.md),
 [verification/WP-K1.md](verification/WP-K1.md)): cargo grids come from the package (`inventory_containers`), boxes are
-exported box entities, drones are stand-in art (`/SCBridge/Cargo`, rebuilt by `game/scripts/create_cargo_art.py`).
+exported box entities, drones are stand-in art (`/Game/Cargo` in the game, rebuilt by `game/scripts/create_cargo_art.py`).
 Scenarios (`game/Config/Cargo/*.json`, `-SCCargoScenario=<name>`) set the stock, docks and owners:
 
 | Scenario | Host switches | Route |

@@ -18,7 +18,7 @@ LOG="$LOGDIR/$TAG.log"; rm -f "$LOG"
 "$SC_ENGINE/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/viewer/SCViewer.uproject" -game -windowed \
   -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC -nosplash -nop4 -abslog="$SC_REPO/$LOG" -SCScript="$ROUTE" "$@" \
   >/dev/null 2>&1 &
-pid=$! start=$(date +%s) taken=0 status=""
+pid=$! start=$(date +%s) taken=0 cancelled=0 status=""
 shot() { # $1 = shot tag; niri reports a proxy PID, so match the UE window by app id / title
   local wid before after
   wid=$(niri msg windows | awk '/^Window ID/{id=$3} /App ID:|Title:/{ l=tolower($0); if (l ~ /unrealeditor|scviewer/ && l !~ /crash/) {print id; exit} }' | tr -d ':')
@@ -34,6 +34,7 @@ while kill -0 $pid 2>/dev/null; do
     mapfile -t tags < <(grep -o 'SCRIPT_SHOT tag=[^ ]*' "$LOG" | cut -d= -f2)
     while [ "$taken" -lt "${#tags[@]}" ]; do sleep 1; shot "${tags[$taken]}"; taken=$((taken+1)); done
     grep -q 'SCRIPT_DONE' "$LOG" && break
+    grep -q 'Error: SCRIPT_CANCELLED ' "$LOG" && { echo "$TAG: route cancelled (no ship loaded)"; cancelled=1; break; }
   fi
   [ $(( $(date +%s) - start )) -gt "${SC_TIMEOUT:-1200}" ] && { echo "$TAG: timeout"; break; }
   sleep 0.5
@@ -45,3 +46,5 @@ else wait "$pid"; status="exit $?"; fi
 echo "$TAG: $status after $(( $(date +%s) - start )) s"
 pkill -f "CrashReportClient.*$TAG" 2>/dev/null && echo "$TAG: closed a crash reporter (UE crashed)"
 grep -E "SCRIPT|FP_|FIRST_PERSON|VIEWER_LOAD|EXPLORATION |Ensure|Assertion|Fatal" "$LOG" | sed 's/^.*\]\[ *[0-9]*\]//' | cut -c1-400
+grep -q 'Error: SCRIPT_CANCELLED ' "$LOG" 2>/dev/null && cancelled=1 # also when UE exited between polls
+if (( cancelled )); then exit 1; fi

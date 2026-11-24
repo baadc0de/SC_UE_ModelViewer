@@ -311,6 +311,14 @@ public:
     void AdoptPackageVehicle(ASCVehicle* Imported);
     /** The FFI client (null before OpenArchive): WP-K1 exports cargo box packages through it. */
     TSharedPtr<ISCArchive, ESPMode::ThreadSafe> GetClient() const { return Client; }
+    /** Whether this build reads Star Citizen's archive at all: the importer plugin (SCBridgeImport) registers the reader;
+     *  a packaged game has none and plays prepared content only (WP-O1-4c). */
+    bool CanReadArchive() const { return Client.IsValid(); }
+    /** The scene's owner (a game scenario, a cargo setup) failed before its ship came, in a build without an archive
+     *  reader: an unstarted -SCScript route is ended, so it does not run against a ship loaded later. */
+    /** bSceneGoing: the owner removes its ship too (a failed scenario), so a ship loaded or loading now does not keep the
+     *  route (a ship queued by -SCLoad still does). */
+    void CancelPendingScript(bool bSceneGoing = false);
     /** Cache statistics as of the last export/open (no FFI call). */
     const FSCCacheStats& GetCacheStats() const { return CacheStats; }
 

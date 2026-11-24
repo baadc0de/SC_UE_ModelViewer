@@ -176,6 +176,10 @@ void USCMusicSubsystem::Tick(float DeltaTime)
         ResetArchive();
     }
     const auto Client = Viewer->GetClient();
+    // No archive reader in this build (WP-O1-4c): the library never comes; a request (the app, a scenario's music) ends
+    // with that reason instead of waiting.
+    if (!Viewer->CanReadArchive() && bWantCatalogue && !bCatalogueLoaded && Error.IsEmpty())
+        Error = LOCTEXT("NoArchiveReader", "The soundtrack library is unavailable in this build.");
     if (!Client || Viewer->GetArchiveState() != ESCArchiveState::Ready) return;
 
     if (CatalogueTask.IsValid() && CatalogueTask.IsCompleted())

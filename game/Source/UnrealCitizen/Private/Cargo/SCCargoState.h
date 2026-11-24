@@ -393,6 +393,10 @@ struct FSCCargoState
     TArray<FSCCargoJob> Jobs;
     FSCCargoScenario Scenario;
     bool bScenarioTried = false, bScenarioLoadRequested = false;
+    /** A standalone setup that failed before loading its ship (FailScenario): the ship still loads, as it would have, so
+     *  what waits for it (a -SCScript route) runs; only the cargo is gone. */
+    FString ShipOfFailedSetup;
+
     /** The cargo setup is a prepared scenario's (WP-O1-4b-3): its tractor record is the one kept at prep (none kept: the
      *  setup's own values). Not the default fleet a live spawn loads under a scenario without a setup. */
     bool bPreparedSetup = false;

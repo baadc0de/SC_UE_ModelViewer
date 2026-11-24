@@ -34,6 +34,8 @@ TArray<FString> USCCargoSubsystem::ActivityReasons() const
     // The default fleet (live spawning) is busy only while a dock of it waits on a grid that is here.
     if (State->bDefaultFleet ? FleetPending() : State->Scenario.IsSet() && (!State->bScenarioPlaced || (!State->Scenario.Loose.IsEmpty() && !State->bLoosePlaced)))
         Out.Add(TEXT("cargo_scenario"));
+    // A failed standalone setup's ship still to load (as the setup itself would have been busy until then).
+    else if (!State->ShipOfFailedSetup.IsEmpty()) Out.Add(TEXT("cargo_scenario"));
     if (State->Jobs.ContainsByPredicate([](const FSCCargoJob& J) { return J.IsActive(); })) Out.Add(TEXT("cargo_jobs"));
     // Live spawning: box records being read, spawns waiting to be put down.
     if (State->CatalogState == ESCCargoCatalogState::Loading) Out.Add(TEXT("cargo_catalog"));
