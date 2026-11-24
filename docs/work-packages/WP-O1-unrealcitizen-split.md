@@ -350,8 +350,19 @@ library of ours. In stages:
   step. A prepared wave knows where its decoding ends, so a pass and a seek use it from the start; the Ogg finds it while
   decoding, as before. A voice that loops for ever stays until stopped also when its media ends before its loop region
   (none of the 1084 prepared media does; 268 have loop points). Prep format 31.
-- **O1-4c-2** (bus DSP on UE): the bus EQ, Peak Limiter and Meter on UE's signal processing (`Audio::FBiquadFilter`,
-  `Audio::FDynamicsProcessor`, an envelope follower) in place of the Rust kernels.
+- **O1-4c-2** (bus DSP in the plugin): the bus effects no longer call scbridge (`sc_eq`, `sc_limiter`, `sc_meter`); their
+  kernels are `SCAudioBusKernels.h`.
+  - Parametric EQ: UE biquads (`Audio::FBiquadFilter`). A band's Q becomes UE's bandwidth in octaves at its frequency,
+    so pass, notch and peaking bands keep the cookbook's Q forms. UE's shelves have a fixed slope (S = 1); every C2
+    shelf is at 0 dB at the parameters' defaults.
+  - Meter: each 10 ms block's peak or RMS in dB, as the Wwise meter measures, smoothed by UE's envelope follower at one
+    sample per block, with the hold and range rules. Following the samples themselves read the slow ambience meters
+    5-11 dB under the game's (an average, not the peaks).
+  - Peak Limiter: ours, ported to C++ (the look-ahead hold of A1-2: never over the ceiling). UE's dynamics processor
+    let single-sample clicks 11.8 dB over it; owner's decision (2026-11-24): port ours.
+  - Two prepared C2 runs each, before and after: every bus's peak and RMS, every meter's range and the side-chain gain
+    agree within the runs' own spread (`AUDIO_METER`, `AUDIO_MIX_TRACE`). The Rust kernels stay in scbridge until
+    O1-4c-3 reworks its surface.
 - **O1-4c-3** (`SCBridgeImport`): the runtime importer becomes its own module (FFI client, package reader / source, import
   job, processed caches, the Ogg source, `SCBridgeLib`), loaded by the viewer and the game's editor module, not by the
   packaged game; the plugin's cargo art moves to the game's content.

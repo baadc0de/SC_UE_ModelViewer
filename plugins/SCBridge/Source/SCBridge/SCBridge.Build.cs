@@ -15,7 +15,7 @@ public class SCBridge : ModuleRules
         RuntimeDependencies.Add("$(PluginDir)/Resources/StarEngineRender.json");
         // -SCPlayerDemo's built-in route (SCViewerAutomation), in both apps.
         RuntimeDependencies.Add("$(PluginDir)/Resources/Routes/player-demo.txt");
-        PrivateDependencyModuleNames.AddRange(new[] { "Json", "StaticMeshDescription", "RenderCore", "RHI", "PhysicsCore", "Chaos", "ChaosCore", "GeometryCore", "ImageWrapper", "Projects", "Slate", "SlateCore", "InputCore", "ApplicationCore", "Niagara", "NiagaraShader", "XmlParser", "AudioMixer", "AudioExtensions", "Synthesis", "AssetRegistry" });
+        PrivateDependencyModuleNames.AddRange(new[] { "Json", "StaticMeshDescription", "RenderCore", "RHI", "PhysicsCore", "Chaos", "ChaosCore", "GeometryCore", "ImageWrapper", "Projects", "Slate", "SlateCore", "InputCore", "ApplicationCore", "Niagara", "NiagaraShader", "XmlParser", "AudioMixer", "AudioExtensions", "SignalProcessing", "Synthesis", "AssetRegistry" });
         PublicDefinitions.Add("SC_SPIKE=" + (Environment.GetEnvironmentVariable("SC_SPIKE") == "1" ? "1" : "0"));
         PublicDefinitions.Add("SC_SPIKE_RAW_SERIALIZE=" + (Environment.GetEnvironmentVariable("SC_SPIKE_RAW_SERIALIZE") == "1" ? "1" : "0"));
         if (Target.bBuildEditor)

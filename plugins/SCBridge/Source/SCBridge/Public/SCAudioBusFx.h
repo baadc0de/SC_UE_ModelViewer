@@ -6,7 +6,7 @@
 //   values), Meter (ballistics -> the game parameter it writes; a meter that applies the downstream volume measures
 //   after the bus's and its parents' static levels), Peak Limiter — and the bus's output-stage gain curves on
 //   meter-driven parameters (side-chain ducking) applied after the chain; FSCBusDspState holds one effect instance's
-//   kernels (scbridge sc_meter / sc_eq / sc_limiter), built at the instance's Init, never in its audio callback (only a
+//   kernels (SCAudioBusKernels.h, on UE's signal processing), built at the instance's Init, never in its audio callback (only a
 //   later channel-count change rebuilds them); its trace (sc.Audio.MixTrace) records per buffer, in a preallocated
 //   ring, the peaks, the limiter's gain and ratio bound, the meters' values, the side-chain gain and the EQ bands;
 // - USCBusFxPreset / FSCBusFx: the UE submix effect; each instance finds its chain by the preset's unique id.
@@ -20,9 +20,9 @@
 #include "SCAudio.h"
 #include "SCAudioBusFx.generated.h"
 
-struct sc_limiter;
-struct sc_meter;
-struct sc_eq;
+class FSCBusEq;
+class FSCBusLimiter;
+class FSCBusMeter;
 
 /** One game parameter's live value (written on the render thread, read anywhere). */
 struct FSCLiveRtpc
@@ -58,9 +58,9 @@ struct SCBRIDGE_API FSCBusDspState
     int32 Channels = 0;
     struct FKernel
     {
-        sc_meter* Meter = nullptr;
-        sc_eq* Eq = nullptr;
-        sc_limiter* Limiter = nullptr;
+        TSharedPtr<FSCBusMeter> Meter; // (shared: the kernel list is copyable)
+        TSharedPtr<FSCBusEq> Eq;
+        TSharedPtr<FSCBusLimiter> Limiter;
         uint32 EqKey = 0;
         float LastGain = 1.f; // gain slots
         float LastLimiterInPeak = 0.f;

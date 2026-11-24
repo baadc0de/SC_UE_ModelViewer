@@ -1,9 +1,9 @@
-// WP-A1 A1-2: the bus effect chain of SCAudioBusFx.h. Every parameter comes from the manifest; the DSP kernels are
-// scbridge's (sc_limiter, sc_meter, sc_eq) so they are unit-tested in Rust.
+// WP-A1 A1-2: the bus effect chain of SCAudioBusFx.h. Every parameter comes from the manifest; the DSP kernels run on
+// UE's signal processing (SCAudioBusKernels.h, WP-O1-4c-2).
 #include "SCAudioBusFx.h"
 #include "AudioDeviceManager.h"
 #include "AudioMixerDevice.h"
-#include "scbridge.h"
+#include "SCAudioBusKernels.h"
 
 // ------------------------------------------------------------------------------------------------ game parameters
 FSCLiveRtpcRef FSCRtpcBank::Get(const FString& Name, float Default)
@@ -37,15 +37,7 @@ int32 LfeChannel(int32 Channels) { return Channels == 6 || Channels == 8 ? 3 : -
 float Lin(float Db) { return FMath::Pow(10.f, Db / 20.f); }
 } // namespace
 
-FSCBusDspState::~FSCBusDspState()
-{
-    for (FKernel& K : Kernels)
-    {
-        sc_meter_free(K.Meter);
-        sc_eq_free(K.Eq);
-        sc_limiter_free(K.Limiter);
-    }
-}
+FSCBusDspState::~FSCBusDspState() = default;
 
 bool FSCBusDsp::RunsMeter(const FSCAudioBusEffect& Fx)
 {
@@ -133,16 +125,16 @@ TUniquePtr<FSCBusDspState> FSCBusDsp::MakeState(float InRate, int32 InChannels) 
         if (Fx.Kind == TEXT("gain")) K.LastGain = Lin(Fx.GainAt(V));
         if (Fx.Kind == TEXT("meter"))
         {
-            K.Meter = sc_meter_new(uint32(InRate), uint32(InChannels), Fx.Meter.AttackS, Fx.Meter.ReleaseS, Fx.Meter.HoldS, Fx.Meter.MinDb, Fx.Meter.MaxDb, Fx.Meter.bRms ? 1u : 0u,
-                                   Fx.Meter.bInfiniteHold);
+            K.Meter = MakeShared<FSCBusMeter>(InRate, InChannels, Fx.Meter.AttackS, Fx.Meter.ReleaseS, Fx.Meter.HoldS, Fx.Meter.MinDb, Fx.Meter.MaxDb, Fx.Meter.bRms,
+                                              Fx.Meter.bInfiniteHold);
             // A meter that applies the downstream volume measures after this bus's and its parents' levels.
-            if (Fx.Meter.bDownstream) sc_meter_set_offset(K.Meter, DownstreamDb);
+            if (Fx.Meter.bDownstream) K.Meter->SetOffset(DownstreamDb);
         }
         else if (Fx.Kind == TEXT("parametric_eq"))
-            K.Eq = sc_eq_new(uint32(InRate), uint32(InChannels), Fx.bEqProcessLfe ? -1 : Lfe);
+            K.Eq = MakeShared<FSCBusEq>(InRate, InChannels, Fx.bEqProcessLfe ? -1 : Lfe);
         else if (Fx.Kind == TEXT("peak_limiter"))
-            K.Limiter = sc_limiter_new(uint32(InRate), uint32(InChannels), Fx.Limiter.ThresholdDb, Fx.Limiter.Ratio, Fx.Limiter.LookAheadS, Fx.Limiter.ReleaseS,
-                                       Fx.Limiter.OutputDb, Fx.Limiter.bChannelLink, Fx.Limiter.bProcessLfe ? -1 : Lfe);
+            K.Limiter = MakeShared<FSCBusLimiter>(InRate, InChannels, Fx.Limiter.ThresholdDb, Fx.Limiter.Ratio, Fx.Limiter.LookAheadS, Fx.Limiter.ReleaseS,
+                                                  Fx.Limiter.OutputDb, Fx.Limiter.bChannelLink, Fx.Limiter.bProcessLfe ? -1 : Lfe);
     }
     return St;
 }
@@ -223,7 +215,7 @@ void FSCBusDsp::Process(FSCBusDspState& St, float* Data, int32 Frames)
             Ramp(K.LastGain, Lin(S.Fx.GainAt(V))); // the full-band gain at its slot (the LFE gain parameter is not exported)
         else if (K.Meter)
         {
-            const float M = sc_meter_process(K.Meter, Data, size_t(Frames));
+            const float M = K.Meter->Process(Data, Frames);
             if (S.MeterOut) S.MeterOut->Value.store(M, std::memory_order_relaxed);
             if (bTracing && Row.NumMeters < MaxMeters) Row.Meters[Row.NumMeters++] = M;
         }
@@ -241,9 +233,8 @@ void FSCBusDsp::Process(FSCBusDspState& St, float* Data, int32 Frames)
             if (Key != K.EqKey)
             {
                 K.EqKey = Key;
-                for (int32 B = 0; B < 3; ++B)
-                    sc_eq_set_band(K.Eq, uint32(B), uint32(FMath::Max(0, Bands[B].Type)), Bands[B].FrequencyHz, Bands[B].Q, Bands[B].GainDb, Bands[B].bOn);
-                sc_eq_set_output(K.Eq, OutDb);
+                for (int32 B = 0; B < 3; ++B) K.Eq->SetBand(B, FMath::Max(0, Bands[B].Type), Bands[B].FrequencyHz, Bands[B].Q, Bands[B].GainDb, Bands[B].bOn);
+                K.Eq->SetOutput(OutDb);
                 if (bTracing && Row.NumEq < MaxEqSlots)
                 {
                     FTraceRow::FEq& E = Row.Eq[Row.NumEq++];
@@ -251,19 +242,19 @@ void FSCBusDsp::Process(FSCBusDspState& St, float* Data, int32 Frames)
                     for (int32 B = 0; B < 3; ++B) E.Bands[B] = Bands[B];
                 }
             }
-            sc_eq_process(K.Eq, Data, size_t(Frames));
+            K.Eq->Process(Data, Frames);
         }
         else if (K.Limiter && bLimiterOn.load(std::memory_order_relaxed))
         {
-            sc_limiter_stats Stats{};
-            sc_limiter_process(K.Limiter, Data, size_t(Frames), &Stats);
+            FSCBusLimiter::FStats Stats;
+            K.Limiter->Process(Data, Frames, Stats);
             // The ratio bound of this buffer's output: its peaks entered within a look-ahead (this buffer or the last).
-            const float In = FMath::Pow(10.f, Stats.input_peak_db / 20.f);
+            const float In = FMath::Pow(10.f, Stats.InPeakDb / 20.f);
             if (bTracing)
             {
                 Row.LimiterInPeak = In;
-                Row.LimiterOutPeak = FMath::Pow(10.f, Stats.output_peak_db / 20.f);
-                Row.LimiterGainDb = Stats.gain_min_db;
+                Row.LimiterOutPeak = FMath::Pow(10.f, Stats.OutPeakDb / 20.f);
+                Row.LimiterGainDb = Stats.GainMinDb;
                 Row.LimiterBound = LimiterCeilingOf(FMath::Max(In, K.LastLimiterInPeak));
             }
             K.LastLimiterInPeak = In;

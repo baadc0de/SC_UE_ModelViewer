@@ -607,12 +607,13 @@ the buffer size. It runs at its slot in the bus's own chain (`SCAudioBusFx`). Te
 click trains over a loud bed at 64 / 480 / 1024-frame blocks, unchanged passage below the threshold, release, linked /
 unlinked channels, an LFE channel left out, invalid parameters refused); UE `Audio.BusEffects`, `Audio.BusFxInstance`.
 In the game mix it no longer engages: the walk's master input peaks at −11.4 dBFS (limiter gain 0 dB, 0 ratio-bound
-violations in 2,104 buffers).
+violations in 2,104 buffers). (WP-O1-4c-2: the same algorithm in C++, `FSCBusLimiter` in `SCAudioBusKernels.h`, so a
+packaged game needs no library of ours; its cases are `SCBridge.Audio.LimiterKernel`.)
 
 **2. Meter-driven side-chains.** Exported per slot (`buses[].effects[].meter`: v154 `CAkMeterFXParams`, 28 bytes —
 attack, release, min, max, hold, infinite hold, mode, scope, apply-downstream-volume, the written game parameter by ATL
 name). The viewer runs every meter the data enables (not bypassed, not state-dependent, global scope) at its slot
-(`sc_meter`: peak / RMS in 10 ms blocks carried across buffers, attack, hold or infinite hold, release, range; a meter
+(`sc_meter`, since WP-O1-4c-2 `FSCBusMeter`: peak / RMS in 10 ms blocks carried across buffers, attack, hold or infinite hold, release, range; a meter
 applying the downstream volume measures after the bus's and its parents' static levels) and writes its game parameter
 (`FSCRtpcBank`: global, the last write stands; the parameters a scene's meters drive are known before its voices start).
 Every curve on it moves: bus output-stage gains after the chain (relative to the curve at the parameter's default, which
@@ -629,7 +630,8 @@ Other meters in these chains write `DM_ENV_Master_Mix`, `DM_HDR_Mix`, `DM_ENV_Am
 curves on the effect's own parameters (`fx_param_<id>`, scaling, accumulation) and `state_bypass` (state groups that
 switch the slot: `BypassFX` 0x30 with the slot in the high byte). Parametric EQ parameter ids, read off the banks'
 curves: band b's gain `5b+1` (dB-scaled, additive), frequency `5b+2` (log-scaled — 3.0 = 1 kHz, 4.30103 = 20 kHz —
-exclusive), on `5b+4`, output 15; Q `5b+3` by the layout. Bands run as RBJ biquads (`sc_eq`) with their parameters at
+exclusive), on `5b+4`, output 15; Q `5b+3` by the layout. Bands run as RBJ biquads (`sc_eq`; since WP-O1-4c-2 UE's
+`Audio::FBiquadFilter`, `FSCBusEq`, whose shelves have a fixed slope) with their parameters at
 the RTPC values. In force (`AUDIO_BUSFX`, `mix-trace.csv` first rows): 2633160988 high-pass 90 Hz (hangar ambience
 parent), 4091642180 low shelf 390 Hz −5 dB + peak 500 Hz −3 dB Q 6.8 (`ENVP`), 4239495202 high-pass 70 Hz, 2920869659
 high-pass 200 Hz (reverb return), 1952793459 high-pass 20 Hz; the rest at 0 dB. Gain slots now run at their slots
