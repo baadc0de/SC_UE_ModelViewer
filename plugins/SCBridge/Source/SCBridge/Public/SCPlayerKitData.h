@@ -49,7 +49,7 @@ namespace SCTraversal
 /** Every traversal clip a first-person body can ask for on this vehicle or environment: each seat's actions (all of them, a
  *  superset of what its routes use) and each ladder's. Unique, sorted. Read from saved records (a prepared level's too). */
 SCBRIDGE_API TArray<FString> ClipNames(const ASCVehicle& Vehicle);
-/** Read a player_clips package (FSCBridgeClient::ExportPlayerClips) for Gender: each of Names against Bones (body bone name
+/** Read a player_clips package (ISCArchive::ExportPlayerClips) for Gender: each of Names against Bones (body bone name
  *  -> index). A name the package lacks or cannot read fails the read with Error, or with bSkipMissing is left out and listed
  *  in Skipped. */
 SCBRIDGE_API bool ReadClips(const FSCPackageSource& Source, const FString& Gender, const TArray<FString>& Names, const TMap<FString, int32>& Bones,

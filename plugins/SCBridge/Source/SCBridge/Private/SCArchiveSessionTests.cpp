@@ -25,4 +25,25 @@ bool FSCArchivePanicNoticeTest::RunTest(const FString&)
     return true;
 }
 
-#endif
+
+/** WP-O1-4c-3b: the export options mirror (FSCExportOptions, SCArchive.h) defaults to the core's (sc_default_options), so
+ *  the view options' defaults need no archive library. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCArchiveExportOptionsDefaultsTest, "SCBridge.Archive.ExportOptionsDefaults",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCArchiveExportOptionsDefaultsTest::RunTest(const FString&)
+{
+    const sc_options Core = FSCBridgeClient::DefaultOptions();
+    const sc_options Mirror = FSCBridgeClient::ToFfi(FSCExportOptions());
+    TestEqual(TEXT("lod"), Mirror.lod, Core.lod);
+    TestEqual(TEXT("mip"), Mirror.mip, Core.mip);
+    TestEqual(TEXT("material_mode"), Mirror.material_mode, Core.material_mode);
+    TestEqual(TEXT("attachments"), Mirror.attachments, Core.attachments);
+    TestEqual(TEXT("interior"), Mirror.interior, Core.interior);
+    TestEqual(TEXT("lights"), Mirror.lights, Core.lights);
+    TestEqual(TEXT("shields"), Mirror.shields, Core.shields);
+    TestEqual(TEXT("animations"), Mirror.animations, Core.animations);
+    TestEqual(TEXT("default_pose"), Mirror.default_pose, Core.default_pose);
+    TestEqual(TEXT("collision_reserved"), Mirror.collision_reserved, Core.collision_reserved);
+    return true;
+}
+#endif // WITH_DEV_AUTOMATION_TESTS

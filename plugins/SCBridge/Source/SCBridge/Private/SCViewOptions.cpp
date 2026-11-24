@@ -1,6 +1,6 @@
-// USCViewOptions: core defaults, FFI mapping, hashing.
+// USCViewOptions: core defaults, the archive's export options, hashing.
 #include "SCViewOptions.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "Misc/SecureHash.h"
 
 USCViewOptions::USCViewOptions()
@@ -9,18 +9,18 @@ USCViewOptions::USCViewOptions()
 }
 void USCViewOptions::ResetToDefaults()
 {
-    const sc_options D = FSCBridgeClient::DefaultOptions();
-    Lod = int32(D.lod);
-    Mip = int32(D.mip);
-    MaterialMode = D.material_mode == SC_MATERIAL_COLORS ? ESCMaterialMode::Colors
-                   : D.material_mode == SC_MATERIAL_NONE ? ESCMaterialMode::None
-                                                         : ESCMaterialMode::Textures;
-    bAttachments = D.attachments != 0;
-    bInterior = D.interior != 0;
-    bLights = D.lights != 0;
-    bShields = D.shields != 0;
-    bAnimations = D.animations != 0;
-    bDefaultPose = D.default_pose != 0;
+    const FSCExportOptions D; // the core's defaults
+    Lod = int32(D.Lod);
+    Mip = int32(D.Mip);
+    MaterialMode = D.MaterialMode == FSCExportOptions::MaterialColors ? ESCMaterialMode::Colors
+                   : D.MaterialMode == FSCExportOptions::MaterialNone ? ESCMaterialMode::None
+                                                                      : ESCMaterialMode::Textures;
+    bAttachments = D.Attachments != 0;
+    bInterior = D.Interior != 0;
+    bLights = D.Lights != 0;
+    bShields = D.Shields != 0;
+    bAnimations = D.Animations != 0;
+    bDefaultPose = D.DefaultPose != 0;
     bCollision = true;
 }
 void USCViewOptions::CopyFrom(const USCViewOptions* Other)
@@ -37,21 +37,20 @@ void USCViewOptions::CopyFrom(const USCViewOptions* Other)
     bDefaultPose = Other->bDefaultPose;
     bCollision = Other->bCollision;
 }
-void USCViewOptions::ToFfi(sc_options& Out) const
+void USCViewOptions::ToExportOptions(FSCExportOptions& Out) const
 {
-    Out = FSCBridgeClient::DefaultOptions();
-    Out.lod = uint32(FMath::Max(0, Lod));
-    Out.mip = uint32(FMath::Max(0, Mip));
-    Out.material_mode = MaterialMode == ESCMaterialMode::Colors ? SC_MATERIAL_COLORS
-                        : MaterialMode == ESCMaterialMode::None ? SC_MATERIAL_NONE
-                                                                : SC_MATERIAL_TEXTURES;
-    Out.attachments = bAttachments;
-    Out.interior = bInterior;
-    Out.lights = bLights;
-    Out.shields = bShields;
-    Out.animations = bAnimations;
-    Out.default_pose = bDefaultPose;
-    Out.collision_reserved = 0;
+    Out = FSCExportOptions();
+    Out.Lod = uint32(FMath::Max(0, Lod));
+    Out.Mip = uint32(FMath::Max(0, Mip));
+    Out.MaterialMode = MaterialMode == ESCMaterialMode::Colors ? FSCExportOptions::MaterialColors
+                       : MaterialMode == ESCMaterialMode::None ? FSCExportOptions::MaterialNone
+                                                               : FSCExportOptions::MaterialTextures;
+    Out.Attachments = bAttachments;
+    Out.Interior = bInterior;
+    Out.Lights = bLights;
+    Out.Shields = bShields;
+    Out.Animations = bAnimations;
+    Out.DefaultPose = bDefaultPose;
 }
 FString USCViewOptions::GetHash() const
 {

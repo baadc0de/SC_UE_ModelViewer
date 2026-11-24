@@ -22,7 +22,6 @@
 #include "Misc/Parse.h"
 #include "RenderingThread.h"
 #include "UObject/UObjectIterator.h"
-#include "scbridge.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSCVehicles, Log, All);
 
@@ -533,8 +532,8 @@ void FSCVehicleInstances::Start(FInstance& I)
         Fail(I, TEXT("the entity has no retained import and the archive is not open (packages are exported from Data.p4k)"));
         return;
     }
-    sc_options Ffi = FSCBridgeClient::DefaultOptions();
-    if (Viewer.GetOptions()) Viewer.GetOptions()->ToFfi(Ffi);
+    FSCExportOptions Ffi;
+    if (Viewer.GetOptions()) Viewer.GetOptions()->ToExportOptions(Ffi);
     Progress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
     Export = Viewer.GetClient()->ExportDecomposed(I.Info.Entity, Ffi, Progress.ToSharedRef());
     I.Info.State = ESCVehicleInstanceState::Exporting;

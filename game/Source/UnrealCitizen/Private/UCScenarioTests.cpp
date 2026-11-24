@@ -4,7 +4,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "SCSceneManifest.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
@@ -302,7 +302,7 @@ bool FUCPreparedLevelsTest::RunTest(const FString&)
     TestNotEqual(TEXT("... other weapons"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a")}, true), Body);
     TestNotEqual(TEXT("... without spares"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b")}, false), Body);
     TestEqual(TEXT("... no gender: the one the export asks for"), USCViewerSubsystem::PlayerLevelPath(FString(), FString(), {}, true),
-              USCViewerSubsystem::PlayerLevelPath(FSCBridgeClient::DefaultPlayerGender, FString(), {}, true));
+              USCViewerSubsystem::PlayerLevelPath(ISCArchive::DefaultPlayerGender, FString(), {}, true));
     TestEqual(TEXT("... a weapon named twice"), USCViewerSubsystem::PlayerLevelPath(TEXT("female"), TEXT("Data/Scripts/L.xml"), {TEXT("a"), TEXT("b"), TEXT("A")}, true), Body);
     TestEqual(TEXT("a ship"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2")), FString(TEXT("/Game/SC/Ships/Maps/CRUS_Starlifter_C2")));
     TestEqual(TEXT("a ship with a paint"), USCViewerSubsystem::ShipLevelPath(TEXT("CRUS_Starlifter_C2"), TEXT("crus.starlifter-pirate")),

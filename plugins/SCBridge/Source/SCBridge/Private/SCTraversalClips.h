@@ -1,7 +1,7 @@
 // Clip-only archive request shared by the character's authored traversal actions.
 #pragma once
 
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "SCPlayerAnimator.h"
 
 class USCPlayerBodyComponent;

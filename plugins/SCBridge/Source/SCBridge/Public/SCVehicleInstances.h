@@ -7,7 +7,7 @@
 #include "CoreMinimal.h"
 #include "SCPackageSource.h"
 #include "Tasks/Task.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 
 class AActor;
 class UWorld;

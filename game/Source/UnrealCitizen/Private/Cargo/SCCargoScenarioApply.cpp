@@ -164,7 +164,7 @@ void USCCargoSubsystem::TryScenario()
         // The client exists while the archive is still opening (a prepared scenario's ship can be in the scene first): a
         // query then would answer "no archive" and the scenario's copy would stay for the session, so it waits.
         if (Viewer->GetArchiveState() == ESCArchiveState::Opening) return;
-        const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe> Client =
+        const TSharedPtr<ISCArchive, ESPMode::ThreadSafe> Client =
             Viewer->GetArchiveState() == ESCArchiveState::Ready ? Viewer->GetClient() : nullptr;
         const FString Record = !S.Drone.TractorRecord.IsEmpty() ? S.Drone.TractorRecord : S.Drone.TractorRecordGuid;
         if (!Client || Record.IsEmpty())

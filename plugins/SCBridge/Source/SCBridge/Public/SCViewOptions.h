@@ -40,6 +40,6 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Options") FString GetHash() const;
     /** Short human summary, e.g. "LOD 1 · mip 2 · textures · interior · lights · anim · collision". */
     UFUNCTION(BlueprintPure, Category = "SC|Options") FString Describe() const;
-    /** Fill the FFI struct (collision_reserved stays 0). */
-    void ToFfi(struct sc_options& Out) const;
+    /** The archive's export options for these view options. */
+    void ToExportOptions(struct FSCExportOptions& Out) const;
 };

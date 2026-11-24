@@ -6,7 +6,7 @@
 #pragma once
 #include "CoreMinimal.h"
 
-class FSCBridgeClient;
+class ISCArchive;
 struct FSCCargoDroneDefinition;
 struct FSCTextResult;
 
@@ -29,7 +29,7 @@ struct UNREALCITIZEN_API FSCCargoFxMapping
     static bool Parse(const FString& Json, FSCCargoFxMapping& Out);
     /** At prep (a commandlet: blocks, pumping the game thread for the client's answers): the hit of Drone and the contacts
      *  of Entities. False with Error when MaterialEffects.xml cannot be read. */
-    static bool Resolve(FSCBridgeClient& Client, const FSCCargoDroneDefinition& Drone, const TArray<FString>& Entities, FSCCargoFxMapping& Out,
+    static bool Resolve(ISCArchive& Client, const FSCCargoDroneDefinition& Drone, const TArray<FString>& Entities, FSCCargoFxMapping& Out,
                         FString& Error);
 
     // The pure steps (shared with FSCCargoFx).

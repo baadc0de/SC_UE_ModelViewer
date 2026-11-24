@@ -5,140 +5,62 @@
 #include "Tasks/Task.h"
 #include "scbridge.h"
 #include <atomic>
-#include "SCBridgeClient.generated.h"
+#include "SCArchive.h"
 
 class FJsonObject;
 
-/** One sc_search_entities hit (core EntityHit JSON). */
-USTRUCT(BlueprintType)
-struct SCBRIDGE_API FSCEntityHit
-{
-    GENERATED_BODY()
-    /** Exact DataCore class name, the export key. */
-    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Name;
-    UPROPERTY(BlueprintReadOnly, Category = "SC") FString DisplayName;
-    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Category;
-    UPROPERTY(BlueprintReadOnly, Category = "SC") FString GeometryPath;
-    UPROPERTY(BlueprintReadOnly, Category = "SC") FString Guid;
-};
-
-/** Export progress shared by the FFI callback (any thread) and the game thread; also carries the cancel request. */
-class SCBRIDGE_API FSCExportProgress
-{
-public:
-    void Report(const char* Phase, uint64 Done, uint64 Total);
-    FString GetPhase() const;
-    float GetFraction() const { return float(Permille.load()) / 1000.f; }
-    void RequestCancel() { bCancel = true; }
-    bool IsCancelRequested() const { return bCancel; }
-    /** sc_progress_cb thunk; User is an FSCExportProgress*. Returns nonzero to cancel. */
-    static int Callback(const char* Phase, uint64_t Done, uint64_t Total, void* User);
-
-private:
-    mutable FCriticalSection Lock;
-    FString Phase;
-    std::atomic<uint32> Permille{0};
-    std::atomic<bool> bCancel{false};
-};
-
-struct SCBRIDGE_API FSCCacheStats
-{
-    bool bEnabled = false, bLastHit = false;
-    uint64 Bytes = 0, Entries = 0, CapBytes = 0;
-};
-struct SCBRIDGE_API FSCOpenResult
-{
-    bool bOK = false;
-    FText Error;
-    FString ArchiveBuildId;
-    double Seconds = 0;
-    bool bIndexCacheHit = false;
-    FSCCacheStats Cache; // read by the open worker under the handle lock (the game thread never waits for it)
-};
-struct SCBRIDGE_API FSCSearchResult
-{
-    FString Query;
-    TArray<FSCEntityHit> Hits;
-    FText Error;
-    bool bPanicked = false;
-    /** Archive generation the search was issued in (set by the host; results of older generations are dropped). */
-    uint32 Generation = 0;
-    double Seconds = 0;
-};
-struct SCBRIDGE_API FSCExportResult
-{
-    bool bOK = false, bCancelled = false, bPanicked = false;
-    FText Error;
-    TArray64<uint8> Tar;
-    double Seconds = 0;
-    FSCCacheStats Cache; // after the export: bLastHit is the package-cache hit of this export
-};
-struct SCBRIDGE_API FSCTextResult
-{
-    bool bOK = false, bPanicked = false;
-    FString Json;
-    FText Error;
-};
-
-struct FSCMusicBytesResult
-{
-    TSharedPtr<const TArray<uint8>, ESPMode::ThreadSafe> Ogg;
-    FText Error;
-};
-
-class SCBRIDGE_API FSCBridgeClient : public TSharedFromThis<FSCBridgeClient, ESPMode::ThreadSafe>
+/** ISCArchive over the archive library (scbridge.h). */
+class SCBRIDGE_API FSCBridgeClient : public ISCArchive
 {
 public:
     FSCBridgeClient() = default;
-    ~FSCBridgeClient();
+    virtual ~FSCBridgeClient() override;
     FSCBridgeClient(const FSCBridgeClient&) = delete;
     FSCBridgeClient& operator=(const FSCBridgeClient&) = delete;
 
     /** Empty P4k auto-discovers the install; empty CacheDir disables the cache. CacheDir must be absolute. */
-    UE::Tasks::TTask<FSCOpenResult> Open(const FString& P4k, const FString& CacheDir);
-    UE::Tasks::TTask<FSCSearchResult> Search(const FString& Query, int32 Limit);
-    UE::Tasks::TTask<FSCTextResult> ClipCatalogue(const FString& Entity);
+    virtual UE::Tasks::TTask<FSCOpenResult> Open(const FString& P4k, const FString& CacheDir) override;
+    virtual UE::Tasks::TTask<FSCSearchResult> Search(const FString& Query, int32 Limit) override;
+    virtual UE::Tasks::TTask<FSCTextResult> ClipCatalogue(const FString& Entity) override;
     /** The tar is copied out of the FFI blob (freed before return). Cancel through Progress. */
-    UE::Tasks::TTask<FSCExportResult> ExportDecomposed(const FString& Entity, const sc_options& Options,
-                                                      TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    virtual UE::Tasks::TTask<FSCExportResult> ExportDecomposed(const FString& Entity, const FSCExportOptions& Options,
+                                                      TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress) override;
     /** Game environment (object container) package: sc_export_environment_mem; same rules as ExportDecomposed. */
-    UE::Tasks::TTask<FSCExportResult> ExportEnvironment(const FString& Socpak, const sc_options& Options,
-                                                       TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    virtual UE::Tasks::TTask<FSCExportResult> ExportEnvironment(const FString& Socpak, const FSCExportOptions& Options,
+                                                       TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress) override;
     /** JSON array of object-container paths matching every term of Query (sc_search_environments). */
-    UE::Tasks::TTask<FSCTextResult> SearchEnvironments(const FString& Query, int32 Limit);
+    virtual UE::Tasks::TTask<FSCTextResult> SearchEnvironments(const FString& Query, int32 Limit) override;
     /** The viewer's pick lists, chosen from game data (sc_viewer_catalog; FSCViewerCatalog::Parse reads the JSON). For
      *  the archive session open when called: when another archive has been opened by the time it runs, it does not scan. */
-    UE::Tasks::TTask<FSCTextResult> ViewerCatalog();
+    virtual UE::Tasks::TTask<FSCTextResult> ViewerCatalog() override;
     /** One DataCore record as JSON (sc_datacore_record): NameOrGuid is `Type.Name`, a bare record name (exact,
      *  case-insensitive) or a GUID. Objects carry `__type`; references are record GUID strings (look them up the
      *  same way); `__record_name` / `__record_id` name the record. No match or an ambiguous bare name fails. */
-    UE::Tasks::TTask<FSCTextResult> DataCoreRecord(const FString& NameOrGuid);
+    virtual UE::Tasks::TTask<FSCTextResult> DataCoreRecord(const FString& NameOrGuid) override;
     /** The same, with OnDone called on the game thread. */
-    void DataCoreRecord(const FString& NameOrGuid, TFunction<void(const FSCTextResult&)> OnDone);
+    virtual void DataCoreRecord(const FString& NameOrGuid, TFunction<void(const FSCTextResult&)> OnDone) override;
     /** An archive file as UTF-8 XML text (sc_p4k_read_xml: binary CryXML converted, element text kept); in Json.
      *  OnDone on the game thread. */
-    void P4kReadXml(const FString& Path, TFunction<void(const FSCTextResult&)> OnDone);
+    virtual void P4kReadXml(const FString& Path, TFunction<void(const FSCTextResult&)> OnDone) override;
     /** A MaterialEffects FXLib entry `<FXLib>:<effect>` as JSON (sc_material_effect: its particle effect references,
      *  audio, random groups). OnDone on the game thread. */
-    void MaterialEffect(const FString& LibraryAndEffect, TFunction<void(const FSCTextResult&)> OnDone);
+    virtual void MaterialEffect(const FString& LibraryAndEffect, TFunction<void(const FSCTextResult&)> OnDone) override;
     /** Player kit (scbridge_export_player_request, PlayerRequest JSON): empty Gender = male, empty Loadout = the
      *  exporter's default loadout, empty Weapons = every loadout weapon; bSpareAttachments puts each kept weapon's
      *  default attachments (its magazine) into the wearer's empty storage ports. */
-    /** The gender ExportPlayer asks for when none is given. */
-    static constexpr const TCHAR* DefaultPlayerGender = TEXT("male");
-    UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments,
-                                                  TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
+    virtual UE::Tasks::TTask<FSCExportResult> ExportPlayer(const FString& Gender, const FString& Loadout, const TArray<FString>& Weapons, bool bSpareAttachments,
+                                                  TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress) override;
     /** The archive's authored soundtrack catalogue and one selected Ogg cue. */
-    UE::Tasks::TTask<FSCTextResult> MusicCatalogue();
-    UE::Tasks::TTask<FSCMusicBytesResult> MusicRead(const FString& CueId);
+    virtual UE::Tasks::TTask<FSCTextResult> MusicCatalogue() override;
+    virtual UE::Tasks::TTask<FSCMusicBytesResult> MusicRead(const FString& CueId) override;
     /** Blocking; waits for a running export (host lock). */
     /** Clip-only player actions, including seat transitions. */
-    UE::Tasks::TTask<FSCExportResult> ExportPlayerClips(const FString& Gender, const TArray<FString>& Clips,
-        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress);
-    FSCCacheStats CacheStats();
-    bool IsOpen() const;
+    virtual UE::Tasks::TTask<FSCExportResult> ExportPlayerClips(const FString& Gender, const TArray<FString>& Clips,
+        TSharedRef<FSCExportProgress, ESPMode::ThreadSafe> Progress) override;
+    virtual FSCCacheStats CacheStats() override;
+    virtual bool IsOpen() const override;
     /** True once after any call hit SC_STATUS_PANIC (the handle is already closed); the host must reopen. */
-    bool TakePanic(FText& OutError);
+    virtual bool TakePanic(FText& OutError) override;
 #if WITH_DEV_AUTOMATION_TESTS
     /** Tests: a panic notice as FailLocked leaves it (the handle is not touched). */
     void NotePanicForTest(const FText& Error)
@@ -150,6 +72,8 @@ public:
 #endif
     /** Core defaults (sc_default_options); no handle needed. */
     static sc_options DefaultOptions();
+    /** Options as the library takes them. */
+    static sc_options ToFfi(const FSCExportOptions& Options);
 
 private:
     FText LastError(sc_status Status) const; // caller holds HandleLock

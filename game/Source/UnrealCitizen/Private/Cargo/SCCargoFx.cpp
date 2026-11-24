@@ -6,7 +6,7 @@
 #include "Serialization/JsonWriter.h"
 #include "Cargo/SCCargoContainer.h"
 #include "Cargo/SCCargoSubsystem.h"
-#include "SCBridgeClient.h"
+#include "SCArchive.h"
 #include "SCCargoState.h"
 #include "SCFxNames.h"
 #include "SCVehicle.h"
@@ -166,7 +166,7 @@ bool FSCCargoFxMapping::Parse(const FString& Json, FSCCargoFxMapping& Out)
             if (Value && Value->Type == EJson::Object) Effect(Value->AsObject(), Out.Contacts.Add(FString(Entity)));
     return true;
 }
-bool FSCCargoFxMapping::Resolve(FSCBridgeClient& Client, const FSCCargoDroneDefinition& Drone, const TArray<FString>& Entities, FSCCargoFxMapping& Out,
+bool FSCCargoFxMapping::Resolve(ISCArchive& Client, const FSCCargoDroneDefinition& Drone, const TArray<FString>& Entities, FSCCargoFxMapping& Out,
                                 FString& Error)
 {
     Out = FSCCargoFxMapping();
@@ -256,7 +256,7 @@ UNiagaraSystem* FSCCargoFx::Load(const FString& Reference, const TCHAR* What)
     return System;
 }
 
-void FSCCargoFx::Start(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone)
+void FSCCargoFx::Start(const TSharedPtr<ISCArchive, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone)
 {
     const FString Key = Drone.BeamEffect + Drone.MuzzleEffect + Drone.HitEffectName;
     if (Key == StartedFor && !Key.IsEmpty()) return;
@@ -294,7 +294,7 @@ void FSCCargoFx::Start(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& I
     });
 }
 
-void FSCCargoFx::StartPrepared(const TSharedPtr<FSCBridgeClient, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone,
+void FSCCargoFx::StartPrepared(const TSharedPtr<ISCArchive, ESPMode::ThreadSafe>& InClient, const FSCCargoDroneDefinition& Drone,
                                const FSCCargoFxMapping& Mapping)
 {
     // The beam and the muzzle as Start sets them (the tractor record's references), the hit and the contacts from the mapping;

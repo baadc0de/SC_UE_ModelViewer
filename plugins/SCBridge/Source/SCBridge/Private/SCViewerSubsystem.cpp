@@ -96,7 +96,7 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Super::Initialize(Collection);
     Options = NewObject<USCViewOptions>(this, TEXT("ViewOptions"));
     LoadOptions = NewObject<USCViewOptions>(this, TEXT("LoadOptions"));
-    Client = MakeShared<FSCBridgeClient, ESPMode::ThreadSafe>();
+    Client = ISCArchive::Create();
     CacheDir = USCViewerSettings::Get()->ResolveCacheDir();
     if (!CacheDir.IsEmpty())
         ProcessedCache = MakeShared<FSCProcessedCache, ESPMode::ThreadSafe>(CacheDir / TEXT("processed"),
@@ -442,7 +442,7 @@ FString USCViewerSubsystem::PlayerLevelPath(const FString& Gender, const FString
     for (const FString& Weapon : Weapons)
         if (const FString W = Weapon.TrimStartAndEnd().ToLower(); !W.IsEmpty()) Kept.AddUnique(W);
     Kept.Sort();
-    const FString Sex = Gender.TrimStartAndEnd().IsEmpty() ? FString(FSCBridgeClient::DefaultPlayerGender) : Gender.TrimStartAndEnd().ToLower();
+    const FString Sex = Gender.TrimStartAndEnd().IsEmpty() ? FString(ISCArchive::DefaultPlayerGender) : Gender.TrimStartAndEnd().ToLower();
     // The exporter reads a loadout under Data/ whether or not the path names it: one loadout, one key.
     FString Path = Loadout.Replace(TEXT("\\"), TEXT("/")).TrimStartAndEnd().ToLower();
     if (!Path.IsEmpty() && !Path.StartsWith(TEXT("data/"))) Path = TEXT("data/") + Path;
@@ -693,9 +693,9 @@ void USCViewerSubsystem::StepEnvironment()
         {
             if (ArchiveState != ESCArchiveState::Ready || !Client) return; // wait for the archive
             bEnvironmentPending = false;
-            sc_options Ffi;
-            LoadOptions->ToFfi(Ffi);
-            Ffi.mip = FMath::Max<uint32>(Ffi.mip, 1u); // environments: half-resolution textures (tar under 2 GB)
+            FSCExportOptions Ffi;
+            LoadOptions->ToExportOptions(Ffi);
+            Ffi.Mip = FMath::Max<uint32>(Ffi.Mip, 1u); // environments: half-resolution textures (tar under 2 GB)
             EnvProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
             EnvExport = Client->ExportEnvironment(EnvironmentFolder, Ffi, EnvProgress.ToSharedRef());
             EnvArchiveGeneration = ArchiveGeneration;
@@ -846,8 +846,8 @@ bool USCViewerSubsystem::StartLoad(const FString& Entity, USCViewOptions* InOpti
         UE_LOG(LogSCViewer, Display, TEXT("VIEWER_LOAD_COOKED entity=%s level=%s"), *Entity, *Cooked);
         return true;
     }
-    sc_options Ffi;
-    LoadOptions->ToFfi(Ffi);
+    FSCExportOptions Ffi;
+    LoadOptions->ToExportOptions(Ffi);
     ExportProgress = MakeShared<FSCExportProgress, ESPMode::ThreadSafe>();
     ExportTask = Client->ExportDecomposed(Entity, Ffi, ExportProgress.ToSharedRef());
     Phase = ESCLoadPhase::Exporting;
@@ -1339,7 +1339,7 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
 void USCViewerSubsystem::PollClientPanic()
 {
     // While an open is in progress a pending notice is left alone: the open retires the replaced session's notice
-    // itself (FSCBridgeClient::Open), so one still pending once its result is applied belongs to the new session.
+    // itself (ISCArchive::Open), so one still pending once its result is applied belongs to the new session.
     FText Error;
     if (ArchiveState == ESCArchiveState::Opening || !Client || !Client->TakePanic(Error)) return;
     ArchiveState = ESCArchiveState::Failed;
