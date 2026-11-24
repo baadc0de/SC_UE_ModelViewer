@@ -2,6 +2,7 @@
 // structs: ports, stowed weapons, resolved Mannequin motion states and blend spaces. No UObjects, no game names.
 // A prepared player body saves them field by field (SCPlayerKitData.cpp): a field added here is added there too.
 #pragma once
+#include "SCLights.h"
 #include "CoreMinimal.h"
 
 class FJsonObject;
@@ -129,7 +130,7 @@ struct SCBRIDGE_API FSCBlendSpace
 };
 
 /** The game's personal light (`player.flashlights[]`: a loadout item's SCItemFlashlightParams; the worn helmet in LIVE): the
- *  split the local player sees (`localPlayerParams`), as authored in native units. FSCLightImporter::FlashlightSettings maps it. */
+ *  split the local player sees (`localPlayerParams`), as authored in native units. FSCLights::FlashlightSettings maps it. */
 struct SCBRIDGE_API FSCFlashlight
 {
     FString Entity, Port;

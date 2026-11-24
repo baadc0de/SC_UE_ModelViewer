@@ -23,7 +23,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "SCVehicle.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCLift.h"
 #include "SCRigComponent.h"
 #include "SCAnimImporter.h"
@@ -436,7 +436,7 @@ bool FSCButtonPanelTest::RunTest(const FString&)
         S.GroupEntityId = Group;
         S.Interior = 0;
         S.Json = ParseJson(Json);
-        FSCLightImporter::AuthorStates(S); // as the import does
+        FSCLights::AuthorStates(S); // as the import does
         V->LightStates.Add(S);
         return L;
     };

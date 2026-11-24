@@ -16,7 +16,7 @@
 #include "Engine/World.h"
 #include "UObject/UObjectIterator.h"
 
-TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Point, const AActor* Ignore, int32 Top, uint8 ReceiverChannels)
+TArray<FString> FSCLights::Probe(const UWorld* World, const FVector& Point, const AActor* Ignore, int32 Top, uint8 ReceiverChannels)
 {
     struct FRow { double Lux; FString Text; };
     TArray<FRow> Rows;
@@ -92,7 +92,7 @@ TArray<FString> FSCLightImporter::Probe(const UWorld* World, const FVector& Poin
     return Out;
 }
 
-bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
+bool FSCLights::Verify(ASCVehicle* Vehicle)
 {
     struct FExpected
     {
@@ -108,12 +108,12 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
     TSet<FString> Textures;
     auto Collect = [&](const FSCSceneInstance& Instance) {
         // The importer's own rules decide which records become components and where the shadow quartile lies.
-        const double Threshold = FSCLightImporter::ShadowRadiusThreshold(Instance.LightJson);
+        const double Threshold = FSCLights::ShadowRadiusThreshold(Instance.LightJson);
         for (const auto& Text : Instance.LightJson)
         {
             TSharedPtr<FJsonObject> J;
             if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), J) || !J) continue;
-            const UClass* Class = FSCLightImporter::ComponentClass(J);
+            const UClass* Class = FSCLights::ComponentClass(J);
             if (!Class) continue;
             const bool bLocal = Class->IsChildOf(ULocalLightComponent::StaticClass());
             FString State;
@@ -128,7 +128,7 @@ bool FSCLightImporter::Verify(ASCVehicle* Vehicle)
                 if ((*States)->TryGetObjectField(State, Authored)) Selected = *Authored;
             }
             // The importer's intensity rule (authored light model, else the exporter's proxy) decides what is lit.
-            const double Intensity = FSCLightImporter::StateCandela(J, Selected);
+            const double Intensity = FSCLights::StateCandela(J, Selected);
             FString Gobo;
             J->TryGetStringField(TEXT("projector_texture"), Gobo);
             if (!Gobo.IsEmpty()) Textures.Add(Gobo);

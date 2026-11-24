@@ -1,5 +1,6 @@
 // USCCookLibrary: environment -> persistent level actor with pooled assets (WP-C1).
 #include "SCCookLibrary.h"
+#include "SCLights.h"
 #include "SCRigAssets.h"
 #include "SCLift.h"
 #include "SCRigComponent.h"
@@ -365,7 +366,7 @@ bool USCCookLibrary::CookEnvironment(ASCVehicle* Environment, const FString& Roo
     auto Pooled = [&Cook](TObjectPtr<UTexture2D>& Texture) {
         if (UObject** Asset = Texture ? Cook.Remap.Find(Texture) : nullptr) Texture = Cast<UTexture2D>(*Asset);
     };
-    // The light cookies a later light function is made from (a personal light's, FSCLightImporter::GoboLightFunction).
+    // The light cookies a later light function is made from (a personal light's, FSCLights::GoboLightFunction).
     for (auto& [Path, Texture] : Environment->GoboTextures) Pooled(Texture);
     for (TArray<FSCFloorPanel>* Panels : {&Environment->FloorPanels, &Environment->DoorPanelLocks})
         for (FSCFloorPanel& Panel : *Panels)

@@ -1,6 +1,7 @@
 // Synthetic animation basis, routing, skin buffer, and projector regressions.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCClipCatalog.h"
 #include "SCAnimImporter.h"
 #include "SCSkeletonBuilder.h"
 #include "SCVehicle.h"
@@ -16,23 +17,23 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCRigMath, "SCBridge.Rig.MathAndRouting",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCRigMath::RunTest(const FString&)
 {
-    TestEqual(TEXT("standard CRC32 lower UTF8"), FSCAnimImporter::BoneHash(TEXT("123456789")), uint32(0xcbf43926));
-    TestEqual(TEXT("source case is significant (exporter CRC32)"), FSCAnimImporter::BoneHash(TEXT("Canopy")), uint32(0x2C83BDF));
+    TestEqual(TEXT("standard CRC32 lower UTF8"), FSCClipSampling::BoneHash(TEXT("123456789")), uint32(0xcbf43926));
+    TestEqual(TEXT("source case is significant (exporter CRC32)"), FSCClipSampling::BoneHash(TEXT("Canopy")), uint32(0x2C83BDF));
     const FQuat Q(FVector(1, 2, 3).GetSafeNormal(), 1.2);
     const FVector V(2, 3, 4);
     // Independent native Y-up fixture: the exporter swaps native (x,y,z) to (x,-z,y).
     const FVector Native(2, 3, 4);
     TestTrue(TEXT("sidecar undoes exporter swap before GLB conversion"),
-             FSCAnimImporter::SidecarPosition(FVector(2, -4, 3)).Equals(FSCMeshImporter::Position(Native), 1.e-8));
+             FSCClipSampling::SidecarPosition(FVector(2, -4, 3)).Equals(FSCMeshImporter::Position(Native), 1.e-8));
     const FQuat NativeQ(FVector(1, 2, 3).GetSafeNormal(), 0.7);
     const FQuat SidecarQ(NativeQ.X, -NativeQ.Z, NativeQ.Y, NativeQ.W);
     const FQuat ExpectedQ(FSCMeshImporter::Transform(FTransform(NativeQ).ToMatrixWithScale()));
     TestTrue(TEXT("sidecar rotation agrees with independent native GLB matrix"),
-             FSCAnimImporter::SidecarRotation(SidecarQ).AngularDistance(ExpectedQ) < 1.e-7);
-    TestTrue(TEXT("rotation and position bases agree"), FSCAnimImporter::SidecarRotation(Q)
-                                                            .RotateVector(FSCAnimImporter::SidecarPosition(V))
-                                                            .Equals(FSCAnimImporter::SidecarPosition(Q.RotateVector(V)), 1.e-5));
-    TestTrue(TEXT("hemisphere avoids zero quaternion"), FSCAnimImporter::LinearRotation(Q, Q * -1., 0.5).Equals(Q, 1.e-6));
+             FSCClipSampling::SidecarRotation(SidecarQ).AngularDistance(ExpectedQ) < 1.e-7);
+    TestTrue(TEXT("rotation and position bases agree"), FSCClipSampling::SidecarRotation(Q)
+                                                            .RotateVector(FSCClipSampling::SidecarPosition(V))
+                                                            .Equals(FSCClipSampling::SidecarPosition(Q.RotateVector(V)), 1.e-5));
+    TestTrue(TEXT("hemisphere avoids zero quaternion"), FSCClipSampling::LinearRotation(Q, Q * -1., 0.5).Equals(Q, 1.e-6));
     TestTrue(TEXT("duplicate hash routes rear"),
              FSCAnimImporter::ProvenanceScore(TEXT("Foot"), TEXT("gear/rear/left.skin"), TEXT("Foot"), TEXT("gear/rear/left.chr")) >
                  FSCAnimImporter::ProvenanceScore(TEXT("Foot"), TEXT("gear/rear/left.skin"), TEXT("Foot"), TEXT("gear/front/right.chr")));
@@ -51,7 +52,7 @@ bool FSCRigMath::RunTest(const FString&)
     auto QJson = [](FQuat X) { return FString::Printf(TEXT("[%0.12f,%0.12f,%0.12f,%0.12f]"), X.W, X.X, X.Y, X.Z); };
     const FString JsonText = FString::Printf(
         TEXT("{\"start_rotation\":%s,\"bones\":{\"0x%X\":{\"source_node_name\":\"Root\",\"rotation\":[%s,%s],\"rotation_time\":[0,2]}}}"),
-        *QJson(Start), FSCAnimImporter::BoneHash(TEXT("Root")), *QJson(Start), *QJson(End * -1.));
+        *QJson(Start), FSCClipSampling::BoneHash(TEXT("Root")), *QJson(Start), *QJson(End * -1.));
     TSharedPtr<FJsonObject> Json;
     FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(JsonText), Json);
     FSCImportedClip Clip;
@@ -63,8 +64,8 @@ bool FSCRigMath::RunTest(const FString&)
         const auto& Track = Clip.Bindings[0].Tracks[0];
         TestTrue(TEXT("start anchors to bind"), Track.Keys[0].GetRotation().Equals(N.Local.GetRotation(), 1.e-5));
         TestTrue(TEXT("bind * inverse(start) * sample"),
-                 Track.Keys[2].GetRotation().Equals(N.Local.GetRotation() * FSCAnimImporter::SidecarRotation(Start).Inverse() *
-                                                        FSCAnimImporter::SidecarRotation(End),
+                 Track.Keys[2].GetRotation().Equals(N.Local.GetRotation() * FSCClipSampling::SidecarRotation(Start).Inverse() *
+                                                        FSCClipSampling::SidecarRotation(End),
                                                     1.e-5));
         TestEqual(TEXT("uniform frames include endpoint"), Track.Keys.Num(), 3);
         TestTrue(TEXT("nonboomerang"), !Clip.bBoomerang);
@@ -73,7 +74,7 @@ bool FSCRigMath::RunTest(const FString&)
     // A clip of one frame holds one key per channel (a channel with more would run past the clip's length).
     const FString StillText =
         FString::Printf(TEXT("{\"start_rotation\":%s,\"bones\":{\"0x%X\":{\"source_node_name\":\"Root\",\"rotation\":[%s]}}}"),
-                        *QJson(Start), FSCAnimImporter::BoneHash(TEXT("Root")), *QJson(Start));
+                        *QJson(Start), FSCClipSampling::BoneHash(TEXT("Root")), *QJson(Start));
     TSharedPtr<FJsonObject> StillJson;
     FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(StillText), StillJson);
     FSCImportedClip Still;

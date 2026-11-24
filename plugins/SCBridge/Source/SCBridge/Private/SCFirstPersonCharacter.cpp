@@ -4,7 +4,7 @@
 #include "SCVehicle.h"
 #include "SCPlayerBody.h"
 #include "SCLightAreas.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCPlayerKit.h"
 #include "SCSeatRuntime.h"
 #include "SCLadderRuntime.h"
@@ -862,9 +862,9 @@ void ASCFirstPersonCharacter::SetTorchLight(const FSCFlashlight* Game, UMaterial
 {
     if (Game)
     {
-        FSCLightImporter::ApplyFlashlight(Flashlight, *Game, LightFunction);
+        FSCLights::ApplyFlashlight(Flashlight, *Game, LightFunction);
         TorchSource = TEXT("game:") + Game->Entity;
-        const FSCLightImporter::FFlashlightSettings S = FSCLightImporter::FlashlightSettings(*Game);
+        const FSCLights::FFlashlightSettings S = FSCLights::FlashlightSettings(*Game);
         UE_LOG(LogTemp, Display,
                TEXT("FP_TORCH_LIGHT source=%s port=%s cd=%.0f radius_cm=%.0f half_fov=%.1f bulb_cm=%.2f color=%s cookie=%s gobo=%d"),
                *TorchSource, *Game->Port, S.Candela, S.RadiusCm, S.HalfFovDeg, S.BulbCm, *Game->Color.ToHex(), *Game->Cookie,

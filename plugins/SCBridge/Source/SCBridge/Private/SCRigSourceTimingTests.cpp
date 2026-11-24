@@ -1,6 +1,7 @@
 // A clip merged by name across rigs keeps each contributing animation's own rate, length and start pose.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCClipCatalog.h"
 #include "SCAnimImporter.h"
 #include "SCSkeletonBuilder.h"
 #include "SCVehicle.h"
@@ -36,7 +37,7 @@ FString QuatJson(FQuat X)
 // frames), 2 frames with an authored start.
 TSharedPtr<FJsonObject> TimingClip(const FQuat& Start, const FQuat& End)
 {
-    auto Hash = [](const TCHAR* Name) { return FSCAnimImporter::BoneHash(Name); };
+    auto Hash = [](const TCHAR* Name) { return FSCClipSampling::BoneHash(Name); };
     const FString Text = FString::Printf(
         TEXT("{\"fps\":30,\"frame_count\":6,\"start_rotation\":[1,0,0,0],\"sources\":[")
         TEXT("{\"skeleton_path\":\"a.chr\",\"fps\":30,\"frame_count\":6},{\"skeleton_path\":\"b.chr\",\"fps\":30,\"frame_count\":4},")
@@ -77,21 +78,21 @@ bool FSCRigSourceTiming::RunTest(const FString&)
     TestEqual(TEXT("faster animation keeps its own frames"), Fast.Keys.Num(), 9);
     TestEqual(TEXT("fast track rate"), Fast.Fps, 60.f);
     TestTrue(TEXT("faster animation keeps the key between two clip frames"),
-             Fast.Keys[1].GetTranslation().Equals(FSCAnimImporter::SidecarPosition(FVector(0, 0, 100)), 1.e-6));
+             Fast.Keys[1].GetTranslation().Equals(FSCClipSampling::SidecarPosition(FVector(0, 0, 100)), 1.e-6));
     TestEqual(TEXT("short track rate"), Short.Fps, 30.f);
     TestTrue(TEXT("short track ends on its own last key"),
-             Short.Keys.Last().GetTranslation().Equals(FSCAnimImporter::SidecarPosition(FVector(0, 0, 4)), 1.e-6));
+             Short.Keys.Last().GetTranslation().Equals(FSCClipSampling::SidecarPosition(FVector(0, 0, 4)), 1.e-6));
     TestTrue(TEXT("fast track ends on its own last key"),
-             Fast.Keys.Last().GetTranslation().Equals(FSCAnimImporter::SidecarPosition(FVector(0, 0, 8)), 1.e-6));
+             Fast.Keys.Last().GetTranslation().Equals(FSCClipSampling::SidecarPosition(FVector(0, 0, 8)), 1.e-6));
     TestEqual(TEXT("anchored animation length"), Anchored.Keys.Num(), 3);
     TestTrue(TEXT("each animation anchors on its own start pose"),
              Anchored.Keys[0].GetRotation().Equals(Data.RigNodes[3].Local.GetRotation(), 1.e-5));
     TestTrue(TEXT("bind * inverse(own start) * sample"),
-             Anchored.Keys[2].GetRotation().Equals(Data.RigNodes[3].Local.GetRotation() * FSCAnimImporter::SidecarRotation(Start).Inverse() *
-                                                       FSCAnimImporter::SidecarRotation(End),
+             Anchored.Keys[2].GetRotation().Equals(Data.RigNodes[3].Local.GetRotation() * FSCClipSampling::SidecarRotation(Start).Inverse() *
+                                                       FSCClipSampling::SidecarRotation(End),
                                                    1.e-5));
     // Forward: every animation starts with the clip. Backward: every animation starts at its own end.
-    auto Frame = [&](const FSCBoneTrack& Track, double At, bool bFromEnd) { return FSCAnimImporter::TrackFrame(Clip, Track, At, bFromEnd); };
+    auto Frame = [&](const FSCBoneTrack& Track, double At, bool bFromEnd) { return FSCClipSampling::TrackFrame(Clip, Track, At, bFromEnd); };
     TestEqual(TEXT("forward start"), Frame(Short, 0, false), 0.);
     TestEqual(TEXT("forward holds own end"), Frame(Short, 5, false), 4.);
     TestEqual(TEXT("backward starts at own end"), Frame(Short, 6, true), 4.);
@@ -105,7 +106,7 @@ bool FSCRigSourceTiming::RunTest(const FString&)
     // A channel must name a listed animation with a usable rate and length.
     auto Fails = [&](const TCHAR* Sources, const TCHAR* Channel) {
         const FString Text = FString::Printf(TEXT("{\"sources\":%s,\"bones\":{\"0x%X\":{%s\"position\":[[0,0,0],[0,0,1]]}}}"), Sources,
-                                             FSCAnimImporter::BoneHash(TEXT("Long")), Channel);
+                                             FSCClipSampling::BoneHash(TEXT("Long")), Channel);
         TSharedPtr<FJsonObject> Bad;
         FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Bad);
         FSCImportedClip Other;
@@ -142,7 +143,7 @@ bool FSCRigSourceTiming::RunTest(const FString&)
     {
         // Without a source list the clip's own length bounds the keys.
         const FString Text = FString::Printf(TEXT("{\"bones\":{\"0x%X\":{\"position\":[[0,0,0],[0,0,1],[0,0,2]]}}}"),
-                                             FSCAnimImporter::BoneHash(TEXT("Long")));
+                                             FSCClipSampling::BoneHash(TEXT("Long")));
         TSharedPtr<FJsonObject> Plain;
         FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Plain);
         FSCImportedClip Other;

@@ -1,5 +1,6 @@
 // Imported vehicle ownership and sparse clip/fragment playback API.
 #pragma once
+#include "SCLights.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "SCPackageReader.h"
@@ -394,7 +395,7 @@ public:
      *  it links too (the chipset both a panel and its group name). */
     TArray<int32> LightGroupsLinkedBy(int32 Interior, const TArray<FString>& Links) const;
     /** Deliver a linking tag to a group: the interaction it receives with that tag, and its light state on every light of
-     *  the group (FSCLightImporter::ApplyState). Returns the lights changed; OutState the group's light state ("" when the
+     *  the group (FSCLights::ApplyState). Returns the lights changed; OutState the group's light state ("" when the
      *  group receives no such tag). */
     int32 DeliverLightGroupTag(int32 Group, const FString& LinkingTag, FString* OutState = nullptr);
 

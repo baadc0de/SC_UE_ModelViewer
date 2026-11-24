@@ -6,7 +6,7 @@
 #include "SCHangarIndex.h"
 #include "SCLook.h"
 #include "SCVehicle.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCViewerSettings.h"
 #include "SCViewerSubsystem.h"
 #include "Components/RectLightComponent.h"
@@ -135,7 +135,7 @@ int32 SCLookLighting::SetPerimeterFloorWash(UWorld* World, float Scale)
     GFloorWashOriginal.Reset();
     for (const auto& WeakLight : GScaledFloorWash)
         if (ULightComponent* Light = WeakLight.Get())
-            FSCLightImporter::SetIntensityScale(Cast<ASCVehicle>(Light->GetOwner()), Light, ESCLightIntensityScale::FloorWash, 1.f);
+            FSCLights::SetIntensityScale(Cast<ASCVehicle>(Light->GetOwner()), Light, ESCLightIntensityScale::FloorWash, 1.f);
     GScaledFloorWash.Reset();
     USCViewerSubsystem* Viewer = World ? USCViewerSubsystem::Get(World) : nullptr;
     ASCVehicle* Environment = Viewer ? Viewer->GetEnvironment() : nullptr;
@@ -171,7 +171,7 @@ int32 SCLookLighting::SetPerimeterFloorWash(UWorld* World, float Scale)
             else if (Hit.ImpactNormal.Z > 0.9) FloorOutside += Weight;
         }
         if (Total <= 0 || FloorOutside / Total < 0.8 || Inside / Total > 0.1) continue;
-        if (FSCLightImporter::SetIntensityScale(Environment, Light, ESCLightIntensityScale::FloorWash, Scale))
+        if (FSCLights::SetIntensityScale(Environment, Light, ESCLightIntensityScale::FloorWash, Scale))
             GScaledFloorWash.Add(Light);
         else
         {

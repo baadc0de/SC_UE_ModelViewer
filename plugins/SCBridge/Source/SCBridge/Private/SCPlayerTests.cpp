@@ -3,6 +3,7 @@
 // weapon re-parenting between stow and hand ports.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "SCClipCatalog.h"
 #include "HAL/IConsoleManager.h"
 #include "SCPlayerAnimator.h"
 #include "SCPlayerBody.h"
@@ -210,7 +211,7 @@ bool FSCPlayerAdditive::RunTest(const FString&)
     TestTrue(TEXT("first frame changes the base"), !Pose[1].GetRotation().Equals(Base[1].GetRotation(), 1e-3));
     TestTrue(TEXT("translation adds"), FVector::Dist(Pose[1].GetTranslation(), Base[1].GetTranslation()) > 50);
     TestTrue(TEXT("delta composes in the parent's frame (delta * base)"),
-             Pose[1].GetRotation().Equals((FQuat(FSCAnimImporter::SidecarRotation(FQuat(S, 0, 0, C))) * Base[1].GetRotation()).GetNormalized(), 1e-4));
+             Pose[1].GetRotation().Equals((FQuat(FSCClipSampling::SidecarRotation(FQuat(S, 0, 0, C))) * Base[1].GetRotation()).GetNormalized(), 1e-4));
     Pose = Base;
     Clip.ApplyAdditive(0, 0, Pose);
     TestTrue(TEXT("zero weight is a no-op"), Pose[1].Equals(Base[1], 1e-6));
@@ -225,7 +226,7 @@ bool FSCPlayerAdditive::RunTest(const FString&)
         TestTrue(TEXT("parse terminal"), FSCPlayerClip::Parse(Json2, [](const FString& N) { return N == TEXT("b") ? 1 : INDEX_NONE; }, Terminal, Error));
         Pose = Base;
         Terminal.ApplyAdditive(Terminal.Duration, 1, Pose);
-        const FQuat Delta = FSCAnimImporter::SidecarRotation(FQuat(S2, 0, 0, C2));
+        const FQuat Delta = FSCClipSampling::SidecarRotation(FQuat(S2, 0, 0, C2));
         const FVector Axis = Delta.GetRotationAxis();
         TestTrue(TEXT("terminal delta is 20 degrees"), FMath::IsNearlyEqual(FMath::RadiansToDegrees(Delta.GetAngle()), 20.0, 1e-3));
         const FQuat Expected = (FQuat(Axis, FMath::DegreesToRadians(20.0)) * Base[1].GetRotation()).GetNormalized();

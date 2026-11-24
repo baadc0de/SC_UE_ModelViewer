@@ -50,34 +50,6 @@ TSet<FString> Tokens(FString Path)
     return TSet<FString>(Parts);
 }
 } // namespace
-uint32 FSCAnimImporter::BoneHash(const FString& Name)
-{
-    // Standard CRC32 of case-sensitive UTF-8, not UE's TCHAR-based StrCrc32.
-    FTCHARToUTF8 Bytes(*Name);
-    uint32 CRC = ~0u;
-    for (int32 I = 0; I < Bytes.Length(); ++I)
-    {
-        CRC ^= uint8(Bytes.Get()[I]);
-        for (int32 Bit = 0; Bit < 8; ++Bit)
-            CRC = (CRC >> 1) ^ ((CRC & 1) ? 0xedb88320u : 0);
-    }
-    return ~CRC;
-}
-FVector FSCAnimImporter::SidecarPosition(const FVector& V)
-{
-    // Undo exporter (x,y,z)->(x,-z,y), then GLB G=(-z,x,y), metres to cm.
-    return FVector(V.Y, V.X, V.Z) * 100.;
-}
-FQuat FSCAnimImporter::SidecarRotation(const FQuat& Q)
-{
-    return FQuat(-Q.Y, -Q.X, -Q.Z, Q.W).GetNormalized();
-}
-
-FQuat FSCAnimImporter::LinearRotation(FQuat A, FQuat B, double Alpha)
-{
-    if ((A | B) < 0) B = B * -1.;
-    return (A * (1 - Alpha) + B * Alpha).GetNormalized();
-}
 int32 FSCAnimImporter::ProvenanceScore(const FString& ReceiverName, const FString& ReceiverPath, const FString& SourceName,
                                        const FString& SourcePath)
 {
@@ -205,7 +177,7 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
     {
         const auto& Node = Rig.RigNodes[I];
         if (!Node.bAnimate) continue;
-        const auto Entry = (*Bones)->TryGetField(FString::Printf(TEXT("0x%X"), BoneHash(Node.SourceName)));
+        const auto Entry = (*Bones)->TryGetField(FString::Printf(TEXT("0x%X"), FSCClipSampling::BoneHash(Node.SourceName)));
         if (!Entry) continue;
         TArray<TSharedPtr<FJsonValue>> Variants;
         if (Entry->Type == EJson::Array)
@@ -325,7 +297,7 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
         }
         const FTransform Bind = Node.Local;
         const auto& Anchor = Arr(Timing, TEXT("start_rotation"));
-        const FQuat Start = SidecarRotation(Anchor.Num() == 4 ? Quat(Anchor) : HR ? Quat(Rot[0]->AsArray()) : FQuat::Identity);
+        const FQuat Start = FSCClipSampling::SidecarRotation(Anchor.Num() == 4 ? Quat(Anchor) : HR ? Quat(Rot[0]->AsArray()) : FQuat::Identity);
         for (int32 Frame = 0; Frame <= OwnLast; ++Frame)
         {
             FTransform Key = Bind;
@@ -334,7 +306,7 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
             if (HR)
             {
                 Interval(Rot, RT, Frame, A, B, Alpha);
-                const FQuat Q = SidecarRotation(LinearRotation(Quat(Rot[A]->AsArray()), Quat(Rot[B]->AsArray()), Alpha));
+                const FQuat Q = FSCClipSampling::SidecarRotation(FSCClipSampling::LinearRotation(Quat(Rot[A]->AsArray()), Quat(Rot[B]->AsArray()), Alpha));
                 // A non-identity authored origin is anchor-relative (§14.6). Identity clip-root
                 // metadata is not a per-bone bind: current exporter/default-pose and addon use absolute keys.
                 Key.SetRotation(Anchor.Num() == 4 && !Start.Equals(FQuat::Identity, 1.e-6)
@@ -344,9 +316,9 @@ bool FSCAnimImporter::DeriveBinding(const FObj& Json, const FSCDerivedMesh& Rig,
             if (HP)
             {
                 Interval(Pos, PT, Frame, A, B, Alpha);
-                const FVector P = SidecarPosition(FMath::Lerp(Vec(Pos[A]->AsArray()), Vec(Pos[B]->AsArray()), Alpha));
+                const FVector P = FSCClipSampling::SidecarPosition(FMath::Lerp(Vec(Pos[A]->AsArray()), Vec(Pos[B]->AsArray()), Alpha));
                 // Cyclic motion is a delta about this receiver's bind; other clips are absolute locals.
-                Key.SetTranslation(Clip.bCyclic ? Bind.GetTranslation() + P - SidecarPosition(Vec(Pos[0]->AsArray())) : P);
+                Key.SetTranslation(Clip.bCyclic ? Bind.GetTranslation() + P - FSCClipSampling::SidecarPosition(Vec(Pos[0]->AsArray())) : P);
             }
             if (!Track.Keys.IsEmpty() && (Track.Keys.Last().GetRotation() | Key.GetRotation()) < 0)
                 Key.SetRotation(Key.GetRotation() * -1.);
@@ -450,24 +422,6 @@ void FSCAnimImporter::BuildSequences(USkeletalMesh* Mesh, UObject* Outer, FSCCli
 #endif
     }
 }
-FTransform FSCAnimImporter::Sample(const FSCBoneTrack& Track, double Frame)
-{
-    if (Track.Keys.IsEmpty()) return FTransform::Identity;
-    Frame = FMath::Clamp(Frame, 0., double(Track.Keys.Num() - 1));
-    const int32 A = FMath::FloorToInt(Frame), B = FMath::Min(A + 1, Track.Keys.Num() - 1);
-    const double T = Frame - A;
-    return FTransform(LinearRotation(Track.Keys[A].GetRotation(), Track.Keys[B].GetRotation(), T),
-                      FMath::Lerp(Track.Keys[A].GetTranslation(), Track.Keys[B].GetTranslation(), T),
-                      FMath::Lerp(Track.Keys[A].GetScale3D(), Track.Keys[B].GetScale3D(), T));
-}
-double FSCAnimImporter::TrackFrame(const FSCImportedClip& Clip, const FSCBoneTrack& Track, double ClipFrame, bool bFromEnd)
-{
-    checkf(Clip.Fps > 0 && Track.Fps > 0, TEXT("clip and track rates are set by the importer"));
-    const double Last = FMath::Max(0, Track.Keys.Num() - 1);
-    const double Scale = Track.Fps / Clip.Fps;
-    return bFromEnd ? FMath::Max(0., Last - (Clip.LastFrame - ClipFrame) * Scale) : FMath::Min(Last, ClipFrame * Scale);
-}
-
 void FSCAnimImporter::Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImportedClip& Clip)
 {
     if (!Clip.Bindings.IsEmpty())

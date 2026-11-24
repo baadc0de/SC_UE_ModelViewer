@@ -15,7 +15,7 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Materials/Material.h"
 #include "Components/PointLightComponent.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCPlayerKitData.h"
 #include "SCTraversalClips.h"
 #include <limits>
@@ -322,11 +322,11 @@ bool FSCSavedInteractionsTest::RunTest(const FString&)
     // Another authored state on the loaded light, from what was saved.
     if (!TestEqual(TEXT("the light"), Loaded->LightStates.Num(), 1)) return false;
     TestTrue(TEXT("its state values and wall scale"), Loaded->LightStates[0].AuthoredStates.Num() == 2 && Loaded->LightStates[0].WallLightScale == 0.5f);
-    TestTrue(TEXT("a loaded light takes another authored state"), FSCLightImporter::ApplyState(Loaded, 0, TEXT("auxiliaryState")));
+    TestTrue(TEXT("a loaded light takes another authored state"), FSCLights::ApplyState(Loaded, 0, TEXT("auxiliaryState")));
     TestTrue(TEXT("its candela, colour and style from the saved values"),
              Loaded->LightStates[0].BaseCandela == 250.0 && Loaded->LightStates[0].BaseColor == FLinearColor::Red && Loaded->LightStates[0].LightStyleId == 3 &&
                  Loaded->LightStates[0].ActiveState == TEXT("auxiliaryState"));
-    TestFalse(TEXT("a state it does not author leaves it"), FSCLightImporter::ApplyState(Loaded, 0, TEXT("emergencyState")));
+    TestFalse(TEXT("a state it does not author leaves it"), FSCLights::ApplyState(Loaded, 0, TEXT("emergencyState")));
     return !HasAnyErrors();
 }
 

@@ -3,7 +3,7 @@
 #include "SCEnvironment.h"
 #include "SCImportJob.h"
 #include "SCVehicle.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Engine/StaticMesh.h"
@@ -151,7 +151,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
             It->GetOutermost()->GetName().StartsWith(First.Vehicle->SessionPath))
             Old.Add(*It);
     const int32 Loaded = StaticMeshCount();
-    bool bLights = FSCLightImporter::Verify(First.Vehicle.Get());
+    bool bLights = FSCLights::Verify(First.Vehicle.Get());
     bool bRepresentations = true;
     for (const auto& Pair : First.MeshStats)
         if (Pair.Value.Triangles > 0)
@@ -192,7 +192,7 @@ bool FSCImporter::Verify(const FString& Folder, const FString& Tar, UWorld* Worl
     for (auto Object : Old)
         if (Object.IsValid()) ++Leaks;
     const int32 Reloaded = StaticMeshCount();
-    bLights &= FSCLightImporter::Verify(Second.Vehicle.Get());
+    bLights &= FSCLights::Verify(Second.Vehicle.Get());
     bool bSame = First.MeshCount == Second.MeshCount && First.InstanceCount == Second.InstanceCount;
     for (const auto& Pair : First.ContentHashes)
         bSame &= Second.ContentHashes.FindRef(Pair.Key) == Pair.Value;

@@ -1,5 +1,6 @@
 // Package regressions use the original GLB bind and raw sidecars, never clip_final_pose exports.
 #include "SCImporter.h"
+#include "SCClipCatalog.h"
 #include "SCVehicle.h"
 #include "SCAnimImporter.h"
 #include "SCRigComponent.h"
@@ -61,7 +62,7 @@ bool SCVerifySourcePose(ASCVehicle* Vehicle)
                        Angle);
             }
             if (!Scorpius || !Track.bPosition) continue;
-            const auto Entry = Bones->TryGetField(FString::Printf(TEXT("0x%X"), FSCAnimImporter::BoneHash(Node.SourceName)));
+            const auto Entry = Bones->TryGetField(FString::Printf(TEXT("0x%X"), FSCClipSampling::BoneHash(Node.SourceName)));
             if (!Entry)
             {
                 OK = false;

@@ -4,7 +4,7 @@
 #include "SCPackageSource.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCImporter.h"
 #include "Sound/SoundWave.h"
 #include "AudioDevice.h"
@@ -356,9 +356,9 @@ void FSCAudioScene::AddInterior(int32 Interior, USceneComponent* Anchor, bool bH
     }
     InteriorAnchors[Interior] = Anchor;
     // The container -> anchor mapping lights and room volumes use (metres -> cm).
-    const FVector X = FSCLightImporter::ContainerBasis(FVector(1, 0, 0), bHelperFrame) * 100;
-    const FVector Y = FSCLightImporter::ContainerBasis(FVector(0, 1, 0), bHelperFrame) * 100;
-    const FVector Z = FSCLightImporter::ContainerBasis(FVector(0, 0, 1), bHelperFrame) * 100;
+    const FVector X = FSCLights::ContainerBasis(FVector(1, 0, 0), bHelperFrame) * 100;
+    const FVector Y = FSCLights::ContainerBasis(FVector(0, 1, 0), bHelperFrame) * 100;
+    const FVector Z = FSCLights::ContainerBasis(FVector(0, 0, 1), bHelperFrame) * 100;
     AnchorToContainer[Interior] = FMatrix(FPlane(X, 0), FPlane(Y, 0), FPlane(Z, 0), FPlane(0, 0, 0, 1)).Inverse();
     auto Parse = [&](const FString& Text, FSCAudioPlaced& P) {
         FObj O;
@@ -1838,7 +1838,7 @@ int32 USCAudioSubsystem::FireEntityTag(ASCVehicle* Vehicle, int32 Interior, cons
         FSCAudioPlace P;
         P.Attach = E->Rig.IsValid() ? static_cast<USceneComponent*>(E->Rig.Get()) : E->Anchor.Get();
         if (USCRigComponent* Rig = E->Rig.Get(); Rig && !Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
-        P.Offset = FSCLightImporter::ContainerBasis(Fx->Offset, false) * 100;
+        P.Offset = FSCLights::ContainerBasis(Fx->Offset, false) * 100;
         P.Label = C->Name + TEXT(":") + Tag;
         Played += Post(*S, Fx->Trigger, P) != INDEX_NONE;
     }
@@ -1866,7 +1866,7 @@ void USCAudioSubsystem::SetEntityTag(ASCVehicle* Vehicle, int32 Interior, const 
         FSCAudioPlace P;
         P.Attach = E->Rig.IsValid() ? static_cast<USceneComponent*>(E->Rig.Get()) : E->Anchor.Get();
         if (USCRigComponent* Rig = E->Rig.Get(); Rig && !Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
-        P.Offset = FSCLightImporter::ContainerBasis(Fx->Offset, false) * 100;
+        P.Offset = FSCLights::ContainerBasis(Fx->Offset, false) * 100;
         P.Label = C->Name + TEXT(":") + Tag;
         const int32 Id = Post(*S, Fx->Trigger, P);
         if (Id != INDEX_NONE) E->TagInstances.FindOrAdd(Tag).Add(Id);
@@ -1901,7 +1901,7 @@ int32 USCAudioSubsystem::PlayClipEvent(ASCVehicle* Vehicle, USCRigComponent* Rig
     FSCAudioPlace P;
     P.Attach = Rig;
     if (!Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Bone)) != INDEX_NONE) P.Socket = FName(*Bone);
-    P.Offset = FSCLightImporter::ContainerBasis(OffsetCry, false) * 100;
+    P.Offset = FSCLights::ContainerBasis(OffsetCry, false) * 100;
     P.Label = Rig->OwnerEntity + TEXT(":") + Bone;
     return Post(*S, Trigger, P);
 }

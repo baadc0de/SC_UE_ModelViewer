@@ -9,7 +9,7 @@
 // The panel's own state machine takes the interaction (`state_types[].transitions`: LightSwitchState) and follows the
 // group (`state_types[].linked`: LightState from the group's state tag); its face shows the render of that state.
 #include "SCVehicle.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCRigComponent.h"
 #include "SCClipCatalog.h"
 #include "Components/LightComponent.h"
@@ -69,7 +69,7 @@ int32 ASCVehicle::DeliverLightGroupTag(int32 Group, const FString& LinkingTag, F
     {
         if (LightStates[L].GroupEntityId != G.EntityId || LightStates[L].Interior != G.Interior) continue; // ids are per container
         ++Members;
-        if (FSCLightImporter::ApplyState(this, L, Key)) ++Changed;
+        if (FSCLights::ApplyState(this, L, Key)) ++Changed;
         else ++Unauthored; // a state the light does not author (DisableOverride: the group keeps what it shows)
         if (LightStates[L].bEnabled) Candela += LightStates[L].BaseCandela;
     }
@@ -234,7 +234,7 @@ static FAutoConsoleCommandWithWorldAndArgs GSCLightStylesProbe(
             int32 Changed = 0;
             if (!Key.IsNone())
                 for (int32 I = 0; I < Vehicle->LightStates.Num(); ++I)
-                    Changed += FSCLightImporter::ApplyState(Vehicle, I, Key);
+                    Changed += FSCLights::ApplyState(Vehicle, I, Key);
             const int32 Index = RequestedIndex != INDEX_NONE ? RequestedIndex
                 : (Vehicle->LoopingLights.IsEmpty() ? INDEX_NONE : *Vehicle->LoopingLights.begin());
             UE_LOG(LogSCLightControl, Display, TEXT("LIGHT_STYLES ship=%s definitions=%d lights=%d loops=%d changed=%d"),

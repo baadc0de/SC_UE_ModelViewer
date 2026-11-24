@@ -41,7 +41,7 @@ void SampleAndApply(FSCImportedLightState& State, const FSCLightStyleWaveform* S
     ApplyPhotometry(State, Style ? Style->Sample(Now, State.AnimationSpeed, State.AnimationPhase) : FVector3f(1));
 }
 }
-void FSCLightImporter::ApplyStyle(ASCVehicle* Vehicle, int32 Index)
+void FSCLights::ApplyStyle(ASCVehicle* Vehicle, int32 Index)
 {
     FSCImportedLightState& State = Vehicle->LightStates[Index];
     const FSCLightStyleWaveform* Style = State.bEnabled ? Vehicle->Manifest.LightStyles.Find(State.LightStyleId) : nullptr;
@@ -57,7 +57,7 @@ void FSCLightImporter::ApplyStyle(ASCVehicle* Vehicle, int32 Index)
     State.Component->SetVisibility(State.bEnabled);
 }
 
-void FSCLightImporter::TickStyles(ASCVehicle* Vehicle)
+void FSCLights::TickStyles(ASCVehicle* Vehicle)
 {
     if (Vehicle->LoopingLights.IsEmpty()) return;
     const double Now = Vehicle->GetWorld()->GetTimeSeconds();
@@ -69,7 +69,7 @@ void FSCLightImporter::TickStyles(ASCVehicle* Vehicle)
     }
 }
 
-void FSCLightImporter::ResumeStyles(ASCVehicle* Vehicle)
+void FSCLights::ResumeStyles(ASCVehicle* Vehicle)
 {
     if (Vehicle->Manifest.LightStyles.IsEmpty()) return;
     Vehicle->LoopingLights.Reset();
@@ -82,7 +82,7 @@ void FSCLightImporter::ResumeStyles(ASCVehicle* Vehicle)
     Vehicle->UpdateTickEnabled();
 }
 
-bool FSCLightImporter::SetIntensityScale(ASCVehicle* Vehicle, ULightComponent* Light, ESCLightIntensityScale Layer, float Scale)
+bool FSCLights::SetIntensityScale(ASCVehicle* Vehicle, ULightComponent* Light, ESCLightIntensityScale Layer, float Scale)
 {
     if (!Vehicle || !Light || Vehicle->Manifest.LightStyles.IsEmpty()) return false;
     const int32 Index = Vehicle->LightStates.IndexOfByPredicate([Light](const FSCImportedLightState& State) {

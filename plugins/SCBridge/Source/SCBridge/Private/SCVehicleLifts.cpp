@@ -4,7 +4,7 @@
 #include "SCLift.h"
 #include "SCMeshImporter.h"
 #include "SCRigComponent.h"
-#include "SCLightImporter.h"
+#include "SCLights.h"
 #include "SCAudioSystem.h"
 #include "Components/LightComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -538,7 +538,7 @@ void SCVehicleLifts::BuildInteriorLifts(ASCVehicle* V, int32 InteriorIndex, cons
         for (USceneComponent* C : ContainerChildren)
             if (ULightComponent* Light = Cast<ULightComponent>(C))
                 for (const FName& Tag : Light->ComponentTags)
-                    if (FString Rides = Tag.ToString(); Rides.RemoveFromStart(FSCLightImporter::RidesTagPrefix) && Carried.Contains(Rides))
+                    if (FString Rides = Tag.ToString(); Rides.RemoveFromStart(FSCLights::RidesTagPrefix) && Carried.Contains(Rides))
                         LightsMoved += AttachRider(Light, Rides, FString());
         for (int32 S = 0; S < Record.Stops.Num() && S < Lift->Stops.Num(); ++S)
             for (const FString& Id : Record.Stops[S].LandingDoorIds)

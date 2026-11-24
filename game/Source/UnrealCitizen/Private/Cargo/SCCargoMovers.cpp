@@ -40,7 +40,7 @@ TArray<FTransform> PoseAt(const FSCImportedClip& Clip, const FSCClipBinding& Bin
     for (const FSCBoneTrack& T : Binding.Tracks)
     {
         if (!Pose.IsValidIndex(T.Bone)) continue;
-        const FTransform Sample = FSCAnimImporter::Sample(T, FSCAnimImporter::TrackFrame(Clip, T, Frame, false));
+        const FTransform Sample = FSCClipSampling::Sample(T, FSCClipSampling::TrackFrame(Clip, T, Frame, false));
         if (T.bRotation) Pose[T.Bone].SetRotation(Sample.GetRotation());
         if (T.bPosition) Pose[T.Bone].SetTranslation(Sample.GetTranslation());
     }

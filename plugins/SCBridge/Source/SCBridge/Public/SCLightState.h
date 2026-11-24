@@ -1,5 +1,6 @@
 // Blueprint-visible authored/default state and fallback-shadow metadata for each imported light.
 #pragma once
+#include "SCLights.h"
 #include "CoreMinimal.h"
 #include "SCLightState.generated.h"
 class ULightComponent;
@@ -44,7 +45,7 @@ struct SCBRIDGE_API FSCImportedLightState
     UPROPERTY(BlueprintReadOnly, Category = "SC|Lights") int32 Interior = INDEX_NONE;
     /** The light record (its states and intensity model), at import only. */
     TSharedPtr<FJsonObject> Json;
-    /** Its authored states by key (FSCLightStateValues): FSCLightImporter::ApplyState puts one on. Saved. */
+    /** Its authored states by key (FSCLightStateValues): FSCLights::ApplyState puts one on. Saved. */
     UPROPERTY() TMap<FName, FSCLightStateValues> AuthoredStates;
     /** Authored photometry before the active preset waveform is applied. */
     UPROPERTY() double BaseCandela = 0;

@@ -399,7 +399,7 @@ void USCPlayerBodyComponent::ApplyTorchLight(bool bGame)
     // The torch is the game's personal light: the loadout's first flashlight item with its cookie (built by the viewer while
     // the package was open, FSCLightImporter::LoadGobo); a loadout without one keeps the fallback beam.
     const FSCFlashlight* Light = bGame && Kit && Data && !Data->Flashlights.IsEmpty() ? &Data->Flashlights[0] : nullptr;
-    C->SetTorchLight(Light, Light ? FSCLightImporter::GoboLightFunction(Kit, Kit->GoboTextures.FindRef(Light->ProjectorTexture)) : nullptr);
+    C->SetTorchLight(Light, Light ? FSCLights::GoboLightFunction(Kit, Kit->GoboTextures.FindRef(Light->ProjectorTexture)) : nullptr);
     C->SetTorchAudio(Kit, Light ? Light->Entity : FString()); // WP-A1: its Light_On_SFX / Light_Off_SFX
 }
 void USCPlayerBodyComponent::Detach()
