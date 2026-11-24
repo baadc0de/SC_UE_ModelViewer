@@ -12,7 +12,7 @@ class UTexture2D;
 struct FSCTextureCacheRequest;
 
 /** Pure CPU result: a PNG's BGRA8 mip chain (largest first), or a package DDS's blocks as prepared for UE. */
-struct SCBRIDGE_API FSCDecodedTexture
+struct SCBRIDGEIMPORT_API FSCDecodedTexture
 {
     FSCTextureKey Key;
     int32 Width = 0, Height = 0;
@@ -30,7 +30,7 @@ struct SCBRIDGE_API FSCDecodedTexture
     int64 UploadBytes() const;
 };
 
-struct SCBRIDGE_API FSCTextureStats
+struct SCBRIDGEIMPORT_API FSCTextureStats
 {
     int32 Requested = 0, Created = 0, Failed = 0;
     int32 Cached = 0;
@@ -41,7 +41,7 @@ struct SCBRIDGE_API FSCTextureStats
 /** Validation before any decompression. Dimension limit is the RHI's; the byte limits are host budgets
  *  (fallback register, viewer/verification/WP-U2.md) on the bytes uploaded: a DDS's mip data as stored, a PNG's BGRA8
  *  plus its full mip chain. */
-struct SCBRIDGE_API FSCTextureLimits
+struct SCBRIDGEIMPORT_API FSCTextureLimits
 {
     uint32 MaxDimension = 0;          // 0: GetMax2DTextureDimension()
     int64 MaxTextureBytes = 256ll << 20;
@@ -49,7 +49,7 @@ struct SCBRIDGE_API FSCTextureLimits
     static FSCTextureLimits FromHost();
 };
 
-class SCBRIDGE_API FSCTextureImporter
+class SCBRIDGEIMPORT_API FSCTextureImporter
 {
 public:
     /** Decode one package texture. Normal maps convert the glTF/OpenGL (+Y) tangent convention to UE's (-Y), as

@@ -5,7 +5,7 @@
 #include "SCClipCatalog.h"
 #include "SCMeshes.h"
 #include "SCSceneManifest.h"
-class SCBRIDGE_API FSCAnimImporter
+class SCBRIDGEIMPORT_API FSCAnimImporter
 {
 public:
     static int32 ProvenanceScore(const FString& ReceiverName, const FString& ReceiverPath, const FString& SourceName,

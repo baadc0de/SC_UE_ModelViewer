@@ -11,7 +11,7 @@ the Lumen `Viewer` level with an orbit camera. All UI is in the **Runtime** modu
 
 ## Read first
 `docs/03-unreal-export-design.md` (§Hosts, §How a view happens, §In-game UI, §FFI),
-`plugins/SCBridge/Source/ThirdParty/SCBridgeLib/include/scbridge.h`,
+`plugins/SCBridgeImport/Source/ThirdParty/SCBridgeLib/include/scbridge.h`,
 `viewer/README.md` Decision section.
 
 ## Deliverables

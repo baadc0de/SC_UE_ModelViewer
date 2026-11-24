@@ -7,7 +7,7 @@
 class ASCVehicle;
 class USceneComponent;
 /** Builds a package's scene lights and projectors (the runtime half is FSCLights). */
-class SCBRIDGE_API FSCLightImporter
+class SCBRIDGEIMPORT_API FSCLightImporter
 {
 public:
     // A projector's gobo: the package texture at Path (EXR keeps its HDR values, PNG / DDS decode linear), clamped, loaded once

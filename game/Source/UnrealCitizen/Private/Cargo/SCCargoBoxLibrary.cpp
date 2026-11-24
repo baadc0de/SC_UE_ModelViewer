@@ -116,7 +116,8 @@ void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
             E.State = EState::Streaming;
             return;
         }
-        if (Viewer->GetArchiveState() == ESCArchiveState::Failed || (Viewer->GetArchiveState() == ESCArchiveState::Ready && !Viewer->GetClient()))
+        // No archive reader in this build (a packaged game) fails too: the archive never opens, waiting would hold the queue.
+        if (Viewer->GetArchiveState() == ESCArchiveState::Failed || !Viewer->GetClient())
         {
             Fail(*Next, TEXT("the archive is not available (box packages are exported from Data.p4k)"));
             return;
@@ -180,7 +181,9 @@ void FSCCargoBoxLibrary::Tick(USCViewerSubsystem* Viewer, UWorld* World)
         Options.bPublish = false;
         Options.bReplacePrevious = false;
         Options.bImportClips = false;
-        Job = ISCImporting::Get()->NewJob(*Source, Options, Source);
+        ISCImporting* const Importer = ISCImporting::Get();
+        if (!Importer) { Fail(Running, TEXT("this build has no importer (the SCBridgeImport plugin)")); return; }
+        Job = Importer->NewJob(*Source, Options, Source);
         E.State = EState::Importing;
         return;
     }

@@ -9,7 +9,7 @@ class ASCVehicle;
 
 
 
-class SCBRIDGE_API FSCImportJob : public ISCImportJob, public FGCObject
+class SCBRIDGEIMPORT_API FSCImportJob : public ISCImportJob, public FGCObject
 {
 public:
     /** Source must outlive the job unless SourceOwner keeps it alive. Options.World is required. */

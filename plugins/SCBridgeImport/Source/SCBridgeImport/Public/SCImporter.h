@@ -7,7 +7,7 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "SCImporter.generated.h"
 class ASCVehicle;
-class SCBRIDGE_API FSCImporter
+class SCBRIDGEIMPORT_API FSCImporter
 {
 public:
     // Game-thread synchronous API over FSCImportJob (SCImportJob.h), which hosts drive incrementally.
@@ -20,7 +20,7 @@ public:
     static bool Verify(const FString& Folder, const FString& Tar, UWorld* World);
 };
 UCLASS()
-class SCBRIDGE_API USCImportLibrary : public UBlueprintFunctionLibrary
+class SCBRIDGEIMPORT_API USCImportLibrary : public UBlueprintFunctionLibrary
 {
     GENERATED_BODY()
 public:

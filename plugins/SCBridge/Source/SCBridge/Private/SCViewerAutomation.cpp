@@ -821,23 +821,28 @@ void FSCViewerAutomation::Tick()
     if (!bCameraApplied && !Camera.IsEmpty() && S->GetVehicle() && (bLoaded || Queue.IsEmpty())) ApplyCamera();
     // A cooked ship loads without the archive.
     const bool bCookedNext = !Queue.IsEmpty() && !USCViewerSubsystem::CookedShipLevel(Queue[0].TrimStartAndEnd()).IsEmpty();
-    if (S->GetArchiveState() == ESCArchiveState::Failed && !Queue.IsEmpty() && !bCookedNext)
+    // No archive reader in this build (a packaged game): the archive never opens, an unprepared ship cannot load.
+    if ((S->GetArchiveState() == ESCArchiveState::Failed || !S->GetClient()) && !Queue.IsEmpty() && !bCookedNext)
     {
-        UE_LOG(LogSCViewerAutomation, Error, TEXT("AUTOMATION archive failed: %s"), *S->GetArchiveError());
+        UE_LOG(LogSCViewerAutomation, Error, TEXT("AUTOMATION archive failed: %s"),
+               S->GetClient() ? *S->GetArchiveError() : TEXT("this build has no archive reader and the ship is not prepared"));
         Queue.Empty();
         bAllSucceeded = false;
-        if (bQuit) FPlatformMisc::RequestExitWithStatus(false, 1);
+        if (bQuit) FPlatformMisc::RequestExitWithStatus(true, 1); // forced: a graceful request exits 0 from GuardedMain
         bQuit = bQueued = false;
         return;
     }
-    if ((S->GetArchiveState() != ESCArchiveState::Ready && !bCookedNext) || FPlatformTime::Seconds() < NextAt) return;
+    // Only a remaining unprepared ship waits for the archive: a finished queue completes without one (failed, or no reader).
+    const bool bAwaitArchive = !Queue.IsEmpty() && S->GetArchiveState() != ESCArchiveState::Ready && !bCookedNext;
+    if (bAwaitArchive || FPlatformTime::Seconds() < NextAt) return;
     if (Queue.IsEmpty())
     {
         if (bQueued)
         {
             bQueued = false;
             UE_LOG(LogSCViewerAutomation, Display, TEXT("AUTOMATION_DONE all_succeeded=%d"), bAllSucceeded);
-            if (bQuit) FPlatformMisc::RequestExitWithStatus(false, bAllSucceeded ? 0 : 1);
+            // A failure is forced: a graceful request exits 0 from GuardedMain whatever the status.
+            if (bQuit) FPlatformMisc::RequestExitWithStatus(!bAllSucceeded, bAllSucceeded ? 0 : 1);
         }
         return;
     }

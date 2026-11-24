@@ -44,11 +44,11 @@ inline constexpr FGlassRefractionProfile GlassProfileDefault{5.f, 0.5f};
 const FGlassRefractionProfile& GlassRefractionProfile(EGlassProfile Profile);
 /** The profile of a glass instance: Kit when it is on a player kit, else Canopy when its F0 (SpecularColor.r, through its
  *  parents: a cooked constant's value) is zero, else Default. Pure. */
-EGlassProfile SelectGlassProfile(const UMaterialInterface* Glass, bool bOnPlayerKit);
+SCBRIDGE_API EGlassProfile SelectGlassProfile(const UMaterialInterface* Glass, bool bOnPlayerKit);
 /** Puts the profile's values on a glass instance. */
 void ApplyGlassProfile(UMaterialInstanceDynamic* MID, EGlassProfile Profile);
 /** The player kit actors of the world's first-person bodies (USCPlayerBodyComponent::GetKit()). */
-TArray<const AActor*> PlayerKits(UWorld* World);
+SCBRIDGE_API TArray<const AActor*> PlayerKits(UWorld* World);
 /** Glass instances SetGlassRefraction gave each profile (only while switching the look on). */
 struct FGlassProfileCounts { int32 Canopy = 0, Kit = 0, Default = 0; };
 /** The glass refraction look (USCViewerSettings::bGlassRefraction, M_SC_Glass GlassRefractionLook; viewer/verification/WP-U3b.md
@@ -59,10 +59,10 @@ struct FGlassProfileCounts { int32 Canopy = 0, Kit = 0, Default = 0; };
  *  slots), on so it takes its profile, off so the diagnostic reaches it too. Logs
  *  `LOOK glass_refraction on=… instances=… converted=… canopy=… kit=… default=…` and one `LOOK glass_refraction_actor` line per
  *  vehicle with glass; returns the instances set. */
-int32 SetGlassRefraction(UWorld* World, bool bOn);
+SCBRIDGE_API int32 SetGlassRefraction(UWorld* World, bool bOn);
 /** SetGlassRefraction with the player kit actors given (tests); OutCounts receives the profile counts. */
-int32 SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const AActor*> Kits, FGlassProfileCounts* OutCounts = nullptr);
+SCBRIDGE_API int32 SetGlassRefraction(UWorld* World, bool bOn, TConstArrayView<const AActor*> Kits, FGlassProfileCounts* OutCounts = nullptr);
 /** After a load: SetGlassRefraction(World, the setting): the loaded vehicle's glass takes its profile (on, the default) or the
  *  diagnostic off, a cooked ship's or hangar's constant glass a dynamic instance over it either way. */
-void RefreshGlassRefraction(UWorld* World);
+SCBRIDGE_API void RefreshGlassRefraction(UWorld* World);
 }

@@ -82,3 +82,5 @@ game/Build/*/FileOpenOrder/
 # Fab marketplace assets (licensed for use, not redistribution): installed per machine, never committed
 /viewer/Content/SciFi_Drone_4/
 /game/Content/SciFi_Drone_4/
+# Locally built FFI libraries left at the library's path before WP-O1-4c-3b (now plugins/SCBridgeImport).
+/plugins/SCBridge/Source/ThirdParty/SCBridgeLib/lib/

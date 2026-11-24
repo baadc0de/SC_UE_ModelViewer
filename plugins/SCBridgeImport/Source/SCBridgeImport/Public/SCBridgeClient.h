@@ -10,7 +10,7 @@
 class FJsonObject;
 
 /** ISCArchive over the archive library (scbridge.h). */
-class SCBRIDGE_API FSCBridgeClient : public ISCArchive
+class SCBRIDGEIMPORT_API FSCBridgeClient : public ISCArchive
 {
 public:
     FSCBridgeClient() = default;

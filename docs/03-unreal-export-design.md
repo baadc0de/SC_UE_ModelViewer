@@ -5,8 +5,9 @@ Target: the SCViewer fork of Unreal Engine 5.9 built from source (Win64, D3D12 S
 
 | Module | Type | Contents |
 | --- | --- | --- |
-| `SCBridgeLib` | ThirdParty | links `libscbridge.so`, ships `scbridge.h` |
-| `SCBridge` | Runtime | FFI client, package source + reader, runtime importers, `ASCVehicle`, `USCClipCatalog`, player pawn, collision, in-game UI (UMG/Slate), app game mode |
+| `SCBridgeLib` | ThirdParty (`SCBridgeImport` plugin) | links `scbridge.dll` / `libscbridge.so`, ships `scbridge.h` |
+| `SCBridgeImport` | Runtime (`SCBridgeImport` plugin) | FFI client, package reader, runtime importers, processed caches, Ogg decoder; registers the archive and importer behind `ISCArchive` / `ISCImporting` (WP-O1-4c-3b). The viewer and the game's editor load it, a packaged game does not |
+| `SCBridge` | Runtime | package sources, `ASCVehicle`, `USCClipCatalog`, player pawn, collision, in-game UI (UMG/Slate), app game mode, the archive and importer interfaces |
 | `SCBridgeEditor` | Editor (optional host) | "Keep as assets" (save transient objects to `/Game/SC/<Entity>/`), viewer-level helpers, Interchange baseline tooling |
 
 Everything the user touches lives in the **Runtime** module so it works in the

@@ -159,7 +159,7 @@ enum class ESCPanelKind : uint8 { FloorSelect, Buttons };
  *  option's interaction. Saved with a prepared level (WP-O1-4b-1c): its face, layout, colours, render target and images;
  *  what it shows is drawn again when it loads (a render target's pixels are not saved). */
 USTRUCT()
-struct FSCFloorPanel
+struct SCBRIDGE_API FSCFloorPanel
 {
     GENERATED_BODY()
     UPROPERTY() ESCPanelKind Kind = ESCPanelKind::FloorSelect;

@@ -127,8 +127,10 @@ game/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # explo
 crates/scviewer-core    Rust: session over p4k + DataCore, decomposed export (disk and in memory), clip catalogue, cache
 crates/scviewer-cli     CLI over the core, for verification and exports
 crates/scbridge-ffi     C-ABI library the Unreal plugin calls (scbridge.dll / libscbridge.so)
-plugins/SCBridge        shared UE plugin: Runtime module (FFI client, importer, vehicles, doors and panels, player, HUD,
-                        RPC harness, viewer shell and its extension points), SCBridgeFx (effects build), ThirdParty/SCBridgeLib
+plugins/SCBridge        shared UE plugin: Runtime module (vehicles, doors and panels, player, HUD, RPC harness, viewer
+                        shell and its extension points, the archive and importer interfaces); no archive library
+plugins/SCBridgeImport  importing from the archive: SCBridgeImport (FFI client, package reader, importer, caches),
+                        SCBridgeFx (effects build), ThirdParty/SCBridgeLib; the viewer and the game's editor only
 viewer/                 the viewer: UE 5.9 project (game-mode app, Viewer map), scripts/ (builds, material generation,
                         routes/, rpc/ with the RPC module), verification/ (records and evidence per work package)
 game/                   UnrealCitizen: UE 5.9 project with the game module (cargo, mobiGlas, Ship Link, Garage, music,

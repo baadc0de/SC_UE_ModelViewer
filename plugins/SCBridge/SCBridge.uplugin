@@ -3,18 +3,13 @@
   "Version": 1,
   "VersionName": "0.0.1",
   "FriendlyName": "SC Bridge",
-  "Description": "The shared Star Citizen runtime of the viewer and UnrealCitizen: import, rendering, ships and places, first person (WP-O1)",
+  "Description": "The shared Star Citizen runtime of the viewer and UnrealCitizen: ships and places, rendering, first person, audio (WP-O1); importing from the archive is the SCBridgeImport plugin.",
   "Category": "Importers",
   "CanContainContent": true,
   "Modules": [
     {
       "Name": "SCBridge",
       "Type": "Runtime",
-      "LoadingPhase": "Default"
-    },
-    {
-      "Name": "SCBridgeFx",
-      "Type": "Editor",
       "LoadingPhase": "Default"
     }
   ],

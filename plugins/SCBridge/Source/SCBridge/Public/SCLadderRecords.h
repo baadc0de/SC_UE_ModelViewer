@@ -30,7 +30,7 @@ struct FSCLadderAction
 
 /** Saved with a prepared level (ASCVehicle::LadderAnchors, WP-O1-4b-1b-3). */
 USTRUCT()
-struct FSCLadderDefinition
+struct SCBRIDGE_API FSCLadderDefinition
 {
     GENERATED_BODY()
     UPROPERTY() float Height = 0;
