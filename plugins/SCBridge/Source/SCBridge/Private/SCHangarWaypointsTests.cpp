@@ -10,7 +10,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "SCHangarWaypoints.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "SCVehicle.h"
 #include "SCFirstPersonCharacter.h"
 #include "Components/BoxComponent.h"

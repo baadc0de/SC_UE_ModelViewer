@@ -1,6 +1,5 @@
 // FSCImportMaterials: material phase of FSCImporter (describe -> decode textures -> textures + MIDs).
 #include "SCImportMaterials.h"
-#include "SCImporter.h"
 #include "SCVehicle.h"
 #include "Async/ParallelFor.h"
 #include "Engine/Texture2D.h"

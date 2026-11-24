@@ -6,24 +6,10 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "SCPackageSource.h"
+#include "SCTextureKey.h"
 
 class UTexture2D;
 struct FSCTextureCacheRequest;
-
-/** How a texture slot is sampled. Normal is a DDNA tangent-space map (always linear). For Color / Linear the
- *  role only decides the encoding of a PNG that does not state one (Color: sRGB, Linear: linear).
- *  DerivedRoughness is the exporter's PNG fallback for a DDNA smoothness map, r = sqrt(1 - smoothness): it is
- *  decoded back to the game's smoothness (1 - r^2, linear) before its mips are built, so the masters read the
- *  same quantity from it as from the DDS smoothness map (WP-T1). */
-enum class ESCTextureRole : uint8 { Color, Normal, Linear, DerivedRoughness };
-
-struct SCBRIDGE_API FSCTextureKey
-{
-    FString Path;
-    ESCTextureRole Role = ESCTextureRole::Color;
-    bool operator==(const FSCTextureKey& O) const { return Role == O.Role && Path == O.Path; }
-    friend uint32 GetTypeHash(const FSCTextureKey& K) { return HashCombine(GetTypeHash(K.Path), uint32(K.Role)); }
-};
 
 /** Pure CPU result: a PNG's BGRA8 mip chain (largest first), or a package DDS's blocks as prepared for UE. */
 struct SCBRIDGE_API FSCDecodedTexture

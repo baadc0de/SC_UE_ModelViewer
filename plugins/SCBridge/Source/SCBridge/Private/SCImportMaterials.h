@@ -2,6 +2,8 @@
 // decodes the referenced textures once (worker), then creates textures + MIDs owned by the vehicle (game thread).
 #pragma once
 #include "CoreMinimal.h"
+#include "SCTextureImporter.h"
+#include "SCPackageSource.h"
 #include "SCMaterialBuilder.h"
 
 class ASCVehicle;

@@ -1,7 +1,7 @@
 // WP-M2 data the shared plugin keeps (WP-O1-2): which drawn panels are the hangar's vehicle kiosks (set at import,
 // ASCVehicle::GarageKiosks) and the aim at one. What a kiosk does is the application's (UnrealCitizen: the Garage app).
 #include "SCVehicle.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "Engine/World.h"
 
 bool ASCVehicle::IsGarageKiosk(const FSCUiBinding& Binding)

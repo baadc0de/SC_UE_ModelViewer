@@ -1,6 +1,6 @@
 // FSCDirt: dirt presets, the MPC_SCDirt push, exterior marking and the sc.Dirt console command (see SCDirt.h).
 #include "SCDirt.h"
-#include "SCImporter.h"
+#include "SCImportLog.h"
 #include "SCVehicle.h"
 #include "SCViewerSettings.h"
 #include "Components/PrimitiveComponent.h"

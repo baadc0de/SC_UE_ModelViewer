@@ -17,6 +17,7 @@
 //   AUDIO_VOICE_RESOURCED, AUDIO_VOICE_CUT.
 #pragma once
 #include <atomic>
+#include "SCPackageSource.h"
 #include "CoreMinimal.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "SCAudioSource.h"

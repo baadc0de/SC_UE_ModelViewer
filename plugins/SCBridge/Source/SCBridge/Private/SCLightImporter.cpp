@@ -6,7 +6,7 @@
 #include "SCStarEngine.h"
 #include "SCVehicle.h"
 #include "SCMeshes.h"
-#include "SCImporter.h"
+#include "SCImportLog.h"
 #include "SCTextureImporter.h"
 #include "SCPlayerKit.h"
 #include "Dom/JsonObject.h"

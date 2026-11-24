@@ -2,6 +2,7 @@
 #include "CoreMinimal.h"
 #include "SCPackageSource.h"
 #include "SCMeshes.h"
+#include "SCImportLog.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "SCImporter.generated.h"
 class ASCVehicle;
@@ -83,18 +84,10 @@ public:
     /** ScenePath selects the package in a shared export root holding several (empty: the sole scene.json). */
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static ASCVehicle* ImportFolder(UObject* WorldContext, const FString& Folder, bool bBuildCollision = true, const FString& ScenePath = TEXT(""));
-    /** The viewer's resting pose: landing gear deployed (its clips), then the lowest visible part moved to FloorZ.
-     *  Returns the number of gear clips played. */
-    UFUNCTION(BlueprintCallable, Category="SC")
-    static int32 RestOnFloor(ASCVehicle* Vehicle, double FloorZ = -5.0);
     /** An object container package from a (shared) export root as an environment: effect-only placements hidden,
      *  repeated parts instanced. ScenePath selects the package's scene.json in a root holding several. */
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static ASCVehicle* ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath);
-    /** The door fragments' presented pose ("open", "closed" or "bind"), then the ship elevator moved under the origin
-     *  with its top at FloorZ. Returns the offset applied. */
-    UFUNCTION(BlueprintCallable, Category="SC")
-    static FVector PresentEnvironment(ASCVehicle* Environment, const FString& State = TEXT("open"), double FloorZ = -5.0);
     /** ImportFolder and ImportEnvironment over any package source (WP-O1-4: the game's prep step imports the archive's
      *  export as it comes, without writing it to disk). */
     static ASCVehicle* ImportVehicleFrom(UWorld* World, FSCPackageSource& Source, bool bBuildCollision = true, const FString& ScenePath = TEXT(""));
@@ -104,4 +97,3 @@ public:
     UFUNCTION(BlueprintCallable, Category="SC", meta=(WorldContext="WorldContext"))
     static void UnloadPackage(UObject* WorldContext);
 };
-DECLARE_LOG_CATEGORY_EXTERN(LogSCImport, Log, All);

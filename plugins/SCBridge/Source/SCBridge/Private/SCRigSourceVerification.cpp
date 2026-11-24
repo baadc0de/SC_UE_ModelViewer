@@ -1,5 +1,5 @@
 // Package regressions use the original GLB bind and raw sidecars, never clip_final_pose exports.
-#include "SCImporter.h"
+#include "SCImportLog.h"
 #include "SCMeshImporter.h"
 #include "SCMeshes.h"
 #include "SCClipCatalog.h"

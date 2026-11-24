@@ -17,7 +17,7 @@
 #include "CoreMinimal.h"
 #include "MeshDescription.h"
 #include "SCInteractionRecords.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "SCFloorPanel.generated.h"
 
 class FSCLift;

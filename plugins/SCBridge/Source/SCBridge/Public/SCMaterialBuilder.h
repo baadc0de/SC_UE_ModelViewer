@@ -2,8 +2,8 @@
 // then UMaterialInstanceDynamic on the /SCBridge/Materials masters (game thread, Create).
 #pragma once
 #include "CoreMinimal.h"
-#include "SCPackageReader.h"
-#include "SCTextureImporter.h"
+#include "SCSceneManifest.h"
+#include "SCTextureKey.h"
 
 class UMaterialInterface;
 class UMaterialInstanceDynamic;

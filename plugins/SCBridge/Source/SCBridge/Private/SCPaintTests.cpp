@@ -1,5 +1,5 @@
 // Paints (tint system): which instances a paint touches and what it puts on them (FSCSceneManifest::PaintTarget).
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "SCVehicle.h"
 #include "UObject/Package.h"
 #include "Misc/AutomationTest.h"

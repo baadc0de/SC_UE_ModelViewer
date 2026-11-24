@@ -1,5 +1,6 @@
 // USCPrepareCommandlet (SCPrepareCommandlet.h): a scenario's environment, vehicle and player body prepared as levels.
 #include "SCPrepareCommandlet.h"
+#include "SCPlacement.h"
 #include "SCCookLibrary.h"
 #include "SCHangarIndex.h"
 #include "SCImporter.h"
@@ -252,7 +253,7 @@ public:
             return false;
         }
         Environment->SetActorLabel(TEXT("Environment ") + Name);
-        const FVector Offset = USCImportLibrary::PresentEnvironment(Environment, TEXT("open"), FloorZ);
+        const FVector Offset = USCPlacementLibrary::PresentEnvironment(Environment, TEXT("open"), FloorZ);
         const FString Path = Container.Replace(TEXT("\\"), TEXT("/"));
         bool bMeasured = false;
         if (!USCCookLibrary::RecordHangarCapacity(Environment, FPaths::GetCleanFilename(FPaths::GetPath(Path)), FPaths::GetBaseFilename(Path), bMeasured))
@@ -318,7 +319,7 @@ public:
             Error = FString::Printf(TEXT("%s: the paint \"%s\" (%s) did not go on"), *Scenario.Vehicle, *Scenario.Skin, *Paints[Paint].Label());
             return false;
         }
-        const int32 GearClips = USCImportLibrary::RestOnFloor(Ship, FloorZ);
+        const int32 GearClips = USCPlacementLibrary::RestOnFloor(Ship, FloorZ);
         UE_LOG(LogSCPrepare, Display, TEXT("SC_PREPARE vehicle %s paint=%s gear_clips=%d"), *Scenario.Vehicle,
                Paint == INDEX_NONE ? TEXT("default") : *Paints[Paint].Label(), GearClips);
         return Finish(Ship, Level, TEXT("/Game/SC/Ships/") + Name, TEXT("/Game/SC/Ships/Shared"), *Source, Scene, Error);

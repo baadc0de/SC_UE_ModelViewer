@@ -3,7 +3,7 @@
 #include "SCLightAreas.h"
 #include "SCViewerSettings.h"
 #include "SCVehicle.h"
-#include "SCImporter.h"
+#include "SCImportLog.h"
 #include "SCLights.h"
 #include "SCRigComponent.h"
 #include "Components/LightComponent.h"

@@ -2,7 +2,7 @@
 // interior, after its placements exist and before instancing merges repeated parts).
 #pragma once
 #include "CoreMinimal.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 
 class ASCVehicle;
 class USceneComponent;

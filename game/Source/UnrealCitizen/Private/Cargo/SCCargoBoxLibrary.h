@@ -5,6 +5,7 @@
 // the template, nothing is exported or imported.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCPackageSource.h"
 #include "UObject/GCObject.h"
 #include "Tasks/Task.h"
 #include "SCBridgeClient.h"

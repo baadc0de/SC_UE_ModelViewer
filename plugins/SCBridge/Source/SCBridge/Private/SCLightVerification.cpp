@@ -3,7 +3,7 @@
 #include "SCStarEngine.h"
 #include "SCViewerSettings.h"
 #include "SCVehicle.h"
-#include "SCImporter.h"
+#include "SCImportLog.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Components/LightComponent.h"

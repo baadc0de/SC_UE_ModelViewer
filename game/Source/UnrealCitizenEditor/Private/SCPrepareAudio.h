@@ -9,6 +9,7 @@
 // Content/SCAudio and Content/SC are gitignored.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCPackageSource.h"
 
 class FSCPackageSource;
 class USoundWave;

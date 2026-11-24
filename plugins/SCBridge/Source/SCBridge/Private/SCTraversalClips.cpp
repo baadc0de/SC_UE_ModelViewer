@@ -1,6 +1,6 @@
 // Asynchronous request and sidecar validation for an authored body action set.
 #include "SCTraversalClips.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "SCPackageSource.h"
 #include "SCLadderRecords.h"
 #include "SCPlayerKitData.h"

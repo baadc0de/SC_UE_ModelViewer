@@ -2,7 +2,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "SCClipCatalog.h"
 #include "SCLightState.h"
 #include "SCLightAreas.h"
