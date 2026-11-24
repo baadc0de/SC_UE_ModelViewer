@@ -1,6 +1,7 @@
 // FSCVehicleInstances: extra vehicle instances (queue -> export/parse or retained assets -> import/assembly -> envelope,
 // free-floor placement, rest on the landing gear), their console commands and the free-floor placement helper.
 #include "SCVehicleInstances.h"
+#include "SCPlacement.h"
 #include "SCEnvironment.h"
 #include "SCImportJob.h"
 #include "SCImporter.h"
@@ -628,7 +629,7 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
     if (!I.Info.bAutoPlaced)
     {
         // TODO(WP-K1): an explicit transform is taken as given: no overlap check against geometry or other vehicles.
-        if (bFresh && I.bRest) USCImportLibrary::RestOnFloor(V, I.Requested.GetLocation().Z);
+        if (bFresh && I.bRest) USCPlacementLibrary::RestOnFloor(V, I.Requested.GetLocation().Z);
         return true;
     }
     double EnvelopeSeconds = 0;
@@ -695,7 +696,7 @@ bool FSCVehicleInstances::Place(FInstance& I, const TArray<const AActor*>& Other
         return false;
     }
     V->SetActorTransform(R.Transform, false, nullptr, ETeleportType::TeleportPhysics);
-    if (bFresh) USCImportLibrary::RestOnFloor(V, R.GroundZ); // landing gear, then the lowest visible point on the floor
+    if (bFresh) USCPlacementLibrary::RestOnFloor(V, R.GroundZ); // landing gear, then the lowest visible point on the floor
     else if (const double Lowest = V->LowestVisibleZ(); Lowest < TNumericLimits<double>::Max())
         V->AddActorWorldOffset(FVector(0, 0, R.GroundZ - Lowest)); // keeps its pose (plates, gear, doors)
     return true;

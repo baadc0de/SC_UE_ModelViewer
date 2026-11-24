@@ -5,6 +5,7 @@
 // Auto-placed instances stand on free hangar floor (FSCVehiclePlacement); the set is cleared with the loaded vehicle.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCPackageSource.h"
 #include "Tasks/Task.h"
 #include "SCBridgeClient.h"
 

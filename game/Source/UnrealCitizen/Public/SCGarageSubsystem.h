@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SCSceneManifest.h"
 #include "SCBridgeClient.h"
 #include "Subsystems/WorldSubsystem.h"
 

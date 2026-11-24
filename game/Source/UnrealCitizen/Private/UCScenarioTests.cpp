@@ -5,7 +5,7 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "SCBridgeClient.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "SCViewerSubsystem.h"
 #include "UCScenario.h"
 #include "Cargo/SCCargoFxMapping.h"

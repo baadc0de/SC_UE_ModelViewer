@@ -1,7 +1,7 @@
 // Parses the K1a cargo fields of scene.json into FSCSceneManifest (inventory containers, port paths, item occupancy).
 // Values are kept as authored (metres, SC axes); nothing is defaulted: a missing field stays zero/empty.
 #include "Cargo/SCCargoRecords.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 

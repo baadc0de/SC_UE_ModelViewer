@@ -1,6 +1,7 @@
 // USCViewerSubsystem: archive open, async search, the load pipeline with phase progress and cancel, unload with
 // GC accounting, reuse by entity + options hash, camera mode/focus/isolate and the editor Keep hook.
 #include "SCViewerSubsystem.h"
+#include "SCPlacement.h"
 #include "SCLook.h"
 #include "SCHangarIndex.h"
 #include "SCViewerShell.h"
@@ -1169,7 +1170,7 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
         if (Stage == ESCImportStage::Succeeded)
         {
             Vehicle = Result.Vehicle;
-            USCImportLibrary::RestOnFloor(Vehicle.Get(), ViewerFloorZ);
+            USCPlacementLibrary::RestOnFloor(Vehicle.Get(), ViewerFloorZ);
             LoadedEntity = PendingEntity;
             LoadedKey = PendingKey;
             if (VehicleInstances) VehicleInstances->SetPrimary(Vehicle.Get(), Job->GetRetainedAssets(), LoadedKey);

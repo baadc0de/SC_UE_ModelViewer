@@ -1,9 +1,10 @@
 // Runtime animation import API; CPU binding is independent of skeletal UObject construction.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCPackageSource.h"
 #include "SCClipCatalog.h"
 #include "SCMeshes.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 class SCBRIDGE_API FSCAnimImporter
 {
 public:

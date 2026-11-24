@@ -1,5 +1,6 @@
 // USCCookLibrary: environment -> persistent level actor with pooled assets (WP-C1).
 #include "SCCookLibrary.h"
+#include "SCImporter.h"
 #include "SCLights.h"
 #include "SCRigAssets.h"
 #include "SCLift.h"

@@ -3,6 +3,7 @@
 // A prepared player body saves them field by field (SCPlayerKitData.cpp): a field added here is added there too.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCPackageSource.h"
 
 class FJsonObject;
 

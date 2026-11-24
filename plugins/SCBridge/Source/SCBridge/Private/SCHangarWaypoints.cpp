@@ -1,7 +1,7 @@
 // Hangar waypoints: which environment records are places a player walks to (by their DataCore components), their labels,
 // ASCVehicle::BuildWaypoints, and the teleport menu's sections.
 #include "SCHangarWaypoints.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "SCVehicle.h"
 #include "SCEnvironment.h"
 #include "Internationalization/Regex.h"

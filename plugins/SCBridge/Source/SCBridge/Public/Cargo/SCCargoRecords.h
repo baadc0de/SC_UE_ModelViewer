@@ -2,6 +2,7 @@
 // interiors, `children[].port_path`, and the root item's inventory occupancy. Called by FSCPackageReader.
 #pragma once
 #include "CoreMinimal.h"
+#include "SCSceneManifest.h"
 #include "Cargo/SCCargoTypes.h"
 
 class FJsonObject;

@@ -1,7 +1,8 @@
 // Import schema-v2 scene lights and attachment-relative projectors.
 #pragma once
 #include "CoreMinimal.h"
-#include "SCPackageReader.h"
+#include "SCPackageSource.h"
+#include "SCSceneManifest.h"
 #include "SCLights.h"
 class ASCVehicle;
 class USceneComponent;

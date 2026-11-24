@@ -1,6 +1,6 @@
 #include "SCGeometryStreaming.h"
 
-#include "SCImporter.h"
+#include "SCImportLog.h"
 #include "SCProcessedCache.h"
 #include "SCProcessedMeshCache.h"
 #include "SCVehicle.h"

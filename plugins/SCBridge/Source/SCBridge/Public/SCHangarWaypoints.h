@@ -2,6 +2,7 @@
 // their DataCore components, never by names; and the first-person teleport menu's sections (ship spawns, hangar places).
 #pragma once
 #include "CoreMinimal.h"
+#include "SCSceneManifest.h"
 #include "SCHangarWaypoints.generated.h"
 
 struct FSCSceneManifest;

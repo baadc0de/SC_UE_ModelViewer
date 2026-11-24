@@ -15,7 +15,6 @@
 #include "UObject/UObjectIterator.h"
 #include "RenderingThread.h"
 
-DEFINE_LOG_CATEGORY(LogSCImport);
 namespace
 {
 TMap<TWeakObjectPtr<UWorld>, TWeakObjectPtr<ASCVehicle>> Vehicles;
@@ -69,16 +68,6 @@ ASCVehicle* USCImportLibrary::ImportVehicleFrom(UWorld* World, FSCPackageSource&
     }
     return Result.Vehicle.Get();
 }
-int32 USCImportLibrary::RestOnFloor(ASCVehicle* Vehicle, double FloorZ)
-{
-    if (!Vehicle) return 0;
-    const int32 GearClips = Vehicle->RestOnLandingGear();
-    FString LowestPart;
-    const double Lowest = Vehicle->LowestVisibleZ(&LowestPart);
-    UE_LOG(LogSCImport, Display, TEXT("VIEWER_REST gear_clips=%d lowest_z=%.1f part=%s"), GearClips, Lowest, *LowestPart);
-    if (Lowest < TNumericLimits<double>::Max()) Vehicle->AddActorWorldOffset(FVector(0, 0, FloorZ - Lowest));
-    return GearClips;
-}
 ASCVehicle* USCImportLibrary::ImportEnvironment(UObject* WorldContext, const FString& Folder, const FString& ScenePath)
 {
     FSCFolderPackageSource Source(Folder);
@@ -96,13 +85,6 @@ ASCVehicle* USCImportLibrary::ImportEnvironmentFrom(UWorld* World, FSCPackageSou
     FSCImportResult Result;
     if (!FSCImporter::Import(Source, Options, Result)) UE_LOG(LogSCImport, Error, TEXT("IMPORT_FAILED %s"), *Result.Error);
     return Result.Vehicle.Get();
-}
-FVector USCImportLibrary::PresentEnvironment(ASCVehicle* Environment, const FString& State, double FloorZ)
-{
-    FSCEnvironment::SetState(Environment, State);
-    const FVector Offset = FSCEnvironment::PlaceOnFloor(Environment, FloorZ, nullptr);
-    if (Environment) Environment->BuildWaypoints(); // in the presented pose, while the rigs are alive (a cook saves them)
-    return Offset;
 }
 bool USCImportLibrary::VerifyPackage(UObject* Context, const FString& Folder, const FString& Tar)
 {

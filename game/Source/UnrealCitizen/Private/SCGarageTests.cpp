@@ -1,6 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "SCGarageSubsystem.h"
-#include "SCPackageReader.h"
+#include "SCSceneManifest.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "SCVehicleInstances.h"
