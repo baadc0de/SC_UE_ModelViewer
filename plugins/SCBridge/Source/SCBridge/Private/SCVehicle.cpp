@@ -171,32 +171,26 @@ bool ASCVehicle::HasTravelLeft(const FSCClipPlayback& P) const
     if (!ClipCatalog || !ClipCatalog->Clips.IsValidIndex(P.Clip)) return false;
     return P.Speed > 0 ? P.Frame < ClipCatalog->Clips[P.Clip].LastFrame : P.Speed < 0 && P.Frame > 0;
 }
-bool ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool bWasAtEnd, bool bForward)
+void ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool bWasAtEnd)
 {
-    if (!Doors.IsValidIndex(Door) || !Doors[Door].Rig) return true;
+    if (!Doors.IsValidIndex(Door) || !Doors[Door].Rig) return;
     const USCRigComponent* Rig = Doors[Door].Rig;
-    // The order's layers on the door's rig: those with travel left in their direction move it; the others show it where
-    // they hold: at the end the order plays to (a clip started at that end, a one-frame clip), or short of it (a layer
-    // held between its ends: an option authored at speed zero).
+    // The order's layers on the door's rig: those with travel left in their direction move it; one started at the end it
+    // plays to (in Playback until the next tick) or a one-frame clip shows it at the order's end. (A layer authored at
+    // speed zero, a pose, is not judged: no door option in the data is one.)
     auto Ours = [&](const FSCClipPlayback& P) {
-        return P.Order > AfterOrder && (P.TargetRig.Get() == Rig || !P.bTargeted) && ClipCatalog && ClipCatalog->Clips.IsValidIndex(P.Clip);
-    };
-    auto AtEnd = [&](const FSCClipPlayback& P) {
-        const int32 Last = ClipCatalog->Clips[P.Clip].LastFrame;
-        if (Last <= 0) return true;
-        return (P.Speed != 0 ? P.Speed > 0 : bForward) ? P.Frame >= Last : P.Frame <= 0;
+        return P.Order > AfterOrder && (P.TargetRig.Get() == Rig || !P.bTargeted) && P.Speed != 0 && ClipCatalog && ClipCatalog->Clips.IsValidIndex(P.Clip);
     };
     TArray<uint64> Orders;
-    bool bAny = false, bShort = false;
-    for (const TArray<FSCClipPlayback>* List : {&Playback, &HeldPlayback})
-        for (const FSCClipPlayback& P : *List)
-            if (Ours(P))
-            {
-                bAny = true;
-                if (List == &Playback && HasTravelLeft(P)) Orders.Add(P.Order);
-                else if (!AtEnd(P)) bShort = true;
-            }
-    const bool bAtEnd = bAny && !bShort;
+    bool bAtEnd = false;
+    for (const FSCClipPlayback& P : Playback)
+        if (Ours(P))
+        {
+            if (HasTravelLeft(P)) Orders.Add(P.Order);
+            else bAtEnd = true;
+        }
+    for (const FSCClipPlayback& P : HeldPlayback)
+        if (Ours(P) && ClipCatalog->Clips[P.Clip].LastFrame <= 0) bAtEnd = true;
     const int32 Previous = DoorMotions.IndexOfByPredicate([&](const FDoorMotion& M) { return M.Door == Door; });
     if (!Orders.IsEmpty())
     {
@@ -205,8 +199,7 @@ bool ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool
             // The same order again mid-stroke (a lift ordering a closing door closed): the move goes on with the playback
             // just started, and its start effects are not played again.
             DoorMotions[Previous].Orders = MoveTemp(Orders);
-            DoorMotions[Previous].bShort = bShort;
-            return !bShort;
+            return;
         }
         // A door turned around mid-stroke, or leaving its rest: its previous move is replaced (the new Moved ends what it
         // held).
@@ -216,26 +209,23 @@ bool ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool
         Motion.bOpen = bOpen;
         Motion.Rig = const_cast<USCRigComponent*>(Rig);
         Motion.Orders = MoveTemp(Orders);
-        Motion.bShort = bShort;
         DoorMotions.Add(MoveTemp(Motion));
         OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Moved);
         UpdateTickEnabled();
-        return !bShort;
+        return;
     }
     // Nothing moves.
     if (Previous != INDEX_NONE)
     {
-        // A move under way: re-ordered at its end it arrives; turned around before it moved, or held short of the end, it
-        // is cancelled.
+        // A move under way: re-ordered at its end it arrives; turned around before it moved it is cancelled.
         const bool bArrives = bAtEnd && DoorMotions[Previous].bOpen == bOpen;
         DoorMotions.RemoveAt(Previous);
         OnDoorMotion.Broadcast(this, Door, bOpen, bArrives ? EDoorMotion::Arrived : EDoorMotion::Cancelled);
-        return bAtEnd;
+        return;
     }
     // At rest: already at the order's end, it keeps its rest (its held loops); otherwise what it held ends.
-    if (bAtEnd && bWasAtEnd) return true;
+    if (bWasAtEnd) return;
     OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Cancelled);
-    return bAtEnd;
 }
 void ASCVehicle::CancelDoorMotion(int32 Door)
 {
@@ -267,8 +257,7 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended, const TSet<uint64>
         // (its next order goes the other way, as before) but is unsettled, so sc.Doors.Play does not skip it. A gangway
         // stopped by the ground is settled (RememberGangwayStop).
         if (bVanished) MarkDoorUnsettled(Done.Door);
-        // A move with a layer held short of its end (bShort: PlayDoor left it unsettled) ends cancelled too.
-        if (!Done.Orders.IsEmpty() || bVanished || bGrounded || Done.bShort) OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Cancelled);
+        if (!Done.Orders.IsEmpty() || bVanished || bGrounded) OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Cancelled);
         else OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Arrived);
     }
 }

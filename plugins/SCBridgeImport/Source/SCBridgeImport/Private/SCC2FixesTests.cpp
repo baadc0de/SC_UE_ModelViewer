@@ -819,26 +819,8 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     RRamp.Door.bValid = true;
     RRamp.Door.TransitionTag = TEXT("Open");
     V->DoorRecords.Add(Ramp, RRamp);
-    // A gate whose open option is authored at speed zero: an order holds it where it is.
-    USCRigComponent* Gate = AddRig(V, TEXT("Gate"));
-    AddClip(V, Gate, TEXT("gate_open"), TEXT("Open"), {0, 20, 40});
-    V->ClipCatalog->Clips.Last().Fragments[0].Speed = 0;
-    AddClip(V, Gate, TEXT("gate_close"), TEXT("Close"), {40, 20, 0});
-    V->DoorRecords.Add(Gate, R);
-    // Double gates: one open option of two leaves, one moving, the other (another bone) authored at speed zero.
-    USCRigComponent* Double = AddRig(V, TEXT("Double"));
-    AddClip(V, Double, TEXT("double_a"), TEXT("Open"), {0, 20, 40});
-    AddClip(V, Double, TEXT("double_b"), TEXT("Open"), {0, 20, 40});
-    {
-        FSCImportedClip& LeafB = V->ClipCatalog->Clips.Last();
-        LeafB.Bindings[0].Tracks[0].Bone = 0;
-        LeafB.Fragments[0].Speed = 0;
-        LeafB.Fragments[0].OptionId = TEXT("double_a"); // the same option as leaf A
-    }
-    AddClip(V, Double, TEXT("double_close"), TEXT("Close"), {40, 20, 0});
-    V->DoorRecords.Add(Double, R);
     V->BuildExploration();
-    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B), DBed = V->DoorForRig(Bed), DRamp = V->DoorForRig(Ramp), DGate = V->DoorForRig(Gate);
+    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B), DBed = V->DoorForRig(Bed), DRamp = V->DoorForRig(Ramp);
     if (!TestTrue(TEXT("two doors"), DA != INDEX_NONE && DB != INDEX_NONE)) return false;
     TArray<FString> Events;
     const FDelegateHandle Handle = ASCVehicle::OnDoorMotion.AddLambda([&](ASCVehicle* Vehicle, int32 Door, bool bOpen, ASCVehicle::EDoorMotion E) {
@@ -1005,31 +987,6 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     TestTrue(TEXT("ramp closes again"), V->PlayDoor(DRamp, false));
     V->Tick(1.f);
     Expect(TEXT("a reverse-close door re-ordered at rest"), {});
-
-    // The gate's open option is held where it is (speed zero): no move, its rest ends, and its state is unsettled.
-    TestTrue(TEXT("gate ordered open"), V->PlayDoor(DGate, true));
-    TestEqual(TEXT("its rest ends, no move"), Events.Num(), 1);
-    TestTrue(TEXT("a cancel"), Events.Num() == 1 && Events[0].EndsWith(TEXT("cancelled")));
-    TestFalse(TEXT("gate unsettled"), V->IsDoorStateKnown(DGate));
-    V->Tick(1.f);
-    Events.Reset();
-    // Held at its open end (snapped there), an open order holding it there keeps its rest: no event, settled open.
-    const int32 GateOpen = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("gate_open")); });
-    TestTrue(TEXT("gate snapped open"), V->SnapClipAt(GateOpen, Gate, true) && V->IsDoorStateKnown(DGate) && V->IsDoorOpen(DGate));
-    Events.Reset();
-    TestTrue(TEXT("gate ordered open"), V->PlayDoor(DGate, true));
-    V->Tick(1.f);
-    Expect(TEXT("held at its end: its rest goes on"), {});
-    TestTrue(TEXT("settled open"), V->IsDoorStateKnown(DGate) && V->IsDoorOpen(DGate));
-
-    // The double gates: one leaf moves, the other is held short: a move that ends cancelled, not arrived; unsettled.
-    const int32 DDouble = V->DoorForRig(Double);
-    Events.Reset();
-    TestTrue(TEXT("double gates ordered open"), V->PlayDoor(DDouble, true));
-    V->Tick(1.f);
-    TestTrue(TEXT("moved, then cancelled"), Events.Num() == 2 && Events[0].EndsWith(TEXT("moved")) && Events[1].EndsWith(TEXT("cancelled")));
-    TestFalse(TEXT("double gates unsettled"), V->IsDoorStateKnown(DDouble));
-    Events.Reset();
 
     // A lock change is reported.
     TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));

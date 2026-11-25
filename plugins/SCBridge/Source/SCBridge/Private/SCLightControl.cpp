@@ -170,12 +170,17 @@ static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPlay(
                 }
         for (const auto& [V, D, bOpen] : Orders)
         {
-            // Skipped only when its recorded state is the target (an unknown state, after a raw clip, closes from its pose).
-            const bool bAtTarget = V->IsDoorStateKnown(D) && V->IsDoorOpen(D) == bOpen;
+            // Skipped when its recorded state is the target (an unknown state, after a raw clip, closes from its pose) or a
+            // port link of the batch already ordered it there.
+            const bool bAtTarget = (V->IsDoorStateKnown(D) && V->IsDoorOpen(D) == bOpen) || V->DoorOrderDelivered.Contains(D);
             const bool bPlayed = !bAtTarget && V->PlayDoor(D, bOpen);
             UE_LOG(LogSCLightControl, Display, TEXT("DOOR_PLAY vehicle=%s door=%d owner=%s open=%d played=%d"), *V->GetName(), D, *V->Doors[D].Rig->OwnerEntity, bOpen, bPlayed);
         }
-        for (const auto& [V, D, bOpen] : Orders) V->DoorOrderBatch.Reset();
+        for (const auto& [V, D, bOpen] : Orders)
+        {
+            V->DoorOrderBatch.Reset();
+            V->DoorOrderDelivered.Reset();
+        }
     }));
 
 // sc.Doors.Trace <door index|-1>: log that door every vehicle tick while a clip plays on its rig (DOOR_TICK: recorded state,

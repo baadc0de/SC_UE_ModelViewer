@@ -602,15 +602,13 @@ public:
         bool bOpen = false;
         TArray<uint64> Orders;
         TWeakObjectPtr<USCRigComponent> Rig; // gone: the move stops (an untargeted clip plays on)
-        bool bShort = false; // a layer of the order is held short of its end: the move ends cancelled, not arrived
     };
     TArray<FDoorMotion> DoorMotions;
     int32 OrderingDoor = INDEX_NONE; // the door PlayDoor is playing the fragment of (it reports that move itself)
     /** Door's motion starts with the playback entries of its rig started after AfterOrder (none: nothing moves).
-     *  bWasAtEnd: the door's state was known and was the order's end before the order played; bForward: the order plays
-     *  its clips forwards (the end a layer held at speed zero is measured against). Returns false when the order leaves
-     *  the door short of its end (a layer held between its ends): its recorded state is then unsettled. */
-    bool StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool bWasAtEnd, bool bForward = true);
+     *  bWasAtEnd: the door's state was known and was the order's end before the order played (a door at rest there that
+     *  nothing moves keeps its rest). */
+    void StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool bWasAtEnd);
     /** Door's motion (if any) stops without arriving. */
     void CancelDoorMotion(int32 Door);
     /** Motions whose entries ended naturally (Ended) arrive; those stopped by the ground (Grounded) are cancelled keeping
@@ -637,6 +635,8 @@ public:
     TArray<int32> EligibleFragmentClips(FName Fragment, FName Tag, const USCRigComponent* Target) const;
     /** sc.Doors.Play's batch: a port link (PlayDoor) does not move a door of the batch away from its own target. */
     TMap<int32, bool> DoorOrderBatch;
+    /** The batch's doors already ordered in it (by a port link before their own turn): not ordered twice. */
+    TSet<int32> DoorOrderDelivered;
     /** WP-O1-4b-3c: a copy streamed from a prepared level registers its level audio (CookedAudio) once it is placed, not at
      *  BeginPlay (it begins play at the level's origin, hidden): StartCookedAudio then. */
     UPROPERTY(Transient) bool bDeferCookedAudio = false;

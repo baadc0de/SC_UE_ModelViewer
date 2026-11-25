@@ -258,7 +258,8 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     OrderingDoor = OuterOrder;
     if (!bStarted) return false;
     // WP-A1: the door's move (its effects listen); it arrives when the playback it started ends.
-    const bool bReachesEnd = StartDoorMotion(Index, bOpen, PriorOrder, bWasAtEnd, Speed >= 0);
+    StartDoorMotion(Index, bOpen, PriorOrder, bWasAtEnd);
+    if (DoorOrderBatch.Contains(Index)) DoorOrderDelivered.Add(Index);
     if (ShipDoors.IsValidIndex(Index))
     {
         FShipDoor& State = ShipDoors[Index];
@@ -276,9 +277,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
         ShipDoors[Index].bCargoRelock = true;
     }
     FragmentTargets.Add({Rig, D.Fragment}, bOpen ? D.OpenTag : D.CloseTag);
-    UnsettledTargets.Remove({Rig, D.Fragment});
-    if (!bReachesEnd) MarkDoorUnsettled(Index); // held short of the end (a zero-speed option): its next order is not skipped
-    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
+    UnsettledTargets.Remove({Rig, D.Fragment});    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
     UpdateTickEnabled();
     // The door's own interaction goes on to the items of the vehicle ports its links name (the C2's front hatch: its Open and
     // Close reach the front doors and the ramp).
