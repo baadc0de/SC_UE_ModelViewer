@@ -812,8 +812,21 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
         BedClip.Fragments.Insert(Alias, 0);
     }
     V->DoorRecords.Add(Bed, R);
+    // A ramp: one open transition, closed by playing it backwards (single-procedural).
+    USCRigComponent* Ramp = AddRig(V, TEXT("Ramp"));
+    AddClip(V, Ramp, TEXT("ramp_open"), TEXT("Open"), {0, 40});
+    FSCDoorRecord RRamp;
+    RRamp.Door.bValid = true;
+    RRamp.Door.TransitionTag = TEXT("Open");
+    V->DoorRecords.Add(Ramp, RRamp);
+    // A gate whose open option is authored at speed zero: an order holds it where it is.
+    USCRigComponent* Gate = AddRig(V, TEXT("Gate"));
+    AddClip(V, Gate, TEXT("gate_open"), TEXT("Open"), {0, 20, 40});
+    V->ClipCatalog->Clips.Last().Fragments[0].Speed = 0;
+    AddClip(V, Gate, TEXT("gate_close"), TEXT("Close"), {40, 20, 0});
+    V->DoorRecords.Add(Gate, R);
     V->BuildExploration();
-    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B), DBed = V->DoorForRig(Bed);
+    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B), DBed = V->DoorForRig(Bed), DRamp = V->DoorForRig(Ramp), DGate = V->DoorForRig(Gate);
     if (!TestTrue(TEXT("two doors"), DA != INDEX_NONE && DB != INDEX_NONE)) return false;
     TArray<FString> Events;
     const FDelegateHandle Handle = ASCVehicle::OnDoorMotion.AddLambda([&](ASCVehicle* Vehicle, int32 Door, bool bOpen, ASCVehicle::EDoorMotion E) {
@@ -967,6 +980,26 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     TestTrue(TEXT("bed played forwards"), V->PlayClipAt(BedIndex, Bed, 1.f));
     V->Tick(1.f);
     TestTrue(TEXT("recorded closed"), V->IsDoorStateKnown(DBed) && !V->IsDoorOpen(DBed));
+    Events.Reset();
+
+    // The ramp, closed backwards, ordered closed again at rest closed: nothing moves, its rest goes on (no event).
+    TestTrue(TEXT("ramp is a reverse-close door"), V->Doors.IsValidIndex(DRamp) && V->Doors[DRamp].bReverseClose);
+    TestTrue(TEXT("ramp opens"), V->PlayDoor(DRamp, true));
+    V->Tick(1.f);
+    TestTrue(TEXT("ramp closes"), V->PlayDoor(DRamp, false));
+    V->Tick(1.f);
+    TestTrue(TEXT("ramp closed"), V->IsDoorStateKnown(DRamp) && !V->IsDoorOpen(DRamp));
+    Events.Reset();
+    TestTrue(TEXT("ramp closes again"), V->PlayDoor(DRamp, false));
+    V->Tick(1.f);
+    Expect(TEXT("a reverse-close door re-ordered at rest"), {});
+
+    // The gate's open option is held where it is (speed zero): no move, its rest ends, and its state is unsettled.
+    TestTrue(TEXT("gate ordered open"), V->PlayDoor(DGate, true));
+    TestEqual(TEXT("its rest ends, no move"), Events.Num(), 1);
+    TestTrue(TEXT("a cancel"), Events.Num() == 1 && Events[0].EndsWith(TEXT("cancelled")));
+    TestFalse(TEXT("gate unsettled"), V->IsDoorStateKnown(DGate));
+    V->Tick(1.f);
     Events.Reset();
 
     // A lock change is reported.

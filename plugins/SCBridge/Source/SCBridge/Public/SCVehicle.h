@@ -605,8 +605,10 @@ public:
     };
     TArray<FDoorMotion> DoorMotions;
     int32 OrderingDoor = INDEX_NONE; // the door PlayDoor is playing the fragment of (it reports that move itself)
-    /** Door's motion starts with the playback entries of its rig started after AfterOrder (none: nothing moves). */
-    void StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder);
+    /** Door's motion starts with the playback entries of its rig started after AfterOrder (none: nothing moves).
+     *  bWasAtEnd: the door's state was known and was the order's end before the order played. Returns false when the order
+     *  leaves the door short of its end (held between its ends): its recorded state is then unsettled. */
+    bool StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool bWasAtEnd);
     /** Door's motion (if any) stops without arriving. */
     void CancelDoorMotion(int32 Door);
     /** Motions whose entries ended naturally (Ended) arrive; those stopped by the ground (Grounded) are cancelled keeping

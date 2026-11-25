@@ -251,13 +251,14 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
     const uint64 PriorOrder = NextOrder;
+    const bool bWasAtEnd = IsDoorStateKnown(Index) && IsDoorOpen(Index) == bOpen; // before the fragment records its tag
     const int32 OuterOrder = OrderingDoor;
     OrderingDoor = Index; // this door's move is reported below, once; other doors its fragment drives stop
     const bool bStarted = PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose);
     OrderingDoor = OuterOrder;
     if (!bStarted) return false;
     // WP-A1: the door's move (its effects listen); it arrives when the playback it started ends.
-    StartDoorMotion(Index, bOpen, PriorOrder);
+    const bool bReachesEnd = StartDoorMotion(Index, bOpen, PriorOrder, bWasAtEnd);
     if (ShipDoors.IsValidIndex(Index))
     {
         FShipDoor& State = ShipDoors[Index];
@@ -276,6 +277,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     }
     FragmentTargets.Add({Rig, D.Fragment}, bOpen ? D.OpenTag : D.CloseTag);
     UnsettledTargets.Remove({Rig, D.Fragment});
+    if (!bReachesEnd) MarkDoorUnsettled(Index); // held short of the end (a zero-speed option): its next order is not skipped
     if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
     UpdateTickEnabled();
     // The door's own interaction goes on to the items of the vehicle ports its links name (the C2's front hatch: its Open and
