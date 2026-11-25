@@ -258,7 +258,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     OrderingDoor = OuterOrder;
     if (!bStarted) return false;
     // WP-A1: the door's move (its effects listen); it arrives when the playback it started ends.
-    const bool bReachesEnd = StartDoorMotion(Index, bOpen, PriorOrder, bWasAtEnd);
+    const bool bReachesEnd = StartDoorMotion(Index, bOpen, PriorOrder, bWasAtEnd, Speed >= 0);
     if (ShipDoors.IsValidIndex(Index))
     {
         FShipDoor& State = ShipDoors[Index];
