@@ -78,7 +78,7 @@ vendored as a git submodule at `vendor/StarBreaker` (our patches live on `scview
   (`-SCRpc`) drives the running app: load, spawn, cargo, camera, screenshots, MP4 recording. An NDJSON state log
   reports positions, forces, idle and settled events, and anomalies. `explore.ps1` makes seeded random scene changes
   and checks stability after each (WP-H1).
-- **Local cache.** Exports and the entity index are cached under `./cache/` of the working directory: a size cap,
+- **Local cache.** Exports and the entity index are cached under `./cache/` of the working directory (a packaged build: beside its `SCViewer.exe`): a size cap,
   keyed by archive build, entity and options. A repeat load skips the export.
 
 ### Platforms and builds

@@ -62,6 +62,10 @@ SCBRIDGE_API FText MenuName();
  *  (orbit / fly cameras). Opening is ignored while no menu is registered. */
 SCBRIDGE_API bool IsMenuOpen(USCViewerSubsystem* Viewer);
 SCBRIDGE_API void SetMenuOpen(USCViewerSubsystem* Viewer, bool bOpen);
+/** While the menu is open, whether the view keeps its mouse (orbit and fly drags, the wheel) where the menu draws nothing:
+ *  the viewer's paint-only menu. First person never does (its buttons fire and aim). Reset when the menu closes. */
+SCBRIDGE_API void SetMenuPassesView(bool bPasses);
+SCBRIDGE_API bool MenuPassesView();
 
 using FMakeOverlay = TFunction<TSharedRef<SWidget>(const FSCViewOverlayArgs&)>;
 /** A layer over the view, above the first-person HUD; drawn in registration order. Takes effect for roots built after. */

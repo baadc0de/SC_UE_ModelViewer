@@ -34,7 +34,9 @@ FString USCViewerSettings::ResolveCacheDir() const
 }
 FString USCViewerSettings::ResolveArchivePath() const
 {
-    FString Path = ArchivePath;
+    // The saved choice only while its file is there (a moved or reinstalled game: discovery instead); the command line
+    // is taken as given (its error is shown).
+    FString Path = !ArchivePath.IsEmpty() && FPaths::FileExists(ArchivePath) ? ArchivePath : FString();
     FParse::Value(FCommandLine::Get(), TEXT("SCArchive="), Path);
     return Path.IsEmpty() ? Path : FPaths::ConvertRelativePathToFull(FPlatformMisc::LaunchDir(), Path);
 }

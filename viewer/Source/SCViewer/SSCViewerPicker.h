@@ -127,5 +127,9 @@ private:
     FLinearColor ColorOf(const FString& Channel) const;
     void ApplyColor(const FString& Channel, const FLinearColor& Linear, bool bSave);
     void ResetColors();
+    /** Back to the paint's own colour for one channel (a cancelled colour picker on a channel that had none). */
+    void RemoveColor(const FString& Channel);
+    /** The active paint's own colours (its palette channels), read when the colour rows are made. */
+    TMap<FString, FLinearColor> BaseColors;
     void OpenColorPicker(const FString& Channel);
 };

@@ -10,6 +10,7 @@
 #include "SCViewOptions.h"
 #include "RenderUtils.h"
 #include "SCNativeFileDialog.h"
+#include "SCViewerSettings.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/ViewportSplitScreen.h"
@@ -332,6 +333,12 @@ TSharedRef<SWidget> SSCViewerRoot::MakeArchiveOverlay()
                     [
                         SNew(SButton).ToolTipText(LOCTEXT("RetryTip", "Look for Star Citizen in its usual install folder again"))
                         .OnClicked_Lambda([this] {
+                            USCViewerSettings* Settings = USCViewerSettings::Get();
+                            if (!Settings->ArchivePath.IsEmpty())
+                            {
+                                Settings->ArchivePath.Reset(); // the usual folder, not the last choice
+                                Settings->Save();
+                            }
                             if (Subsystem.IsValid()) Subsystem->OpenArchive(FString());
                             return FReply::Handled();
                         })

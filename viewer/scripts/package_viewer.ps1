@@ -2,7 +2,7 @@
 # SCViewer.exe. It imports from the user's own Star Citizen installation at run time (Data.p4k, found in the standard RSI
 # install locations or chosen in the app), through the archive library (scbridge.dll, staged as a runtime dependency of
 # SCBridgeImport). A game target has no editor modules: meshes are built at run time without Nanite, distance fields or
-# Lumen cards (SCMeshBuild: "disabled:non_editor_host"); see viewer/README.md "Packaged viewer".
+# Lumen cards (SCMeshBuild: "disabled:non_editor_host"). Its cache is the "cache" folder beside SCViewer.exe.
 # -Release makes the public download (docs/viewer/USER_GUIDE.md): Shipping, no debug symbols, the Visual C++ runtime
 # installer staged, and out/release/SCViewer-<Version>-win64.zip with one SCViewer folder (SCViewer.exe, README.txt).
 # The engine is the SCViewer fork of UE 5.9 built from source (plan D17): -Engine, else $env:UE_ENGINE_ROOT, else
@@ -43,7 +43,8 @@ if (-not $Release) { return }
 $Stage = Join-Path $Root "out\release\stage\SCViewer"
 if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
 New-Item -ItemType Directory -Force $Stage | Out-Null
-robocopy $Out $Stage /E /NFL /NDL /NJH /NJS /XD cache Saved /XF *.pdb Manifest_*.txt | Out-Null
+$From = if (Test-Path (Join-Path $Out 'Windows\SCViewer.exe')) { Join-Path $Out 'Windows' } else { $Out }
+robocopy $From $Stage /E /NFL /NDL /NJH /NJS /XD cache Saved /XF *.pdb Manifest_*.txt | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
 Copy-Item (Join-Path $Root 'viewer\release\README.txt') (Join-Path $Stage 'README.txt')
 Copy-Item (Join-Path $Root 'LICENSE') (Join-Path $Stage 'LICENSE.txt')

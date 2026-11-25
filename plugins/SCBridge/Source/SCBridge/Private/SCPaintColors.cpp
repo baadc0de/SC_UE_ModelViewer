@@ -118,11 +118,12 @@ bool ASCVehicle::SetPaintColors(const TMap<FString, FLinearColor>& Overrides)
         TMap<FName, float> Scalars;
         bool IsEmpty() const { return Vectors.IsEmpty() && Scalars.IsEmpty(); }
     };
-    TMap<FString, FChange> Changes;
+    // Owned by pointer: the instances below are keyed by a change's address, which a map's growth must not move.
+    TMap<FString, TUniquePtr<FChange>> Changes;
     auto ChangeOf = [&](const FSCPaintSource& Source) -> const FChange* {
         const FString Key = FString::Printf(TEXT("%s|%d|%s|%s"), *Source.Sidecar, Source.Ordinal, *Source.PaletteId, *Source.HostChannel);
-        if (const FChange* Done = Changes.Find(Key)) return Done;
-        FChange& Change = Changes.Add(Key);
+        if (const TUniquePtr<FChange>* Done = Changes.Find(Key)) return Done->Get();
+        FChange& Change = *Changes.Add(Key, MakeUnique<FChange>());
         const FSCMaterialSet* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Source.Sidecar; });
         const FSCSubmaterial* Sub = Set ? Set->Submaterials.FindByPredicate([&](const FSCSubmaterial& S) { return S.Index == Source.Ordinal; }) : nullptr;
         const FSCPalette* Base = Manifest.Palettes.FindByPredicate([&](const FSCPalette& P) { return P.Id == Source.PaletteId; });
@@ -134,8 +135,9 @@ bool ASCVehicle::SetPaintColors(const TMap<FString, FLinearColor>& Overrides)
         for (const auto& [Name, Value] : After.Scalars)
             if (const float* Old = Before.Scalars.Find(Name); !Old || !FMath::IsNearlyEqual(*Old, Value)) Change.Scalars.Add(Name, Value);
         // A host-tinted material (FSCImportMaterials::Find) takes its host channel's colour.
-        FLinearColor Host;
-        if (Before.bHostTinted && !Source.HostChannel.IsEmpty() && FSCMaterialBuilder::PaletteColor(Custom, Source.HostChannel, Host))
+        FLinearColor Host, HostBefore;
+        if (Before.bHostTinted && !Source.HostChannel.IsEmpty() && FSCMaterialBuilder::PaletteColor(Custom, Source.HostChannel, Host) &&
+            (!FSCMaterialBuilder::PaletteColor(Base, Source.HostChannel, HostBefore) || !HostBefore.Equals(Host)))
             Change.Vectors.Add(TEXT("HostTint"), Host);
         if (!Change.IsEmpty())
         {
@@ -147,6 +149,14 @@ bool ASCVehicle::SetPaintColors(const TMap<FString, FLinearColor>& Overrides)
         return &Change;
     };
 
+    // The colours edited are the active paint's palette (PaintPalette, what the menu lists): a slot painted from another
+    // palette (a part with its own, a slot the paint leaves as authored) keeps its colours.
+    const FSCPalette* Active = PaintPalette(ActivePaint);
+    if (!Active)
+    {
+        PaintColorOverrides.Reset(); // a paint without a palette has no colours to change (nothing saved either)
+        return false;
+    }
     // One instance per (paint material, change): slots that share a material share the edited instance.
     TMap<TPair<UMaterialInterface*, const FChange*>, UMaterialInstanceDynamic*> Instances;
     int32 Slots = 0;
@@ -156,7 +166,7 @@ bool ASCVehicle::SetPaintColors(const TMap<FString, FLinearColor>& Overrides)
         const bool bPaint = ActivePaint != INDEX_NONE && Entry.Sources.IsValidIndex(ActivePaint) && Entry.Sources[ActivePaint].IsValid();
         const FSCPaintSource& Source = bPaint ? Entry.Sources[ActivePaint] : Entry.DefaultSource;
         UMaterialInterface* Material = C ? C->GetMaterial(Entry.Slot) : nullptr;
-        if (!Material || !Source.IsValid()) continue;
+        if (!Material || !Source.IsValid() || Source.PaletteId != Active->Id) continue;
         const FChange* Change = ChangeOf(Source);
         if (!Change || Change->IsEmpty()) continue;
         UMaterialInstanceDynamic*& MID = Instances.FindOrAdd({Material, Change});

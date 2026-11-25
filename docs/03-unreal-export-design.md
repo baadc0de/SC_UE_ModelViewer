@@ -157,9 +157,10 @@ without DataCore keeps the name with a null index until interior assembly.
 
 ## Local file cache (D10, WP-R1 + WP-C1)
 
-Root: `./cache/` **relative to the working directory the app or CLI is launched
-from** (the repo root in development; gitignored), overridable with `--cache <dir>`
-or in settings. Never a global or home-directory location. Key material: archive build id (`BuildId` from
+Root: `./cache/` **relative to the working directory the editor host or CLI is launched
+from** (the repo root in development; gitignored); a packaged build's is the `cache` folder beside its
+`SCViewer.exe` (`FPaths::RootDir()`, whatever a shortcut's start directory). Overridable with `--cache <dir>`,
+`-SCCacheDir=` or in settings. Never a global or home-directory location. Key material: archive build id (`BuildId` from
 `build_manifest.id`, else `Data.p4k` size + mtime), entity class name, the full
 options struct, and a cache-format version per layer. A `manifest.json` per root
 tracks entries, sizes and last-use for LRU eviction under a size cap (default 20 GB).
