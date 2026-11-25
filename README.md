@@ -1,9 +1,34 @@
 # UnrealCitizen
 
+## SC Viewer — any ship, any hangar, any paint
+
+**SC Viewer** shows any ship from your own Star Citizen installation, in any of the game's hangars, in any of its
+paints. You can recolour any paint and walk around and inside the ship. It is free, it runs on Windows, and it reads
+the game files already on your PC.
+
+![A Drake Golem in a Levski hangar in SC Viewer](docs/viewer/images/hero.jpg)
+
+**[⬇ Download for Windows](https://github.com/baadc0de/UnrealCitizen/releases/latest)** (the `SCViewer-…-win64.zip`
+under Assets) · **[User guide](docs/viewer/USER_GUIDE.md)** · **[Report a problem](https://github.com/baadc0de/UnrealCitizen/issues)**
+
+1. Download the zip and unzip it into a folder such as `C:\Games` (not `Program Files`).
+2. Double-click `SCViewer\SCViewer.exe`. It finds Star Citizen by itself, or asks where `Data.p4k` is.
+3. Pick a hangar, a ship and a paint in the menu (F1). To change a paint's colours beside the ship, click **SHOW SHIP**.
+
+**You need:** Windows 10 or 11 (64-bit); Star Citizen installed; a DirectX 12 graphics card with Shader Model 6.6
+(GeForce GTX 1060 / Radeon RX 5000 / Intel Arc or newer); 16 GB RAM; 12 GB of free disk to start (the cache can grow to 40 GB). Hardware ray tracing (GeForce
+RTX, Radeon RX 6000 or newer) gives the best lighting; without it the viewer uses simpler lighting
+("Basic lighting"). The [user guide](docs/viewer/USER_GUIDE.md#1-requirements) has the details.
+
+SC Viewer is a fan project, not made or endorsed by Cloud Imperium Games. It only reads the game's files; it never
+changes the game or touches your account.
+
+## For developers
+
 > Formerly `SC_UE_ModelViewer`. The repository is being split into the StarBreaker core (`vendor/StarBreaker`,
 > `crates/`), the viewer (`viewer/`, with the shared plugin `plugins/SCBridge`) and the UnrealCitizen game
-> (`game/`); see [WP-O1](docs/work-packages/WP-O1-unrealcitizen-split.md). This page still describes the viewer as it
-> is today.
+> (`game/`); see [WP-O1](docs/work-packages/WP-O1-unrealcitizen-split.md). The rest of this page describes how the
+> viewer is built.
 
 An **Unreal Engine 5.9 viewer for Star Citizen game data**. Point it at a `Data.p4k` and it lists the entities inside
 and exports the chosen one in memory through Rust. It then builds real UE objects at run time and shows them under Nanite, Lumen
@@ -19,7 +44,7 @@ The archive formats are read by the Rust crates of [StarBreaker](https://github.
 vendored as a git submodule at `vendor/StarBreaker` (our patches live on `scviewer/<topic>` branches of the
 [public fork](https://github.com/baadc0de/StarBreaker) and go upstream from there).
 
-## What it does
+### What it does
 
 - **Picker (F1).** An environment from the game's player hangars, a vehicle from one row per ship a player would
   recognise, and its paint; the lists come from game data (WP-O1-3). The model comes through the FFI library
@@ -53,10 +78,10 @@ vendored as a git submodule at `vendor/StarBreaker` (our patches live on `scview
   (`-SCRpc`) drives the running app: load, spawn, cargo, camera, screenshots, MP4 recording. An NDJSON state log
   reports positions, forces, idle and settled events, and anomalies. `explore.ps1` makes seeded random scene changes
   and checks stability after each (WP-H1).
-- **Local cache.** Exports and the entity index are cached under `./cache/` of the working directory: a size cap,
+- **Local cache.** Exports and the entity index are cached under `./cache/` of the working directory (a packaged build: beside its `SCViewer.exe`): a size cap,
   keyed by archive build, entity and options. A repeat load skips the export.
 
-## Platforms and builds
+### Platforms and builds
 
 The engine is the SCViewer fork of UE 5.9, built from source (plan D17): branch `scviewer/5.9` of a local
 `UnrealEngine` checkout (`%USERPROFILE%\UnrealEngine-5.9-src`, registered as `UE_5.9_src`), upstream `5.9` plus engine
@@ -66,9 +91,10 @@ web or RTX-fork build.
 | Target | Engine / RHI | Notes |
 | --- | --- | --- |
 | Windows | UE 5.9 source fork, D3D12 SM6 | Optional NVIDIA DLSS (`scripts/install_dlss.ps1`, compiled against the fork; DLAA by default, TSR without it). |
+| Win64 viewer release | Shipping package | The public download: `viewer/scripts/package_viewer.ps1 -Release -Version <x.y.z>` makes `out/release/SCViewer-<x.y.z>-win64.zip` (no DLSS: TSR). |
 | Win64 showcase | Shipping package | One cooked ship and hangar at maximum Lumen quality with hardware ray tracing and DLAA, started as a player (`game/scripts/package_showcase.ps1`). |
 
-## Quick start
+### Quick start
 
 Star Citizen must be installed: `Data.p4k` is found in the standard RSI install locations. **Do not set
 `SC_DATA_P4K`.** Rust (stable) and a built UE 5.9 source fork (`Build.bat UnrealEditor Win64 Development` in its
@@ -121,7 +147,7 @@ Stop-SCViewer $p
 game/scripts/rpc/explore.ps1 -Scenario hull_a_hangar -Steps 40 -Seed 1   # exploratory stability run
 ```
 
-## Layout
+### Layout
 
 ```
 crates/scviewer-core    Rust: session over p4k + DataCore, decomposed export (disk and in memory), clip catalogue, cache
@@ -142,10 +168,11 @@ vendor/StarBreaker      upstream toolkit (submodule, pinned)
 out/, cache/            exports and the local cache (gitignored)
 ```
 
-## Documentation
+### Documentation
 
 | Doc | Purpose |
 | --- | --- |
+| [docs/viewer/USER_GUIDE.md](docs/viewer/USER_GUIDE.md) | the viewer for players: requirements, download, menu, paint colours, controls, troubleshooting |
 | [docs/01-starbreaker-analysis.md](docs/01-starbreaker-analysis.md) | what StarBreaker provides and the gaps it left |
 | [docs/02-implementation-plan.md](docs/02-implementation-plan.md) | architecture decisions (D1–D17), milestones, work packages and their status, orchestration rules |
 | [docs/03-unreal-export-design.md](docs/03-unreal-export-design.md) | UE app design: hosts, view flow, object mapping, Nanite / Lumen rules, player modes, UI, FFI |
@@ -161,12 +188,12 @@ Open work is listed in the plan. It includes:
 - the standalone launcher and settings UX (WP-S1);
 - CI (WP-Q1).
 
-## Rules for game data
+### Rules for game data
 
 Game-derived files (exports, textures, `.glb`, `.dds`, `.png`, `.mp4`, the archive itself) never enter git; they live
 in `out/` and `cache/`. Game values are derived from DataCore and the archive, never hard-coded or keyed on asset names.
 
-## License
+### License
 
 This repository: MIT (see `LICENSE`). StarBreaker: MIT. Star Citizen game data is © Cloud Imperium Games and is never
 committed here.

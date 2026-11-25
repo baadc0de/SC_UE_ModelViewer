@@ -23,6 +23,7 @@ struct FShell
     TFunction<bool(const FString&)> CookedLevelCheck;
     TOptional<FText> Menu;
     bool bOpen = false; // the UI-level mirror of the open state (see IsMenuOpen)
+    bool bPassesView = false; // SetMenuPassesView
     TWeakObjectPtr<ASCFirstPersonCharacter> Owner;
     TArray<TNamed<SCViewerShell::FMakeOverlay>> Overlays;
     TArray<TNamed<TSharedRef<ISCInteractionProvider>>> Interactions;
@@ -82,8 +83,11 @@ void SetMenuOpen(USCViewerSubsystem* Viewer, bool bOpen)
     bOpen = bOpen && HasMenu();
     if (ASCFirstPersonCharacter* C = Character(Viewer)) C->SetMenuOpen(bOpen);
     Shell().bOpen = bOpen;
+    if (!bOpen) Shell().bPassesView = false;
     UE_LOG(LogSCViewerShell, Display, TEXT("VIEWER_MENU open=%d menu=%s"), bOpen, *MenuName().ToString());
 }
+void SetMenuPassesView(bool bPasses) { Shell().bPassesView = bPasses; }
+bool MenuPassesView() { return Shell().bPassesView; }
 
 void AddOverlay(FName Name, FMakeOverlay Make) { Put(Shell().Overlays, Name, MoveTemp(Make)); }
 void RemoveOverlay(FName Name) { Shell().Overlays.RemoveAll([&](const auto& E) { return E.Name == Name; }); }

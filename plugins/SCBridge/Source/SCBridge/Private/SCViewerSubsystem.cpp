@@ -346,6 +346,104 @@ bool USCViewerSubsystem::SetPaint(int32 Index)
     if (Index == INDEX_NONE) Settings->Paints.Remove(LoadedEntity);
     else Settings->Paints.Add(LoadedEntity, V->Manifest.Paints[Index].PaletteId);
     Settings->Save();
+    // The colours saved for this paint come back with it.
+    if (const TMap<FString, FLinearColor> Saved = SavedPaintColors(LoadedEntity, Index == INDEX_NONE ? FString() : V->Manifest.Paints[Index].PaletteId);
+        !Saved.IsEmpty())
+        V->SetPaintColors(Saved);
+    return true;
+}
+
+FString USCViewerSubsystem::PaintColorsFile() { return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("PaintColors.json")); }
+
+FString USCViewerSubsystem::ToHex(const FLinearColor& Linear)
+{
+    const FColor C = Linear.ToFColorSRGB();
+    return FString::Printf(TEXT("#%02X%02X%02X"), C.R, C.G, C.B);
+}
+
+bool USCViewerSubsystem::FromHex(const FString& Hex, FLinearColor& OutLinear)
+{
+    FString Digits = Hex.TrimStartAndEnd();
+    Digits.RemoveFromStart(TEXT("#"));
+    if (Digits.Len() != 6) return false;
+    for (const TCHAR Ch : Digits)
+        if (!FChar::IsHexDigit(Ch)) return false;
+    OutLinear = FLinearColor(FColor::FromHex(Digits)); // sRGB bytes to linear
+    return true;
+}
+
+namespace
+{
+/** PaintColors.json as JSON (an empty store when the file is absent or unreadable). */
+TSharedPtr<FJsonObject> ReadPaintColorStore()
+{
+    FString Text;
+    TSharedPtr<FJsonObject> Store;
+    if (FFileHelper::LoadFileToString(Text, *USCViewerSubsystem::PaintColorsFile()))
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Store);
+    if (!Store) Store = MakeShared<FJsonObject>();
+    Store->SetNumberField(TEXT("version"), 1);
+    return Store;
+}
+bool SameEntry(const TSharedPtr<FJsonObject>& E, const FString& Entity, const FString& PaletteId)
+{
+    FString Vehicle, Palette;
+    return E && E->TryGetStringField(TEXT("vehicle"), Vehicle) && Vehicle.Equals(Entity, ESearchCase::IgnoreCase) &&
+           (E->TryGetStringField(TEXT("palette"), Palette) ? Palette : FString()) == PaletteId;
+}
+} // namespace
+
+TMap<FString, FLinearColor> USCViewerSubsystem::SavedPaintColors(const FString& Entity, const FString& PaletteId) const
+{
+    TMap<FString, FLinearColor> Out;
+    const TSharedPtr<FJsonObject> Store = ReadPaintColorStore();
+    const TArray<TSharedPtr<FJsonValue>>* Entries;
+    if (!Store->TryGetArrayField(TEXT("paints"), Entries)) return Out;
+    for (const TSharedPtr<FJsonValue>& V : *Entries)
+    {
+        const TSharedPtr<FJsonObject> E = V.IsValid() && V->Type == EJson::Object ? V->AsObject() : nullptr;
+        const TSharedPtr<FJsonObject>* Colors;
+        if (!SameEntry(E, Entity, PaletteId) || !E->TryGetObjectField(TEXT("colors"), Colors)) continue;
+        for (const auto& [Channel, Value] : (*Colors)->Values)
+        {
+            FLinearColor C;
+            if (Value.IsValid() && Value->Type == EJson::String && ASCVehicle::PaintChannels().Contains(FString(Channel)) && FromHex(Value->AsString(), C)) Out.Add(FString(Channel), C);
+            else UE_LOG(LogSCViewer, Warning, TEXT("PAINT_COLORS %s: %s %s is not a channel with a #RRGGBB colour (ignored)"), *PaintColorsFile(), *Entity, *Channel);
+        }
+    }
+    return Out;
+}
+
+bool USCViewerSubsystem::SetPaintColors(const TMap<FString, FLinearColor>& Overrides, bool bSave)
+{
+    ASCVehicle* V = Vehicle.Get();
+    if (!V || !V->SetPaintColors(Overrides)) return false;
+    if (!bSave) return true;
+    const int32 Paint = V->GetPaint();
+    const FString PaletteId = Paint == INDEX_NONE ? FString() : V->Manifest.Paints[Paint].PaletteId;
+    const TSharedPtr<FJsonObject> Store = ReadPaintColorStore();
+    TArray<TSharedPtr<FJsonValue>> Entries;
+    const TArray<TSharedPtr<FJsonValue>>* Existing;
+    if (Store->TryGetArrayField(TEXT("paints"), Existing))
+        for (const TSharedPtr<FJsonValue>& E : *Existing)
+            if (!SameEntry(E.IsValid() && E->Type == EJson::Object ? E->AsObject() : nullptr, LoadedEntity, PaletteId)) Entries.Add(E);
+    if (!Overrides.IsEmpty())
+    {
+        TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+        Entry->SetStringField(TEXT("vehicle"), LoadedEntity);
+        Entry->SetStringField(TEXT("palette"), PaletteId);
+        Entry->SetStringField(TEXT("paint"), Paint == INDEX_NONE ? FString(TEXT("Default paint")) : V->Manifest.Paints[Paint].Label());
+        TSharedPtr<FJsonObject> Colors = MakeShared<FJsonObject>();
+        for (const FString& Channel : ASCVehicle::PaintChannels())
+            if (const FLinearColor* C = Overrides.Find(Channel)) Colors->SetStringField(Channel, ToHex(*C));
+        Entry->SetObjectField(TEXT("colors"), Colors);
+        Entries.Add(MakeShared<FJsonValueObject>(Entry));
+    }
+    Store->SetArrayField(TEXT("paints"), Entries);
+    FString Text;
+    FJsonSerializer::Serialize(Store.ToSharedRef(), TJsonWriterFactory<>::Create(&Text));
+    if (!FFileHelper::SaveStringToFile(Text, *PaintColorsFile(), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+        UE_LOG(LogSCViewer, Warning, TEXT("PAINT_COLORS cannot write %s"), *PaintColorsFile());
     return true;
 }
 
@@ -1330,6 +1428,11 @@ void USCViewerSubsystem::FinishLoad(ESCLoadPhase Result, const FString& Error)
             if (const FString* Saved = USCViewerSettings::Get()->Paints.Find(Report.Entity))
                 if (const int32 Index = V->Manifest.Paints.IndexOfByPredicate([&](const FSCPaintVariant& P) { return P.PaletteId == *Saved; }); Index != INDEX_NONE)
                     V->SetPaint(Index);
+        // ... with the custom colours saved for it.
+        if (ASCVehicle* V = Vehicle.Get())
+            if (const TMap<FString, FLinearColor> Colors = SavedPaintColors(Report.Entity, V->GetPaint() == INDEX_NONE ? FString() : V->Manifest.Paints[V->GetPaint()].PaletteId);
+                !Colors.IsEmpty())
+                V->SetPaintColors(Colors);
         ApplyStartSkin();
         FitEnvironmentToShip();
     }
@@ -1618,14 +1721,14 @@ FString USCViewerSubsystem::GetPlayerKitStatus() const
     case EPlayerKitState::Exporting:
     {
         const FString Step = KitProgress ? KitProgress->GetPhase() : FString();
-        return TEXT("Player body: exporting") + (Step.IsEmpty() ? FString(TEXT("…")) : TEXT(" (") + Step + TEXT(")"));
+        return TEXT("Preparing your character…") + (Step.IsEmpty() ? FString() : TEXT(" (") + Step + TEXT(")"));
     }
-    case EPlayerKitState::Parsing: return TEXT("Player body: reading package…");
-    case EPlayerKitState::Importing: return TEXT("Player body: ") + (KitJob ? KitJob->GetPhase() : FString(TEXT("importing")));
-    case EPlayerKitState::Clips: return TEXT("Player body: reading animations…");
-    case EPlayerKitState::Streaming: return TEXT("Player body: loading…");
-    case EPlayerKitState::Ready: return TEXT("Player body ready");
-    case EPlayerKitState::Failed: return TEXT("Player body unavailable (capsule only): ") + KitError;
+    case EPlayerKitState::Parsing: return TEXT("Preparing your character…");
+    case EPlayerKitState::Importing: return TEXT("Preparing your character…") + (KitJob ? TEXT(" (") + KitJob->GetPhase() + TEXT(")") : FString());
+    case EPlayerKitState::Clips: return TEXT("Preparing your character… (animations)");
+    case EPlayerKitState::Streaming: return TEXT("Preparing your character…");
+    case EPlayerKitState::Ready: return TEXT("Character ready");
+    case EPlayerKitState::Failed: return TEXT("Your character could not be prepared; you walk without one: ") + KitError;
     default: return FString();
     }
 }
@@ -1925,7 +2028,7 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
         {
             if (FirstPerson) FirstPerson->Destroy();
             FirstPerson = nullptr;
-            UE_LOG(LogSCViewer, Warning, TEXT("FIRST_PERSON no safe spawn; choose a surface with Spawn where I look"));
+            UE_LOG(LogSCViewer, Warning, TEXT("FIRST_PERSON no safe spawn; choose a surface with Walk from here"));
             return false;
         }
         if (InspectionPawn.IsValid())
@@ -1934,7 +2037,19 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
             InspectionPawn->SetActorTickEnabled(false);
         }
         PC->Possess(FirstPerson);
-        PC->SetControlRotation(FirstPerson->GetActorRotation());
+        // A start at an outside access (entrance, seat access, door, hull) facing away from the vehicle turns to it, level:
+        // the player came to see the ship. Interior places and seats keep the spawn's own facing.
+        FRotator View = FirstPerson->GetActorRotation();
+        if (Vehicle->SpawnPoints.IsValidIndex(FirstPerson->CurrentSpawn))
+        {
+            const FName Kind = Vehicle->SpawnPoints[FirstPerson->CurrentSpawn].Kind;
+            const FBox Bounds = Vehicle->GetComponentsBoundingBox(true);
+            const FVector ToShip = Bounds.IsValid ? (Bounds.GetCenter() - FirstPerson->GetActorLocation()).GetSafeNormal2D() : FVector::ZeroVector;
+            const bool bOutside = Kind != FSCSpawnKind::Interior && Kind != FSCSpawnKind::Seat;
+            if (bOutside && !ToShip.IsZero() && FVector::DotProduct(View.Vector().GetSafeNormal2D(), ToShip) < 0)
+                View = FRotator(0, ToShip.Rotation().Yaw, 0);
+        }
+        PC->SetControlRotation(View);
         RequestPlayerKit(); // first entry starts the player body; WP-P1 capsule-only until it is ready
         AttachPlayerKit();
     }

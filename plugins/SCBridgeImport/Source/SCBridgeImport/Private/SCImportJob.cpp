@@ -1277,7 +1277,14 @@ void FSCImportJob::FState::Assemble()
     };
     // A split mesh can bind the same slot on many components. Compute its paint material list once for each
     // (mesh, sidecar, palette, slot) and use it for both the soft rig and rigid companions.
-    using FPaintMaterials = TArray<TWeakObjectPtr<UMaterialInterface>>;
+    // Each paint's material and its source (sidecar, palette, submaterial, host channel: what a custom colour edit
+    // describes again, ASCVehicle::SetPaintColors), and the source of the slot's own material.
+    struct FPaintMaterials
+    {
+        TArray<TWeakObjectPtr<UMaterialInterface>> Materials;
+        TArray<FSCPaintSource> Sources;
+        FSCPaintSource Default;
+    };
     using FPaintsBySlot = TMap<int32, FPaintMaterials>;
     TMap<TTuple<FString, FString, FString>, FPaintsBySlot> PaintVariants;
     auto RecordPaint = [&](const FSCSceneInstance& I, UMeshComponent* C, int32 Slot, const FSCDerivedMesh& Mesh, FPaintsBySlot* Slots)
@@ -1286,29 +1293,47 @@ void FSCImportJob::FState::Assemble()
         const FPaintMaterials* Variants = Slots->Find(Slot);
         if (!Variants)
         {
-            FPaintMaterials& MaterialsForSlot = Slots->Add(Slot);
+            FPaintMaterials& ForSlot = Slots->Add(Slot);
+            auto SourceOf = [&](const FString& Sidecar, const FString& Palette) {
+                FSCPaintSource Source;
+                if (const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
+                    if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
+                        Source = {Sidecar, Palette, HostFor(Sidecar, I.MeshAsset, Set, Mesh), Sub->Index};
+                return Source;
+            };
             bool bAny = false;
-            MaterialsForSlot.Reserve(Manifest.Paints.Num());
+            ForSlot.Materials.Reserve(Manifest.Paints.Num());
             FString Sidecar, Palette;
             for (int32 Paint = 0; Paint < Manifest.Paints.Num(); ++Paint)
             {
                 UMaterialInterface* Material = nullptr;
+                FSCPaintSource Source;
                 if (Manifest.PaintTarget(I, Paint, Sidecar, Palette))
-                    if (const auto* Set = Manifest.Materials.FindByPredicate([&](const FSCMaterialSet& M) { return M.Path == Sidecar; }))
-                        if (const FSCSubmaterial* Sub = FSCImportMaterials::Resolve(Set, Mesh.MaterialSourceNames, Slot))
-                            Material = Materials.Find(Sidecar, Palette, Sub->Index, HostFor(Sidecar, I.MeshAsset, Set, Mesh));
-                MaterialsForSlot.Add(Material);
+                {
+                    Source = SourceOf(Sidecar, Palette);
+                    if (Source.IsValid()) Material = Materials.Find(Sidecar, Palette, Source.Ordinal, Source.HostChannel);
+                }
+                ForSlot.Materials.Add(Material);
+                ForSlot.Sources.Add(Material ? Source : FSCPaintSource());
                 bAny |= Material != nullptr;
             }
-            if (!bAny) MaterialsForSlot.Reset();
-            Variants = &MaterialsForSlot;
+            if (!bAny)
+            {
+                ForSlot.Materials.Reset();
+                ForSlot.Sources.Reset();
+            }
+            // The vehicle's own paint: its palette's colours can be customised even without other paints.
+            if (!I.PaletteId.IsEmpty()) ForSlot.Default = SourceOf(I.MaterialSidecar, I.PaletteId);
+            Variants = &ForSlot;
         }
-        if (Variants->IsEmpty()) return;
+        if (Variants->Materials.IsEmpty() && !Variants->Default.IsValid()) return;
         FSCPaintSlot& Entry = V->PaintSlots.AddDefaulted_GetRef();
         Entry.Component = C;
         Entry.Slot = Slot;
         Entry.Default = C->GetMaterial(Slot);
-        Entry.Paints = *Variants;
+        Entry.Paints = Variants->Materials;
+        Entry.Sources = Variants->Sources;
+        Entry.DefaultSource = Variants->Default;
     };
     // WP-I1: each screen face (a slot drawn by a screen master with triangles in the drawn variant / LOD) shows the
     // image its own binding resolves to (FSCSceneInstance::ScreenSlotImage); every other screen face stays dark glass.
@@ -1336,7 +1361,7 @@ void FSCImportJob::FState::Assemble()
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
         FSCThrusterBinding Thruster;
-        FPaintsBySlot* Paints = Manifest.Paints.IsEmpty() || !E.Mesh ? nullptr
+        FPaintsBySlot* Paints = Options.bEnvironment || (Manifest.Paints.IsEmpty() && I.PaletteId.IsEmpty()) || !E.Mesh ? nullptr
             : &PaintVariants.FindOrAdd(TTuple<FString, FString, FString>(I.MeshAsset, I.MaterialSidecar, I.PaletteId));
         bool bScreenBound = false;
         ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };

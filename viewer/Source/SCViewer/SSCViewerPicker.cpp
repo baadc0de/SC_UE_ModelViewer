@@ -7,6 +7,7 @@
 #include "UI/SCHudStyle.h"
 #include "Brushes/SlateColorBrush.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Styling/CoreStyle.h"
@@ -19,6 +20,8 @@
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/STableRow.h"
+#include "Widgets/Colors/SColorPicker.h"
+#include "Widgets/Layout/SSpacer.h"
 
 #define LOCTEXT_NAMESPACE "SCViewerPicker"
 using namespace SCHudStyle;
@@ -131,10 +134,24 @@ bool StartRequested()
         if (FParse::Param(Cmd, Switch) || FParse::Value(Cmd, *(FString(Switch) + TEXT("=")), Value)) return true;
     return false;
 }
+/** The menu built last (one per viewer root), for the console. */
+TWeakPtr<SSCViewerPicker> LastPicker;
+/** sc.Menu.ShowShip 1|0: the menu's paint-only view (verification and screenshots; the menu's button does the same). */
+FAutoConsoleCommand ShowShipCommand(TEXT("sc.Menu.ShowShip"), TEXT("sc.Menu.ShowShip 1|0: open the menu with only the paint column (1), or all lists (0)"),
+    FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) {
+        if (const TSharedPtr<SSCViewerPicker> Picker = LastPicker.Pin()) Picker->ShowShip(Args.IsEmpty() || Args[0] != TEXT("0"));
+    }));
 } // namespace
+
+void SSCViewerPicker::ShowShip(bool bOn)
+{
+    bPaintOnly = bOn;
+    if (bOn && Subsystem.IsValid()) SCViewerShell::SetMenuOpen(Subsystem.Get(), true);
+}
 
 void SSCViewerPicker::Construct(const FArguments& Args)
 {
+    LastPicker = StaticCastSharedRef<SSCViewerPicker>(AsShared());
     Subsystem = Args._Subsystem;
     FocusView = Args._FocusView;
     TWeakObjectPtr<USCViewerSubsystem> Weak = Subsystem;
@@ -143,7 +160,7 @@ void SSCViewerPicker::Construct(const FArguments& Args)
     SetVisibility(EVisibility::SelfHitTestInvisible);
     FParse::Value(FCommandLine::Get(), TEXT("SCSearch="), Vehicles.Filter); // verification aid: prefill the vehicle search
 
-    TSharedRef<SWidget> EnvironmentList = MakeList(Environments, LOCTEXT("Environment", "Environment"), LOCTEXT("SearchPlaces", "Search places"),
+    TSharedRef<SWidget> EnvironmentList = MakeList(Environments, LOCTEXT("Environment", "Hangar"), LOCTEXT("SearchPlaces", "Search hangars"),
         [this](const FString& Id) { return EnvironmentState(Id); }, [this](const FString& Id, int32 RowSession) { PickEnvironment(Id, RowSession); });
     TSharedRef<SWidget> VehicleList = MakeList(Vehicles, LOCTEXT("Vehicle", "Vehicle"), LOCTEXT("SearchVehicles", "Search vehicles"),
         [this](const FString& Id) { return VehicleState(Id); }, [this](const FString& Id, int32 RowSession) { PickVehicle(Id, RowSession); });
@@ -180,20 +197,73 @@ void SSCViewerPicker::Construct(const FArguments& Args)
             .Text(LOCTEXT("NoVehicle", "Pick a vehicle to see its paints."))
             .Visibility_Lambda([this] { return Paints.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
         ]);
+    // The active paint's colours, below its list: change one by its hex code or the colour picker; saved per vehicle and
+    // paint (PaintColors.json), back to the paint's own with Reset.
+    TSharedRef<SWidget> ColorPanel = Panel(LOCTEXT("Colours", "Customise colours"), FText(),
+        SNew(SVerticalBox)
+        + SVerticalBox::Slot().AutoHeight()[SAssignNew(ColorRows, SVerticalBox)]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+        [
+            SNew(SHorizontalBox)
+            + SHorizontalBox::Slot().AutoWidth()
+            [
+                SNew(SButton).ButtonStyle(&FlatButton())
+                .IsEnabled_Lambda([this] {
+                    const USCViewerSubsystem* S = Subsystem.Get();
+                    const ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+                    return V && !V->GetPaintColorOverrides().IsEmpty();
+                })
+                .OnClicked_Lambda([this] { ResetColors(); return FReply::Handled(); })
+                [Txt(LOCTEXT("ResetColours", "RESET COLOURS"), Label(), Ink())]
+            ]
+        ]);
+    TSharedRef<SWidget> PaintColumn = SNew(SVerticalBox)
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, Gutter)
+        [
+            SNew(SHorizontalBox)
+            .Visibility_Lambda([this] { return bPaintOnly ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; })
+            + SHorizontalBox::Slot().AutoWidth()
+            [
+                SNew(SButton).ButtonStyle(&FlatButton()).ToolTipText(LOCTEXT("AllListsTip", "Back to the hangar and vehicle lists"))
+                .OnClicked_Lambda([this] { ShowShip(false); return FReply::Handled(); })
+                [Txt(LOCTEXT("AllLists", "SHOW LISTS"), Label(), Accent())]
+            ]
+            + SHorizontalBox::Slot().FillWidth(1)
+            + SHorizontalBox::Slot().AutoWidth()
+            [
+                SNew(SButton).ButtonStyle(&FlatButton()).OnClicked_Lambda([this] { Close(); return FReply::Handled(); })
+                [Txt(LOCTEXT("ClosePaint", "F1  CLOSE"), Label(), Ink())]
+            ]
+        ]
+        + SVerticalBox::Slot().FillHeight(1)[PaintList]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, Gutter, 0, 0)[ColorPanel];
 
     ChildSlot
     [
-        SNew(SBorder).BorderImage(White()).BorderBackgroundColor(ScrimOpen()).Padding(SafeMargin)
-        .Visibility_Lambda([Weak] { return SCViewerShell::IsMenuOpen(Weak.Get()) ? EVisibility::Visible : EVisibility::Collapsed; })
+        SNew(SBorder).BorderImage(White()).Padding(SafeMargin)
+        .BorderBackgroundColor_Lambda([this] { return bPaintOnly ? FLinearColor::Transparent : ScrimOpen(); })
+        .Visibility_Lambda([this, Weak] {
+            if (!SCViewerShell::IsMenuOpen(Weak.Get())) return EVisibility::Collapsed;
+            return bPaintOnly ? EVisibility::SelfHitTestInvisible : EVisibility::Visible;
+        })
         [
             SNew(SVerticalBox)
             + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, Gutter)
             [
                 SNew(SHorizontalBox)
+                .Visibility_Lambda([this] { return bPaintOnly ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible; })
                 + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                 [Txt(TAttribute<FText>::CreateLambda([] { return Caps(SCViewerShell::AppName()); }), Display(), OnScrim())]
                 + SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(Gutter, 0)
                 [Txt(TAttribute<FText>::CreateSP(this, &SSCViewerPicker::StatusText), Label(), OnScrim())]
+                + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+                [
+                    SNew(SButton).ButtonStyle(&FlatButton())
+                    .ToolTipText(LOCTEXT("ShowShipTip", "Keep only the paint and colour lists, so you see the ship while you change them"))
+                    .Visibility_Lambda([this] { return Subsystem.IsValid() && Subsystem->GetVehicle() ? EVisibility::Visible : EVisibility::Collapsed; })
+                    .OnClicked_Lambda([this] { ShowShip(true); return FReply::Handled(); })
+                    [Txt(LOCTEXT("ShowShip", "SHOW SHIP"), Label(), Accent())]
+                ]
                 + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                 [
                     SNew(SButton).ButtonStyle(&FlatButton()).OnClicked_Lambda([this] { Close(); return FReply::Handled(); })
@@ -203,9 +273,14 @@ void SSCViewerPicker::Construct(const FArguments& Args)
             + SVerticalBox::Slot().FillHeight(1)
             [
                 SNew(SHorizontalBox)
-                + SHorizontalBox::Slot().FillWidth(1)[EnvironmentList]
-                + SHorizontalBox::Slot().FillWidth(1.2f).Padding(Gutter, 0, 0, 0)[VehicleList]
-                + SHorizontalBox::Slot().FillWidth(0.8f).Padding(Gutter, 0, 0, 0)[PaintList]
+                + SHorizontalBox::Slot().FillWidth(1)
+                [SNew(SBox).Visibility_Lambda([this] { return bPaintOnly ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible; })[EnvironmentList]]
+                + SHorizontalBox::Slot().FillWidth(1.2f).Padding(Gutter, 0, 0, 0)
+                [SNew(SBox).Visibility_Lambda([this] { return bPaintOnly ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible; })[VehicleList]]
+                // Show ship: the view's share of the width, let through to the view (no hit test).
+                + SHorizontalBox::Slot().FillWidth(2.2f)
+                [SNew(SSpacer).Visibility_Lambda([this] { return bPaintOnly ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })]
+                + SHorizontalBox::Slot().FillWidth(0.8f).Padding(Gutter, 0, 0, 0)[PaintColumn]
             ]
         ]
     ];
@@ -237,6 +312,9 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
         ]
         + SVerticalBox::Slot().FillHeight(1)
         [
+            SNew(SOverlay)
+            + SOverlay::Slot()
+            [
             SAssignNew(List.View, SListView<FEntry>).ListItemsSource(&List.Shown).ListViewStyle(&ListStyle()).SelectionMode(ESelectionMode::None)
             .OnGenerateRow_Lambda([State, Pick, L](FEntry Item, const TSharedRef<STableViewBase>& Table) {
                 const FString Id = Item->Id;
@@ -253,6 +331,19 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
                     [Row(Item->Label, Second, [State, Id] { return State(Id); })]
                 ];
             })
+            ]
+            + SOverlay::Slot().VAlign(VAlign_Center).Padding(16, 0)
+            [
+                SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink2()).AutoWrapText(true).Justification(ETextJustify::Center)
+                .Visibility_Lambda([this, L] { return !bCatalogReady || L->Shown.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+                .Text_Lambda([this] {
+                    const USCViewerSubsystem* S = Subsystem.Get();
+                    if (S && (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed))
+                        return LOCTEXT("EmptyNoArchive", "Star Citizen was not found: choose its Data.p4k first.");
+                    return bCatalogReady ? LOCTEXT("EmptySearch", "Nothing matches the search.")
+                                         : LOCTEXT("EmptyReading", "Reading your Star Citizen files…\nThe first start takes a minute or two.");
+                })
+            ]
         ]);
 }
 
@@ -477,10 +568,14 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
     }
     if (!bOpen && bWasOpen)
     {
+        bPaintOnly = false;
         RestoreScreenMessages();
         if (FocusView) FocusView(); // however it closed (F1, Esc, the button, RPC /ui): keys go back to the view
     }
     bWasOpen = bOpen;
+    // The view keeps its mouse while the paint-only menu is up (derived every frame: it follows the menu however it opens
+    // or closes).
+    SCViewerShell::SetMenuPassesView(bOpen && bPaintOnly);
 
     const FSCViewerCatalog& Catalog = S->GetCatalog();
     if (Catalog.Revision != CatalogRevision || Catalog.bReady != bCatalogReady)
@@ -496,8 +591,8 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         };
         FSCCatalogEntry Procedural;
         Procedural.Id = MapHangar;
-        Procedural.Label = LOCTEXT("MapHangar", "Procedural hangar").ToString();
-        Procedural.Detail = LOCTEXT("MapHangarDetail", "The viewer's own, no game environment").ToString();
+        Procedural.Label = LOCTEXT("MapHangar", "Empty studio").ToString();
+        Procedural.Detail = LOCTEXT("MapHangarDetail", "A plain room, not from the game").ToString();
         Fill(Environments, Catalog.Environments, &Procedural);
         Fill(Vehicles, Catalog.Vehicles, nullptr);
         bReveal |= bOpen;
@@ -512,13 +607,171 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         Paints.Reset();
         if (V)
         {
-            Paints.Add(MakeShared<FPaintRow>(FPaintRow{INDEX_NONE, LOCTEXT("OwnPaint", "The vehicle's own").ToString(), V}));
-            for (int32 I = 0; I < V->Manifest.Paints.Num(); ++I) Paints.Add(MakeShared<FPaintRow>(FPaintRow{I, V->Manifest.Paints[I].Label(), V}));
+            Paints.Add(MakeShared<FPaintRow>(FPaintRow{INDEX_NONE, LOCTEXT("OwnPaint", "Default paint").ToString(), V}));
+            for (int32 I = 0; I < V->Manifest.Paints.Num(); ++I) Paints.Add(MakeShared<FPaintRow>(FPaintRow{I, V->Manifest.Paints[I].Label().Replace(TEXT("_"), TEXT(" ")), V}));
         }
         if (PaintView) PaintView->RequestListRefresh();
         bReveal |= bOpen;
     }
+    // The colour rows of the paint on it, made again when the vehicle or its paint changes.
+    if (V != ColorsOwner.Get() || (V ? V->GetPaint() : MIN_int32) != ColorsPaint) RebuildColors(S->GetVehicle());
+    else if (bOpen) // a colour changed elsewhere (the colour picker, the console, a saved file): the field follows, unless typed in
+        for (const auto& [Channel, Field] : ColorFields)
+            if (Field && !Field->HasKeyboardFocus())
+                if (const FString Hex = USCViewerSubsystem::ToHex(ColorOf(Channel)); Field->GetText().ToString() != Hex) Field->SetText(FText::FromString(Hex));
     if (bReveal) RevealCurrent();
+}
+
+FLinearColor SSCViewerPicker::ColorOf(const FString& Channel) const
+{
+    const USCViewerSubsystem* S = Subsystem.Get();
+    const ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+    if (!V) return FLinearColor::Black;
+    if (const FLinearColor* Custom = V->GetPaintColorOverrides().Find(Channel)) return *Custom;
+    return BaseColors.FindRef(Channel); // the paint's own (RebuildColors)
+}
+
+void SSCViewerPicker::RebuildColors(ASCVehicle* V)
+{
+    ColorsOwner = V;
+    ColorsPaint = V ? V->GetPaint() : MIN_int32;
+    ColorFields.Reset();
+    BaseColors = V ? V->PaintColors(V->GetPaint()) : TMap<FString, FLinearColor>();
+    if (!ColorRows) return;
+    ColorRows->ClearChildren();
+    const TMap<FString, FLinearColor>& Base = BaseColors;
+    if (Base.IsEmpty())
+    {
+        ColorRows->AddSlot().AutoHeight()
+        [
+            SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink2()).AutoWrapText(true)
+            .Text(V ? LOCTEXT("NoColours", "This paint has no colours to change.") : LOCTEXT("ColoursNoVehicle", "Pick a vehicle to change its paint colours."))
+        ];
+        return;
+    }
+    static const TMap<FString, FText> Names = {
+        {TEXT("primary"), LOCTEXT("Primary", "Main")}, {TEXT("secondary"), LOCTEXT("Secondary", "Second")},
+        {TEXT("tertiary"), LOCTEXT("Tertiary", "Accent")}, {TEXT("glass"), LOCTEXT("Glass", "Glass")},
+        {TEXT("decal_red"), LOCTEXT("Decal1", "Decal 1")}, {TEXT("decal_green"), LOCTEXT("Decal2", "Decal 2")},
+        {TEXT("decal_blue"), LOCTEXT("Decal3", "Decal 3")}};
+    static const TMap<FString, FText> Tips = {
+        {TEXT("primary"), LOCTEXT("PrimaryTip", "The paint's main hull colour")},
+        {TEXT("secondary"), LOCTEXT("SecondaryTip", "The paint's second hull colour")},
+        {TEXT("tertiary"), LOCTEXT("TertiaryTip", "The paint's accent colour (trim, details)")},
+        {TEXT("glass"), LOCTEXT("GlassTip", "The tint of the canopy and windows")},
+        {TEXT("decal_red"), LOCTEXT("Decal1Tip", "A colour of the logos, stripes and markings; not every paint uses it")},
+        {TEXT("decal_green"), LOCTEXT("Decal2Tip", "A colour of the logos, stripes and markings; not every paint uses it")},
+        {TEXT("decal_blue"), LOCTEXT("Decal3Tip", "A colour of the logos, stripes and markings; not every paint uses it")}};
+    for (const FString& Channel : ASCVehicle::PaintChannels())
+    {
+        if (!Base.Contains(Channel)) continue;
+        TSharedPtr<SEditableTextBox> Field;
+        ColorRows->AddSlot().AutoHeight().Padding(0, 2)
+        [
+            SNew(SHorizontalBox)
+            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+            [SNew(SBox).WidthOverride(64)[SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink()).Text(Names.FindRef(Channel)).ToolTipText(Tips.FindRef(Channel))]]
+            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+            [
+                SNew(SButton).ButtonStyle(&FlatButton()).ContentPadding(0)
+                .ToolTipText(LOCTEXT("PickColour", "Choose a colour"))
+                .OnClicked_Lambda([this, Channel] { OpenColorPicker(Channel); return FReply::Handled(); })
+                [
+                    SNew(SBox).WidthOverride(36).HeightOverride(22)
+                    [SNew(SBorder).BorderImage(White()).BorderBackgroundColor_Lambda([this, Channel] { return ColorOf(Channel); })]
+                ]
+            ]
+            + SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
+            [
+                SAssignNew(Field, SEditableTextBox).Style(&SearchStyle()).Font(Body())
+                .Text(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))))
+                .ToolTipText(LOCTEXT("HexHint", "Type a colour as #RRGGBB (for example #FFB000) and press Enter, or click the swatch to pick one"))
+                .OnTextCommitted_Lambda([this, Channel](const FText& Value, ETextCommit::Type How) {
+                    FLinearColor C;
+                    // Focus leaving an untouched field commits its text too: only a different colour is applied and saved.
+                    if (How != ETextCommit::OnCleared && USCViewerSubsystem::FromHex(Value.ToString(), C))
+                    {
+                        if (USCViewerSubsystem::ToHex(C) != USCViewerSubsystem::ToHex(ColorOf(Channel))) ApplyColor(Channel, C, true);
+                    }
+                    else if (const TSharedPtr<SEditableTextBox>* F = ColorFields.Find(Channel)) (*F)->SetText(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))));
+                })
+            ]
+        ];
+        ColorFields.Add(Channel, Field);
+    }
+}
+
+void SSCViewerPicker::ApplyColor(const FString& Channel, const FLinearColor& Linear, bool bSave)
+{
+    USCViewerSubsystem* S = Subsystem.Get();
+    ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+    if (!V) return;
+    TMap<FString, FLinearColor> Overrides = V->GetPaintColorOverrides();
+    Overrides.Add(Channel, FLinearColor(Linear.R, Linear.G, Linear.B, 1.f));
+    S->SetPaintColors(Overrides, bSave);
+    if (const TSharedPtr<SEditableTextBox>* F = ColorFields.Find(Channel)) (*F)->SetText(FText::FromString(USCViewerSubsystem::ToHex(Linear)));
+}
+
+void SSCViewerPicker::RemoveColor(const FString& Channel)
+{
+    USCViewerSubsystem* S = Subsystem.Get();
+    ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+    if (!V || !V->GetPaintColorOverrides().Contains(Channel)) return;
+    TMap<FString, FLinearColor> Overrides = V->GetPaintColorOverrides();
+    Overrides.Remove(Channel);
+    S->SetPaintColors(Overrides, true);
+    if (const TSharedPtr<SEditableTextBox>* F = ColorFields.Find(Channel)) (*F)->SetText(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))));
+}
+
+void SSCViewerPicker::ResetColors()
+{
+    if (USCViewerSubsystem* S = Subsystem.Get()) S->SetPaintColors({}, true);
+    for (const auto& [Channel, Field] : ColorFields)
+        if (Field) Field->SetText(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))));
+}
+
+void SSCViewerPicker::OpenColorPicker(const FString& Channel)
+{
+    FColorPickerArgs Args;
+    Args.bIsModal = false;
+    Args.bUseAlpha = false;
+    Args.sRGBOverride = true; // its hex agrees with the field's (sRGB)
+    Args.bOnlyRefreshOnMouseUp = true; // the ship's materials follow when the mouse is let go
+    Args.InitialColor = ColorOf(Channel);
+    Args.ParentWidget = AsShared();
+    // The window can outlive the menu (Quit, a world change): the callbacks hold it weakly, and act only on the vehicle and
+    // paint the picker was opened for.
+    const TWeakPtr<SSCViewerPicker> Weak = StaticCastSharedRef<SSCViewerPicker>(AsShared());
+    const TWeakObjectPtr<const ASCVehicle> For = ColorsOwner;
+    const int32 ForPaint = ColorsPaint;
+    auto Live = [Weak, For, ForPaint]() -> TSharedPtr<SSCViewerPicker> {
+        const TSharedPtr<SSCViewerPicker> P = Weak.Pin();
+        const USCViewerSubsystem* S = P ? P->Subsystem.Get() : nullptr;
+        const ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+        return V && V == For.Get() && V->GetPaint() == ForPaint ? P : nullptr;
+    };
+    Args.OnColorCommitted = FOnLinearColorValueChanged::CreateLambda([Live, Channel](FLinearColor C) {
+        if (const TSharedPtr<SSCViewerPicker> P = Live()) P->ApplyColor(Channel, C, false);
+    });
+    // Closed: the colour it left is saved, if it is a custom one (opening and closing without a change saves nothing).
+    Args.OnColorPickerWindowClosed = FOnWindowClosed::CreateLambda([Live, Channel](const TSharedRef<SWindow>&) {
+        const TSharedPtr<SSCViewerPicker> P = Live();
+        const ASCVehicle* V = P ? P->Subsystem->GetVehicle() : nullptr;
+        if (const FLinearColor* Custom = V ? V->GetPaintColorOverrides().Find(Channel) : nullptr) P->ApplyColor(Channel, *Custom, true);
+    });
+    // Cancelled: back to the colour the channel had when the picker opened.
+    const TOptional<FLinearColor> Before = [&]() -> TOptional<FLinearColor> {
+        const ASCVehicle* V = Subsystem.IsValid() ? Subsystem->GetVehicle() : nullptr;
+        const FLinearColor* Custom = V ? V->GetPaintColorOverrides().Find(Channel) : nullptr;
+        return Custom ? TOptional<FLinearColor>(*Custom) : TOptional<FLinearColor>();
+    }();
+    Args.OnColorPickerCancelled = FOnColorPickerCancelled::CreateLambda([Live, Channel, Before](FLinearColor) {
+        const TSharedPtr<SSCViewerPicker> P = Live();
+        if (!P) return;
+        if (Before.IsSet()) P->ApplyColor(Channel, *Before, true);
+        else P->RemoveColor(Channel);
+    });
+    ::OpenColorPicker(Args);
 }
 
 SSCViewerPicker::~SSCViewerPicker()
@@ -551,13 +804,14 @@ FText SSCViewerPicker::StatusText() const
 {
     const USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return FText();
-    if (S->GetArchiveState() == ESCArchiveState::Opening) return LOCTEXT("Opening", "OPENING THE ARCHIVE…");
-    if (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed) return LOCTEXT("NoArchive", "NO ARCHIVE");
+    if (S->GetArchiveState() == ESCArchiveState::Opening) return LOCTEXT("Opening", "READING YOUR STAR CITIZEN FILES…");
+    if (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed) return LOCTEXT("NoArchive", "STAR CITIZEN NOT FOUND");
     if (const FString Error = S->GetCatalogError(); !Error.IsEmpty()) return FText::FromString(Caps(Error));
-    if (!S->GetCatalog().bReady) return LOCTEXT("Listing", "LISTING…");
+    if (!S->GetCatalog().bReady) return LOCTEXT("Listing", "READING THE SHIP AND HANGAR LISTS…");
     if (QueuedEnvironment.IsSet() || QueuedVehicle.IsSet()) return LOCTEXT("Queued", "LOADING…  YOUR NEXT CHOICE FOLLOWS");
     if (S->IsBusy() || S->IsEnvironmentLoading()) return LOCTEXT("LoadingStatus", "LOADING…");
-    return LOCTEXT("Pick", "PICK A PLACE, A VEHICLE AND ITS PAINT");
+    if (S->GetVehicle()) return LOCTEXT("Loaded", "F1 SHOWS THE SHIP  ·  SHOW SHIP KEEPS THE PAINTS BESIDE IT");
+    return LOCTEXT("Pick", "PICK A HANGAR, A VEHICLE AND ITS PAINT");
 }
 
 #undef LOCTEXT_NAMESPACE

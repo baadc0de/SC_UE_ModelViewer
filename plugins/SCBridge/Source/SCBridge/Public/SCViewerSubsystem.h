@@ -207,6 +207,16 @@ public:
     /** Put paint Index (Manifest.Paints; INDEX_NONE = the vehicle's own) on the loaded vehicle and remember it for the
      *  entity (USCViewerSettings::Paints). Also `sc.Paint [index|default|name part]`. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool SetPaint(int32 Index);
+    /** Custom colours of the active paint (ASCVehicle::SetPaintColors), by palette channel (linear RGB). bSave keeps them
+     *  in PaintColorsFile() for this vehicle and paint (an empty map removes them), so they come back with the paint. */
+    bool SetPaintColors(const TMap<FString, FLinearColor>& Overrides, bool bSave = true);
+    /** The custom colours saved for a vehicle entity and a paint's palette id ("" = the vehicle's own paint). */
+    TMap<FString, FLinearColor> SavedPaintColors(const FString& Entity, const FString& PaletteId) const;
+    /** <Saved>/PaintColors.json: {"version": 1, "paints": [{"vehicle", "palette", "paint", "colors": {"primary": "#RRGGBB", ...}}]}
+     *  (sRGB hex, as a colour picker shows them); read again on every load, so an edit by hand applies on the next one. */
+    static FString PaintColorsFile();
+    static FString ToHex(const FLinearColor& Linear);
+    static bool FromHex(const FString& Hex, FLinearColor& OutLinear);
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetEnvironment() const { return Environment.Get(); }
     /** The requested environment (folder, archive path or empty) and the catalogue's environments (listed once per
      *  archive session; GetCatalog). */

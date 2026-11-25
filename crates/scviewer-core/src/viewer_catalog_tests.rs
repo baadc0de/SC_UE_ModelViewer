@@ -119,7 +119,7 @@ fn rows_do_not_depend_on_record_order() {
         places: places.iter().map(|p| p.to_string()).collect(),
         name: name.into(),
     };
-    // One container from three records: places merged, the smallest named size, an unplaced record as detail-less.
+    // One container from three records: places merged, the smallest named size.
     let records = vec![
         rec("c/one.socpak", 2, "Medium", &["Beta", "Alpha"], "One_B"),
         rec("c/one.socpak", 1, "Small", &["Gamma"], "One_A"),
@@ -131,9 +131,14 @@ fn rows_do_not_depend_on_record_order() {
     let backward = container_rows(records.into_iter().rev().collect());
     assert_eq!(forward, backward);
     let one = forward.iter().find(|r| r.id == "c/one.socpak").unwrap();
-    assert_eq!((one.label.as_str(), one.group.as_str(), one.detail.as_str()), ("Alpha, Beta, Gamma", "Small", "One_A, One_B"));
+    // Players read places, not record ids: an offered container shows its places only.
+    assert_eq!((one.label.as_str(), one.group.as_str(), one.detail.as_str()), ("Alpha, Beta, Gamma", "Small", ""));
+    // A container no place offers: its first record name, readable, and why it has no place; listed after the offered ones.
     let two = forward.iter().find(|r| r.id == "c/two.socpak").unwrap();
-    assert_eq!((two.label.as_str(), two.detail.as_str()), ("Two_Y", ""));
+    assert_eq!((two.label.as_str(), two.detail.as_str()), ("Two Y", "Not offered at a location"));
+    assert_eq!(forward.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["c/one.socpak", "c/two.socpak"]);
+    let unplaced_first = container_rows(vec![rec("c/a.socpak", 1, "Small", &[], "A"), rec("c/z.socpak", 4, "Large", &["Zeta"], "Z")]);
+    assert_eq!(unplaced_first.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["c/z.socpak", "c/a.socpak"]);
     // A size with no name still orders by its id: an unnamed size 4 after a named size 1.
     let sized = container_rows(vec![rec("c/big.socpak", 4, "", &["Zeta"], "Big"), rec("c/small.socpak", 1, "Small", &["Zeta"], "Small")]);
     assert_eq!(sized.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["c/small.socpak", "c/big.socpak"]);

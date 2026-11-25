@@ -80,12 +80,24 @@ struct SCBRIDGE_API FSCDoorInteraction
  *  ExitDelay seconds after the player left every sensor of a door that a sensor opened, the door closes. */
 /** One mesh slot a paint touches: its bound (default) instance and each paint's (null: the paint leaves it). The
  *  instances are owned by the vehicle (ASCVehicle::Materials). */
+/** Where a paint slot's material for one paint comes from: the material sidecar, the palette, the submaterial and the
+ *  host channel it is tinted by (a host-tinted material, HostTint). A custom colour edit describes it again with an
+ *  edited palette (ASCVehicle::SetPaintColors). */
+struct FSCPaintSource
+{
+    FString Sidecar, PaletteId, HostChannel;
+    int32 Ordinal = INDEX_NONE;
+    bool IsValid() const { return !Sidecar.IsEmpty() && Ordinal != INDEX_NONE; }
+};
 struct FSCPaintSlot
 {
     TWeakObjectPtr<class UMeshComponent> Component;
     int32 Slot = 0;
     TWeakObjectPtr<class UMaterialInterface> Default;
     TArray<TWeakObjectPtr<class UMaterialInterface>> Paints;
+    /** The sources of Default and of each of Paints (index-aligned). */
+    FSCPaintSource DefaultSource;
+    TArray<FSCPaintSource> Sources;
 };
 USTRUCT()
 struct FSCDoorSensor

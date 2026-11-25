@@ -334,17 +334,20 @@ pub(crate) struct ContainerRecord {
     pub name: String,
 }
 
+/// The detail of a hangar no location offers (a player reads why it has no place).
+const UNPLACED: &str = "Not offered at a location";
+
 /// Records sharing one container are one row: their places merged (sorted), its size the smallest named one (else, none
 /// named, the smallest size id, which still orders it), labelled by the places that offer it, else by the first record
-/// name. Independent of record order.
+/// name made readable (underscores as spaces) with [`UNPLACED`] as detail. Offered rows come first, then by size and
+/// label. Independent of record order.
 pub(crate) fn container_rows(records: Vec<ContainerRecord>) -> Vec<CatalogRow> {
     #[derive(Default)]
     struct Container {
         size: Option<(i64, String)>,
         unnamed_size_id: Option<i64>,
         places: Vec<String>,
-        placed: Vec<String>,   // records that have places
-        unplaced: Vec<String>, // records that have none
+        unplaced: Vec<String>, // records that have no place
     }
     let mut containers: BTreeMap<String, Container> = BTreeMap::new();
     for r in records {
@@ -362,22 +365,21 @@ pub(crate) fn container_rows(records: Vec<ContainerRecord>) -> Vec<CatalogRow> {
                     c.places.push(place);
                 }
             }
-            c.placed.push(r.name);
         }
     }
-    let mut rows: Vec<(i64, CatalogRow)> = containers
+    let mut rows: Vec<((bool, i64), CatalogRow)> = containers
         .into_iter()
         .map(|(id, mut c)| {
             c.places.sort();
-            c.placed.sort();
             c.unplaced.sort();
-            let (label, detail) = if c.places.is_empty() {
-                (c.unplaced.first().cloned().unwrap_or_default(), String::new())
+            let placed = !c.places.is_empty();
+            let (label, detail) = if placed {
+                (c.places.join(", "), String::new())
             } else {
-                (c.places.join(", "), c.placed.join(", "))
+                (c.unplaced.first().map(|n| n.replace('_', " ")).unwrap_or_default(), UNPLACED.to_owned())
             };
             let (size_id, group) = c.size.unwrap_or((c.unnamed_size_id.unwrap_or_default(), String::new()));
-            (size_id, CatalogRow { id, label, group, detail })
+            ((!placed, size_id), CatalogRow { id, label, group, detail })
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.label.cmp(&b.1.label)).then(a.1.id.cmp(&b.1.id)));

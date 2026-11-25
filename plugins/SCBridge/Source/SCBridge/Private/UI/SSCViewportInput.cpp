@@ -23,9 +23,10 @@ FReply SSCViewportInput::OnMouseButtonDown(const FGeometry&, const FPointerEvent
     const FKey Button = Event.GetEffectingButton();
     const bool bPan = Button == EKeys::MiddleMouseButton || (Button == EKeys::LeftMouseButton && Event.IsShiftDown());
     if (!bPan && Button != EKeys::LeftMouseButton && Button != EKeys::RightMouseButton) return FReply::Unhandled();
-    if (SCViewerShell::IsMenuOpen(Subsystem.Get())) return FReply::Unhandled(); // the cursor belongs to the menu
     // First person: the button is also a key-table input (right button held: aim down sights).
     const bool bFirstPerson = Subsystem.IsValid() && Subsystem->GetFirstPerson();
+    // The cursor belongs to an open menu, unless it leaves the view its mouse (orbit / fly only).
+    if (SCViewerShell::IsMenuOpen(Subsystem.Get()) && (bFirstPerson || !SCViewerShell::MenuPassesView())) return FReply::Unhandled();
     if (bFirstPerson) Subsystem->GetFirstPerson()->HandleKey(Button, true);
     // Already captured (a second button while looking: right button to aim, left to fire): keep the capture. Asking for it again
     // makes Slate release it first (FSlateUser::SetPointerCaptor), whose OnMouseCaptureLost ended the look until the window was
