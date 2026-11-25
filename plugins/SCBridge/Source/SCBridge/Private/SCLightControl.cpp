@@ -170,7 +170,9 @@ static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPlay(
                 }
         for (const auto& [V, D, bOpen] : Orders)
         {
-            const bool bPlayed = V->IsDoorOpen(D) != bOpen && V->PlayDoor(D, bOpen);
+            // Skipped only when its recorded state is the target (an unknown state, after a raw clip, closes from its pose).
+            const bool bAtTarget = V->IsDoorStateKnown(D) && V->IsDoorOpen(D) == bOpen;
+            const bool bPlayed = !bAtTarget && V->PlayDoor(D, bOpen);
             UE_LOG(LogSCLightControl, Display, TEXT("DOOR_PLAY vehicle=%s door=%d owner=%s open=%d played=%d"), *V->GetName(), D, *V->Doors[D].Rig->OwnerEntity, bOpen, bPlayed);
         }
         for (const auto& [V, D, bOpen] : Orders) V->DoorOrderBatch.Reset();

@@ -153,9 +153,19 @@ ASCVehicle::FOnDoorMotion ASCVehicle::OnDoorMotion;
 void ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder)
 {
     if (!Doors.IsValidIndex(Door) || !Doors[Door].Rig) return;
+    const USCRigComponent* Rig = Doors[Door].Rig;
+    // The same order again mid-stroke (a lift ordering a closing door closed): the move goes on with the playback just
+    // started, and its start effects are not played again.
+    if (FDoorMotion* Same = DoorMotions.FindByPredicate([&](const FDoorMotion& M) { return M.Door == Door && M.bOpen == bOpen; }))
+    {
+        TArray<uint64> Orders;
+        for (const FSCClipPlayback& P : Playback)
+            if (P.Order > AfterOrder && (P.TargetRig.Get() == Rig || !P.bTargeted)) Orders.Add(P.Order);
+        if (!Orders.IsEmpty()) Same->Orders = MoveTemp(Orders);
+        return;
+    }
     // A door turned around mid-stroke: its previous move is replaced (the new Moved ends what it held).
     DoorMotions.RemoveAll([&](const FDoorMotion& M) { return M.Door == Door; });
-    const USCRigComponent* Rig = Doors[Door].Rig;
     FDoorMotion Motion;
     Motion.Door = Door;
     Motion.bOpen = bOpen;
@@ -565,8 +575,8 @@ void ASCVehicle::Tick(float DeltaSeconds)
             Playback.RemoveAt(I);
         }
     }
-    UpdateDoorMotions(Ended);
     EvaluateClips();
+    UpdateDoorMotions(Ended); // after the final pose: an arrival effect on a door bone starts where the bone ended
     for (const auto& Pair : GroundStops) RememberGangwayStop(Pair.Key);
     for (const FString& Line : TraceLines)
     {

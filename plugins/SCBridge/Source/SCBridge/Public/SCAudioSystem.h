@@ -174,6 +174,14 @@ struct SCBRIDGE_API FSCAudioPlace
     bool bListener = false;                 // an area bed at the listener
     double EpochClock = -1.0;               // a placed loop: its looping voices keep the scene's timeline
     FString Label;                          // for logs: who played it
+    /** The game object it plays on when one object plays at several points (a door's helpers and pivot): object-scoped
+     *  stops and per-object container histories match it instead of the attachment, socket and label. */
+    FString Emitter;
+    bool SameEmitter(const FSCAudioPlace& Other) const
+    {
+        if (!Emitter.IsEmpty() || !Other.Emitter.IsEmpty()) return Emitter == Other.Emitter;
+        return Attach == Other.Attach && Socket == Other.Socket && Label == Other.Label;
+    }
 };
 
 UCLASS()

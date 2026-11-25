@@ -827,6 +827,16 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     V->Tick(1.f);
     Expect(TEXT("two moves, one arrival"), {TEXT("A:0:moved"), TEXT("A:1:moved"), TEXT("A:1:arrived")});
 
+    // The same order again mid-stroke (a lift re-ordering a closing door): one move, one arrival.
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(0.05f);
+    V->PlayDoor(DA, false);
+    V->Tick(1.f);
+    Expect(TEXT("a repeated order is one move"), {TEXT("A:0:moved"), TEXT("A:0:arrived")});
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    V->Tick(1.f);
+    Events.Reset();
+
     // Two doors (here two rigs) move and arrive on their own.
     TestTrue(TEXT("A closes again"), V->PlayDoor(DA, false));
     TestTrue(TEXT("B opens"), V->PlayDoor(DB, true));

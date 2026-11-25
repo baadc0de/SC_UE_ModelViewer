@@ -961,7 +961,7 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
             const bool bObject = (O.ActionType & 0x01) != 0;
             for (auto& [Id, I] : Instances)
                 if (I.Scene.Pin().Get() == &S && I.Action && S.Manifest.Nodes.IsValidIndex(I.Action->Root) && S.Manifest.Nodes[I.Action->Root].Id == O.Target &&
-                    (!bObject || (I.Place.Attach == Where.Attach && I.Place.Socket == Where.Socket && I.Place.Label == Where.Label)))
+                    (!bObject || I.Place.SameEmitter(Where)))
                     Stop(Id, O.FadeS, O.DelayS);
         }
     if (!T->IsPlayable())
@@ -1122,7 +1122,9 @@ FSCAudioContainerState& USCAudioSubsystem::ContainerState(FSCAudioScene& S, int3
     // Wwise keeps a container's sequence / avoid-repeat history per game object unless the container is global.
     uint32 Emitter = 0;
     if (S.Manifest.Nodes.IsValidIndex(Node) && !S.Manifest.Nodes[Node].bGlobal)
-        Emitter = HashCombine(GetTypeHash(I.Place.Label), HashCombine(GetTypeHash(I.Place.Attach.Get()), GetTypeHash(I.Place.Socket))) | 1u;
+        Emitter = (I.Place.Emitter.IsEmpty()
+                       ? HashCombine(GetTypeHash(I.Place.Label), HashCombine(GetTypeHash(I.Place.Attach.Get()), GetTypeHash(I.Place.Socket)))
+                       : GetTypeHash(I.Place.Emitter)) | 1u;
     return S.Containers.FindOrAdd((uint64(uint32(Node)) << 32) | Emitter);
 }
 
@@ -1946,7 +1948,8 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
         P.Attach = E.Rig.IsValid() ? static_cast<USceneComponent*>(E.Rig.Get()) : E.Anchor.Get();
         if (!Fx.Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx.Bone)) != INDEX_NONE) P.Socket = FName(*Fx.Bone);
         P.Offset = FSCLights::ContainerBasis(Fx.Offset, !P.Socket.IsNone()) * 100; // a bone's frame: the helper basis
-        P.Label = DoorEmitter;
+        P.Emitter = DoorEmitter;
+        P.Label = DoorEmitter + TEXT(":") + Event;
         return P;
     };
     int32 Played = 0;
@@ -1972,9 +1975,10 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
         // pivot does not.
         const bool bHelperFrame = !P.Socket.IsNone() || P.Attach.Get() != E.Rig.Get();
         P.Offset = FSCLights::ContainerBasis(Sound->Offset, bHelperFrame) * 100;
-        // One emitter per door across its events (an object-scoped stop in the close group reaches the open group's sound);
-        // the event is in AUDIO_DOOR.
-        P.Label = DoorEmitter;
+        // One game object per door across its events and helpers (an object-scoped stop in the close group reaches the open
+        // group's sound; one container history).
+        P.Emitter = DoorEmitter;
+        P.Label = DoorEmitter + TEXT(":") + Event;
         const int32 Id = Post(*S, Sound->Trigger, P);
         Played += Id != INDEX_NONE;
         // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds). One that cannot

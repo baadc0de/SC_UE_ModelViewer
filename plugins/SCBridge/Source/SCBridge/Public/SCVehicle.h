@@ -611,6 +611,11 @@ public:
     void CancelDoorMotion(int32 Door);
     /** Motions whose entries ended naturally (Ended) arrive; those whose entries vanished are cancelled. */
     void UpdateDoorMotions(const TSet<uint64>& Ended);
+    /** Door has a recorded state (its last move's end; none after a raw clip took it over). */
+    bool IsDoorStateKnown(int32 Door) const
+    {
+        return Doors.IsValidIndex(Door) && FragmentTargets.Contains(FSCFragmentKey(Doors[Door].Rig, Doors[Door].Fragment));
+    }
     /** Does Clip drive a channel (bone, rotation / position) that Door's own moves drive on its rig? */
     bool ClipDrivesDoor(int32 Door, int32 Clip) const;
     /** The clips PlayFragmentAt chooses among for Fragment / Tag on Target (weighted options bound to its mesh, its own
