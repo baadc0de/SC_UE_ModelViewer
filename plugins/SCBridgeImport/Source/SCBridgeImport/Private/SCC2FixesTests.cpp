@@ -905,6 +905,22 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
                                                     FMath::IsNearlyEqual(BoneX(A), bAOpen ? 0.0 : 50.0, 1e-3));
     Events.Reset();
 
+    // A raw clip on the door's channels records its end; a fragment on other bones of the rig preempting it through a shared
+    // scope freezes it short of that end: unsettled too.
+    AddClip(V, A, TEXT("hatch_wave"), TEXT("Wave"), {0, 5});
+    {
+        FSCImportedClip& Wave = V->ClipCatalog->Clips.Last();
+        Wave.Bindings[0].Tracks[0].Bone = 0;
+        Wave.Fragments[0].Fragment = TEXT("Wave");
+    }
+    TestTrue(TEXT("raw clip"), V->PlayClipAt(V->IsDoorOpen(DA) ? Close : Open, A, 1.f));
+    TestTrue(TEXT("its end recorded"), V->IsDoorStateKnown(DA));
+    V->Tick(0.05f);
+    TestTrue(TEXT("a fragment on other bones"), V->PlayFragmentAt(TEXT("Wave"), TEXT("Wave"), A));
+    TestFalse(TEXT("the frozen door is unsettled"), V->IsDoorStateKnown(DA));
+    V->Tick(1.f);
+    Events.Reset();
+
     // A lock change is reported.
     TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));
     Expect(TEXT("locked"), {TEXT("A:0:locked")});

@@ -963,16 +963,20 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
                 if (I.Scene.Pin().Get() == &S && I.Action && S.Manifest.Nodes.IsValidIndex(I.Action->Root) && S.Manifest.Nodes[I.Action->Root].Id == O.Target &&
                     (!bObject || I.Place.SameEmitter(Where)))
                     Stop(Id, O.FadeS, O.DelayS);
-            // WP-A1: a held door post it targets is stopped too when it has no live instance now (between two of its
-            // repetitions): it is not posted again.
+            // WP-A1: a held door post it targets with no live instance now (between two of its repetitions) stops too: it
+            // repeats until the action's delay has passed, then stops over its fade (UpdateDoorHolds).
             auto MarkHeld = [&](TArray<FHeldPost>& Posts) {
                 for (FHeldPost& P : Posts)
                 {
                     if (P.bStopped || (bObject && !P.Place.SameEmitter(Where))) continue;
                     const FSCAudioTrigger* HT = S.Manifest.Triggers.Find(P.Trigger);
-                    P.bStopped = HT && HT->Play.ContainsByPredicate([&](const FSCAudioAction& A) {
-                        return S.Manifest.Nodes.IsValidIndex(A.Root) && S.Manifest.Nodes[A.Root].Id == O.Target;
-                    });
+                    if (HT && HT->Play.ContainsByPredicate([&](const FSCAudioAction& A) {
+                            return S.Manifest.Nodes.IsValidIndex(A.Root) && S.Manifest.Nodes[A.Root].Id == O.Target;
+                        }) && Clock + O.DelayS < P.StopAt)
+                    {
+                        P.StopAt = Clock + O.DelayS;
+                        P.StopFade = O.FadeS;
+                    }
                 }
             };
             for (FDoorHold& H : DoorHolds)
@@ -2093,12 +2097,21 @@ void USCAudioSubsystem::UpdateDoorHolds()
         TArray<int32> Drop;
         for (int32 I = 0; I < Posts.Num(); ++I)
         {
+            if (!Posts[I].bStopped && Clock >= Posts[I].StopAt) // an authored stop's delay has passed
+            {
+                if (IsPlaying(Posts[I].Id)) Stop(Posts[I].Id, Posts[I].StopFade); // marks it: dropped once it ended
+                else Drop.Add(I);
+                continue;
+            }
             if (IsPlaying(Posts[I].Id)) continue; // kept while any of its actions plays (a release stops them)
             if (Posts[I].bStopped) { Drop.Add(I); continue; }
             const FHeldPost Held = Posts[I]; // Post may stop (and mark) entries of this array
             const int32 Id = Held.Place.Attach.IsValid() ? Post(S, Held.Trigger, Held.Place) : INDEX_NONE;
             Posts[I].Id = Id;
-            Posts[I].bStopped = false; // its own stop actions (a stop-then-play trigger) restart it, they do not stop it
+            // Its own stop actions (a stop-then-play trigger) restart it, they do not stop it: its stop state is as before.
+            Posts[I].bStopped = false;
+            Posts[I].StopAt = Held.StopAt;
+            Posts[I].StopFade = Held.StopFade;
             if (!HasStarted(Id)) Drop.Add(I);
         }
         for (int32 K = Drop.Num() - 1; K >= 0; --K) Posts.RemoveAt(Drop[K]);

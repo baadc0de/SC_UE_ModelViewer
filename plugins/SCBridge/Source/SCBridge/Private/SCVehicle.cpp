@@ -211,7 +211,7 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended, const TSet<uint64>
         // short of its end by something else (a scope preempting it), the door shows neither end: its recorded target stays
         // (its next order goes the other way, as before) but is unsettled, so sc.Doors.Play does not skip it. A gangway
         // stopped by the ground is settled (RememberGangwayStop).
-        if (bVanished && Doors.IsValidIndex(Done.Door)) UnsettledTargets.Add(FSCFragmentKey(Doors[Done.Door].Rig.Get(), Doors[Done.Door].Fragment));
+        if (bVanished) MarkDoorUnsettled(Done.Door);
         if (!Done.Orders.IsEmpty() || bVanished || bGrounded) OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Cancelled);
         else OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Arrived);
     }
@@ -432,6 +432,11 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         for (int32 I = Playback.Num() - 1; I >= 0; --I)
             if (Playback[I].bTargeted == (Target != nullptr) && Playback[I].TargetRig.Get() == Target && Conflicts(Selected.Scopes, Playback[I].Scopes))
             {
+                // WP-A1: an unfinished clip frozen here leaves the doors whose channels it drives short of the target it
+                // recorded (a door order's or a raw clip's): unsettled until a new target is recorded for them.
+                for (int32 D = 0; D < Doors.Num(); ++D)
+                    if (const USCRigComponent* DoorRig = Doors[D].Rig; DoorRig && AppliesTo(Playback[I], DoorRig) && ClipDrivesDoor(D, Playback[I].Clip))
+                        UnsettledTargets.Add(FSCFragmentKey(DoorRig, Doors[D].Fragment));
                 Playback[I].bPlaying = false;
                 HeldPlayback.Add(Playback[I]);
                 Playback.RemoveAt(I);

@@ -621,6 +621,11 @@ public:
         const FName* Tag = FragmentTargets.Find(Key);
         return Tag && !Tag->IsNone() && (*Tag == Doors[Door].OpenTag || *Tag == Doors[Door].CloseTag) && !UnsettledTargets.Contains(Key);
     }
+    /** Door stopped short of its recorded target: unsettled until a new target is recorded for it (IsDoorStateKnown). */
+    void MarkDoorUnsettled(int32 Door)
+    {
+        if (Doors.IsValidIndex(Door)) UnsettledTargets.Add(FSCFragmentKey(Doors[Door].Rig, Doors[Door].Fragment));
+    }
     /** Does Clip drive a channel (bone, rotation / position) that Door's own moves drive on its rig? */
     bool ClipDrivesDoor(int32 Door, int32 Clip) const;
     /** The clips PlayFragmentAt chooses among for Fragment / Tag on Target (weighted options bound to its mesh, its own
@@ -657,8 +662,9 @@ private:
     // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle. Saved: the doors' state.
     UPROPERTY() TMap<FSCFragmentKey, FName> FragmentTargets;
     // WP-A1: targets whose door was stopped short of them (preempted, taken over by another fragment): the door shows
-    // neither end. IsDoorOpen still reads the target (the next order goes the other way); IsDoorStateKnown is false.
-    UPROPERTY(Transient) TSet<FSCFragmentKey> UnsettledTargets;
+    // neither end. IsDoorOpen still reads the target (the next order goes the other way); IsDoorStateKnown is false. Saved
+    // with the targets (the frozen pose is too).
+    UPROPERTY() TSet<FSCFragmentKey> UnsettledTargets;
     struct FSensorDoorState { double LastInside = -1; float ExitDelay = 0; bool bOpenedBySensor = false; };
     TMap<int32, FSensorDoorState> SensorDoorStates;
     struct FPendingSpawn

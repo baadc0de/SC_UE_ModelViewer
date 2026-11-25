@@ -274,6 +274,9 @@ private:
         FSCAudioPlace Place;
         int32 Id = INDEX_NONE;
         bool bStopped = false; // Stop reached it (a command, a stop action): kept for cleanup while it plays, never reposted
+        // An authored stop that reached it between two repetitions: it stops then (its delay), over StopFade.
+        double StopAt = TNumericLimits<double>::Max();
+        float StopFade = 0.f;
     };
     /** What a door holds: looped posts and state-tag references, for its move or at rest; it ends with its door's rig. */
     struct FDoorHold
