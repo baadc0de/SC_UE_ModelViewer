@@ -772,8 +772,8 @@ bool FSCExteriorPanelReachTest::RunTest(const FString&)
 
 // SCBridge.Doors.MotionEvents (WP-A1 door effects): a door's moves and their ends as ASCVehicle::OnDoorMotion reports them:
 // an order moves it and it arrives when its playback ends; turned around mid-stroke the new move replaces the old (no arrival
-// for the first); ResetPose, a snap and its rig destroyed cancel a move; a raw play of its own clip moves it; two doors of
-// one rig move and arrive on their own; a fragment command moves it; a lock change is reported.
+// for the first); ResetPose, a snap, a raw clip, a fragment command and its rig destroyed stop a move (door effects come
+// from door orders); two doors move and arrive on their own; a lock change is reported.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCDoorMotionEventsTest, "SCBridge.Doors.MotionEvents", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCDoorMotionEventsTest::RunTest(const FString&)
 {
@@ -843,24 +843,39 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     TestTrue(TEXT("B's rest ends too"), Events.Contains(TEXT("B:0:cancelled")));
     Events.Reset();
 
-    // A fragment command (outside a door order) moves the door, and it arrives.
+    // Door effects come from door orders: a fragment command taking a moving door over stops its move (no arrival).
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
     TestTrue(TEXT("fragment"), V->PlayFragmentAt(TEXT("SCItemDoor"), TEXT("Open"), A));
     V->Tick(1.f);
-    Expect(TEXT("fragment moves and arrives"), {TEXT("A:1:moved"), TEXT("A:1:arrived")});
+    Expect(TEXT("a fragment stops the move"), {TEXT("A:0:moved"), TEXT("A:0:cancelled")});
 
-    // A raw play of the door's own clip moves it; a snap of it cancels the move.
+    // So does a raw clip on its channels, and a snap.
     const int32 Open = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("hatch_open")); });
+    const int32 Close = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("hatch_close")); });
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
     TestTrue(TEXT("raw open clip"), V->PlayClipAt(Open, A, 1.f));
-    V->Tick(0.05f);
-    TestTrue(TEXT("snapped"), V->SnapClipAt(Open, A, true));
     V->Tick(1.f);
-    Expect(TEXT("raw play moves, snap cancels"), {TEXT("A:1:moved"), TEXT("A:1:cancelled")});
+    Expect(TEXT("a raw clip stops the move"), {TEXT("A:0:moved"), TEXT("A:0:cancelled")});
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(0.05f);
+    TestTrue(TEXT("snapped"), V->SnapClipAt(Close, A, true));
+    V->Tick(1.f);
+    Expect(TEXT("a snap stops the move"), {TEXT("A:0:moved"), TEXT("A:0:cancelled")});
 
-    // An untargeted raw play of B's own clip moves it; its rig destroyed while the clip plays on: cancelled, no arrival.
-    TestTrue(TEXT("untargeted raw clip"), V->PlayClip(TEXT("leaf_open")));
+    // A door on another rig is not touched by them.
+    TestTrue(TEXT("B moves"), V->PlayDoor(DB, !V->IsDoorOpen(DB)));
+    TestTrue(TEXT("A's raw clip"), V->PlayClipAt(Open, A, 1.f));
+    V->Tick(1.f);
+    TestTrue(TEXT("B arrives undisturbed"), Events.Num() >= 2 && Events[0].EndsWith(TEXT("moved")) && Events.Last().StartsWith(TEXT("B:")) &&
+                                             Events.Last().EndsWith(TEXT("arrived")));
+    Events.Reset();
+
+    // Its rig destroyed while moving: cancelled, no arrival.
+    TestTrue(TEXT("B moves"), V->PlayDoor(DB, !V->IsDoorOpen(DB)));
+    const bool bBOpen = V->IsDoorOpen(DB);
     B->DestroyComponent();
     V->Tick(1.f);
-    Expect(TEXT("rig gone cancels"), {TEXT("B:1:moved"), TEXT("B:1:cancelled")});
+    Expect(TEXT("rig gone cancels"), {bBOpen ? TEXT("B:1:moved") : TEXT("B:0:moved"), bBOpen ? TEXT("B:1:cancelled") : TEXT("B:0:cancelled")});
 
     // A lock change is reported.
     TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));

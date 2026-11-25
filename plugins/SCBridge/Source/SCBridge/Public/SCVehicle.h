@@ -631,8 +631,8 @@ private:
     bool IsCoveredOnRig(const FSCClipPlayback& Entry, const USCRigComponent* Rig) const;
     /** A clip started outside a door interaction (PlayClip / SnapClip / PlayClipAt / SnapClipAt) on a door's channels: the
      *  door's recorded state becomes what the clip ends in when it is the door's own open or close fragment, else unknown.
-     *  bPlayed: the clip plays (from AfterOrder on: the door's motion starts, WP-A1); else it was snapped (a motion stops). */
-    void ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast, bool bPlayed = false, uint64 AfterOrder = 0);
+     *  The door's move (WP-A1 door effects) stops: the clip takes it over. */
+    void ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast);
     /** WP-A1: play the audio events of P's clip bindings crossed between Previous and P.Frame. */
     void FireClipAudio(FSCClipPlayback& P, double Previous);
     void MarkDirty(int32 ClipIndex);

@@ -257,24 +257,35 @@ private:
     TSharedPtr<FSCRtpcBank> RtpcBank;                                // the game parameters meters write
     bool bMixTracing = false;                                        // sc.Audio.MixTrace running
     double MixTraceStart = 0;
-    /** What a door holds: looped posts (posted again when they end) and set state tags, for its move or at rest. */
+    /** A held post: posted again whenever it stops playing (a finite tree lasts the whole hold). */
+    struct FHeldPost { FString Trigger; FSCAudioPlace Place; int32 Id = INDEX_NONE; };
+    /** What a door holds: looped posts and state-tag references, for its move or at rest; it ends with its door's rig. */
     struct FDoorHold
     {
         TWeakObjectPtr<ASCVehicle> Vehicle;
+        uint32 VehicleId = 0; // UObject unique id: stable after the vehicle is gone
+        TWeakObjectPtr<USCRigComponent> Rig;
         int32 Door = INDEX_NONE;
         bool bMotion = true;
-        int32 Interior = INDEX_NONE;
-        FString EntityId;
-        TArray<FString> StateTags;
-        struct FLoop { FString Trigger; FSCAudioPlace Place; int32 Id = INDEX_NONE; };
-        TArray<FLoop> Loops;
+        TArray<FString> TagKeys; // TagHolds it references
+        TArray<FHeldPost> Loops;
     };
     TArray<FDoorHold> DoorHolds;
-    TMap<FString, int32> DoorTagRefs; // "<vehicle>|<interior>|<entity>|<tag>" -> the door holds holding that state tag
+    /** A state tag of an entity held by door holds (two doors of one entity share it): each of its tag effects is kept
+     *  playing (posted again on its own when it ends) while any door holds it. */
+    struct FTagHold
+    {
+        TWeakObjectPtr<ASCVehicle> Vehicle;
+        int32 Refs = 0;
+        TArray<FHeldPost> Effects;
+    };
+    TMap<FString, FTagHold> TagHolds; // "<vehicle id>|<interior>|<entity id>|<tag>"
+    void ReleaseDoorHold(FDoorHold& Hold);
+    void StopHeldPosts(TArray<FHeldPost>& Posts);
     /** A door event: its group's one-shots once, its looped sounds held (bMotion: for the move, else at rest), its tag
      *  set as a state (bState) or fired. Returns the posts started. */
     int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState);
-    /** Ends Door's holds (bMotionOnly: its move's, not its rest's). */
+    /** Ends Door's holds (INDEX_NONE: every door of the vehicle; bMotionOnly: its move's, not its rest's). */
     void EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly);
     void UpdateDoorHolds();
     FDelegateHandle DoorMotionHandle;

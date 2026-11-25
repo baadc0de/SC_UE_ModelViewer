@@ -201,7 +201,7 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
     }
 }
 
-void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast, bool bPlayed, uint64 AfterOrder)
+void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast)
 {
     // A clip started outside a door interaction (sc.Vehicle.Clip, a harness, an environment state) on a door's channels: the
     // door's recorded state is what that clip ends in when it is one of the door's own fragments (an open fragment's end is
@@ -237,9 +237,10 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
         const FSCFragmentKey Key(Rig, D.Fragment);
         if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenClip == bEndsAtLast) ? D.OpenTag : D.CloseTag);
         else FragmentTargets.Remove(Key);
-        // WP-A1: the door's own clip played moves it (its effects); a snap or another clip on its channels stops a move.
-        if ((bOpenClip || bCloseClip) && bPlayed) StartDoorMotion(DoorIndex, bOpenClip == bEndsAtLast, AfterOrder);
-        else CancelDoorMotion(DoorIndex);
+        // WP-A1: a raw clip on the door's channels takes the door over: its move (and rest) stops. Door effects belong to
+        // the door's own state changes (orders, PlayDoor), as the game's door component plays them; a clip plays its own
+        // animation events.
+        CancelDoorMotion(DoorIndex);
         bChanged = true;
         UE_LOG(LogTemp, Display, TEXT("DOOR_STATE_RAW_CLIP owner=%s fragment=%s clip=%s ends_at_last=%d state=%s"), *Rig->OwnerEntity, *D.Fragment.ToString(),
                *Clip.Id.ToString(), bEndsAtLast, bOpenClip || bCloseClip ? *FragmentTargets[Key].ToString() : TEXT("unknown"));
@@ -250,9 +251,8 @@ bool ASCVehicle::PlayClip(FName Id)
 {
     if (!ClipCatalog) return false;
     const int32 Index = ClipCatalog->Clips.IndexOfByPredicate([&](const FSCImportedClip& C) { return C.Id == Id; });
-    const uint64 Prior = NextOrder;
     if (!StartClip(Index, 1, false, false)) return false;
-    ReconcileDoorStates(Index, nullptr, true, true, Prior);
+    ReconcileDoorStates(Index, nullptr, true);
     return true;
 }
 bool ASCVehicle::SnapClip(FName Id, bool bLast)
@@ -265,9 +265,8 @@ bool ASCVehicle::SnapClip(FName Id, bool bLast)
 }
 bool ASCVehicle::PlayClipAt(int32 Index, USCRigComponent* Target, float Speed)
 {
-    const uint64 Prior = NextOrder;
     if (!StartClip(Index, Speed, false, false, {}, Target)) return false;
-    ReconcileDoorStates(Index, Target, Speed >= 0, true, Prior);
+    ReconcileDoorStates(Index, Target, Speed >= 0);
     return true;
 }
 bool ASCVehicle::SnapClipAt(int32 Index, USCRigComponent* Target, bool bLast)
@@ -430,17 +429,17 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         };
         for (const auto& P : Playback) Record(P);
         for (const auto& P : HeldPlayback) Record(P);
-        // WP-A1: a door's own fragment played outside a door order (a fragment command, a harness) moves the door, held at a
-        // start or end it stops it (PlayDoor reports its own move).
+        // WP-A1: a fragment played outside a door order (a command, a harness, a rest pose) takes over the doors whose rigs
+        // its new layers drive: their moves (and rest holds) stop. Door effects come from door orders (PlayDoor) only.
         if (!bInDoorOrder)
             for (int32 D = 0; D < Doors.Num(); ++D)
             {
-                const FSCDoorInteraction& Door = Doors[D];
-                if (Door.Fragment != Fragment || (Target && Door.Rig != Target)) continue;
-                const bool bDoorTag = Tag == Door.OpenTag || Tag == Door.CloseTag;
-                const bool bHold = Start == ESCFragmentStart::HoldFirst || Start == ESCFragmentStart::HoldLast;
-                if (bDoorTag && !bHold) StartDoorMotion(D, Tag == Door.OpenTag && SpeedScale >= 0, OrderBefore);
-                else CancelDoorMotion(D);
+                const USCRigComponent* Rig = Doors[D].Rig;
+                auto Drives = [&](const FSCClipPlayback& P) {
+                    return P.Order > OrderBefore && Rig && AppliesTo(P, Rig) &&
+                           ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); });
+                };
+                if (Playback.ContainsByPredicate(Drives) || HeldPlayback.ContainsByPredicate(Drives)) CancelDoorMotion(D);
             }
     }
     if (Found && !ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: the pads of a door that starts moving

@@ -1796,6 +1796,42 @@ void FSCImportJob::FState::Assemble()
     TSharedPtr<FSCAudioScene> Audio = FSCAudioScene::Load(*Source, Manifest.ScenePath, AudioError);
     if (Audio) Audio->Vehicle = V;
     else UE_LOG(LogSCImport, Display, TEXT("AUDIO_NONE %s: %s"), *Manifest.ScenePath, *AudioError);
+    // WP-A1 door effects: a door sound's helper that is a mesh node of the entity (bones resolve on its rig at play) becomes
+    // a frame of the audio entity, saved with it.
+    auto ResolveDoorHelpers = [&](const FEntity& Placed, const FSCAudioClass& Class, FSCAudioEntity& Entity, FSCSavedAudioEntity& Saved) {
+        for (const FSCAudioDoorSound& Sound : Class.DoorSounds)
+            for (const FString& Name : {Sound.Helper, Sound.Helper.StartsWith(TEXT("$")) ? Sound.Helper.Mid(1) : FString()})
+            {
+                if (Name.IsEmpty() || Entity.Helpers.Contains(Name) || !Placed.Mesh || !Placed.Anchor ||
+                    (Placed.Rig && Placed.Rig->DoesSocketExist(FName(*Name)))) continue;
+                const FMatrix* Node = nullptr;
+                for (const auto& Pair : Placed.Mesh->Nodes)
+                    if (Pair.Key.Equals(Name, ESearchCase::IgnoreCase)) Node = &Pair.Value;
+                if (!Node) continue;
+                USceneComponent* Frame = NewAnchor(Name, Placed.Anchor, FSCMeshes::Transform(*Node));
+                Entity.Helpers.Add(Name, Frame);
+                Saved.Helpers.Add(Name, Frame);
+            }
+    };
+    // Loadout doors (a ship's exterior doors: children, not interior placements): their class by entity name, keyed as the
+    // audio system finds a door's entity by its rig ("-1/<owner>#<rig>").
+    if (Audio)
+        for (const FSCSceneInstance& I : Manifest.Children)
+        {
+            const FEntity* Placed = Entities.Find(I.EntityName);
+            if (!Placed || !Placed->Rig) continue;
+            const FString Qualified = TEXT("EntityClassDefinition.") + I.EntityName;
+            for (const auto& [Guid, Class] : Audio->Manifest.Classes)
+            {
+                if (Class.DoorEvents.IsEmpty() || (Class.Name != I.EntityName && Class.Name != Qualified)) continue;
+                const FString Key = FString::Printf(TEXT("%d/%s#%s"), INDEX_NONE, *Placed->Rig->OwnerEntity, *Placed->Rig->GetName()).ToLower();
+                if (Audio->Entities.Contains(Key)) break;
+                FSCAudioEntity& Entity = Audio->Entities.Add(Key, {Guid, Placed->Anchor, Placed->Rig, INDEX_NONE});
+                FSCSavedAudioEntity& Saved = V->AudioEntities.Add_GetRef({Key, Guid, Placed->Anchor, Placed->Rig, INDEX_NONE});
+                ResolveDoorHelpers(*Placed, Class, Entity, Saved);
+                break;
+            }
+        }
     // Hangar waypoints (environments): the records the rule chooses, anchored per interior below, in the rule's order.
     const TArray<FSCWaypointCandidate> WaypointCandidates = Options.bEnvironment ? SCHangarWaypoints::Select(Manifest) : TArray<FSCWaypointCandidate>();
     TArray<FSCWaypointSource> WaypointSources;
@@ -1868,20 +1904,7 @@ void FSCImportJob::FState::Assemble()
                     const FString Key = FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower());
                     FSCAudioEntity& Entity = Audio->Entities.Add(Key, {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
                     FSCSavedAudioEntity& Saved = V->AudioEntities.Add_GetRef({Key, P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex}); // saved with a prepared level
-                    // WP-A1: the door sounds' helpers that are mesh nodes of the entity (bones resolve on its rig at play).
-                    for (const FSCAudioDoorSound& Sound : Audio->Manifest.Classes[P.EntityClassGuid].DoorSounds)
-                        for (const FString& Name : {Sound.Helper, Sound.Helper.StartsWith(TEXT("$")) ? Sound.Helper.Mid(1) : FString()})
-                        {
-                            if (Name.IsEmpty() || Entity.Helpers.Contains(Name) || !Placed->Mesh || !Placed->Anchor ||
-                                (Placed->Rig && Placed->Rig->DoesSocketExist(FName(*Name)))) continue;
-                            const FMatrix* Node = nullptr;
-                            for (const auto& Pair : Placed->Mesh->Nodes)
-                                if (Pair.Key.Equals(Name, ESearchCase::IgnoreCase)) Node = &Pair.Value;
-                            if (!Node) continue;
-                            USceneComponent* Frame = NewAnchor(Name, Placed->Anchor, FSCMeshes::Transform(*Node));
-                            Entity.Helpers.Add(Name, Frame);
-                            Saved.Helpers.Add(Name, Frame);
-                        }
+                    ResolveDoorHelpers(*Placed, Audio->Manifest.Classes[P.EntityClassGuid], Entity, Saved);
                 }
         }
         // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel. A lift carriage links

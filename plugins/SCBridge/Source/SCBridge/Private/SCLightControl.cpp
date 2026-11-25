@@ -152,15 +152,18 @@ static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPlay(
     TEXT("sc.Doors.Play"), TEXT("sc.Doors.Play <owner substring> <open|close|toggle>: move matching doors as an order does (DOOR_PLAY)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
         if (Args.Num() < 2) return;
+        // Every matching door's target first (a toggle reads the state before any order): an order's links may move
+        // another matching door, which is then already where it is asked to go.
+        TArray<TTuple<ASCVehicle*, int32, bool>> Orders;
         for (TActorIterator<ASCVehicle> It(World); It; ++It)
             for (int32 D = 0; D < It->Doors.Num(); ++D)
-            {
-                const USCRigComponent* Rig = It->Doors[D].Rig;
-                if (!Rig || !Rig->OwnerEntity.Contains(Args[0])) continue;
-                const bool bOpen = Args[1] == TEXT("toggle") ? !It->IsDoorOpen(D) : Args[1] == TEXT("open");
-                const bool bPlayed = It->IsDoorOpen(D) != bOpen && It->PlayDoor(D, bOpen);
-                UE_LOG(LogSCLightControl, Display, TEXT("DOOR_PLAY vehicle=%s door=%d owner=%s open=%d played=%d"), *It->GetName(), D, *Rig->OwnerEntity, bOpen, bPlayed);
-            }
+                if (const USCRigComponent* Rig = It->Doors[D].Rig; Rig && Rig->OwnerEntity.Contains(Args[0]))
+                    Orders.Add({*It, D, Args[1] == TEXT("toggle") ? !It->IsDoorOpen(D) : Args[1] == TEXT("open")});
+        for (const auto& [V, D, bOpen] : Orders)
+        {
+            const bool bPlayed = V->IsDoorOpen(D) != bOpen && V->PlayDoor(D, bOpen);
+            UE_LOG(LogSCLightControl, Display, TEXT("DOOR_PLAY vehicle=%s door=%d owner=%s open=%d played=%d"), *V->GetName(), D, *V->Doors[D].Rig->OwnerEntity, bOpen, bPlayed);
+        }
     }));
 
 // sc.Doors.Trace <door index|-1>: log that door every vehicle tick while a clip plays on its rig (DOOR_TICK: recorded state,
