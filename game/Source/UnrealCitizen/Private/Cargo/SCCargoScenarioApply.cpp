@@ -333,8 +333,28 @@ void USCCargoSubsystem::TryScenario()
         !FParse::Value(FCommandLine::Get(), TEXT("SCLoad="), Ignored) && !Viewer->IsBusy() && Viewer->CanLoad(S.Ship))
     {
         State->bScenarioLoadRequested = true;
-        Viewer->LoadEntity(S.Ship, Viewer->GetOptions());
+        // Its own load, the only one (no -SCLoad, nothing loaded or loading): when it ends without a ship, the -SCScript route
+        // waiting for that ship ends too (bFinal: also with an archive reader).
+        if (!Viewer->LoadEntity(S.Ship, Viewer->GetOptions()))
+        {
+            const FString Ship = S.Ship; // FailScenario drops the scenario S refers to
+            FailScenario(FString::Printf(TEXT("its ship %s cannot be loaded"), *Ship));
+            Viewer->CancelPendingScript(/*bSceneGoing=*/false, /*bFinal=*/true);
+            return;
+        }
+        State->ScenarioLoadSerial = Viewer->GetLoadSerial();
         UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO loading ship=%s environment=%s"), *S.Ship, *S.Environment);
+    }
+    // The load it asked for ended without a ship (failed or cancelled: a prepared level holding no vehicle, an export error):
+    // the setup fails instead of waiting for it. Another load since (a later one of the same ship included) is not its.
+    if (State->bScenarioLoadRequested && !UUCSettings::Get()->bScenarioOwnsScene && Viewer->GetLoadSerial() == State->ScenarioLoadSerial &&
+        (Viewer->GetLoadPhase() == ESCLoadPhase::Failed || Viewer->GetLoadPhase() == ESCLoadPhase::Cancelled))
+    {
+        const FSCLoadReport Report = Viewer->GetLastReport();
+        const FString Ship = S.Ship;
+        FailScenario(FString::Printf(TEXT("its ship %s did not load: %s"), *Ship, Report.Error.IsEmpty() ? TEXT("cancelled") : *Report.Error));
+        Viewer->CancelPendingScript(/*bSceneGoing=*/false, /*bFinal=*/true);
+        return;
     }
     // Loose stock (WP-K2): put down once the rest is placed, at its poses or at free reachable spots from the scenario's seed.
     if (State->bScenarioPlaced && !State->bLoosePlaced && !Viewer->IsSpawningVehicles())
@@ -422,6 +442,7 @@ void USCCargoSubsystem::TryScenario()
             const FString* Recorded = State->bPreparedSetup ? UUCSettings::Get()->ScenarioObstacleLevels.Find(O.Entity) : nullptr;
             const int32 Id = Viewer->SpawnVehicleInstance(O.Entity, O.Pose, /*bRest=*/false, Recorded ? *Recorded : FString());
             State->ObstacleIds.Add(Id);
+            if (ShipLink) ShipLink->SetUnowned(Id); // an asteroid is nobody's ship (Ship Link, the Garage)
             UE_LOG(LogSCCargo, Display, TEXT("CARGO_SCENARIO obstacle=%s instance=%d at=%s"), *O.Entity, Id, *(O.Pose.GetLocation() / 100).ToCompactString());
         }
         // Grids found before the owners were known take them now.

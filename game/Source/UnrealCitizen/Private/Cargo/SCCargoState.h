@@ -395,6 +395,7 @@ struct FSCCargoState
     TArray<FSCCargoJob> Jobs;
     FSCCargoScenario Scenario;
     bool bScenarioTried = false, bScenarioLoadRequested = false;
+    uint32 ScenarioLoadSerial = 0; // the viewer's load serial of the ship load the setup requested
     /** A standalone setup that failed before loading its ship (FailScenario): the ship still loads, as it would have, so
      *  what waits for it (a -SCScript route) runs; only the cargo is gone. */
     FString ShipOfFailedSetup;

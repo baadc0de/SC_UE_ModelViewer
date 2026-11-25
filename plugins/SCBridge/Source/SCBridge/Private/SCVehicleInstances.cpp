@@ -271,7 +271,9 @@ int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTrans
 {
     FInstance& I = Instances.AddDefaulted_GetRef();
     I.Info.Id = NextId++;
-    I.Info.Entity = Entity.TrimStartAndEnd();
+    // The bare entity (a record name `EntityClassDefinition.X` is X): what the exporter resolves, the prepared levels and
+    // the cargo effects are keyed by.
+    I.Info.Entity = USCViewerSubsystem::EntityName(Entity);
     if (I.Info.Entity.Equals(TEXT("loaded"), ESearchCase::IgnoreCase)) I.Info.Entity.Empty();
     I.Info.bAutoPlaced = bAuto;
     I.Requested = World;
@@ -287,6 +289,7 @@ int32 FSCVehicleInstances::Spawn(const FString& Entity, bool bAuto, const FTrans
                               (!I.Info.Entity.IsEmpty() && Viewer.IsShipLoading() &&
                                USCViewerSubsystem::EntityName(I.Info.Entity).Equals(USCViewerSubsystem::EntityName(Viewer.GetPendingEntity()), ESearchCase::IgnoreCase));
     I.bAwaitsPending = bPendingShip;
+    I.AwaitedLoad = Viewer.GetLoadSerial();
     const int32 Id = I.Info.Id; // by value: Fail's listeners may change the list
     if (const FString Wanted = I.Info.Entity.IsEmpty() ? Viewer.GetLoadedEntity() : I.Info.Entity;
         !bPendingShip && !Wanted.IsEmpty() && !ISCImporting::Get() && Level.IsEmpty() && Viewer.PreparedShipLevelFor(Wanted).IsEmpty())
@@ -380,6 +383,14 @@ bool FSCVehicleInstances::RetainsSession(const FString& Session) const
 
 void FSCVehicleInstances::Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive)
 {
+    ResetImpl(Tracked, bWorldAlive, nullptr);
+}
+void FSCVehicleInstances::ResetForLoad(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive, uint32 LoadSerial)
+{
+    ResetImpl(Tracked, bWorldAlive, &LoadSerial);
+}
+void FSCVehicleInstances::ResetImpl(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive, const uint32* KeepFor)
+{
     if (Progress) Progress->RequestCancel();
     if (Export.IsValid()) Export.Wait();
     if (Parse.IsValid()) Parse.Wait();
@@ -395,6 +406,24 @@ void FSCVehicleInstances::Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool b
         Sessions.AddUnique(Job->GetSessionPath());
     }
     Job.Reset(); // drains workers; a partial actor is destroyed
+    // Requests waiting for a ship being loaded have not started (they hold no objects). Those for the load the previous ship
+    // goes for stay queued (an archive load frees it after parsing the next; with no ship arriving, Tick fails them); the
+    // others fail here (an unload, a later load): their ids report it, they never vanish.
+    TArray<FInstance> Waiting;
+    for (int32 Index = Instances.Num() - 1; Index >= 0; --Index)
+        if (FInstance& I = Instances[Index]; I.bAwaitsPending && I.Info.State == ESCVehicleInstanceState::Queued &&
+                                              I.Info.Id != Running && !I.Info.Actor.IsValid() && !I.Level.IsValid())
+        {
+            if (!(KeepFor && I.AwaitedLoad == *KeepFor))
+            {
+                I.Info.State = ESCVehicleInstanceState::Failed;
+                I.Info.Error = TEXT("the ship it was for went before it came");
+                UE_LOG(LogSCVehicles, Warning, TEXT("VEHICLE_SPAWN idx=%d entity=%s ok=0 error=\"%s\""), I.Info.Id,
+                       I.Info.Entity.IsEmpty() ? TEXT("<loaded>") : *I.Info.Entity, *I.Info.Error);
+            }
+            Waiting.Insert(MoveTemp(Instances[Index]), 0);
+            Instances.RemoveAt(Index);
+        }
     Running = INDEX_NONE;
     const bool bAny = !Instances.IsEmpty() || Primary.IsValid();
     for (FInstance& I : Instances)
@@ -413,7 +442,8 @@ void FSCVehicleInstances::Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool b
     if (!Instances.IsEmpty() || !AssetSets.IsEmpty())
         UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_RESET instances=%d asset_sets=%d tracked_objects=%d"), Instances.Num(), AssetSets.Num(),
                Tracked ? Tracked->Num() : -1);
-    Instances.Empty();
+    Instances = MoveTemp(Waiting);
+    if (!Instances.IsEmpty()) UE_LOG(LogSCVehicles, Display, TEXT("VEHICLE_RESET kept=%d (requests for a ship being loaded: queued for this one, else failed)"), Instances.Num());
     AssetSets.Empty(); // the shared objects go with the last holder (GC after this)
     SetSessions.Empty();
     Primary = nullptr;

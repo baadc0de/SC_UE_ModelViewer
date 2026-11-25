@@ -168,7 +168,17 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") void Unload();
     /** Garage lifecycle for the primary slot. Extra vehicle instances stay where they are. */
     bool LoadGarageVehicle(const FString& Entity);
+    /** Stores the loaded ship; the prepared level it came from (a scenario's paint) is kept as its stored level. */
     bool StoreGaragePrimary();
+    /** The prepared level the Garage retrieves an entity from: the one it was stored from (its paint comes back with it;
+     *  a package may hold only that level), else the entity's own. Empty: none (the archive exports it). */
+    FString GarageShipLevel(const FString& Entity) const;
+    /** Whether the Garage can load the entity as the loaded ship now (its GarageShipLevel, or the archive). */
+    bool CanLoadGarage(const FString& Entity) const;
+    /** Records the prepared level a stored ship came from (StoreGaragePrimary does for the loaded ship). */
+    void SetStoredShipLevel(const FString& Entity, const FString& Level);
+    /** Entities stored with a recorded level, by their bare names. */
+    TArray<FString> GetStoredShipEntities() const;
     int32 SpawnGarageFloorVehicle(const FString& Entity);
     /** Pumps the pipeline on the calling (game) thread until the load finishes; for commandlets and tests. */
     UFUNCTION(BlueprintCallable, Category = "SC|Viewer") bool WaitForLoad(float TimeoutSeconds = 600.f);
@@ -281,6 +291,8 @@ public:
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") ASCVehicle* GetVehicle() const;
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetLoadedEntity() const { return LoadedEntity; }
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") FString GetPendingEntity() const { return PendingEntity; }
+    /** Counts the vehicle loads started (each StartLoad): which load a request or a report belongs to. */
+    uint32 GetLoadSerial() const { return LoadSerial; }
     /** The options instance the UI edits; persisted with the settings after each successful load. */
     UFUNCTION(BlueprintPure, Category = "SC|Viewer") USCViewOptions* GetOptions() const { return Options; }
 
@@ -333,8 +345,9 @@ public:
     /** The scene's owner (a game scenario, a cargo setup) failed before its ship came, in a build without an archive
      *  reader: an unstarted -SCScript route is ended, so it does not run against a ship loaded later. */
     /** bSceneGoing: the owner removes its ship too (a failed scenario), so a ship loaded or loading now does not keep the
-     *  route (a ship queued by -SCLoad still does). */
-    void CancelPendingScript(bool bSceneGoing = false);
+     *  route (a ship queued by -SCLoad still does). bFinal: the owner ended for good (a game scenario refused or failed:
+     *  it owns the scene, nothing loads for it later), so the route ends with an archive reader too. */
+    void CancelPendingScript(bool bSceneGoing = false, bool bFinal = false);
     /** Cache statistics as of the last export/open (no FFI call). */
     const FSCCacheStats& GetCacheStats() const { return CacheStats; }
 
@@ -401,7 +414,8 @@ private:
     void StepLoad(bool bBlocking);
     void StartImport();
     void FinishLoad(ESCLoadPhase Result, const FString& Error);
-    void UnloadInternal(bool bCollect, bool bKeepExtras = false);
+    /** bForPendingLoad: the previous ship goes for the load in progress (requests waiting for that load stay queued). */
+    void UnloadInternal(bool bCollect, bool bKeepExtras = false, bool bForPendingLoad = false);
     bool bGarageLoad = false;
     void CompleteSearches(bool bBlocking);
     void LogPhaseChange();
@@ -420,6 +434,7 @@ private:
 
     ESCArchiveState ArchiveState = ESCArchiveState::Closed;
     uint32 ArchiveGeneration = 0;
+    uint32 LoadSerial = 0;
     FText ArchiveError;
     FString ArchivePath, CacheDir;
     FString ArchiveBuildId;
@@ -446,6 +461,8 @@ private:
     FString PendingEntity, PendingKey, LoadedEntity, LoadedKey;
     /** The prepared level the pending / loaded ship streams from (empty: imported). */
     FString PendingShipLevel, LoadedShipLevel;
+    struct FStoredShip { FString Entity, Level; };
+    TMap<FString, FStoredShip> StoredShipLevels; // lower-case bare entity -> it and the prepared level it was stored from
     bool bRebuildProcessed = false;
     double LoadStart = 0, ParseStart = 0, ImportStart = 0;
     FString LastPhaseKey;

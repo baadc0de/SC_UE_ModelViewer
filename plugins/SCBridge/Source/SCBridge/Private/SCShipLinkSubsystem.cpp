@@ -64,7 +64,11 @@ void USCShipLinkSubsystem::SyncVehicles()
         FPairing& Pair = Pairings.FindOrAdd(Info.Id);
         ASCVehicle* Previous = Pair.Vehicle.Get();
         ASCVehicle* Current = Info.Actor.Get();
-        if ((Previous || Pair.Vehicle.IsStale()) && Previous != Current) Pair.ExplicitOwner = NAME_None;
+        if ((Previous || Pair.Vehicle.IsStale()) && Previous != Current)
+        {
+            Pair.ExplicitOwner = NAME_None;
+            Pair.bUnowned = false;
+        }
         Pair.Vehicle = Current;
     }
     for (auto It = Pairings.CreateIterator(); It; ++It)
@@ -79,7 +83,23 @@ void USCShipLinkSubsystem::SetScenarioPlayer(FName Actor)
 
 void USCShipLinkSubsystem::SetOwner(int32 VehicleInstance, FName Actor)
 {
-    if (VehicleInstance >= 0) Pairings.FindOrAdd(VehicleInstance).ExplicitOwner = Actor;
+    if (VehicleInstance >= 0)
+    {
+        FPairing& Pair = Pairings.FindOrAdd(VehicleInstance);
+        Pair.ExplicitOwner = Actor;
+        Pair.bUnowned = false;
+    }
+    if (GetOwner(LocateShip.Get()) != Player) LocateShip.Reset();
+}
+
+void USCShipLinkSubsystem::SetUnowned(int32 VehicleInstance)
+{
+    if (VehicleInstance >= 0)
+    {
+        FPairing& Pair = Pairings.FindOrAdd(VehicleInstance);
+        Pair.ExplicitOwner = NAME_None;
+        Pair.bUnowned = true;
+    }
     if (GetOwner(LocateShip.Get()) != Player) LocateShip.Reset();
 }
 
@@ -87,7 +107,7 @@ FName USCShipLinkSubsystem::GetOwner(const ASCVehicle* Vehicle) const
 {
     if (!Vehicle || !Viewer.IsValid()) return NAME_None;
     const FPairing* Pair = Pairings.Find(Viewer->GetVehicleInstanceId(Vehicle));
-    if (!Pair || Pair->Vehicle.Get() != Vehicle) return NAME_None;
+    if (!Pair || Pair->Vehicle.Get() != Vehicle || Pair->bUnowned) return NAME_None;
     return Pair->ExplicitOwner.IsNone() ? Player : Pair->ExplicitOwner;
 }
 

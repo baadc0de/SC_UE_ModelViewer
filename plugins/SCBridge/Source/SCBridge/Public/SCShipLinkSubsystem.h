@@ -40,6 +40,9 @@ public:
     FName GetPlayer() const { return Player; }
     void SetScenarioPlayer(FName Actor);
     void SetOwner(int32 VehicleInstance, FName Actor);
+    /** The instance is nobody's ship (a cargo obstacle such as an asteroid): no owner, not paired, not the player's by
+     *  default. Like an explicit owner, it is dropped when the instance's vehicle is replaced. */
+    void SetUnowned(int32 VehicleInstance);
     FName GetOwner(const ASCVehicle* Vehicle) const;
     ESCShipRole RoleOf(FName Actor, const ASCVehicle* Vehicle) const;
     TArray<ASCVehicle*> PairedShips(FName Actor) const;
@@ -61,6 +64,7 @@ private:
     {
         TWeakObjectPtr<ASCVehicle> Vehicle;
         FName ExplicitOwner;
+        bool bUnowned = false;
     };
     void SyncVehicles();
     TWeakObjectPtr<USCViewerSubsystem> Viewer;

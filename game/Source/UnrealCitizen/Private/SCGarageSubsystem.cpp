@@ -327,8 +327,10 @@ void USCGarageSubsystem::ReadNextDetail()
 
 bool USCGarageSubsystem::Available(const FString& Entity) const
 {
+    const USCViewerSubsystem* V = Viewer();
     return Cooked.ContainsByPredicate([&](const FString& Ship) { return Ship.Equals(Entity, ESearchCase::IgnoreCase); }) ||
-        Catalog.ContainsByPredicate([&](const FSCEntityHit& Ship) { return Ship.Name.Equals(Entity, ESearchCase::IgnoreCase); });
+        Catalog.ContainsByPredicate([&](const FSCEntityHit& Ship) { return Ship.Name.Equals(Entity, ESearchCase::IgnoreCase); }) ||
+        (V && !V->GarageShipLevel(Entity).IsEmpty());
 }
 
 TArray<FSCGarageRow> USCGarageSubsystem::Rows(const FString& EntityFilter, bool bIncludeDefaultStored) const
@@ -341,6 +343,9 @@ TArray<FSCGarageRow> USCGarageSubsystem::Rows(const FString& EntityFilter, bool 
         Names = Cooked;
         for (const FSCEntityHit& Hit : Catalog) Names.Add(Hit.Name);
     }
+    // A ship stored from a level (a scenario's paint, the only level a package may hold) is in the fleet whatever the fleet
+    // setting lists: it was the player's when stored.
+    if (V) Names.Append(V->GetStoredShipEntities());
     const TArray<FSCVehicleInstanceInfo> Instances = V ? V->GetVehicleInstances() : TArray<FSCVehicleInstanceInfo>();
     TMap<FName, const FSCVehicleInstanceInfo*> Paired;
     const USCCargoSubsystem* Cargo = USCCargoSubsystem::Get(GetWorld());
@@ -471,7 +476,7 @@ FSCGarageOrder USCGarageSubsystem::Retrieve(const FString& Name, ESCGaragePlacem
     // retrieval loads the loaded ship (CanLoad: its prepared level, or the archive); else it is an extra copy (its prepared
     // level - the loaded ship's paint for more of it - or the archive).
     const bool bLoadsPrimary = At == ESCGaragePlacement::Bay && (!V->GetVehicle() || Occupant == V->GetVehicle());
-    if (bLoadsPrimary ? !V->CanLoad(Entity)
+    if (bLoadsPrimary ? !V->CanLoadGarage(Entity)
                       : V->PreparedShipLevelFor(Entity).IsEmpty() && !(V->CanReadArchive() && V->GetArchiveState() == ESCArchiveState::Ready))
         return Refuse(V->CanReadArchive() ? TEXT("The ship is unavailable until the archive is open") : TEXT("The ship is unavailable in this build"));
     if (Occupant)
