@@ -646,7 +646,11 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
     Source.Text = TEXT(R"({"version":2,"export_kind":"Decomposed","root_entity":{"entity_name":"Ship"},
       "children":[{"entity_name":"Hatch","source_transform_basis":"gltf_y_up","local_transform_sc":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
         "door":{"animation_params":"SCItemDoorSingleProceduralParams","animation_speed":1.5,"is_opened":false,"is_locked":true,"transition_tag":"Open","open_tag":null,"close_tag":null},
-        "item_port_links":[{"source_slot":"Open","target_port":"hardpoint_front_ramp","target_slot":"Open"}]}],
+        "item_port_links":[{"source_slot":"Open","target_port":"hardpoint_front_ramp","target_slot":"Open"}]},
+        {"entity_name":"hangar_door_a","source_transform_basis":"gltf_y_up","local_transform_sc":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+         "door":{"is_opened":false,"open_tag":"Open","close_tag":"Close"},
+         "placement":{"interior":0,"entity_id":"door1","entity_class_guid":"ABC","links":["sensor1"],"entity_name":"Door_Hangar_1",
+           "door":{"is_opened":false,"open_tag":"Open","close_tag":"Close"},"transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[2,3,4,1]]}}],
       "interiors":[{"name":"hold","container_transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
         "placements":[{"cgf_path":"screen.cgf","entity_id":"p","transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"links":["lg"],
           "sendable_interactions":[{"name":"LightsAlarm","linking_tag":"/Interaction/LightGroup/SetEmergency"}],
@@ -661,7 +665,19 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
     FSCSceneManifest M;
     FString Error;
     if (!TestTrue(TEXT("reads: ") + Error, FSCPackageReader::Read(Source, M, Error))) return false;
-    if (!TestEqual(TEXT("child"), M.Children.Num(), 1) || !TestEqual(TEXT("interior"), M.Interiors.Num(), 1)) return false;
+    if (!TestEqual(TEXT("children"), M.Children.Num(), 2) || !TestEqual(TEXT("interior"), M.Interiors.Num(), 1)) return false;
+    // WP-A1: a promoted placement (a hangar door exported as a child for its clips) is an identity record in its container.
+    const FSCSceneInstance* Promoted = M.Interiors[0].Placements.FindByPredicate([](const FSCSceneInstance& X) { return X.PromotedChild != INDEX_NONE; });
+    if (TestNotNull(TEXT("promoted placement in its container"), Promoted))
+    {
+        TestEqual(TEXT("points at its child"), Promoted->PromotedChild, 1);
+        TestTrue(TEXT("its ids and class"), Promoted->EntityId == TEXT("door1") && Promoted->EntityClassGuid == TEXT("abc") && Promoted->Links == TArray<FString>{TEXT("sensor1")});
+        TestTrue(TEXT("its door"), Promoted->Door.bValid && Promoted->Door.OpenTag == FName(TEXT("Open")));
+        TestTrue(TEXT("no geometry of its own"), Promoted->MeshAsset.IsEmpty() && Promoted->UiBindings.IsEmpty());
+        TestTrue(TEXT("its container frame"), Promoted->LocalMatrix.GetOrigin().Equals(FVector(2, 3, 4)));
+        TestEqual(TEXT("named as its child"), Promoted->EntityName, FString(TEXT("hangar_door_a")));
+    }
+    TestEqual(TEXT("the ordinary placement stays first"), M.Interiors[0].Placements[0].EntityId, FString(TEXT("p")));
     const FSCDoorTiming& D = M.Children[0].Door;
     TestTrue(TEXT("child door"), D.bValid && D.bIsOpened.IsSet() && !D.bIsOpened.GetValue() && D.TransitionTag == FName(TEXT("Open")) &&
                                      D.OpenTag.IsNone() && FMath::IsNearlyEqual(D.AnimationSpeed, 1.5f) && D.AnimationParams == TEXT("SCItemDoorSingleProceduralParams"));

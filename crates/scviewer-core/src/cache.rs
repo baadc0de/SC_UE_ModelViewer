@@ -69,7 +69,10 @@ use std::{
 //     use of the class's usable). WP-I1-4.
 // 44: `audio.json` entity classes carry `door` (the door's events: effect groups and entity-effect tags, and the
 //     effect-core sounds of its groups). WP-A1 door effects.
-pub const CACHE_FORMAT_VERSION: u32 = 44;
+// 45: a socpak's animated placements promoted to children keep their identity (`children[].placement`: interior index,
+//     ids, links, interactions, door, container transform), carry the placement's door / links / UI, and their clips
+//     the fragments of their class's Mannequin controller. WP-A1 hangar doors.
+pub const CACHE_FORMAT_VERSION: u32 = 45;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

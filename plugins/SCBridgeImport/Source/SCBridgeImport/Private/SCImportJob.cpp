@@ -1871,7 +1871,14 @@ void FSCImportJob::FState::Assemble()
         TMap<int32, FEntity> ByPlacement;
         const int32 FirstDeferred = DeferredRegistration.Num();
         for (int32 PlacementIndex = 0; PlacementIndex < Interior.Placements.Num(); ++PlacementIndex)
-            if (const auto& P = Interior.Placements[PlacementIndex]; CanPlace(P))
+            if (const auto& P = Interior.Placements[PlacementIndex]; P.PromotedChild != INDEX_NONE)
+            {
+                // WP-A1: a promoted placement (a hangar door) is its child, placed above: the container's entity by id.
+                if (!ChildEntities.IsValidIndex(P.PromotedChild) || !ChildEntities[P.PromotedChild].Anchor) continue;
+                if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, ChildEntities[P.PromotedChild]);
+                ByPlacement.Add(PlacementIndex, ChildEntities[P.PromotedChild]);
+            }
+            else if (CanPlace(P))
             {
                 FEntity Placed = Place(P, Container, bHelper, false);
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, Placed);

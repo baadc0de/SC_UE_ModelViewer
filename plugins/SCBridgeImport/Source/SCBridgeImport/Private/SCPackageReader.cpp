@@ -687,6 +687,8 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     // Nested assemblies (a personal weapon's own children) follow their parent depth-first; ParentId binds
     // them to that instance even when the authored parent name differs from the instance's entity name.
     TArray<FString> NestedPackages; // nested assemblies keep their own palettes next to their manifest
+    // WP-A1: children that are promoted interior placements (a hangar door): their `placement` record, by child index.
+    TArray<TPair<int32, FReaderObject>> Promoted;
     TFunction<void(const TArray<TSharedPtr<FJsonValue>>&, const FString&, const FString&)> ReadChildren =
         [&](const TArray<TSharedPtr<FJsonValue>>& List, const FString& ParentKey, const FString& ParentEntity) {
             // Inside a nested assembly every entry binds to the containing instance (its authored parent names the
@@ -715,6 +717,9 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
                 if (!I.ImportWarning.IsEmpty()) Warn(I.EntityName, I.ImportWarning);
                 const FString Key = I.Id;
                 const bool bMetadataOnly = I.SourceTransformBasis.IsEmpty() && I.ImportWarning.IsEmpty();
+                const FReaderObject* Placement;
+                if (!bMetadataOnly && Child && Child->TryGetObjectField(TEXT("placement"), Placement))
+                    Promoted.Add({Out.Children.Num(), *Placement});
                 if (!bMetadataOnly) Out.Children.Add(MoveTemp(I));
                 if (const auto O = Object(V); O && !Key.IsEmpty())
                 {
@@ -729,6 +734,18 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
     SCCargoRecords::ParseOccupancy(*Root, Out.RootOccupancy);
     SCCargoRecords::AddContainers(Scene, INDEX_NONE, Out, Warn);
     const auto& Interiors = ReaderArray(Scene, TEXT("interiors"));
+    // A placement's identity record in its container (its frame, ids, links, interactions, door).
+    auto ReadPlacement = [&](const FReaderObject& P, FSCSceneInstance& Placement) {
+        if (!Instance(P, Placement, Detail, TEXT("transform"))) return false;
+        Placement.EntityName = String(P, TEXT("cgf_path"));
+        Placement.SourceTransformBasis = TEXT("cryengine_z_up");
+        Placement.EntityId = String(P, TEXT("entity_id"));
+        Placement.EntityClassGuid = String(P, TEXT("entity_class_guid")).ToLower();
+        Placement.LoadoutOwnerEntityId = String(P, TEXT("loadout_owner_entity_id"));
+        for (const auto& L : ReaderArray(P, TEXT("links"))) if (L->Type == EJson::String) Placement.Links.Add(L->AsString());
+        ReadInteractions(P, Placement);
+        return true;
+    };
     for (int32 SourceIndex = 0; SourceIndex < Interiors.Num(); ++SourceIndex)
     {
         const auto O = Object(Interiors[SourceIndex]); FSCInterior I;
@@ -742,14 +759,7 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         for (const auto& P : ReaderArray(O, TEXT("placements")))
         {
             FSCSceneInstance Placement;
-            if (!Instance(Object(P), Placement, Detail, TEXT("transform"))) { Warn(TEXT("placement"), Detail); continue; }
-            Placement.EntityName = String(P->AsObject(), TEXT("cgf_path"));
-            Placement.SourceTransformBasis = TEXT("cryengine_z_up");
-            Placement.EntityId = String(P->AsObject(), TEXT("entity_id"));
-            Placement.EntityClassGuid = String(P->AsObject(), TEXT("entity_class_guid")).ToLower();
-            Placement.LoadoutOwnerEntityId = String(P->AsObject(), TEXT("loadout_owner_entity_id"));
-            for (const auto& L : ReaderArray(P->AsObject(), TEXT("links"))) if (L->Type == EJson::String) Placement.Links.Add(L->AsString());
-            ReadInteractions(P->AsObject(), Placement);
+            if (!ReadPlacement(Object(P), Placement)) { Warn(TEXT("placement"), Detail); continue; }
             I.Placements.Add(MoveTemp(Placement));
         }
         for (const auto& S : ReaderArray(O, TEXT("proximity_sensors")))
@@ -777,6 +787,26 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
         ReadLiftRecords(O, I, Warn);
         SCCargoRecords::AddContainers(O, Out.Interiors.Num(), Out, Warn);
         Out.Interiors.Add(MoveTemp(I));
+    }
+    // WP-A1: a promoted placement (an animated hangar door, exported as a child for its clips) is still its container's
+    // entity: an identity record among the container's placements (its ids, links, interactions, door; no geometry, no
+    // UI: the child carries them) points at the child, so panels, sensors, lifts and audio find it as before.
+    for (const auto& [ChildIndex, P] : Promoted)
+    {
+        double Interior = -1;
+        FSCInterior* Into = P && P->TryGetNumberField(TEXT("interior"), Interior)
+                                ? Out.Interiors.FindByPredicate([&](const FSCInterior& I) { return I.SourceIndex == int32(Interior); })
+                                : nullptr;
+        FSCSceneInstance Placement;
+        if (!Into || !ReadPlacement(P, Placement))
+        {
+            Warn(Out.Children[ChildIndex].EntityName, TEXT("promoted placement without its interior: ") + (Detail.IsEmpty() ? FString::SanitizeFloat(Interior) : Detail));
+            Detail.Reset();
+            continue;
+        }
+        Placement.EntityName = Out.Children[ChildIndex].EntityName;
+        Placement.PromotedChild = ChildIndex;
+        Into->Placements.Add(MoveTemp(Placement));
     }
     // Paints (optional `paints.json` beside scene.json): each variant's exterior material file is loaded with the
     // scene's, so a paint can be put on without another read.
