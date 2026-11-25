@@ -970,12 +970,14 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
                 {
                     if (P.bStopped || (bObject && !P.Place.SameEmitter(Where))) continue;
                     const FSCAudioTrigger* HT = S.Manifest.Triggers.Find(P.Trigger);
-                    if (HT && HT->Play.ContainsByPredicate([&](const FSCAudioAction& A) {
-                            return S.Manifest.Nodes.IsValidIndex(A.Root) && S.Manifest.Nodes[A.Root].Id == O.Target;
-                        }) && Clock + O.DelayS < P.StopAt)
+                    const FSCAudioAction* Hit = HT ? HT->Play.FindByPredicate([&](const FSCAudioAction& A) {
+                        return S.Manifest.Nodes.IsValidIndex(A.Root) && S.Manifest.Nodes[A.Root].Id == O.Target;
+                    }) : nullptr;
+                    if (Hit && Clock + O.DelayS < P.StopAt)
                     {
                         P.StopAt = Clock + O.DelayS;
                         P.StopFade = O.FadeS;
+                        P.StopRoot = Hit->Root; // only that action's repetition fades then
                     }
                 }
             };
@@ -1279,9 +1281,13 @@ void USCAudioSubsystem::Stop(int32 Id, float FadeS, float DelayS)
     // WP-A1: a held door post a stop reaches (the post's group, or one of its actions' instances) is not posted again when
     // it ends; a delayed stop lets it repeat until its delay has passed, then stops the repetition playing then over its
     // fade (UpdateDoorHolds).
-    int32 StoppedGroup = Id;
+    int32 StoppedGroup = Id, StoppedRoot = INDEX_NONE;
     for (const auto& [Key, I] : Instances)
-        if (I.Id == Id && I.Group != INDEX_NONE) StoppedGroup = I.Group;
+        if (I.Id == Id && I.Group != INDEX_NONE)
+        {
+            StoppedGroup = I.Group;
+            if (I.Id != I.Group && I.Action) StoppedRoot = I.Action->Root; // one action of the post, not the whole post
+        }
     auto MarkHeld = [&](FHeldPost& P) {
         if (P.bStopped || (P.Id != Id && P.Id != StoppedGroup)) return;
         if (DelayS <= 0) P.bStopped = true;
@@ -1289,26 +1295,28 @@ void USCAudioSubsystem::Stop(int32 Id, float FadeS, float DelayS)
         {
             P.StopAt = Clock + DelayS;
             P.StopFade = FadeS;
+            P.StopRoot = StoppedRoot;
         }
     };
     for (FDoorHold& H : DoorHolds)
         for (FHeldPost& P : H.Loops) MarkHeld(P);
     for (auto& [Key, T] : TagHolds)
         for (FHeldPost& P : T.Effects) MarkHeld(P);
-    const double From = Clock + DelayS;
     for (auto& [Key, I] : Instances)
+        if (I.Id == Id || I.Group == Id) ScheduleStop(I, Clock + DelayS, FadeS);
+}
+
+void USCAudioSubsystem::ScheduleStop(FInstance& I, double From, float FadeS)
+{
+    I.Runs.Reset();
+    I.bStopping = true;
+    I.StopAt = From + FadeS;
+    for (FVoice& V : I.Voices)
     {
-        if (I.Id != Id && I.Group != Id) continue;
-        I.Runs.Reset();
-        I.bStopping = true;
-        I.StopAt = From + FadeS;
-        for (FVoice& V : I.Voices)
-        {
-            V.FadeOutStart = FMath::Min(V.FadeOutStart, From);
-            V.FadeOutEnd = FMath::Min(V.FadeOutEnd, From + FadeS);
-            V.End = FMath::Min(V.End, From + FadeS);
-            V.bStopped = true;
-        }
+        V.FadeOutStart = FMath::Min(V.FadeOutStart, From);
+        V.FadeOutEnd = FMath::Min(V.FadeOutEnd, From + FadeS);
+        V.End = FMath::Min(V.End, From + FadeS);
+        V.bStopped = true;
     }
 }
 
@@ -1842,7 +1850,6 @@ void USCAudioSubsystem::ScheduleHitches(float Ms, int32 Count, float EveryS)
 void USCAudioSubsystem::Tick(float DeltaTime)
 {
     CSV_SCOPED_TIMING_STAT_EXCLUSIVE(SCAudioTick);
-    UpdateDoorHolds(); // WP-A1: door holds end with their scene or rig; held posts that ended play again
     if (HitchesLeft > 0 && WallNow() >= NextHitch)
     {
         // A measured game-thread stall (the frame-time spike a heavy frame or a load causes).
@@ -1852,6 +1859,9 @@ void USCAudioSubsystem::Tick(float DeltaTime)
     }
     if (Totals.Since == 0) Totals.Since = WallNow();
     Clock += DeltaTime;
+    // WP-A1: door holds end with their scene or rig; held posts that ended play again (on this tick's clock: a delayed stop
+    // whose time has come is not reposted).
+    UpdateDoorHolds();
     UWorld* World = GetWorld();
     if (!World || Scenes.IsEmpty()) return;
     if (Scenes.ContainsByPredicate([](const TSharedRef<FSCAudioScene>& S) { return !S->Vehicle.IsValid(); })) RemoveScene(nullptr);
@@ -2109,12 +2119,9 @@ void USCAudioSubsystem::UpdateDoorHolds()
         TArray<int32> Drop;
         for (int32 I = 0; I < Posts.Num(); ++I)
         {
-            if (!Posts[I].bStopped && Clock >= Posts[I].StopAt) // an authored stop's delay has passed
-            {
-                if (IsPlaying(Posts[I].Id)) Stop(Posts[I].Id, Posts[I].StopFade); // marks it: dropped once it ended
-                else Drop.Add(I);
-                continue;
-            }
+            // A delayed stop's time has come: its live repetition was scheduled to stop then (by the stop, or below when it
+            // was posted); it is not posted again.
+            if (Clock >= Posts[I].StopAt) Posts[I].bStopped = true;
             if (IsPlaying(Posts[I].Id)) continue; // kept while any of its actions plays (a release stops them)
             if (Posts[I].bStopped) { Drop.Add(I); continue; }
             const FHeldPost Held = Posts[I]; // Post may stop (and mark) entries of this array
@@ -2124,7 +2131,14 @@ void USCAudioSubsystem::UpdateDoorHolds()
             Posts[I].bStopped = false;
             Posts[I].StopAt = Held.StopAt;
             Posts[I].StopFade = Held.StopFade;
-            if (!HasStarted(Id)) Drop.Add(I);
+            Posts[I].StopRoot = Held.StopRoot;
+            if (!HasStarted(Id)) { Drop.Add(I); continue; }
+            // A pending delayed stop: this repetition's targeted actions fade at the stop's own time and over its own fade
+            // (its absolute schedule, whatever the ticks).
+            if (Held.StopAt < TNumericLimits<double>::Max())
+                for (auto& [Key, Inst] : Instances)
+                    if (Inst.Group == Id && (Held.StopRoot == INDEX_NONE || (Inst.Action && Inst.Action->Root == Held.StopRoot)))
+                        ScheduleStop(Inst, Held.StopAt, Held.StopFade);
         }
         for (int32 K = Drop.Num() - 1; K >= 0; --K) Posts.RemoveAt(Drop[K]);
     };

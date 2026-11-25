@@ -274,9 +274,11 @@ private:
         FSCAudioPlace Place;
         int32 Id = INDEX_NONE;
         bool bStopped = false; // Stop reached it (a command, a stop action): kept for cleanup while it plays, never reposted
-        // An authored stop that reached it between two repetitions: it stops then (its delay), over StopFade.
+        // A delayed stop that reached it: it repeats until StopAt, the repetition playing then fades over StopFade (only its
+        // action rooted at StopRoot, a manifest node index; INDEX_NONE: all), and it is not posted again.
         double StopAt = TNumericLimits<double>::Max();
         float StopFade = 0.f;
+        int32 StopRoot = INDEX_NONE;
     };
     /** What a door holds: looped posts and state-tag references, for its move or at rest; it ends with its door's rig. */
     struct FDoorHold
@@ -403,6 +405,8 @@ private:
 
     TArray<TSharedRef<FSCAudioScene>> Scenes;
     TMap<int32, FInstance> Instances;
+    /** I stops: its voices fade from From (the clock) over FadeS; nothing more of it is scheduled. */
+    void ScheduleStop(FInstance& I, double From, float FadeS);
     int32 NextId = 1;
     double Clock = 0;
     UPROPERTY() TMap<uint32, TObjectPtr<USoundSubmix>> BusSubmixes;
