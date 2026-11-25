@@ -69,22 +69,27 @@ int32 FSCEnvironment::SetState(ASCVehicle* Environment, const FString& State)
     // (a freight elevator's platform and its front gate both animate `VertAnimL`), so an untargeted snap of one owner's
     // clip would also pose the other's rigs, the last one snapped winning (WP-K1).
     int32 Snapped = 0;
-    TSet<const USCRigComponent*> Posed;
+    bool bRecorded = false;
     for (const auto& [Owner, Pick] : Best)
     {
         bool bAny = false;
         for (USCRigComponent* Rig : ClipRigs(Environment, Pick.Value))
-            if (Environment->SnapClipAt(Pick.Value, Rig, true))
-            {
-                bAny = true;
-                Posed.Add(Rig);
-            }
+        {
+            if (!Environment->SnapClipAt(Pick.Value, Rig, true)) continue;
+            bAny = true;
+            // The presented pose is the state of each door this clip moves on the rig (an opened / closed clip is not
+            // the door's own move, so its snap leaves the state unknown): a toggle closes a door presented open. A door
+            // on the rig the clip does not move keeps its state.
+            for (int32 Door = 0; Door < Environment->Doors.Num(); ++Door)
+                if (Environment->Doors[Door].Rig.Get() == Rig && Environment->ClipDrivesDoor(Door, Pick.Value))
+                {
+                    Environment->RecordDoorState(Door, bOpen);
+                    bRecorded = true;
+                }
+        }
         Snapped += bAny;
     }
-    // The presented pose is each posed door's state (its opened / closed clip is not the door's own move): a toggle
-    // closes a door presented open.
-    for (int32 Door = 0; Door < Environment->Doors.Num(); ++Door)
-        if (Posed.Contains(Environment->Doors[Door].Rig.Get())) Environment->RecordDoorState(Door, bOpen);
+    if (bRecorded && !Environment->ScreenFaces.IsEmpty()) Environment->RefreshPanelScreens(); // the pads show the state
     UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_STATE %s parts=%d"), *Lower, Snapped);
     FSCEnvironmentAccess::Reapply(Environment); // inventory containers kept accessible (WP-K1)
     return Snapped;

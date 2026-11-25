@@ -1033,6 +1033,15 @@ bool FSCDoorPresentedStateTest::RunTest(const FString&)
     AddClip(V, A, TEXT("HangarDoor__door_close"), TEXT("Close"), {50, 25, 0});
     AddClip(V, A, TEXT("HangarDoor__door_opened"), TEXT("Opened"), {50}); // the open state: one frame, no Mannequin fragment
     V->ClipCatalog->Clips.Last().Fragments.Reset();
+    // A second door on the same rig (a latch on another bone, its own fragment): the presented clip does not move it.
+    for (const TCHAR* Latch : {TEXT("latch_open"), TEXT("latch_close")})
+    {
+        AddClip(V, A, Latch, FString(Latch).EndsWith(TEXT("open")) ? FName(TEXT("Open")) : FName(TEXT("Close")),
+                FString(Latch).EndsWith(TEXT("open")) ? std::initializer_list<double>{0, 9} : std::initializer_list<double>{9, 0});
+        FSCImportedClip& Clip = V->ClipCatalog->Clips.Last();
+        Clip.Bindings[0].Tracks[0].Bone = 0;
+        Clip.Fragments[0].Fragment = TEXT("Latch");
+    }
     FSCDoorRecord R;
     R.Door.bValid = true;
     R.Door.OpenTag = TEXT("Open");
@@ -1043,8 +1052,11 @@ bool FSCDoorPresentedStateTest::RunTest(const FString&)
     const int32 D = V->DoorForRig(A);
     if (!TestTrue(TEXT("a door"), D != INDEX_NONE)) return false;
     TestTrue(TEXT("closed at rest"), V->IsDoorStateKnown(D) && !V->IsDoorOpen(D));
+    const int32 LatchDoor = V->Doors.IndexOfByPredicate([&](const FSCDoorInteraction& X) { return X.Rig == A && X.Fragment == FName(TEXT("Latch")); });
     TestTrue(TEXT("presented open"), FSCEnvironment::SetState(V, TEXT("open")) > 0);
     TestTrue(TEXT("its state is the presented pose"), V->IsDoorStateKnown(D) && V->IsDoorOpen(D) && FMath::IsNearlyEqual(BoneX(A), 50.0, 1e-3));
+    if (TestTrue(TEXT("the latch is a door of its own"), V->Doors.IsValidIndex(LatchDoor) && LatchDoor != D))
+        TestFalse(TEXT("a door the presented clip does not move is not recorded open"), V->IsDoorOpen(LatchDoor));
     TestTrue(TEXT("a toggle closes it"), V->ToggleDoor(D));
     V->Tick(1.f);
     TestTrue(TEXT("closed"), !V->IsDoorOpen(D) && FMath::IsNearlyEqual(BoneX(A), 0.0, 1e-3));
