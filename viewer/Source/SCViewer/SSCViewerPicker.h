@@ -25,6 +25,8 @@ public:
     virtual void Tick(const FGeometry& Geometry, double CurrentTime, float DeltaTime) override;
     virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
     virtual bool SupportsKeyboardFocus() const override { return true; }
+    /** Opens the menu with only the paint column (the ship stays in view), or back to all lists. */
+    void ShowShip(bool bOn);
 
     /** A paint row of Owner's manifest: INDEX_NONE is the vehicle's own. */
     struct FPaintRow
@@ -104,6 +106,8 @@ private:
     bool bStartDecided = false;
     bool bWasOpen = false;
     bool bHidScreenMessages = false; // the menu turned GAreScreenMessagesEnabled off when it opened
+    /** Show ship: only the paint column, over the view (the rest of the screen stays the view's: orbit while painting). */
+    bool bPaintOnly = false;
     // The latest choice the running load could not take yet (applied from Tick), and the archive session it was made in
     // (the lists it came from): a choice from an earlier session is dropped, not applied to another archive.
     TOptional<FString> QueuedEnvironment, QueuedVehicle;

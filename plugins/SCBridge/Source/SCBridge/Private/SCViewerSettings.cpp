@@ -21,8 +21,14 @@ FString USCViewerSettings::ResolveCacheDir() const
     FParse::Value(FCommandLine::Get(), TEXT("SCCacheDir="), Dir);
     if (Dir.Equals(TEXT("none"), ESearchCase::IgnoreCase)) return FString();
     if (Dir.IsEmpty()) Dir = TEXT("cache");
-    // LaunchDir is the shell's working directory before UE switched to the binary directory.
+    // A relative directory is under the editor host's launch directory (the shell's working directory before UE switched
+    // to the binary directory: run from the repository root), and under a packaged build's own folder (the one holding
+    // SCViewer.exe), whatever a shortcut's start directory is.
+#if WITH_EDITOR
     Dir = FPaths::ConvertRelativePathToFull(FPlatformMisc::LaunchDir(), Dir);
+#else
+    Dir = FPaths::ConvertRelativePathToFull(FPaths::RootDir(), Dir);
+#endif
     FPaths::NormalizeDirectoryName(Dir);
     return Dir;
 }

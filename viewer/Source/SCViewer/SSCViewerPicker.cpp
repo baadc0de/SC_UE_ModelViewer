@@ -7,6 +7,7 @@
 #include "UI/SCHudStyle.h"
 #include "Brushes/SlateColorBrush.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Styling/CoreStyle.h"
@@ -20,6 +21,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/STableRow.h"
 #include "Widgets/Colors/SColorPicker.h"
+#include "Widgets/Layout/SSpacer.h"
 
 #define LOCTEXT_NAMESPACE "SCViewerPicker"
 using namespace SCHudStyle;
@@ -132,10 +134,24 @@ bool StartRequested()
         if (FParse::Param(Cmd, Switch) || FParse::Value(Cmd, *(FString(Switch) + TEXT("=")), Value)) return true;
     return false;
 }
+/** The menu built last (one per viewer root), for the console. */
+TWeakPtr<SSCViewerPicker> LastPicker;
+/** sc.Menu.ShowShip 1|0: the menu's paint-only view (verification and screenshots; the menu's button does the same). */
+FAutoConsoleCommand ShowShipCommand(TEXT("sc.Menu.ShowShip"), TEXT("sc.Menu.ShowShip 1|0: open the menu with only the paint column (1), or all lists (0)"),
+    FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) {
+        if (const TSharedPtr<SSCViewerPicker> Picker = LastPicker.Pin()) Picker->ShowShip(Args.IsEmpty() || Args[0] != TEXT("0"));
+    }));
 } // namespace
+
+void SSCViewerPicker::ShowShip(bool bOn)
+{
+    bPaintOnly = bOn;
+    if (bOn && Subsystem.IsValid()) SCViewerShell::SetMenuOpen(Subsystem.Get(), true);
+}
 
 void SSCViewerPicker::Construct(const FArguments& Args)
 {
+    LastPicker = StaticCastSharedRef<SSCViewerPicker>(AsShared());
     Subsystem = Args._Subsystem;
     FocusView = Args._FocusView;
     TWeakObjectPtr<USCViewerSubsystem> Weak = Subsystem;
@@ -144,7 +160,7 @@ void SSCViewerPicker::Construct(const FArguments& Args)
     SetVisibility(EVisibility::SelfHitTestInvisible);
     FParse::Value(FCommandLine::Get(), TEXT("SCSearch="), Vehicles.Filter); // verification aid: prefill the vehicle search
 
-    TSharedRef<SWidget> EnvironmentList = MakeList(Environments, LOCTEXT("Environment", "Environment"), LOCTEXT("SearchPlaces", "Search places"),
+    TSharedRef<SWidget> EnvironmentList = MakeList(Environments, LOCTEXT("Environment", "Hangar"), LOCTEXT("SearchPlaces", "Search hangars"),
         [this](const FString& Id) { return EnvironmentState(Id); }, [this](const FString& Id, int32 RowSession) { PickEnvironment(Id, RowSession); });
     TSharedRef<SWidget> VehicleList = MakeList(Vehicles, LOCTEXT("Vehicle", "Vehicle"), LOCTEXT("SearchVehicles", "Search vehicles"),
         [this](const FString& Id) { return VehicleState(Id); }, [this](const FString& Id, int32 RowSession) { PickVehicle(Id, RowSession); });
@@ -183,7 +199,7 @@ void SSCViewerPicker::Construct(const FArguments& Args)
         ]);
     // The active paint's colours, below its list: change one by its hex code or the colour picker; saved per vehicle and
     // paint (PaintColors.json), back to the paint's own with Reset.
-    TSharedRef<SWidget> ColorPanel = Panel(LOCTEXT("Colours", "Colours"), FText(),
+    TSharedRef<SWidget> ColorPanel = Panel(LOCTEXT("Colours", "Customise colours"), FText(),
         SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight()[SAssignNew(ColorRows, SVerticalBox)]
         + SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
@@ -202,22 +218,52 @@ void SSCViewerPicker::Construct(const FArguments& Args)
             ]
         ]);
     TSharedRef<SWidget> PaintColumn = SNew(SVerticalBox)
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, Gutter)
+        [
+            SNew(SHorizontalBox)
+            .Visibility_Lambda([this] { return bPaintOnly ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; })
+            + SHorizontalBox::Slot().AutoWidth()
+            [
+                SNew(SButton).ButtonStyle(&FlatButton()).ToolTipText(LOCTEXT("AllListsTip", "Back to the hangar and vehicle lists"))
+                .OnClicked_Lambda([this] { bPaintOnly = false; return FReply::Handled(); })
+                [Txt(LOCTEXT("AllLists", "ALL LISTS"), Label(), Ink())]
+            ]
+            + SHorizontalBox::Slot().FillWidth(1)
+            + SHorizontalBox::Slot().AutoWidth()
+            [
+                SNew(SButton).ButtonStyle(&FlatButton()).OnClicked_Lambda([this] { Close(); return FReply::Handled(); })
+                [Txt(LOCTEXT("ClosePaint", "F1  CLOSE"), Label(), Ink())]
+            ]
+        ]
         + SVerticalBox::Slot().FillHeight(1)[PaintList]
         + SVerticalBox::Slot().AutoHeight().Padding(0, Gutter, 0, 0)[ColorPanel];
 
     ChildSlot
     [
-        SNew(SBorder).BorderImage(White()).BorderBackgroundColor(ScrimOpen()).Padding(SafeMargin)
-        .Visibility_Lambda([Weak] { return SCViewerShell::IsMenuOpen(Weak.Get()) ? EVisibility::Visible : EVisibility::Collapsed; })
+        SNew(SBorder).BorderImage(White()).Padding(SafeMargin)
+        .BorderBackgroundColor_Lambda([this] { return bPaintOnly ? FLinearColor::Transparent : ScrimOpen(); })
+        .Visibility_Lambda([this, Weak] {
+            if (!SCViewerShell::IsMenuOpen(Weak.Get())) return EVisibility::Collapsed;
+            return bPaintOnly ? EVisibility::SelfHitTestInvisible : EVisibility::Visible;
+        })
         [
             SNew(SVerticalBox)
             + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, Gutter)
             [
                 SNew(SHorizontalBox)
+                .Visibility_Lambda([this] { return bPaintOnly ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible; })
                 + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                 [Txt(TAttribute<FText>::CreateLambda([] { return Caps(SCViewerShell::AppName()); }), Display(), OnScrim())]
                 + SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(Gutter, 0)
                 [Txt(TAttribute<FText>::CreateSP(this, &SSCViewerPicker::StatusText), Label(), OnScrim())]
+                + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+                [
+                    SNew(SButton).ButtonStyle(&FlatButton())
+                    .ToolTipText(LOCTEXT("ShowShipTip", "Keep only the paint and colour lists, so you see the ship while you change them"))
+                    .Visibility_Lambda([this] { return Subsystem.IsValid() && Subsystem->GetVehicle() ? EVisibility::Visible : EVisibility::Collapsed; })
+                    .OnClicked_Lambda([this] { bPaintOnly = true; return FReply::Handled(); })
+                    [Txt(LOCTEXT("ShowShip", "PAINT WITH SHIP IN VIEW"), Label(), Ink())]
+                ]
                 + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                 [
                     SNew(SButton).ButtonStyle(&FlatButton()).OnClicked_Lambda([this] { Close(); return FReply::Handled(); })
@@ -227,8 +273,13 @@ void SSCViewerPicker::Construct(const FArguments& Args)
             + SVerticalBox::Slot().FillHeight(1)
             [
                 SNew(SHorizontalBox)
-                + SHorizontalBox::Slot().FillWidth(1)[EnvironmentList]
-                + SHorizontalBox::Slot().FillWidth(1.2f).Padding(Gutter, 0, 0, 0)[VehicleList]
+                + SHorizontalBox::Slot().FillWidth(1)
+                [SNew(SBox).Visibility_Lambda([this] { return bPaintOnly ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible; })[EnvironmentList]]
+                + SHorizontalBox::Slot().FillWidth(1.2f).Padding(Gutter, 0, 0, 0)
+                [SNew(SBox).Visibility_Lambda([this] { return bPaintOnly ? EVisibility::Collapsed : EVisibility::SelfHitTestInvisible; })[VehicleList]]
+                // Show ship: the view's share of the width, let through to the view (no hit test).
+                + SHorizontalBox::Slot().FillWidth(2.2f)
+                [SNew(SSpacer).Visibility_Lambda([this] { return bPaintOnly ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })]
                 + SHorizontalBox::Slot().FillWidth(0.8f).Padding(Gutter, 0, 0, 0)[PaintColumn]
             ]
         ]
@@ -261,6 +312,9 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
         ]
         + SVerticalBox::Slot().FillHeight(1)
         [
+            SNew(SOverlay)
+            + SOverlay::Slot()
+            [
             SAssignNew(List.View, SListView<FEntry>).ListItemsSource(&List.Shown).ListViewStyle(&ListStyle()).SelectionMode(ESelectionMode::None)
             .OnGenerateRow_Lambda([State, Pick, L](FEntry Item, const TSharedRef<STableViewBase>& Table) {
                 const FString Id = Item->Id;
@@ -277,6 +331,19 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
                     [Row(Item->Label, Second, [State, Id] { return State(Id); })]
                 ];
             })
+            ]
+            + SOverlay::Slot().VAlign(VAlign_Center).Padding(16, 0)
+            [
+                SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink2()).AutoWrapText(true).Justification(ETextJustify::Center)
+                .Visibility_Lambda([this, L] { return !bCatalogReady || L->Shown.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+                .Text_Lambda([this] {
+                    const USCViewerSubsystem* S = Subsystem.Get();
+                    if (S && (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed))
+                        return LOCTEXT("EmptyNoArchive", "Star Citizen was not found: choose its Data.p4k first.");
+                    return bCatalogReady ? LOCTEXT("EmptySearch", "Nothing matches the search.")
+                                         : LOCTEXT("EmptyReading", "Reading your Star Citizen files…\nThe first start can take a minute.");
+                })
+            ]
         ]);
 }
 
@@ -501,6 +568,7 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
     }
     if (!bOpen && bWasOpen)
     {
+        bPaintOnly = false;
         RestoreScreenMessages();
         if (FocusView) FocusView(); // however it closed (F1, Esc, the button, RPC /ui): keys go back to the view
     }
@@ -520,8 +588,8 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         };
         FSCCatalogEntry Procedural;
         Procedural.Id = MapHangar;
-        Procedural.Label = LOCTEXT("MapHangar", "Procedural hangar").ToString();
-        Procedural.Detail = LOCTEXT("MapHangarDetail", "The viewer's own, no game environment").ToString();
+        Procedural.Label = LOCTEXT("MapHangar", "Empty studio").ToString();
+        Procedural.Detail = LOCTEXT("MapHangarDetail", "A plain room, not from the game").ToString();
         Fill(Environments, Catalog.Environments, &Procedural);
         Fill(Vehicles, Catalog.Vehicles, nullptr);
         bReveal |= bOpen;
@@ -536,8 +604,8 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         Paints.Reset();
         if (V)
         {
-            Paints.Add(MakeShared<FPaintRow>(FPaintRow{INDEX_NONE, LOCTEXT("OwnPaint", "The vehicle's own").ToString(), V}));
-            for (int32 I = 0; I < V->Manifest.Paints.Num(); ++I) Paints.Add(MakeShared<FPaintRow>(FPaintRow{I, V->Manifest.Paints[I].Label(), V}));
+            Paints.Add(MakeShared<FPaintRow>(FPaintRow{INDEX_NONE, LOCTEXT("OwnPaint", "Default paint").ToString(), V}));
+            for (int32 I = 0; I < V->Manifest.Paints.Num(); ++I) Paints.Add(MakeShared<FPaintRow>(FPaintRow{I, V->Manifest.Paints[I].Label().Replace(TEXT("_"), TEXT(" ")), V}));
         }
         if (PaintView) PaintView->RequestListRefresh();
         bReveal |= bOpen;
@@ -573,7 +641,7 @@ void SSCViewerPicker::RebuildColors(ASCVehicle* V)
         ColorRows->AddSlot().AutoHeight()
         [
             SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink2()).AutoWrapText(true)
-            .Text(V ? LOCTEXT("NoColours", "This paint has no colours to change.") : LOCTEXT("ColoursNoVehicle", "Pick a vehicle to change its colours."))
+            .Text(V ? LOCTEXT("NoColours", "This paint has no colours to change.") : LOCTEXT("ColoursNoVehicle", "Pick a vehicle to change its paint colours."))
         ];
         return;
     }
@@ -605,7 +673,7 @@ void SSCViewerPicker::RebuildColors(ASCVehicle* V)
             [
                 SAssignNew(Field, SEditableTextBox).Style(&SearchStyle()).Font(Body())
                 .Text(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))))
-                .ToolTipText(LOCTEXT("HexHint", "A colour as #RRGGBB, then Enter"))
+                .ToolTipText(LOCTEXT("HexHint", "Type a colour as #RRGGBB (for example #FFB000) and press Enter, or click the swatch to pick one"))
                 .OnTextCommitted_Lambda([this, Channel](const FText& Value, ETextCommit::Type How) {
                     FLinearColor C;
                     if (How != ETextCommit::OnCleared && USCViewerSubsystem::FromHex(Value.ToString(), C)) ApplyColor(Channel, C, true);
@@ -680,13 +748,13 @@ FText SSCViewerPicker::StatusText() const
 {
     const USCViewerSubsystem* S = Subsystem.Get();
     if (!S) return FText();
-    if (S->GetArchiveState() == ESCArchiveState::Opening) return LOCTEXT("Opening", "OPENING THE ARCHIVE…");
-    if (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed) return LOCTEXT("NoArchive", "NO ARCHIVE");
+    if (S->GetArchiveState() == ESCArchiveState::Opening) return LOCTEXT("Opening", "READING YOUR STAR CITIZEN FILES…");
+    if (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed) return LOCTEXT("NoArchive", "STAR CITIZEN NOT FOUND");
     if (const FString Error = S->GetCatalogError(); !Error.IsEmpty()) return FText::FromString(Caps(Error));
-    if (!S->GetCatalog().bReady) return LOCTEXT("Listing", "LISTING…");
+    if (!S->GetCatalog().bReady) return LOCTEXT("Listing", "READING THE SHIP AND HANGAR LISTS…");
     if (QueuedEnvironment.IsSet() || QueuedVehicle.IsSet()) return LOCTEXT("Queued", "LOADING…  YOUR NEXT CHOICE FOLLOWS");
     if (S->IsBusy() || S->IsEnvironmentLoading()) return LOCTEXT("LoadingStatus", "LOADING…");
-    return LOCTEXT("Pick", "PICK A PLACE, A VEHICLE AND ITS PAINT");
+    return LOCTEXT("Pick", "PICK A HANGAR, A VEHICLE AND ITS PAINT");
 }
 
 #undef LOCTEXT_NAMESPACE

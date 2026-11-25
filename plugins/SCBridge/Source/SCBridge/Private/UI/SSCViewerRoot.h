@@ -33,6 +33,9 @@ private:
     FReply PickArchive();
     FText FooterLoadText() const;
     FText FooterSystemText() const;
+    /** What a player calls the entity / environment: its row label in the viewer's lists, else its id. */
+    FString VehicleName(const FString& Entity) const;
+    FString EnvironmentName(const FString& Request) const;
     EActiveTimerReturnType SampleSystem(double, float);
 
     TWeakObjectPtr<USCViewerSubsystem> Subsystem;
@@ -41,6 +44,7 @@ private:
     /** The application's layers over the view (SCViewerShell::Overlays; UnrealCitizen: the mobiGlas and the callouts). */
     TSharedPtr<class SOverlay> Overlays;
     FText Notice; // Keep result / picker errors
-    bool bOfferedPicker = false; // the picker opens by itself once when the startup open fails
+    bool bFooterDetails = false; // the footer shows load timings and caches (developer details)
+    bool bArchiveDetails = false; // the archive screen shows the open error's text
     uint64 UsedMemory = 0, FreeMemory = 0, DiskFree = 0, DiskTotal = 0;
 };

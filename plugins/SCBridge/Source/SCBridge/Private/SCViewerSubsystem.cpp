@@ -432,7 +432,7 @@ bool USCViewerSubsystem::SetPaintColors(const TMap<FString, FLinearColor>& Overr
         TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
         Entry->SetStringField(TEXT("vehicle"), LoadedEntity);
         Entry->SetStringField(TEXT("palette"), PaletteId);
-        Entry->SetStringField(TEXT("paint"), Paint == INDEX_NONE ? FString(TEXT("(the vehicle's own)")) : V->Manifest.Paints[Paint].Label());
+        Entry->SetStringField(TEXT("paint"), Paint == INDEX_NONE ? FString(TEXT("Default paint")) : V->Manifest.Paints[Paint].Label());
         TSharedPtr<FJsonObject> Colors = MakeShared<FJsonObject>();
         for (const FString& Channel : ASCVehicle::PaintChannels())
             if (const FLinearColor* C = Overrides.Find(Channel)) Colors->SetStringField(Channel, ToHex(*C));
@@ -2028,7 +2028,7 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
         {
             if (FirstPerson) FirstPerson->Destroy();
             FirstPerson = nullptr;
-            UE_LOG(LogSCViewer, Warning, TEXT("FIRST_PERSON no safe spawn; choose a surface with Spawn where I look"));
+            UE_LOG(LogSCViewer, Warning, TEXT("FIRST_PERSON no safe spawn; choose a surface with Walk from here"));
             return false;
         }
         if (InspectionPawn.IsValid())
@@ -2037,7 +2037,19 @@ bool USCViewerSubsystem::SetCameraMode(ESCCameraMode Mode)
             InspectionPawn->SetActorTickEnabled(false);
         }
         PC->Possess(FirstPerson);
-        PC->SetControlRotation(FirstPerson->GetActorRotation());
+        // A start at an outside access (entrance, seat access, door, hull) facing away from the vehicle turns to it, level:
+        // the player came to see the ship. Interior places and seats keep the spawn's own facing.
+        FRotator View = FirstPerson->GetActorRotation();
+        if (Vehicle->SpawnPoints.IsValidIndex(FirstPerson->CurrentSpawn))
+        {
+            const FName Kind = Vehicle->SpawnPoints[FirstPerson->CurrentSpawn].Kind;
+            const FBox Bounds = Vehicle->GetComponentsBoundingBox(true);
+            const FVector ToShip = Bounds.IsValid ? (Bounds.GetCenter() - FirstPerson->GetActorLocation()).GetSafeNormal2D() : FVector::ZeroVector;
+            const bool bOutside = Kind != FSCSpawnKind::Interior && Kind != FSCSpawnKind::Seat;
+            if (bOutside && !ToShip.IsZero() && FVector::DotProduct(View.Vector().GetSafeNormal2D(), ToShip) < 0)
+                View = FRotator(0, ToShip.Rotation().Yaw, 0);
+        }
+        PC->SetControlRotation(View);
         RequestPlayerKit(); // first entry starts the player body; WP-P1 capsule-only until it is ready
         AttachPlayerKit();
     }

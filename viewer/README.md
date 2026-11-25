@@ -1,5 +1,9 @@
 # SCViewer — WP-U0 Unreal setup and feasibility spikes
 
+> **Using the viewer?** This page is for developers. Players: [docs/viewer/USER_GUIDE.md](../docs/viewer/USER_GUIDE.md)
+> (download, requirements, controls). The public download is made with `viewer/scripts/package_viewer.ps1 -Release
+> -Version <x.y.z>` (Shipping, no DLSS, `out/release/SCViewer-<x.y.z>-win64.zip`).
+
 **Engine: the SCViewer fork of UE 5.9, built from source, is the only build** (plan D17, 2026-11-18): branch
 `scviewer/5.9` of `C:\Users\bojan\UnrealEngine-5.9-src` (upstream `5.9` plus engine features the viewer needs, WP-E1;
 UE's behaviour stays the default), registered as `UE_5.9_src` (`SCViewer.uproject`'s `EngineAssociation`). Build the
@@ -566,7 +570,7 @@ random scene changes, checked after every step; report in `out/h1/`).
 
 ## First-person exploration (WP-P1)
 
-Load a package, then choose **First person** or **Spawn where I look** in Orbit.
+Load a package, then choose **First person** or **Walk from here** (formerly "Spawn where I look") in Orbit.
 Collision readiness includes the soft skin's animated triangle body. Click the
 viewport for mouse look; Esc releases capture. WASD walks, Shift runs, Space jumps,
 Ctrl crouches, E toggles the interaction under the crosshair (else the nearest

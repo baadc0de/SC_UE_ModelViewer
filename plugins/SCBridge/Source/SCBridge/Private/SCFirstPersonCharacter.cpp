@@ -1155,16 +1155,19 @@ void ASCFirstPersonCharacter::UpdatePanelHover()
 FString ASCFirstPersonCharacter::HUDText() const
 {
     if (!Vehicle) return FString();
-    // WP-I1-4: what E does is the popout's (SSCInteractionPrompt, GetPrompt), no longer a line here.
-    const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: the capsule overlaps geometry")
-        : bStuck ? TEXT("Movement blocked — press V for noclip")
-        : Vehicle->bCollisionReady ? TEXT("Collision ready") : TEXT("Collision cooking…");
+    // WP-I1-4: what E does is the popout's (SSCInteractionPrompt, GetPrompt), no longer a line here. A player reads what
+    // they are doing, what stops them and the keys they need most; the rest is in the user guide (docs/viewer/USER_GUIDE.md).
+    const TCHAR* Status = NoclipRefusedSeconds > 0 ? TEXT("Cannot leave noclip here: you are inside geometry")
+        : bStuck ? TEXT("Movement blocked: press V to pass through walls (noclip)")
+        : Vehicle->bCollisionReady ? TEXT("") : TEXT("Preparing collision…");
+    const TCHAR* Mode = Ladder && Ladder->OwnsMovement() ? TEXT("On ladder")
+        : Seats && Seats->OwnsMovement() ? (GetOccupiedSeatRole() == ESCSeatRole::Unknown ? TEXT("Seat transition") : TEXT("Seated"))
+        : bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking");
     const FString Player = Body->HasBody() ? Body->HUDLine() : BodyStatus;
-    return FString::Printf(TEXT("%s · %.1f m/s · torch %s · %s cm from ship origin\n%s%s%s\nWASD move · Shift run · Space jump · Ctrl crouch · E interact · wheel: choose action · F torch · V noclip · T teleport · C view · Z orbit (double-tap: behind) · LMB fire · RMB aim%s"),
-        Ladder && Ladder->OwnsMovement() ? TEXT("On ladder") :
-        Seats && Seats->OwnsMovement() ? (GetOccupiedSeatRole() == ESCSeatRole::Unknown ? TEXT("Seat transition") : TEXT("Seated"))
-            : bNoclip ? TEXT("Noclip") : bIsCrouched ? TEXT("Crouched") : bRunning ? TEXT("Running") : TEXT("Walking"),
-        GetVelocity().Size() / 100, Flashlight->IsVisible() ? TEXT("on") : TEXT("off"),
-        *GetVehicleRelativeLocation().ToCompactString(), Status, Player.IsEmpty() ? TEXT("") : TEXT("\n"), *Player,
-        SCViewerShell::HasMenu() ? *(TEXT(" · F1 ") + SCViewerShell::MenuName().ToString()) : TEXT(""));
+    TArray<FString> Lines;
+    Lines.Add(*Status ? FString::Printf(TEXT("%s · %s"), Mode, Status) : FString(Mode));
+    if (!Player.IsEmpty()) Lines.Add(Player);
+    Lines.Add(FString::Printf(TEXT("WASD move · Shift run · Space jump · Ctrl crouch · E use · F torch · T teleport · C third person · V noclip%s"),
+                              SCViewerShell::HasMenu() ? *(TEXT(" · F1 ") + SCViewerShell::MenuName().ToString()) : TEXT("")));
+    return FString::Join(Lines, TEXT("\n"));
 }
