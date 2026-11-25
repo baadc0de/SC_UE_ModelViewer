@@ -795,8 +795,19 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     AddClip(V, B, TEXT("leaf_open"), TEXT("Open"), {0, 30});
     AddClip(V, B, TEXT("leaf_close"), TEXT("Close"), {30, 0});
     V->DoorRecords.Add(B, R);
+    // A bed: one clip, played forwards to close and backwards to open (SCItem_Bed_Anims_Reverse_Close): its first frame is open.
+    USCRigComponent* Bed = AddRig(V, TEXT("Bed"));
+    AddClip(V, Bed, TEXT("bed_close"), TEXT("Close"), {50, 0});
+    {
+        FSCImportedClip& BedClip = V->ClipCatalog->Clips.Last();
+        FSCClipFragment Open = BedClip.Fragments[0];
+        Open.FragmentTags = {TEXT("Open")};
+        Open.Speed = -1;
+        BedClip.Fragments.Add(Open);
+    }
+    V->DoorRecords.Add(Bed, R);
     V->BuildExploration();
-    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B);
+    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B), DBed = V->DoorForRig(Bed);
     if (!TestTrue(TEXT("two doors"), DA != INDEX_NONE && DB != INDEX_NONE)) return false;
     TArray<FString> Events;
     const FDelegateHandle Handle = ASCVehicle::OnDoorMotion.AddLambda([&](ASCVehicle* Vehicle, int32 Door, bool bOpen, ASCVehicle::EDoorMotion E) {
@@ -919,6 +930,16 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     TestTrue(TEXT("a fragment on other bones"), V->PlayFragmentAt(TEXT("Wave"), TEXT("Wave"), A));
     TestFalse(TEXT("the frozen door is unsettled"), V->IsDoorStateKnown(DA));
     V->Tick(1.f);
+    Events.Reset();
+
+    // A raw clip's recorded state follows the end its fragment plays it to: the bed's clip held at speed zero shows its
+    // first frame, open; played forwards it ends closed.
+    const int32 BedIndex = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("bed_close")); });
+    TestTrue(TEXT("bed held at its first frame"), V->PlayClipAt(BedIndex, Bed, 0.f));
+    TestTrue(TEXT("recorded open"), V->IsDoorStateKnown(DBed) && V->IsDoorOpen(DBed));
+    TestTrue(TEXT("bed played forwards"), V->PlayClipAt(BedIndex, Bed, 1.f));
+    V->Tick(1.f);
+    TestTrue(TEXT("recorded closed"), V->IsDoorStateKnown(DBed) && !V->IsDoorOpen(DBed));
     Events.Reset();
 
     // A lock change is reported.

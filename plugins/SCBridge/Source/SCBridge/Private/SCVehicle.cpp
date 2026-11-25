@@ -316,7 +316,16 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
         // Another clip: does it drive a channel the door's own open / close options drive?
         if (!(bOpenClip || bCloseClip) && !ClipDrivesDoor(DoorIndex, Index)) continue;
         const FSCFragmentKey Key(Rig, D.Fragment);
-        if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenClip == bEndsAtLast) ? D.OpenTag : D.CloseTag);
+        // Which end of the clip is open: the end its tag's fragment plays it to (an authored negative speed plays it
+        // backwards: a reverse-authored open fragment's first frame is open).
+        auto Forward = [&](FName Tag) {
+            const FSCClipFragment* F = Clip.Fragments.FindByPredicate([&](const FSCClipFragment& X) {
+                return X.Fragment == D.Fragment && X.OptionWeight > 0 && (X.Tags.Contains(Tag) || X.FragmentTags.Contains(Tag));
+            });
+            return !F || F->Speed >= 0;
+        };
+        const bool bOpenAtLast = bOpenClip ? Forward(D.OpenTag) : !Forward(D.CloseTag);
+        if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenAtLast == bEndsAtLast) ? D.OpenTag : D.CloseTag);
         else FragmentTargets.Remove(Key);
         UnsettledTargets.Remove(Key);
         // WP-A1: a raw clip on the door's channels takes the door over: its move (and rest) stops. Door effects belong to
