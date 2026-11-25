@@ -17,9 +17,11 @@ bool FSCBasicLighting::RunTest(const FString&)
     }
     const TCHAR* Names[] = {TEXT("r.Shadow.Virtual.OnePassProjection.MaxLightsPerPixel"), TEXT("r.DynamicRes.OperationMode"),
                             TEXT("r.DynamicRes.MinScreenPercentage"), TEXT("r.DynamicRes.MaxScreenPercentage"), TEXT("r.DynamicRes.FrameTimeBudget")};
-    TMap<FString, FString> Before;
+    // Restored afterwards at the priority they had (code priority would pin them for the rest of the session).
+    TMap<FString, TPair<FString, EConsoleVariableFlags>> Before;
     for (const TCHAR* Name : Names)
-        if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name)) Before.Add(Name, Var->GetString());
+        if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
+            Before.Add(Name, {Var->GetString(), EConsoleVariableFlags(Var->GetFlags() & ECVF_SetByMask)});
     SCLook::ApplyBasicLighting();
     auto Int = [](const TCHAR* Name) { const IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(Name); return V ? V->GetInt() : -1; };
     auto Float = [](const TCHAR* Name) { const IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(Name); return V ? V->GetFloat() : -1.f; };
@@ -29,7 +31,11 @@ bool FSCBasicLighting::RunTest(const FString&)
     TestEqual(TEXT("up to full resolution"), Float(Names[3]), 100.f);
     TestEqual(TEXT("held at 60 fps"), Float(Names[4]), 1000.f / 60.f, 1e-3f);
     for (const auto& [Name, Value] : Before)
-        if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(*Name)) Var->Set(*Value, ECVF_SetByCode);
+        if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(*Name))
+        {
+            Var->Unset(ECVF_SetByCode); // drop the test's code-priority value, back to what was set below it
+            if (Var->GetString() != Value.Key) Var->Set(*Value.Key, Value.Value);
+        }
     return true;
 }
 #endif

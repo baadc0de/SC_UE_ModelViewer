@@ -33,8 +33,8 @@ SC Viewer is a fan project. It is **not made or endorsed by Cloud Imperium Games
 **Ray tracing is optional.** On a graphics card without hardware ray tracing (GeForce GTX, Radeon RX 5000), the viewer
 switches to simpler lighting by itself. The top bar then shows **Basic lighting**. Every light still casts shadows
 (shadow maps instead of ray-traced shadows) and the screen-space occlusion of the game is on. Light bouncing off surfaces
-and reflections only come from what is on screen, so they are simpler. To stay smooth, the viewer lowers its render
-resolution by itself on a slower card when it would drop below 60 frames per second, down to half resolution. Everything
+and reflections only come from what is on screen, so they are simpler. When the graphics card is what slows the viewer
+below 60 frames per second, the viewer lowers its render resolution by itself, down to half, to stay smooth. Everything
 else works the same. The viewer was tested on an RTX card, with and without its ray tracing.
 
 ![The same Golem with Basic lighting (no hardware ray tracing)](images/basic-lighting.jpg)
