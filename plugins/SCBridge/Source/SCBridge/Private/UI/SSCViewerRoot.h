@@ -35,6 +35,8 @@ private:
     FText FooterSystemText() const;
     /** What a player calls the entity / environment: its row label in the viewer's lists, else its id. */
     FString VehicleName(const FString& Entity) const;
+    /** The loading overlay's model row: a named entity loading, or the last load failed. */
+    bool ModelRowShown() const;
     FString EnvironmentName(const FString& Request) const;
     EActiveTimerReturnType SampleSystem(double, float);
 

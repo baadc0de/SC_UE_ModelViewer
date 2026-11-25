@@ -13,10 +13,10 @@ under Assets) · **[User guide](docs/viewer/USER_GUIDE.md)** · **[Report a prob
 
 1. Download the zip and unzip it into a folder such as `C:\Games` (not `Program Files`).
 2. Double-click `SCViewer\SCViewer.exe`. It finds Star Citizen by itself, or asks where `Data.p4k` is.
-3. Pick a hangar, a ship and a paint in the menu (F1). To change a paint's colours, click **PAINT WITH SHIP IN VIEW**.
+3. Pick a hangar, a ship and a paint in the menu (F1). To change a paint's colours beside the ship, click **SHOW SHIP**.
 
 **You need:** Windows 10 or 11 (64-bit); Star Citizen installed; a DirectX 12 graphics card with Shader Model 6.6
-(GeForce GTX 1060 / Radeon RX 5000 / Intel Arc or newer); 16 GB RAM; about 12 GB of disk. Hardware ray tracing (GeForce
+(GeForce GTX 1060 / Radeon RX 5000 / Intel Arc or newer); 16 GB RAM; 12 GB of free disk to start (the cache can grow to 40 GB). Hardware ray tracing (GeForce
 RTX, Radeon RX 6000 or newer) gives the best lighting; without it the viewer uses simpler lighting
 ("Basic lighting"). The [user guide](docs/viewer/USER_GUIDE.md#1-requirements) has the details.
 

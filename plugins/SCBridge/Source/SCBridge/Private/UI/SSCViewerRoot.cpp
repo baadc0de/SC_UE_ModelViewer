@@ -57,7 +57,10 @@ void SSCViewerRoot::Construct(const FArguments& Args)
                 [
                     SNew(SBox).Visibility_Lambda([this] { return MenuHidden(); })
                     [
-                    SNew(STextBlock).Font(Font(8)).ColorAndOpacity(FLinearColor(1, 1, 1, 0.55f)).Visibility(EVisibility::HitTestInvisible)
+                    SNew(SBorder).BorderImage(Fill()).BorderBackgroundColor(FLinearColor(0, 0, 0, 0.5f)).Padding(FMargin(8, 4))
+                    .Visibility(EVisibility::HitTestInvisible)
+                    [
+                    SNew(STextBlock).Font(Font(9)).ColorAndOpacity(FLinearColor(1, 1, 1, 0.85f))
                     .Text_Lambda([this] {
                         if (Subsystem.IsValid() && Subsystem->GetCameraMode() == ESCCameraMode::FirstPerson)
                             return SCViewerShell::HasMenu()
@@ -67,6 +70,7 @@ void SSCViewerRoot::Construct(const FArguments& Args)
                         return bFly ? LOCTEXT("FlyHelp", "Drag: look · WASD move · E/Q up/down · Shift fast · Ctrl slow · wheel: speed · double-click: focus")
                                     : LOCTEXT("OrbitHelp", "Drag: orbit · Shift/middle drag: pan · wheel: zoom · double-click: focus part · F: frame all");
                     })
+                    ]
                     ]
                 ]
                 // The first-person HUD steps aside while the menu is up (it would show through the menu's scrim).
@@ -241,7 +245,7 @@ TSharedRef<SWidget> SSCViewerRoot::MakeLoadingOverlay()
     };
     return SNew(SBorder)
         .Visibility_Lambda([this] {
-            const bool bModel = Subsystem.IsValid() && (Subsystem->IsBusy() || Subsystem->GetLoadPhase() == ESCLoadPhase::Failed);
+            const bool bModel = ModelRowShown();
             // A hangar waiting for an archive that failed to open says nothing useful: the archive screen speaks.
             const bool bEnv = Subsystem.IsValid() && Subsystem->IsEnvironmentLoading() && Subsystem->GetArchiveState() != ESCArchiveState::Failed;
             return bModel || bEnv ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
@@ -252,7 +256,7 @@ TSharedRef<SWidget> SSCViewerRoot::MakeLoadingOverlay()
             [
                 SNew(SVerticalBox)
                 + SVerticalBox::Slot().AutoHeight()
-                [Row([this] { return Subsystem.IsValid() && (Subsystem->IsBusy() || Subsystem->GetLoadPhase() == ESCLoadPhase::Failed); },
+                [Row([this] { return ModelRowShown(); },
                      [this] { return Subsystem.IsValid() ? Subsystem->GetLoadProgress() : 0.f; },
                      [this] { return FSlateColor(Subsystem.IsValid() && Subsystem->GetLoadPhase() == ESCLoadPhase::Failed ? Bad() : Accent()); },
                      [this] {
@@ -309,8 +313,9 @@ TSharedRef<SWidget> SSCViewerRoot::MakeArchiveOverlay()
                         if (!Subsystem.IsValid()) return FText();
                         if (Subsystem->GetArchiveState() == ESCArchiveState::Failed)
                             return LOCTEXT("OpenFailed", "The viewer could not find your Star Citizen game files. Choose the file Data.p4k in "
-                                                         "your game folder, usually\nC:\\Program Files\\Roberts Space Industries\\StarCitizen\\LIVE\n\n"
-                                                         "The viewer only reads it; your game is not changed.");
+                                                         "the LIVE folder of your RSI library, for example\nD:\\Roberts Space Industries\\StarCitizen\\LIVE\\Data.p4k\n"
+                                                         "The RSI Launcher's settings show where your library is.\n\n"
+                                                         "The viewer only reads the file; your game is not changed.");
                         return LOCTEXT("Opening", "The viewer reads the list of ships and hangars from your game. "
                                                   "The first start takes longer; later starts reuse what it read.");
                     })
@@ -325,11 +330,12 @@ TSharedRef<SWidget> SSCViewerRoot::MakeArchiveOverlay()
                     [SNew(SButton).OnClicked(this, &SSCViewerRoot::PickArchive)[SNew(STextBlock).Font(Font(10, true)).Text(LOCTEXT("Choose", "Find Data.p4k…"))]]
                     + SHorizontalBox::Slot().AutoWidth()
                     [
-                        SNew(SButton).OnClicked_Lambda([this] {
+                        SNew(SButton).ToolTipText(LOCTEXT("RetryTip", "Look for Star Citizen in its usual install folder again"))
+                        .OnClicked_Lambda([this] {
                             if (Subsystem.IsValid()) Subsystem->OpenArchive(FString());
                             return FReply::Handled();
                         })
-                        [SNew(STextBlock).Font(Font(10)).Text(LOCTEXT("Retry", "Try again"))]
+                        [SNew(STextBlock).Font(Font(10)).Text(LOCTEXT("Retry", "Look again"))]
                     ]
                     + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
                     [
@@ -435,6 +441,14 @@ FText SSCViewerRoot::FooterSystemText() const
     const FString CacheText = Cache.bEnabled ? FString::Printf(TEXT("L1 %s · L2 %s"), *Bytes(Cache.Bytes), *Bytes(Processed.Bytes)) : TEXT("cache off");
     return FText::FromString(FString::Printf(TEXT("%s · memory %s used, %s free · disk %s free of %s"), *CacheText, *Bytes(UsedMemory),
                                              *Bytes(FreeMemory), *Bytes(DiskFree), *Bytes(DiskTotal)));
+}
+
+bool SSCViewerRoot::ModelRowShown() const
+{
+    // A load of a named entity, running or failed; work without one (none pending) has no row.
+    if (!Subsystem.IsValid()) return false;
+    if (Subsystem->IsBusy()) return !Subsystem->GetPendingEntity().IsEmpty();
+    return Subsystem->GetLoadPhase() == ESCLoadPhase::Failed;
 }
 
 FString SSCViewerRoot::VehicleName(const FString& Entity) const

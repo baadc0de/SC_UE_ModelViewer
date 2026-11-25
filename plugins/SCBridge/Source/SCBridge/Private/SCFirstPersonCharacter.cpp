@@ -1167,7 +1167,8 @@ FString ASCFirstPersonCharacter::HUDText() const
     TArray<FString> Lines;
     Lines.Add(*Status ? FString::Printf(TEXT("%s · %s"), Mode, Status) : FString(Mode));
     if (!Player.IsEmpty()) Lines.Add(Player);
-    Lines.Add(FString::Printf(TEXT("WASD move · Shift run · Space jump · Ctrl crouch · E use · F torch · T teleport · C third person · V noclip%s"),
-                              SCViewerShell::HasMenu() ? *(TEXT(" · F1 ") + SCViewerShell::MenuName().ToString()) : TEXT("")));
+    // C is on the body's line (SCPlayerBody HUDLine) once there is a body.
+    Lines.Add(Body->HasBody() ? TEXT("WASD move · Shift run · Space jump · Ctrl crouch · E use · F torch · T teleport · V noclip")
+                              : TEXT("WASD move · Shift run · Space jump · Ctrl crouch · E use · F torch · T teleport · C third person · V noclip"));
     return FString::Join(Lines, TEXT("\n"));
 }

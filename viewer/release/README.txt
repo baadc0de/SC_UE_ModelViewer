@@ -8,8 +8,8 @@ START:  double-click SCViewer.exe (in this folder).
     for the file Data.p4k in your game folder.
   - The first start reads the game's ship and hangar lists: give it a minute
     or two. Later starts are quick.
-  - F1 opens the menu: pick a hangar, a ship and a paint. "PAINT WITH SHIP IN
-    VIEW" lets you change a paint's colours while you see the ship.
+  - F1 opens the menu: pick a hangar, a ship and a paint. SHOW SHIP keeps
+    the paint list beside the ship, to change the paint's colours.
 
 If Windows says "Windows protected your PC": More info, then Run anyway.
 If Windows says VCRUNTIME140.dll is missing: run

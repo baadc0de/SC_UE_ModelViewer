@@ -1721,14 +1721,14 @@ FString USCViewerSubsystem::GetPlayerKitStatus() const
     case EPlayerKitState::Exporting:
     {
         const FString Step = KitProgress ? KitProgress->GetPhase() : FString();
-        return TEXT("Player body: exporting") + (Step.IsEmpty() ? FString(TEXT("…")) : TEXT(" (") + Step + TEXT(")"));
+        return TEXT("Preparing your character…") + (Step.IsEmpty() ? FString() : TEXT(" (") + Step + TEXT(")"));
     }
-    case EPlayerKitState::Parsing: return TEXT("Player body: reading package…");
-    case EPlayerKitState::Importing: return TEXT("Player body: ") + (KitJob ? KitJob->GetPhase() : FString(TEXT("importing")));
-    case EPlayerKitState::Clips: return TEXT("Player body: reading animations…");
-    case EPlayerKitState::Streaming: return TEXT("Player body: loading…");
-    case EPlayerKitState::Ready: return TEXT("Player body ready");
-    case EPlayerKitState::Failed: return TEXT("Player body unavailable (capsule only): ") + KitError;
+    case EPlayerKitState::Parsing: return TEXT("Preparing your character…");
+    case EPlayerKitState::Importing: return TEXT("Preparing your character…") + (KitJob ? TEXT(" (") + KitJob->GetPhase() + TEXT(")") : FString());
+    case EPlayerKitState::Clips: return TEXT("Preparing your character… (animations)");
+    case EPlayerKitState::Streaming: return TEXT("Preparing your character…");
+    case EPlayerKitState::Ready: return TEXT("Character ready");
+    case EPlayerKitState::Failed: return TEXT("Your character could not be prepared; you walk without one: ") + KitError;
     default: return FString();
     }
 }

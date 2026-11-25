@@ -226,7 +226,7 @@ void SSCViewerPicker::Construct(const FArguments& Args)
             [
                 SNew(SButton).ButtonStyle(&FlatButton()).ToolTipText(LOCTEXT("AllListsTip", "Back to the hangar and vehicle lists"))
                 .OnClicked_Lambda([this] { bPaintOnly = false; return FReply::Handled(); })
-                [Txt(LOCTEXT("AllLists", "ALL LISTS"), Label(), Ink())]
+                [Txt(LOCTEXT("AllLists", "SHOW LISTS"), Label(), Accent())]
             ]
             + SHorizontalBox::Slot().FillWidth(1)
             + SHorizontalBox::Slot().AutoWidth()
@@ -262,7 +262,7 @@ void SSCViewerPicker::Construct(const FArguments& Args)
                     .ToolTipText(LOCTEXT("ShowShipTip", "Keep only the paint and colour lists, so you see the ship while you change them"))
                     .Visibility_Lambda([this] { return Subsystem.IsValid() && Subsystem->GetVehicle() ? EVisibility::Visible : EVisibility::Collapsed; })
                     .OnClicked_Lambda([this] { bPaintOnly = true; return FReply::Handled(); })
-                    [Txt(LOCTEXT("ShowShip", "PAINT WITH SHIP IN VIEW"), Label(), Ink())]
+                    [Txt(LOCTEXT("ShowShip", "SHOW SHIP"), Label(), Accent())]
                 ]
                 + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                 [
@@ -341,7 +341,7 @@ TSharedRef<SWidget> SSCViewerPicker::MakeList(FList& List, const FText& Title, c
                     if (S && (S->GetArchiveState() == ESCArchiveState::Failed || S->GetArchiveState() == ESCArchiveState::Closed))
                         return LOCTEXT("EmptyNoArchive", "Star Citizen was not found: choose its Data.p4k first.");
                     return bCatalogReady ? LOCTEXT("EmptySearch", "Nothing matches the search.")
-                                         : LOCTEXT("EmptyReading", "Reading your Star Citizen files…\nThe first start can take a minute.");
+                                         : LOCTEXT("EmptyReading", "Reading your Star Citizen files…\nThe first start takes a minute or two.");
                 })
             ]
         ]);
@@ -650,6 +650,14 @@ void SSCViewerPicker::RebuildColors(ASCVehicle* V)
         {TEXT("tertiary"), LOCTEXT("Tertiary", "Accent")}, {TEXT("glass"), LOCTEXT("Glass", "Glass")},
         {TEXT("decal_red"), LOCTEXT("Decal1", "Decal 1")}, {TEXT("decal_green"), LOCTEXT("Decal2", "Decal 2")},
         {TEXT("decal_blue"), LOCTEXT("Decal3", "Decal 3")}};
+    static const TMap<FString, FText> Tips = {
+        {TEXT("primary"), LOCTEXT("PrimaryTip", "The paint's main hull colour")},
+        {TEXT("secondary"), LOCTEXT("SecondaryTip", "The paint's second hull colour")},
+        {TEXT("tertiary"), LOCTEXT("TertiaryTip", "The paint's accent colour (trim, details)")},
+        {TEXT("glass"), LOCTEXT("GlassTip", "The tint of the canopy and windows")},
+        {TEXT("decal_red"), LOCTEXT("Decal1Tip", "A colour of the logos, stripes and markings; not every paint uses it")},
+        {TEXT("decal_green"), LOCTEXT("Decal2Tip", "A colour of the logos, stripes and markings; not every paint uses it")},
+        {TEXT("decal_blue"), LOCTEXT("Decal3Tip", "A colour of the logos, stripes and markings; not every paint uses it")}};
     for (const FString& Channel : ASCVehicle::PaintChannels())
     {
         if (!Base.Contains(Channel)) continue;
@@ -658,7 +666,7 @@ void SSCViewerPicker::RebuildColors(ASCVehicle* V)
         [
             SNew(SHorizontalBox)
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-            [SNew(SBox).WidthOverride(64)[SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink()).Text(Names.FindRef(Channel))]]
+            [SNew(SBox).WidthOverride(64)[SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink()).Text(Names.FindRef(Channel)).ToolTipText(Tips.FindRef(Channel))]]
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
             [
                 SNew(SButton).ButtonStyle(&FlatButton()).ContentPadding(0)
@@ -754,6 +762,7 @@ FText SSCViewerPicker::StatusText() const
     if (!S->GetCatalog().bReady) return LOCTEXT("Listing", "READING THE SHIP AND HANGAR LISTS…");
     if (QueuedEnvironment.IsSet() || QueuedVehicle.IsSet()) return LOCTEXT("Queued", "LOADING…  YOUR NEXT CHOICE FOLLOWS");
     if (S->IsBusy() || S->IsEnvironmentLoading()) return LOCTEXT("LoadingStatus", "LOADING…");
+    if (S->GetVehicle()) return LOCTEXT("Loaded", "F1 SHOWS THE SHIP  ·  SHOW SHIP KEEPS THE PAINTS BESIDE IT");
     return LOCTEXT("Pick", "PICK A HANGAR, A VEHICLE AND ITS PAINT");
 }
 
