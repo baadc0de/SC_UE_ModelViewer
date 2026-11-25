@@ -21,6 +21,7 @@
 #include "ShaderCompiler.h"
 #include "Containers/Ticker.h"
 #include "Engine/Engine.h"
+#include "DynamicResolutionState.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -899,6 +900,23 @@ private:
         Respond(Done, ApplyCamera(B));
     }
 
+    // Dynamic resolution (Basic lighting, SCLook::ApplyBasicLighting) is held at full resolution while a screenshot or a
+    // recording runs: their output must not depend on the GPU load of the moment. Counted: they may overlap.
+    int32 DynamicResolutionHolds = 0;
+    bool bRecordingHold = false;
+    bool HoldDynamicResolution()
+    {
+        if (!GEngine) return false;
+        FDynamicResolutionStateInfos Infos;
+        GEngine->GetDynamicResolutionCurrentStateInfos(Infos);
+        if (DynamicResolutionHolds++ == 0) GEngine->PauseDynamicResolution();
+        return Infos.Status == EDynamicResolutionStatus::Enabled; // it was changing the resolution
+    }
+    void ReleaseDynamicResolution()
+    {
+        if (GEngine && DynamicResolutionHolds > 0 && --DynamicResolutionHolds == 0) GEngine->ResumeDynamicResolution();
+    }
+
     void Screenshot(const TSharedPtr<FJsonObject>& B, const FHttpResultCallback& Done)
     {
         FString Path = Str(B, TEXT("path"));
@@ -910,12 +928,19 @@ private:
         }
         Path = FPaths::ConvertRelativePathToFull(Path);
         IFileManager::Get().Delete(*Path, false, true, true);
-        FScreenshotRequest::RequestScreenshot(Path, Flag(B, TEXT("ui"), false), /*bAddFilenameSuffix=*/false);
+        // At full resolution: requested once TSR has had frames to settle there when dynamic resolution was running.
+        const bool bUI = Flag(B, TEXT("ui"), false);
+        TSharedRef<int32> Settle = MakeShared<int32>(HoldDynamicResolution() ? 8 : 0);
+        if (*Settle == 0) FScreenshotRequest::RequestScreenshot(Path, bUI, /*bAddFilenameSuffix=*/false);
         // Done when the file is written and its size holds still for a frame.
         TSharedRef<int64> Last = MakeShared<int64>(-1);
-        Defer(TEXT("/screenshot"), Num(B, TEXT("timeout_s"), 30), false, Done, [Path, Last](bool) -> TSharedPtr<FJsonObject> {
+        Defer(TEXT("/screenshot"), Num(B, TEXT("timeout_s"), 30), false, Done, [this, Path, Last, Settle, bUI](bool bTimeout) -> TSharedPtr<FJsonObject> {
+            if (*Settle > 0 && --*Settle == 0) FScreenshotRequest::RequestScreenshot(Path, bUI, /*bAddFilenameSuffix=*/false);
+            if (bTimeout) ReleaseDynamicResolution();
+            if (*Settle > 0) return nullptr;
             const int64 Size = IFileManager::Get().FileSize(*Path);
             if (Size <= 0 || Size != *Last) { *Last = Size; return nullptr; }
+            if (!bTimeout) ReleaseDynamicResolution();
             FObj O = Ok();
             O->SetStringField(TEXT("path"), Path);
             O->SetNumberField(TEXT("bytes"), double(Size));
@@ -939,13 +964,23 @@ private:
             FString Err;
             if (!Video.Start(Path, Num(B, TEXT("fps"), 30), Num(B, TEXT("max_s"), 300), int32(Num(B, TEXT("width"), 0)), Flag(B, TEXT("keep_frames"), false), Err))
                 return Respond(Done, Error(Err));
+            if (!bRecordingHold) // held until stop (a recording that ends at max_s keeps it until then)
+            {
+                bRecordingHold = true;
+                HoldDynamicResolution();
+            }
             return Respond(Done, Video.Describe());
         }
         if (Action == TEXT("stop"))
         {
             if (!Video.IsBusy() && !Video.IsFinished()) return Respond(Done, Error(TEXT("not recording")));
             Video.Stop();
-            Defer(TEXT("/record"), Num(B, TEXT("timeout_s"), 600), false, Done, [this](bool) -> TSharedPtr<FJsonObject> {
+            Defer(TEXT("/record"), Num(B, TEXT("timeout_s"), 600), false, Done, [this](bool bTimeout) -> TSharedPtr<FJsonObject> {
+                if ((Video.IsFinished() || bTimeout) && bRecordingHold)
+                {
+                    bRecordingHold = false;
+                    ReleaseDynamicResolution();
+                }
                 return Video.IsFinished() ? TSharedPtr<FJsonObject>(Video.Describe()) : nullptr;
             });
             return;

@@ -252,6 +252,40 @@ without an Experimental label in that section. They still label other Nanite
 features experimental. This is documentation/source evidence, not a skeletal
 rendering test; WP-U3 must validate our soft-skinned import before enabling it by default.
 
+## Packaged viewer (the public download)
+
+`viewer/scripts/package_viewer.ps1 -Release` packages the SCViewer game target, which has no editor modules. Meshes are
+built at run time without Nanite, mesh distance fields or Lumen cards (`SCMeshBuild`: `disabled:non_editor_host`). Their
+builders (`NaniteBuilder`, `MeshUtilities`, `MeshBuilder`) are Developer modules. The Unreal Engine EULA counts any code
+in the Developer or Editor folders as Engine Tools, and a product that includes them may only be distributed through Fab
+or a fork of Epic's GitHub UnrealEngine network ("Restrictions on Engine Tools"), not as a public GitHub release. The
+editor host (`SCViewerEditor -game`) keeps all three.
+
+What the download renders:
+- **Hardware ray tracing:**
+  - MegaLights, with ray-traced Lumen GI and reflections.
+  - Traced short-range AO within the segment budget (`SCLook::UpdateShortRangeAO`).
+- **Without it ("Basic lighting", `SCLook::ApplyBasicLighting`):**
+  - MegaLights and ray-traced Lumen switch themselves off.
+  - Every light keeps a virtual shadow map, with up to 32 filtered per pixel (`r.Shadow.Virtual.OnePassProjection.MaxLightsPerPixel`). The engine default of 16 overflowed in dense hangar views.
+  - The game's SSDO stays on.
+  - Lumen GI and reflections trace the screen only: no distance fields means no world-space traces.
+  - Dynamic resolution keeps the GPU time within 60 fps (its 15 ms target: 16.7 ms less the engine's 10 % headroom) between 50 % and 100 %, with TSR (DLSS is not in the release). It cannot help a CPU-bound frame. `r.ScreenPercentage` has no effect while it runs; RPC `/screenshot` and `/record` hold it at full resolution while they capture.
+  - Cost of 32 lights per pixel: the shadow mask goes from 64 to 128 bits per pixel at scene-texture size, also for scene captures. That is +17 MB at 1080p, +66 MB at 4K and about +265 MB for an 8K `/render`, all transient.
+  - Applied once at startup: switching `r.RayTracing.Enable` at run time does not re-apply or revert it.
+
+Measured with the Golem in the Levski large hangar (Development package, 1920×1080, `ProfileGPU`, RTX 4090):
+
+| Mode | GPU frame | Notes |
+| --- | --- | --- |
+| Ray tracing | 7.0 ms | MegaLights 0.75 ms |
+| Basic lighting | 6.7 ms | direct lighting 1.7 ms (538 shadowed lights in view), SSDO 0.55, Lumen reflections 0.3, Lumen screen-probe GI ~1.0 async |
+| Basic lighting, GPU-bound test (asked for 200 %) | 14.8 ms | dynamic resolution settled at 173 %; fixed 200 % costs 17.8 ms |
+
+Test with `-noraytracing`. Software Lumen with world-space GI in the download would need distance fields and cards built
+at run time by our own code: GeometryCore's `SparseNarrowBandMeshSDF` and `MeshCardRepresentation::SetCardsFromBounds`
+are runtime modules. That is not done yet.
+
 ## Open work
 
 TODO(WP-U0): Run Vulkan Nanite cluster visualization, Lumen scene view and HWRT checks on a host exposing the RTX 4090; also render the reloaded cooked package.
