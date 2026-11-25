@@ -746,8 +746,8 @@ entity. The C2's door groups play `Play_Silence` (its door sounds are clip event
 `.cga` placements are promoted to scene children (`interior_animation::extract_animated_interior_children`) so their
 per-`.cga` clips are extracted; the child now keeps the placement's identity (`children[].placement`: interior index, ids,
 links, interactions, door, container transform; the child's `door`, `item_port_links` and `ui_bindings` are the
-placement's), and its clips carry the fragments of its class's `SAnimationControllerParams` database (the interior's
-unique-geometry controller). The viewer reads each `placement` as an identity record among its container's placements
+placement's), and its clips carry the fragments of the `SAnimationControllerParams` database its placements' classes
+agree on (different controllers: none, logged; a class-less placement takes its geometry's). The viewer reads each `placement` as an identity record among its container's placements
 (`FSCSceneInstance::PromotedChild`, no geometry) that maps to the placed child, so the container's entity map, audio
 entities (`<interior>/<entity id>`), door pads, sensors and lifts find it as before; `BuildDoorInteractions` builds the
 doors. `hangar_xltop_001`: `ENVIRONMENT_DOORS doors=17` (was 0): its top doors, the ship-elevator pad and loading gate,
