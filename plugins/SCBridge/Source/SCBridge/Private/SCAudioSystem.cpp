@@ -1858,7 +1858,7 @@ int32 USCAudioSubsystem::FireEntityTag(ASCVehicle* Vehicle, int32 Interior, cons
         FSCAudioPlace P;
         P.Attach = E->Rig.IsValid() ? static_cast<USceneComponent*>(E->Rig.Get()) : E->Anchor.Get();
         if (USCRigComponent* Rig = E->Rig.Get(); Rig && !Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
-        P.Offset = FSCLights::ContainerBasis(Fx->Offset, false) * 100;
+        P.Offset = FSCLights::ContainerBasis(Fx->Offset, !P.Socket.IsNone()) * 100; // a bone's frame carries the imported axis conversion
         P.Label = C->Name + TEXT(":") + Tag;
         Played += Post(*S, Fx->Trigger, P) != INDEX_NONE;
     }
@@ -1886,7 +1886,7 @@ void USCAudioSubsystem::SetEntityTag(ASCVehicle* Vehicle, int32 Interior, const 
         FSCAudioPlace P;
         P.Attach = E->Rig.IsValid() ? static_cast<USceneComponent*>(E->Rig.Get()) : E->Anchor.Get();
         if (USCRigComponent* Rig = E->Rig.Get(); Rig && !Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
-        P.Offset = FSCLights::ContainerBasis(Fx->Offset, false) * 100;
+        P.Offset = FSCLights::ContainerBasis(Fx->Offset, !P.Socket.IsNone()) * 100; // a bone's frame carries the imported axis conversion
         P.Label = C->Name + TEXT(":") + Tag;
         const int32 Id = Post(*S, Fx->Trigger, P);
         if (Id != INDEX_NONE) E->TagInstances.FindOrAdd(Tag).Add(Id);
@@ -1939,6 +1939,16 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
     Hold.Rig = Rig;
     Hold.Door = Door;
     Hold.bMotion = bMotion;
+    const FString DoorEmitter = FString::Printf(TEXT("%s:door:%s"), *C->Name, *Key);
+    // A tag effect of the entity, placed as the entity's effects are (its rig or anchor, a bone of the rig).
+    auto EffectPlace = [&](const FSCAudioEffect& Fx) {
+        FSCAudioPlace P;
+        P.Attach = E.Rig.IsValid() ? static_cast<USceneComponent*>(E.Rig.Get()) : E.Anchor.Get();
+        if (!Fx.Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx.Bone)) != INDEX_NONE) P.Socket = FName(*Fx.Bone);
+        P.Offset = FSCLights::ContainerBasis(Fx.Offset, !P.Socket.IsNone()) * 100; // a bone's frame: the helper basis
+        P.Label = DoorEmitter;
+        return P;
+    };
     int32 Played = 0;
     for (const FSCAudioDoorSound* Sound : C->DoorSoundsFor(Event))
     {
@@ -1962,7 +1972,9 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
         // pivot does not.
         const bool bHelperFrame = !P.Socket.IsNone() || P.Attach.Get() != E.Rig.Get();
         P.Offset = FSCLights::ContainerBasis(Sound->Offset, bHelperFrame) * 100;
-        P.Label = C->Name + TEXT(":door:") + Event;
+        // One emitter per door across its events (an object-scoped stop in the close group reaches the open group's sound);
+        // the event is in AUDIO_DOOR.
+        P.Label = DoorEmitter;
         const int32 Id = Post(*S, Sound->Trigger, P);
         Played += Id != INDEX_NONE;
         // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds). One that cannot
@@ -1974,19 +1986,16 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
     {
         if (bState)
         {
-            // One hold per entity and tag, shared by the doors holding it; its tag effects each kept playing.
-            const FString TagKey = FString::Printf(TEXT("%u|%s|%s|%s"), Hold.VehicleId, *Interior, *EntityId.ToLower(), *Ev->Tag);
+            // One hold per entity and tag (by its full path), shared by the doors holding it; its tag effects each kept playing.
+            const FString TagKey = FString::Printf(TEXT("%u|%s|%s|%s"), Hold.VehicleId, *Interior, *EntityId.ToLower(),
+                                                   Ev->TagPath.IsEmpty() ? *Ev->Tag : *Ev->TagPath);
             FTagHold& T = TagHolds.FindOrAdd(TagKey);
             if (T.Refs++ == 0)
             {
                 T.Vehicle = Vehicle;
-                for (const FSCAudioEffect* Fx : C->EffectsFor(Ev->Tag, TEXT("tag")))
+                for (const FSCAudioEffect* Fx : C->EffectsForDoorEvent(*Ev, TEXT("tag")))
                 {
-                    FSCAudioPlace P;
-                    P.Attach = E.Rig.IsValid() ? static_cast<USceneComponent*>(E.Rig.Get()) : E.Anchor.Get();
-                    if (!Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
-                    P.Offset = FSCLights::ContainerBasis(Fx->Offset, !P.Socket.IsNone()) * 100; // a bone's frame: the helper basis
-                    P.Label = C->Name + TEXT(":") + Ev->Tag;
+                    const FSCAudioPlace P = EffectPlace(*Fx);
                     const int32 Id = Post(*S, Fx->Trigger, P);
                     Played += Id != INDEX_NONE;
                     if (HasStarted(Id)) T.Effects.Add({Fx->Trigger, P, Id}); // one that cannot play is not held
@@ -1994,7 +2003,9 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
             }
             Hold.TagKeys.Add(TagKey);
         }
-        else Played += FireEntityTag(Vehicle, FCString::Atoi(*Interior), EntityId, Ev->Tag);
+        else
+            for (const FSCAudioEffect* Fx : C->EffectsForDoorEvent(*Ev, TEXT("trigger"))) // the tag's own effects, by its path
+                Played += Post(*S, Fx->Trigger, EffectPlace(*Fx)) != INDEX_NONE;
     }
     UE_LOG(LogSCAudio, Display, TEXT("AUDIO_DOOR class=%s door=%d event=%s group=%s tag=%s posts=%d held_loops=%d%s"), *C->Name, Door, *Event, *Ev->Group, *Ev->Tag,
            Played, Hold.Loops.Num(), Hold.TagKeys.IsEmpty() ? TEXT("") : TEXT(" state"));

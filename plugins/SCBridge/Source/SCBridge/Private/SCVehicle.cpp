@@ -269,7 +269,6 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
     // otherwise unknown (no state: IsDoorOpen reads closed, so a press, a pad or a sensor opens it from the pose it shows).
     if (!ClipCatalog || !ClipCatalog->Clips.IsValidIndex(Index)) return;
     const FSCImportedClip& Clip = ClipCatalog->Clips[Index];
-    auto HasTag = [](const FSCClipFragment& F, FName Tag) { return !Tag.IsNone() && (F.FragmentTags.Contains(Tag) || F.Tags.Contains(Tag)); };
     bool bChanged = false;
     for (int32 DoorIndex = 0; DoorIndex < Doors.Num(); ++DoorIndex)
     {
@@ -279,9 +278,10 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
         const USkeletalMesh* Mesh = Rig->GetSkeletalMeshAsset();
         const FSCClipBinding* Raw = Clip.Bindings.FindByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Mesh; });
         if (!Raw) continue;
-        const bool bOpenClip = Clip.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment && HasTag(F, D.OpenTag); });
-        const bool bCloseClip = !D.bReverseClose &&
-                                Clip.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment && HasTag(F, D.CloseTag); });
+        // The door's own open / close clip: one PlayFragmentAt would choose for its tag on this rig (not a zero-weight option
+        // or another geometry's clip that only shares the tag).
+        const bool bOpenClip = EligibleFragmentClips(D.Fragment, D.OpenTag, Rig).Contains(Index);
+        const bool bCloseClip = !D.bReverseClose && EligibleFragmentClips(D.Fragment, D.CloseTag, Rig).Contains(Index);
         // Another clip: does it drive a channel the door's own open / close options drive?
         if (!(bOpenClip || bCloseClip) && !ClipDrivesDoor(DoorIndex, Index)) continue;
         const FSCFragmentKey Key(Rig, D.Fragment);

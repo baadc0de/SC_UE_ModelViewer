@@ -519,7 +519,9 @@ bool FSCAudioDoorEffectsTest::RunTest(const FString&)
     FSCAudioManifest M;
     FString Error;
     const TCHAR* Json = TEXT(R"json({ "version": 1, "triggers": {}, "nodes": [], "attenuations": {}, "buses": {}, "media": {},
-  "entity_classes": { "DOOR-1": { "name": "Gate", "effects": [], "actions": [],
+  "entity_classes": { "DOOR-1": { "name": "Gate", "actions": [],
+    "effects": [ { "on": "trigger", "tag": "Open", "tag_path": "Door/Open", "trigger": "Play_Synthetic_DoorTag" },
+                 { "on": "trigger", "tag": "Open", "tag_path": "Latch/Open", "trigger": "Play_Synthetic_LatchTag" } ],
     "door": { "events": { "open": { "group": "OpenGroup", "tag": "Open", "tag_path": "Door/Open" },
                           "opening": { "group": "OpeningGroup" }, "opened": { "tag": "Opened" } },
               "sounds": [ { "group": "OpenGroup", "trigger": "Play_Synthetic_Open", "helper": "$slot_sensor", "offset": [0, 1, 2], "looped": false },
@@ -542,5 +544,9 @@ bool FSCAudioDoorEffectsTest::RunTest(const FString&)
     TestTrue(TEXT("opening holds its loop"), Opening.Num() == 1 && Opening[0]->bLooped);
     TestEqual(TEXT("an event with a tag and no group plays no group sound"), C->DoorSoundsFor(TEXT("opened")).Num(), 0);
     TestEqual(TEXT("an event the door does not have plays nothing"), C->DoorSoundsFor(TEXT("locked")).Num(), 0);
+    // The event's tag by its full path: the latch's tag of the same leaf name is not the door's.
+    TestEqual(TEXT("the open event's tag path"), C->DoorEvents[TEXT("open")].TagPath, FString(TEXT("Door/Open")));
+    const TArray<const FSCAudioEffect*> Fired = C->EffectsForDoorEvent(C->DoorEvents[TEXT("open")], TEXT("trigger"));
+    TestTrue(TEXT("only the door's own tag effect"), Fired.Num() == 1 && Fired[0]->Trigger == TEXT("Play_Synthetic_DoorTag"));
     return true;
 }

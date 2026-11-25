@@ -207,6 +207,17 @@ TArray<const FSCAudioEffect*> FSCAudioClass::EffectsFor(const FString& Tag, cons
         if (E.Tag == Tag && (On.IsEmpty() || E.On == On)) Out.Add(&E);
     return Out;
 }
+TArray<const FSCAudioEffect*> FSCAudioClass::EffectsForDoorEvent(const FSCAudioDoorEvent& Event, const FString& On) const
+{
+    TArray<const FSCAudioEffect*> Out;
+    for (const FSCAudioEffect& E : Effects)
+    {
+        if (E.On != On) continue;
+        const bool bByPath = !Event.TagPath.IsEmpty() && !E.TagPath.IsEmpty();
+        if (bByPath ? E.TagPath == Event.TagPath : (!Event.Tag.IsEmpty() && E.Tag == Event.Tag)) Out.Add(&E);
+    }
+    return Out;
+}
 TArray<const FSCAudioDoorSound*> FSCAudioClass::DoorSoundsFor(const FString& Event) const
 {
     TArray<const FSCAudioDoorSound*> Out;
@@ -507,7 +518,7 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
                     for (const auto& [Event, EV] : Events->Values)
                     {
                         const FObj EO = EV->AsObject();
-                        Class.DoorEvents.Add(FString(*Event), {Str(EO, TEXT("group")), Str(EO, TEXT("tag"))});
+                        Class.DoorEvents.Add(FString(*Event), {Str(EO, TEXT("group")), Str(EO, TEXT("tag")), Str(EO, TEXT("tag_path"))});
                     }
                 for (const auto& S : Arr(Door, TEXT("sounds")))
                 {

@@ -214,7 +214,7 @@ struct SCBRIDGE_API FSCAudioEffect
  *  locked, unlocked and the override forms. */
 struct SCBRIDGE_API FSCAudioDoorEvent
 {
-    FString Group, Tag;
+    FString Group, Tag, TagPath; // TagPath: the tag's full path, which effects match (two tags may share a leaf name)
 };
 /** An effect-core sound of a door's effect group (`door.sounds`): played once on its group's event, or while the
  *  opening / closing state lasts when looped. */
@@ -236,6 +236,8 @@ struct SCBRIDGE_API FSCAudioClass
     TArray<const FSCAudioEffect*> EffectsFor(const FString& Tag, const FString& On = FString()) const;
     /** The sounds of the effect group Event names (none without a group). */
     TArray<const FSCAudioDoorSound*> DoorSoundsFor(const FString& Event) const;
+    /** The effects of kind On whose tag is the door event's: by its full path when both carry one, else by the leaf. */
+    TArray<const FSCAudioEffect*> EffectsForDoorEvent(const FSCAudioDoorEvent& Event, const FString& On) const;
 };
 
 struct SCBRIDGE_API FSCAudioManifest
