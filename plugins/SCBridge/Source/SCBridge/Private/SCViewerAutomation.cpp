@@ -593,6 +593,37 @@ void FSCViewerAutomation::RegisterPlayerCommands()
         if (C && !C->Body->HasBody()) UE_LOG(LogSCViewerAutomation, Warning, TEXT("PLAYER_CMD ignored: no player body (%s)"), *W->GetPlayerKitStatus());
         return C && C->Body->HasBody() ? C->Body.Get() : nullptr;
     };
+    Add(TEXT("sc.Paint.Set"), TEXT("sc.Paint.Set <index|own>: put a paint on the vehicle (its Manifest.Paints index; own: its own)"),
+        [Weak](const TArray<FString>& Args) {
+            if (!Weak.IsValid() || Args.IsEmpty()) return;
+            const bool OK = Weak->SetPaint(Args[0].Equals(TEXT("own"), ESearchCase::IgnoreCase) ? INDEX_NONE : FCString::Atoi(*Args[0]));
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("PAINT_CMD set arg=%s ok=%d"), *Args[0], OK);
+        });
+    Add(TEXT("sc.Paint.Color"), TEXT("sc.Paint.Color <channel> <#RRGGBB> | reset: a custom colour of the active paint (primary, secondary, tertiary, glass, decal_red, decal_green, decal_blue)"),
+        [Weak](const TArray<FString>& Args) {
+            ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+            if (!V || Args.IsEmpty()) return;
+            TMap<FString, FLinearColor> Overrides = V->GetPaintColorOverrides();
+            FLinearColor C;
+            if (Args[0].Equals(TEXT("reset"), ESearchCase::IgnoreCase)) Overrides.Reset();
+            else if (Args.Num() >= 2 && ASCVehicle::PaintChannels().Contains(Args[0].ToLower()) && USCViewerSubsystem::FromHex(Args[1], C)) Overrides.Add(Args[0].ToLower(), C);
+            else { UE_LOG(LogSCViewerAutomation, Warning, TEXT("PAINT_CMD color: <channel> <#RRGGBB> | reset")); return; }
+            const bool OK = Weak->SetPaintColors(Overrides, true);
+            UE_LOG(LogSCViewerAutomation, Display, TEXT("PAINT_CMD color ok=%d overrides=%d file=%s"), OK, Overrides.Num(), *USCViewerSubsystem::PaintColorsFile());
+        });
+    Add(TEXT("sc.Paint.Check"), TEXT("sc.Paint.Check: how many paint slots show a custom-colour instance now"), [Weak](const TArray<FString>&) {
+        ASCVehicle* V = Weak.IsValid() ? Weak->GetVehicle() : nullptr;
+        if (!V) return;
+        int32 Custom = 0, Other = 0, Visible = 0;
+        for (const FSCPaintSlot& E : V->PaintSlots)
+            if (UMeshComponent* C = E.Component.Get())
+            {
+                const bool bCustom = V->CustomPaintMaterials.Contains(Cast<UMaterialInstanceDynamic>(C->GetMaterial(E.Slot)));
+                (bCustom ? Custom : Other)++;
+                Visible += bCustom && C->IsVisible() && C->IsRegistered();
+            }
+        UE_LOG(LogSCViewerAutomation, Display, TEXT("PAINT_CHECK custom=%d other=%d custom_visible=%d instances=%d"), Custom, Other, Visible, V->CustomPaintMaterials.Num());
+    });
     Add(TEXT("sc.Player.Load"), TEXT("sc.Player.Load: start (or retry) the player-body export/import"), [Weak](const TArray<FString>&) {
         if (Weak.IsValid()) UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_CMD load ok=%d"), Weak->RequestPlayerKit());
     });

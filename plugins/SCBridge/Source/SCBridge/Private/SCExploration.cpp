@@ -474,6 +474,8 @@ bool ASCVehicle::SetPaint(int32 Index)
         return false;
     }
     int32 Swapped = 0;
+    PaintColorOverrides.Reset(); // custom colours belong to the paint they were set on (SetPaintColors)
+    CustomPaintMaterials.Reset();
     for (const FSCPaintSlot& Entry : PaintSlots)
     {
         UMeshComponent* C = Entry.Component.Get();

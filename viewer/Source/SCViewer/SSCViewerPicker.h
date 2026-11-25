@@ -111,4 +111,17 @@ private:
     int32 QueuedEnvironmentSession = 0, QueuedVehicleSession = 0, SaveEnvironmentSession = 0;
     /** Drops the queued and to-be-saved choices made in an archive session that is no longer the current one. */
     void DropSupersededChoices(const USCViewerSubsystem& S);
+
+    // Custom colours of the active paint (its palette channels; USCViewerSubsystem::SetPaintColors): the rows are made again
+    // when the vehicle or its paint changes.
+    TSharedPtr<class SVerticalBox> ColorRows;
+    TMap<FString, TSharedPtr<SEditableTextBox>> ColorFields;
+    TWeakObjectPtr<const ASCVehicle> ColorsOwner;
+    int32 ColorsPaint = MIN_int32;
+    void RebuildColors(ASCVehicle* V);
+    /** The channel's colour now: the custom one, else the paint's. */
+    FLinearColor ColorOf(const FString& Channel) const;
+    void ApplyColor(const FString& Channel, const FLinearColor& Linear, bool bSave);
+    void ResetColors();
+    void OpenColorPicker(const FString& Channel);
 };

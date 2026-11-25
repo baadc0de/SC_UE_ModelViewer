@@ -364,6 +364,20 @@ public:
     /** The paint on the vehicle (Manifest.Paints index, INDEX_NONE: its own). Saved with a prepared level: the paint the prep
      *  step baked in, which SetPaint cannot change there. */
     UPROPERTY() int32 ActivePaint = INDEX_NONE;
+    /** Custom paint colours (SCPaintColors.cpp): the active paint's palette channels a user overrides, by channel name
+     *  (primary, secondary, tertiary, glass, decal_red, decal_green, decal_blue; linear RGB, as palettes.json). The paint's
+     *  own channels come from PaintColors; SetPaintColors applies overrides on top of the active paint (an empty map
+     *  restores it), live: each slot whose material the edited palette changes gets its own instance of the paint's
+     *  material with the changed parameters. SetPaint clears the overrides. */
+    TMap<FString, FLinearColor> PaintColors(int32 Paint) const;
+    bool SetPaintColors(const TMap<FString, FLinearColor>& Overrides);
+    const TMap<FString, FLinearColor>& GetPaintColorOverrides() const { return PaintColorOverrides; }
+    /** The palette of a paint (INDEX_NONE: the vehicle's own); null when it has none. */
+    const FSCPalette* PaintPalette(int32 Paint) const;
+    /** The palette channel names a custom colour edit can set, in display order. */
+    static const TArray<FString>& PaintChannels();
+    TMap<FString, FLinearColor> PaintColorOverrides;
+    UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInstanceDynamic>> CustomPaintMaterials;
     /** First-person tick: opens doors whose sensors hold the player, closes the ones a sensor opened after their delay. */
     void UpdateDoorSensors(const FVector& PlayerWorld, double Now);
     /** The door interaction driven by a rig (the first one; INDEX_NONE without). */

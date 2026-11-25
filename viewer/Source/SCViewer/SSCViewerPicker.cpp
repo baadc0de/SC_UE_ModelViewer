@@ -19,6 +19,7 @@
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/STableRow.h"
+#include "Widgets/Colors/SColorPicker.h"
 
 #define LOCTEXT_NAMESPACE "SCViewerPicker"
 using namespace SCHudStyle;
@@ -180,6 +181,29 @@ void SSCViewerPicker::Construct(const FArguments& Args)
             .Text(LOCTEXT("NoVehicle", "Pick a vehicle to see its paints."))
             .Visibility_Lambda([this] { return Paints.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
         ]);
+    // The active paint's colours, below its list: change one by its hex code or the colour picker; saved per vehicle and
+    // paint (PaintColors.json), back to the paint's own with Reset.
+    TSharedRef<SWidget> ColorPanel = Panel(LOCTEXT("Colours", "Colours"), FText(),
+        SNew(SVerticalBox)
+        + SVerticalBox::Slot().AutoHeight()[SAssignNew(ColorRows, SVerticalBox)]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+        [
+            SNew(SHorizontalBox)
+            + SHorizontalBox::Slot().AutoWidth()
+            [
+                SNew(SButton).ButtonStyle(&FlatButton())
+                .IsEnabled_Lambda([this] {
+                    const USCViewerSubsystem* S = Subsystem.Get();
+                    const ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+                    return V && !V->GetPaintColorOverrides().IsEmpty();
+                })
+                .OnClicked_Lambda([this] { ResetColors(); return FReply::Handled(); })
+                [Txt(LOCTEXT("ResetColours", "RESET COLOURS"), Label(), Ink())]
+            ]
+        ]);
+    TSharedRef<SWidget> PaintColumn = SNew(SVerticalBox)
+        + SVerticalBox::Slot().FillHeight(1)[PaintList]
+        + SVerticalBox::Slot().AutoHeight().Padding(0, Gutter, 0, 0)[ColorPanel];
 
     ChildSlot
     [
@@ -205,7 +229,7 @@ void SSCViewerPicker::Construct(const FArguments& Args)
                 SNew(SHorizontalBox)
                 + SHorizontalBox::Slot().FillWidth(1)[EnvironmentList]
                 + SHorizontalBox::Slot().FillWidth(1.2f).Padding(Gutter, 0, 0, 0)[VehicleList]
-                + SHorizontalBox::Slot().FillWidth(0.8f).Padding(Gutter, 0, 0, 0)[PaintList]
+                + SHorizontalBox::Slot().FillWidth(0.8f).Padding(Gutter, 0, 0, 0)[PaintColumn]
             ]
         ]
     ];
@@ -518,7 +542,112 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
         if (PaintView) PaintView->RequestListRefresh();
         bReveal |= bOpen;
     }
+    // The colour rows of the paint on it, made again when the vehicle or its paint changes.
+    if (V != ColorsOwner.Get() || (V ? V->GetPaint() : MIN_int32) != ColorsPaint) RebuildColors(S->GetVehicle());
+    else if (bOpen) // a colour changed elsewhere (the colour picker, the console, a saved file): the field follows, unless typed in
+        for (const auto& [Channel, Field] : ColorFields)
+            if (Field && !Field->HasKeyboardFocus())
+                if (const FString Hex = USCViewerSubsystem::ToHex(ColorOf(Channel)); Field->GetText().ToString() != Hex) Field->SetText(FText::FromString(Hex));
     if (bReveal) RevealCurrent();
+}
+
+FLinearColor SSCViewerPicker::ColorOf(const FString& Channel) const
+{
+    const USCViewerSubsystem* S = Subsystem.Get();
+    const ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+    if (!V) return FLinearColor::Black;
+    if (const FLinearColor* Custom = V->GetPaintColorOverrides().Find(Channel)) return *Custom;
+    return V->PaintColors(V->GetPaint()).FindRef(Channel);
+}
+
+void SSCViewerPicker::RebuildColors(ASCVehicle* V)
+{
+    ColorsOwner = V;
+    ColorsPaint = V ? V->GetPaint() : MIN_int32;
+    ColorFields.Reset();
+    if (!ColorRows) return;
+    ColorRows->ClearChildren();
+    const TMap<FString, FLinearColor> Base = V ? V->PaintColors(V->GetPaint()) : TMap<FString, FLinearColor>();
+    if (Base.IsEmpty())
+    {
+        ColorRows->AddSlot().AutoHeight()
+        [
+            SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink2()).AutoWrapText(true)
+            .Text(V ? LOCTEXT("NoColours", "This paint has no colours to change.") : LOCTEXT("ColoursNoVehicle", "Pick a vehicle to change its colours."))
+        ];
+        return;
+    }
+    static const TMap<FString, FText> Names = {
+        {TEXT("primary"), LOCTEXT("Primary", "Main")}, {TEXT("secondary"), LOCTEXT("Secondary", "Second")},
+        {TEXT("tertiary"), LOCTEXT("Tertiary", "Accent")}, {TEXT("glass"), LOCTEXT("Glass", "Glass")},
+        {TEXT("decal_red"), LOCTEXT("Decal1", "Decal 1")}, {TEXT("decal_green"), LOCTEXT("Decal2", "Decal 2")},
+        {TEXT("decal_blue"), LOCTEXT("Decal3", "Decal 3")}};
+    for (const FString& Channel : ASCVehicle::PaintChannels())
+    {
+        if (!Base.Contains(Channel)) continue;
+        TSharedPtr<SEditableTextBox> Field;
+        ColorRows->AddSlot().AutoHeight().Padding(0, 2)
+        [
+            SNew(SHorizontalBox)
+            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+            [SNew(SBox).WidthOverride(64)[SNew(STextBlock).Font(Body()).ColorAndOpacity(Ink()).Text(Names.FindRef(Channel))]]
+            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+            [
+                SNew(SButton).ButtonStyle(&FlatButton()).ContentPadding(0)
+                .ToolTipText(LOCTEXT("PickColour", "Choose a colour"))
+                .OnClicked_Lambda([this, Channel] { OpenColorPicker(Channel); return FReply::Handled(); })
+                [
+                    SNew(SBox).WidthOverride(36).HeightOverride(22)
+                    [SNew(SBorder).BorderImage(White()).BorderBackgroundColor_Lambda([this, Channel] { return ColorOf(Channel); })]
+                ]
+            ]
+            + SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
+            [
+                SAssignNew(Field, SEditableTextBox).Style(&SearchStyle()).Font(Body())
+                .Text(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))))
+                .ToolTipText(LOCTEXT("HexHint", "A colour as #RRGGBB, then Enter"))
+                .OnTextCommitted_Lambda([this, Channel](const FText& Value, ETextCommit::Type How) {
+                    FLinearColor C;
+                    if (How != ETextCommit::OnCleared && USCViewerSubsystem::FromHex(Value.ToString(), C)) ApplyColor(Channel, C, true);
+                    else if (const TSharedPtr<SEditableTextBox>* F = ColorFields.Find(Channel)) (*F)->SetText(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))));
+                })
+            ]
+        ];
+        ColorFields.Add(Channel, Field);
+    }
+}
+
+void SSCViewerPicker::ApplyColor(const FString& Channel, const FLinearColor& Linear, bool bSave)
+{
+    USCViewerSubsystem* S = Subsystem.Get();
+    ASCVehicle* V = S ? S->GetVehicle() : nullptr;
+    if (!V) return;
+    TMap<FString, FLinearColor> Overrides = V->GetPaintColorOverrides();
+    Overrides.Add(Channel, FLinearColor(Linear.R, Linear.G, Linear.B, 1.f));
+    S->SetPaintColors(Overrides, bSave);
+    if (const TSharedPtr<SEditableTextBox>* F = ColorFields.Find(Channel)) (*F)->SetText(FText::FromString(USCViewerSubsystem::ToHex(Linear)));
+}
+
+void SSCViewerPicker::ResetColors()
+{
+    if (USCViewerSubsystem* S = Subsystem.Get()) S->SetPaintColors({}, true);
+    for (const auto& [Channel, Field] : ColorFields)
+        if (Field) Field->SetText(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))));
+}
+
+void SSCViewerPicker::OpenColorPicker(const FString& Channel)
+{
+    FColorPickerArgs Args;
+    Args.bIsModal = false;
+    Args.bUseAlpha = false;
+    Args.sRGBOverride = true; // its hex agrees with the field's (sRGB)
+    Args.bOnlyRefreshOnMouseUp = true; // the ship's materials follow when the mouse is let go
+    Args.InitialColor = ColorOf(Channel);
+    Args.ParentWidget = AsShared();
+    Args.OnColorCommitted = FOnLinearColorValueChanged::CreateLambda([this, Channel](FLinearColor C) { ApplyColor(Channel, C, false); });
+    Args.OnColorPickerWindowClosed = FOnWindowClosed::CreateLambda([this, Channel](const TSharedRef<SWindow>&) { ApplyColor(Channel, ColorOf(Channel), true); });
+    Args.OnColorPickerCancelled = FOnColorPickerCancelled::CreateLambda([this, Channel](FLinearColor Initial) { ApplyColor(Channel, Initial, true); });
+    ::OpenColorPicker(Args);
 }
 
 SSCViewerPicker::~SSCViewerPicker()
