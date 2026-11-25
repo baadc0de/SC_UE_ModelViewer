@@ -1361,7 +1361,7 @@ void FSCImportJob::FState::Assemble()
         FEntity E;
         if (auto* Data = Derived.Find(I.MeshAsset)) E.Mesh = Data->Get();
         FSCThrusterBinding Thruster;
-        FPaintsBySlot* Paints = (Manifest.Paints.IsEmpty() && I.PaletteId.IsEmpty()) || !E.Mesh ? nullptr
+        FPaintsBySlot* Paints = Options.bEnvironment || (Manifest.Paints.IsEmpty() && I.PaletteId.IsEmpty()) || !E.Mesh ? nullptr
             : &PaintVariants.FindOrAdd(TTuple<FString, FString, FString>(I.MeshAsset, I.MaterialSidecar, I.PaletteId));
         bool bScreenBound = false;
         ON_SCOPE_EXIT { ScreenBoundInstances += bScreenBound; };

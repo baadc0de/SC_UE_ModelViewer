@@ -146,7 +146,6 @@ FAutoConsoleCommand ShowShipCommand(TEXT("sc.Menu.ShowShip"), TEXT("sc.Menu.Show
 void SSCViewerPicker::ShowShip(bool bOn)
 {
     bPaintOnly = bOn;
-    SCViewerShell::SetMenuPassesView(bOn);
     if (bOn && Subsystem.IsValid()) SCViewerShell::SetMenuOpen(Subsystem.Get(), true);
 }
 
@@ -570,11 +569,13 @@ void SSCViewerPicker::Tick(const FGeometry& Geometry, double CurrentTime, float 
     if (!bOpen && bWasOpen)
     {
         bPaintOnly = false;
-        SCViewerShell::SetMenuPassesView(false);
         RestoreScreenMessages();
         if (FocusView) FocusView(); // however it closed (F1, Esc, the button, RPC /ui): keys go back to the view
     }
     bWasOpen = bOpen;
+    // The view keeps its mouse while the paint-only menu is up (derived every frame: it follows the menu however it opens
+    // or closes).
+    SCViewerShell::SetMenuPassesView(bOpen && bPaintOnly);
 
     const FSCViewerCatalog& Catalog = S->GetCatalog();
     if (Catalog.Revision != CatalogRevision || Catalog.bReady != bCatalogReady)
@@ -687,7 +688,11 @@ void SSCViewerPicker::RebuildColors(ASCVehicle* V)
                 .ToolTipText(LOCTEXT("HexHint", "Type a colour as #RRGGBB (for example #FFB000) and press Enter, or click the swatch to pick one"))
                 .OnTextCommitted_Lambda([this, Channel](const FText& Value, ETextCommit::Type How) {
                     FLinearColor C;
-                    if (How != ETextCommit::OnCleared && USCViewerSubsystem::FromHex(Value.ToString(), C)) ApplyColor(Channel, C, true);
+                    // Focus leaving an untouched field commits its text too: only a different colour is applied and saved.
+                    if (How != ETextCommit::OnCleared && USCViewerSubsystem::FromHex(Value.ToString(), C))
+                    {
+                        if (USCViewerSubsystem::ToHex(C) != USCViewerSubsystem::ToHex(ColorOf(Channel))) ApplyColor(Channel, C, true);
+                    }
                     else if (const TSharedPtr<SEditableTextBox>* F = ColorFields.Find(Channel)) (*F)->SetText(FText::FromString(USCViewerSubsystem::ToHex(ColorOf(Channel))));
                 })
             ]
