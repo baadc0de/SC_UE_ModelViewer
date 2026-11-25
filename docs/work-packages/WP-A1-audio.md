@@ -732,7 +732,7 @@ default, EQ LFE flag — each failing first), `starbreaker-3d` 991, `scbridge-ff
 amounts; nested-area precedence; multi-position panning (one voice at the nearest position; MultiDirections blends the
 directions); compressor, RoomVerb, delay and third-party slots; the Gain effect's LFE gain (not exported).
 
-## Door effects (A1-2b, in progress)
+## Door effects (A1-2b)
 
 **Done** (branch `wp/a1-door-effects`; submodule `scviewer/door-effects`): `audio.json` classes carry `door` — the
 events (`SCItemDoorParams.<Event>EffectGroup`, `SCItemDoorEffectParams` tags) and the effect-core sounds of their groups
@@ -742,17 +742,18 @@ loops and state tags held), the clip end (opened / closed, loops held at rest) a
 next lock change); a loadout door finds its class by its owner
 entity. The C2's door groups play `Play_Silence` (its door sounds are clip events, route C). `sc.Doors.Play`.
 
-**Environment doors are not doors yet.** `interior_animation::extract_animated_interior_children` promotes a socpak's
-animated `.cga` placements to scene children (so their per-`.cga` clips are extracted) and drops the placement's
-identity: `door: None`, no entity id, class or links, and the placement is removed. The hangar's clips carry no Mannequin
-fragments (`annotate_animation_fragments_json` runs on the root entity's controller only; a socpak has none). So the
-viewer builds no door interaction for a hangar door (`ENVIRONMENT_DOORS doors=0` on `hangar_xltop_001`, whose 26
-children are airlock, elevator, ship-elevator, top and cargo doors; it has no loading-platform gates — those are in other
-hangars). Plan:
-1. Exporter: the promoted child keeps its placement's identity (door record, entity id, class GUID, links, UI bindings).
-2. Exporter: each promoted child's clips get the fragments of its own class's `SAnimationControllerParams` database.
-3. Viewer: promoted children register as their entities (audio entity, door pads, sensors, links);
-   `ASCVehicle::BuildDoorInteractions` (environment import) then builds their doors.
+**Environment doors are doors** (branch `wp/a1-hangar-doors`; submodule `scviewer/hangar-doors`). A socpak's animated
+`.cga` placements are promoted to scene children (`interior_animation::extract_animated_interior_children`) so their
+per-`.cga` clips are extracted; the child now keeps the placement's identity (`children[].placement`: interior index, ids,
+links, interactions, door, container transform; the child's `door`, `item_port_links` and `ui_bindings` are the
+placement's), and its clips carry the fragments of the `SAnimationControllerParams` database its placements' classes
+agree on (different controllers: none, logged; a class-less placement takes its geometry's). The viewer reads each `placement` as an identity record among its container's placements
+(`FSCSceneInstance::PromotedChild`, no geometry) that maps to the placed child, so the container's entity map, audio
+entities (`<interior>/<entity id>`), door pads, sensors and lifts find it as before; `BuildDoorInteractions` builds the
+doors. `hangar_xltop_001`: `ENVIRONMENT_DOORS doors=17` (was 0): its top doors, the ship-elevator pad and loading gate,
+the cargo elevator door and pad, the elevator doors. Its ship-elevator gate (`LoadingPlatformLoadingGate`) plays
+`Play_MCDR_Metal_Door_Close` / `_Closed` / `_Open` / `_Opened` from its orders (`sc.Doors.Play ht_hangar_ship_elev_door_xl_a`);
+the top doors' class (`DoorDefaultTemplate`) has no sounds of its own. Cache format 45, prepared format 33.
 
 ## Proof decode (research)
 

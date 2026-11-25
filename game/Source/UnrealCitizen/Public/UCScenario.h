@@ -80,8 +80,9 @@ struct UNREALCITIZEN_API FUCPrepared
      *  tractor record kept (TractorRecordJson). 30: WP-O1-4b-3b the tractor's hit and the box contacts' effects resolved
      *  (CargoFxJson). 31: WP-O1-4c-1 the levels' media saved as SoundWave assets (ASCVehicle::CookedAudioMedia; UE decodes
      *  them), no longer staged as Ogg files. 32: WP-A1 door effects (audio.json classes carry `door`; the audio entities of
-     *  loadout doors and their helper frames saved). */
-    static constexpr int32 FormatVersion = 32;
+     *  loadout doors and their helper frames saved). 33: WP-A1 hangar doors (a socpak's animated placements are doors:
+     *  their identity kept, their clips with Mannequin fragments). */
+    static constexpr int32 FormatVersion = 33;
 
     int32 Format = 0;
     FString Scenario;        // the scenario's id

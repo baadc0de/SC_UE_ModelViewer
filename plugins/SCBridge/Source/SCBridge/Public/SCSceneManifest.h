@@ -190,6 +190,9 @@ struct SCBRIDGE_API FSCSceneInstance
     FString EntityId;
     TArray<FString> Links;
     FString LoadoutOwnerEntityId;
+    /** WP-A1 (interior placements): an animated placement the exporter promoted to a scene child (a hangar door): this
+     *  record is its identity in its container (no geometry), the child (this index in Children) is what is placed. */
+    int32 PromotedChild = INDEX_NONE;
     /** WP-P5 (interior placements): the `.soc` entity name, its interaction links, the entity it rides, its door timing
      *  and the interaction points of its class. */
     FString SocEntityName;
