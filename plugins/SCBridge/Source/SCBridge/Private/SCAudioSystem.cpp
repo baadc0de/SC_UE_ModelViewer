@@ -1876,11 +1876,19 @@ void USCAudioSubsystem::Tick(float DeltaTime)
 }
 
 // ------------------------------------------------------------------------------------------------ viewer events
+namespace
+{
+/** The game object an audio entity plays on (FSCAudioPlace::Emitter), whichever path posts for it (its door events, tag
+ *  effects, its rig's clip events): one object for object-scoped stops and container histories. Key: its scene key. */
+FString EntityEmitter(const FString& Key) { return TEXT("entity:") + Key; }
+}
+
 int32 USCAudioSubsystem::FireEntityTag(ASCVehicle* Vehicle, int32 Interior, const FString& EntityId, const FString& Tag)
 {
     const TSharedPtr<FSCAudioScene> S = SceneOf(Vehicle);
     if (!S) return 0;
-    const FSCAudioEntity* E = S->Entities.Find(FString::Printf(TEXT("%d/%s"), Interior, *EntityId.ToLower()));
+    const FString Key = FString::Printf(TEXT("%d/%s"), Interior, *EntityId.ToLower());
+    const FSCAudioEntity* E = S->Entities.Find(Key);
     const FSCAudioClass* C = E ? S->Manifest.Classes.Find(E->ClassGuid) : nullptr;
     if (!C) return 0;
     int32 Played = 0;
@@ -1890,6 +1898,7 @@ int32 USCAudioSubsystem::FireEntityTag(ASCVehicle* Vehicle, int32 Interior, cons
         P.Attach = E->Rig.IsValid() ? static_cast<USceneComponent*>(E->Rig.Get()) : E->Anchor.Get();
         if (USCRigComponent* Rig = E->Rig.Get(); Rig && !Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
         P.Offset = FSCLights::ContainerBasis(Fx->Offset, !P.Socket.IsNone()) * 100; // a bone's frame carries the imported axis conversion
+        P.Emitter = EntityEmitter(Key);
         P.Label = C->Name + TEXT(":") + Tag;
         Played += Post(*S, Fx->Trigger, P) != INDEX_NONE;
     }
@@ -1900,7 +1909,8 @@ void USCAudioSubsystem::SetEntityTag(ASCVehicle* Vehicle, int32 Interior, const 
 {
     const TSharedPtr<FSCAudioScene> S = SceneOf(Vehicle);
     if (!S) return;
-    FSCAudioEntity* E = S->Entities.Find(FString::Printf(TEXT("%d/%s"), Interior, *EntityId.ToLower()));
+    const FString Key = FString::Printf(TEXT("%d/%s"), Interior, *EntityId.ToLower());
+    FSCAudioEntity* E = S->Entities.Find(Key);
     const FSCAudioClass* C = E ? S->Manifest.Classes.Find(E->ClassGuid) : nullptr;
     if (!C) return;
     if (!bSet)
@@ -1918,6 +1928,7 @@ void USCAudioSubsystem::SetEntityTag(ASCVehicle* Vehicle, int32 Interior, const 
         P.Attach = E->Rig.IsValid() ? static_cast<USceneComponent*>(E->Rig.Get()) : E->Anchor.Get();
         if (USCRigComponent* Rig = E->Rig.Get(); Rig && !Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
         P.Offset = FSCLights::ContainerBasis(Fx->Offset, !P.Socket.IsNone()) * 100; // a bone's frame carries the imported axis conversion
+        P.Emitter = EntityEmitter(Key);
         P.Label = C->Name + TEXT(":") + Tag;
         const int32 Id = Post(*S, Fx->Trigger, P);
         if (Id != INDEX_NONE) E->TagInstances.FindOrAdd(Tag).Add(Id);
@@ -1974,7 +1985,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
     Hold.Door = Door;
     Hold.bMotion = bMotion;
     Hold.bLock = bLock;
-    const FString DoorEmitter = FString::Printf(TEXT("%s:door:%s"), *C->Name, *Key);
+    const FString DoorEmitter = EntityEmitter(Key);
     // A tag effect of the entity, placed as the entity's effects are (its rig or anchor, a bone of the rig).
     auto EffectPlace = [&](const FSCAudioEffect& Fx) {
         FSCAudioPlace P;
@@ -2180,6 +2191,9 @@ int32 USCAudioSubsystem::PlayClipEvent(ASCVehicle* Vehicle, USCRigComponent* Rig
     if (!Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Bone)) != INDEX_NONE) P.Socket = FName(*Bone);
     P.Offset = FSCLights::ContainerBasis(OffsetCry, false) * 100;
     P.Label = Rig->OwnerEntity + TEXT(":") + Bone;
+    // The rig's audio entity, if it has one (a door's): the same game object as its door events and tag effects.
+    FString Key;
+    if (DoorEntity(*S, Rig, Key)) P.Emitter = EntityEmitter(Key);
     return Post(*S, Trigger, P);
 }
 

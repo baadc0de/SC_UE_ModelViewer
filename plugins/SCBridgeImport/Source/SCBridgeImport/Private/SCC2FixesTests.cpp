@@ -804,6 +804,12 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
         Open.FragmentTags = {TEXT("Open")};
         Open.Speed = -1;
         BedClip.Fragments.Add(Open);
+        // Before it, an alias entry (metadata naming another clip, played forwards): not what plays this clip.
+        FSCClipFragment Alias = Open;
+        Alias.Speed = 1;
+        Alias.AnimationNames = {TEXT("hatch_open")};
+        Alias.OptionId = TEXT("hatch_open");
+        BedClip.Fragments.Insert(Alias, 0);
     }
     V->DoorRecords.Add(Bed, R);
     V->BuildExploration();

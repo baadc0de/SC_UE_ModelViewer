@@ -319,8 +319,12 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
         // Which end of the clip is open: the end its tag's fragment plays it to (an authored negative speed plays it
         // backwards: a reverse-authored open fragment's first frame is open).
         auto Forward = [&](FName Tag) {
+            // The fragment entry that plays this clip itself (EligibleFragmentClips' choice), not an alias naming another.
             const FSCClipFragment* F = Clip.Fragments.FindByPredicate([&](const FSCClipFragment& X) {
-                return X.Fragment == D.Fragment && X.OptionWeight > 0 && (X.Tags.Contains(Tag) || X.FragmentTags.Contains(Tag));
+                return X.Fragment == D.Fragment && X.OptionWeight > 0 && (X.Tags.Contains(Tag) || X.FragmentTags.Contains(Tag)) &&
+                       (X.AnimationNames.Contains(Clip.Id) || !X.AnimationNames.ContainsByPredicate([&](FName Id) {
+                           return ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) { return Other.Id == Id; });
+                       }));
             });
             return !F || F->Speed >= 0;
         };
