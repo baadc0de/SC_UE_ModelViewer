@@ -197,6 +197,8 @@ public:
     /** Stop every instance of a post (after DelayS, fading over FadeS). */
     void Stop(int32 Post, float FadeS = 0.f, float DelayS = 0.f);
     bool IsPlaying(int32 Instance) const;
+    /** The post started something: a voice or a scheduled run (not a playable trigger whose media is missing). */
+    bool HasStarted(int32 Post) const;
 
     // ---------------------------------------------------------------- viewer events (no trigger names: effects by tag)
     /** Fire the trigger effects tagged Tag of entity EntityId in Interior of Vehicle (e.g. a lift phase, a press). */
@@ -284,7 +286,7 @@ private:
     void StopHeldPosts(TArray<FHeldPost>& Posts);
     /** A door event: its group's one-shots once, its looped sounds held (bMotion: for the move, else at rest), its tag
      *  set as a state (bState) or fired. Returns the posts started. */
-    int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState);
+    int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState, bool bHoldLoops = true);
     /** Ends Door's holds (INDEX_NONE: every door of the vehicle; bMotionOnly: its move's, not its rest's). */
     void EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly);
     void UpdateDoorHolds();

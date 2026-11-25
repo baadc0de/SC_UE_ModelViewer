@@ -1271,6 +1271,15 @@ void USCAudioSubsystem::Stop(int32 Id, float FadeS, float DelayS)
     }
 }
 
+bool USCAudioSubsystem::HasStarted(int32 Id) const
+{
+    // A post whose group has a voice or a scheduled run (a playable trigger whose media is missing posts none).
+    if (Id == INDEX_NONE) return false;
+    for (const auto& [Key, I] : Instances)
+        if ((I.Id == Id || I.Group == Id) && (!I.Voices.IsEmpty() || !I.Runs.IsEmpty())) return true;
+    return false;
+}
+
 bool USCAudioSubsystem::IsPlaying(int32 Id) const
 {
     if (Id == INDEX_NONE) return false;
@@ -1911,7 +1920,7 @@ FSCAudioEntity* DoorEntity(FSCAudioScene& S, const USCRigComponent* Rig, FString
 }
 }
 
-int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState)
+int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState, bool bHoldLoops)
 {
     const TSharedPtr<FSCAudioScene> S = SceneOf(Vehicle);
     USCRigComponent* Rig = Vehicle && Vehicle->Doors.IsValidIndex(Door) ? Vehicle->Doors[Door].Rig.Get() : nullptr;
@@ -1955,7 +1964,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
         Played += Id != INDEX_NONE;
         // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds). One that cannot
         // play (no media: Play_Silence) is not held.
-        if (Sound->bLooped && Id != INDEX_NONE) Hold.Loops.Add({Sound->Trigger, P, Id});
+        if (Sound->bLooped && bHoldLoops && HasStarted(Id)) Hold.Loops.Add({Sound->Trigger, P, Id});
     }
     // The entity-effect tag (the class's `effects`): held as a state for the move, or fired once.
     if (!Ev->Tag.IsEmpty() && bKey)
@@ -1977,7 +1986,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
                     P.Label = C->Name + TEXT(":") + Ev->Tag;
                     const int32 Id = Post(*S, Fx->Trigger, P);
                     Played += Id != INDEX_NONE;
-                    if (Id != INDEX_NONE) T.Effects.Add({Fx->Trigger, P, Id}); // one that cannot play is not held
+                    if (HasStarted(Id)) T.Effects.Add({Fx->Trigger, P, Id}); // one that cannot play is not held
                 }
             }
             Hold.TagKeys.Add(TagKey);
@@ -2036,7 +2045,7 @@ void USCAudioSubsystem::UpdateDoorHolds()
         Posts.RemoveAll([&](FHeldPost& P) {
             if (IsPlaying(P.Id)) return false;
             P.Id = P.Place.Attach.IsValid() ? Post(S, P.Trigger, P.Place) : INDEX_NONE;
-            return P.Id == INDEX_NONE;
+            return !HasStarted(P.Id);
         });
     };
     for (FDoorHold& H : DoorHolds)
@@ -2065,7 +2074,8 @@ void USCAudioSubsystem::HandleDoorMotion(ASCVehicle* Vehicle, int32 Door, bool b
         break;
     case EDoorMotion::Locked:
     case EDoorMotion::Unlocked:
-        PlayDoorEvent(Vehicle, Door, EDoorMotion(Event) == EDoorMotion::Locked ? TEXT("locked") : TEXT("unlocked"), false, false);
+        // One-shots (the brief's lock events): a looped node plays its trigger once, never held across lock changes.
+        PlayDoorEvent(Vehicle, Door, EDoorMotion(Event) == EDoorMotion::Locked ? TEXT("locked") : TEXT("unlocked"), false, false, false);
         break;
     }
 }

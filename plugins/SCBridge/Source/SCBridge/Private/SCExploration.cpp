@@ -248,9 +248,10 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
     const uint64 PriorOrder = NextOrder;
-    bInDoorOrder = true; // the move is reported below, once
+    const int32 OuterOrder = OrderingDoor;
+    OrderingDoor = Index; // this door's move is reported below, once; other doors its fragment drives stop
     const bool bStarted = PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose);
-    bInDoorOrder = false;
+    OrderingDoor = OuterOrder;
     if (!bStarted) return false;
     // WP-A1: the door's move (its effects listen); it arrives when the playback it started ends.
     StartDoorMotion(Index, bOpen, PriorOrder);

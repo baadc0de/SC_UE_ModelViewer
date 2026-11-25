@@ -1727,7 +1727,12 @@ void FSCImportJob::FState::Assemble()
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
     int32 PanelsWithoutReachField = 0;     // door panels of an export before cache format 40 (no interaction_distance)
-    if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
+    FEntity RootEntity; // the root entity as placed (WP-A1 door audio: a door imported on its own)
+    if (CanPlace(Manifest.Root))
+    {
+        RootEntity = Place(Manifest.Root, V->GetRootComponent(), false, true);
+        Entities.Add(Manifest.Root.EntityName, RootEntity);
+    }
     TArray<FEntity> ChildEntities; // by child index: every instance, repeated loadout items included (WP-A1 door audio)
     ChildEntities.SetNum(Manifest.Children.Num());
     for (int32 ChildIndex = 0; ChildIndex < Manifest.Children.Num(); ++ChildIndex)
@@ -1820,10 +1825,10 @@ void FSCImportJob::FState::Assemble()
     // Loadout doors (a ship's exterior doors: children, not interior placements): their class by entity name, keyed as the
     // audio system finds a door's entity by its rig ("-1/<owner>#<rig>").
     if (Audio)
-        for (int32 ChildIndex = 0; ChildIndex < Manifest.Children.Num(); ++ChildIndex)
+        for (int32 ChildIndex = -1; ChildIndex < Manifest.Children.Num(); ++ChildIndex) // -1: the root entity
         {
-            const FSCSceneInstance& I = Manifest.Children[ChildIndex];
-            const FEntity* Placed = &ChildEntities[ChildIndex];
+            const FSCSceneInstance& I = ChildIndex < 0 ? Manifest.Root : Manifest.Children[ChildIndex];
+            const FEntity* Placed = ChildIndex < 0 ? &RootEntity : &ChildEntities[ChildIndex];
             if (!Placed->Rig) continue;
             const FString Qualified = TEXT("EntityClassDefinition.") + I.EntityName;
             for (const auto& [Guid, Class] : Audio->Manifest.Classes)

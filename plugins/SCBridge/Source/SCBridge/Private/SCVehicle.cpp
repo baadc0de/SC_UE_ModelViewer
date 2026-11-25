@@ -208,10 +208,14 @@ bool ASCVehicle::ClipDrivesDoor(int32 Door, int32 Clip) const
     const USkeletalMesh* Mesh = D.Rig->GetSkeletalMeshAsset();
     const FSCClipBinding* Raw = ClipCatalog->Clips[Clip].Bindings.FindByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Mesh; });
     if (!Raw) return false;
-    // One of the door's own fragment clips, or another clip driving a channel (bone and rotation / position) they drive.
+    // A channel (bone and rotation / position) the door's own open / close (or transition) options drive: other tags under
+    // the same fragment (a latch in another scope) are not the door.
+    auto HasTag = [](const FSCClipFragment& F, FName Tag) { return !Tag.IsNone() && (F.FragmentTags.Contains(Tag) || F.Tags.Contains(Tag)); };
     for (const FSCImportedClip& Own : ClipCatalog->Clips)
     {
-        if (!Own.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment; })) continue;
+        if (!Own.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) {
+                return F.Fragment == D.Fragment && (HasTag(F, D.OpenTag) || HasTag(F, D.CloseTag));
+            })) continue;
         const FSCClipBinding* B = Own.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; });
         if (B && B->Tracks.ContainsByPredicate([&](const FSCBoneTrack& T) {
                 return Raw->Tracks.ContainsByPredicate([&](const FSCBoneTrack& R) { return R.Bone == T.Bone && ((R.bRotation && T.bRotation) || (R.bPosition && T.bPosition)); });
@@ -242,18 +246,8 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
         const bool bOpenClip = Clip.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment && HasTag(F, D.OpenTag); });
         const bool bCloseClip = !D.bReverseClose &&
                                 Clip.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment && HasTag(F, D.CloseTag); });
-        // Another clip: does it drive a channel the door's own fragments drive?
-        bool bShares = bOpenClip || bCloseClip;
-        for (int32 C = 0; !bShares && C < ClipCatalog->Clips.Num(); ++C)
-        {
-            const FSCImportedClip& Own = ClipCatalog->Clips[C];
-            if (!Own.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment; })) continue;
-            const FSCClipBinding* B = Own.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; });
-            bShares = B && B->Tracks.ContainsByPredicate([&](const FSCBoneTrack& T) {
-                return Raw->Tracks.ContainsByPredicate([&](const FSCBoneTrack& R) { return R.Bone == T.Bone && ((R.bRotation && T.bRotation) || (R.bPosition && T.bPosition)); });
-            });
-        }
-        if (!bShares) continue;
+        // Another clip: does it drive a channel the door's own open / close options drive?
+        if (!(bOpenClip || bCloseClip) && !ClipDrivesDoor(DoorIndex, Index)) continue;
         const FSCFragmentKey Key(Rig, D.Fragment);
         if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenClip == bEndsAtLast) ? D.OpenTag : D.CloseTag);
         else FragmentTargets.Remove(Key);
@@ -452,8 +446,8 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         // WP-A1: a fragment played outside a door order (a command, a harness, a rest pose) takes over the doors whose
         // channels its new layers drive on their rigs: their moves (and rest holds) stop. Door effects come from door orders
         // (PlayDoor) only; a layer on other bones of the same rig leaves the door alone.
-        if (!bInDoorOrder)
-            for (int32 D = 0; D < Doors.Num(); ++D)
+        for (int32 D = 0; D < Doors.Num(); ++D)
+            if (D != OrderingDoor) // the ordered door reports its own move (PlayDoor); another door it drives stops
             {
                 const USCRigComponent* Rig = Doors[D].Rig;
                 auto Drives = [&](const FSCClipPlayback& P) { return P.Order > OrderBefore && Rig && AppliesTo(P, Rig) && ClipDrivesDoor(D, P.Clip); };
