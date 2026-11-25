@@ -628,6 +628,15 @@ public:
     {
         if (Doors.IsValidIndex(Door)) UnsettledTargets.Add(FSCFragmentKey(Doors[Door].Rig, Doors[Door].Fragment));
     }
+    /** Door is at its open (or closed) end, posed there by other means than its own move (an environment's presented
+     *  state): its recorded state, settled. */
+    void RecordDoorState(int32 Door, bool bOpen)
+    {
+        if (!Doors.IsValidIndex(Door)) return;
+        const FSCFragmentKey Key(Doors[Door].Rig, Doors[Door].Fragment);
+        FragmentTargets.Add(Key, bOpen ? Doors[Door].OpenTag : Doors[Door].CloseTag);
+        UnsettledTargets.Remove(Key);
+    }
     /** Does Clip drive a channel (bone, rotation / position) that Door's own moves drive on its rig? */
     bool ClipDrivesDoor(int32 Door, int32 Clip) const;
     /** The clips PlayFragmentAt chooses among for Fragment / Tag on Target (weighted options bound to its mesh, its own

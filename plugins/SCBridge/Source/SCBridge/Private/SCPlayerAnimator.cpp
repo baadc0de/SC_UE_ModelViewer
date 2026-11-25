@@ -800,6 +800,8 @@ bool SCLoadPlayerKit(const FSCPackageSource& Source, const FString& ScenePath, c
                                   [&](const FString& Name) { const int32* B = Bones.Find(Name); return B ? *B : INDEX_NONE; }, *Clip, ClipError))
         {
             ++Failures;
+            UE_LOG(LogTemp, Warning, TEXT("PLAYER_CLIP_UNREADABLE clip=%s sidecar=%s reason=\"%s\""), *Names[I].ToString(),
+                   Sidecar ? **Sidecar : TEXT("-"), Sidecar ? *ClipError : TEXT("no sidecar in the kit"));
             return;
         }
         Clip->Name = Names[I];
@@ -820,6 +822,8 @@ bool SCLoadPlayerKit(const FSCPackageSource& Source, const FString& ScenePath, c
                 if (!Sidecar || !Source.ReadBytes(*Sidecar, ClipBytes, ClipError))
                 {
                     ++Failures;
+                    UE_LOG(LogTemp, Warning, TEXT("PLAYER_CLIP_UNREADABLE weapon_clip=%s sidecar=%s reason=\"%s\""), *Layer.Clip.ToString(),
+                           Sidecar ? **Sidecar : TEXT("-"), Sidecar ? *ClipError : TEXT("no sidecar in the kit"));
                     continue;
                 }
                 Weapon.FireClipJson.Add(Layer.Clip, FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(ClipBytes.GetData()), ClipBytes.Num())));

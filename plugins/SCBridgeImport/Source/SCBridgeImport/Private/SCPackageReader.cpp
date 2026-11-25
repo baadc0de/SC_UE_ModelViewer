@@ -804,8 +804,23 @@ bool FSCPackageReader::Read(const FSCPackageSource& Source, FSCSceneManifest& Ou
             Detail.Reset();
             continue;
         }
-        Placement.EntityName = Out.Children[ChildIndex].EntityName;
+        // Both sides carry what their consumers read: the record the child's UI (waypoints and kiosks choose placements by
+        // their panels), the child the entity's ids and interactions (its button faces, usables and links act as the
+        // container's entity).
+        FSCSceneInstance& Child = Out.Children[ChildIndex];
+        Placement.EntityName = Child.EntityName;
         Placement.PromotedChild = ChildIndex;
+        Placement.UiBindings = Child.UiBindings;
+        Child.EntityId = Placement.EntityId;
+        Child.EntityClassGuid = Placement.EntityClassGuid;
+        Child.Links = Placement.Links;
+        Child.LoadoutOwnerEntityId = Placement.LoadoutOwnerEntityId;
+        Child.SocEntityName = Placement.SocEntityName;
+        Child.InteractionLinks = Placement.InteractionLinks;
+        Child.InteractionPoints = Placement.InteractionPoints;
+        Child.SendableInteractions = Placement.SendableInteractions;
+        Child.UsableInteractions = Placement.UsableInteractions;
+        Child.PromotedInterior = int32(Into - Out.Interiors.GetData());
         Into->Placements.Add(MoveTemp(Placement));
     }
     // Paints (optional `paints.json` beside scene.json): each variant's exterior material file is loaded with the

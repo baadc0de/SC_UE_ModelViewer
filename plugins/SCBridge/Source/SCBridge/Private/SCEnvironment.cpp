@@ -69,12 +69,22 @@ int32 FSCEnvironment::SetState(ASCVehicle* Environment, const FString& State)
     // (a freight elevator's platform and its front gate both animate `VertAnimL`), so an untargeted snap of one owner's
     // clip would also pose the other's rigs, the last one snapped winning (WP-K1).
     int32 Snapped = 0;
+    TSet<const USCRigComponent*> Posed;
     for (const auto& [Owner, Pick] : Best)
     {
         bool bAny = false;
-        for (USCRigComponent* Rig : ClipRigs(Environment, Pick.Value)) bAny |= Environment->SnapClipAt(Pick.Value, Rig, true);
+        for (USCRigComponent* Rig : ClipRigs(Environment, Pick.Value))
+            if (Environment->SnapClipAt(Pick.Value, Rig, true))
+            {
+                bAny = true;
+                Posed.Add(Rig);
+            }
         Snapped += bAny;
     }
+    // The presented pose is each posed door's state (its opened / closed clip is not the door's own move): a toggle
+    // closes a door presented open.
+    for (int32 Door = 0; Door < Environment->Doors.Num(); ++Door)
+        if (Posed.Contains(Environment->Doors[Door].Rig.Get())) Environment->RecordDoorState(Door, bOpen);
     UE_LOG(LogSCEnvironment, Display, TEXT("ENVIRONMENT_STATE %s parts=%d"), *Lower, Snapped);
     FSCEnvironmentAccess::Reapply(Environment); // inventory containers kept accessible (WP-K1)
     return Snapped;

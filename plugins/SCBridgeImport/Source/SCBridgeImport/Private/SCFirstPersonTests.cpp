@@ -2,6 +2,12 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "SCImporter.h"
+#include "SCTestPackages.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/StaticMesh.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/CollisionProfile.h"
+#include "SCPlacement.h"
 #include "SCVehicle.h"
 #include "SCRigComponent.h"
 #include "SCFirstPersonCharacter.h"
@@ -100,12 +106,19 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFirstPersonCollision, "SCBridge.FirstPerson.
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCFirstPersonCollision::RunTest(const FString&)
 {
-    FString Package;
-    if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Package)) return false;
+    // -SCPackage=<exported folder>, else a ship with skinned (soft) geometry, seats and doors exported from the archive.
+    FString Package, PackageError;
+    TSharedPtr<FSCPackageSource> Exported;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Package))
+    {
+        Exported = SCTestPackages::Vehicle(TEXT("DRAK_Golem"), PackageError);
+        if (!TestTrue(TEXT("package (-SCPackage, else exported): ") + PackageError, Exported.IsValid())) return false;
+    }
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
     World->InitializeActorsForPlay(FURL());
     World->BeginPlay();
-    FSCFolderPackageSource Source(Package);
+    FSCFolderPackageSource Folder(Package);
+    FSCPackageSource& Source = Exported ? *Exported : static_cast<FSCPackageSource&>(Folder);
     FSCImportOptions Options;
     Options.World = World;
     FSCImportResult Result;
@@ -197,8 +210,23 @@ bool FSCFirstPersonCollision::RunTest(const FString&)
         TestFalse(TEXT("closed state"), V->IsDoorOpen(I));
         ++Toggles;
     }
-    // Leave entrances deployed for the traversal. No asset/file-name matching.
-    for (int32 I=0; I<V->Doors.Num(); ++I) { V->ToggleDoor(I); V->Tick(60); }
+    // The doors at their authored rest (the state the viewer starts in: an entrance ramp authored deployed is the floor
+    // its seat access stands on), after the toggles above.
+    V->ApplyDoorRestPoses();
+    V->Tick(60);
+    // The viewer's floor: the ship rests on it on its landing gear (USCPlacementLibrary::RestOnFloor) over a hangar-sized
+    // slab (a seat access may be a spot on that floor, under the cockpit ladder).
+    USCPlacementLibrary::RestOnFloor(V);
+    V->Tick(60);
+    {
+        AStaticMeshActor* Ground = World->SpawnActor<AStaticMeshActor>();
+        UStaticMeshComponent* Slab = Ground->GetStaticMeshComponent();
+        Slab->SetMobility(EComponentMobility::Movable);
+        Slab->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
+        Slab->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+        Ground->SetActorScale3D(FVector(200, 200, 1)); // the engine cube: 100 cm a side
+        Ground->SetActorLocation(FVector(V->GetActorLocation().X, V->GetActorLocation().Y, -5.0 - 50.0));
+    }
     FActorSpawnParameters Params;
     Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
     auto* Character = World->SpawnActor<ASCFirstPersonCharacter>(ASCFirstPersonCharacter::StaticClass(), FTransform::Identity, Params);
@@ -246,8 +274,21 @@ bool FSCFirstPersonCollision::RunTest(const FString&)
         Character->SetActorTransform(Saved,false,nullptr,ETeleportType::TeleportPhysics);
     }
     auto* Movement = Character->GetCharacterMovement();
+    FHitResult Below; // what a pawn stands on under the start (for the report)
+    const FVector From = Character->GetActorLocation();
+    const bool bBelow = World->LineTraceSingleByChannel(Below, From, From - FVector(0, 0, 1000), ECC_Pawn, FCollisionQueryParams(NAME_None, true, Character));
+    const FString BelowText = bBelow ? FString::Printf(TEXT("%s/%s %.0f cm below"), *GetNameSafe(Below.GetActor()), *GetNameSafe(Below.GetComponent()), Below.Distance)
+                                     : FString(TEXT("nothing within 10 m"));
     StepCharacter(Character,120);
-    TestTrue(TEXT("start spawn settles on walkable floor"), Movement->IsMovingOnGround());
+    const FSCSpawnPoint* StartSpawn = V->SpawnPoints.IsValidIndex(Character->CurrentSpawn) ? &V->SpawnPoints[Character->CurrentSpawn] : nullptr;
+    TestTrue(FString::Printf(TEXT("start spawn settles on walkable floor (spawn %d kind %s, start %s, under the start %s, spawn point %s, character at %s, mode %d, floor blocking %d walkable %d)"),
+                 Character->CurrentSpawn, StartSpawn ? *StartSpawn->Kind.ToString() : TEXT("-"), *From.ToCompactString(), *BelowText,
+                 StartSpawn ? *StartSpawn->Transform.GetLocation().ToCompactString() : TEXT("-"), *Character->GetActorLocation().ToCompactString(),
+                 int32(Movement->MovementMode), Movement->CurrentFloor.bBlockingHit, Movement->CurrentFloor.IsWalkableFloor()),
+             Movement->IsMovingOnGround());
+    // Leave entrances deployed for the traversal (after the start: the viewer starts at the doors' rest, and an open
+    // leaf can take the place of a better-ranked spawn). No asset/file-name matching.
+    for (int32 I=0; I<V->Doors.Num(); ++I) if (!V->IsDoorOpen(I)) { V->ToggleDoor(I); V->Tick(60); }
     // Walk from the first spawn (start ranking, then the rest) that has floor under a complete
     // capsule route; seats can sit in cockpits with no room to walk. Real movement sweeps.
     bool Walked = false;
