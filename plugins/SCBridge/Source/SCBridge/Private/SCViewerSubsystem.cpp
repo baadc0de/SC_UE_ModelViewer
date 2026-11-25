@@ -1588,6 +1588,11 @@ bool USCViewerSubsystem::Tick(float)
         UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE ok=%d seconds=%.3f index_cache_hit=%d cache_bytes=%llu cache_entries=%llu error=\"%s\""),
                Result.bOK, Result.Seconds, Result.bIndexCacheHit, CacheStats.Bytes, CacheStats.Entries, *Result.Error.ToString());
     }
+    if (bBasicLightingPending && GetViewerWorld())
+    {
+        bBasicLightingPending = false; // after the game user settings applied their scalability at startup
+        SCLook::ApplyBasicLighting();
+    }
     if (bMaxQualityPending && GetViewerWorld())
     {
         bMaxQualityPending = false; // after the game user settings applied their scalability at startup

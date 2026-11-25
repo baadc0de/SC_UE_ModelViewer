@@ -25,6 +25,10 @@ void UpdateShortRangeAO(UWorld* World);
  *  reflections) and hardware ray tracing with hit lighting for GI and reflections and area shadows at hits. Applied
  *  once the game's own settings are (the subsystem's first tick with a world); logs the effective values. */
 void ApplyMaxQuality();
+/** Without hardware ray tracing ("Basic lighting": a GPU without DirectX Raytracing, or -noraytracing; MegaLights and
+ *  ray-traced Lumen are off by themselves): the most the remaining pipeline gives a mid-range GPU (filtered virtual shadow
+ *  maps for up to 32 lights per pixel, dynamic resolution held at 60 fps). Applied once at startup, every run. */
+void ApplyBasicLighting();
 /** Which of the owner's refraction profiles a glass instance takes (viewer/verification/WP-U3b.md §14.10), from data only:
  *  Canopy = glass authored not to reflect (game F0, SpecularColor.r, below 1e-6: the reflectance floor's own test);
  *  Kit = glass on the first-person player kit actor (USCPlayerBodyComponent::GetKit(): weapon optics, visor);

@@ -10,6 +10,7 @@
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
 #include "Scalability.h"
+#include "RenderUtils.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
@@ -384,6 +385,25 @@ void SCLook::ApplyMaxQuality()
     // Shipping keeps no log: -SCQualityReport=<file> writes the line for checks of a packaged build.
     FString ReportFile;
     if (FParse::Value(FCommandLine::Get(), TEXT("SCQualityReport="), ReportFile)) FFileHelper::SaveStringToFile(Report + TEXT("\n"), *ReportFile);
+}
+
+void SCLook::ApplyBasicLighting()
+{
+    if (IsRayTracingEnabled()) return;
+    IConsoleManager& Console = IConsoleManager::Get();
+    auto Set = [&Console](const TCHAR* Name, float Value) {
+        if (IConsoleVariable* Var = Console.FindConsoleVariable(Name)) Var->Set(Value, ECVF_SetByCode);
+    };
+    // Every light keeps its virtual shadow map; up to 32 lights per pixel get filtered shadows (the engine's maximum; 16
+    // overflowed in dense hangar views and left the lights beyond them unshadowed there).
+    Set(TEXT("r.Shadow.Virtual.OnePassProjection.MaxLightsPerPixel"), 32);
+    // Dynamic resolution holds 60 fps on the mid-range GPUs this path serves, down to half resolution (TSR upsamples); a
+    // GPU that holds 60 fps renders at full resolution.
+    Set(TEXT("r.DynamicRes.OperationMode"), 2);
+    Set(TEXT("r.DynamicRes.MinScreenPercentage"), 50);
+    Set(TEXT("r.DynamicRes.MaxScreenPercentage"), 100);
+    Set(TEXT("r.DynamicRes.FrameTimeBudget"), 1000.f / 60.f);
+    UE_LOG(LogTemp, Display, TEXT("LOOK basic_lighting vsm_lights_per_pixel=32 dynamic_res=60fps min_screen_percentage=50"));
 }
 
 static int32 GShortRangeAOOverride = -1; // sc.Look.ShortRangeAO: -1 auto (budget), 0 screen space, 1 traced

@@ -169,8 +169,9 @@ TSharedRef<SWidget> SSCViewerRoot::MakeTopBar()
             .Visibility_Lambda([] { return IsRayTracingEnabled() ? EVisibility::Collapsed : EVisibility::Visible; })
             .Text(LOCTEXT("BasicLighting", "Basic lighting"))
             .ToolTipText(LOCTEXT("BasicLightingTip", "This graphics card (or its driver) has no hardware ray tracing, so the viewer "
-                                                     "uses standard shadow maps and screen-space lighting: fewer lights cast shadows "
-                                                     "and reflections are simpler. Everything else works."))
+                                                     "uses shadow maps for every light and lighting from what is on screen: bounce "
+                                                     "light and reflections are simpler, and the resolution drops by itself on a "
+                                                     "slower card to stay smooth. Everything else works."))
         ]
         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0)
         [
