@@ -190,14 +190,16 @@ void ASCVehicle::CancelDoorMotion(int32 Door)
     if (Index != INDEX_NONE) DoorMotions.RemoveAt(Index);
     OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Cancelled);
 }
-void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
+void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended, const TSet<uint64>& Grounded)
 {
     for (int32 I = DoorMotions.Num() - 1; I >= 0; --I)
     {
         FDoorMotion& M = DoorMotions[I];
         bool bVanished = !M.Rig.IsValid(); // its rig gone (an untargeted clip may play on without it)
+        bool bGrounded = false;
         M.Orders.RemoveAll([&](uint64 Order) {
             if (Ended.Contains(Order)) return true;
+            if (Grounded.Contains(Order)) { bGrounded = true; return true; } // a gangway resting on the ground
             if (Playback.ContainsByPredicate([&](const FSCClipPlayback& P) { return P.Order == Order; })) return false;
             bVanished = true; // stopped without reaching its end (reset, replaced, its rig gone)
             return true;
@@ -205,8 +207,11 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
         if (!M.Orders.IsEmpty() && !bVanished) continue;
         const FDoorMotion Done = M;
         DoorMotions.RemoveAt(I);
-        // (A move with an entry gone otherwise is cancelled even if others ended: its pose is not the move's end.)
-        if (!Done.Orders.IsEmpty() || bVanished) OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Cancelled);
+        // (A move with an entry gone otherwise is cancelled even if others ended: its pose is not the move's end.) Stopped
+        // short of its end by something else (a scope preempting it, a reset of playback), the door shows neither end: its
+        // recorded state goes (unknown). A gangway stopped by the ground keeps its state (RememberGangwayStop).
+        if (bVanished && Doors.IsValidIndex(Done.Door)) FragmentTargets.Remove(FSCFragmentKey(Doors[Done.Door].Rig.Get(), Doors[Done.Door].Fragment));
+        if (!Done.Orders.IsEmpty() || bVanished || bGrounded) OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Cancelled);
         else OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Arrived);
     }
 }
@@ -550,7 +555,7 @@ void ASCVehicle::Tick(float DeltaSeconds)
         UpdateTickEnabled();
         return;
     }
-    TSet<uint64> Ended; // entries that reached their end this tick (WP-A1: door moves arrive)
+    TSet<uint64> Ended, Grounded; // entries that reached their end / were stopped by the ground this tick (WP-A1)
     const USCRigComponent* Traced = Doors.IsValidIndex(TraceDoor) ? Doors[TraceDoor].Rig.Get() : nullptr;
     TArray<FString> TraceLines; // sc.Doors.Trace: the traced door's clips advanced this tick
     TMap<int32, double> GroundStops;
@@ -572,14 +577,14 @@ void ASCVehicle::Tick(float DeltaSeconds)
         {
             // A move arrives at its clip's end; a gangway stopped by the ground short of it does not (WP-A1: the data does
             // not say the game plays the arrival then).
-            if (!GroundStop) Ended.Add(P.Order);
+            (GroundStop ? Grounded : Ended).Add(P.Order);
             P.bPlaying = false;
             HeldPlayback.Add(P);
             Playback.RemoveAt(I);
         }
     }
     EvaluateClips();
-    UpdateDoorMotions(Ended); // after the final pose: an arrival effect on a door bone starts where the bone ended
+    UpdateDoorMotions(Ended, Grounded); // after the final pose: an arrival effect on a door bone starts where the bone ended
     for (const auto& Pair : GroundStops) RememberGangwayStop(Pair.Key);
     for (const FString& Line : TraceLines)
     {

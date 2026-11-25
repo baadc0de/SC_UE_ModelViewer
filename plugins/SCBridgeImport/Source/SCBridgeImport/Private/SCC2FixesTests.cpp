@@ -773,7 +773,8 @@ bool FSCExteriorPanelReachTest::RunTest(const FString&)
 // SCBridge.Doors.MotionEvents (WP-A1 door effects): a door's moves and their ends as ASCVehicle::OnDoorMotion reports them:
 // an order moves it and it arrives when its playback ends; turned around mid-stroke the new move replaces the old (no arrival
 // for the first); ResetPose, a snap, a raw clip, a fragment command and its rig destroyed stop a move (door effects come
-// from door orders); two doors move and arrive on their own; a lock change is reported.
+// from door orders); two doors move and arrive on their own; a move stopped short otherwise leaves its state unknown; a lock
+// change is reported.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCDoorMotionEventsTest, "SCBridge.Doors.MotionEvents", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCDoorMotionEventsTest::RunTest(const FString&)
 {
@@ -886,6 +887,16 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     B->DestroyComponent();
     V->Tick(1.f);
     Expect(TEXT("rig gone cancels"), {bBOpen ? TEXT("B:1:moved") : TEXT("B:0:moved"), bBOpen ? TEXT("B:1:cancelled") : TEXT("B:0:cancelled")});
+
+    // Its playback stopped short by something that does not drive its channels (a Mannequin scope preempting it): cancelled,
+    // and the door shows neither end, so its recorded state goes (sc.Doors.Play does not skip it as already open).
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, !V->IsDoorOpen(DA)));
+    const bool bAOpen = V->IsDoorOpen(DA);
+    V->Tick(0.05f);
+    V->Playback.RemoveAll([&](const FSCClipPlayback& P) { return P.TargetRig.Get() == A; });
+    V->Tick(0.05f);
+    Expect(TEXT("preempted cancels"), {bAOpen ? TEXT("A:1:moved") : TEXT("A:0:moved"), bAOpen ? TEXT("A:1:cancelled") : TEXT("A:0:cancelled")});
+    TestFalse(TEXT("its state unknown"), V->IsDoorStateKnown(DA));
 
     // A lock change is reported.
     TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));

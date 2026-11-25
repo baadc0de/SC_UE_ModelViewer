@@ -1944,7 +1944,10 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
     const FSCAudioEntity& E = *Found;
     FString Interior, EntityId;
     const bool bKey = Key.Split(TEXT("/"), &Interior, &EntityId);
-    FDoorHold Hold;
+    // The hold is in DoorHolds before anything is posted: a later trigger of this event that stops a loop reaches it (Stop
+    // marks held posts). Nothing posted here adds door holds, so the reference stays valid.
+    const int32 HoldIndex = DoorHolds.AddDefaulted();
+    FDoorHold& Hold = DoorHolds[HoldIndex];
     Hold.Vehicle = Vehicle;
     Hold.VehicleId = Vehicle->GetUniqueID();
     Hold.Rig = Rig;
@@ -1991,8 +1994,8 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
         const int32 Id = Post(*S, Sound->Trigger, P);
         Played += Id != INDEX_NONE;
         // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds). One that cannot
-        // play (no media: Play_Silence) is not held.
-        if (Sound->bLooped && bHoldLoops && HasStarted(Id)) Hold.Loops.Add({Sound->Trigger, P, Id});
+        // play (no media: Play_Silence) is not held. Held at once: a later trigger's stop action reaches it.
+        if (Sound->bLooped && bHoldLoops && HasStarted(Id)) DoorHolds[HoldIndex].Loops.Add({Sound->Trigger, P, Id});
     }
     // The entity-effect tag (the class's `effects`): held as a state for the move, or fired once.
     if (!Ev->Tag.IsEmpty() && bKey)
@@ -2022,7 +2025,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
     }
     UE_LOG(LogSCAudio, Display, TEXT("AUDIO_DOOR class=%s door=%d event=%s group=%s tag=%s posts=%d held_loops=%d%s"), *C->Name, Door, *Event, *Ev->Group, *Ev->Tag,
            Played, Hold.Loops.Num(), Hold.TagKeys.IsEmpty() ? TEXT("") : TEXT(" state"));
-    if (!Hold.Loops.IsEmpty() || !Hold.TagKeys.IsEmpty()) DoorHolds.Add(MoveTemp(Hold));
+    if (Hold.Loops.IsEmpty() && Hold.TagKeys.IsEmpty()) DoorHolds.RemoveAt(HoldIndex); // nothing held
     return Played;
 }
 
@@ -2069,13 +2072,19 @@ void USCAudioSubsystem::UpdateDoorHolds()
     }
     // A held post that ended by itself is posted again; one that was stopped (a stop command or an object-scoped stop
     // action) or no longer starts (its attachment gone, nothing playable) is dropped.
+    // Two passes: a repost may run stop actions (Stop marks held posts), so every entry stays live until the removal.
     auto KeepHeld = [&](FSCAudioScene& S, TArray<FHeldPost>& Posts) {
-        Posts.RemoveAll([&](FHeldPost& P) {
-            if (IsPlaying(P.Id)) return false; // kept while any of its actions plays (a release stops them)
-            if (P.bStopped) return true;
-            P.Id = P.Place.Attach.IsValid() ? Post(S, P.Trigger, P.Place) : INDEX_NONE;
-            return !HasStarted(P.Id);
-        });
+        TArray<int32> Drop;
+        for (int32 I = 0; I < Posts.Num(); ++I)
+        {
+            if (IsPlaying(Posts[I].Id)) continue; // kept while any of its actions plays (a release stops them)
+            if (Posts[I].bStopped) { Drop.Add(I); continue; }
+            const FHeldPost Held = Posts[I]; // Post may stop (and mark) entries of this array
+            const int32 Id = Held.Place.Attach.IsValid() ? Post(S, Held.Trigger, Held.Place) : INDEX_NONE;
+            Posts[I].Id = Id;
+            if (!HasStarted(Id)) Drop.Add(I);
+        }
+        for (int32 K = Drop.Num() - 1; K >= 0; --K) Posts.RemoveAt(Drop[K]);
     };
     for (FDoorHold& H : DoorHolds)
         if (const TSharedPtr<FSCAudioScene> S = SceneOf(H.Vehicle.Get())) KeepHeld(*S, H.Loops);
@@ -2152,6 +2161,11 @@ int32 USCAudioSubsystem::PlayClipEvent(ASCVehicle* Vehicle, USCRigComponent* Rig
 
 void USCAudioSubsystem::StopAll()
 {
+    // WP-A1: every held door post too, also one between two of its repetitions (no live instance now).
+    for (FDoorHold& H : DoorHolds)
+        for (FHeldPost& P : H.Loops) P.bStopped = true;
+    for (auto& [Key, T] : TagHolds)
+        for (FHeldPost& P : T.Effects) P.bStopped = true;
     TArray<int32> Ids;
     Instances.GetKeys(Ids);
     for (int32 Id : Ids) Stop(Id, 0.05f);

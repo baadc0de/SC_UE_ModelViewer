@@ -609,8 +609,9 @@ public:
     void StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder);
     /** Door's motion (if any) stops without arriving. */
     void CancelDoorMotion(int32 Door);
-    /** Motions whose entries ended naturally (Ended) arrive; those whose entries vanished are cancelled. */
-    void UpdateDoorMotions(const TSet<uint64>& Ended);
+    /** Motions whose entries ended naturally (Ended) arrive; those stopped by the ground (Grounded) are cancelled keeping
+     *  their state; those whose entries vanished otherwise are cancelled and their state goes (unknown). */
+    void UpdateDoorMotions(const TSet<uint64>& Ended, const TSet<uint64>& Grounded = {});
     /** Door has a recorded state: its open or its close tag (its last move's end; none after a raw clip took it over, and
      *  not a fragment played without a tag). */
     bool IsDoorStateKnown(int32 Door) const
