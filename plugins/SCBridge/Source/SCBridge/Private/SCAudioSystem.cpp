@@ -1277,14 +1277,24 @@ void USCAudioSubsystem::Stop(int32 Id, float FadeS, float DelayS)
 {
     if (Id == INDEX_NONE) return;
     // WP-A1: a held door post a stop reaches (the post's group, or one of its actions' instances) is not posted again when
-    // it ends.
+    // it ends; a delayed stop lets it repeat until its delay has passed, then stops the repetition playing then over its
+    // fade (UpdateDoorHolds).
     int32 StoppedGroup = Id;
     for (const auto& [Key, I] : Instances)
         if (I.Id == Id && I.Group != INDEX_NONE) StoppedGroup = I.Group;
+    auto MarkHeld = [&](FHeldPost& P) {
+        if (P.bStopped || (P.Id != Id && P.Id != StoppedGroup)) return;
+        if (DelayS <= 0) P.bStopped = true;
+        else if (Clock + DelayS < P.StopAt)
+        {
+            P.StopAt = Clock + DelayS;
+            P.StopFade = FadeS;
+        }
+    };
     for (FDoorHold& H : DoorHolds)
-        for (FHeldPost& P : H.Loops) P.bStopped |= P.Id == Id || P.Id == StoppedGroup;
+        for (FHeldPost& P : H.Loops) MarkHeld(P);
     for (auto& [Key, T] : TagHolds)
-        for (FHeldPost& P : T.Effects) P.bStopped |= P.Id == Id || P.Id == StoppedGroup;
+        for (FHeldPost& P : T.Effects) MarkHeld(P);
     const double From = Clock + DelayS;
     for (auto& [Key, I] : Instances)
     {
@@ -1951,7 +1961,7 @@ FSCAudioEntity* DoorEntity(FSCAudioScene& S, const USCRigComponent* Rig, FString
 }
 }
 
-int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState, bool bHoldLoops)
+int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState, bool bLock)
 {
     const TSharedPtr<FSCAudioScene> S = SceneOf(Vehicle);
     USCRigComponent* Rig = Vehicle && Vehicle->Doors.IsValidIndex(Door) ? Vehicle->Doors[Door].Rig.Get() : nullptr;
@@ -1973,6 +1983,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
     Hold.Rig = Rig;
     Hold.Door = Door;
     Hold.bMotion = bMotion;
+    Hold.bLock = bLock;
     const FString DoorEmitter = FString::Printf(TEXT("%s:door:%s"), *C->Name, *Key);
     // A tag effect of the entity, placed as the entity's effects are (its rig or anchor, a bone of the rig).
     auto EffectPlace = [&](const FSCAudioEffect& Fx) {
@@ -2015,7 +2026,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
         Played += Id != INDEX_NONE;
         // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds). One that cannot
         // play (no media: Play_Silence) is not held. Held at once: a later trigger's stop action reaches it.
-        if (Sound->bLooped && bHoldLoops && HasStarted(Id)) DoorHolds[HoldIndex].Loops.Add({Sound->Trigger, P, Id});
+        if (Sound->bLooped && HasStarted(Id)) DoorHolds[HoldIndex].Loops.Add({Sound->Trigger, P, Id});
     }
     // The entity-effect tag (the class's `effects`): held as a state for the move, or fired once.
     if (!Ev->Tag.IsEmpty() && bKey)
@@ -2068,13 +2079,14 @@ void USCAudioSubsystem::ReleaseDoorHold(FDoorHold& Hold)
     Hold.TagKeys.Reset();
 }
 
-void USCAudioSubsystem::EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly)
+void USCAudioSubsystem::EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly, bool bLockOnly)
 {
     const uint32 VehicleId = Vehicle ? Vehicle->GetUniqueID() : 0;
     for (int32 I = DoorHolds.Num() - 1; I >= 0; --I)
     {
         FDoorHold& H = DoorHolds[I];
         if (H.VehicleId != VehicleId || (Door != INDEX_NONE && H.Door != Door) || (bMotionOnly && !H.bMotion)) continue;
+        if (Door != INDEX_NONE && H.bLock != bLockOnly) continue; // a lock state's holds end with a lock change
         ReleaseDoorHold(H);
         DoorHolds.RemoveAt(I);
     }
@@ -2142,8 +2154,9 @@ void USCAudioSubsystem::HandleDoorMotion(ASCVehicle* Vehicle, int32 Door, bool b
         break;
     case EDoorMotion::Locked:
     case EDoorMotion::Unlocked:
-        // One-shots (the brief's lock events): a looped node plays its trigger once, never held across lock changes.
-        PlayDoorEvent(Vehicle, Door, EDoorMotion(Event) == EDoorMotion::Locked ? TEXT("locked") : TEXT("unlocked"), false, false, false);
+        // The lock state's one-shots once and its looped sounds held until the next lock change (or the door's teardown).
+        EndDoorHolds(Vehicle, Door, false, true);
+        PlayDoorEvent(Vehicle, Door, EDoorMotion(Event) == EDoorMotion::Locked ? TEXT("locked") : TEXT("unlocked"), false, false, true);
         break;
     }
 }

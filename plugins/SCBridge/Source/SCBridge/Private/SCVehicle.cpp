@@ -433,9 +433,11 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
             if (Playback[I].bTargeted == (Target != nullptr) && Playback[I].TargetRig.Get() == Target && Conflicts(Selected.Scopes, Playback[I].Scopes))
             {
                 // WP-A1: an unfinished clip frozen here leaves the doors whose channels it drives short of the target it
-                // recorded (a door order's or a raw clip's): unsettled until a new target is recorded for them.
+                // recorded (a door order's or a raw clip's): unsettled until a new target is recorded for them. (A clip later
+                // entries cover entirely shows nothing there: freezing it changes no pose.)
                 for (int32 D = 0; D < Doors.Num(); ++D)
-                    if (const USCRigComponent* DoorRig = Doors[D].Rig; DoorRig && AppliesTo(Playback[I], DoorRig) && ClipDrivesDoor(D, Playback[I].Clip))
+                    if (const USCRigComponent* DoorRig = Doors[D].Rig; DoorRig && AppliesTo(Playback[I], DoorRig) && ClipDrivesDoor(D, Playback[I].Clip) &&
+                                                                       !IsCoveredOnRig(Playback[I], DoorRig))
                         UnsettledTargets.Add(FSCFragmentKey(DoorRig, Doors[D].Fragment));
                 Playback[I].bPlaying = false;
                 HeldPlayback.Add(Playback[I]);

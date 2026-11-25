@@ -738,7 +738,8 @@ directions); compressor, RoomVerb, delay and third-party slots; the Gain effect'
 events (`SCItemDoorParams.<Event>EffectGroup`, `SCItemDoorEffectParams` tags) and the effect-core sounds of their groups
 (`SEntityEffectCoreParams` → `SEffectParamsNodeSound`; `Enabled` is the spawn state, not a filter: 2 of ~3,000 door
 nodes are authored enabled). The viewer plays them from `ASCVehicle::PlayDoor` (open / close once, opening / closing
-loops and state tags held), the clip end (opened / closed) and lock changes; a loadout door finds its class by its owner
+loops and state tags held), the clip end (opened / closed, loops held at rest) and lock changes (loops held until the
+next lock change); a loadout door finds its class by its owner
 entity. The C2's door groups play `Play_Silence` (its door sounds are clip events, route C). `sc.Doors.Play`.
 
 **Environment doors are not doors yet.** `interior_animation::extract_animated_interior_children` promotes a socpak's

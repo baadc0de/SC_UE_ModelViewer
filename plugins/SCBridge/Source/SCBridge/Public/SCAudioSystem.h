@@ -286,6 +286,7 @@ private:
         TWeakObjectPtr<USCRigComponent> Rig;
         int32 Door = INDEX_NONE;
         bool bMotion = true;
+        bool bLock = false; // a lock state's (locked / unlocked): ends with the next lock change, not with a move
         TArray<FString> TagKeys; // TagHolds it references
         TArray<FHeldPost> Loops;
     };
@@ -301,11 +302,12 @@ private:
     TMap<FString, FTagHold> TagHolds; // "<vehicle id>|<interior>|<entity id>|<tag>"
     void ReleaseDoorHold(FDoorHold& Hold);
     void StopHeldPosts(TArray<FHeldPost>& Posts);
-    /** A door event: its group's one-shots once, its looped sounds held (bMotion: for the move, else at rest), its tag
-     *  set as a state (bState) or fired. Returns the posts started. */
-    int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState, bool bHoldLoops = true);
-    /** Ends Door's holds (INDEX_NONE: every door of the vehicle; bMotionOnly: its move's, not its rest's). */
-    void EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly);
+    /** A door event: its group's one-shots once, its looped sounds held (bMotion: for the move; bLock: for the lock state;
+     *  else at rest), its tag set as a state (bState) or fired. Returns the posts started. */
+    int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState, bool bLock = false);
+    /** Ends Door's holds (INDEX_NONE: every door of the vehicle, lock holds included; bMotionOnly: its move's, not its
+     *  rest's; bLockOnly: its lock state's, which otherwise stay). */
+    void EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly, bool bLockOnly = false);
     void UpdateDoorHolds();
     FDelegateHandle DoorMotionHandle;
     TSet<FString> UnresolvedDoorHelpers; // logged once each
