@@ -207,8 +207,6 @@ public:
     bool IsPlaying(int32 Instance) const;
     /** The post started something: a voice or a scheduled run (not a playable trigger whose media is missing). */
     bool HasStarted(int32 Post) const;
-    /** The post was stopped (Stop: a command, an object-scoped stop action), not ended by itself. */
-    bool IsStopping(int32 Post) const;
 
     // ---------------------------------------------------------------- viewer events (no trigger names: effects by tag)
     /** Fire the trigger effects tagged Tag of entity EntityId in Interior of Vehicle (e.g. a lift phase, a press). */
@@ -270,7 +268,13 @@ private:
     bool bMixTracing = false;                                        // sc.Audio.MixTrace running
     double MixTraceStart = 0;
     /** A held post: posted again whenever it stops playing (a finite tree lasts the whole hold). */
-    struct FHeldPost { FString Trigger; FSCAudioPlace Place; int32 Id = INDEX_NONE; };
+    struct FHeldPost
+    {
+        FString Trigger;
+        FSCAudioPlace Place;
+        int32 Id = INDEX_NONE;
+        bool bStopped = false; // Stop reached it (a command, a stop action): kept for cleanup while it plays, never reposted
+    };
     /** What a door holds: looped posts and state-tag references, for its move or at rest; it ends with its door's rig. */
     struct FDoorHold
     {

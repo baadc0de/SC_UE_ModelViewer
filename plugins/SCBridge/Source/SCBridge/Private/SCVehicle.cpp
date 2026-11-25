@@ -497,7 +497,10 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
             {
                 const USCRigComponent* Rig = Doors[D].Rig;
                 auto Drives = [&](const FSCClipPlayback& P) { return P.Order > OrderBefore && Rig && AppliesTo(P, Rig) && ClipDrivesDoor(D, P.Clip); };
-                if (Playback.ContainsByPredicate(Drives) || HeldPlayback.ContainsByPredicate(Drives)) CancelDoorMotion(D);
+                if (!Playback.ContainsByPredicate(Drives) && !HeldPlayback.ContainsByPredicate(Drives)) continue;
+                CancelDoorMotion(D);
+                // Another fragment took the door's channels: its recorded state is no longer what it shows (unknown).
+                if (Fragment != Doors[D].Fragment) FragmentTargets.Remove(FSCFragmentKey(Rig, Doors[D].Fragment));
             }
     }
     if (Found && !ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: the pads of a door that starts moving

@@ -1256,6 +1256,15 @@ double USCAudioSubsystem::StartVoice(FInstance& I, FSCAudioScene& S, const TArra
 void USCAudioSubsystem::Stop(int32 Id, float FadeS, float DelayS)
 {
     if (Id == INDEX_NONE) return;
+    // WP-A1: a held door post a stop reaches (the post's group, or one of its actions' instances) is not posted again when
+    // it ends.
+    int32 StoppedGroup = Id;
+    for (const auto& [Key, I] : Instances)
+        if (I.Id == Id && I.Group != INDEX_NONE) StoppedGroup = I.Group;
+    for (FDoorHold& H : DoorHolds)
+        for (FHeldPost& P : H.Loops) P.bStopped |= P.Id == Id || P.Id == StoppedGroup;
+    for (auto& [Key, T] : TagHolds)
+        for (FHeldPost& P : T.Effects) P.bStopped |= P.Id == Id || P.Id == StoppedGroup;
     const double From = Clock + DelayS;
     for (auto& [Key, I] : Instances)
     {
@@ -1271,14 +1280,6 @@ void USCAudioSubsystem::Stop(int32 Id, float FadeS, float DelayS)
             V.bStopped = true;
         }
     }
-}
-
-bool USCAudioSubsystem::IsStopping(int32 Id) const
-{
-    if (Id == INDEX_NONE) return false;
-    for (const auto& [Key, I] : Instances)
-        if ((I.Id == Id || I.Group == Id) && I.bStopping) return true;
-    return false;
 }
 
 bool USCAudioSubsystem::HasStarted(int32 Id) const
@@ -2070,8 +2071,8 @@ void USCAudioSubsystem::UpdateDoorHolds()
     // action) or no longer starts (its attachment gone, nothing playable) is dropped.
     auto KeepHeld = [&](FSCAudioScene& S, TArray<FHeldPost>& Posts) {
         Posts.RemoveAll([&](FHeldPost& P) {
-            if (IsStopping(P.Id)) return true;
-            if (IsPlaying(P.Id)) return false;
+            if (IsPlaying(P.Id)) return false; // kept while any of its actions plays (a release stops them)
+            if (P.bStopped) return true;
             P.Id = P.Place.Attach.IsValid() ? Post(S, P.Trigger, P.Place) : INDEX_NONE;
             return !HasStarted(P.Id);
         });
