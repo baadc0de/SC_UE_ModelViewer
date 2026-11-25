@@ -1958,7 +1958,10 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
                 UnresolvedDoorHelpers.Add(Unresolved);
                 UE_LOG(LogSCAudio, Display, TEXT("AUDIO_DOOR class=%s helper=%s not a frame of its entity: played at the entity's pivot"), *C->Name, *Sound->Helper);
             }
-        P.Offset = FSCLights::ContainerBasis(Sound->Offset, false) * 100;
+        // The offset in the frame it plays in: a helper frame or a bone carries the imported axis conversion, the entity's
+        // pivot does not.
+        const bool bHelperFrame = !P.Socket.IsNone() || P.Attach.Get() != E.Rig.Get();
+        P.Offset = FSCLights::ContainerBasis(Sound->Offset, bHelperFrame) * 100;
         P.Label = C->Name + TEXT(":door:") + Event;
         const int32 Id = Post(*S, Sound->Trigger, P);
         Played += Id != INDEX_NONE;
@@ -1982,7 +1985,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
                     FSCAudioPlace P;
                     P.Attach = E.Rig.IsValid() ? static_cast<USceneComponent*>(E.Rig.Get()) : E.Anchor.Get();
                     if (!Fx->Bone.IsEmpty() && Rig->GetBoneIndex(FName(*Fx->Bone)) != INDEX_NONE) P.Socket = FName(*Fx->Bone);
-                    P.Offset = FSCLights::ContainerBasis(Fx->Offset, false) * 100;
+                    P.Offset = FSCLights::ContainerBasis(Fx->Offset, !P.Socket.IsNone()) * 100; // a bone's frame: the helper basis
                     P.Label = C->Name + TEXT(":") + Ev->Tag;
                     const int32 Id = Post(*S, Fx->Trigger, P);
                     Played += Id != INDEX_NONE;

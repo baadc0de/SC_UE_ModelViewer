@@ -201,6 +201,43 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
     }
 }
 
+TArray<int32> ASCVehicle::EligibleFragmentClips(FName Fragment, FName Tag, const USCRigComponent* Target) const
+{
+    // PlayFragmentAt's choice of clips: options of the fragment and tag with weight, bound to the target's mesh, its own
+    // geometry's clips when it has any, aliases (metadata for a canonical animation) left out.
+    TArray<int32> Out;
+    if (!ClipCatalog) return Out;
+    auto Matches = [&](const FSCClipFragment& F) {
+        return F.Fragment == Fragment && F.OptionWeight > 0 && (Tag.IsNone() || F.Tags.Contains(Tag) || F.FragmentTags.Contains(Tag));
+    };
+    auto OwnPath = [](FString Path) {
+        Path.ReplaceInline(TEXT("\\"), TEXT("/"));
+        Path.RemoveFromStart(TEXT("Data/"), ESearchCase::IgnoreCase);
+        return Path;
+    };
+    const FString TargetOwner = Target ? OwnPath(Target->OwnerEntity) : FString();
+    auto OwnClip = [&](const FSCImportedClip& C) { return !TargetOwner.IsEmpty() && OwnPath(C.Owner).Equals(TargetOwner, ESearchCase::IgnoreCase); };
+    auto Binds = [&](const FSCImportedClip& C) {
+        return !C.Bindings.IsEmpty() &&
+               (!Target || C.Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Target->GetSkeletalMeshAsset(); }));
+    };
+    auto Alias = [&](const FSCImportedClip& C, const FSCClipFragment& F) {
+        return !F.AnimationNames.Contains(C.Id) && F.AnimationNames.ContainsByPredicate([&](FName Id) {
+            return ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& Other) { return Other.Id == Id; });
+        });
+    };
+    const bool bOwnClips = ClipCatalog->Clips.ContainsByPredicate([&](const FSCImportedClip& C) {
+        return Binds(C) && OwnClip(C) && C.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return Matches(F) && !Alias(C, F); });
+    });
+    for (int32 Index = 0; Index < ClipCatalog->Clips.Num(); ++Index)
+    {
+        const FSCImportedClip& C = ClipCatalog->Clips[Index];
+        if (!Binds(C) || (bOwnClips && !OwnClip(C))) continue;
+        if (C.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return Matches(F) && !Alias(C, F); })) Out.Add(Index);
+    }
+    return Out;
+}
+
 bool ASCVehicle::ClipDrivesDoor(int32 Door, int32 Clip) const
 {
     if (!ClipCatalog || !Doors.IsValidIndex(Door) || !Doors[Door].Rig || !ClipCatalog->Clips.IsValidIndex(Clip)) return false;
@@ -208,15 +245,14 @@ bool ASCVehicle::ClipDrivesDoor(int32 Door, int32 Clip) const
     const USkeletalMesh* Mesh = D.Rig->GetSkeletalMeshAsset();
     const FSCClipBinding* Raw = ClipCatalog->Clips[Clip].Bindings.FindByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Mesh; });
     if (!Raw) return false;
-    // A channel (bone and rotation / position) the door's own open / close (or transition) options drive: other tags under
-    // the same fragment (a latch in another scope) are not the door.
-    auto HasTag = [](const FSCClipFragment& F, FName Tag) { return !Tag.IsNone() && (F.FragmentTags.Contains(Tag) || F.Tags.Contains(Tag)); };
-    for (const FSCImportedClip& Own : ClipCatalog->Clips)
+    // A channel (bone and rotation / position) the clips the door's own moves play drive (PlayFragmentAt's choice for its
+    // rig): its open option, and its close option unless it closes by its transition backwards. Other tags under the same
+    // fragment (a latch) and other geometries' clips are not the door.
+    TArray<int32> Own = EligibleFragmentClips(D.Fragment, D.OpenTag, D.Rig);
+    if (!D.bReverseClose) Own.Append(EligibleFragmentClips(D.Fragment, D.CloseTag, D.Rig));
+    for (const int32 OwnIndex : Own)
     {
-        if (!Own.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) {
-                return F.Fragment == D.Fragment && (HasTag(F, D.OpenTag) || HasTag(F, D.CloseTag));
-            })) continue;
-        const FSCClipBinding* B = Own.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; });
+        const FSCClipBinding* B = ClipCatalog->Clips[OwnIndex].Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; });
         if (B && B->Tracks.ContainsByPredicate([&](const FSCBoneTrack& T) {
                 return Raw->Tracks.ContainsByPredicate([&](const FSCBoneTrack& R) { return R.Bone == T.Bone && ((R.bRotation && T.bRotation) || (R.bPosition && T.bPosition)); });
             }))
