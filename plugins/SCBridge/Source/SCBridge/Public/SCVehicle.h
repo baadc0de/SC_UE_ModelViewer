@@ -313,6 +313,12 @@ public:
     int32 SetSelectedSpawn(const FTransform& WorldTransform);
     void AddItemSpawn(const FSCSceneInstance& Instance, USceneComponent* Anchor);
     void BuildExploration();
+    /** An environment's doors (a hangar's gates): door interactions, their authored rest poses and door state, as
+     *  BuildExploration builds them for an explored vehicle, without its spawn points. */
+    void BuildDoorInteractions();
+    /** The door interactions from the clips' door fragments and the rigs' door records (Doors); bSpawnPoints: also a
+     *  spawn point per door (an explored vehicle). */
+    void CollectDoors(bool bSpawnPoints);
     FBox ExplorationBounds() const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") int32 NearestDoor(FVector Position, float Reach = 300) const;
     /** Interaction under the view ray within Reach (rig hit -> its nearest driven joint), else NearestDoor. A door panel

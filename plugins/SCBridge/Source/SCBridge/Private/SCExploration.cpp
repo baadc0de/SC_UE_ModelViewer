@@ -99,6 +99,27 @@ void ASCVehicle::BuildExploration()
     PendingItemSpawns.Reset();
     SpawnPoints.Insert(Items, 0);
     ++SpawnRevision;
+    CollectDoors(true);
+    const FBox Bounds = ExplorationBounds();
+    if (Bounds.IsValid)
+        AddSpawnPoint(FSCSpawnKind::Hull, TEXT("Above hull centre"), FTransform(FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z)));
+    const int32 Posed = ApplyDoorRestPoses();
+    BuildShipDoors();
+    UE_LOG(LogTemp, Display, TEXT("EXPLORATION spawns=%d doors=%d door_rest_poses=%d collision_ready=%d"), SpawnPoints.Num(), Doors.Num(), Posed,
+           bCollisionReady);
+}
+void ASCVehicle::BuildDoorInteractions()
+{
+    // An environment's doors (a hangar's gates and doors): the same door interactions, rest poses and door state as a vehicle
+    // explored in first person, without its spawn points.
+    Doors.Reset();
+    CollectDoors(false);
+    const int32 Posed = ApplyDoorRestPoses();
+    BuildShipDoors();
+    UE_LOG(LogTemp, Display, TEXT("ENVIRONMENT_DOORS doors=%d door_rest_poses=%d"), Doors.Num(), Posed);
+}
+void ASCVehicle::CollectDoors(bool bSpawnPoints)
+{
     if (ClipCatalog)
         for (const auto& Clip : ClipCatalog->Clips)
             for (const auto& Fragment : Clip.Fragments)
@@ -169,7 +190,7 @@ void ASCVehicle::BuildExploration()
                             Clip.Owner.Contains(TEXT("/")) ? FPaths::GetBaseFilename(Clip.Owner) : Joint.ToString();
                         Door.DisplayName = Label.Replace(TEXT("_"), TEXT(" "));
                         Doors.Add(Door);
-                        AddSpawnPoint(FSCSpawnKind::Door, Door.DisplayName, Rig->GetSocketTransform(Joint));
+                        if (bSpawnPoints) AddSpawnPoint(FSCSpawnKind::Door, Door.DisplayName, Rig->GetSocketTransform(Joint));
                         UE_LOG(LogTemp, Display, TEXT("EXPLORATION_INTERACTION fragment=%s owner=%s item_type=%s joint=%s label=\"%s\""),
                                *Fragment.Fragment.ToString(), *Rig->OwnerEntity, Instance ? *Instance->ItemType : TEXT("-"),
                                *Joint.ToString(), *Door.DisplayName);
@@ -177,13 +198,6 @@ void ASCVehicle::BuildExploration()
                     }
                 }
             }
-    const FBox Bounds = ExplorationBounds();
-    if (Bounds.IsValid)
-        AddSpawnPoint(FSCSpawnKind::Hull, TEXT("Above hull centre"), FTransform(FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z)));
-    const int32 Posed = ApplyDoorRestPoses();
-    BuildShipDoors();
-    UE_LOG(LogTemp, Display, TEXT("EXPLORATION spawns=%d doors=%d door_rest_poses=%d collision_ready=%d"), SpawnPoints.Num(), Doors.Num(), Posed,
-           bCollisionReady);
 }
 int32 ASCVehicle::ApplyDoorRestPoses()
 {

@@ -2033,6 +2033,8 @@ void FSCImportJob::FState::Assemble()
         V->BuildExploration();
         FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
     }
+    else if (Options.bEnvironment)
+        V->BuildDoorInteractions(); // a hangar's gates and doors are doors (WP-A1 door effects)
     if (GeometryStreamingOf(Options)) GeometryStreamingOf(Options)->Attach(V);
     Result.Vehicle = V;
     Result.MeshCount = Meshes.Num();
