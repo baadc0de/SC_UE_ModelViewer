@@ -148,7 +148,54 @@ bool ASCVehicle::StartClip(int32 Index, float Speed, bool bSnap, bool bLast, con
     UpdateTickEnabled();
     return true;
 }
-void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast)
+ASCVehicle::FOnDoorMotion ASCVehicle::OnDoorMotion;
+
+void ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder)
+{
+    if (!Doors.IsValidIndex(Door) || !Doors[Door].Rig) return;
+    // A door turned around mid-stroke: its previous move is replaced (the new Moved ends what it held).
+    DoorMotions.RemoveAll([&](const FDoorMotion& M) { return M.Door == Door; });
+    const USCRigComponent* Rig = Doors[Door].Rig;
+    FDoorMotion Motion;
+    Motion.Door = Door;
+    Motion.bOpen = bOpen;
+    for (const FSCClipPlayback& P : Playback)
+        if (P.Order > AfterOrder && (P.TargetRig.Get() == Rig || !P.bTargeted)) Motion.Orders.Add(P.Order);
+    if (Motion.Orders.IsEmpty()) return; // held, not playing: nothing moves
+    DoorMotions.Add(MoveTemp(Motion));
+    OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Moved);
+    UpdateTickEnabled();
+}
+void ASCVehicle::CancelDoorMotion(int32 Door)
+{
+    const int32 Index = DoorMotions.IndexOfByPredicate([&](const FDoorMotion& M) { return M.Door == Door; });
+    if (Index == INDEX_NONE) return;
+    const bool bOpen = DoorMotions[Index].bOpen;
+    DoorMotions.RemoveAt(Index);
+    OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Cancelled);
+}
+void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
+{
+    for (int32 I = DoorMotions.Num() - 1; I >= 0; --I)
+    {
+        FDoorMotion& M = DoorMotions[I];
+        bool bVanished = false;
+        M.Orders.RemoveAll([&](uint64 Order) {
+            if (Ended.Contains(Order)) return true;
+            if (Playback.ContainsByPredicate([&](const FSCClipPlayback& P) { return P.Order == Order; })) return false;
+            bVanished = true; // stopped without reaching its end (reset, replaced, its rig gone)
+            return true;
+        });
+        if (!M.Orders.IsEmpty() && !bVanished) continue;
+        const FDoorMotion Done = M;
+        DoorMotions.RemoveAt(I);
+        // (A move with an entry gone otherwise is cancelled even if others ended: its pose is not the move's end.)
+        if (!Done.Orders.IsEmpty() || bVanished) OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Cancelled);
+        else OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Arrived);
+    }
+}
+
+void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast, bool bPlayed, uint64 AfterOrder)
 {
     // A clip started outside a door interaction (sc.Vehicle.Clip, a harness, an environment state) on a door's channels: the
     // door's recorded state is what that clip ends in when it is one of the door's own fragments (an open fragment's end is
@@ -158,8 +205,9 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
     const FSCImportedClip& Clip = ClipCatalog->Clips[Index];
     auto HasTag = [](const FSCClipFragment& F, FName Tag) { return !Tag.IsNone() && (F.FragmentTags.Contains(Tag) || F.Tags.Contains(Tag)); };
     bool bChanged = false;
-    for (const FSCDoorInteraction& D : Doors)
+    for (int32 DoorIndex = 0; DoorIndex < Doors.Num(); ++DoorIndex)
     {
+        const FSCDoorInteraction& D = Doors[DoorIndex];
         USCRigComponent* Rig = D.Rig;
         if (!Rig || (Target && Rig != Target)) continue;
         const USkeletalMesh* Mesh = Rig->GetSkeletalMeshAsset();
@@ -183,6 +231,9 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
         const FSCFragmentKey Key(Rig, D.Fragment);
         if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenClip == bEndsAtLast) ? D.OpenTag : D.CloseTag);
         else FragmentTargets.Remove(Key);
+        // WP-A1: the door's own clip played moves it (its effects); a snap or another clip on its channels stops a move.
+        if ((bOpenClip || bCloseClip) && bPlayed) StartDoorMotion(DoorIndex, bOpenClip == bEndsAtLast, AfterOrder);
+        else CancelDoorMotion(DoorIndex);
         bChanged = true;
         UE_LOG(LogTemp, Display, TEXT("DOOR_STATE_RAW_CLIP owner=%s fragment=%s clip=%s ends_at_last=%d state=%s"), *Rig->OwnerEntity, *D.Fragment.ToString(),
                *Clip.Id.ToString(), bEndsAtLast, bOpenClip || bCloseClip ? *FragmentTargets[Key].ToString() : TEXT("unknown"));
@@ -193,8 +244,9 @@ bool ASCVehicle::PlayClip(FName Id)
 {
     if (!ClipCatalog) return false;
     const int32 Index = ClipCatalog->Clips.IndexOfByPredicate([&](const FSCImportedClip& C) { return C.Id == Id; });
+    const uint64 Prior = NextOrder;
     if (!StartClip(Index, 1, false, false)) return false;
-    ReconcileDoorStates(Index, nullptr, true);
+    ReconcileDoorStates(Index, nullptr, true, true, Prior);
     return true;
 }
 bool ASCVehicle::SnapClip(FName Id, bool bLast)
@@ -207,8 +259,9 @@ bool ASCVehicle::SnapClip(FName Id, bool bLast)
 }
 bool ASCVehicle::PlayClipAt(int32 Index, USCRigComponent* Target, float Speed)
 {
+    const uint64 Prior = NextOrder;
     if (!StartClip(Index, Speed, false, false, {}, Target)) return false;
-    ReconcileDoorStates(Index, Target, Speed >= 0);
+    ReconcileDoorStates(Index, Target, Speed >= 0, true, Prior);
     return true;
 }
 bool ASCVehicle::SnapClipAt(int32 Index, USCRigComponent* Target, bool bLast)
@@ -385,6 +438,7 @@ bool ASCVehicle::ToggleClip(FName Fragment, FName OpenTag, FName CloseTag)
 }
 void ASCVehicle::ResetPose()
 {
+    while (!DoorMotions.IsEmpty()) CancelDoorMotion(DoorMotions.Last().Door); // every move stops (WP-A1)
     Playback.Reset();
     HeldPlayback.Reset();
     DirtyMeshes.Reset();
@@ -411,7 +465,14 @@ void ASCVehicle::Tick(float DeltaSeconds)
     Playback.RemoveAll(Orphaned);
     HeldPlayback.RemoveAll(Orphaned);
     RestoreCargoDoorLocks();
-    if (!ClipCatalog || Playback.IsEmpty()) { FinishSecureOrders(); UpdateTickEnabled(); return; }
+    if (!ClipCatalog || Playback.IsEmpty())
+    {
+        UpdateDoorMotions({}); // moves whose playback is gone (a reset, their rig destroyed) stop
+        FinishSecureOrders();
+        UpdateTickEnabled();
+        return;
+    }
+    TSet<uint64> Ended; // entries that reached their end this tick (WP-A1: door moves arrive)
     const USCRigComponent* Traced = Doors.IsValidIndex(TraceDoor) ? Doors[TraceDoor].Rig.Get() : nullptr;
     TArray<FString> TraceLines; // sc.Doors.Trace: the traced door's clips advanced this tick
     TMap<int32, double> GroundStops;
@@ -431,19 +492,13 @@ void ASCVehicle::Tick(float DeltaSeconds)
             TraceLines.Add(FString::Printf(TEXT("clip=%s from=%.2f frame=%.2f last=%d speed=%.2f ended=%d"), *C.Id.ToString(), Previous, P.Frame, C.LastFrame, P.Speed, bEnded));
         if (bEnded)
         {
+            Ended.Add(P.Order);
             P.bPlaying = false;
             HeldPlayback.Add(P);
             Playback.RemoveAt(I);
         }
     }
-    // WP-A1: a door moved by a door order arrives when its rig has no clip playing any more.
-    for (auto It = MovingDoorRigs.CreateIterator(); It; ++It)
-    {
-        USCRigComponent* Rig = It->Get();
-        if (Rig && IsRigPlaying(Rig)) continue;
-        It.RemoveCurrent();
-        if (USCAudioSubsystem* Audio = Rig ? USCAudioSubsystem::Get(this) : nullptr) Audio->DoorArrived(this, Rig, IsRigOpen(Rig));
-    }
+    UpdateDoorMotions(Ended);
     EvaluateClips();
     for (const auto& Pair : GroundStops) RememberGangwayStop(Pair.Key);
     for (const FString& Line : TraceLines)
@@ -536,7 +591,8 @@ void ASCVehicle::UpdateTickEnabled()
 {
     bool bLifts = false;
     for (const TSharedPtr<FSCLift>& Lift : Lifts) bLifts |= Lift->NeedsTick();
-    SetActorTickEnabled(ShipDoors.ContainsByPredicate([](const FShipDoor& Door) { return Door.bCargoRelock || Door.bSecurePending; }) || !Playback.IsEmpty() || bLifts || !LoopingLights.IsEmpty());
+    SetActorTickEnabled(ShipDoors.ContainsByPredicate([](const FShipDoor& Door) { return Door.bCargoRelock || Door.bSecurePending; }) || !Playback.IsEmpty() || bLifts ||
+                        !LoopingLights.IsEmpty() || !DoorMotions.IsEmpty());
 }
 void ASCVehicle::EvaluateClips()
 {

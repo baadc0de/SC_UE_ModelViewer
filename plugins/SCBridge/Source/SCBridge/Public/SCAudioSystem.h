@@ -123,6 +123,8 @@ struct SCBRIDGE_API FSCAudioEntity
     TWeakObjectPtr<USCRigComponent> Rig;
     int32 Interior = INDEX_NONE;
     TMap<FString, TArray<int32>> TagInstances; // state tag -> the posts playing for it (one per effect)
+    /** Helper frames of the entity's door sounds that are mesh nodes, not bones (resolved at import, saved). */
+    TMap<FString, TWeakObjectPtr<USceneComponent>> Helpers;
 };
 
 struct SCBRIDGE_API FSCAudioScene
@@ -201,15 +203,14 @@ public:
     int32 FireEntityTag(ASCVehicle* Vehicle, int32 Interior, const FString& EntityId, const FString& Tag);
     /** Start / stop the state-tag effects (tag effects) tagged Tag of an entity. */
     void SetEntityTag(ASCVehicle* Vehicle, int32 Interior, const FString& EntityId, const FString& Tag, bool bSet);
-    /** WP-A1 door effects (`door` of the class of the entity whose rig is Rig): the door starts to open (bOpen) or close —
-     *  its open / close group plays once and its tag fires, and the opening / closing group's loops and state tag hold
-     *  until it arrives or moves again. Returns the posts started. */
-    int32 DoorMoved(ASCVehicle* Vehicle, const USCRigComponent* Rig, bool bOpen);
-    /** The door reached open (bOpen) or closed: the motion loops and state tag end; the opened / closed group plays and
-     *  its tag fires. */
-    int32 DoorArrived(ASCVehicle* Vehicle, const USCRigComponent* Rig, bool bOpen);
-    /** The door was locked or unlocked: its locked / unlocked group plays and its tag fires. */
-    int32 DoorLockChanged(ASCVehicle* Vehicle, const USCRigComponent* Rig, bool bLocked);
+    /** WP-A1 door effects (`door` of the class of the door's entity), on ASCVehicle::OnDoorMotion: Moved plays the open /
+     *  close and opening / closing groups (one-shots once; looped sounds and the opening / closing state tag held for the
+     *  move, the open / close tag fired); Arrived ends the move's holds and plays opened / closed (looped sounds held at
+     *  rest until the next move); Cancelled ends every hold of the door; Locked / Unlocked play their groups. A held
+     *  looped sound whose trigger ends is posted again while it is held. */
+    void HandleDoorMotion(ASCVehicle* Vehicle, int32 Door, bool bOpen, uint8 Event);
+    /** The door posts and state tags held now (tests, diagnostics). */
+    int32 NumDoorHolds(const ASCVehicle* Vehicle, int32 Door) const;
     /** An item's own action (WP-A1 hooks: flashlight, weapon): the trigger of the item class's audio field Field (a
      *  DataCore field name, the last element of the action's property path), played at Attach. */
     int32 PlayItemAction(ASCVehicle* Kit, const FString& ItemEntity, const FString& Field, USceneComponent* Attach);
@@ -256,11 +257,26 @@ private:
     TSharedPtr<FSCRtpcBank> RtpcBank;                                // the game parameters meters write
     bool bMixTracing = false;                                        // sc.Audio.MixTrace running
     double MixTraceStart = 0;
-    /** A door event of the entity whose rig is Rig: its group's sounds (bHold: the looped ones, kept under the event as
-     *  a state; else the one-shots) and its tag (bHold: set as a state tag; else fired). */
-    int32 PlayDoorEvent(ASCVehicle* Vehicle, const USCRigComponent* Rig, const FString& Event, bool bHold);
-    /** Ends the door's held events (the opening / closing loops and state tags). */
-    void EndDoorMotion(ASCVehicle* Vehicle, const USCRigComponent* Rig);
+    /** What a door holds: looped posts (posted again when they end) and set state tags, for its move or at rest. */
+    struct FDoorHold
+    {
+        TWeakObjectPtr<ASCVehicle> Vehicle;
+        int32 Door = INDEX_NONE;
+        bool bMotion = true;
+        int32 Interior = INDEX_NONE;
+        FString EntityId;
+        TArray<FString> StateTags;
+        struct FLoop { FString Trigger; FSCAudioPlace Place; int32 Id = INDEX_NONE; };
+        TArray<FLoop> Loops;
+    };
+    TArray<FDoorHold> DoorHolds;
+    /** A door event: its group's one-shots once, its looped sounds held (bMotion: for the move, else at rest), its tag
+     *  set as a state (bState) or fired. Returns the posts started. */
+    int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState);
+    /** Ends Door's holds (bMotionOnly: its move's, not its rest's). */
+    void EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly);
+    void UpdateDoorHolds();
+    FDelegateHandle DoorMotionHandle;
     TSet<FString> UnresolvedDoorHelpers; // logged once each
     struct FVoice
     {

@@ -336,7 +336,8 @@ void FSCAudioScene::LoadCooked(ASCVehicle* V)
     for (const FSCSavedAudioEntity& E : V->AudioEntities)
         if (Scene->Manifest.Classes.Contains(E.ClassGuid))
         {
-            Scene->Entities.Add(E.Key, {E.ClassGuid, E.Anchor, E.Rig, E.Interior});
+            FSCAudioEntity& Entity = Scene->Entities.Add(E.Key, {E.ClassGuid, E.Anchor, E.Rig, E.Interior});
+            for (const auto& [Name, Frame] : E.Helpers) Entity.Helpers.Add(Name, Frame.Get());
             ++Entities;
         }
     for (const FString& W : Warnings) UE_LOG(LogSCAudio, Warning, TEXT("AUDIO_COOKED %s"), *W);
@@ -714,6 +715,9 @@ void USCAudioSubsystem::Deinitialize()
             if (V.Component) V.Component->Stop();
     Instances.Reset();
     Scenes.Reset();
+    DoorHolds.Reset();
+    if (DoorMotionHandle.IsValid()) ASCVehicle::OnDoorMotion.Remove(DoorMotionHandle);
+    DoorMotionHandle.Reset();
     Super::Deinitialize();
 }
 
@@ -732,6 +736,11 @@ void USCAudioSubsystem::AddScene(const TSharedRef<FSCAudioScene>& Scene)
             }
     Scenes.Add(Scene);
     LogScene(*Scene);
+    // WP-A1 door effects: the vehicles' door moves (once per subsystem).
+    if (!DoorMotionHandle.IsValid())
+        DoorMotionHandle = ASCVehicle::OnDoorMotion.AddWeakLambda(this, [this](ASCVehicle* V, int32 Door, bool bOpen, ASCVehicle::EDoorMotion E) {
+            HandleDoorMotion(V, Door, bOpen, uint8(E));
+        });
 }
 
 void USCAudioSubsystem::RemoveScene(const ASCVehicle* Vehicle)
@@ -1821,6 +1830,7 @@ void USCAudioSubsystem::Tick(float DeltaTime)
         UpdateInstance(It->Value, Clock);
         if (It->Value.Voices.IsEmpty() && It->Value.Runs.IsEmpty() && (It->Value.bStopping || Clock > It->Value.StopAt)) It.RemoveCurrent();
     }
+    UpdateDoorHolds(); // WP-A1: held door loops whose trigger ended play again
 }
 
 // ------------------------------------------------------------------------------------------------ viewer events
@@ -1899,93 +1909,131 @@ FSCAudioEntity* DoorEntity(FSCAudioScene& S, const USCRigComponent* Rig, FString
 }
 }
 
-int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, const USCRigComponent* Rig, const FString& Event, bool bHold)
+int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState)
 {
     const TSharedPtr<FSCAudioScene> S = SceneOf(Vehicle);
+    const USCRigComponent* Rig = Vehicle && Vehicle->Doors.IsValidIndex(Door) ? Vehicle->Doors[Door].Rig.Get() : nullptr;
     if (!S || !Rig) return 0;
     FString Key;
-    if (FSCAudioEntity* Found = DoorEntity(*S, Rig, Key))
+    FSCAudioEntity* Found = DoorEntity(*S, Rig, Key);
+    const FSCAudioClass* C = Found ? S->Manifest.Classes.Find(Found->ClassGuid) : nullptr;
+    const FSCAudioDoorEvent* Ev = C ? C->DoorEvents.Find(Event) : nullptr;
+    if (!Ev) return 0;
+    const FSCAudioEntity& E = *Found;
+    FString Interior, EntityId;
+    const bool bKey = Key.Split(TEXT("/"), &Interior, &EntityId);
+    FDoorHold Hold;
+    Hold.Vehicle = Vehicle;
+    Hold.Door = Door;
+    Hold.bMotion = bMotion;
+    Hold.Interior = bKey ? FCString::Atoi(*Interior) : INDEX_NONE;
+    Hold.EntityId = EntityId;
+    int32 Played = 0;
+    for (const FSCAudioDoorSound* Sound : C->DoorSoundsFor(Event))
     {
-        FSCAudioEntity& E = *Found;
-        const FSCAudioClass* C = S->Manifest.Classes.Find(E.ClassGuid);
-        const FSCAudioDoorEvent* Ev = C ? C->DoorEvents.Find(Event) : nullptr;
-        if (!Ev) return 0;
-        int32 Played = 0;
-        for (const FSCAudioDoorSound* Sound : C->DoorSoundsFor(Event))
+        FSCAudioPlace P;
+        P.Attach = E.Rig.Get();
+        // The helper: a frame the import resolved (a mesh node), else a bone of the door's rig (a `$` helper names the
+        // entity's own: tried without it too), else the entity's pivot, reported once per class and helper.
+        for (const FString& Name : {Sound->Helper, Sound->Helper.StartsWith(TEXT("$")) ? Sound->Helper.Mid(1) : FString()})
         {
-            if (Sound->bLooped != bHold) continue; // a group's loops hold its state; its one-shots play on the event
-            FSCAudioPlace P;
-            P.Attach = E.Rig.Get();
-            // The helper: a bone of the door's rig (a `$` helper names the entity's own: the same name without it); else
-            // the entity's pivot, reported once per class and helper.
-            for (const FString& Name : {Sound->Helper, Sound->Helper.StartsWith(TEXT("$")) ? Sound->Helper.Mid(1) : FString()})
-                if (!Name.IsEmpty() && P.Socket.IsNone() && Rig->GetBoneIndex(FName(*Name)) != INDEX_NONE) P.Socket = FName(*Name);
-            if (P.Socket.IsNone() && !Sound->Helper.IsEmpty())
-                if (const FString Unresolved = C->Name + TEXT(" ") + Sound->Helper; !UnresolvedDoorHelpers.Contains(Unresolved))
-                {
-                    UnresolvedDoorHelpers.Add(Unresolved);
-                    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_DOOR class=%s helper=%s not a bone of its rig: played at the entity's pivot"), *C->Name, *Sound->Helper);
-                }
-            P.Offset = FSCLights::ContainerBasis(Sound->Offset, false) * 100;
-            P.Label = C->Name + TEXT(":door:") + Event;
-            const int32 Id = Post(*S, Sound->Trigger, P);
-            if (Id == INDEX_NONE) continue;
-            ++Played;
-            if (bHold) E.TagInstances.FindOrAdd(TEXT("door:") + Event).Add(Id);
+            if (Name.IsEmpty() || !P.Socket.IsNone() || P.Attach.Get() != E.Rig.Get()) continue;
+            if (const TWeakObjectPtr<USceneComponent>* Frame = E.Helpers.Find(Name); Frame && Frame->IsValid()) P.Attach = *Frame;
+            else if (Rig->GetBoneIndex(FName(*Name)) != INDEX_NONE) P.Socket = FName(*Name);
         }
-        // The entity-effect tag (the class's `effects`): fired once, or held as a state while the event lasts.
-        FString Interior, EntityId;
-        if (!Ev->Tag.IsEmpty() && Key.Split(TEXT("/"), &Interior, &EntityId))
-        {
-            if (bHold) SetEntityTag(Vehicle, FCString::Atoi(*Interior), EntityId, Ev->Tag, true);
-            else Played += FireEntityTag(Vehicle, FCString::Atoi(*Interior), EntityId, Ev->Tag);
-        }
-        UE_LOG(LogSCAudio, Display, TEXT("AUDIO_DOOR class=%s event=%s group=%s tag=%s posts=%d%s"), *C->Name, *Event, *Ev->Group, *Ev->Tag, Played,
-               bHold ? TEXT(" held") : TEXT(""));
-        return Played;
+        if (P.Socket.IsNone() && P.Attach.Get() == E.Rig.Get() && !Sound->Helper.IsEmpty())
+            if (const FString Unresolved = C->Name + TEXT(" ") + Sound->Helper; !UnresolvedDoorHelpers.Contains(Unresolved))
+            {
+                UnresolvedDoorHelpers.Add(Unresolved);
+                UE_LOG(LogSCAudio, Display, TEXT("AUDIO_DOOR class=%s helper=%s not a frame of its entity: played at the entity's pivot"), *C->Name, *Sound->Helper);
+            }
+        P.Offset = FSCLights::ContainerBasis(Sound->Offset, false) * 100;
+        P.Label = C->Name + TEXT(":door:") + Event;
+        const int32 Id = Post(*S, Sound->Trigger, P);
+        Played += Id != INDEX_NONE;
+        // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds).
+        if (Sound->bLooped) Hold.Loops.Add({Sound->Trigger, P, Id});
     }
-    return 0;
-}
-
-void USCAudioSubsystem::EndDoorMotion(ASCVehicle* Vehicle, const USCRigComponent* Rig)
-{
-    const TSharedPtr<FSCAudioScene> S = SceneOf(Vehicle);
-    if (!S || !Rig) return;
-    FString Key;
-    if (FSCAudioEntity* Found = DoorEntity(*S, Rig, Key))
+    // The entity-effect tag (the class's `effects`): held as a state for the move, or fired once.
+    if (!Ev->Tag.IsEmpty() && bKey)
     {
-        FSCAudioEntity& E = *Found;
-        const FSCAudioClass* C = S->Manifest.Classes.Find(E.ClassGuid);
-        FString Interior, EntityId;
-        const bool bKey = Key.Split(TEXT("/"), &Interior, &EntityId);
-        for (const TCHAR* Event : {TEXT("opening"), TEXT("closing")})
+        if (bState)
         {
-            if (const TArray<int32>* Ids = E.TagInstances.Find(FString(TEXT("door:")) + Event))
-                for (const int32 Id : *Ids) Stop(Id, 0.1f);
-            E.TagInstances.Remove(FString(TEXT("door:")) + Event);
-            if (const FSCAudioDoorEvent* Ev = C ? C->DoorEvents.Find(Event) : nullptr; Ev && !Ev->Tag.IsEmpty() && bKey)
-                SetEntityTag(Vehicle, FCString::Atoi(*Interior), EntityId, Ev->Tag, false);
+            SetEntityTag(Vehicle, Hold.Interior, EntityId, Ev->Tag, true);
+            Hold.StateTags.Add(Ev->Tag);
         }
-        return;
+        else Played += FireEntityTag(Vehicle, Hold.Interior, EntityId, Ev->Tag);
+    }
+    UE_LOG(LogSCAudio, Display, TEXT("AUDIO_DOOR class=%s door=%d event=%s group=%s tag=%s posts=%d held_loops=%d%s"), *C->Name, Door, *Event, *Ev->Group, *Ev->Tag,
+           Played, Hold.Loops.Num(), Hold.StateTags.IsEmpty() ? TEXT("") : TEXT(" state"));
+    if (!Hold.Loops.IsEmpty() || !Hold.StateTags.IsEmpty()) DoorHolds.Add(MoveTemp(Hold));
+    return Played;
+}
+
+void USCAudioSubsystem::EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly)
+{
+    for (int32 I = DoorHolds.Num() - 1; I >= 0; --I)
+    {
+        FDoorHold& H = DoorHolds[I];
+        if (H.Vehicle.Get() != Vehicle || H.Door != Door || (bMotionOnly && !H.bMotion)) continue;
+        for (const FDoorHold::FLoop& L : H.Loops)
+            if (L.Id != INDEX_NONE) Stop(L.Id, 0.1f);
+        // The state tags end by entity key: the door's rig may be gone (its entity entry stays with the scene).
+        if (ASCVehicle* V = H.Vehicle.Get())
+            for (const FString& Tag : H.StateTags) SetEntityTag(V, H.Interior, H.EntityId, Tag, false);
+        DoorHolds.RemoveAt(I);
     }
 }
 
-int32 USCAudioSubsystem::DoorMoved(ASCVehicle* Vehicle, const USCRigComponent* Rig, bool bOpen)
+void USCAudioSubsystem::UpdateDoorHolds()
 {
-    EndDoorMotion(Vehicle, Rig); // turned around mid-stroke: the other direction's loop ends
-    const int32 Played = PlayDoorEvent(Vehicle, Rig, bOpen ? TEXT("open") : TEXT("close"), false);
-    return Played + PlayDoorEvent(Vehicle, Rig, bOpen ? TEXT("opening") : TEXT("closing"), true);
+    for (int32 I = DoorHolds.Num() - 1; I >= 0; --I)
+    {
+        FDoorHold& H = DoorHolds[I];
+        const TSharedPtr<FSCAudioScene> S = SceneOf(H.Vehicle.Get());
+        if (!S)
+        {
+            for (const FDoorHold::FLoop& L : H.Loops)
+                if (L.Id != INDEX_NONE) Stop(L.Id, 0.1f);
+            DoorHolds.RemoveAt(I);
+            continue;
+        }
+        for (FDoorHold::FLoop& L : H.Loops)
+            if (L.Place.Attach.IsValid() && (L.Id == INDEX_NONE || !IsPlaying(L.Id))) L.Id = Post(*S, L.Trigger, L.Place);
+    }
 }
 
-int32 USCAudioSubsystem::DoorArrived(ASCVehicle* Vehicle, const USCRigComponent* Rig, bool bOpen)
+void USCAudioSubsystem::HandleDoorMotion(ASCVehicle* Vehicle, int32 Door, bool bOpen, uint8 Event)
 {
-    EndDoorMotion(Vehicle, Rig);
-    return PlayDoorEvent(Vehicle, Rig, bOpen ? TEXT("opened") : TEXT("closed"), false);
+    if (!Vehicle || Vehicle->GetWorld() != GetWorld()) return;
+    using EDoorMotion = ASCVehicle::EDoorMotion;
+    switch (EDoorMotion(Event))
+    {
+    case EDoorMotion::Moved:
+        EndDoorHolds(Vehicle, Door, false); // turned around, or leaving its rest: what it held ends
+        PlayDoorEvent(Vehicle, Door, bOpen ? TEXT("open") : TEXT("close"), true, false);
+        PlayDoorEvent(Vehicle, Door, bOpen ? TEXT("opening") : TEXT("closing"), true, true);
+        break;
+    case EDoorMotion::Arrived:
+        EndDoorHolds(Vehicle, Door, true);
+        PlayDoorEvent(Vehicle, Door, bOpen ? TEXT("opened") : TEXT("closed"), false, false);
+        break;
+    case EDoorMotion::Cancelled:
+        EndDoorHolds(Vehicle, Door, false);
+        break;
+    case EDoorMotion::Locked:
+    case EDoorMotion::Unlocked:
+        PlayDoorEvent(Vehicle, Door, EDoorMotion(Event) == EDoorMotion::Locked ? TEXT("locked") : TEXT("unlocked"), false, false);
+        break;
+    }
 }
 
-int32 USCAudioSubsystem::DoorLockChanged(ASCVehicle* Vehicle, const USCRigComponent* Rig, bool bLocked)
+int32 USCAudioSubsystem::NumDoorHolds(const ASCVehicle* Vehicle, int32 Door) const
 {
-    return PlayDoorEvent(Vehicle, Rig, bLocked ? TEXT("locked") : TEXT("unlocked"), false);
+    int32 N = 0;
+    for (const FDoorHold& H : DoorHolds)
+        if (H.Vehicle.Get() == Vehicle && H.Door == Door) N += H.Loops.Num() + H.StateTags.Num();
+    return N;
 }
 
 int32 USCAudioSubsystem::PlayItemAction(ASCVehicle* Kit, const FString& ItemEntity, const FString& Field, USceneComponent* Attach)

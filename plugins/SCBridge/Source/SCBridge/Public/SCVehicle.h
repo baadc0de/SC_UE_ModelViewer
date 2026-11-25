@@ -126,6 +126,8 @@ struct FSCSavedAudioEntity
     UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
     UPROPERTY() TWeakObjectPtr<USCRigComponent> Rig;
     UPROPERTY() int32 Interior = INDEX_NONE;
+    /** Helper frames of its door sounds that are mesh nodes (WP-A1; bones are resolved on the rig). */
+    UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> Helpers;
 };
 /** A panel that operates a lift (its links reach a carriage or a stop): the press path until WP-I1 has its own. Saved. */
 USTRUCT()
@@ -586,8 +588,27 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") void ResetPose();
     void EvaluateClips();
     UPROPERTY(Transient) TArray<FSCClipPlayback> Playback; // active entries only
-    /** WP-A1 door effects: door rigs moving by a door order (PlayDoor) until their clips end (then they arrive). */
-    TSet<TWeakObjectPtr<USCRigComponent>> MovingDoorRigs;
+    /** WP-A1 door effects: a door's motion and lock events, for listeners (the audio system plays the door's own effects).
+     *  Moved: a door starts to open (bOpen) or close (an order, or a raw play of one of its own clips); Arrived: the
+     *  playback that move started ended at its end; Cancelled: it stopped otherwise (reset, snap, another clip on its
+     *  channels, its rig gone); Locked / Unlocked: its lock changed (bOpen unused). */
+    enum class EDoorMotion : uint8 { Moved, Arrived, Cancelled, Locked, Unlocked };
+    DECLARE_MULTICAST_DELEGATE_FourParams(FOnDoorMotion, ASCVehicle* /*Vehicle*/, int32 /*Door*/, bool /*bOpen*/, EDoorMotion);
+    static FOnDoorMotion OnDoorMotion;
+    /** A door in motion: the playback entries (by Order) the move started. */
+    struct FDoorMotion
+    {
+        int32 Door = INDEX_NONE;
+        bool bOpen = false;
+        TArray<uint64> Orders;
+    };
+    TArray<FDoorMotion> DoorMotions;
+    /** Door's motion starts with the playback entries of its rig started after AfterOrder (none: nothing moves). */
+    void StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder);
+    /** Door's motion (if any) stops without arriving. */
+    void CancelDoorMotion(int32 Door);
+    /** Motions whose entries ended naturally (Ended) arrive; those whose entries vanished are cancelled. */
+    void UpdateDoorMotions(const TSet<uint64>& Ended);
     /** WP-O1-4b-3c: a copy streamed from a prepared level registers its level audio (CookedAudio) once it is placed, not at
      *  BeginPlay (it begins play at the level's origin, hidden): StartCookedAudio then. */
     UPROPERTY(Transient) bool bDeferCookedAudio = false;
@@ -607,8 +628,9 @@ private:
      *  there, so Entry shows nothing on Rig (its audio events are not Rig's). */
     bool IsCoveredOnRig(const FSCClipPlayback& Entry, const USCRigComponent* Rig) const;
     /** A clip started outside a door interaction (PlayClip / SnapClip / PlayClipAt / SnapClipAt) on a door's channels: the
-     *  door's recorded state becomes what the clip ends in when it is the door's own open or close fragment, else unknown. */
-    void ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast);
+     *  door's recorded state becomes what the clip ends in when it is the door's own open or close fragment, else unknown.
+     *  bPlayed: the clip plays (from AfterOrder on: the door's motion starts, WP-A1); else it was snapped (a motion stops). */
+    void ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast, bool bPlayed = false, uint64 AfterOrder = 0);
     /** WP-A1: play the audio events of P's clip bindings crossed between Previous and P.Frame. */
     void FireClipAudio(FSCClipPlayback& P, double Previous);
     void MarkDirty(int32 ClipIndex);

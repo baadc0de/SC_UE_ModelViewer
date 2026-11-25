@@ -1,6 +1,5 @@
 // WP-M1: door runtime state, access, and the data-derived room classification.
 #include "SCVehicle.h"
-#include "SCAudioSystem.h"
 #include "SCGangwayGround.h"
 #include "Components/BoxComponent.h"
 #include "Engine/OverlapResult.h"
@@ -364,7 +363,7 @@ bool ASCVehicle::SetDoorLocked(int32 Index, bool bLocked)
     Door.bSecurePending = false;
     if (Door.bLocked == bLocked) return true;
     Door.bLocked = bLocked;
-    if (USCAudioSubsystem* Audio = USCAudioSubsystem::Get(this)) Audio->DoorLockChanged(this, Doors[Index].Rig.Get(), bLocked); // WP-A1
+    OnDoorMotion.Broadcast(this, Index, false, bLocked ? EDoorMotion::Locked : EDoorMotion::Unlocked); // WP-A1
     RefreshPanelScreens();
     return true;
 }

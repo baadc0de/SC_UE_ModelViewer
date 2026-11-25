@@ -1866,8 +1866,22 @@ void FSCImportJob::FState::Assemble()
                 if (const FEntity* Placed = ById.Find(P.EntityId); Placed && Audio->Manifest.Classes.Contains(P.EntityClassGuid))
                 {
                     const FString Key = FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower());
-                    Audio->Entities.Add(Key, {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
-                    V->AudioEntities.Add({Key, P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex}); // saved with a prepared level
+                    FSCAudioEntity& Entity = Audio->Entities.Add(Key, {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
+                    FSCSavedAudioEntity& Saved = V->AudioEntities.Add_GetRef({Key, P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex}); // saved with a prepared level
+                    // WP-A1: the door sounds' helpers that are mesh nodes of the entity (bones resolve on its rig at play).
+                    for (const FSCAudioDoorSound& Sound : Audio->Manifest.Classes[P.EntityClassGuid].DoorSounds)
+                        for (const FString& Name : {Sound.Helper, Sound.Helper.StartsWith(TEXT("$")) ? Sound.Helper.Mid(1) : FString()})
+                        {
+                            if (Name.IsEmpty() || Entity.Helpers.Contains(Name) || !Placed->Mesh || !Placed->Anchor ||
+                                (Placed->Rig && Placed->Rig->DoesSocketExist(FName(*Name)))) continue;
+                            const FMatrix* Node = nullptr;
+                            for (const auto& Pair : Placed->Mesh->Nodes)
+                                if (Pair.Key.Equals(Name, ESearchCase::IgnoreCase)) Node = &Pair.Value;
+                            if (!Node) continue;
+                            USceneComponent* Frame = NewAnchor(Name, Placed->Anchor, FSCMeshes::Transform(*Node));
+                            Entity.Helpers.Add(Name, Frame);
+                            Saved.Helpers.Add(Name, Frame);
+                        }
                 }
         }
         // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel. A lift carriage links

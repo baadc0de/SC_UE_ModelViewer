@@ -770,4 +770,94 @@ bool FSCExteriorPanelReachTest::RunTest(const FString&)
     return !HasAnyErrors();
 }
 
+// SCBridge.Doors.MotionEvents (WP-A1 door effects): a door's moves and their ends as ASCVehicle::OnDoorMotion reports them:
+// an order moves it and it arrives when its playback ends; turned around mid-stroke the new move replaces the old (no arrival
+// for the first); ResetPose, a snap and its rig destroyed cancel a move; a raw play of its own clip moves it; two doors of
+// one rig move and arrive on their own; a lock change is reported.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCDoorMotionEventsTest, "SCBridge.Doors.MotionEvents", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCDoorMotionEventsTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    auto* V = World->SpawnActor<ASCVehicle>();
+    V->ClipCatalog = NewObject<USCClipCatalog>(V);
+    USCRigComponent* A = AddRig(V, TEXT("Hatch"));
+    AddClip(V, A, TEXT("hatch_open"), TEXT("Open"), {0, 25, 50});
+    AddClip(V, A, TEXT("hatch_close"), TEXT("Close"), {50, 25, 0});
+    FSCDoorRecord R;
+    R.Door.bValid = true;
+    R.Door.OpenTag = TEXT("Open");
+    R.Door.CloseTag = TEXT("Close");
+    R.Door.bIsOpened = false;
+    V->DoorRecords.Add(A, R);
+    USCRigComponent* B = AddRig(V, TEXT("Leaf"));
+    AddClip(V, B, TEXT("leaf_open"), TEXT("Open"), {0, 30});
+    AddClip(V, B, TEXT("leaf_close"), TEXT("Close"), {30, 0});
+    V->DoorRecords.Add(B, R);
+    V->BuildExploration();
+    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B);
+    if (!TestTrue(TEXT("two doors"), DA != INDEX_NONE && DB != INDEX_NONE)) return false;
+    TArray<FString> Events;
+    const FDelegateHandle Handle = ASCVehicle::OnDoorMotion.AddLambda([&](ASCVehicle* Vehicle, int32 Door, bool bOpen, ASCVehicle::EDoorMotion E) {
+        if (Vehicle != V) return;
+        static const TCHAR* Names[] = {TEXT("moved"), TEXT("arrived"), TEXT("cancelled"), TEXT("locked"), TEXT("unlocked")};
+        Events.Add(FString::Printf(TEXT("%s:%d:%s"), Door == DA ? TEXT("A") : TEXT("B"), bOpen, Names[uint8(E)]));
+    });
+    ON_SCOPE_EXIT { ASCVehicle::OnDoorMotion.Remove(Handle); };
+    auto Expect = [&](const TCHAR* What, std::initializer_list<const TCHAR*> Want) {
+        TArray<FString> W;
+        for (const TCHAR* S : Want) W.Add(S);
+        TestEqual(What, FString::Join(Events, TEXT(" ")), FString::Join(W, TEXT(" ")));
+        Events.Reset();
+    };
+    Events.Reset(); // the rest poses do not move a door
+
+    // An order: it moves, and arrives when its playback ends.
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    Expect(TEXT("moved"), {TEXT("A:1:moved")});
+    V->Tick(0.1f);
+    Expect(TEXT("still moving"), {});
+    V->Tick(1.f);
+    Expect(TEXT("arrived open"), {TEXT("A:1:arrived")});
+
+    // Turned around mid-stroke: the new move replaces the old; only the second arrives.
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(0.1f);
+    TestTrue(TEXT("A turned around"), V->PlayDoor(DA, true));
+    V->Tick(1.f);
+    Expect(TEXT("two moves, one arrival"), {TEXT("A:0:moved"), TEXT("A:1:moved"), TEXT("A:1:arrived")});
+
+    // Two doors (here two rigs) move and arrive on their own.
+    TestTrue(TEXT("A closes again"), V->PlayDoor(DA, false));
+    TestTrue(TEXT("B opens"), V->PlayDoor(DB, true));
+    V->Tick(0.15f); // B's 1-frame clip ends; A's 2-frame clip does not
+    V->Tick(1.f);
+    Expect(TEXT("each arrives"), {TEXT("A:0:moved"), TEXT("B:1:moved"), TEXT("B:1:arrived"), TEXT("A:0:arrived")});
+
+    // ResetPose cancels a move.
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    V->ResetPose();
+    V->Tick(1.f);
+    Expect(TEXT("reset cancels, no arrival"), {TEXT("A:1:moved"), TEXT("A:1:cancelled")});
+
+    // A raw play of the door's own clip moves it; a snap of it cancels the move.
+    const int32 Open = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("hatch_open")); });
+    TestTrue(TEXT("raw open clip"), V->PlayClipAt(Open, A, 1.f));
+    V->Tick(0.05f);
+    TestTrue(TEXT("snapped"), V->SnapClipAt(Open, A, true));
+    V->Tick(1.f);
+    Expect(TEXT("raw play moves, snap cancels"), {TEXT("A:1:moved"), TEXT("A:1:cancelled")});
+
+    // Its rig destroyed while moving: cancelled (no arrival).
+    TestTrue(TEXT("B closes"), V->PlayDoor(DB, false));
+    B->DestroyComponent();
+    V->Tick(1.f);
+    Expect(TEXT("rig gone cancels"), {TEXT("B:0:moved"), TEXT("B:0:cancelled")});
+
+    // A lock change is reported.
+    TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));
+    Expect(TEXT("locked"), {TEXT("A:0:locked")});
+    return !HasAnyErrors();
+}
+
 #endif
