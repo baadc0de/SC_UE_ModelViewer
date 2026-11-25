@@ -1824,12 +1824,18 @@ void FSCImportJob::FState::Assemble()
     };
     // Loadout doors (a ship's exterior doors: children, not interior placements): their class by entity name, keyed as the
     // audio system finds a door's entity by its rig ("-1/<owner>#<rig>").
+    // A promoted interior placement (a hangar door) is its container's entity: its audio identity is its class by GUID
+    // under its interior and entity id (below), not a class matched by its child's name.
+    TSet<int32> PromotedChildren;
+    for (const FSCInterior& Interior : Manifest.Interiors)
+        for (const FSCSceneInstance& P : Interior.Placements)
+            if (P.PromotedChild != INDEX_NONE) PromotedChildren.Add(P.PromotedChild);
     if (Audio)
         for (int32 ChildIndex = -1; ChildIndex < Manifest.Children.Num(); ++ChildIndex) // -1: the root entity
         {
             const FSCSceneInstance& I = ChildIndex < 0 ? Manifest.Root : Manifest.Children[ChildIndex];
             const FEntity* Placed = ChildIndex < 0 ? &RootEntity : &ChildEntities[ChildIndex];
-            if (!Placed->Rig) continue;
+            if (!Placed->Rig || PromotedChildren.Contains(ChildIndex)) continue;
             const FString Qualified = TEXT("EntityClassDefinition.") + I.EntityName;
             for (const auto& [Guid, Class] : Audio->Manifest.Classes)
             {
@@ -1929,12 +1935,14 @@ void FSCImportJob::FState::Assemble()
         const TSet<FString> Carriages = SCVehicleLifts::CarriageIds(Interior);
         for (const auto& P : Interior.Placements)
         {
+            // (A promoted animated placement, a hangar door or elevator, is not a pad: its links name what it drives.)
             const FEntity* Panel = ById.Find(P.EntityId);
-            if (!Panel || !Panel->Anchor || Carriages.Contains(P.EntityId)) continue;
+            if (!Panel || !Panel->Anchor || Carriages.Contains(P.EntityId) || P.PromotedChild != INDEX_NONE) continue;
             TArray<FString> Targets = P.Links;
             if (!P.LoadoutOwnerEntityId.IsEmpty()) Targets.Add(P.LoadoutOwnerEntityId);
+            auto IsDoor = [&](USCRigComponent* Rig) { const FSCDoorRecord* R = V->DoorRecords.Find(Rig); return R && R->Door.bValid; };
             for (const FString& Target : Targets)
-                if (const FEntity* Door = ById.Find(Target); Door && Door->Rig && Door->Anchor != Panel->Anchor)
+                if (const FEntity* Door = ById.Find(Target); Door && Door->Rig && Door->Anchor != Panel->Anchor && IsDoor(Door->Rig))
                 {
                     V->DoorControls.Add(Panel->Anchor, Door->Rig);
                     for (const FSCUiBinding& B : P.UiBindings)
