@@ -651,6 +651,8 @@ private:
     /** Whether later layers on Rig (Playback or HeldPlayback, targeted at Rig or untargeted) drive every channel Entry drives
      *  there, so Entry shows nothing on Rig (its audio events are not Rig's). */
     bool IsCoveredOnRig(const FSCClipPlayback& Entry, const USCRigComponent* Rig, int32 OnlyDoor = INDEX_NONE) const;
+    /** P has frames left in its playback direction (not started at the end it plays to). */
+    bool HasTravelLeft(const FSCClipPlayback& P) const;
     /** A clip started outside a door interaction (PlayClip / SnapClip / PlayClipAt / SnapClipAt) on a door's channels: the
      *  door's recorded state becomes what the clip ends in when it is the door's own open or close fragment, else unknown.
      *  The door's move (WP-A1 door effects) stops: the clip takes it over. */

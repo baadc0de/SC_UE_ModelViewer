@@ -869,6 +869,10 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     V->Tick(1.f);
     Expect(TEXT("a reversal with no travel"), {TEXT("A:1:moved"), TEXT("A:0:cancelled")});
     TestTrue(TEXT("A closed"), V->IsDoorStateKnown(DA) && !V->IsDoorOpen(DA) && FMath::IsNearlyEqual(BoneX(A), 0.0, 1e-3));
+    // Ordered closed again at rest closed: nothing moves and its rest (held closed loops) goes on: no event.
+    TestTrue(TEXT("A closes again"), V->PlayDoor(DA, false));
+    V->Tick(1.f);
+    Expect(TEXT("an order at rest at its end"), {});
 
     // ResetPose cancels a move (and every door's rest: each door reports a cancel), with no arrival.
     TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
@@ -943,6 +947,15 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     V->Tick(0.05f);
     TestTrue(TEXT("a fragment on other bones"), V->PlayFragmentAt(TEXT("Wave"), TEXT("Wave"), A));
     TestFalse(TEXT("the frozen door is unsettled"), V->IsDoorStateKnown(DA));
+    V->Tick(1.f);
+    // A clip with no travel left (the close of an open-then-close before a tick: it starts at its end) preempted: the door
+    // stays settled closed.
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(1.f);
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    TestTrue(TEXT("and at once closes"), V->PlayDoor(DA, false));
+    TestTrue(TEXT("the other fragment"), V->PlayFragmentAt(TEXT("Wave"), TEXT("Wave"), A));
+    TestTrue(TEXT("still settled closed"), V->IsDoorStateKnown(DA) && !V->IsDoorOpen(DA));
     V->Tick(1.f);
     Events.Reset();
 
