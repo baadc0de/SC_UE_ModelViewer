@@ -239,7 +239,9 @@ FSCKeepResult SCKeepAssets::Keep(ASCVehicle* Vehicle, const FString& Entity)
                 FSCAnimImporter::Finalize(KeptRoot, GetTransientPackage(), Clip);
                 if (Clip.Bindings.IsEmpty() && Clip.Sequence)
                 {
-                    if (KeptRoot) K.Move(Clip.Sequence, TEXT("Animations"), ClipName);
+                    // On the kept root rig's skeleton (saved with it), else on a skeleton of its own (Finalize's, when the
+                    // vehicle has no root rig or it has no bones): kept with the sequence.
+                    if (KeptRoot && Clip.Sequence->GetSkeleton() == KeptRoot->GetSkeleton()) K.Move(Clip.Sequence, TEXT("Animations"), ClipName);
                     else Clip.Sequence = KeepSequence(Clip.Sequence, ClipName);
                 }
             }
