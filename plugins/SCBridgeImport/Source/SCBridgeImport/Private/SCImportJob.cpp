@@ -1728,8 +1728,11 @@ void FSCImportJob::FState::Assemble()
     TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
     int32 PanelsWithoutReachField = 0;     // door panels of an export before cache format 40 (no interaction_distance)
     if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
-    for (const auto& I : Manifest.Children)
+    TArray<FEntity> ChildEntities; // by child index: every instance, repeated loadout items included (WP-A1 door audio)
+    ChildEntities.SetNum(Manifest.Children.Num());
+    for (int32 ChildIndex = 0; ChildIndex < Manifest.Children.Num(); ++ChildIndex)
     {
+        const FSCSceneInstance& I = Manifest.Children[ChildIndex];
         bool bHelper;
         auto* Parent = FindParent(I, bHelper);
         if (!Parent || !CanPlace(I))
@@ -1740,6 +1743,7 @@ void FSCImportJob::FState::Assemble()
         }
         // Export order is depth-first; latest matching entity disambiguates repeated loadout instances.
         FEntity Placed = Place(I, Parent, bHelper, false);
+        ChildEntities[ChildIndex] = Placed;
         if (!I.Id.IsEmpty()) EntitiesById.Add(I.Id, Placed);
         Entities.Add(I.EntityName, Placed);
         if (!I.PortPath.IsEmpty())
@@ -1816,10 +1820,11 @@ void FSCImportJob::FState::Assemble()
     // Loadout doors (a ship's exterior doors: children, not interior placements): their class by entity name, keyed as the
     // audio system finds a door's entity by its rig ("-1/<owner>#<rig>").
     if (Audio)
-        for (const FSCSceneInstance& I : Manifest.Children)
+        for (int32 ChildIndex = 0; ChildIndex < Manifest.Children.Num(); ++ChildIndex)
         {
-            const FEntity* Placed = Entities.Find(I.EntityName);
-            if (!Placed || !Placed->Rig) continue;
+            const FSCSceneInstance& I = Manifest.Children[ChildIndex];
+            const FEntity* Placed = &ChildEntities[ChildIndex];
+            if (!Placed->Rig) continue;
             const FString Qualified = TEXT("EntityClassDefinition.") + I.EntityName;
             for (const auto& [Guid, Class] : Audio->Manifest.Classes)
             {

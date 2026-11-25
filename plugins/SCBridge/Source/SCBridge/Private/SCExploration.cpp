@@ -285,6 +285,8 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
         if (TargetDoor != INDEX_NONE && FSCInteractionNetwork::DoorVerb(L.TargetSlot, bTargetOpen, bTargetToggle))
         {
             if (bTargetToggle) bTargetOpen = !IsDoorOpen(TargetDoor);
+            // A batch order (sc.Doors.Play) gives its doors their own targets: a link does not reverse one of them.
+            if (const bool* Wanted = DoorOrderBatch.Find(TargetDoor); Wanted && *Wanted != bTargetOpen) continue;
             bHandled = IsDoorOpen(TargetDoor) == bTargetOpen || PlayDoor(TargetDoor, bTargetOpen, 0.f, Depth + 1, AsActor, LocalUse, bCargoAccess);
         }
         UE_LOG(LogTemp, Display, TEXT("DOOR_PORT_LINK source=%s slot=%s port=%s target=%s target_slot=%s handled=%d depth=%d"), *Rig->OwnerEntity,

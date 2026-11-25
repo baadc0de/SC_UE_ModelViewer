@@ -611,6 +611,10 @@ public:
     void CancelDoorMotion(int32 Door);
     /** Motions whose entries ended naturally (Ended) arrive; those whose entries vanished are cancelled. */
     void UpdateDoorMotions(const TSet<uint64>& Ended);
+    /** Does Clip drive a channel (bone, rotation / position) of Door's own fragment clips on its rig? */
+    bool ClipDrivesDoor(int32 Door, int32 Clip) const;
+    /** sc.Doors.Play's batch: a port link (PlayDoor) does not move a door of the batch away from its own target. */
+    TMap<int32, bool> DoorOrderBatch;
     /** WP-O1-4b-3c: a copy streamed from a prepared level registers its level audio (CookedAudio) once it is placed, not at
      *  BeginPlay (it begins play at the level's origin, hidden): StartCookedAudio then. */
     UPROPERTY(Transient) bool bDeferCookedAudio = false;

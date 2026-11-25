@@ -201,6 +201,26 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
     }
 }
 
+bool ASCVehicle::ClipDrivesDoor(int32 Door, int32 Clip) const
+{
+    if (!ClipCatalog || !Doors.IsValidIndex(Door) || !Doors[Door].Rig || !ClipCatalog->Clips.IsValidIndex(Clip)) return false;
+    const FSCDoorInteraction& D = Doors[Door];
+    const USkeletalMesh* Mesh = D.Rig->GetSkeletalMeshAsset();
+    const FSCClipBinding* Raw = ClipCatalog->Clips[Clip].Bindings.FindByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Mesh; });
+    if (!Raw) return false;
+    // One of the door's own fragment clips, or another clip driving a channel (bone and rotation / position) they drive.
+    for (const FSCImportedClip& Own : ClipCatalog->Clips)
+    {
+        if (!Own.Fragments.ContainsByPredicate([&](const FSCClipFragment& F) { return F.Fragment == D.Fragment; })) continue;
+        const FSCClipBinding* B = Own.Bindings.FindByPredicate([&](const FSCClipBinding& X) { return X.Mesh == Mesh; });
+        if (B && B->Tracks.ContainsByPredicate([&](const FSCBoneTrack& T) {
+                return Raw->Tracks.ContainsByPredicate([&](const FSCBoneTrack& R) { return R.Bone == T.Bone && ((R.bRotation && T.bRotation) || (R.bPosition && T.bPosition)); });
+            }))
+            return true;
+    }
+    return false;
+}
+
 void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast)
 {
     // A clip started outside a door interaction (sc.Vehicle.Clip, a harness, an environment state) on a door's channels: the
@@ -429,16 +449,14 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         };
         for (const auto& P : Playback) Record(P);
         for (const auto& P : HeldPlayback) Record(P);
-        // WP-A1: a fragment played outside a door order (a command, a harness, a rest pose) takes over the doors whose rigs
-        // its new layers drive: their moves (and rest holds) stop. Door effects come from door orders (PlayDoor) only.
+        // WP-A1: a fragment played outside a door order (a command, a harness, a rest pose) takes over the doors whose
+        // channels its new layers drive on their rigs: their moves (and rest holds) stop. Door effects come from door orders
+        // (PlayDoor) only; a layer on other bones of the same rig leaves the door alone.
         if (!bInDoorOrder)
             for (int32 D = 0; D < Doors.Num(); ++D)
             {
                 const USCRigComponent* Rig = Doors[D].Rig;
-                auto Drives = [&](const FSCClipPlayback& P) {
-                    return P.Order > OrderBefore && Rig && AppliesTo(P, Rig) &&
-                           ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); });
-                };
+                auto Drives = [&](const FSCClipPlayback& P) { return P.Order > OrderBefore && Rig && AppliesTo(P, Rig) && ClipDrivesDoor(D, P.Clip); };
                 if (Playback.ContainsByPredicate(Drives) || HeldPlayback.ContainsByPredicate(Drives)) CancelDoorMotion(D);
             }
     }

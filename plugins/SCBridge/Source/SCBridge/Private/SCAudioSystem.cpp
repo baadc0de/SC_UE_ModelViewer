@@ -1953,8 +1953,9 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
         P.Label = C->Name + TEXT(":door:") + Event;
         const int32 Id = Post(*S, Sound->Trigger, P);
         Played += Id != INDEX_NONE;
-        // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds).
-        if (Sound->bLooped) Hold.Loops.Add({Sound->Trigger, P, Id});
+        // A looped node plays while its door holds it: posted again if its trigger ends (UpdateDoorHolds). One that cannot
+        // play (no media: Play_Silence) is not held.
+        if (Sound->bLooped && Id != INDEX_NONE) Hold.Loops.Add({Sound->Trigger, P, Id});
     }
     // The entity-effect tag (the class's `effects`): held as a state for the move, or fired once.
     if (!Ev->Tag.IsEmpty() && bKey)
@@ -1976,7 +1977,7 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
                     P.Label = C->Name + TEXT(":") + Ev->Tag;
                     const int32 Id = Post(*S, Fx->Trigger, P);
                     Played += Id != INDEX_NONE;
-                    T.Effects.Add({Fx->Trigger, P, Id});
+                    if (Id != INDEX_NONE) T.Effects.Add({Fx->Trigger, P, Id}); // one that cannot play is not held
                 }
             }
             Hold.TagKeys.Add(TagKey);
@@ -2030,14 +2031,18 @@ void USCAudioSubsystem::UpdateDoorHolds()
         ReleaseDoorHold(H);
         DoorHolds.RemoveAt(I);
     }
+    // A held post that ended is posted again; one that no longer starts (its attachment gone, nothing playable) is dropped.
+    auto KeepHeld = [&](FSCAudioScene& S, TArray<FHeldPost>& Posts) {
+        Posts.RemoveAll([&](FHeldPost& P) {
+            if (IsPlaying(P.Id)) return false;
+            P.Id = P.Place.Attach.IsValid() ? Post(S, P.Trigger, P.Place) : INDEX_NONE;
+            return P.Id == INDEX_NONE;
+        });
+    };
     for (FDoorHold& H : DoorHolds)
-        if (const TSharedPtr<FSCAudioScene> S = SceneOf(H.Vehicle.Get()))
-            for (FHeldPost& L : H.Loops)
-                if (L.Place.Attach.IsValid() && (L.Id == INDEX_NONE || !IsPlaying(L.Id))) L.Id = Post(*S, L.Trigger, L.Place);
+        if (const TSharedPtr<FSCAudioScene> S = SceneOf(H.Vehicle.Get())) KeepHeld(*S, H.Loops);
     for (auto& [Key, T] : TagHolds)
-        if (const TSharedPtr<FSCAudioScene> S = SceneOf(T.Vehicle.Get()))
-            for (FHeldPost& Fx : T.Effects)
-                if (Fx.Place.Attach.IsValid() && (Fx.Id == INDEX_NONE || !IsPlaying(Fx.Id))) Fx.Id = Post(*S, Fx.Trigger, Fx.Place);
+        if (const TSharedPtr<FSCAudioScene> S = SceneOf(T.Vehicle.Get())) KeepHeld(*S, T.Effects);
 }
 
 void USCAudioSubsystem::HandleDoorMotion(ASCVehicle* Vehicle, int32 Door, bool bOpen, uint8 Event)

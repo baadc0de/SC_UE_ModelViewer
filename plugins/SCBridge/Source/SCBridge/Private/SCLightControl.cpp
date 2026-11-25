@@ -151,19 +151,29 @@ static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPose(
 static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPlay(
     TEXT("sc.Doors.Play"), TEXT("sc.Doors.Play <owner substring> <open|close|toggle>: move matching doors as an order does (DOOR_PLAY)"),
     FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
-        if (Args.Num() < 2) return;
-        // Every matching door's target first (a toggle reads the state before any order): an order's links may move
-        // another matching door, which is then already where it is asked to go.
+        const FString Verb = Args.Num() >= 2 ? Args[1].ToLower() : FString();
+        if (Verb != TEXT("open") && Verb != TEXT("close") && Verb != TEXT("toggle"))
+        {
+            UE_LOG(LogSCLightControl, Warning, TEXT("DOOR_PLAY usage: sc.Doors.Play <owner substring> <open|close|toggle>"));
+            return;
+        }
+        // Every matching door's target first (a toggle reads the state before any order), and the batch is known to the
+        // doors' port links: a link neither reverses a batch door nor moves it twice.
         TArray<TTuple<ASCVehicle*, int32, bool>> Orders;
         for (TActorIterator<ASCVehicle> It(World); It; ++It)
             for (int32 D = 0; D < It->Doors.Num(); ++D)
                 if (const USCRigComponent* Rig = It->Doors[D].Rig; Rig && Rig->OwnerEntity.Contains(Args[0]))
-                    Orders.Add({*It, D, Args[1] == TEXT("toggle") ? !It->IsDoorOpen(D) : Args[1] == TEXT("open")});
+                {
+                    const bool bOpen = Verb == TEXT("toggle") ? !It->IsDoorOpen(D) : Verb == TEXT("open");
+                    Orders.Add({*It, D, bOpen});
+                    It->DoorOrderBatch.Add(D, bOpen);
+                }
         for (const auto& [V, D, bOpen] : Orders)
         {
             const bool bPlayed = V->IsDoorOpen(D) != bOpen && V->PlayDoor(D, bOpen);
             UE_LOG(LogSCLightControl, Display, TEXT("DOOR_PLAY vehicle=%s door=%d owner=%s open=%d played=%d"), *V->GetName(), D, *V->Doors[D].Rig->OwnerEntity, bOpen, bPlayed);
         }
+        for (const auto& [V, D, bOpen] : Orders) V->DoorOrderBatch.Reset();
     }));
 
 // sc.Doors.Trace <door index|-1>: log that door every vehicle tick while a clip plays on its rig (DOOR_TICK: recorded state,
