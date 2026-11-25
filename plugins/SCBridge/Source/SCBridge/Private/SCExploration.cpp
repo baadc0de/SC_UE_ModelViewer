@@ -248,7 +248,10 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
     const uint64 PriorOrder = NextOrder;
-    if (!PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose)) return false;
+    bInDoorOrder = true; // the move is reported below, once
+    const bool bStarted = PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose);
+    bInDoorOrder = false;
+    if (!bStarted) return false;
     // WP-A1: the door's move (its effects listen); it arrives when the playback it started ends.
     StartDoorMotion(Index, bOpen, PriorOrder);
     if (ShipDoors.IsValidIndex(Index))

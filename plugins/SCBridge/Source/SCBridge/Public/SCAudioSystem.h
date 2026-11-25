@@ -270,6 +270,7 @@ private:
         TArray<FLoop> Loops;
     };
     TArray<FDoorHold> DoorHolds;
+    TMap<FString, int32> DoorTagRefs; // "<vehicle>|<interior>|<entity>|<tag>" -> the door holds holding that state tag
     /** A door event: its group's one-shots once, its looped sounds held (bMotion: for the move, else at rest), its tag
      *  set as a state (bState) or fired. Returns the posts started. */
     int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState);

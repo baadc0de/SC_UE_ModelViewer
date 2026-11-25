@@ -716,6 +716,7 @@ void USCAudioSubsystem::Deinitialize()
     Instances.Reset();
     Scenes.Reset();
     DoorHolds.Reset();
+    DoorTagRefs.Reset();
     if (DoorMotionHandle.IsValid()) ASCVehicle::OnDoorMotion.Remove(DoorMotionHandle);
     DoorMotionHandle.Reset();
     Super::Deinitialize();
@@ -1959,7 +1960,10 @@ int32 USCAudioSubsystem::PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FS
     {
         if (bState)
         {
-            SetEntityTag(Vehicle, Hold.Interior, EntityId, Ev->Tag, true);
+            // Held per entity and tag by every door holding it (two doors of one entity: the first to stop does not end
+            // the other's).
+            if (++DoorTagRefs.FindOrAdd(FString::Printf(TEXT("%p|%d|%s|%s"), Vehicle, Hold.Interior, *EntityId, *Ev->Tag)) == 1)
+                SetEntityTag(Vehicle, Hold.Interior, EntityId, Ev->Tag, true);
             Hold.StateTags.Add(Ev->Tag);
         }
         else Played += FireEntityTag(Vehicle, Hold.Interior, EntityId, Ev->Tag);
@@ -1978,9 +1982,16 @@ void USCAudioSubsystem::EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool
         if (H.Vehicle.Get() != Vehicle || H.Door != Door || (bMotionOnly && !H.bMotion)) continue;
         for (const FDoorHold::FLoop& L : H.Loops)
             if (L.Id != INDEX_NONE) Stop(L.Id, 0.1f);
-        // The state tags end by entity key: the door's rig may be gone (its entity entry stays with the scene).
-        if (ASCVehicle* V = H.Vehicle.Get())
-            for (const FString& Tag : H.StateTags) SetEntityTag(V, H.Interior, H.EntityId, Tag, false);
+        // The state tags end by entity key (the door's rig may be gone; its entity entry stays with the scene), when no
+        // other door of the entity holds them.
+        for (const FString& Tag : H.StateTags)
+        {
+            const FString Ref = FString::Printf(TEXT("%p|%d|%s|%s"), Vehicle, H.Interior, *H.EntityId, *Tag);
+            int32* Count = DoorTagRefs.Find(Ref);
+            if (Count && --*Count > 0) continue;
+            DoorTagRefs.Remove(Ref);
+            if (ASCVehicle* V = H.Vehicle.Get()) SetEntityTag(V, H.Interior, H.EntityId, Tag, false);
+        }
         DoorHolds.RemoveAt(I);
     }
 }
@@ -1995,11 +2006,19 @@ void USCAudioSubsystem::UpdateDoorHolds()
         {
             for (const FDoorHold::FLoop& L : H.Loops)
                 if (L.Id != INDEX_NONE) Stop(L.Id, 0.1f);
+            for (const FString& Tag : H.StateTags)
+            {
+                const FString Ref = FString::Printf(TEXT("%p|%d|%s|%s"), H.Vehicle.Get(), H.Interior, *H.EntityId, *Tag);
+                if (int32* Count = DoorTagRefs.Find(Ref); Count && --*Count <= 0) DoorTagRefs.Remove(Ref);
+            }
             DoorHolds.RemoveAt(I);
             continue;
         }
         for (FDoorHold::FLoop& L : H.Loops)
             if (L.Place.Attach.IsValid() && (L.Id == INDEX_NONE || !IsPlaying(L.Id))) L.Id = Post(*S, L.Trigger, L.Place);
+        // A held state tag's effects play for the whole hold: SetEntityTag posts them again once none plays (a finite tree).
+        if (ASCVehicle* V = H.Vehicle.Get())
+            for (const FString& Tag : H.StateTags) SetEntityTag(V, H.Interior, H.EntityId, Tag, true);
     }
 }
 

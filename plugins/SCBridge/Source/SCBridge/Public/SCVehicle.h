@@ -601,8 +601,10 @@ public:
         int32 Door = INDEX_NONE;
         bool bOpen = false;
         TArray<uint64> Orders;
+        TWeakObjectPtr<USCRigComponent> Rig; // gone: the move stops (an untargeted clip plays on)
     };
     TArray<FDoorMotion> DoorMotions;
+    bool bInDoorOrder = false; // PlayDoor's own fragment play (it reports the move itself)
     /** Door's motion starts with the playback entries of its rig started after AfterOrder (none: nothing moves). */
     void StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder);
     /** Door's motion (if any) stops without arriving. */

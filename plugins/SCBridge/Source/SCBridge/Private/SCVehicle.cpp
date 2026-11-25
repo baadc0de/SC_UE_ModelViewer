@@ -159,19 +159,25 @@ void ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder)
     FDoorMotion Motion;
     Motion.Door = Door;
     Motion.bOpen = bOpen;
+    Motion.Rig = const_cast<USCRigComponent*>(Rig);
     for (const FSCClipPlayback& P : Playback)
         if (P.Order > AfterOrder && (P.TargetRig.Get() == Rig || !P.bTargeted)) Motion.Orders.Add(P.Order);
-    if (Motion.Orders.IsEmpty()) return; // held, not playing: nothing moves
+    if (Motion.Orders.IsEmpty())
+    {
+        // Held, not playing (a zero-speed play): nothing moves, and what the door held (a previous move, its rest) ends.
+        OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Cancelled);
+        return;
+    }
     DoorMotions.Add(MoveTemp(Motion));
     OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Moved);
     UpdateTickEnabled();
 }
 void ASCVehicle::CancelDoorMotion(int32 Door)
 {
+    // Reported with or without a move: a stationary door's rest (its held opened / closed loops) ends too.
     const int32 Index = DoorMotions.IndexOfByPredicate([&](const FDoorMotion& M) { return M.Door == Door; });
-    if (Index == INDEX_NONE) return;
-    const bool bOpen = DoorMotions[Index].bOpen;
-    DoorMotions.RemoveAt(Index);
+    const bool bOpen = Index != INDEX_NONE && DoorMotions[Index].bOpen;
+    if (Index != INDEX_NONE) DoorMotions.RemoveAt(Index);
     OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Cancelled);
 }
 void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
@@ -179,7 +185,7 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended)
     for (int32 I = DoorMotions.Num() - 1; I >= 0; --I)
     {
         FDoorMotion& M = DoorMotions[I];
-        bool bVanished = false;
+        bool bVanished = !M.Rig.IsValid(); // its rig gone (an untargeted clip may play on without it)
         M.Orders.RemoveAll([&](uint64 Order) {
             if (Ended.Contains(Order)) return true;
             if (Playback.ContainsByPredicate([&](const FSCClipPlayback& P) { return P.Order == Order; })) return false;
@@ -424,6 +430,18 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
         };
         for (const auto& P : Playback) Record(P);
         for (const auto& P : HeldPlayback) Record(P);
+        // WP-A1: a door's own fragment played outside a door order (a fragment command, a harness) moves the door, held at a
+        // start or end it stops it (PlayDoor reports its own move).
+        if (!bInDoorOrder)
+            for (int32 D = 0; D < Doors.Num(); ++D)
+            {
+                const FSCDoorInteraction& Door = Doors[D];
+                if (Door.Fragment != Fragment || (Target && Door.Rig != Target)) continue;
+                const bool bDoorTag = Tag == Door.OpenTag || Tag == Door.CloseTag;
+                const bool bHold = Start == ESCFragmentStart::HoldFirst || Start == ESCFragmentStart::HoldLast;
+                if (bDoorTag && !bHold) StartDoorMotion(D, Tag == Door.OpenTag && SpeedScale >= 0, OrderBefore);
+                else CancelDoorMotion(D);
+            }
     }
     if (Found && !ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: the pads of a door that starts moving
     return Found;
@@ -438,7 +456,7 @@ bool ASCVehicle::ToggleClip(FName Fragment, FName OpenTag, FName CloseTag)
 }
 void ASCVehicle::ResetPose()
 {
-    while (!DoorMotions.IsEmpty()) CancelDoorMotion(DoorMotions.Last().Door); // every move stops (WP-A1)
+    for (int32 D = 0; D < Doors.Num(); ++D) CancelDoorMotion(D); // every move and rest hold stops (WP-A1)
     Playback.Reset();
     HeldPlayback.Reset();
     DirtyMeshes.Reset();
@@ -492,7 +510,9 @@ void ASCVehicle::Tick(float DeltaSeconds)
             TraceLines.Add(FString::Printf(TEXT("clip=%s from=%.2f frame=%.2f last=%d speed=%.2f ended=%d"), *C.Id.ToString(), Previous, P.Frame, C.LastFrame, P.Speed, bEnded));
         if (bEnded)
         {
-            Ended.Add(P.Order);
+            // A move arrives at its clip's end; a gangway stopped by the ground short of it does not (WP-A1: the data does
+            // not say the game plays the arrival then).
+            if (!GroundStop) Ended.Add(P.Order);
             P.bPlaying = false;
             HeldPlayback.Add(P);
             Playback.RemoveAt(I);
