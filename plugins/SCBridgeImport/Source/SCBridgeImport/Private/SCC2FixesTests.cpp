@@ -23,6 +23,9 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "SCVehicle.h"
+#include "SCEnvironment.h"
+#include "SCAudioSystem.h"
+#include "SCAudioSource.h"
 #include "SCLights.h"
 #include "SCLift.h"
 #include "SCRigComponent.h"
@@ -673,9 +676,14 @@ bool FSCReaderC2FixesTest::RunTest(const FString&)
         TestEqual(TEXT("points at its child"), Promoted->PromotedChild, 1);
         TestTrue(TEXT("its ids and class"), Promoted->EntityId == TEXT("door1") && Promoted->EntityClassGuid == TEXT("abc") && Promoted->Links == TArray<FString>{TEXT("sensor1")});
         TestTrue(TEXT("its door"), Promoted->Door.bValid && Promoted->Door.OpenTag == FName(TEXT("Open")));
-        TestTrue(TEXT("no geometry of its own"), Promoted->MeshAsset.IsEmpty() && Promoted->UiBindings.IsEmpty());
+        TestTrue(TEXT("no geometry of its own"), Promoted->MeshAsset.IsEmpty());
         TestTrue(TEXT("its container frame"), Promoted->LocalMatrix.GetOrigin().Equals(FVector(2, 3, 4)));
         TestEqual(TEXT("named as its child"), Promoted->EntityName, FString(TEXT("hangar_door_a")));
+        // The child acts as the container's entity: its ids, links and interior (button faces, usables).
+        const FSCSceneInstance& Child = M.Children[1];
+        TestTrue(TEXT("the child carries the entity's ids"), Child.EntityId == TEXT("door1") && Child.Links == TArray<FString>{TEXT("sensor1")} &&
+                                                                 Child.SocEntityName == TEXT("Door_Hangar_1"));
+        TestEqual(TEXT("the child's interior"), Child.PromotedInterior, 0);
     }
     TestEqual(TEXT("the ordinary placement stays first"), M.Interiors[0].Placements[0].EntityId, FString(TEXT("p")));
     const FSCDoorTiming& D = M.Children[0].Door;
@@ -1007,6 +1015,156 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     // A lock change is reported.
     TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));
     Expect(TEXT("locked"), {TEXT("A:0:locked")});
+    return !HasAnyErrors();
+}
+
+// SCBridge.Doors.PresentedState (WP-A1 follow-ups): an environment presented open (FSCEnvironment::SetState snaps each owner's
+// opened clip: a state clip, not the door's own move) records its doors open, so a toggle closes them (a hangar's top doors
+// presented open: the first order was an open on an open door).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCDoorPresentedStateTest, "SCBridge.Doors.PresentedState", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCDoorPresentedStateTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    auto* V = World->SpawnActor<ASCVehicle>();
+    V->ClipCatalog = NewObject<USCClipCatalog>(V);
+    USCRigComponent* A = AddRig(V, TEXT("HangarDoor"));
+    AddClip(V, A, TEXT("HangarDoor__door_open"), TEXT("Open"), {0, 25, 50});
+    AddClip(V, A, TEXT("HangarDoor__door_close"), TEXT("Close"), {50, 25, 0});
+    AddClip(V, A, TEXT("HangarDoor__door_opened"), TEXT("Opened"), {50}); // the open state: one frame, no Mannequin fragment
+    V->ClipCatalog->Clips.Last().Fragments.Reset();
+    // A second door on the same rig (a latch on another bone, its own fragment): the presented clip does not move it.
+    for (const TCHAR* Latch : {TEXT("latch_open"), TEXT("latch_close")})
+    {
+        AddClip(V, A, Latch, FString(Latch).EndsWith(TEXT("open")) ? FName(TEXT("Open")) : FName(TEXT("Close")),
+                FString(Latch).EndsWith(TEXT("open")) ? std::initializer_list<double>{0, 9} : std::initializer_list<double>{9, 0});
+        FSCImportedClip& Clip = V->ClipCatalog->Clips.Last();
+        Clip.Bindings[0].Tracks[0].Bone = 0;
+        Clip.Fragments[0].Fragment = TEXT("Latch");
+    }
+    FSCDoorRecord R;
+    R.Door.bValid = true;
+    R.Door.OpenTag = TEXT("Open");
+    R.Door.CloseTag = TEXT("Close");
+    R.Door.bIsOpened = false;
+    V->DoorRecords.Add(A, R);
+    V->BuildExploration();
+    const int32 D = V->DoorForRig(A);
+    if (!TestTrue(TEXT("a door"), D != INDEX_NONE)) return false;
+    TestTrue(TEXT("closed at rest"), V->IsDoorStateKnown(D) && !V->IsDoorOpen(D));
+    const int32 LatchDoor = V->Doors.IndexOfByPredicate([&](const FSCDoorInteraction& X) { return X.Rig == A && X.Fragment == FName(TEXT("Latch")); });
+    TestTrue(TEXT("presented open"), FSCEnvironment::SetState(V, TEXT("open")) > 0);
+    TestTrue(TEXT("its state is the presented pose"), V->IsDoorStateKnown(D) && V->IsDoorOpen(D) && FMath::IsNearlyEqual(BoneX(A), 50.0, 1e-3));
+    if (TestTrue(TEXT("the latch is a door of its own"), V->Doors.IsValidIndex(LatchDoor) && LatchDoor != D))
+        TestFalse(TEXT("a door the presented clip does not move is not recorded open"), V->IsDoorOpen(LatchDoor));
+    TestTrue(TEXT("a toggle closes it"), V->ToggleDoor(D));
+    V->Tick(1.f);
+    TestTrue(TEXT("closed"), !V->IsDoorOpen(D) && FMath::IsNearlyEqual(BoneX(A), 0.0, 1e-3));
+    TestTrue(TEXT("presented closed"), FSCEnvironment::SetState(V, TEXT("closed")) >= 0 && V->IsDoorStateKnown(D) && !V->IsDoorOpen(D));
+    return !HasAnyErrors();
+}
+
+namespace
+{
+/** A silent mono media of Frames frames at 48 kHz (synthetic: the hold runtime needs a voice that ends, not a sound). */
+class FSilentSource final : public FSCAudioSource
+{
+public:
+    explicit FSilentSource(uint64 InFrames)
+    {
+        Channels = 1;
+        Rate = 48000;
+        Frames = LoopEnd = DecodedEnd = InFrames;
+    }
+    TUniquePtr<ISCAudioDecoder> NewDecoder() const override
+    {
+        struct FDecoder final : ISCAudioDecoder
+        {
+            uint64 At = 0, End = 0;
+            bool Seek(uint64 Frame) override { At = Frame; return Frame <= End; }
+            int32 Read(float* Out, int32 N) override
+            {
+                const int32 Count = int32(FMath::Min<uint64>(N, End - FMath::Min(At, End)));
+                FMemory::Memzero(Out, Count * sizeof(float));
+                At += Count;
+                return Count;
+            }
+        };
+        auto D = MakeUnique<FDecoder>();
+        D->End = Frames;
+        return D;
+    }
+    const TCHAR* Kind() const override { return TEXT("silent"); }
+};
+}
+
+// SCBridge.Audio.DoorHoldRuntime (WP-A1 follow-ups): a door's looped sound is held for its move: posted again when it ends;
+// an authored stop reached between two repetitions ends the hold's repeats; StopAll does too. Synthetic manifest: one
+// half-second silent sound, a door class whose opening group holds it looped, a global stop trigger targeting it.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioDoorHoldRuntimeTest, "SCBridge.Audio.DoorHoldRuntime", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioDoorHoldRuntimeTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    USCAudioSubsystem* Audio = World->GetSubsystem<USCAudioSubsystem>();
+    if (!TestNotNull(TEXT("audio subsystem"), Audio)) return false;
+    auto* V = World->SpawnActor<ASCVehicle>();
+    V->ClipCatalog = NewObject<USCClipCatalog>(V);
+    USCRigComponent* A = AddRig(V, TEXT("Hatch"));
+    AddClip(V, A, TEXT("hatch_open"), TEXT("Open"), {0, 25, 50});
+    AddClip(V, A, TEXT("hatch_close"), TEXT("Close"), {50, 25, 0});
+    FSCDoorRecord R;
+    R.Door.bValid = true;
+    R.Door.OpenTag = TEXT("Open");
+    R.Door.CloseTag = TEXT("Close");
+    R.Door.bIsOpened = false;
+    V->DoorRecords.Add(A, R);
+    V->BuildExploration();
+    const int32 Door = V->DoorForRig(A);
+    if (!TestTrue(TEXT("a door"), Door != INDEX_NONE)) return false;
+
+    const TSharedRef<FSCAudioScene> Scene = MakeShared<FSCAudioScene>();
+    Scene->Vehicle = V;
+    Scene->Name = TEXT("synthetic");
+    FSCAudioNode& Sound = Scene->Manifest.Nodes.AddDefaulted_GetRef();
+    Sound.Id = 100;
+    Sound.Media = 7;
+    Scene->Manifest.Media.Add(7, {TEXT("silent.ogg"), TEXT("vorbis"), FString(), 1, 48000, 0.5f});
+    Scene->Sources.Add(7, MakeShared<FSilentSource, ESPMode::ThreadSafe>(24000));
+    FSCAudioTrigger& Play = Scene->Manifest.Triggers.Add(TEXT("Play_Loop"));
+    Play.Status = TEXT("playable");
+    Play.Play.Add({0});
+    FSCAudioTrigger& StopIt = Scene->Manifest.Triggers.Add(TEXT("Stop_Loop"));
+    StopIt.Status = TEXT("stop_only");
+    StopIt.Other.Add({0x0100, 100, 0.f, 0.f}); // a stop (high byte 1), global (even low byte), of the sound's node
+    FSCAudioClass& Class = Scene->Manifest.Classes.Add(TEXT("cls"));
+    Class.Name = TEXT("EntityClassDefinition.SyntheticDoor");
+    Class.DoorEvents.Add(TEXT("opening"), {TEXT("OpeningGroup"), FString(), FString()});
+    Class.DoorSounds.Add({TEXT("OpeningGroup"), TEXT("Play_Loop"), FString(), FVector::ZeroVector, true});
+    Scene->Entities.Add(TEXT("0/door1"), {TEXT("cls"), A, A, 0});
+    Audio->AddScene(Scene);
+
+    // The order: its move holds the looped sound; when a repetition ends the hold posts it again.
+    TestTrue(TEXT("the door moves"), V->PlayDoor(Door, true));
+    TestEqual(TEXT("the move holds its looped sound"), Audio->NumDoorHolds(V, Door), 1);
+    for (int32 Step = 0; Step < 8; ++Step) Audio->Tick(0.2f); // 1.6 s: three repetitions of a 0.5 s sound
+    TestEqual(TEXT("still held after it ended (posted again)"), Audio->NumDoorHolds(V, Door), 1);
+
+    // An authored stop of its node ends the repeats: once the repetition playing ends, nothing is posted again.
+    FSCAudioPlace Anywhere;
+    Anywhere.Label = TEXT("stopper");
+    Audio->Post(*Scene, TEXT("Stop_Loop"), Anywhere);
+    for (int32 Step = 0; Step < 6; ++Step) Audio->Tick(0.2f);
+    TestEqual(TEXT("an authored stop ends the hold's repeats"), Audio->NumDoorHolds(V, Door), 0);
+
+    // StopAll ends a new move's hold too.
+    TestTrue(TEXT("the door turns around"), V->PlayDoor(Door, false));
+    TestEqual(TEXT("the new move holds its sound"), Audio->NumDoorHolds(V, Door), 0); // closing plays no group here
+    TestTrue(TEXT("and back"), V->PlayDoor(Door, true));
+    TestEqual(TEXT("held again"), Audio->NumDoorHolds(V, Door), 1);
+    Audio->StopAll();
+    for (int32 Step = 0; Step < 6; ++Step) Audio->Tick(0.2f);
+    TestEqual(TEXT("StopAll ends the repeats"), Audio->NumDoorHolds(V, Door), 0);
     return !HasAnyErrors();
 }
 

@@ -1414,7 +1414,7 @@ void FSCImportJob::FState::Assemble()
                     if (!Operable.Geometry.Positions.IsEmpty())
                     {
                         Operable.Component = Target; Operable.Slot = Slot; Operable.Panel = E.Anchor;
-                        Operable.Interior = PlacingInterior; Operable.EntityId = I.EntityId.IsEmpty() ? SCCargoRecords::PortKey(I.PortPath) : I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
+                        Operable.Interior = PlacingInterior != INDEX_NONE ? PlacingInterior : I.PromotedInterior; Operable.EntityId = I.EntityId.IsEmpty() ? SCCargoRecords::PortKey(I.PortPath) : I.EntityId; Operable.Links = I.Links; Operable.Sendables = I.SendableInteractions;
                         Operable.Buttons = Binding->Buttons; Operable.ImageSizePx = Binding->ImageSizePx;
                         Operable.bHideDoorLockControl = Binding->bHideDoorLockControl;
                         Operable.StateTypes = Binding->StateTypes; Operable.StateImages = Binding->PanelStateImages(); Operable.DefaultImage = Image;
@@ -1457,7 +1457,7 @@ void FSCImportJob::FState::Assemble()
         if (!I.UsableInteractions.IsEmpty() && E.Anchor && !I.Door.bValid)
         {
             FSCUsableTarget Usable;
-            Usable.Interior = PlacingInterior;
+            Usable.Interior = PlacingInterior != INDEX_NONE ? PlacingInterior : I.PromotedInterior; // a promoted placement: its container's
             Usable.EntityId = I.EntityId;
             Usable.Label = I.SocEntityName.IsEmpty() ? I.EntityName : I.SocEntityName;
             for (const FSCInteractionPoint& Point : I.InteractionPoints)
@@ -1883,6 +1883,11 @@ void FSCImportJob::FState::Assemble()
                 if (!ChildEntities.IsValidIndex(P.PromotedChild) || !ChildEntities[P.PromotedChild].Anchor) continue;
                 if (!P.EntityId.IsEmpty()) ById.Add(P.EntityId, ChildEntities[P.PromotedChild]);
                 ByPlacement.Add(PlacementIndex, ChildEntities[P.PromotedChild]);
+                if (P.Ladder.IsSet()) // its frame in the container, as a placed ladder's
+                {
+                    USceneComponent* Ladder = NewAnchor(TEXT("LadderFrame"), Container, ContainerFrame(P.LocalMatrix, bHelper));
+                    V->LadderAnchors.Add({Ladder, P.EntityId, P.Ladder.GetValue()});
+                }
             }
             else if (CanPlace(P))
             {
@@ -1995,26 +2000,18 @@ void FSCImportJob::FState::Assemble()
             Door.ExitDelay = Sensor.ExitDelay;
             V->DoorSensors.Add(MoveTemp(Door));
         }
-        FBox Floor(ForceInit);
-        TArray<USceneComponent*> Descendants;
-        Container->GetChildrenComponents(true, Descendants);
-        for (const auto* C : Descendants)
-            if (const auto* Primitive = Cast<UPrimitiveComponent>(C); Primitive && Primitive->IsCollisionEnabled()) Floor += Primitive->Bounds.GetBox();
         for (int32 Index = FirstDeferred; Index < DeferredRegistration.Num(); ++Index)
         {
             UStaticMeshComponent* Component = DeferredRegistration[Index];
             Component->UpdateComponentToWorld();
             Component->UpdateBounds();
-            if (Component->IsCollisionEnabled() && Component->IsAttachedTo(Container)) Floor += Component->Bounds.GetBox();
         }
-        // The container's largest room stands on its floor; without rooms, the bounds of what collides (a container's
-        // collision can reach far below its rooms, e.g. a ship's lift down to the ground).
+        // The container's largest room stands on its floor. A container without a room volume is no place to stand (a
+        // ship's exterior lighting set: the bounds of what it collides with are a point inside the hull); the vehicle's
+        // seats, accesses, doors and hull are its spawns.
         FVector RoomFloor;
         if (V->LightAreas.Num() > AreasBefore && V->LightAreas.Last().LargestRoomFloor(RoomFloor))
             V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName, FTransform(RoomFloor));
-        else if (Floor.IsValid)
-            V->AddSpawnPoint(TEXT("Interior"), Interior.Container.EntityName,
-                FTransform(FVector(Floor.GetCenter().X, Floor.GetCenter().Y, Floor.Min.Z)));
     }
     // Inventory waypoints stand on the container's floor centre: the container entity sits at the centre of its lattice
     // floor, grid_pos_offset adds to it (USCCargoGridComponent::LatticeToWorld).

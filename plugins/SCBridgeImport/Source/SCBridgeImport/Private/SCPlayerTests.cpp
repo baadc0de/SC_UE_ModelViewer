@@ -12,6 +12,7 @@
 #include "SCFirstPersonCharacter.h"
 #include "SCImportJob.h"
 #include "SCPackageSource.h"
+#include "SCTestPackages.h"
 #include "SCRigComponent.h"
 #include "SCVehicle.h"
 #include "Components/CapsuleComponent.h"
@@ -74,10 +75,17 @@ bool CheckGrid(FAutomationTestBase& Test, const FSCBlendSpace& Space, int32 Step
         }
     return OK;
 }
-TSharedPtr<FSCTarPackageSource> LoadPackage()
+/** -SCPlayerPackage=<kit tar>, else the default kit exported from the archive (SCTestPackages). */
+TSharedPtr<FSCTarPackageSource> LoadPackage(FString* Error = nullptr)
 {
     FString Path;
-    if (!FParse::Value(FCommandLine::Get(), TEXT("SCPlayerPackage="), Path)) return nullptr;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("SCPlayerPackage="), Path))
+    {
+        FString Detail;
+        TSharedPtr<FSCTarPackageSource> Kit = SCTestPackages::PlayerKit(Detail);
+        if (Error) *Error = Detail;
+        return Kit;
+    }
     TArray<uint8> Bytes;
     if (!FFileHelper::LoadFileToArray(Bytes, *Path)) return nullptr;
     return MakeShared<FSCTarPackageSource>(MoveTemp(Bytes));
@@ -409,8 +417,9 @@ bool AttachedTo(const USceneComponent* Anchor, const USCRigComponent* Leader, FN
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCPlayerKitRig, "SCBridge.Player.KitRigAndWeapons", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FSCPlayerKitRig::RunTest(const FString&)
 {
-    TSharedPtr<FSCTarPackageSource> Package = LoadPackage();
-    if (!TestTrue(TEXT("-SCPlayerPackage=<kit tar> readable"), Package.IsValid() && Package->IsValid())) return false;
+    FString PackageError;
+    TSharedPtr<FSCTarPackageSource> Package = LoadPackage(&PackageError);
+    if (!TestTrue(TEXT("player kit package (-SCPlayerPackage, else exported): ") + PackageError, Package.IsValid() && Package->IsValid())) return false;
     UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
     World->InitializeActorsForPlay(FURL());
     World->BeginPlay();

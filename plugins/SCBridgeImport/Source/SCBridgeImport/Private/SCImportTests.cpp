@@ -446,18 +446,8 @@ bool FSCDeferredInstancingTest::RunTest(const FString&)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCFolderTarImport, "SCBridge.Package.FolderTarImport", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FSCFolderTarImport::RunTest(const FString&)
-{
-    FString Folder, Tar;
-    if (!FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder) || !FParse::Value(FCommandLine::Get(), TEXT("SCVerifyTar="), Tar))
-    { AddError(TEXT("FolderTarImport requires -SCPackage and -SCVerifyTar")); return false; }
-    UWorld* World = nullptr;
-    for (const auto& Context : GEngine->GetWorldContexts())
-        if (Context.World() && (Context.WorldType == EWorldType::Editor || Context.World()->IsGameWorld())) World = Context.World();
-    TestTrue(TEXT("Folder/tar asset counts, content hashes, collision, representations and GC"), FSCImporter::Verify(Folder, Tar, World));
-    return true;
-}
+// (SCBridge.Package.FolderTarImport, a folder export against the tar of the same package, is retired: the archive
+// library exports tars only; the import harness keeps the comparison, FSCImporter::Verify.)
 #endif
 #include "SCImporter.h"
 bool USCImportLibrary::RunUnitTests()
@@ -470,7 +460,7 @@ bool USCImportLibrary::RunUnitTests()
         TEXT("FSCStarEngineFixture"), TEXT("FSCStarEngineDomain"), TEXT("FSCStarEngineRules"),
         TEXT("FSCViewerExposureSettings"), TEXT("FSCViewerExposureLut"), TEXT("FSCViewerExposureInstall"), TEXT("FSCFirstPersonSeatReach"), TEXT("FSCGamePhysicsClasses"), TEXT("FSCGamePhysicsGrid"), TEXT("FSCGamePhysicsFailedCollider"), TEXT("FSCHangarCapacityHolds"), TEXT("FSCPlayerAimPose"), TEXT("FSCPaintTarget")};
     FString Folder;
-    if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Append({TEXT("FSCMaterialsPackageRules"), TEXT("FSCFolderTarImport")});
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCPackage="), Folder)) Names.Add(TEXT("FSCMaterialsPackageRules"));
     if (FParse::Param(FCommandLine::Get(), TEXT("SCFirstPersonTests"))) Names = {TEXT("FSCFirstPersonCollision")};
     if (FParse::Param(FCommandLine::Get(), TEXT("SCPlayerTests")))
     {

@@ -72,7 +72,9 @@ use std::{
 // 45: a socpak's animated placements promoted to children keep their identity (`children[].placement`: interior index,
 //     ids, links, interactions, door, container transform), carry the placement's door / links / UI, and their clips
 //     the fragments of their class's Mannequin controller. WP-A1 hangar doors.
-pub const CACHE_FORMAT_VERSION: u32 = 45;
+// 46: a rig whose chrparams declares its clips by a wildcard rule only (no tracks database: `#filepath` + `**/*.caf`)
+//     gets every loose CAF the rule matches, named after its file (the BEHR P6-LR sniper's fire clips). WP-A1 follow-ups.
+pub const CACHE_FORMAT_VERSION: u32 = 46;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

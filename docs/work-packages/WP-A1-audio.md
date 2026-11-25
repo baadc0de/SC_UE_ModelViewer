@@ -753,7 +753,22 @@ entities (`<interior>/<entity id>`), door pads, sensors and lifts find it as bef
 doors. `hangar_xltop_001`: `ENVIRONMENT_DOORS doors=17` (was 0): its top doors, the ship-elevator pad and loading gate,
 the cargo elevator door and pad, the elevator doors. Its ship-elevator gate (`LoadingPlatformLoadingGate`) plays
 `Play_MCDR_Metal_Door_Close` / `_Closed` / `_Open` / `_Opened` from its orders (`sc.Doors.Play ht_hangar_ship_elev_door_xl_a`);
-the top doors' class (`DoorDefaultTemplate`) has no sounds of its own. Cache format 45, prepared format 33.
+the top doors play their clips' animation events (`Play_MCAN_Hangar_Doors_Hightech_XL_Top_Open` / `_Close`; their class, `DoorDefaultTemplate`, has no group sounds). Cache format 45, prepared format 33.
+
+**Follow-ups** (branch `wp/a1-door-followups`; submodule `scviewer/chrparams-wildcards`):
+- A promoted door's child carries the entity's ids, links, interactions and its interior (`PromotedInterior`): its
+  button faces and usables belong to its container; its identity record carries the child's UI (waypoints, garage
+  kiosks) and registers its ladder.
+- A presented environment (`FSCEnvironment::SetState`) records each posed door's state (`ASCVehicle::RecordDoorState`):
+  the hangar's top doors presented open close on the first toggle (it used to order an open door open).
+- An interior container without a room volume is no spawn (the Golem's exterior lighting set gave a point inside the
+  hull).
+- The exporter plays a chrparams' wildcard-only clips (`#filepath` + `**/*.caf`, no tracks database): the BEHR P6-LR
+  sniper's fire clips. Cache format 46, prepared format 34.
+- Tests: `SCBridge.Audio.DoorHoldRuntime` (a held loop posted again, ended by an authored stop and by StopAll, on a
+  synthetic manifest), `SCBridge.Doors.PresentedState`; `FirstPerson.SkeletalCollision` and `Player.KitRigAndWeapons`
+  export their packages from the archive (SCTestPackages.h) and pass (the first stands the ship on the viewer's floor);
+  `Package.FolderTarImport` is retired (the archive library exports tars only; the import harness keeps the comparison).
 
 ## Proof decode (research)
 
