@@ -422,6 +422,20 @@ void FSCAnimImporter::BuildSequences(USkeletalMesh* Mesh, UObject* Outer, FSCCli
 #endif
     }
 }
+namespace
+{
+/** The skeleton of a clip's metadata-only sequence on a vehicle without a root rig: one root bone. The engine's animation
+ *  compression evaluates every bone of a sequence's skeleton (FByFramePoseEvalContext): a skeleton without bones is an
+ *  invalid bone container and asserts. */
+USkeleton* MetadataSkeleton(UObject* Outer)
+{
+    USkeleton* Skeleton = NewObject<USkeleton>(Outer, NAME_None, RF_Transient);
+    FReferenceSkeletonModifier Modifier(Skeleton);
+    Modifier.Add(FMeshBoneInfo(TEXT("root"), TEXT("root"), INDEX_NONE), FTransform::Identity);
+    return Skeleton;
+}
+} // namespace
+
 void FSCAnimImporter::Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImportedClip& Clip)
 {
     if (!Clip.Bindings.IsEmpty())
@@ -431,7 +445,8 @@ void FSCAnimImporter::Finalize(USkeletalMesh* RootMesh, UObject* Outer, FSCImpor
     }
     Clip.bBoomerang = false;
     Clip.Sequence = NewObject<UAnimSequence>(Outer, NAME_None, RF_Transient);
-    Clip.Sequence->SetSkeleton(RootMesh ? RootMesh->GetSkeleton() : NewObject<USkeleton>(Outer, NAME_None, RF_Transient));
+    USkeleton* RootSkeleton = RootMesh ? RootMesh->GetSkeleton() : nullptr;
+    Clip.Sequence->SetSkeleton(RootSkeleton && RootSkeleton->GetReferenceSkeleton().GetNum() > 0 ? RootSkeleton : MetadataSkeleton(Outer));
     Clip.Sequence->Interpolation = EAnimInterpolationType::Linear;
 #if WITH_EDITOR
     auto& Controller = Clip.Sequence->GetController();
