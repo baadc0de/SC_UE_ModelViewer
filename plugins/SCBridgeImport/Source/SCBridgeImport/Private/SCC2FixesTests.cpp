@@ -889,14 +889,21 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     Expect(TEXT("rig gone cancels"), {bBOpen ? TEXT("B:1:moved") : TEXT("B:0:moved"), bBOpen ? TEXT("B:1:cancelled") : TEXT("B:0:cancelled")});
 
     // Its playback stopped short by something that does not drive its channels (a Mannequin scope preempting it): cancelled,
-    // and the door shows neither end, so its recorded state goes (sc.Doors.Play does not skip it as already open).
-    TestTrue(TEXT("A opens"), V->PlayDoor(DA, !V->IsDoorOpen(DA)));
+    // and the door shows neither end: unsettled (sc.Doors.Play does not skip it), its target kept (the next order, a Ship
+    // Link close, goes the other way and settles it).
+    TestTrue(TEXT("A moves"), V->PlayDoor(DA, !V->IsDoorOpen(DA)));
     const bool bAOpen = V->IsDoorOpen(DA);
     V->Tick(0.05f);
     V->Playback.RemoveAll([&](const FSCClipPlayback& P) { return P.TargetRig.Get() == A; });
     V->Tick(0.05f);
     Expect(TEXT("preempted cancels"), {bAOpen ? TEXT("A:1:moved") : TEXT("A:0:moved"), bAOpen ? TEXT("A:1:cancelled") : TEXT("A:0:cancelled")});
-    TestFalse(TEXT("its state unknown"), V->IsDoorStateKnown(DA));
+    TestFalse(TEXT("its state unsettled"), V->IsDoorStateKnown(DA));
+    TestEqual(TEXT("its target kept"), V->IsDoorOpen(DA), bAOpen);
+    TestTrue(TEXT("the next order goes the other way"), V->PlayDoor(DA, !bAOpen));
+    V->Tick(1.f);
+    TestTrue(TEXT("and settles it at that end"), V->IsDoorStateKnown(DA) && V->IsDoorOpen(DA) == !bAOpen &&
+                                                    FMath::IsNearlyEqual(BoneX(A), bAOpen ? 0.0 : 50.0, 1e-3));
+    Events.Reset();
 
     // A lock change is reported.
     TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));

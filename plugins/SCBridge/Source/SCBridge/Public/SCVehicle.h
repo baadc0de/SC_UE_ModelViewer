@@ -610,15 +610,16 @@ public:
     /** Door's motion (if any) stops without arriving. */
     void CancelDoorMotion(int32 Door);
     /** Motions whose entries ended naturally (Ended) arrive; those stopped by the ground (Grounded) are cancelled keeping
-     *  their state; those whose entries vanished otherwise are cancelled and their state goes (unknown). */
+     *  their state; those whose entries vanished otherwise are cancelled and their state is unsettled. */
     void UpdateDoorMotions(const TSet<uint64>& Ended, const TSet<uint64>& Grounded = {});
     /** Door has a recorded state: its open or its close tag (its last move's end; none after a raw clip took it over, and
-     *  not a fragment played without a tag). */
+     *  not a fragment played without a tag), and the door reached it (not unsettled: stopped short of it). */
     bool IsDoorStateKnown(int32 Door) const
     {
         if (!Doors.IsValidIndex(Door)) return false;
-        const FName* Tag = FragmentTargets.Find(FSCFragmentKey(Doors[Door].Rig, Doors[Door].Fragment));
-        return Tag && !Tag->IsNone() && (*Tag == Doors[Door].OpenTag || *Tag == Doors[Door].CloseTag);
+        const FSCFragmentKey Key(Doors[Door].Rig, Doors[Door].Fragment);
+        const FName* Tag = FragmentTargets.Find(Key);
+        return Tag && !Tag->IsNone() && (*Tag == Doors[Door].OpenTag || *Tag == Doors[Door].CloseTag) && !UnsettledTargets.Contains(Key);
     }
     /** Does Clip drive a channel (bone, rotation / position) that Door's own moves drive on its rig? */
     bool ClipDrivesDoor(int32 Door, int32 Clip) const;
@@ -655,6 +656,9 @@ private:
     TSet<USkeletalMesh*> DirtyMeshes;
     // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle. Saved: the doors' state.
     UPROPERTY() TMap<FSCFragmentKey, FName> FragmentTargets;
+    // WP-A1: targets whose door was stopped short of them (preempted, taken over by another fragment): the door shows
+    // neither end. IsDoorOpen still reads the target (the next order goes the other way); IsDoorStateKnown is false.
+    UPROPERTY(Transient) TSet<FSCFragmentKey> UnsettledTargets;
     struct FSensorDoorState { double LastInside = -1; float ExitDelay = 0; bool bOpenedBySensor = false; };
     TMap<int32, FSensorDoorState> SensorDoorStates;
     struct FPendingSpawn

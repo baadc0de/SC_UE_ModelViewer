@@ -963,6 +963,22 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
                 if (I.Scene.Pin().Get() == &S && I.Action && S.Manifest.Nodes.IsValidIndex(I.Action->Root) && S.Manifest.Nodes[I.Action->Root].Id == O.Target &&
                     (!bObject || I.Place.SameEmitter(Where)))
                     Stop(Id, O.FadeS, O.DelayS);
+            // WP-A1: a held door post it targets is stopped too when it has no live instance now (between two of its
+            // repetitions): it is not posted again.
+            auto MarkHeld = [&](TArray<FHeldPost>& Posts) {
+                for (FHeldPost& P : Posts)
+                {
+                    if (P.bStopped || (bObject && !P.Place.SameEmitter(Where))) continue;
+                    const FSCAudioTrigger* HT = S.Manifest.Triggers.Find(P.Trigger);
+                    P.bStopped = HT && HT->Play.ContainsByPredicate([&](const FSCAudioAction& A) {
+                        return S.Manifest.Nodes.IsValidIndex(A.Root) && S.Manifest.Nodes[A.Root].Id == O.Target;
+                    });
+                }
+            };
+            for (FDoorHold& H : DoorHolds)
+                if (SceneOf(H.Vehicle.Get()).Get() == &S) MarkHeld(H.Loops);
+            for (auto& [Key, TH] : TagHolds)
+                if (SceneOf(TH.Vehicle.Get()).Get() == &S) MarkHeld(TH.Effects);
         }
     if (!T->IsPlayable())
     {
@@ -2082,6 +2098,7 @@ void USCAudioSubsystem::UpdateDoorHolds()
             const FHeldPost Held = Posts[I]; // Post may stop (and mark) entries of this array
             const int32 Id = Held.Place.Attach.IsValid() ? Post(S, Held.Trigger, Held.Place) : INDEX_NONE;
             Posts[I].Id = Id;
+            Posts[I].bStopped = false; // its own stop actions (a stop-then-play trigger) restart it, they do not stop it
             if (!HasStarted(Id)) Drop.Add(I);
         }
         for (int32 K = Drop.Num() - 1; K >= 0; --K) Posts.RemoveAt(Drop[K]);

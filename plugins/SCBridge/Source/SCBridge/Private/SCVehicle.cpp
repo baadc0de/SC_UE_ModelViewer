@@ -208,9 +208,10 @@ void ASCVehicle::UpdateDoorMotions(const TSet<uint64>& Ended, const TSet<uint64>
         const FDoorMotion Done = M;
         DoorMotions.RemoveAt(I);
         // (A move with an entry gone otherwise is cancelled even if others ended: its pose is not the move's end.) Stopped
-        // short of its end by something else (a scope preempting it, a reset of playback), the door shows neither end: its
-        // recorded state goes (unknown). A gangway stopped by the ground keeps its state (RememberGangwayStop).
-        if (bVanished && Doors.IsValidIndex(Done.Door)) FragmentTargets.Remove(FSCFragmentKey(Doors[Done.Door].Rig.Get(), Doors[Done.Door].Fragment));
+        // short of its end by something else (a scope preempting it), the door shows neither end: its recorded target stays
+        // (its next order goes the other way, as before) but is unsettled, so sc.Doors.Play does not skip it. A gangway
+        // stopped by the ground is settled (RememberGangwayStop).
+        if (bVanished && Doors.IsValidIndex(Done.Door)) UnsettledTargets.Add(FSCFragmentKey(Doors[Done.Door].Rig.Get(), Doors[Done.Door].Fragment));
         if (!Done.Orders.IsEmpty() || bVanished || bGrounded) OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Cancelled);
         else OnDoorMotion.Broadcast(this, Done.Door, Done.bOpen, EDoorMotion::Arrived);
     }
@@ -302,6 +303,7 @@ void ASCVehicle::ReconcileDoorStates(int32 Index, const USCRigComponent* Target,
         const FSCFragmentKey Key(Rig, D.Fragment);
         if (bOpenClip || bCloseClip) FragmentTargets.Add(Key, (bOpenClip == bEndsAtLast) ? D.OpenTag : D.CloseTag);
         else FragmentTargets.Remove(Key);
+        UnsettledTargets.Remove(Key);
         // WP-A1: a raw clip on the door's channels takes the door over: its move (and rest) stops. Door effects belong to
         // the door's own state changes (orders, PlayDoor), as the game's door component plays them; a clip plays its own
         // animation events.
@@ -490,7 +492,10 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
             for (USCRigComponent* Rig : Rigs)
                 if (AppliesTo(P, Rig) &&
                     ClipCatalog->Clips[P.Clip].Bindings.ContainsByPredicate([&](const FSCClipBinding& B) { return B.Mesh == Rig->GetSkeletalMeshAsset(); }))
+                {
                     FragmentTargets.Add({Rig, Fragment}, Tag);
+                    UnsettledTargets.Remove({Rig, Fragment});
+                }
         };
         for (const auto& P : Playback) Record(P);
         for (const auto& P : HeldPlayback) Record(P);
@@ -504,8 +509,8 @@ bool ASCVehicle::PlayFragmentAt(FName Fragment, FName Tag, USCRigComponent* Targ
                 auto Drives = [&](const FSCClipPlayback& P) { return P.Order > OrderBefore && Rig && AppliesTo(P, Rig) && ClipDrivesDoor(D, P.Clip); };
                 if (!Playback.ContainsByPredicate(Drives) && !HeldPlayback.ContainsByPredicate(Drives)) continue;
                 CancelDoorMotion(D);
-                // Another fragment took the door's channels: its recorded state is no longer what it shows (unknown).
-                if (Fragment != Doors[D].Fragment) FragmentTargets.Remove(FSCFragmentKey(Rig, Doors[D].Fragment));
+                // Another fragment took the door's channels: its recorded state is no longer what it shows (unsettled).
+                if (Fragment != Doors[D].Fragment) UnsettledTargets.Add(FSCFragmentKey(Rig, Doors[D].Fragment));
             }
     }
     if (Found && !ScreenFaces.IsEmpty()) RefreshPanelScreens(); // WP-I1 I1-3: the pads of a door that starts moving
@@ -526,6 +531,7 @@ void ASCVehicle::ResetPose()
     HeldPlayback.Reset();
     DirtyMeshes.Reset();
     FragmentTargets.Reset();
+    UnsettledTargets.Reset();
     SensorDoorStates.Reset(); // a door a sensor opened is back at rest: no pending exit closes it later
     UpdateTickEnabled();
     for (USCRigComponent* Rig : Rigs)

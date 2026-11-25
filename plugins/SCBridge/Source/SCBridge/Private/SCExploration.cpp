@@ -219,7 +219,10 @@ int32 ASCVehicle::ApplyDoorRestPoses()
         else if (D.bReverseClose) bPosed = PlayFragmentAt(D.Fragment, D.OpenTag, D.Rig, 1.f, ESCFragmentStart::HoldFirst);
         else if (bData) bPosed = PlayFragmentAt(D.Fragment, D.CloseTag, D.Rig, 1.f, ESCFragmentStart::HoldLast);
         if (bPosed || (!bData && !D.bStartsOpen))
+        {
             FragmentTargets.Add({D.Rig.Get(), D.Fragment}, D.bStartsOpen ? D.OpenTag : D.CloseTag);
+            UnsettledTargets.Remove({D.Rig.Get(), D.Fragment});
+        }
         else
             UE_LOG(LogTemp, Warning, TEXT("DOOR_REST owner=%s fragment=%s open=%d: no fragment poses the authored state; left at the bind pose, state not recorded"),
                    *D.Rig->OwnerEntity, *D.Fragment.ToString(), D.bStartsOpen);
@@ -272,6 +275,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
         ShipDoors[Index].bCargoRelock = true;
     }
     FragmentTargets.Add({Rig, D.Fragment}, bOpen ? D.OpenTag : D.CloseTag);
+    UnsettledTargets.Remove({Rig, D.Fragment});
     if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
     UpdateTickEnabled();
     // The door's own interaction goes on to the items of the vehicle ports its links name (the C2's front hatch: its Open and
