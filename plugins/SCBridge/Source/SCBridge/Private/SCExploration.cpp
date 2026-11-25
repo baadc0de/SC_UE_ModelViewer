@@ -1,6 +1,7 @@
 // Spawn categories come from DataCore, interaction semantics from Mannequin and receiving joints.
 #include "SCExploration.h"
 #include "SCVehicle.h"
+#include "SCAudioSystem.h"
 #include "SCRigComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Dom/JsonObject.h"
@@ -235,6 +236,9 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
     const uint64 PriorOrder = NextOrder;
     if (!PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose)) return false;
+    // WP-A1: the door's own effects (its class's effect groups and tags) as it starts to move; it arrives when its clips end.
+    MovingDoorRigs.Add(Rig);
+    if (USCAudioSubsystem* Audio = USCAudioSubsystem::Get(this)) Audio->DoorMoved(this, Rig, bOpen);
     if (ShipDoors.IsValidIndex(Index))
     {
         FShipDoor& State = ShipDoors[Index];

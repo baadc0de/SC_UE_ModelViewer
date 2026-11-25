@@ -511,3 +511,36 @@ bool FSCAudioMeterKernelTest::RunTest(const FString&)
     }
     return true;
 }
+
+// A door class's events and the effect-core sounds of their groups (audio.json `door`, WP-A1 door effects).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCAudioDoorEffectsTest, "SCBridge.Audio.DoorEffects", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCAudioDoorEffectsTest::RunTest(const FString&)
+{
+    FSCAudioManifest M;
+    FString Error;
+    const TCHAR* Json = TEXT(R"json({ "version": 1, "triggers": {}, "nodes": [], "attenuations": {}, "buses": {}, "media": {},
+  "entity_classes": { "DOOR-1": { "name": "Gate", "effects": [], "actions": [],
+    "door": { "events": { "open": { "group": "OpenGroup", "tag": "Open", "tag_path": "Door/Open" },
+                          "opening": { "group": "OpeningGroup" }, "opened": { "tag": "Opened" } },
+              "sounds": [ { "group": "OpenGroup", "trigger": "Play_Synthetic_Open", "helper": "$slot_sensor", "offset": [0, 1, 2], "looped": false },
+                          { "group": "OpeningGroup", "trigger": "Play_Synthetic_Loop", "looped": true },
+                          { "group": "UnusedGroup", "trigger": "Play_Synthetic_Other", "looped": false } ] } } } })json");
+    if (!TestTrue(TEXT("parses: ") + Error, FSCAudioManifest::Parse(Json, M, Error))) return false;
+    const FSCAudioClass* C = M.Classes.Find(TEXT("door-1"));
+    if (!TestNotNull(TEXT("class"), C)) return false;
+    TestEqual(TEXT("events"), C->DoorEvents.Num(), 3);
+    TestEqual(TEXT("the open event's tag"), C->DoorEvents[TEXT("open")].Tag, FString(TEXT("Open")));
+    const TArray<const FSCAudioDoorSound*> Open = C->DoorSoundsFor(TEXT("open"));
+    if (TestEqual(TEXT("open plays its group's sound"), Open.Num(), 1))
+    {
+        TestEqual(TEXT("trigger"), Open[0]->Trigger, FString(TEXT("Play_Synthetic_Open")));
+        TestEqual(TEXT("helper"), Open[0]->Helper, FString(TEXT("$slot_sensor")));
+        TestEqual(TEXT("offset"), Open[0]->Offset, FVector(0, 1, 2));
+        TestFalse(TEXT("one-shot"), Open[0]->bLooped);
+    }
+    const TArray<const FSCAudioDoorSound*> Opening = C->DoorSoundsFor(TEXT("opening"));
+    TestTrue(TEXT("opening holds its loop"), Opening.Num() == 1 && Opening[0]->bLooped);
+    TestEqual(TEXT("an event with a tag and no group plays no group sound"), C->DoorSoundsFor(TEXT("opened")).Num(), 0);
+    TestEqual(TEXT("an event the door does not have plays nothing"), C->DoorSoundsFor(TEXT("locked")).Num(), 0);
+    return true;
+}

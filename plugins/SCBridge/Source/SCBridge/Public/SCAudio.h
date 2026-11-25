@@ -210,13 +210,32 @@ struct SCBRIDGE_API FSCAudioEffect
     FVector Offset = FVector::ZeroVector; // CryEngine axes, metres
 };
 
+/** A door event's effect group and entity-effect tag (`door.events`): open, close, opened, closed, opening, closing,
+ *  locked, unlocked and the override forms. */
+struct SCBRIDGE_API FSCAudioDoorEvent
+{
+    FString Group, Tag;
+};
+/** An effect-core sound of a door's effect group (`door.sounds`): played once on its group's event, or while the
+ *  opening / closing state lasts when looped. */
+struct SCBRIDGE_API FSCAudioDoorSound
+{
+    FString Group, Trigger, Helper;
+    FVector Offset = FVector::ZeroVector; // CryEngine axes, metres
+    bool bLooped = false;
+};
+
 struct SCBRIDGE_API FSCAudioClass
 {
     FString Name;
     TArray<FSCAudioEffect> Effects;
     TArray<TPair<FString, FString>> Actions; // (property path, trigger)
+    TMap<FString, FSCAudioDoorEvent> DoorEvents; // by event name
+    TArray<FSCAudioDoorSound> DoorSounds;
     /** Effects whose tag (its own name, the last element of its path) is Tag, of kind On ("" = any). */
     TArray<const FSCAudioEffect*> EffectsFor(const FString& Tag, const FString& On = FString()) const;
+    /** The sounds of the effect group Event names (none without a group). */
+    TArray<const FSCAudioDoorSound*> DoorSoundsFor(const FString& Event) const;
 };
 
 struct SCBRIDGE_API FSCAudioManifest

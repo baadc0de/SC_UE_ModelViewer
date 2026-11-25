@@ -580,6 +580,8 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") void ResetPose();
     void EvaluateClips();
     UPROPERTY(Transient) TArray<FSCClipPlayback> Playback; // active entries only
+    /** WP-A1 door effects: door rigs moving by a door order (PlayDoor) until their clips end (then they arrive). */
+    TSet<TWeakObjectPtr<USCRigComponent>> MovingDoorRigs;
     /** WP-O1-4b-3c: a copy streamed from a prepared level registers its level audio (CookedAudio) once it is placed, not at
      *  BeginPlay (it begins play at the level's origin, hidden): StartCookedAudio then. */
     UPROPERTY(Transient) bool bDeferCookedAudio = false;

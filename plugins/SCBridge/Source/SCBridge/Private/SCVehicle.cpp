@@ -436,6 +436,14 @@ void ASCVehicle::Tick(float DeltaSeconds)
             Playback.RemoveAt(I);
         }
     }
+    // WP-A1: a door moved by a door order arrives when its rig has no clip playing any more.
+    for (auto It = MovingDoorRigs.CreateIterator(); It; ++It)
+    {
+        USCRigComponent* Rig = It->Get();
+        if (Rig && IsRigPlaying(Rig)) continue;
+        It.RemoveCurrent();
+        if (USCAudioSubsystem* Audio = Rig ? USCAudioSubsystem::Get(this) : nullptr) Audio->DoorArrived(this, Rig, IsRigOpen(Rig));
+    }
     EvaluateClips();
     for (const auto& Pair : GroundStops) RememberGangwayStop(Pair.Key);
     for (const FString& Line : TraceLines)

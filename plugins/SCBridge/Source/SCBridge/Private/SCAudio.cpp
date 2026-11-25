@@ -207,6 +207,15 @@ TArray<const FSCAudioEffect*> FSCAudioClass::EffectsFor(const FString& Tag, cons
         if (E.Tag == Tag && (On.IsEmpty() || E.On == On)) Out.Add(&E);
     return Out;
 }
+TArray<const FSCAudioDoorSound*> FSCAudioClass::DoorSoundsFor(const FString& Event) const
+{
+    TArray<const FSCAudioDoorSound*> Out;
+    const FSCAudioDoorEvent* E = DoorEvents.Find(Event);
+    if (!E || E->Group.IsEmpty()) return Out;
+    for (const FSCAudioDoorSound& S : DoorSounds)
+        if (S.Group == E->Group) Out.Add(&S);
+    return Out;
+}
 
 bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString& Error)
 {
@@ -491,6 +500,27 @@ bool FSCAudioManifest::Parse(const FString& Json, FSCAudioManifest& Out, FString
             {
                 const FObj AO = A->AsObject();
                 Class.Actions.Add({Str(AO, TEXT("path")), Str(AO, TEXT("trigger"))});
+            }
+            if (const FObj Door = Obj(O, TEXT("door")))
+            {
+                if (const FObj Events = Obj(Door, TEXT("events")))
+                    for (const auto& [Event, EV] : Events->Values)
+                    {
+                        const FObj EO = EV->AsObject();
+                        Class.DoorEvents.Add(FString(*Event), {Str(EO, TEXT("group")), Str(EO, TEXT("tag"))});
+                    }
+                for (const auto& S : Arr(Door, TEXT("sounds")))
+                {
+                    const FObj SO = S->AsObject();
+                    FSCAudioDoorSound Sound;
+                    Sound.Group = Str(SO, TEXT("group"));
+                    Sound.Trigger = Str(SO, TEXT("trigger"));
+                    Sound.Helper = Str(SO, TEXT("helper"));
+                    Sound.bLooped = Bool(SO, TEXT("looped"));
+                    const auto& Off = Arr(SO, TEXT("offset"));
+                    if (Off.Num() == 3) Sound.Offset = FVector(Off[0]->AsNumber(), Off[1]->AsNumber(), Off[2]->AsNumber());
+                    if (!Sound.Trigger.IsEmpty()) Class.DoorSounds.Add(MoveTemp(Sound));
+                }
             }
             Out.Classes.Add(K.ToLower(), MoveTemp(Class));
         }
