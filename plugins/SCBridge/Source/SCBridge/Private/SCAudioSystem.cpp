@@ -1273,6 +1273,14 @@ void USCAudioSubsystem::Stop(int32 Id, float FadeS, float DelayS)
     }
 }
 
+bool USCAudioSubsystem::IsStopping(int32 Id) const
+{
+    if (Id == INDEX_NONE) return false;
+    for (const auto& [Key, I] : Instances)
+        if ((I.Id == Id || I.Group == Id) && I.bStopping) return true;
+    return false;
+}
+
 bool USCAudioSubsystem::HasStarted(int32 Id) const
 {
     // A post whose group has a voice or a scheduled run (a playable trigger whose media is missing posts none).
@@ -2058,9 +2066,11 @@ void USCAudioSubsystem::UpdateDoorHolds()
         ReleaseDoorHold(H);
         DoorHolds.RemoveAt(I);
     }
-    // A held post that ended is posted again; one that no longer starts (its attachment gone, nothing playable) is dropped.
+    // A held post that ended by itself is posted again; one that was stopped (a stop command or an object-scoped stop
+    // action) or no longer starts (its attachment gone, nothing playable) is dropped.
     auto KeepHeld = [&](FSCAudioScene& S, TArray<FHeldPost>& Posts) {
         Posts.RemoveAll([&](FHeldPost& P) {
+            if (IsStopping(P.Id)) return true;
             if (IsPlaying(P.Id)) return false;
             P.Id = P.Place.Attach.IsValid() ? Post(S, P.Trigger, P.Place) : INDEX_NONE;
             return !HasStarted(P.Id);

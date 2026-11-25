@@ -611,10 +611,13 @@ public:
     void CancelDoorMotion(int32 Door);
     /** Motions whose entries ended naturally (Ended) arrive; those whose entries vanished are cancelled. */
     void UpdateDoorMotions(const TSet<uint64>& Ended);
-    /** Door has a recorded state (its last move's end; none after a raw clip took it over). */
+    /** Door has a recorded state: its open or its close tag (its last move's end; none after a raw clip took it over, and
+     *  not a fragment played without a tag). */
     bool IsDoorStateKnown(int32 Door) const
     {
-        return Doors.IsValidIndex(Door) && FragmentTargets.Contains(FSCFragmentKey(Doors[Door].Rig, Doors[Door].Fragment));
+        if (!Doors.IsValidIndex(Door)) return false;
+        const FName* Tag = FragmentTargets.Find(FSCFragmentKey(Doors[Door].Rig, Doors[Door].Fragment));
+        return Tag && !Tag->IsNone() && (*Tag == Doors[Door].OpenTag || *Tag == Doors[Door].CloseTag);
     }
     /** Does Clip drive a channel (bone, rotation / position) that Door's own moves drive on its rig? */
     bool ClipDrivesDoor(int32 Door, int32 Clip) const;
