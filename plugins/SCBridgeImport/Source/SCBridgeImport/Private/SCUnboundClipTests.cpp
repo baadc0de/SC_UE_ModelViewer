@@ -21,6 +21,13 @@ bool FSCUnboundClipSequence::RunTest(const FString&)
     if (!TestNotNull(TEXT("metadata sequence"), Clip.Sequence.Get())) return false;
     const USkeleton* Skeleton = Clip.Sequence->GetSkeleton();
     TestTrue(TEXT("its skeleton has a bone (a valid bone container for compression)"), Skeleton && Skeleton->GetReferenceSkeleton().GetNum() > 0);
+    // A bone tree for its bone (editor tools index it): a bone's retargeting mode is kept there; without one it reads the
+    // default back.
+    if (USkeleton* Mutable = const_cast<USkeleton*>(Skeleton))
+    {
+        Mutable->SetBoneTranslationRetargetingMode(0, EBoneTranslationRetargetingMode::Skeleton, false);
+        TestEqual(TEXT("a bone tree for its bone"), int32(Mutable->GetBoneTranslationRetargetingMode(0)), int32(EBoneTranslationRetargetingMode::Skeleton));
+    }
 #if WITH_EDITOR
     Clip.Sequence->WaitOnExistingCompression();
     TestTrue(TEXT("compressed"), Clip.Sequence->IsCompressedDataValid());

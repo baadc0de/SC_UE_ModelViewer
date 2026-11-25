@@ -424,14 +424,13 @@ void FSCAnimImporter::BuildSequences(USkeletalMesh* Mesh, UObject* Outer, FSCCli
 }
 namespace
 {
-/** The skeleton of a clip's metadata-only sequence on a vehicle without a root rig: one root bone. The engine's animation
- *  compression evaluates every bone of a sequence's skeleton (FByFramePoseEvalContext): a skeleton without bones is an
- *  invalid bone container and asserts. */
+/** The skeleton of a clip's metadata-only sequence on a vehicle without a root rig: a rig of no nodes, i.e. the builder's
+ *  root bone alone (with its bone tree, as every rig skeleton). The engine's animation compression evaluates every bone of
+ *  a sequence's skeleton (FByFramePoseEvalContext): a skeleton without bones is an invalid bone container and asserts. */
 USkeleton* MetadataSkeleton(UObject* Outer)
 {
-    USkeleton* Skeleton = NewObject<USkeleton>(Outer, NAME_None, RF_Transient);
-    FReferenceSkeletonModifier Modifier(Skeleton);
-    Modifier.Add(FMeshBoneInfo(TEXT("root"), TEXT("root"), INDEX_NONE), FTransform::Identity);
+    USkeleton* Skeleton = nullptr;
+    FSCSkeletonBuilder::Build(FSCDerivedMesh(), Outer, Skeleton);
     return Skeleton;
 }
 } // namespace
