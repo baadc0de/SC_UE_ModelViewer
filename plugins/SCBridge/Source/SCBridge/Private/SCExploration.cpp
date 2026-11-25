@@ -98,6 +98,27 @@ void ASCVehicle::BuildExploration()
     PendingItemSpawns.Reset();
     SpawnPoints.Insert(Items, 0);
     ++SpawnRevision;
+    CollectDoors(true);
+    const FBox Bounds = ExplorationBounds();
+    if (Bounds.IsValid)
+        AddSpawnPoint(FSCSpawnKind::Hull, TEXT("Above hull centre"), FTransform(FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z)));
+    const int32 Posed = ApplyDoorRestPoses();
+    BuildShipDoors();
+    UE_LOG(LogTemp, Display, TEXT("EXPLORATION spawns=%d doors=%d door_rest_poses=%d collision_ready=%d"), SpawnPoints.Num(), Doors.Num(), Posed,
+           bCollisionReady);
+}
+void ASCVehicle::BuildDoorInteractions()
+{
+    // An environment's doors (a hangar's gates and doors): the same door interactions, rest poses and door state as a vehicle
+    // explored in first person, without its spawn points.
+    Doors.Reset();
+    CollectDoors(false);
+    const int32 Posed = ApplyDoorRestPoses();
+    BuildShipDoors();
+    UE_LOG(LogTemp, Display, TEXT("ENVIRONMENT_DOORS doors=%d door_rest_poses=%d"), Doors.Num(), Posed);
+}
+void ASCVehicle::CollectDoors(bool bSpawnPoints)
+{
     if (ClipCatalog)
         for (const auto& Clip : ClipCatalog->Clips)
             for (const auto& Fragment : Clip.Fragments)
@@ -168,7 +189,7 @@ void ASCVehicle::BuildExploration()
                             Clip.Owner.Contains(TEXT("/")) ? FPaths::GetBaseFilename(Clip.Owner) : Joint.ToString();
                         Door.DisplayName = Label.Replace(TEXT("_"), TEXT(" "));
                         Doors.Add(Door);
-                        AddSpawnPoint(FSCSpawnKind::Door, Door.DisplayName, Rig->GetSocketTransform(Joint));
+                        if (bSpawnPoints) AddSpawnPoint(FSCSpawnKind::Door, Door.DisplayName, Rig->GetSocketTransform(Joint));
                         UE_LOG(LogTemp, Display, TEXT("EXPLORATION_INTERACTION fragment=%s owner=%s item_type=%s joint=%s label=\"%s\""),
                                *Fragment.Fragment.ToString(), *Rig->OwnerEntity, Instance ? *Instance->ItemType : TEXT("-"),
                                *Joint.ToString(), *Door.DisplayName);
@@ -176,13 +197,6 @@ void ASCVehicle::BuildExploration()
                     }
                 }
             }
-    const FBox Bounds = ExplorationBounds();
-    if (Bounds.IsValid)
-        AddSpawnPoint(FSCSpawnKind::Hull, TEXT("Above hull centre"), FTransform(FVector(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Max.Z)));
-    const int32 Posed = ApplyDoorRestPoses();
-    BuildShipDoors();
-    UE_LOG(LogTemp, Display, TEXT("EXPLORATION spawns=%d doors=%d door_rest_poses=%d collision_ready=%d"), SpawnPoints.Num(), Doors.Num(), Posed,
-           bCollisionReady);
 }
 int32 ASCVehicle::ApplyDoorRestPoses()
 {
@@ -205,7 +219,10 @@ int32 ASCVehicle::ApplyDoorRestPoses()
         else if (D.bReverseClose) bPosed = PlayFragmentAt(D.Fragment, D.OpenTag, D.Rig, 1.f, ESCFragmentStart::HoldFirst);
         else if (bData) bPosed = PlayFragmentAt(D.Fragment, D.CloseTag, D.Rig, 1.f, ESCFragmentStart::HoldLast);
         if (bPosed || (!bData && !D.bStartsOpen))
+        {
             FragmentTargets.Add({D.Rig.Get(), D.Fragment}, D.bStartsOpen ? D.OpenTag : D.CloseTag);
+            UnsettledTargets.Remove({D.Rig.Get(), D.Fragment});
+        }
         else
             UE_LOG(LogTemp, Warning, TEXT("DOOR_REST owner=%s fragment=%s open=%d: no fragment poses the authored state; left at the bind pose, state not recorded"),
                    *D.Rig->OwnerEntity, *D.Fragment.ToString(), D.bStartsOpen);
@@ -234,7 +251,15 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
     const FName Tag = bOpen || bBackward ? D.OpenTag : D.CloseTag;
     const float Speed = (SpeedScale > 0 ? SpeedScale : D.Speed) * (bBackward ? -1.f : 1.f);
     const uint64 PriorOrder = NextOrder;
-    if (!PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose)) return false;
+    const bool bWasAtEnd = IsDoorStateKnown(Index) && IsDoorOpen(Index) == bOpen; // before the fragment records its tag
+    const int32 OuterOrder = OrderingDoor;
+    OrderingDoor = Index; // this door's move is reported below, once; other doors its fragment drives stop
+    const bool bStarted = PlayFragmentAt(D.Fragment, Tag, Rig, Speed, ESCFragmentStart::CurrentPose);
+    OrderingDoor = OuterOrder;
+    if (!bStarted) return false;
+    // WP-A1: the door's move (its effects listen); it arrives when the playback it started ends.
+    StartDoorMotion(Index, bOpen, PriorOrder, bWasAtEnd);
+    if (DoorOrderBatch.Contains(Index)) DoorOrderDelivered.Add(Index);
     if (ShipDoors.IsValidIndex(Index))
     {
         FShipDoor& State = ShipDoors[Index];
@@ -252,7 +277,7 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
         ShipDoors[Index].bCargoRelock = true;
     }
     FragmentTargets.Add({Rig, D.Fragment}, bOpen ? D.OpenTag : D.CloseTag);
-    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
+    UnsettledTargets.Remove({Rig, D.Fragment});    if (!ScreenFaces.IsEmpty()) RefreshPanelScreens();
     UpdateTickEnabled();
     // The door's own interaction goes on to the items of the vehicle ports its links name (the C2's front hatch: its Open and
     // Close reach the front doors and the ramp).
@@ -266,6 +291,8 @@ bool ASCVehicle::PlayDoor(int32 Index, bool bOpen, float SpeedScale, int32 Depth
         if (TargetDoor != INDEX_NONE && FSCInteractionNetwork::DoorVerb(L.TargetSlot, bTargetOpen, bTargetToggle))
         {
             if (bTargetToggle) bTargetOpen = !IsDoorOpen(TargetDoor);
+            // A batch order (sc.Doors.Play) gives its doors their own targets: a link does not reverse one of them.
+            if (const bool* Wanted = DoorOrderBatch.Find(TargetDoor); Wanted && *Wanted != bTargetOpen) continue;
             bHandled = IsDoorOpen(TargetDoor) == bTargetOpen || PlayDoor(TargetDoor, bTargetOpen, 0.f, Depth + 1, AsActor, LocalUse, bCargoAccess);
         }
         UE_LOG(LogTemp, Display, TEXT("DOOR_PORT_LINK source=%s slot=%s port=%s target=%s target_slot=%s handled=%d depth=%d"), *Rig->OwnerEntity,

@@ -67,7 +67,9 @@ use std::{
 //     the engine's hover tag on the node) and `buttons[].label` (the button's caption), styled role fills keep their
 //     alpha (a large button's background), and placements carry `usable_interactions[]` (the interactions that start a
 //     use of the class's usable). WP-I1-4.
-pub const CACHE_FORMAT_VERSION: u32 = 43;
+// 44: `audio.json` entity classes carry `door` (the door's events: effect groups and entity-effect tags, and the
+//     effect-core sounds of its groups). WP-A1 door effects.
+pub const CACHE_FORMAT_VERSION: u32 = 44;
 pub const DEFAULT_CACHE_CAP_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 pub const EXPORTER_REVISION: &str = env!("SCVIEWER_EXPORTER_REVISION");
 pub const EXPORTER_DIRTY: &str = env!("SCVIEWER_EXPORTER_DIRTY");

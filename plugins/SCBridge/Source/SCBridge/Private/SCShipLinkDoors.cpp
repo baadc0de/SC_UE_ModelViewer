@@ -363,6 +363,7 @@ bool ASCVehicle::SetDoorLocked(int32 Index, bool bLocked)
     Door.bSecurePending = false;
     if (Door.bLocked == bLocked) return true;
     Door.bLocked = bLocked;
+    OnDoorMotion.Broadcast(this, Index, false, bLocked ? EDoorMotion::Locked : EDoorMotion::Unlocked); // WP-A1
     RefreshPanelScreens();
     return true;
 }

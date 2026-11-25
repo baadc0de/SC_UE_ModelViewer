@@ -1727,9 +1727,17 @@ void FSCImportJob::FState::Assemble()
     for (const FVector& P : Manifest.PhysicsGrid) V->PhysicsGridBounds += P; // FBox(TArray) reads [0]: not for an empty grid
     TMap<FString, FEntity> EntitiesByPort; // WP-K1: loadout items by port path (siblings share entity names)
     int32 PanelsWithoutReachField = 0;     // door panels of an export before cache format 40 (no interaction_distance)
-    if (CanPlace(Manifest.Root)) Entities.Add(Manifest.Root.EntityName, Place(Manifest.Root, V->GetRootComponent(), false, true));
-    for (const auto& I : Manifest.Children)
+    FEntity RootEntity; // the root entity as placed (WP-A1 door audio: a door imported on its own)
+    if (CanPlace(Manifest.Root))
     {
+        RootEntity = Place(Manifest.Root, V->GetRootComponent(), false, true);
+        Entities.Add(Manifest.Root.EntityName, RootEntity);
+    }
+    TArray<FEntity> ChildEntities; // by child index: every instance, repeated loadout items included (WP-A1 door audio)
+    ChildEntities.SetNum(Manifest.Children.Num());
+    for (int32 ChildIndex = 0; ChildIndex < Manifest.Children.Num(); ++ChildIndex)
+    {
+        const FSCSceneInstance& I = Manifest.Children[ChildIndex];
         bool bHelper;
         auto* Parent = FindParent(I, bHelper);
         if (!Parent || !CanPlace(I))
@@ -1740,6 +1748,7 @@ void FSCImportJob::FState::Assemble()
         }
         // Export order is depth-first; latest matching entity disambiguates repeated loadout instances.
         FEntity Placed = Place(I, Parent, bHelper, false);
+        ChildEntities[ChildIndex] = Placed;
         if (!I.Id.IsEmpty()) EntitiesById.Add(I.Id, Placed);
         Entities.Add(I.EntityName, Placed);
         if (!I.PortPath.IsEmpty())
@@ -1796,6 +1805,43 @@ void FSCImportJob::FState::Assemble()
     TSharedPtr<FSCAudioScene> Audio = FSCAudioScene::Load(*Source, Manifest.ScenePath, AudioError);
     if (Audio) Audio->Vehicle = V;
     else UE_LOG(LogSCImport, Display, TEXT("AUDIO_NONE %s: %s"), *Manifest.ScenePath, *AudioError);
+    // WP-A1 door effects: a door sound's helper that is a mesh node of the entity (bones resolve on its rig at play) becomes
+    // a frame of the audio entity, saved with it.
+    auto ResolveDoorHelpers = [&](const FEntity& Placed, const FSCAudioClass& Class, FSCAudioEntity& Entity, FSCSavedAudioEntity& Saved) {
+        for (const FSCAudioDoorSound& Sound : Class.DoorSounds)
+            for (const FString& Name : {Sound.Helper, Sound.Helper.StartsWith(TEXT("$")) ? Sound.Helper.Mid(1) : FString()})
+            {
+                if (Name.IsEmpty() || Entity.Helpers.Contains(Name) || !Placed.Mesh || !Placed.Anchor ||
+                    (Placed.Rig && Placed.Rig->DoesSocketExist(FName(*Name)))) continue;
+                const FMatrix* Node = nullptr;
+                for (const auto& Pair : Placed.Mesh->Nodes)
+                    if (Pair.Key.Equals(Name, ESearchCase::IgnoreCase)) Node = &Pair.Value;
+                if (!Node) continue;
+                USceneComponent* Frame = NewAnchor(Name, Placed.Anchor, FSCMeshes::Transform(*Node));
+                Entity.Helpers.Add(Name, Frame);
+                Saved.Helpers.Add(Name, Frame);
+            }
+    };
+    // Loadout doors (a ship's exterior doors: children, not interior placements): their class by entity name, keyed as the
+    // audio system finds a door's entity by its rig ("-1/<owner>#<rig>").
+    if (Audio)
+        for (int32 ChildIndex = -1; ChildIndex < Manifest.Children.Num(); ++ChildIndex) // -1: the root entity
+        {
+            const FSCSceneInstance& I = ChildIndex < 0 ? Manifest.Root : Manifest.Children[ChildIndex];
+            const FEntity* Placed = ChildIndex < 0 ? &RootEntity : &ChildEntities[ChildIndex];
+            if (!Placed->Rig) continue;
+            const FString Qualified = TEXT("EntityClassDefinition.") + I.EntityName;
+            for (const auto& [Guid, Class] : Audio->Manifest.Classes)
+            {
+                if (Class.DoorEvents.IsEmpty() || (Class.Name != I.EntityName && Class.Name != Qualified)) continue;
+                const FString Key = FString::Printf(TEXT("%d/%s#%s"), INDEX_NONE, *Placed->Rig->OwnerEntity, *Placed->Rig->GetName()).ToLower();
+                if (Audio->Entities.Contains(Key)) break;
+                FSCAudioEntity& Entity = Audio->Entities.Add(Key, {Guid, Placed->Anchor, Placed->Rig, INDEX_NONE});
+                FSCSavedAudioEntity& Saved = V->AudioEntities.Add_GetRef({Key, Guid, Placed->Anchor, Placed->Rig, INDEX_NONE});
+                ResolveDoorHelpers(*Placed, Class, Entity, Saved);
+                break;
+            }
+        }
     // Hangar waypoints (environments): the records the rule chooses, anchored per interior below, in the rule's order.
     const TArray<FSCWaypointCandidate> WaypointCandidates = Options.bEnvironment ? SCHangarWaypoints::Select(Manifest) : TArray<FSCWaypointCandidate>();
     TArray<FSCWaypointSource> WaypointSources;
@@ -1866,8 +1912,9 @@ void FSCImportJob::FState::Assemble()
                 if (const FEntity* Placed = ById.Find(P.EntityId); Placed && Audio->Manifest.Classes.Contains(P.EntityClassGuid))
                 {
                     const FString Key = FString::Printf(TEXT("%d/%s"), InteriorIndex, *P.EntityId.ToLower());
-                    Audio->Entities.Add(Key, {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
-                    V->AudioEntities.Add({Key, P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex}); // saved with a prepared level
+                    FSCAudioEntity& Entity = Audio->Entities.Add(Key, {P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex});
+                    FSCSavedAudioEntity& Saved = V->AudioEntities.Add_GetRef({Key, P.EntityClassGuid, Placed->Anchor, Placed->Rig, InteriorIndex}); // saved with a prepared level
+                    ResolveDoorHelpers(*Placed, Audio->Manifest.Classes[P.EntityClassGuid], Entity, Saved);
                 }
         }
         // Door panels (pads): EntityLinks name the door, or the door's own loadout attached the panel. A lift carriage links
@@ -2033,6 +2080,8 @@ void FSCImportJob::FState::Assemble()
         V->BuildExploration();
         FSCImporter::Publish(Options.World, V, Options.bReplacePrevious);
     }
+    else if (Options.bEnvironment)
+        V->BuildDoorInteractions(); // a hangar's gates and doors are doors (WP-A1 door effects)
     if (GeometryStreamingOf(Options)) GeometryStreamingOf(Options)->Attach(V);
     Result.Vehicle = V;
     Result.MeshCount = Meshes.Num();

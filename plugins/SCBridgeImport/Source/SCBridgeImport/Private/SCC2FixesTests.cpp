@@ -770,4 +770,228 @@ bool FSCExteriorPanelReachTest::RunTest(const FString&)
     return !HasAnyErrors();
 }
 
+// SCBridge.Doors.MotionEvents (WP-A1 door effects): a door's moves and their ends as ASCVehicle::OnDoorMotion reports them:
+// an order moves it and it arrives when its playback ends; turned around mid-stroke the new move replaces the old (no arrival
+// for the first); ResetPose, a snap, a raw clip, a fragment command and its rig destroyed stop a move (door effects come
+// from door orders); two doors move and arrive on their own; a move stopped short otherwise leaves its state unknown; a lock
+// change is reported.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCDoorMotionEventsTest, "SCBridge.Doors.MotionEvents", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSCDoorMotionEventsTest::RunTest(const FString&)
+{
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+    ON_SCOPE_EXIT { World->DestroyWorld(false); };
+    auto* V = World->SpawnActor<ASCVehicle>();
+    V->ClipCatalog = NewObject<USCClipCatalog>(V);
+    USCRigComponent* A = AddRig(V, TEXT("Hatch"));
+    AddClip(V, A, TEXT("hatch_open"), TEXT("Open"), {0, 25, 50});
+    AddClip(V, A, TEXT("hatch_close"), TEXT("Close"), {50, 25, 0});
+    FSCDoorRecord R;
+    R.Door.bValid = true;
+    R.Door.OpenTag = TEXT("Open");
+    R.Door.CloseTag = TEXT("Close");
+    R.Door.bIsOpened = false;
+    V->DoorRecords.Add(A, R);
+    USCRigComponent* B = AddRig(V, TEXT("Leaf"));
+    AddClip(V, B, TEXT("leaf_open"), TEXT("Open"), {0, 30});
+    AddClip(V, B, TEXT("leaf_close"), TEXT("Close"), {30, 0});
+    V->DoorRecords.Add(B, R);
+    // A bed: one clip, played forwards to close and backwards to open (SCItem_Bed_Anims_Reverse_Close): its first frame is open.
+    USCRigComponent* Bed = AddRig(V, TEXT("Bed"));
+    AddClip(V, Bed, TEXT("bed_close"), TEXT("Close"), {50, 0});
+    {
+        FSCImportedClip& BedClip = V->ClipCatalog->Clips.Last();
+        FSCClipFragment Open = BedClip.Fragments[0];
+        Open.FragmentTags = {TEXT("Open")};
+        Open.Speed = -1;
+        BedClip.Fragments.Add(Open);
+        // Before it, an alias entry (metadata naming another clip, played forwards): not what plays this clip.
+        FSCClipFragment Alias = Open;
+        Alias.Speed = 1;
+        Alias.AnimationNames = {TEXT("hatch_open")};
+        Alias.OptionId = TEXT("hatch_open");
+        BedClip.Fragments.Insert(Alias, 0);
+    }
+    V->DoorRecords.Add(Bed, R);
+    // A ramp: one open transition, closed by playing it backwards (single-procedural).
+    USCRigComponent* Ramp = AddRig(V, TEXT("Ramp"));
+    AddClip(V, Ramp, TEXT("ramp_open"), TEXT("Open"), {0, 40});
+    FSCDoorRecord RRamp;
+    RRamp.Door.bValid = true;
+    RRamp.Door.TransitionTag = TEXT("Open");
+    V->DoorRecords.Add(Ramp, RRamp);
+    V->BuildExploration();
+    const int32 DA = V->DoorForRig(A), DB = V->DoorForRig(B), DBed = V->DoorForRig(Bed), DRamp = V->DoorForRig(Ramp);
+    if (!TestTrue(TEXT("two doors"), DA != INDEX_NONE && DB != INDEX_NONE)) return false;
+    TArray<FString> Events;
+    const FDelegateHandle Handle = ASCVehicle::OnDoorMotion.AddLambda([&](ASCVehicle* Vehicle, int32 Door, bool bOpen, ASCVehicle::EDoorMotion E) {
+        if (Vehicle != V) return;
+        static const TCHAR* Names[] = {TEXT("moved"), TEXT("arrived"), TEXT("cancelled"), TEXT("locked"), TEXT("unlocked")};
+        Events.Add(FString::Printf(TEXT("%s:%d:%s"), Door == DA ? TEXT("A") : TEXT("B"), bOpen, Names[uint8(E)]));
+    });
+    ON_SCOPE_EXIT { ASCVehicle::OnDoorMotion.Remove(Handle); };
+    auto Expect = [&](const TCHAR* What, std::initializer_list<const TCHAR*> Want) {
+        TArray<FString> W;
+        for (const TCHAR* S : Want) W.Add(S);
+        TestEqual(What, FString::Join(Events, TEXT(" ")), FString::Join(W, TEXT(" ")));
+        Events.Reset();
+    };
+    Events.Reset(); // the rest poses do not move a door
+
+    // An order: it moves, and arrives when its playback ends.
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    Expect(TEXT("moved"), {TEXT("A:1:moved")});
+    V->Tick(0.1f);
+    Expect(TEXT("still moving"), {});
+    V->Tick(1.f);
+    Expect(TEXT("arrived open"), {TEXT("A:1:arrived")});
+
+    // Turned around mid-stroke: the new move replaces the old; only the second arrives.
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(0.1f);
+    TestTrue(TEXT("A turned around"), V->PlayDoor(DA, true));
+    V->Tick(1.f);
+    Expect(TEXT("two moves, one arrival"), {TEXT("A:0:moved"), TEXT("A:1:moved"), TEXT("A:1:arrived")});
+
+    // The same order again mid-stroke (a lift re-ordering a closing door): one move, one arrival.
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(0.05f);
+    V->PlayDoor(DA, false);
+    V->Tick(1.f);
+    Expect(TEXT("a repeated order is one move"), {TEXT("A:0:moved"), TEXT("A:0:arrived")});
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    V->Tick(1.f);
+    Events.Reset();
+
+    // Two doors (here two rigs) move and arrive on their own.
+    TestTrue(TEXT("A closes again"), V->PlayDoor(DA, false));
+    TestTrue(TEXT("B opens"), V->PlayDoor(DB, true));
+    V->Tick(0.15f); // B's 1-frame clip ends; A's 2-frame clip does not
+    V->Tick(1.f);
+    Expect(TEXT("each arrives"), {TEXT("A:0:moved"), TEXT("B:1:moved"), TEXT("B:1:arrived"), TEXT("A:0:arrived")});
+
+    // Ordered open and turned back before it moved: the close starts at its end (the pose it shows), so no closing stroke
+    // (no close / closed effects): the open move is cancelled.
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    TestTrue(TEXT("and at once closes"), V->PlayDoor(DA, false));
+    V->Tick(1.f);
+    Expect(TEXT("a reversal with no travel"), {TEXT("A:1:moved"), TEXT("A:0:cancelled")});
+    TestTrue(TEXT("A closed"), V->IsDoorStateKnown(DA) && !V->IsDoorOpen(DA) && FMath::IsNearlyEqual(BoneX(A), 0.0, 1e-3));
+    // Ordered closed again at rest closed: nothing moves and its rest (held closed loops) goes on: no event.
+    TestTrue(TEXT("A closes again"), V->PlayDoor(DA, false));
+    V->Tick(1.f);
+    Expect(TEXT("an order at rest at its end"), {});
+
+    // ResetPose cancels a move (and every door's rest: each door reports a cancel), with no arrival.
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    V->ResetPose();
+    V->Tick(1.f);
+    TestTrue(TEXT("reset cancels A's move"), Events.Num() >= 2 && Events[0] == TEXT("A:1:moved") && Events[1] == TEXT("A:1:cancelled"));
+    TestFalse(TEXT("no arrival after a reset"), Events.ContainsByPredicate([](const FString& E) { return E.EndsWith(TEXT("arrived")); }));
+    TestTrue(TEXT("B's rest ends too"), Events.Contains(TEXT("B:0:cancelled")));
+    Events.Reset();
+
+    // Door effects come from door orders: a fragment command taking a moving door over stops its move (no arrival).
+    TestTrue(TEXT("A opens (from the rest the reset left)"), V->PlayDoor(DA, true));
+    TestTrue(TEXT("fragment"), V->PlayFragmentAt(TEXT("SCItemDoor"), TEXT("Open"), A));
+    V->Tick(1.f);
+    Expect(TEXT("a fragment stops the move"), {TEXT("A:1:moved"), TEXT("A:1:cancelled")});
+
+    // So does a raw clip on its channels, and a snap.
+    const int32 Open = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("hatch_open")); });
+    const int32 Close = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("hatch_close")); });
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    TestTrue(TEXT("raw open clip"), V->PlayClipAt(Open, A, 1.f));
+    V->Tick(1.f);
+    Expect(TEXT("a raw clip stops the move"), {TEXT("A:0:moved"), TEXT("A:0:cancelled")});
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(0.05f);
+    TestTrue(TEXT("snapped"), V->SnapClipAt(Close, A, true));
+    V->Tick(1.f);
+    Expect(TEXT("a snap stops the move"), {TEXT("A:0:moved"), TEXT("A:0:cancelled")});
+
+    // A door on another rig is not touched by them.
+    TestTrue(TEXT("B moves"), V->PlayDoor(DB, !V->IsDoorOpen(DB)));
+    TestTrue(TEXT("A's raw clip"), V->PlayClipAt(Open, A, 1.f));
+    V->Tick(1.f);
+    TestTrue(TEXT("B arrives undisturbed"), Events.Num() >= 2 && Events[0].EndsWith(TEXT("moved")) && Events.Last().StartsWith(TEXT("B:")) &&
+                                             Events.Last().EndsWith(TEXT("arrived")));
+    Events.Reset();
+
+    // Its rig destroyed while moving: cancelled, no arrival.
+    TestTrue(TEXT("B moves"), V->PlayDoor(DB, !V->IsDoorOpen(DB)));
+    const bool bBOpen = V->IsDoorOpen(DB);
+    B->DestroyComponent();
+    V->Tick(1.f);
+    Expect(TEXT("rig gone cancels"), {bBOpen ? TEXT("B:1:moved") : TEXT("B:0:moved"), bBOpen ? TEXT("B:1:cancelled") : TEXT("B:0:cancelled")});
+
+    // Its playback stopped short by something that does not drive its channels (a Mannequin scope preempting it): cancelled,
+    // and the door shows neither end: unsettled (sc.Doors.Play does not skip it), its target kept (the next order, a Ship
+    // Link close, goes the other way and settles it).
+    TestTrue(TEXT("A moves"), V->PlayDoor(DA, !V->IsDoorOpen(DA)));
+    const bool bAOpen = V->IsDoorOpen(DA);
+    V->Tick(0.05f);
+    V->Playback.RemoveAll([&](const FSCClipPlayback& P) { return P.TargetRig.Get() == A; });
+    V->Tick(0.05f);
+    Expect(TEXT("preempted cancels"), {bAOpen ? TEXT("A:1:moved") : TEXT("A:0:moved"), bAOpen ? TEXT("A:1:cancelled") : TEXT("A:0:cancelled")});
+    TestFalse(TEXT("its state unsettled"), V->IsDoorStateKnown(DA));
+    TestEqual(TEXT("its target kept"), V->IsDoorOpen(DA), bAOpen);
+    TestTrue(TEXT("the next order goes the other way"), V->PlayDoor(DA, !bAOpen));
+    V->Tick(1.f);
+    TestTrue(TEXT("and settles it at that end"), V->IsDoorStateKnown(DA) && V->IsDoorOpen(DA) == !bAOpen &&
+                                                    FMath::IsNearlyEqual(BoneX(A), bAOpen ? 0.0 : 50.0, 1e-3));
+    Events.Reset();
+
+    // A raw clip on the door's channels records its end; a fragment on other bones of the rig preempting it through a shared
+    // scope freezes it short of that end: unsettled too.
+    AddClip(V, A, TEXT("hatch_wave"), TEXT("Wave"), {0, 5});
+    {
+        FSCImportedClip& Wave = V->ClipCatalog->Clips.Last();
+        Wave.Bindings[0].Tracks[0].Bone = 0;
+        Wave.Fragments[0].Fragment = TEXT("Wave");
+    }
+    TestTrue(TEXT("raw clip"), V->PlayClipAt(V->IsDoorOpen(DA) ? Close : Open, A, 1.f));
+    TestTrue(TEXT("its end recorded"), V->IsDoorStateKnown(DA));
+    V->Tick(0.05f);
+    TestTrue(TEXT("a fragment on other bones"), V->PlayFragmentAt(TEXT("Wave"), TEXT("Wave"), A));
+    TestFalse(TEXT("the frozen door is unsettled"), V->IsDoorStateKnown(DA));
+    V->Tick(1.f);
+    // A clip with no travel left (the close of an open-then-close before a tick: it starts at its end) preempted: the door
+    // stays settled closed.
+    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    V->Tick(1.f);
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    TestTrue(TEXT("and at once closes"), V->PlayDoor(DA, false));
+    TestTrue(TEXT("the other fragment"), V->PlayFragmentAt(TEXT("Wave"), TEXT("Wave"), A));
+    TestTrue(TEXT("still settled closed"), V->IsDoorStateKnown(DA) && !V->IsDoorOpen(DA));
+    V->Tick(1.f);
+    Events.Reset();
+
+    // A raw clip's recorded state follows the end its fragment plays it to: the bed's clip held at speed zero shows its
+    // first frame, open; played forwards it ends closed.
+    const int32 BedIndex = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("bed_close")); });
+    TestTrue(TEXT("bed held at its first frame"), V->PlayClipAt(BedIndex, Bed, 0.f));
+    TestTrue(TEXT("recorded open"), V->IsDoorStateKnown(DBed) && V->IsDoorOpen(DBed));
+    TestTrue(TEXT("bed played forwards"), V->PlayClipAt(BedIndex, Bed, 1.f));
+    V->Tick(1.f);
+    TestTrue(TEXT("recorded closed"), V->IsDoorStateKnown(DBed) && !V->IsDoorOpen(DBed));
+    Events.Reset();
+
+    // The ramp, closed backwards, ordered closed again at rest closed: nothing moves, its rest goes on (no event).
+    TestTrue(TEXT("ramp is a reverse-close door"), V->Doors.IsValidIndex(DRamp) && V->Doors[DRamp].bReverseClose);
+    TestTrue(TEXT("ramp opens"), V->PlayDoor(DRamp, true));
+    V->Tick(1.f);
+    TestTrue(TEXT("ramp closes"), V->PlayDoor(DRamp, false));
+    V->Tick(1.f);
+    TestTrue(TEXT("ramp closed"), V->IsDoorStateKnown(DRamp) && !V->IsDoorOpen(DRamp));
+    Events.Reset();
+    TestTrue(TEXT("ramp closes again"), V->PlayDoor(DRamp, false));
+    V->Tick(1.f);
+    Expect(TEXT("a reverse-close door re-ordered at rest"), {});
+
+    // A lock change is reported.
+    TestTrue(TEXT("locks"), V->SetDoorLocked(DA, true));
+    Expect(TEXT("locked"), {TEXT("A:0:locked")});
+    return !HasAnyErrors();
+}
+
 #endif

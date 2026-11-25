@@ -126,6 +126,8 @@ struct FSCSavedAudioEntity
     UPROPERTY() TWeakObjectPtr<USceneComponent> Anchor;
     UPROPERTY() TWeakObjectPtr<USCRigComponent> Rig;
     UPROPERTY() int32 Interior = INDEX_NONE;
+    /** Helper frames of its door sounds that are mesh nodes (WP-A1; bones are resolved on the rig). */
+    UPROPERTY() TMap<FString, TObjectPtr<USceneComponent>> Helpers;
 };
 /** A panel that operates a lift (its links reach a carriage or a stop): the press path until WP-I1 has its own. Saved. */
 USTRUCT()
@@ -313,6 +315,12 @@ public:
     int32 SetSelectedSpawn(const FTransform& WorldTransform);
     void AddItemSpawn(const FSCSceneInstance& Instance, USceneComponent* Anchor);
     void BuildExploration();
+    /** An environment's doors (a hangar's gates): door interactions, their authored rest poses and door state, as
+     *  BuildExploration builds them for an explored vehicle, without its spawn points. */
+    void BuildDoorInteractions();
+    /** The door interactions from the clips' door fragments and the rigs' door records (Doors); bSpawnPoints: also a
+     *  spawn point per door (an explored vehicle). */
+    void CollectDoors(bool bSpawnPoints);
     FBox ExplorationBounds() const;
     UFUNCTION(BlueprintCallable, Category = "SC|Exploration") int32 NearestDoor(FVector Position, float Reach = 300) const;
     /** Interaction under the view ray within Reach (rig hit -> its nearest driven joint), else NearestDoor. A door panel
@@ -580,6 +588,55 @@ public:
     UFUNCTION(BlueprintCallable, Category = "SC|Animation") void ResetPose();
     void EvaluateClips();
     UPROPERTY(Transient) TArray<FSCClipPlayback> Playback; // active entries only
+    /** WP-A1 door effects: a door's motion and lock events, for listeners (the audio system plays the door's own effects).
+     *  Moved: a door starts to open (bOpen) or close (an order, or a raw play of one of its own clips); Arrived: the
+     *  playback that move started ended at its end; Cancelled: it stopped otherwise (reset, snap, another clip on its
+     *  channels, its rig gone); Locked / Unlocked: its lock changed (bOpen unused). */
+    enum class EDoorMotion : uint8 { Moved, Arrived, Cancelled, Locked, Unlocked };
+    DECLARE_MULTICAST_DELEGATE_FourParams(FOnDoorMotion, ASCVehicle* /*Vehicle*/, int32 /*Door*/, bool /*bOpen*/, EDoorMotion);
+    static FOnDoorMotion OnDoorMotion;
+    /** A door in motion: the playback entries (by Order) the move started. */
+    struct FDoorMotion
+    {
+        int32 Door = INDEX_NONE;
+        bool bOpen = false;
+        TArray<uint64> Orders;
+        TWeakObjectPtr<USCRigComponent> Rig; // gone: the move stops (an untargeted clip plays on)
+    };
+    TArray<FDoorMotion> DoorMotions;
+    int32 OrderingDoor = INDEX_NONE; // the door PlayDoor is playing the fragment of (it reports that move itself)
+    /** Door's motion starts with the playback entries of its rig started after AfterOrder (none: nothing moves).
+     *  bWasAtEnd: the door's state was known and was the order's end before the order played (a door at rest there that
+     *  nothing moves keeps its rest). */
+    void StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder, bool bWasAtEnd);
+    /** Door's motion (if any) stops without arriving. */
+    void CancelDoorMotion(int32 Door);
+    /** Motions whose entries ended naturally (Ended) arrive; those stopped by the ground (Grounded) are cancelled keeping
+     *  their state; those whose entries vanished otherwise are cancelled and their state is unsettled. */
+    void UpdateDoorMotions(const TSet<uint64>& Ended, const TSet<uint64>& Grounded = {});
+    /** Door has a recorded state: its open or its close tag (its last move's end; none after a raw clip took it over, and
+     *  not a fragment played without a tag), and the door reached it (not unsettled: stopped short of it). */
+    bool IsDoorStateKnown(int32 Door) const
+    {
+        if (!Doors.IsValidIndex(Door)) return false;
+        const FSCFragmentKey Key(Doors[Door].Rig, Doors[Door].Fragment);
+        const FName* Tag = FragmentTargets.Find(Key);
+        return Tag && !Tag->IsNone() && (*Tag == Doors[Door].OpenTag || *Tag == Doors[Door].CloseTag) && !UnsettledTargets.Contains(Key);
+    }
+    /** Door stopped short of its recorded target: unsettled until a new target is recorded for it (IsDoorStateKnown). */
+    void MarkDoorUnsettled(int32 Door)
+    {
+        if (Doors.IsValidIndex(Door)) UnsettledTargets.Add(FSCFragmentKey(Doors[Door].Rig, Doors[Door].Fragment));
+    }
+    /** Does Clip drive a channel (bone, rotation / position) that Door's own moves drive on its rig? */
+    bool ClipDrivesDoor(int32 Door, int32 Clip) const;
+    /** The clips PlayFragmentAt chooses among for Fragment / Tag on Target (weighted options bound to its mesh, its own
+     *  geometry's clips when it has any, no aliases). */
+    TArray<int32> EligibleFragmentClips(FName Fragment, FName Tag, const USCRigComponent* Target) const;
+    /** sc.Doors.Play's batch: a port link (PlayDoor) does not move a door of the batch away from its own target. */
+    TMap<int32, bool> DoorOrderBatch;
+    /** The batch's doors already ordered in it (by a port link before their own turn): not ordered twice. */
+    TSet<int32> DoorOrderDelivered;
     /** WP-O1-4b-3c: a copy streamed from a prepared level registers its level audio (CookedAudio) once it is placed, not at
      *  BeginPlay (it begins play at the level's origin, hidden): StartCookedAudio then. */
     UPROPERTY(Transient) bool bDeferCookedAudio = false;
@@ -597,9 +654,12 @@ private:
                    double StartFrame = -1);
     /** Whether later layers on Rig (Playback or HeldPlayback, targeted at Rig or untargeted) drive every channel Entry drives
      *  there, so Entry shows nothing on Rig (its audio events are not Rig's). */
-    bool IsCoveredOnRig(const FSCClipPlayback& Entry, const USCRigComponent* Rig) const;
+    bool IsCoveredOnRig(const FSCClipPlayback& Entry, const USCRigComponent* Rig, int32 OnlyDoor = INDEX_NONE) const;
+    /** P has frames left in its playback direction (not started at the end it plays to). */
+    bool HasTravelLeft(const FSCClipPlayback& P) const;
     /** A clip started outside a door interaction (PlayClip / SnapClip / PlayClipAt / SnapClipAt) on a door's channels: the
-     *  door's recorded state becomes what the clip ends in when it is the door's own open or close fragment, else unknown. */
+     *  door's recorded state becomes what the clip ends in when it is the door's own open or close fragment, else unknown.
+     *  The door's move (WP-A1 door effects) stops: the clip takes it over. */
     void ReconcileDoorStates(int32 Index, const USCRigComponent* Target, bool bEndsAtLast);
     /** WP-A1: play the audio events of P's clip bindings crossed between Previous and P.Frame. */
     void FireClipAudio(FSCClipPlayback& P, double Previous);
@@ -607,6 +667,10 @@ private:
     TSet<USkeletalMesh*> DirtyMeshes;
     // Last tag played per (rig instance, fragment); the nullptr rig is the untargeted toggle. Saved: the doors' state.
     UPROPERTY() TMap<FSCFragmentKey, FName> FragmentTargets;
+    // WP-A1: targets whose door was stopped short of them (preempted, taken over by another fragment): the door shows
+    // neither end. IsDoorOpen still reads the target (the next order goes the other way); IsDoorStateKnown is false. Saved
+    // with the targets (the frozen pose is too).
+    UPROPERTY() TSet<FSCFragmentKey> UnsettledTargets;
     struct FSensorDoorState { double LastInside = -1; float ExitDelay = 0; bool bOpenedBySensor = false; };
     TMap<int32, FSensorDoorState> SensorDoorStates;
     struct FPendingSpawn

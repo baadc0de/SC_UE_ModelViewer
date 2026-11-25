@@ -146,6 +146,43 @@ static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPose(
         }
     }));
 
+// sc.Doors.Play <owner substring> <open|close|toggle>: order the doors whose owner entity contains the substring (every
+// vehicle in the world, the environment included) as a door order does (ASCVehicle::PlayDoor: clips, links, audio).
+static FAutoConsoleCommandWithWorldAndArgs GSCDoorsPlay(
+    TEXT("sc.Doors.Play"), TEXT("sc.Doors.Play <owner substring> <open|close|toggle>: move matching doors as an order does (DOOR_PLAY)"),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+        const FString Verb = Args.Num() >= 2 ? Args[1].ToLower() : FString();
+        if (Verb != TEXT("open") && Verb != TEXT("close") && Verb != TEXT("toggle"))
+        {
+            UE_LOG(LogSCLightControl, Warning, TEXT("DOOR_PLAY usage: sc.Doors.Play <owner substring> <open|close|toggle>"));
+            return;
+        }
+        // Every matching door's target first (a toggle reads the state before any order), and the batch is known to the
+        // doors' port links: a link neither reverses a batch door nor moves it twice.
+        TArray<TTuple<ASCVehicle*, int32, bool>> Orders;
+        for (TActorIterator<ASCVehicle> It(World); It; ++It)
+            for (int32 D = 0; D < It->Doors.Num(); ++D)
+                if (const USCRigComponent* Rig = It->Doors[D].Rig; Rig && Rig->OwnerEntity.Contains(Args[0]))
+                {
+                    const bool bOpen = Verb == TEXT("toggle") ? !It->IsDoorOpen(D) : Verb == TEXT("open");
+                    Orders.Add({*It, D, bOpen});
+                    It->DoorOrderBatch.Add(D, bOpen);
+                }
+        for (const auto& [V, D, bOpen] : Orders)
+        {
+            // Skipped when its recorded state is the target (an unknown state, after a raw clip, closes from its pose) or a
+            // port link of the batch already ordered it there.
+            const bool bAtTarget = (V->IsDoorStateKnown(D) && V->IsDoorOpen(D) == bOpen) || V->DoorOrderDelivered.Contains(D);
+            const bool bPlayed = !bAtTarget && V->PlayDoor(D, bOpen);
+            UE_LOG(LogSCLightControl, Display, TEXT("DOOR_PLAY vehicle=%s door=%d owner=%s open=%d played=%d"), *V->GetName(), D, *V->Doors[D].Rig->OwnerEntity, bOpen, bPlayed);
+        }
+        for (const auto& [V, D, bOpen] : Orders)
+        {
+            V->DoorOrderBatch.Reset();
+            V->DoorOrderDelivered.Reset();
+        }
+    }));
+
 // sc.Doors.Trace <door index|-1>: log that door every vehicle tick while a clip plays on its rig (DOOR_TICK: recorded state,
 // clip, playhead before and after, joint tip) and each audio event its clips cross (DOOR_AUDIO_EVENT); -1 stops.
 static FAutoConsoleCommandWithWorldAndArgs GSCDoorsTrace(

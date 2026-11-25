@@ -88,6 +88,9 @@ bool FSCSavedDoorStateTest::RunTest(const FString&)
     AddExpectedMessage(TEXT("DOOR_REST"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1); // door 0 has no clips
     Source->ApplyDoorRestPoses();
     TestTrue(TEXT("the second door's state reads open"), Source->IsDoorOpen(1));
+    // WP-A1: the second door stopped short of its target (preempted): unsettled, also after the load.
+    TestTrue(TEXT("the second door's state is known"), Source->IsDoorStateKnown(1));
+    Source->MarkDoorUnsettled(1);
     // A lift gate: the lift drives it, never a door order.
     USCRigComponent* Gate = NewObject<USCRigComponent>(Source);
     Source->LiftDrivenRigs.Add(Gate);
@@ -117,6 +120,7 @@ bool FSCSavedDoorStateTest::RunTest(const FString&)
     TestTrue(TEXT("the physics grid"), Loaded->PhysicsGridTriangles.Num() == 3 && Loaded->PhysicsGridShapeEnds == TArray<int32>({3}) &&
                                            Loaded->PhysicsGridBounds.Equals(FBox(FVector(0), FVector(1))));
     TestTrue(TEXT("the doors' fragment states"), Loaded->IsDoorOpen(1) && !Loaded->IsDoorOpen(0));
+    TestTrue(TEXT("the unsettled door keeps its target"), Loaded->IsDoorOpen(1) && !Loaded->IsDoorStateKnown(1));
     TestTrue(TEXT("the lift gate stays the lift's"), Loaded->IsLiftDriven(Gate) && !Loaded->IsLiftDriven(Rig));
     return !HasAnyErrors();
 }

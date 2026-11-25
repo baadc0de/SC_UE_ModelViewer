@@ -732,6 +732,28 @@ default, EQ LFE flag — each failing first), `starbreaker-3d` 991, `scbridge-ff
 amounts; nested-area precedence; multi-position panning (one voice at the nearest position; MultiDirections blends the
 directions); compressor, RoomVerb, delay and third-party slots; the Gain effect's LFE gain (not exported).
 
+## Door effects (A1-2b, in progress)
+
+**Done** (branch `wp/a1-door-effects`; submodule `scviewer/door-effects`): `audio.json` classes carry `door` — the
+events (`SCItemDoorParams.<Event>EffectGroup`, `SCItemDoorEffectParams` tags) and the effect-core sounds of their groups
+(`SEntityEffectCoreParams` → `SEffectParamsNodeSound`; `Enabled` is the spawn state, not a filter: 2 of ~3,000 door
+nodes are authored enabled). The viewer plays them from `ASCVehicle::PlayDoor` (open / close once, opening / closing
+loops and state tags held), the clip end (opened / closed, loops held at rest) and lock changes (loops held until the
+next lock change); a loadout door finds its class by its owner
+entity. The C2's door groups play `Play_Silence` (its door sounds are clip events, route C). `sc.Doors.Play`.
+
+**Environment doors are not doors yet.** `interior_animation::extract_animated_interior_children` promotes a socpak's
+animated `.cga` placements to scene children (so their per-`.cga` clips are extracted) and drops the placement's
+identity: `door: None`, no entity id, class or links, and the placement is removed. The hangar's clips carry no Mannequin
+fragments (`annotate_animation_fragments_json` runs on the root entity's controller only; a socpak has none). So the
+viewer builds no door interaction for a hangar door (`ENVIRONMENT_DOORS doors=0` on `hangar_xltop_001`, whose 26
+children are airlock, elevator, ship-elevator, top and cargo doors; it has no loading-platform gates — those are in other
+hangars). Plan:
+1. Exporter: the promoted child keeps its placement's identity (door record, entity id, class GUID, links, UI bindings).
+2. Exporter: each promoted child's clips get the fragments of its own class's `SAnimationControllerParams` database.
+3. Viewer: promoted children register as their entities (audio entity, door pads, sensors, links);
+   `ASCVehicle::BuildDoorInteractions` (environment import) then builds their doors.
+
 ## Proof decode (research)
 
 The prebuilt CLI decodes with `starbreaker wwise extract <bank>.bnk -o out/audio-datamine/decoded/<bank> --decode`.

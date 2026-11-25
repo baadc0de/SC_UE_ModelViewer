@@ -123,6 +123,8 @@ struct SCBRIDGE_API FSCAudioEntity
     TWeakObjectPtr<USCRigComponent> Rig;
     int32 Interior = INDEX_NONE;
     TMap<FString, TArray<int32>> TagInstances; // state tag -> the posts playing for it (one per effect)
+    /** Helper frames of the entity's door sounds that are mesh nodes, not bones (resolved at import, saved). */
+    TMap<FString, TWeakObjectPtr<USceneComponent>> Helpers;
 };
 
 struct SCBRIDGE_API FSCAudioScene
@@ -172,6 +174,14 @@ struct SCBRIDGE_API FSCAudioPlace
     bool bListener = false;                 // an area bed at the listener
     double EpochClock = -1.0;               // a placed loop: its looping voices keep the scene's timeline
     FString Label;                          // for logs: who played it
+    /** The game object it plays on when one object plays at several points (a door's helpers and pivot): object-scoped
+     *  stops and per-object container histories match it instead of the attachment, socket and label. */
+    FString Emitter;
+    bool SameEmitter(const FSCAudioPlace& Other) const
+    {
+        if (!Emitter.IsEmpty() || !Other.Emitter.IsEmpty()) return Emitter == Other.Emitter;
+        return Attach == Other.Attach && Socket == Other.Socket && Label == Other.Label;
+    }
 };
 
 UCLASS()
@@ -195,12 +205,22 @@ public:
     /** Stop every instance of a post (after DelayS, fading over FadeS). */
     void Stop(int32 Post, float FadeS = 0.f, float DelayS = 0.f);
     bool IsPlaying(int32 Instance) const;
+    /** The post started something: a voice or a scheduled run (not a playable trigger whose media is missing). */
+    bool HasStarted(int32 Post) const;
 
     // ---------------------------------------------------------------- viewer events (no trigger names: effects by tag)
     /** Fire the trigger effects tagged Tag of entity EntityId in Interior of Vehicle (e.g. a lift phase, a press). */
     int32 FireEntityTag(ASCVehicle* Vehicle, int32 Interior, const FString& EntityId, const FString& Tag);
     /** Start / stop the state-tag effects (tag effects) tagged Tag of an entity. */
     void SetEntityTag(ASCVehicle* Vehicle, int32 Interior, const FString& EntityId, const FString& Tag, bool bSet);
+    /** WP-A1 door effects (`door` of the class of the door's entity), on ASCVehicle::OnDoorMotion: Moved plays the open /
+     *  close and opening / closing groups (one-shots once; looped sounds and the opening / closing state tag held for the
+     *  move, the open / close tag fired); Arrived ends the move's holds and plays opened / closed (looped sounds held at
+     *  rest until the next move); Cancelled ends every hold of the door; Locked / Unlocked play their groups. A held
+     *  looped sound whose trigger ends is posted again while it is held. */
+    void HandleDoorMotion(ASCVehicle* Vehicle, int32 Door, bool bOpen, uint8 Event);
+    /** The door posts and state tags held now (tests, diagnostics). */
+    int32 NumDoorHolds(const ASCVehicle* Vehicle, int32 Door) const;
     /** An item's own action (WP-A1 hooks: flashlight, weapon): the trigger of the item class's audio field Field (a
      *  DataCore field name, the last element of the action's property path), played at Attach. */
     int32 PlayItemAction(ASCVehicle* Kit, const FString& ItemEntity, const FString& Field, USceneComponent* Attach);
@@ -247,6 +267,47 @@ private:
     TSharedPtr<FSCRtpcBank> RtpcBank;                                // the game parameters meters write
     bool bMixTracing = false;                                        // sc.Audio.MixTrace running
     double MixTraceStart = 0;
+    /** A held post: posted again whenever it stops playing (a finite tree lasts the whole hold). */
+    struct FHeldPost
+    {
+        FString Trigger;
+        FSCAudioPlace Place;
+        int32 Id = INDEX_NONE;
+        bool bStopped = false; // Stop reached it (a command, a stop action): kept for cleanup while it plays, never reposted
+    };
+    /** What a door holds: looped posts and state-tag references, for its move or at rest; it ends with its door's rig. */
+    struct FDoorHold
+    {
+        TWeakObjectPtr<ASCVehicle> Vehicle;
+        uint32 VehicleId = 0; // UObject unique id: stable after the vehicle is gone
+        TWeakObjectPtr<USCRigComponent> Rig;
+        int32 Door = INDEX_NONE;
+        bool bMotion = true;
+        bool bLock = false; // a lock state's (locked / unlocked): ends with the next lock change, not with a move
+        TArray<FString> TagKeys; // TagHolds it references
+        TArray<FHeldPost> Loops;
+    };
+    TArray<FDoorHold> DoorHolds;
+    /** A state tag of an entity held by door holds (two doors of one entity share it): each of its tag effects is kept
+     *  playing (posted again on its own when it ends) while any door holds it. */
+    struct FTagHold
+    {
+        TWeakObjectPtr<ASCVehicle> Vehicle;
+        int32 Refs = 0;
+        TArray<FHeldPost> Effects;
+    };
+    TMap<FString, FTagHold> TagHolds; // "<vehicle id>|<interior>|<entity id>|<tag>"
+    void ReleaseDoorHold(FDoorHold& Hold);
+    void StopHeldPosts(TArray<FHeldPost>& Posts);
+    /** A door event: its group's one-shots once, its looped sounds held (bMotion: for the move; bLock: for the lock state;
+     *  else at rest), its tag set as a state (bState) or fired. Returns the posts started. */
+    int32 PlayDoorEvent(ASCVehicle* Vehicle, int32 Door, const FString& Event, bool bMotion, bool bState, bool bLock = false);
+    /** Ends Door's holds (INDEX_NONE: every door of the vehicle, lock holds included; bMotionOnly: its move's, not its
+     *  rest's; bLockOnly: its lock state's, which otherwise stay). */
+    void EndDoorHolds(const ASCVehicle* Vehicle, int32 Door, bool bMotionOnly, bool bLockOnly = false);
+    void UpdateDoorHolds();
+    FDelegateHandle DoorMotionHandle;
+    TSet<FString> UnresolvedDoorHelpers; // logged once each
     struct FVoice
     {
         TObjectPtr<UAudioComponent> Component;
@@ -339,6 +400,8 @@ private:
 
     TArray<TSharedRef<FSCAudioScene>> Scenes;
     TMap<int32, FInstance> Instances;
+    /** I stops: its voices fade from From (the clock) over FadeS; nothing more of it is scheduled. */
+    void ScheduleStop(FInstance& I, double From, float FadeS);
     int32 NextId = 1;
     double Clock = 0;
     UPROPERTY() TMap<uint32, TObjectPtr<USoundSubmix>> BusSubmixes;
