@@ -169,13 +169,19 @@ void ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder)
 {
     if (!Doors.IsValidIndex(Door) || !Doors[Door].Rig) return;
     const USCRigComponent* Rig = Doors[Door].Rig;
+    // The order's entries on the door's rig with travel left in their direction (a clip started at the end it plays to, a
+    // door already there, does not move it).
+    auto Moves = [&](const FSCClipPlayback& P) {
+        if (P.Order <= AfterOrder || !(P.TargetRig.Get() == Rig || !P.bTargeted) || !ClipCatalog || !ClipCatalog->Clips.IsValidIndex(P.Clip)) return false;
+        return P.Speed > 0 ? P.Frame < ClipCatalog->Clips[P.Clip].LastFrame : P.Speed < 0 && P.Frame > 0;
+    };
     // The same order again mid-stroke (a lift ordering a closing door closed): the move goes on with the playback just
     // started, and its start effects are not played again.
     if (FDoorMotion* Same = DoorMotions.FindByPredicate([&](const FDoorMotion& M) { return M.Door == Door && M.bOpen == bOpen; }))
     {
         TArray<uint64> Orders;
         for (const FSCClipPlayback& P : Playback)
-            if (P.Order > AfterOrder && (P.TargetRig.Get() == Rig || !P.bTargeted)) Orders.Add(P.Order);
+            if (Moves(P)) Orders.Add(P.Order);
         if (!Orders.IsEmpty()) Same->Orders = MoveTemp(Orders);
         return;
     }
@@ -186,10 +192,11 @@ void ASCVehicle::StartDoorMotion(int32 Door, bool bOpen, uint64 AfterOrder)
     Motion.bOpen = bOpen;
     Motion.Rig = const_cast<USCRigComponent*>(Rig);
     for (const FSCClipPlayback& P : Playback)
-        if (P.Order > AfterOrder && (P.TargetRig.Get() == Rig || !P.bTargeted)) Motion.Orders.Add(P.Order);
+        if (Moves(P)) Motion.Orders.Add(P.Order);
     if (Motion.Orders.IsEmpty())
     {
-        // Held, not playing (a zero-speed play): nothing moves, and what the door held (a previous move, its rest) ends.
+        // Held, not playing (a zero-speed play), or already at the order's end (turned around before it moved): nothing
+        // moves, and what the door held (a previous move, its rest) ends.
         OnDoorMotion.Broadcast(this, Door, bOpen, EDoorMotion::Cancelled);
         return;
     }

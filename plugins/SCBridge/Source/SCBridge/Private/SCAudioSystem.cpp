@@ -962,7 +962,7 @@ int32 USCAudioSubsystem::Post(FSCAudioScene& S, const FString& Trigger, const FS
             for (auto& [Id, I] : Instances)
                 if (I.Scene.Pin().Get() == &S && I.Action && S.Manifest.Nodes.IsValidIndex(I.Action->Root) && S.Manifest.Nodes[I.Action->Root].Id == O.Target &&
                     (!bObject || I.Place.SameEmitter(Where)))
-                    Stop(Id, O.FadeS, O.DelayS);
+                    ScheduleStop(I, Clock + O.DelayS, O.FadeS); // that action only (Stop on a post's first action is its group)
             // WP-A1: a held door post it targets is not posted again, also one with no live instance now (between two of
             // its repetitions). (A stop's delay is not kept for a held post: one reached between repetitions ends now.)
             auto MarkHeld = [&](TArray<FHeldPost>& Posts) {

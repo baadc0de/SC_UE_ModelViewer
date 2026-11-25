@@ -862,6 +862,14 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     V->Tick(1.f);
     Expect(TEXT("each arrives"), {TEXT("A:0:moved"), TEXT("B:1:moved"), TEXT("B:1:arrived"), TEXT("A:0:arrived")});
 
+    // Ordered open and turned back before it moved: the close starts at its end (the pose it shows), so no closing stroke
+    // (no close / closed effects): the open move is cancelled.
+    TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
+    TestTrue(TEXT("and at once closes"), V->PlayDoor(DA, false));
+    V->Tick(1.f);
+    Expect(TEXT("a reversal with no travel"), {TEXT("A:1:moved"), TEXT("A:0:cancelled")});
+    TestTrue(TEXT("A closed"), V->IsDoorStateKnown(DA) && !V->IsDoorOpen(DA) && FMath::IsNearlyEqual(BoneX(A), 0.0, 1e-3));
+
     // ResetPose cancels a move (and every door's rest: each door reports a cancel), with no arrival.
     TestTrue(TEXT("A opens"), V->PlayDoor(DA, true));
     V->ResetPose();
@@ -872,10 +880,10 @@ bool FSCDoorMotionEventsTest::RunTest(const FString&)
     Events.Reset();
 
     // Door effects come from door orders: a fragment command taking a moving door over stops its move (no arrival).
-    TestTrue(TEXT("A closes"), V->PlayDoor(DA, false));
+    TestTrue(TEXT("A opens (from the rest the reset left)"), V->PlayDoor(DA, true));
     TestTrue(TEXT("fragment"), V->PlayFragmentAt(TEXT("SCItemDoor"), TEXT("Open"), A));
     V->Tick(1.f);
-    Expect(TEXT("a fragment stops the move"), {TEXT("A:0:moved"), TEXT("A:0:cancelled")});
+    Expect(TEXT("a fragment stops the move"), {TEXT("A:1:moved"), TEXT("A:1:cancelled")});
 
     // So does a raw clip on its channels, and a snap.
     const int32 Open = V->ClipCatalog->Clips.IndexOfByPredicate([](const FSCImportedClip& C) { return C.Id == FName(TEXT("hatch_open")); });
