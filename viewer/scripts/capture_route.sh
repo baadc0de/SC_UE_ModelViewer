@@ -18,7 +18,7 @@ LOG="$LOGDIR/$TAG.log"; rm -f "$LOG"
 "$SC_ENGINE/Engine/Binaries/Linux/UnrealEditor" "$SC_REPO/viewer/SCViewer.uproject" -game -windowed \
   -resx=1600 -resy=900 -vulkan -ddc=SCViewerDDC -nosplash -nop4 -abslog="$SC_REPO/$LOG" -SCScript="$ROUTE" "$@" \
   >/dev/null 2>&1 &
-pid=$! start=$(date +%s) taken=0 cancelled=0 status=""
+pid=$! start=$(date +%s) taken=0 cancelled=0 status="" rc=0
 shot() { # $1 = shot tag; niri reports a proxy PID, so match the UE window by app id / title
   local wid before after
   wid=$(niri msg windows | awk '/^Window ID/{id=$3} /App ID:|Title:/{ l=tolower($0); if (l ~ /unrealeditor|scviewer/ && l !~ /crash/) {print id; exit} }' | tr -d ':')
@@ -42,9 +42,9 @@ done
 for _ in $(seq 1 "${SC_EXIT_WAIT:-30}"); do kill -0 $pid 2>/dev/null || break; sleep 1; done
 if kill -0 $pid 2>/dev/null; then
   kill "$pid" 2>/dev/null; sleep 5; kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; status="stopped by PID"
-else wait "$pid"; status="exit $?"; fi
+else wait "$pid"; rc=$?; status="exit $rc"; fi # UE's own status (an automation that failed or was skipped exits 1)
 echo "$TAG: $status after $(( $(date +%s) - start )) s"
 pkill -f "CrashReportClient.*$TAG" 2>/dev/null && echo "$TAG: closed a crash reporter (UE crashed)"
 grep -E "SCRIPT|FP_|FIRST_PERSON|VIEWER_LOAD|EXPLORATION |Ensure|Assertion|Fatal" "$LOG" | sed 's/^.*\]\[ *[0-9]*\]//' | cut -c1-400
 grep -q 'Error: SCRIPT_CANCELLED ' "$LOG" 2>/dev/null && cancelled=1 # also when UE exited between polls
-if (( cancelled )); then exit 1; fi
+if (( cancelled || rc != 0 )); then exit 1; fi

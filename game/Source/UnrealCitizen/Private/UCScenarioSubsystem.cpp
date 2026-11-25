@@ -148,7 +148,7 @@ void UUCScenarioSubsystem::Refuse(const FString& Why, bool bClearScene)
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
     {
         Viewer->SetEnvironment(TEXT("none"));
-        Viewer->CancelPendingScript(); // no ship comes: a -SCScript route does not run against one loaded later
+        Viewer->CancelPendingScript(/*bSceneGoing=*/false, /*bFinal=*/true); // no ship comes: a -SCScript route does not run against one loaded later
     }
 }
 
@@ -159,7 +159,7 @@ void UUCScenarioSubsystem::Fail(const FString& Why)
     // A -SCScript route waiting for the scenario's ship does not run against one loaded later (the scenario's own ship,
     // loaded or loading, goes with it).
     if (USCViewerSubsystem* Viewer = GetGameInstance() ? GetGameInstance()->GetSubsystem<USCViewerSubsystem>() : nullptr)
-        Viewer->CancelPendingScript(/*bSceneGoing=*/true);
+        Viewer->CancelPendingScript(/*bSceneGoing=*/true, /*bFinal=*/true);
     // What the run started stops and goes: a level still streaming, the environment, the player body and the cargo setup not
     // applied yet.
     UUCSettings::Get()->ScenarioCargoJson.Reset();

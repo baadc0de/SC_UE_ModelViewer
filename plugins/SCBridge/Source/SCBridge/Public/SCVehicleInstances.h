@@ -127,6 +127,9 @@ public:
     /** The loaded vehicle goes: every instance and retained asset set with it. Their objects are added to Tracked
      *  (unload accounting) when given; bWorldAlive false: the world is tearing down and destroys the actors itself. */
     void Reset(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive);
+    /** The previous ship goes for the load numbered LoadSerial (USCViewerSubsystem::GetLoadSerial): as Reset, but the
+     *  requests waiting for that load stay queued; other waiting requests fail (they never vanish). */
+    void ResetForLoad(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive, uint32 LoadSerial);
     void Tick();
     /** Share assets between instances (sc.Vehicle.ShareAssets, default 1); 0: every instance is a fresh import. */
     static bool ShareAssets();
@@ -146,6 +149,7 @@ private:
         TWeakObjectPtr<ASCVehicle> Streamed;
         bool bStreamedCollision = true; // its saved collision setting, off until it is placed
         bool bAwaitsPending = false;    // its entity is the ship being loaded at the request (decided when that load ends)
+        uint32 AwaitedLoad = 0;         // with bAwaitsPending: the viewer's load serial at the request
         FString LevelOverride;          // a prepared level to stream, named by the caller (empty: PreparedShipLevelFor)
     };
     /** A prepared instance's level: released (USCViewerSubsystem::ReleaseLevel: unloaded and removed, a failed one too); its
@@ -158,6 +162,7 @@ private:
     void StepRunning();
     void Finish(FInstance& I, ASCVehicle* Actor);
     void Fail(FInstance& I, const FString& Error);
+    void ResetImpl(TArray<TWeakObjectPtr<UObject>>* Tracked, bool bWorldAlive, const uint32* KeepFor);
     /** Place I's actor (auto: free floor; else the requested transform). Others: instances to ignore while placing. */
     bool Place(FInstance& I, const TArray<const AActor*>& Others, FString& OutError);
     void ReplaceAll();

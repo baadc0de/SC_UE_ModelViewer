@@ -824,14 +824,43 @@ FString USCViewerSubsystem::PreparedShipLevelFor(const FString& Entity) const
 {
     const FString Asked = EntityName(Entity), Loaded = EntityName(LoadedEntity);
     if (!LoadedShipLevel.IsEmpty() && Asked.Equals(Loaded, ESearchCase::IgnoreCase)) return LoadedShipLevel;
-    return CookedShipLevel(Asked);
+    if (FString Own = CookedShipLevel(Asked); !Own.IsEmpty()) return Own;
+    // Only the level it was stored from (a package holding just a scenario's paint).
+    const FStoredShip* Stored = StoredShipLevels.Find(Asked.ToLower());
+    return Stored && FPackageName::DoesPackageExist(Stored->Level) ? Stored->Level : FString();
 }
-void USCViewerSubsystem::CancelPendingScript(bool bSceneGoing)
+FString USCViewerSubsystem::GarageShipLevel(const FString& Entity) const
+{
+    const FStoredShip* Stored = StoredShipLevels.Find(EntityName(Entity).ToLower());
+    if (Stored && FPackageName::DoesPackageExist(Stored->Level)) return Stored->Level;
+    return CookedShipLevel(Entity);
+}
+bool USCViewerSubsystem::CanLoadGarage(const FString& Entity) const
+{
+    return !IsBusy() && (ArchiveState == ESCArchiveState::Ready || !GarageShipLevel(Entity).IsEmpty());
+}
+void USCViewerSubsystem::SetStoredShipLevel(const FString& Entity, const FString& Level)
+{
+    const FString Name = EntityName(Entity);
+    if (Name.IsEmpty()) return;
+    if (Level.IsEmpty()) StoredShipLevels.Remove(Name.ToLower());
+    else StoredShipLevels.Add(Name.ToLower(), FStoredShip{Name, Level});
+}
+TArray<FString> USCViewerSubsystem::GetStoredShipEntities() const
+{
+    TArray<FString> Out;
+    for (const auto& [Key, Stored] : StoredShipLevels)
+        if (FPackageName::DoesPackageExist(Stored.Level)) Out.Add(Stored.Entity);
+    return Out;
+}
+void USCViewerSubsystem::CancelPendingScript(bool bSceneGoing, bool bFinal)
 {
     // Not while a ship is loaded or loading (whoever asked for it): the route runs on that one.
     const bool bShipLoading = Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing;
-    // Only without an archive reader is that final (with one, a later load may still bring a ship, as before).
-    if (Automation && !CanReadArchive() && (bSceneGoing || (!Vehicle.IsValid() && !bShipLoading))) Automation->CancelUnstartedScript();
+    // Final without an archive reader, or when the owner says so (with a reader, a later load may still bring a ship for
+    // an owner that is not done).
+    if (Automation && (bFinal || !CanReadArchive()) && (bSceneGoing || (!Vehicle.IsValid() && !bShipLoading)))
+        Automation->CancelUnstartedScript();
 }
 bool USCViewerSubsystem::CanLoad(const FString& Entity) const
 {
@@ -861,6 +890,7 @@ bool USCViewerSubsystem::StartLoad(const FString& Entity, USCViewOptions* InOpti
         return false;
     }
     LoadOptions->CopyFrom(InOptions ? InOptions : Options.Get());
+    ++LoadSerial;
     bLoadCancelRequested = false;
     Report = FSCLoadReport();
     Report.Entity = Entity;
@@ -905,9 +935,9 @@ bool USCViewerSubsystem::StartLoad(const FString& Entity, USCViewOptions* InOpti
 }
 bool USCViewerSubsystem::LoadGarageVehicle(const FString& Entity)
 {
-    if (Vehicle.IsValid() || !CanLoad(Entity)) return false;
+    if (Vehicle.IsValid() || !CanLoadGarage(Entity)) return false;
     bGarageLoad = true;
-    if (LoadEntity(Entity, GetOptions())) return true;
+    if (StartLoad(Entity, GetOptions(), GarageShipLevel(Entity))) return true;
     bGarageLoad = false;
     return false;
 }
@@ -920,6 +950,9 @@ int32 USCViewerSubsystem::SpawnGarageFloorVehicle(const FString& Entity)
 bool USCViewerSubsystem::StoreGaragePrimary()
 {
     if (!Vehicle.IsValid() || IsBusy()) return false;
+    // It comes back from the level it came from (a scenario's paint; a package may hold no other); one from the archive
+    // (no level) clears what an earlier store of the entity recorded.
+    SetStoredShipLevel(LoadedEntity, LoadedShipLevel);
     UnloadInternal(true, true);
     return true;
 }
@@ -1037,8 +1070,10 @@ void USCViewerSubsystem::Unload()
 }
 bool USCViewerSubsystem::WaitForLoad(float TimeoutSeconds)
 {
+    // The vehicle load only: StepLoad advances nothing else, and environment work (IsBusy counts it) goes on in the tick.
     const double Deadline = FPlatformTime::Seconds() + TimeoutSeconds;
-    while (IsBusy() && FPlatformTime::Seconds() < Deadline)
+    while ((Phase == ESCLoadPhase::Exporting || Phase == ESCLoadPhase::Parsing || Phase == ESCLoadPhase::Importing) &&
+           FPlatformTime::Seconds() < Deadline)
         StepLoad(true);
     return Phase == ESCLoadPhase::Succeeded;
 }
@@ -1190,8 +1225,8 @@ void USCViewerSubsystem::StepLoad(bool bBlocking)
             FinishLoad(ESCLoadPhase::Failed, Source->GetError());
             return;
         }
-        // Free the previous ship before building the next one so peak memory holds one ship.
-        UnloadInternal(true, bGarageLoad);
+        // Free the previous ship before building the next one so peak memory holds one ship (requests for this one stay).
+        UnloadInternal(true, bGarageLoad, /*bForPendingLoad=*/true);
         FSCImportOptions ImportOptions;
         ImportOptions.World = GetViewerWorld();
         ImportOptions.bBuildCollision = LoadOptions->bCollision;
@@ -1354,7 +1389,7 @@ void USCViewerSubsystem::UnloadShipLevel()
     ShipLevel = nullptr;
 }
 
-void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
+void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras, bool bForPendingLoad)
 {
     UWorld* ViewerWorld = GetViewerWorld();
     if (!ViewerWorld || ViewerWorld->bIsTearingDown || IsEngineExitRequested())
@@ -1374,7 +1409,9 @@ void USCViewerSubsystem::UnloadInternal(bool bCollect, bool bKeepExtras)
     if (VehicleInstances)
     {
         if (bKeepExtras) VehicleInstances->SetPrimary(nullptr, nullptr, FString());
-        else VehicleInstances->Reset(bCollect ? &Tracked : nullptr, ViewerWorld && !ViewerWorld->bIsTearingDown && !IsEngineExitRequested());
+        else if (const bool bWorldAlive = ViewerWorld && !ViewerWorld->bIsTearingDown && !IsEngineExitRequested(); bForPendingLoad)
+            VehicleInstances->ResetForLoad(bCollect ? &Tracked : nullptr, bWorldAlive, LoadSerial);
+        else VehicleInstances->Reset(bCollect ? &Tracked : nullptr, bWorldAlive);
     }
     if (ShipLevel)
     {
@@ -1831,7 +1868,7 @@ void USCViewerSubsystem::AdoptPackageVehicle(ASCVehicle* Imported)
 {
     if (!Imported || Imported->GetWorld() != GetViewerWorld()) return;
     Vehicle = Imported;
-    LoadedEntity = Imported->Manifest.Root.EntityName;
+    LoadedEntity = EntityName(Imported->Manifest.Root.EntityName); // the manifest names the record; loads key the bare entity
     LoadedShipLevel.Empty();
     Report.Entity = LoadedEntity;
     Phase = Report.Result = ESCLoadPhase::Succeeded;
