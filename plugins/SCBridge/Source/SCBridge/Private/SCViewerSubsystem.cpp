@@ -108,6 +108,9 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
     VehicleInstances = MakeShared<FSCVehicleInstances>(*this);
+    // The game user settings applied their scalability before the game instance started (UGameEngine::Init): capped here,
+    // before the first frame, which is the one that hung at Cinematic without ray tracing.
+    SCLook::CapQualityWithoutRayTracing();
     bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
     bShowcase = FParse::Param(FCommandLine::Get(), TEXT("SCShowcase"));
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.

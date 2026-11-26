@@ -273,6 +273,8 @@ What the download renders:
   - Dynamic resolution keeps the GPU time within 60 fps (its 15 ms target: 16.7 ms less the engine's 10 % headroom) between 50 % and 100 %, with TSR (DLSS is not in the release). It cannot help a CPU-bound frame. `r.ScreenPercentage` has no effect while it runs; RPC `/screenshot` and `/record` hold it at full resolution while they capture.
   - Cost of 32 lights per pixel: the shadow mask goes from 64 to 128 bits per pixel at scene-texture size, also for scene captures. That is +17 MB at 1080p, +66 MB at 4K and about +265 MB for an 8K `/render`, all transient.
   - Applied once at startup: switching `r.RayTracing.Enable` at run time does not re-apply or revert it.
+  - GI and reflection quality are held at Epic (3) at most (`SCLook::CapQualityWithoutRayTracing`, before the first frame; `LOOK quality_cap` in the log). Started at Cinematic (4) without ray tracing, the GPU hung in `DeferredLightPixelMain` on the first frame, drawing the viewer map's studio lights (D3D12 `DEVICE_HUNG`, in 0.1.0 and 0.1.1). The cap is for the run only: `GameUserSettings.ini` keeps the user's levels.
+  - `-SCMaxQuality` changes nothing here (its Cinematic levels and hit lighting need ray tracing). With ray tracing its levels are also for the run only; before this, they were saved on exit and stayed for later runs.
 
 Measured with the Golem in the Levski large hangar (Development package, 1920×1080, `ProfileGPU`, RTX 4090):
 
