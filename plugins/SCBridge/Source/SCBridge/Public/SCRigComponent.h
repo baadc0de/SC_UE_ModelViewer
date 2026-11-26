@@ -17,6 +17,11 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "SC") FString MeshAsset;
     UPROPERTY(BlueprintReadOnly, Category = "SC") FString OwnerEntity;
     virtual void RefreshBoneTransforms(FActorComponentTickFunction* TickFunction = nullptr) override;
+    /** Bounds that follow the pose (the rigs have no physics asset, so the engine's are the mesh's bind-pose bounds):
+     *  the engine's bounds joined with the posed bones' box, padded by how far the mesh reaches beyond its bones in the
+     *  bind pose. A leader-pose follower joins its leader's (it is skinned by the leader's bones). A seated player's
+     *  helmet otherwise kept its standing bounds, about a metre above the head, and was culled. */
+    virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
     void ResetPose();
     bool InitializeCollision(const FSCDerivedMesh& Data);
     /** The collision body from serialized Chaos trimesh bytes (FSCSkeletalMeshImporter::DeriveCollision's, in LOD 0's
@@ -67,4 +72,7 @@ private:
     TArray<FTransform> RefitPose;         // component-space pose the body currently represents
     int32 CollisionRefits = 0;
     bool bRefitUnavailable = false;
+    float BonePadding() const;            // how far the mesh's bind-pose bounds reach beyond its bones (cm), cached
+    mutable float CachedBonePadding = -1.f;
+    mutable const UObject* PaddingMesh = nullptr;
 };

@@ -12,7 +12,7 @@ class UTexture2D;
 /** One master per shader family group; names match viewer/scripts/create_materials.py. Screen: a DisplayScreen face whose
  *  image is a render target ($RenderToTexture), drawn as dark glass with the bound panel image as emission (opaque;
  *  M_SC_Screen_Translucent when the authored opacity is below 1). */
-enum class ESCMaster : uint8 { Illum, HardSurface, Layered, Glass, MeshDecal, MeshDecalRelief, Translucent, EmissiveUnlit, Fallback, Screen };
+enum class ESCMaster : uint8 { Illum, HardSurface, Layered, Glass, MeshDecal, MeshDecalRelief, Translucent, EmissiveUnlit, Fallback, Screen, Ping };
 enum class ESCBlend : uint8 { Opaque, Masked, Translucent };
 
 /** Pure description of one material instance: safe to build on a worker, unit-testable without UObjects. */

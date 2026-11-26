@@ -16,7 +16,8 @@ bool FSCBasicLighting::RunTest(const FString&)
         return true;
     }
     const TCHAR* Names[] = {TEXT("r.Shadow.Virtual.OnePassProjection.MaxLightsPerPixel"), TEXT("r.DynamicRes.OperationMode"),
-                            TEXT("r.DynamicRes.MinScreenPercentage"), TEXT("r.DynamicRes.MaxScreenPercentage"), TEXT("r.DynamicRes.FrameTimeBudget")};
+                            TEXT("r.DynamicRes.MinScreenPercentage"), TEXT("r.DynamicRes.MaxScreenPercentage"), TEXT("r.DynamicRes.FrameTimeBudget"),
+                            TEXT("r.MegaLights.Allowed"), TEXT("r.Shadow.Virtual.AllowScreenOverflowMessages")};
     // Restored afterwards at the priority they had (code priority would pin them for the rest of the session).
     TMap<FString, TPair<FString, EConsoleVariableFlags>> Before;
     for (const TCHAR* Name : Names)
@@ -30,6 +31,8 @@ bool FSCBasicLighting::RunTest(const FString&)
     TestEqual(TEXT("down to half resolution"), Float(Names[2]), 50.f);
     TestEqual(TEXT("up to full resolution"), Float(Names[3]), 100.f);
     TestEqual(TEXT("held at 60 fps"), Float(Names[4]), 1000.f / 60.f, 1e-3f);
+    TestEqual(TEXT("MegaLights not requested (no on-screen notice)"), Int(Names[5]), 0);
+    TestEqual(TEXT("no on-screen VSM overflow notice"), Int(Names[6]), 0);
     for (const auto& [Name, Value] : Before)
         if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(*Name))
         {

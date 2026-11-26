@@ -84,6 +84,13 @@ shader rebuild. No C++ change.
   `M_SC_MeshDecal` (DBuffer colour decal via Substrate *Convert To Decal*),
   `M_SC_MeshDecal_Relief` (DBuffer normal + roughness only), `M_SC_Translucent` (lit forward/faded
   surfaces), `M_SC_Emissive_Unlit` (additive screens), plus 4×4 neutral default textures.
+  `M_SC_Ping` (2026-11-26): the game's `Ping` shader, which the exporter gives no family (`Unknown`), so the describer
+  maps it by shader name. Hangar atmosphere force fields (`hangar_shield_a` `shield_interference`) use it; before this
+  they fell back to the opaque `M_SC_Fallback` and showed as a flat sheet across the hangar mouth. Additive, unlit,
+  two-sided. Emissive colour × Glow (the Illum rule) × the `TexSlot1` noise, tiled by `NoiseOctave0` and panned by
+  `NoiseSpeed0`, raised by a rim term (`RimWeight` × (1 − |N·V|)^`OuterRimPower`) and an intersection glow
+  (`IntersectionWeight` × (1 − depth fade over `IntersectionRimSoftening` m)). The shader text is not in the archive,
+  so the curves are an approximation named after its public parameters.
 - **`FSCMaterialBuilder`** (`Public/SCMaterialBuilder.h`, `Private/SCMaterialDescribe.cpp` pure mapping,
   `Private/SCMaterialBuilder.cpp` MID creation): family → master, roles → texture params, authored
   attributes / public params / palette routing → scalars and colours, blend/two-sided/D6 decision.

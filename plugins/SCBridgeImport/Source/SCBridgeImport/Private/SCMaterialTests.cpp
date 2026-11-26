@@ -377,6 +377,21 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
         FSCMaterialDesc Driven = *X; FSCMaterialBuilder::ApplyEngineGlow(Driven, 50.f);
         TestTrue(TEXT("driven non-forward target stays a lit Nanite surface"), Driven.Master == ESCMaster::Illum && !Driven.bNonNanite);
     }
+    // Ping.cfx (hangar force fields): no exporter family, named by its shader; additive glow, never the opaque fallback.
+    if (auto* X = Check(TEXT("ping_shield"), ESCMaster::Ping, ESCBlend::Translucent, false, true))
+    {
+        TestEqual(TEXT("ping parent"), FSCMaterialBuilder::ParentPath(X->Master, X->Blend, X->bTwoSided), FString(TEXT("/SCBridge/Materials/M_SC_Ping.M_SC_Ping")));
+        TestEqual(TEXT("ping noise = TexSlot1"), X->Textures.Contains(TEXT("DiffuseMap")) ? X->Textures[TEXT("DiffuseMap")].Path : FString(), FString(TEXT("tex/forcefield_diff.png")));
+        TestTrue(TEXT("ping colour = authored Emissive"), Near(X->Vectors[TEXT("EmissiveColor")], FLinearColor(0.13f, 0.25f, 1.f)));
+        TestEqual(TEXT("ping strength = Glow in scene units (linear)"), X->Scalars[TEXT("EmissiveStrength")], UnitGlowNits() * 0.05f);
+        TestEqual(TEXT("ping rim weight"), X->Scalars[TEXT("RimWeight")], 2.f);
+        TestEqual(TEXT("ping rim power"), X->Scalars[TEXT("OuterRimPower")], 0.5f);
+        TestEqual(TEXT("ping intersection weight"), X->Scalars[TEXT("IntersectionWeight")], 0.2f);
+        TestEqual(TEXT("ping intersection softening (m)"), X->Scalars[TEXT("IntersectionRimSoftening")], 1.2f);
+        TestEqual(TEXT("ping noise tiling"), X->Scalars[TEXT("NoiseOctave0")], 6.f);
+        TestEqual(TEXT("ping noise speed"), X->Scalars[TEXT("NoiseSpeed0")], 0.1f);
+        TestFalse(TEXT("ping is not reported as an unknown family"), X->Warnings.ContainsByPredicate([](const FString& W) { return W.Contains(TEXT("Unknown shader family")); }));
+    }
     if (auto* X = Check(TEXT("forward_glow"), ESCMaster::EmissiveUnlit, ESCBlend::Translucent, false, true))
     {
         // Headlight_Glow-like: forward flag + Emissive 1,1,1 + no Glow -> glow card, strength mean(Emissive) = 1,
@@ -562,7 +577,7 @@ bool FSCMaterialsFamilies::RunTest(const FString&)
     // hard_wear_tinted blend map (its wear surface reuses the Primary maps). Two more are read for their mean
     // colour only: the unsampled spec maps of hard_wear_tinted and blend1. GlassPBR adds 2: the glass_thickness
     // height map and the glass_vertex_tint tint map.
-    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 48); // + Layered WearMap, the decal DirtBlendMap, the engine detail map (WP-U2b), the HardSurface stencil
+    TestEqual(TEXT("deduplicated texture requests"), Phase.TextureStats.Requested, 49); // + the Ping noise map, Layered WearMap, the decal DirtBlendMap, the engine detail map (WP-U2b), the HardSurface stencil
     // Scene schemas v2 (WP-R5) and v3 (WP-K1) are additive. Future versions are rejected.
     {
         FSCFolderPackageSource Source(FixtureDir()); FSCSceneManifest V2, V3, Unknown; FString Error;
@@ -670,7 +685,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSCMaterialsMasters, "SCBridge.Materials.Master
 bool FSCMaterialsMasters::RunTest(const FString&)
 {
     for (ESCMaster Master : {ESCMaster::Illum, ESCMaster::HardSurface, ESCMaster::Layered, ESCMaster::Glass, ESCMaster::MeshDecal,
-        ESCMaster::MeshDecalRelief, ESCMaster::Translucent, ESCMaster::EmissiveUnlit, ESCMaster::Fallback, ESCMaster::Screen})
+        ESCMaster::MeshDecalRelief, ESCMaster::Translucent, ESCMaster::EmissiveUnlit, ESCMaster::Fallback, ESCMaster::Screen, ESCMaster::Ping})
         for (ESCBlend Blend : {ESCBlend::Opaque, ESCBlend::Masked})
             for (bool bTwoSided : {false, true})
             {

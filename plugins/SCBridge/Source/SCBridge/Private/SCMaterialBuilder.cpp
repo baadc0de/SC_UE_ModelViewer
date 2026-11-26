@@ -48,6 +48,7 @@ const TCHAR* FSCMaterialBuilder::MasterName(ESCMaster Master)
     case ESCMaster::Translucent: return TEXT("SC_Translucent");
     case ESCMaster::EmissiveUnlit: return TEXT("SC_Emissive_Unlit");
     case ESCMaster::Screen: return TEXT("SC_Screen");
+    case ESCMaster::Ping: return TEXT("SC_Ping");
     default: return TEXT("SC_Fallback");
     }
 }
