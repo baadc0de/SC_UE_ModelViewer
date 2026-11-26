@@ -108,6 +108,10 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &USCViewerSubsystem::Tick));
     Automation = MakeShared<FSCViewerAutomation>(*this);
     VehicleInstances = MakeShared<FSCVehicleInstances>(*this);
+    // The user's scalability levels are applied in PreInit (Scalability::LoadState): capped here, before the first frame of a
+    // game (packaged, -game, PIE), which is the one that hung at Cinematic without ray tracing. Editor viewports before
+    // PIE render at the editor's own levels.
+    SCLook::CapQualityWithoutRayTracing();
     bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
     bShowcase = FParse::Param(FCommandLine::Get(), TEXT("SCShowcase"));
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
@@ -129,6 +133,7 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void USCViewerSubsystem::Deinitialize()
 {
     FTSTicker::GetCoreTicker().RemoveTicker(TickHandle);
+    SCLook::EndRunQuality();
     Automation.Reset();
     if (ExportProgress) ExportProgress->RequestCancel();
     if (ExportTask.IsValid()) ExportTask.Wait();
@@ -1598,6 +1603,7 @@ bool USCViewerSubsystem::Tick(float)
         bMaxQualityPending = false; // after the game user settings applied their scalability at startup
         SCLook::ApplyMaxQuality();
     }
+    SCLook::FollowQualityChanges();
     CompleteSearches(false);
     StepLoad(false);
     StepPlayerKit(false);

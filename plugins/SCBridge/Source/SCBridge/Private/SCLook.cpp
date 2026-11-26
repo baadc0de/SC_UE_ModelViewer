@@ -359,13 +359,88 @@ int64 SCLook::RayTracingSegments(UWorld* World, int32* OutPrimitives)
     if (OutPrimitives) *OutPrimitives = Primitives;
     return Segments;
 }
+
+// The run's scalability rule over the user's levels: none, the cap without ray tracing, or -SCMaxQuality.
+namespace
+{
+enum class ERunQuality : uint8 { None, Cap, Max };
+ERunQuality GRunQuality = ERunQuality::None;
+Scalability::FQualityLevels GRunFrom(false); // the user's levels the run's levels were made from
+}
+
+static Scalability::FQualityLevels RunLevels(Scalability::FQualityLevels Levels)
+{
+    if (GRunQuality == ERunQuality::Max)
+    {
+        Levels.GlobalIlluminationQuality = 4; // Cinematic
+        Levels.ReflectionQuality = 4;
+    }
+    else if (GRunQuality == ERunQuality::Cap)
+    {
+        Levels.GlobalIlluminationQuality = FMath::Min(Levels.GlobalIlluminationQuality, 3); // Epic
+        Levels.ReflectionQuality = FMath::Min(Levels.ReflectionQuality, 3);
+    }
+    return Levels;
+}
+
+// Puts the run's levels over the user's, for this run only: as temporary scalability levels, which Scalability::SaveState
+// (UGameEngine::PreExit -> UGameUserSettings::SaveSettings) does not write; the user's levels stay the saved ones. While
+// they are active, the engine keeps a change of the levels (console `scalability`, UGameUserSettings::ApplySettings, the
+// editor's menu) as the user's levels without applying it: the run's levels are made again from the changed ones.
+// Returns whether it changed the levels in effect.
+static bool UpdateRunQuality()
+{
+    if (GRunQuality == ERunQuality::None) return false;
+    const Scalability::FQualityLevels User = Scalability::GetQualityLevels(); // the backup while temporary levels are active
+    const bool bTemporary = Scalability::IsTemporaryQualityLevelActive();
+    if (bTemporary && User == GRunFrom) return false;
+    GRunFrom = User;
+    const Scalability::FQualityLevels Levels = RunLevels(User);
+    if (Levels == User)
+    {
+        if (bTemporary) Scalability::ToggleTemporaryQualityLevels(false); // applies the user's levels
+        return bTemporary;
+    }
+    Scalability::ToggleTemporaryQualityLevels(false);
+    Scalability::ToggleTemporaryQualityLevels(true, Levels);
+    Scalability::SetQualityLevels(Levels, true);
+    return true;
+}
+
+void SCLook::FollowQualityChanges()
+{
+    if (UpdateRunQuality())
+        UE_LOG(LogTemp, Display, TEXT("LOOK run_quality reapplied gi=%d reflections=%d (saved gi=%d reflections=%d)"),
+               RunLevels(GRunFrom).GlobalIlluminationQuality, RunLevels(GRunFrom).ReflectionQuality,
+               GRunFrom.GlobalIlluminationQuality, GRunFrom.ReflectionQuality);
+}
+
+void SCLook::EndRunQuality()
+{
+    if (GRunQuality != ERunQuality::None && Scalability::IsTemporaryQualityLevelActive())
+        Scalability::ToggleTemporaryQualityLevels(false); // back to the user's levels
+    GRunQuality = ERunQuality::None;
+}
+
+// Shipping keeps no log: -SCQualityReport=<file> writes the line for checks of a packaged build.
+static void ReportQuality(const FString& Report)
+{
+    UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
+    FString ReportFile;
+    if (FParse::Value(FCommandLine::Get(), TEXT("SCQualityReport="), ReportFile)) FFileHelper::SaveStringToFile(Report + TEXT("\n"), *ReportFile);
+}
+
 void SCLook::ApplyMaxQuality()
 {
-    Scalability::FQualityLevels Levels = Scalability::GetQualityLevels();
-    Levels.GlobalIlluminationQuality = 4; // Cinematic
-    Levels.ReflectionQuality = 4;
-    Scalability::SetQualityLevels(Levels);
+    if (!IsRayTracingEnabled())
+    {
+        // Cinematic hangs the GPU without ray tracing (CapQualityWithoutRayTracing), and its hit lighting needs it.
+        ReportQuality(TEXT("LOOK max_quality skipped: no hardware ray tracing"));
+        return;
+    }
     IConsoleManager& Console = IConsoleManager::Get();
+    GRunQuality = ERunQuality::Max; // not saved: the next run without -SCMaxQuality starts at the user's levels
+    UpdateRunQuality();
     auto Set = [&Console](const TCHAR* Name, int32 Value) {
         if (IConsoleVariable* Var = Console.FindConsoleVariable(Name)) Var->Set(Value, ECVF_SetByCode);
     };
@@ -381,10 +456,16 @@ void SCLook::ApplyMaxQuality()
         *Get(TEXT("r.Lumen.HardwareRayTracing.LightingMode")), *Get(TEXT("r.Lumen.HardwareRayTracing.HitLighting.ShadowMode")),
         *Get(TEXT("r.Lumen.ScreenProbeGather.DownsampleFactor")), *Get(TEXT("r.Nanite")), *Get(TEXT("r.NGX.DLSS.Enable")),
         *Get(TEXT("r.ScreenPercentage")), *Get(TEXT("r.AntiAliasingMethod")));
-    UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
-    // Shipping keeps no log: -SCQualityReport=<file> writes the line for checks of a packaged build.
-    FString ReportFile;
-    if (FParse::Value(FCommandLine::Get(), TEXT("SCQualityReport="), ReportFile)) FFileHelper::SaveStringToFile(Report + TEXT("\n"), *ReportFile);
+    ReportQuality(Report);
+}
+
+void SCLook::CapQualityWithoutRayTracing()
+{
+    if (IsRayTracingEnabled()) return;
+    GRunQuality = ERunQuality::Cap;
+    if (UpdateRunQuality())
+        UE_LOG(LogTemp, Display, TEXT("LOOK quality_cap no_ray_tracing gi=%d->%d reflections=%d->%d"), GRunFrom.GlobalIlluminationQuality,
+               RunLevels(GRunFrom).GlobalIlluminationQuality, GRunFrom.ReflectionQuality, RunLevels(GRunFrom).ReflectionQuality);
 }
 
 void SCLook::ApplyBasicLighting()

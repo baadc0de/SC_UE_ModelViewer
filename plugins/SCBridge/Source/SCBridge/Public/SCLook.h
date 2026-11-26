@@ -23,8 +23,20 @@ void UpdateShortRangeAO(UWorld* World);
 /** -SCMaxQuality (the standalone Win64 showcase, viewer/scripts/package_showcase.ps1): Lumen global illumination and
  *  reflections at Cinematic (BaseScalability @Cine: 8x screen probes, larger trace budgets, front-layer translucency
  *  reflections) and hardware ray tracing with hit lighting for GI and reflections and area shadows at hits. Applied
- *  once the game's own settings are (the subsystem's first tick with a world); logs the effective values. */
+ *  once the game's own settings are (the subsystem's first tick with a world); logs the effective values. The levels are
+ *  for this run only (not saved to GameUserSettings.ini). Without hardware ray tracing it changes nothing (see below). */
 void ApplyMaxQuality();
+/** Without hardware ray tracing, global illumination and reflection quality are held at Epic (3) at most for this run:
+ *  started at Cinematic (4) without ray tracing, the GPU hangs in DeferredLightPixelMain on the first frame (D3D12 device
+ *  hung, 2026-11-26). The levels the game saves stay the user's (temporary scalability levels). Called when the viewer
+ *  starts, before the first frame. */
+void CapQualityWithoutRayTracing();
+/** Keeps the run's levels (the cap above, or -SCMaxQuality) over the user's when those change during the run (console
+ *  `scalability`, UGameUserSettings::ApplySettings, the editor's menu), which the engine otherwise saves without applying
+ *  while the run's levels are active. Called every tick. */
+void FollowQualityChanges();
+/** Back to the user's levels: the viewer's game instance ends (in the editor, PIE). */
+void EndRunQuality();
 /** Without hardware ray tracing ("Basic lighting": a GPU without DirectX Raytracing, or -noraytracing; MegaLights and
  *  ray-traced Lumen are off by themselves): the most the remaining pipeline gives a mid-range GPU (filtered virtual shadow
  *  maps for up to 32 lights per pixel, dynamic resolution held at 60 fps). Applied once at startup, every run. */
