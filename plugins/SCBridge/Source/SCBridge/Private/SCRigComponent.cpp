@@ -52,42 +52,40 @@ void USCRigComponent::RefreshBoneTransforms(FActorComponentTickFunction*)
     MarkRenderTransformDirty();
     MarkRenderDynamicDataDirty();
 }
-float USCRigComponent::BonePadding() const
+const TArray<FTransform>& USCRigComponent::InverseBindPose() const
 {
     const USkeletalMesh* Mesh = GetSkeletalMeshAsset();
-    if (!Mesh) return 0.f;
-    if (PaddingMesh == Mesh && CachedBonePadding >= 0.f) return CachedBonePadding;
+    if (BindMesh == Mesh) return InverseBind;
+    BindMesh = Mesh;
+    InverseBind.Reset();
+    if (!Mesh) return InverseBind;
     const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
     const TArray<FTransform>& Local = Ref.GetRefBonePose();
-    TArray<FTransform> Space;
-    Space.SetNum(Local.Num());
-    FBox Bones(ForceInit);
+    InverseBind.SetNum(Local.Num());
     for (int32 I = 0; I < Local.Num(); ++I)
     {
         const int32 Parent = Ref.GetParentIndex(I);
-        Space[I] = Parent == INDEX_NONE ? Local[I] : Local[I] * Space[Parent];
-        Bones += Space[I].GetLocation();
+        InverseBind[I] = Parent == INDEX_NONE ? Local[I] : Local[I] * InverseBind[Parent]; // bind pose, component space
     }
-    const FBox MeshBox = Mesh->GetImportedBounds().GetBox();
-    float Padding = 0.f;
-    if (Bones.IsValid && MeshBox.IsValid)
-    {
-        const FVector Out = FVector::Max(MeshBox.Max - Bones.Max, Bones.Min - MeshBox.Min);
-        Padding = float(FMath::Max(0.0, Out.GetMax()));
-    }
-    PaddingMesh = Mesh;
-    CachedBonePadding = Padding;
-    return Padding;
+    for (FTransform& Bind : InverseBind) Bind = Bind.Inverse();
+    return InverseBind;
 }
 FBoxSphereBounds USCRigComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
     const FBoxSphereBounds Engine = Super::CalcBounds(LocalToWorld);
-    if (const USCRigComponent* Leader = Cast<USCRigComponent>(LeaderPoseComponent.Get()))
-        return Leader->IsRegistered() && Leader->Bounds.SphereRadius > 0 ? Engine + Leader->Bounds : Engine;
-    const TArray<FTransform>& Space = GetComponentSpaceTransforms();
+    // A vertex skinned to bone b moves by b's bind -> posed transform; a blended vertex lies within the hull of its bones'
+    // moved positions. So the mesh's bind-pose box moved by every bone's transform, joined, holds the posed mesh: no
+    // vertex can leave it however far it sits from its bones (a door panel swung on its hinge). A leader-pose follower is
+    // skinned by its leader's component-space bones in its own component space: its own box, moved by the leader's bones.
+    const USCRigComponent* Leader = Cast<USCRigComponent>(LeaderPoseComponent.Get());
+    const USCRigComponent* Posing = Leader ? Leader : this;
     const USkeletalMesh* Mesh = GetSkeletalMeshAsset();
-    if (!Mesh || Space.Num() != Mesh->GetRefSkeleton().GetNum() || Space.IsEmpty()) return Engine;
+    const TArray<FTransform>& Space = Posing->GetComponentSpaceTransforms();
+    const TArray<FTransform>& Unbind = Posing->InverseBindPose();
+    if (!Mesh || Space.IsEmpty() || Space.Num() != Unbind.Num()) return Engine;
+    const FBox MeshBox = Mesh->GetImportedBounds().GetBox();
+    if (!MeshBox.IsValid) return Engine;
     FBox Posed(ForceInit);
-    for (const FTransform& Bone : Space) Posed += Bone.GetLocation();
-    return Engine + FBoxSphereBounds(Posed.ExpandBy(BonePadding()).TransformBy(LocalToWorld));
+    for (int32 Bone = 0; Bone < Space.Num(); ++Bone) Posed += MeshBox.TransformBy(Unbind[Bone] * Space[Bone]);
+    return Engine + FBoxSphereBounds(Posed.TransformBy(LocalToWorld));
 }

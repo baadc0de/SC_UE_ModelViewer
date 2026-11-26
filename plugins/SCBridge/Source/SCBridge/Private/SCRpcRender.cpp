@@ -584,7 +584,7 @@ bool FSCRpcRender::WriteSidecar()
     }
     auto Settings = MakeShared<FJsonObject>();
     for (const TCHAR* Key : {TEXT("r.ScreenPercentage"), TEXT("r.AntiAliasingMethod"), TEXT("r.Lumen.DiffuseIndirect.Allow"),
-                              TEXT("r.DynamicGlobalIlluminationMethod"), TEXT("r.HDR.EnableHDROutput"), TEXT("r.SSDO.Quality"), TEXT("r.SSDO"), TEXT("r.Lumen.HardwareRayTracing"), TEXT("r.MegaLights.Allow")})
+                              TEXT("r.DynamicGlobalIlluminationMethod"), TEXT("r.HDR.EnableHDROutput"), TEXT("r.SSDO.Quality"), TEXT("r.SSDO"), TEXT("r.Lumen.HardwareRayTracing"), TEXT("r.MegaLights.Allowed")})
         if (auto* CVar = IConsoleManager::Get().FindConsoleVariable(Key)) Settings->SetStringField(Key, CVar->GetString());
     O->SetObjectField(TEXT("cvars"), Settings);
     O->SetArrayField(TEXT("frames"), Frames);
