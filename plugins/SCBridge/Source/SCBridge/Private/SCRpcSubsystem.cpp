@@ -338,6 +338,9 @@ private:
             Load->SetStringField(TEXT("phase"), StaticEnum<ESCLoadPhase>()->GetNameStringByValue(int64(V->GetLoadPhase())));
             Load->SetStringField(TEXT("archive"), StaticEnum<ESCArchiveState>()->GetNameStringByValue(int64(V->GetArchiveState())));
             Load->SetStringField(TEXT("environment"), V->GetEnvironmentRequest());
+            // The request above is set before the hangar loads; the actor only once it has (a request resets it, a failure
+            // leaves it empty).
+            Load->SetBoolField(TEXT("environment_ready"), V->GetEnvironment() != nullptr && !V->IsEnvironmentLoading());
             Load->SetBoolField(TEXT("space"), V->IsSpace()); // WP-K3: no environment, no gravity
             O->SetObjectField(TEXT("load"), Load);
             TArray<TSharedPtr<FJsonValue>> Vehicles;
