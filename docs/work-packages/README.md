@@ -12,6 +12,8 @@ the local-file-cache requirement: WP-C1 (layer 2), with layer 1 folded into WP-R
 
 Added on 2026-11-20 for the mobiGlas ship features: WP-M1 (Ship Link) and WP-M2 (Garage).
 
+Added on 2026-11-26 for ground truth from the real game: WP-Q2 (game reference capture by computer use).
+
 Common preamble every agent receives:
 
 > You are working in `/home/baadc0de/Development/baadc0de/SC_UE_ModelViewer`.

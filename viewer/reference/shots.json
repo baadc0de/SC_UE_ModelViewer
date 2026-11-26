@@ -1,0 +1,54 @@
+{
+  "about": "Game reference shot list (WP-Q2, docs/work-packages/WP-Q2-game-reference-capture.md). Each shot is captured in the viewer (viewer/scripts/reference/Capture-ViewerShots.ps1) and then matched in Star Citizen by computer use (Take-GameShot.ps1). Viewer positions are in metres, in the viewer's world.",
+  "version": 1,
+  "shots": [
+    {
+      "id": "levski-medium-shield-straight",
+      "title": "Levski medium hangar: door force field, straight on",
+      "why": "Calibrate the hangar door force field (hangar_shield_a: Illum shield_edge strips and the Ping shield_interference sheet). In the viewer the edge strips read as a bright flat sheet; we need the game's brightness, colour and rim look.",
+      "viewer": {
+        "environment": "Data/ObjectContainers/PU/loc/mod/common/hangar/util_a/hangar_medfrnt_001_levski.socpak",
+        "load": "DRAK_Cutlass_Black",
+        "camera": { "mode": "fly", "at": [-30, -11, 1.8], "look_at": [60, 0, 7] },
+        "settle_s": 6
+      },
+      "game": {
+        "where": "A medium front-opening hangar with a door force field (Levski on Delamar if reachable; otherwise any station hangar with the same blue door field, and write down which).",
+        "frame": "Stand on foot near the back of the hangar, beside the ship (to its left as you face the door), eye height, looking out at the open door so the whole force field is in the frame past the ship's nose.",
+        "conditions": "Doors open (the field only shows then: request departure with a ship stored in the hangar). Helmet off or visor HUD hidden if possible; note what was visible."
+      }
+    },
+    {
+      "id": "levski-medium-shield-oblique",
+      "title": "Levski medium hangar: door force field, from the side",
+      "why": "The rim and edge terms of the field depend on the view angle; a grazing view shows how the game fades it.",
+      "viewer": {
+        "environment": "Data/ObjectContainers/PU/loc/mod/common/hangar/util_a/hangar_medfrnt_001_levski.socpak",
+        "load": "DRAK_Cutlass_Black",
+        "camera": { "mode": "fly", "at": [20, -14, 4], "look_at": [45, 6, 8] },
+        "settle_s": 5
+      },
+      "game": {
+        "where": "Same hangar as levski-medium-shield-straight.",
+        "frame": "Stand near the door on one side wall, about 25 m in from the door, looking diagonally across at the field so it is seen at a grazing angle.",
+        "conditions": "Same as levski-medium-shield-straight."
+      }
+    },
+    {
+      "id": "levski-medium-shield-close",
+      "title": "Levski medium hangar: door force field, up close",
+      "why": "Close up the edge strips (shield_edge, vertex alpha 0.10-0.95) and the interference noise are resolvable; this is the shot that tells their brightness apart.",
+      "viewer": {
+        "environment": "Data/ObjectContainers/PU/loc/mod/common/hangar/util_a/hangar_medfrnt_001_levski.socpak",
+        "load": "DRAK_Cutlass_Black",
+        "camera": { "mode": "fly", "at": [38, -12, 1.8], "look_at": [60, -2, 5] },
+        "settle_s": 5
+      },
+      "game": {
+        "where": "Same hangar as levski-medium-shield-straight.",
+        "frame": "Walk up to about 10 m from the field, slightly off centre, looking at it and a little upward so its lower edge and the floor meet in the frame.",
+        "conditions": "Same as levski-medium-shield-straight."
+      }
+    }
+  ]
+}
