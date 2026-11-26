@@ -484,7 +484,13 @@ void SCLook::ApplyBasicLighting()
     Set(TEXT("r.DynamicRes.MinScreenPercentage"), 50);
     Set(TEXT("r.DynamicRes.MaxScreenPercentage"), 100);
     Set(TEXT("r.DynamicRes.FrameTimeBudget"), 1000.f / 60.f);
-    UE_LOG(LogTemp, Display, TEXT("LOOK basic_lighting vsm_lights_per_pixel=32 dynamic_res=60fps min_screen_percentage=50"));
+    // MegaLights needs hardware ray tracing: not requested at all, so the renderer does not put "MegaLights is turned on, but
+    // Hardware Ray Tracing isn't available" on screen (the project enables it, r.MegaLights.EnableForProject).
+    Set(TEXT("r.MegaLights.Allowed"), 0);
+    // Busy hangars still pass 32 lights per pixel in places: the renderer's on-screen overflow notice is for developers
+    // (the log keeps its warning).
+    Set(TEXT("r.Shadow.Virtual.AllowScreenOverflowMessages"), 0);
+    UE_LOG(LogTemp, Display, TEXT("LOOK basic_lighting vsm_lights_per_pixel=32 dynamic_res=60fps min_screen_percentage=50 megalights=off"));
 }
 
 static int32 GShortRangeAOOverride = -1; // sc.Look.ShortRangeAO: -1 auto (budget), 0 screen space, 1 traced

@@ -954,6 +954,39 @@ def unlit_master():
     return g.save()
 
 
+# Ping.cfx (the game's ping / shield surface: hangar force fields, shields): a see-through surface that glows by its
+# emissive colour x Glow only toward grazing angles (rim) and where it meets other geometry (intersection), both broken
+# up by a panning noise texture; seen face-on it is nearly invisible. The terms follow the shader's public parameters;
+# their exact curves are not transcribed (the shader text is not in the archive), so this is the documented
+# approximation: rim = RimWeight x (1 - |N.V|)^OuterRimPower, intersection = IntersectionWeight x (1 - depth fade over
+# IntersectionRimSoftening metres).
+PING = """float facing = abs(dot(normalize(N), normalize(V)));
+float rim = RimWeight * pow(saturate(1.0 - facing), max(OuterRimPower, 1e-3));
+float edge = IntersectionWeight * saturate(1.0 - Fade);
+return Colour * Strength * Noise * (rim + edge);"""
+
+
+def ping_master():
+    """M_SC_Ping: Ping.cfx surfaces, additive unlit and two-sided (a force field is seen from both sides). The noise
+    texture (TexSlot1) is tiled by NoiseOctave0 and panned by NoiseSpeed0 per second."""
+    g = Graph("M_SC_Ping", unreal.BlendMode.BLEND_ADDITIVE, two_sided=True)
+    coords = (g.node(unreal.MaterialExpressionTextureCoordinate, coordinate_index=0), "")
+    time = (g.node(unreal.MaterialExpressionTime), "")
+    uv = g.add(g.mul(coords, g.scalar("NoiseOctave0", 1.0)), g.mul(time, g.scalar("NoiseSpeed0", 0.0)))
+    noise = (g.texture("DiffuseMap", g.white, ST.SAMPLERTYPE_COLOR, uv), "RGB")
+    fade = g.node(unreal.MaterialExpressionDepthFade)
+    g.link(*g.mul(g.scalar("IntersectionRimSoftening", 1.0), g.const(100.0)), fade, "FadeDistance")  # metres -> cm
+    unlit = g.node(unreal.MaterialExpressionSubstrateUnlitBSDF)
+    glow = g.custom(PING, unreal.CustomMaterialOutputType.CMOT_FLOAT3, Colour=g.vector("EmissiveColor", (1, 1, 1)),
+                    Strength=g.scalar("EmissiveStrength", 0.0), Noise=noise, Fade=(fade, ""),
+                    N=(g.node(unreal.MaterialExpressionVertexNormalWS), ""), V=(g.node(unreal.MaterialExpressionCameraVectorWS), ""),
+                    RimWeight=g.scalar("RimWeight", 0.0), OuterRimPower=g.scalar("OuterRimPower", 1.0),
+                    IntersectionWeight=g.scalar("IntersectionWeight", 0.0))
+    g.link(*glow, unlit, "EmissiveColor")
+    g.out(unlit, "", MP.MP_FRONT_MATERIAL)
+    return g.save()
+
+
 # Flipbook sample of the particle masters (WP-K4c). The sprite's two frames (Niagara's SubImageIndex: UV0 the current,
 # UV1 the next, Blend between them when the renderer blends sub-images) are read at the frame-local coordinate, which
 # is optionally mirrored per particle (CryEngine RandomFlipU / RandomFlipV, from Niagara's MaterialRandom) and
@@ -1170,6 +1203,7 @@ screen_master(translucent=True)
 for sided in (decal_master("M_SC_MeshDecal", True), decal_master("M_SC_MeshDecal_Relief", False), translucent_master()):
     variants(sided, (("_TwoSided", False, True),))  # is_double_sided decals keep reverse-facing triangles
 unlit_master()
+ping_master()
 particle_master("M_SC_Particle_Additive", unreal.BlendMode.BLEND_ADDITIVE)
 particle_master("M_SC_Particle_Translucent", unreal.BlendMode.BLEND_TRANSLUCENT)
 distortion_master()

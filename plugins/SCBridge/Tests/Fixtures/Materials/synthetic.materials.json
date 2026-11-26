@@ -3043,6 +3043,69 @@
     "state": "active",
     "reason": "synthetic"
    }
+  },
+  {
+   "index": 39,
+   "submaterial_name": "ping_shield",
+   "shader_family": "Unknown",
+   "shader": "Ping",
+   "authored_attributes": [
+    {
+     "name": "Shader",
+     "value": "Ping"
+    },
+    {
+     "name": "Diffuse",
+     "value": "1,1,1"
+    },
+    {
+     "name": "Emissive",
+     "value": "0.13,0.25,1"
+    },
+    {
+     "name": "Opacity",
+     "value": "1"
+    },
+    {
+     "name": "Glow",
+     "value": "0.05"
+    }
+   ],
+   "decoded_feature_flags": {
+    "tokens": []
+   },
+   "texture_slots": [
+    {
+     "slot": "TexSlot1",
+     "role": "unknown",
+     "is_virtual": false,
+     "export_path": "tex/forcefield_diff.png"
+    },
+    {
+     "slot": "TexSlot3",
+     "role": "unknown",
+     "is_virtual": false,
+     "export_path": "tex/ping_gradient.png"
+    }
+   ],
+   "derived_textures": [],
+   "layer_manifest": [],
+   "palette_routing": {
+    "layer_channels": [],
+    "material_channel": null
+   },
+   "public_params": {
+    "RimWeight": 2,
+    "OuterRimPower": 0.5,
+    "IntersectionWeight": 0.2,
+    "IntersectionRimSoftening": 1.2,
+    "NoiseOctave0": 6,
+    "NoiseSpeed0": 0.1
+   },
+   "activation_state": {
+    "state": "active",
+    "reason": "synthetic"
+   }
   }
  ]
 }

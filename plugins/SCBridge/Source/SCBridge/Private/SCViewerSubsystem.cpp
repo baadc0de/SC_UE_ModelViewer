@@ -112,6 +112,7 @@ void USCViewerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     // game (packaged, -game, PIE), which is the one that hung at Cinematic without ray tracing. Editor viewports before
     // PIE render at the editor's own levels.
     SCLook::CapQualityWithoutRayTracing();
+    SCLook::ApplyBasicLighting(); // also before the first frame: its MegaLights notice would show on it
     bMaxQualityPending = FParse::Param(FCommandLine::Get(), TEXT("SCMaxQuality"));
     bShowcase = FParse::Param(FCommandLine::Get(), TEXT("SCShowcase"));
     // The -SCPackage folder harness (WP-U1..U3 review runs) imports from disk and needs no archive.
@@ -1592,11 +1593,6 @@ bool USCViewerSubsystem::Tick(float)
         }
         UE_LOG(LogSCViewer, Display, TEXT("VIEWER_ARCHIVE ok=%d seconds=%.3f index_cache_hit=%d cache_bytes=%llu cache_entries=%llu error=\"%s\""),
                Result.bOK, Result.Seconds, Result.bIndexCacheHit, CacheStats.Bytes, CacheStats.Entries, *Result.Error.ToString());
-    }
-    if (bBasicLightingPending && GetViewerWorld())
-    {
-        bBasicLightingPending = false; // after the game user settings applied their scalability at startup
-        SCLook::ApplyBasicLighting();
     }
     if (bMaxQualityPending && GetViewerWorld())
     {

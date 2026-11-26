@@ -490,7 +490,6 @@ private:
     bool bShowcase = false;
     bool bStartSkinApplied = false; // -SCSkin is applied to the first loaded vehicle only
     void ApplyStartSkin();
-    bool bBasicLightingPending = true; // SCLook::ApplyBasicLighting on the first tick with a world
     bool bMaxQualityPending = false; // -SCMaxQuality: SCLook::ApplyMaxQuality on the first tick with a world
     FString EnvironmentState = TEXT("open"); // door fragments' Open end pose: the ship elevator raised flush, ship delivered
     void ShowMapHangar(bool bShow);

@@ -230,6 +230,22 @@ void Direct(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A, const FSCPa
     SurfaceGloss(D, Sub, A);
     Emission(D, Sub, A);
 }
+/** Ping.cfx (M_SC_Ping): the noise texture in TexSlot1 (the shader's slot, whatever role the exporter gives it), the
+ *  authored emission (Emissive x Glow, the Illum rule) and the shader's own rim, intersection and noise parameters. */
+void Ping(FSCMaterialDesc& D, const FObj& Sub, const FAuthored& A)
+{
+    if (const FObj Noise = SlotAt(Sub, 1)) Tex(D, TEXT("DiffuseMap"), Str(Noise, TEXT("export_path")), ESCTextureRole::Color);
+    Emission(D, Sub, A);
+    // The quadratic glow rule (MaterialGlowToLinearGlow) is Illum's; Ping's Glow scales its glow linearly in scene units
+    // (the quadratic one made the hangar fields a bright sheet: 0.05 -> 1000 cd/m2 against 50 here).
+    D.Scalars.Add(TEXT("EmissiveStrength"), float(FSCStarEngine::Get().InstanceGlowNits(AuthoredGlow(A))));
+    D.Scalars.Add(TEXT("RimWeight"), A.Param(TEXT("RimWeight"), 0.f));
+    D.Scalars.Add(TEXT("OuterRimPower"), A.Param(TEXT("OuterRimPower"), 1.f));
+    D.Scalars.Add(TEXT("IntersectionWeight"), A.Param(TEXT("IntersectionWeight"), 0.f));
+    D.Scalars.Add(TEXT("IntersectionRimSoftening"), A.Param(TEXT("IntersectionRimSoftening"), 1.f));
+    D.Scalars.Add(TEXT("NoiseOctave0"), A.Param(TEXT("NoiseOctave0"), 1.f));
+    D.Scalars.Add(TEXT("NoiseSpeed0"), A.Param(TEXT("NoiseSpeed0"), 0.f));
+}
 /** UE HairShadingCommon.ush GetHairColorFromMelanin (absorption model, [0..1] melanin), on the CPU. */
 FLinearColor HairColorFromMelanin(float Melanin01, float Redness, const FLinearColor& Dye)
 {
@@ -644,6 +660,9 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     // subsurface / DNA / wrinkle work. HumanSkin_V2 and Eye: base colour, DDNA normal, spec map, authored F0.
     // HairPBR: card coverage from the `opacity` slot (masked), colour from the authored melanin parameters.
     else if (F == TEXT("HumanSkin_V2") || F == TEXT("Eye") || F == TEXT("HairPBR")) D.Master = ESCMaster::Illum;
+    // Ping.cfx, the game's ping / shield surface (hangar force fields): the exporter has no family for it, so it is
+    // named by its shader. M_SC_Ping: additive unlit glow (see Ping() below).
+    else if (D.Shader == TEXT("Ping")) D.Master = ESCMaster::Ping;
     else if (F != TEXT("NoDraw"))
         D.Warnings.Add(FString::Printf(TEXT("Unknown shader family '%s' (shader '%s'); using M_SC_Fallback"), *F, *D.Shader));
     D.bHidden = F == TEXT("NoDraw") || Str(Child(Sub, TEXT("activation_state")), TEXT("state")) == TEXT("inactive");
@@ -667,7 +686,7 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     const float Cutoff = AlphaTest > 0.f ? AlphaTest : GetDefault<UMaterial>()->OpacityMaskClipValue;
     D.bTwoSided = bDecal; // v1: mtl.rs is_double_sided
     if (AC) AC->TryGetBoolField(TEXT("two_sided"), D.bTwoSided); // v2: authored MtlFlags two-sided
-    if (D.Master == ESCMaster::Glass || D.Master == ESCMaster::EmissiveUnlit) D.Blend = ESCBlend::Translucent;
+    if (D.Master == ESCMaster::Glass || D.Master == ESCMaster::EmissiveUnlit || D.Master == ESCMaster::Ping) D.Blend = ESCBlend::Translucent;
     // A screen is opaque whatever its forward flag (the forward pass is how CryEngine draws the face, not coverage),
     // unless its data asks for partial coverage: authored opacity below 1 or a blended alpha mode. Then it is a lit
     // translucent screen (M_SC_Screen_Translucent, coverage = Opacity) in the non-Nanite split, like any blended surface.
@@ -722,6 +741,10 @@ FSCMaterialDesc FSCMaterialBuilder::Describe(const FSCSubmaterial& In, const FSC
     else if (D.Master == ESCMaster::Screen)
     {
         Screen(D, Sub, A);
+    }
+    else if (D.Master == ESCMaster::Ping)
+    {
+        Ping(D, Sub, A);
     }
     else
     {

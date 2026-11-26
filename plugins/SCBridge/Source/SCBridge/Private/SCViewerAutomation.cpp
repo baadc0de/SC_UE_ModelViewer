@@ -655,6 +655,24 @@ void FSCViewerAutomation::RegisterPlayerCommands()
         if (C) UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_STATE kit=\"%s\" walk=%.0f run=%.0f %s"), *Weak->GetPlayerKitStatus(),
                       C->GetProfile().WalkSpeed, C->GetProfile().RunSpeed, *C->Body->Describe());
     });
+    Add(TEXT("sc.Player.Parts"), TEXT("sc.Player.Parts: log every primitive of the player kit (PLAYER_PART: visibility, bounds, leader, first-person type)"),
+        [Weak, BodyOf](const TArray<FString>&) {
+            USCPlayerBodyComponent* Body = BodyOf(Weak);
+            AActor* Kit = Body ? Body->GetKit() : nullptr;
+            if (!Kit) return;
+            TArray<UPrimitiveComponent*> Parts;
+            Kit->GetComponents<UPrimitiveComponent>(Parts);
+            const FVector Origin = Body->GetOwner()->GetActorLocation();
+            for (const UPrimitiveComponent* P : Parts)
+            {
+                const USkinnedMeshComponent* Skinned = Cast<USkinnedMeshComponent>(P);
+                const USkinnedMeshComponent* Leader = Skinned ? Skinned->LeaderPoseComponent.Get() : nullptr;
+                UE_LOG(LogSCViewerAutomation, Display, TEXT("PLAYER_PART name=%s hidden=%d visible=%d rendered=%d owner_no_see=%d fp=%d leader=%s parent=%s socket=%s centre=%s extent=%s"),
+                    *P->GetName(), P->bHiddenInGame, P->IsVisible(), P->WasRecentlyRendered(0.2f), P->bOwnerNoSee, int32(P->FirstPersonPrimitiveType),
+                    Leader ? *Leader->GetName() : TEXT("-"), P->GetAttachParent() ? *P->GetAttachParent()->GetName() : TEXT("-"),
+                    *P->GetAttachSocketName().ToString(), *(P->Bounds.Origin - Origin).ToCompactString(), *P->Bounds.BoxExtent.ToCompactString());
+            }
+        });
 }
 
 void FSCViewerAutomation::ApplyPlayerOptions(USCViewerSubsystem& S)
