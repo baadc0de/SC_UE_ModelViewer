@@ -31,6 +31,12 @@ void ApplyMaxQuality();
  *  hung, 2026-11-26). The levels the game saves stay the user's (temporary scalability levels). Called when the viewer
  *  starts, before the first frame. */
 void CapQualityWithoutRayTracing();
+/** Keeps the run's levels (the cap above, or -SCMaxQuality) over the user's when those change during the run (console
+ *  `scalability`, UGameUserSettings::ApplySettings, the editor's menu), which the engine otherwise saves without applying
+ *  while the run's levels are active. Called every tick. */
+void FollowQualityChanges();
+/** Back to the user's levels: the viewer's game instance ends (in the editor, PIE). */
+void EndRunQuality();
 /** Without hardware ray tracing ("Basic lighting": a GPU without DirectX Raytracing, or -noraytracing; MegaLights and
  *  ray-traced Lumen are off by themselves): the most the remaining pipeline gives a mid-range GPU (filtered virtual shadow
  *  maps for up to 32 lights per pixel, dynamic resolution held at 60 fps). Applied once at startup, every run. */
